@@ -2,9 +2,9 @@
 #include <math.h>
 #include <string.h>
 
-// Max ACF lag array size: 4 * (OSS_FRAMES_PER_MIN / bpmMin) = 4 * 66 = 264
-// Subtract minLag (~20) + 1 = 245. Round up for safety.
-static constexpr int MAX_ACF_SIZE = 280;
+// Max ACF lag array size: (OSS_FRAMES_PER_MIN / bpmMin) - minLag + 1 = 66 - 20 + 1 = 47.
+// Round up for safety.
+static constexpr int MAX_ACF_SIZE = 80;
 
 // Constants moved to AudioTracker public members (v74) for tuning via serial console.
 // Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
@@ -15,59 +15,6 @@ static inline float clampf(float v, float lo, float hi) {
     if (v > hi) return hi;
     return v;
 }
-
-// Static constexpr member definitions (required in C++14; remove if upgrading to C++17)
-constexpr float AudioTracker::CACHE_BLEND_RATES[4];
-
-// ============================================================================
-// Pattern Template Bank (8 templates, ~544 bytes flash)
-// ============================================================================
-// Each template has 16 bins (16th-note positions in a 4/4 bar).
-// fillMask: bit i set = position i is fill-prone (ignored in core matching).
-// Bins represent relative onset density (normalized to sum ~1.0).
-
-const PatternTemplate AudioTracker::templates_[AudioTracker::NUM_TEMPLATES] = {
-    // 0: "4otf" — four-on-the-floor (kick on every quarter note: 0,4,8,12)
-    {{0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f,
-      0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f},
-     0x8888},  // fills at positions 3,7,11,15 (upbeat 16ths before kicks)
-
-    // 1: "backbeat" — kick on 1,3 + snare on 2,4 (bins 0,4,8,12)
-    // but emphasis on 0,8 (kick) and 4,12 (snare)
-    {{0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f,
-      0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f},
-     0x8888},
-
-    // 2: "halftime" — kick on 1, snare on 3 (bins 0, 8)
-    {{0.35f,0.0f,0.0f,0.0f, 0.0f,0.0f,0.0f,0.0f,
-      0.35f,0.0f,0.0f,0.0f, 0.15f,0.0f,0.0f,0.15f},
-     0x6060},  // fills at positions 5,6,13,14
-
-    // 3: "breakbeat" — syncopated kick + snare (funk/hip-hop)
-    {{0.20f,0.0f,0.0f,0.15f, 0.0f,0.0f,0.20f,0.0f,
-      0.10f,0.0f,0.0f,0.0f, 0.15f,0.0f,0.20f,0.0f},
-     0x0808},  // fills at positions 3,11
-
-    // 4: "8thnote" — straight 8th notes (hi-hat pulse on every 8th)
-    {{0.15f,0.0f,0.10f,0.0f, 0.15f,0.0f,0.10f,0.0f,
-      0.15f,0.0f,0.10f,0.0f, 0.15f,0.0f,0.10f,0.0f},
-     0x0000},  // no typical fills
-
-    // 5: "dnb" — drum and bass (fast kick + snare on 2, 160-180 BPM)
-    {{0.25f,0.0f,0.10f,0.0f, 0.0f,0.0f,0.0f,0.0f,
-      0.30f,0.0f,0.0f,0.10f, 0.0f,0.0f,0.15f,0.10f},
-     0x0808},
-
-    // 6: "dembow" — syncopated dancehall/reggaeton
-    {{0.20f,0.0f,0.0f,0.15f, 0.0f,0.0f,0.20f,0.0f,
-      0.0f,0.0f,0.0f,0.15f, 0.20f,0.0f,0.0f,0.10f},
-     0x0000},
-
-    // 7: "sparse" — ambient/minimal (kick on 1, sparse ghost notes)
-    {{0.50f,0.0f,0.0f,0.0f, 0.0f,0.0f,0.0f,0.0f,
-      0.10f,0.0f,0.0f,0.0f, 0.20f,0.0f,0.0f,0.20f},
-     0x6666},  // fills at positions 1,2,5,6,9,10,13,14
-};
 
 // ============================================================================
 // Construction / Lifecycle
@@ -87,7 +34,6 @@ AudioTracker::~AudioTracker() {
 bool AudioTracker::begin(uint32_t sampleRate) {
     if (!mic_.begin(sampleRate)) return false;
     spectral_.begin();
-    combFilterBank_.init(OSS_FRAME_RATE);
 
     bool nnOk = frameOnsetNN_.begin();
     nnActive_ = nnOk && frameOnsetNN_.isReady();
@@ -109,18 +55,9 @@ int AudioTracker::getHwGain() const {
     return mic_.getHwGain();
 }
 
-int AudioTracker::getCacheEntryCount() const {
-    int count = 0;
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        if (cache_[i].valid) count++;
-    }
-    return count;
-}
-
 void AudioTracker::resetPatternMemory() {
     memset(ioiBins_, 0, sizeof(ioiBins_));
     memset(barBins_, 0, sizeof(barBins_));
-    memset(prevGoodBins_, 0, sizeof(prevGoodBins_));
     memset(onsetTimes_, 0, sizeof(onsetTimes_));
     onsetBufCount_ = 0;
     onsetWriteIdx_ = 0;
@@ -130,17 +67,8 @@ void AudioTracker::resetPatternMemory() {
     ioiConfidence_ = 0.0f;
     barEntropy_ = 1.0f;
     patternConfidence_ = 0.0f;
-    prevPatternConfidence_ = 0.0f;
     patternBarsAccumulated_ = 0;
     lastBarBoundaryMs_ = time_.millis();
-    bestTemplateIdx_ = -1;
-    bestTemplateSim_ = 0.0f;
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        cache_[i].valid = false;
-    }
-    cacheRestoreActive_ = false;
-    cacheRestoreBarsLeft_ = 0;
-    cacheRestoreIdx_ = -1;
 }
 
 // ============================================================================
@@ -183,7 +111,7 @@ const AudioControl& AudioTracker::update(float dt) {
         odf = mic_.getLevel();
         newSpectralFrame = true;  // mic level updates every frame
     } else {
-        // NN active but no new spectral frame — skip OSS/comb update
+        // NN active but no new spectral frame — skip OSS update
         // to avoid duplicate samples in the ACF buffer.
         // Still run PLP phase advance and output synthesis.
         odf = frameOnsetNN_.getLastOnset();
@@ -222,8 +150,6 @@ const AudioControl& AudioTracker::update(float dt) {
         // amplifies the overshoot and degrades ACF normalization.
         fluxContrast = clampf(fluxContrast, 0.0f, 1.0f);
 
-        combFilterBank_.feedbackGain = combFeedback;
-        combFilterBank_.process(fluxContrast);
         addOssSample(fluxContrast);
 
         // Bass energy for PLP dual-source analysis
@@ -317,16 +243,12 @@ void AudioTracker::runAutocorrelation() {
     if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
     if (minLag < 1) minLag = 1;
 
-    // Extended range for harmonic enhancement
-    int harmonicMaxLag = maxLag * 4;
-    if (harmonicMaxLag >= ossCount_ - 1) harmonicMaxLag = ossCount_ - 2;
-
     // Compute ACF at all lags (fixed-size array, no VLA)
-    int acfSize = harmonicMaxLag - minLag + 1;
+    int acfSize = maxLag - minLag + 1;
     if (acfSize > MAX_ACF_SIZE) acfSize = MAX_ACF_SIZE;
     if (acfSize <= 0) return;  // Safety: not enough data
 
-    float acf[MAX_ACF_SIZE];  // Fixed size on stack (~1.1 KB)
+    float acf[MAX_ACF_SIZE];  // Fixed size on stack
     float signalEnergy = 0.0f;
     for (int i = 0; i < ossCount_; i++) {
         float v = ossLinear[i] - ossMean;
@@ -344,36 +266,18 @@ void AudioTracker::runAutocorrelation() {
         acf[lagIdx] = sum / count;
     }
 
-    // Percival harmonic enhancement (fold 2nd+4th harmonics into fundamental)
-    percivalEnhance(acf, minLag, maxLag, harmonicMaxLag, acfSize);
-
-    // Find peak in fundamental range with Rayleigh prior weighting
+    // Find raw best lag (highest ACF peak)
     float bestCorr = -1e30f;
     int bestLag = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
 
-    // Precompute Rayleigh sigma from rayleighBpm
-    float rayleighLag = OSS_FRAMES_PER_MIN / rayleighBpm;
-    float rayleighSigma2 = rayleighLag * rayleighLag;
-
-    for (int lagIdx = 0; lagIdx <= maxLag - minLag && lagIdx < acfSize; lagIdx++) {
-        int lag = minLag + lagIdx;
-        float lagF = static_cast<float>(lag);
-
-        // Compute Rayleigh weight directly per lag (no comb bin lookup).
-        // Early-exit when weight contribution is negligible (expf(-20) ≈ 2e-9);
-        // avoids unnecessary expf() calls for lags far outside the Rayleigh peak.
-        float expArg = -lagF * lagF / (2.0f * rayleighSigma2);
-        if (expArg < -20.0f) continue;
-        float rayleighW = (lagF / rayleighSigma2) * expf(expArg);
-
-        float weighted = acf[lagIdx] * rayleighW;
-        if (weighted > bestCorr) {
-            bestCorr = weighted;
-            bestLag = lag;
+    for (int lagIdx = 0; lagIdx < acfSize; lagIdx++) {
+        if (acf[lagIdx] > bestCorr) {
+            bestCorr = acf[lagIdx];
+            bestLag = minLag + lagIdx;
         }
     }
 
-    // Compute periodicity strength from unweighted ACF at best lag
+    // Compute periodicity strength from ACF at best lag
     float avgEnergy = signalEnergy / ossCount_;
     if (avgEnergy > 1e-10f && bestLag - minLag < acfSize) {
         float normCorr = acf[bestLag - minLag] / avgEnergy;
@@ -382,17 +286,7 @@ void AudioTracker::runAutocorrelation() {
     }
 
     // ACF candidate BPM
-    float acfBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestLag);
-
-    // Tempo selection: ACF primary, comb bank validates
-    float combBpm = combFilterBank_.getPeakBPM();
-    float agreement = fabsf(acfBpm - combBpm) / acfBpm;
-
-    float newBpm = acfBpm;
-    if (agreement < 0.10f) {
-        // ACF and comb agree — high confidence, use average
-        newBpm = (acfBpm + combBpm) * 0.5f;
-    }
+    float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestLag);
 
     // IOI advisory nudge: when the IOI histogram has a confident peak that
     // disagrees with ACF, blend toward IOI (max 30% influence). This helps
@@ -430,29 +324,6 @@ void AudioTracker::runAutocorrelation() {
         bpm_ = bpm_ * tempoSmoothing + newBpm * (1.0f - tempoSmoothing);
     }
     beatPeriodFrames_ = OSS_FRAME_RATE * 60.0f / bpm_;
-}
-
-void AudioTracker::percivalEnhance(float* acf, int minLag, int maxLag,
-                                    int harmonicMaxLag, int acfSize) {
-    // Percival 2014: fold 2nd and 4th harmonic ACF peaks into fundamental.
-    // This gives the fundamental lag a unique advantage over its harmonics.
-    // NOTE: In-place modification means earlier lags accumulate before later lags
-    // read them. This matches AudioController behavior (proven via A/B testing).
-    for (int lagIdx = 0; lagIdx <= maxLag - minLag && lagIdx < acfSize; lagIdx++) {
-        int lag = minLag + lagIdx;
-
-        // 2nd harmonic: ACF[2L] folds into ACF[L]
-        int harm2Idx = lag * 2 - minLag;
-        if (harm2Idx >= 0 && harm2Idx < acfSize) {
-            acf[lagIdx] += percivalWeight2 * acf[harm2Idx];
-        }
-
-        // 4th harmonic: ACF[4L] folds into ACF[L]
-        int harm4Idx = lag * 4 - minLag;
-        if (harm4Idx >= 0 && harm4Idx < acfSize) {
-            acf[lagIdx] += percivalWeight4 * acf[harm4Idx];
-        }
-    }
 }
 
 // ============================================================================
@@ -799,19 +670,13 @@ void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
 void AudioTracker::computePatternStats() {
     if (patternBarsAccumulated_ < 0xFFFF) patternBarsAccumulated_++;  // Saturate to avoid wrap
 
-    // Step 1: Progressive cache blend (if restore in progress)
-    cacheProgressiveBlend();
-
-    // Step 2: Shannon entropy of bar histogram (normalized to [0, 1]).
-    // Note: barEntropy_ is no longer used in the confidence pipeline (replaced by
-    // peak-to-mean ratio in Step 4), but is retained for serial diagnostics
-    // (getBarEntropy() is streamed via SerialConsole).
+    // Shannon entropy of bar histogram (normalized to [0, 1]).
+    // Retained for serial diagnostics (getBarEntropy() is streamed via SerialConsole).
     float sum = 0;
     for (int i = 0; i < BAR_BINS; i++) sum += barBins_[i];
     if (sum < 1e-6f) {
         barEntropy_ = 1.0f;
         patternConfidence_ *= 0.9f;
-        prevPatternConfidence_ = patternConfidence_;
         return;
     }
 
@@ -822,13 +687,8 @@ void AudioTracker::computePatternStats() {
     }
     barEntropy_ = H / 4.0f;  // log2(16) = 4.0
 
-    // Step 3: Template matching
-    matchTemplates();
-
-    // Step 4: Confidence update — peak-to-mean ratio measures pattern structure.
-    // Entropy was too sensitive: even 5x variation between bins gave entropy ~0.97,
-    // killing confidence. Peak-to-mean directly measures how peaked the histogram
-    // is vs uniform noise: 1.0 = flat (no pattern), 4.0+ = strong peaks (kick/snare).
+    // Confidence update — peak-to-mean ratio measures pattern structure.
+    // 1.0 = flat (no pattern), 4.0+ = strong peaks (kick/snare).
     float maxBin = 0.0f;
     float meanBin = sum / BAR_BINS;
     for (int i = 0; i < BAR_BINS; i++) {
@@ -838,47 +698,9 @@ void AudioTracker::computePatternStats() {
     // Map peak-to-mean [1, 4] → target [0, 1]. At 1x (uniform) target=0,
     // at 4x+ (strong beats) target=1. Typical 4otf pattern peaks at 2-3x.
     float target = clampf((peakToMean - 1.0f) / 3.0f, 0.0f, 1.0f);
-    float rise = confidenceRise;
-    float decay = confidenceDecay;
 
-    // Fill tolerance: when template core is intact (>0.75 similarity),
-    // halve decay rate. Fill onsets raised entropy but the core pattern is intact.
-    if (bestTemplateSim_ > 0.75f) {
-        decay *= 0.5f;
-    }
-
-    float alpha = (target > patternConfidence_) ? rise : decay;
+    float alpha = (target > patternConfidence_) ? confidenceRise : confidenceDecay;
     patternConfidence_ += (target - patternConfidence_) * alpha;
-
-    // Step 5: Cold start boost (first 4 bars, template match >0.70)
-    if (patternBarsAccumulated_ <= 4 && bestTemplateSim_ > 0.70f) {
-        float boost = bestTemplateSim_ * 0.15f;  // proportional to similarity
-        patternConfidence_ = fminf(patternConfidence_ + boost, 1.0f);
-    }
-
-    // Step 6: Save snapshot of bins while confidence is healthy.
-    // Used by cachePatternRestore() — at the downward crossing through 0.3,
-    // current barBins_ are contaminated by the new section. prevGoodBins_
-    // preserves the last high-confidence state for meaningful cache matching.
-    if (patternConfidence_ > 0.5f) {
-        memcpy(prevGoodBins_, barBins_, sizeof(float) * BAR_BINS);
-    }
-
-    // Step 7: Cache save (upward confidence crossing through 0.6)
-    // Guard: require > 8 bars of data to avoid saving undercooked patterns
-    // from cold start boost (which can push confidence above 0.6 in 4 bars).
-    if (patternConfidence_ >= 0.6f && prevPatternConfidence_ < 0.6f
-        && patternBarsAccumulated_ > 8) {
-        cachePatternSave();
-    }
-
-    // Step 8: Cache restore trigger (downward confidence crossing through 0.3)
-    if (patternConfidence_ < 0.3f && prevPatternConfidence_ >= 0.3f) {
-        cachePatternRestore();
-    }
-
-    // Step 9: Update prevPatternConfidence_
-    prevPatternConfidence_ = patternConfidence_;
 }
 
 float AudioTracker::predictOnsetStrength(uint32_t nowMs) {
@@ -902,142 +724,6 @@ void AudioTracker::decayPatternBins() {
     // Bar bins: decay slower (patternDecayRate=0.9995, half-life ~22s at 62.5 Hz).
     // Pattern persists through breakdowns.
     for (int i = 0; i < BAR_BINS; i++) barBins_[i] *= patternDecayRate;
-}
-
-// ============================================================================
-// Template Matching + LRU Cache
-// ============================================================================
-
-float AudioTracker::templateCosineSimilarity(const float* observed,
-                                              const PatternTemplate& tmpl) const {
-    // Cosine similarity with fill-masked bins zeroed out.
-    // Fill mask positions are excluded so that extra fill onsets don't
-    // reduce the match score against the core pattern.
-    float dotProduct = 0.0f;
-    float normObs = 0.0f;
-    float normTmpl = 0.0f;
-    for (int i = 0; i < BAR_BINS; i++) {
-        if (tmpl.fillMask & (1 << i)) continue;  // Skip fill-prone positions
-        float o = observed[i];
-        float t = tmpl.bins[i];
-        dotProduct += o * t;
-        normObs += o * o;
-        normTmpl += t * t;
-    }
-    float denom = sqrtf(normObs) * sqrtf(normTmpl);
-    if (denom < 1e-8f) return 0.0f;
-    return dotProduct / denom;
-}
-
-void AudioTracker::matchTemplates() {
-    bestTemplateIdx_ = -1;
-    bestTemplateSim_ = 0.0f;
-    for (int t = 0; t < NUM_TEMPLATES; t++) {
-        float sim = templateCosineSimilarity(barBins_, templates_[t]);
-        if (sim > bestTemplateSim_) {
-            bestTemplateSim_ = sim;
-            bestTemplateIdx_ = t;
-        }
-    }
-}
-
-void AudioTracker::cachePatternSave() {
-    // Check if current pattern already matches an existing cache entry (cosine > 0.85)
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        if (!cache_[i].valid) continue;
-        // Simple cosine similarity between two bar histograms (no fill mask)
-        float dot = 0, na = 0, nb = 0;
-        for (int b = 0; b < BAR_BINS; b++) {
-            dot += barBins_[b] * cache_[i].bins[b];
-            na += barBins_[b] * barBins_[b];
-            nb += cache_[i].bins[b] * cache_[i].bins[b];
-        }
-        float denom = sqrtf(na) * sqrtf(nb);
-        if (denom > 1e-8f && dot / denom > 0.85f) {
-            // Already cached — just refresh LRU age
-            uint8_t oldAge = cache_[i].age;
-            for (int j = 0; j < CACHE_SIZE; j++) {
-                if (cache_[j].valid && cache_[j].age < oldAge) {
-                    cache_[j].age++;
-                }
-            }
-            cache_[i].age = 0;
-            cache_[i].bpm = bpm_;
-            return;
-        }
-    }
-
-    // Find slot: first invalid, or LRU (highest age)
-    int slot = -1;
-    uint8_t maxAge = 0;
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        if (!cache_[i].valid) { slot = i; break; }
-        if (cache_[i].age >= maxAge) { maxAge = cache_[i].age; slot = i; }
-    }
-    if (slot < 0) slot = 0;  // Safety fallback
-
-    // Age all other entries
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        if (cache_[i].valid) cache_[i].age++;
-    }
-
-    // Save current pattern
-    memcpy(cache_[slot].bins, barBins_, sizeof(float) * BAR_BINS);
-    cache_[slot].bpm = bpm_;
-    cache_[slot].age = 0;
-    cache_[slot].valid = true;
-}
-
-void AudioTracker::cachePatternRestore() {
-    // Search cache for best cosine match > 0.7 against prevGoodBins_
-    // (not current barBins_, which are contaminated by the section change
-    // that triggered the confidence drop)
-    int bestIdx = -1;
-    float bestSim = 0.7f;
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        if (!cache_[i].valid) continue;
-        float dot = 0, na = 0, nb = 0;
-        for (int b = 0; b < BAR_BINS; b++) {
-            dot += prevGoodBins_[b] * cache_[i].bins[b];
-            na += prevGoodBins_[b] * prevGoodBins_[b];
-            nb += cache_[i].bins[b] * cache_[i].bins[b];
-        }
-        float denom = sqrtf(na) * sqrtf(nb);
-        float sim = (denom > 1e-8f) ? dot / denom : 0.0f;
-        if (sim > bestSim) {
-            bestSim = sim;
-            bestIdx = i;
-        }
-    }
-
-    if (bestIdx >= 0) {
-        cacheRestoreActive_ = true;
-        cacheRestoreBarsLeft_ = 4;
-        cacheRestoreIdx_ = bestIdx;
-    }
-}
-
-void AudioTracker::cacheProgressiveBlend() {
-    if (!cacheRestoreActive_ || cacheRestoreIdx_ < 0 ||
-        cacheRestoreIdx_ >= CACHE_SIZE || !cache_[cacheRestoreIdx_].valid) {
-        cacheRestoreActive_ = false;
-        return;
-    }
-
-    // Blend rates: 40%, 20%, 10%, 5% over 4 bar boundaries
-    int step = 4 - cacheRestoreBarsLeft_;  // 0,1,2,3
-    if (step < 0 || step > 3) { cacheRestoreActive_ = false; return; }
-
-    float rate = CACHE_BLEND_RATES[step];
-    const float* cached = cache_[cacheRestoreIdx_].bins;
-    for (int i = 0; i < BAR_BINS; i++) {
-        barBins_[i] = barBins_[i] * (1.0f - rate) + cached[i] * rate;
-    }
-
-    cacheRestoreBarsLeft_--;
-    if (cacheRestoreBarsLeft_ <= 0) {
-        cacheRestoreActive_ = false;
-    }
 }
 
 // ============================================================================
@@ -1095,11 +781,8 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.plpPulse = plpPulseValue_;
 
     // --- Rhythm Strength ---
-    // Base: ACF periodicity + comb bank confidence (proven formula).
-    // PLP confidence can only boost, never drag down.
-    float combConf = combFilterBank_.getPeakConfidence();
-    float baseStrength = periodicityStrength_ * 0.6f + combConf * 0.4f;
-    float strength = (plpConfidence_ > baseStrength) ? plpConfidence_ : baseStrength;
+    // PLP confidence can only boost, never drag down ACF periodicity.
+    float strength = (plpConfidence_ > periodicityStrength_) ? plpConfidence_ : periodicityStrength_;
 
     // Soft activation gate (quadratic falloff below threshold)
     if (strength < activationThreshold) {

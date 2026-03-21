@@ -928,7 +928,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_beat_state',
-        description: 'Get CBSS beat tracker state (BPM, phase, confidence, periodicity, beatCount, stability). Useful for validating tempo tracking behavior.',
+        description: 'Get beat tracker state (BPM, phase, confidence). Useful for validating tempo tracking behavior.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1770,11 +1770,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const formatted = {
           bpm: parsed.bpm,
           phase: parsed.phase,
-          periodicity: parsed.periodicity,
           confidence: parsed.confidence,
-          beatCount: parsed.beatCount,
-          beatPeriod: parsed.beatPeriod,
-          stability: parsed.stability,
         };
 
         return {

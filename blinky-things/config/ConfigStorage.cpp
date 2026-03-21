@@ -197,8 +197,6 @@ void ConfigStorage::loadSettingsDefaults() {
     // AudioTracker defaults (v74+)
     data_.tracker.bpmMin = 60.0f;
     data_.tracker.bpmMax = 200.0f;
-    data_.tracker.rayleighBpm = 130.0f;
-    data_.tracker.combFeedback = 0.855f;
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 150;
     data_.tracker.activationThreshold = 0.3f;
@@ -206,8 +204,6 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.odfContrast = 1.25f;
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
-    data_.tracker.percivalWeight2 = 0.5f;
-    data_.tracker.percivalWeight4 = 0.25f;
     data_.tracker.baselineFastDrop = 0.05f;
     data_.tracker.baselineSlowRise = 0.005f;
     data_.tracker.odfPeakHoldDecay = 0.85f;
@@ -588,16 +584,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
             data_.tracker.bpmMax = 200.0f;
             fixedCount++;
         }
-        validateFloat(data_.tracker.rayleighBpm, 60.0f, 180.0f, F("tracker.rayleighBpm"));
-        validateFloat(data_.tracker.combFeedback, 0.85f, 0.98f, F("tracker.combFeedback"));
         validateFloat(data_.tracker.tempoSmoothing, 0.5f, 0.99f, F("tracker.tempoSmooth"));
         validateFloat(data_.tracker.activationThreshold, 0.0f, 1.0f, F("tracker.actThresh"));
         validateFloat(data_.tracker.pulseOnsetFloor, 0.0f, 0.5f, F("tracker.pulseOnsetFloor"));
         validateFloat(data_.tracker.odfContrast, 0.1f, 4.0f, F("tracker.odfContrast"));
         validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
         validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
-        validateFloat(data_.tracker.percivalWeight2, 0.0f, 1.0f, F("tracker.percival2"));
-        validateFloat(data_.tracker.percivalWeight4, 0.0f, 1.0f, F("tracker.percival4"));
         validateFloat(data_.tracker.baselineFastDrop, 0.01f, 0.2f, F("tracker.blFastDrop"));
         validateFloat(data_.tracker.baselineSlowRise, 0.001f, 0.05f, F("tracker.blSlowRise"));
         validateFloat(data_.tracker.odfPeakHoldDecay, 0.5f, 0.99f, F("tracker.odfPkDecay"));
@@ -626,8 +618,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         // Copy to AudioTracker
         tracker->bpmMin = data_.tracker.bpmMin;
         tracker->bpmMax = data_.tracker.bpmMax;
-        tracker->rayleighBpm = data_.tracker.rayleighBpm;
-        tracker->combFeedback = data_.tracker.combFeedback;
         tracker->tempoSmoothing = data_.tracker.tempoSmoothing;
         tracker->acfPeriodMs = data_.tracker.acfPeriodMs;
         tracker->activationThreshold = data_.tracker.activationThreshold;
@@ -635,8 +625,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->odfContrast = data_.tracker.odfContrast;
         tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
         tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
-        tracker->percivalWeight2 = data_.tracker.percivalWeight2;
-        tracker->percivalWeight4 = data_.tracker.percivalWeight4;
         tracker->baselineFastDrop = data_.tracker.baselineFastDrop;
         tracker->baselineSlowRise = data_.tracker.baselineSlowRise;
         tracker->odfPeakHoldDecay = data_.tracker.odfPeakHoldDecay;
@@ -755,8 +743,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     if (tracker) {
         data_.tracker.bpmMin = tracker->bpmMin;
         data_.tracker.bpmMax = tracker->bpmMax;
-        data_.tracker.rayleighBpm = tracker->rayleighBpm;
-        data_.tracker.combFeedback = tracker->combFeedback;
         data_.tracker.tempoSmoothing = tracker->tempoSmoothing;
         data_.tracker.acfPeriodMs = tracker->acfPeriodMs;
         data_.tracker.activationThreshold = tracker->activationThreshold;
@@ -764,8 +750,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.odfContrast = tracker->odfContrast;
         data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
         data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
-        data_.tracker.percivalWeight2 = tracker->percivalWeight2;
-        data_.tracker.percivalWeight4 = tracker->percivalWeight4;
         data_.tracker.baselineFastDrop = tracker->baselineFastDrop;
         data_.tracker.baselineSlowRise = tracker->baselineSlowRise;
         data_.tracker.odfPeakHoldDecay = tracker->odfPeakHoldDecay;

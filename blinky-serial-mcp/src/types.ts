@@ -53,7 +53,7 @@ export interface BeatEvent {
   timestampMs: number;
   bpm: number;
   type: 'quarter';
-  predicted?: boolean;  // Whether beat came from CBSS prediction vs fallback
+  predicted?: boolean;  // Whether beat came from prediction vs fallback
 }
 
 export interface MusicModeMetrics {

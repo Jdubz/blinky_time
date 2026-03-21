@@ -234,7 +234,7 @@ void SerialConsole::registerAgcSettings() {
 
 // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67 — BandFlux pipeline removed)
 
-// === TRACKER SETTINGS (AudioTracker — ACF+Comb+PLP, v79) ===
+// === TRACKER SETTINGS (AudioTracker — ACF+PLP, v80) ===
 void SerialConsole::registerTrackerSettings() {
     if (!audioCtrl_) return;
 
@@ -243,12 +243,7 @@ void SerialConsole::registerTrackerSettings() {
         "Minimum detectable BPM", 40.0f, 120.0f, onParamChanged);
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "tracker",
         "Maximum detectable BPM", 120.0f, 240.0f, onParamChanged);
-    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "tracker",
-        "Rayleigh prior peak BPM (perceptual bias)", 60.0f, 180.0f, onParamChanged);
-
-    // Comb filter bank
-    settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "tracker",
-        "Comb bank resonance strength (0.85-0.98)", 0.85f, 0.98f, onParamChanged);
+    // (rayleighBpm + combFeedback removed v80 — comb filter bank removed)
 
     // PLP pattern-learned pulse
     settings_.registerFloat("plpactivation", &audioCtrl_->plpActivation, "tracker",
@@ -286,11 +281,7 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("pulseonsetfloor", &audioCtrl_->pulseOnsetFloor, "tracker",
         "ODF floor for pulse detection scaling", 0.0f, 0.5f, onParamChanged);
 
-    // Percival ACF harmonic enhancement
-    settings_.registerFloat("percival2", &audioCtrl_->percivalWeight2, "tracker",
-        "ACF 2nd harmonic fold weight", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("percival4", &audioCtrl_->percivalWeight4, "tracker",
-        "ACF 4th harmonic fold weight", 0.0f, 1.0f, onParamChanged);
+    // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
     // ODF baseline tracking
     settings_.registerFloat("blfastdrop", &audioCtrl_->baselineFastDrop, "tracker",
@@ -626,10 +617,6 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.println(F("--- Advanced Metrics ---"));
             Serial.print(F("Periodicity: "));
             Serial.println(audioCtrl_->getPeriodicityStrength(), 2);
-            Serial.print(F("Comb BPM: "));
-            Serial.println(audioCtrl_->getCombBankBPM(), 1);
-            Serial.print(F("Comb Confidence: "));
-            Serial.println(audioCtrl_->getCombBankConfidence(), 3);
             Serial.print(F("PLP Confidence: "));
             Serial.println(audioCtrl_->getPlpConfidence(), 4);
         } else {
@@ -975,8 +962,6 @@ void SerialConsole::restoreDefaults() {
     if (audioCtrl_) {
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
-        audioCtrl_->rayleighBpm = 130.0f;
-        audioCtrl_->combFeedback = 0.855f;
         audioCtrl_->plpActivation = 0.3f;
         audioCtrl_->plpConfAlpha = 0.15f;
         audioCtrl_->plpNovGain = 1.5f;
@@ -1681,7 +1666,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show beat" - tracker state
     if (strcmp(cmd, "show beat") == 0) {
-        Serial.println(F("=== AudioTracker (ACF+Comb+PLP) ==="));
+        Serial.println(F("=== AudioTracker (ACF+PLP) ==="));
         Serial.print(F("BPM: "));
         Serial.println(audioCtrl_->getCurrentBpm(), 1);
         Serial.print(F("Phase: "));
@@ -1690,10 +1675,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
         Serial.print(F("Beat Count: "));
         Serial.println(audioCtrl_->getBeatCount());
-        Serial.print(F("Comb BPM: "));
-        Serial.println(audioCtrl_->getCombBankBPM(), 1);
-        Serial.print(F("Comb Confidence: "));
-        Serial.println(audioCtrl_->getCombBankConfidence(), 3);
         Serial.print(F("PLP Confidence: "));
         Serial.println(audioCtrl_->getPlpConfidence(), 4);
         Serial.print(F("PLP Pulse: "));
@@ -1715,10 +1696,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getPlpPhase(), 3);
         Serial.print(F(",\"periodicity\":"));
         Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F(",\"combBpm\":"));
-        Serial.print(audioCtrl_->getCombBankBPM(), 1);
-        Serial.print(F(",\"combConf\":"));
-        Serial.print(audioCtrl_->getCombBankConfidence(), 3);
         Serial.print(F(",\"beatCount\":"));
         Serial.print(audioCtrl_->getBeatCount());
         Serial.print(F(",\"rhythmStrength\":"));
@@ -1749,16 +1726,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getBarEntropy(), 3);
         Serial.print(F(",\"bars\":"));
         Serial.print(audioCtrl_->getPatternBarsAccumulated());
-        Serial.print(F(",\"tmpl\":"));
-        Serial.print(audioCtrl_->getBestTemplateIndex());
-        Serial.print(F(",\"tsim\":"));
-        Serial.print(audioCtrl_->getBestTemplateSimilarity(), 3);
-        Serial.print(F(",\"cache\":"));
-        Serial.print(audioCtrl_->getCacheEntryCount());
-        Serial.print(F(",\"restore\":"));
-        Serial.print(audioCtrl_->isCacheRestoreActive() ? 1 : 0);
-        Serial.print(F(",\"rbl\":"));
-        Serial.print(audioCtrl_->getCacheRestoreBarsLeft());
         Serial.print(F(",\"bb\":["));
         const float* bb = audioCtrl_->getBarBins();
         for (int i = 0; i < audioCtrl_->getBarBinCount(); i++) {
@@ -1806,41 +1773,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         }
         Serial.println(F("]"));
 
-        // Template match state
-        Serial.println(F("-- Template Match --"));
-        {
-            // Order must match AudioTracker::templates_[]
-            static const char* const templateNames[] = {
-                "4otf", "backbeat", "halftime", "breakbeat",
-                "8thnote", "dnb", "dembow", "sparse"
-            };
-            int idx = audioCtrl_->getBestTemplateIndex();
-            Serial.print(F("  Template: "));
-            if (idx >= 0 && idx < 8) {
-                Serial.print(templateNames[idx]);
-            } else {
-                Serial.print(F("none"));
-            }
-            Serial.print(F(" (idx="));
-            Serial.print(idx);
-            Serial.print(F(", sim="));
-            Serial.print(audioCtrl_->getBestTemplateSimilarity(), 3);
-            Serial.println(F(")"));
-        }
-
-        // Cache state
-        Serial.println(F("-- Pattern Cache --"));
-        Serial.print(F("  Entries: "));
-        Serial.print(audioCtrl_->getCacheEntryCount());
-        Serial.println(F("/4"));
-        Serial.print(F("  Restore: "));
-        if (audioCtrl_->isCacheRestoreActive()) {
-            Serial.print(F("active ("));
-            Serial.print(audioCtrl_->getCacheRestoreBarsLeft());
-            Serial.println(F(" bars left)"));
-        } else {
-            Serial.println(F("inactive"));
-        }
+        // (Template match + pattern cache display removed v80)
 
         Serial.println();
         return true;

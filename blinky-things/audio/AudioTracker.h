@@ -1,7 +1,6 @@
 #pragma once
 
 #include "AudioControl.h"
-#include "CombFilterBank.h"
 #include "../hal/PlatformDetect.h"
 
 #if defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)
@@ -25,35 +24,13 @@ struct FrameOnsetNN {
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
 
-// Pattern template: expected bar histogram shape for common rhythmic patterns.
-// Static const, stored in flash only (~544 bytes total for 8 templates).
-struct PatternTemplate {
-    float bins[16];       // Expected histogram shape (BAR_BINS=16)
-    uint16_t fillMask;    // Bitmask: 1 = fill-prone position (ignored in core matching)
-};
-
-// LRU cache entry: snapshot of a learned bar histogram for section recall.
-struct PatternCacheEntry {
-    float bins[16];       // Snapshot of barBins when cached (BAR_BINS=16)
-    float bpm;            // BPM at time of caching
-    uint8_t age;          // LRU counter (0 = most recently used)
-    bool valid;
-};
-
 /**
  * AudioTracker - Audio analysis with decoupled tempo/onset architecture
  *
- * ACF + Comb + PLP architecture with decoupled signal paths:
- *
- *   BPM path:  SharedSpectralAnalysis → spectral flux → OSS buffer
- *                → ACF (tempo) + Comb bank (validation) → BPM estimate
- *
- *   Onset path: SharedSpectralAnalysis → FrameOnsetNN (Conv1D W16, ~7ms)
- *                → onset activation → pulse detection (visual sparks)
- *
- *   Pulse path: PLP (Predominant Local Pulse) — epoch-folds spectral flux
- *                at detected period to extract actual repeating energy pattern.
- *                Dual-source (flux + bass energy) period agreement → confidence.
+ * ACF + PLP architecture:
+ *   BPM path:  spectral flux → OSS buffer → ACF → period estimate
+ *   Onset path: FrameOnsetNN → pulse detection (visual sparks)
+ *   Pulse path: PLP epoch-folds flux at detected period → repeating energy pattern
  *
  * Key design: BPM estimation uses spectral flux (NN-independent). NN onset
  * drives visual pulse only. PLP extracts the dominant repeating energy pattern
@@ -83,8 +60,6 @@ public:
     float getPeriodicityStrength() const { return periodicityStrength_; }
     float getLastPulseStrength() const { return lastPulseStrength_; }
     uint16_t getBeatCount() const { return beatCount_; }
-    float getCombBankBPM() const { return combFilterBank_.getPeakBPM(); }
-    float getCombBankConfidence() const { return combFilterBank_.getPeakConfidence(); }
     float getPlpPhase() const { return plpPhase_; }
     float getPlpConfidence() const { return plpConfidence_; }
     float getPlpPulseValue() const { return plpPulseValue_; }
@@ -107,21 +82,10 @@ public:
     // Pattern memory reset (for test automation)
     void resetPatternMemory();
 
-    // Template matching accessors
-    int getBestTemplateIndex() const { return bestTemplateIdx_; }
-    float getBestTemplateSimilarity() const { return bestTemplateSim_; }
-
-    // Cache accessors
-    int getCacheEntryCount() const;
-    bool isCacheRestoreActive() const { return cacheRestoreActive_; }
-    int getCacheRestoreBarsLeft() const { return cacheRestoreBarsLeft_; }
-
     // === Tunable parameters ===
     // Core tempo
     float bpmMin = 60.0f;
     float bpmMax = 200.0f;
-    float rayleighBpm = 130.0f;
-    float combFeedback = 0.855f;
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
 
@@ -136,17 +100,13 @@ public:
     // NN profiling
     bool nnProfile = false;
 
-    // Spectral flux contrast (power-law sharpening before ACF/comb)
+    // Spectral flux contrast (power-law sharpening before ACF)
     float odfContrast = 1.25f;
 
     // Pulse detection thresholds
     float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
     float pulseOnsetFloor = 0.1f;      // ODF floor for pulse detection scaling
-
-    // Percival ACF harmonic enhancement weights
-    float percivalWeight2 = 0.5f;      // 2nd harmonic fold weight
-    float percivalWeight4 = 0.25f;     // 4th harmonic fold weight
 
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
@@ -190,9 +150,6 @@ private:
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
-
-    // === Comb filter bank ===
-    CombFilterBank combFilterBank_;
 
     // === Tempo state ===
     float bpm_ = 120.0f;
@@ -252,28 +209,10 @@ private:
     // Phase B: Bar-position histogram — 16 bins (16th-note resolution)
     static constexpr int BAR_BINS = 16;
     float barBins_[BAR_BINS] = {0};
-    float prevGoodBins_[BAR_BINS] = {0};   // Snapshot from last high-confidence state (for cache restore matching)
     float barEntropy_ = 1.0f;
     float patternConfidence_ = 0.0f;
-    float prevPatternConfidence_ = 0.0f;   // For detecting confidence crossings
     uint16_t patternBarsAccumulated_ = 0;
     uint32_t lastBarBoundaryMs_ = 0;
-
-    // Template matching state
-    int bestTemplateIdx_ = -1;
-    float bestTemplateSim_ = 0.0f;
-    static constexpr int NUM_TEMPLATES = 8;
-    static const PatternTemplate templates_[NUM_TEMPLATES];
-
-    // LRU pattern cache (4 entries, ~280 bytes RAM)
-    static constexpr int CACHE_SIZE = 4;
-    PatternCacheEntry cache_[CACHE_SIZE] = {};  // zero-initialized (valid=false)
-
-    // Cache restore state
-    bool cacheRestoreActive_ = false;
-    int cacheRestoreBarsLeft_ = 0;
-    int cacheRestoreIdx_ = -1;
-    static constexpr float CACHE_BLEND_RATES[4] = {0.40f, 0.20f, 0.10f, 0.05f};
 
     // === Output ===
     AudioControl control_;
@@ -295,13 +234,4 @@ private:
     float predictOnsetStrength(uint32_t nowMs);
     void decayPatternBins();
 
-    // Template matching + cache methods
-    float templateCosineSimilarity(const float* observed, const PatternTemplate& tmpl) const;
-    void matchTemplates();
-    void cachePatternSave();
-    void cachePatternRestore();
-    void cacheProgressiveBlend();
-
-    // Percival harmonic enhancement on ACF
-    void percivalEnhance(float* acf, int minLag, int maxLag, int harmonicMaxLag, int acfSize);
 };
