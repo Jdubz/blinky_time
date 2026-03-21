@@ -263,6 +263,38 @@ interface DeviceRunScore {
 }
 
 /**
+ * Convert a DeviceRunScore into a compact summary object.
+ * Shared by run_music_test (single & multi-run) and run_music_test_multi.
+ */
+function formatScoreSummary(score: DeviceRunScore) {
+  return {
+    beatTracking: {
+      f1: score.beatTracking.f1,
+      precision: score.beatTracking.precision,
+      recall: score.beatTracking.recall,
+      refBeats: score.beatTracking.refBeats,
+      estBeats: score.beatTracking.estBeats,
+    },
+    transientTracking: score.transientTracking,
+    musicMode: score.musicMode,
+    plp: score.plp,
+    diagnostics: {
+      transientRate: Math.round(score.diagnostics.transientRate * 10) / 10,
+      expectedBeatRate: Math.round(score.diagnostics.expectedBeatRate * 10) / 10,
+      beatEventRate: Math.round(score.diagnostics.beatEventRate * 10) / 10,
+      transientOffsetMs: score.diagnostics.phaseOffsetStats,
+      beatOffsetMs: score.diagnostics.beatOffsetStats,
+      beatOffsetHistogram: score.diagnostics.beatOffsetHistogram,
+      predictionRatio: score.diagnostics.predictionRatio,
+      matched: score.diagnostics.beatVsReference.matched,
+      extra: score.diagnostics.beatVsReference.extra,
+      missed: score.diagnostics.beatVsReference.missed,
+    },
+    timing: { latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null },
+  };
+}
+
+/**
  * Score a single device's test recording against ground truth.
  * This is the shared scoring logic used by run_music_test, run_music_test_multi,
  * and run_validation_suite.
@@ -2578,30 +2610,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             // Build per-run compact summary
             perRunSummaries.push({
               ...(numRuns > 1 ? { run: runIdx + 1 } : {}),
-              beatTracking: {
-                f1: score.beatTracking.f1,
-                precision: score.beatTracking.precision,
-                recall: score.beatTracking.recall,
-                cmlt: score.beatTracking.cmlt,
-                amlt: score.beatTracking.amlt,
-                refBeats: score.beatTracking.refBeats,
-                estBeats: score.beatTracking.estBeats,
-              },
-              transientTracking: score.transientTracking,
-              musicMode: score.musicMode,
-              diagnostics: {
-                transientRate: Math.round(score.diagnostics.transientRate * 10) / 10,
-                expectedBeatRate: Math.round(score.diagnostics.expectedBeatRate * 10) / 10,
-                beatEventRate: Math.round(score.diagnostics.beatEventRate * 10) / 10,
-                transientOffsetMs: score.diagnostics.phaseOffsetStats,
-                beatOffsetMs: score.diagnostics.beatOffsetStats,
-                beatOffsetHistogram: score.diagnostics.beatOffsetHistogram,
-                predictionRatio: score.diagnostics.predictionRatio,
-                matched: score.diagnostics.beatVsReference.matched,
-                extra: score.diagnostics.beatVsReference.extra,
-                missed: score.diagnostics.beatVsReference.missed,
-              },
-              timing: { latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null },
+              ...formatScoreSummary(score),
               detailsFile: detailsFilename,
             });
 
@@ -2799,24 +2808,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const score = allRunScores.get(devPort)![0];
               return {
                 port: devPort,
-                beatTracking: {
-                  f1: score.beatTracking.f1,
-                  precision: score.beatTracking.precision,
-                  recall: score.beatTracking.recall,
-                  refBeats: score.beatTracking.refBeats,
-                  estBeats: score.beatTracking.estBeats,
-                },
-                transientTracking: score.transientTracking,
-                musicMode: {
-                  avgBpm: score.musicMode.avgBpm,
-                  expectedBpm: score.musicMode.expectedBpm,
-                  bpmError: score.musicMode.bpmError,
-                  bpmAccuracy: score.musicMode.bpmAccuracy,
-                },
-                timing: {
-                  latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
-                  beatOffsetMedianMs: score.diagnostics.beatOffsetStats?.median ?? null,
-                },
+                ...formatScoreSummary(score),
               };
             });
 
@@ -2847,10 +2839,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 },
                 perRun: scores.map((s, i) => ({
                   run: i + 1,
-                  beatF1: s.beatTracking.f1,
-                  transientF1: s.transientTracking.f1,
-                  bpmAccuracy: s.musicMode.bpmAccuracy,
-                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
+                  ...formatScoreSummary(s),
                 })),
               };
             });
