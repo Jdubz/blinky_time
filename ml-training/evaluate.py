@@ -259,7 +259,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         # Extract channel activations
         activations = all_activations[:, 0]  # ch0: onset (or kick for instrument models)
         db_activations = all_activations[:, 1] if has_downbeat else None
-        is_instrument_model = n_out_ch >= 3 and not has_downbeat
+        is_instrument_model = n_out_ch >= 3
 
         # Load ground truth beats
         with open(label_path) as f:
@@ -556,7 +556,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
 
         n_frames = mel.shape[0]
         n_out_ch = model.out_channels
-        is_inst = n_out_ch >= 3 and not has_downbeat
+        is_inst = n_out_ch >= 3
         all_act = np.zeros((n_frames, n_out_ch), dtype=np.float32)
         counts = np.zeros(n_frames, dtype=np.float32)
         stride = chunk_frames // 2

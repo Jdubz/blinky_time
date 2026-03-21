@@ -125,7 +125,7 @@ public:
     float pllKp = 0.15f;
     float pllKi = 0.005f;
     float activationThreshold = 0.3f;
-    float odfGateThreshold = 0.20f;
+    float odfGateThreshold = 0.20f;  // DEPRECATED: gate removed (v76). Kept for settings compat; not read by update().
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
 

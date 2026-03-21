@@ -161,7 +161,25 @@ struct AudioControl {
 };
 ```
 
-Note: The exact struct layout will be determined during implementation. Generator code that reads `phase` and `rhythmStrength` will need to be updated to use `plpPulse` and `plpConfidence`.
+Note: The exact struct layout will be determined during implementation.
+
+### Generator Migration Table
+
+| Generator | Old Field | Old Usage | New Field | New Usage |
+|-----------|-----------|-----------|-----------|-----------|
+| HeatFire | `phase` | Breathing effect (cosine of phase) | `plpPulse` | Breathing driven by PLP wave |
+| HeatFire | `pulse` | Spark burst intensity | `pulse` | Unchanged (raw NN onset) |
+| HeatFire | `rhythmStrength` | Blend music/organic mode | `plpConfidence` | Same role, PLP-derived |
+| HeatFire | `energy` | Baseline flame height | `energy` | Unchanged |
+| HeatFire | `onsetDensity` | Content classification | `onsetRegularity` | nPVI replaces density for mode selection |
+| Water | `phase` | Wave phase offset | `plpPulse` | Wave driven by PLP |
+| Water | `pulse` | Ripple trigger | `pulse` | Unchanged |
+| Lightning | `phase` | Bolt timing | `plpPulse` | Bolt timing from PLP |
+| Lightning | `pulse` | Bolt trigger | `pulse` | Unchanged |
+| All | (none) | (none) | `bassEnergy` | New: bass-specific visual drive |
+| All | (none) | (none) | `brightness` | New: color temperature control |
+
+Generator migration is estimated at 60-70% of total implementation effort (Phase 4).
 
 ## Implementation Plan
 
@@ -200,14 +218,17 @@ Instead of phase consistency (which measures lock to beat grid — something we'
 
 ## Open Questions
 
-1. **PLP buffer size:** The 2024 paper uses a 4-8 second window. At 62.5 Hz that's 250-500 frames. We need to determine the minimum buffer size that produces stable output for our BPM range (60-200 BPM).
-2. **Spectral flux vs. NN onset as PLP input:** PLP can use either. Spectral flux is NN-independent and broadband. NN onset is instrument-aware (especially with v8's 3-channel output). May want to try both.
-3. **Generator migration:** How much generator code needs to change? Fire currently uses `phase` for breathing, `pulse` for sparks, `rhythmStrength` for mode blend, `energy` for baseline. All except `energy` change.
-4. **Settings version bump:** New AudioControl layout requires SETTINGS_VERSION increment and migration.
+1. **PLP buffer size:** The Meier 2024 paper uses a 4-8 second window. At 62.5 Hz that's 250-500 frames. Minimum for 60 BPM (slowest tempo): 2 beat periods = 2 seconds = 125 frames = 500 bytes. Maximum for full stability: 500 frames = 2 KB. Start with 256 frames (1 KB) and tune. RAM budget: current arena 3404/32768 bytes, plus ~13 KB globals. 1-2 KB for PLP buffer is feasible.
+2. **Spectral flux vs. NN onset as PLP input:** PLP can use either. Spectral flux is NN-independent and broadband. NN onset is instrument-aware (especially with v8's 3-channel output). May want to try both. Start with spectral flux (same signal ACF already uses) to avoid adding an NN dependency to the phase path.
+3. **PLP lookahead:** The extrapolated right half of the kernel provides ~1 beat period of lookahead. At 120 BPM that's 500ms. At 200 BPM that's 300ms. This is a stretch goal for Phase 1 — the core pulse output works without it. Anticipatory effects can be added later.
+4. **nPVI stability:** nPVI requires at least 4-8 inter-onset intervals for a stable estimate. At 2-4 onsets/second (typical for EDM), that's 2-4 seconds of onset history. The existing 64-slot onset timestamp buffer covers ~16-32 seconds at typical density — more than sufficient. nPVI should be updated every ~500ms (not every frame) to smooth the output.
+5. **nPVI threshold calibration:** The proposed ranges (0-25=metronomic, 25-60=regular, etc.) are from speech prosody literature. Electronic music may cluster differently. Treat these as starting points and calibrate with on-device testing across the 18 EDM test tracks.
+6. **Settings version bump:** New AudioControl layout requires SETTINGS_VERSION increment (v75 → v76) and factory reset on all 7 devices. The `odfGateThreshold` parameter should be fully removed at that time.
 
 ## References
 
-- Grosche & Muller, "Extracting Predominant Local Pulse Information from Music Recordings", IEEE TASLP 2011
-- Meier, Chiu & Muller, "A Real-Time Beat Tracking System with Zero Latency", TISMIR 2024
-- Patel & Daniele, "Pairwise Variability Index", 2003 (nPVI for rhythm regularity)
-- Scheirer, "Tempo and Beat Analysis of Acoustic Musical Signals", 1998 (multi-band envelope model)
+- Grosche & Muller, "Extracting Predominant Local Pulse Information from Music Recordings", IEEE TASLP 2011 (original PLP algorithm)
+- Meier, Chiu & Muller, "A Real-Time Beat Tracking System with Zero Latency and Enhanced Confidence Signals", TISMIR 2024 (causal real-time PLP with confidence signals; open-source: github.com/groupmm/real_time_plp)
+- Patel & Daniele, "An empirical comparison of rhythm in language and music", Cognition 2003 (nPVI for rhythm regularity)
+- Scheirer, "Tempo and Beat Analysis of Acoustic Musical Signals", JASA 1998 (multi-band envelope model)
+- Thul & Toussaint, "A Comparative Evaluation of Rhythm Complexity Measures", ISMIR 2008 (comparison of 32 complexity measures including nPVI)

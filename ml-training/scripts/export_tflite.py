@@ -417,6 +417,24 @@ def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
     No BatchNorm to worry about — just transpose Conv1D weights.
     Extracts Conv1d layers by name pattern (backbone.N.weight) rather than
     assuming a fixed stride, robust to changes in non-parametric layers.
+
+    Bias folding for freq_pos_encoding:
+        The learnable frequency position vector (1, 1, n_mels) is added to the
+        input before convolutions in PyTorch: conv(x + fp). This is equivalent
+        to conv(x) + conv(fp), where conv(fp) is a constant per output channel.
+        We fold conv(fp) into the first Conv1D's bias, eliminating the extra op.
+
+        This folding is exact for timesteps where the full kernel window sees
+        real input (t >= k-1). For the first k-1 timesteps, causal zero-padding
+        means the freq_pos contribution is partial, so the folded bias slightly
+        over-estimates. This is acceptable because:
+          - Firmware inference uses only the LAST frame of the sliding window
+            (always t=15 for W16, well past the k-1=4 boundary)
+          - Offline evaluation uses overlapping chunks where boundary frames
+            contribute minimally to the averaged activation
+
+        Do NOT use this folding for sequential/streaming inference where every
+        frame's output matters equally — use a separate addition op instead.
     """
     # Frequency position encoding: fold into first Conv1D bias.
     # conv(x + fp) = conv(x) + conv(fp). Since fp is constant across time,

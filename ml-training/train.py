@@ -542,7 +542,15 @@ def main():
         ft_state = torch.load(ft_path, map_location=device, weights_only=True)
         if isinstance(ft_state, dict) and "state_dict" in ft_state:
             ft_state = ft_state["state_dict"]
-        model.load_state_dict(ft_state)
+        # strict=False allows fine-tuning across output head changes (e.g., 1→3 channels).
+        # Optimizer state is discarded — fresh Adam moments for the new task.
+        load_result = model.load_state_dict(ft_state, strict=False)
+        if load_result.missing_keys or load_result.unexpected_keys:
+            print(f"  Fine-tune partial load:")
+            if load_result.missing_keys:
+                print(f"    Missing (randomly initialized): {load_result.missing_keys}")
+            if load_result.unexpected_keys:
+                print(f"    Unexpected (ignored): {load_result.unexpected_keys}")
         # Reduce LR 10x for fine-tuning (pretrained features, just adjusting to new labels)
         lr = lr / 10
         print(f"Fine-tuning from {ft_path} (LR reduced to {lr:.1e})")
