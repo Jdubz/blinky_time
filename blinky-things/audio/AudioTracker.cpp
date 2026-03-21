@@ -197,11 +197,8 @@ const AudioControl& AudioTracker::update(float dt) {
     // 5. Pulse detection runs every frame (uses raw ODF, before gating)
     updatePulseDetection(odf, dt, nowMs);
 
-    // 6. ODF information gate — suppress noise-driven false beats
-    //    Applied after pulse detection so transient sensitivity is unaffected.
-    if (odf < odfGateThreshold) {
-        odf = 0.02f;
-    }
+    // 6. ODF information gate — removed. Was dead code: no consumer reads
+    //    ODF after pulse detection (step 5), and it starved the PLL.
 
     // 7-8. Feed DSP components only on new spectral frames.
     //      BPM estimation uses spectral flux (NN-independent broadband transient

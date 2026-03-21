@@ -1,0 +1,66 @@
+# Conv1D W16 v8 — 3-channel instrument-aware onset detection
+#
+# Instead of suppressing hi-hats in the training labels (v7's approach,
+# which collaterally kills snare recall), output 3 independent channels
+# — kick/snare/hihat — and let the firmware decide what to ignore.
+#
+# The model detects ALL onsets at full quality on each channel:
+#   ch0 = sigmoid(logit_kick)   — kick onset activation
+#   ch1 = sigmoid(logit_snare)  — snare onset activation
+#   ch2 = sigmoid(logit_hihat)  — hihat onset activation
+#
+# Firmware uses: onset = max(kick, snare), ignoring hihat entirely.
+# This avoids the v7 problem where label-level hihat suppression
+# caused a 15% snare recall regression.
+#
+# Architecture unchanged: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->3, k=1)
+#   ~7.1K params, ~13.5 KB INT8, ~7ms inference on Cortex-M4F
+#   Output conv: 32*3+3 = 99 params (vs 33 for single-channel)
+#
+# Labels: kick_weighted JSON with per-onset "type" field.
+#   kick onsets  → ch0 target = 1.0
+#   snare onsets → ch1 target = 1.0
+#   hihat onsets → ch2 target = 1.0
+#
+# Loss: asymmetric_focal (same as v3/v7, best loss for this architecture).
+# pos_weight: auto-calculated per channel from data (kick/snare are rare
+# relative to silence frames, hihat even rarer).
+#
+# Prerequisites:
+#   1. Kick-weighted labels already generated
+#   2. Prepare dataset (new label type, can't reuse v3/v7 processed data):
+#      python scripts/prepare_dataset.py --config configs/conv1d_w16_onset_v8.yaml --augment
+#   3. Train:
+#      python train.py --config configs/conv1d_w16_onset_v8.yaml \
+#        --output-dir outputs/conv1d_w16_onset_v8
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true
+  num_output_channels: 3
+  output_channel_names: ["kick", "snare", "hihat"]
+
+labels:
+  labels_type: "instrument"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted"
+  target_type: "binary"
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  pos_weight: 0       # 0 = auto-calculate per channel from data
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v8.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15

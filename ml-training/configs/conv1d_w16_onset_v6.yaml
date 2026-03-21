@@ -1,0 +1,55 @@
+# Conv1D W16 v6 — kick/snare-focused onset detection with shift-tolerant BCE
+#
+# Key change from v5: switch from asymmetric_focal to shift_bce.
+# Beat This! (Foscarin et al., ISMIR 2024) shows shift-tolerant BCE is
+# +13 F1 over plain BCE for onset/beat detection. Focal loss with
+# gamma_pos=0.5 suppresses gradients from rare positive frames, causing
+# v5 to converge to a noisy detector that fires more but hits less.
+#
+# Labels unchanged from v5:
+#   - Kick onsets (<200 Hz) → target 1.0
+#   - Snare onsets (200-4k Hz) → target 1.0
+#   - Hi-hat/cymbal onsets (>4k Hz) → target 0.0 (explicit negative)
+#
+# Architecture unchanged: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
+#   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F
+#
+# Output: 1 channel
+#   ch0 = sigmoid(onset_logit) — onset activation
+#
+# Prerequisites:
+#   1. Kick-weighted labels already generated for v5 (reuse them)
+#
+#   2. Prepare dataset (reuses v5 processed data if labels unchanged):
+#      python scripts/prepare_dataset.py --config configs/conv1d_w16_onset_v6.yaml --augment
+#
+#   3. Train:
+#      python train.py --config configs/conv1d_w16_onset_v6.yaml \
+#        --output-dir outputs/conv1d_w16_onset_v6
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true
+
+labels:
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted"
+  target_type: "binary"
+
+loss:
+  type: "shift_bce"
+  shift_tolerance: 3    # ±48ms at 62.5 Hz — handles annotation jitter
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v6.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15

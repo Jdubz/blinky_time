@@ -1,0 +1,58 @@
+# Conv1D W16 v7 — consensus beats + hihat suppression
+#
+# Best of both worlds: consensus_v5 beat positions (high accuracy from
+# 7-system agreement) with kick_weighted instrument classification to
+# suppress hihat-coincident beats.
+#
+# For each consensus beat:
+#   - Match to nearest kick_weighted onset within ±70ms
+#   - Kick/snare match → keep original consensus strength (fire)
+#   - Hihat match → weight 0.0 (suppress)
+#   - No match → keep original strength (musically important beat)
+#
+# v3 (consensus only) was the best model but fired on everything including
+# hihats. This config adds selective suppression without losing the
+# accurate beat timing that made v3 work.
+#
+# Uses asymmetric_focal (same as v3 — confirmed better than shift_bce
+# when combined with consensus labels).
+#
+# Architecture unchanged: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
+#   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F
+#
+# Prerequisites:
+#   1. Consensus_v5 labels already exist
+#   2. Kick-weighted labels already generated for v5 (reuse)
+#   3. Must re-prepare dataset (new label combination):
+#      python scripts/prepare_dataset.py --config configs/conv1d_w16_onset_v7.yaml --augment
+#   4. Train:
+#      python train.py --config configs/conv1d_w16_onset_v7.yaml \
+#        --output-dir outputs/conv1d_w16_onset_v7
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true
+
+labels:
+  labels_type: "consensus_kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted"
+  target_type: "binary"
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v7.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15
