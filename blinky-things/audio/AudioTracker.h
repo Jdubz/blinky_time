@@ -43,24 +43,21 @@ struct PatternCacheEntry {
 /**
  * AudioTracker - Audio analysis with decoupled tempo/onset architecture
  *
- * Replaces AudioController's 2162-line CBSS system with a ~400-line
- * ACF + Comb + PLL architecture with decoupled signal paths:
+ * ACF + Comb + PLP architecture with decoupled signal paths:
  *
  *   BPM path:  SharedSpectralAnalysis → spectral flux → OSS buffer
  *                → ACF (tempo) + Comb bank (validation) → BPM estimate
  *
  *   Onset path: SharedSpectralAnalysis → FrameOnsetNN (Conv1D W16, ~7ms)
  *                → onset activation → pulse detection (visual sparks)
- *                → PLL phase refinement (onset-gated correction)
  *
- *   Phase path: PLL free-running sawtooth at BPM → smooth phase ramp
+ *   Pulse path: PLP (Predominant Local Pulse) — epoch-folds spectral flux
+ *                at detected period to extract actual repeating energy pattern.
+ *                Dual-source (flux + bass energy) period agreement → confidence.
  *
- * Key design: BPM estimation uses spectral flux (NN-independent), not NN
- * onset activation. The NN detects acoustic onsets (kicks/snares) which
- * drive visual pulse and refine PLL phase, but cannot distinguish on-beat
- * from off-beat onsets — so it must not drive tempo estimation.
- *
- * ~10 tunable parameters (vs ~56 in AudioController).
+ * Key design: BPM estimation uses spectral flux (NN-independent). NN onset
+ * drives visual pulse only. PLP extracts the dominant repeating energy pattern
+ * without needing onset-beat classification.
  */
 class AudioTracker {
 public:
@@ -88,8 +85,10 @@ public:
     uint16_t getBeatCount() const { return beatCount_; }
     float getCombBankBPM() const { return combFilterBank_.getPeakBPM(); }
     float getCombBankConfidence() const { return combFilterBank_.getPeakConfidence(); }
-    float getPllPhase() const { return pllPhase_; }
-    float getPllIntegral() const { return pllIntegral_; }
+    float getPlpPhase() const { return plpPhase_; }
+    float getPlpConfidence() const { return plpConfidence_; }
+    float getPlpPulseValue() const { return plpPulseValue_; }
+    int getPlpPatternLen() const { return plpPatternLen_; }
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
@@ -117,44 +116,33 @@ public:
     bool isCacheRestoreActive() const { return cacheRestoreActive_; }
     int getCacheRestoreBarsLeft() const { return cacheRestoreBarsLeft_; }
 
-    // === Tunable parameters (~10 total) ===
+    // === Tunable parameters ===
+    // Core tempo
     float bpmMin = 60.0f;
     float bpmMax = 200.0f;
     float rayleighBpm = 130.0f;
     float combFeedback = 0.855f;
-    float pllKp = 0.15f;
-    float pllKi = 0.005f;
-    float activationThreshold = 0.3f;
-    float odfGateThreshold = 0.20f;  // DEPRECATED: gate removed (v76). Kept for settings compat; not read by update().
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
 
-    // Phase-aware onset confidence modulation (v75)
-    // Replaces binary boost/suppress with subdivision-aware cosine proximity curve.
-    // Phase alignment matters; octave errors don't (half/double time still looks musical).
-    float pulseBoostOnBeat = 1.3f;         // Max boost for confident on-grid onsets
-    float energyBoostOnBeat = 0.3f;        // Energy boost near beat subdivisions
-    float confFloor = 0.4f;                // Min confidence for maximally off-grid onsets (0=suppress, 1=passthrough)
-    float confActivation = 0.3f;           // rhythmStrength below this: no modulation (all onsets passthrough)
-    float confFullModulation = 0.7f;       // rhythmStrength above this: full phase-based modulation
-    float subdivTolerance = 0.10f;         // Phase distance for "near subdivision" (at 120 BPM, 0.10 = 50ms)
+    // Rhythm activation
+    float activationThreshold = 0.3f;
+
+    // PLP (Predominant Local Pulse)
+    float plpActivation = 0.3f;        // Min PLP confidence for pattern pulse (below: cosine fallback)
+    float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
+    float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
 
     // NN profiling
     bool nnProfile = false;
 
-    // === Newly exposed tuning constants (v74) ===
     // Spectral flux contrast (power-law sharpening before ACF/comb)
     float odfContrast = 1.25f;
 
     // Pulse detection thresholds
     float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-
-    // PLL tuning constants
-    float pllOnsetFloor = 0.1f;        // ODF values below this get zero PLL correction
-    float pllNearBeatWindow = 0.25f;   // Phase distance (0-0.5) for onset-gated correction
-    float pllIntegralDecay = 0.95f;    // Leaky integrator decay rate
-    float pllSilenceDecay = 0.99f;     // Integral decay during silence
+    float pulseOnsetFloor = 0.1f;      // ODF floor for pulse detection scaling
 
     // Percival ACF harmonic enhancement weights
     float percivalWeight2 = 0.5f;      // 2nd harmonic fold weight
@@ -172,7 +160,6 @@ public:
     float energyMicWeight = 0.30f;     // Broadband mic level weight
     float energyMelWeight = 0.30f;     // Bass mel energy weight
     float energyOdfWeight = 0.40f;     // ODF peak-hold transient weight
-    float energyBoostWindow = 0.25f;   // Phase distance for beat-proximity boost
 
     // Pattern memory (v77): IOI histogram discovers tempo from onset intervals,
     // bar histogram reveals repeating pattern for prediction. See PATTERN_HISTOGRAM_DESIGN.md.
@@ -212,10 +199,20 @@ private:
     float beatPeriodFrames_ = OSS_FRAME_RATE * 60.0f / 120.0f;  // ~33 frames
     float periodicityStrength_ = 0.0f;
 
-    // === PLL state ===
-    float pllPhase_ = 0.0f;           // 0→1 sawtooth
-    float pllIntegral_ = 0.0f;        // Leaky integrator for frequency correction
-    uint16_t beatCount_ = 0;
+    // === PLP state (Predominant Local Pulse) ===
+    static constexpr int BASS_BUFFER_SIZE = 360;  // Same size as OSS buffer
+    static constexpr int MAX_PATTERN_LEN = 66;    // Max period in frames (66 Hz / 60 BPM)
+    float bassBuffer_[BASS_BUFFER_SIZE] = {0};
+    int bassWriteIdx_ = 0;
+    int bassCount_ = 0;
+
+    float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period)
+    int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
+    float plpPhase_ = 0.0f;                     // 0→1 phase within pattern cycle
+    float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
+    float plpPulseValue_ = 0.5f;               // Current pattern value at phase position
+    float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
+    uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
     // === Pulse detection ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline
@@ -283,9 +280,11 @@ private:
 
     // === Internal methods ===
     void addOssSample(float odf);
+    void addBassSample(float bassEnergy);
     void runAutocorrelation();
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
-    void updatePll(float odf, uint32_t nowMs);
+    void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
+    void updatePlpPhase();          // Advance phase + read pattern value (every frame)
     void synthesizeOutputs(float dt, uint32_t nowMs);
 
     // Pattern memory methods

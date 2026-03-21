@@ -8,7 +8,7 @@ static constexpr int MAX_ACF_SIZE = 280;
 
 // Constants moved to AudioTracker public members (v74) for tuning via serial console.
 // Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
-// PULSE_MIN_LEVEL=0.03, PLL_ONSET_FLOOR=0.1
+// PULSE_MIN_LEVEL=0.03, PULSE_ONSET_FLOOR=0.1
 
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
@@ -166,10 +166,10 @@ const AudioControl& AudioTracker::update(float dt) {
         spectral_.process();
     }
 
-    // 4. NN inference → onset activation for pulse detection + PLL phase refinement.
+    // 4. NN inference → onset activation for pulse detection.
     //    Only run NN when a new spectral frame is ready. Between frames,
     //    use last activation. Note: NN output is NOT used for BPM estimation
-    //    (spectral flux handles that) — it drives visual pulse and PLL correction.
+    //    (spectral flux handles that) — it drives visual pulse only.
     float odf = 0.0f;
     uint32_t currentFrameCount = spectral_.getFrameCount();
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
@@ -185,7 +185,7 @@ const AudioControl& AudioTracker::update(float dt) {
     } else {
         // NN active but no new spectral frame — skip OSS/comb update
         // to avoid duplicate samples in the ACF buffer.
-        // Still run PLL (free-running) and output synthesis.
+        // Still run PLP phase advance and output synthesis.
         odf = frameOnsetNN_.getLastOnset();
     }
 
@@ -197,21 +197,11 @@ const AudioControl& AudioTracker::update(float dt) {
     // 5. Pulse detection runs every frame (uses raw ODF, before gating)
     updatePulseDetection(odf, dt, nowMs);
 
-    // 6. ODF information gate — removed. Was dead code: no consumer reads
-    //    ODF after pulse detection (step 5), and it starved the PLL.
+    // 6. ODF information gate — removed (v76).
 
     // 7-8. Feed DSP components only on new spectral frames.
     //      BPM estimation uses spectral flux (NN-independent broadband transient
-    //      signal) — not NN onset activation. This decouples tempo estimation from
-    //      the NN, which can't distinguish on-beat from off-beat onsets. Syncopated
-    //      kicks, hi-hats, and off-beat transients in NN output would corrupt ACF
-    //      periodicity. Spectral flux is a raw acoustic transient signal that
-    //      preserves the periodic structure ACF needs.
-    //
-    //      NN onset activation is used for:
-    //        - Pulse detection (visual sparks/flashes, step 5 above)
-    //        - PLL phase refinement (onset-gated correction, step 10 below)
-    //        - Energy synthesis (ODF peak-hold, in synthesizeOutputs)
+    //      signal) — not NN onset activation. NN onset drives visual pulse only.
     if (newSpectralFrame) {
         float flux = spectral_.getSpectralFlux();
         // Apply contrast sharpening (power-law) before buffering.
@@ -235,6 +225,15 @@ const AudioControl& AudioTracker::update(float dt) {
         combFilterBank_.feedbackGain = combFeedback;
         combFilterBank_.process(fluxContrast);
         addOssSample(fluxContrast);
+
+        // Bass energy for PLP dual-source analysis
+        float bassEnergy = 0.0f;
+        const float* mel = spectral_.getMelBands();
+        if (mel) {
+            for (int i = 1; i <= 6; i++) bassEnergy += mel[i];
+            bassEnergy /= 6.0f;
+        }
+        addBassSample(bassEnergy);
     }
 
     // 9. Periodic ACF for tempo estimation + IOI analysis
@@ -244,6 +243,7 @@ const AudioControl& AudioTracker::update(float dt) {
     if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
         lastAcfMs_ = nowMs;
         runAutocorrelation();
+        updatePlpAnalysis();  // PLP epoch-fold + bass ACF + cross-correlate
 
         // IOI analysis runs once per ACF cycle (same cadence)
         if (patternEnabled) {
@@ -251,8 +251,8 @@ const AudioControl& AudioTracker::update(float dt) {
         }
     }
 
-    // 10. PLL update (free-running every frame + onset correction)
-    updatePll(odf, nowMs);
+    // 10. PLP phase update (free-running + pattern-based correction)
+    updatePlpPhase();
 
     // 11. Decay periodicity during silence (between ACF runs)
     if (nowMs - lastSignificantAudioMs_ > 2000) {
@@ -456,58 +456,186 @@ void AudioTracker::percivalEnhance(float* acf, int minLag, int maxLag,
 }
 
 // ============================================================================
-// PLL Phase Tracking
+// PLP (Predominant Local Pulse) — Dual-Source Pattern Extraction
 // ============================================================================
 
-void AudioTracker::updatePll(float odf, uint32_t nowMs) {
-    // Free-running sawtooth: advance phase at current BPM
-    float phaseIncrement = 1.0f / beatPeriodFrames_;
-    pllPhase_ += phaseIncrement;
+void AudioTracker::addBassSample(float bassEnergy) {
+    bassBuffer_[bassWriteIdx_] = bassEnergy;
+    bassWriteIdx_ = (bassWriteIdx_ + 1) % BASS_BUFFER_SIZE;
+    if (bassCount_ < BASS_BUFFER_SIZE) bassCount_++;
+}
 
-    // Beat wrap
-    if (pllPhase_ >= 1.0f) {
-        pllPhase_ -= 1.0f;
-        beatCount_++;
+void AudioTracker::updatePlpAnalysis() {
+    // --- 1. Compute pattern length from current BPM ---
+    int patLen = static_cast<int>(beatPeriodFrames_ + 0.5f);
+    if (patLen < 2) patLen = 2;
+    if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
+    plpPatternLen_ = patLen;
+
+    // Need at least 2 full periods in OSS buffer for meaningful epoch folding
+    if (ossCount_ < patLen * 2) return;
+
+    // --- 2. Epoch-fold OSS buffer to extract average pattern ---
+    // Linearize circular buffer (reuse static from runAutocorrelation)
+    static float ossLinear[OSS_BUFFER_SIZE];
+    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+    for (int i = 0; i < ossCount_; i++) {
+        ossLinear[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
 
-    // Subdivision-aware PLL correction (v75):
-    // Correct phase when a strong onset lands near ANY beat grid subdivision,
-    // not just phase 0. This fixes the half-time anti-phase bug where beats at
-    // phase 0.5 got no correction (outside the old ±0.25 window at phase 0).
-    //
-    // Octave errors don't matter visually — half/double time still looks musical
-    // because events align with grid subdivisions. Phase alignment is what matters.
-    bool isStrongOnset = (odf > odfBaseline_ * pulseThresholdMult) && (odf > pllOnsetFloor);
+    // Fold and average
+    float patternAccum[MAX_PATTERN_LEN] = {0};
+    int epochs = 0;
+    for (int offset = ossCount_ - patLen; offset >= 0; offset -= patLen) {
+        for (int j = 0; j < patLen; j++) {
+            patternAccum[j] += ossLinear[offset + j];
+        }
+        epochs++;
+    }
 
-    if (isStrongOnset) {
-        // Compute phase error relative to nearest 8th-note subdivision.
-        // subdivPhase wraps pllPhase_ into [0, 1) within each half-beat.
-        // At phase 0.0 → subdivError=0 (on quarter), phase 0.5 → subdivError=0 (on 8th).
-        float subdivPhase = fmodf(pllPhase_ * 2.0f, 1.0f);
-        float subdivError = subdivPhase > 0.5f ? (subdivPhase - 1.0f) : subdivPhase;
+    if (epochs < 2) return;
 
-        // pllNearBeatWindow is in beat-phase units (0.25 = ±25% of beat period).
-        // subdivError is in subdivision space (2x compressed), so scale window accordingly.
-        if (fabsf(subdivError) < pllNearBeatWindow * 2.0f) {
-            float correctionScale = clampf(
-                (odf - pllOnsetFloor) / (1.0f - pllOnsetFloor), 0.0f, 1.0f);
-
-            // Map subdivision error back to beat-phase correction.
-            // subdivError is in subdivision space; divide by 2 to get beat-phase.
-            float beatPhaseCorrection = subdivError * 0.5f;
-
-            pllPhase_ -= pllKp * beatPhaseCorrection * correctionScale;
-
-            pllIntegral_ = pllIntegralDecay * pllIntegral_ + beatPhaseCorrection * correctionScale;
-            pllPhase_ -= pllKi * pllIntegral_;
-
-            pllPhase_ -= floorf(pllPhase_);  // Wrap to [0, 1) — handles arbitrary overshoot
+    // Normalize to [0, 1], then apply contrast via power-law
+    float maxVal = 0.0f;
+    for (int j = 0; j < patLen; j++) {
+        patternAccum[j] /= epochs;
+        if (patternAccum[j] > maxVal) maxVal = patternAccum[j];
+    }
+    if (maxVal > 0.0f) {
+        for (int j = 0; j < patLen; j++) {
+            float normalized = patternAccum[j] / maxVal;
+            // plpNovGain as contrast exponent: >1 sharpens peaks, <1 flattens
+            plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
     }
 
-    // Decay integral during silence (prevent wind-up)
-    if (nowMs - lastSignificantAudioMs_ > 2000) {
-        pllIntegral_ *= pllSilenceDecay;
+    // --- 3. Bass ACF for dual-source period agreement ---
+    if (bassCount_ >= patLen * 2) {
+        // Linearize bass buffer
+        static float bassLinear[BASS_BUFFER_SIZE];
+        int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
+        for (int i = 0; i < bassCount_; i++) {
+            bassLinear[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
+        }
+
+        // Bass mean subtraction
+        float bassMean = 0.0f;
+        for (int i = 0; i < bassCount_; i++) bassMean += bassLinear[i];
+        bassMean /= bassCount_;
+
+        // Bass ACF — find dominant lag in [minLag, maxLag]
+        // Normalized by zero-lag autocorrelation for fair comparison across lags
+        int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
+        int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
+        if (maxLag >= bassCount_ / 2) maxLag = bassCount_ / 2 - 1;
+        if (minLag < 1) minLag = 1;
+
+        // Zero-lag autocorrelation (= variance * count) for normalization
+        float bassZeroLag = 0.0f;
+        for (int i = 0; i < bassCount_; i++) {
+            float d = bassLinear[i] - bassMean;
+            bassZeroLag += d * d;
+        }
+
+        float bestBassCorr = -1e30f;
+        int bestBassLag = minLag;
+        if (bassZeroLag > 1e-10f) {
+            for (int lag = minLag; lag <= maxLag && lag < bassCount_; lag++) {
+                float sum = 0.0f;
+                int n = bassCount_ - lag;
+                for (int i = 0; i < n; i++) {
+                    sum += (bassLinear[i] - bassMean) * (bassLinear[i + lag] - bassMean);
+                }
+                // Normalize by zero-lag to get [-1, 1] range
+                float normalized = sum / bassZeroLag;
+                if (normalized > bestBassCorr) {
+                    bestBassCorr = normalized;
+                    bestBassLag = lag;
+                }
+            }
+        }
+        plpBassPeriod_ = static_cast<float>(bestBassLag);
+        float bassStrength = clampf(bestBassCorr, 0.0f, 1.0f);
+
+        // --- 4. Dual-source agreement → PLP confidence ---
+        float fluxBpm = bpm_;
+        float bassBpm = OSS_FRAMES_PER_MIN / plpBassPeriod_;
+
+        // Check agreement: within 10%, or at octave (2x / 0.5x)
+        float ratio = bassBpm / fluxBpm;
+        float agreement = 0.0f;
+        if (ratio > 0.9f && ratio < 1.1f) {
+            agreement = 1.0f;  // Direct agreement
+        } else if (ratio > 1.8f && ratio < 2.2f) {
+            agreement = 0.7f;  // Octave above
+        } else if (ratio > 0.45f && ratio < 0.55f) {
+            agreement = 0.7f;  // Octave below
+        }
+
+        // Factor in both ACF strengths: flux periodicity AND bass periodicity
+        float fluxStrength = clampf(periodicityStrength_, 0.0f, 1.0f);
+        float targetConf = agreement * fluxStrength * bassStrength;
+
+        // EMA smooth confidence
+        plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
+    }
+
+    // --- 5. Cross-correlate last period with extracted pattern for phase alignment ---
+    if (ossCount_ >= patLen) {
+        float bestCorr = -1e30f;
+        int bestOffset = 0;
+        for (int offset = 0; offset < patLen; offset++) {
+            float sum = 0.0f;
+            for (int j = 0; j < patLen; j++) {
+                int sigIdx = ossCount_ - patLen + j;
+                int patIdx = (j + offset) % patLen;
+                sum += ossLinear[sigIdx] * plpPattern_[patIdx];
+            }
+            if (sum > bestCorr) {
+                bestCorr = sum;
+                bestOffset = offset;
+            }
+        }
+
+        // Convert offset to target phase
+        float measuredPhase = static_cast<float>(bestOffset) / static_cast<float>(patLen);
+
+        // Gentle proportional phase correction (10% per update, ~150ms cadence)
+        float phaseError = measuredPhase - plpPhase_;
+        if (phaseError > 0.5f) phaseError -= 1.0f;
+        if (phaseError < -0.5f) phaseError += 1.0f;
+        plpPhase_ += 0.1f * phaseError;
+        if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+    }
+}
+
+void AudioTracker::updatePlpPhase() {
+    // Free-running phase advance at current BPM
+    float phaseIncrement = 1.0f / beatPeriodFrames_;
+    plpPhase_ += phaseIncrement;
+
+    // Beat wrap
+    if (plpPhase_ >= 1.0f) {
+        plpPhase_ -= 1.0f;
+        beatCount_++;
+    }
+
+    // Read extracted pattern at current phase position (linear interpolation)
+    if (plpPatternLen_ > 0 && plpConfidence_ > plpActivation) {
+        float patPos = plpPhase_ * plpPatternLen_;
+        int idx0 = static_cast<int>(patPos) % plpPatternLen_;
+        float frac = patPos - floorf(patPos);
+        int idx1 = (idx0 + 1) % plpPatternLen_;
+        plpPulseValue_ = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
+    } else {
+        // Fallback: cosine pulse (same shape as old phaseToPulse)
+        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * 6.28318530718f);
+    }
+
+    // Decay confidence during extended silence
+    if (plpConfidence_ > 0.0f && (time_.millis() - lastSignificantAudioMs_ > 2000)) {
+        plpConfidence_ *= 0.998f;
     }
 }
 
@@ -534,7 +662,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
     // Pulse detection: fire when ODF exceeds baseline threshold
     float pulseThreshold = odfBaseline_ * pulseThresholdMult;
-    if (pulseThreshold < pllOnsetFloor) pulseThreshold = pllOnsetFloor;
+    if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
 
     // Tempo-adaptive cooldown: shorter at faster tempos
     float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
@@ -931,14 +1059,8 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
 
     float rawEnergy = energyMicWeight * micLevel + energyMelWeight * bassMelEnergy + energyOdfWeight * odfPeakHold_;
 
-    // Subdivision-aware beat-proximity boost (v75):
-    // Boost energy near ANY grid subdivision (quarter + 8th notes), not just phase 0.
-    // This fixes energy suppression on every other beat at half-time BPM.
-    float subdivPhase = fmodf(pllPhase_ * 2.0f, 1.0f);  // 0=on subdivision, 0.5=max distance
-    float gridDistance = subdivPhase < 0.5f ? subdivPhase : (1.0f - subdivPhase);  // [0, 0.5]
-    float nearBeat = 1.0f - (gridDistance / (energyBoostWindow * 0.5f));
-    if (nearBeat < 0.0f) nearBeat = 0.0f;
-    rawEnergy *= (1.0f + nearBeat * energyBoostOnBeat * periodicityStrength_);
+    // Beat-proximity energy boost via PLP pulse (replaces subdivision-aware proximity)
+    rawEnergy *= (1.0f + plpPulseValue_ * 0.3f * plpConfidence_);
 
     // Pattern prediction (computed once, used for both anticipatory energy and pulse boost)
     float patternPrediction = 0.0f;
@@ -957,48 +1079,25 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
 
     control_.energy = clampf(rawEnergy, 0.0f, 1.0f);
 
-    // --- Pulse (phase-aware confidence modulation, v76) ---
-    // Replace binary boost/suppress with continuous cosine proximity curve.
-    // Octave errors are acceptable — events on ANY subdivision look musical.
-    // When rhythmStrength is low, all onsets pass through unmodulated (organic mode).
+    // --- Pulse ---
+    // Raw onset strength with pattern prediction boost.
+    // PLP pulse (via phaseToPulse()) provides beat-synced breathing separately.
     float pulse = lastPulseStrength_;
 
-    if (pulse > 0.0f) {
-        // Cosine proximity: 1.0 at grid center, decays to confFloor at max distance.
-        // gridDistance is [0, 0.5] — normalize to [0, 1] for cosine.
-        float normalizedDist = gridDistance * 2.0f;  // [0, 1] (always <= 1.0, defensive clamp)
-        float proximityMult = confFloor + (1.0f - confFloor) *
-                              0.5f * (1.0f + cosf(normalizedDist * 3.14159f));
-
-        // On-grid boost: when close to a subdivision, boost above 1.0
-        if (gridDistance < subdivTolerance) {
-            proximityMult *= pulseBoostOnBeat;
-        }
-
-        // rhythmStrength gate: blend between passthrough and modulated.
-        // Below confActivation: all onsets pass through (gate=0, mult=1.0).
-        // Above confFullModulation: full phase-based modulation (gate=1).
-        float gate = clampf((periodicityStrength_ - confActivation) /
-                            (confFullModulation - confActivation + 0.001f), 0.0f, 1.0f);
-        float confMult = 1.0f + gate * (proximityMult - 1.0f);
-
-        pulse *= confMult;
-
-        // Pattern prediction boost: onsets at historically active bar positions
-        // get extra confidence. Uses cached prediction from above.
-        if (patternPrediction > 0.0f) {
-            pulse *= (1.0f + patternPrediction * patternGain);
-        }
+    if (pulse > 0.0f && patternPrediction > 0.0f) {
+        pulse *= (1.0f + patternPrediction * patternGain);
     }
 
     control_.pulse = clampf(pulse, 0.0f, 1.0f);
 
-    // --- Phase ---
-    control_.phase = pllPhase_;
+    // --- Phase + PLP Pulse ---
+    control_.phase = plpPhase_;
+    control_.plpPulse = plpPulseValue_;
 
     // --- Rhythm Strength ---
+    // Blend ACF periodicity, comb bank confidence, and PLP dual-source agreement
     float combConf = combFilterBank_.getPeakConfidence();
-    float strength = periodicityStrength_ * 0.6f + combConf * 0.4f;
+    float strength = periodicityStrength_ * 0.4f + combConf * 0.3f + plpConfidence_ * 0.3f;
 
     // Soft activation gate (quadratic falloff below threshold)
     if (strength < activationThreshold) {

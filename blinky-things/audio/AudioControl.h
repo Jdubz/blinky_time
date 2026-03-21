@@ -12,31 +12,40 @@
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 28 bytes (6 floats + 1 uint8_t + padding)
+ * Memory: 32 bytes (7 floats + 1 uint8_t + padding)
  */
 struct AudioControl {
     // === ENERGY ===
     // Overall audio energy level, smoothed and normalized (0.0 - 1.0)
-    // Combines: mic level, beat likelihood boost, rhythmic gating
+    // Combines: mic level, bass mel energy, ODF peak-hold
     // Use for: Baseline intensity, brightness, activity level
     float energy = 0.0f;
 
     // === PULSE ===
-    // Transient/hit intensity with rhythmic context (0.0 - 1.0)
-    // Combines: mic transient detection, beat alignment boost/suppress
-    // 0.0 = no transient, 1.0 = strong on-beat transient
+    // Transient/hit intensity (0.0 - 1.0)
+    // Raw NN onset strength with pattern prediction boost
+    // 0.0 = no transient, 1.0 = strong transient
     // Use for: Sparks, flashes, bursts, event triggers
     float pulse = 0.0f;
 
     // === PHASE ===
     // Beat phase position (0.0 - 1.0)
-    // 0.0 = on-beat moment, 0.5 = off-beat, 1.0 = next beat (wraps to 0)
-    // Only meaningful when rhythmStrength > 0.5
-    // Use for: Pulsing effects, wave timing, breathing animations
+    // PLP-driven: free-running at detected tempo, corrected by pattern cross-correlation
+    // 0.0 = start of pattern cycle, 1.0 = next cycle (wraps to 0)
+    // Use for: Beat wrap detection, direct phase-based calculations
     float phase = 0.0f;
+
+    // === PLP PULSE ===
+    // Extracted dominant energy pattern value at current phase position (0.0 - 1.0)
+    // The actual repeating energy shape (sharp kick attacks, fast decays — not a
+    // synthesized sinusoid). Extracted via epoch-folding at detected tempo period.
+    // Falls back to cosine pulse when PLP confidence is low.
+    // Use for: Pulsing effects, breathing animations, beat-synced modulation
+    float plpPulse = 0.0f;
 
     // === RHYTHM STRENGTH ===
     // Confidence in detected rhythm pattern (0.0 - 1.0)
+    // Blends ACF periodicity, comb bank confidence, and PLP dual-source agreement
     // 0.0 = no rhythm detected (use organic behavior)
     // 1.0 = strong rhythm locked (use beat-synced behavior)
     // Use for: Choosing between music mode vs organic mode behavior
@@ -49,28 +58,24 @@ struct AudioControl {
     float onsetDensity = 0.0f;
 
     // === DOWNBEAT ===
-    // Downbeat activation (0.0 - 1.0), synchronized with beat detection.
-    // Only fires on actual beats (not between beats). Smoothed from NN output.
-    // Only meaningful when FrameOnsetNN has a multi-output model loaded.
-    // Use for: Extra-dramatic effects every 4 beats (e.g., burst of sparks on bar 1)
+    // Downbeat activation (0.0 - 1.0). Always 0 — not tracked by current model.
+    // Reserved for future multi-output model.
     float downbeat = 0.0f;
 
     // === BEAT IN MEASURE ===
-    // Position in the current measure (1-4 for 4/4 time, 0 = unknown/no rhythm).
-    // Reset to 1 when downbeat detected. Increments each beat. Wraps at 5→1.
-    // Only meaningful when rhythmStrength > 0.5 and downbeat model is available.
-    // Use for: Syncopation patterns, accent beats 1 and 3, etc.
+    // Position in the current measure. Always 0 — not tracked by current model.
     uint8_t beatInMeasure = 0;
 
     // === CONVENIENCE METHODS ===
 
     /**
-     * Convert phase to pulse intensity.
-     * Returns 1.0 at phase=0 (on-beat), 0.0 at phase=0.5 (off-beat).
-     * Useful for breathing/pulsing effects synchronized to beat.
+     * Get beat-synced pulse intensity for breathing/pulsing effects.
+     * Returns the PLP extracted pattern value — the actual repeating energy
+     * shape of the music. Peaks at rhythmically periodic positions.
+     * When PLP confidence is low, falls back to cosine pulse.
      */
     inline float phaseToPulse() const {
-        return 0.5f + 0.5f * cosf(phase * 6.28318530718f);
+        return plpPulse;
     }
 
     /**

@@ -432,20 +432,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
 
-  // PLL phase tracking
-  pllkp: {
-    displayName: 'PLL Proportional Gain',
-    tooltip:
-      'Phase-locked loop proportional gain (0-0.5). Higher = more responsive to phase errors but may overshoot. Lower = smoother. Default: 0.15.',
-    unit: '',
-  },
-  pllki: {
-    displayName: 'PLL Integral Gain',
-    tooltip:
-      'Phase-locked loop integral gain (0-0.05). Corrects steady-state tempo drift. Higher = faster convergence but may oscillate. Default: 0.005.',
-    unit: '',
-  },
-
   // Rhythm activation
   activationthreshold: {
     displayName: 'Activation Threshold',
@@ -453,13 +439,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'Minimum periodicity strength to activate rhythm mode (0-1). Below this, no rhythm-aware modulation. Default: 0.3.',
     unit: '',
   },
-  odfgate: {
-    displayName: 'ODF Gate',
-    tooltip:
-      'NN output floor gate (0-0.5). Suppresses low-confidence NN output to prevent noise-driven PLL jitter. Default: 0.20.',
-    unit: '',
-  },
-
   // Tempo smoothing
   temposmooth: {
     displayName: 'Tempo Smoothing',
@@ -468,41 +447,23 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
 
-  // Phase-aware onset confidence modulation (v76)
-  pulseboost: {
-    displayName: 'Pulse Boost On-Beat',
+  // PLP (Predominant Local Pulse) settings
+  plpactivation: {
+    displayName: 'PLP Activation',
     tooltip:
-      'Pulse boost factor for on-grid onsets (1.0-3.0). Amplifies pulse strength when onset aligns with beat grid. Default: 1.3.',
-    unit: 'x',
-  },
-  conffloor: {
-    displayName: 'Confidence Floor',
-    tooltip:
-      'Min confidence for off-grid onsets (0-1). 0 = fully suppress off-grid onsets, 1 = pass all onsets unchanged. Controls how aggressively phase position modulates pulse strength. Default: 0.4.',
+      'Min PLP confidence for pattern pulse (0-1). Below this threshold, falls back to cosine phase pulse. Default: 0.3.',
     unit: '',
   },
-  energyboost: {
-    displayName: 'Energy Boost On-Beat',
+  plpconfalpha: {
+    displayName: 'PLP Confidence Smoothing',
     tooltip:
-      'Energy boost near beat subdivisions (0-1). Adds energy when onset is phase-aligned. Default: 0.3.',
+      'PLP confidence EMA smoothing rate (0.01-0.5). Lower = slower, more stable confidence tracking. Default: 0.05.',
     unit: '',
   },
-  confactivation: {
-    displayName: 'Confidence Activation',
+  plpnovgain: {
+    displayName: 'PLP Pattern Contrast',
     tooltip:
-      'rhythmStrength below this: no phase modulation (0-1). When rhythm is weak, all onsets pass through unmodulated. Default: 0.3.',
-    unit: '',
-  },
-  conffullmod: {
-    displayName: 'Confidence Full Modulation',
-    tooltip:
-      'rhythmStrength above this: full phase modulation (0.1-1.0). When rhythm is strong, phase position fully modulates onset confidence. Default: 0.7.',
-    unit: '',
-  },
-  subdivtol: {
-    displayName: 'Subdivision Tolerance',
-    tooltip:
-      'Phase distance for near-subdivision (0.02-0.20). At 120 BPM, 0.10 = 50ms tolerance window around beat/subdivision positions. Default: 0.10.',
+      'PLP pattern novelty scaling (0.1-5.0). Values >1 sharpen peaks in the PLP pattern. Default: 1.5.',
     unit: '',
   },
 
@@ -533,32 +494,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     displayName: 'Pulse Min Level',
     tooltip:
       'Minimum mic level for pulse detection (0-0.2). Prevents firing pulse on silence/noise. Default: 0.03.',
-    unit: '',
-  },
-
-  // PLL tuning
-  pllonsetfloor: {
-    displayName: 'PLL Onset Floor',
-    tooltip:
-      'ODF floor for PLL correction scaling (0-0.5). ODF values below this get zero PLL correction. Default: 0.1.',
-    unit: '',
-  },
-  pllnearbeatwin: {
-    displayName: 'PLL Near-Beat Window',
-    tooltip:
-      'Phase distance for onset-gated PLL correction (0.05-0.5). Only onsets within this window of the expected beat correct PLL phase. Default: 0.25.',
-    unit: '',
-  },
-  pllintdecay: {
-    displayName: 'PLL Integral Decay',
-    tooltip:
-      'PLL integral leaky decay rate (0.8-0.999). Lower = faster integral bleed, less tempo correction memory. Default: 0.95.',
-    unit: '',
-  },
-  pllsildecay: {
-    displayName: 'PLL Silence Decay',
-    tooltip:
-      'PLL integral decay during silence (0.9-0.9999). Prevents stale tempo corrections from persisting through quiet passages. Default: 0.99.',
     unit: '',
   },
 
@@ -615,13 +550,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'ODF peak-hold weight in energy synthesis (0-1). Transient contribution to energy. Default: 0.40.',
     unit: '',
   },
-  eboostwindow: {
-    displayName: 'Energy: Boost Window',
-    tooltip:
-      'Phase distance for beat-proximity energy boost (0.05-0.5). Energy is boosted when phase is within this window of the beat. Default: 0.25.',
-    unit: '',
-  },
-
   // Spectral flux band weights
   bassflux: {
     displayName: 'Bass Flux Weight',

@@ -2,6 +2,8 @@
 
 *Drafted: March 18, 2026*
 
+> **SUPERSEDED (March 21, 2026):** The PLL-based approach described here has been abandoned. On-device testing across all onset models showed phase consistency of ~0.035-0.042 (effectively random), confirming the PLL cannot converge. The system is being replaced by PLP (Predominant Local Pulse) with dual-source pattern extraction. See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for the current design.
+
 ## Problem Statement
 
 The NN onset detector and DSP phase tracker have a circular reliability problem:

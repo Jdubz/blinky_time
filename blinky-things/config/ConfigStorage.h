@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 78;  // v78: add confidenceRise, confidenceDecay, histogramMinStrength for pattern memory tuning
+    static const uint8_t SETTINGS_VERSION = 79;  // v79: PLL→PLP refactor (remove 12 PLL/phase params, add 4 PLP params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -290,25 +290,13 @@ public:
         float tempoSmoothing;
         uint16_t acfPeriodMs;
 
-        // PLL
-        float pllKp;
-        float pllKi;
-        float pllOnsetFloor;
-        float pllNearBeatWindow;
-        float pllIntegralDecay;
-        float pllSilenceDecay;
-
         // Rhythm activation
         float activationThreshold;
-        float odfGateThreshold;     // DEPRECATED v76: gate removed, field kept for struct layout compat. Not read by AudioTracker::update().
 
-        // Phase-aware onset confidence modulation (v75, replaces binary boost/suppress)
-        float pulseBoostOnBeat;
-        float confFloor;              // was pulseSuppressOffBeat
-        float energyBoostOnBeat;
-        float confActivation;         // was pulseNearBeatThreshold
-        float confFullModulation;     // was pulseFarFromBeatThreshold
-        float subdivTolerance;        // NEW v75: phase distance for "near subdivision"
+        // PLP (Predominant Local Pulse) — v79, replaces PLL
+        float plpActivation;
+        float plpConfAlpha;
+        float plpNovGain;
 
         // Spectral flux contrast
         float odfContrast;
@@ -316,6 +304,7 @@ public:
         // Pulse detection
         float pulseThresholdMult;
         float pulseMinLevel;
+        float pulseOnsetFloor;        // Renamed from pllOnsetFloor (still used in pulse detection)
 
         // Percival ACF
         float percivalWeight2;
@@ -330,7 +319,6 @@ public:
         float energyMicWeight;
         float energyMelWeight;
         float energyOdfWeight;
-        float energyBoostWindow;
 
         // Spectral flux band weights
         float bassFluxWeight;
@@ -381,8 +369,8 @@ public:
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
-    static_assert(sizeof(StoredTrackerParams) == 180,
-        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (180 bytes = 43 floats + 1 uint16 + 1 uint8 + padding)");
+    static_assert(sizeof(StoredTrackerParams) == 140,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (140 bytes = 33 floats + 1 uint16 + 1 uint8 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

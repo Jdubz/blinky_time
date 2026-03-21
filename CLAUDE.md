@@ -129,7 +129,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 | Document | Purpose |
 |----------|---------|
 | `docs/VISUALIZER_GOALS.md` | **Design philosophy** - visual quality over metrics |
-| `docs/AUDIO_ARCHITECTURE.md` | AudioTracker architecture (decoupled spectral flux → BPM, NN onset → pulse/PLL) |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioTracker architecture (decoupled spectral flux → BPM, NN onset → pulse, PLP pattern extraction) |
 | `docs/AUDIO-TUNING-GUIDE.md` | **Main testing guide** - ~10 tunable parameters, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator/Effect/Renderer pattern |
@@ -153,11 +153,11 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 
 ### Key Architecture Components
 
-- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF+Comb → BPM; NN onset → pulse + PLL phase refinement
+- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF+Comb → BPM; NN onset → visual pulse. PLP extracts dominant repeating energy pattern from dual sources (flux + bass energy).
 - **FrameOnsetNN** (`blinky-things/audio/FrameOnsetNN.h`) - Conv1D W16 TFLite NN onset detection (single-channel, 13.4 KB INT8, ~7ms). Detects acoustic onsets (kicks/snares), not metrical beats.
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands + spectral flux (HWR)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with fixed hardware gain (AGC removed v72)
-- **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity (downbeat/beatInMeasure always 0 — not tracked)
+- **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, plpPulse, phase (PLP-driven), rhythmStrength, onsetDensity (downbeat/beatInMeasure always 0 — not tracked)
 
 ### Obsolete Documents (Removed)
 
@@ -212,11 +212,12 @@ AdaptiveMic (fixed gain + window/range normalization)
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands + spectral flux)
     ↓
     ├── [BPM] Spectral flux (HWR) → contrast² → OSS buffer → ACF + comb bank → BPM
-    ├── [ONSET] FrameOnsetNN (Conv1D W16, ~7ms) → onset activation → pulse + PLL refinement
+    ├── [ONSET] FrameOnsetNN (Conv1D W16, ~7ms) → onset activation → pulse (visual sparks)
+    ├── [PLP] Epoch-fold flux + bass energy at detected period → repeating pattern
     ↓
-AudioTracker (decoupled: spectral flux → tempo, NN onset → pulse + PLL phase)
+AudioTracker (decoupled: spectral flux → tempo, NN onset → pulse, PLP → phase/pattern)
     ↓
-AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity}
+AudioControl {energy, pulse, plpPulse, phase, rhythmStrength, onsetDensity}
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -239,20 +240,18 @@ RenderPipeline → LED Output
      - v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704)
      - v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806)
      - Arena: 3404/32768 bytes
-     - Used for: visual pulse, PLL phase refinement, energy peak-hold. NOT used for BPM estimation.
+     - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
-3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v75)**
+3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v79)**
    - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~10 params)
    - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (~5.5s, 360 samples @ ~66 Hz) + comb filter bank
      - ACF tempo estimation: Percival harmonic enhancement (2nd+4th harmonics), Rayleigh prior weighting
      - CombFilterBank: 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
      - Tempo selection: ACF primary, comb bank validates (average when within 10% agreement)
-   - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection + PLL phase refinement
-     - Onset information gate: suppresses low-confidence NN output (prevents noise-driven PLL jitter)
+   - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection (visual sparks)
      - Pulse detection: floor-tracking baseline (fast drop, slow rise)
-     - PLL phase correction: onset-gated proportional+integral (only when onset near expected beat)
-   - **Phase path**: PLL free-running sawtooth at estimated BPM
+   - **PLP path**: Epoch-fold dual sources (spectral flux + bass energy) at detected period → repeating energy pattern → phase + plpPulse
    - Energy synthesis: hybrid mic level + bass mel energy + onset peak-hold
 
 4. **Generators (Visual Effects)**
@@ -267,7 +266,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v75)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v79)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -366,9 +365,9 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 5. ACF every 150ms → Percival harmonic enhancement → Rayleigh-weighted peak → BPM
    Comb filter bank (20 filters) validates independently → average when agreeing within 10%
 6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
-7. Onset activation → pulse detection (raw onset, before gate) → onset information gate
-8. [PHASE PATH] PLL free-running phase ramp at estimated BPM
-9. Onset-gated PLL correction: strong NN onsets near beat boundary → proportional+integral phase correction
+7. Onset activation → pulse detection (visual sparks)
+8. [PLP PATH] PLP pattern extraction from spectral flux + bass energy at detected period
+9. PLP cross-correlation phase alignment → phase + plpPulse output
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
      onsetDensity=3.2}
 11. Fire generator:
@@ -432,7 +431,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Current Status (March 2026)
 
 **Production Ready:**
-- ✅ AudioTracker with ACF+Comb+PLL + ODF information gate + pulse baseline tracking
+- ✅ AudioTracker with ACF+Comb+PLP + pulse baseline tracking
 - ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, All Onsets F1=0.681, deployed on all 7 devices)
 - ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
@@ -493,22 +492,21 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Detection Architecture
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
-**Current (v75, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse + PLL phase refinement.
+**Current (v79, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. PLP extracts repeating energy pattern for phase.
 - Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
-- Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLL phase alignment. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
+- Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLP phase/pattern extraction. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
-- **Decoupled BPM/onset** (v75): BPM estimation uses spectral flux (HWR, NN-independent). NN onset used for visual pulse + PLL phase refinement only. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
+- **Decoupled BPM/onset** (v79): BPM estimation uses spectral flux (HWR, NN-independent). NN onset used for visual pulse only. PLP extracts repeating energy pattern for phase. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
 - **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent BPM signal for ACF + comb bank.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
-- **Onset information gate**: Suppresses low-confidence NN output (prevents noise-driven PLL jitter)
 - **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **ACF tempo estimation** (v74): Percival harmonic enhancement (2nd+4th ACF folding), Rayleigh prior weighting (~60-200 BPM). Fed by spectral flux.
 - **CombFilterBank** (v74): 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation. Fed by spectral flux.
-- **PLL phase tracking** (v74): Free-running sawtooth at estimated BPM, NN onset-gated P+I correction
+- **PLP pattern extraction** (v79): Epoch-folds dual sources (spectral flux + bass energy) at detected period, extracts dominant repeating energy pattern via cross-correlation phase alignment
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

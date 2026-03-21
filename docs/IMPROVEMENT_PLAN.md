@@ -1,14 +1,14 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 18, 2026*
+*Last Updated: March 21, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v76 (SETTINGS_VERSION 75). AudioTracker with decoupled tempo/onset architecture, subdivision-aware PLL correction, cosine confidence modulation. BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse + PLL phase refinement only. ~35 tunable params persisted to flash (v74+). AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v76 (SETTINGS_VERSION 75). AudioTracker with decoupled tempo/onset architecture. BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse. PLL phase tracking ABANDONED (phase consistency ~0.04, effectively random) — being replaced by PLP (Predominant Local Pulse). ~35 tunable params persisted to flash (v74+). AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). PLL phase refinement abandoned (phase consistency ~0.04). Downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
@@ -28,27 +28,26 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ## Active Priorities
 
-### Priority 1: Phase Grid Alignment (v76) — IMPLEMENTED
+### Priority 1: Predominant Local Pulse (PLP) — PLANNED
 
-**Status: DEPLOYED on ESP32-S3 display (March 18, 2026). Pending: flash blinkyhost, A/B test.**
+**Status: PLL ABANDONED (March 20, 2026). PLP implementation planned.**
 
-See `docs/PHASE_CONFIDENCE_ARCHITECTURE.md` for full design.
+See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
-Phase alignment is the primary visual bottleneck. Octave errors (half/double time) are acceptable — events still land on beat grid subdivisions. Phase misalignment (events between subdivisions) looks random.
+**PLL approach ABANDONED.** On-device A/B testing (March 20) measured phase consistency of 0.035-0.042 across ALL models (v1, v3, v7, v8) — essentially random. Root cause: onset-gated PLL cannot converge because the NN detects onsets (kicks/snares) but cannot distinguish on-beat from off-beat onsets. This is a fundamental limitation, not a tuning problem. The subdivision-aware PLL, cosine confidence modulation, and all v76 PLL improvements were deployed and tested — none achieved meaningful phase locking.
 
-**Implemented (SETTINGS_VERSION 74→75):**
-- ✅ Subdivision-aware PLL correction: corrects at phase 0.0 AND 0.5 (8th notes), not just phase 0. Fixes half-time anti-phase bug.
-- ✅ Subdivision-aware energy boost: fires at all 8th-note positions.
-- ✅ Cosine proximity confidence modulation: smooth falloff replaces binary boost/suppress.
-- ✅ rhythmStrength gate: no modulation when uncertain, full when confident.
-- ✅ New tunable params: conffloor (0.4), confactivation (0.3), conffullmod (0.7), subdivtol (0.10).
-- ✅ Parameter sweep defaults applied: odfContrast 2.0→1.25, combFeedback 0.92→0.855, rayleighBpm 140→130.
+**PLP (Predominant Local Pulse) is the replacement.** Instead of tracking phase via a PLL oscillator, PLP extracts the actual repeating energy pattern from dual-source input (spectral flux + band energies). Each source is autocorrelated independently to find the dominant period; when both agree, confidence is high. The output is the real energy pattern shape (sharp attack, fast decay — not a synthesized sinusoid), providing a more visually interesting driver than a smooth sine wave. See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for architecture.
 
-**Remaining:**
-- [ ] Flash blinkyhost (3 nRF52840 + 2 ESP32-S3) with v76 firmware
-- [ ] A/B test v76 vs v75 on blinkyhost (18 tracks, phase alignment metric)
-- [ ] Visual assessment on ESP32-S3 display with music
-- [ ] Update blinky-console settingsMetadata.ts for new params
+**Key advantages of PLP over PLL:**
+- No onset-beat classification needed (resolves circular reliability problem)
+- Octave errors are non-issues — half/double time patterns still track musically
+- BPM accuracy doesn't matter — the system tracks repeating energy patterns, not phase-locked oscillators
+- Dual-source input (spectral flux + band energies) provides richer signal than single-channel NN onset
+
+**Previous PLL work (v76, archived):**
+- ✅ Subdivision-aware PLL correction (implemented but ineffective — phase consistency ~0.04)
+- ✅ Cosine proximity confidence modulation (implemented but insufficient)
+- ✅ Parameter sweep defaults: odfContrast 2.0→1.25, combFeedback 0.92→0.855, rayleighBpm 140→130 (retained)
 
 ### Priority 2: NN Training Improvements (When Retrained)
 
@@ -87,7 +86,7 @@ Phase alignment is the primary visual bottleneck. Octave errors (half/double tim
 
 - ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
 - ✅ Octave error penalty removed from param_sweep_multidev.cjs scoring
-- [ ] Add phase-grid-alignment metric to sweep tooling: measure onset-to-subdivision distance, not BPM accuracy
+- [ ] Add pulse-pattern-alignment metric to sweep tooling (will depend on PLP implementation)
 - [x] Update evaluate.py aggregate to show onset F1 as primary metric
 - [ ] Add phase alignment visualization (onset time vs grid position scatter plot)
 
@@ -112,13 +111,13 @@ All frame-level FC options are well within the 10ms per-frame budget.
 
 1. **Raw mel bands as stable interface.** Same principle as beat-sync approach — uses `rawMelBands_` (pre-compression, pre-whitening), decoupled from 47+ tunable firmware parameters. Only depends on 8 fundamental constants (sample rate, FFT size, hop, mel bands, mel range, mel scale, log compression, window) that never change.
 
-2. **NN replaces BandFlux as ODF source.** The beat activation output feeds directly into CBSS as a higher-quality ODF signal. BandFlux is obsolete and being removed from the codebase.
+2. **NN replaces BandFlux as ODF source.** The onset activation output provides a higher-quality ODF signal. BandFlux removed in v67.
 
-3. **No circular dependency.** Feature extraction (raw mel frames) is independent of CBSS. The NN produces the ODF that CBSS consumes — a clean feedforward pipeline, not a feedback loop.
+3. **No circular dependency.** Feature extraction (raw mel frames) is independent of tempo tracking. The NN produces onset activation; ACF + comb bank handle tempo estimation from spectral flux (NN-independent). PLP will replace PLL for pulse synthesis.
 
-4. **CBSS remains for tempo/phase tracking.** The NN provides a better activation signal, but CBSS still handles tempo estimation (ACF + Bayesian fusion) and phase tracking (counter-based beats). This is how all leading systems work: NN activation → post-processing for tempo/phase.
+4. **ACF + Comb bank for tempo estimation.** Spectral flux (HWR) feeds ACF with Percival harmonic enhancement and comb filter bank for independent validation. CBSS removed in v75.
 
-5. **Downbeat comes free.** Second output head trained on frame-level downbeat labels. All leading systems (madmom, BeatNet, Beat This!) produce both beat and downbeat activations from the same model.
+5. **Downbeat deferred.** System focuses on onset detection + BPM + pulse. Downbeat tracking deferred indefinitely.
 
 **Context window sizing:**
 
@@ -224,9 +223,9 @@ System now focuses on onset/BPM/phase only. Downbeat detection deferred indefini
 
 W192 FC (4992→64→32→2, 322K params, 314 KB INT8): severe regression from W32 FC. Root cause: FC flattening of 192×26=4992 inputs destroys temporal locality. The first FC layer (4992→64) contains 319K of the model's 322K total parameters and must implicitly encode all temporal relationships through raw weight correlations. Training converged to val_loss=0.497 with only 84.5% accuracy — the model failed to learn meaningful temporal patterns from the flat input. Superseded by dual-model architecture with Conv1D temporal pooling.
 
-### Priority 2 (new): ESP32-S3 Mic Calibration and Model
+### Priority 5: ESP32-S3 Mic Calibration and Model — VERY LOW PRIORITY
 
-**Status: Phase 1 DONE (March 15, 2026) — mic profile measured, training config created. ESP32-S3 PDM mic fixed (JTAG pin conflict + partial DMA read). Phase 2 (retrain with ESP32-calibrated data) pending.**
+**Status: Phase 1 DONE (March 15, 2026) — mic profile measured, training config created. ESP32-S3 PDM mic fixed (JTAG pin conflict + partial DMA read). Calibration showed nRF52840 and ESP32-S3 mics are similar enough that a platform-specific model is VERY LOW PRIORITY. Phase 2 (retrain with ESP32-calibrated data) deferred indefinitely.**
 
 The XIAO ESP32-S3 Sense uses a PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
 
@@ -269,28 +268,28 @@ The ESP32-S3 operates ~0.25 higher mel mean. The software-only AGC (no hardware 
 
 Removed all BandFlux/EnsembleDetector code. SharedSpectralAnalysis promoted to direct AudioController ownership. Pulse detection inlined from EnsembleFusion (ODF threshold + tempo-adaptive cooldown). Non-NN fallback: `mic_.getLevel()` as simple energy ODF. See git log for details.
 
-### ~~Priority 3: CBSS ODF Contrast~~ — COMPLETED (v66)
+### ~~Priority 3: CBSS ODF Contrast~~ — COMPLETED (v66), CBSS REMOVED (v75)
 
-**Status: COMPLETED — cbssContrast=2.0 is now the default**
+**Status: COMPLETED — cbssContrast=2.0 was the default. CBSS entirely removed in v75, replaced by ACF + comb bank.**
 
-A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring). Results: 10 wins, 6 losses, 2 ties across 3 devices × 18 tracks. Mean BPM error 12.4 vs 12.6. Octave errors unchanged (9 vs 9). Default updated to 2.0 in v66.
+A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring). Results: 10 wins, 6 losses, 2 ties across 3 devices × 18 tracks. Mean BPM error 12.4 vs 12.6. Octave errors unchanged (9 vs 9). Default updated to 2.0 in v66. CBSS subsequently removed in v75.
 
 ### Future: Heydari 1D State Space
 
 **Status: RESEARCH ONLY**
 
-Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. ~860 states fits our memory budget. Could replace CBSS if feature-level NN improvements are insufficient.
+Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. ~860 states fits our memory budget. CBSS already removed (v75). Could complement PLP if additional tempo tracking robustness is needed.
 
 ## Current Bottlenecks
 
-1. **Phase alignment — PLL REPLACED BY PLP.** On-device A/B testing (March 20) measured phase consistency of 0.035-0.042 across ALL models (v1, v3, v7, v8) — essentially random. Root cause: onset-gated PLL cannot converge because the NN can't distinguish on-beat from off-beat onsets (chicken-and-egg). The ODF information gate was also starving the PLL (fixed, but phase still didn't lock). **Decision: replace PLL with Predominant Local Pulse (PLP, Meier 2024).** PLP creates a smooth pulse signal via sinusoidal kernel overlap-add — phase emerges from constructive interference without requiring onset-beat discrimination. See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md`.
+1. **PLP implementation — PRIMARY BOTTLENECK.** PLL phase tracking abandoned (March 20) — phase consistency 0.035-0.042 across ALL models, effectively random. PLP (Predominant Local Pulse) replaces PLL entirely. PLP extracts the actual repeating energy pattern from dual-source input (spectral flux + band energies). Each source is autocorrelated independently; when both agree on the dominant period, confidence is high. No onset-beat classification needed. See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md`.
 
-2. **Onset/phase circular reliability problem — RESOLVED by architecture change.** PLP doesn't depend on onset-beat classification. It uses spectral flux periodicity (same ACF input) to synthesize a smooth pulse. The NN onset detector continues to drive visual sparks/flashes independently.
+2. ~~**Onset/phase circular reliability problem — RESOLVED.**~~ PLP architecture eliminates the circular dependency. PLP uses spectral flux and band energies (NN-independent) to extract repeating patterns. The NN onset detector continues to drive visual sparks/flashes independently, without needing to distinguish on-beat from off-beat.
 
-3. ~~**~135 BPM gravity well**~~ — **LOW PRIORITY.** Octave errors are visually acceptable (half/double time still looks rhythmic). Phase grid alignment matters; octave accuracy does not. Literature A/B tests (March 18) running on blinkyhost — may improve BPM as a side effect but this is not the visual priority.
+3. ~~**~135 BPM gravity well — NON-ISSUE.**~~ With PLP, octave errors are non-issues. Half/double time patterns still track musically. BPM accuracy doesn't matter — the system tracks repeating energy patterns, not phase-locked oscillators.
 
 4. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed with cal63 model.
-5. ~~**Downbeat detection (DEFERRED)**~~ — System focuses on onset/BPM/phase only.
+5. ~~**Downbeat detection (DEFERRED)**~~ — System focuses on onset/BPM/pulse only.
 6. ~~**NN inference speed (RESOLVED)**~~ — 6.8ms nRF52840, 5.8ms ESP32-S3.
 
 ## SOTA Context (March 2026)
@@ -302,19 +301,19 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Novel-1D | 2022 | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+Comb+PLL (mic-in-room, nRF52840) | All Onsets F1=0.681 (v1), 0.787 (v3) |
+| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+Comb+PLP (planned) (mic-in-room, nRF52840) | All Onsets F1=0.681 (v1), 0.787 (v3). PLL abandoned, PLP replacing. |
 
 **Note:** SOTA table previously listed Beat F1 (onset-vs-metrical-grid alignment). This metric is not comparable to our onset F1. SOTA systems are evaluated on line-in audio with standardized beat annotations; our system detects acoustic onsets through a microphone in a room.
 
-**Key insight:** SOTA systems use strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN is the sole ODF source, providing a learned onset activation that feeds into ACF+Comb+PLL for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
+**Key insight:** SOTA systems use strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN provides learned onset activation for visual pulse; spectral flux feeds ACF+Comb for tempo estimation; PLP (planned) will replace PLL for pulse synthesis. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
 
 ## Known Limitations
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| PLL half-time anti-phase | Correction window only at phase 0, not subdivisions | **High** — every other beat dimmed | v76 Phase 1: subdivision-aware PLL |
-| Onset/phase circular reliability | NN can't classify on/off-beat; PLL needs on-beat onsets | **High** — phase drift on syncopated content | v76 Phase 2: confidence modulation |
-| ~135 BPM gravity well | Multi-factorial (prior, harmonics, band weighting) | **Low** — octave errors look fine visually | Low priority; phase alignment matters more |
+| ~~PLL half-time anti-phase~~ | ~~Correction window only at phase 0, not subdivisions~~ | ~~**High**~~ | **RESOLVED** — PLL abandoned. PLP doesn't have this issue. |
+| ~~Onset/phase circular reliability~~ | ~~NN can't classify on/off-beat; PLL needs on-beat onsets~~ | ~~**High**~~ | **RESOLVED** — PLP doesn't need onset-beat classification. |
+| ~135 BPM gravity well | Multi-factorial (prior, harmonics, band weighting) | **Low** — octave errors look fine visually | **NON-ISSUE** with PLP — half/double time patterns still track musically |
 | Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable eval | -- |
 | DnB half-time detection | librosa and firmware both detect ~117 vs ~170 | **None** — acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** — organic mode is correct | -- |
@@ -335,8 +334,8 @@ All items below were A/B tested and showed zero or negative benefit, or proven i
 - **Template+subbeat** (v50): No net benefit (baseline 10 wins, subbeat 8).
 - **Tempo bins 20→47** (v61): No improvement. Gravity well not a bin count issue.
 - **Focal loss** (v5): Identical to v4.
-- **HMM phase tracker** (v37, v46): Bernoulli obs model fails on mic audio. CBSS retained.
-- **PLP phase extraction** (v42): OSS too noisy. Redundant with onset snap.
+- **HMM phase tracker** (v37, v46): Bernoulli obs model fails on mic audio. CBSS was retained at the time (since removed in v75).
+- **PLP phase extraction** (v42): OSS too noisy at the time. Now revisited with improved architecture — see Priority 1 (PLP) and `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md`.
 - **Signal chain decompression** (v47): BandFlux self-normalizes. Not the F1 bottleneck.
 - **Particle filter** (v38-39): Improved BPM but not F1. Phase is the bottleneck.
 - **Adaptive tightness, Percival harmonic, bidirectional snap** (v44-45): Marginal or no benefit.

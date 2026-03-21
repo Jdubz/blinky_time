@@ -201,20 +201,8 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.combFeedback = 0.855f;
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 150;
-    data_.tracker.pllKp = 0.15f;
-    data_.tracker.pllKi = 0.005f;
-    data_.tracker.pllOnsetFloor = 0.1f;
-    data_.tracker.pllNearBeatWindow = 0.25f;
-    data_.tracker.pllIntegralDecay = 0.95f;
-    data_.tracker.pllSilenceDecay = 0.99f;
     data_.tracker.activationThreshold = 0.3f;
-    data_.tracker.odfGateThreshold = 0.20f;
-    data_.tracker.pulseBoostOnBeat = 1.3f;
-    data_.tracker.confFloor = 0.4f;           // v75: min confidence for off-grid onsets
-    data_.tracker.energyBoostOnBeat = 0.3f;
-    data_.tracker.confActivation = 0.3f;      // v75: rhythmStrength below this = no modulation
-    data_.tracker.confFullModulation = 0.7f;  // v75: rhythmStrength above this = full modulation
-    data_.tracker.subdivTolerance = 0.10f;    // v75: phase distance for "near subdivision"
+    data_.tracker.pulseOnsetFloor = 0.1f;
     data_.tracker.odfContrast = 1.25f;
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
@@ -226,7 +214,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.energyMicWeight = 0.30f;
     data_.tracker.energyMelWeight = 0.30f;
     data_.tracker.energyOdfWeight = 0.40f;
-    data_.tracker.energyBoostWindow = 0.25f;
+    data_.tracker.plpActivation = 0.3f;
+    data_.tracker.plpConfAlpha = 0.15f;
+    data_.tracker.plpNovGain = 1.5f;
     data_.tracker.bassFluxWeight = 0.5f;
     data_.tracker.midFluxWeight = 0.2f;
     data_.tracker.highFluxWeight = 0.3f;
@@ -601,20 +591,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.rayleighBpm, 60.0f, 180.0f, F("tracker.rayleighBpm"));
         validateFloat(data_.tracker.combFeedback, 0.85f, 0.98f, F("tracker.combFeedback"));
         validateFloat(data_.tracker.tempoSmoothing, 0.5f, 0.99f, F("tracker.tempoSmooth"));
-        validateFloat(data_.tracker.pllKp, 0.0f, 0.5f, F("tracker.pllKp"));
-        validateFloat(data_.tracker.pllKi, 0.0f, 0.05f, F("tracker.pllKi"));
-        validateFloat(data_.tracker.pllOnsetFloor, 0.0f, 0.5f, F("tracker.pllOnsetFloor"));
-        validateFloat(data_.tracker.pllNearBeatWindow, 0.05f, 0.5f, F("tracker.pllNearBeatWin"));
-        validateFloat(data_.tracker.pllIntegralDecay, 0.8f, 0.999f, F("tracker.pllIntDecay"));
-        validateFloat(data_.tracker.pllSilenceDecay, 0.9f, 0.9999f, F("tracker.pllSilDecay"));
         validateFloat(data_.tracker.activationThreshold, 0.0f, 1.0f, F("tracker.actThresh"));
-        validateFloat(data_.tracker.odfGateThreshold, 0.0f, 0.5f, F("tracker.odfGate"));
-        validateFloat(data_.tracker.pulseBoostOnBeat, 1.0f, 3.0f, F("tracker.pulseBoost"));
-        validateFloat(data_.tracker.confFloor, 0.0f, 1.0f, F("tracker.confFloor"));
-        validateFloat(data_.tracker.energyBoostOnBeat, 0.0f, 1.0f, F("tracker.energyBoost"));
-        validateFloat(data_.tracker.confActivation, 0.0f, 1.0f, F("tracker.confAct"));
-        validateFloat(data_.tracker.confFullModulation, 0.1f, 1.0f, F("tracker.confFull"));
-        validateFloat(data_.tracker.subdivTolerance, 0.02f, 0.20f, F("tracker.subdivTol"));
+        validateFloat(data_.tracker.pulseOnsetFloor, 0.0f, 0.5f, F("tracker.pulseOnsetFloor"));
         validateFloat(data_.tracker.odfContrast, 0.1f, 4.0f, F("tracker.odfContrast"));
         validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
         validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
@@ -626,7 +604,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.energyMicWeight, 0.0f, 1.0f, F("tracker.eMicW"));
         validateFloat(data_.tracker.energyMelWeight, 0.0f, 1.0f, F("tracker.eMelW"));
         validateFloat(data_.tracker.energyOdfWeight, 0.0f, 1.0f, F("tracker.eOdfW"));
-        validateFloat(data_.tracker.energyBoostWindow, 0.05f, 0.5f, F("tracker.eBoostWin"));
+        validateFloat(data_.tracker.plpActivation, 0.0f, 1.0f, F("tracker.plpAct"));
+        validateFloat(data_.tracker.plpConfAlpha, 0.01f, 0.5f, F("tracker.plpConfAlpha"));
+        validateFloat(data_.tracker.plpNovGain, 0.1f, 5.0f, F("tracker.plpNovGain"));
         validateFloat(data_.tracker.bassFluxWeight, 0.0f, 1.0f, F("tracker.bassFluxW"));
         validateFloat(data_.tracker.midFluxWeight, 0.0f, 1.0f, F("tracker.midFluxW"));
         validateFloat(data_.tracker.highFluxWeight, 0.0f, 1.0f, F("tracker.highFluxW"));
@@ -650,20 +630,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->combFeedback = data_.tracker.combFeedback;
         tracker->tempoSmoothing = data_.tracker.tempoSmoothing;
         tracker->acfPeriodMs = data_.tracker.acfPeriodMs;
-        tracker->pllKp = data_.tracker.pllKp;
-        tracker->pllKi = data_.tracker.pllKi;
-        tracker->pllOnsetFloor = data_.tracker.pllOnsetFloor;
-        tracker->pllNearBeatWindow = data_.tracker.pllNearBeatWindow;
-        tracker->pllIntegralDecay = data_.tracker.pllIntegralDecay;
-        tracker->pllSilenceDecay = data_.tracker.pllSilenceDecay;
         tracker->activationThreshold = data_.tracker.activationThreshold;
-        tracker->odfGateThreshold = data_.tracker.odfGateThreshold;
-        tracker->pulseBoostOnBeat = data_.tracker.pulseBoostOnBeat;
-        tracker->confFloor = data_.tracker.confFloor;
-        tracker->energyBoostOnBeat = data_.tracker.energyBoostOnBeat;
-        tracker->confActivation = data_.tracker.confActivation;
-        tracker->confFullModulation = data_.tracker.confFullModulation;
-        tracker->subdivTolerance = data_.tracker.subdivTolerance;
+        tracker->pulseOnsetFloor = data_.tracker.pulseOnsetFloor;
         tracker->odfContrast = data_.tracker.odfContrast;
         tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
         tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
@@ -675,7 +643,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->energyMicWeight = data_.tracker.energyMicWeight;
         tracker->energyMelWeight = data_.tracker.energyMelWeight;
         tracker->energyOdfWeight = data_.tracker.energyOdfWeight;
-        tracker->energyBoostWindow = data_.tracker.energyBoostWindow;
+        tracker->plpActivation = data_.tracker.plpActivation;
+        tracker->plpConfAlpha = data_.tracker.plpConfAlpha;
+        tracker->plpNovGain = data_.tracker.plpNovGain;
 
         // Spectral flux weights go to SharedSpectralAnalysis via tracker accessor
         tracker->getSpectral().bassFluxWeight = data_.tracker.bassFluxWeight;
@@ -789,20 +759,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.combFeedback = tracker->combFeedback;
         data_.tracker.tempoSmoothing = tracker->tempoSmoothing;
         data_.tracker.acfPeriodMs = tracker->acfPeriodMs;
-        data_.tracker.pllKp = tracker->pllKp;
-        data_.tracker.pllKi = tracker->pllKi;
-        data_.tracker.pllOnsetFloor = tracker->pllOnsetFloor;
-        data_.tracker.pllNearBeatWindow = tracker->pllNearBeatWindow;
-        data_.tracker.pllIntegralDecay = tracker->pllIntegralDecay;
-        data_.tracker.pllSilenceDecay = tracker->pllSilenceDecay;
         data_.tracker.activationThreshold = tracker->activationThreshold;
-        data_.tracker.odfGateThreshold = tracker->odfGateThreshold;
-        data_.tracker.pulseBoostOnBeat = tracker->pulseBoostOnBeat;
-        data_.tracker.confFloor = tracker->confFloor;
-        data_.tracker.energyBoostOnBeat = tracker->energyBoostOnBeat;
-        data_.tracker.confActivation = tracker->confActivation;
-        data_.tracker.confFullModulation = tracker->confFullModulation;
-        data_.tracker.subdivTolerance = tracker->subdivTolerance;
+        data_.tracker.pulseOnsetFloor = tracker->pulseOnsetFloor;
         data_.tracker.odfContrast = tracker->odfContrast;
         data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
         data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
@@ -814,7 +772,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.energyMicWeight = tracker->energyMicWeight;
         data_.tracker.energyMelWeight = tracker->energyMelWeight;
         data_.tracker.energyOdfWeight = tracker->energyOdfWeight;
-        data_.tracker.energyBoostWindow = tracker->energyBoostWindow;
+        data_.tracker.plpActivation = tracker->plpActivation;
+        data_.tracker.plpConfAlpha = tracker->plpConfAlpha;
+        data_.tracker.plpNovGain = tracker->plpNovGain;
         data_.tracker.bassFluxWeight = tracker->getSpectral().bassFluxWeight;
         data_.tracker.midFluxWeight = tracker->getSpectral().midFluxWeight;
         data_.tracker.highFluxWeight = tracker->getSpectral().highFluxWeight;
