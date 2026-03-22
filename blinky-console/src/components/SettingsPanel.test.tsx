@@ -8,7 +8,7 @@ describe('SettingsPanel', () => {
     { name: 'intensity', value: 0.75, type: 'float', cat: 'fire', min: 0, max: 1 },
     { name: 'speed', value: 100, type: 'uint8', cat: 'fire', min: 0, max: 255 },
     { name: 'enabled', value: true, type: 'bool', cat: 'audio', min: 0, max: 1 },
-    { name: 'conffloor', value: 0.4, type: 'float', cat: 'tracker', min: 0, max: 1.0 },
+    { name: 'plpactivation', value: 0.3, type: 'float', cat: 'tracker', min: 0, max: 1.0 },
   ];
 
   const mockSettingsByCategory: SettingsByCategory = {
@@ -135,14 +135,14 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('intensity')).toBeInTheDocument();
       expect(screen.getByText('speed')).toBeInTheDocument();
       expect(screen.getByText('enabled')).toBeInTheDocument();
-      // conffloor has metadata, so displays as "Confidence Floor"
-      expect(screen.getByText('Confidence Floor')).toBeInTheDocument();
+      // plpactivation has metadata, so displays as "PLP Activation"
+      expect(screen.getByText('PLP Activation')).toBeInTheDocument();
     });
 
     it('displays current values for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
       expect(screen.getByDisplayValue('0.75')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('0.4')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('0.3')).toBeInTheDocument();
     });
 
     it('displays current values for integer settings', () => {
@@ -177,8 +177,8 @@ describe('SettingsPanel', () => {
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
-      // inputs[0] is conffloor due to category ordering (audio → tracker → fire)
-      expect(onSettingChange).toHaveBeenCalledWith('conffloor', 0.5);
+      // inputs[0] is plpactivation due to category ordering (audio → tracker → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('plpactivation', 0.5);
     });
 
     it('debounces rapid input changes', async () => {
@@ -199,8 +199,8 @@ describe('SettingsPanel', () => {
 
       // Should only call once with the final value
       expect(onSettingChange).toHaveBeenCalledTimes(1);
-      // inputs[0] is conffloor due to category ordering (audio → tracker → fire)
-      expect(onSettingChange).toHaveBeenCalledWith('conffloor', 0.5);
+      // inputs[0] is plpactivation due to category ordering (audio → tracker → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('plpactivation', 0.5);
     });
 
     it('disables controls when disabled prop is true', () => {
@@ -224,21 +224,21 @@ describe('SettingsPanel', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const inputs = screen.getAllByRole('spinbutton');
-      // inputs[0] is conffloor due to category ordering (audio → tracker → fire)
-      const conffloorInput = inputs[0];
+      // inputs[0] is plpactivation due to category ordering (audio → tracker → fire)
+      const plpInput = inputs[0];
 
-      expect(conffloorInput).toHaveAttribute('min', '0');
-      expect(conffloorInput).toHaveAttribute('max', '1');
+      expect(plpInput).toHaveAttribute('min', '0');
+      expect(plpInput).toHaveAttribute('max', '1');
     });
 
     it('uses correct step for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const inputs = screen.getAllByRole('spinbutton');
-      // inputs[0] is conffloor (float type)
-      const conffloorInput = inputs[0];
+      // inputs[0] is plpactivation (float type)
+      const plpInput = inputs[0];
 
-      expect(conffloorInput).toHaveAttribute('step', '0.01');
+      expect(plpInput).toHaveAttribute('step', '0.01');
     });
 
     it('uses correct step for integer settings', () => {

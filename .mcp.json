@@ -13,9 +13,11 @@
     },
     "blinky-serial": {
       "type": "stdio",
-      "command": "node",
+      "command": "ssh",
       "args": [
-        "blinky-serial-mcp/dist/index.js"
+        "-o", "StrictHostKeyChecking=accept-new",
+        "blinkytime@blinkyhost.local",
+        "cd /home/blinkytime/blinky_time && node blinky-serial-mcp/dist/index.js"
       ],
       "env": {}
     }

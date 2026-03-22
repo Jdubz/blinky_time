@@ -234,7 +234,7 @@ void SerialConsole::registerAgcSettings() {
 
 // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67 — BandFlux pipeline removed)
 
-// === TRACKER SETTINGS (AudioTracker — ACF+Comb+PLL, v74) ===
+// === TRACKER SETTINGS (AudioTracker — ACF+PLP, v80) ===
 void SerialConsole::registerTrackerSettings() {
     if (!audioCtrl_) return;
 
@@ -243,42 +243,24 @@ void SerialConsole::registerTrackerSettings() {
         "Minimum detectable BPM", 40.0f, 120.0f, onParamChanged);
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "tracker",
         "Maximum detectable BPM", 120.0f, 240.0f, onParamChanged);
-    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "tracker",
-        "Rayleigh prior peak BPM (perceptual bias)", 60.0f, 180.0f, onParamChanged);
+    // (rayleighBpm + combFeedback removed v80 — comb filter bank removed)
 
-    // Comb filter bank
-    settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "tracker",
-        "Comb bank resonance strength (0.85-0.98)", 0.85f, 0.98f, onParamChanged);
-
-    // PLL phase tracking
-    settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "tracker",
-        "PLL proportional gain (phase correction speed)", 0.0f, 0.5f, onParamChanged);
-    settings_.registerFloat("pllki", &audioCtrl_->pllKi, "tracker",
-        "PLL integral gain (tempo adaptation speed)", 0.0f, 0.05f, onParamChanged);
+    // PLP pattern-learned pulse
+    settings_.registerFloat("plpactivation", &audioCtrl_->plpActivation, "tracker",
+        "Min PLP confidence for pattern pulse", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("plpconfalpha", &audioCtrl_->plpConfAlpha, "tracker",
+        "PLP confidence EMA smoothing rate", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("plpnovgain", &audioCtrl_->plpNovGain, "tracker",
+        "PLP pattern novelty scaling", 0.1f, 5.0f, onParamChanged);
 
     // Rhythm activation
     settings_.registerFloat("activationthreshold", &audioCtrl_->activationThreshold, "tracker",
         "Minimum periodicity to activate rhythm mode", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("odfgate", &audioCtrl_->odfGateThreshold, "tracker",
-        "NN output floor gate (suppress noise)", 0.0f, 0.5f, onParamChanged);
-
     // Tempo smoothing
     settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothing, "tracker",
         "BPM EMA smoothing factor (higher=slower)", 0.5f, 0.99f, onParamChanged);
 
-    // Phase-aware onset confidence modulation (v75)
-    settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "tracker",
-        "Pulse boost factor for on-grid onsets", 1.0f, 3.0f, onParamChanged);
-    settings_.registerFloat("conffloor", &audioCtrl_->confFloor, "tracker",
-        "Min confidence for off-grid onsets (0=suppress, 1=passthrough)", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "tracker",
-        "Energy boost near beat subdivisions", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("confactivation", &audioCtrl_->confActivation, "tracker",
-        "rhythmStrength below this: no phase modulation", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("conffullmod", &audioCtrl_->confFullModulation, "tracker",
-        "rhythmStrength above this: full phase modulation", 0.1f, 1.0f, onParamChanged);
-    settings_.registerFloat("subdivtol", &audioCtrl_->subdivTolerance, "tracker",
-        "Phase distance for near-subdivision (at 120 BPM, 0.10=50ms)", 0.02f, 0.20f, onParamChanged);
+    // (Phase-aware onset confidence modulation removed v78 — replaced by PLP)
 
     // NN profiling
     settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "tracker",
@@ -295,21 +277,11 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("pulseminlevel", &audioCtrl_->pulseMinLevel, "tracker",
         "Minimum mic level for pulse detection", 0.0f, 0.2f, onParamChanged);
 
-    // PLL tuning
-    settings_.registerFloat("pllonsetfloor", &audioCtrl_->pllOnsetFloor, "tracker",
-        "ODF floor for PLL correction scaling", 0.0f, 0.5f, onParamChanged);
-    settings_.registerFloat("pllnearbeatwin", &audioCtrl_->pllNearBeatWindow, "tracker",
-        "PLL phase correction window (0-0.5)", 0.05f, 0.5f, onParamChanged);
-    settings_.registerFloat("pllintdecay", &audioCtrl_->pllIntegralDecay, "tracker",
-        "PLL integral leaky decay rate", 0.8f, 0.999f, onParamChanged);
-    settings_.registerFloat("pllsildecay", &audioCtrl_->pllSilenceDecay, "tracker",
-        "PLL integral decay during silence", 0.9f, 0.9999f, onParamChanged);
+    // Pulse detection tuning
+    settings_.registerFloat("pulseonsetfloor", &audioCtrl_->pulseOnsetFloor, "tracker",
+        "ODF floor for pulse detection scaling", 0.0f, 0.5f, onParamChanged);
 
-    // Percival ACF harmonic enhancement
-    settings_.registerFloat("percival2", &audioCtrl_->percivalWeight2, "tracker",
-        "ACF 2nd harmonic fold weight", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("percival4", &audioCtrl_->percivalWeight4, "tracker",
-        "ACF 4th harmonic fold weight", 0.0f, 1.0f, onParamChanged);
+    // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
     // ODF baseline tracking
     settings_.registerFloat("blfastdrop", &audioCtrl_->baselineFastDrop, "tracker",
@@ -326,9 +298,6 @@ void SerialConsole::registerTrackerSettings() {
         "Energy: bass mel weight", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("eodfweight", &audioCtrl_->energyOdfWeight, "tracker",
         "Energy: ODF peak-hold weight", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("eboostwindow", &audioCtrl_->energyBoostWindow, "tracker",
-        "Energy: beat-proximity boost window", 0.05f, 0.5f, onParamChanged);
-
     // Spectral flux band weights (on SharedSpectralAnalysis, accessed via tracker)
     settings_.registerFloat("bassflux", &audioCtrl_->getSpectral().bassFluxWeight, "tracker",
         "Spectral flux: bass band weight (62-375Hz)", 0.0f, 1.0f, onParamChanged);
@@ -648,12 +617,8 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.println(F("--- Advanced Metrics ---"));
             Serial.print(F("Periodicity: "));
             Serial.println(audioCtrl_->getPeriodicityStrength(), 2);
-            Serial.print(F("Comb BPM: "));
-            Serial.println(audioCtrl_->getCombBankBPM(), 1);
-            Serial.print(F("Comb Confidence: "));
-            Serial.println(audioCtrl_->getCombBankConfidence(), 3);
-            Serial.print(F("PLL Integral: "));
-            Serial.println(audioCtrl_->getPllIntegral(), 4);
+            Serial.print(F("PLP Confidence: "));
+            Serial.println(audioCtrl_->getPlpConfidence(), 4);
         } else {
             Serial.println(F("Audio controller not available"));
         }
@@ -997,20 +962,12 @@ void SerialConsole::restoreDefaults() {
     if (audioCtrl_) {
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
-        audioCtrl_->rayleighBpm = 130.0f;
-        audioCtrl_->combFeedback = 0.855f;
-        audioCtrl_->pllKp = 0.15f;
-        audioCtrl_->pllKi = 0.005f;
+        audioCtrl_->plpActivation = 0.3f;
+        audioCtrl_->plpConfAlpha = 0.15f;
+        audioCtrl_->plpNovGain = 1.5f;
         audioCtrl_->activationThreshold = 0.3f;
-        audioCtrl_->odfGateThreshold = 0.20f;
         audioCtrl_->tempoSmoothing = 0.85f;
-        audioCtrl_->pulseBoostOnBeat = 1.3f;
-        audioCtrl_->confFloor = 0.4f;
-        audioCtrl_->confActivation = 0.3f;
-        audioCtrl_->confFullModulation = 0.7f;
-        audioCtrl_->subdivTolerance = 0.10f;
         audioCtrl_->odfContrast = 1.25f;
-        audioCtrl_->energyBoostOnBeat = 0.3f;
 
         // Restore spectral processing defaults
         SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
@@ -1348,7 +1305,7 @@ void SerialConsole::streamTick() {
                 if (i > 0) Serial.print(',');
                 Serial.print(mel[i], 4);
             }
-            // onset = raw ODF fed into CBSS (NN activation or mic level fallback)
+            // onset = last pulse strength (NN activation or mic level fallback)
             Serial.print(F("],\"onset\":"));
             Serial.print(audioCtrl_->getLastOnsetStrength(), 4);
             // Note (v65): "nn" field is now always present in both NN and non-NN builds.
@@ -1448,15 +1405,13 @@ void SerialConsole::streamTick() {
 
         Serial.print(F("}"));
 
-        // AudioTracker telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"bt":12345,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2,"db":0.8,"bm":1}
-        // Music stream format (v77):
-        // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
-        // conf = periodicity strength, bc = beat count, q = beat event (phase wrap)
-        // e = energy, p = pulse (visual trigger), oss = onset strength
-        // od = onset density (onsets/sec), db = downbeat (0), bm = beat in measure (0)
-        // Debug mode adds: ps = periodicity, pc = pattern confidence,
-        // ic = IOI confidence, ib = IOI peak BPM, be = bar entropy
+        // AudioTracker music stream (v79 — PLP architecture)
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2}
+        // a = rhythm active, bpm = tempo, ph = PLP phase (0-1)
+        // pp = PLP pulse (extracted pattern value), str = rhythm strength
+        // q = beat event (phase wrap), e = energy, p = pulse (transient), od = onset density
+        // Debug adds: conf = ACF periodicity, pc = pattern confidence,
+        // ic = IOI confidence, ib = IOI peak BPM
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1472,31 +1427,22 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));
             Serial.print(currentPhase, 2);
+            Serial.print(F(",\"pp\":"));
+            Serial.print(audio.plpPulse, 3);
             Serial.print(F(",\"str\":"));
             Serial.print(audio.rhythmStrength, 2);
-            Serial.print(F(",\"conf\":"));
-            Serial.print(audioCtrl_->getPeriodicityStrength(), 2);
-            Serial.print(F(",\"bc\":"));
-            Serial.print(audioCtrl_->getBeatCount());
             Serial.print(F(",\"q\":"));
             Serial.print(beatEvent);
-            // Beat timestamp not available in AudioTracker (no discrete beat events)
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
             Serial.print(audio.pulse, 2);
-            Serial.print(F(",\"oss\":"));
-            Serial.print(audioCtrl_->getLastOnsetStrength(), 3);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
-            Serial.print(F(",\"db\":"));
-            Serial.print(audio.downbeat, 2);
-            Serial.print(F(",\"bm\":"));
-            Serial.print(audio.beatInMeasure);
 
-            // Debug mode: add tempo + pattern diagnostics
+            // Debug mode: add diagnostics
             if (streamDebug_) {
-                Serial.print(F(",\"ps\":"));
+                Serial.print(F(",\"conf\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
                 Serial.print(F(",\"pc\":"));
                 Serial.print(audioCtrl_->getPatternConfidence(), 3);
@@ -1504,8 +1450,6 @@ void SerialConsole::streamTick() {
                 Serial.print(audioCtrl_->getIoiConfidence(), 3);
                 Serial.print(F(",\"ib\":"));
                 Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
-                Serial.print(F(",\"be\":"));
-                Serial.print(audioCtrl_->getBarEntropy(), 3);
             }
 
             Serial.print(F("}"));
@@ -1722,21 +1666,24 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show beat" - tracker state
     if (strcmp(cmd, "show beat") == 0) {
-        Serial.println(F("=== AudioTracker (ACF+Comb+PLL) ==="));
+        Serial.println(F("=== AudioTracker (ACF+PLP) ==="));
         Serial.print(F("BPM: "));
         Serial.println(audioCtrl_->getCurrentBpm(), 1);
         Serial.print(F("Phase: "));
-        Serial.println(audioCtrl_->getPllPhase(), 3);
+        Serial.println(audioCtrl_->getPlpPhase(), 3);
         Serial.print(F("Periodicity: "));
         Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
         Serial.print(F("Beat Count: "));
         Serial.println(audioCtrl_->getBeatCount());
-        Serial.print(F("Comb BPM: "));
-        Serial.println(audioCtrl_->getCombBankBPM(), 1);
-        Serial.print(F("Comb Confidence: "));
-        Serial.println(audioCtrl_->getCombBankConfidence(), 3);
-        Serial.print(F("PLL Integral: "));
-        Serial.println(audioCtrl_->getPllIntegral(), 4);
+        Serial.print(F("PLP Confidence: "));
+        Serial.println(audioCtrl_->getPlpConfidence(), 4);
+        Serial.print(F("PLP Pulse: "));
+        Serial.println(audioCtrl_->getPlpPulseValue(), 3);
+        Serial.print(F("PLP PMR: "));
+        Serial.println(audioCtrl_->getPlpBestPmr(), 2);
+        { const char* srcNames[] = {"flux", "bass", "nn"};
+          Serial.print(F("PLP Source: "));
+          Serial.println(srcNames[audioCtrl_->getPlpBestSource()]); }
         Serial.print(F("Pulse: "));
         Serial.println(audioCtrl_->getLastPulseStrength(), 3);
         Serial.print(F("Onset Density: "));
@@ -1751,19 +1698,19 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(F("{\"bpm\":"));
         Serial.print(audioCtrl_->getCurrentBpm(), 1);
         Serial.print(F(",\"phase\":"));
-        Serial.print(audioCtrl_->getPllPhase(), 3);
+        Serial.print(audioCtrl_->getPlpPhase(), 3);
         Serial.print(F(",\"periodicity\":"));
         Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F(",\"combBpm\":"));
-        Serial.print(audioCtrl_->getCombBankBPM(), 1);
-        Serial.print(F(",\"combConf\":"));
-        Serial.print(audioCtrl_->getCombBankConfidence(), 3);
         Serial.print(F(",\"beatCount\":"));
         Serial.print(audioCtrl_->getBeatCount());
         Serial.print(F(",\"rhythmStrength\":"));
         Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
         Serial.print(F(",\"pulse\":"));
         Serial.print(audioCtrl_->getLastPulseStrength(), 3);
+        Serial.print(F(",\"plpConf\":"));
+        Serial.print(audioCtrl_->getPlpConfidence(), 3);
+        Serial.print(F(",\"plpPulse\":"));
+        Serial.print(audioCtrl_->getPlpPulseValue(), 3);
         Serial.print(F(",\"onsetDensity\":"));
         Serial.print(audioCtrl_->getControl().onsetDensity, 1);
         Serial.println(F("}"));
@@ -1784,16 +1731,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getBarEntropy(), 3);
         Serial.print(F(",\"bars\":"));
         Serial.print(audioCtrl_->getPatternBarsAccumulated());
-        Serial.print(F(",\"tmpl\":"));
-        Serial.print(audioCtrl_->getBestTemplateIndex());
-        Serial.print(F(",\"tsim\":"));
-        Serial.print(audioCtrl_->getBestTemplateSimilarity(), 3);
-        Serial.print(F(",\"cache\":"));
-        Serial.print(audioCtrl_->getCacheEntryCount());
-        Serial.print(F(",\"restore\":"));
-        Serial.print(audioCtrl_->isCacheRestoreActive() ? 1 : 0);
-        Serial.print(F(",\"rbl\":"));
-        Serial.print(audioCtrl_->getCacheRestoreBarsLeft());
         Serial.print(F(",\"bb\":["));
         const float* bb = audioCtrl_->getBarBins();
         for (int i = 0; i < audioCtrl_->getBarBinCount(); i++) {
@@ -1841,41 +1778,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         }
         Serial.println(F("]"));
 
-        // Template match state
-        Serial.println(F("-- Template Match --"));
-        {
-            // Order must match AudioTracker::templates_[]
-            static const char* const templateNames[] = {
-                "4otf", "backbeat", "halftime", "breakbeat",
-                "8thnote", "dnb", "dembow", "sparse"
-            };
-            int idx = audioCtrl_->getBestTemplateIndex();
-            Serial.print(F("  Template: "));
-            if (idx >= 0 && idx < 8) {
-                Serial.print(templateNames[idx]);
-            } else {
-                Serial.print(F("none"));
-            }
-            Serial.print(F(" (idx="));
-            Serial.print(idx);
-            Serial.print(F(", sim="));
-            Serial.print(audioCtrl_->getBestTemplateSimilarity(), 3);
-            Serial.println(F(")"));
-        }
-
-        // Cache state
-        Serial.println(F("-- Pattern Cache --"));
-        Serial.print(F("  Entries: "));
-        Serial.print(audioCtrl_->getCacheEntryCount());
-        Serial.println(F("/4"));
-        Serial.print(F("  Restore: "));
-        if (audioCtrl_->isCacheRestoreActive()) {
-            Serial.print(F("active ("));
-            Serial.print(audioCtrl_->getCacheRestoreBarsLeft());
-            Serial.println(F(" bars left)"));
-        } else {
-            Serial.println(F("inactive"));
-        }
+        // (Template match + pattern cache display removed v80)
 
         Serial.println();
         return true;

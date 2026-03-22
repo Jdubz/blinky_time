@@ -16,7 +16,7 @@ The PLL requires onset corrections to align phase. Two fundamental barriers prev
 
 2. **The ODF information gate was starving the PLL.** The gate (threshold 0.20) set `odf = 0.02` for weak onsets, but the PLL floor was 0.10. This has been fixed (PLL now receives raw ODF), but phase consistency only improved from 0.035 to 0.042 — confirming that the gate was a secondary issue, not the root cause.
 
-Previous attempt with CBSS (cumulative beat strength scoring) was removed in v75 for similar reasons: CBSS accumulates score at positions with the most onsets, which in syncopated music is not necessarily the beat.
+Previous attempt with CBSS (cumulative beat strength scoring — a beat tracking system that accumulated score at positions with the most onsets) was removed in v75 for similar reasons: in syncopated music, the positions with the most onsets are not necessarily the beats.
 
 ### Conclusion
 
@@ -30,43 +30,49 @@ Replace the PLL with three complementary signal sources operating at different t
 
 **Paper:** Meier, Chiu & Muller, "A Real-Time Beat Tracking System with Zero Latency and Enhanced Confidence Signals", TISMIR 2024. Open-source: [github.com/groupmm/real_time_plp](https://github.com/groupmm/real_time_plp)
 
-**Concept:** Instead of maintaining a free-running oscillator with onset corrections, PLP creates a smooth pulse signal by convolving the onset/flux signal with half-wave sinusoidal kernels at the detected tempo and overlap-adding them into a buffer.
+**Concept:** Instead of maintaining a free-running oscillator with onset corrections, PLP finds the dominant repeating energy pattern in the audio signal. It uses dual-source input (spectral flux AND band energy envelopes), detects the dominant period via autocorrelation, and extracts the actual repeating pattern at that period — not a synthesized sinusoidal approximation.
+
+**Dual-source input:**
+- **Spectral flux** (HWR): Captures transient change spikes — sharp onsets, attacks. Same signal ACF already uses.
+- **Band energy envelopes** (bass/mid): Captures the raw energy envelope — bass pumping, sustained swells. Tracked separately from spectral flux.
+
+When both sources agree on the dominant period, this provides higher confidence in the detected rhythm. Each source is autocorrelated independently; period agreement is checked before extracting the pattern.
 
 **Algorithm (causal version):**
-1. At each frame, the current spectral flux feeds an onset novelty function
-2. The ACF (already computed every 150ms) provides the local tempo estimate
-3. A half-wave rectified sinusoidal kernel is synthesized at the detected tempo
-4. The kernel is centered at the current frame position in a circular buffer
-5. The left half (past) matches observed data; the right half (future) extrapolates
-6. All overlapping kernels accumulate via addition in the buffer
-7. The buffer value at the current position is the PLP pulse output
+1. At each frame, spectral flux and band energy envelopes are computed (dual-source)
+2. Each source is autocorrelated independently to find its dominant period
+3. If both sources agree on the dominant period (within tolerance), confidence is high
+4. The actual repeating energy pattern at the detected period is extracted from the circular buffer — this is the real kick-pattern curve (sharp attack, fast decay, silence, repeat), not a synthesized sinusoid
+5. The extracted pattern is normalized and phase-aligned to produce the PLP pulse output
+6. The pattern is also extrapolated forward by repeating the extracted waveform for lookahead
 
 **Why it works without phase alignment:**
 - The ACF finds the dominant period regardless of which onsets are on-beat
-- When many consecutive frames agree on the same tempo, their kernels reinforce at consistent positions (the natural beat phase emerges from constructive interference)
-- Off-beat onsets partially cancel because their kernels don't consistently align
-- The output is inherently smooth (sum of sinusoids) — no jitter, no phase discontinuities
+- Dual-source agreement (spectral flux + band energy) provides robust period detection — spectral flux catches transients, band energy catches sustained rhythmic patterns (bass pumping)
+- The output is the actual energy pattern, which is more visually interesting than a smooth sine approximation — real kick patterns have sharp attacks and fast decays
+- BPM accuracy and octave errors don't matter: half/double time still produces a valid repeating pattern. PLP finds whatever period dominates regardless.
 
 **Output signals:**
-- `plpPulse` (0-1): Smooth wave peaking at musically periodic positions. Replaces `audio.phase` as the primary visual driver for "on-beat" effects.
-- `plpConfidence` (0-1): Amplitude of PLP peaks. Replaces `periodicityStrength_` for gating musical vs. organic mode. High when tempo is stable and onsets are periodic. Low during transitions/breakdowns.
-- `plpLookahead` (0-1): Extrapolated future pulse value. Enables anticipatory energy effects (the "swell before the drop").
+- `plpPulse` (0-1): The extracted dominant energy pattern, normalized. Peaks at rhythmically periodic positions with the actual waveshape of the audio (sharp kick attacks, fast decays — not a smooth sinusoid). Replaces `audio.phase` as the primary visual driver for "on-beat" effects.
+- `plpConfidence` (0-1): Degree of agreement between spectral flux and band energy period estimates. Replaces `periodicityStrength_` for gating musical vs. organic mode. High when both sources agree on the same period. Low during transitions/breakdowns or when no periodic pattern is present.
+- `plpLookahead` (0-1): Extrapolated future pulse value (repeating the extracted pattern forward). Enables anticipatory energy effects (the "swell before the drop").
 
 **Resource estimate:**
-- Buffer: ~128 floats = 512 bytes (2-beat window at minimum BPM)
-- Kernel synthesis: sine lookup table (existing or ~256 bytes)
-- Per-frame cost: ~0.05ms (one sine eval + one buffer write + one buffer read)
-- ACF: already computed, no additional cost
+- Circular buffers: 2 source buffers (spectral flux + band energy) x ~128 floats = 1024 bytes
+- Extracted pattern: ~64 floats = 256 bytes (one period of the dominant pattern)
+- Per-frame cost: ~0.05ms (buffer write + pattern readout)
+- ACF: already computed for spectral flux; band energy ACF adds ~0.02ms
 
 **What PLP replaces:**
 - PLL free-running sawtooth + onset-gated correction (~40 lines in updatePll)
 - Phase modulation in synthesizeOutputs (~30 lines)
 - `pllKp`, `pllKi`, `pllOnsetFloor`, `pllNearBeatWindow`, `pllIntegralDecay`, `pllSilenceDecay` parameters (6 parameters removed)
+- Dependence on NN onset accuracy for the phase/pulse path — PLP uses spectral flux and band energies, both of which are reliable audio-domain signals (unlike NN onsets at ~60% accuracy / F1=0.681)
 
 **What PLP does NOT replace:**
-- ACF tempo estimation (PLP uses this as input)
+- ACF tempo estimation (PLP uses the detected period, though octave errors are non-issues — half/double time still produces valid repeating patterns)
 - Comb filter bank (still validates tempo)
-- NN onset detection (still drives visual pulse/sparks independently)
+- NN onset detection (still drives visual pulse/sparks independently — raw transient trigger)
 - Pattern memory (histogram can accumulate PLP-phase-relative positions instead of PLL-phase)
 
 ### 2. Multi-Band Energy Envelopes — independent frequency channel visuals
@@ -143,8 +149,8 @@ struct AudioControl {
     float pulse;             // NN onset strength (raw transient trigger, no phase modulation)
 
     // Replaced
-    float plpPulse;          // PLP smooth pulse (was: phase — PLL sawtooth)
-    float plpConfidence;     // PLP confidence (was: rhythmStrength — periodicity + comb blend)
+    float plpPulse;          // PLP dominant pattern (was: phase — PLL sawtooth). Actual waveshape, not sinusoidal.
+    float plpConfidence;     // PLP dual-source agreement (was: rhythmStrength — periodicity + comb blend)
 
     // New
     float onsetRegularity;   // nPVI-based regularity (0=metronomic, 1=chaotic)
@@ -184,11 +190,13 @@ Generator migration is estimated at 60-70% of total implementation effort (Phase
 ## Implementation Plan
 
 ### Phase 1: PLP Core (replaces PLL)
-1. Implement PLP overlap-add buffer in AudioTracker
-2. Feed spectral flux as the novelty function (same signal ACF uses)
-3. Output `plpPulse` and `plpConfidence` to AudioControl
-4. Update generators to use `plpPulse` instead of `phase`
-5. Remove PLL code and associated parameters
+1. Implement dual-source PLP in AudioTracker: circular buffers for spectral flux and band energy envelopes
+2. Independent autocorrelation on each source to find dominant period
+3. Extract the actual repeating pattern at the dominant period (not sinusoidal synthesis)
+4. Compute `plpConfidence` from dual-source period agreement
+5. Output `plpPulse` and `plpConfidence` to AudioControl
+6. Update generators to use `plpPulse` instead of `phase`
+7. Remove PLL code and associated parameters
 
 ### Phase 2: Multi-Band Energy
 1. Add band grouping computation in SharedSpectralAnalysis (or AudioTracker)
@@ -231,8 +239,8 @@ Generator migration is estimated at 60-70% of total implementation effort (Phase
 
 | Field | Key | Source | Purpose |
 |-------|-----|--------|---------|
-| PLP pulse | `ph` | PLP buffer readout | Reuse key for backward compat; semantics change from sawtooth to smooth sinusoidal wave (0-1, peaks at periodic positions) |
-| PLP confidence | `str` | PLP peak amplitude | Reuse key; semantics change from periodicity blend to PLP-derived confidence |
+| PLP pulse | `ph` | PLP pattern readout | Reuse key for backward compat; semantics change from sawtooth to extracted rhythmic pattern (0-1, peaks at periodic positions, actual waveshape not sinusoidal) |
+| PLP confidence | `str` | Dual-source period agreement | Reuse key; semantics change from periodicity blend to spectral flux / band energy period agreement |
 | Beat event | `q` | PLP peak detection | 1 when plpPulse crosses threshold downward (peak just passed); replaces phase-wrap detection |
 | Onset regularity | `nPVI` | nPVI computation | New field. 0=metronomic, 100+=irregular |
 | Bass energy | `eBass` | Mel bands 1-6 EMA | New field. 0-1 |
@@ -294,7 +302,7 @@ Compare streamed `nPVI` values across the 18 EDM test tracks. Four-on-the-floor 
 
 ### Settle time
 
-Current: 12 seconds (OSS buffer 5.5s + ACF convergence 3-5s + margin). PLP convergence depends on the overlap-add buffer filling with enough periodic kernels — likely similar to ACF convergence (a few beat periods). Start with 12 seconds and adjust if PLP converges faster.
+Current: 12 seconds (OSS buffer 5.5s + ACF convergence 3-5s + margin). PLP convergence depends on the circular buffers accumulating enough data for reliable autocorrelation and pattern extraction — likely similar to ACF convergence (a few beat periods). Start with 12 seconds and adjust if PLP converges faster.
 
 ## Parameters
 
@@ -320,9 +328,9 @@ Current: 12 seconds (OSS buffer 5.5s + ACF convergence 3-5s + margin). PLP conve
 
 | Serial Name | Parameter | Default | Range | Purpose | Needs Sweep? |
 |-------------|-----------|---------|-------|---------|-------------|
-| `plpbufsize` | PLP buffer frames | 256 | 128-512 | Overlap-add buffer length | No (set once based on BPM range) |
-| `plpnovgain` | Novelty scaling | 1.0 | 0.1-5.0 | Spectral flux gain into PLP kernels | Yes |
-| `plpconfalpha` | Confidence EMA | 0.2 | 0.05-0.5 | Smoothing for plpConfidence | Maybe |
+| `plpbufsize` | PLP buffer frames | 128 | 64-256 | Circular buffer length per source (spectral flux + band energy) | No (set once based on BPM range) |
+| `plpnovgain` | Novelty scaling | 1.0 | 0.1-5.0 | Spectral flux gain into PLP buffer | Yes |
+| `plpconfalpha` | Confidence EMA | 0.2 | 0.05-0.5 | Smoothing for plpConfidence (dual-source agreement) | Maybe |
 | `plpactivation` | Music mode threshold | 0.3 | 0.0-1.0 | plpConfidence below this → organic mode | Yes |
 | `bassalpha` | Bass energy EMA | 0.3 | 0.1-0.5 | Smoothing for 60-300 Hz band | Maybe |
 | `midalpha` | Mid energy EMA | 0.3 | 0.1-0.5 | Smoothing for 300-4k Hz band | Maybe |
@@ -343,9 +351,9 @@ Instead of phase consistency (which measures lock to beat grid — something we'
 
 ## Open Questions
 
-1. **PLP buffer size:** The Meier 2024 paper uses a 4-8 second window. At 62.5 Hz that's 250-500 frames. Minimum for 60 BPM (slowest tempo): 2 beat periods = 2 seconds = 125 frames = 500 bytes. Maximum for full stability: 500 frames = 2 KB. Start with 256 frames (1 KB) and tune. RAM budget: current arena 3404/32768 bytes, plus ~13 KB globals. 1-2 KB for PLP buffer is feasible.
-2. **Spectral flux vs. NN onset as PLP input:** PLP can use either. Spectral flux is NN-independent and broadband. NN onset is instrument-aware (especially with v8's 3-channel output). May want to try both. Start with spectral flux (same signal ACF already uses) to avoid adding an NN dependency to the phase path.
-3. **PLP lookahead:** The extrapolated right half of the kernel provides ~1 beat period of lookahead. At 120 BPM that's 500ms. At 200 BPM that's 300ms. This is a stretch goal for Phase 1 — the core pulse output works without it. Anticipatory effects can be added later.
+1. **PLP buffer size:** Pattern extraction needs enough history to autocorrelate and extract at least 2 full periods of the dominant pattern. Minimum for 60 BPM (slowest tempo): 2 beat periods = 2 seconds = 125 frames. Two source buffers (spectral flux + band energy) x 128 floats = 1024 bytes, plus ~256 bytes for the extracted pattern. Start with 128 frames per source and tune. RAM budget: current arena 3404/32768 bytes, plus ~13 KB globals. ~1.3 KB for PLP buffers is feasible.
+2. **~~Spectral flux vs. NN onset as PLP input~~** RESOLVED: Use both spectral flux AND band energy envelopes as dual-source input — NOT NN onset. NN onsets are only ~60% accurate (F1=0.681 for v1 model) and cannot distinguish on-beat from off-beat. Spectral flux captures transient change spikes; band energies capture raw energy envelopes (bass pumping, etc.). Both are reliable audio-domain signals. Each source is autocorrelated independently; when both agree on the dominant period, confidence is high.
+3. **PLP lookahead:** The extracted pattern can be repeated forward to provide ~1 beat period of lookahead. At 120 BPM that's 500ms. At 200 BPM that's 300ms. This is a stretch goal for Phase 1 — the core pulse output works without it. Anticipatory effects can be added later.
 4. **nPVI stability:** nPVI requires at least 4-8 inter-onset intervals for a stable estimate. At 2-4 onsets/second (typical for EDM), that's 2-4 seconds of onset history. The existing 64-slot onset timestamp buffer covers ~16-32 seconds at typical density — more than sufficient. nPVI should be updated every ~500ms (not every frame) to smooth the output.
 5. **nPVI threshold calibration:** The proposed ranges (0-25=metronomic, 25-60=regular, etc.) are from speech prosody literature. Electronic music may cluster differently. Treat these as starting points and calibrate with on-device testing across the 18 EDM test tracks.
 6. **Settings version bump:** New AudioControl layout requires SETTINGS_VERSION increment (v75 → v76) and factory reset on all 7 devices. The `odfGateThreshold` parameter should be fully removed at that time.

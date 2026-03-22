@@ -250,10 +250,48 @@ interface DeviceRunScore {
     transientBeatOffsets: number[];
     beatEventOffsets: number[];
   };
+  plp: {
+    atTransient: number;  // avg PLP pulse when transients fire (1.0 = perfect alignment)
+    autoCorr: number;     // autocorrelation at BPM lag (1.0 = perfectly periodic)
+    peakiness: number;    // peak/mean ratio (1.0 = flat, >2 = strong pattern)
+    mean: number;         // average PLP value (0.5 = cosine fallback)
+  };
   // Adjusted raw data
   adjustedDetections: Array<{ timestampMs: number; type: string; strength: number }>;
   adjustedBeatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
-  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; cbss?: number }>;
+  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; plpPulse?: number }>;
+}
+
+/**
+ * Convert a DeviceRunScore into a compact summary object.
+ * Shared by run_music_test (single & multi-run) and run_music_test_multi.
+ */
+function formatScoreSummary(score: DeviceRunScore) {
+  return {
+    beatTracking: {
+      f1: score.beatTracking.f1,
+      precision: score.beatTracking.precision,
+      recall: score.beatTracking.recall,
+      refBeats: score.beatTracking.refBeats,
+      estBeats: score.beatTracking.estBeats,
+    },
+    transientTracking: score.transientTracking,
+    musicMode: score.musicMode,
+    plp: score.plp,
+    diagnostics: {
+      transientRate: Math.round(score.diagnostics.transientRate * 10) / 10,
+      expectedBeatRate: Math.round(score.diagnostics.expectedBeatRate * 10) / 10,
+      beatEventRate: Math.round(score.diagnostics.beatEventRate * 10) / 10,
+      transientOffsetMs: score.diagnostics.phaseOffsetStats,
+      beatOffsetMs: score.diagnostics.beatOffsetStats,
+      beatOffsetHistogram: score.diagnostics.beatOffsetHistogram,
+      predictionRatio: score.diagnostics.predictionRatio,
+      matched: score.diagnostics.beatVsReference.matched,
+      extra: score.diagnostics.beatVsReference.extra,
+      missed: score.diagnostics.beatVsReference.missed,
+    },
+    timing: { latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null },
+  };
 }
 
 /**
@@ -266,7 +304,7 @@ function scoreDeviceRun(
     duration: number;
     startTime: number;
     transients: Array<{ timestampMs: number; type: string; strength: number }>;
-    musicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; cbss?: number }>;
+    musicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; plpPulse?: number }>;
     beatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
   },
   audioStartTime: number,
@@ -407,6 +445,56 @@ function scoreDeviceRun(
     }
   }
 
+  // PLP accuracy metrics
+  const plpValues = activeStates.filter(s => s.plpPulse !== undefined).map(s => s.plpPulse!);
+  let plpAtTransient = 0;
+  let plpAutoCorr = 0;
+  let plpPeakiness = 0;
+  let plpMean = 0;
+
+  if (plpValues.length > 0) {
+    plpMean = plpValues.reduce((s, v) => s + v, 0) / plpValues.length;
+    const plpMax = Math.max(...plpValues);
+    plpPeakiness = plpMean > 0.01 ? plpMax / plpMean : 0;
+
+    // PLP value at transient times: for each transient, find nearest music state
+    // Use a sliding search start index since both arrays are sorted by time
+    const transientPlpValues: number[] = [];
+    let searchStart = 0;
+    for (const det of detections) {
+      let bestState: (typeof activeStates)[0] | null = null;
+      let bestDist = Infinity;
+      for (let si = searchStart; si < activeStates.length; si++) {
+        const dist = Math.abs(activeStates[si].timestampMs - det.timestampMs);
+        if (dist < bestDist) { bestDist = dist; bestState = activeStates[si]; }
+        else if (dist > bestDist) { searchStart = Math.max(0, si - 2); break; }  // past minimum, advance start
+      }
+      if (bestState && bestState.plpPulse !== undefined && bestDist < 100) {
+        transientPlpValues.push(bestState.plpPulse);
+      }
+    }
+    if (transientPlpValues.length > 0) {
+      plpAtTransient = transientPlpValues.reduce((s, v) => s + v, 0) / transientPlpValues.length;
+    }
+
+    // PLP autocorrelation at detected BPM lag
+    if (avgBpm > 0 && plpValues.length > 10) {
+      const streamRate = plpValues.length / (audioDurationSec || 1);
+      const bpmLag = Math.round(streamRate * 60 / avgBpm);
+      if (bpmLag > 0 && bpmLag < plpValues.length / 2) {
+        let sumXY = 0, sumX2 = 0;
+        const n = plpValues.length - bpmLag;
+        for (let i = 0; i < n; i++) {
+          const x = plpValues[i] - plpMean;
+          const y = plpValues[i + bpmLag] - plpMean;
+          sumXY += x * y;
+          sumX2 += x * x;
+        }
+        plpAutoCorr = sumX2 > 0 ? sumXY / sumX2 : 0;
+      }
+    }
+  }
+
   // Diagnostics
   const transientBeatOffsets: number[] = [];
   detections.forEach((det) => {
@@ -493,6 +581,12 @@ function scoreDeviceRun(
       avgConfidence: Math.round(avgConf * 100) / 100,
       phaseStability: Math.round(phaseStability * 1000) / 1000,
       activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
+    },
+    plp: {
+      atTransient: Math.round(plpAtTransient * 1000) / 1000,  // avg PLP pulse when transients fire (1.0 = perfect alignment)
+      autoCorr: Math.round(plpAutoCorr * 1000) / 1000,        // autocorrelation at BPM lag (1.0 = perfectly periodic)
+      peakiness: Math.round(plpPeakiness * 100) / 100,        // peak/mean ratio (1.0 = flat/cosine, >2 = strong pattern)
+      mean: Math.round(plpMean * 1000) / 1000,                // average PLP value (0.5 = cosine fallback)
     },
     diagnostics: {
       transientRate: audioDurationSec > 0 ? detections.length / audioDurationSec : 0,
@@ -836,7 +930,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_beat_state',
-        description: 'Get CBSS beat tracker state (BPM, phase, confidence, periodicity, beatCount, stability). Useful for validating tempo tracking behavior.',
+        description: 'Get beat tracker state (BPM, phase, confidence). Useful for validating tempo tracking behavior.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1336,7 +1430,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (musicState.a === 1) {
             musicActiveCount++;
             bpmSum += musicState.bpm;
-            confSum += musicState.conf;
+            confSum += musicState.str;
           }
           if (musicState.q === 1) beatCount++;
         };
@@ -1532,15 +1626,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 active: ms.a === 1,
                 bpm: ms.bpm,
                 phase: ms.ph,
+                plpPulse: ms.pp,
                 rhythmStrength: ms.str,
-                confidence: ms.conf,
-                beatCount: ms.bc,
                 beat: ms.q === 1,
                 energy: ms.e,
                 pulse: ms.p,
-                debug: {
-                  periodicityStrength: ms.ps,
-                },
+                onsetDensity: ms.od,
               }, null, 2),
             },
           ],
@@ -1595,11 +1686,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? bpmValues.reduce((sum, b) => sum + Math.pow(b - avgBpm, 2), 0) / bpmValues.length : 0;
         const bpmStdDev = Math.sqrt(bpmVariance);
 
-        // Confidence statistics
-        const confValues = activeStates.map(s => s.conf);
+        // Confidence statistics (use str for rhythm strength, conf is debug-only)
+        const confValues = activeStates.map(s => s.str);
         const avgConf = confValues.length > 0
           ? confValues.reduce((a, b) => a + b, 0) / confValues.length : 0;
-        const finalConf = samples.length > 0 ? samples[samples.length - 1].conf : 0;
+        const finalConf = samples.length > 0 ? samples[samples.length - 1].str : 0;
 
         // Stability assessment
         let stability: string;
@@ -1642,13 +1733,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         };
 
-        // Add debug info if available
-        if (lastSample && (lastSample.sb !== undefined || lastSample.mb !== undefined)) {
+        // Add PLP debug info if available
+        if (lastSample && lastSample.pp !== undefined) {
           response.debug = {
-            stableBeats: lastSample.sb,
-            missedBeats: lastSample.mb,
-            peakEnergy: lastSample.pe !== undefined ? parseFloat(lastSample.pe.toFixed(4)) : null,
-            errorIntegral: lastSample.ei !== undefined ? parseFloat(lastSample.ei.toFixed(3)) : null,
+            plpPulse: parseFloat(lastSample.pp.toFixed(3)),
+            periodicityStrength: lastSample.conf !== undefined ? parseFloat(lastSample.conf.toFixed(3)) : null,
+            patternConfidence: lastSample.pc !== undefined ? parseFloat(lastSample.pc.toFixed(3)) : null,
           };
         }
 
@@ -1682,11 +1772,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const formatted = {
           bpm: parsed.bpm,
           phase: parsed.phase,
-          periodicity: parsed.periodicity,
           confidence: parsed.confidence,
-          beatCount: parsed.beatCount,
-          beatPeriod: parsed.beatPeriod,
-          stability: parsed.stability,
         };
 
         return {
@@ -2522,30 +2608,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             // Build per-run compact summary
             perRunSummaries.push({
               ...(numRuns > 1 ? { run: runIdx + 1 } : {}),
-              beatTracking: {
-                f1: score.beatTracking.f1,
-                precision: score.beatTracking.precision,
-                recall: score.beatTracking.recall,
-                cmlt: score.beatTracking.cmlt,
-                amlt: score.beatTracking.amlt,
-                refBeats: score.beatTracking.refBeats,
-                estBeats: score.beatTracking.estBeats,
-              },
-              transientTracking: score.transientTracking,
-              musicMode: score.musicMode,
-              diagnostics: {
-                transientRate: Math.round(score.diagnostics.transientRate * 10) / 10,
-                expectedBeatRate: Math.round(score.diagnostics.expectedBeatRate * 10) / 10,
-                beatEventRate: Math.round(score.diagnostics.beatEventRate * 10) / 10,
-                transientOffsetMs: score.diagnostics.phaseOffsetStats,
-                beatOffsetMs: score.diagnostics.beatOffsetStats,
-                beatOffsetHistogram: score.diagnostics.beatOffsetHistogram,
-                predictionRatio: score.diagnostics.predictionRatio,
-                matched: score.diagnostics.beatVsReference.matched,
-                extra: score.diagnostics.beatVsReference.extra,
-                missed: score.diagnostics.beatVsReference.missed,
-              },
-              timing: { latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null },
+              ...formatScoreSummary(score),
               detailsFile: detailsFilename,
             });
 
@@ -2743,24 +2806,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const score = allRunScores.get(devPort)![0];
               return {
                 port: devPort,
-                beatTracking: {
-                  f1: score.beatTracking.f1,
-                  precision: score.beatTracking.precision,
-                  recall: score.beatTracking.recall,
-                  refBeats: score.beatTracking.refBeats,
-                  estBeats: score.beatTracking.estBeats,
-                },
-                transientTracking: score.transientTracking,
-                musicMode: {
-                  avgBpm: score.musicMode.avgBpm,
-                  expectedBpm: score.musicMode.expectedBpm,
-                  bpmError: score.musicMode.bpmError,
-                  bpmAccuracy: score.musicMode.bpmAccuracy,
-                },
-                timing: {
-                  latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
-                  beatOffsetMedianMs: score.diagnostics.beatOffsetStats?.median ?? null,
-                },
+                ...formatScoreSummary(score),
               };
             });
 
@@ -2791,10 +2837,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 },
                 perRun: scores.map((s, i) => ({
                   run: i + 1,
-                  beatF1: s.beatTracking.f1,
-                  transientF1: s.transientTracking.f1,
-                  bpmAccuracy: s.musicMode.bpmAccuracy,
-                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
+                  ...formatScoreSummary(s),
                 })),
               };
             });

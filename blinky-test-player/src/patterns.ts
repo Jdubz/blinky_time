@@ -2315,7 +2315,7 @@ export const PATTERN_REGISTRY: PatternRegistry = {
   // === MUSIC MODE PATTERNS ===
 
   'steady-120bpm': extendPattern(STEADY_120BPM, {
-    ...musicModeMeta(STEADY_120BPM, ['musicthresh', 'bpmmin', 'bpmmax', 'pllkp', 'pllki'], 10),
+    ...musicModeMeta(STEADY_120BPM, ['musicthresh', 'bpmmin', 'bpmmax', 'plpactivation', 'plpnovgain'], 10),
   }),
 
   'steady-80bpm': extendPattern(STEADY_80BPM, {

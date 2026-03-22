@@ -27,27 +27,21 @@ export interface AudioSample {
 }
 
 export interface MusicModeState {
+  // Always present in stream
   a: number;      // Active (0 or 1)
   bpm: number;    // Tempo (BPM)
-  ph: number;     // Phase (0-1)
+  ph: number;     // Phase (0-1, PLP-driven)
+  pp?: number;    // PLP pulse (0-1, extracted energy pattern value)
   str: number;    // Rhythm strength (0-1)
-  conf: number;   // CBSS beat tracking confidence (0-1)
-  bc: number;     // Beat count (tracked beats)
   q: number;      // Beat event (0 or 1, phase wrap)
-  bt?: number;    // Firmware millis() timestamp of last beat (only when q=1)
   e: number;      // Energy (0-1)
-  p: number;      // Pulse (0-1)
-  // Observability fields (always present in stream)
-  cb?: number;    // Current CBSS value
-  oss?: number;   // Smoothed onset strength
-  ttb?: number;   // Time to next beat (frames countdown)
-  bp?: number;    // Beat was predicted (0=fallback, 1=predicted)
-  // Debug fields (only present in debug stream mode)
-  ps?: number;    // Periodicity strength (raw autocorrelation peak)
-  sb?: number;    // Stable beats count
-  mb?: number;    // Missed beats count
-  pe?: number;    // Peak energy
-  ei?: number;    // Error integral
+  p: number;      // Pulse (0-1, transient strength)
+  od?: number;    // Onset density (onsets/sec)
+  // Debug-only fields (stream debug mode)
+  conf?: number;  // ACF periodicity strength
+  pc?: number;    // Pattern confidence
+  ic?: number;    // IOI confidence
+  ib?: number;    // IOI peak BPM
 }
 
 export interface LedTelemetry {
@@ -59,7 +53,7 @@ export interface BeatEvent {
   timestampMs: number;
   bpm: number;
   type: 'quarter';
-  predicted?: boolean;  // Whether beat came from CBSS prediction vs fallback
+  predicted?: boolean;  // Whether beat came from prediction vs fallback
 }
 
 export interface MusicModeMetrics {
@@ -133,6 +127,6 @@ export interface TimestampedMusicState {
   bpm: number;
   phase: number;
   confidence: number;
-  oss?: number;     // Smoothed onset strength
-  cbss?: number;    // Current CBSS value
+  oss?: number;       // Raw onset strength
+  plpPulse?: number;  // PLP extracted pattern value (0-1)
 }
