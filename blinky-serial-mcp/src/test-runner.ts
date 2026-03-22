@@ -77,9 +77,14 @@ async function killOrphanAudio(): Promise<void> {
 function playAudio(
   audioFile: string,
   durationMs?: number,
+  seekSec?: number,
 ): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
-    const args = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
+    const args = ['-nodisp', '-autoexit', '-loglevel', 'error'];
+    if (seekSec && seekSec > 0) {
+      args.push('-ss', seekSec.toFixed(1));
+    }
+    args.push(audioFile);
     if (durationMs) {
       args.push('-t', (durationMs / 1000).toString());
     }
@@ -229,6 +234,7 @@ interface RunTrackArgs {
   groundTruthFile: string;
   ports: string[];
   durationMs?: number;
+  seekSec?: number;
   outputPath?: string;
   gain?: number;
   commands?: string[];
@@ -238,8 +244,8 @@ interface RunTrackArgs {
 
 async function runTrack(args: RunTrackArgs): Promise<void> {
   const {
-    audioFile, groundTruthFile, ports, durationMs, outputPath,
-    gain, commands, portCommands, numRuns,
+    audioFile, groundTruthFile, ports, durationMs, seekSec,
+    outputPath, gain, commands, portCommands, numRuns,
   } = args;
 
   // Validate inputs
@@ -300,7 +306,7 @@ async function runTrack(args: RunTrackArgs): Promise<void> {
       // Play audio
       const audioStartTime = Date.now();
       log(`Playing audio...`);
-      const result = await playAudio(audioFile, durationMs);
+      const result = await playAudio(audioFile, durationMs, seekSec);
 
       // Stop recording on all devices
       const deviceResults: Array<{ port: string; data: ReturnType<DeviceSession['stopTestRecording']> }> = [];
@@ -422,6 +428,15 @@ async function validate(args: ValidateArgs): Promise<void> {
     process.exit(1);
   }
 
+  // Load track manifest for seek offsets (skip intros, jump to densest beat region)
+  const manifestPath = join(dir, 'track_manifest.json');
+  let manifest: Record<string, { seekOffset?: number }> = {};
+  if (existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    } catch { /* ignore parse errors */ }
+  }
+
   // Filter tracks if specified
   if (trackNames && trackNames.length > 0) {
     tracks = tracks.filter(t => trackNames.includes(t.name));
@@ -469,7 +484,10 @@ async function validate(args: ValidateArgs): Promise<void> {
       const track = tracks[trackIdx];
       const gtData = JSON.parse(readFileSync(track.groundTruth, 'utf-8')) as GroundTruth;
 
-      log(`\n[${ trackIdx + 1}/${tracks.length}] ${track.name} (${gtData.bpm || '?'} BPM)`);
+      // Get seek offset from manifest (skip intro, jump to densest beat region)
+      const trackManifest = manifest[track.name];
+      const seekSec = trackManifest?.seekOffset || 0;
+      log(`\n[${ trackIdx + 1}/${tracks.length}] ${track.name} (${gtData.bpm || '?'} BPM${seekSec > 0 ? `, seek ${seekSec}s` : ''})`);
 
       // Per-device per-run scores for this track
       const trackDeviceScores: Map<string, DeviceRunScore[]> = new Map();
@@ -486,7 +504,7 @@ async function validate(args: ValidateArgs): Promise<void> {
 
         // Play audio
         const audioStartTime = Date.now();
-        const result = await playAudio(track.audioFile, durationMs);
+        const result = await playAudio(track.audioFile, durationMs, seekSec);
 
         if (!result.success) {
           // Stop recording (discard data)
@@ -759,6 +777,7 @@ async function main(): Promise<void> {
         commands: { type: 'string' },
         'port-commands': { type: 'string' },
         runs: { type: 'string' },
+        seek: { type: 'string' },
         'track-dir': { type: 'string' },
         tracks: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
@@ -830,11 +849,13 @@ async function main(): Promise<void> {
         process.exit(1);
       }
 
+      const seekRaw = str('seek');
       await runTrack({
         audioFile: pathResolve(audioFile),
         groundTruthFile: pathResolve(gtFile),
         ports,
         durationMs,
+        seekSec: seekRaw ? parseFloat(seekRaw) : undefined,
         outputPath: str('output'),
         gain,
         commands: commandsList,
