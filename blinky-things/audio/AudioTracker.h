@@ -164,9 +164,11 @@ private:
     static constexpr int NN_BUFFER_SIZE = 360;    // NN onset activation history
     static constexpr int MAX_PATTERN_LEN = 66;    // Max period in frames (66 Hz / 60 BPM)
     float bassBuffer_[BASS_BUFFER_SIZE] = {0};
+    float bassLinear_[BASS_BUFFER_SIZE] = {0};    // Linearized bass (shared by ACF + PLP)
     int bassWriteIdx_ = 0;
     int bassCount_ = 0;
     float nnOnsetBuffer_[NN_BUFFER_SIZE] = {0};   // Raw NN activation per frame
+    float nnLinear_[NN_BUFFER_SIZE] = {0};        // Linearized NN onset (shared by ACF + PLP)
     int nnWriteIdx_ = 0;
     int nnCount_ = 0;
 
@@ -178,6 +180,7 @@ private:
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpBestPmr_ = 0.0f;                 // PMR of winning epoch-fold (diagnostic)
+    int plpBestPeriod_ = 33;                   // Winning period from grid search (frames, pre-smoothing)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 

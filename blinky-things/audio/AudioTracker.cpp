@@ -228,24 +228,21 @@ void AudioTracker::runAutocorrelation() {
     }
 
     // --- Grid search: find period with best PMR across 3 sources ---
-    // Instead of ACF peak → period, directly try every candidate period and
-    // epoch-fold each source. The period × source with highest peak-to-mean
-    // ratio (PMR) wins. This optimizes for pattern quality, not BPM accuracy.
+    // Try every candidate period and epoch-fold each source. The period × source
+    // with highest peak-to-mean ratio (PMR) wins. Optimizes for pattern quality.
     int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
     int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
     if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
-    if (minLag < 2) minLag = 2;
+    if (minLag < 10) minLag = 10;  // ~400 BPM floor — prevents trivially high PMR at tiny periods
 
-    // Linearize bass and NN onset buffers
-    static float bassLinear[BASS_BUFFER_SIZE];
-    static float nnLinear[NN_BUFFER_SIZE];
+    // Linearize bass and NN onset buffers into class members (shared with updatePlpAnalysis)
     int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
-    for (int i = 0; i < bassCount_; i++) bassLinear[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
+    for (int i = 0; i < bassCount_; i++) bassLinear_[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
     int nStart = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
-    for (int i = 0; i < nnCount_; i++) nnLinear[i] = nnOnsetBuffer_[(nStart + i) % NN_BUFFER_SIZE];
+    for (int i = 0; i < nnCount_; i++) nnLinear_[i] = nnOnsetBuffer_[(nStart + i) % NN_BUFFER_SIZE];
 
     // Source buffers and counts
-    const float* sources[3] = { ossLinear_, bassLinear, nnLinear };
+    const float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
     const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
     // source 0=flux, 1=bass, 2=nn
 
@@ -287,7 +284,8 @@ void AudioTracker::runAutocorrelation() {
     }
 
     plpBestPmr_ = bestPmr;
-    plpBestSource_ = bestSource;
+    plpBestPeriod_ = bestPeriod;
+    plpBestSource_ = static_cast<uint8_t>(bestSource);
 
     // --- Also compute ACF periodicity strength for rhythmStrength ---
     // Quick ACF at the winning period (just one lag, not full spectrum)
@@ -331,33 +329,24 @@ void AudioTracker::addBassSample(float bassEnergy) {
 }
 
 void AudioTracker::updatePlpAnalysis() {
-    // --- 1. Use period from grid search (set by runAutocorrelation) ---
-    int patLen = static_cast<int>(beatPeriodFrames_ + 0.5f);
+    // --- 1. Use raw period from grid search (not BPM-smoothed) ---
+    // The grid search found the exact period with best PMR. Using the BPM-smoothed
+    // beatPeriodFrames_ introduces a round-trip error (period→BPM→EMA→period)
+    // that can shift the fold by ±1 frame and degrade coherence.
+    int patLen = plpBestPeriod_;
     if (patLen < 2) patLen = 2;
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
     // --- 2. Epoch-fold the WINNING source at the winning period ---
-    // runAutocorrelation() already found the best source (flux/bass/nn) and period.
-    // Now extract the pattern from that source for visual output.
-    // ossLinear_ already populated. Bass/NN linearized in runAutocorrelation statics.
-
-    // Use the winning source buffer (ossLinear_ for flux, or re-linearize for bass/nn)
+    // All linearized buffers populated by runAutocorrelation() (class members).
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
-        // Bass won — linearize bass buffer
-        static float bassLin[BASS_BUFFER_SIZE];
-        int bS = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
-        for (int i = 0; i < bassCount_; i++) bassLin[i] = bassBuffer_[(bS + i) % BASS_BUFFER_SIZE];
-        sourceBuf = bassLin;
+        sourceBuf = bassLinear_;
         sourceCount = bassCount_;
     } else if (plpBestSource_ == 2 && nnCount_ >= patLen * 2) {
-        // NN onset won — linearize NN buffer
-        static float nnLin[NN_BUFFER_SIZE];
-        int nS = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
-        for (int i = 0; i < nnCount_; i++) nnLin[i] = nnOnsetBuffer_[(nS + i) % NN_BUFFER_SIZE];
-        sourceBuf = nnLin;
+        sourceBuf = nnLinear_;
         sourceCount = nnCount_;
     }
 
@@ -387,12 +376,11 @@ void AudioTracker::updatePlpAnalysis() {
         }
     }
 
-    // --- 3. PLP confidence from PMR quality ---
-    // High PMR (>2.5) = strong pattern = high confidence
-    // Low PMR (<1.5) = weak/flat pattern = low confidence
-    float targetConf = clampf((plpBestPmr_ - 1.5f) / 2.0f, 0.0f, 1.0f);
-    // Also gate by periodicity strength (weak ACF = unreliable period)
-    targetConf *= clampf(periodicityStrength_ * 2.0f, 0.0f, 1.0f);
+    // --- 3. PLP confidence directly from PMR quality ---
+    // PMR measures pattern peakedness: 1.0 = flat (no pattern), 4.0+ = strong kicks.
+    // Map [1.5, 4.0] → [0.0, 1.0] for confidence.
+    // No ACF gating — PMR IS the quality signal. ACF periodicity is separate.
+    float targetConf = clampf((plpBestPmr_ - 1.5f) / 2.5f, 0.0f, 1.0f);
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 
     // --- 4. Cross-correlate last period of winning source with pattern ---
