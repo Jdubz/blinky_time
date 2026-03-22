@@ -326,9 +326,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 **Core Audio System:**
 - `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP (~10 tunable params)
 - `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP Fourier tempogram, pulse detection, output synthesis)
-- `blinky-things/audio/AudioControl.h` - Output struct definition (7 fields)
-- `blinky-things/audio/CombFilterBank.h` - Comb filter bank header (20 parallel IIR resonators)
-- `blinky-things/audio/CombFilterBank.cpp` - Comb filter bank implementation (Scheirer 1998)
+- `blinky-things/audio/AudioControl.h` - Output struct definition (8 fields including plpPulse)
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
 - `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)
 - `blinky-things/audio/frame_onset_model_data.h` - INT8 TFLite model weights

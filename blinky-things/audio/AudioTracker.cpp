@@ -8,6 +8,12 @@
 
 static constexpr float TWO_PI_F = 6.28318530718f;
 
+// Adaptive phase correction constants (from parameter sweep data)
+static constexpr float PHASE_ALPHA_ERR = 0.15f;   // Error EMA rate (~6-7 sample window at 150ms cadence)
+static constexpr float PHASE_SIGMA_REF = 0.08f;   // Expected RMS phase error when locked
+static constexpr float PHASE_ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
+static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
+
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -303,12 +309,22 @@ void AudioTracker::runFourierTempogram() {
     }
 
     plpDftMag_ = bestMag;
+
+    // Reset adaptive phase correction state on significant period change
+    // (>10% shift). Prevents old low-variance state from suppressing
+    // the fast correction needed to re-converge at the new period.
+    if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
+        phaseErrVar_ = 0.25f;  // Force fast convergence
+    }
+
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
-    plpDftPhase_ = bestPhase;  // Store for use in updatePlpAnalysis
+    plpDftPhase_ = bestPhase;
 
     // --- Periodicity strength from DFT magnitude ---
-    // With sqrt(N) normalization, magnitude ~1.0 for a clearly periodic signal
+    // With sqrt(N) normalization, magnitude ~1.0 for a clearly periodic signal.
+    // This is not a normalized cross-correlation [-1,1] but a spectral magnitude
+    // where ~1.0 indicates strong periodicity. Clamp to [0,1] for rhythmStrength.
     float newStrength = clampf(bestMag, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
 
@@ -419,18 +435,13 @@ void AudioTracker::updatePlpAnalysis() {
     // Adaptive correction rate from phase error variance (EMA)
     // High variance → still converging → aggressive correction
     // Low variance → locked → gentle correction (prevents jitter)
-    static constexpr float ALPHA_ERR = 0.15f;    // Error EMA rate (~6-7 sample window)
-    static constexpr float SIGMA_REF = 0.08f;    // Expected RMS error when locked
-    static constexpr float ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
-    static constexpr float ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
-
-    phaseErrEma_ += ALPHA_ERR * (phaseError - phaseErrEma_);
+    phaseErrEma_ += PHASE_ALPHA_ERR * (phaseError - phaseErrEma_);
     float deviation = phaseError - phaseErrEma_;
-    phaseErrVar_ += ALPHA_ERR * (deviation * deviation - phaseErrVar_);
+    phaseErrVar_ += PHASE_ALPHA_ERR * (deviation * deviation - phaseErrVar_);
 
     float sigma = sqrtf(phaseErrVar_ > 0.0f ? phaseErrVar_ : 0.0f);
-    float lambda = sigma / (sigma + SIGMA_REF);
-    float alpha = ALPHA_MIN + (ALPHA_MAX - ALPHA_MIN) * lambda;
+    float lambda = sigma / (sigma + PHASE_SIGMA_REF);
+    float alpha = PHASE_ALPHA_MIN + (PHASE_ALPHA_MAX - PHASE_ALPHA_MIN) * lambda;
 
     plpPhase_ += alpha * phaseError;
     if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;

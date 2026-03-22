@@ -39,7 +39,7 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 - **Epoch-fold pattern extraction** still used for the actual visual pattern shape
 - **Pattern normalization** uses min-max (signal is mean-subtracted, may have negatives)
 - **Confidence** = DFT magnitude x signal presence (mic level gate)
-- **Phase correction** at 30% per 150ms cycle (was 10% with cross-correlation)
+- **Adaptive phase correction** (EMA variance: ALPHA_MIN=0.10 when locked, ALPHA_MAX=0.50 when converging, auto-resets on period change)
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
 **Current test results:**
