@@ -6,6 +6,8 @@
 // Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
 // PULSE_MIN_LEVEL=0.03, PULSE_ONSET_FLOOR=0.1
 
+static constexpr float TWO_PI_F = 6.28318530718f;
+
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -159,7 +161,7 @@ const AudioControl& AudioTracker::update(float dt) {
     //    enough OSS data for meaningful autocorrelation.
     if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
         lastAcfMs_ = nowMs;
-        runAutocorrelation();
+        runFourierTempogram();
         updatePlpAnalysis();  // PLP epoch-fold + bass ACF + cross-correlate
 
         // IOI analysis runs once per ACF cycle (same cadence)
@@ -215,7 +217,7 @@ void AudioTracker::addOssSample(float odf) {
 // Fourier Tempogram — Period + Phase Selection
 // ============================================================================
 
-void AudioTracker::runAutocorrelation() {
+void AudioTracker::runFourierTempogram() {
     // Linearize all 3 source circular buffers into class members
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
@@ -256,14 +258,14 @@ void AudioTracker::runAutocorrelation() {
     int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
     int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
     if (minLag < 10) minLag = 10;
+    if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;  // Keep period ≤ pattern buffer
 
     for (int lag = minLag; lag <= maxLag; lag++) {
         // Goertzel recurrence: computes one DFT bin with 2 multiply-adds per sample.
-        // Only needs cos(omega) precomputed — no per-sample trig calls.
-        float omega = 6.28318530718f / static_cast<float>(lag);
-        float coeff = 2.0f * cosf(omega);  // One cosf per candidate period
+        float omega = TWO_PI_F / static_cast<float>(lag);
         float cosOmega = cosf(omega);
         float sinOmega = sinf(omega);
+        float coeff = 2.0f * cosOmega;
 
         for (int src = 0; src < 3; src++) {
             int count = sourceCounts[src];
@@ -290,13 +292,13 @@ void AudioTracker::runAutocorrelation() {
                 bestPeriod = lag;
                 bestSource = src;
                 // Phase: position of the peak within the cycle
-                bestPhase = -atan2f(dftImag, dftReal) / 6.28318530718f;
+                bestPhase = -atan2f(dftImag, dftReal) / TWO_PI;
                 if (bestPhase < 0.0f) bestPhase += 1.0f;
             }
         }
     }
 
-    plpBestPmr_ = bestMag;  // Reuse field for DFT magnitude (diagnostic)
+    plpDftMag_ = bestMag;
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
     plpDftPhase_ = bestPhase;  // Store for use in updatePlpAnalysis
@@ -337,7 +339,7 @@ void AudioTracker::updatePlpAnalysis() {
     plpPatternLen_ = patLen;
 
     // --- 2. Epoch-fold the WINNING source at the winning period ---
-    // All linearized buffers populated by runAutocorrelation() (class members).
+    // All linearized buffers populated by runFourierTempogram() (class members).
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
@@ -429,7 +431,7 @@ void AudioTracker::updatePlpAnalysis() {
     if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
     // --- 4. PLP confidence from DFT magnitude + signal presence ---
-    float dftConf = clampf(plpBestPmr_, 0.0f, 1.0f);
+    float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
     float signalPresence = clampf(mic_.getLevel() / plpSignalFloor, 0.0f, 1.0f);
     float targetConf = dftConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
@@ -456,7 +458,7 @@ void AudioTracker::updatePlpPhase() {
         plpPulseValue_ = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
     } else {
         // Fallback: cosine pulse (same shape as old phaseToPulse)
-        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * 6.28318530718f);
+        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
     }
 
     // Decay confidence during extended silence

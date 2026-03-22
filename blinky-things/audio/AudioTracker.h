@@ -64,7 +64,7 @@ public:
     float getPlpConfidence() const { return plpConfidence_; }
     float getPlpPulseValue() const { return plpPulseValue_; }
     int getPlpPatternLen() const { return plpPatternLen_; }
-    float getPlpBestPmr() const { return plpBestPmr_; }
+    float getPlpDftMag() const { return plpDftMag_; }
     int getPlpBestSource() const { return plpBestSource_; }
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
@@ -180,7 +180,7 @@ private:
     float plpPulseValue_ = 0.5f;               // Current pattern value at phase position
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
-    float plpBestPmr_ = 0.0f;                 // DFT magnitude of winning frequency (diagnostic)
+    float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
     float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
@@ -237,7 +237,7 @@ private:
     // === Internal methods ===
     void addOssSample(float odf);
     void addBassSample(float bassEnergy);
-    void runAutocorrelation();
+    void runFourierTempogram();
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
     void updatePlpPhase();          // Advance phase + read pattern value (every frame)
