@@ -299,18 +299,7 @@ void AudioTracker::runAutocorrelation() {
     plpBestPmr_ = bestMag;  // Reuse field for DFT magnitude (diagnostic)
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
-
-    // --- Phase alignment from DFT ---
-    // The DFT phase directly gives the beat position within the current buffer.
-    // Convert to our running plpPhase_ coordinate: the DFT phase tells us where
-    // the peak of the dominant sinusoidal component is, which corresponds to the
-    // strongest transient position. Apply as a direct phase correction.
-    float phaseError = bestPhase - plpPhase_;
-    if (phaseError > 0.5f) phaseError -= 1.0f;
-    if (phaseError < -0.5f) phaseError += 1.0f;
-    plpPhase_ += 0.3f * phaseError;  // 30% correction per ACF cycle (~150ms)
-    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-    if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+    plpDftPhase_ = bestPhase;  // Store for use in updatePlpAnalysis
 
     // --- Periodicity strength from DFT magnitude ---
     // With sqrt(N) normalization, magnitude ~1.0 for a clearly periodic signal
@@ -389,16 +378,42 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. PLP confidence from DFT magnitude + signal presence ---
-    // DFT magnitude measures periodicity strength at the winning frequency.
-    // Gate by mic level to prevent ambient noise from spurious patterns.
+    // --- 3. Phase alignment: DFT coarse + pattern-peak fine ---
+    // Step 1: DFT phase gives coarse alignment (sinusoidal centroid of periodic energy)
+    {
+        float phaseError = plpDftPhase_ - plpPhase_;
+        if (phaseError > 0.5f) phaseError -= 1.0f;
+        if (phaseError < -0.5f) phaseError += 1.0f;
+        plpPhase_ += plpPhaseCorrection * 0.5f * phaseError;  // Half the correction rate for coarse
+        if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+    }
+
+    // Step 2: Pattern-peak gives fine alignment (actual transient position)
+    // The epoch-fold pattern has the real shape (sharp kick attack). Its peak
+    // is the on-beat position. Correct phase so pattern peak aligns with phase=0.
+    {
+        int peakIdx = 0;
+        float peakVal = plpPattern_[0];
+        for (int j = 1; j < patLen; j++) {
+            if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
+        }
+        if (peakVal > 0.5f) {  // Only refine if pattern has a clear peak
+            float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
+            float phaseError = peakPhase - plpPhase_;
+            if (phaseError > 0.5f) phaseError -= 1.0f;
+            if (phaseError < -0.5f) phaseError += 1.0f;
+            plpPhase_ += plpPhaseCorrection * phaseError;  // Full correction rate for fine
+            if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+            if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+        }
+    }
+
+    // --- 4. PLP confidence from DFT magnitude + signal presence ---
     float dftConf = clampf(plpBestPmr_, 0.0f, 1.0f);
-    float signalPresence = clampf(mic_.getLevel() / 0.10f, 0.0f, 1.0f);
+    float signalPresence = clampf(mic_.getLevel() / plpSignalFloor, 0.0f, 1.0f);
     float targetConf = dftConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
-
-    // Phase alignment is handled by the Fourier tempogram in runAutocorrelation()
-    // (DFT phase gives beat position directly — no cross-correlation needed).
 }
 
 void AudioTracker::updatePlpPhase() {
