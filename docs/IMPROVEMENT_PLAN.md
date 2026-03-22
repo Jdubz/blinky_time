@@ -8,7 +8,7 @@
 
 **Firmware:** v76 (SETTINGS_VERSION 75). AudioTracker with decoupled tempo/onset architecture. BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse. PLL phase tracking ABANDONED (phase consistency ~0.04, effectively random) — being replaced by PLP (Predominant Local Pulse). ~35 tunable params persisted to flash (v74+). AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). PLL phase refinement abandoned (phase consistency ~0.04). Downbeat detection deferred.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). PLL phase refinement abandoned (phase consistency ~0.04). Downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
@@ -51,11 +51,11 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 ### Priority 2: NN Training Improvements (When Retrained)
 
-**Status: NOT URGENT — v1 model already All Onsets F1=0.681. v3 reaches 0.787. Retrain when firmware phase is validated.**
+**Status: NOT URGENT — v3 model deployed (All Onsets F1=0.787). Next training target: v9. Retrain when firmware phase is validated.**
 
-**Onset detection quality (v1 deployed / v3 pending):**
+**Onset detection quality (v3 deployed):**
 
-| Metric | v1 (deployed) | v3 (pending) |
+| Metric | v1 (deployed) | v3 (deployed) |
 |--------|:------------:|:------------:|
 | All Onsets F1 | 0.681 | **0.787** |
 | Kick F1 (<200 Hz) | 0.607 | **0.688** |

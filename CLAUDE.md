@@ -238,17 +238,14 @@ RenderPipeline → LED Output
      - Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3
      - Single output channel: onset activation (kicks/snares — cannot distinguish on-beat from off-beat)
      - v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704)
-     - v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806)
+     - v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806)
      - Arena: 3404/32768 bytes
      - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
-3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v79)**
+3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v80)**
    - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~10 params)
-   - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (~5.5s, 360 samples @ ~66 Hz) + comb filter bank
-     - ACF tempo estimation: Percival harmonic enhancement (2nd+4th harmonics), Rayleigh prior weighting
-     - CombFilterBank: 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
-     - Tempo selection: ACF primary, comb bank validates (average when within 10% agreement)
+   - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (~5.5s, 360 samples @ ~66 Hz) → ACF → period estimate
    - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection (visual sparks)
      - Pulse detection: floor-tracking baseline (fast drop, slow rise)
    - **PLP path**: Epoch-fold dual sources (spectral flux + bass energy) at detected period → repeating energy pattern → phase + plpPulse
@@ -266,7 +263,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v79)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v80)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -361,9 +358,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 1. PDM mic samples → AdaptiveMic (fixed gain + window/range normalization)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands + spectral flux)
 3. [BPM PATH] Spectral flux (HWR: sum of positive magnitude changes) → contrast²
-4. Contrast-sharpened spectral flux → OSS buffer (~5.5s, 360 samples @ ~66 Hz) + comb filter bank
-5. ACF every 150ms → Percival harmonic enhancement → Rayleigh-weighted peak → BPM
-   Comb filter bank (20 filters) validates independently → average when agreeing within 10%
+4. Contrast-sharpened spectral flux → OSS buffer (~5.5s, 360 samples @ ~66 Hz)
+5. ACF every 150ms → raw peak-finding → BPM / period estimate
 6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
 7. Onset activation → pulse detection (visual sparks)
 8. [PLP PATH] PLP pattern extraction from spectral flux + bass energy at detected period
@@ -493,7 +489,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
 **Current (v79, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. PLP extracts repeating energy pattern for phase.
-- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
+- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLP phase/pattern extraction. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
@@ -506,7 +502,6 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
-- **ACF tempo estimation** (v74): Percival harmonic enhancement (2nd+4th ACF folding), Rayleigh prior weighting (~60-200 BPM). Fed by spectral flux.
-- **CombFilterBank** (v74): 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation. Fed by spectral flux.
+- **ACF tempo estimation** (v80): Bare ACF peak-finding on spectral flux (Percival/Rayleigh/comb bank removed v80 — octave errors are non-issues with PLP)
 - **PLP pattern extraction** (v79): Epoch-folds dual sources (spectral flux + bass energy) at detected period, extracts dominant repeating energy pattern via cross-correlation phase alignment
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)
