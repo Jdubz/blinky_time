@@ -376,11 +376,13 @@ void AudioTracker::updatePlpAnalysis() {
         }
     }
 
-    // --- 3. PLP confidence directly from PMR quality ---
-    // PMR measures pattern peakedness: 1.0 = flat (no pattern), 4.0+ = strong kicks.
-    // Map [1.5, 4.0] → [0.0, 1.0] for confidence.
-    // No ACF gating — PMR IS the quality signal. ACF periodicity is separate.
-    float targetConf = clampf((plpBestPmr_ - 1.5f) / 2.5f, 0.0f, 1.0f);
+    // --- 3. PLP confidence from PMR + signal presence ---
+    // PMR measures pattern peakedness: 1.0 = flat, 4.0+ = strong kicks.
+    // Gate by mic level to prevent ambient noise (HVAC, hum) from producing
+    // spurious high-PMR patterns. Mic level > 0.05 = significant audio present.
+    float pmrConf = clampf((plpBestPmr_ - 1.5f) / 2.5f, 0.0f, 1.0f);
+    float signalPresence = clampf(mic_.getLevel() / 0.10f, 0.0f, 1.0f);  // 0 at silence, 1 at level≥0.10
+    float targetConf = pmrConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 
     // --- 4. Cross-correlate last period of winning source with pattern ---

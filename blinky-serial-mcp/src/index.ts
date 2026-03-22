@@ -458,14 +458,16 @@ function scoreDeviceRun(
     plpPeakiness = plpMean > 0.01 ? plpMax / plpMean : 0;
 
     // PLP value at transient times: for each transient, find nearest music state
+    // Use a sliding search start index since both arrays are sorted by time
     const transientPlpValues: number[] = [];
+    let searchStart = 0;
     for (const det of detections) {
       let bestState: (typeof activeStates)[0] | null = null;
       let bestDist = Infinity;
-      for (const s of activeStates) {
-        const dist = Math.abs(s.timestampMs - det.timestampMs);
-        if (dist < bestDist) { bestDist = dist; bestState = s; }
-        if (dist > 200) break;  // early exit, states are sorted by time
+      for (let si = searchStart; si < activeStates.length; si++) {
+        const dist = Math.abs(activeStates[si].timestampMs - det.timestampMs);
+        if (dist < bestDist) { bestDist = dist; bestState = activeStates[si]; }
+        else if (dist > bestDist) { searchStart = Math.max(0, si - 2); break; }  // past minimum, advance start
       }
       if (bestState && bestState.plpPulse !== undefined && bestDist < 100) {
         transientPlpValues.push(bestState.plpPulse);
