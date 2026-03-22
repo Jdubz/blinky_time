@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** March 17, 2026
-**Firmware Version:** SETTINGS_VERSION 75 (AudioTracker: spectral flux → ACF + Comb; Conv1D W16 onset → visual pulse). PLL phase tracking ABANDONED (phase consistency ~0.04, effectively random) — being replaced by PLP. See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md`.
+**Last Updated:** March 22, 2026
+**Firmware Version:** SETTINGS_VERSION 80 (AudioTracker: ACF + PLP with grid-search PMR across 3 sources. Conv1D W16 v3 onset model deployed). PLL, comb bank, Percival, Rayleigh all removed.
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 

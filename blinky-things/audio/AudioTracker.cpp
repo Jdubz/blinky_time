@@ -2,11 +2,6 @@
 #include <math.h>
 #include <string.h>
 
-// Max ACF lag array size: need 4x maxLag for Percival harmonic folding.
-// At 60 BPM: maxLag=66. Percival reads acf[4*lagIdx] so needs 4*46+66 = 250.
-// Round up for safety.
-static constexpr int MAX_ACF_SIZE = 280;
-
 // Constants moved to AudioTracker public members (v74) for tuning via serial console.
 // Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
 // PULSE_MIN_LEVEL=0.03, PULSE_ONSET_FLOOR=0.1
@@ -374,6 +369,9 @@ void AudioTracker::updatePlpAnalysis() {
             float normalized = patternAccum[j] / maxVal;
             plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
+    } else {
+        // Degenerate / all-zero pattern: clear to avoid stale data in cross-correlation
+        for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
     // --- 3. PLP confidence from PMR + signal presence ---
@@ -414,7 +412,8 @@ void AudioTracker::updatePlpAnalysis() {
 
 void AudioTracker::updatePlpPhase() {
     // Free-running phase advance at the PMR-winning period (not BPM-smoothed)
-    float phaseIncrement = 1.0f / static_cast<float>(plpBestPeriod_);
+    int period = (plpBestPeriod_ > 0) ? plpBestPeriod_ : 33;  // Guard against zero
+    float phaseIncrement = 1.0f / static_cast<float>(period);
     plpPhase_ += phaseIncrement;
 
     // Beat wrap

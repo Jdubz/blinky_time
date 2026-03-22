@@ -457,7 +457,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   plpconfalpha: {
     displayName: 'PLP Confidence Smoothing',
     tooltip:
-      'PLP confidence EMA smoothing rate (0.01-0.5). Lower = slower, more stable confidence tracking. Default: 0.05.',
+      'PLP confidence EMA smoothing rate (0.01-0.5). Lower = slower, more stable confidence tracking. Default: 0.15.',
     unit: '',
   },
   plpnovgain: {

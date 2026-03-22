@@ -45,7 +45,7 @@ struct AudioControl {
 
     // === RHYTHM STRENGTH ===
     // Confidence in detected rhythm pattern (0.0 - 1.0)
-    // Blends ACF periodicity, comb bank confidence, and PLP dual-source agreement
+    // Max of ACF periodicity strength and PLP PMR-based confidence
     // 0.0 = no rhythm detected (use organic behavior)
     // 1.0 = strong rhythm locked (use beat-synced behavior)
     // Use for: Choosing between music mode vs organic mode behavior
