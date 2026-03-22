@@ -2,9 +2,10 @@
 #include <math.h>
 #include <string.h>
 
-// Max ACF lag array size: (OSS_FRAMES_PER_MIN / bpmMin) - minLag + 1 = 66 - 20 + 1 = 47.
+// Max ACF lag array size: need 4x maxLag for Percival harmonic folding.
+// At 60 BPM: maxLag=66. Percival reads acf[4*lagIdx] so needs 4*46+66 = 250.
 // Round up for safety.
-static constexpr int MAX_ACF_SIZE = 80;
+static constexpr int MAX_ACF_SIZE = 280;
 
 // Constants moved to AudioTracker public members (v74) for tuning via serial console.
 // Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
@@ -255,56 +256,86 @@ void AudioTracker::runAutocorrelation() {
         acf[lagIdx] = sum / count;
     }
 
-    // Find raw best lag (highest ACF peak)
-    float bestCorr = -1e30f;
-    int bestLag = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
-
+    // --- Percival harmonic enhancement (signal-driven, no prior bias) ---
+    // Fold 2nd and 4th harmonics into fundamental. A lag whose multiples also
+    // show periodicity is more likely to be the true repeating period.
+    // This is octave disambiguation via signal structure, not a tempo prior.
     for (int lagIdx = 0; lagIdx < acfSize; lagIdx++) {
-        if (acf[lagIdx] > bestCorr) {
-            bestCorr = acf[lagIdx];
-            bestLag = minLag + lagIdx;
+        int lag2Idx = 2 * (minLag + lagIdx) - minLag;
+        int lag4Idx = 4 * (minLag + lagIdx) - minLag;
+        if (lag2Idx >= 0 && lag2Idx < acfSize) {
+            acf[lagIdx] += 0.5f * acf[lag2Idx];
+        }
+        if (lag4Idx >= 0 && lag4Idx < acfSize) {
+            acf[lagIdx] += 0.25f * acf[lag4Idx];
         }
     }
 
-    // Compute periodicity strength from ACF at best lag
-    float avgEnergy = signalEnergy / ossCount_;
-    if (avgEnergy > 1e-10f && bestLag - minLag < acfSize) {
-        float normCorr = acf[bestLag - minLag] / avgEnergy;
-        float newStrength = clampf(normCorr * 1.5f, 0.0f, 1.0f);
+    // --- Find top 3 ACF candidate lags ---
+    int candidateLags[3] = {minLag, minLag, minLag};
+    float candidateCorr[3] = {-1e30f, -1e30f, -1e30f};
+    for (int lagIdx = 0; lagIdx < acfSize; lagIdx++) {
+        float val = acf[lagIdx];
+        int lag = minLag + lagIdx;
+        if (val > candidateCorr[0]) {
+            candidateCorr[2] = candidateCorr[1]; candidateLags[2] = candidateLags[1];
+            candidateCorr[1] = candidateCorr[0]; candidateLags[1] = candidateLags[0];
+            candidateCorr[0] = val; candidateLags[0] = lag;
+        } else if (val > candidateCorr[1]) {
+            candidateCorr[2] = candidateCorr[1]; candidateLags[2] = candidateLags[1];
+            candidateCorr[1] = val; candidateLags[1] = lag;
+        } else if (val > candidateCorr[2]) {
+            candidateCorr[2] = val; candidateLags[2] = lag;
+        }
+    }
+
+    // --- Score each candidate by epoch-fold R-squared ---
+    // R² = 1 - SS_res/SS_tot measures how well the periodic model explains the signal.
+    // Anti-correlated folds (wrong octave) give R² near 0 or negative.
+    // Coherent folds give R² > 0.3.
+    float ssTot = signalEnergy;  // Already computed: sum of (x - mean)²
+    float bestR2 = -1e30f;
+    int bestLag = candidateLags[0];
+
+    for (int c = 0; c < 3; c++) {
+        int period = candidateLags[c];
+        if (period < 2 || period > MAX_PATTERN_LEN || period > ossCount_ / 2) continue;
+
+        // Epoch-fold: compute mean pattern at this period
+        float patMean[MAX_PATTERN_LEN];
+        int patCount[MAX_PATTERN_LEN];
+        for (int j = 0; j < period; j++) { patMean[j] = 0.0f; patCount[j] = 0; }
+        for (int i = 0; i < ossCount_; i++) {
+            int j = i % period;
+            patMean[j] += ossLinear_[i];
+            patCount[j]++;
+        }
+        for (int j = 0; j < period; j++) {
+            if (patCount[j] > 0) patMean[j] /= patCount[j];
+        }
+
+        // Compute residual sum of squares
+        float ssRes = 0.0f;
+        for (int i = 0; i < ossCount_; i++) {
+            float residual = ossLinear_[i] - patMean[i % period];
+            ssRes += residual * residual;
+        }
+
+        float r2 = (ssTot > 1e-10f) ? 1.0f - ssRes / ssTot : 0.0f;
+        if (r2 > bestR2) {
+            bestR2 = r2;
+            bestLag = period;
+        }
+    }
+
+    // Compute periodicity strength from R-squared of best candidate
+    {
+        float newStrength = clampf(bestR2 * 2.0f, 0.0f, 1.0f);  // R²=0.5 → strength=1.0
         periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
     }
 
-    // ACF candidate BPM
+    // BPM from best epoch-fold period
     float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestLag);
-
-    // IOI advisory nudge: when the IOI histogram has a confident peak that
-    // disagrees with ACF, blend toward IOI (max 30% influence). This helps
-    // break the ~135 BPM gravity well by providing onset-interval evidence
-    // independent of spectral flux periodicity.
-    //
-    // Octave disambiguation: fold IOI BPM to nearest octave of ACF BPM before
-    // nudging. Prevents subdivisions (8th/16th notes) from pulling BPM to 2x/4x.
-    if (patternEnabled && ioiConfidence_ > 0.65f) {
-        float foldedIoiBpm = ioiPeakBpm_;
-        // Fold down: if IOI is at 4x, quarter it; if 2x, halve it
-        while (foldedIoiBpm > newBpm * 1.5f && foldedIoiBpm > bpmMin) {
-            foldedIoiBpm *= 0.5f;
-        }
-        // Fold up: if IOI is at 0.5x (half-note), double it
-        while (foldedIoiBpm < newBpm * 0.667f && foldedIoiBpm * 2.0f < bpmMax) {
-            foldedIoiBpm *= 2.0f;
-        }
-
-        float ioiDiff = fabsf(foldedIoiBpm - newBpm) / newBpm;
-        if (ioiDiff > 0.10f) {
-            // Cap nudge at 15% unless very high confidence (>0.8 → up to 24%)
-            float maxWeight = (ioiConfidence_ > 0.8f) ? 0.3f : 0.15f;
-            float ioiWeight = fminf(ioiConfidence_ * 0.3f, maxWeight);
-            newBpm = newBpm * (1.0f - ioiWeight) + foldedIoiBpm * ioiWeight;
-        }
-    }
-
-    // Clamp to valid range
     newBpm = clampf(newBpm, bpmMin, bpmMax);
 
     // Smooth BPM update (EMA) — only if meaningful change
