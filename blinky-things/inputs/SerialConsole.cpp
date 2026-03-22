@@ -252,8 +252,6 @@ void SerialConsole::registerTrackerSettings() {
         "PLP confidence EMA smoothing rate", 0.01f, 0.5f, onParamChanged);
     settings_.registerFloat("plpnovgain", &audioCtrl_->plpNovGain, "tracker",
         "PLP pattern novelty scaling", 0.1f, 5.0f, onParamChanged);
-    settings_.registerFloat("plpphasecorr", &audioCtrl_->plpPhaseCorrection, "tracker",
-        "PLP phase correction rate per cycle", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("plpsigfloor", &audioCtrl_->plpSignalFloor, "tracker",
         "Mic level for full PLP confidence", 0.01f, 0.5f, onParamChanged);
 
@@ -969,7 +967,6 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpActivation = 0.3f;
         audioCtrl_->plpConfAlpha = 0.15f;
         audioCtrl_->plpNovGain = 1.5f;
-        audioCtrl_->plpPhaseCorrection = 0.3f;
         audioCtrl_->plpSignalFloor = 0.10f;
         audioCtrl_->activationThreshold = 0.3f;
         audioCtrl_->tempoSmoothing = 0.85f;

@@ -98,7 +98,6 @@ public:
     float plpActivation = 0.3f;        // Min PLP confidence for pattern pulse (below: cosine fallback)
     float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
     float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
-    float plpPhaseCorrection = 0.3f;   // Phase correction rate per ACF cycle (0=none, 1=instant)
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
 
     // NN profiling
@@ -184,6 +183,8 @@ private:
     float plpBestPmr_ = 0.0f;                 // DFT magnitude of winning frequency (diagnostic)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
+    float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
+    float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 

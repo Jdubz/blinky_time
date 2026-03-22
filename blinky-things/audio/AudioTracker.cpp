@@ -378,36 +378,55 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. Phase alignment: DFT coarse + pattern-peak fine ---
-    // Step 1: DFT phase gives coarse alignment (sinusoidal centroid of periodic energy)
-    {
-        float phaseError = plpDftPhase_ - plpPhase_;
-        if (phaseError > 0.5f) phaseError -= 1.0f;
-        if (phaseError < -0.5f) phaseError += 1.0f;
-        plpPhase_ += plpPhaseCorrection * 0.5f * phaseError;  // Half the correction rate for coarse
-        if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
-    }
+    // --- 3. Phase alignment: adaptive correction rate ---
+    // Combines DFT coarse phase and pattern-peak fine phase into a single error,
+    // then applies an adaptive correction rate that's fast during convergence
+    // and slow once locked. Based on EMA variance of recent phase errors.
 
-    // Step 2: Pattern-peak gives fine alignment (actual transient position)
-    // The epoch-fold pattern has the real shape (sharp kick attack). Its peak
-    // is the on-beat position. Correct phase so pattern peak aligns with phase=0.
+    // Compute phase error from pattern peak (most precise alignment)
+    float phaseError = 0.0f;
+    bool hasPatternPeak = false;
     {
         int peakIdx = 0;
         float peakVal = plpPattern_[0];
         for (int j = 1; j < patLen; j++) {
             if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
         }
-        if (peakVal > 0.5f) {  // Only refine if pattern has a clear peak
+        if (peakVal > 0.5f) {
             float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
-            float phaseError = peakPhase - plpPhase_;
-            if (phaseError > 0.5f) phaseError -= 1.0f;
-            if (phaseError < -0.5f) phaseError += 1.0f;
-            plpPhase_ += plpPhaseCorrection * phaseError;  // Full correction rate for fine
-            if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-            if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+            phaseError = peakPhase - plpPhase_;
+            hasPatternPeak = true;
         }
     }
+
+    // Fall back to DFT phase if pattern peak is weak
+    if (!hasPatternPeak) {
+        phaseError = plpDftPhase_ - plpPhase_;
+    }
+
+    // Wrap error to [-0.5, 0.5]
+    if (phaseError > 0.5f) phaseError -= 1.0f;
+    if (phaseError < -0.5f) phaseError += 1.0f;
+
+    // Adaptive correction rate from phase error variance (EMA)
+    // High variance → still converging → aggressive correction
+    // Low variance → locked → gentle correction (prevents jitter)
+    static constexpr float ALPHA_ERR = 0.15f;    // Error EMA rate (~6-7 sample window)
+    static constexpr float SIGMA_REF = 0.08f;    // Expected RMS error when locked
+    static constexpr float ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
+    static constexpr float ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
+
+    phaseErrEma_ += ALPHA_ERR * (phaseError - phaseErrEma_);
+    float deviation = phaseError - phaseErrEma_;
+    phaseErrVar_ += ALPHA_ERR * (deviation * deviation - phaseErrVar_);
+
+    float sigma = sqrtf(phaseErrVar_ > 0.0f ? phaseErrVar_ : 0.0f);
+    float lambda = sigma / (sigma + SIGMA_REF);
+    float alpha = ALPHA_MIN + (ALPHA_MAX - ALPHA_MIN) * lambda;
+
+    plpPhase_ += alpha * phaseError;
+    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+    if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
     // --- 4. PLP confidence from DFT magnitude + signal presence ---
     float dftConf = clampf(plpBestPmr_, 0.0f, 1.0f);
