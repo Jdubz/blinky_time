@@ -2,11 +2,12 @@
 
 ## Overview
 
-AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF+Comb tempo estimation to output an `AudioControl` struct with 7 parameters. PLL phase tracking is currently deployed but being replaced by PLP (Predominant Local Pulse) — see evolution notes below.
+AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 7 parameters.
 
-**Current Version:** AudioTracker with decoupled tempo/onset architecture (March 2026)
-**BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF + comb bank → BPM
-**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse; currently also feeds PLL phase refinement, but PLL is being replaced by PLP (Predominant Local Pulse). Non-NN fallback: mic level.
+**Current Version:** AudioTracker with ACF+PLP architecture (March 2026)
+**BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF → period estimate
+**Phase/Pattern:** PLP Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Epoch-fold pattern extraction for visual pattern shape.
+**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 PLP sources. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
 **Evolution:**
@@ -15,7 +16,7 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 - **v3 (January 2026)**: Multi-hypothesis tracking (complex, phase jitter from competing corrections)
 - **v4 (February 2026)**: CBSS beat tracking (deterministic phase, counter-based beats)
 - **v5 (March 2026)**: AudioTracker — ACF+Comb+PLL, replaces AudioController CBSS. ~400 lines, ~10 params (vs ~2100 lines, ~56 params). No CBSS, no Bayesian fusion.
-- **v6 (March 2026, planned)**: PLP (Predominant Local Pulse) — replaces PLL with dual-source pattern extraction (spectral flux + band energies). PLL proven ineffective: phase consistency ~0.04 across all models (essentially random).
+- **v6 (March 2026, deployed)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. PLL proven ineffective: phase consistency ~0.04 across all models (essentially random). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 
 ---
 
@@ -63,15 +64,10 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |         |
       |    Contrast sharpening (flux^2.0)
       |         |
-      |    +--- CombFilterBank (20 parallel IIR filters, Scheirer 1998)
-      |    |         Independent tempo validation (60-198 BPM)
-      |    |
       |    +--- OSS Buffer (~5.5s @ ~66 Hz, 360 samples, circular)
       |    |
       |    +--- Autocorrelation (every 150ms)
-      |              Percival harmonic enhancement (2nd+4th harmonics)
-      |              Rayleigh prior weighting (peak at rayleighBpm)
-      |              ACF primary tempo, comb bank validates (average when within 10%)
+      |              Peak-finding → period estimate
       |              EMA smoothing -> BPM estimate
       |
       +--- [ONSET PATH: NN → visual pulse]
@@ -82,14 +78,16 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |    ODF Information Gate (suppresses weak NN output)
       |         |
       |    +--- Pulse: floor-tracking baseline detection (visual sparks)
-      |    +--- PLL phase refinement (onset-gated P+I correction) ← BEING REPLACED BY PLP
       |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
       |
-      +--- [PHASE PATH: PLL → smooth phase ramp] ← BEING REPLACED BY PLP
-           PLL (free-running sawtooth at estimated BPM)
-           NOTE: PLL phase consistency measured ~0.04 (essentially random).
-           Planned replacement: PLP (Predominant Local Pulse) extracts
-           repeating energy patterns from dual sources (spectral flux + band energies).
+      +--- [PHASE PATH: PLP → Fourier tempogram → phase + pattern]
+           3 sources mean-subtracted: spectral flux, bass energy, NN onset
+           Goertzel DFT at candidate frequencies
+           DFT magnitude → period selection (suppresses sub-harmonics)
+           DFT phase → beat alignment (no cross-correlation needed)
+           Epoch-fold pattern → plpPulse (visual pattern shape)
+           Confidence = DFT magnitude × signal presence (mic level gate)
+           Adaptive phase correction (EMA variance: fast during convergence, slow when locked)
                 |
 AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat=0, beatInMeasure=0 }
       |
@@ -100,47 +98,46 @@ Generators (HeatFire, Water, Lightning)
 
 1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
 
-2. **PLL Phase Tracking (being replaced)**: A free-running sawtooth ramp at the estimated BPM produces perfectly smooth phase output. Only corrected when strong NN onsets align near expected beats (within 25% of period). The PLL bridges the two paths: tempo from spectral flux, phase refinement from NN onsets. **However, PLL has been proven ineffective — phase consistency measured ~0.04 across all models (essentially random). Being replaced by PLP (Predominant Local Pulse), which uses dual-source input (spectral flux + band energies) to extract actual repeating energy patterns.**
+2. **PLP Phase/Pattern Extraction (deployed)**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction used for the actual visual pattern shape. This replaced the PLL, which was proven ineffective (phase consistency ~0.04, essentially random).
 
-3. **Dual Tempo Estimation**: ACF (autocorrelation) is the primary tempo estimator with Percival harmonic enhancement and Rayleigh prior weighting. CombFilterBank provides independent validation. Both fed by spectral flux. When they agree within 10%, their average is used.
+3. **ACF Tempo Estimation**: Bare ACF peak-finding on spectral flux. Percival harmonic enhancement, Rayleigh prior, and comb filter bank removed in v80 — octave errors are non-issues with PLP.
 
-4. **NN Onset → Visual Pulse Only**: NN onset activation drives visual effects (sparks, flashes) but does not influence tempo estimation. This is the correct use for a signal that fires on every acoustic transient regardless of metrical position. (Currently also feeds PLL phase refinement, but PLL is being replaced by PLP.)
+4. **NN Onset → Visual Pulse + PLP Source**: NN onset activation drives visual effects (sparks, flashes) and serves as one of 3 PLP sources. It does not influence ACF tempo estimation. This is the correct use for a signal that fires on every acoustic transient regardless of metrical position.
 
-5. **Tempo Prior**: Rayleigh distribution centered on `rayleighBpm` (default 140 BPM) weights ACF peaks to disambiguate half-time/double-time harmonics.
+5. **No Tempo Prior Needed**: PLP's Fourier tempogram inherently suppresses sub-harmonics through DFT magnitude. No Rayleigh prior or other disambiguation needed.
 
 ---
 
 ## Rhythm Tracking Algorithm
 
-### ACF + Comb + PLL (v5 - Currently Deployed, PLL Being Replaced)
+### ACF + PLP (v6 - Currently Deployed)
 
-> **NOTE:** The PLL phase tracking component of this algorithm has been proven insufficient. Phase consistency measures ~0.04 across all models — essentially random. The PLL is being replaced by **PLP (Predominant Local Pulse)**, which extracts actual repeating energy patterns from dual sources (spectral flux + band energies) rather than trying to lock a free-running oscillator to sparse onset events. The ACF + Comb tempo estimation remains valid and will be retained.
+> **NOTE:** PLL was replaced by PLP (Predominant Local Pulse) in March 2026. PLP uses a Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 
 **Every frame (~62.5 Hz, on new spectral frame):**
-1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (for pulse + PLL)
+1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (for pulse + PLP source)
 2. **Pulse Detection**: Floor-tracking baseline, fire pulse when onset exceeds baseline * 2.0
-3. **Onset Gate**: Suppress onset below `odfGateThreshold` (prevent noise-driven PLL jitter)
+3. **Onset Gate**: Suppress onset below `odfGateThreshold` (prevent noise-driven false patterns)
 4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
 5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
-6. **Feed Comb Bank**: 20 parallel IIR comb filters on contrast-sharpened spectral flux
-7. **Buffer OSS**: Store contrast-enhanced spectral flux in ~5.5s circular buffer (360 samples)
-8. **PLL Free-Run**: Advance sawtooth phase by `1/beatPeriodFrames` per frame
+6. **Buffer OSS**: Store contrast-enhanced spectral flux in ~5.5s circular buffer (360 samples)
+7. **Phase Advance**: Free-running sawtooth phase at PLP-selected period
 
 **Every 150ms (acfPeriodMs):**
-9. **Linearize OSS**: Copy circular spectral flux buffer to linear array with mean subtraction
-10. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
-11. **Percival Enhancement**: Fold 2nd harmonic (ACF[2L], weight 0.5) and 4th harmonic (ACF[4L], weight 0.25) into fundamental lag L
-12. **Rayleigh Weighting**: Weight each lag by `(L/sigma^2) * exp(-L^2/(2*sigma^2))` where sigma = lag at rayleighBpm
-13. **Peak Selection**: Best weighted lag -> candidate BPM
-14. **Comb Validation**: Compare ACF BPM with comb bank peak BPM. Average when within 10% agreement.
-15. **Smooth Update**: EMA filter on BPM (only when change > 5%)
+8. **Linearize OSS**: Copy circular spectral flux buffer to linear array with mean subtraction
+9. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
+10. **Peak Selection**: Best lag -> candidate period
+11. **Smooth Update**: EMA filter on BPM (only when change > 5%)
 
-**PLL Correction (every frame, NN onset-gated) — being replaced by PLP:**
-16. **Detect Strong Onset**: NN onset > baseline * 2.0 and onset > 0.1
-17. **Phase Error**: Distance from nearest beat boundary, centered [-0.5, +0.5]
-18. **Gate**: Only correct if |phase error| < 0.25 (onset near expected beat)
-19. **Proportional**: Pull phase toward beat boundary by `pllKp * phaseError`
-20. **Integral**: Leaky integrator (`0.95 * integral + phaseError`), correct by `pllKi * integral`
+**PLP Update (every 150ms):**
+12. **Mean-subtract sources**: Spectral flux, bass energy, NN onset buffers each mean-subtracted
+13. **Goertzel DFT**: Compute DFT magnitude and phase at candidate frequencies for each source
+14. **Period Selection**: Source x frequency with highest DFT magnitude wins (inherently suppresses sub-harmonics)
+15. **Phase Alignment**: DFT phase gives beat alignment directly (no cross-correlation needed)
+16. **Phase Correction**: Correct phase toward DFT-derived alignment with adaptive rate (EMA variance-driven)
+17. **Epoch-fold Pattern**: Fold winning source at selected period for visual pattern shape
+18. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
+19. **Confidence**: DFT magnitude x signal presence (mic level gate)
 
 ### Evolution: Why ACF+Comb, and Why PLL Failed
 
@@ -151,7 +148,7 @@ Generators (HeatFire, Water, Lightning)
 | **v3 (Multi-Hypo)** | Multiple concurrent tempos | Handles ambiguity | Competing corrections cause phase jitter |
 | **v4 (CBSS)** | Cumulative beat strength | Deterministic phase, no jitter | Complex (~2100 lines, ~56 params). Removed in v75. |
 | **v5 (ACF+Comb+PLL)** | ACF tempo + comb validation + PLL phase | Simple (~400 lines, ~10 params), smooth phase | **PLL phase consistency ~0.04 (random)** — onset-gated corrections insufficient |
-| **v6 (ACF+Comb+PLP, planned)** | ACF tempo + comb validation + PLP phase | Extracts repeating patterns from dual sources | Planned replacement for PLL |
+| **v6 (ACF+PLP, deployed)** | ACF tempo + PLP Fourier tempogram | DFT magnitude selects period, DFT phase gives alignment, 3 sources | atTransient 0.37-0.48, autoCorr up to +0.93 |
 
 ---
 
@@ -212,14 +209,9 @@ float output = organic * (1.0f - blend) + synced * blend;
 | `combFeedback` | `combfeedback` | 0.92 | 0.85-0.98 | Comb bank resonance strength |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 
-### Phase Tracking (PLL) — being removed, PLP replacement planned
+### Phase Tracking (PLP — Fourier Tempogram)
 
-| Parameter | Serial Name | Default | Range | Description |
-|-----------|-------------|---------|-------|-------------|
-| `pllKp` | `pllkp` | 0.15 | 0.0-0.5 | Proportional gain (phase correction speed) |
-| `pllKi` | `pllki` | 0.005 | 0.0-0.05 | Integral gain (tempo adaptation speed) |
-
-> These parameters will be removed when PLP replaces PLL. PLL phase consistency measured ~0.04 (essentially random).
+PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). No tunable parameters exposed — the algorithm is self-tuning via DFT.
 
 ### Rhythm Activation
 
@@ -228,7 +220,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 | `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Min periodicity to activate rhythm mode |
 | `odfGateThreshold` | `odfgate` | 0.25 | 0.0-0.5 | NN output floor gate (suppress noise) |
 
-### Pulse/Energy Modulation — PLL-dependent, will change with PLP
+### Pulse/Energy Modulation — PLP phase-driven
 
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
@@ -236,7 +228,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 | `pulseSuppressOffBeat` | `pulsesuppress` | 0.6 | 0.0-1.0 | Pulse suppress factor off-beat |
 | `energyBoostOnBeat` | `energyboost` | 0.3 | 0.0-1.0 | Energy boost near predicted beats |
 
-> These parameters depend on PLL phase for "on-beat" / "off-beat" determination. With PLL phase consistency ~0.04, beat-proximity modulation is effectively random. Will be reworked when PLP provides meaningful phase output.
+> These parameters use PLP phase for "on-beat" / "off-beat" determination. With PLP Fourier tempogram providing meaningful phase output (atTransient 0.37-0.48), beat-proximity modulation is now functional.
 
 ### Other
 
@@ -253,7 +245,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 `FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806).
 
-The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and PLL phase refinement). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
+The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and as one of 3 PLP Fourier tempogram sources). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
 **Architecture:** Conv1D onset-only model. 13.4 KB INT8 (per-tensor quantization). Single output channel (onset activation). Arena: 3404 bytes of 32768 allocated.
 
@@ -263,7 +255,7 @@ The model processes a sliding window of raw mel frames (16 frames x 26 bands = 2
 
 ### Onset Information Gate
 
-The NN onset activation passes through an information gate before use in PLL correction and pulse detection. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false PLL corrections. This improves phase stability during silence and ambient passages.
+The NN onset activation passes through an information gate before use in PLP source input and pulse detection. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false pattern detection. This improves phase stability during silence and ambient passages.
 
 ### Spectral Flux (BPM Signal)
 
@@ -317,8 +309,8 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 | FrameOnsetNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
 | OSS Buffer (360 floats) | 1.4 KB | - | ~5.5 seconds @ ~66 Hz, circular. Fed by spectral flux. |
 | ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
-| CombFilterBank (20 filters) | ~5.3 KB | ~1ms/frame | 20 x 66 delay line = 5,280 bytes + state |
-| PLL + pulse + output | negligible | <0.1ms/frame | Simple arithmetic |
+| PLP (Fourier tempogram + epoch-fold) | ~2 KB | ~1ms every 150ms | Goertzel DFT at candidate frequencies, epoch-fold pattern |
+| Pulse + output | negligible | <0.1ms/frame | Simple arithmetic |
 | **Total audio budget** | **~13 KB + 32 KB arena** | **~14ms/frame** | Well under 16.7ms frame budget (60 fps) |
 
 **Compared to AudioController (v4, removed):**
@@ -332,11 +324,9 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 ## Files
 
 **Core Audio System:**
-- `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + Comb + PLL (~10 tunable params)
-- `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLL, pulse detection, output synthesis)
-- `blinky-things/audio/AudioControl.h` - Output struct definition (7 fields)
-- `blinky-things/audio/CombFilterBank.h` - Comb filter bank header (20 parallel IIR resonators)
-- `blinky-things/audio/CombFilterBank.cpp` - Comb filter bank implementation (Scheirer 1998)
+- `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP (~10 tunable params)
+- `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP Fourier tempogram, pulse detection, output synthesis)
+- `blinky-things/audio/AudioControl.h` - Output struct definition (8 fields including plpPulse)
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
 - `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)
 - `blinky-things/audio/frame_onset_model_data.h` - INT8 TFLite model weights

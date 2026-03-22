@@ -64,8 +64,9 @@ public:
     float getPlpConfidence() const { return plpConfidence_; }
     float getPlpPulseValue() const { return plpPulseValue_; }
     int getPlpPatternLen() const { return plpPatternLen_; }
-    float getPlpBestPmr() const { return plpBestPmr_; }
+    float getPlpDftMag() const { return plpDftMag_; }
     int getPlpBestSource() const { return plpBestSource_; }
+    float getBeatStability() const { return beatStability_; }
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
@@ -98,6 +99,7 @@ public:
     float plpActivation = 0.3f;        // Min PLP confidence for pattern pulse (below: cosine fallback)
     float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
     float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
+    float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
 
     // NN profiling
     bool nnProfile = false;
@@ -179,8 +181,13 @@ private:
     float plpPulseValue_ = 0.5f;               // Current pattern value at phase position
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
-    float plpBestPmr_ = 0.0f;                 // PMR of winning epoch-fold (diagnostic)
-    int plpBestPeriod_ = 33;                   // Winning period from grid search (frames, pre-smoothing)
+    float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
+    int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
+    float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
+    float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
+    float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
+    float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
+    float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
@@ -233,7 +240,7 @@ private:
     // === Internal methods ===
     void addOssSample(float odf);
     void addBassSample(float bassEnergy);
-    void runAutocorrelation();
+    void runFourierTempogram();
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
     void updatePlpPhase();          // Advance phase + read pattern value (every frame)

@@ -252,6 +252,8 @@ void SerialConsole::registerTrackerSettings() {
         "PLP confidence EMA smoothing rate", 0.01f, 0.5f, onParamChanged);
     settings_.registerFloat("plpnovgain", &audioCtrl_->plpNovGain, "tracker",
         "PLP pattern novelty scaling", 0.1f, 5.0f, onParamChanged);
+    settings_.registerFloat("plpsigfloor", &audioCtrl_->plpSignalFloor, "tracker",
+        "Mic level for full PLP confidence", 0.01f, 0.5f, onParamChanged);
 
     // Rhythm activation
     settings_.registerFloat("activationthreshold", &audioCtrl_->activationThreshold, "tracker",
@@ -965,6 +967,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpActivation = 0.3f;
         audioCtrl_->plpConfAlpha = 0.15f;
         audioCtrl_->plpNovGain = 1.5f;
+        audioCtrl_->plpSignalFloor = 0.10f;
         audioCtrl_->activationThreshold = 0.3f;
         audioCtrl_->tempoSmoothing = 0.85f;
         audioCtrl_->odfContrast = 1.25f;
@@ -1679,11 +1682,13 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.println(audioCtrl_->getPlpConfidence(), 4);
         Serial.print(F("PLP Pulse: "));
         Serial.println(audioCtrl_->getPlpPulseValue(), 3);
-        Serial.print(F("PLP PMR: "));
-        Serial.println(audioCtrl_->getPlpBestPmr(), 2);
+        Serial.print(F("PLP DFT Mag: "));
+        Serial.println(audioCtrl_->getPlpDftMag(), 3);
         { const char* srcNames[] = {"flux", "bass", "nn"};
           Serial.print(F("PLP Source: "));
           Serial.println(srcNames[audioCtrl_->getPlpBestSource()]); }
+        Serial.print(F("Beat Stability: "));
+        Serial.println(audioCtrl_->getBeatStability(), 3);
         Serial.print(F("Pulse: "));
         Serial.println(audioCtrl_->getLastPulseStrength(), 3);
         Serial.print(F("Onset Density: "));

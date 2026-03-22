@@ -6,6 +6,14 @@
 // Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
 // PULSE_MIN_LEVEL=0.03, PULSE_ONSET_FLOOR=0.1
 
+static constexpr float TWO_PI_F = 6.28318530718f;
+
+// Adaptive phase correction constants (from parameter sweep data)
+static constexpr float PHASE_ALPHA_ERR = 0.15f;   // Error EMA rate (~6-7 sample window at 150ms cadence)
+static constexpr float PHASE_SIGMA_REF = 0.08f;   // Expected RMS phase error when locked
+static constexpr float PHASE_ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
+static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
+
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -159,7 +167,7 @@ const AudioControl& AudioTracker::update(float dt) {
     //    enough OSS data for meaningful autocorrelation.
     if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
         lastAcfMs_ = nowMs;
-        runAutocorrelation();
+        runFourierTempogram();
         updatePlpAnalysis();  // PLP epoch-fold + bass ACF + cross-correlate
 
         // IOI analysis runs once per ACF cycle (same cadence)
@@ -212,100 +220,121 @@ void AudioTracker::addOssSample(float odf) {
 }
 
 // ============================================================================
-// Autocorrelation + Tempo Estimation
+// Fourier Tempogram — Period + Phase Selection
 // ============================================================================
 
-void AudioTracker::runAutocorrelation() {
-    // Linearize circular OSS buffer into class member (shared with updatePlpAnalysis)
+void AudioTracker::runFourierTempogram() {
+    // Linearize all 3 source circular buffers into class members
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
         ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
-
-    // --- Grid search: find period with best PMR across 3 sources ---
-    // Try every candidate period and epoch-fold each source. The period × source
-    // with highest peak-to-mean ratio (PMR) wins. Optimizes for pattern quality.
-    int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
-    int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
-    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
-    if (minLag < 10) minLag = 10;  // ~400 BPM floor — prevents trivially high PMR at tiny periods
-
-    // Linearize bass and NN onset buffers into class members (shared with updatePlpAnalysis)
     int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
     for (int i = 0; i < bassCount_; i++) bassLinear_[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
     int nStart = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
     for (int i = 0; i < nnCount_; i++) nnLinear_[i] = nnOnsetBuffer_[(nStart + i) % NN_BUFFER_SIZE];
 
-    // Source buffers and counts
-    const float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
-    const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
-    // source 0=flux, 1=bass, 2=nn
+    // --- Fourier Tempogram: DFT at candidate tempo frequencies ---
+    // For each candidate BPM, compute the DFT coefficient (Goertzel-style).
+    // DFT magnitude selects the period. DFT phase gives beat alignment for free.
+    // Unlike epoch-fold PMR, the Fourier tempogram inherently suppresses
+    // sub-harmonics (half-time) because a sub-harmonic sinusoid anti-correlates
+    // with half the onset peaks. (Grosche & Mueller 2011)
 
-    float bestPmr = 0.0f;
+    float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
+    const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
+
+    // Mean-subtract each source IN-PLACE (critical for DFT — DC leakage otherwise
+    // dominates all frequency bins, making periodic components invisible).
+    // NOTE: this mutates ossLinear_/bassLinear_/nnLinear_ — updatePlpAnalysis()
+    // reads these mean-subtracted values; its min-max normalization handles
+    // the zero-centered epoch-fold output. Do not reorder these calls.
+    for (int src = 0; src < 3; src++) {
+        int count = sourceCounts[src];
+        if (count < 20) continue;
+        float mean = 0.0f;
+        for (int i = 0; i < count; i++) mean += sources[src][i];
+        mean /= count;
+        for (int i = 0; i < count; i++) sources[src][i] -= mean;
+    }
+
+    float bestMag = 0.0f;
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
+    float bestPhase = 0.0f;
     int bestSource = 0;
 
+    // Scan candidate periods from bpmMin to bpmMax
+    int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
+    int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
+    if (minLag < 10) minLag = 10;
+    if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;  // Keep period ≤ pattern buffer
+    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1; // Avoid scanning past buffer at startup
+
     for (int lag = minLag; lag <= maxLag; lag++) {
+        // Goertzel recurrence: computes one DFT bin with 2 multiply-adds per sample.
+        float omega = TWO_PI_F / static_cast<float>(lag);
+        float cosOmega = cosf(omega);
+        float sinOmega = sinf(omega);
+        float coeff = 2.0f * cosOmega;
+
         for (int src = 0; src < 3; src++) {
             int count = sourceCounts[src];
-            if (count < lag * 2) continue;  // Need at least 2 periods
+            if (count < lag * 2) continue;
             const float* buf = sources[src];
 
-            // Epoch-fold: sum values at each position within the period
-            float patSum[MAX_PATTERN_LEN] = {0};
-            int epochs = 0;
-            for (int off = count - lag; off >= 0; off -= lag) {
-                for (int j = 0; j < lag; j++) patSum[j] += buf[off + j];
-                epochs++;
+            // Goertzel recurrence: s[n] = x[n] + coeff*s[n-1] - s[n-2]
+            float s1 = 0.0f, s2 = 0.0f;
+            for (int i = 0; i < count; i++) {
+                float s0 = buf[i] + coeff * s1 - s2;
+                s2 = s1;
+                s1 = s0;
             }
-            if (epochs < 2) continue;
 
-            // Compute PMR = max / mean of folded pattern
-            float maxVal = 0.0f, sumVal = 0.0f;
-            for (int j = 0; j < lag; j++) {
-                float v = patSum[j] / epochs;
-                if (v > maxVal) maxVal = v;
-                sumVal += v;
-            }
-            float mean = sumVal / lag;
-            float pmr = (mean > 1e-10f) ? maxVal / mean : 0.0f;
+            // Extract real + imag from Goertzel final state
+            float dftReal = s1 - s2 * cosOmega;
+            float dftImag = s2 * sinOmega;
 
-            if (pmr > bestPmr) {
-                bestPmr = pmr;
+            // Magnitude (normalize by sqrt(count) for fair comparison across sources)
+            float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
+
+            if (mag > bestMag) {
+                bestMag = mag;
                 bestPeriod = lag;
                 bestSource = src;
+                // Phase at the END of the buffer (most recent sample).
+                // Goertzel DFT phase is relative to index 0 (oldest sample).
+                // Advance by (count-1) periods to get phase at the newest sample.
+                float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
+                float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
+                bestPhase = rawPhase + phaseAdvance;
+                bestPhase -= floorf(bestPhase);  // Wrap to [0, 1)
             }
         }
     }
 
-    plpBestPmr_ = bestPmr;
+    plpDftMag_ = bestMag;
+
+    // Reset adaptive phase correction state on significant period change
+    // (>10% shift). Prevents old low-variance state from suppressing
+    // the fast correction needed to re-converge at the new period.
+    if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
+        phaseErrVar_ = 0.25f;  // Force fast convergence
+    }
+
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
+    plpDftPhase_ = bestPhase;
 
-    // --- Also compute ACF periodicity strength for rhythmStrength ---
-    // Quick ACF at the winning period (just one lag, not full spectrum)
-    float ossMean = 0.0f;
-    for (int i = 0; i < ossCount_; i++) ossMean += ossLinear_[i];
-    ossMean /= ossCount_;
+    // --- Periodicity strength from DFT magnitude ---
+    // With sqrt(N) normalization, magnitude ~1.0 for a clearly periodic signal.
+    // This is not a normalized cross-correlation [-1,1] but a spectral magnitude
+    // where ~1.0 indicates strong periodicity. Clamp to [0,1] for rhythmStrength.
+    float newStrength = clampf(bestMag, 0.0f, 1.0f);
+    periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
 
-    float signalEnergy = 0.0f;
-    float lagCorr = 0.0f;
-    int n = ossCount_ - bestPeriod;
-    for (int i = 0; i < ossCount_; i++) {
-        float v = ossLinear_[i] - ossMean;
-        signalEnergy += v * v;
-        if (i < n) lagCorr += v * (ossLinear_[i + bestPeriod] - ossMean);
-    }
-    if (signalEnergy > 1e-10f) {
-        float normCorr = lagCorr / signalEnergy;
-        float newStrength = clampf(normCorr * 1.5f, 0.0f, 1.0f);
-        periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
-    }
-
-    // BPM from best period
+    // BPM from best period (informational — PLP uses plpBestPeriod_ directly)
     float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestPeriod);
     newBpm = clampf(newBpm, bpmMin, bpmMax);
-
     float bpmChange = fabsf(newBpm - bpm_) / bpm_;
     if (bpmChange > 0.05f) {
         bpm_ = bpm_ * tempoSmoothing + newBpm * (1.0f - tempoSmoothing);
@@ -334,7 +363,9 @@ void AudioTracker::updatePlpAnalysis() {
     plpPatternLen_ = patLen;
 
     // --- 2. Epoch-fold the WINNING source at the winning period ---
-    // All linearized buffers populated by runAutocorrelation() (class members).
+    // All linearized buffers populated by runFourierTempogram() (class members).
+    // NOTE: buffers are mean-subtracted by runFourierTempogram() — epoch-fold
+    // produces zero-centered values, hence min-max normalization below.
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
@@ -358,56 +389,76 @@ void AudioTracker::updatePlpAnalysis() {
     }
     if (epochs < 2) return;
 
-    // Normalize to [0, 1], then apply contrast via power-law
-    float maxVal = 0.0f;
+    // Normalize to [0, 1] using min-max (signal is mean-subtracted, may have negatives)
+    float minVal = patternAccum[0], maxVal = patternAccum[0];
     for (int j = 0; j < patLen; j++) {
         patternAccum[j] /= epochs;
+        if (patternAccum[j] < minVal) minVal = patternAccum[j];
         if (patternAccum[j] > maxVal) maxVal = patternAccum[j];
     }
-    if (maxVal > 0.0f) {
+    float range = maxVal - minVal;
+    if (range > 1e-10f) {
         for (int j = 0; j < patLen; j++) {
-            float normalized = patternAccum[j] / maxVal;
+            float normalized = (patternAccum[j] - minVal) / range;
             plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
     } else {
-        // Degenerate / all-zero pattern: clear to avoid stale data in cross-correlation
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. PLP confidence from PMR + signal presence ---
-    // PMR measures pattern peakedness: 1.0 = flat, 4.0+ = strong kicks.
-    // Gate by mic level to prevent ambient noise (HVAC, hum) from producing
-    // spurious high-PMR patterns. Mic level > 0.05 = significant audio present.
-    float pmrConf = clampf((plpBestPmr_ - 1.5f) / 2.5f, 0.0f, 1.0f);
-    float signalPresence = clampf(mic_.getLevel() / 0.10f, 0.0f, 1.0f);  // 0 at silence, 1 at level≥0.10
-    float targetConf = pmrConf * signalPresence;
-    plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
+    // --- 3. Phase alignment: adaptive correction rate ---
+    // Combines DFT coarse phase and pattern-peak fine phase into a single error,
+    // then applies an adaptive correction rate that's fast during convergence
+    // and slow once locked. Based on EMA variance of recent phase errors.
 
-    // --- 4. Cross-correlate last period of winning source with pattern ---
-    if (sourceCount >= patLen) {
-        float bestCorr = -1e30f;
-        int bestOffset = 0;
-        for (int offset = 0; offset < patLen; offset++) {
-            float sum = 0.0f;
-            for (int j = 0; j < patLen; j++) {
-                int sigIdx = sourceCount - patLen + j;
-                int patIdx = (j + offset) % patLen;
-                sum += sourceBuf[sigIdx] * plpPattern_[patIdx];
-            }
-            if (sum > bestCorr) {
-                bestCorr = sum;
-                bestOffset = offset;
-            }
+    // Compute phase error from pattern peak (most precise alignment)
+    float phaseError = 0.0f;
+    bool hasPatternPeak = false;
+    {
+        int peakIdx = 0;
+        float peakVal = plpPattern_[0];
+        for (int j = 1; j < patLen; j++) {
+            if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
         }
-
-        float measuredPhase = static_cast<float>(bestOffset) / static_cast<float>(patLen);
-        float phaseError = measuredPhase - plpPhase_;
-        if (phaseError > 0.5f) phaseError -= 1.0f;
-        if (phaseError < -0.5f) phaseError += 1.0f;
-        plpPhase_ += 0.1f * phaseError;
-        if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+        // After min-max normalization, max=1.0 and min=0.0 for any non-flat pattern.
+        // peakVal > 0.5 always true for non-flat signals. Falls through to DFT phase
+        // fallback only when pattern is flat (range < 1e-10, all values set to 0.0).
+        if (peakVal > 0.5f) {
+            float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
+            phaseError = peakPhase - plpPhase_;
+            hasPatternPeak = true;
+        }
     }
+
+    // Fall back to DFT phase if pattern peak is weak
+    if (!hasPatternPeak) {
+        phaseError = plpDftPhase_ - plpPhase_;
+    }
+
+    // Wrap error to [-0.5, 0.5]
+    if (phaseError > 0.5f) phaseError -= 1.0f;
+    if (phaseError < -0.5f) phaseError += 1.0f;
+
+    // Adaptive correction rate from phase error variance (EMA)
+    // High variance → still converging → aggressive correction
+    // Low variance → locked → gentle correction (prevents jitter)
+    phaseErrEma_ += PHASE_ALPHA_ERR * (phaseError - phaseErrEma_);
+    float deviation = phaseError - phaseErrEma_;
+    phaseErrVar_ += PHASE_ALPHA_ERR * (deviation * deviation - phaseErrVar_);
+
+    float sigma = sqrtf(phaseErrVar_ > 0.0f ? phaseErrVar_ : 0.0f);
+    float lambda = sigma / (sigma + PHASE_SIGMA_REF);
+    float alpha = PHASE_ALPHA_MIN + (PHASE_ALPHA_MAX - PHASE_ALPHA_MIN) * lambda;
+
+    plpPhase_ += alpha * phaseError;
+    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+    if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+
+    // --- 4. PLP confidence from DFT magnitude + signal presence ---
+    float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
+    float signalPresence = clampf(mic_.getLevel() / plpSignalFloor, 0.0f, 1.0f);
+    float targetConf = dftConf * signalPresence;
+    plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
 
 void AudioTracker::updatePlpPhase() {
@@ -431,7 +482,20 @@ void AudioTracker::updatePlpPhase() {
         plpPulseValue_ = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
     } else {
         // Fallback: cosine pulse (same shape as old phaseToPulse)
-        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * 6.28318530718f);
+        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+    }
+
+    // --- Beat stability tracking ---
+    // Track PLP peak amplitude via EMA. Stability = current peak / EMA.
+    // High stability (>0.7) = pattern is locked and repeating.
+    // Low stability (<0.3) = disrupted (fill, breakdown, section change).
+    // Used to gate bar histogram learning rate (fill/breakdown immunity).
+    if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
+        // Near phase=0 (beat position): measure current PLP peak amplitude
+        float peakAmp = plpPulseValue_;
+        static constexpr float STABILITY_ALPHA = 0.1f;
+        plpPeakEma_ += STABILITY_ALPHA * (peakAmp - plpPeakEma_);
+        beatStability_ = (plpPeakEma_ > 0.01f) ? clampf(peakAmp / plpPeakEma_, 0.0f, 1.5f) : 0.0f;
     }
 
     // Decay confidence during extended silence
@@ -580,21 +644,30 @@ void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
     if (ioiConfidence_ < 0.5f) return;  // Phase B inactive until Phase A confident
 
     // Only accumulate strong onsets (kicks/snares) into the bar histogram.
-    // Hi-hats/cymbals fire at every 8th/16th note position, making the
-    // histogram uniform and destroying pattern structure. Kicks and snares
-    // are the events that define phrasing (4otf, backbeat, halftime, etc.).
     if (strength < histogramMinStrength) return;
 
+    // Beat-stability-gated learning rate (RFC Phase 1):
+    // Stability > 0.7: pattern locked → low rate (protect established pattern)
+    // Stability 0.3-0.7: transitioning → normal rate
+    // Stability < 0.3: disrupted (fill/breakdown) → frozen (don't contaminate)
+    float effectiveRate;
+    if (beatStability_ < 0.3f) {
+        return;  // Frozen — fill/breakdown immunity
+    } else if (beatStability_ > 0.7f) {
+        effectiveRate = patternLearnRate * 0.5f;  // Protect established pattern
+    } else if (patternBarsAccumulated_ < 4) {
+        effectiveRate = patternLearnRate * 2.5f;  // Cold start: fast warm-up (~0.375)
+    } else {
+        effectiveRate = patternLearnRate;  // Normal
+    }
+
     // Project onset onto bar grid using IOI peak as beat period.
-    // NOTE: This is a time-based approximation, not beat-synchronized.
-    // Under tempo drift, the histogram smears across bins until the new
-    // tempo stabilizes and the old bins decay.
     float barPeriodMs = ioiPeakMs_ * 4.0f;
     float elapsed = (float)(nowMs - lastBarBoundaryMs_);
     float barPhase = fmodf(elapsed / barPeriodMs, 1.0f);
     int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
 
-    barBins_[bin] = barBins_[bin] * (1.0f - patternLearnRate) + strength * patternLearnRate;
+    barBins_[bin] = barBins_[bin] * (1.0f - effectiveRate) + strength * effectiveRate;
 }
 
 void AudioTracker::computePatternStats() {

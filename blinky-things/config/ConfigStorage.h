@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 80;  // v80: Remove comb filter bank + Percival ACF params (combFeedback, rayleighBpm, percivalWeight2/4)
+    static const uint8_t SETTINGS_VERSION = 81;  // v81: Add plpSignalFloor for PLP tuning
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -295,6 +295,7 @@ public:
         float plpActivation;
         float plpConfAlpha;
         float plpNovGain;
+        float plpSignalFloor;       // v81
 
         // Spectral flux contrast
         float odfContrast;
@@ -365,8 +366,8 @@ public:
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
-    static_assert(sizeof(StoredTrackerParams) == 124,
-        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (124 bytes = 29 floats + 1 uint16 + 1 uint8 + padding)");
+    static_assert(sizeof(StoredTrackerParams) == 128,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (128 bytes = 30 floats + 1 uint16 + 1 uint8 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

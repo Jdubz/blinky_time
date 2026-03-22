@@ -153,7 +153,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 
 ### Key Architecture Components
 
-- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF → period; NN onset → visual pulse. PLP grid-search PMR across 3 sources (flux, bass, NN onset) selects best period + source for phase/pattern.
+- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF → period; NN onset → visual pulse. Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset) selects best period via DFT magnitude + phase alignment for free.
 - **FrameOnsetNN** (`blinky-things/audio/FrameOnsetNN.h`) - Conv1D W16 TFLite NN onset detection (single-channel, 13.4 KB INT8, ~7ms). Detects acoustic onsets (kicks/snares), not metrical beats.
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands + spectral flux (HWR)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with fixed hardware gain (AGC removed v72)
@@ -213,7 +213,7 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands + spe
     ↓
     ├── [BPM] Spectral flux (HWR) → contrast² → OSS buffer → ACF → period estimate
     ├── [ONSET] FrameOnsetNN (Conv1D W16, ~7ms) → onset activation → pulse (visual sparks)
-    ├── [PLP] Grid-search PMR across 3 sources (flux, bass, NN onset) → best period + pattern
+    ├── [PLP] Fourier tempogram (Goertzel DFT) across 3 sources (flux, bass, NN onset) → best period + pattern
     ↓
 AudioTracker (decoupled: spectral flux → tempo, NN onset → pulse, PLP → phase/pattern)
     ↓
@@ -248,7 +248,7 @@ RenderPipeline → LED Output
    - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (~5.5s, 360 samples @ ~66 Hz) → ACF → period estimate
    - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection (visual sparks)
      - Pulse detection: floor-tracking baseline (fast drop, slow rise)
-   - **PLP path**: Grid-search PMR across 3 sources (spectral flux, bass energy, NN onset) at candidate periods → best period + epoch-fold pattern → phase + plpPulse. Confidence is PMR-based, gated by mic signal level. Phase advance uses raw PMR-winning period (not BPM-smoothed).
+   - **PLP path**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Epoch-fold pattern extraction for visual pattern shape. Confidence = DFT magnitude x signal presence (mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked).
    - Energy synthesis: hybrid mic level + bass mel energy + onset peak-hold
 
 4. **Generators (Visual Effects)**
@@ -362,8 +362,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 5. ACF every 150ms → raw peak-finding → BPM / period estimate
 6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
 7. Onset activation → pulse detection (visual sparks)
-8. [PLP PATH] Grid-search PMR across 3 sources (flux, bass, NN onset) at candidate periods
-9. Best PMR period + source → epoch-fold pattern → phase + plpPulse output
+8. [PLP PATH] Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (flux, bass, NN onset)
+9. DFT magnitude selects period, DFT phase gives alignment → epoch-fold pattern → phase + plpPulse output
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
      onsetDensity=3.2}
 11. Fire generator:
@@ -427,7 +427,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Current Status (March 2026)
 
 **Production Ready:**
-- ✅ AudioTracker with ACF+PLP (grid-search PMR) + pulse baseline tracking
+- ✅ AudioTracker with ACF+PLP (Fourier tempogram) + pulse baseline tracking
 - ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, All Onsets F1=0.681, deployed on all 7 devices)
 - ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
@@ -488,20 +488,20 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Detection Architecture
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
-**Current (v80, deployed):** ACF+PLP architecture. ACF provides period estimate from spectral flux. PLP grid-search PMR compares 3 sources (flux, bass, NN onset) to find best period + epoch-fold pattern. NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. Confidence is PMR-based, gated by mic signal level. Phase advance uses raw PMR-winning period.
+**Current (v80, deployed):** ACF+PLP architecture. ACF provides period estimate from spectral flux. PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset) — DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Epoch-fold pattern extraction for visual pattern shape. NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. Confidence = DFT magnitude x signal presence (mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 - Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLP phase/pattern extraction. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
-- **ACF+PLP architecture** (v80): ACF estimates period from spectral flux (HWR, NN-independent). PLP grid-search PMR selects best period + source across flux/bass/NN onset. NN onset used for visual pulse only. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
+- **ACF+PLP architecture** (v80): ACF estimates period from spectral flux (HWR, NN-independent). PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux/bass/NN onset) — DFT magnitude selects period, DFT phase gives alignment. NN onset used for visual pulse only. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
 - **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
-- **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP epoch-folding.
+- **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP Fourier tempogram.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 - **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **ACF tempo estimation** (v80): Bare ACF peak-finding on spectral flux (Percival/Rayleigh/comb bank removed v80 — octave errors are non-issues with PLP)
-- **PLP pattern extraction** (v80): Grid-search PMR across 3 sources (spectral flux, bass energy, NN onset) at candidate periods from ACF. Selects the period + source with best epoch-fold pattern quality (peak-to-mean ratio). Phase advance uses raw PMR-winning period (not BPM-smoothed). Confidence is PMR-based, gated by mic signal level. Current test results: autoCorr ~0.03 (positive), peakiness 7-9, atTransient 0.10-0.13.
+- **PLP pattern extraction** (v80): Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction still used for visual pattern shape. Pattern normalization uses min-max (signal is mean-subtracted, may have negatives). Confidence = DFT magnitude x signal presence (mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)
