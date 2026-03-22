@@ -267,9 +267,9 @@ void AudioTracker::runAutocorrelation() {
                 s1 = s0;
             }
 
-            // Extract real + imag from final state
-            float dftReal = s1 * cosOmega - s2;
-            float dftImag = s1 * sinOmega;
+            // Extract real + imag from Goertzel final state
+            float dftReal = s1 - s2 * cosOmega;
+            float dftImag = s2 * sinOmega;
 
             // Magnitude (normalized by sample count for fair comparison)
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / count;
