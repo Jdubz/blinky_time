@@ -411,8 +411,8 @@ void AudioTracker::updatePlpAnalysis() {
 }
 
 void AudioTracker::updatePlpPhase() {
-    // Free-running phase advance at current BPM
-    float phaseIncrement = 1.0f / beatPeriodFrames_;
+    // Free-running phase advance at the PMR-winning period (not BPM-smoothed)
+    float phaseIncrement = 1.0f / static_cast<float>(plpBestPeriod_);
     plpPhase_ += phaseIncrement;
 
     // Beat wrap
