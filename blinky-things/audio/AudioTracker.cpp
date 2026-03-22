@@ -244,8 +244,11 @@ void AudioTracker::runFourierTempogram() {
     float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
     const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
 
-    // Mean-subtract each source (critical for DFT — DC leakage otherwise
-    // dominates all frequency bins, making periodic components invisible)
+    // Mean-subtract each source IN-PLACE (critical for DFT — DC leakage otherwise
+    // dominates all frequency bins, making periodic components invisible).
+    // NOTE: this mutates ossLinear_/bassLinear_/nnLinear_ — updatePlpAnalysis()
+    // reads these mean-subtracted values; its min-max normalization handles
+    // the zero-centered epoch-fold output. Do not reorder these calls.
     for (int src = 0; src < 3; src++) {
         int count = sourceCounts[src];
         if (count < 20) continue;
@@ -265,6 +268,7 @@ void AudioTracker::runFourierTempogram() {
     int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
     if (minLag < 10) minLag = 10;
     if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;  // Keep period ≤ pattern buffer
+    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1; // Avoid scanning past buffer at startup
 
     for (int lag = minLag; lag <= maxLag; lag++) {
         // Goertzel recurrence: computes one DFT bin with 2 multiply-adds per sample.
@@ -416,6 +420,9 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 1; j < patLen; j++) {
             if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
         }
+        // After min-max normalization, max=1.0 and min=0.0 for any non-flat pattern.
+        // peakVal > 0.5 always true for non-flat signals. Falls through to DFT phase
+        // fallback only when pattern is flat (range < 1e-10, all values set to 0.0).
         if (peakVal > 0.5f) {
             float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
             phaseError = peakPhase - plpPhase_;

@@ -6,7 +6,7 @@
 
 ## Current Status
 
-**Firmware:** v80 (SETTINGS_VERSION 80). AudioTracker with ACF+PLP architecture. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v81 (SETTINGS_VERSION 81). AudioTracker with ACF+PLP architecture. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v3 deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 model backed up. All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Next model: v9. Downbeat detection deferred.
 
