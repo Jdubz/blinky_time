@@ -66,6 +66,7 @@ public:
     int getPlpPatternLen() const { return plpPatternLen_; }
     float getPlpDftMag() const { return plpDftMag_; }
     int getPlpBestSource() const { return plpBestSource_; }
+    float getBeatStability() const { return beatStability_; }
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
@@ -185,6 +186,8 @@ private:
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
     float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
     float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
+    float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
+    float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 

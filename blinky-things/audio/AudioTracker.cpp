@@ -485,6 +485,19 @@ void AudioTracker::updatePlpPhase() {
         plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
     }
 
+    // --- Beat stability tracking ---
+    // Track PLP peak amplitude via EMA. Stability = current peak / EMA.
+    // High stability (>0.7) = pattern is locked and repeating.
+    // Low stability (<0.3) = disrupted (fill, breakdown, section change).
+    // Used to gate bar histogram learning rate (fill/breakdown immunity).
+    if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
+        // Near phase=0 (beat position): measure current PLP peak amplitude
+        float peakAmp = plpPulseValue_;
+        static constexpr float STABILITY_ALPHA = 0.1f;
+        plpPeakEma_ += STABILITY_ALPHA * (peakAmp - plpPeakEma_);
+        beatStability_ = (plpPeakEma_ > 0.01f) ? clampf(peakAmp / plpPeakEma_, 0.0f, 1.5f) : 0.0f;
+    }
+
     // Decay confidence during extended silence
     if (plpConfidence_ > 0.0f && (time_.millis() - lastSignificantAudioMs_ > 2000)) {
         plpConfidence_ *= 0.998f;
@@ -631,21 +644,30 @@ void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
     if (ioiConfidence_ < 0.5f) return;  // Phase B inactive until Phase A confident
 
     // Only accumulate strong onsets (kicks/snares) into the bar histogram.
-    // Hi-hats/cymbals fire at every 8th/16th note position, making the
-    // histogram uniform and destroying pattern structure. Kicks and snares
-    // are the events that define phrasing (4otf, backbeat, halftime, etc.).
     if (strength < histogramMinStrength) return;
 
+    // Beat-stability-gated learning rate (RFC Phase 1):
+    // Stability > 0.7: pattern locked → low rate (protect established pattern)
+    // Stability 0.3-0.7: transitioning → normal rate
+    // Stability < 0.3: disrupted (fill/breakdown) → frozen (don't contaminate)
+    float effectiveRate;
+    if (beatStability_ < 0.3f) {
+        return;  // Frozen — fill/breakdown immunity
+    } else if (beatStability_ > 0.7f) {
+        effectiveRate = patternLearnRate * 0.5f;  // Protect established pattern
+    } else if (patternBarsAccumulated_ < 4) {
+        effectiveRate = patternLearnRate * 2.5f;  // Cold start: fast warm-up (~0.375)
+    } else {
+        effectiveRate = patternLearnRate;  // Normal
+    }
+
     // Project onset onto bar grid using IOI peak as beat period.
-    // NOTE: This is a time-based approximation, not beat-synchronized.
-    // Under tempo drift, the histogram smears across bins until the new
-    // tempo stabilizes and the old bins decay.
     float barPeriodMs = ioiPeakMs_ * 4.0f;
     float elapsed = (float)(nowMs - lastBarBoundaryMs_);
     float barPhase = fmodf(elapsed / barPeriodMs, 1.0f);
     int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
 
-    barBins_[bin] = barBins_[bin] * (1.0f - patternLearnRate) + strength * patternLearnRate;
+    barBins_[bin] = barBins_[bin] * (1.0f - effectiveRate) + strength * effectiveRate;
 }
 
 void AudioTracker::computePatternStats() {

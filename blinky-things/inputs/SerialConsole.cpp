@@ -1687,6 +1687,8 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         { const char* srcNames[] = {"flux", "bass", "nn"};
           Serial.print(F("PLP Source: "));
           Serial.println(srcNames[audioCtrl_->getPlpBestSource()]); }
+        Serial.print(F("Beat Stability: "));
+        Serial.println(audioCtrl_->getBeatStability(), 3);
         Serial.print(F("Pulse: "));
         Serial.println(audioCtrl_->getLastPulseStrength(), 3);
         Serial.print(F("Onset Density: "));
