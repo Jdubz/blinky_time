@@ -87,7 +87,7 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
            DFT phase → beat alignment (no cross-correlation needed)
            Epoch-fold pattern → plpPulse (visual pattern shape)
            Confidence = DFT magnitude × signal presence (mic level gate)
-           Phase correction at 30% per 150ms cycle
+           Adaptive phase correction (EMA variance: fast during convergence, slow when locked)
                 |
 AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat=0, beatInMeasure=0 }
       |
@@ -134,7 +134,7 @@ Generators (HeatFire, Water, Lightning)
 13. **Goertzel DFT**: Compute DFT magnitude and phase at candidate frequencies for each source
 14. **Period Selection**: Source x frequency with highest DFT magnitude wins (inherently suppresses sub-harmonics)
 15. **Phase Alignment**: DFT phase gives beat alignment directly (no cross-correlation needed)
-16. **Phase Correction**: Correct phase toward DFT-derived alignment at 30% per cycle
+16. **Phase Correction**: Correct phase toward DFT-derived alignment with adaptive rate (EMA variance-driven)
 17. **Epoch-fold Pattern**: Fold winning source at selected period for visual pattern shape
 18. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
 19. **Confidence**: DFT magnitude x signal presence (mic level gate)
@@ -211,7 +211,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ### Phase Tracking (PLP — Fourier Tempogram)
 
-PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Phase correction at 30% per 150ms cycle. No tunable parameters exposed — the algorithm is self-tuning via DFT.
+PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). No tunable parameters exposed — the algorithm is self-tuning via DFT.
 
 ### Rhythm Activation
 

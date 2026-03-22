@@ -295,7 +295,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **PLP pattern alignment — SUBSTANTIALLY IMPROVED.** Fourier tempogram (Goertzel DFT) replaced grid-search PMR. DFT magnitude inherently suppresses sub-harmonics (no PMR length normalization needed). DFT phase gives beat alignment for free. atTransient improved from 0.10-0.13 to 0.37-0.48. autoCorr up to +0.93. BPM accuracy 0.91-0.98. Phase correction at 30% per 150ms cycle.
+1. **PLP pattern alignment — SUBSTANTIALLY IMPROVED.** Fourier tempogram (Goertzel DFT) replaced grid-search PMR. DFT magnitude inherently suppresses sub-harmonics (no PMR length normalization needed). DFT phase gives beat alignment for free. atTransient improved from 0.10-0.13 to 0.37-0.48. autoCorr up to +0.93. BPM accuracy 0.91-0.98. Adaptive phase correction (EMA variance: fast during convergence, slow when locked).
 
 2. ~~**Onset/phase circular reliability problem — RESOLVED.**~~ PLP architecture eliminates the circular dependency. PLP uses Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) to extract repeating patterns. The NN onset detector continues to drive visual sparks/flashes independently.
 

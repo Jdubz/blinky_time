@@ -291,9 +291,13 @@ void AudioTracker::runFourierTempogram() {
                 bestMag = mag;
                 bestPeriod = lag;
                 bestSource = src;
-                // Phase: position of the peak within the cycle
-                bestPhase = -atan2f(dftImag, dftReal) / TWO_PI;
-                if (bestPhase < 0.0f) bestPhase += 1.0f;
+                // Phase at the END of the buffer (most recent sample).
+                // Goertzel DFT phase is relative to index 0 (oldest sample).
+                // Advance by (count-1) periods to get phase at the newest sample.
+                float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
+                float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
+                bestPhase = rawPhase + phaseAdvance;
+                bestPhase -= floorf(bestPhase);  // Wrap to [0, 1)
             }
         }
     }
@@ -340,6 +344,8 @@ void AudioTracker::updatePlpAnalysis() {
 
     // --- 2. Epoch-fold the WINNING source at the winning period ---
     // All linearized buffers populated by runFourierTempogram() (class members).
+    // NOTE: buffers are mean-subtracted by runFourierTempogram() — epoch-fold
+    // produces zero-centered values, hence min-max normalization below.
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
