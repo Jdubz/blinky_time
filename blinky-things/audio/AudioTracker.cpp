@@ -151,6 +151,11 @@ const AudioControl& AudioTracker::update(float dt) {
             cachedBassEnergy_ /= 6.0f;
         }
         addBassSample(cachedBassEnergy_);
+
+        // Buffer raw NN onset activation for PLP source comparison
+        nnOnsetBuffer_[nnWriteIdx_] = odf;
+        nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
+        if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
     }
 
     // 9. Periodic ACF for tempo estimation + IOI analysis
@@ -222,128 +227,92 @@ void AudioTracker::runAutocorrelation() {
         ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
 
-    // Compute mean for mean subtraction (important for spectral flux with non-zero baseline)
+    // --- Grid search: find period with best PMR across 3 sources ---
+    // Instead of ACF peak → period, directly try every candidate period and
+    // epoch-fold each source. The period × source with highest peak-to-mean
+    // ratio (PMR) wins. This optimizes for pattern quality, not BPM accuracy.
+    int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
+    int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
+    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
+    if (minLag < 2) minLag = 2;
+
+    // Linearize bass and NN onset buffers
+    static float bassLinear[BASS_BUFFER_SIZE];
+    static float nnLinear[NN_BUFFER_SIZE];
+    int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
+    for (int i = 0; i < bassCount_; i++) bassLinear[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
+    int nStart = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
+    for (int i = 0; i < nnCount_; i++) nnLinear[i] = nnOnsetBuffer_[(nStart + i) % NN_BUFFER_SIZE];
+
+    // Source buffers and counts
+    const float* sources[3] = { ossLinear_, bassLinear, nnLinear };
+    const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
+    // source 0=flux, 1=bass, 2=nn
+
+    float bestPmr = 0.0f;
+    int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
+    int bestSource = 0;
+
+    for (int lag = minLag; lag <= maxLag; lag++) {
+        for (int src = 0; src < 3; src++) {
+            int count = sourceCounts[src];
+            if (count < lag * 2) continue;  // Need at least 2 periods
+            const float* buf = sources[src];
+
+            // Epoch-fold: sum values at each position within the period
+            float patSum[MAX_PATTERN_LEN] = {0};
+            int epochs = 0;
+            for (int off = count - lag; off >= 0; off -= lag) {
+                for (int j = 0; j < lag; j++) patSum[j] += buf[off + j];
+                epochs++;
+            }
+            if (epochs < 2) continue;
+
+            // Compute PMR = max / mean of folded pattern
+            float maxVal = 0.0f, sumVal = 0.0f;
+            for (int j = 0; j < lag; j++) {
+                float v = patSum[j] / epochs;
+                if (v > maxVal) maxVal = v;
+                sumVal += v;
+            }
+            float mean = sumVal / lag;
+            float pmr = (mean > 1e-10f) ? maxVal / mean : 0.0f;
+
+            if (pmr > bestPmr) {
+                bestPmr = pmr;
+                bestPeriod = lag;
+                bestSource = src;
+            }
+        }
+    }
+
+    plpBestPmr_ = bestPmr;
+    plpBestSource_ = bestSource;
+
+    // --- Also compute ACF periodicity strength for rhythmStrength ---
+    // Quick ACF at the winning period (just one lag, not full spectrum)
     float ossMean = 0.0f;
     for (int i = 0; i < ossCount_; i++) ossMean += ossLinear_[i];
     ossMean /= ossCount_;
 
-    // Lag range from BPM limits
-    int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
-    int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
-    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
-    if (minLag < 1) minLag = 1;
-
-    // Compute ACF at all lags (fixed-size array, no VLA)
-    int acfSize = maxLag - minLag + 1;
-    if (acfSize > MAX_ACF_SIZE) acfSize = MAX_ACF_SIZE;
-    if (acfSize <= 0) return;  // Safety: not enough data
-
-    float acf[MAX_ACF_SIZE];  // Fixed size on stack
     float signalEnergy = 0.0f;
+    float lagCorr = 0.0f;
+    int n = ossCount_ - bestPeriod;
     for (int i = 0; i < ossCount_; i++) {
         float v = ossLinear_[i] - ossMean;
         signalEnergy += v * v;
+        if (i < n) lagCorr += v * (ossLinear_[i + bestPeriod] - ossMean);
     }
-
-    for (int lagIdx = 0; lagIdx < acfSize; lagIdx++) {
-        int lag = minLag + lagIdx;
-        float sum = 0.0f;
-        int count = ossCount_ - lag;
-        if (count <= 0) { acf[lagIdx] = 0.0f; continue; }
-        for (int i = 0; i < count; i++) {
-            sum += (ossLinear_[i] - ossMean) * (ossLinear_[i + lag] - ossMean);
-        }
-        acf[lagIdx] = sum / count;
-    }
-
-    // --- Percival harmonic enhancement (signal-driven, no prior bias) ---
-    // Fold 2nd and 4th harmonics into fundamental. A lag whose multiples also
-    // show periodicity is more likely to be the true repeating period.
-    // This is octave disambiguation via signal structure, not a tempo prior.
-    for (int lagIdx = 0; lagIdx < acfSize; lagIdx++) {
-        int lag2Idx = 2 * (minLag + lagIdx) - minLag;
-        int lag4Idx = 4 * (minLag + lagIdx) - minLag;
-        if (lag2Idx >= 0 && lag2Idx < acfSize) {
-            acf[lagIdx] += 0.5f * acf[lag2Idx];
-        }
-        if (lag4Idx >= 0 && lag4Idx < acfSize) {
-            acf[lagIdx] += 0.25f * acf[lag4Idx];
-        }
-    }
-
-    // --- Find top 3 ACF candidate lags ---
-    int candidateLags[3] = {minLag, minLag, minLag};
-    float candidateCorr[3] = {-1e30f, -1e30f, -1e30f};
-    for (int lagIdx = 0; lagIdx < acfSize; lagIdx++) {
-        float val = acf[lagIdx];
-        int lag = minLag + lagIdx;
-        if (val > candidateCorr[0]) {
-            candidateCorr[2] = candidateCorr[1]; candidateLags[2] = candidateLags[1];
-            candidateCorr[1] = candidateCorr[0]; candidateLags[1] = candidateLags[0];
-            candidateCorr[0] = val; candidateLags[0] = lag;
-        } else if (val > candidateCorr[1]) {
-            candidateCorr[2] = candidateCorr[1]; candidateLags[2] = candidateLags[1];
-            candidateCorr[1] = val; candidateLags[1] = lag;
-        } else if (val > candidateCorr[2]) {
-            candidateCorr[2] = val; candidateLags[2] = lag;
-        }
-    }
-
-    // --- Score candidates by epoch-fold R-squared (including octave variants) ---
-    // For each of 3 ACF peaks, also try 2x and 0.5x period (octave variants).
-    // R² = 1 - SS_res/SS_tot measures how well the periodic model explains the signal.
-    // Anti-correlated folds (wrong octave) give R² near 0 or negative.
-    // Coherent folds give R² > 0.3.
-    float ssTot = signalEnergy;  // Already computed: sum of (x - mean)²
-    float bestR2 = -1e30f;
-    int bestLag = candidateLags[0];
-
-    for (int c = 0; c < 3; c++) {
-        // Try each candidate plus its octave variants (half and double period)
-        int variants[3] = { candidateLags[c], candidateLags[c] / 2, candidateLags[c] * 2 };
-        for (int v = 0; v < 3; v++) {
-            int period = variants[v];
-            if (period < 2 || period > MAX_PATTERN_LEN || period > ossCount_ / 2) continue;
-
-            // Epoch-fold: compute mean pattern at this period
-            float patMean[MAX_PATTERN_LEN];
-            int patCount[MAX_PATTERN_LEN];
-            for (int j = 0; j < period; j++) { patMean[j] = 0.0f; patCount[j] = 0; }
-            for (int i = 0; i < ossCount_; i++) {
-                int j = i % period;
-                patMean[j] += ossLinear_[i];
-                patCount[j]++;
-            }
-            for (int j = 0; j < period; j++) {
-                if (patCount[j] > 0) patMean[j] /= patCount[j];
-            }
-
-            // Compute residual sum of squares
-            float ssRes = 0.0f;
-            for (int i = 0; i < ossCount_; i++) {
-                float residual = ossLinear_[i] - patMean[i % period];
-                ssRes += residual * residual;
-            }
-
-            float r2 = (ssTot > 1e-10f) ? 1.0f - ssRes / ssTot : 0.0f;
-            if (r2 > bestR2) {
-                bestR2 = r2;
-                bestLag = period;
-            }
-        }
-    }
-
-    // Compute periodicity strength from R-squared of best candidate
-    {
-        float newStrength = clampf(bestR2 * 2.0f, 0.0f, 1.0f);  // R²=0.5 → strength=1.0
+    if (signalEnergy > 1e-10f) {
+        float normCorr = lagCorr / signalEnergy;
+        float newStrength = clampf(normCorr * 1.5f, 0.0f, 1.0f);
         periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
     }
 
-    // BPM from best epoch-fold period
-    float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestLag);
+    // BPM from best period
+    float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestPeriod);
     newBpm = clampf(newBpm, bpmMin, bpmMax);
 
-    // Smooth BPM update (EMA) — only if meaningful change
     float bpmChange = fabsf(newBpm - bpm_) / bpm_;
     if (bpmChange > 0.05f) {
         bpm_ = bpm_ * tempoSmoothing + newBpm * (1.0f - tempoSmoothing);
@@ -362,28 +331,47 @@ void AudioTracker::addBassSample(float bassEnergy) {
 }
 
 void AudioTracker::updatePlpAnalysis() {
-    // --- 1. Compute pattern length from current BPM ---
+    // --- 1. Use period from grid search (set by runAutocorrelation) ---
     int patLen = static_cast<int>(beatPeriodFrames_ + 0.5f);
     if (patLen < 2) patLen = 2;
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // Need at least 2 full periods in OSS buffer for meaningful epoch folding
-    if (ossCount_ < patLen * 2) return;
+    // --- 2. Epoch-fold the WINNING source at the winning period ---
+    // runAutocorrelation() already found the best source (flux/bass/nn) and period.
+    // Now extract the pattern from that source for visual output.
+    // ossLinear_ already populated. Bass/NN linearized in runAutocorrelation statics.
 
-    // --- 2. Epoch-fold OSS buffer to extract average pattern ---
-    // ossLinear_ already populated by runAutocorrelation() (called just before us)
+    // Use the winning source buffer (ossLinear_ for flux, or re-linearize for bass/nn)
+    const float* sourceBuf = ossLinear_;
+    int sourceCount = ossCount_;
+    if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
+        // Bass won — linearize bass buffer
+        static float bassLin[BASS_BUFFER_SIZE];
+        int bS = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
+        for (int i = 0; i < bassCount_; i++) bassLin[i] = bassBuffer_[(bS + i) % BASS_BUFFER_SIZE];
+        sourceBuf = bassLin;
+        sourceCount = bassCount_;
+    } else if (plpBestSource_ == 2 && nnCount_ >= patLen * 2) {
+        // NN onset won — linearize NN buffer
+        static float nnLin[NN_BUFFER_SIZE];
+        int nS = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
+        for (int i = 0; i < nnCount_; i++) nnLin[i] = nnOnsetBuffer_[(nS + i) % NN_BUFFER_SIZE];
+        sourceBuf = nnLin;
+        sourceCount = nnCount_;
+    }
+
+    if (sourceCount < patLen * 2) return;
 
     // Fold and average
     float patternAccum[MAX_PATTERN_LEN] = {0};
     int epochs = 0;
-    for (int offset = ossCount_ - patLen; offset >= 0; offset -= patLen) {
+    for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
         for (int j = 0; j < patLen; j++) {
-            patternAccum[j] += ossLinear_[offset + j];
+            patternAccum[j] += sourceBuf[offset + j];
         }
         epochs++;
     }
-
     if (epochs < 2) return;
 
     // Normalize to [0, 1], then apply contrast via power-law
@@ -395,92 +383,28 @@ void AudioTracker::updatePlpAnalysis() {
     if (maxVal > 0.0f) {
         for (int j = 0; j < patLen; j++) {
             float normalized = patternAccum[j] / maxVal;
-            // plpNovGain as contrast exponent: >1 sharpens peaks, <1 flattens
             plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
     }
 
-    // --- 3. Bass ACF for dual-source period agreement ---
-    if (bassCount_ >= patLen * 2) {
-        // Linearize bass buffer
-        static float bassLinear[BASS_BUFFER_SIZE];
-        int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
-        for (int i = 0; i < bassCount_; i++) {
-            bassLinear[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
-        }
+    // --- 3. PLP confidence from PMR quality ---
+    // High PMR (>2.5) = strong pattern = high confidence
+    // Low PMR (<1.5) = weak/flat pattern = low confidence
+    float targetConf = clampf((plpBestPmr_ - 1.5f) / 2.0f, 0.0f, 1.0f);
+    // Also gate by periodicity strength (weak ACF = unreliable period)
+    targetConf *= clampf(periodicityStrength_ * 2.0f, 0.0f, 1.0f);
+    plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 
-        // Bass mean subtraction
-        float bassMean = 0.0f;
-        for (int i = 0; i < bassCount_; i++) bassMean += bassLinear[i];
-        bassMean /= bassCount_;
-
-        // Bass ACF — find dominant lag in [minLag, maxLag]
-        // Normalized by zero-lag autocorrelation for fair comparison across lags
-        int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
-        int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
-        if (maxLag >= bassCount_ / 2) maxLag = bassCount_ / 2 - 1;
-        if (minLag < 1) minLag = 1;
-
-        // Zero-lag autocorrelation (= variance * count) for normalization
-        float bassZeroLag = 0.0f;
-        for (int i = 0; i < bassCount_; i++) {
-            float d = bassLinear[i] - bassMean;
-            bassZeroLag += d * d;
-        }
-
-        float bestBassCorr = -1e30f;
-        int bestBassLag = minLag;
-        if (bassZeroLag > 1e-10f) {
-            for (int lag = minLag; lag <= maxLag && lag < bassCount_; lag++) {
-                float sum = 0.0f;
-                int n = bassCount_ - lag;
-                for (int i = 0; i < n; i++) {
-                    sum += (bassLinear[i] - bassMean) * (bassLinear[i + lag] - bassMean);
-                }
-                // Normalize by zero-lag to get [-1, 1] range
-                float normalized = sum / bassZeroLag;
-                if (normalized > bestBassCorr) {
-                    bestBassCorr = normalized;
-                    bestBassLag = lag;
-                }
-            }
-        }
-        plpBassPeriod_ = static_cast<float>(bestBassLag);
-        float bassStrength = clampf(bestBassCorr, 0.0f, 1.0f);
-
-        // --- 4. Dual-source agreement → PLP confidence ---
-        float fluxBpm = bpm_;
-        float bassBpm = OSS_FRAMES_PER_MIN / plpBassPeriod_;
-
-        // Check agreement: within 10%, or at octave (2x / 0.5x)
-        float ratio = bassBpm / fluxBpm;
-        float agreement = 0.0f;
-        if (ratio > 0.9f && ratio < 1.1f) {
-            agreement = 1.0f;  // Direct agreement
-        } else if (ratio > 1.8f && ratio < 2.2f) {
-            agreement = 0.7f;  // Octave above
-        } else if (ratio > 0.45f && ratio < 0.55f) {
-            agreement = 0.7f;  // Octave below
-        }
-
-        // Factor in both ACF strengths: flux periodicity AND bass periodicity
-        float fluxStrength = clampf(periodicityStrength_, 0.0f, 1.0f);
-        float targetConf = agreement * fluxStrength * bassStrength;
-
-        // EMA smooth confidence
-        plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
-    }
-
-    // --- 5. Cross-correlate last period with extracted pattern for phase alignment ---
-    if (ossCount_ >= patLen) {
+    // --- 4. Cross-correlate last period of winning source with pattern ---
+    if (sourceCount >= patLen) {
         float bestCorr = -1e30f;
         int bestOffset = 0;
         for (int offset = 0; offset < patLen; offset++) {
             float sum = 0.0f;
             for (int j = 0; j < patLen; j++) {
-                int sigIdx = ossCount_ - patLen + j;
+                int sigIdx = sourceCount - patLen + j;
                 int patIdx = (j + offset) % patLen;
-                sum += ossLinear_[sigIdx] * plpPattern_[patIdx];
+                sum += sourceBuf[sigIdx] * plpPattern_[patIdx];
             }
             if (sum > bestCorr) {
                 bestCorr = sum;
@@ -488,10 +412,7 @@ void AudioTracker::updatePlpAnalysis() {
             }
         }
 
-        // Convert offset to target phase
         float measuredPhase = static_cast<float>(bestOffset) / static_cast<float>(patLen);
-
-        // Gentle proportional phase correction (10% per update, ~150ms cadence)
         float phaseError = measuredPhase - plpPhase_;
         if (phaseError > 0.5f) phaseError -= 1.0f;
         if (phaseError < -0.5f) phaseError += 1.0f;
