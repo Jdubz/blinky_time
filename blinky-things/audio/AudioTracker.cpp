@@ -247,32 +247,39 @@ void AudioTracker::runAutocorrelation() {
     if (minLag < 10) minLag = 10;
 
     for (int lag = minLag; lag <= maxLag; lag++) {
-        // Precompute angular frequency for this candidate period
+        // Goertzel recurrence: computes one DFT bin with 2 multiply-adds per sample.
+        // Only needs cos(omega) precomputed — no per-sample trig calls.
         float omega = 6.28318530718f / static_cast<float>(lag);
+        float coeff = 2.0f * cosf(omega);  // One cosf per candidate period
+        float cosOmega = cosf(omega);
+        float sinOmega = sinf(omega);
 
         for (int src = 0; src < 3; src++) {
             int count = sourceCounts[src];
             if (count < lag * 2) continue;
             const float* buf = sources[src];
 
-            // Goertzel-style DFT at this frequency: compute real + imag components
-            float sumReal = 0.0f, sumImag = 0.0f;
+            // Goertzel recurrence: s[n] = x[n] + coeff*s[n-1] - s[n-2]
+            float s1 = 0.0f, s2 = 0.0f;
             for (int i = 0; i < count; i++) {
-                float angle = omega * i;
-                sumReal += buf[i] * cosf(angle);
-                sumImag += buf[i] * sinf(angle);
+                float s0 = buf[i] + coeff * s1 - s2;
+                s2 = s1;
+                s1 = s0;
             }
 
-            // Magnitude (normalized by sample count for fair comparison across sources)
-            float mag = sqrtf(sumReal * sumReal + sumImag * sumImag) / count;
+            // Extract real + imag from final state
+            float dftReal = s1 * cosOmega - s2;
+            float dftImag = s1 * sinOmega;
+
+            // Magnitude (normalized by sample count for fair comparison)
+            float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / count;
 
             if (mag > bestMag) {
                 bestMag = mag;
                 bestPeriod = lag;
                 bestSource = src;
-                // Phase: where in the cycle the peak falls (0 = start of period)
-                // Negate because we want "position of peak" not "phase of sinusoid"
-                bestPhase = -atan2f(sumImag, sumReal) / 6.28318530718f;
+                // Phase: position of the peak within the cycle
+                bestPhase = -atan2f(dftImag, dftReal) / 6.28318530718f;
                 if (bestPhase < 0.0f) bestPhase += 1.0f;
             }
         }
