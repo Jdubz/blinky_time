@@ -289,7 +289,8 @@ void AudioTracker::runAutocorrelation() {
         }
     }
 
-    // --- Score each candidate by epoch-fold R-squared ---
+    // --- Score candidates by epoch-fold R-squared (including octave variants) ---
+    // For each of 3 ACF peaks, also try 2x and 0.5x period (octave variants).
     // R² = 1 - SS_res/SS_tot measures how well the periodic model explains the signal.
     // Anti-correlated folds (wrong octave) give R² near 0 or negative.
     // Coherent folds give R² > 0.3.
@@ -298,33 +299,37 @@ void AudioTracker::runAutocorrelation() {
     int bestLag = candidateLags[0];
 
     for (int c = 0; c < 3; c++) {
-        int period = candidateLags[c];
-        if (period < 2 || period > MAX_PATTERN_LEN || period > ossCount_ / 2) continue;
+        // Try each candidate plus its octave variants (half and double period)
+        int variants[3] = { candidateLags[c], candidateLags[c] / 2, candidateLags[c] * 2 };
+        for (int v = 0; v < 3; v++) {
+            int period = variants[v];
+            if (period < 2 || period > MAX_PATTERN_LEN || period > ossCount_ / 2) continue;
 
-        // Epoch-fold: compute mean pattern at this period
-        float patMean[MAX_PATTERN_LEN];
-        int patCount[MAX_PATTERN_LEN];
-        for (int j = 0; j < period; j++) { patMean[j] = 0.0f; patCount[j] = 0; }
-        for (int i = 0; i < ossCount_; i++) {
-            int j = i % period;
-            patMean[j] += ossLinear_[i];
-            patCount[j]++;
-        }
-        for (int j = 0; j < period; j++) {
-            if (patCount[j] > 0) patMean[j] /= patCount[j];
-        }
+            // Epoch-fold: compute mean pattern at this period
+            float patMean[MAX_PATTERN_LEN];
+            int patCount[MAX_PATTERN_LEN];
+            for (int j = 0; j < period; j++) { patMean[j] = 0.0f; patCount[j] = 0; }
+            for (int i = 0; i < ossCount_; i++) {
+                int j = i % period;
+                patMean[j] += ossLinear_[i];
+                patCount[j]++;
+            }
+            for (int j = 0; j < period; j++) {
+                if (patCount[j] > 0) patMean[j] /= patCount[j];
+            }
 
-        // Compute residual sum of squares
-        float ssRes = 0.0f;
-        for (int i = 0; i < ossCount_; i++) {
-            float residual = ossLinear_[i] - patMean[i % period];
-            ssRes += residual * residual;
-        }
+            // Compute residual sum of squares
+            float ssRes = 0.0f;
+            for (int i = 0; i < ossCount_; i++) {
+                float residual = ossLinear_[i] - patMean[i % period];
+                ssRes += residual * residual;
+            }
 
-        float r2 = (ssTot > 1e-10f) ? 1.0f - ssRes / ssTot : 0.0f;
-        if (r2 > bestR2) {
-            bestR2 = r2;
-            bestLag = period;
+            float r2 = (ssTot > 1e-10f) ? 1.0f - ssRes / ssTot : 0.0f;
+            if (r2 > bestR2) {
+                bestR2 = r2;
+                bestLag = period;
+            }
         }
     }
 
