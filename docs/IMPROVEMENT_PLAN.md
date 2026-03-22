@@ -6,7 +6,7 @@
 
 ## Current Status
 
-**Firmware:** v80 (SETTINGS_VERSION 80). AudioTracker with ACF+PLP architecture. Grid-search PMR period selection across 3 sources (spectral flux, bass energy, NN onset). Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v80 (SETTINGS_VERSION 80). AudioTracker with ACF+PLP architecture. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v3 deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 model backed up. All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Next model: v9. Downbeat detection deferred.
 
@@ -30,31 +30,34 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ### Priority 1: Predominant Local Pulse (PLP) — DEPLOYED (v80)
 
-**Status: DEPLOYED. Grid-search PMR period selection across 3 sources. PLL abandoned (March 20).**
+**Status: DEPLOYED. Fourier tempogram (Goertzel DFT) period selection across 3 sources. PLL abandoned (March 20). Grid-search PMR replaced by Fourier tempogram (March 22).**
 
 See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 **What was built:**
-- **Grid-search PMR period selection**: 3 sources compared — spectral flux, bass energy, NN onset. For each candidate period, compute PMR (peak-to-mean ratio) across all sources. Best PMR wins.
-- **PMR-based confidence** gated by mic signal level (no confidence without audio input)
-- **Phase advance** using raw PMR-winning period (no Percival, no Rayleigh, no comb bank)
-- **Cross-correlation phase alignment** between PLP pattern and live signal
+- **Fourier tempogram period selection**: Goertzel DFT at candidate frequencies across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step).
+- **Epoch-fold pattern extraction** still used for the actual visual pattern shape
+- **Pattern normalization** uses min-max (signal is mean-subtracted, may have negatives)
+- **Confidence** = DFT magnitude x signal presence (mic level gate)
+- **Phase correction** at 30% per 150ms cycle (was 10% with cross-correlation)
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
 **Current test results:**
-- autoCorr ~0.03 (positive — pattern repeats, but weakly)
-- peakiness 7-9 (good — clear dominant period in PMR landscape)
-- atTransient 0.10-0.13 (modest — phase not yet tightly locked to onsets)
+- atTransient 0.37-0.48 (strong improvement from grid-search PMR's 0.10-0.13)
+- autoCorr up to +0.93 (pattern repeats strongly)
+- BPM accuracy 0.91-0.98
 
 **Remaining work:**
-- Stronger phase correction (current rate may be too slow)
-- PMR length normalization (longer periods get artificially higher PMR — half-time bias)
+- Further phase correction tuning if needed
+- Multi-agent pattern switching (RFC ready)
 
 **Key advantages of PLP over PLL:**
 - No onset-beat classification needed (resolves circular reliability problem)
 - Octave errors are non-issues — half/double time patterns still track musically
 - BPM accuracy doesn't matter — the system tracks repeating energy patterns, not phase-locked oscillators
 - 3-source input (spectral flux, bass energy, NN onset) provides richer signal than single-channel NN onset
+- DFT magnitude inherently suppresses sub-harmonics (no PMR length normalization needed)
+- DFT phase gives beat alignment for free (no separate cross-correlation step)
 
 **PLL (v76, archived):** Abandoned March 20 — phase consistency 0.035-0.042 across all models, effectively random. Onset-gated PLL cannot converge because NN detects onsets but cannot distinguish on-beat from off-beat.
 
@@ -125,7 +128,7 @@ All frame-level FC options are well within the 10ms per-frame budget.
 
 3. **No circular dependency.** Feature extraction (raw mel frames) is independent of tempo tracking. The NN produces onset activation; ACF handles tempo estimation from spectral flux (NN-independent). PLP extracts repeating energy patterns for phase/pulse synthesis.
 
-4. **ACF for period estimation (simplified).** Spectral flux (HWR) feeds ACF. Percival harmonic enhancement, Rayleigh prior, comb filter bank, and template matching all removed in v80. PLP grid-search PMR selects optimal period across 3 sources (spectral flux, bass energy, NN onset).
+4. **ACF for period estimation (simplified).** Spectral flux (HWR) feeds ACF. Percival harmonic enhancement, Rayleigh prior, comb filter bank, and template matching all removed in v80. PLP Fourier tempogram (Goertzel DFT) selects optimal period across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) — DFT magnitude selects period, DFT phase gives alignment.
 
 5. **Downbeat deferred.** System focuses on onset detection + BPM + pulse. Downbeat tracking deferred indefinitely.
 
@@ -292,9 +295,9 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **PLP pattern alignment — PRIMARY.** Grid-search PMR finds the right period (peakiness 7-9, autoCorr positive) but atTransient is still modest (0.10-0.13). Phase correction may need to be faster. PMR has half-time bias (longer periods get artificially higher PMR without length normalization).
+1. **PLP pattern alignment — SUBSTANTIALLY IMPROVED.** Fourier tempogram (Goertzel DFT) replaced grid-search PMR. DFT magnitude inherently suppresses sub-harmonics (no PMR length normalization needed). DFT phase gives beat alignment for free. atTransient improved from 0.10-0.13 to 0.37-0.48. autoCorr up to +0.93. BPM accuracy 0.91-0.98. Phase correction at 30% per 150ms cycle.
 
-2. ~~**Onset/phase circular reliability problem — RESOLVED.**~~ PLP architecture eliminates the circular dependency. PLP uses spectral flux, bass energy, and NN onset (3 sources) to extract repeating patterns via grid-search PMR. The NN onset detector continues to drive visual sparks/flashes independently.
+2. ~~**Onset/phase circular reliability problem — RESOLVED.**~~ PLP architecture eliminates the circular dependency. PLP uses Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) to extract repeating patterns. The NN onset detector continues to drive visual sparks/flashes independently.
 
 3. ~~**~135 BPM gravity well — NON-ISSUE.**~~ With PLP, octave errors are non-issues. Half/double time patterns still track musically.
 
@@ -313,11 +316,11 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Novel-1D | 2022 | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+PLP (grid-search PMR) (mic-in-room, nRF52840) | All Onsets F1=0.787 (v3 deployed). PLP deployed v80. |
+| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+PLP (Fourier tempogram) (mic-in-room, nRF52840) | All Onsets F1=0.787 (v3 deployed). PLP deployed v80. atTransient 0.37-0.48. |
 
 **Note:** SOTA table previously listed Beat F1 (onset-vs-metrical-grid alignment). This metric is not comparable to our onset F1. SOTA systems are evaluated on line-in audio with standardized beat annotations; our system detects acoustic onsets through a microphone in a room.
 
-**Key insight:** SOTA systems use strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN provides learned onset activation for visual pulse; spectral flux feeds ACF for tempo estimation; PLP extracts repeating energy patterns via grid-search PMR across 3 sources (spectral flux, bass energy, NN onset) for phase and pulse synthesis. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
+**Key insight:** SOTA systems use strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN provides learned onset activation for visual pulse; spectral flux feeds ACF for tempo estimation; PLP extracts repeating energy patterns via Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) for phase and pulse synthesis — DFT magnitude selects period, DFT phase gives alignment. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
 
 ## Known Limitations
 
@@ -330,7 +333,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | DnB half-time detection | librosa and firmware both detect ~117 vs ~170 | **None** — acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** — organic mode is correct | -- |
 | trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** — energy-reactive acceptable | -- |
-| PLP atTransient low (0.10-0.13) | Phase correction too slow or PMR half-time bias | **Medium** — pulse not tightly locked to onsets | Increase phase correction rate, normalize PMR by period length |
+| PLP atTransient improved (0.37-0.48) | Fourier tempogram approach working well | **Low** — substantially improved phase alignment | Further tuning if needed |
 
 ## Closed Investigations (v28-v65)
 
