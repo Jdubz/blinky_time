@@ -372,19 +372,20 @@ void AudioTracker::updatePlpAnalysis() {
     }
     if (epochs < 2) return;
 
-    // Normalize to [0, 1], then apply contrast via power-law
-    float maxVal = 0.0f;
+    // Normalize to [0, 1] using min-max (signal is mean-subtracted, may have negatives)
+    float minVal = patternAccum[0], maxVal = patternAccum[0];
     for (int j = 0; j < patLen; j++) {
         patternAccum[j] /= epochs;
+        if (patternAccum[j] < minVal) minVal = patternAccum[j];
         if (patternAccum[j] > maxVal) maxVal = patternAccum[j];
     }
-    if (maxVal > 0.0f) {
+    float range = maxVal - minVal;
+    if (range > 1e-10f) {
         for (int j = 0; j < patLen; j++) {
-            float normalized = patternAccum[j] / maxVal;
+            float normalized = (patternAccum[j] - minVal) / range;
             plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
     } else {
-        // Degenerate / all-zero pattern: clear to avoid stale data in cross-correlation
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
