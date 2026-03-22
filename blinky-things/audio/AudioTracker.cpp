@@ -282,8 +282,8 @@ void AudioTracker::runAutocorrelation() {
             float dftReal = s1 - s2 * cosOmega;
             float dftImag = s2 * sinOmega;
 
-            // Magnitude (normalized by sample count for fair comparison)
-            float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / count;
+            // Magnitude (normalize by sqrt(count) for fair comparison across sources)
+            float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
 
             if (mag > bestMag) {
                 bestMag = mag;
@@ -313,7 +313,8 @@ void AudioTracker::runAutocorrelation() {
     if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
     // --- Periodicity strength from DFT magnitude ---
-    float newStrength = clampf(bestMag * 5.0f, 0.0f, 1.0f);
+    // With sqrt(N) normalization, magnitude ~1.0 for a clearly periodic signal
+    float newStrength = clampf(bestMag, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
 
     // BPM from best period (informational — PLP uses plpBestPeriod_ directly)
@@ -390,7 +391,7 @@ void AudioTracker::updatePlpAnalysis() {
     // --- 3. PLP confidence from DFT magnitude + signal presence ---
     // DFT magnitude measures periodicity strength at the winning frequency.
     // Gate by mic level to prevent ambient noise from spurious patterns.
-    float dftConf = clampf(plpBestPmr_ * 5.0f, 0.0f, 1.0f);
+    float dftConf = clampf(plpBestPmr_, 0.0f, 1.0f);
     float signalPresence = clampf(mic_.getLevel() / 0.10f, 0.0f, 1.0f);
     float targetConf = dftConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
