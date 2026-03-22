@@ -233,8 +233,19 @@ void AudioTracker::runAutocorrelation() {
     // sub-harmonics (half-time) because a sub-harmonic sinusoid anti-correlates
     // with half the onset peaks. (Grosche & Mueller 2011)
 
-    const float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
+    float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
     const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
+
+    // Mean-subtract each source (critical for DFT — DC leakage otherwise
+    // dominates all frequency bins, making periodic components invisible)
+    for (int src = 0; src < 3; src++) {
+        int count = sourceCounts[src];
+        if (count < 20) continue;
+        float mean = 0.0f;
+        for (int i = 0; i < count; i++) mean += sources[src][i];
+        mean /= count;
+        for (int i = 0; i < count; i++) sources[src][i] -= mean;
+    }
 
     float bestMag = 0.0f;
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
