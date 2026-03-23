@@ -14,6 +14,22 @@ static constexpr float PHASE_SIGMA_REF = 0.08f;   // Expected RMS phase error wh
 static constexpr float PHASE_ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
 static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
 
+// Cold-start template bank: 8 common rhythmic patterns (16 bins = 16th-note resolution).
+// Used ONLY for 1-bar seeding during cold start — not for runtime matching or caching.
+// ~512 bytes flash. Each pattern normalized to sum ~1.0.
+static constexpr int NUM_SEED_TEMPLATES = 8;
+static constexpr int SEED_TEMPLATE_BINS = 16;
+static const float SEED_TEMPLATES[NUM_SEED_TEMPLATES][SEED_TEMPLATE_BINS] = {
+    {0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f},  // 4otf
+    {0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f, 0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f},  // backbeat
+    {0.35f,0.0f,0.0f,0.0f, 0.0f,0.0f,0.0f,0.0f,  0.35f,0.0f,0.0f,0.0f, 0.15f,0.0f,0.0f,0.15f}, // halftime
+    {0.20f,0.0f,0.0f,0.15f,0.0f,0.0f,0.20f,0.0f,  0.10f,0.0f,0.0f,0.0f, 0.15f,0.0f,0.20f,0.0f}, // breakbeat
+    {0.15f,0.0f,0.10f,0.0f,0.15f,0.0f,0.10f,0.0f,  0.15f,0.0f,0.10f,0.0f,0.15f,0.0f,0.10f,0.0f}, // 8th note
+    {0.25f,0.0f,0.10f,0.0f,0.0f,0.0f,0.0f,0.0f,   0.30f,0.0f,0.0f,0.10f,0.0f,0.0f,0.15f,0.10f}, // dnb
+    {0.20f,0.0f,0.0f,0.15f,0.0f,0.0f,0.20f,0.0f,  0.0f,0.0f,0.0f,0.15f, 0.20f,0.0f,0.0f,0.10f}, // dembow
+    {0.50f,0.0f,0.0f,0.0f, 0.0f,0.0f,0.0f,0.0f,  0.10f,0.0f,0.0f,0.0f, 0.20f,0.0f,0.0f,0.20f},  // sparse
+};
+
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -72,6 +88,7 @@ void AudioTracker::resetPatternMemory() {
     barEntropy_ = 1.0f;
     patternConfidence_ = 0.0f;
     patternBarsAccumulated_ = 0;
+    templateSeeded_ = false;
     lastBarBoundaryMs_ = time_.millis();
 }
 
@@ -693,6 +710,42 @@ void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
 
 void AudioTracker::computePatternStats() {
     if (patternBarsAccumulated_ < 0xFFFF) patternBarsAccumulated_++;  // Saturate to avoid wrap
+
+    // --- Cold-start template seeding (one-shot after first bar) ---
+    // After 1 bar of data, compare the emerging histogram against 8 known patterns.
+    // If a good match is found, seed the histogram with a 50/50 blend of the
+    // template and observed data. This gives the system a head start on the
+    // repeating pattern, cutting warm-up from ~8 bars to ~2 bars.
+    if (!templateSeeded_ && patternBarsAccumulated_ >= 1 && patternBarsAccumulated_ <= 3) {
+        float bestSim = 0.0f;
+        int bestIdx = -1;
+
+        // Compute cosine similarity against each template
+        float obsNorm = 0.0f;
+        for (int i = 0; i < BAR_BINS; i++) obsNorm += barBins_[i] * barBins_[i];
+        obsNorm = sqrtf(obsNorm);
+
+        if (obsNorm > 1e-6f) {
+            for (int t = 0; t < NUM_SEED_TEMPLATES; t++) {
+                float dot = 0.0f, tmplNorm = 0.0f;
+                for (int i = 0; i < BAR_BINS; i++) {
+                    dot += barBins_[i] * SEED_TEMPLATES[t][i];
+                    tmplNorm += SEED_TEMPLATES[t][i] * SEED_TEMPLATES[t][i];
+                }
+                tmplNorm = sqrtf(tmplNorm);
+                float sim = (tmplNorm > 1e-6f) ? dot / (obsNorm * tmplNorm) : 0.0f;
+                if (sim > bestSim) { bestSim = sim; bestIdx = t; }
+            }
+
+            // Seed if match is good enough (0.50 threshold — after only 1 bar, data is noisy)
+            if (bestSim > 0.50f && bestIdx >= 0) {
+                for (int i = 0; i < BAR_BINS; i++) {
+                    barBins_[i] = 0.5f * barBins_[i] + 0.5f * SEED_TEMPLATES[bestIdx][i];
+                }
+                templateSeeded_ = true;
+            }
+        }
+    }
 
     // Shannon entropy of bar histogram (normalized to [0, 1]).
     // Retained for serial diagnostics (getBarEntropy() is streamed via SerialConsole).

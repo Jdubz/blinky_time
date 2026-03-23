@@ -189,6 +189,7 @@ private:
     float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
+    bool templateSeeded_ = false;              // Cold-start template seeding (one-shot)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
