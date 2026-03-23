@@ -23,6 +23,7 @@
  *   energy        — base 0.45, boosted on each onset, decays with ~0.7s fall
  *   pulse         — fires on each onset, decays to 0 in ~0.1s
  *   phase         — 0→1 per beat, resets at each beat (120 BPM)
+ *   plpPulse      — cosine pulse synced to beat phase
  *   rhythmStrength — fixed 0.85 (strong lock)
  *   onsetDensity  — fixed 4.0 (dance music range)
  */
@@ -80,6 +81,8 @@ public:
         ac.pulse         = pulse_;
         // Phase: 0.0 on-beat → 1.0 just before next beat
         ac.phase         = fmodf(measureTime_, BEAT_DURATION) / BEAT_DURATION;
+        // Cosine pulse: 1.0 at phase=0 (on-beat), 0.0 at phase=0.5 (off-beat)
+        ac.plpPulse      = 0.5f * (1.0f + cosf(ac.phase * 2.0f * 3.14159265f));
         ac.rhythmStrength = 0.85f;
         ac.onsetDensity  = 4.0f;   // Typical dance music: 4 onsets/s
         return ac;

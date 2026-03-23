@@ -16,7 +16,7 @@ import type { AudioSample, MusicModeState } from './types.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, statSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -576,20 +576,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['ports'],
-        },
-      },
-      {
-        name: 'check_test_result',
-        description: 'Check the result of a test by reading its output file. Returns file contents if complete, or "not found" if the file does not exist yet.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            path: {
-              type: 'string',
-              description: 'Path to results JSON file',
-            },
-          },
-          required: ['path'],
         },
       },
     ],
@@ -2064,15 +2050,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         return { content: [{ type: 'text', text: result.stdout }] };
-      }
-
-      case 'check_test_result': {
-        const { path: resultPath } = args as { path: string };
-        if (!existsSync(resultPath)) {
-          return { content: [{ type: 'text', text: JSON.stringify({ status: 'not_found' }) }] };
-        }
-        const contents = readFileSync(resultPath, 'utf-8');
-        return { content: [{ type: 'text', text: contents }] };
       }
 
       default:

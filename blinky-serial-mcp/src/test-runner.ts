@@ -633,7 +633,9 @@ async function validate(args: ValidateArgs): Promise<void> {
           if (agg) {
             trackMeanBeatF1.push(agg.beatF1.mean);
             trackMeanTransientF1.push(agg.transientF1.mean);
-            if (agg.bpmAccuracy.mean > 0) trackMeanBpmAccuracy.push(agg.bpmAccuracy.mean);
+            if (typeof agg.bpmAccuracy?.mean === 'number' && !Number.isNaN(agg.bpmAccuracy.mean)) {
+              trackMeanBpmAccuracy.push(agg.bpmAccuracy.mean);
+            }
           }
         }
       }

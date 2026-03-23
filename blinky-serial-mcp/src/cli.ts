@@ -10,8 +10,8 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { spawn } from 'child_process';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -43,6 +43,7 @@ async function main() {
   else console.error('Tracks: all');
 
   // Spawn the MCP server as a subprocess and connect via stdio
+  const __dirname = dirname(fileURLToPath(import.meta.url));
   const serverPath = join(__dirname, 'index.js');
   const transport = new StdioClientTransport({
     command: 'node',
