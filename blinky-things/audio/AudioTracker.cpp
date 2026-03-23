@@ -363,10 +363,9 @@ void AudioTracker::addBassSample(float bassEnergy) {
 }
 
 void AudioTracker::updatePlpAnalysis() {
-    // --- 1. Use raw period from grid search (not BPM-smoothed) ---
-    // The grid search found the exact period with best PMR. Using the BPM-smoothed
-    // beatPeriodFrames_ introduces a round-trip error (period→BPM→EMA→period)
-    // that can shift the fold by ±1 frame and degrade coherence.
+    // --- 1. Use raw period from Fourier tempogram (not BPM-smoothed) ---
+    // Using the BPM-smoothed beatPeriodFrames_ introduces a round-trip error
+    // (period→BPM→EMA→period) that can shift the fold by ±1 frame and degrade coherence.
     int patLen = plpBestPeriod_;
     if (patLen < 2) patLen = 2;
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
@@ -651,7 +650,7 @@ void AudioTracker::checkPatternSlots() {
         // Reset phase correction for fast re-convergence at new section
         phaseErrVar_ = 0.25f;
 
-    } else if (bestSlot == activeSlot_ && bestSim > 0.50f && plpConfidence_ > slotSaveMinConf) {
+    } else if (bestSlot == activeSlot_ && bestSim > slotNewThreshold && plpConfidence_ > slotSaveMinConf) {
         // REINFORCE active slot with current PLP pattern
         for (int i = 0; i < SLOT_BINS; i++) {
             slots_[activeSlot_].bins[i] =
@@ -660,6 +659,7 @@ void AudioTracker::checkPatternSlots() {
         }
         slots_[activeSlot_].totalBars++;
         slots_[activeSlot_].confidence = plpConfidence_;
+        slots_[activeSlot_].age = 0;  // Keep active slot fresh for LRU
 
     } else if (bestSim < slotNewThreshold && plpConfidence_ > slotSaveMinConf) {
         // NEW SECTION: allocate a new slot
@@ -700,16 +700,17 @@ void AudioTracker::checkPatternSlots() {
             }
         }
         if (bestTemplate >= 0 && bestTemplateSim > 0.50f) {
-            // Blend template into slot
+            // Blend template into slot (use slotSeedBlend for consistency with recall path)
+            float seedBlend = slotSeedBlend;
             for (int i = 0; i < SLOT_BINS; i++) {
                 slots_[activeSlot_].bins[i] =
-                    0.5f * slots_[activeSlot_].bins[i] + 0.5f * SEED_TEMPLATES[bestTemplate][i];
+                    (1.0f - seedBlend) * slots_[activeSlot_].bins[i] + seedBlend * SEED_TEMPLATES[bestTemplate][i];
             }
             // Also seed PLP pattern
             float tempPattern[MAX_PATTERN_LEN];
             resamplePattern(slots_[activeSlot_].bins, SLOT_BINS, tempPattern, plpPatternLen_);
             for (int j = 0; j < plpPatternLen_; j++) {
-                plpPattern_[j] = tempPattern[j] * 0.5f + plpPattern_[j] * 0.5f;
+                plpPattern_[j] = tempPattern[j] * seedBlend + plpPattern_[j] * (1.0f - seedBlend);
             }
         }
         slots_[activeSlot_].seeded = true;  // One-shot: don't re-seed this slot
