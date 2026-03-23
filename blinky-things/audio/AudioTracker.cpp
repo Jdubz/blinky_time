@@ -463,10 +463,11 @@ void AudioTracker::updatePlpAnalysis() {
     if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
     if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
-    // --- 4. PLP confidence from Fisher's g-statistic + steep signal gate ---
-    // Fisher's g measures how concentrated the DFT energy is at one frequency.
-    // Map [0.05, 0.30] → [0, 1] for confidence (g>0.30 = p<0.01 significance).
-    float dftConf = clampf((plpFisherG_ - 0.05f) / 0.25f, 0.0f, 1.0f);
+    // --- 4. PLP confidence from DFT magnitude + steep signal gate ---
+    // Use DFT magnitude directly (not Fisher's g — g penalizes tracks with multiple
+    // similarly-strong periods, common in syncopated music). Soft blend handles the
+    // confidence-to-output mapping without needing a principled [0,1] scale.
+    float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
 
     // Steep signal gate: transition from 0→1 over a narrow range near noise floor.
     // Once there's clearly audio (>2x noise floor), presence is 1.0 and doesn't
