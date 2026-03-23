@@ -6,7 +6,7 @@
 
 ## Current Status
 
-**Firmware:** v81 (SETTINGS_VERSION 81). AudioTracker with ACF+PLP architecture. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Beat stability gated learning. Steep signal gate for mic level. Fisher's g computed but NOT used for confidence (reverted — penalizes syncopated music). Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v82 (SETTINGS_VERSION 82). AudioTracker with ACF+PLP architecture + pattern slot cache. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. Fisher's g removed (penalized syncopated music). v77 pattern memory (IOI histogram + bar histogram) replaced by slot cache. ~20 tunable params persisted to flash. 16,464 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v3 deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 model backed up. All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Next model: v9. Downbeat detection deferred.
 
@@ -54,7 +54,7 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 **Remaining work:**
 - Further phase correction tuning if needed
-- Multi-agent pattern switching (RFC ready)
+- Pattern slot cache tuning (switch/new thresholds, seed blend ratio)
 
 **Key advantages of PLP over PLL:**
 - No onset-beat classification needed (resolves circular reliability problem)
@@ -296,7 +296,7 @@ A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring). Results: 10 wins
 
 **Status: RESEARCH ONLY**
 
-Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. ~860 states fits our memory budget. CBSS already removed (v75). Could complement PLP if additional tempo tracking robustness is needed, or serve as a period selection mechanism within the multi-agent pattern switching architecture (see `docs/RFC_MULTI_HYPOTHESIS_PATTERN_AGENTS.md`).
+Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. ~860 states fits our memory budget. CBSS already removed (v75). Could complement PLP if additional tempo tracking robustness is needed.
 
 ## Current Bottlenecks
 
@@ -306,7 +306,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 3. ~~**~135 BPM gravity well — NON-ISSUE.**~~ With PLP, octave errors are non-issues. Half/double time patterns still track musically.
 
-4. **Multi-agent pattern switching — NEXT.** RFC ready at `docs/RFC_MULTI_HYPOTHESIS_PATTERN_AGENTS.md`. Instant section switching, fill/breakdown immunity, 2-bar warm-up.
+4. ~~**Pattern section switching — DEPLOYED (v82).**~~ Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests. Instant section recall via cosine similarity matching. Replaces v77 pattern memory (IOI histogram + bar histogram).
 
 5. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed with cal63 model.
 6. ~~**Downbeat detection (DEFERRED)**~~ — System focuses on onset/BPM/pulse only.

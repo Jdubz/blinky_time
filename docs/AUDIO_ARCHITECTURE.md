@@ -4,7 +4,7 @@
 
 AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.
 
-**Current Version:** AudioTracker with ACF+PLP architecture (March 2026)
+**Current Version:** AudioTracker with ACF+PLP architecture + pattern slot cache (v82, March 2026)
 **BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF → period estimate
 **Phase/Pattern:** PLP Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Epoch-fold pattern extraction for visual pattern shape.
 **Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 PLP sources. Non-NN fallback: mic level.
@@ -16,7 +16,8 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 - **v3 (January 2026)**: Multi-hypothesis tracking (complex, phase jitter from competing corrections)
 - **v4 (February 2026)**: CBSS beat tracking (deterministic phase, counter-based beats)
 - **v5 (March 2026)**: AudioTracker — ACF+Comb+PLL, replaces AudioController CBSS. ~400 lines, ~10 params (vs ~2100 lines, ~56 params). No CBSS, no Bayesian fusion.
-- **v6 (March 2026, deployed)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns). Beat stability gated learning. Fisher's g computed but NOT used for confidence (reverted — penalizes syncopated music). PLL proven ineffective: phase consistency ~0.04 across all models (essentially random). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
+- **v6 (March 2026)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram. Soft blend, cold-start template seeding, beat stability gated learning. PLL proven ineffective (phase consistency ~0.04).
+- **v7 (March 2026, deployed)**: Pattern slot cache — 4-slot LRU of 16-bin PLP pattern digests for instant section recall. v77 pattern memory (IOI histogram + bar histogram) replaced. Fisher's g removed (penalized syncopated music). downbeat/beatInMeasure removed from AudioControl. Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 
 ---
 
@@ -96,7 +97,7 @@ Generators (HeatFire, Water, Lightning)
 
 1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
 
-2. **PLP Phase/Pattern Extraction (deployed)**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction used for the actual visual pattern shape. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold — confidence naturally approaches 0 during silence). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Fisher's g computed for diagnostics but NOT used for confidence (reverted — penalizes syncopated music). This replaced the PLL, which was proven ineffective (phase consistency ~0.04, essentially random).
+2. **PLP Phase/Pattern Extraction (deployed)**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction used for the actual visual pattern shape. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold — confidence naturally approaches 0 during silence). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests for instant section recall. This replaced the PLL, which was proven ineffective (phase consistency ~0.04, essentially random).
 
 3. **ACF Tempo Estimation**: Bare ACF peak-finding on spectral flux. Percival harmonic enhancement, Rayleigh prior, and comb filter bank removed in v80 — octave errors are non-issues with PLP.
 
@@ -135,7 +136,7 @@ Generators (HeatFire, Water, Lightning)
 16. **Phase Correction**: Correct phase toward DFT-derived alignment with adaptive rate (EMA variance-driven)
 17. **Epoch-fold Pattern**: Fold winning source at selected period for visual pattern shape
 18. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
-19. **Confidence**: DFT magnitude (not Fisher's g — reverted) x signal presence (steep mic level gate)
+19. **Confidence**: DFT magnitude x signal presence (steep mic level gate)
 
 ### Evolution: Why ACF+Comb, and Why PLL Failed
 
@@ -204,7 +205,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ### Phase Tracking (PLP — Fourier Tempogram)
 
-PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Beat stability gated learning provides fill/breakdown immunity. Fisher's g computed for diagnostics but NOT used for confidence (penalizes syncopated music — DFT magnitude used instead). `plpActivation` parameter exists in settings but is vestigial (soft blend uses raw confidence). `plpSignalFloor` controls the steep mic-level gate (0→1 transition near noise floor).
+PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Beat stability gated learning provides fill/breakdown immunity. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests — cached PLP patterns recalled instantly when a previously-heard section returns (cosine similarity > 0.70). `plpActivation` parameter exists in settings but is vestigial (soft blend uses raw confidence). `plpSignalFloor` controls the steep mic-level gate (0→1 transition near noise floor).
 
 ### Rhythm Activation
 
