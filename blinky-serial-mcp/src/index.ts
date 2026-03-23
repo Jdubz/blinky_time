@@ -13,10 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { DeviceManager } from './device-manager.js';
 import type { AudioSample, MusicModeState } from './types.js';
-import { scoreDeviceRun, formatScoreSummary, matchEventsF1, computeStats, roundStats, estimateAudioLatency, computeBpmMetrics } from './lib/scoring.js';
-import { discoverTracks } from './lib/track-discovery.js';
-import type { GroundTruth, DeviceRunScore } from './lib/types.js';
-import { spawn, exec, type ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync } from 'fs';
@@ -30,27 +27,41 @@ const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'blinky-test-player', 'dist
 // Path to test results directory
 const TEST_RESULTS_DIR = join(__dirname, '..', '..', 'test-results');
 
-// Gap between runs/tracks to let AGC and detectors settle
-const INTER_RUN_GAP_MS = 5000;
-
-// Track the current ffplay process so we can kill it before starting a new test
-let activeFFplay: ChildProcess | null = null;
+// Path to standalone test runner
+const TEST_RUNNER_PATH = join(__dirname, 'test-runner.js');
 
 /**
- * Kill any orphan ffplay processes. Called before every test to prevent
- * overlapping audio (all devices share the same speakers).
+ * Spawn the standalone test runner as a subprocess.
+ * Disconnects MCP sessions on the requested ports first (to release serial locks),
+ * then spawns the test runner which manages its own connections.
+ * Returns the parsed JSON result from stdout.
  */
-async function killOrphanAudio(): Promise<void> {
-  // Kill our tracked child first
-  if (activeFFplay && !activeFFplay.killed) {
-    activeFFplay.kill('SIGKILL');
-    activeFFplay = null;
+async function spawnTestRunner(
+  args: string[],
+  portsToRelease: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Disconnect MCP sessions on ports the test runner will use
+  for (const port of portsToRelease) {
+    try { await manager.disconnect(port); } catch { /* already disconnected */ }
   }
-  // Also kill any system-wide ffplay (catches orphans from crashed/aborted runs)
-  await new Promise<void>((resolve) => {
-    exec('pkill -9 ffplay', (err) => {
-      // pkill returns non-zero if no processes matched — that's fine
-      resolve();
+
+  return new Promise((resolve) => {
+    const child = spawn('node', [TEST_RUNNER_PATH, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+
+    child.on('close', (code: number | null) => {
+      resolve({ stdout, stderr, exitCode: code ?? 1 });
+    });
+
+    child.on('error', (err: Error) => {
+      resolve({ stdout: '', stderr: err.message, exitCode: 1 });
     });
   });
 }
@@ -565,6 +576,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['ports'],
+        },
+      },
+      {
+        name: 'check_test_result',
+        description: 'Check the result of a test by reading its output file. Returns file contents if complete, or "not found" if the file does not exist yet.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Path to results JSON file',
+            },
+          },
+          required: ['path'],
         },
       },
     ],
@@ -1921,7 +1946,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_music_test': {
-        await killOrphanAudio();
         const {
           audio_file: audioFile,
           ground_truth: groundTruthFile,
@@ -1940,183 +1964,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           runs?: number;
         };
 
-        // Validate files exist
-        if (!existsSync(audioFile)) {
-          throw new Error(`Audio file not found: ${audioFile}`);
+        if (!existsSync(audioFile)) throw new Error(`Audio file not found: ${audioFile}`);
+        if (!existsSync(groundTruthFile)) throw new Error(`Ground truth file not found: ${groundTruthFile}`);
+
+        const cliArgs = ['run-track', '--audio', audioFile, '--ground-truth', groundTruthFile, '--ports', port];
+        if (overrideDurationMs) cliArgs.push('--duration', String(overrideDurationMs));
+        if (gain !== undefined) cliArgs.push('--gain', String(gain));
+        if (requestedRuns) cliArgs.push('--runs', String(requestedRuns));
+        if (preTestCommands) {
+          cliArgs.push('--commands', preTestCommands.join(','));
         }
-        if (!existsSync(groundTruthFile)) {
-          throw new Error(`Ground truth file not found: ${groundTruthFile}`);
+
+        const result = await spawnTestRunner(cliArgs, [port]);
+
+        if (result.exitCode !== 0) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}` }) }],
+          };
         }
 
-        // Load ground truth
-        const gtData = JSON.parse(readFileSync(groundTruthFile, 'utf-8')) as {
-          pattern: string;
-          durationMs: number;
-          bpm?: number;
-          hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
-        };
-
-        const { session: musicTestSession } = await manager.connect(port);
-        try {
-          // Lock hardware gain if specified
-          if (gain !== undefined) {
-            await musicTestSession.serial.sendCommand(`set hwgainlock ${gain}`);
-          }
-
-          // Send pre-test commands (e.g., detector isolation)
-          if (preTestCommands && preTestCommands.length > 0) {
-            for (const cmd of preTestCommands) {
-              await musicTestSession.serial.sendCommand(cmd);
-            }
-          }
-
-          await musicTestSession.serial.sendCommand('stream fast');
-
-          const numRuns = Math.max(1, Math.min(10, requestedRuns || 1));
-          const perRunScores: DeviceRunScore[] = [];
-          const perRunSummaries: Array<Record<string, unknown>> = [];
-          let lastPlaybackWarning: string | undefined;
-
-          for (let runIdx = 0; runIdx < numRuns; runIdx++) {
-            // Start recording AFTER stream fast — avoid capturing events during command response
-            musicTestSession.startTestRecording();
-
-            // Play audio file directly with ffplay (no browser needed)
-            const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
-            if (overrideDurationMs) {
-              ffplayArgs.push('-t', (overrideDurationMs / 1000).toString());
-            }
-
-            const audioStartTime = Date.now();
-            const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-              const child = spawn('ffplay', ffplayArgs, {
-                stdio: ['ignore', 'pipe', 'pipe'],
-              });
-              activeFFplay = child;
-
-              let stderr = '';
-              child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-              child.on('close', (code: number | null) => {
-                activeFFplay = null;
-                resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
-              });
-              child.on('error', (err: Error) => {
-                activeFFplay = null;
-                resolve({ success: false, error: err.message });
-              });
-            });
-
-            // Always stop recording and collect data
-            const musicTestData = musicTestSession.stopTestRecording();
-
-            // Hard failure only if ffplay couldn't spawn at all
-            if (!result.success) {
-              return {
-                content: [{ type: 'text', text: JSON.stringify({ error: result.error }, null, 2) }],
-              };
-            }
-
-            lastPlaybackWarning = result.error;
-
-            // Score this run using shared scoring function
-            const score = scoreDeviceRun(musicTestData, audioStartTime, gtData);
-            perRunScores.push(score);
-
-            const duration = overrideDurationMs || gtData.durationMs || musicTestData.duration;
-
-            // Save detailed results for this run
-            ensureTestResultsDir();
-            const timestamp = Date.now();
-            const runSuffix = numRuns > 1 ? `-run${runIdx + 1}` : '';
-            const detailsFilename = `music-${gtData.pattern}${runSuffix}-${timestamp}.json`;
-            const detailsPath = join(TEST_RESULTS_DIR, detailsFilename);
-
-            const fullResults = {
-              type: 'music_test',
-              pattern: gtData.pattern,
-              audioFile,
-              run: numRuns > 1 ? runIdx + 1 : undefined,
-              totalRuns: numRuns > 1 ? numRuns : undefined,
-              timestamp: new Date(timestamp).toISOString(),
-              durationMs: duration,
-              timingOffsetMs: score.timingOffsetMs,
-              audioLatencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
-              beatTracking: { ...score.beatTracking, toleranceSec: 0.07 },
-              transientTracking: score.transientTracking,
-              musicMode: score.musicMode,
-              diagnostics: score.diagnostics,
-              groundTruth: gtData,
-              detections: score.adjustedDetections,
-              musicStates: score.adjustedMusicStates,
-              beatEvents: score.adjustedBeatEvents,
-            };
-
-            writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
-            if (numRuns === 1) {
-              // Only write latest for single-run (multi-run results are in per-run detail files)
-              writeFileSync(join(TEST_RESULTS_DIR, 'latest-music.json'), JSON.stringify(fullResults, null, 2));
-            }
-
-            // Build per-run compact summary
-            perRunSummaries.push({
-              ...(numRuns > 1 ? { run: runIdx + 1 } : {}),
-              ...formatScoreSummary(score),
-              detailsFile: detailsFilename,
-            });
-
-            // Inter-run gap
-            if (runIdx < numRuns - 1) {
-              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
-            }
-          }
-
-          // Build output
-          if (numRuns === 1) {
-            // Single run: backward-compatible format
-            const s = perRunSummaries[0];
-            return {
-              content: [{ type: 'text', text: JSON.stringify({
-                pattern: gtData.pattern,
-                durationMs: overrideDurationMs || gtData.durationMs || perRunScores[0].audioDurationSec * 1000,
-                audioDurationSec: Math.round(perRunScores[0].audioDurationSec * 10) / 10,
-                ...(lastPlaybackWarning ? { playbackWarning: lastPlaybackWarning } : {}),
-                ...s,
-              }) }],
-            };
-          } else {
-            // Multi-run: aggregate statistics
-            const aggregate = {
-              beatF1: roundStats(computeStats(perRunScores.map(s => s.beatTracking.f1))),
-              beatPrecision: roundStats(computeStats(perRunScores.map(s => s.beatTracking.precision))),
-              beatRecall: roundStats(computeStats(perRunScores.map(s => s.beatTracking.recall))),
-              bpmAccuracy: roundStats(computeStats(perRunScores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
-              transientF1: roundStats(computeStats(perRunScores.map(s => s.transientTracking.f1))),
-              latencyMs: roundStats(computeStats(perRunScores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!))),
-            };
-
-            return {
-              content: [{ type: 'text', text: JSON.stringify({
-                pattern: gtData.pattern,
-                runs: numRuns,
-                aggregate,
-                perRun: perRunSummaries,
-              }) }],
-            };
-          }
-        } finally {
-          if (gain !== undefined && musicTestSession.getState().connected) {
-            try {
-              await musicTestSession.serial.sendCommand('set hwgainlock 255');
-            } catch (err) {
-              console.error('Failed to unlock hardware gain:', err);
-            }
-          }
-          await manager.disconnect(port);
-        }
+        return { content: [{ type: 'text', text: result.stdout }] };
       }
 
       case 'run_music_test_multi': {
-        await killOrphanAudio();
         const {
           ports: multiPorts,
           audio_file: multiAudioFile,
@@ -2135,195 +2005,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           runs?: number;
         };
 
-        // Validate inputs
         if (!existsSync(multiAudioFile)) throw new Error(`Audio file not found: ${multiAudioFile}`);
         if (!existsSync(multiGtFile)) throw new Error(`Ground truth file not found: ${multiGtFile}`);
         if (!multiPorts || multiPorts.length === 0) throw new Error('At least one port required');
 
-        // Load ground truth
-        const multiGtData = JSON.parse(readFileSync(multiGtFile, 'utf-8')) as GroundTruth;
+        const cliArgs = ['run-track', '--audio', multiAudioFile, '--ground-truth', multiGtFile, '--ports', multiPorts.join(',')];
+        if (multiDurationMs) cliArgs.push('--duration', String(multiDurationMs));
+        if (multiGain !== undefined) cliArgs.push('--gain', String(multiGain));
+        if (multiRequestedRuns) cliArgs.push('--runs', String(multiRequestedRuns));
+        if (multiPortCommands) cliArgs.push('--port-commands', JSON.stringify(multiPortCommands));
 
-        const multiNumRuns = Math.max(1, Math.min(10, multiRequestedRuns || 1));
+        const result = await spawnTestRunner(cliArgs, multiPorts);
 
-        // Connect all devices in parallel, handling partial failures
-        const connectedSessions: Array<{ port: string; session: Awaited<ReturnType<typeof manager.connect>>['session'] }> = [];
-        try {
-          const connectResults = await Promise.allSettled(multiPorts.map(async (p) => {
-            const { session } = await manager.connect(p);
-            return { port: p, session };
-          }));
-          const connectFailures: string[] = [];
-          for (let idx = 0; idx < connectResults.length; idx++) {
-            const result = connectResults[idx];
-            if (result.status === 'fulfilled') {
-              connectedSessions.push(result.value);
-            } else {
-              const reason = result.reason as Error;
-              connectFailures.push(`${multiPorts[idx]}: ${reason.message ?? String(result.reason)}`);
-            }
-          }
-          if (connectFailures.length > 0) {
-            throw new Error(`Failed to connect some ports: ${connectFailures.join('; ')}`);
-          }
-          // Lock gain on all devices if specified
-          if (multiGain !== undefined) {
-            await Promise.all(connectedSessions.map(({ session }) =>
-              session.serial.sendCommand(`set hwgainlock ${multiGain}`)
-            ));
-          }
-
-          // Send per-port commands for A/B configuration (parallel across devices)
-          if (multiPortCommands) {
-            await Promise.all(Object.entries(multiPortCommands).map(async ([p, cmds]) => {
-              const s = connectedSessions.find(x => x.port === p);
-              if (s) {
-                for (const cmd of cmds) {
-                  await s.session.serial.sendCommand(cmd);
-                }
-              }
-            }));
-          }
-
-          // Start streaming on all devices
-          await Promise.all(connectedSessions.map(({ session }) =>
-            session.serial.sendCommand('stream fast')
-          ));
-
-          // Per-device per-run scores
-          const allRunScores: Map<string, DeviceRunScore[]> = new Map();
-          for (const { port: p } of connectedSessions) {
-            allRunScores.set(p, []);
-          }
-          let lastPlaybackWarning: string | undefined;
-
-          for (let runIdx = 0; runIdx < multiNumRuns; runIdx++) {
-            // Start recording on all devices (synchronized)
-            for (const { session } of connectedSessions) {
-              session.startTestRecording();
-            }
-
-            // Play audio file ONCE through speakers
-            const multiAudioStartTime = Date.now();
-            const multiFFplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', multiAudioFile];
-            if (multiDurationMs) {
-              multiFFplayArgs.push('-t', (multiDurationMs / 1000).toString());
-            }
-
-            const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-              const child = spawn('ffplay', multiFFplayArgs, {
-                stdio: ['ignore', 'pipe', 'pipe'],
-              });
-              activeFFplay = child;
-              let stderr = '';
-              child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-              child.on('close', (code: number | null) => {
-                activeFFplay = null;
-                resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
-              });
-              child.on('error', (err: Error) => {
-                activeFFplay = null;
-                resolve({ success: false, error: err.message });
-              });
-            });
-
-            // Stop recording on all devices
-            const deviceResults: Array<{ port: string; data: ReturnType<import('./device-session.js').DeviceSession['stopTestRecording']> }> = [];
-            for (const { port: p, session } of connectedSessions) {
-              deviceResults.push({ port: p, data: session.stopTestRecording() });
-            }
-
-            if (!playResult.success) {
-              return {
-                content: [{ type: 'text', text: JSON.stringify({ error: `Audio playback failed: ${playResult.error}` }, null, 2) }],
-              };
-            }
-            lastPlaybackWarning = playResult.error;
-
-            // Score each device for this run
-            for (const { port: devPort, data } of deviceResults) {
-              const score = scoreDeviceRun(data, multiAudioStartTime, multiGtData);
-              allRunScores.get(devPort)!.push(score);
-            }
-
-            // Inter-run gap
-            if (runIdx < multiNumRuns - 1) {
-              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
-            }
-          }
-
-          // Build output
-          if (multiNumRuns === 1) {
-            // Single run: backward-compatible format
-            const perDeviceSummaries = connectedSessions.map(({ port: devPort }) => {
-              const score = allRunScores.get(devPort)![0];
-              return {
-                port: devPort,
-                ...formatScoreSummary(score),
-              };
-            });
-
-            return {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({
-                  pattern: multiGtData.pattern,
-                  audioDurationSec: multiDurationMs ? Math.round(multiDurationMs / 100) / 10 : null,
-                  deviceCount: perDeviceSummaries.length,
-                  ...(lastPlaybackWarning ? { playbackWarning: lastPlaybackWarning } : {}),
-                  perDevice: perDeviceSummaries,
-                }, null, 2),
-              }],
-            };
-          } else {
-            // Multi-run: per-device aggregates
-            const perDeviceAggregates = connectedSessions.map(({ port: devPort }) => {
-              const scores = allRunScores.get(devPort)!;
-              return {
-                port: devPort,
-                runs: scores.length,
-                aggregate: {
-                  beatF1: roundStats(computeStats(scores.map(s => s.beatTracking.f1))),
-                  bpmAccuracy: roundStats(computeStats(scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
-                  transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
-                  latencyMs: roundStats(computeStats(scores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!))),
-                },
-                perRun: scores.map((s, i) => ({
-                  run: i + 1,
-                  ...formatScoreSummary(s),
-                })),
-              };
-            });
-
-            return {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({
-                  pattern: multiGtData.pattern,
-                  runs: multiNumRuns,
-                  deviceCount: connectedSessions.length,
-                  ...(lastPlaybackWarning ? { playbackWarning: lastPlaybackWarning } : {}),
-                  perDevice: perDeviceAggregates,
-                }, null, 2),
-              }],
-            };
-          }
-        } finally {
-          // Always cleanup: unlock gain, disconnect all (parallel)
-          if (multiGain !== undefined) {
-            await Promise.all(connectedSessions.map(({ session }) =>
-              session.getState().connected
-                ? session.serial.sendCommand('set hwgainlock 255').catch(() => {})
-                : Promise.resolve()
-            ));
-          }
-          await Promise.all(connectedSessions.map(({ port: p }) =>
-            manager.disconnect(p).catch(() => {})
-          ));
+        if (result.exitCode !== 0) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}` }) }],
+          };
         }
+
+        return { content: [{ type: 'text', text: result.stdout }] };
       }
 
       case 'run_validation_suite': {
-        await killOrphanAudio();
         const {
           ports: valPorts,
           runs: valRunsParam,
@@ -2344,278 +2047,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (!valPorts || valPorts.length === 0) throw new Error('At least one port required');
 
-        const valNumRuns = Math.max(1, Math.min(10, valRunsParam || 3));
+        const cliArgs = ['validate', '--ports', valPorts.join(',')];
+        if (valDurationMs) cliArgs.push('--duration', String(valDurationMs));
+        if (valRunsParam) cliArgs.push('--runs', String(valRunsParam));
+        if (valGain !== undefined) cliArgs.push('--gain', String(valGain));
+        if (valTrackNames) cliArgs.push('--tracks', valTrackNames.join(','));
+        if (valTrackDir) cliArgs.push('--track-dir', valTrackDir);
+        if (valPortCommands) cliArgs.push('--port-commands', JSON.stringify(valPortCommands));
 
-        // Discover tracks
-        const defaultTrackDir = join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
-        const trackDir = valTrackDir || defaultTrackDir;
-        let allTracks = discoverTracks(trackDir);
-        if (allTracks.length === 0) throw new Error(`No tracks found in ${trackDir}`);
+        const result = await spawnTestRunner(cliArgs, valPorts);
 
-        // Filter to requested tracks if specified
-        if (valTrackNames && valTrackNames.length > 0) {
-          allTracks = allTracks.filter(t => valTrackNames.includes(t.name));
-          if (allTracks.length === 0) throw new Error(`None of the requested tracks found in ${trackDir}`);
-        }
-
-        // Connect all devices
-        const valSessions: Array<{ port: string; session: Awaited<ReturnType<typeof manager.connect>>['session'] }> = [];
-        try {
-          const connectResults = await Promise.allSettled(valPorts.map(async (p) => {
-            const { session } = await manager.connect(p);
-            return { port: p, session };
-          }));
-          const failures: string[] = [];
-          for (let i = 0; i < connectResults.length; i++) {
-            const r = connectResults[i];
-            if (r.status === 'fulfilled') {
-              valSessions.push(r.value);
-            } else {
-              failures.push(`${valPorts[i]}: ${(r.reason as Error).message}`);
-            }
-          }
-          if (failures.length > 0) throw new Error(`Failed to connect: ${failures.join('; ')}`);
-
-          // Lock gain if specified
-          if (valGain !== undefined) {
-            await Promise.all(valSessions.map(({ session }) =>
-              session.serial.sendCommand(`set hwgainlock ${valGain}`)
-            ));
-          }
-
-          // Send per-port commands
-          if (valPortCommands) {
-            await Promise.all(Object.entries(valPortCommands).map(async ([p, cmds]) => {
-              const s = valSessions.find(x => x.port === p);
-              if (s) {
-                for (const cmd of cmds) {
-                  await s.session.serial.sendCommand(cmd);
-                }
-              }
-            }));
-          }
-
-          // Start streaming on all devices
-          await Promise.all(valSessions.map(({ session }) =>
-            session.serial.sendCommand('stream fast')
-          ));
-
-          // Run all tracks × all runs
-          // Results are written incrementally after each track so interrupted suites
-          // only lose the currently-running track's data.
-          ensureTestResultsDir();
-          const valStartTimestamp = Date.now();
-          const valFilename = `validation-suite-${valStartTimestamp}.json`;
-          const valPath = join(TEST_RESULTS_DIR, valFilename);
-
-          const trackResults: Array<{
-            track: string;
-            bpm: number;
-            error?: string;
-            perDevice: Array<{
-              port: string;
-              aggregate: { beatF1: ReturnType<typeof roundStats>; bpmAccuracy: ReturnType<typeof roundStats>; transientF1: ReturnType<typeof roundStats> };
-              perRun?: Array<{ run: number; beatF1: number; bpmAccuracy: number | null; transientF1: number; latencyMs: number | null }>;
-            }>;
-          }> = [];
-
-          for (let trackIdx = 0; trackIdx < allTracks.length; trackIdx++) {
-            const track = allTracks[trackIdx];
-            const gtData = JSON.parse(readFileSync(track.groundTruth, 'utf-8')) as GroundTruth;
-
-            // Per-device per-run scores for this track
-            const trackDeviceScores: Map<string, DeviceRunScore[]> = new Map();
-            for (const { port: p } of valSessions) {
-              trackDeviceScores.set(p, []);
-            }
-
-            let trackFailed = false;
-            for (let runIdx = 0; runIdx < valNumRuns; runIdx++) {
-              // Start recording on all devices
-              for (const { session } of valSessions) {
-                session.startTestRecording();
-              }
-
-              // Play audio
-              const audioStartTime = Date.now();
-              const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', track.audioFile];
-              if (valDurationMs) {
-                ffplayArgs.push('-t', (valDurationMs / 1000).toString());
-              }
-
-              const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-                const child = spawn('ffplay', ffplayArgs, {
-                  stdio: ['ignore', 'pipe', 'pipe'],
-                });
-                activeFFplay = child;
-                let settled = false;
-                let stderr = '';
-                child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
-                child.on('error', (err) => {
-                  activeFFplay = null;
-                  if (settled) return;
-                  settled = true;
-                  resolve({ success: false, error: `Failed to start ffplay: ${err.message}` });
-                });
-                child.on('close', (code) => {
-                  activeFFplay = null;
-                  if (settled) return;
-                  settled = true;
-                  if (code !== 0) {
-                    resolve({ success: false, error: `ffplay exited with code ${code}: ${stderr.slice(0, 200)}` });
-                  } else {
-                    resolve({ success: true, error: stderr ? `ffplay warning: ${stderr.slice(0, 200)}` : undefined });
-                  }
-                });
-              });
-
-              if (!playResult.success) {
-                // Skip this track — record error and move on
-                trackResults.push({
-                  track: track.name,
-                  bpm: gtData.bpm || 0,
-                  error: `${playResult.error} (failed on run ${runIdx + 1}/${valNumRuns})`,
-                  perDevice: [],
-                });
-                trackFailed = true;
-                // Stop recording on all devices (discard data)
-                for (const { session } of valSessions) {
-                  session.stopTestRecording();
-                }
-                break; // Skip remaining runs for this track
-              }
-
-              // Stop recording and score each device
-              for (const { port: p, session } of valSessions) {
-                const data = session.stopTestRecording();
-                const score = scoreDeviceRun(data, audioStartTime, gtData);
-                trackDeviceScores.get(p)!.push(score);
-              }
-
-              // Inter-run gap
-              if (runIdx < valNumRuns - 1) {
-                await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
-              }
-            }
-
-            // Skip aggregation if track playback failed (error already pushed above)
-            if (trackFailed) {
-              if (trackIdx < allTracks.length - 1) {
-                await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
-              }
-              continue;
-            }
-
-            // Aggregate per-device for this track
-            const perDevice = valSessions.map(({ port: p }) => {
-              const scores = trackDeviceScores.get(p)!;
-              return {
-                port: p,
-                aggregate: {
-                  beatF1: roundStats(computeStats(scores.map(s => s.beatTracking.f1))),
-                  bpmAccuracy: roundStats(computeStats(scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
-                  transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
-                },
-                // Per-run detail for post-hoc analysis
-                perRun: scores.map((s, i) => ({
-                  run: i + 1,
-                  beatF1: Math.round(s.beatTracking.f1 * 1000) / 1000,
-                  bpmAccuracy: s.musicMode.bpmAccuracy !== null ? Math.round(s.musicMode.bpmAccuracy * 1000) / 1000 : null,
-                  transientF1: Math.round(s.transientTracking.f1 * 1000) / 1000,
-                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
-                })),
-              };
-            });
-
-            trackResults.push({
-              track: track.name,
-              bpm: gtData.bpm || 0,
-              perDevice,
-            });
-
-            // Write incremental results after each track (survives interruption)
-            const partialResults = {
-              type: 'validation_suite',
-              status: trackIdx < allTracks.length - 1 ? 'in_progress' : 'complete',
-              timestamp: new Date(valStartTimestamp).toISOString(),
-              config: { ports: valPorts, runs: valNumRuns, trackCount: allTracks.length, trackDir, gain: valGain, durationMs: valDurationMs },
-              completedTracks: trackResults.length,
-              totalTracks: allTracks.length,
-              trackResults,
-            };
-            writeFileSync(valPath, JSON.stringify(partialResults, null, 2));
-
-            // Inter-track gap (same duration as inter-run; AGC re-adapts within first ~2s
-            // of new track, so 5s is sufficient for both cases)
-            if (trackIdx < allTracks.length - 1) {
-              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
-            }
-          }
-
-          // Compute overall per-device aggregates across all tracks
-          const overallPerDevice = valSessions.map(({ port: p }) => {
-            const allBeatF1s = trackResults
-              .map(t => t.perDevice.find(d => d.port === p)?.aggregate.beatF1.mean)
-              .filter((v): v is number => typeof v === 'number');
-            const allBpmAccs = trackResults
-              .map(t => t.perDevice.find(d => d.port === p)?.aggregate.bpmAccuracy.mean)
-              .filter((v): v is number => typeof v === 'number');
-            return {
-              port: p,
-              overallBeatF1: roundStats(computeStats(allBeatF1s)),
-              overallBpmAccuracy: roundStats(computeStats(allBpmAccs)),
-              trackCount: allBeatF1s.length,
-            };
-          });
-
-          // Final write with overall aggregates (overwrites incremental file)
-          const fullValidationResults = {
-            type: 'validation_suite',
-            status: 'complete',
-            timestamp: new Date(valStartTimestamp).toISOString(),
-            config: { ports: valPorts, runs: valNumRuns, trackCount: allTracks.length, trackDir, gain: valGain, durationMs: valDurationMs },
-            completedTracks: trackResults.length,
-            totalTracks: allTracks.length,
-            overallPerDevice,
-            trackResults,
-          };
-          writeFileSync(valPath, JSON.stringify(fullValidationResults, null, 2));
-
+        if (result.exitCode !== 0) {
           return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                type: 'validation_suite',
-                tracks: allTracks.length,
-                runsPerTrack: valNumRuns,
-                devices: valSessions.length,
-                overallPerDevice,
-                perTrack: trackResults.map(t => ({
-                  track: t.track,
-                  bpm: t.bpm,
-                  ...(t.error ? { error: t.error } : {}),
-                  perDevice: t.perDevice.map(d => ({
-                    port: d.port,
-                    beatF1: d.aggregate.beatF1.mean,
-                    bpmAccuracy: d.aggregate.bpmAccuracy.mean,
-                  })),
-                })),
-                resultsFile: valFilename,
-              }, null, 2),
-            }],
+            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}` }) }],
           };
-        } finally {
-          if (valGain !== undefined) {
-            await Promise.all(valSessions.map(({ session }) =>
-              session.getState().connected
-                ? session.serial.sendCommand('set hwgainlock 255').catch(() => {})
-                : Promise.resolve()
-            ));
-          }
-          await Promise.all(valSessions.map(({ port: p }) =>
-            manager.disconnect(p).catch(() => {})
-          ));
         }
+
+        return { content: [{ type: 'text', text: result.stdout }] };
+      }
+
+      case 'check_test_result': {
+        const { path: resultPath } = args as { path: string };
+        if (!existsSync(resultPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ status: 'not_found' }) }] };
+        }
+        const contents = readFileSync(resultPath, 'utf-8');
+        return { content: [{ type: 'text', text: contents }] };
       }
 
       default:
