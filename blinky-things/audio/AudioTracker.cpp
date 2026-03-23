@@ -19,6 +19,7 @@ static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when conve
 // ~512 bytes flash. Each pattern normalized to sum ~1.0.
 static constexpr int NUM_SEED_TEMPLATES = 8;
 static constexpr int SEED_TEMPLATE_BINS = 16;
+static_assert(SLOT_BINS == SEED_TEMPLATE_BINS, "SLOT_BINS must match SEED_TEMPLATE_BINS for cosine similarity");
 static const float SEED_TEMPLATES[NUM_SEED_TEMPLATES][SEED_TEMPLATE_BINS] = {
     {0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f},  // 4otf
     {0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f, 0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f},  // backbeat
@@ -258,7 +259,6 @@ void AudioTracker::runFourierTempogram() {
 
     float bestMag = 0.0f;
     float dftMagSum = 0.0f;   // Sum of all DFT magnitudes (for Fisher's g-statistic)
-    int dftMagCount = 0;
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
     float bestPhase = 0.0f;
     int bestSource = 0;
@@ -297,7 +297,6 @@ void AudioTracker::runFourierTempogram() {
             // Magnitude (normalize by sqrt(count) for fair comparison across sources)
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
             dftMagSum += mag;
-            dftMagCount++;
 
             if (mag > bestMag) {
                 bestMag = mag;
