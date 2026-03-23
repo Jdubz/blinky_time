@@ -23,7 +23,7 @@ import { parseArgs } from 'util';
 
 import { DeviceSession } from './device-session.js';
 import { scoreDeviceRun, formatScoreSummary, computeStats, roundStats } from './lib/scoring.js';
-import { acquireAudioLock, releaseAudioLock } from './lib/audio-lock.js';
+import { acquireAudioLock, releaseAudioLock, audioLockSigintHandler, audioLockSigtermHandler } from './lib/audio-lock.js';
 import { discoverTracks } from './lib/track-discovery.js';
 import type { GroundTruth, DeviceRunScore } from './lib/types.js';
 
@@ -482,7 +482,16 @@ async function validate(args: ValidateArgs): Promise<void> {
 
     for (let trackIdx = 0; trackIdx < tracks.length; trackIdx++) {
       const track = tracks[trackIdx];
-      const gtData = JSON.parse(readFileSync(track.groundTruth, 'utf-8')) as GroundTruth;
+
+      let gtData: GroundTruth;
+      try {
+        gtData = JSON.parse(readFileSync(track.groundTruth, 'utf-8')) as GroundTruth;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`\n[${trackIdx + 1}/${tracks.length}] ${track.name} — SKIPPED: ${msg}`);
+        trackResults.push({ track: track.name, error: `Ground truth error: ${msg}`, perDevice: [] });
+        continue;
+      }
 
       // Get seek offset from manifest (skip intro, jump to densest beat region)
       const trackManifest = manifest[track.name];
@@ -925,12 +934,11 @@ function handleSignal(signal: string): void {
   process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
 }
 
-// audio-lock.ts registers its own SIGINT/SIGTERM handlers that call releaseAudioLock().
-// Replace them with our handlers that also clean up devices and ffplay.
-// Our handleSignal() calls process.exit(), which triggers audio-lock's 'exit' handler
-// to release the lock file.
-process.removeAllListeners('SIGINT');
-process.removeAllListeners('SIGTERM');
+// Remove audio-lock.ts's specific signal handlers (they call process.exit() which
+// would skip our device cleanup). Our handleSignal() calls process.exit(), which
+// triggers audio-lock's 'exit' handler to release the lock file.
+process.removeListener('SIGINT', audioLockSigintHandler);
+process.removeListener('SIGTERM', audioLockSigtermHandler);
 
 process.on('SIGINT', () => handleSignal('SIGINT'));
 process.on('SIGTERM', () => handleSignal('SIGTERM'));

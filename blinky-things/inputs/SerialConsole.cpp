@@ -247,7 +247,7 @@ void SerialConsole::registerTrackerSettings() {
 
     // PLP pattern-learned pulse
     settings_.registerFloat("plpactivation", &audioCtrl_->plpActivation, "tracker",
-        "Min PLP confidence for pattern pulse", 0.0f, 1.0f, onParamChanged);
+        "[VESTIGIAL] Unused since soft blend (v81)", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("plpconfalpha", &audioCtrl_->plpConfAlpha, "tracker",
         "PLP confidence EMA smoothing rate", 0.01f, 0.5f, onParamChanged);
     settings_.registerFloat("plpnovgain", &audioCtrl_->plpNovGain, "tracker",

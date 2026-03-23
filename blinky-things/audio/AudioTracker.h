@@ -104,7 +104,7 @@ public:
     float activationThreshold = 0.3f;
 
     // PLP (Predominant Local Pulse)
-    float plpActivation = 0.3f;        // Min PLP confidence for pattern pulse (below: cosine fallback)
+    float plpActivation = 0.3f;        // [VESTIGIAL] Unused since soft blend (v81). Kept for settings compat.
     float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
     float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
@@ -184,7 +184,7 @@ private:
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
-    float plpFisherG_ = 0.0f;                  // Fisher's g-statistic (periodicity significance)
+    // plpFisherG_ removed v82: computed but unused (penalizes syncopated music, DFT magnitude used instead)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
     float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)

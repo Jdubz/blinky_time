@@ -318,7 +318,7 @@ void AudioTracker::runFourierTempogram() {
     // Measures how concentrated the periodic energy is at one frequency.
     // g > 0.3 → highly significant periodicity (p < 0.01)
     // g ~ 0.05 → no significant periodicity (uniform spectrum)
-    plpFisherG_ = (dftMagSum > 1e-10f) ? bestMag / dftMagSum : 0.0f;
+    // Fisher's g removed v82 — penalizes syncopated music. DFT magnitude used for confidence instead.
 
     // Reset adaptive phase correction state on significant period change
     // (>10% shift). Prevents old low-variance state from suppressing

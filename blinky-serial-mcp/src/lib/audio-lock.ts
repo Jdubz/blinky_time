@@ -141,20 +141,26 @@ export function isAudioLocked(): {
 
 // --- Process exit cleanup ---
 // Release the lock on any exit path so we never leave stale locks behind.
+// Handlers are exported so callers (e.g., test-runner.ts) can remove them
+// specifically when installing their own signal handlers.
 
 function cleanup() {
   releaseAudioLock();
 }
 
-process.on('exit', cleanup);
-process.on('SIGINT', () => {
+export const audioLockSigintHandler = () => {
   cleanup();
   process.exit(128 + 2);
-});
-process.on('SIGTERM', () => {
+};
+
+export const audioLockSigtermHandler = () => {
   cleanup();
   process.exit(128 + 15);
-});
+};
+
+process.on('exit', cleanup);
+process.on('SIGINT', audioLockSigintHandler);
+process.on('SIGTERM', audioLockSigtermHandler);
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception — releasing audio lock:', err);
   cleanup();

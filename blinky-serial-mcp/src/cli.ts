@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
  * CLI wrapper for blinky-serial validation suite.
- * Runs independently of MCP protocol — can be invoked via SSH/nohup/tmux.
+ * Spawns test-runner.js directly — no MCP server needed.
  *
  * Usage:
  *   node dist/cli.js validate --ports /dev/ttyACM1,/dev/ttyACM2,/dev/ttyACM4 --duration 35000
  *   node dist/cli.js validate --ports /dev/ttyACM1 --tracks techno-minimal-01,trance-party
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   const args = process.argv.slice(2);
@@ -29,9 +30,9 @@ async function main() {
   };
 
   const ports = (getArg('--ports') || '').split(',').filter(Boolean);
-  const duration = parseInt(getArg('--duration') || '35000');
+  const duration = parseInt(getArg('--duration') || '35000', 10);
   const tracks = getArg('--tracks')?.split(',').filter(Boolean);
-  const runs = parseInt(getArg('--runs') || '1');
+  const runs = parseInt(getArg('--runs') || '1', 10);
 
   if (ports.length === 0) {
     console.error('Error: --ports required');
@@ -42,40 +43,22 @@ async function main() {
   if (tracks) console.error(`Tracks: ${tracks.join(', ')}`);
   else console.error('Tracks: all');
 
-  // Spawn the MCP server as a subprocess and connect via stdio
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const serverPath = join(__dirname, 'index.js');
-  const transport = new StdioClientTransport({
-    command: 'node',
-    args: [serverPath],
+  // Spawn test-runner.js directly (no MCP server hop)
+  const runnerPath = join(__dirname, 'test-runner.js');
+  const cliArgs = ['validate', '--ports', ports.join(','), '--duration', String(duration), '--runs', String(runs)];
+  if (tracks) cliArgs.push('--tracks', tracks.join(','));
+
+  const child = spawn('node', [runnerPath, ...cliArgs], {
+    stdio: ['ignore', 'pipe', 'inherit'],  // stdout piped (JSON), stderr inherited (progress)
   });
 
-  const client = new Client({ name: 'blinky-cli', version: '1.0.0' }, {});
-  await client.connect(transport);
+  child.stdout.pipe(process.stdout);
 
-  try {
-    // Call the validation suite tool
-    const toolArgs: Record<string, unknown> = {
-      ports,
-      duration_ms: duration,
-      runs,
-    };
-    if (tracks) toolArgs.tracks = tracks;
+  const exitCode = await new Promise<number>((resolve) => {
+    child.on('close', (code) => resolve(code ?? 1));
+  });
 
-    console.error('Starting validation suite...');
-    const result = await client.callTool({ name: 'run_validation_suite', arguments: toolArgs });
-
-    // Output result to stdout (JSON)
-    if (result.content && Array.isArray(result.content)) {
-      for (const item of result.content) {
-        if (item.type === 'text') {
-          console.log(item.text);
-        }
-      }
-    }
-  } finally {
-    await client.close();
-  }
+  process.exit(exitCode);
 }
 
 main().catch((err) => {
