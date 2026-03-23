@@ -675,6 +675,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 }
                 if use_downbeat:
                     cond_result["downbeat_target"] = result["downbeat_target"]
+                if generate_teacher and "teacher" in result:
+                    cond_result["teacher"] = result["teacher"]  # Same beats, different mel
                 results.append(cond_result)
 
     # Stem augmentation: generate additional variants from Demucs-separated stems.
@@ -753,6 +755,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                         stem_result["downbeat_target"] = make_downbeat_targets(
                             downbeat_times, n_frames, frame_rate, sigma,
                             target_type=target_type)
+                    if generate_teacher:
+                        stem_result["teacher"] = make_teacher_targets(
+                            beat_times, n_frames, frame_rate,
+                            strengths=beat_strengths, sigma=1.5)
                     results.append(stem_result)
 
     return results

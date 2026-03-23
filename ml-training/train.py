@@ -221,6 +221,49 @@ def asymmetric_focal_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * focal_weight * class_weight).mean()
 
 
+def shift_tolerant_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
+                         pos_weight: torch.Tensor | float,
+                         gamma_pos: float = 0.5,
+                         gamma_neg: float = 2.0,
+                         tolerance_frames: int = 3) -> torch.Tensor:
+    """Shift-tolerant asymmetric focal loss — combines the best of both.
+
+    Shift tolerance (Beat This!): max-pools predictions at positive targets
+    so the model isn't penalized for firing ±tolerance_frames from annotation.
+    Handles annotation jitter in consensus labels.
+
+    Asymmetric focal (Imoto & Mishima 2022): low gamma_pos preserves gradient
+    for all onset frames, high gamma_neg suppresses easy negatives.
+    Handles the 97% class imbalance.
+
+    These address orthogonal problems and were never tested together before.
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+    is_positive = y_true > 0.5
+
+    # Shift tolerance: max-pool predictions at positive target positions
+    pool_size = 2 * tolerance_frames + 1
+    y_pooled = F.max_pool1d(
+        y_pred.permute(0, 2, 1),
+        kernel_size=pool_size, stride=1, padding=tolerance_frames
+    ).permute(0, 2, 1)
+    y_effective = torch.where(is_positive, y_pooled, y_pred)
+
+    # BCE on the shift-tolerant predictions
+    bce = F.binary_cross_entropy(y_effective, y_true, reduction='none')
+
+    # Asymmetric focal modulation
+    pt = torch.where(is_positive, y_effective, 1 - y_effective)
+    gamma = torch.where(is_positive,
+                        torch.tensor(gamma_pos, device=y_pred.device),
+                        torch.tensor(gamma_neg, device=y_pred.device))
+    focal_weight = (1 - pt) ** gamma
+
+    class_weight = torch.where(is_positive, pw, 1.0)
+    return (bce * focal_weight * class_weight).mean()
+
+
 def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
                    pos_weight: torch.Tensor | float,
                    gamma: float = 2.0) -> torch.Tensor:
@@ -283,7 +326,7 @@ def main():
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     parser.add_argument("--loss", default=None,
                         choices=["bce", "focal", "shift_bce", "confidence_shift_bce",
-                                 "asymmetric_focal"],
+                                 "asymmetric_focal", "shift_focal"],
                         help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
@@ -300,6 +343,8 @@ def main():
                         help="Distillation temperature. Default: from config, or 2.0")
     parser.add_argument("--patience", type=int, default=None,
                         help="Early stopping patience (default: from config, or 15)")
+    parser.add_argument("--swa", action="store_true",
+                        help="Enable Stochastic Weight Averaging over final epochs")
     parser.add_argument("--subsample", type=float, default=None,
                         help="Fraction of training data to sample per epoch (0-1). "
                              "Each epoch sees a different random subset. Default: from config, or 1.0")
@@ -632,7 +677,16 @@ def main():
     pf = getattr(model, 'pool_factor', 1)
     if pf > 1:
         shift_tolerance = max(0, shift_tolerance // pf)
-    if loss_type == "asymmetric_focal":
+    if loss_type == "shift_focal":
+        loss_cfg = cfg.get("loss", {})
+        gamma_pos = loss_cfg.get("gamma_pos", 0.5)
+        gamma_neg = loss_cfg.get("gamma_neg", 2.0)
+        loss_fn = partial(shift_tolerant_focal, pos_weight=pos_weight,
+                          gamma_pos=gamma_pos, gamma_neg=gamma_neg,
+                          tolerance_frames=shift_tolerance)
+        print(f"Loss: shift-tolerant focal (gamma_pos={gamma_pos}, gamma_neg={gamma_neg}, "
+              f"tolerance={shift_tolerance} frames)")
+    elif loss_type == "asymmetric_focal":
         loss_cfg = cfg.get("loss", {})
         gamma_pos = loss_cfg.get("gamma_pos", 0.5)
         gamma_neg = loss_cfg.get("gamma_neg", 2.0)
@@ -881,6 +935,38 @@ def main():
     # Restore best weights
     model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
 
+    # Stochastic Weight Averaging: retrain from best weights with constant LR,
+    # average weights across epochs. Finds flatter optima that generalize better.
+    # (Izmailov et al. 2018). Zero cost at inference.
+    if args.swa:
+        from torch.optim.swa_utils import AveragedModel, SWALR
+        swa_epochs = 10
+        swa_lr = 1e-4
+        print(f"\nSWA: {swa_epochs} epochs at lr={swa_lr}")
+        swa_model = AveragedModel(model)
+        swa_optimizer = torch.optim.Adam(model.parameters(), lr=swa_lr)
+
+        for swa_ep in range(swa_epochs):
+            model.train()
+            for batch_idx, (X_batch, Y_batch, T_batch) in enumerate(train_loader):
+                X_batch = X_batch.to(device)
+                Y_batch = Y_batch.to(device)
+                swa_optimizer.zero_grad()
+                model_out = model(X_batch)
+                Y_pred = model_out[0] if isinstance(model_out, tuple) else model_out
+                loss = loss_fn(Y_pred, Y_batch)
+                loss.backward()
+                swa_optimizer.step()
+            swa_model.update_parameters(model)
+            print(f"  SWA epoch {swa_ep+1}/{swa_epochs} loss={loss.item():.4f}")
+
+        # Replace model weights with SWA average
+        torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
+        model.load_state_dict({k.replace('module.', ''): v
+                               for k, v in swa_model.state_dict().items()
+                               if k.startswith('module.')})
+        print("  SWA weights applied")
+
     # Save final model
     torch.save(model.state_dict(), output_dir / "final_model.pt")
     # Save full model info for export
@@ -890,7 +976,7 @@ def main():
         "use_downbeat": use_downbeat,
         "loss": loss_type,
         "focal_gamma": args.focal_gamma if loss_type == "focal" else None,
-        "shift_tolerance": shift_tolerance if loss_type == "shift_bce" else None,
+        "shift_tolerance": shift_tolerance if loss_type in ("shift_bce", "shift_focal") else None,
         "spec_augment": use_spec_augment,
         "distillation": {"alpha": distill_alpha, "temp": distill_temp} if use_distill else None,
     }, output_dir / "model_checkpoint.pt")
