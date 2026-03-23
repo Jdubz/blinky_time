@@ -194,8 +194,10 @@ const AudioControl& AudioTracker::update(float dt) {
         periodicityStrength_ *= 0.998f;  // ~0.5s half-life at 62.5 Hz
     }
 
-    // 12. Pattern slot cache: check every bar (4 beats)
-    if ((beatCount_ & 3) == 0 && beatCount_ != lastSlotCheckBeat_) {
+    // 12. Pattern slot cache: check every bar (4 beats), delayed start.
+    // Don't commit slots until 2 bars (8 beats) — early patterns are noisy
+    // and wrong phase locks get persisted via the slot cache (Fix 3).
+    if (beatCount_ >= 8 && (beatCount_ & 3) == 0 && beatCount_ != lastSlotCheckBeat_) {
         lastSlotCheckBeat_ = beatCount_;
         if (plpConfidence_ > 0.1f) {
             checkPatternSlots();
@@ -445,10 +447,11 @@ void AudioTracker::updatePlpAnalysis() {
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // --- 2. Recency-weighted epoch fold ---
-    // Uses exponential recency weighting so stale epochs from previous sections
-    // contribute less. Pattern used for both pulse output (read at PLP phase)
-    // and slot cache (resampled to 16-bin digest for section detection).
+    // --- 2. Phase-aligned recency-weighted epoch fold ---
+    // FIX: Align each epoch to the DFT phase before folding (Leahy 1983).
+    // Without alignment, the fold grid depends on the buffer write position,
+    // causing phase-dependent artifacts — especially anti-correlation on
+    // syncopated music where off-beat energy lands between grid bins.
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
@@ -461,10 +464,14 @@ void AudioTracker::updatePlpAnalysis() {
 
     if (sourceCount < patLen * 2) return;
 
+    // Compute phase-aligned starting offset: the most recent sample in the buffer
+    // corresponds to DFT phase plpDftPhase_. Align the fold grid so bin 0 = phase 0.
+    int phaseAlignOffset = static_cast<int>(plpDftPhase_ * patLen + 0.5f) % patLen;
+
     float patternAccum[MAX_PATTERN_LEN] = {0};
     float totalWeight = 0.0f;
     int epochs = 0;
-    for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
+    for (int offset = sourceCount - patLen - phaseAlignOffset; offset >= 0; offset -= patLen) {
         float weight = expf(-0.3f * epochs);  // ~3-epoch half-life
         for (int j = 0; j < patLen; j++) {
             patternAccum[j] += sourceBuf[offset + j] * weight;
@@ -491,11 +498,51 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. Phase alignment: pattern-peak with DFT fallback ---
-    // Use pattern peak for fine phase alignment (deterministic, no noise on
-    // symmetric patterns). Fall back to DFT phase when pattern is flat.
-    // NN onset cross-correlation was tried but introduces phase noise on
-    // 4otf patterns (4 equally valid shifts cause inter-frame jumping).
+    // --- 3. Anti-correlation detection + half-period correction ---
+    // Cross-correlate the epoch-folded pattern against the most recent raw epoch
+    // at lag 0 and lag patLen/2. If the half-shifted version correlates better,
+    // the pattern is phase-inverted (common on syncopated music: garage, breakbeat).
+    // Inspired by pulsar astronomy's multi-phase epoch folding (Leahy 1983).
+    {
+        int recentStart = sourceCount - patLen;
+        float corrAtZero = 0.0f, corrAtHalf = 0.0f;
+        int halfPat = patLen / 2;
+        for (int j = 0; j < patLen; j++) {
+            float raw = sourceBuf[recentStart + j];
+            corrAtZero += plpPattern_[j] * raw;
+            corrAtHalf += plpPattern_[(j + halfPat) % patLen] * raw;
+        }
+
+        if (corrAtHalf > corrAtZero * 1.2f) {
+            // Half-shifted version correlates 20% better — pattern is phase-inverted.
+            // Rotate pattern by half a period.
+            float tmp[MAX_PATTERN_LEN];
+            memcpy(tmp, plpPattern_, patLen * sizeof(float));
+            for (int j = 0; j < patLen; j++) {
+                plpPattern_[j] = tmp[(j + halfPat) % patLen];
+            }
+        }
+
+        // --- 4. Persistent anti-correlation phase reset ---
+        // If the pattern has been anti-correlated for multiple consecutive ACF cycles,
+        // force a half-period phase shift. This breaks out of wrong phase locks that
+        // the normal adaptive correction can't escape (e.g., initial convergence locked
+        // to the wrong beat on symmetric patterns).
+        if (corrAtZero < 0.0f) {
+            antiCorrRunCount_++;
+            if (antiCorrRunCount_ >= 4) {
+                // ~600ms of persistent anti-correlation: force phase reset
+                plpPhase_ += 0.5f;
+                if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+                phaseErrVar_ = 0.25f;  // Force fast re-convergence
+                antiCorrRunCount_ = 0;
+            }
+        } else {
+            antiCorrRunCount_ = 0;
+        }
+    }
+
+    // --- 5. Phase alignment: pattern-peak with DFT fallback ---
     float phaseError = 0.0f;
     {
         int peakIdx = 0;
@@ -507,7 +554,6 @@ void AudioTracker::updatePlpAnalysis() {
             float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
             phaseError = peakPhase - plpPhase_;
         } else {
-            // Flat pattern — fall back to DFT phase
             phaseError = plpDftPhase_ - plpPhase_;
         }
     }
@@ -529,7 +575,7 @@ void AudioTracker::updatePlpAnalysis() {
     if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
     if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
-    // --- 5. PLP confidence from DFT magnitude + steep signal gate ---
+    // --- 6. PLP confidence from DFT magnitude + steep signal gate ---
     float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);

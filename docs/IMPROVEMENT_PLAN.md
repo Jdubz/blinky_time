@@ -300,7 +300,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **PLP pattern alignment — SUBSTANTIALLY IMPROVED.** Fourier tempogram (Goertzel DFT) replaced grid-search PMR. DFT magnitude inherently suppresses sub-harmonics (no PMR length normalization needed). DFT phase gives beat alignment for free. atTransient improved from 0.10-0.13 to 0.37-0.48. autoCorr up to +0.93. BPM accuracy 0.91-0.98. Adaptive phase correction (EMA variance: fast during convergence, slow when locked).
+1. **PLP pattern alignment — SUBSTANTIALLY IMPROVED (v83).** Fourier tempogram with epoch-fold quality scoring (top-5 diverse candidates scored by DFT mag × pattern variance). Phase-aligned epoch folding. Anti-correlation detection + half-period correction (Leahy 1983). Persistent anti-correlation phase reset (4-cycle threshold). Delayed slot cache commitment (2 bars minimum). Recency-weighted epoch fold. Mean autoCorr=0.186, atTransient=0.509 across 18-track suite. **Remaining weakness:** syncopated tracks (garage, breakbeat, amapiano) still show negative autoCorr due to fundamental epoch-fold grid limitation. **Future (Fix 5):** Harmonic PLP kernel — decompose epoch-fold into 4-harmonic Fourier series, synthesize pulse via harmonic cosine OLA. Preserves pattern shape while gaining OLA phase robustness.
 
 2. ~~**Onset/phase circular reliability problem — RESOLVED.**~~ PLP architecture eliminates the circular dependency. PLP uses Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) to extract repeating patterns. The NN onset detector continues to drive visual sparks/flashes independently.
 
@@ -334,7 +334,8 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | ~~PLL half-time anti-phase~~ | ~~Correction window only at phase 0, not subdivisions~~ | ~~**High**~~ | **RESOLVED** — PLL abandoned. PLP doesn't have this issue. |
 | ~~Onset/phase circular reliability~~ | ~~NN can't classify on/off-beat; PLL needs on-beat onsets~~ | ~~**High**~~ | **RESOLVED** — PLP doesn't need onset-beat classification. |
 | ~135 BPM gravity well | Multi-factorial (prior, harmonics, band weighting) | **Low** — octave errors look fine visually | **NON-ISSUE** with PLP — half/double time patterns still track musically |
-| Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable eval | -- |
+| Run-to-run variance | Initial phase bifurcation, early slot cache commitment | Requires 5+ runs for reliable eval | Delayed slot commitment (2 bars), anti-corr phase reset |
+| Syncopated anti-correlation | Epoch-fold grid misaligns with off-beat energy | **Medium** — pulse breathes opposite to energy | Anti-corr detection + half-period shift; future: harmonic PLP kernel |
 | DnB half-time detection | librosa and firmware both detect ~117 vs ~170 | **None** — acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** — organic mode is correct | -- |
 | trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** — energy-reactive acceptable | -- |
