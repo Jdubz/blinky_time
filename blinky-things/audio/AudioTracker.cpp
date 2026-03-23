@@ -63,9 +63,6 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     // instant flush on first update (nowMs >> 0 would fire immediately)
     uint32_t now = time_.millis();
     onsetDensityWindowStart_ = now;
-    memset(pulseBuffer_, 0, sizeof(pulseBuffer_));
-    pulseReadIdx_ = 0;
-    olaPeakTrack_ = 1.0f;
     resetSlots();
 
     return true;
@@ -300,17 +297,38 @@ void AudioTracker::runFourierTempogram() {
             float dftImag = s2 * sinOmega;
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
 
-            // Insert into top-N if large enough
-            int minIdx = 0;
-            for (int k = 1; k < TOP_N; k++) {
-                if (topCandidates[k].mag < topCandidates[minIdx].mag) minIdx = k;
+            // Insert into top-N if large enough.
+            // Enforce minimum 10% period separation to prevent near-duplicate
+            // candidates (e.g., lag 32/33/34 from different sources) from
+            // crowding out genuinely different tempo hypotheses.
+            bool tooClose = false;
+            for (int k = 0; k < TOP_N; k++) {
+                if (topCandidates[k].mag > 0.01f &&
+                    abs(lag - topCandidates[k].period) <= topCandidates[k].period / 10) {
+                    // Near-duplicate: keep the stronger one
+                    if (mag > topCandidates[k].mag) {
+                        float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
+                        float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
+                        float phase = rawPhase + phaseAdvance;
+                        phase -= floorf(phase);
+                        topCandidates[k] = { mag, phase, lag, src };
+                    }
+                    tooClose = true;
+                    break;
+                }
             }
-            if (mag > topCandidates[minIdx].mag) {
-                float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
-                float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
-                float phase = rawPhase + phaseAdvance;
-                phase -= floorf(phase);
-                topCandidates[minIdx] = { mag, phase, lag, src };
+            if (!tooClose) {
+                int minIdx = 0;
+                for (int k = 1; k < TOP_N; k++) {
+                    if (topCandidates[k].mag < topCandidates[minIdx].mag) minIdx = k;
+                }
+                if (mag > topCandidates[minIdx].mag) {
+                    float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
+                    float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
+                    float phase = rawPhase + phaseAdvance;
+                    phase -= floorf(phase);
+                    topCandidates[minIdx] = { mag, phase, lag, src };
+                }
             }
         }
     }
@@ -375,11 +393,6 @@ void AudioTracker::runFourierTempogram() {
     }
 
     plpDftMag_ = bestMag;
-    // Fisher's g-statistic: max magnitude / sum of all magnitudes.
-    // Measures how concentrated the periodic energy is at one frequency.
-    // g > 0.3 → highly significant periodicity (p < 0.01)
-    // g ~ 0.05 → no significant periodicity (uniform spectrum)
-    // Fisher's g removed v82 — penalizes syncopated music. DFT magnitude used for confidence instead.
 
     // Reset adaptive phase correction state on significant period change
     // (>10% shift). Prevents old low-variance state from suppressing
@@ -432,10 +445,10 @@ void AudioTracker::updatePlpAnalysis() {
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // --- 2. Recency-weighted epoch fold for PATTERN DIGEST (slot cache) ---
+    // --- 2. Recency-weighted epoch fold ---
     // Uses exponential recency weighting so stale epochs from previous sections
-    // contribute less. This pattern is used by the slot cache for section detection,
-    // NOT for pulse output (which uses cosine OLA instead).
+    // contribute less. Pattern used for both pulse output (read at PLP phase)
+    // and slot cache (resampled to 16-bin digest for section detection).
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
@@ -478,60 +491,25 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. Canonical PLP: windowed cosine overlap-add into pulse buffer ---
-    // Each ACF update contributes a Hann-windowed cosine kernel at the detected
-    // period and phase. Overlap-add of many kernels produces constructive interference
-    // at beat positions and destructive interference elsewhere — correct phase alignment
-    // by construction, even for syncopated music. (Grosche & Mueller 2011, Meier 2024)
-    {
-        int halfWin = patLen * 2;  // ~2 beat periods each side
-        if (halfWin > PULSE_BUFFER_SIZE / 2 - 1) halfWin = PULSE_BUFFER_SIZE / 2 - 1;
-        int winLen = halfWin * 2 + 1;
-        float omega = 1.0f / static_cast<float>(patLen);  // cycles per frame
-
-        // Apply slow decay to pulse buffer before adding new kernel.
-        // This prevents unbounded accumulation while retaining recent history.
-        static constexpr float PULSE_DECAY = 0.92f;
-        for (int i = 0; i < PULSE_BUFFER_SIZE; i++) {
-            pulseBuffer_[i] *= PULSE_DECAY;
-        }
-
-        // Synthesize and add Hann-windowed cosine kernel centered at current position
-        for (int i = -halfWin; i <= halfWin; i++) {
-            // Hann window
-            float w = 0.5f + 0.5f * cosf(TWO_PI_F * static_cast<float>(i) / static_cast<float>(winLen - 1));
-            // Cosine at detected tempo and phase
-            float kernel = w * cosf(TWO_PI_F * (static_cast<float>(pulseReadIdx_ + i) * omega - plpDftPhase_));
-            int idx = (pulseReadIdx_ + i + PULSE_BUFFER_SIZE) % PULSE_BUFFER_SIZE;
-            pulseBuffer_[idx] += kernel;
-        }
-    }
-
-    // --- 4. Phase alignment via NN onset cross-correlation ---
-    // Cross-correlate the epoch-folded pattern with the NN onset buffer to find
-    // the phase offset that maximizes alignment with actual transients.
-    // More robust than pattern-peak: considers full pattern shape vs full onset history.
+    // --- 3. Phase alignment: pattern-peak with DFT fallback ---
+    // Use pattern peak for fine phase alignment (deterministic, no noise on
+    // symmetric patterns). Fall back to DFT phase when pattern is flat.
+    // NN onset cross-correlation was tried but introduces phase noise on
+    // 4otf patterns (4 equally valid shifts cause inter-frame jumping).
     float phaseError = 0.0f;
-    if (nnCount_ >= patLen * 2) {
-        float bestXCorr = -1e30f;
-        int bestShift = 0;
-        // Test phase offsets at 1-frame resolution
-        int recentStart = nnCount_ - patLen;
-        for (int shift = 0; shift < patLen; shift++) {
-            float xcorr = 0.0f;
-            for (int j = 0; j < patLen; j++) {
-                xcorr += plpPattern_[(j + shift) % patLen] * nnLinear_[recentStart + j];
-            }
-            if (xcorr > bestXCorr) {
-                bestXCorr = xcorr;
-                bestShift = shift;
-            }
+    {
+        int peakIdx = 0;
+        float peakVal = plpPattern_[0];
+        for (int j = 1; j < patLen; j++) {
+            if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
         }
-        float xcorrPhase = static_cast<float>(bestShift) / static_cast<float>(patLen);
-        phaseError = xcorrPhase - plpPhase_;
-    } else {
-        // Fall back to DFT phase when NN data insufficient
-        phaseError = plpDftPhase_ - plpPhase_;
+        if (peakVal > 0.5f) {
+            float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
+            phaseError = peakPhase - plpPhase_;
+        } else {
+            // Flat pattern — fall back to DFT phase
+            phaseError = plpDftPhase_ - plpPhase_;
+        }
     }
 
     // Wrap error to [-0.5, 0.5]
@@ -571,27 +549,21 @@ void AudioTracker::updatePlpPhase() {
         beatCount_++;
     }
 
-    // Advance pulse buffer read position (tracks frame rate, not ACF rate)
-    pulseReadIdx_ = (pulseReadIdx_ + 1) % PULSE_BUFFER_SIZE;
-
-    // --- Read pulse from cosine OLA buffer ---
-    // The pulse buffer accumulates Hann-windowed cosine kernels from each ACF update.
-    // Half-wave rectify (only positive lobes) to produce the pulse curve.
-    // Blend with cosine fallback when confidence is low.
-    float olaPulse = fmaxf(pulseBuffer_[pulseReadIdx_], 0.0f);
-
-    // Normalize OLA pulse: track running peak to keep output in [0, 1]
-    if (olaPulse > olaPeakTrack_) {
-        olaPeakTrack_ = olaPulse;
-    } else {
-        olaPeakTrack_ *= 0.999f;  // Slow decay
-        if (olaPeakTrack_ < 0.1f) olaPeakTrack_ = 0.1f;  // Floor
+    // Read PLP pattern and cosine fallback, blend by confidence.
+    // No hard threshold — published PLP systems run continuously (Meier 2024, librosa).
+    // Confidence naturally approaches 0 during silence/ambient, making the output
+    // smoothly degrade to the cosine fallback without a discontinuous switch.
+    float patternPulse = 0.5f;
+    if (plpPatternLen_ > 0) {
+        float patPos = plpPhase_ * plpPatternLen_;
+        int idx0 = static_cast<int>(patPos) % plpPatternLen_;
+        float frac = patPos - floorf(patPos);
+        int idx1 = (idx0 + 1) % plpPatternLen_;
+        patternPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
     }
-    float normalizedOla = olaPulse / olaPeakTrack_;
-
     float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
     float blend = clampf(plpConfidence_, 0.0f, 1.0f);
-    plpPulseValue_ = cosinePulse * (1.0f - blend) + normalizedOla * blend;
+    plpPulseValue_ = cosinePulse * (1.0f - blend) + patternPulse * blend;
 
     // --- Beat stability tracking ---
     if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {

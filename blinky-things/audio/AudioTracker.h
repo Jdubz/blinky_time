@@ -176,11 +176,11 @@ private:
     int nnWriteIdx_ = 0;
     int nnCount_ = 0;
 
-    float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period, for slot cache)
+    float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period)
     int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
     float plpPhase_ = 0.0f;                     // 0→1 phase within pattern cycle
     float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
-    float plpPulseValue_ = 0.5f;               // Current pulse value (from cosine OLA)
+    float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
@@ -191,15 +191,6 @@ private:
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
-
-    // === Canonical PLP: windowed cosine overlap-add pulse buffer (v83) ===
-    // Each ACF update contributes a Hann-windowed cosine kernel at the detected
-    // period+phase. Overlap-add produces smooth pulse with correct phase alignment.
-    // (Grosche & Mueller 2011, Meier et al. 2024)
-    static constexpr int PULSE_BUFFER_SIZE = 360;  // Same as OSS buffer (~5.5s)
-    float pulseBuffer_[PULSE_BUFFER_SIZE] = {0};
-    int pulseReadIdx_ = 0;                       // Current read position in pulse buffer
-    float olaPeakTrack_ = 1.0f;                  // Running peak for OLA normalization
 
     // === Pulse detection ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline
