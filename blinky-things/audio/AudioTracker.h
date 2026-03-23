@@ -184,7 +184,6 @@ private:
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
-    // plpFisherG_ removed v82: computed but unused (penalizes syncopated music, DFT magnitude used instead)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
     float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)

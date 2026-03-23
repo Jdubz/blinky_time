@@ -258,7 +258,6 @@ void AudioTracker::runFourierTempogram() {
     }
 
     float bestMag = 0.0f;
-    float dftMagSum = 0.0f;   // Sum of all DFT magnitudes (for Fisher's g-statistic)
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
     float bestPhase = 0.0f;
     int bestSource = 0;
@@ -296,7 +295,6 @@ void AudioTracker::runFourierTempogram() {
 
             // Magnitude (normalize by sqrt(count) for fair comparison across sources)
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
-            dftMagSum += mag;
 
             if (mag > bestMag) {
                 bestMag = mag;

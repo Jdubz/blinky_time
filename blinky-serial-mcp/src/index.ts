@@ -16,7 +16,7 @@ import type { AudioSample, MusicModeState } from './types.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, mkdirSync, existsSync, statSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync, existsSync, statSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -576,6 +576,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['ports'],
+        },
+      },
+      {
+        name: 'check_test_result',
+        description: 'Read a previously saved test result from disk. Use the output_path returned by run_music_test, run_music_test_multi, or run_validation_suite.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            output_path: {
+              type: 'string',
+              description: 'Path to the JSON results file (returned by test runner tools)',
+            },
+          },
+          required: ['output_path'],
         },
       },
     ],
@@ -1953,7 +1967,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!existsSync(audioFile)) throw new Error(`Audio file not found: ${audioFile}`);
         if (!existsSync(groundTruthFile)) throw new Error(`Ground truth file not found: ${groundTruthFile}`);
 
-        const cliArgs = ['run-track', '--audio', audioFile, '--ground-truth', groundTruthFile, '--ports', port];
+        const outputPath = `/tmp/test-results/run-${Date.now()}.json`;
+        mkdirSync('/tmp/test-results', { recursive: true });
+
+        const cliArgs = ['run-track', '--audio', audioFile, '--ground-truth', groundTruthFile, '--ports', port, '--output', outputPath];
         if (overrideDurationMs) cliArgs.push('--duration', String(overrideDurationMs));
         if (gain !== undefined) cliArgs.push('--gain', String(gain));
         if (requestedRuns) cliArgs.push('--runs', String(requestedRuns));
@@ -1965,11 +1982,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (result.exitCode !== 0) {
           return {
-            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}` }) }],
+            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}`, output_path: outputPath }) }],
           };
         }
 
-        return { content: [{ type: 'text', text: result.stdout }] };
+        // Parse stdout and inject output_path
+        try {
+          const parsed = JSON.parse(result.stdout);
+          parsed.output_path = outputPath;
+          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
+        } catch {
+          return { content: [{ type: 'text', text: result.stdout }] };
+        }
       }
 
       case 'run_music_test_multi': {
@@ -1995,7 +2019,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!existsSync(multiGtFile)) throw new Error(`Ground truth file not found: ${multiGtFile}`);
         if (!multiPorts || multiPorts.length === 0) throw new Error('At least one port required');
 
-        const cliArgs = ['run-track', '--audio', multiAudioFile, '--ground-truth', multiGtFile, '--ports', multiPorts.join(',')];
+        const multiOutputPath = `/tmp/test-results/run-${Date.now()}.json`;
+        mkdirSync('/tmp/test-results', { recursive: true });
+
+        const cliArgs = ['run-track', '--audio', multiAudioFile, '--ground-truth', multiGtFile, '--ports', multiPorts.join(','), '--output', multiOutputPath];
         if (multiDurationMs) cliArgs.push('--duration', String(multiDurationMs));
         if (multiGain !== undefined) cliArgs.push('--gain', String(multiGain));
         if (multiRequestedRuns) cliArgs.push('--runs', String(multiRequestedRuns));
@@ -2005,11 +2032,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (result.exitCode !== 0) {
           return {
-            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}` }) }],
+            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}`, output_path: multiOutputPath }) }],
           };
         }
 
-        return { content: [{ type: 'text', text: result.stdout }] };
+        try {
+          const parsed = JSON.parse(result.stdout);
+          parsed.output_path = multiOutputPath;
+          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
+        } catch {
+          return { content: [{ type: 'text', text: result.stdout }] };
+        }
       }
 
       case 'run_validation_suite': {
@@ -2033,7 +2066,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (!valPorts || valPorts.length === 0) throw new Error('At least one port required');
 
-        const cliArgs = ['validate', '--ports', valPorts.join(',')];
+        const valOutputPath = `/tmp/test-results/suite-${Date.now()}.json`;
+        mkdirSync('/tmp/test-results', { recursive: true });
+
+        const cliArgs = ['validate', '--ports', valPorts.join(','), '--output', valOutputPath];
         if (valDurationMs) cliArgs.push('--duration', String(valDurationMs));
         if (valRunsParam) cliArgs.push('--runs', String(valRunsParam));
         if (valGain !== undefined) cliArgs.push('--gain', String(valGain));
@@ -2045,11 +2081,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (result.exitCode !== 0) {
           return {
-            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}` }) }],
+            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}`, output_path: valOutputPath }) }],
           };
         }
 
-        return { content: [{ type: 'text', text: result.stdout }] };
+        try {
+          const parsed = JSON.parse(result.stdout);
+          parsed.output_path = valOutputPath;
+          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
+        } catch {
+          return { content: [{ type: 'text', text: result.stdout }] };
+        }
+      }
+
+      case 'check_test_result': {
+        const { output_path: checkPath } = args as { output_path: string };
+        if (!checkPath) throw new Error('output_path is required');
+        if (!existsSync(checkPath)) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ error: `Results file not found: ${checkPath}` }) }],
+          };
+        }
+        const fileContents = readFileSync(checkPath, 'utf-8');
+        return { content: [{ type: 'text', text: fileContents }] };
       }
 
       default:
