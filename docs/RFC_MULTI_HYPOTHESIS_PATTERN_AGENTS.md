@@ -7,19 +7,18 @@
 
 ## Problem Statement
 
-The current pattern memory system (v77-78) uses a frozen LRU cache with save/restore semantics. When a musical section changes (verse → chorus), the system must:
+The current v77 pattern memory system uses an IOI histogram (128 bins, 512 bytes) for tempo discovery and a bar-position histogram (16 bins) for onset prediction, with cold-start template seeding. When a musical section changes (verse → chorus), the single bar histogram must:
 
 1. Detect that the current pattern no longer matches (confidence drop)
-2. Search the cache for a previously seen pattern (cosine similarity)
-3. Progressively blend the cached pattern over 4 bar boundaries
+2. Progressively overwrite the histogram via EMA learning
 
-This takes 4-8 bars (~8-16 seconds at 120 BPM) to fully switch patterns. During the transition, the visual output is a noisy blend of old and new patterns. Drum fills contaminate the histogram because there's no fill detection. Breakdowns cause confidence decay, which can trigger unnecessary cache searches.
+This takes 4-8 bars (~8-16 seconds at 120 BPM) to fully adapt. During the transition, the visual output is a noisy blend of old and new patterns. Drum fills contaminate the histogram because stability-gated learning only applies to PLP, not the bar histogram. Breakdowns cause confidence decay.
 
-Additionally, the system has a cold-start problem: ~12 seconds before any pattern is established, during which the PLP confidence is too low to drive visuals.
+The PLP epoch-fold pattern extraction (Fourier tempogram) handles phase/pulse well, but the bar histogram provides onset prediction and anticipatory energy pre-ramp — features PLP doesn't replicate. The multi-agent architecture replaces the bar histogram while preserving these capabilities.
 
 ## Proposed Architecture
 
-Replace the frozen LRU cache with **4 live pattern agents** that continuously track competing rhythmic hypotheses. Each agent maintains its own bar histogram and independently interprets incoming onsets at its own tempo/phase. The agent with the highest confidence is the "active" agent driving PLP visual output. Switching agents is instant because all agents are always pre-warmed.
+Replace the v77 pattern memory (single IOI histogram + bar histogram) with **4 live pattern agents** that continuously track competing rhythmic hypotheses. Each agent maintains its own bar histogram and independently interprets incoming onsets at its own tempo/phase. The agent with the highest confidence is the "active" agent driving PLP visual output. Switching agents is instant because all agents are always pre-warmed.
 
 ### Core Concept: Always-On Multi-Tracking
 
@@ -58,7 +57,7 @@ Each agent tracks the same onset stream but at different tempo/phase hypotheses.
 - **Agent 0:** Primary — runs at the ACF-detected BPM
 - **Agent 1:** Octave above — runs at 2× ACF BPM
 - **Agent 2:** Octave below — runs at 0.5× ACF BPM
-- **Agent 3:** Free — runs at the comb bank BPM (may differ from ACF)
+- **Agent 3:** Free — runs at the strongest non-primary ACF peak (may differ from Agent 0)
 
 When an agent's confidence exceeds all others by > 0.1, it becomes the active agent. Its bar histogram feeds the PLP epoch-fold pattern. Other agents continue accumulating quietly.
 
@@ -163,7 +162,7 @@ No new fields needed. The existing fields change meaning slightly:
 | Field | Current Source | With Pattern Agents |
 |-------|---------------|-------------------|
 | `plpPulse` | Epoch-fold at ACF BPM | Epoch-fold at **active agent's** BPM |
-| `rhythmStrength` | max(ACF+comb blend, plpConfidence) | max(ACF+comb blend, **active agent confidence**) |
+| `rhythmStrength` | max(ACF periodicity, plpConfidence) | max(ACF periodicity, **active agent confidence**) |
 | `phase` | PLP phase at ACF BPM | PLP phase at **active agent's** BPM |
 
 The active agent's BPM may differ from the ACF BPM (e.g., if Agent 2 at half-time is winning). This is correct — the visualizer should follow whichever tempo produces the most coherent pattern.
@@ -203,42 +202,39 @@ Beat Stability: 0.85
 | `agentBreakdownEnergy` | 0.30 | 0.1-0.5 | Energy fraction below which to freeze agents |
 | `stabilityAlpha` | 0.1 | 0.01-0.3 | EMA rate for beat stability tracking |
 
-These replace the existing pattern memory parameters: `patternLearnRate`, `patternDecayRate`, `confidenceRise`, `confidenceDecay`, `histogramMinStrength`. The cache-specific parameters (`cacheRestoreBarsLeft`, blend rates) are eliminated entirely.
+These replace the existing v77 pattern memory parameters: `patternLearnRate`, `patternDecayRate`, `ioiDecayRate`, `patternGain`, `anticipationGain`, `patternLookahead`, `confidenceRise`, `confidenceDecay`, `histogramMinStrength`, `patternEnabled`.
 
-Net parameter change: remove 9 (pattern memory + cache), add 6 (agents). Simpler tuning surface.
+Net parameter change: remove 10 (pattern memory), add 6 (agents). Simpler tuning surface.
 
 ## Implementation Plan
 
-### Phase 1: Beat Stability + Gated Learning (no new agents)
+### Phase 1: Beat Stability + Gated Learning — DONE (PLP only)
 
-Add beat stability signal to existing PLP. Use it to gate the existing bar histogram learning rate. This validates the stability signal and fill/breakdown immunity before adding multi-agent complexity.
+Beat stability signal exists in PLP (`plpPeakEma_`, `beatStability_`). PLP epoch-fold learning is gated by stability. However, the v77 bar histogram is NOT gated by beat stability — fills contaminate freely. This gap is resolved by replacing the v77 histogram with agents (Phase 3).
 
-1. Track PLP peak amplitude EMA
-2. Compute beat stability = current peak / EMA
-3. Gate learning rate: frozen when stability < 0.3, reduced when < 0.7
-4. Test: play music with drum fills, verify histogram is not contaminated
+### Phase 2: Template-Accelerated Warm-Up — DONE (both PLP and v77)
 
-### Phase 2: Template-Accelerated Warm-Up (no new agents)
-
-Add 1-bar template seeding to existing pattern memory. This validates fast warm-up independently.
-
-1. After 1 bar, match against 8 templates
-2. If match > 0.70, seed histogram with 50/50 blend
-3. Use elevated learning rate (0.40) for first 4 bars
-4. Test: measure time-to-pattern-lock, compare to baseline
+Template seeding implemented for both PLP cold-start and v77 bar histogram. 8 canonical patterns, cosine similarity > 0.50, 50/50 blend. Activation time dropped from 8-22s to 0-2.4s on most tracks.
 
 ### Phase 3: Multi-Agent Pattern Tracking
 
-Replace frozen LRU cache with 4 live agents. This is the core architectural change.
+Replace v77 pattern memory (IOI histogram, bar histogram, onset prediction) with 4 live agents. This is the core architectural change.
 
-1. Create `PatternAgent` struct, 4 instances
+**Removes from AudioTracker:**
+- `ioiBins_[128]`, `onsetTimes_[64]`, `barBins_[16]` and all associated state
+- Methods: `recordOnsetForPattern()`, `updateIoiAnalysis()`, `updateBarHistogram()`, `computePatternStats()`, `predictOnsetStrength()`, `decayPatternBins()`
+- Parameters: `patternLearnRate`, `patternDecayRate`, `ioiDecayRate`, `patternGain`, `anticipationGain`, `patternLookahead`, `confidenceRise`, `confidenceDecay`, `histogramMinStrength`, `patternEnabled`
+
+**Adds:**
+1. `PatternAgent` struct (76 bytes × 4 = 304 bytes)
 2. All agents update on each onset
 3. Active agent selection with hysteresis
-4. Test: play music with section changes, measure switching latency
+4. Onset prediction via active agent's bar histogram (replaces `predictOnsetStrength()`)
+5. Test: play music with section changes, measure switching latency
 
 ### Phase 4: PLP Integration
 
-Wire the active agent's BPM/pattern into the PLP epoch-fold.
+Wire the active agent's BPM/pattern into the PLP epoch-fold. PLP epoch-fold pattern extraction remains — it provides the `plpPulse` visual output. The agent system provides tempo/phase selection; PLP provides the pattern shape.
 
 1. PLP epoch-folds at active agent's BPM (may differ from ACF BPM)
 2. Phase correction uses active agent's phase
@@ -246,14 +242,14 @@ Wire the active agent's BPM/pattern into the PLP epoch-fold.
 
 ## Resource Budget
 
-| Component | Current | With Agents | Delta |
+| Component | Current (v77 pattern memory) | With Agents | Delta |
 |-----------|---------|-------------|-------|
-| Pattern memory state | ~400 bytes (bins + IOI + cache) | ~400 bytes (4 agents + stability) | ≈ 0 |
-| Parameters | 9 floats (36 bytes) | 6 floats (24 bytes) | -12 bytes |
-| Code size | ~350 lines (pattern + cache) | ~250 lines (agents, no cache logic) | -100 lines |
-| CPU per onset | Update 1 histogram + IOI | Update 4 histograms | +3 histogram updates (~trivial) |
+| Pattern memory state | ~832 bytes (ioiBins\_[128] 512B + barBins\_[16] 64B + onsetTimes\_[64] 256B) | ~304 bytes (4 agents × 76B) | -528 bytes |
+| Parameters | 10 floats (patternLearnRate, patternDecayRate, ioiDecayRate, patternGain, anticipationGain, patternLookahead, confidenceRise, confidenceDecay, histogramMinStrength, patternEnabled) | 6 floats (24 bytes) | -4 params |
+| Code size | ~200 lines (pattern memory methods) | ~250 lines (agents, onset prediction built-in) | +50 lines |
+| CPU per onset | Update 1 histogram + IOI analysis | Update 4 histograms | +3 histogram updates (~trivial) |
 
-The multi-agent approach is actually simpler than the current cache system because it eliminates save/restore/blend logic.
+The multi-agent approach eliminates the separate IOI histogram (agents implicitly discover tempo through pattern coherence) and replaces single-histogram adaptation with instant agent switching.
 
 ## Success Metrics
 
@@ -271,11 +267,11 @@ The multi-agent approach is actually simpler than the current cache system becau
 
 2. **Agent count:** 4 agents covers primary + octave above + octave below + free. Is this enough? Some music has more than 2 distinct sections. Could use 6-8 agents at 456-608 bytes total (still trivial).
 
-3. **IOI histogram interaction:** The current IOI histogram provides an independent tempo estimate. With multi-agent, the agents implicitly discover tempo through pattern coherence. Should IOI be kept as a third tempo source, or folded into agent initialization?
+3. **Cross-agent inhibition:** Should agents actively compete (high-confidence agent suppresses others' learning rates)? This would prevent the "winning" agent from being contaminated while other agents explore alternatives. Risk: if the winner is wrong, suppressed agents can't catch up.
 
-4. **Cross-agent inhibition:** Should agents actively compete (high-confidence agent suppresses others' learning rates)? This would prevent the "winning" agent from being contaminated while other agents explore alternatives. Risk: if the winner is wrong, suppressed agents can't catch up.
+4. **Onset density normalization:** Should agent histograms be normalized by onset count? Currently bars with more onsets (dense sections) dominate the histogram. Normalizing per-bar would give equal weight to sparse and dense sections.
 
-5. **Onset density normalization:** Should agent histograms be normalized by onset count? Currently bars with more onsets (dense sections) dominate the histogram. Normalizing per-bar would give equal weight to sparse and dense sections.
+5. **v77 pattern memory A/B test:** Before implementing agents, test with `patternEnabled=false` to determine whether the v77 onset prediction and anticipatory energy pre-ramp provide visible benefit over PLP alone. If not, removing the v77 system without replacement may be sufficient.
 
 ## References
 

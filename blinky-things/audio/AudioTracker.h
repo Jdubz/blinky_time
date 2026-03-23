@@ -24,6 +24,19 @@ struct FrameOnsetNN {
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
 
+// Pattern slot cache (v82): caches PLP patterns for instant section recall
+static constexpr int SLOT_COUNT = 4;
+static constexpr int SLOT_BINS = 16;
+
+struct PatternSlot {
+    float bins[SLOT_BINS];   // Resampled PLP pattern digest
+    float confidence;         // PLP confidence when snapshot taken
+    uint16_t totalBars;      // Bars observed with this pattern
+    uint8_t age;             // LRU counter (0 = most recent)
+    bool valid;              // Is this slot populated?
+    bool seeded;             // Template-seeded (one-shot per slot)
+};
+
 /**
  * AudioTracker - Audio analysis with decoupled tempo/onset architecture
  *
@@ -73,17 +86,12 @@ public:
 
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
-    float getPatternConfidence() const { return patternConfidence_; }
-    float getIoiConfidence() const { return ioiConfidence_; }
-    float getIoiPeakBpm() const { return ioiPeakBpm_; }
-    float getIoiPeakMs() const { return ioiPeakMs_; }
-    float getBarEntropy() const { return barEntropy_; }
-    uint16_t getPatternBarsAccumulated() const { return patternBarsAccumulated_; }
-    const float* getBarBins() const { return barBins_; }
-    static constexpr int getBarBinCount() { return BAR_BINS; }
 
-    // Pattern memory reset (for test automation)
-    void resetPatternMemory();
+    // Pattern slot cache (v82)
+    int getActiveSlotId() const { return activeSlot_; }
+    const struct PatternSlot& getSlot(int i) const { return slots_[i]; }
+    static constexpr int getSlotCount() { return SLOT_COUNT; }
+    void resetSlots();
 
     // === Tunable parameters ===
     // Core tempo
@@ -125,18 +133,12 @@ public:
     float energyMelWeight = 0.30f;     // Bass mel energy weight
     float energyOdfWeight = 0.40f;     // ODF peak-hold transient weight
 
-    // Pattern memory (v77): IOI histogram discovers tempo from onset intervals,
-    // bar histogram reveals repeating pattern for prediction. See PATTERN_HISTOGRAM_DESIGN.md.
-    float patternLearnRate = 0.15f;    // EMA alpha for histogram update
-    float patternDecayRate = 0.9995f;  // Per-frame bar bin decay (half-life ~22s)
-    float ioiDecayRate = 0.999f;       // Per-frame IOI bin decay (half-life ~11s)
-    float patternGain = 0.3f;          // Prediction boost strength for onset confidence
-    float anticipationGain = 0.1f;     // Energy pre-ramp before predicted onsets
-    float patternLookahead = 0.05f;    // Phase lookahead (fraction of beat)
-    float confidenceRise = 0.05f;      // Confidence EMA alpha when rising
-    float confidenceDecay = 0.15f;     // Confidence EMA alpha when falling
-    float histogramMinStrength = 0.5f; // Min onset strength for bar histogram (filters hi-hats)
-    bool patternEnabled = true;        // Master enable for A/B testing
+    // Pattern slot cache (v82): caches PLP patterns for instant section recall
+    float slotSwitchThreshold = 0.70f;   // Cosine sim to recall cached slot
+    float slotNewThreshold = 0.40f;      // Below this: allocate new slot
+    float slotUpdateRate = 0.15f;        // EMA rate for active slot reinforcement
+    float slotSaveMinConf = 0.50f;       // Min PLP confidence to save/update slots
+    float slotSeedBlend = 0.70f;         // Blend ratio when seeding from cached slot
 
 private:
     // === Audio input ===
@@ -189,7 +191,6 @@ private:
     float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
-    bool templateSeeded_ = false;              // Cold-start template seeding (one-shot)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
@@ -210,31 +211,12 @@ private:
     // === Silence detection ===
     uint32_t lastSignificantAudioMs_ = 0;
 
-    // === Pattern memory (v77) ===
-    // Phase A: IOI histogram — discovers tempo from raw onset intervals
-    static constexpr int ONSET_BUF_SIZE = 64;
-    static constexpr int IOI_BINS = 128;          // 100-1600ms range (~12ms per bin)
-    static constexpr float IOI_MIN_MS = 100.0f;
-    static constexpr float IOI_MAX_MS = 1600.0f;
-    // Beat-range IOI bins: 250ms (240 BPM) to 1000ms (60 BPM)
-    static constexpr int IOI_BEAT_LOW = (int)((250.0f - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
-    static constexpr int IOI_BEAT_HIGH = (int)((1000.0f - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
-    uint32_t onsetTimes_[ONSET_BUF_SIZE] = {0};
-    uint8_t onsetWriteIdx_ = 0;
-    uint8_t onsetBufCount_ = 0;
-    float ioiBins_[IOI_BINS] = {0};
-    float ioiPeakMs_ = 500.0f;                   // Dominant IOI (ms)
-    float ioiPeakBpm_ = 120.0f;                  // BPM from IOI peak
-    float ioiPeakStrength_ = 0.0f;
-    float ioiConfidence_ = 0.0f;                  // Agreement between IOI and ACF
-
-    // Phase B: Bar-position histogram — 16 bins (16th-note resolution)
-    static constexpr int BAR_BINS = 16;
-    float barBins_[BAR_BINS] = {0};
-    float barEntropy_ = 1.0f;
-    float patternConfidence_ = 0.0f;
-    uint16_t patternBarsAccumulated_ = 0;
-    uint32_t lastBarBoundaryMs_ = 0;
+    // === Pattern slot cache (v82) ===
+    PatternSlot slots_[SLOT_COUNT] = {};
+    float currentDigest_[SLOT_BINS] = {0};
+    int activeSlot_ = -1;
+    uint16_t lastSlotCheckBeat_ = 0;
+    float prevBpm_ = 120.0f;          // For BPM shift detection
 
     // === Output ===
     AudioControl control_;
@@ -248,12 +230,10 @@ private:
     void updatePlpPhase();          // Advance phase + read pattern value (every frame)
     void synthesizeOutputs(float dt, uint32_t nowMs);
 
-    // Pattern memory methods
-    void recordOnsetForPattern(float strength, uint32_t nowMs);
-    void updateIoiAnalysis();
-    void updateBarHistogram(float strength, uint32_t nowMs);
-    void computePatternStats();
-    float predictOnsetStrength(uint32_t nowMs);
-    void decayPatternBins();
+    // Pattern slot cache methods
+    void checkPatternSlots();
+    int allocateSlot();
+    static void resamplePattern(const float* src, int srcLen, float* dst, int dstLen);
+    static float cosineSimilarity(const float* a, const float* b, int len);
 
 };

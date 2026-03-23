@@ -1201,7 +1201,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           response.debug = {
             plpPulse: parseFloat(lastSample.pp.toFixed(3)),
             periodicityStrength: lastSample.conf !== undefined ? parseFloat(lastSample.conf.toFixed(3)) : null,
-            patternConfidence: lastSample.pc !== undefined ? parseFloat(lastSample.pc.toFixed(3)) : null,
+            slotCache: lastSample.sl !== undefined ? lastSample.sl : null,
           };
         }
 

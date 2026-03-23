@@ -2,7 +2,7 @@
 
 ## Overview
 
-AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 7 parameters.
+AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.
 
 **Current Version:** AudioTracker with ACF+PLP architecture (March 2026)
 **BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF → period estimate
@@ -22,17 +22,16 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 
 ## Output: AudioControl Struct
 
-Generators receive a single struct with 7 parameters:
+Generators receive a single struct with 6 parameters:
 
 ```cpp
 struct AudioControl {
     float energy;         // Audio energy level (0-1)
     float pulse;          // Transient intensity (0-1)
     float phase;          // Beat phase position (0-1)
+    float plpPulse;       // PLP pattern value at current phase (0-1)
     float rhythmStrength; // Confidence in rhythm (0-1)
     float onsetDensity;   // Smoothed onsets per second (0-10+)
-    float downbeat;       // Reserved, always 0.0 (not wired)
-    uint8_t beatInMeasure; // Reserved, always 0 (not wired)
 };
 ```
 
@@ -41,12 +40,9 @@ struct AudioControl {
 | `energy` | Smoothed overall level | Baseline intensity, brightness |
 | `pulse` | Transient hits with beat context | Sparks, flashes, bursts |
 | `phase` | Position in beat cycle (0=on-beat) | Pulsing, breathing effects |
+| `plpPulse` | PLP extracted pattern value (epoch-folded) | Beat-synced pulsing, breathing animations |
 | `rhythmStrength` | Periodicity confidence | Music mode vs organic mode |
 | `onsetDensity` | Smoothed transients/second (EMA) | Content classification (dance=2-6, ambient=0-1) |
-| `downbeat` | Reserved (always 0.0) | Not currently active |
-| `beatInMeasure` | Reserved (always 0) | Not currently active |
-
-**Note:** The `downbeat` and `beatInMeasure` fields exist in the struct for forward compatibility but are always zero. The system focuses exclusively on onset detection, BPM identification, and pulse/phase alignment.
 
 ---
 
@@ -91,7 +87,7 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
            Cold-start template seeding (8 patterns, cosine similarity > 0.50)
            Adaptive phase correction (EMA variance: fast during convergence, slow when locked)
                 |
-AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat=0, beatInMeasure=0 }
+AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
       |
 Generators (HeatFire, Water, Lightning)
 ```
@@ -160,12 +156,12 @@ Generators (HeatFire, Water, Lightning)
 
 ```cpp
 void Generator::update(float dt, const AudioControl& audio) {
-    if (audio.hasRhythm()) {
+    if (audio.rhythmStrength > 0.3f) {
         // Beat-synced behavior
         if (audio.pulse > 0.5f) {
             burstSparks();
         }
-        float breathe = audio.phaseToPulse();  // 1.0 on-beat, 0.0 off-beat
+        float breathe = audio.phaseToPulse();  // PLP pattern value at current phase
         setBrightness(breathe);
     } else {
         // Organic behavior (no rhythm detected)
@@ -177,11 +173,8 @@ void Generator::update(float dt, const AudioControl& audio) {
 ### Phase Patterns
 
 ```cpp
-// Smooth breathing (1.0 on-beat, 0.0 off-beat)
-float breathe = audio.phaseToPulse();
-
-// Distance from beat (0.0 on-beat, 0.5 off-beat)
-float offBeat = audio.distanceFromBeat();
+// PLP extracted pattern pulse (actual repeating energy shape)
+float breathe = audio.phaseToPulse();  // == audio.plpPulse
 
 // Raw phase (0.0 -> 1.0 over one beat cycle)
 float sawPhase = audio.phase;
@@ -207,8 +200,6 @@ float output = organic * (1.0f - blend) + synced * blend;
 |-----------|-------------|---------|-------|-------------|
 | `bpmMin` | `bpmmin` | 60 | 40-120 | Minimum detectable BPM |
 | `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
-| `rayleighBpm` | `rayleighbpm` | 140 | 60-180 | Rayleigh prior peak BPM (perceptual bias) |
-| `combFeedback` | `combfeedback` | 0.92 | 0.85-0.98 | Comb bank resonance strength |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 
 ### Phase Tracking (PLP — Fourier Tempogram)
@@ -328,7 +319,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 **Core Audio System:**
 - `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP (~10 tunable params)
 - `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP Fourier tempogram, pulse detection, output synthesis)
-- `blinky-things/audio/AudioControl.h` - Output struct definition (8 fields including plpPulse)
+- `blinky-things/audio/AudioControl.h` - Output struct definition (6 fields)
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
 - `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)
 - `blinky-things/audio/frame_onset_model_data.h` - INT8 TFLite model weights
@@ -348,7 +339,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 **Beat Tracker Inspection:**
 ```bash
-show beat           # Show AudioTracker state (BPM, phase, periodicity, comb bank)
+show beat           # Show AudioTracker state (BPM, phase, periodicity, PLP)
 audio               # Show overall audio status + BPM
 json beat           # JSON output of beat tracker state
 json rhythm         # JSON output of rhythm tracking state

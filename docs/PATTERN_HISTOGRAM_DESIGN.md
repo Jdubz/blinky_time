@@ -2,6 +2,8 @@
 
 *Drafted: March 18, 2026*
 
+> **STATUS: PARTIALLY SUPERSEDED.** The IOI histogram and bar histogram described here are implemented in `AudioTracker` (v81), but PLP Fourier tempogram now handles phase/pattern extraction independently. The multi-agent RFC (`RFC_MULTI_HYPOTHESIS_PATTERN_AGENTS.md`) proposes replacing the v77 pattern memory with live pattern agents. This document is retained as reference for the current implementation.
+
 ## Core Insight
 
 Music is built on repeating patterns. A kick-snare pattern that has repeated for 8 bars is very likely to repeat on bar 9. By recording onset timestamps and finding periodicity in the intervals, the system discovers the rhythmic pattern WITHOUT assuming BPM is correct.

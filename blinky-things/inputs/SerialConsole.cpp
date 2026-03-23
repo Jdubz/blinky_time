@@ -308,27 +308,17 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("highflux", &audioCtrl_->getSpectral().highFluxWeight, "tracker",
         "Spectral flux: high band weight (2-8kHz)", 0.0f, 1.0f, onParamChanged);
 
-    // Pattern memory (v77)
-    settings_.registerFloat("patlearn", &audioCtrl_->patternLearnRate, "pattern",
-        "Pattern histogram EMA learn rate", 0.01f, 0.5f, onParamChanged);
-    settings_.registerFloat("patdecay", &audioCtrl_->patternDecayRate, "pattern",
-        "Bar bin per-frame decay (0.9995 = ~22s half-life)", 0.990f, 0.9999f, onParamChanged);
-    settings_.registerFloat("ioidecay", &audioCtrl_->ioiDecayRate, "pattern",
-        "IOI bin per-frame decay (0.999 = ~11s half-life)", 0.990f, 0.9999f, onParamChanged);
-    settings_.registerFloat("patgain", &audioCtrl_->patternGain, "pattern",
-        "Pattern prediction onset boost strength", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("patanticipation", &audioCtrl_->anticipationGain, "pattern",
-        "Anticipatory energy pre-ramp gain", 0.0f, 0.5f, onParamChanged);
-    settings_.registerFloat("patlookahead", &audioCtrl_->patternLookahead, "pattern",
-        "Phase lookahead fraction for anticipation", 0.0f, 0.15f, onParamChanged);
-    settings_.registerFloat("patrise", &audioCtrl_->confidenceRise, "pattern",
-        "Confidence EMA rise alpha (higher = faster lock-on)", 0.01f, 0.5f, onParamChanged);
-    settings_.registerFloat("patfall", &audioCtrl_->confidenceDecay, "pattern",
-        "Confidence EMA decay alpha (higher = faster drop)", 0.01f, 0.5f, onParamChanged);
-    settings_.registerFloat("patminstren", &audioCtrl_->histogramMinStrength, "pattern",
-        "Min onset strength for bar histogram (filters hi-hats)", 0.1f, 0.9f, onParamChanged);
-    settings_.registerBool("patenabled", &audioCtrl_->patternEnabled, "pattern",
-        "Pattern memory master enable (A/B testing)");
+    // Pattern slot cache (v82)
+    settings_.registerFloat("slotswitchthresh", &audioCtrl_->slotSwitchThreshold, "slots",
+        "Cosine similarity threshold to recall cached slot", 0.50f, 0.95f, onParamChanged);
+    settings_.registerFloat("slotnewthresh", &audioCtrl_->slotNewThreshold, "slots",
+        "Below this similarity: allocate new slot", 0.20f, 0.60f, onParamChanged);
+    settings_.registerFloat("slotupdaterate", &audioCtrl_->slotUpdateRate, "slots",
+        "EMA rate for reinforcing active slot", 0.05f, 0.40f, onParamChanged);
+    settings_.registerFloat("slotsaveconf", &audioCtrl_->slotSaveMinConf, "slots",
+        "Min PLP confidence to save/update slots", 0.20f, 0.80f, onParamChanged);
+    settings_.registerFloat("slotseedblend", &audioCtrl_->slotSeedBlend, "slots",
+        "Blend ratio when seeding from cached slot", 0.30f, 0.95f, onParamChanged);
 }
 
 // (registerRhythmSettings removed v74 — ~250 lines of CBSS/Bayesian settings. See git history.)
@@ -1413,8 +1403,7 @@ void SerialConsole::streamTick() {
         // a = rhythm active, bpm = tempo, ph = PLP phase (0-1)
         // pp = PLP pulse (extracted pattern value), str = rhythm strength
         // q = beat event (phase wrap), e = energy, p = pulse (transient), od = onset density
-        // Debug adds: conf = ACF periodicity, pc = pattern confidence,
-        // ic = IOI confidence, ib = IOI peak BPM
+        // Debug adds: conf = ACF periodicity, sl = slot cache {id, conf[]}
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1447,12 +1436,15 @@ void SerialConsole::streamTick() {
             if (streamDebug_) {
                 Serial.print(F(",\"conf\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-                Serial.print(F(",\"pc\":"));
-                Serial.print(audioCtrl_->getPatternConfidence(), 3);
-                Serial.print(F(",\"ic\":"));
-                Serial.print(audioCtrl_->getIoiConfidence(), 3);
-                Serial.print(F(",\"ib\":"));
-                Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
+                Serial.print(F(",\"sl\":{\"id\":"));
+                Serial.print(audioCtrl_->getActiveSlotId());
+                Serial.print(F(",\"conf\":["));
+                for (int si = 0; si < audioCtrl_->getSlotCount(); si++) {
+                    if (si > 0) Serial.print(F(","));
+                    const PatternSlot& slot = audioCtrl_->getSlot(si);
+                    Serial.print(slot.valid ? slot.confidence : 0.0f, 2);
+                }
+                Serial.print(F("]}"));
             }
 
             Serial.print(F("}"));
@@ -1722,69 +1714,70 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         return true;
     }
 
-    // "json pattern" - compact JSON for test automation (v77+)
-    if (strcmp(cmd, "json pattern") == 0) {
-        Serial.print(F("{\"pc\":"));
-        Serial.print(audioCtrl_->getPatternConfidence(), 3);
-        Serial.print(F(",\"ic\":"));
-        Serial.print(audioCtrl_->getIoiConfidence(), 3);
-        Serial.print(F(",\"ib\":"));
-        Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
-        Serial.print(F(",\"im\":"));
-        Serial.print(audioCtrl_->getIoiPeakMs(), 1);
-        Serial.print(F(",\"be\":"));
-        Serial.print(audioCtrl_->getBarEntropy(), 3);
-        Serial.print(F(",\"bars\":"));
-        Serial.print(audioCtrl_->getPatternBarsAccumulated());
-        Serial.print(F(",\"bb\":["));
-        const float* bb = audioCtrl_->getBarBins();
-        for (int i = 0; i < audioCtrl_->getBarBinCount(); i++) {
+    // "json pattern" / "json slots" - compact JSON for test automation (v82)
+    if (strcmp(cmd, "json pattern") == 0 || strcmp(cmd, "json slots") == 0) {
+        Serial.print(F("{\"active\":"));
+        Serial.print(audioCtrl_->getActiveSlotId());
+        Serial.print(F(",\"slots\":["));
+        for (int i = 0; i < audioCtrl_->getSlotCount(); i++) {
             if (i > 0) Serial.print(F(","));
-            Serial.print(bb[i], 3);
+            const PatternSlot& slot = audioCtrl_->getSlot(i);
+            Serial.print(F("{\"conf\":"));
+            Serial.print(slot.confidence, 3);
+            Serial.print(F(",\"bars\":"));
+            Serial.print(slot.totalBars);
+            Serial.print(F(",\"valid\":"));
+            Serial.print(slot.valid ? F("true") : F("false"));
+            Serial.print(F(",\"bb\":["));
+            for (int j = 0; j < SLOT_BINS; j++) {
+                if (j > 0) Serial.print(F(","));
+                Serial.print(slot.bins[j], 3);
+            }
+            Serial.print(F("]}"));
         }
         Serial.println(F("]}"));
         return true;
     }
 
-    // "reset pattern" - zero all pattern memory state (for test automation, v77+)
-    if (strcmp(cmd, "reset pattern") == 0) {
-        audioCtrl_->resetPatternMemory();
+    // "reset pattern" / "reset slots" - zero all slot cache state (for test automation)
+    if (strcmp(cmd, "reset pattern") == 0 || strcmp(cmd, "reset slots") == 0) {
+        audioCtrl_->resetSlots();
         Serial.println(F("OK"));
         return true;
     }
 
-    // "show pattern" - pattern memory state (v77+)
-    if (strcmp(cmd, "show pattern") == 0) {
-        Serial.println(F("=== Pattern Memory ==="));
-        Serial.println(F("-- Phase A: IOI Histogram --"));
-        Serial.print(F("  IOI Peak: "));
-        Serial.print(audioCtrl_->getIoiPeakMs(), 1);
-        Serial.print(F(" ms ("));
-        Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
-        Serial.println(F(" BPM)"));
-        Serial.print(F("  IOI Confidence: "));
-        Serial.println(audioCtrl_->getIoiConfidence(), 3);
-        Serial.print(F("  ACF BPM: "));
+    // "show pattern" / "show slots" - pattern slot cache state (v82)
+    if (strcmp(cmd, "show pattern") == 0 || strcmp(cmd, "show slots") == 0) {
+        Serial.println(F("=== Pattern Slot Cache ==="));
+        Serial.print(F("  Active Slot: "));
+        Serial.println(audioCtrl_->getActiveSlotId());
+        Serial.print(F("  PLP Confidence: "));
+        Serial.println(audioCtrl_->getPlpConfidence(), 3);
+        Serial.print(F("  BPM: "));
         Serial.println(audioCtrl_->getCurrentBpm(), 1);
-        Serial.println(F("-- Phase B: Bar Histogram --"));
-        Serial.print(F("  Enabled: "));
-        Serial.println(audioCtrl_->patternEnabled ? F("yes") : F("no"));
-        Serial.print(F("  Pattern Confidence: "));
-        Serial.println(audioCtrl_->getPatternConfidence(), 3);
-        Serial.print(F("  Bar Entropy: "));
-        Serial.println(audioCtrl_->getBarEntropy(), 3);
-        Serial.print(F("  Bars Accumulated: "));
-        Serial.println(audioCtrl_->getPatternBarsAccumulated());
-        Serial.print(F("  Bar Bins: ["));
-        const float* bins = audioCtrl_->getBarBins();
-        for (int i = 0; i < audioCtrl_->getBarBinCount(); i++) {
-            if (i > 0) Serial.print(F(","));
-            Serial.print(bins[i], 2);
+        for (int i = 0; i < audioCtrl_->getSlotCount(); i++) {
+            const PatternSlot& slot = audioCtrl_->getSlot(i);
+            Serial.print(F("  Slot "));
+            Serial.print(i);
+            Serial.print(F(": "));
+            if (!slot.valid) {
+                Serial.println(F("[empty]"));
+                continue;
+            }
+            Serial.print(F("conf="));
+            Serial.print(slot.confidence, 3);
+            Serial.print(F(" bars="));
+            Serial.print(slot.totalBars);
+            Serial.print(F(" age="));
+            Serial.print(slot.age);
+            if (i == audioCtrl_->getActiveSlotId()) Serial.print(F(" *ACTIVE*"));
+            Serial.print(F("\n    bins=["));
+            for (int j = 0; j < SLOT_BINS; j++) {
+                if (j > 0) Serial.print(F(","));
+                Serial.print(slot.bins[j], 2);
+            }
+            Serial.println(F("]"));
         }
-        Serial.println(F("]"));
-
-        // (Template match + pattern cache display removed v80)
-
         Serial.println();
         return true;
     }
