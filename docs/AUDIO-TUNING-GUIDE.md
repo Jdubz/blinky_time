@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
 **Last Updated:** March 22, 2026
-**Firmware Version:** SETTINGS_VERSION 80 (AudioTracker: ACF + PLP with grid-search PMR across 3 sources. Conv1D W16 v3 onset model deployed). PLL, comb bank, Percival, Rayleigh all removed.
+**Firmware Version:** SETTINGS_VERSION 82 (AudioTracker: ACF + PLP with Fourier tempogram + pattern slot cache. Conv1D W16 v3 onset model deployed).
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -35,19 +35,23 @@ PDM Microphone (16kHz, mono)
    └── Spectral flux (HWR: sum of positive magnitude changes, NN-independent)
         |
         ├── [BPM PATH]
-        │   Spectral flux → contrast^2 → CombFilterBank + OSS buffer
-        │   → Autocorrelation (every 150ms) + Percival + Rayleigh → BPM
+        │   Spectral flux → contrast sharpening → OSS buffer (~5.5s)
+        │   → Autocorrelation (every 150ms) → period estimate
         │
         ├── [ONSET PATH]
         │   FrameOnsetNN (Conv1D W16, ~7ms, single channel)
         │   → onset_activation → information gate
-        │   → Pulse detection (visual sparks) + PLL phase refinement
+        │   → Pulse detection (visual sparks)
         │   → Energy synthesis (onset peak-hold blend)
         │
         └── [PHASE PATH]
-            PLL free-running sawtooth at BPM (onset-gated P+I correction)
+            PLP Fourier tempogram (Goertzel DFT at candidate frequencies)
+            3 sources: spectral flux, bass energy, NN onset
+            → DFT magnitude selects period, DFT phase gives alignment
+            → Epoch-fold pattern → plpPulse (visual pattern shape)
+            → Pattern slot cache (4-slot LRU, instant section recall)
         |
-   AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity }
+   AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
         |
    Fire/Water/Lightning Generators (visual effects)
 ```
@@ -55,12 +59,12 @@ PDM Microphone (16kHz, mono)
 ### Key Design Decisions
 
 1. **Decoupled BPM and onset paths**: BPM estimation uses spectral flux (NN-independent). The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat — syncopated transients would corrupt ACF periodicity. Spectral flux preserves periodic structure.
-2. **NN onset → visual pulse + PLL refinement**: Conv1D W16 onset model drives visual pulse (sparks/flashes) and refines PLL phase when strong onsets align near expected beats. Non-NN fallback: mic level. Single output channel (no downbeats).
+2. **NN onset → visual pulse**: Conv1D W16 onset model drives visual pulse (sparks/flashes) and serves as one of 3 PLP sources. Non-NN fallback: mic level. Single output channel (no downbeats).
 3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
-4. **ACF + Comb + PLL tempo tracking** (AudioTracker v74): Percival harmonic-enhanced ACF estimates tempo from spectral flux; 20-filter IIR comb bank validates independently; average when within 10% agreement.
-5. **PLL phase tracking**: Free-running sawtooth at estimated BPM. NN onset-gated proportional+integral correction bridges the BPM and onset paths.
-6. **Onset information gate**: Suppresses low-confidence NN output before PLL correction and pulse detection, preventing noise-driven phase jitter during silence/breakdowns.
-7. **5-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, rhythmStrength, onsetDensity.
+4. **PLP phase/pattern extraction** (v82): Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources selects period (DFT magnitude) and alignment (DFT phase). Epoch-fold extracts repeating energy pattern for visual output.
+5. **Pattern slot cache** (v82): 4-slot LRU of 16-bin PLP pattern digests. Every bar, current PLP pattern compared via cosine similarity. Match > 0.70 triggers instant recall from cache. Enables rapid verse/chorus switching.
+6. **Onset information gate**: Suppresses low-confidence NN output before PLP source input and pulse detection, preventing noise-driven false patterns during silence/breakdowns.
+7. **6-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity.
 
 ---
 
@@ -225,14 +229,9 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 |---------|---------|-------|-------------|
 | `nnprofile` | 0 | bool | Enable [NNPROF] per-operator timing output to Serial |
 
-### Category: `v45` (4 parameters) - PLL + Onset Snap (v45+)
+### Category: `v45` — REMOVED (PLL removed v80, replaced by PLP)
 
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `pll` | 1 | bool | PLL proportional phase correction |
-| `pllkp` | 0.15 | 0.0-1.0 | PLL proportional gain |
-| `pllki` | 0.005 | 0.0-0.1 | PLL integral gain |
-| `onsetSnapWindow` | 8 | 1-16 | Onset snap search window in frames |
+PLL parameters (`pll`, `pllkp`, `pllki`, `onsetSnapWindow`) removed. PLP Fourier tempogram handles phase alignment.
 
 ### Category: `octave` (5 parameters) - Octave Disambiguation (v32)
 
@@ -330,13 +329,14 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 |-----------|---------|---------|------|
 | BPM min | `bpmmin` | 60 | Minimum detectable BPM |
 | BPM max | `bpmmax` | 200 | Maximum detectable BPM |
-| Rayleigh BPM | `rayleighbpm` | 140 | Rayleigh prior peak (perceptual tempo bias) |
-| Comb feedback | `combfeedback` | 0.92 | Comb bank IIR resonance strength |
 | Tempo smoothing | `temposmooth` | 0.85 | BPM EMA smoothing (higher = slower) |
-| PLL Kp | `pllkp` | 0.15 | Proportional gain (phase correction speed) |
-| PLL Ki | `pllki` | 0.005 | Integral gain (tempo adaptation speed) |
 | Activation threshold | `activationthreshold` | 0.3 | Min periodicity to activate rhythm mode |
 | ODF gate | `odfgate` | 0.25 | NN output floor gate (suppress noise) |
+| Slot switch threshold | `slotswitchthresh` | 0.70 | Cosine sim to recall cached slot |
+| Slot new threshold | `slotnewthresh` | 0.40 | Below this: allocate new slot |
+| Slot update rate | `slotupdaterate` | 0.15 | EMA rate for reinforcing active slot |
+| Slot save confidence | `slotsaveconf` | 0.50 | Min PLP confidence to save/update slots |
+| Slot seed blend | `slotseedblend` | 0.70 | Blend ratio when seeding from cached slot |
 
 ### Spectral Pipeline Defaults (v23+)
 

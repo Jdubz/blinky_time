@@ -39,9 +39,7 @@ export interface MusicModeState {
   od?: number;    // Onset density (onsets/sec)
   // Debug-only fields (stream debug mode)
   conf?: number;  // ACF periodicity strength
-  pc?: number;    // Pattern confidence
-  ic?: number;    // IOI confidence
-  ib?: number;    // IOI peak BPM
+  sl?: { id: number; conf: number[] };  // Pattern slot cache state
 }
 
 export interface LedTelemetry {

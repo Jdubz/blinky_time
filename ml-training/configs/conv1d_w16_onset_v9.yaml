@@ -1,0 +1,50 @@
+# Conv1D W16 v9 — onset detection with tempo auxiliary head
+#
+# New over v3 (deployed):
+#   1. Tempo auxiliary head (40 bins, 60-200 BPM, weight=0.1)
+#      - Zero firmware cost (stripped at export)
+#      - Shared backbone learns tempo-aware features (+1-5% F1, Bock 2019)
+#
+# Knowledge distillation DEFERRED: the teacher label generator produces
+# Gaussian-smoothed hard labels (not real Beat This! predictions), causing
+# 52% positive ratio and severe F1 regression. Needs proper Beat This!
+# inference pipeline before enabling.
+#
+# Retained from v3 (proven):
+#   - Frequency positional encoding (26-dim learnable, FAC 2024)
+#   - Online mixup augmentation (Beta(0.4,0.4), p=0.5)
+#   - Asymmetric focal loss (gamma_pos=0.5, gamma_neg=2.0)
+#   - All augmentation: time stretch, pitch shift, SpecAugment, gain, noise, RIR
+#
+# Architecture unchanged: Conv1D(26→24, k=5) → Conv1D(24→32, k=5) → Conv1D(32→1, k=1)
+# Target: All Onsets F1 > 0.80 (v3 baseline: 0.787)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true     # Proven in v3: helps kick/hi-hat discrimination
+  num_tempo_bins: 40           # NEW: tempo auxiliary head (60-200 BPM, stripped at export)
+
+loss:
+  type: "asymmetric_focal"     # Proven in v3: gamma_pos=0.5, gamma_neg=2.0
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true                  # Proven in v3: Beta(0.4, 0.4)
+  mixup_alpha: 0.4
+  epochs: 80                   # More epochs for tempo head convergence
+  patience: 15
+  tempo:                       # NEW: tempo auxiliary head training config
+    min_bpm: 60
+    max_bpm: 200
+    loss_weight: 0.1           # Low weight — auxiliary signal, not primary objective
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v9.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15

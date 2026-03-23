@@ -14,6 +14,23 @@ static constexpr float PHASE_SIGMA_REF = 0.08f;   // Expected RMS phase error wh
 static constexpr float PHASE_ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
 static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
 
+// Cold-start template bank: 8 common rhythmic patterns (16 bins = 16th-note resolution).
+// Used ONLY for 1-bar seeding during cold start — not for runtime matching or caching.
+// ~512 bytes flash. Each pattern normalized to sum ~1.0.
+static constexpr int NUM_SEED_TEMPLATES = 8;
+static constexpr int SEED_TEMPLATE_BINS = 16;
+static_assert(SLOT_BINS == SEED_TEMPLATE_BINS, "SLOT_BINS must match SEED_TEMPLATE_BINS for cosine similarity");
+static const float SEED_TEMPLATES[NUM_SEED_TEMPLATES][SEED_TEMPLATE_BINS] = {
+    {0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f, 0.25f,0.0f,0.0f,0.0f},  // 4otf
+    {0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f, 0.20f,0.0f,0.0f,0.0f, 0.30f,0.0f,0.0f,0.0f},  // backbeat
+    {0.35f,0.0f,0.0f,0.0f, 0.0f,0.0f,0.0f,0.0f,  0.35f,0.0f,0.0f,0.0f, 0.15f,0.0f,0.0f,0.15f}, // halftime
+    {0.20f,0.0f,0.0f,0.15f,0.0f,0.0f,0.20f,0.0f,  0.10f,0.0f,0.0f,0.0f, 0.15f,0.0f,0.20f,0.0f}, // breakbeat
+    {0.15f,0.0f,0.10f,0.0f,0.15f,0.0f,0.10f,0.0f,  0.15f,0.0f,0.10f,0.0f,0.15f,0.0f,0.10f,0.0f}, // 8th note
+    {0.25f,0.0f,0.10f,0.0f,0.0f,0.0f,0.0f,0.0f,   0.30f,0.0f,0.0f,0.10f,0.0f,0.0f,0.15f,0.10f}, // dnb
+    {0.20f,0.0f,0.0f,0.15f,0.0f,0.0f,0.20f,0.0f,  0.0f,0.0f,0.0f,0.15f, 0.20f,0.0f,0.0f,0.10f}, // dembow
+    {0.50f,0.0f,0.0f,0.0f, 0.0f,0.0f,0.0f,0.0f,  0.10f,0.0f,0.0f,0.0f, 0.20f,0.0f,0.0f,0.20f},  // sparse
+};
+
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -46,7 +63,7 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     // instant flush on first update (nowMs >> 0 would fire immediately)
     uint32_t now = time_.millis();
     onsetDensityWindowStart_ = now;
-    lastBarBoundaryMs_ = now;
+    resetSlots();
 
     return true;
 }
@@ -59,20 +76,18 @@ int AudioTracker::getHwGain() const {
     return mic_.getHwGain();
 }
 
-void AudioTracker::resetPatternMemory() {
-    memset(ioiBins_, 0, sizeof(ioiBins_));
-    memset(barBins_, 0, sizeof(barBins_));
-    memset(onsetTimes_, 0, sizeof(onsetTimes_));
-    onsetBufCount_ = 0;
-    onsetWriteIdx_ = 0;
-    ioiPeakMs_ = 500.0f;
-    ioiPeakBpm_ = 120.0f;
-    ioiPeakStrength_ = 0.0f;
-    ioiConfidence_ = 0.0f;
-    barEntropy_ = 1.0f;
-    patternConfidence_ = 0.0f;
-    patternBarsAccumulated_ = 0;
-    lastBarBoundaryMs_ = time_.millis();
+void AudioTracker::resetSlots() {
+    for (int i = 0; i < SLOT_COUNT; i++) {
+        memset(slots_[i].bins, 0, sizeof(slots_[i].bins));
+        slots_[i].confidence = 0.0f;
+        slots_[i].totalBars = 0;
+        slots_[i].age = 0;
+        slots_[i].valid = false;
+        slots_[i].seeded = false;
+    }
+    memset(currentDigest_, 0, sizeof(currentDigest_));
+    activeSlot_ = -1;
+    lastSlotCheckBeat_ = 0;
 }
 
 // ============================================================================
@@ -169,11 +184,6 @@ const AudioControl& AudioTracker::update(float dt) {
         lastAcfMs_ = nowMs;
         runFourierTempogram();
         updatePlpAnalysis();  // PLP epoch-fold + bass ACF + cross-correlate
-
-        // IOI analysis runs once per ACF cycle (same cadence)
-        if (patternEnabled) {
-            updateIoiAnalysis();
-        }
     }
 
     // 10. PLP phase update (free-running + pattern-based correction)
@@ -184,22 +194,11 @@ const AudioControl& AudioTracker::update(float dt) {
         periodicityStrength_ *= 0.998f;  // ~0.5s half-life at 62.5 Hz
     }
 
-    // 12. Pattern memory: decay bins + bar stats
-    //    (IOI analysis runs in the ACF block above, once per cycle)
-    if (patternEnabled) {
-        decayPatternBins();
-
-        // Bar-boundary stats: phase-accumulating boundary (avoids drift)
-        uint32_t currentBarMs = (uint32_t)(ioiPeakMs_ * 4.0f);
-        if (currentBarMs > 0 && nowMs - lastBarBoundaryMs_ >= currentBarMs) {
-            lastBarBoundaryMs_ += currentBarMs;
-            // Re-sync if accumulator drifted too far (tempo change or startup).
-            // Behind: more than half a bar late. Ahead: BPM was overestimated.
-            if (nowMs - lastBarBoundaryMs_ > currentBarMs / 2
-                || lastBarBoundaryMs_ > nowMs + currentBarMs / 2) {
-                lastBarBoundaryMs_ = nowMs;
-            }
-            computePatternStats();
+    // 12. Pattern slot cache: check every bar (4 beats)
+    if ((beatCount_ & 3) == 0 && beatCount_ != lastSlotCheckBeat_) {
+        lastSlotCheckBeat_ = beatCount_;
+        if (plpConfidence_ > 0.1f) {
+            checkPatternSlots();
         }
     }
 
@@ -313,6 +312,11 @@ void AudioTracker::runFourierTempogram() {
     }
 
     plpDftMag_ = bestMag;
+    // Fisher's g-statistic: max magnitude / sum of all magnitudes.
+    // Measures how concentrated the periodic energy is at one frequency.
+    // g > 0.3 → highly significant periodicity (p < 0.01)
+    // g ~ 0.05 → no significant periodicity (uniform spectrum)
+    // Fisher's g removed v82 — penalizes syncopated music. DFT magnitude used for confidence instead.
 
     // Reset adaptive phase correction state on significant period change
     // (>10% shift). Prevents old low-variance state from suppressing
@@ -340,6 +344,12 @@ void AudioTracker::runFourierTempogram() {
         bpm_ = bpm_ * tempoSmoothing + newBpm * (1.0f - tempoSmoothing);
     }
     beatPeriodFrames_ = OSS_FRAME_RATE * 60.0f / bpm_;
+
+    // Invalidate pattern slots on significant BPM change (>15%)
+    if (prevBpm_ > 0.0f && fabsf(bpm_ - prevBpm_) / prevBpm_ > 0.15f) {
+        resetSlots();
+    }
+    prevBpm_ = bpm_;
 }
 
 // ============================================================================
@@ -454,9 +464,17 @@ void AudioTracker::updatePlpAnalysis() {
     if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
     if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
-    // --- 4. PLP confidence from DFT magnitude + signal presence ---
+    // --- 4. PLP confidence from DFT magnitude + steep signal gate ---
+    // Use DFT magnitude directly (not Fisher's g — g penalizes tracks with multiple
+    // similarly-strong periods, common in syncopated music). Soft blend handles the
+    // confidence-to-output mapping without needing a principled [0,1] scale.
     float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
-    float signalPresence = clampf(mic_.getLevel() / plpSignalFloor, 0.0f, 1.0f);
+
+    // Steep signal gate: transition from 0→1 over a narrow range near noise floor.
+    // Once there's clearly audio (>2x noise floor), presence is 1.0 and doesn't
+    // attenuate DFT confidence. Only suppresses during true silence.
+    float micLevel = mic_.getLevel();
+    float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
     float targetConf = dftConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
@@ -473,17 +491,21 @@ void AudioTracker::updatePlpPhase() {
         beatCount_++;
     }
 
-    // Read extracted pattern at current phase position (linear interpolation)
-    if (plpPatternLen_ > 0 && plpConfidence_ > plpActivation) {
+    // Read PLP pattern and cosine fallback, blend by confidence.
+    // No hard threshold — published PLP systems run continuously (Meier 2024, librosa).
+    // Confidence naturally approaches 0 during silence/ambient, making the output
+    // smoothly degrade to the cosine fallback without a discontinuous switch.
+    float patternPulse = 0.5f;
+    if (plpPatternLen_ > 0) {
         float patPos = plpPhase_ * plpPatternLen_;
         int idx0 = static_cast<int>(patPos) % plpPatternLen_;
         float frac = patPos - floorf(patPos);
         int idx1 = (idx0 + 1) % plpPatternLen_;
-        plpPulseValue_ = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
-    } else {
-        // Fallback: cosine pulse (same shape as old phaseToPulse)
-        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+        patternPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
     }
+    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
+    plpPulseValue_ = cosinePulse * (1.0f - blend) + patternPulse * blend;
 
     // --- Beat stability tracking ---
     // Track PLP peak amplitude via EMA. Stability = current peak / EMA.
@@ -542,191 +564,156 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
         lastPulseMs_ = nowMs;
-
-        // Record onset for pattern memory (Phase A: IOI, Phase B: bar histogram)
-        recordOnsetForPattern(pulseStrength, nowMs);
     }
     lastPulseStrength_ = pulseStrength;
 }
 
 // ============================================================================
-// Pattern Memory (v77): IOI histogram + bar-position prediction
+// Pattern Slot Cache (v82): PLP pattern caching for instant section recall
 // ============================================================================
 
-void AudioTracker::recordOnsetForPattern(float strength, uint32_t nowMs) {
-    if (!patternEnabled) return;
-
-    // Store timestamp in circular buffer
-    onsetTimes_[onsetWriteIdx_] = nowMs;
-    onsetWriteIdx_ = (onsetWriteIdx_ + 1) % ONSET_BUF_SIZE;
-    if (onsetBufCount_ < ONSET_BUF_SIZE) onsetBufCount_++;
-
-    // Phase A: compute IOIs against recent onsets (not just previous one)
-    // This captures intervals at multiple subdivision levels
-    int maxBack = (onsetBufCount_ < 8) ? onsetBufCount_ - 1 : 8;
-    for (int back = 1; back <= maxBack; back++) {
-        // onsetWriteIdx_ was just incremented, so -1 is the slot just written,
-        // -1-back is 'back' slots before it in the circular buffer.
-        int prevIdx = (onsetWriteIdx_ - 1 - back + ONSET_BUF_SIZE) % ONSET_BUF_SIZE;
-        float ioiMs = (float)(nowMs - onsetTimes_[prevIdx]);
-        if (ioiMs >= IOI_MIN_MS && ioiMs <= IOI_MAX_MS) {
-            int bin = (int)((ioiMs - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
-            bin = (bin < 0) ? 0 : (bin >= IOI_BINS ? IOI_BINS - 1 : bin);
-            ioiBins_[bin] += strength * patternLearnRate;
-        }
+void AudioTracker::resamplePattern(const float* src, int srcLen, float* dst, int dstLen) {
+    if (srcLen <= 0) { memset(dst, 0, dstLen * sizeof(float)); return; }
+    for (int i = 0; i < dstLen; i++) {
+        float srcPos = static_cast<float>(i) / dstLen * srcLen;
+        int idx0 = static_cast<int>(srcPos) % srcLen;
+        float frac = srcPos - floorf(srcPos);
+        int idx1 = (idx0 + 1) % srcLen;
+        dst[i] = src[idx0] * (1.0f - frac) + src[idx1] * frac;
     }
-
-    // Phase B: update bar histogram (only when IOI is confident)
-    updateBarHistogram(strength, nowMs);
 }
 
-void AudioTracker::updateIoiAnalysis() {
-    // Triangular smoothing: 3-bin kernel (0.25, 0.5, 0.25) on stack-local copy.
-    // 512 bytes stack, runs every 150ms (same path as ACF's 1.1KB — they don't overlap).
-    float smoothed[IOI_BINS];
-    smoothed[0] = ioiBins_[0] * 0.75f + ioiBins_[1] * 0.25f;
-    for (int i = 1; i < IOI_BINS - 1; i++) {
-        smoothed[i] = ioiBins_[i - 1] * 0.25f + ioiBins_[i] * 0.5f + ioiBins_[i + 1] * 0.25f;
+float AudioTracker::cosineSimilarity(const float* a, const float* b, int len) {
+    float dot = 0.0f, normA = 0.0f, normB = 0.0f;
+    for (int i = 0; i < len; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
     }
-    smoothed[IOI_BINS - 1] = ioiBins_[IOI_BINS - 2] * 0.25f + ioiBins_[IOI_BINS - 1] * 0.75f;
+    float denom = sqrtf(normA) * sqrtf(normB);
+    return (denom > 1e-10f) ? dot / denom : 0.0f;
+}
 
-    // Find strongest IOI peak in the 250-1000ms range (60-240 BPM)
-    float bestVal = 0;
-    int bestBin = -1;
-    for (int i = IOI_BEAT_LOW; i <= IOI_BEAT_HIGH; i++) {
-        if (smoothed[i] > bestVal) {
-            bestVal = smoothed[i];
-            bestBin = i;
+int AudioTracker::allocateSlot() {
+    // Find first invalid slot
+    for (int i = 0; i < SLOT_COUNT; i++) {
+        if (!slots_[i].valid) return i;
+    }
+    // All valid — evict oldest (highest age)
+    int oldest = 0;
+    for (int i = 1; i < SLOT_COUNT; i++) {
+        if (slots_[i].age > slots_[oldest].age) oldest = i;
+    }
+    // Clear the evicted slot
+    memset(slots_[oldest].bins, 0, sizeof(slots_[oldest].bins));
+    slots_[oldest].valid = false;
+    slots_[oldest].totalBars = 0;
+    slots_[oldest].confidence = 0.0f;
+    slots_[oldest].seeded = false;
+    return oldest;
+}
+
+void AudioTracker::checkPatternSlots() {
+    if (plpPatternLen_ < 2) return;
+
+    // 1. Resample current PLP pattern to 16-bin digest
+    resamplePattern(plpPattern_, plpPatternLen_, currentDigest_, SLOT_BINS);
+
+    // 2. Compare against all valid slots
+    int bestSlot = -1;
+    float bestSim = 0.0f;
+    for (int i = 0; i < SLOT_COUNT; i++) {
+        if (!slots_[i].valid) continue;
+        float sim = cosineSimilarity(currentDigest_, slots_[i].bins, SLOT_BINS);
+        if (sim > bestSim) {
+            bestSim = sim;
+            bestSlot = i;
         }
     }
 
-    if (bestBin >= 0 && bestVal > 0.01f) {
-        // Parabolic interpolation: refine peak with sub-bin precision (~1-2ms vs ~12ms bin width)
-        float binWidth = (IOI_MAX_MS - IOI_MIN_MS) / IOI_BINS;
-        float peakBinMs = IOI_MIN_MS + bestBin * binWidth;
+    // 3. Decision logic
+    if (bestSlot >= 0 && bestSlot != activeSlot_ && bestSim > slotSwitchThreshold) {
+        // INSTANT RECALL: previously-seen section returned
+        activeSlot_ = bestSlot;
+        // Refresh LRU ages
+        for (int i = 0; i < SLOT_COUNT; i++) {
+            if (slots_[i].valid && i != activeSlot_) slots_[i].age++;
+        }
+        slots_[activeSlot_].age = 0;
+        // Blend cached pattern into PLP (slotSeedBlend controls mix ratio)
+        float tempPattern[MAX_PATTERN_LEN];
+        resamplePattern(slots_[activeSlot_].bins, SLOT_BINS, tempPattern, plpPatternLen_);
+        for (int j = 0; j < plpPatternLen_; j++) {
+            plpPattern_[j] = tempPattern[j] * slotSeedBlend + plpPattern_[j] * (1.0f - slotSeedBlend);
+        }
+        // Confidence boost
+        plpConfidence_ = fmaxf(plpConfidence_, slots_[activeSlot_].confidence * 0.8f);
+        // Reset phase correction for fast re-convergence at new section
+        phaseErrVar_ = 0.25f;
 
-        if (bestBin > IOI_BEAT_LOW && bestBin < IOI_BEAT_HIGH) {
-            float left = smoothed[bestBin - 1];
-            float center = smoothed[bestBin];
-            float right = smoothed[bestBin + 1];
-            float denom = left - 2.0f * center + right;
-            if (fabsf(denom) > 1e-6f) {
-                float offset = 0.5f * (left - right) / denom;
-                offset = clampf(offset, -0.5f, 0.5f);
-                peakBinMs += offset * binWidth;
+    } else if (bestSlot == activeSlot_ && bestSim > 0.50f && plpConfidence_ > slotSaveMinConf) {
+        // REINFORCE active slot with current PLP pattern
+        for (int i = 0; i < SLOT_BINS; i++) {
+            slots_[activeSlot_].bins[i] =
+                slots_[activeSlot_].bins[i] * (1.0f - slotUpdateRate) +
+                currentDigest_[i] * slotUpdateRate;
+        }
+        slots_[activeSlot_].totalBars++;
+        slots_[activeSlot_].confidence = plpConfidence_;
+
+    } else if (bestSim < slotNewThreshold && plpConfidence_ > slotSaveMinConf) {
+        // NEW SECTION: allocate a new slot
+        int newSlot = allocateSlot();
+        memcpy(slots_[newSlot].bins, currentDigest_, sizeof(currentDigest_));
+        slots_[newSlot].confidence = plpConfidence_;
+        slots_[newSlot].totalBars = 1;
+        slots_[newSlot].valid = true;
+        slots_[newSlot].age = 0;
+        slots_[newSlot].seeded = false;
+        // Age all other slots
+        for (int i = 0; i < SLOT_COUNT; i++) {
+            if (i != newSlot && slots_[i].valid) slots_[i].age++;
+        }
+        activeSlot_ = newSlot;
+
+    } else if (activeSlot_ < 0 && plpConfidence_ > slotSaveMinConf) {
+        // FIRST SLOT: no active slot yet, create one
+        activeSlot_ = 0;
+        memcpy(slots_[0].bins, currentDigest_, sizeof(currentDigest_));
+        slots_[0].confidence = plpConfidence_;
+        slots_[0].totalBars = 1;
+        slots_[0].valid = true;
+        slots_[0].age = 0;
+        slots_[0].seeded = false;
+    }
+
+    // 4. Template seeding for new/young slots (one-shot, reuses SEED_TEMPLATES)
+    if (activeSlot_ >= 0 && slots_[activeSlot_].valid && !slots_[activeSlot_].seeded &&
+        slots_[activeSlot_].totalBars >= 1 && slots_[activeSlot_].totalBars <= 3) {
+        float bestTemplateSim = 0.0f;
+        int bestTemplate = -1;
+        for (int t = 0; t < NUM_SEED_TEMPLATES; t++) {
+            float sim = cosineSimilarity(slots_[activeSlot_].bins, SEED_TEMPLATES[t], SLOT_BINS);
+            if (sim > bestTemplateSim) {
+                bestTemplateSim = sim;
+                bestTemplate = t;
             }
         }
-
-        // EMA smoothing: prevents bar histogram smearing from IOI jumps between bins.
-        // 30% new, 70% old — histogram accumulation already provides smoothing.
-        ioiPeakMs_ = ioiPeakMs_ * 0.7f + peakBinMs * 0.3f;
-        ioiPeakBpm_ = 60000.0f / ioiPeakMs_;
-        ioiPeakStrength_ = bestVal;
-
-        // Check agreement with ACF BPM (within 10% or at octave)
-        float acfBeatPeriodMs = 60000.0f / bpm_;
-        float ratio = ioiPeakMs_ / acfBeatPeriodMs;
-        bool agrees = (fabsf(ratio - 1.0f) < 0.10f) ||
-                      (fabsf(ratio - 0.5f) < 0.10f) ||
-                      (fabsf(ratio - 2.0f) < 0.10f);
-
-        if (agrees) {
-            ioiConfidence_ = fminf(ioiConfidence_ + 0.05f, 1.0f);
-        } else {
-            ioiConfidence_ *= 0.93f;  // Symmetric with ramp: ~1.5s to decay from 0.5 to 0.25
+        if (bestTemplate >= 0 && bestTemplateSim > 0.50f) {
+            // Blend template into slot
+            for (int i = 0; i < SLOT_BINS; i++) {
+                slots_[activeSlot_].bins[i] =
+                    0.5f * slots_[activeSlot_].bins[i] + 0.5f * SEED_TEMPLATES[bestTemplate][i];
+            }
+            // Also seed PLP pattern
+            float tempPattern[MAX_PATTERN_LEN];
+            resamplePattern(slots_[activeSlot_].bins, SLOT_BINS, tempPattern, plpPatternLen_);
+            for (int j = 0; j < plpPatternLen_; j++) {
+                plpPattern_[j] = tempPattern[j] * 0.5f + plpPattern_[j] * 0.5f;
+            }
         }
-    } else {
-        ioiConfidence_ *= 0.96f;  // Gentle decay when no peak found
+        slots_[activeSlot_].seeded = true;  // One-shot: don't re-seed this slot
     }
-}
-
-void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
-    if (ioiConfidence_ < 0.5f) return;  // Phase B inactive until Phase A confident
-
-    // Only accumulate strong onsets (kicks/snares) into the bar histogram.
-    if (strength < histogramMinStrength) return;
-
-    // Beat-stability-gated learning rate (RFC Phase 1):
-    // Stability > 0.7: pattern locked → low rate (protect established pattern)
-    // Stability 0.3-0.7: transitioning → normal rate
-    // Stability < 0.3: disrupted (fill/breakdown) → frozen (don't contaminate)
-    float effectiveRate;
-    if (beatStability_ < 0.3f) {
-        return;  // Frozen — fill/breakdown immunity
-    } else if (beatStability_ > 0.7f) {
-        effectiveRate = patternLearnRate * 0.5f;  // Protect established pattern
-    } else if (patternBarsAccumulated_ < 4) {
-        effectiveRate = patternLearnRate * 2.5f;  // Cold start: fast warm-up (~0.375)
-    } else {
-        effectiveRate = patternLearnRate;  // Normal
-    }
-
-    // Project onset onto bar grid using IOI peak as beat period.
-    float barPeriodMs = ioiPeakMs_ * 4.0f;
-    float elapsed = (float)(nowMs - lastBarBoundaryMs_);
-    float barPhase = fmodf(elapsed / barPeriodMs, 1.0f);
-    int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
-
-    barBins_[bin] = barBins_[bin] * (1.0f - effectiveRate) + strength * effectiveRate;
-}
-
-void AudioTracker::computePatternStats() {
-    if (patternBarsAccumulated_ < 0xFFFF) patternBarsAccumulated_++;  // Saturate to avoid wrap
-
-    // Shannon entropy of bar histogram (normalized to [0, 1]).
-    // Retained for serial diagnostics (getBarEntropy() is streamed via SerialConsole).
-    float sum = 0;
-    for (int i = 0; i < BAR_BINS; i++) sum += barBins_[i];
-    if (sum < 1e-6f) {
-        barEntropy_ = 1.0f;
-        patternConfidence_ *= 0.9f;
-        return;
-    }
-
-    float H = 0;
-    for (int i = 0; i < BAR_BINS; i++) {
-        float p = barBins_[i] / sum;
-        if (p > 1e-6f) H -= p * log2f(p);
-    }
-    barEntropy_ = H / 4.0f;  // log2(16) = 4.0
-
-    // Confidence update — peak-to-mean ratio measures pattern structure.
-    // 1.0 = flat (no pattern), 4.0+ = strong peaks (kick/snare).
-    float maxBin = 0.0f;
-    float meanBin = sum / BAR_BINS;
-    for (int i = 0; i < BAR_BINS; i++) {
-        if (barBins_[i] > maxBin) maxBin = barBins_[i];
-    }
-    float peakToMean = (meanBin > 1e-6f) ? (maxBin / meanBin) : 0.0f;
-    // Map peak-to-mean [1, 4] → target [0, 1]. At 1x (uniform) target=0,
-    // at 4x+ (strong beats) target=1. Typical 4otf pattern peaks at 2-3x.
-    float target = clampf((peakToMean - 1.0f) / 3.0f, 0.0f, 1.0f);
-
-    float alpha = (target > patternConfidence_) ? confidenceRise : confidenceDecay;
-    patternConfidence_ += (target - patternConfidence_) * alpha;
-}
-
-float AudioTracker::predictOnsetStrength(uint32_t nowMs) {
-    if (!patternEnabled || patternConfidence_ < 0.3f || ioiConfidence_ < 0.5f) return 0.0f;
-
-    // barPeriodMs is always >= 400ms (ioiPeakMs_ >= IOI_MIN_MS=100, * 4 = 400)
-    float barPeriodMs = ioiPeakMs_ * 4.0f;
-    float elapsed = (float)(nowMs - lastBarBoundaryMs_);
-    float barPhase = fmodf(elapsed / barPeriodMs, 1.0f);
-    int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
-    float frac = barPhase * BAR_BINS - floorf(barPhase * BAR_BINS);
-    int nextBin = (bin + 1) % BAR_BINS;
-    return (barBins_[bin] * (1.0f - frac) + barBins_[nextBin] * frac) * patternConfidence_;
-}
-
-void AudioTracker::decayPatternBins() {
-    // IOI bins: decay per frame (0.999^62.5 ≈ 0.94/sec, half-life ~11s).
-    // Runs every frame at 62.5 Hz — intentionally faster than bar bins
-    // because tempo can change quickly (breakdowns, DJ transitions).
-    for (int i = 0; i < IOI_BINS; i++) ioiBins_[i] *= ioiDecayRate;
-    // Bar bins: decay slower (patternDecayRate=0.9995, half-life ~22s at 62.5 Hz).
-    // Pattern persists through breakdowns.
-    for (int i = 0; i < BAR_BINS; i++) barBins_[i] *= patternDecayRate;
 }
 
 // ============================================================================
@@ -742,19 +729,21 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // Beat-proximity energy boost via PLP pulse (replaces subdivision-aware proximity)
     rawEnergy *= (1.0f + plpPulseValue_ * 0.3f * plpConfidence_);
 
-    // Pattern prediction (computed once, used for both anticipatory energy and pulse boost)
-    float patternPrediction = 0.0f;
-    if (patternEnabled) {
-        patternPrediction = predictOnsetStrength(nowMs);
-        // Anticipatory energy: subtle pre-glow before predicted onsets.
-        // patternLookahead=0.05 = 5% of beat period (~25ms at 120 BPM).
-        // Intentionally subtle — this is a "lights know what's coming" effect,
-        // not a full pre-flash. Increase to 0.12-0.15 for more visible anticipation.
-        if (anticipationGain > 0.0f) {
-            uint32_t lookaheadMs = (uint32_t)(patternLookahead * ioiPeakMs_);
-            float lookaheadPrediction = predictOnsetStrength(nowMs + lookaheadMs);
-            rawEnergy += lookaheadPrediction * anticipationGain;
-        }
+    // Pattern prediction via PLP pattern (replaces v77 bar histogram prediction)
+    float patternPrediction = plpPulseValue_ * plpConfidence_;
+
+    // Anticipatory energy: read PLP pattern at lookahead phase
+    static constexpr float ANTICIPATION_GAIN = 0.1f;
+    static constexpr float ANTICIPATION_LOOKAHEAD = 0.05f;
+    if (ANTICIPATION_GAIN > 0.0f && plpPatternLen_ > 0 && plpConfidence_ > 0.2f) {
+        float lookaheadPhase = plpPhase_ + ANTICIPATION_LOOKAHEAD;
+        if (lookaheadPhase >= 1.0f) lookaheadPhase -= 1.0f;
+        float patPos = lookaheadPhase * plpPatternLen_;
+        int idx0 = static_cast<int>(patPos) % plpPatternLen_;
+        float frac = patPos - floorf(patPos);
+        int idx1 = (idx0 + 1) % plpPatternLen_;
+        float lookaheadPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
+        rawEnergy += lookaheadPulse * ANTICIPATION_GAIN * plpConfidence_;
     }
 
     control_.energy = clampf(rawEnergy, 0.0f, 1.0f);
@@ -764,8 +753,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // PLP pulse (via phaseToPulse()) provides beat-synced breathing separately.
     float pulse = lastPulseStrength_;
 
-    if (pulse > 0.0f && patternPrediction > 0.0f) {
-        pulse *= (1.0f + patternPrediction * patternGain);
+    static constexpr float PATTERN_GAIN = 0.3f;
+    if (pulse > 0.0f && patternPrediction > 0.3f) {
+        pulse *= (1.0f + patternPrediction * PATTERN_GAIN);
     }
 
     control_.pulse = clampf(pulse, 0.0f, 1.0f);
@@ -777,6 +767,12 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // --- Rhythm Strength ---
     // PLP confidence can only boost, never drag down ACF periodicity.
     float strength = (plpConfidence_ > periodicityStrength_) ? plpConfidence_ : periodicityStrength_;
+
+    // Active slot confidence can only boost
+    if (activeSlot_ >= 0 && slots_[activeSlot_].valid) {
+        float slotConf = slots_[activeSlot_].confidence;
+        if (slotConf > strength) strength = slotConf;
+    }
 
     // Soft activation gate (quadratic falloff below threshold)
     if (strength < activationThreshold) {
@@ -803,10 +799,4 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         onsetDensityWindowStart_ = nowMs;
     }
     control_.onsetDensity = onsetDensity_;
-
-    // --- Downbeat / BeatInMeasure ---
-    // Not tracked. Current NN (Conv1D W16) is onset-only (single output channel).
-    // A future multi-output model could provide downbeat activation.
-    control_.downbeat = 0.0f;
-    control_.beatInMeasure = 0;
 }

@@ -56,14 +56,13 @@ struct HeatFireParams {
  *   4. Threshold drops on energy/beat/pulse → fire grows and surges
  *
  * Produces continuous flame tongues that split, merge, and sway organically.
- * All 7 AudioControl signals consumed:
+ * All 6 AudioControl signals consumed:
  *   energy        → flame height + threshold range + scroll speed + palette blend
  *   phase         → scroll speed breathing + on-beat threshold dip
  *   pulse         → transient threshold surge
- *   downbeat      → max threshold drop + warp expansion + color tint
+ *   plpPulse      → beat-synced pulsing via phaseToPulse()
  *   rhythmStrength→ organic/music blend for scroll and breathing
  *   onsetDensity  → scroll speed + tongue width
- *   beatInMeasure → beat 1/3/2+4 accent threshold patterns + left/right bias
  *
  * Layout-aware: 2D gradient for matrix layouts, 1D horizontal for linear strings.
  */
@@ -102,13 +101,6 @@ private:
     // Animation state
     float noiseTime_;
     float prevPhase_;
-    uint8_t beatCount_;
-
-    // Downbeat transient state (matching particle Fire decay patterns)
-    float downbeatSpreadMult_;   // Warp widening: 2.5 → 1.0 over 0.5s
-    float downbeatCoolSuppress_; // Threshold suppression: 1.0 → 0.0 over 0.5s
-    float beat3Suppress_;        // Beat 3 threshold suppression: 0.5 → 0.0 over 0.4s
-    float beat24Suppress_;       // Beats 2/4 threshold suppression: 0.25 → 0.0 over 0.3s
 
     // Smoothed audio state
     float smoothedEnergy_;       // Low-pass filtered energy (rises ~0.1s, falls ~0.25s)

@@ -2,9 +2,9 @@
 
 ## Overview
 
-AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 7 parameters.
+AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.
 
-**Current Version:** AudioTracker with ACF+PLP architecture (March 2026)
+**Current Version:** AudioTracker with ACF+PLP architecture + pattern slot cache (v82, March 2026)
 **BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF → period estimate
 **Phase/Pattern:** PLP Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Epoch-fold pattern extraction for visual pattern shape.
 **Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 PLP sources. Non-NN fallback: mic level.
@@ -16,23 +16,23 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 - **v3 (January 2026)**: Multi-hypothesis tracking (complex, phase jitter from competing corrections)
 - **v4 (February 2026)**: CBSS beat tracking (deterministic phase, counter-based beats)
 - **v5 (March 2026)**: AudioTracker — ACF+Comb+PLL, replaces AudioController CBSS. ~400 lines, ~10 params (vs ~2100 lines, ~56 params). No CBSS, no Bayesian fusion.
-- **v6 (March 2026, deployed)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. PLL proven ineffective: phase consistency ~0.04 across all models (essentially random). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
+- **v6 (March 2026)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram. Soft blend, cold-start template seeding, beat stability gated learning. PLL proven ineffective (phase consistency ~0.04).
+- **v7 (March 2026, deployed)**: Pattern slot cache — 4-slot LRU of 16-bin PLP pattern digests for instant section recall. v77 pattern memory (IOI histogram + bar histogram) replaced. Fisher's g removed (penalized syncopated music). downbeat/beatInMeasure removed from AudioControl. Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 
 ---
 
 ## Output: AudioControl Struct
 
-Generators receive a single struct with 7 parameters:
+Generators receive a single struct with 6 parameters:
 
 ```cpp
 struct AudioControl {
     float energy;         // Audio energy level (0-1)
     float pulse;          // Transient intensity (0-1)
     float phase;          // Beat phase position (0-1)
+    float plpPulse;       // PLP pattern value at current phase (0-1)
     float rhythmStrength; // Confidence in rhythm (0-1)
     float onsetDensity;   // Smoothed onsets per second (0-10+)
-    float downbeat;       // Reserved, always 0.0 (not wired)
-    uint8_t beatInMeasure; // Reserved, always 0 (not wired)
 };
 ```
 
@@ -41,12 +41,9 @@ struct AudioControl {
 | `energy` | Smoothed overall level | Baseline intensity, brightness |
 | `pulse` | Transient hits with beat context | Sparks, flashes, bursts |
 | `phase` | Position in beat cycle (0=on-beat) | Pulsing, breathing effects |
+| `plpPulse` | PLP extracted pattern value (epoch-folded) | Beat-synced pulsing, breathing animations |
 | `rhythmStrength` | Periodicity confidence | Music mode vs organic mode |
 | `onsetDensity` | Smoothed transients/second (EMA) | Content classification (dance=2-6, ambient=0-1) |
-| `downbeat` | Reserved (always 0.0) | Not currently active |
-| `beatInMeasure` | Reserved (always 0) | Not currently active |
-
-**Note:** The `downbeat` and `beatInMeasure` fields exist in the struct for forward compatibility but are always zero. The system focuses exclusively on onset detection, BPM identification, and pulse/phase alignment.
 
 ---
 
@@ -86,10 +83,12 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
            DFT magnitude → period selection (suppresses sub-harmonics)
            DFT phase → beat alignment (no cross-correlation needed)
            Epoch-fold pattern → plpPulse (visual pattern shape)
-           Confidence = DFT magnitude × signal presence (mic level gate)
+           Confidence = DFT magnitude × signal presence (steep mic level gate)
+           Soft blend: PLP pattern ↔ cosine fallback (continuous, no hard threshold)
+           Cold-start template seeding (8 patterns, cosine similarity > 0.50)
            Adaptive phase correction (EMA variance: fast during convergence, slow when locked)
                 |
-AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat=0, beatInMeasure=0 }
+AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
       |
 Generators (HeatFire, Water, Lightning)
 ```
@@ -98,7 +97,7 @@ Generators (HeatFire, Water, Lightning)
 
 1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
 
-2. **PLP Phase/Pattern Extraction (deployed)**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction used for the actual visual pattern shape. This replaced the PLL, which was proven ineffective (phase consistency ~0.04, essentially random).
+2. **PLP Phase/Pattern Extraction (deployed)**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction used for the actual visual pattern shape. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold — confidence naturally approaches 0 during silence). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests for instant section recall. This replaced the PLL, which was proven ineffective (phase consistency ~0.04, essentially random).
 
 3. **ACF Tempo Estimation**: Bare ACF peak-finding on spectral flux. Percival harmonic enhancement, Rayleigh prior, and comb filter bank removed in v80 — octave errors are non-issues with PLP.
 
@@ -137,7 +136,7 @@ Generators (HeatFire, Water, Lightning)
 16. **Phase Correction**: Correct phase toward DFT-derived alignment with adaptive rate (EMA variance-driven)
 17. **Epoch-fold Pattern**: Fold winning source at selected period for visual pattern shape
 18. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
-19. **Confidence**: DFT magnitude x signal presence (mic level gate)
+19. **Confidence**: DFT magnitude x signal presence (steep mic level gate)
 
 ### Evolution: Why ACF+Comb, and Why PLL Failed
 
@@ -158,12 +157,12 @@ Generators (HeatFire, Water, Lightning)
 
 ```cpp
 void Generator::update(float dt, const AudioControl& audio) {
-    if (audio.hasRhythm()) {
+    if (audio.rhythmStrength > 0.3f) {
         // Beat-synced behavior
         if (audio.pulse > 0.5f) {
             burstSparks();
         }
-        float breathe = audio.phaseToPulse();  // 1.0 on-beat, 0.0 off-beat
+        float breathe = audio.phaseToPulse();  // PLP pattern value at current phase
         setBrightness(breathe);
     } else {
         // Organic behavior (no rhythm detected)
@@ -175,11 +174,8 @@ void Generator::update(float dt, const AudioControl& audio) {
 ### Phase Patterns
 
 ```cpp
-// Smooth breathing (1.0 on-beat, 0.0 off-beat)
-float breathe = audio.phaseToPulse();
-
-// Distance from beat (0.0 on-beat, 0.5 off-beat)
-float offBeat = audio.distanceFromBeat();
+// PLP extracted pattern pulse (actual repeating energy shape)
+float breathe = audio.phaseToPulse();  // == audio.plpPulse
 
 // Raw phase (0.0 -> 1.0 over one beat cycle)
 float sawPhase = audio.phase;
@@ -205,19 +201,17 @@ float output = organic * (1.0f - blend) + synced * blend;
 |-----------|-------------|---------|-------|-------------|
 | `bpmMin` | `bpmmin` | 60 | 40-120 | Minimum detectable BPM |
 | `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
-| `rayleighBpm` | `rayleighbpm` | 140 | 60-180 | Rayleigh prior peak BPM (perceptual bias) |
-| `combFeedback` | `combfeedback` | 0.92 | 0.85-0.98 | Comb bank resonance strength |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 
 ### Phase Tracking (PLP — Fourier Tempogram)
 
-PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). No tunable parameters exposed — the algorithm is self-tuning via DFT.
+PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Beat stability gated learning provides fill/breakdown immunity. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests — cached PLP patterns recalled instantly when a previously-heard section returns (cosine similarity > 0.70). `plpActivation` parameter exists in settings but is vestigial (soft blend uses raw confidence). `plpSignalFloor` controls the steep mic-level gate (0→1 transition near noise floor).
 
 ### Rhythm Activation
 
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
-| `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Min periodicity to activate rhythm mode |
+| `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Soft gate: quadratic falloff below this threshold (no hard cutoff) |
 | `odfGateThreshold` | `odfgate` | 0.25 | 0.0-0.5 | NN output floor gate (suppress noise) |
 
 ### Pulse/Energy Modulation — PLP phase-driven
@@ -326,7 +320,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 **Core Audio System:**
 - `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP (~10 tunable params)
 - `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP Fourier tempogram, pulse detection, output synthesis)
-- `blinky-things/audio/AudioControl.h` - Output struct definition (8 fields including plpPulse)
+- `blinky-things/audio/AudioControl.h` - Output struct definition (6 fields)
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
 - `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)
 - `blinky-things/audio/frame_onset_model_data.h` - INT8 TFLite model weights
@@ -346,7 +340,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 **Beat Tracker Inspection:**
 ```bash
-show beat           # Show AudioTracker state (BPM, phase, periodicity, comb bank)
+show beat           # Show AudioTracker state (BPM, phase, periodicity, PLP)
 audio               # Show overall audio status + BPM
 json beat           # JSON output of beat tracker state
 json rhythm         # JSON output of rhythm tracking state

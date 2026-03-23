@@ -5,14 +5,14 @@
 /**
  * AudioControl - Unified audio control signal for visual generators
  *
- * Synthesizes all audio analysis into 7 parameters.
+ * Synthesizes all audio analysis into 6 parameters.
  * Generators receive this struct and don't need to know about:
  * - Microphone processing
  * - FFT/spectral analysis
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 32 bytes (7 floats + 1 uint8_t + padding)
+ * Memory: 24 bytes (6 floats)
  */
 struct AudioControl {
     // === ENERGY ===
@@ -57,15 +57,6 @@ struct AudioControl {
     // Use for: Content classification, organic/music mode blending
     float onsetDensity = 0.0f;
 
-    // === DOWNBEAT ===
-    // Downbeat activation (0.0 - 1.0). Always 0 — not tracked by current model.
-    // Reserved for future multi-output model.
-    float downbeat = 0.0f;
-
-    // === BEAT IN MEASURE ===
-    // Position in the current measure. Always 0 — not tracked by current model.
-    uint8_t beatInMeasure = 0;
-
     // === CONVENIENCE METHODS ===
 
     /**
@@ -76,14 +67,5 @@ struct AudioControl {
      */
     inline float phaseToPulse() const {
         return plpPulse;
-    }
-
-    /**
-     * Get phase distance from nearest beat.
-     * Returns 0.0 when on-beat (phase near 0 or 1), 0.5 when off-beat.
-     */
-    inline float distanceFromBeat() const {
-        float d = phase < 0.5f ? phase : (1.0f - phase);
-        return d;
     }
 };

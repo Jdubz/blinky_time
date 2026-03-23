@@ -11,9 +11,7 @@
 #include <Arduino.h>
 
 Fire::Fire()
-    : params_(), beatCount_(0), noiseTime_(0.0f),
-      downbeatSpreadMult_(1.0f), downbeatColorShift_(0.0f),
-      downbeatVelBoost_(0.0f), spawnBias_(0.0f),
+    : params_(), noiseTime_(0.0f),
       paletteBias_(0.0f), background_(nullptr) {}
 
 Fire::~Fire() {
@@ -22,8 +20,6 @@ Fire::~Fire() {
 
 bool Fire::begin(const DeviceConfig& config) {
     if (!ParticleGenerator::begin(config)) return false;
-
-    beatCount_ = 0;
 
     return true;
 }
@@ -100,24 +96,13 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
 void Fire::reset() {
     ParticleGenerator::reset();
-    beatCount_ = 0;
     noiseTime_ = 0.0f;
-    downbeatSpreadMult_ = 1.0f;
-    downbeatColorShift_ = 0.0f;
-    downbeatVelBoost_   = 0.0f;
-    spawnBias_          = 0.0f;
     paletteBias_        = 0.0f;
 }
 
 void Fire::spawnParticles(float dt) {
     float spawnProb;
     uint8_t sparkCount = 0;
-
-    // Decay downbeat transient effect state
-    downbeatSpreadMult_ = max(1.0f, downbeatSpreadMult_ - 3.0f  * dt);  // 1.5 range / 0.5s
-    downbeatColorShift_ = max(0.0f, downbeatColorShift_ - 2.0f  * dt);  // 1.0 range / 0.5s
-    downbeatVelBoost_   = max(0.0f, downbeatVelBoost_   - 1.67f * dt);  // 0.5 range / 0.3s
-    spawnBias_         *= max(0.0f, 1.0f - dt * 3.0f);                  // decay τ ≈ 0.33s
 
     // MUSIC-DRIVEN behavior (rhythmStrength weighted)
     float phasePulse = audio_.phaseToPulse();
@@ -139,32 +124,7 @@ void Fire::spawnParticles(float dt) {
 
     // Extra burst on predicted beats (only when rhythm is strong)
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
-        beatCount_++;
         sparkCount += (uint8_t)(burst * audio_.rhythmStrength);
-
-        // Downbeat (beat 1): maximum dramatic effect
-        if (audio_.downbeat > 0.5f) {
-            sparkCount += (uint8_t)(burst * audio_.downbeat);
-            downbeatSpreadMult_ = 2.5f;   // Width expansion: 2.5× spread
-            downbeatColorShift_ = 1.0f;   // Color temperature: hot white/blue tint
-            downbeatVelBoost_   = 0.5f;   // Velocity burst: 1.5× for 0.3s
-        }
-
-        // Beat 3: secondary accent burst (50% of full beat burst)
-        if (audio_.beatInMeasure == 3 && audio_.rhythmStrength > 0.5f) {
-            sparkCount += (uint8_t)(burst * 0.5f * audio_.rhythmStrength);
-        }
-
-        // Beats 2 & 4: lighter spawn rate bump only
-        if ((audio_.beatInMeasure == 2 || audio_.beatInMeasure == 4) &&
-                audio_.rhythmStrength > 0.5f) {
-            sparkCount += (uint8_t)(burst * 0.25f * audio_.rhythmStrength);
-        }
-
-        // Left/right rocking bias: odd beats lean one way, even beats the other
-        if (audio_.beatInMeasure > 0 && audio_.rhythmStrength > 0.5f) {
-            spawnBias_ = (audio_.beatInMeasure % 2 == 1) ? -0.25f : 0.25f;
-        }
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
@@ -190,12 +150,6 @@ void Fire::spawnParticles(float dt) {
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
         getSpawnPosition(x, y);
-
-        // Apply beat-in-measure left/right spawn bias (visual "rocking")
-        if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
-            x += spawnBias_ * crossDim_;
-            x = max(0.0f, min((float)(width_ - 1), x));
-        }
 
         // Base speed for this spark (dimension-scaled)
         float baseSpeed = scaledVelMin() +
@@ -224,8 +178,7 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
     getInitialVelocity(baseSpeed, vx, vy);
 
     // Add spread perpendicular to main direction (dimension-scaled)
-    // Downbeat widens the flame: spread multiplier decays from 2.5× back to 1.0×
-    float spreadAmount = (random(200) - 100) * scaledSpread() * downbeatSpreadMult_ / 100.0f;
+    float spreadAmount = (random(200) - 100) * scaledSpread() / 100.0f;
     if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
         vx += spreadAmount;  // Matrix: horizontal spread
     } else {
@@ -292,12 +245,9 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
         intensity = (uint8_t)min(255, (int)intensity + boost);
     }
 
-    // Downbeat velocity burst: up to 1.5× at peak, decays over 0.3s
-    float velBurst = 1.0f + downbeatVelBoost_;
-
     // Apply speed and velocity multipliers
-    vx *= velocityMult * speedMult * velBurst;
-    vy *= velocityMult * speedMult * velBurst;
+    vx *= velocityMult * speedMult;
+    vy *= velocityMult * speedMult;
 
     pool_.spawn(x, y, vx, vy, intensity, lifespan, 1.0f,
                ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE);
@@ -417,15 +367,6 @@ uint32_t Fire::particleColor(uint8_t intensity) const {
     uint8_t r = (uint8_t)(wr + blend * (hr - wr));
     uint8_t g = (uint8_t)(wg + blend * (hg - wg));
     uint8_t b = (uint8_t)(wb + blend * (hb - wb));
-
-    // Downbeat color temperature shift: push toward hot white/pale blue
-    // downbeatColorShift_ decays 1.0→0.0 over 0.5s after each downbeat
-    if (downbeatColorShift_ > 0.0f) {
-        float s = downbeatColorShift_;
-        r = (uint8_t)min(255, (int)r + (int)(s * 40));
-        g = (uint8_t)min(255, (int)g + (int)(s * 50));
-        b = (uint8_t)min(255, (int)b + (int)(s * 80));
-    }
 
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }

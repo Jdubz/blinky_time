@@ -218,17 +218,12 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.midFluxWeight = 0.2f;
     data_.tracker.highFluxWeight = 0.3f;
 
-    // Pattern memory (v77)
-    data_.tracker.patternLearnRate = 0.15f;
-    data_.tracker.patternDecayRate = 0.9995f;
-    data_.tracker.ioiDecayRate = 0.999f;
-    data_.tracker.patternGain = 0.3f;
-    data_.tracker.anticipationGain = 0.1f;
-    data_.tracker.patternLookahead = 0.05f;
-    data_.tracker.confidenceRise = 0.05f;
-    data_.tracker.confidenceDecay = 0.15f;
-    data_.tracker.histogramMinStrength = 0.5f;
-    data_.tracker.patternEnabled = 1;
+    // Pattern slot cache (v82)
+    data_.tracker.slotSwitchThreshold = 0.70f;
+    data_.tracker.slotNewThreshold = 0.40f;
+    data_.tracker.slotUpdateRate = 0.15f;
+    data_.tracker.slotSaveMinConf = 0.50f;
+    data_.tracker.slotSeedBlend = 0.70f;
 
     data_.brightness = 100;
 }
@@ -606,16 +601,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.highFluxWeight, 0.0f, 1.0f, F("tracker.highFluxW"));
         VALIDATE_INT(data_.tracker.acfPeriodMs, 50, 500, F("tracker.acfPeriod"));
 
-        // Pattern memory (v77)
-        validateFloat(data_.tracker.patternLearnRate, 0.01f, 0.5f, F("tracker.patLearn"));
-        validateFloat(data_.tracker.patternDecayRate, 0.990f, 0.9999f, F("tracker.patDecay"));
-        validateFloat(data_.tracker.ioiDecayRate, 0.990f, 0.9999f, F("tracker.ioiDecay"));
-        validateFloat(data_.tracker.patternGain, 0.0f, 1.0f, F("tracker.patGain"));
-        validateFloat(data_.tracker.anticipationGain, 0.0f, 0.5f, F("tracker.patAnticipation"));
-        validateFloat(data_.tracker.patternLookahead, 0.0f, 0.15f, F("tracker.patLookahead"));
-        validateFloat(data_.tracker.confidenceRise, 0.01f, 0.5f, F("tracker.patRise"));
-        validateFloat(data_.tracker.confidenceDecay, 0.01f, 0.5f, F("tracker.patFall"));
-        validateFloat(data_.tracker.histogramMinStrength, 0.1f, 0.9f, F("tracker.patMinStren"));
+        // Pattern slot cache (v82)
+        validateFloat(data_.tracker.slotSwitchThreshold, 0.50f, 0.95f, F("tracker.slotSwitch"));
+        validateFloat(data_.tracker.slotNewThreshold, 0.20f, 0.60f, F("tracker.slotNew"));
+        validateFloat(data_.tracker.slotUpdateRate, 0.05f, 0.40f, F("tracker.slotUpdate"));
+        validateFloat(data_.tracker.slotSaveMinConf, 0.20f, 0.80f, F("tracker.slotSaveConf"));
+        validateFloat(data_.tracker.slotSeedBlend, 0.30f, 0.95f, F("tracker.slotSeedBlend"));
 
         // Copy to AudioTracker
         tracker->bpmMin = data_.tracker.bpmMin;
@@ -643,17 +634,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->getSpectral().midFluxWeight = data_.tracker.midFluxWeight;
         tracker->getSpectral().highFluxWeight = data_.tracker.highFluxWeight;
 
-        // Pattern memory (v77)
-        tracker->patternLearnRate = data_.tracker.patternLearnRate;
-        tracker->patternDecayRate = data_.tracker.patternDecayRate;
-        tracker->ioiDecayRate = data_.tracker.ioiDecayRate;
-        tracker->patternGain = data_.tracker.patternGain;
-        tracker->anticipationGain = data_.tracker.anticipationGain;
-        tracker->patternLookahead = data_.tracker.patternLookahead;
-        tracker->confidenceRise = data_.tracker.confidenceRise;
-        tracker->confidenceDecay = data_.tracker.confidenceDecay;
-        tracker->histogramMinStrength = data_.tracker.histogramMinStrength;
-        tracker->patternEnabled = (data_.tracker.patternEnabled != 0);
+        // Pattern slot cache (v82)
+        tracker->slotSwitchThreshold = data_.tracker.slotSwitchThreshold;
+        tracker->slotNewThreshold = data_.tracker.slotNewThreshold;
+        tracker->slotUpdateRate = data_.tracker.slotUpdateRate;
+        tracker->slotSaveMinConf = data_.tracker.slotSaveMinConf;
+        tracker->slotSeedBlend = data_.tracker.slotSeedBlend;
     }
 
     #undef VALIDATE_INT
@@ -767,17 +753,12 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.midFluxWeight = tracker->getSpectral().midFluxWeight;
         data_.tracker.highFluxWeight = tracker->getSpectral().highFluxWeight;
 
-        // Pattern memory (v77)
-        data_.tracker.patternLearnRate = tracker->patternLearnRate;
-        data_.tracker.patternDecayRate = tracker->patternDecayRate;
-        data_.tracker.ioiDecayRate = tracker->ioiDecayRate;
-        data_.tracker.patternGain = tracker->patternGain;
-        data_.tracker.anticipationGain = tracker->anticipationGain;
-        data_.tracker.patternLookahead = tracker->patternLookahead;
-        data_.tracker.confidenceRise = tracker->confidenceRise;
-        data_.tracker.confidenceDecay = tracker->confidenceDecay;
-        data_.tracker.histogramMinStrength = tracker->histogramMinStrength;
-        data_.tracker.patternEnabled = tracker->patternEnabled ? 1 : 0;
+        // Pattern slot cache (v82)
+        data_.tracker.slotSwitchThreshold = tracker->slotSwitchThreshold;
+        data_.tracker.slotNewThreshold = tracker->slotNewThreshold;
+        data_.tracker.slotUpdateRate = tracker->slotUpdateRate;
+        data_.tracker.slotSaveMinConf = tracker->slotSaveMinConf;
+        data_.tracker.slotSeedBlend = tracker->slotSeedBlend;
     }
 
     saveToFlash();

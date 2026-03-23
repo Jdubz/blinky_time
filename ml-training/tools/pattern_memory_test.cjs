@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * Pattern Memory Test Suite
+ * Pattern Slot Cache Test Suite (v82)
  *
- * Plays full tracks through real speakers, collects pattern memory telemetry
- * from firmware via serial (stream debug + json pattern polling), and analyzes
+ * Plays full tracks through real speakers, collects pattern slot cache telemetry
+ * from firmware via serial (stream debug + json slots polling), and analyzes
  * against ground truth derived from beat/onset labels.
  *
  * Test metrics:
- *   1. IOI precision: |ioiBpm - gtBpm| < 5 BPM (octave-tolerant)
- *   2. Cold start: bars until pc > 0.3, should be ≤ 4
- *   3. Fill tolerance: min pc during fill windows ≥ 0.2
- *   4. Cache save: cache entry count increases when pc crosses 0.6
- *   5. Cache restore: bars until pc > 0.4 after gap/section-change ≤ 8
- *   6. Template stability: % snapshots with same tmpl during steady sections > 70%
+ *   1. BPM precision: |bpm - gtBpm| < 5 BPM (octave-tolerant)
+ *   2. Cold start: bars until active slot confidence > 0.3, should be <= 4
+ *   3. Fill tolerance: min active slot confidence during fill windows >= 0.2
+ *   4. Cache save: valid slot count increases when confidence crosses 0.6
+ *   5. Cache restore: bars until confidence > 0.4 after gap/section-change <= 8
+ *   6. Slot stability: % snapshots with same active slot during steady sections > 70%
  *
  * Usage:
  *   cd blinky-test-player
@@ -62,9 +62,6 @@ const COLD_START_TRACKS = ['techno-minimal-emotion', 'amapiano-vibez', 'breakbea
 const FILL_TRACKS = ['dubstep-edm-halftime', 'reggaeton-fuego-lento', 'techno-dub-groove'];
 const CACHE_RESTORE_TRACKS = ['dnb-energetic-breakbeat', 'amapiano-vibez'];
 const TEMPLATE_TRACKS = ['techno-minimal-emotion', 'breakbeat-background', 'reggaeton-fuego-lento'];
-
-// Template name lookup
-const TEMPLATE_NAMES = ['4otf', 'backbeat', 'halftime', 'breakbeat', '8thnote', 'dnb', 'dembow', 'sparse'];
 
 // Audio lock
 const AUDIO_LOCK = '/tmp/blinky-audio.lock';
@@ -161,8 +158,8 @@ function sendAndReceive(port, cmd, timeoutMs = 2000) {
                 if (trimmed.startsWith('{')) {
                     try {
                         const obj = JSON.parse(trimmed);
-                        // Distinguish pattern response (has "pc" key, no "m" key)
-                        if ('pc' in obj && !('m' in obj)) {
+                        // Distinguish slot response (has "active" key, no "m" key)
+                        if ('active' in obj && !('m' in obj)) {
                             clearTimeout(timer);
                             port.removeListener('data', onData);
                             resolve(obj);
@@ -216,23 +213,34 @@ async function runTrackTest(port, trackName, manifest, groundTruth) {
 
                 // Stream line (has "m" key with music telemetry)
                 if (obj.m) {
+                    const sl = obj.m.sl || {};
+                    const activeId = sl.id !== undefined ? sl.id : -1;
+                    const slotConfs = sl.conf || [];
+                    const activeConf = (activeId >= 0 && activeId < slotConfs.length) ? slotConfs[activeId] : 0;
                     streamReadings.push({
                         trackTime,
                         bpm: obj.m.bpm || 0,
-                        pc: obj.m.pc || 0,
-                        ic: obj.m.ic || 0,
-                        ib: obj.m.ib || 0,
-                        be: obj.m.be || 0,
+                        activeSlot: activeId,
+                        activeConf,
+                        slotConfs,
                         pulse: obj.m.p || 0,
                         energy: obj.m.e || 0,
                     });
                 }
 
-                // Pattern snapshot response (has "pc" key, no "m" key)
-                if ('pc' in obj && !('m' in obj)) {
+                // Slot snapshot response (has "active" key, no "m" key)
+                if ('active' in obj && !('m' in obj)) {
+                    const slots = obj.slots || [];
+                    const validCount = slots.filter(s => s.valid).length;
+                    const activeConf = (obj.active >= 0 && obj.active < slots.length) ? slots[obj.active].conf : 0;
+                    const totalBars = slots.reduce((sum, s) => sum + (s.bars || 0), 0);
                     patternSnapshots.push({
                         trackTime,
-                        ...obj,
+                        active: obj.active,
+                        activeConf,
+                        validSlots: validCount,
+                        totalBars,
+                        slots,
                     });
                 }
             } catch (e) { /* skip */ }
@@ -247,9 +255,9 @@ async function runTrackTest(port, trackName, manifest, groundTruth) {
         trackPath,
     ]);
 
-    // 5. Poll json pattern every 2s during playback
+    // 5. Poll json slots every 2s during playback
     const pollInterval = setInterval(() => {
-        port.write('json pattern\n');
+        port.write('json slots\n');
     }, 2000);
 
     // 6. Wait for ffplay to exit (or timeout at duration + 5s)
@@ -270,12 +278,20 @@ async function runTrackTest(port, trackName, manifest, groundTruth) {
     await sleep(1000);
     await sendCommand(port, 'stream off');
 
-    // Final pattern snapshot
-    const finalSnapshot = await sendAndReceive(port, 'json pattern');
+    // Final slot snapshot
+    const finalSnapshot = await sendAndReceive(port, 'json slots');
     if (finalSnapshot) {
+        const slots = finalSnapshot.slots || [];
+        const validCount = slots.filter(s => s.valid).length;
+        const activeConf = (finalSnapshot.active >= 0 && finalSnapshot.active < slots.length) ? slots[finalSnapshot.active].conf : 0;
+        const totalBars = slots.reduce((sum, s) => sum + (s.bars || 0), 0);
         patternSnapshots.push({
             trackTime: (Date.now() - playbackStart) / 1000.0,
-            ...finalSnapshot,
+            active: finalSnapshot.active,
+            activeConf,
+            validSlots: validCount,
+            totalBars,
+            slots,
         });
     }
 
@@ -289,56 +305,56 @@ async function runTrackTest(port, trackName, manifest, groundTruth) {
 // Analysis
 // ============================================================================
 
-function analyzeIOI(data) {
-    // Median |ib - gtBpm| after 10s settle (octave-tolerant)
+function analyzeBPM(data) {
+    // Median |bpm - gtBpm| after 10s settle (octave-tolerant)
     const settleTime = 10.0;
-    const settled = data.streamReadings.filter(r => r.trackTime > settleTime && r.ib > 0);
+    const settled = data.streamReadings.filter(r => r.trackTime > settleTime && r.bpm > 0);
     if (settled.length === 0) return { error: Infinity, pass: false, readings: 0 };
 
     const errors = settled.map(r => {
-        const ib = r.ib;
+        const bpm = r.bpm;
         const gt = data.gtBpm;
         return Math.min(
-            Math.abs(ib - gt),
-            Math.abs(ib - gt * 2),
-            Math.abs(ib - gt / 2),
+            Math.abs(bpm - gt),
+            Math.abs(bpm - gt * 2),
+            Math.abs(bpm - gt / 2),
         );
     });
     errors.sort((a, b) => a - b);
     const median = errors[Math.floor(errors.length / 2)];
 
-    // Also get the median ib for display
-    const ibs = settled.map(r => r.ib).sort((a, b) => a - b);
-    const medianIb = ibs[Math.floor(ibs.length / 2)];
+    // Also get the median bpm for display
+    const bpms = settled.map(r => r.bpm).sort((a, b) => a - b);
+    const medianBpm = bpms[Math.floor(bpms.length / 2)];
 
     return {
         medianError: Math.round(median * 10) / 10,
-        medianIb: Math.round(medianIb * 10) / 10,
+        medianBpm: Math.round(medianBpm * 10) / 10,
         pass: median < 5.0,
         readings: settled.length,
     };
 }
 
 function analyzeColdStart(data) {
-    // Bars until pc > 0.3 (from snapshots)
+    // Bars until active slot confidence > 0.3 (from snapshots)
     const snapshots = data.patternSnapshots;
     for (const s of snapshots) {
-        if (s.pc > 0.3) {
-            return { bars: s.bars || 0, pass: (s.bars || 0) <= 4 };
+        if (s.activeConf > 0.3) {
+            return { bars: s.totalBars || 0, pass: (s.totalBars || 0) <= 4 };
         }
     }
     // Never crossed 0.3
-    const lastBars = snapshots.length > 0 ? snapshots[snapshots.length - 1].bars : 0;
+    const lastBars = snapshots.length > 0 ? snapshots[snapshots.length - 1].totalBars : 0;
     return { bars: lastBars, pass: false };
 }
 
 function analyzeFillTolerance(data, groundTruth) {
     if (!groundTruth || !groundTruth.fills || groundTruth.fills.length === 0) {
-        return { minPc: 1.0, pass: true, fillCount: 0 };
+        return { minConf: 1.0, pass: true, fillCount: 0 };
     }
 
-    // Find min pc during fill bar time windows
-    let minPc = 1.0;
+    // Find min active slot confidence during fill bar time windows
+    let minConf = 1.0;
     for (const fill of groundTruth.fills) {
         const fillStart = fill.startTime;
         const fillEnd = fill.endTime;
@@ -347,47 +363,47 @@ function analyzeFillTolerance(data, groundTruth) {
             r => r.trackTime >= fillStart && r.trackTime <= fillEnd + 2.0
         );
         for (const r of fillReadings) {
-            if (r.pc < minPc) minPc = r.pc;
+            if (r.activeConf < minConf) minConf = r.activeConf;
         }
     }
 
     return {
-        minPc: Math.round(minPc * 100) / 100,
-        pass: minPc >= 0.2,
+        minConf: Math.round(minConf * 100) / 100,
+        pass: minConf >= 0.2,
         fillCount: groundTruth.fills.length,
     };
 }
 
 function analyzeCacheSave(data) {
-    // Cache entry count should increase at some point when pc > 0.6
+    // Valid slot count should increase at some point when confidence > 0.6
     const snapshots = data.patternSnapshots;
-    let maxCache = 0;
-    let pcReached06 = false;
+    let maxSlots = 0;
+    let confReached06 = false;
     for (const s of snapshots) {
-        if (s.pc > 0.6) pcReached06 = true;
-        if (s.cache > maxCache) maxCache = s.cache;
+        if (s.activeConf > 0.6) confReached06 = true;
+        if (s.validSlots > maxSlots) maxSlots = s.validSlots;
     }
 
     return {
-        maxCacheEntries: maxCache,
-        pass: !pcReached06 || maxCache >= 1,  // pass if pc never reached 0.6 (N/A) or cache saved
-        pcReached06,
+        maxValidSlots: maxSlots,
+        pass: !confReached06 || maxSlots >= 1,  // pass if conf never reached 0.6 (N/A) or slot saved
+        confReached06,
     };
 }
 
 function analyzeCacheRestore(data) {
-    // After gap/section-change where pc < 0.3: bars until pc > 0.4
+    // After gap/section-change where active confidence < 0.3: bars until conf > 0.4
     const snapshots = data.patternSnapshots;
     let droppedBelow03 = false;
     let barsAtDrop = 0;
 
     for (const s of snapshots) {
-        if (s.pc < 0.3 && !droppedBelow03) {
+        if (s.activeConf < 0.3 && !droppedBelow03) {
             droppedBelow03 = true;
-            barsAtDrop = s.bars || 0;
+            barsAtDrop = s.totalBars || 0;
         }
-        if (droppedBelow03 && s.pc > 0.4) {
-            const barsToRecover = (s.bars || 0) - barsAtDrop;
+        if (droppedBelow03 && s.activeConf > 0.4) {
+            const barsToRecover = (s.totalBars || 0) - barsAtDrop;
             return { barsToRecover, pass: barsToRecover <= 8, triggered: true };
         }
     }
@@ -395,19 +411,19 @@ function analyzeCacheRestore(data) {
     return { barsToRecover: -1, pass: true, triggered: false };  // N/A
 }
 
-function analyzeTemplateStability(data) {
-    // % of snapshots with same tmpl during steady 8+ bar sections
-    const snapshots = data.patternSnapshots.filter(s => (s.bars || 0) >= 8);
-    if (snapshots.length === 0) return { stability: 0, pass: false, dominantTemplate: -1 };
+function analyzeSlotStability(data) {
+    // % of snapshots with same active slot during steady 8+ bar sections
+    const snapshots = data.patternSnapshots.filter(s => (s.totalBars || 0) >= 8);
+    if (snapshots.length === 0) return { stability: 0, pass: false, dominantSlot: -1 };
 
-    // Count template occurrences
+    // Count active slot occurrences
     const counts = {};
     for (const s of snapshots) {
-        const t = s.tmpl;
+        const t = s.active;
         counts[t] = (counts[t] || 0) + 1;
     }
 
-    // Find dominant template
+    // Find dominant slot
     let maxCount = 0;
     let dominant = -1;
     for (const [t, c] of Object.entries(counts)) {
@@ -418,8 +434,7 @@ function analyzeTemplateStability(data) {
     return {
         stability: Math.round(stability * 100),
         pass: stability > 0.70,
-        dominantTemplate: dominant,
-        templateName: dominant >= 0 && dominant < TEMPLATE_NAMES.length ? TEMPLATE_NAMES[dominant] : 'none',
+        dominantSlot: dominant,
     };
 }
 
@@ -447,7 +462,7 @@ async function main() {
         trackList = DEFAULT_TRACKS.filter(t => manifest[t]);
     }
 
-    console.log(`\n=== Pattern Memory Test Suite ===`);
+    console.log(`\n=== Pattern Slot Cache Test Suite ===`);
     console.log(`Devices: ${portPaths.length}, Tracks: ${trackList.length}`);
     console.log(`Music dir: ${musicDir}\n`);
 
@@ -493,16 +508,16 @@ async function main() {
         const data = await runTrackTest(port, trackName, manifest, groundTruth);
 
         // Analyze
-        const ioi = analyzeIOI(data);
+        const bpmResult = analyzeBPM(data);
         const coldStart = analyzeColdStart(data);
         const fill = analyzeFillTolerance(data, groundTruth);
         const cacheSave = analyzeCacheSave(data);
         const cacheRestore = analyzeCacheRestore(data);
-        const template = analyzeTemplateStability(data);
+        const slotStability = analyzeSlotStability(data);
 
         // Display results
         let line = '  ';
-        line += `IOI: ${ioi.medianIb} BPM (err=${ioi.medianError}) ${ioi.pass ? '✓' : '✗'}`;
+        line += `BPM: ${bpmResult.medianBpm} (err=${bpmResult.medianError}) ${bpmResult.pass ? '✓' : '✗'}`;
 
         if (COLD_START_TRACKS.includes(trackName)) {
             line += `  Cold: ${coldStart.bars} bars ${coldStart.pass ? '✓' : '✗'}`;
@@ -511,18 +526,18 @@ async function main() {
         }
 
         if (FILL_TRACKS.includes(trackName)) {
-            line += `  Fill: min pc=${fill.minPc} ${fill.pass ? '✓' : '✗'}`;
+            line += `  Fill: min conf=${fill.minConf} ${fill.pass ? '✓' : '✗'}`;
             totalTests++;
             if (fill.pass) passCount++;
         }
 
         if (TEMPLATE_TRACKS.includes(trackName)) {
-            line += `  Template: ${template.templateName} (${template.stability}% stable) ${template.pass ? '✓' : '✗'}`;
+            line += `  Slot: ${slotStability.dominantSlot} (${slotStability.stability}% stable) ${slotStability.pass ? '✓' : '✗'}`;
             totalTests++;
-            if (template.pass) passCount++;
+            if (slotStability.pass) passCount++;
         }
 
-        line += `  Cache: ${cacheSave.maxCacheEntries} saves`;
+        line += `  Slots: ${cacheSave.maxValidSlots} valid`;
 
         if (CACHE_RESTORE_TRACKS.includes(trackName)) {
             if (cacheRestore.triggered) {
@@ -534,10 +549,10 @@ async function main() {
             }
         }
 
-        // IOI and cache save count for all tracks
-        totalTests++;  // IOI
-        if (ioi.pass) passCount++;
-        if (cacheSave.pcReached06) {
+        // BPM and cache save count for all tracks
+        totalTests++;  // BPM
+        if (bpmResult.pass) passCount++;
+        if (cacheSave.confReached06) {
             totalTests++;  // Cache save
             if (cacheSave.pass) passCount++;
         }
@@ -548,12 +563,12 @@ async function main() {
             track: trackName,
             gtBpm,
             duration: dur,
-            ioi,
+            bpm: bpmResult,
             coldStart,
             fill,
             cacheSave,
             cacheRestore,
-            template,
+            slotStability,
             streamReadingCount: data.streamReadings.length,
             snapshotCount: data.patternSnapshots.length,
             streamReadings: data.streamReadings,

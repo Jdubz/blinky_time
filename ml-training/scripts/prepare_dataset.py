@@ -169,6 +169,30 @@ def _binary_targets(times: np.ndarray, n_frames: int,
     return targets
 
 
+def make_teacher_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
+                        strengths: np.ndarray | None = None,
+                        sigma: float = 1.5) -> np.ndarray:
+    """Create soft teacher targets for knowledge distillation.
+
+    Each beat gets a Gaussian peak with amplitude = consensus strength (0-1).
+    Beats with 7/7 system agreement get full amplitude; 2/7 gets 0.29.
+    Sigma = 1.5 frames (~24ms at 62.5 Hz) — wider than binary (0) but much
+    narrower than the broken sigma=3.0 that produced 52% positive ratio.
+
+    These soft labels encode the uncertainty of the consensus labeling system,
+    providing richer supervision than binary labels for distillation.
+    """
+    targets = np.zeros(n_frames, dtype=np.float32)
+    for i, t in enumerate(beat_times):
+        frame_idx = t * frame_rate
+        amplitude = float(strengths[i]) if strengths is not None else 1.0
+        frame_range = max(0, int(frame_idx - 4 * sigma)), min(n_frames, int(frame_idx + 4 * sigma) + 1)
+        for j in range(frame_range[0], frame_range[1]):
+            val = amplitude * np.exp(-0.5 * ((j - frame_idx) / sigma) ** 2)
+            targets[j] = max(targets[j], val)
+    return targets
+
+
 def make_onset_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
                       sigma: float, target_type: str = "gaussian",
                       strengths: np.ndarray | None = None) -> np.ndarray:
@@ -380,7 +404,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  mic_profile: dict | None = None,
                  stems_dir: Path | None = None,
                  stem_variants: list[str] | None = None,
-                 mel_cache_dir: Path | None = None) -> list[dict]:
+                 mel_cache_dir: Path | None = None,
+                 generate_teacher: bool = False) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -619,6 +644,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 "source": audio_path.stem,
             }
 
+            # Teacher targets for knowledge distillation (consensus-strength-weighted Gaussians)
+            if generate_teacher:
+                result["teacher"] = make_teacher_targets(
+                    src_beats, n_frames, frame_rate, strengths=src_strengths, sigma=1.5)
+
             if use_downbeat:
                 result["downbeat_target"] = make_downbeat_targets(
                     src_downbeats, n_frames, frame_rate, sigma,
@@ -730,35 +760,46 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
 def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
-               downbeat_target: np.ndarray | None = None) -> tuple:
+               downbeat_target: np.ndarray | None = None,
+               teacher_target: np.ndarray | None = None) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks."""
     n_frames = mel.shape[0]
     has_downbeat = downbeat_target is not None
+    has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
         pad_mel = np.zeros((chunk_frames, mel.shape[1]), dtype=mel.dtype)
-        # Target may be 1D (n_frames,) or 2D (n_frames, channels) for instrument models
         target_shape = (chunk_frames,) + target.shape[1:]
         pad_target = np.zeros(target_shape, dtype=target.dtype)
         pad_mel[:n_frames] = mel
         pad_target[:n_frames] = target
+        pad_db = None
+        pad_teacher = None
         if has_downbeat:
             pad_db = np.zeros(chunk_frames, dtype=downbeat_target.dtype)
             pad_db[:n_frames] = downbeat_target
-            return pad_mel[np.newaxis], pad_target[np.newaxis], pad_db[np.newaxis]
-        return pad_mel[np.newaxis], pad_target[np.newaxis], None
+        if has_teacher:
+            pad_teacher = np.zeros(chunk_frames, dtype=teacher_target.dtype)
+            pad_teacher[:n_frames] = teacher_target
+        return pad_mel[np.newaxis], pad_target[np.newaxis], \
+               pad_db[np.newaxis] if pad_db is not None else None, \
+               pad_teacher[np.newaxis] if pad_teacher is not None else None
 
     chunks_mel = []
     chunks_target = []
     chunks_db = [] if has_downbeat else None
+    chunks_teacher = [] if has_teacher else None
     for start in range(0, n_frames - chunk_frames + 1, chunk_stride):
         chunks_mel.append(mel[start:start + chunk_frames])
         chunks_target.append(target[start:start + chunk_frames])
         if has_downbeat:
             chunks_db.append(downbeat_target[start:start + chunk_frames])
+        if has_teacher:
+            chunks_teacher.append(teacher_target[start:start + chunk_frames])
 
     db_arr = np.array(chunks_db) if has_downbeat else None
-    return np.array(chunks_mel), np.array(chunks_target), db_arr
+    teacher_arr = np.array(chunks_teacher) if has_teacher else None
+    return np.array(chunks_mel), np.array(chunks_target), db_arr, teacher_arr
 
 
 def main():
@@ -781,6 +822,8 @@ def main():
     parser.add_argument("--stem-variants", default=None,
                         help="Comma-separated stem variants to generate. "
                              "Options: drums, no_vocals, drums_bass (default: drums)")
+    parser.add_argument("--teacher", action="store_true",
+                        help="Generate consensus-strength-weighted teacher labels (Y_teacher_*.npy) for distillation")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
     parser.add_argument("--no-cache", action="store_true",
@@ -943,7 +986,9 @@ def main():
     val_pairs = pairs_shuffled[:n_val_files]
     train_pairs = pairs_shuffled[n_val_files:]
 
-    print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}")
+    generate_teacher = getattr(args, 'teacher', False)
+    print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}"
+          f"{' + Teacher labels' if generate_teacher else ''}")
     if stems_dir:
         # Count how many tracks have stems available
         stems_found = sum(
@@ -966,7 +1011,7 @@ def main():
         shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_"))
         shard_idx = 0
         shard_counts = []
-        batch_X, batch_Y, batch_D = [], [], []
+        batch_X, batch_Y, batch_D, batch_T = [], [], [], []
         total_variants = 0
         errors = 0
 
@@ -980,11 +1025,13 @@ def main():
                                        mic_profile=mic_profile,
                                        stems_dir=stems_dir,
                                        stem_variants=stem_variant_list,
-                                       mel_cache_dir=mel_cache_dir)
+                                       mel_cache_dir=mel_cache_dir,
+                                       generate_teacher=generate_teacher)
                 for r in results:
-                    mel_chunks, target_chunks, db_chunks = chunk_data(
+                    mel_chunks, target_chunks, db_chunks, teacher_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,
                         downbeat_target=r.get("downbeat_target"),
+                        teacher_target=r.get("teacher"),
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)
@@ -992,6 +1039,8 @@ def main():
                         assert db_chunks is not None, \
                             f"downbeat=true but no downbeat_target for {audio_path.name}"
                         batch_D.append(db_chunks)
+                    if generate_teacher and teacher_chunks is not None:
+                        batch_T.append(teacher_chunks)
                     total_variants += 1
             except Exception as e:
                 tqdm.write(f"  ERROR: {audio_path.name}: {e}")
@@ -1008,10 +1057,14 @@ def main():
                         D_s = np.concatenate(batch_D)
                         np.save(shard_dir / f"D_{shard_idx}.npy", D_s)
                         del D_s
+                    if batch_T:
+                        T_s = np.concatenate(batch_T)
+                        np.save(shard_dir / f"T_{shard_idx}.npy", T_s)
+                        del T_s
                     shard_counts.append(len(X_s))
                     del X_s, Y_s
                     shard_idx += 1
-                batch_X, batch_Y, batch_D = [], [], []
+                batch_X, batch_Y, batch_D, batch_T = [], [], [], []
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -1040,6 +1093,13 @@ def main():
                 str(output_dir / f"Y_db_{split_name}.npy"), mode='w+',
                 dtype=np.float32, shape=(total, chunk_frames))
 
+        has_teacher = (shard_dir / "T_0.npy").exists()
+        T_out = None
+        if has_teacher:
+            T_out = np.lib.format.open_memmap(
+                str(output_dir / f"Y_teacher_{split_name}.npy"), mode='w+',
+                dtype=np.float32, shape=(total, chunk_frames))
+
         offset = 0
         for s in range(shard_idx):
             X_s = np.load(shard_dir / f"X_{s}.npy")
@@ -1051,6 +1111,10 @@ def main():
                 D_s = np.load(shard_dir / f"D_{s}.npy")
                 D_out[offset:offset + n] = D_s
                 del D_s
+            if has_teacher and (shard_dir / f"T_{s}.npy").exists():
+                T_s = np.load(shard_dir / f"T_{s}.npy")
+                T_out[offset:offset + n] = T_s
+                del T_s
             offset += n
             del X_s, Y_s
 
@@ -1058,10 +1122,16 @@ def main():
         Y_out.flush()
         if D_out is not None:
             D_out.flush()
+        if T_out is not None:
+            T_out.flush()
+            pos_ratio = (T_out > 0.1).mean()
+            print(f"  Teacher labels: {T_out.shape}, pos_ratio={pos_ratio:.3f}")
 
         del X_out, Y_out
         if D_out is not None:
             del D_out
+        if T_out is not None:
+            del T_out
 
         shutil.rmtree(shard_dir)
         print(f"\n  {split_name}: {total} chunks from {total_variants} variants ({errors} errors)")
