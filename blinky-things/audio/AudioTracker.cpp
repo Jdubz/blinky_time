@@ -259,6 +259,8 @@ void AudioTracker::runFourierTempogram() {
     }
 
     float bestMag = 0.0f;
+    float dftMagSum = 0.0f;   // Sum of all DFT magnitudes (for Fisher's g-statistic)
+    int dftMagCount = 0;
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
     float bestPhase = 0.0f;
     int bestSource = 0;
@@ -296,6 +298,8 @@ void AudioTracker::runFourierTempogram() {
 
             // Magnitude (normalize by sqrt(count) for fair comparison across sources)
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
+            dftMagSum += mag;
+            dftMagCount++;
 
             if (mag > bestMag) {
                 bestMag = mag;
@@ -313,6 +317,11 @@ void AudioTracker::runFourierTempogram() {
     }
 
     plpDftMag_ = bestMag;
+    // Fisher's g-statistic: max magnitude / sum of all magnitudes.
+    // Measures how concentrated the periodic energy is at one frequency.
+    // g > 0.3 → highly significant periodicity (p < 0.01)
+    // g ~ 0.05 → no significant periodicity (uniform spectrum)
+    plpFisherG_ = (dftMagSum > 1e-10f) ? bestMag / dftMagSum : 0.0f;
 
     // Reset adaptive phase correction state on significant period change
     // (>10% shift). Prevents old low-variance state from suppressing
@@ -454,9 +463,16 @@ void AudioTracker::updatePlpAnalysis() {
     if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
     if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
-    // --- 4. PLP confidence from DFT magnitude + signal presence ---
-    float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
-    float signalPresence = clampf(mic_.getLevel() / plpSignalFloor, 0.0f, 1.0f);
+    // --- 4. PLP confidence from Fisher's g-statistic + steep signal gate ---
+    // Fisher's g measures how concentrated the DFT energy is at one frequency.
+    // Map [0.05, 0.30] → [0, 1] for confidence (g>0.30 = p<0.01 significance).
+    float dftConf = clampf((plpFisherG_ - 0.05f) / 0.25f, 0.0f, 1.0f);
+
+    // Steep signal gate: transition from 0→1 over a narrow range near noise floor.
+    // Once there's clearly audio (>2x noise floor), presence is 1.0 and doesn't
+    // attenuate DFT confidence. Only suppresses during true silence.
+    float micLevel = mic_.getLevel();
+    float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
     float targetConf = dftConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
@@ -473,17 +489,21 @@ void AudioTracker::updatePlpPhase() {
         beatCount_++;
     }
 
-    // Read extracted pattern at current phase position (linear interpolation)
-    if (plpPatternLen_ > 0 && plpConfidence_ > plpActivation) {
+    // Read PLP pattern and cosine fallback, blend by confidence.
+    // No hard threshold — published PLP systems run continuously (Meier 2024, librosa).
+    // Confidence naturally approaches 0 during silence/ambient, making the output
+    // smoothly degrade to the cosine fallback without a discontinuous switch.
+    float patternPulse = 0.5f;
+    if (plpPatternLen_ > 0) {
         float patPos = plpPhase_ * plpPatternLen_;
         int idx0 = static_cast<int>(patPos) % plpPatternLen_;
         float frac = patPos - floorf(patPos);
         int idx1 = (idx0 + 1) % plpPatternLen_;
-        plpPulseValue_ = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
-    } else {
-        // Fallback: cosine pulse (same shape as old phaseToPulse)
-        plpPulseValue_ = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+        patternPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
     }
+    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
+    plpPulseValue_ = cosinePulse * (1.0f - blend) + patternPulse * blend;
 
     // --- Beat stability tracking ---
     // Track PLP peak amplitude via EMA. Stability = current peak / EMA.

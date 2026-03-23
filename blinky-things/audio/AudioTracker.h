@@ -182,6 +182,7 @@ private:
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
+    float plpFisherG_ = 0.0f;                  // Fisher's g-statistic (periodicity significance)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
     float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
