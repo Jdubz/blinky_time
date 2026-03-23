@@ -124,7 +124,7 @@ const categoryDescriptions: Record<string, string> = {
   music: 'Phase-locked loop beat tracking → Produces: BPM, Phase, Confidence, Beat Events',
   rhythm: 'Autocorrelation-based tempo detection → Produces: BPM, Periodicity, Beat Likelihood',
   fire: 'Particle-based fire simulation with sparks, heat diffusion, and gravity physics',
-  firemusic: 'Fire behavior when rhythm tracking is active (beat-synced bursts, downbeat emphasis)',
+  firemusic: 'Fire behavior when rhythm tracking is active (beat-synced bursts, phase breathing)',
   fireorganic: 'Fire behavior when no rhythm detected (transient-reactive, organic spawning)',
   water: 'Particle-based water simulation with drops, splashes, and radial physics',
   lightning: 'Particle-based lightning with fast bolts, branching patterns, and rapid fade',

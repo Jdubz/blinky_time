@@ -243,12 +243,12 @@ RenderPipeline → LED Output
      - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
-3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v80)**
+3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v81)**
    - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~10 params)
    - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (~5.5s, 360 samples @ ~66 Hz) → ACF → period estimate
    - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection (visual sparks)
      - Pulse detection: floor-tracking baseline (fast drop, slow rise)
-   - **PLP path**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Epoch-fold pattern extraction for visual pattern shape. Confidence = DFT magnitude x signal presence (mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked).
+   - **PLP path**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Soft blend (PLP pattern / cosine fallback, continuous by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Epoch-fold pattern extraction for visual pattern shape. Confidence = DFT magnitude x signal presence (steep mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked).
    - Energy synthesis: hybrid mic level + bass mel energy + onset peak-hold
 
 4. **Generators (Visual Effects)**
@@ -263,7 +263,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v80)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v81)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -488,14 +488,14 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Detection Architecture
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
-**Current (v80, deployed):** ACF+PLP architecture. ACF provides period estimate from spectral flux. PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset) — DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Epoch-fold pattern extraction for visual pattern shape. NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. Confidence = DFT magnitude x signal presence (mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
+**Current (v81, deployed):** ACF+PLP architecture. ACF provides period estimate from spectral flux. PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset) — DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50, cuts warm-up from ~8 to ~2 bars). Steep signal gate for mic level. Beat stability gated learning (fill/breakdown immunity). Fisher's g computed but NOT used for confidence (reverted — penalizes syncopated music; DFT magnitude used instead). Epoch-fold pattern extraction for visual pattern shape. NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 - Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLP phase/pattern extraction. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
-- **ACF+PLP architecture** (v80): ACF estimates period from spectral flux (HWR, NN-independent). PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux/bass/NN onset) — DFT magnitude selects period, DFT phase gives alignment. NN onset used for visual pulse only. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
+- **ACF+PLP architecture** (v81): ACF estimates period from spectral flux (HWR, NN-independent). PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux/bass/NN onset) — DFT magnitude selects period, DFT phase gives alignment. Soft blend (PLP pattern / cosine fallback, continuous by confidence — no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50). NN onset used for visual pulse only. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
 - **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP Fourier tempogram.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
@@ -503,5 +503,5 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **ACF tempo estimation** (v80): Bare ACF peak-finding on spectral flux (Percival/Rayleigh/comb bank removed v80 — octave errors are non-issues with PLP)
-- **PLP pattern extraction** (v80): Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction still used for visual pattern shape. Pattern normalization uses min-max (signal is mean-subtracted, may have negatives). Confidence = DFT magnitude x signal presence (mic level gate). Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
+- **PLP pattern extraction** (v81): Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free (no separate cross-correlation step). Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50, cuts warm-up ~8→~2 bars). Steep signal gate for mic level. Beat stability gated learning (fill/breakdown immunity). Fisher's g computed but NOT used for confidence (reverted — penalizes syncopated music; DFT magnitude used instead). Epoch-fold pattern extraction still used for visual pattern shape. Pattern normalization uses min-max (signal is mean-subtracted, may have negatives). Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

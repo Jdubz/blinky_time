@@ -2,9 +2,7 @@
 #include <Arduino.h>
 
 HeatFire::HeatFire()
-    : params_(), audio_(), noiseTime_(0.0f), prevPhase_(1.0f), beatCount_(0),
-      downbeatSpreadMult_(1.0f),
-      downbeatCoolSuppress_(0.0f), beat3Suppress_(0.0f), beat24Suppress_(0.0f),
+    : params_(), audio_(), noiseTime_(0.0f), prevPhase_(1.0f),
       smoothedEnergy_(0.0f), pulseFlare_(0.0f),
       paletteBias_(0.0f) {}
 
@@ -32,12 +30,6 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     float targetBias = audio.energy * audio.rhythmStrength;
     paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 6.0f * dt);
 
-    // Decay all transient effect state
-    downbeatSpreadMult_  = max(1.0f, downbeatSpreadMult_  - 3.00f * dt);  // 1.5 range / 0.5s
-    downbeatCoolSuppress_= max(0.0f, downbeatCoolSuppress_- 2.00f * dt);  // 1.0 range / 0.5s
-    beat3Suppress_       = max(0.0f, beat3Suppress_        - 1.25f * dt); // 0.5 range / 0.4s
-    beat24Suppress_      = max(0.0f, beat24Suppress_       - 0.83f * dt); // 0.25 range / 0.3s
-
     // Pulse flare: transient → flame shoots upward briefly
     // burstStrength is reused as the flare height fraction (0–1 of display height)
     if (audio.pulse > params_.organicTransientMin) {
@@ -48,29 +40,9 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     }
     pulseFlare_ = max(0.0f, pulseFlare_ - 4.0f * dt);  // τ ≈ 0.25s
 
-    // Beat detection: accent patterns drive warp expansion + height flares
+    // Beat detection: pulse flare on predicted beats
     if (beatHappened() && audio.rhythmStrength > 0.3f) {
-        beatCount_++;
-
-        // Downbeat (beat 1): maximum warp spread + biggest height flare
-        if (audio.downbeat > 0.5f) {
-            downbeatSpreadMult_   = 2.5f;
-            downbeatCoolSuppress_ = 1.0f;
-            pulseFlare_ = max(pulseFlare_, 0.30f);
-        }
-
-        // Beat 3: secondary accent
-        if (audio.beatInMeasure == 3 && audio.rhythmStrength > 0.5f) {
-            beat3Suppress_ = 0.5f;
-            pulseFlare_ = max(pulseFlare_, 0.18f);
-        }
-
-        // Beats 2 & 4: lighter accent
-        if ((audio.beatInMeasure == 2 || audio.beatInMeasure == 4) &&
-                audio.rhythmStrength > 0.5f) {
-            beat24Suppress_ = 0.25f;
-            pulseFlare_ = max(pulseFlare_, 0.10f);
-        }
+        pulseFlare_ = max(pulseFlare_, 0.20f);
     }
     prevPhase_ = audio.phase;
 
@@ -104,11 +76,6 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
 void HeatFire::reset() {
     noiseTime_            = 0.0f;
     prevPhase_            = 1.0f;
-    beatCount_            = 0;
-    downbeatSpreadMult_   = 1.0f;
-    downbeatCoolSuppress_ = 0.0f;
-    beat3Suppress_        = 0.0f;
-    beat24Suppress_       = 0.0f;
     smoothedEnergy_       = 0.0f;
     pulseFlare_           = 0.0f;
     paletteBias_          = 0.0f;
@@ -144,11 +111,6 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
     float threshold = params_.silenceThreshold
                     - params_.energyThresholdDrop * smoothedEnergy_;
 
-    // Beat-accent threshold dips: brief density bursts on hits
-    if (downbeatCoolSuppress_ > 0.0f) threshold -= 0.10f * downbeatCoolSuppress_;
-    if (beat3Suppress_ > 0.0f)        threshold -= 0.06f * beat3Suppress_;
-    if (beat24Suppress_ > 0.0f)       threshold -= 0.03f * beat24Suppress_;
-
     // Pulse (transient hit) drives immediate threshold drop for big visual burst
     threshold -= 0.15f * audio.pulse;
 
@@ -159,7 +121,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
     float yScale = 0.15f;                          // Vertical feature density
 
     // Domain warp: slow sway (0.2× scroll rate keeps it smooth, not jerky)
-    float warpAmount = params_.warpStrength * (0.75f + audio.energy * downbeatSpreadMult_);
+    float warpAmount = params_.warpStrength * (0.75f + audio.energy);
 
     if (layout_ == LINEAR_LAYOUT) {
         // 1D strip: simple threshold + contrast

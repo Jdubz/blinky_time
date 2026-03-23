@@ -877,10 +877,4 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         onsetDensityWindowStart_ = nowMs;
     }
     control_.onsetDensity = onsetDensity_;
-
-    // --- Downbeat / BeatInMeasure ---
-    // Not tracked. Current NN (Conv1D W16) is onset-only (single output channel).
-    // A future multi-output model could provide downbeat activation.
-    control_.downbeat = 0.0f;
-    control_.beatInMeasure = 0;
 }

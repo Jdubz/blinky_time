@@ -1,12 +1,12 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 21, 2026*
+*Last Updated: March 22, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v81 (SETTINGS_VERSION 81). AudioTracker with ACF+PLP architecture. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v81 (SETTINGS_VERSION 81). AudioTracker with ACF+PLP architecture. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Beat stability gated learning. Steep signal gate for mic level. Fisher's g computed but NOT used for confidence (reverted — penalizes syncopated music). Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed. ~20 tunable params persisted to flash. 16,488 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v3 deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 model backed up. All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Next model: v9. Downbeat detection deferred.
 
@@ -28,17 +28,22 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ## Active Priorities
 
-### Priority 1: Predominant Local Pulse (PLP) — DEPLOYED (v80)
+### Priority 1: Predominant Local Pulse (PLP) — DEPLOYED (v81)
 
-**Status: DEPLOYED. Fourier tempogram (Goertzel DFT) period selection across 3 sources. PLL abandoned (March 20). Grid-search PMR replaced by Fourier tempogram (March 22).**
+**Status: DEPLOYED. Fourier tempogram (Goertzel DFT) period selection across 3 sources. Soft blend (no hard threshold). Cold-start template seeding. Fisher's g computed but NOT used for confidence (reverted). PLL abandoned (March 20). Grid-search PMR replaced by Fourier tempogram (March 22).**
 
 See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 **What was built:**
 - **Fourier tempogram period selection**: Goertzel DFT at candidate frequencies across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step).
+- **Soft blend (no hard threshold)**: PLP pattern and cosine fallback are continuously blended by confidence (0=pure cosine, 1=pure PLP pattern). No discontinuous switch. Confidence naturally approaches 0 during silence/ambient. `plpActivation` parameter exists but is vestigial — the blend uses raw `plpConfidence_` directly.
+- **Cold-start template seeding**: 8 canonical patterns (four-on-floor, backbeat, etc.). After 1 bar of data, cosine similarity > 0.50 triggers a 50/50 blend of template and observed histogram. Cuts warm-up from ~8 bars to ~2 bars. One-shot (never re-seeds).
+- **Steep signal gate**: Mic level gates confidence with a steep transition near noise floor (`plpSignalFloor`). Once audio is clearly present (>2x floor), gate is fully open. Only suppresses during true silence.
+- **Beat stability gated learning**: PLP peak amplitude tracked via EMA. Stability = current/EMA. High stability (>0.7) = locked pattern. Low stability (<0.3) = fill/breakdown/section change. Used to gate bar histogram learning rate (fill/breakdown immunity).
+- **Fisher's g tried and reverted**: Fisher's g-statistic (ratio of max DFT magnitude to sum) was implemented as a principled [0,1] confidence measure, but penalizes tracks with multiple similarly-strong periods (common in syncopated music). DFT magnitude used instead — soft blend handles the confidence-to-output mapping without needing a principled scale.
 - **Epoch-fold pattern extraction** still used for the actual visual pattern shape
 - **Pattern normalization** uses min-max (signal is mean-subtracted, may have negatives)
-- **Confidence** = DFT magnitude x signal presence (mic level gate)
+- **Confidence** = DFT magnitude x signal presence (steep mic level gate)
 - **Adaptive phase correction** (EMA variance: ALPHA_MIN=0.10 when locked, ALPHA_MAX=0.50 when converging, auto-resets on period change)
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
@@ -128,7 +133,7 @@ All frame-level FC options are well within the 10ms per-frame budget.
 
 3. **No circular dependency.** Feature extraction (raw mel frames) is independent of tempo tracking. The NN produces onset activation; ACF handles tempo estimation from spectral flux (NN-independent). PLP extracts repeating energy patterns for phase/pulse synthesis.
 
-4. **ACF for period estimation (simplified).** Spectral flux (HWR) feeds ACF. Percival harmonic enhancement, Rayleigh prior, comb filter bank, and template matching all removed in v80. PLP Fourier tempogram (Goertzel DFT) selects optimal period across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) — DFT magnitude selects period, DFT phase gives alignment.
+4. **ACF for period estimation (simplified).** Spectral flux (HWR) feeds ACF. Percival harmonic enhancement, Rayleigh prior, comb filter bank, and template matching all removed in v80. PLP Fourier tempogram (Goertzel DFT) selects optimal period across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) — DFT magnitude selects period, DFT phase gives alignment. Cold-start template seeding (v81) accelerates warm-up.
 
 5. **Downbeat deferred.** System focuses on onset detection + BPM + pulse. Downbeat tracking deferred indefinitely.
 
@@ -316,7 +321,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Novel-1D | 2022 | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+PLP (Fourier tempogram) (mic-in-room, nRF52840) | All Onsets F1=0.787 (v3 deployed). PLP deployed v80. atTransient 0.37-0.48. |
+| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+PLP (Fourier tempogram) (mic-in-room, nRF52840) | All Onsets F1=0.787 (v3 deployed). PLP deployed v81. atTransient 0.37-0.48. |
 
 **Note:** SOTA table previously listed Beat F1 (onset-vs-metrical-grid alignment). This metric is not comparable to our onset F1. SOTA systems are evaluated on line-in audio with standardized beat annotations; our system detects acoustic onsets through a microphone in a room.
 
