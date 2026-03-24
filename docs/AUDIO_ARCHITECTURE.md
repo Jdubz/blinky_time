@@ -200,7 +200,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
-| `bpmMin` | `bpmmin` | 60 | 40-120 | Minimum detectable BPM |
+| `bpmMin` | `bpmmin` | 15 | 10-120 | Minimum period frequency (15 = full-bar at 60 BPM) |
 | `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 

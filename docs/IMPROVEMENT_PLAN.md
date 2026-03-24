@@ -68,7 +68,14 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 ### Priority 2: NN Training Improvements (When Retrained)
 
-**Status: NOT URGENT — v3 model deployed (All Onsets F1=0.787). v9 (tempo head + distillation) regressed to F1=0.233 due to broken data prep (non-augmented) + useless tempo head (256ms RF too short). v10 shift_tolerant_focal regressed to F1=0.11 — shift tolerance + focal loss are fundamentally incompatible (focal kills max-pooled positive gradients + missing look_at mask). v10 retrained with exact v3 recipe + SWA.**
+**Status: v3 model deployed (All Onsets F1=0.787). v10 training in progress with exact v3 recipe + SWA + pos_weight=20.**
+
+Failed attempts (all regressed from v3):
+- v9 (tempo head + distillation): F1=0.233. Root cause: data prep crash → non-augmented data (209K vs 3M chunks) + tempo head useless (256ms RF can't encode tempo, Bock 2019 applies to beat tracking not onset detection).
+- v10 shift_tolerant_focal: F1=0.11. Root cause: focal modulation on max-pooled predictions kills positive gradients + missing look_at mask creates conflicting gradients near positives. Shift tolerance and focal loss are fundamentally incompatible (Beat This! uses plain BCE, not focal).
+- v10 auto pos_weight: F1=0.164. Root cause: auto pos_weight=35.6 vs v3's manual pos_weight=20. Higher weight over-penalizes with asymmetric focal + soft consensus targets.
+
+Key finding: v3's pos_weight=20 is critical. Auto-calculation gives ~35.6 which doesn't work with asymmetric focal loss on soft consensus targets (strengths 0.14-1.0).
 
 **Onset detection quality (v3 deployed):**
 
@@ -300,7 +307,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **PLP pattern alignment — SUBSTANTIALLY IMPROVED (v83).** Fourier tempogram with epoch-fold quality scoring (top-5 diverse candidates scored by DFT mag × pattern variance). Phase-aligned epoch folding. Anti-correlation detection + half-period correction (Leahy 1983). Persistent anti-correlation phase reset (4-cycle threshold). Delayed slot cache commitment (2 bars minimum). Recency-weighted epoch fold. Mean autoCorr=0.186, atTransient=0.509 across 18-track suite. **Remaining weakness:** syncopated tracks (garage, breakbeat, amapiano) still show negative autoCorr due to fundamental epoch-fold grid limitation. **Future (Fix 5):** Harmonic PLP kernel — decompose epoch-fold into 4-harmonic Fourier series, synthesize pulse via harmonic cosine OLA. Preserves pattern shape while gaining OLA phase robustness.
+1. **PLP pattern consistency — OPEN.** Canonical cosine OLA for plpPulse (Grosche & Mueller 2011, Meier 2024). Epoch-fold quality scoring (top-5 diverse candidates, min 10% separation, DFT mag × pattern variance). Extended period range (bpmMin=15, MAX_PATTERN_LEN=264) for full-bar pattern capture. 7/18 tracks show negative autoCorr (self-consistency: does the PLP pulse repeat at its own detected period). These are syncopated genres (breakbeat, garage, amapiano) where the dominant energy pattern may not repeat at any single timescale — pattern varies across bars, with fills and arrangement changes. Extending the period range to full bars did not help. The slot cache (multi-pattern tracking) partially addresses this by switching between patterns, but autoCorr measures single-period consistency and doesn't capture multi-pattern behavior. **Next investigation:** multi-scale periodicity analysis, or accepting that syncopated music inherently has lower self-consistency and the visual result may still be acceptable.
 
 2. ~~**Onset/phase circular reliability problem — RESOLVED.**~~ PLP architecture eliminates the circular dependency. PLP uses Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset) to extract repeating patterns. The NN onset detector continues to drive visual sparks/flashes independently.
 
@@ -334,12 +341,10 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | ~~PLL half-time anti-phase~~ | ~~Correction window only at phase 0, not subdivisions~~ | ~~**High**~~ | **RESOLVED** — PLL abandoned. PLP doesn't have this issue. |
 | ~~Onset/phase circular reliability~~ | ~~NN can't classify on/off-beat; PLL needs on-beat onsets~~ | ~~**High**~~ | **RESOLVED** — PLP doesn't need onset-beat classification. |
 | ~135 BPM gravity well | Multi-factorial (prior, harmonics, band weighting) | **Low** — octave errors look fine visually | **NON-ISSUE** with PLP — half/double time patterns still track musically |
-| Run-to-run variance | Initial phase bifurcation, early slot cache commitment | Requires 5+ runs for reliable eval | Delayed slot commitment (2 bars), anti-corr phase reset |
-| Syncopated anti-correlation | Epoch-fold grid misaligns with off-beat energy | **Medium** — pulse breathes opposite to energy | Anti-corr detection + half-period shift; future: harmonic PLP kernel |
+| Run-to-run variance | Initial phase lock depends on exact audio timing | Requires 3+ runs for reliable eval | Silence state reset (5s) helps; inherent variability |
+| Syncopated self-consistency | Breakbeat/garage/amapiano patterns don't repeat at single period | 7/18 tracks have negative autoCorr | Extended period range (full bars) didn't help. Multi-scale patterns may not have single dominant period. Slot cache partially addresses via multi-pattern switching. |
 | DnB half-time detection | librosa and firmware both detect ~117 vs ~170 | **None** — acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** — organic mode is correct | -- |
-| trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** — energy-reactive acceptable | -- |
-| PLP atTransient improved (0.37-0.48) | Fourier tempogram approach working well | **Low** — substantially improved phase alignment | Further tuning if needed |
 
 ## Closed Investigations (v28-v65)
 
