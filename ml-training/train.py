@@ -558,8 +558,11 @@ def main():
         ).to(device)
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
+        # With delta features, input has 2× n_mels channels (mel + delta_mel)
+        use_delta = cfg.get("features", {}).get("use_delta", False)
+        input_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
         model = build_onset_conv1d(
-            n_mels=cfg["audio"]["n_mels"],
+            n_mels=input_features,
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"]["dropout"],
@@ -653,10 +656,19 @@ def main():
             wf = cfg["model"]["window_frames"]
             print(f"  Window: {wf} frames -> {wf // pool_factor} output frames")
 
-    # Optimizer + cosine LR schedule
+    # Optimizer + cosine LR schedule with warmup
+    # 3 epochs of linear warmup stabilizes early training with large batches
+    # (Goyal et al. 2017). Prevents overshooting when batch_size/dataset is large.
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     total_steps = epochs * len(train_loader)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+    warmup_steps = 3 * len(train_loader)  # 3 epochs
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps)
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=total_steps - warmup_steps)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_steps])
 
     # Build per-channel pos_weight tensor
     if multichannel_targets:
