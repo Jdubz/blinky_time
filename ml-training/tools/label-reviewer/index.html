@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Label Reviewer</title>
+<script src="https://unpkg.com/wavesurfer.js@7"></script>
+<script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+<script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.min.js"></script>
+<script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/minimap.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; }
+
+  .header { background: #16213e; padding: 12px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #333; }
+  .header h1 { font-size: 18px; color: #fff; }
+  .header .stats { font-size: 13px; color: #888; }
+
+  .controls { background: #0f3460; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .controls button { background: #1a1a40; border: 1px solid #444; color: #ddd; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .controls button:hover { background: #2a2a50; }
+  .controls button.active { background: #e94560; border-color: #e94560; color: #fff; }
+  .controls button.reviewed { background: #0a8; border-color: #0a8; }
+  .controls button.problem { background: #e94560; border-color: #e94560; }
+  .controls select { background: #1a1a40; border: 1px solid #444; color: #ddd; padding: 6px 8px; border-radius: 4px; }
+  .controls .nav-info { font-size: 14px; color: #aaa; min-width: 120px; text-align: center; }
+  .controls .track-name { font-size: 15px; font-weight: bold; color: #fff; }
+  .controls .spacer { flex: 1; }
+
+  .waveform-container { padding: 20px; }
+  #waveform { background: #111; border-radius: 8px; margin-bottom: 4px; }
+  #timeline { height: 25px; }
+
+  .legend { padding: 8px 20px; display: flex; gap: 20px; font-size: 12px; color: #999; }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch { width: 12px; height: 12px; border-radius: 2px; }
+
+  .labels-panel { padding: 0 20px 20px; display: flex; gap: 16px; }
+  .label-section { flex: 1; background: #111; border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; }
+  .label-section h3 { font-size: 13px; color: #888; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  .label-section .count { color: #666; font-weight: normal; }
+  .label-row { font-size: 12px; padding: 2px 0; font-family: monospace; cursor: pointer; }
+  .label-row:hover { background: #1a1a40; }
+  .label-row .time { color: #4ecdc4; }
+  .label-row .strength { color: #ffe66d; }
+  .label-row .systems { color: #666; }
+
+  .review-panel { padding: 0 20px 20px; }
+  .review-panel textarea { width: 100%; background: #111; border: 1px solid #333; color: #ddd; padding: 8px; border-radius: 4px; font-size: 13px; resize: vertical; min-height: 60px; }
+  .review-buttons { display: flex; gap: 8px; margin-top: 8px; }
+
+  .track-list { padding: 0 20px 20px; }
+  .track-list table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .track-list th { text-align: left; padding: 6px 8px; border-bottom: 1px solid #444; color: #888; }
+  .track-list td { padding: 4px 8px; border-bottom: 1px solid #222; cursor: pointer; }
+  .track-list tr:hover td { background: #1a1a40; }
+  .track-list .status-reviewed { color: #0a8; }
+  .track-list .status-problem { color: #e94560; }
+  .track-list .status-unreviewed { color: #666; }
+
+  .pagination { display: flex; gap: 8px; padding: 12px 0; justify-content: center; }
+
+  .playback-time { font-family: monospace; font-size: 14px; color: #4ecdc4; min-width: 80px; }
+
+  .keyboard-help { font-size: 11px; color: #555; padding: 4px 20px; }
+  .keyboard-help kbd { background: #222; padding: 1px 5px; border-radius: 2px; border: 1px solid #444; }
+
+  .tab-bar { display: flex; gap: 0; padding: 0 20px; }
+  .tab-bar button { background: #111; border: 1px solid #333; border-bottom: none; color: #888; padding: 8px 20px; cursor: pointer; border-radius: 8px 8px 0 0; }
+  .tab-bar button.active { background: #1a1a2e; color: #fff; border-color: #444; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .filter-bar { display: flex; gap: 8px; padding: 8px 0; align-items: center; }
+  .filter-bar label { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Label Reviewer</h1>
+  <div class="stats" id="stats">Loading...</div>
+</div>
+
+<div class="tab-bar">
+  <button class="active" onclick="showTab('viewer')">Viewer</button>
+  <button onclick="showTab('browser')">Track Browser</button>
+</div>
+
+<div id="tab-viewer" class="tab-content active">
+  <div class="controls">
+    <button onclick="prevTrack()" title="Previous track">&larr; Prev</button>
+    <div class="nav-info" id="nav-info">0 / 0</div>
+    <button onclick="nextTrack()" title="Next track">Next &rarr;</button>
+    <div class="track-name" id="track-name">—</div>
+    <div class="spacer"></div>
+    <button onclick="togglePlay()" id="btn-play">&#9654; Play</button>
+    <div class="playback-time" id="playback-time">0:00.0</div>
+    <select id="zoom-select" onchange="setZoom(this.value)">
+      <option value="50">Overview</option>
+      <option value="150" selected>Normal</option>
+      <option value="400">Detailed</option>
+      <option value="800">Close-up</option>
+    </select>
+    <select id="label-toggle" onchange="toggleLabels(this.value)">
+      <option value="all">All labels</option>
+      <option value="beats">Beats only</option>
+      <option value="onsets">Onsets only</option>
+      <option value="none">No labels</option>
+    </select>
+  </div>
+
+  <div class="waveform-container">
+    <div id="waveform"></div>
+    <div id="timeline"></div>
+  </div>
+
+  <div class="legend">
+    <div class="item"><div class="swatch" style="background:#e94560"></div> Beat (consensus_v5)</div>
+    <div class="item"><div class="swatch" style="background:#4ecdc4"></div> Onset (5-system consensus)</div>
+    <div class="item"><div class="swatch" style="background:#ffe66d80"></div> Onset (1-2 systems, low confidence)</div>
+    <div class="item"><div class="swatch" style="background:#0a8"></div> Downbeat</div>
+  </div>
+
+  <div class="labels-panel">
+    <div class="label-section">
+      <h3>Beats <span class="count" id="beat-count"></span></h3>
+      <div id="beat-list"></div>
+    </div>
+    <div class="label-section">
+      <h3>Onset Consensus <span class="count" id="onset-count"></span></h3>
+      <div id="onset-list"></div>
+    </div>
+  </div>
+
+  <div class="review-panel">
+    <textarea id="review-notes" placeholder="Notes about this track's labels..."></textarea>
+    <div class="review-buttons">
+      <button class="reviewed" onclick="setReview('reviewed')">&#10003; Mark Reviewed</button>
+      <button class="problem" onclick="setReview('problem')">&#9888; Flag Problem</button>
+      <button onclick="setReview('unreviewed')">Clear</button>
+    </div>
+  </div>
+
+  <div class="keyboard-help">
+    <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> prev/next track &nbsp;
+    <kbd>Space</kbd> play/pause &nbsp;
+    <kbd>R</kbd> mark reviewed &nbsp;
+    <kbd>P</kbd> flag problem &nbsp;
+    <kbd>1</kbd>-<kbd>4</kbd> zoom levels
+  </div>
+</div>
+
+<div id="tab-browser" class="tab-content">
+  <div class="controls">
+    <div class="filter-bar">
+      <label>Filter:</label>
+      <select id="status-filter" onchange="loadTrackList()">
+        <option value="all">All</option>
+        <option value="unreviewed">Unreviewed</option>
+        <option value="reviewed">Reviewed</option>
+        <option value="problem">Problem</option>
+      </select>
+    </div>
+  </div>
+  <div class="track-list" id="track-list"></div>
+</div>
+
+<script>
+let ws = null;
+let currentTracks = [];
+let currentIndex = 0;
+let allLabels = {};
+let labelMode = 'all';
+
+// Initialize WaveSurfer
+const wsRegions = WaveSurfer.Regions.create();
+const wsTimeline = WaveSurfer.Timeline.create({ height: 20 });
+
+ws = WaveSurfer.create({
+  container: '#waveform',
+  waveColor: '#4a4a6a',
+  progressColor: '#e94560',
+  cursorColor: '#fff',
+  height: 150,
+  minPxPerSec: 150,
+  scrollParent: true,
+  plugins: [wsRegions, wsTimeline],
+});
+
+// Playback time display
+ws.on('timeupdate', (time) => {
+  const min = Math.floor(time / 60);
+  const sec = (time % 60).toFixed(1);
+  document.getElementById('playback-time').textContent = `${min}:${sec.padStart(4, '0')}`;
+});
+
+ws.on('play', () => document.getElementById('btn-play').textContent = '⏸ Pause');
+ws.on('pause', () => document.getElementById('btn-play').textContent = '▶ Play');
+
+function togglePlay() { ws.playPause(); }
+
+function setZoom(pxPerSec) { ws.zoom(Number(pxPerSec)); }
+
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-bar button').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'browser') loadTrackList();
+}
+
+// Load track list for browser tab
+async function loadTrackList(page = 0) {
+  const filter = document.getElementById('status-filter').value;
+  const resp = await fetch(`/api/tracks?page=${page}&per_page=100&status=${filter}`);
+  const data = await resp.json();
+
+  let html = '<table><tr><th>#</th><th>Track</th><th>Status</th><th>Beats</th><th>Onsets</th></tr>';
+  data.tracks.forEach((t, i) => {
+    const statusClass = 'status-' + t.review_status;
+    html += `<tr onclick="jumpToTrack('${t.stem}')">
+      <td>${page * 100 + i + 1}</td>
+      <td>${t.stem}</td>
+      <td class="${statusClass}">${t.review_status}</td>
+      <td>${t.has_beat_labels ? '✓' : ''}</td>
+      <td>${t.has_onset_consensus ? '✓' : ''}</td>
+    </tr>`;
+  });
+  html += '</table>';
+
+  // Pagination
+  const totalPages = Math.ceil(data.total / data.per_page);
+  html += '<div class="pagination">';
+  for (let p = 0; p < totalPages && p < 20; p++) {
+    const cls = p === page ? 'active' : '';
+    html += `<button class="${cls}" onclick="loadTrackList(${p})">${p + 1}</button>`;
+  }
+  if (totalPages > 20) html += `<span>... ${totalPages} pages</span>`;
+  html += '</div>';
+
+  document.getElementById('track-list').innerHTML = html;
+}
+
+function jumpToTrack(stem) {
+  const idx = currentTracks.findIndex(t => t.stem === stem);
+  if (idx >= 0) {
+    currentIndex = idx;
+    loadCurrentTrack();
+    showTab('viewer');
+    document.querySelectorAll('.tab-bar button')[0].classList.add('active');
+    document.querySelectorAll('.tab-bar button')[1].classList.remove('active');
+  }
+}
+
+// Load initial track list
+async function init() {
+  const resp = await fetch('/api/tracks?page=0&per_page=10000');
+  const data = await resp.json();
+  currentTracks = data.tracks;
+  document.getElementById('stats').textContent =
+    `${data.total} tracks | ${data.tracks.filter(t => t.has_onset_consensus).length} with onset labels | ` +
+    `${data.tracks.filter(t => t.review_status === 'reviewed').length} reviewed`;
+  if (currentTracks.length > 0) loadCurrentTrack();
+}
+
+async function loadCurrentTrack() {
+  if (currentIndex < 0 || currentIndex >= currentTracks.length) return;
+  const track = currentTracks[currentIndex];
+  document.getElementById('track-name').textContent = track.stem;
+  document.getElementById('nav-info').textContent = `${currentIndex + 1} / ${currentTracks.length}`;
+
+  // Load audio
+  ws.load(`/audio/${track.stem}${track.audio_ext}`);
+
+  // Load labels
+  const resp = await fetch(`/api/labels?stem=${track.stem}`);
+  allLabels = await resp.json();
+
+  // Populate review state
+  document.getElementById('review-notes').value = allLabels.review?.notes || '';
+
+  // Wait for waveform ready then add markers
+  ws.once('ready', () => addMarkers());
+}
+
+function addMarkers() {
+  wsRegions.clearRegions();
+
+  const show = labelMode;
+
+  // Beat markers (red lines)
+  if (show === 'all' || show === 'beats') {
+    (allLabels.beats || []).forEach(b => {
+      const color = b.isDownbeat ? 'rgba(0, 170, 136, 0.8)' : `rgba(233, 69, 96, ${0.3 + b.strength * 0.7})`;
+      wsRegions.addRegion({
+        start: b.time, end: b.time + 0.002,
+        color: color,
+        drag: false, resize: false,
+      });
+    });
+  }
+
+  // Onset consensus markers (cyan/yellow lines)
+  if (show === 'all' || show === 'onsets') {
+    (allLabels.onsets_consensus || []).forEach(o => {
+      const highConf = o.strength >= 0.6;
+      const color = highConf
+        ? `rgba(78, 205, 196, ${0.3 + o.strength * 0.7})`
+        : `rgba(255, 230, 109, ${0.2 + o.strength * 0.4})`;
+      wsRegions.addRegion({
+        start: o.time, end: o.time + 0.001,
+        color: color,
+        drag: false, resize: false,
+      });
+    });
+  }
+
+  // Update label lists
+  const beats = allLabels.beats || [];
+  document.getElementById('beat-count').textContent = `(${beats.length})`;
+  document.getElementById('beat-list').innerHTML = beats.slice(0, 200).map(b =>
+    `<div class="label-row" onclick="ws.setTime(${b.time})">` +
+    `<span class="time">${b.time.toFixed(3)}s</span> ` +
+    `<span class="strength">str=${b.strength.toFixed(2)}</span>` +
+    `${b.isDownbeat ? ' <span style="color:#0a8">DB</span>' : ''}` +
+    `</div>`
+  ).join('');
+
+  const onsets = allLabels.onsets_consensus || [];
+  document.getElementById('onset-count').textContent =
+    `(${onsets.length}${allLabels.onset_systems ? `, ${allLabels.onset_systems_succeeded}/${allLabels.onset_systems} systems` : ''})`;
+  document.getElementById('onset-list').innerHTML = onsets.slice(0, 200).map(o =>
+    `<div class="label-row" onclick="ws.setTime(${o.time})">` +
+    `<span class="time">${o.time.toFixed(3)}s</span> ` +
+    `<span class="strength">str=${o.strength.toFixed(2)}</span> ` +
+    `<span class="systems">(${o.systems}/${allLabels.onset_systems || '?'})</span>` +
+    `</div>`
+  ).join('');
+}
+
+function toggleLabels(mode) {
+  labelMode = mode;
+  addMarkers();
+}
+
+function prevTrack() {
+  if (currentIndex > 0) { currentIndex--; loadCurrentTrack(); }
+}
+
+function nextTrack() {
+  if (currentIndex < currentTracks.length - 1) { currentIndex++; loadCurrentTrack(); }
+}
+
+async function setReview(status) {
+  const track = currentTracks[currentIndex];
+  const notes = document.getElementById('review-notes').value;
+  await fetch('/api/review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stem: track.stem, status, notes }),
+  });
+  track.review_status = status;
+  // Update stats
+  const reviewed = currentTracks.filter(t => t.review_status === 'reviewed').length;
+  const problems = currentTracks.filter(t => t.review_status === 'problem').length;
+  document.getElementById('stats').textContent =
+    `${currentTracks.length} tracks | ${reviewed} reviewed | ${problems} problems`;
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  switch (e.key) {
+    case 'ArrowLeft': prevTrack(); e.preventDefault(); break;
+    case 'ArrowRight': nextTrack(); e.preventDefault(); break;
+    case ' ': togglePlay(); e.preventDefault(); break;
+    case 'r': case 'R': setReview('reviewed'); break;
+    case 'p': case 'P': setReview('problem'); break;
+    case '1': setZoom(50); break;
+    case '2': setZoom(150); break;
+    case '3': setZoom(400); break;
+    case '4': setZoom(800); break;
+  }
+});
+
+init();
+</script>
+</body>
+</html>
