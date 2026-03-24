@@ -195,7 +195,7 @@ void ConfigStorage::loadSettingsDefaults() {
     //  spectral processing, forward filter, particle filter, HMM, noise estimation, etc.)
 
     // AudioTracker defaults (v74+)
-    data_.tracker.bpmMin = 60.0f;
+    data_.tracker.bpmMin = 15.0f;
     data_.tracker.bpmMax = 200.0f;
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 150;
@@ -572,11 +572,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // AudioTracker params (v74)
     if (tracker) {
         // Validate tracker params
-        validateFloat(data_.tracker.bpmMin, 40.0f, 120.0f, F("tracker.bpmMin"));
+        validateFloat(data_.tracker.bpmMin, 10.0f, 120.0f, F("tracker.bpmMin"));
         validateFloat(data_.tracker.bpmMax, 120.0f, 240.0f, F("tracker.bpmMax"));
         // Cross-field: ensure bpmMin < bpmMax after individual clamping
         if (data_.tracker.bpmMin >= data_.tracker.bpmMax) {
-            data_.tracker.bpmMin = 60.0f;
+            data_.tracker.bpmMin = 15.0f;
             data_.tracker.bpmMax = 200.0f;
             fixedCount++;
         }

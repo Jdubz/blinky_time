@@ -95,7 +95,7 @@ public:
 
     // === Tunable parameters ===
     // Core tempo
-    float bpmMin = 60.0f;
+    float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
@@ -148,8 +148,9 @@ private:
     bool nnActive_ = false;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
-    // === OSS buffer (~5.5 seconds: 360 samples @ ~66 Hz) ===
-    static constexpr int OSS_BUFFER_SIZE = 360;
+    // === OSS buffer (~12 seconds: 792 samples @ ~66 Hz) ===
+    // Sized for 3 epochs at MAX_PATTERN_LEN (264 × 3 = 792)
+    static constexpr int OSS_BUFFER_SIZE = 792;
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
@@ -163,9 +164,9 @@ private:
     float periodicityStrength_ = 0.0f;
 
     // === PLP state (Predominant Local Pulse) ===
-    static constexpr int BASS_BUFFER_SIZE = 360;  // Same size as OSS buffer
-    static constexpr int NN_BUFFER_SIZE = 360;    // NN onset activation history
-    static constexpr int MAX_PATTERN_LEN = 66;    // Max period in frames (66 Hz / 60 BPM)
+    static constexpr int BASS_BUFFER_SIZE = 792;  // Same size as OSS buffer
+    static constexpr int NN_BUFFER_SIZE = 792;    // NN onset activation history
+    static constexpr int MAX_PATTERN_LEN = 264;   // 1 bar at 60 BPM (4 beats × 66 frames/beat)
     float bassBuffer_[BASS_BUFFER_SIZE] = {0};
     float bassLinear_[BASS_BUFFER_SIZE] = {0};    // Linearized bass (shared by ACF + PLP)
     int bassWriteIdx_ = 0;
@@ -193,7 +194,7 @@ private:
     // Each ACF update adds a Hann-windowed cosine kernel at detected period+phase.
     // Buffer rolls forward 1 position per frame. Pulse read from current position.
     // Anti-correlation impossible: cosine kernel peaks where DFT says periodicity is.
-    static constexpr int PULSE_BUF_LEN = 198;   // 3 beat periods at 60 BPM (~3s at 66Hz)
+    static constexpr int PULSE_BUF_LEN = 792;   // 3× MAX_PATTERN_LEN for cosine OLA accumulation
     float pulseBuf_[PULSE_BUF_LEN] = {0};
     float olaPeakEma_ = 1.0f;                   // Running peak EMA for normalization
 

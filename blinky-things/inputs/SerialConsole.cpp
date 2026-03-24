@@ -951,7 +951,7 @@ void SerialConsole::restoreDefaults() {
     // Restore audio tracker defaults (all tunable params)
     if (audioCtrl_) {
         // Core tempo
-        audioCtrl_->bpmMin = 60.0f;
+        audioCtrl_->bpmMin = 15.0f;
         audioCtrl_->bpmMax = 200.0f;
         audioCtrl_->tempoSmoothing = 0.85f;
         audioCtrl_->activationThreshold = 0.3f;

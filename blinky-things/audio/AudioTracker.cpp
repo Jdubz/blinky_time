@@ -291,7 +291,11 @@ void AudioTracker::runFourierTempogram() {
     if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;
     if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
 
-    for (int lag = minLag; lag <= maxLag; lag++) {
+    // Step size: 1 frame for short periods (beat-level), 2 for longer periods
+    // (bar-level). Halves Goertzel scan cost for the extended range without
+    // losing resolution where it matters. At lag=66, 1-frame step = 0.9 BPM
+    // resolution; at lag=132, 2-frame step = 0.4 BPM resolution (still fine).
+    for (int lag = minLag; lag <= maxLag; lag += (lag < 66 ? 1 : 2)) {
         float omega = TWO_PI_F / static_cast<float>(lag);
         float cosOmega = cosf(omega);
         float sinOmega = sinf(omega);
