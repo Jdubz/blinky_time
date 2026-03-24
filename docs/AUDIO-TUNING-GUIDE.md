@@ -47,9 +47,11 @@ PDM Microphone (16kHz, mono)
         └── [PHASE PATH]
             PLP Fourier tempogram (Goertzel DFT at candidate frequencies)
             3 sources: spectral flux, bass energy, NN onset
-            → DFT magnitude selects period, DFT phase gives alignment
-            → Epoch-fold pattern → plpPulse (visual pattern shape)
+            → Epoch-fold quality scoring (top-5 diverse candidates, DFT mag × variance)
+            → Canonical cosine OLA → plpPulse (Grosche & Mueller 2011, Meier 2024)
+            → Recency-weighted epoch fold → pattern digest (slot cache only)
             → Pattern slot cache (4-slot LRU, instant section recall)
+            → Silence state reset after 5s (clears all analysis buffers)
         |
    AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
         |
@@ -318,9 +320,9 @@ PLL parameters (`pll`, `pllkp`, `pllki`, `onsetSnapWindow`) removed. PLP Fourier
 
 ### Onset Detection & BPM Configuration (March 2026)
 
-**Architecture:** Decoupled tempo/onset. BPM uses spectral flux (NN-independent). NN onset used for visual pulse + PLL phase refinement.
-- **BPM signal:** Spectral flux (half-wave rectified magnitude change) → contrast² → ACF + comb bank → BPM
-- **Onset detection:** FrameOnsetNN, Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666).
+**Architecture:** Decoupled tempo/onset. BPM uses spectral flux (NN-independent). NN onset used for visual pulse + PLP source.
+- **BPM signal:** Spectral flux (half-wave rectified magnitude change) → contrast² → ACF → BPM
+- **Onset detection:** FrameOnsetNN, Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773).
 - **Training data:** Consensus v5 labels (7-system), cal63 mel calibration (target_rms_db=-63 dB).
 
 ### AudioTracker Tempo Defaults (v74+)
@@ -416,7 +418,7 @@ Key changes from v24:
 
 **Purpose:** Establish v60 performance across the full track library.
 
-**Method:** Use `run_music_test` MCP tool per track, one at a time (shared acoustic space — all devices hear same audio). Run full tracks (Bayesian fusion needs >30s to warm up).
+**Method:** Use `run_music_test` MCP tool per track (async — poll with `check_test_result`), one at a time (shared acoustic space — all devices hear same audio). Run full tracks (PLP needs >10s to warm up).
 
 ```
 # For each track:
@@ -491,7 +493,7 @@ Visual inspection of fire effect with beat-synced music:
 1. Verify steady beat in audio
 2. Check `musicthresh` isn't too high (try 0.3)
 3. Ensure BPM is within `bpmmin`/`bpmmax` range
-4. Allow 30+ seconds for Bayesian fusion to converge
+4. Allow 10+ seconds for PLP to converge
 5. Check tempo: `show beat` or `get_beat_state` MCP tool
 
 ### BPM Detected at Half-Time (e.g., 170 BPM → 85 BPM)

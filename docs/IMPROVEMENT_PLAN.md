@@ -36,15 +36,15 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 **What was built:**
 - **Fourier tempogram period selection**: Goertzel DFT at candidate frequencies across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step).
-- **Soft blend (no hard threshold)**: PLP pattern and cosine fallback are continuously blended by confidence (0=pure cosine, 1=pure PLP pattern). No discontinuous switch. Confidence naturally approaches 0 during silence/ambient. `plpActivation` parameter exists but is vestigial — the blend uses raw `plpConfidence_` directly.
+- **Soft blend (no hard threshold)**: PLP cosine OLA and cosine fallback are continuously blended by confidence (0=pure cosine, 1=pure cosine OLA). No discontinuous switch. Confidence naturally approaches 0 during silence/ambient.
 - **Cold-start template seeding**: 8 canonical patterns (four-on-floor, backbeat, halftime, breakbeat, 8th-note, dnb, dembow, sparse). After 1 bar of data, cosine similarity > 0.50 triggers a 50/50 blend of template and observed histogram. Validated: activation time dropped from 8-22s to 0-2.4s on most tracks (amapiano 0.3s, techno-minimal-emotion 1.3s, trance-goa 1.2s). Some tracks still slow (afrobeat 13.5s, breakbeat-bg 16.9s — patterns don't match templates well).
 - **Steep signal gate**: Mic level gates confidence with a steep transition near noise floor (`plpSignalFloor`). Once audio is clearly present (>2x floor), gate is fully open. Only suppresses during true silence.
 - **Beat stability gated learning**: PLP peak amplitude tracked via EMA. Stability = current/EMA. High stability (>0.7) = locked pattern. Low stability (<0.3) = fill/breakdown/section change. Used to gate bar histogram learning rate (fill/breakdown immunity).
 - **Fisher's g tried and reverted**: Fisher's g-statistic (ratio of max DFT magnitude to sum) was implemented as a principled [0,1] confidence measure, but penalizes tracks with multiple similarly-strong periods (common in syncopated music). DFT magnitude used instead — soft blend handles the confidence-to-output mapping without needing a principled scale.
-- **Epoch-fold pattern extraction** still used for the actual visual pattern shape
+- **Epoch-fold pattern extraction** retained for slot cache pattern digest only (recency-weighted, ~3-epoch half-life). plpPulse output uses canonical cosine OLA.
 - **Pattern normalization** uses min-max (signal is mean-subtracted, may have negatives)
 - **Confidence** = DFT magnitude x signal presence (steep mic level gate)
-- **Adaptive phase correction** (EMA variance: ALPHA_MIN=0.10 when locked, ALPHA_MAX=0.50 when converging, auto-resets on period change)
+- **Adaptive phase correction** removed — phase is implicit in cosine OLA
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
 **Current test results:**
@@ -68,7 +68,7 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 ### Priority 2: NN Training Improvements (When Retrained)
 
-**Status: NOT URGENT — v3 model deployed (All Onsets F1=0.787). Next training target: v9. Retrain when PLP phase alignment is validated.**
+**Status: NOT URGENT — v3 model deployed (All Onsets F1=0.787). v9 (tempo head + distillation) regressed to F1=0.233 due to broken data prep (non-augmented) + useless tempo head (256ms RF too short). v10 shift_tolerant_focal regressed to F1=0.11 — shift tolerance + focal loss are fundamentally incompatible (focal kills max-pooled positive gradients + missing look_at mask). v10 retrained with exact v3 recipe + SWA.**
 
 **Onset detection quality (v3 deployed):**
 
