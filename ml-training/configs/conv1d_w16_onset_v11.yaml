@@ -25,7 +25,8 @@
 #
 # Retained from v3/v10 (proven):
 #   - Asymmetric focal loss (gamma_pos=0.5, gamma_neg=2.0)
-#   - pos_weight=20 (proven in v3, auto=35.6 doesn't work)
+#   - pos_weight=auto (onset labels are ~6% positive vs beats ~2.8%, so v3's
+#     hardcoded 20 is too high. Auto gives ~15.5 which is appropriate.)
 #   - Online mixup (Beta(0.4,0.4), p=0.5)
 #   - Frequency positional encoding (52-dim with deltas)
 #   - Full augmentation pipeline
@@ -58,6 +59,7 @@ training:
   mixup_alpha: 0.4
   epochs: 60
   patience: 15
+  pos_weight: 0                    # Auto-calculate (onset labels ~6% positive → auto ~15.5)
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v11.h"
