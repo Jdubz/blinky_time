@@ -8,12 +8,6 @@
 
 static constexpr float TWO_PI_F = 6.28318530718f;
 
-// Adaptive phase correction constants (from parameter sweep data)
-static constexpr float PHASE_ALPHA_ERR = 0.15f;   // Error EMA rate (~6-7 sample window at 150ms cadence)
-static constexpr float PHASE_SIGMA_REF = 0.08f;   // Expected RMS phase error when locked
-static constexpr float PHASE_ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
-static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
-
 // Cold-start template bank: 8 common rhythmic patterns (16 bins = 16th-note resolution).
 // Used ONLY for 1-bar seeding during cold start — not for runtime matching or caching.
 // ~512 bytes flash. Each pattern normalized to sum ~1.0.
@@ -207,11 +201,10 @@ const AudioControl& AudioTracker::update(float dt) {
         bassWriteIdx_ = 0; bassCount_ = 0;
         nnWriteIdx_ = 0; nnCount_ = 0;
         memset(plpPattern_, 0, sizeof(plpPattern_));
+        memset(pulseBuf_, 0, sizeof(pulseBuf_));
+        olaPeakEma_ = 1.0f;
         odfBaseline_ = 0.0f;
         odfPeakHold_ = 0.0f;
-        phaseErrEma_ = 0.0f;
-        phaseErrVar_ = 0.25f;  // Start fast convergence
-        antiCorrRunCount_ = 0;
         plpConfidence_ = 0.0f;
         periodicityStrength_ = 0.0f;
         resetSlots();
@@ -417,11 +410,11 @@ void AudioTracker::runFourierTempogram() {
 
     plpDftMag_ = bestMag;
 
-    // Reset adaptive phase correction state on significant period change
-    // (>10% shift). Prevents old low-variance state from suppressing
-    // the fast correction needed to re-converge at the new period.
+    // Clear pulse buffer on significant period change (>10% shift)
+    // so old kernels at the wrong frequency don't contaminate the new period.
     if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
-        phaseErrVar_ = 0.25f;  // Force fast convergence
+        memset(pulseBuf_, 0, sizeof(pulseBuf_));
+        olaPeakEma_ = 1.0f;
     }
 
     plpBestPeriod_ = bestPeriod;
@@ -468,11 +461,10 @@ void AudioTracker::updatePlpAnalysis() {
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // --- 2. Recency-weighted epoch fold (fixed grid from buffer end) ---
-    // The fold grid is anchored to the buffer end (most recent data). This is
-    // stable across ACF cycles — the same absolute time positions always map to
-    // the same pattern bins. Phase alignment is handled separately by the
-    // pattern-peak correction in step 4 (adjusts plpPhase_, not the fold grid).
+    // --- 2. Recency-weighted epoch fold for PATTERN DIGEST (slot cache only) ---
+    // Epoch-fold is NOT used for pulse output (cosine OLA handles that).
+    // The pattern digest captures the actual rhythmic shape for section detection
+    // via the slot cache's cosine similarity matching.
     const float* sourceBuf = ossLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
@@ -515,94 +507,37 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. Anti-correlation detection + half-period correction ---
-    // Cross-correlate the pattern against the most recent raw epoch at lag 0
-    // and lag patLen/2. Only rotate if: (a) corrAtZero is clearly negative AND
-    // (b) corrAtHalf is clearly positive. This avoids false triggers when both
-    // correlations are near zero (noise) or both negative (genuinely flat pattern).
+    // --- 3. Canonical PLP: add Hann-windowed cosine kernel to pulse buffer ---
+    // Each ACF update contributes one kernel. The buffer rolls forward 1 position
+    // per frame in updatePlpPhase(). Overlap-add of many kernels produces peaks
+    // where the DFT says periodicity is — anti-correlation is impossible because
+    // cosine peaks are always positively correlated with the dominant periodic
+    // component. (Grosche & Mueller 2011, Meier et al. 2024)
     //
-    // If anti-correlation persists for 4+ consecutive ACF cycles (~600ms),
-    // force a half-period phase shift to break out of wrong phase locks.
+    // Kernel: k(t) = hann(t) * cos(2*pi*(t * omega - phase))
+    //   omega = 1/period (cycles per frame)
+    //   phase = DFT phase at winning frequency (Meier 2024 eq. 3)
+    //   Window length = 2 * period (covers 2 full beat cycles)
     {
-        int recentStart = sourceCount - patLen;
-        float corrAtZero = 0.0f, corrAtHalf = 0.0f;
-        int halfPat = patLen / 2;
-        for (int j = 0; j < patLen; j++) {
-            float raw = sourceBuf[recentStart + j];
-            corrAtZero += plpPattern_[j] * raw;
-            corrAtHalf += plpPattern_[(j + halfPat) % patLen] * raw;
-        }
+        float omega = 1.0f / static_cast<float>(patLen);  // cycles per frame
+        int halfWin = patLen;  // 1 period each side = 2-period window
+        if (halfWin > PULSE_BUF_LEN / 2 - 1) halfWin = PULSE_BUF_LEN / 2 - 1;
+        int winLen = halfWin * 2 + 1;
 
-        // Normalize by pattern energy for scale-independent comparison
-        float patEnergy = 0.0f;
-        for (int j = 0; j < patLen; j++) patEnergy += plpPattern_[j] * plpPattern_[j];
-        if (patEnergy > 1e-10f) {
-            float invE = 1.0f / sqrtf(patEnergy);
-            corrAtZero *= invE;
-            corrAtHalf *= invE;
-        }
-
-        // Only rotate when corrAtZero is significantly negative AND
-        // corrAtHalf is significantly positive — clear phase inversion.
-        static constexpr float ANTI_CORR_THRESH = 0.05f;
-        if (corrAtZero < -ANTI_CORR_THRESH && corrAtHalf > ANTI_CORR_THRESH) {
-            // Clear phase inversion: rotate pattern and shift phase
-            float tmp[MAX_PATTERN_LEN];
-            memcpy(tmp, plpPattern_, patLen * sizeof(float));
-            for (int j = 0; j < patLen; j++) {
-                plpPattern_[j] = tmp[(j + halfPat) % patLen];
-            }
-            plpPhase_ += 0.5f;
-            if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
-            antiCorrRunCount_ = 0;  // Reset: we just corrected, don't double-shift
-        } else if (corrAtZero < -ANTI_CORR_THRESH) {
-            // Negative but no clear half-period improvement: count toward persistent reset
-            antiCorrRunCount_++;
-            if (antiCorrRunCount_ >= 4) {
-                plpPhase_ += 0.5f;
-                if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
-                phaseErrVar_ = 0.25f;  // Force fast re-convergence
-                antiCorrRunCount_ = 0;
-            }
-        } else {
-            antiCorrRunCount_ = 0;
+        // Kernel is centered at position 0 (current frame = buffer position 0).
+        // Negative indices address past samples, positive address future predictions.
+        // The Hann window tapers both ends smoothly.
+        for (int i = -halfWin; i <= halfWin; i++) {
+            float w = 0.5f + 0.5f * cosf(TWO_PI_F * static_cast<float>(i) / static_cast<float>(winLen - 1));
+            float kernel = w * cosf(TWO_PI_F * (static_cast<float>(i) * omega - plpDftPhase_));
+            int idx = i;  // Relative to current position (0 = now)
+            if (idx < 0) idx += PULSE_BUF_LEN;
+            if (idx >= PULSE_BUF_LEN) idx -= PULSE_BUF_LEN;
+            pulseBuf_[idx] += kernel;
         }
     }
 
-    // --- 4. Phase alignment: pattern-peak with DFT fallback ---
-    float phaseError = 0.0f;
-    {
-        int peakIdx = 0;
-        float peakVal = plpPattern_[0];
-        for (int j = 1; j < patLen; j++) {
-            if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
-        }
-        if (peakVal > 0.5f) {
-            float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
-            phaseError = peakPhase - plpPhase_;
-        } else {
-            phaseError = plpDftPhase_ - plpPhase_;
-        }
-    }
-
-    // Wrap error to [-0.5, 0.5]
-    if (phaseError > 0.5f) phaseError -= 1.0f;
-    if (phaseError < -0.5f) phaseError += 1.0f;
-
-    // Adaptive correction rate from phase error variance (EMA)
-    phaseErrEma_ += PHASE_ALPHA_ERR * (phaseError - phaseErrEma_);
-    float deviation = phaseError - phaseErrEma_;
-    phaseErrVar_ += PHASE_ALPHA_ERR * (deviation * deviation - phaseErrVar_);
-
-    float sigma = sqrtf(phaseErrVar_ > 0.0f ? phaseErrVar_ : 0.0f);
-    float lambda = sigma / (sigma + PHASE_SIGMA_REF);
-    float alpha = PHASE_ALPHA_MIN + (PHASE_ALPHA_MAX - PHASE_ALPHA_MIN) * lambda;
-
-    plpPhase_ += alpha * phaseError;
-    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-    if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
-
-    // --- 5. PLP confidence from DFT magnitude + steep signal gate ---
+    // --- 4. PLP confidence from DFT magnitude + steep signal gate ---
     float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
@@ -611,32 +546,39 @@ void AudioTracker::updatePlpAnalysis() {
 }
 
 void AudioTracker::updatePlpPhase() {
-    // Free-running phase advance at detected period (not BPM-smoothed)
+    // --- Roll pulse buffer forward by 1 frame (Meier 2024 real-time PLP) ---
+    // Shift all values left by 1; zero the tail. This advances the "now" cursor
+    // so position 0 always represents the current frame. Old kernel contributions
+    // naturally fall off the left end — no explicit decay needed.
+    memmove(pulseBuf_, pulseBuf_ + 1, (PULSE_BUF_LEN - 1) * sizeof(float));
+    pulseBuf_[PULSE_BUF_LEN - 1] = 0.0f;
+
+    // --- Read pulse from cosine OLA buffer at position 0 (current frame) ---
+    // Half-wave rectify: only positive lobes become pulse peaks (Grosche & Mueller 2011).
+    float rawPulse = fmaxf(pulseBuf_[0], 0.0f);
+
+    // Normalize with slow-tracking peak EMA to keep output in [0, 1].
+    // EMA avoids hard peak-hold artifacts. Floor prevents division issues during silence.
+    static constexpr float PEAK_EMA_ALPHA = 0.01f;   // ~100-frame (~1.5s) time constant
+    static constexpr float PEAK_FLOOR = 0.1f;
+    olaPeakEma_ += PEAK_EMA_ALPHA * (rawPulse - olaPeakEma_);
+    if (olaPeakEma_ < PEAK_FLOOR) olaPeakEma_ = PEAK_FLOOR;
+    float normalizedPulse = clampf(rawPulse / olaPeakEma_, 0.0f, 1.0f);
+
+    // Blend OLA pulse with cosine fallback when confidence is low.
+    // During silence, confidence→0 and the output degrades to a smooth cosine.
+    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
+    plpPulseValue_ = cosinePulse * (1.0f - blend) + normalizedPulse * blend;
+
+    // --- Free-running phase advance (for beat counting + cosine fallback) ---
     int period = (plpBestPeriod_ > 0) ? plpBestPeriod_ : 33;
     float phaseIncrement = 1.0f / static_cast<float>(period);
     plpPhase_ += phaseIncrement;
-
-    // Beat wrap
     if (plpPhase_ >= 1.0f) {
         plpPhase_ -= 1.0f;
         beatCount_++;
     }
-
-    // Read PLP pattern and cosine fallback, blend by confidence.
-    // No hard threshold — published PLP systems run continuously (Meier 2024, librosa).
-    // Confidence naturally approaches 0 during silence/ambient, making the output
-    // smoothly degrade to the cosine fallback without a discontinuous switch.
-    float patternPulse = 0.5f;
-    if (plpPatternLen_ > 0) {
-        float patPos = plpPhase_ * plpPatternLen_;
-        int idx0 = static_cast<int>(patPos) % plpPatternLen_;
-        float frac = patPos - floorf(patPos);
-        int idx1 = (idx0 + 1) % plpPatternLen_;
-        patternPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
-    }
-    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
-    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
-    plpPulseValue_ = cosinePulse * (1.0f - blend) + patternPulse * blend;
 
     // --- Beat stability tracking ---
     if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
@@ -773,8 +715,6 @@ void AudioTracker::checkPatternSlots() {
         }
         // Confidence boost
         plpConfidence_ = fmaxf(plpConfidence_, slots_[activeSlot_].confidence * 0.8f);
-        // Reset phase correction for fast re-convergence at new section
-        phaseErrVar_ = 0.25f;
 
     } else if (bestSlot == activeSlot_ && bestSim > slotNewThreshold && plpConfidence_ > slotSaveMinConf) {
         // REINFORCE active slot with current PLP pattern

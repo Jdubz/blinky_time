@@ -183,14 +183,19 @@ private:
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
-    float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
-    float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
-    float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
+    float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
-    uint8_t antiCorrRunCount_ = 0;             // Consecutive ACF cycles with negative pattern correlation
+
+    // === Canonical PLP: cosine OLA pulse buffer (Grosche & Mueller 2011, Meier 2024) ===
+    // Each ACF update adds a Hann-windowed cosine kernel at detected period+phase.
+    // Buffer rolls forward 1 position per frame. Pulse read from current position.
+    // Anti-correlation impossible: cosine kernel peaks where DFT says periodicity is.
+    static constexpr int PULSE_BUF_LEN = 198;   // 3 beat periods at 60 BPM (~3s at 66Hz)
+    float pulseBuf_[PULSE_BUF_LEN] = {0};
+    float olaPeakEma_ = 1.0f;                   // Running peak EMA for normalization
 
     // === Pulse detection ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline
