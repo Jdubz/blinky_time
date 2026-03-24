@@ -13,10 +13,10 @@
 //
 // Output is used for:
 //   - Visual pulse detection (sparks, flashes on kicks/snares)
-//   - PLL phase refinement (onset-gated correction near expected beats)
+//   - PLP source comparison (Fourier tempogram evaluates NN onset alongside flux/bass)
 //   - Energy synthesis (ODF peak-hold blend)
 //
-// NOT used for BPM estimation — spectral flux drives ACF/comb tempo instead.
+// NOT used for BPM estimation — spectral flux drives ACF tempo instead.
 //
 // Consumes raw mel bands from SharedSpectralAnalysis::getRawMelBands().
 // Falls back to mic energy if model fails to load.

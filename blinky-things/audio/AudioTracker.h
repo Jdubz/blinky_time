@@ -104,7 +104,6 @@ public:
     float activationThreshold = 0.3f;
 
     // PLP (Predominant Local Pulse)
-    float plpActivation = 0.3f;        // [VESTIGIAL] Unused since soft blend (v81). Kept for settings compat.
     float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
     float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation

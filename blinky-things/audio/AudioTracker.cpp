@@ -59,10 +59,13 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     bool nnOk = frameOnsetNN_.begin();
     nnActive_ = nnOk && frameOnsetNN_.isReady();
 
-    // Initialize time-based state to current time to avoid
-    // instant flush on first update (nowMs >> 0 would fire immediately)
+    // Initialize all time-based state to current time to avoid
+    // instant triggers on first update (nowMs >> 0 would fire immediately)
     uint32_t now = time_.millis();
     onsetDensityWindowStart_ = now;
+    lastSignificantAudioMs_ = now;   // Prevent premature silence decay on boot
+    lastAcfMs_ = now;                // Prevent immediate ACF fire
+    lastPulseMs_ = now;
     resetSlots();
 
     return true;
@@ -176,7 +179,7 @@ const AudioControl& AudioTracker::update(float dt) {
         if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
     }
 
-    // 9. Periodic ACF for tempo estimation + IOI analysis
+    // 9. Periodic ACF for tempo estimation
     //    First ACF fires after ~1s (ossCount_ >= 60 at ~66 Hz), then every
     //    acfPeriodMs (~150ms = ~9 frames). The 60-sample minimum ensures
     //    enough OSS data for meaningful autocorrelation.
@@ -189,9 +192,29 @@ const AudioControl& AudioTracker::update(float dt) {
     // 10. PLP phase update (free-running + pattern-based correction)
     updatePlpPhase();
 
-    // 11. Decay periodicity during silence (between ACF runs)
+    // 11. Decay during silence + reset stale state for clean warm-up
     if (nowMs - lastSignificantAudioMs_ > 2000) {
         periodicityStrength_ *= 0.998f;  // ~0.5s half-life at 62.5 Hz
+    }
+    // After 5s of silence, reset analysis state so new music starts clean.
+    // Without this, old OSS/bass/NN buffers, pattern, and phase correction
+    // state contaminate warm-up on the next track.
+    if (nowMs - lastSignificantAudioMs_ > 5000 && ossCount_ > 0) {
+        memset(ossBuffer_, 0, sizeof(ossBuffer_));
+        memset(bassBuffer_, 0, sizeof(bassBuffer_));
+        memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
+        ossWriteIdx_ = 0; ossCount_ = 0;
+        bassWriteIdx_ = 0; bassCount_ = 0;
+        nnWriteIdx_ = 0; nnCount_ = 0;
+        memset(plpPattern_, 0, sizeof(plpPattern_));
+        odfBaseline_ = 0.0f;
+        odfPeakHold_ = 0.0f;
+        phaseErrEma_ = 0.0f;
+        phaseErrVar_ = 0.25f;  // Start fast convergence
+        antiCorrRunCount_ = 0;
+        plpConfidence_ = 0.0f;
+        periodicityStrength_ = 0.0f;
+        resetSlots();
     }
 
     // 12. Pattern slot cache: check every bar (4 beats)
@@ -523,20 +546,17 @@ void AudioTracker::updatePlpAnalysis() {
         // corrAtHalf is significantly positive — clear phase inversion.
         static constexpr float ANTI_CORR_THRESH = 0.05f;
         if (corrAtZero < -ANTI_CORR_THRESH && corrAtHalf > ANTI_CORR_THRESH) {
+            // Clear phase inversion: rotate pattern and shift phase
             float tmp[MAX_PATTERN_LEN];
             memcpy(tmp, plpPattern_, patLen * sizeof(float));
             for (int j = 0; j < patLen; j++) {
                 plpPattern_[j] = tmp[(j + halfPat) % patLen];
             }
-            // Also shift phase to match the rotated pattern
             plpPhase_ += 0.5f;
             if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
-        }
-
-        // Persistent anti-correlation phase reset: if corrAtZero has been
-        // significantly negative for 4+ cycles, force half-period shift.
-        // Uses the normalized correlation, not raw (avoids false triggers on quiet signals).
-        if (corrAtZero < -ANTI_CORR_THRESH) {
+            antiCorrRunCount_ = 0;  // Reset: we just corrected, don't double-shift
+        } else if (corrAtZero < -ANTI_CORR_THRESH) {
+            // Negative but no clear half-period improvement: count toward persistent reset
             antiCorrRunCount_++;
             if (antiCorrRunCount_ >= 4) {
                 plpPhase_ += 0.5f;
@@ -637,9 +657,8 @@ void AudioTracker::updatePlpPhase() {
 // ============================================================================
 
 void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
-    // Floor-tracking baseline (matched to AudioController):
+    // Floor-tracking baseline:
     // Slow rise (peaks don't inflate baseline), fast drop (floor drops caught quickly).
-    // Uses fixed alpha, not dt-based exponential, to match proven AudioController behavior.
     if (odf < odfBaseline_) {
         odfBaseline_ += (odf - odfBaseline_) * baselineFastDrop;   // fast drop
     } else {

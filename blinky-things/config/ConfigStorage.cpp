@@ -624,7 +624,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->energyMicWeight = data_.tracker.energyMicWeight;
         tracker->energyMelWeight = data_.tracker.energyMelWeight;
         tracker->energyOdfWeight = data_.tracker.energyOdfWeight;
-        tracker->plpActivation = data_.tracker.plpActivation;
+        // plpActivation removed v83 (vestigial since v81 soft blend). Field kept in StoredTrackerParams for binary compat.
         tracker->plpConfAlpha = data_.tracker.plpConfAlpha;
         tracker->plpNovGain = data_.tracker.plpNovGain;
         tracker->plpSignalFloor = data_.tracker.plpSignalFloor;
@@ -745,7 +745,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.energyMicWeight = tracker->energyMicWeight;
         data_.tracker.energyMelWeight = tracker->energyMelWeight;
         data_.tracker.energyOdfWeight = tracker->energyOdfWeight;
-        data_.tracker.plpActivation = tracker->plpActivation;
+        // plpActivation: vestigial field kept for binary compat, not saved from tracker
         data_.tracker.plpConfAlpha = tracker->plpConfAlpha;
         data_.tracker.plpNovGain = tracker->plpNovGain;
         data_.tracker.plpSignalFloor = tracker->plpSignalFloor;
