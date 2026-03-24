@@ -1132,9 +1132,13 @@ def main():
             shutil.rmtree(shard_dir)
             continue
 
+        # Detect X feature dimension from first shard (26 for mel, 52 with delta features)
+        x_first = np.load(shard_dir / "X_0.npy", mmap_mode='r')
+        x_features = x_first.shape[2]  # n_mels or n_mels*2 with deltas
+        del x_first
         X_out = np.lib.format.open_memmap(
             str(output_dir / f"X_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=(total, chunk_frames, n_mels))
+            dtype=np.float32, shape=(total, chunk_frames, x_features))
         # Detect Y shape from first shard: 1D (chunk_frames,) or 2D (chunk_frames, channels)
         y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
         y_shape = (total,) + y_first.shape[1:]  # (total, chunk_frames) or (total, chunk_frames, 3)
