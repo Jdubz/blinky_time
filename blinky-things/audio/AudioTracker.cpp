@@ -156,7 +156,13 @@ const AudioControl& AudioTracker::update(float dt) {
             fluxContrast = powf(flux, odfContrast);
         }
         fluxContrast = clampf(fluxContrast, 0.0f, 1.0f);
-        addOssSample(fluxContrast);
+
+        // NN-weighted flux: emphasize consistent rhythmic elements (kicks/snares)
+        // and suppress variable ornamental elements (hi-hats, fills). The NN fires
+        // primarily on kicks and snares (F1=0.716), naturally biasing the epoch-fold
+        // toward the stable rhythmic skeleton. Soft gate preserves some non-NN energy.
+        float nnGatedFlux = fluxContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
+        addOssSample(nnGatedFlux);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;
@@ -481,30 +487,51 @@ void AudioTracker::updatePlpAnalysis() {
 
     if (sourceCount < patLen * 2) return;
 
-    float patternAccum[MAX_PATTERN_LEN] = {0};
+    // Variance-gated epoch fold: track both sum and sum-of-squares per bin.
+    // Bins with low cross-epoch variance are consistent (kick on beat 1 always
+    // lands here). Bins with high variance are unreliable (hi-hat pattern changes
+    // bar-to-bar). Weight each bin inversely by its variance.
+    // (Stellingwerf 1978 Phase Dispersion Minimization, adapted for music)
+    float foldSum[MAX_PATTERN_LEN] = {0};
+    float foldSumSq[MAX_PATTERN_LEN] = {0};
     float totalWeight = 0.0f;
     int epochs = 0;
     for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
-        float weight = expf(-0.3f * epochs);  // ~3-epoch half-life
+        float weight = expf(-0.3f * epochs);
         for (int j = 0; j < patLen; j++) {
-            patternAccum[j] += sourceBuf[offset + j] * weight;
+            float val = sourceBuf[offset + j];
+            foldSum[j] += val * weight;
+            foldSumSq[j] += val * val * weight;
         }
         totalWeight += weight;
         epochs++;
     }
     if (epochs < 2) return;
 
-    // Normalize to [0, 1] using min-max
-    float minVal = patternAccum[0], maxVal = patternAccum[0];
+    // Compute per-bin mean, variance, and reliability-weighted pattern
+    static constexpr float VARIANCE_SENSITIVITY = 10.0f;  // Higher = more aggressive suppression
+    float minVal = 1e30f, maxVal = -1e30f;
+    float patternRaw[MAX_PATTERN_LEN];
     for (int j = 0; j < patLen; j++) {
-        patternAccum[j] /= totalWeight;
-        if (patternAccum[j] < minVal) minVal = patternAccum[j];
-        if (patternAccum[j] > maxVal) maxVal = patternAccum[j];
+        float mean = foldSum[j] / totalWeight;
+        float meanSq = foldSumSq[j] / totalWeight;
+        float variance = meanSq - mean * mean;
+        if (variance < 0.0f) variance = 0.0f;  // Numerical safety
+
+        // Reliability: consistent bins (low variance) get full weight,
+        // variable bins (high variance) get suppressed
+        float reliability = 1.0f / (1.0f + variance * VARIANCE_SENSITIVITY);
+        patternRaw[j] = mean * reliability;
+
+        if (patternRaw[j] < minVal) minVal = patternRaw[j];
+        if (patternRaw[j] > maxVal) maxVal = patternRaw[j];
     }
+
+    // Normalize to [0, 1] using min-max
     float range = maxVal - minVal;
     if (range > 1e-10f) {
         for (int j = 0; j < patLen; j++) {
-            float normalized = (patternAccum[j] - minVal) / range;
+            float normalized = (patternRaw[j] - minVal) / range;
             plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
     } else {
