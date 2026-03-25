@@ -191,10 +191,15 @@ export function scoreDeviceRun(
   const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
     matchEventsF1(estBeats, refBeats, BEAT_TOLERANCE_SEC);
 
-  // Transient F1
+  // Transient F1: match detected transients against onset ground truth if available,
+  // otherwise fall back to beat ground truth. Onset consensus labels match the actual
+  // task (acoustic onset detection) rather than metrical beat positions.
   const estTransients = detections.map(d => (d.timestampMs - latencyCorrectionMs) / 1000);
+  const refOnsets = gtData.onsets && gtData.onsets.length > 0
+    ? gtData.onsets.filter(o => o.time <= audioDurationSec).map(o => o.time)
+    : refBeats;  // Fall back to beats if no onset labels
   const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
-    matchEventsF1(estTransients, refBeats, BEAT_TOLERANCE_SEC);
+    matchEventsF1(estTransients, refOnsets, BEAT_TOLERANCE_SEC);
 
   // CMLt: Continuity metric
   const correct: boolean[] = refBeats.map(ref =>

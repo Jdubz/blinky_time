@@ -259,6 +259,20 @@ async function runTrack(args: RunTrackArgs): Promise<void> {
   }
 
   const gtData = JSON.parse(readFileSync(groundTruthFile, 'utf-8')) as GroundTruth;
+
+  // Load onset consensus labels if available (for transientF1 evaluation).
+  // These match the onset detection task directly, unlike beat labels which
+  // miss off-beat onsets and only mark metrically important positions.
+  const onsetFile = groundTruthFile.replace('.beats.json', '.onsets_consensus.json');
+  if (existsSync(onsetFile)) {
+    const onsetData = JSON.parse(readFileSync(onsetFile, 'utf-8'));
+    gtData.onsets = (onsetData.onsets || []).map((o: any) => ({
+      time: typeof o === 'number' ? o : o.time,
+      strength: typeof o === 'number' ? 1.0 : (o.strength || 1.0),
+    }));
+    log(`Onset labels: ${gtData.onsets!.length} onsets (5-system consensus)`);
+  }
+
   log(`Track: ${gtData.pattern || audioFile}`);
   log(`BPM: ${gtData.bpm || 'unknown'}, Duration: ${durationMs || gtData.durationMs || 'full track'}ms`);
   log(`Ports: ${ports.join(', ')}`);
@@ -486,6 +500,14 @@ async function validate(args: ValidateArgs): Promise<void> {
       let gtData: GroundTruth;
       try {
         gtData = JSON.parse(readFileSync(track.groundTruth, 'utf-8')) as GroundTruth;
+        // Load onset consensus labels for transientF1 evaluation
+        if (track.onsetGroundTruth && existsSync(track.onsetGroundTruth)) {
+          const onsetData = JSON.parse(readFileSync(track.onsetGroundTruth, 'utf-8'));
+          gtData.onsets = (onsetData.onsets || []).map((o: any) => ({
+            time: typeof o === 'number' ? o : o.time,
+            strength: typeof o === 'number' ? 1.0 : (o.strength || 1.0),
+          }));
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(`\n[${trackIdx + 1}/${tracks.length}] ${track.name} — SKIPPED: ${msg}`);
