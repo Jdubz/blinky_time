@@ -44,7 +44,7 @@ OUTPUT_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_consensus")
 LIBROSA_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_librosa")
 SR = 16000
 HOP = 256
-TOLERANCE_SEC = 0.030  # 30ms consensus window
+TOLERANCE_SEC = 0.070  # 70ms consensus window (half a 16th note at common tempos)
 TOTAL_SYSTEMS = 5      # Fixed denominator for strength (even if some fail)
 
 
