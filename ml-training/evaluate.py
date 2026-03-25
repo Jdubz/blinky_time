@@ -146,8 +146,10 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
         ).to(device)
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
+        use_delta = cfg.get("features", {}).get("use_delta", False)
+        input_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
         model = build_onset_conv1d(
-            n_mels=cfg["audio"]["n_mels"],
+            n_mels=input_features,
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"].get("dropout", 0.1),
@@ -219,6 +221,12 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         audio_np = audio_np * (10 ** (target_rms_db / 20) / rms)
         audio_gpu = torch.from_numpy(audio_np).to(device)
         mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
+
+        # Append delta features if configured
+        if cfg.get("features", {}).get("use_delta", False):
+            delta = np.zeros_like(mel)
+            delta[1:] = mel[1:] - mel[:-1]
+            mel = np.concatenate([mel, delta], axis=-1)  # (N, 52)
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -555,6 +563,11 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
         audio_np = audio_np * (10 ** (target_rms_db / 20) / rms)
         audio_gpu = torch.from_numpy(audio_np).to(device)
         mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
+
+        if cfg.get("features", {}).get("use_delta", False):
+            delta = np.zeros_like(mel)
+            delta[1:] = mel[1:] - mel[:-1]
+            mel = np.concatenate([mel, delta], axis=-1)
 
         n_frames = mel.shape[0]
         n_out_ch = model.out_channels
