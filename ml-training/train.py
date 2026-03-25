@@ -760,12 +760,27 @@ def main():
     best_val_loss = float("inf")
     patience_counter = 0
     log_rows = []
+    start_epoch = 0
+
+    # Resume from checkpoint if available
+    ckpt_path = output_dir / "training_checkpoint.pt"
+    if ckpt_path.exists():
+        print(f"Resuming from checkpoint: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        model.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+        start_epoch = ckpt["epoch"] + 1
+        best_val_loss = ckpt["best_val_loss"]
+        patience_counter = ckpt["patience_counter"]
+        log_rows = ckpt.get("log_rows", [])
+        print(f"  Resuming at epoch {start_epoch + 1}/{epochs}, best_val_loss={best_val_loss:.4f}")
 
     num_train_batches = len(train_loader)
     num_val_batches = len(val_loader)
     log_interval = max(1, num_train_batches // 10)  # Print ~10 times per epoch
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         # --- Train ---
         model.train()
         train_loss = 0.0
@@ -943,6 +958,17 @@ def main():
             if patience_counter >= patience:
                 print(f"  Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
                 break
+
+        # Save resumable checkpoint every epoch
+        torch.save({
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "scheduler_state": scheduler.state_dict(),
+            "epoch": epoch,
+            "best_val_loss": best_val_loss,
+            "patience_counter": patience_counter,
+            "log_rows": log_rows,
+        }, output_dir / "training_checkpoint.pt")
 
     # Restore best weights
     model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
