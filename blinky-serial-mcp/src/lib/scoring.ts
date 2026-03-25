@@ -191,17 +191,31 @@ export function scoreDeviceRun(
   const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
     matchEventsF1(estBeats, refBeats, BEAT_TOLERANCE_SEC);
 
-  // Transient F1: match detected transients against onset ground truth if available,
-  // otherwise fall back to beat ground truth. Only use high-confidence onsets (3+
-  // systems agree, strength >= 0.6) — low-confidence onsets include subtle events
-  // that can't be detected through a microphone in a room.
+  // Transient F1: match detected transients against onset ground truth if available.
+  // Onset labels are deduplicated at 70ms (half a 16th note at common tempos) because
+  // the 5 onset detection systems disagree by 40-80ms on the same event, creating
+  // duplicate entries that inflate the reference count.
+  // Only use high-confidence onsets (3+ systems, strength >= 0.6).
   const estTransients = detections.map(d => (d.timestampMs - latencyCorrectionMs) / 1000);
   const MIN_ONSET_STRENGTH = 0.6;  // 3+ of 5 systems must agree
-  const refOnsets = gtData.onsets && gtData.onsets.length > 0
-    ? gtData.onsets
-        .filter(o => o.time <= audioDurationSec && o.strength >= MIN_ONSET_STRENGTH)
-        .map(o => o.time)
-    : refBeats;
+  const ONSET_DEDUP_SEC = 0.070;   // Merge onsets within 70ms (same musical event)
+  let refOnsets: number[];
+  if (gtData.onsets && gtData.onsets.length > 0) {
+    // Filter by confidence, then deduplicate close events
+    const filtered = gtData.onsets
+      .filter(o => o.time <= audioDurationSec && o.strength >= MIN_ONSET_STRENGTH)
+      .map(o => o.time)
+      .sort((a, b) => a - b);
+    const deduped: number[] = [];
+    for (const t of filtered) {
+      if (deduped.length === 0 || t - deduped[deduped.length - 1] > ONSET_DEDUP_SEC) {
+        deduped.push(t);
+      }
+    }
+    refOnsets = deduped;
+  } else {
+    refOnsets = refBeats;
+  }
   const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
     matchEventsF1(estTransients, refOnsets, BEAT_TOLERANCE_SEC);
 
