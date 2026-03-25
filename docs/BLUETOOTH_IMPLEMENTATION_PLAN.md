@@ -1,23 +1,131 @@
-# Bluetooth Implementation Plan
+# Wireless Communication Plan
 
-*Created: December 2025*
+*Created: December 2025, Updated: March 2026*
 
 ## Goal
 
-Add Bluetooth Low Energy (BLE) support so the blinky-console web app can communicate with the device wirelessly. The same JSON protocol works over both Serial and Bluetooth.
+Add wireless communication so devices can be managed remotely as a fleet. ESP32-S3 devices connect to a server via WiFi and relay commands to nRF52840 devices via BLE. The blinky-console web app can also connect directly to any device via BLE.
 
-## MVP Scope
+## Architecture Overview
+
+```
+Server (WiFi)
+  ↕ WiFi (TCP/WebSocket)
+ESP32-S3 devices (gateway role, dual-core)
+  ↕ BLE (Nordic UART Service)
+nRF52840 devices (peripheral role)
+```
+
+**Use case**: Fleet management — settings changes, mode/scene selection, device configuration. No real-time streaming or time-dependent data over wireless.
+
+### Why This Topology?
+
+- ESP32-S3 has WiFi + BLE coexistence (hardware radio time-multiplexing, standard ESP-IDF feature)
+- ESP32-S3 is dual-core: Core 0 handles all comms, Core 1 runs audio+LED loop untouched at 60fps
+- nRF52840 has mature BLE stack (SoftDevice S140 + Bluefruit52Lib, pre-installed)
+- BLE is the only shared radio protocol between the two chips (see Protocol Compatibility below)
+
+### Protocol Compatibility
+
+| Protocol | nRF52840 | ESP32-S3 | Shared? |
+|----------|----------|----------|---------|
+| **BLE** | Yes (SoftDevice S140 v7.3.0) | Yes (ESP32 BLE library) | **Yes** |
+| **802.15.4 / Thread / Zigbee** | Yes (hardware) | No (ESP32-H2/C6 only) | No |
+| **ESB (Enhanced ShockBurst)** | Yes (Nordic proprietary) | No | No |
+| **ESP-NOW** | No | Yes (Espressif proprietary) | No |
+| **WiFi** | No | Yes | N/A |
+
+BLE is the only option without adding new hardware. For the use case (infrequent settings/scene pushes), BLE is more than sufficient.
+
+## Resource Budget
+
+### ESP32-S3 (Gateway)
+
+| Resource | Current Usage | Added by Wireless | Available | Headroom |
+|----------|---------------|-------------------|-----------|----------|
+| **Flash** | ~345 KB | ~170 KB (WiFi ~100 KB + BLE ~60 KB + fleet ~10 KB) | 8 MB | 7.4 MB |
+| **RAM** | ~60 KB | ~50 KB (WiFi ~30 KB + BLE ~15 KB + fleet ~5 KB) | 512 KB | 400 KB |
+| **Core 1 CPU** | 11.3/16.7ms (68%) | 0ms (all comms on Core 0) | - | **5.4ms** |
+| **Core 0 CPU** | idle | WiFi + BLE + fleet tasks | - | abundant |
+
+### nRF52840 (Peripheral)
+
+| Resource | Current Usage | Added by BLE | Available | Headroom |
+|----------|---------------|--------------|-----------|----------|
+| **Flash** | ~345 KB | ~35 KB (Bluefruit52Lib + SoftDevice) | 1 MB | 560 KB |
+| **RAM** | ~60 KB | ~10 KB (SoftDevice ~8 KB + BLEUart ~2 KB) | 256 KB | 170 KB |
+| **CPU** | 14/16.7ms (84%) | <0.3ms (ISR-driven, no main loop impact) | - | **2.4ms** |
+
+**60fps is safe on both platforms.** ESP32-S3 render loop is completely unaffected (Core 0 isolation). nRF52840 BLE is interrupt-driven by the SoftDevice — the main loop doesn't notice.
+
+## ESP32-S3 Dual-Core Architecture
+
+```
+Core 1 (pinned — unchanged firmware)        Core 0 (new — comms & fleet)
+─────────────────────────────────            ──────────────────────────────
+PDM mic → FFT → NN → AudioTracker           WiFi client task
+  → Generator → Effect → LEDs                 ↕ server connection (WebSocket)
+  → SerialConsole (USB debug)                BLE central task
+  60fps, 11.3ms/frame                          ↕ connect to nRF52840 devices
+                                             Fleet manager task
+                                               ↕ scene state, device registry
+
+         Shared: settings struct (mutex-protected FreeRTOS queue)
+```
+
+- WiFi + BLE stacks already run their internal event loops on Core 0 by default in ESP32 Arduino
+- Communication between cores via mutex-protected settings struct or FreeRTOS queue
+- Core 1 reads shared state each frame; Core 0 writes when commands arrive from server
+
+## BLE Communication Strategy
+
+For infrequent settings and scene data, two viable approaches:
+
+### Option A: Brief GATT Connections (recommended for reliability)
+
+- ESP32-S3 connects to nRF52840 via NUS, pushes settings blob, disconnects
+- Whole interaction: <500ms per device
+- Fleet of 3 nRF52840 devices: <2s for full fleet update (sequential)
+- Between connections: zero CPU overhead on nRF52840
+- Guaranteed delivery (GATT provides acknowledgment)
+
+### Option B: BLE Advertising Broadcast (lightest possible)
+
+- ESP32-S3 encodes settings in BLE extended advertising packets (up to 255 bytes, BLE 5)
+- nRF52840 devices passively scan, pick up broadcasts matching a known manufacturer ID
+- No connection, no handshake, no pairing — free multicast to all devices
+- For larger scene data: fragment across multiple packets with sequence numbers
+- Trade-off: no delivery guarantee (fire-and-forget)
+
+**Recommendation**: Option A for settings/scene pushes (need confirmation), Option B for optional status beacons from nRF52840 devices.
+
+## Scope
+
+### Phase 1: Direct BLE (MVP)
 
 **In Scope:**
-- BLE connection using Nordic UART Service (NUS)
-- Same commands work over BLE as Serial
-- User can choose Serial or Bluetooth when connecting
+- nRF52840 BLE peripheral with NUS (same JSON commands as Serial)
+- Web Bluetooth connection from blinky-console to any device
+- User chooses Serial or Bluetooth when connecting
 
-**Out of Scope (for now):**
-- Simultaneous Serial + Bluetooth connections
+**Out of Scope:**
+- WiFi, server communication, fleet management
 - Auto-reconnection
-- Connection quality indicators
-- Transport abstraction layers
+- Simultaneous Serial + Bluetooth from web app
+
+### Phase 2: WiFi Gateway + Fleet Management
+
+**In Scope:**
+- ESP32-S3 WiFi client connecting to server
+- ESP32-S3 BLE central connecting to nRF52840 peripherals
+- Command relay: server → ESP32-S3 → nRF52840
+- Scene/settings distribution across fleet
+- Device registry and status reporting
+
+**Out of Scope:**
+- OTA firmware updates over wireless
+- Real-time audio streaming over wireless
+- Mesh networking between nRF52840 devices
 
 ## Why Nordic UART Service?
 
@@ -25,6 +133,7 @@ NUS emulates a serial port over BLE. This means:
 - **Zero protocol changes** - same JSON commands work
 - **Minimal Arduino changes** - just add a second "serial-like" output
 - **Simple web implementation** - read/write characteristics like a stream
+- **ESP32-S3 central support** - ESP32 BLE library has `BLEClient` for connecting to NUS peripherals
 
 ---
 
@@ -597,13 +706,198 @@ Add Bluetooth connect button:
 
 ---
 
-## Future Improvements (Post-MVP)
+## Part 3: ESP32-S3 WiFi Gateway (Phase 2)
 
-- Refactor shared code between SerialConsole and BLEConsole
-- Auto-reconnect to last-used device
-- Show connection type in UI (USB vs Bluetooth icon)
-- BLE signal strength indicator
+### Approach
+
+All networking runs on Core 0 via FreeRTOS tasks. Core 1 (audio+LED loop) is untouched. Communication between cores uses a mutex-protected shared settings struct.
+
+### New Files
+
+```
+blinky-things/
+└── comms/
+    ├── WifiGateway.h        # WiFi client + server connection
+    ├── WifiGateway.cpp
+    ├── BLECentral.h         # BLE central, connects to nRF52840 devices
+    ├── BLECentral.cpp
+    ├── FleetManager.h       # Device registry, command routing
+    ├── FleetManager.cpp
+    └── SharedState.h        # Mutex-protected state shared between cores
+```
+
+### Core 0 Task Structure
+
+```cpp
+// Created in setup(), pinned to Core 0
+xTaskCreatePinnedToCore(wifiTask, "wifi", 4096, NULL, 1, NULL, 0);
+xTaskCreatePinnedToCore(bleGatewayTask, "ble_gw", 4096, NULL, 1, NULL, 0);
+xTaskCreatePinnedToCore(fleetTask, "fleet", 2048, NULL, 1, NULL, 0);
+```
+
+### SharedState.h (inter-core communication)
+
+```cpp
+#pragma once
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+struct SharedState {
+    SemaphoreHandle_t mutex;
+
+    // Written by Core 0 (comms), read by Core 1 (render loop)
+    uint8_t pendingGenerator;       // generator change request
+    bool settingsDirty;             // flag: new settings available
+    char pendingCommand[128];       // queued command from server
+    bool commandPending;
+
+    // Written by Core 1 (render loop), read by Core 0 (comms)
+    uint8_t currentGenerator;
+    float energy;                   // for status reporting
+    float bpm;
+
+    void init() {
+        mutex = xSemaphoreCreateMutex();
+        commandPending = false;
+        settingsDirty = false;
+    }
+
+    bool lock(TickType_t timeout = pdMS_TO_TICKS(10)) {
+        return xSemaphoreTake(mutex, timeout) == pdTRUE;
+    }
+
+    void unlock() {
+        xSemaphoreGive(mutex);
+    }
+};
+```
+
+### BLE Central (ESP32-S3 connecting to nRF52840 devices)
+
+```cpp
+// Uses ESP32 BLE library in Central (client) mode
+#include <BLEDevice.h>
+#include <BLEClient.h>
+
+// Connect to nRF52840 NUS peripheral, send settings, disconnect
+bool pushSettingsToDevice(BLEAddress address, const char* settingsJson) {
+    BLEClient* client = BLEDevice::createClient();
+    if (!client->connect(address)) return false;
+
+    BLERemoteService* nus = client->getService(NUS_SERVICE_UUID);
+    if (!nus) { client->disconnect(); return false; }
+
+    BLERemoteCharacteristic* rx = nus->getCharacteristic(NUS_RX_UUID);
+    if (!rx) { client->disconnect(); return false; }
+
+    rx->writeValue((uint8_t*)settingsJson, strlen(settingsJson));
+    client->disconnect();
+    return true;
+}
+```
+
+### WiFi Gateway
+
+```cpp
+// Connects to server, receives commands, routes to local or BLE devices
+void wifiTask(void* param) {
+    WiFi.begin(ssid, password);
+    // ... connect to server via WebSocket ...
+
+    while (true) {
+        // Receive command from server
+        // Parse target device
+        // If local: write to SharedState
+        // If remote nRF52840: queue for BLE central task
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+```
+
+### Platform Guard
+
+WiFi gateway code only compiles on ESP32-S3:
+
+```cpp
+#ifdef BLINKY_PLATFORM_ESP32S3
+    #include "comms/WifiGateway.h"
+    #include "comms/BLECentral.h"
+    #include "comms/FleetManager.h"
+#endif
+```
+
+nRF52840 only gets the BLE peripheral (BLEConsole from Phase 1).
 
 ---
 
-*This MVP plan prioritizes getting Bluetooth working with minimal changes. Abstractions and polish can come later.*
+## Implementation Order (Revised)
+
+### Phase 1: nRF52840 BLE Peripheral (MVP)
+
+1. Create `BLEConsole.h/cpp` for nRF52840 (NUS peripheral)
+2. Test with nRF Connect app
+3. Add `bluetooth.ts` to blinky-console web app
+4. Test direct Web Bluetooth connections
+
+### Phase 2: ESP32-S3 WiFi + BLE Gateway
+
+1. Add FreeRTOS tasks on Core 0 for WiFi + BLE central
+2. Implement `SharedState` for inter-core communication
+3. Implement BLE central (connect to nRF52840, push settings)
+4. Implement WiFi client (connect to server)
+5. Implement `FleetManager` (device registry, command routing)
+6. Build server (scope TBD)
+
+---
+
+## Testing Checklist
+
+### Phase 1: Arduino BLE
+- [ ] nRF52840 advertises as "Blinky-{deviceId}" in nRF Connect
+- [ ] Can connect from nRF Connect
+- [ ] `json info` returns device info over BLE
+- [ ] `json settings` returns all settings over BLE
+- [ ] `set <name> <value>` works over BLE
+- [ ] `stream on` sends audio/battery data over BLE
+- [ ] Serial still works when BLE is connected
+- [ ] 60fps maintained with BLE advertising + connection
+
+### Phase 1: Web Console
+- [ ] "Bluetooth" button appears in ConnectionBar
+- [ ] Browser shows device picker when clicking Bluetooth
+- [ ] Device info loads after BLE connection
+- [ ] Settings panel works over BLE
+- [ ] Audio streaming works over BLE
+- [ ] Works on Chrome Android
+
+### Phase 2: ESP32-S3 Gateway
+- [ ] ESP32-S3 connects to WiFi and server
+- [ ] ESP32-S3 discovers nRF52840 BLE peripherals
+- [ ] ESP32-S3 pushes settings to nRF52840 via BLE
+- [ ] Server commands reach nRF52840 via ESP32-S3 relay
+- [ ] Core 1 frame rate unaffected (60fps) during WiFi+BLE activity
+- [ ] Fleet-wide scene change propagates to all devices
+
+---
+
+## Known Limitations
+
+1. **No simultaneous web connections** - Web app tracks one connection (Serial or Bluetooth, not both)
+2. **No auto-reconnect** - Must manually reconnect if BLE disconnects
+3. **Code duplication** - `SerialConsole` and `BLEConsole` have similar code. Acceptable for Phase 1.
+4. **Settings shared** - Both consoles share the same `SettingsRegistry`. Changing a setting via Serial also changes it for BLE (this is correct behavior).
+5. **BLE range** - ~10-30m indoors. nRF52840 and ESP32-S3 must be in the same room.
+6. **Relay latency** - Server → ESP32 → BLE → nRF52840 adds ~50-100ms. Fine for settings, not for sync.
+7. **BLE connections from ESP32-S3** - ESP32-S3 can maintain 3-4 simultaneous BLE central connections while running WiFi.
+
+---
+
+## Future Improvements (Post-Phase 2)
+
+- Refactor shared code between SerialConsole and BLEConsole into transport abstraction
+- Auto-reconnect to last-used device
+- Show connection type in UI (USB vs Bluetooth icon)
+- BLE signal strength indicator
+- OTA firmware updates via WiFi (ESP32-S3) or BLE relay (nRF52840)
+- BLE advertising broadcast for status beacons (Option B from BLE strategy)
+- Scene synchronization across devices (coordinated transitions)
