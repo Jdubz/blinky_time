@@ -245,6 +245,8 @@ void AudioTracker::resetAnalysisState() {
     odfPeakHold_ = 0.0f;
     plpConfidence_ = 0.0f;
     periodicityStrength_ = 0.0f;
+    plpPhase_ = 0.0f;
+    beatCount_ = 0;
     resetSlots();
 }
 

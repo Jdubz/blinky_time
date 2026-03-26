@@ -508,10 +508,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     early_neighbor_weight = cfg.get("labels", {}).get("early_neighbor_weight", 0.0)
 
     if labels_type == "onset_consensus" and onset_consensus_dir:
-        # Multi-system onset consensus labels (madmom + librosa + essentia).
+        # Multi-system onset consensus labels (5 systems).
         # These are acoustic onset positions, not metrical beats — directly
         # matching the onset detection task. Each onset has a strength field
-        # encoding the number of agreeing systems (1/3, 2/3, 3/3).
+        # encoding the number of agreeing systems (1/5 to 5/5).
         onset_path = Path(onset_consensus_dir) / f"{audio_path.stem}.onsets.json"
         if not onset_path.exists():
             raise FileNotFoundError(

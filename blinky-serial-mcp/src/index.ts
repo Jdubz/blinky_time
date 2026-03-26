@@ -2057,14 +2057,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!existsSync(checkPath)) {
           // Check if a test runner is still running (audio lock present)
           const lockPath = '/tmp/blinky-audio.lock';
-          const running = existsSync(lockPath);
+          const lockExists = existsSync(lockPath);
+          let status: string;
+          let message: string;
+          if (lockExists) {
+            // Lock file exists — check if it's stale (older than 10 minutes)
+            try {
+              const lockStat = statSync(lockPath);
+              const ageMs = Date.now() - lockStat.mtimeMs;
+              if (ageMs > 10 * 60 * 1000) {
+                status = 'stale_lock';
+                message = `Audio lock file exists but is ${Math.round(ageMs / 60000)}min old — test runner may have crashed. Lock: ${lockPath}`;
+              } else {
+                status = 'running';
+                message = 'Test is still running (audio lock present). Try again later.';
+              }
+            } catch {
+              status = 'running';
+              message = 'Test is still running (audio lock present). Try again later.';
+            }
+          } else {
+            status = 'not_found';
+            message = `Results file not found: ${checkPath}. If the test was just launched, it may still be starting up — wait a few seconds and retry.`;
+          }
           return {
-            content: [{ type: 'text', text: JSON.stringify({
-              status: running ? 'running' : 'not_found',
-              message: running
-                ? 'Test is still running (audio lock present). Try again later.'
-                : `Results file not found: ${checkPath}`,
-            }) }],
+            content: [{ type: 'text', text: JSON.stringify({ status, message }) }],
           };
         }
         const fileContents = readFileSync(checkPath, 'utf-8');
