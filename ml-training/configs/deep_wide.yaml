@@ -15,7 +15,6 @@ model:
   kernel_size: 3
   dilations: [1, 2, 4, 8, 16, 32, 64]    # RF: 255 frames = 4080ms
   dropout: 0.1
-  downbeat: true
 
 training:
   chunk_frames: 256         # Must be >= RF (255 frames)

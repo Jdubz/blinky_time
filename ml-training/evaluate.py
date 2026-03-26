@@ -130,10 +130,8 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
     # Handle both bare state_dict and full checkpoint
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state_dict = checkpoint["state_dict"]
-        use_downbeat = checkpoint.get("use_downbeat", cfg["model"].get("downbeat", False))
     else:
         state_dict = checkpoint
-        use_downbeat = cfg["model"].get("downbeat", False)
 
     model_type = cfg["model"].get("type", "causal_cnn")
     if model_type == "frame_fc":
@@ -143,7 +141,6 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
         ).to(device)
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
@@ -154,8 +151,6 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
-            sum_head=cfg["model"].get("sum_head", False),
             num_tempo_bins=cfg["model"].get("num_tempo_bins", 0),
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
             num_output_channels=cfg["model"].get("num_output_channels", 0),
@@ -168,7 +163,6 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             kernel_sizes=cfg["model"]["kernel_sizes"],
             pool_sizes=cfg["model"]["pool_sizes"],
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
             use_stride=cfg["model"].get("use_stride", False),
         ).to(device)
     else:
@@ -178,14 +172,13 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             kernel_size=cfg["model"]["kernel_size"],
             dilations=cfg["model"]["dilations"],
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
             model_type=model_type,
             residual=cfg["model"].get("residual", False),
         ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
     pool_factor = getattr(model, 'pool_factor', 1)
-    return model, use_downbeat, pool_factor
+    return model, pool_factor
 
 
 def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
@@ -199,7 +192,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     chunk_frames = cfg["training"]["chunk_frames"]
 
-    model, has_downbeat, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = _load_model(model_path, cfg, device)
     mel_fb = _build_mel_filterbank(cfg, device)
     window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
@@ -265,7 +258,6 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
 
         # Extract channel activations
         activations = all_activations[:, 0]  # ch0: onset (or kick for instrument models)
-        db_activations = all_activations[:, 1] if has_downbeat else None
         is_instrument_model = n_out_ch >= 3
 
         # Load ground truth beats
@@ -375,22 +367,6 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             result["combined_kick_snare_f1"] = float(combined_f1)
             result["combined_est"] = len(combined_est)
 
-        # Downbeat evaluation
-        if has_downbeat:
-            ref_downbeats = np.array([
-                h["time"] for h in labels["hits"]
-                if h.get("expectTrigger", True) and h.get("isDownbeat", False)
-            ])
-            est_downbeats = _peak_pick(db_activations, threshold, frame_rate)
-            if len(ref_downbeats) > 0 and len(est_downbeats) > 0:
-                db_scores = mir_eval.beat.f_measure(
-                    ref_downbeats, est_downbeats, f_measure_threshold=0.07)
-            else:
-                db_scores = 0.0
-            result["db_f1"] = float(db_scores)
-            result["ref_downbeats"] = len(ref_downbeats)
-            result["est_downbeats"] = len(est_downbeats)
-
         # ACF-based ODF quality metrics
         acf_metrics = compute_acf_tempo_quality(activations, ref_beats, frame_rate)
         result["acf_peak_ratio"] = acf_metrics["acf_peak_ratio"]
@@ -399,7 +375,6 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         result["acf_lag_error"] = lag_err if np.isfinite(lag_err) else None
 
         all_results.append(result)
-        db_str = f", DB F1={result['db_f1']:.3f}" if has_downbeat else ""
         acf_err_str = f"{lag_err:.1f}f" if np.isfinite(lag_err) else "n/a"
         acf_str = f", ACF ratio={acf_metrics['acf_peak_ratio']:.3f} prom={acf_metrics['acf_peak_prominence']:.2f} err={acf_err_str}"
         onset_str = f", onsetF1={result['onset_f1']:.3f}" if "onset_f1" in result else ""
@@ -412,12 +387,11 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         if is_instrument_model and "kick_ch_f1" in result:
             inst_str = (f", ch: kick={result['kick_ch_f1']:.3f} snare={result['snare_ch_f1']:.3f} "
                         f"hihat={result['hihat_ch_f1']:.3f} combined={result['combined_kick_snare_f1']:.3f}")
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{kw_str}{inst_str}{db_str}{acf_str}")
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{kw_str}{inst_str}{acf_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
-                         audio_path.stem, output_dir / "plots",
-                         db_activations=db_activations)
+                         audio_path.stem, output_dir / "plots")
 
     # Aggregate
     if all_results:
@@ -459,12 +433,6 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             print(f"Aggregate Combined (kick+snare) F1: mean={np.mean(combined_vals):.3f}, "
                   f"median={np.median(combined_vals):.3f}")
 
-        db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
-        if db_f1s:
-            print(f"Aggregate Downbeat: mean F1={np.mean(db_f1s):.3f}, "
-                  f"median={np.median(db_f1s):.3f}, "
-                  f"min={np.min(db_f1s):.3f}, max={np.max(db_f1s):.3f}")
-
         # ACF tempo quality aggregates
         acf_ratios = [r["acf_peak_ratio"] for r in all_results]
         acf_proms = [r["acf_peak_prominence"] for r in all_results]
@@ -503,17 +471,13 @@ def _peak_pick(activations: np.ndarray, threshold: float,
 
 def _plot_activation(activations: np.ndarray, ref_beats: np.ndarray,
                      est_beats: np.ndarray, frame_rate: float,
-                     title: str, plot_dir: Path,
-                     db_activations: np.ndarray = None):
+                     title: str, plot_dir: Path):
     """Save activation plot with reference and estimated beats."""
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     times = np.arange(len(activations)) / frame_rate
     fig, ax = plt.subplots(figsize=(14, 3))
-    ax.plot(times, activations, "b-", linewidth=0.5, alpha=0.8, label="Beat")
-
-    if db_activations is not None:
-        ax.plot(times, db_activations, "m-", linewidth=0.5, alpha=0.6, label="Downbeat")
+    ax.plot(times, activations, "b-", linewidth=0.5, alpha=0.8, label="Onset")
 
     for bt in ref_beats:
         ax.axvline(bt, color="green", alpha=0.3, linewidth=0.5)
@@ -542,7 +506,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     chunk_frames = cfg["training"]["chunk_frames"]
 
-    model, has_downbeat, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = _load_model(model_path, cfg, device)
     mel_fb = _build_mel_filterbank(cfg, device)
     window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
@@ -644,7 +608,7 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
     X_val = np.load(data_dir / "X_val.npy")
     Y_val = np.load(data_dir / "Y_val.npy")
 
-    model, has_downbeat, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = _load_model(model_path, cfg, device)
 
     # Batch predict (chunked to avoid GPU OOM on large val sets)
     batch_size = 4096
@@ -673,18 +637,6 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
     else:
         Y_pred_beat = Y_pred_all[:, :, 0]
         _print_frame_metrics("Beat", Y_pred_beat, Y_val)
-
-        if has_downbeat:
-            db_val_path = data_dir / "Y_db_val.npy"
-            if db_val_path.exists():
-                Y_db_val = np.load(db_val_path)
-                if pool_factor > 1:
-                    Y_db_val = Y_db_val[:, pool_factor - 1::pool_factor]
-                    Y_db_val = Y_db_val[:, :Y_pred_all.shape[1]]
-                Y_pred_db = Y_pred_all[:, :, 1]
-                _print_frame_metrics("Downbeat", Y_pred_db, Y_db_val)
-            else:
-                print("\nNo Y_db_val.npy found — skipping downbeat frame metrics")
 
 
 def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):

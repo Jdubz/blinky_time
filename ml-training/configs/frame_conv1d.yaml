@@ -1,4 +1,4 @@
-# Frame-level Conv1D — causal convolutions → beat/downbeat
+# Frame-level Conv1D — causal convolutions → onset activation
 #
 # Shared settings are in base.yaml and merged automatically by load_config().
 # This file only contains model-specific overrides.
@@ -17,7 +17,6 @@ model:
   kernel_sizes: [5, 5, 3]        # Per-layer kernel sizes
   window_frames: 32               # Firmware sliding window (32 frames = 512ms)
   dropout: 0.1
-  downbeat: true
 
 export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"

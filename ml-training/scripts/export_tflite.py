@@ -956,10 +956,8 @@ def main():
     checkpoint = torch.load(args.model, map_location="cpu", weights_only=True)
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         pt_state = checkpoint["state_dict"]
-        use_downbeat = checkpoint.get("use_downbeat", cfg["model"].get("downbeat", False))
     else:
         pt_state = checkpoint
-        use_downbeat = cfg["model"].get("downbeat", False)
 
     model_type = cfg["model"].get("type", "causal_cnn")
     use_delta = cfg.get("features", {}).get("use_delta", False)
@@ -978,14 +976,12 @@ def main():
         if cfg["model"].get("short_window", 0) > 0:
             features.append(f"MultiWindow(short={cfg['model']['short_window']})")
         print(f"Building TF model (type=frame_fc_enhanced, window={window_frames}, "
-              f"hidden={hidden_dims}, features=[{', '.join(features)}], "
-              f"downbeat={use_downbeat})...")
+              f"hidden={hidden_dims}, features=[{', '.join(features)}])...")
 
         tf_model = build_tf_frame_fc_enhanced(
             n_mels=n_mels,
             window_frames=window_frames,
             hidden_dims=hidden_dims,
-            downbeat=use_downbeat,
             se_ratio=cfg["model"].get("se_ratio", 0),
             conv_channels=cfg["model"].get("conv_channels", 0),
             conv_kernel=cfg["model"].get("conv_kernel", 5),
@@ -1001,7 +997,6 @@ def main():
             n_mels=n_mels, window_frames=window_frames,
             hidden_dims=hidden_dims,
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
             se_ratio=cfg["model"].get("se_ratio", 0),
             conv_channels=cfg["model"].get("conv_channels", 0),
             conv_kernel=cfg["model"].get("conv_kernel", 5),
@@ -1029,13 +1024,12 @@ def main():
         hidden_dims = cfg["model"]["hidden_dims"]
 
         print(f"Building TF model (type=frame_fc, window={window_frames}, "
-              f"hidden={hidden_dims}, downbeat={use_downbeat})...")
+              f"hidden={hidden_dims})...")
 
         tf_model = build_tf_frame_fc(
             n_mels=n_mels,
             window_frames=window_frames,
             hidden_dims=hidden_dims,
-            downbeat=use_downbeat,
         )
         _transfer_fc_weights(tf_model, pt_state, hidden_dims)
 
@@ -1047,7 +1041,6 @@ def main():
             window_frames=window_frames,
             hidden_dims=hidden_dims,
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
         )
         pt_model.load_state_dict(pt_state)
         pt_model.eval()
@@ -1068,12 +1061,10 @@ def main():
         kernel_sizes = cfg["model"]["kernel_sizes"]
         window_frames = cfg["model"]["window_frames"]
         dropout = cfg["model"].get("dropout", 0.1)
-        sum_head = cfg["model"].get("sum_head", False)
         freq_pos_encoding = cfg["model"].get("freq_pos_encoding", False)
 
         print(f"Building TF model (type=frame_conv1d, channels={channels}, "
               f"kernels={kernel_sizes}, window={window_frames}, "
-              f"downbeat={use_downbeat}, sum_head={sum_head}, "
               f"freq_pos={freq_pos_encoding})...")
         num_output_channels = cfg["model"].get("num_output_channels", 0)
         tf_model = build_tf_frame_conv1d(
@@ -1081,8 +1072,8 @@ def main():
             channels=channels,
             kernel_sizes=kernel_sizes,
             window_frames=window_frames,
-            downbeat=use_downbeat,
-            sum_head=sum_head,
+            downbeat=False,
+            sum_head=False,
             freq_pos_encoding=freq_pos_encoding,
             num_output_channels=num_output_channels,
         )
@@ -1097,8 +1088,6 @@ def main():
             channels=channels,
             kernel_sizes=kernel_sizes,
             dropout=dropout,
-            downbeat=use_downbeat,
-            sum_head=sum_head,
             freq_pos_encoding=freq_pos_encoding,
             num_output_channels=num_output_channels,
         )
@@ -1132,14 +1121,14 @@ def main():
 
         print(f"Building TF model (type=frame_conv1d_pool, channels={channels}, "
               f"kernels={kernel_sizes}, pools={pool_sizes}, window={window_frames}, "
-              f"downbeat={use_downbeat}, stride={use_stride})...")
+              f"stride={use_stride})...")
         tf_model = build_tf_frame_conv1d_pool(
             n_mels=n_mels,
             channels=channels,
             kernel_sizes=kernel_sizes,
             pool_sizes=pool_sizes,
             window_frames=window_frames,
-            downbeat=use_downbeat,
+            downbeat=False,
             use_stride=use_stride,
         )
         # Reuse conv1d weight transfer — pooling layers are parameter-free
@@ -1154,7 +1143,6 @@ def main():
             kernel_sizes=kernel_sizes,
             pool_sizes=pool_sizes,
             dropout=dropout,
-            downbeat=use_downbeat,
             use_stride=use_stride,
         )
         pt_model.load_state_dict(pt_state)
@@ -1176,14 +1164,14 @@ def main():
 
         fuse_bn = not args.no_fuse_bn
         print(f"Building TF model (type={model_type}, inference_frames={inference_frames}, "
-              f"downbeat={use_downbeat}, fuse_bn={fuse_bn}, residual={residual})...")
+              f"fuse_bn={fuse_bn}, residual={residual})...")
         tf_model = build_tf_onset_cnn(
             n_mels=n_mels,
             channels=cfg["model"]["channels"],
             kernel_size=cfg["model"]["kernel_size"],
             dilations=dilations,
             chunk_frames=inference_frames,
-            downbeat=use_downbeat,
+            downbeat=False,
             fuse_bn=fuse_bn,
             model_type=model_type,
             residual=residual,
@@ -1201,7 +1189,6 @@ def main():
             kernel_size=cfg["model"]["kernel_size"],
             dilations=dilations,
             dropout=cfg["model"].get("dropout", 0.1),
-            downbeat=use_downbeat,
             model_type=model_type,
             residual=residual,
         )

@@ -27,7 +27,6 @@ model:
   window_frames: 32         # 512ms — matches deployed model
   hidden_dims: [64, 32]
   dropout: 0.1
-  downbeat: true
 
 training:
   epochs: 60                # Previous runs converge by epoch 40-50

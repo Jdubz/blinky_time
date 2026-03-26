@@ -54,7 +54,6 @@ training:
                             # All data is still seen across every 2 epochs.
   num_workers: 4            # DataLoader workers
   pos_weight: 20              # v3 used 20 (achieved F1=0.787). Auto (0) gives ~35.6 which over-weights positives.
-  downbeat_pos_weight: 0    # 0 = auto from Y_db_train.npy (falls back to 4x beat if absent)
   patience: 10               # Early stopping: stop after N epochs with no val_loss improvement
   min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15
@@ -84,7 +83,7 @@ augmentation:
 
 # Loss function defaults
 loss:
-  type: "shift_bce"          # shift-tolerant BCE (Beat This!, +12.6 F1 on downbeat)
+  type: "shift_bce"          # shift-tolerant BCE (Beat This!)
   shift_tolerance: 3         # ±3 frames = ±48ms at 62.5 Hz (annotation jitter tolerance)
 
 # Knowledge distillation defaults

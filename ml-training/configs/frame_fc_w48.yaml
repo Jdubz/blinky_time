@@ -9,7 +9,6 @@ model:
   window_frames: 48         # 48 frames = 768ms at 62.5 Hz
   hidden_dims: [64, 32]
   dropout: 0.1
-  downbeat: true
 
 export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"

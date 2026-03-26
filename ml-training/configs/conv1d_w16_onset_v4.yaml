@@ -24,7 +24,6 @@ model:
   kernel_sizes: [5, 5]
   window_frames: 16
   dropout: 0.1
-  downbeat: false
   freq_pos_encoding: true       # Learnable frequency positional encoding
 
 loss:

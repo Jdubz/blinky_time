@@ -9,7 +9,6 @@ model:
   kernel_size: 3
   dilations: [1, 2, 4]      # Receptive field: 15 frames = 240ms
   dropout: 0.1
-  downbeat: true
 
 export:
   max_model_size_kb: 25     # ~20 KB INT8 for 3-layer model

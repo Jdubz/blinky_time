@@ -1,23 +1,10 @@
-# Conv1D W64 v2 — tempo auxiliary head + confidence-weighted loss
+# Conv1D W64 v2 — tempo auxiliary head + confidence-weighted loss (legacy, superseded by W16)
 #
-# Improvements over v1 (deployed Conv1D W64):
-#   1. Tempo auxiliary head (Bock 2019): regularizes hidden features toward
-#      tempo-relevant patterns. Training-only, stripped at export. Zero firmware
-#      cost. Expected +1-5% F1 from literature.
-#   2. Confidence-weighted shift-tolerant BCE: reinterprets consensus soft targets
-#      (strength = system agreement ratio) as confidence weights on hard (0/1)
-#      targets. Fixes bug where beats with < 4/7 agreement got no shift tolerance.
-#      Produces sharper ODF peaks for CBSS.
-#
-# Architecture unchanged from v1 — same firmware model, same inference cost:
-#   Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->2, k=1)
+# Architecture:
+#   Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
 #   W64 = 1.024s context (~2 beats at 120 BPM)
 #   ~7K params + 660 tempo head params (training only)
 #   15.1 KB INT8, ~27ms inference on Cortex-M4F
-#
-# Output: 2 channels (Beat This! sum head)
-#   ch0 = sigmoid(onset_logit)               — onset activation (ODF for CBSS)
-#   ch1 = ch0 * sigmoid(downbeat_logit)     — downbeat <= onset
 
 model:
   type: "frame_conv1d"
@@ -25,8 +12,6 @@ model:
   kernel_sizes: [5, 5]
   window_frames: 64
   dropout: 0.1
-  downbeat: true
-  sum_head: true
   num_tempo_bins: 20
   tempo:
     min_bpm: 60

@@ -257,14 +257,6 @@ def make_onset_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
     return _gaussian_targets(beat_times, n_frames, frame_rate, sigma)
 
 
-def make_downbeat_targets(downbeat_times: np.ndarray, n_frames: int,
-                          frame_rate: float, sigma: float,
-                          target_type: str = "gaussian") -> np.ndarray:
-    """Create downbeat activation targets (binary or Gaussian-smoothed)."""
-    if target_type == "binary":
-        return _binary_targets(downbeat_times, n_frames, frame_rate)
-    return _gaussian_targets(downbeat_times, n_frames, frame_rate, sigma)
-
 
 INSTRUMENT_CHANNELS = {"kick": 0, "snare": 1, "hihat": 2}
 
@@ -475,12 +467,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     Supported stem_variants:
       - "drums": Isolated percussion (teaches kick/snare mel patterns)
       - "no_vocals": drums+bass+other (simulates instrumental sections)
-      - "drums_bass": Rhythmic foundation (kick+bass alignment for downbeats)
+      - "drums_bass": Rhythmic foundation (kick+bass for onset detection)
     """
     sr = cfg["audio"]["sample_rate"]
     sigma = cfg["labels"]["sigma_frames"]
     frame_rate = cfg["audio"]["frame_rate"]
-    use_downbeat = cfg["model"].get("downbeat", False)
     target_type = cfg["labels"].get("target_type", "gaussian")
 
     # Load audio with librosa for resampling consistency
@@ -580,10 +571,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         beat_times = np.array([h["time"] for h in hits])
         beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
 
-    downbeat_times = np.array([]) if labels_type in ("kick_weighted", "instrument", "onset_consensus") else np.array([
-        h["time"] for h in hits if h.get("isDownbeat", False)
-    ]) if use_downbeat else np.array([])
-
     results = []
 
     # Time-stretch factors: original speed + stretched variants when augmenting.
@@ -608,7 +595,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             src_audio = audio_gpu
             src_beats = beat_times
             src_strengths = beat_strengths
-            src_downbeats = downbeat_times
         else:
             # Resample to simulate tempo change: speed > 1 = faster
             try:
@@ -621,8 +607,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 continue
             src_beats = beat_times / speed
             src_strengths = beat_strengths  # Strengths don't change with speed
-            src_downbeats = (downbeat_times / speed
-                            if len(downbeat_times) > 0 else downbeat_times)
 
         # Full augmentation only for original speed; clean only for stretched
         if augment and speed == 1.0:
@@ -722,11 +706,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 result["teacher"] = make_teacher_targets(
                     src_beats, n_frames, frame_rate, strengths=src_strengths, sigma=1.5)
 
-            if use_downbeat:
-                result["downbeat_target"] = make_downbeat_targets(
-                    src_downbeats, n_frames, frame_rate, sigma,
-                    target_type=target_type)
-
             results.append(result)
 
             # Spectral conditioning variant (only for original speed, clean)
@@ -746,8 +725,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     "aug": "conditioned",
                     "source": audio_path.stem,
                 }
-                if use_downbeat:
-                    cond_result["downbeat_target"] = result["downbeat_target"]
                 if generate_teacher and "teacher" in result:
                     cond_result["teacher"] = result["teacher"]  # Same beats, different mel
                 results.append(cond_result)
@@ -828,10 +805,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                         "aug": f"stem_{variant_name}",
                         "source": audio_path.stem,
                     }
-                    if use_downbeat:
-                        stem_result["downbeat_target"] = make_downbeat_targets(
-                            downbeat_times, n_frames, frame_rate, sigma,
-                            target_type=target_type)
                     if generate_teacher:
                         stem_result["teacher"] = make_teacher_targets(
                             beat_times, n_frames, frame_rate,
@@ -843,7 +816,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
 def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
-               downbeat_target: np.ndarray | None = None,
                teacher_target: np.ndarray | None = None,
                use_delta: bool = False) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks.
@@ -857,7 +829,6 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
 
     if use_delta:
         mel = append_delta_features(mel)
-    has_downbeat = downbeat_target is not None
     has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
@@ -866,33 +837,24 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
         pad_target = np.zeros(target_shape, dtype=target.dtype)
         pad_mel[:n_frames] = mel
         pad_target[:n_frames] = target
-        pad_db = None
         pad_teacher = None
-        if has_downbeat:
-            pad_db = np.zeros(chunk_frames, dtype=downbeat_target.dtype)
-            pad_db[:n_frames] = downbeat_target
         if has_teacher:
             pad_teacher = np.zeros(chunk_frames, dtype=teacher_target.dtype)
             pad_teacher[:n_frames] = teacher_target
         return pad_mel[np.newaxis], pad_target[np.newaxis], \
-               pad_db[np.newaxis] if pad_db is not None else None, \
                pad_teacher[np.newaxis] if pad_teacher is not None else None
 
     chunks_mel = []
     chunks_target = []
-    chunks_db = [] if has_downbeat else None
     chunks_teacher = [] if has_teacher else None
     for start in range(0, n_frames - chunk_frames + 1, chunk_stride):
         chunks_mel.append(mel[start:start + chunk_frames])
         chunks_target.append(target[start:start + chunk_frames])
-        if has_downbeat:
-            chunks_db.append(downbeat_target[start:start + chunk_frames])
         if has_teacher:
             chunks_teacher.append(teacher_target[start:start + chunk_frames])
 
-    db_arr = np.array(chunks_db) if has_downbeat else None
     teacher_arr = np.array(chunks_teacher) if has_teacher else None
-    return np.array(chunks_mel), np.array(chunks_target), db_arr, teacher_arr
+    return np.array(chunks_mel), np.array(chunks_target), teacher_arr
 
 
 def main():
@@ -1101,14 +1063,13 @@ def main():
     chunk_frames = cfg["training"]["chunk_frames"]
     chunk_stride = cfg["training"]["chunk_stride"]
     n_mels = cfg["audio"]["n_mels"]
-    use_downbeat = cfg["model"].get("downbeat", False)
     SHARD_BATCH = 500  # files per shard (limits RAM to ~3 GB)
 
     for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
         shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_"))
         shard_idx = 0
         shard_counts = []
-        batch_X, batch_Y, batch_D, batch_T = [], [], [], []
+        batch_X, batch_Y, batch_T = [], [], []
         total_variants = 0
         errors = 0
 
@@ -1125,18 +1086,13 @@ def main():
                                        mel_cache_dir=mel_cache_dir,
                                        generate_teacher=generate_teacher)
                 for r in results:
-                    mel_chunks, target_chunks, db_chunks, teacher_chunks = chunk_data(
+                    mel_chunks, target_chunks, teacher_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,
-                        downbeat_target=r.get("downbeat_target"),
                         teacher_target=r.get("teacher"),
                         use_delta=use_delta,
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)
-                    if use_downbeat:
-                        assert db_chunks is not None, \
-                            f"downbeat=true but no downbeat_target for {audio_path.name}"
-                        batch_D.append(db_chunks)
                     if generate_teacher and teacher_chunks is not None:
                         batch_T.append(teacher_chunks)
                     total_variants += 1
@@ -1151,10 +1107,6 @@ def main():
                     Y_s = np.concatenate(batch_Y)
                     np.save(shard_dir / f"X_{shard_idx}.npy", X_s)
                     np.save(shard_dir / f"Y_{shard_idx}.npy", Y_s)
-                    if batch_D:
-                        D_s = np.concatenate(batch_D)
-                        np.save(shard_dir / f"D_{shard_idx}.npy", D_s)
-                        del D_s
                     if batch_T:
                         T_s = np.concatenate(batch_T)
                         np.save(shard_dir / f"T_{shard_idx}.npy", T_s)
@@ -1162,7 +1114,7 @@ def main():
                     shard_counts.append(len(X_s))
                     del X_s, Y_s
                     shard_idx += 1
-                batch_X, batch_Y, batch_D, batch_T = [], [], [], []
+                batch_X, batch_Y, batch_T = [], [], []
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -1188,13 +1140,6 @@ def main():
             str(output_dir / f"Y_{split_name}.npy"), mode='w+',
             dtype=np.float32, shape=y_shape)
 
-        has_db = (shard_dir / "D_0.npy").exists()
-        D_out = None
-        if has_db:
-            D_out = np.lib.format.open_memmap(
-                str(output_dir / f"Y_db_{split_name}.npy"), mode='w+',
-                dtype=np.float32, shape=(total, chunk_frames))
-
         has_teacher = (shard_dir / "T_0.npy").exists()
         T_out = None
         if has_teacher:
@@ -1209,10 +1154,6 @@ def main():
             n = len(X_s)
             X_out[offset:offset + n] = X_s
             Y_out[offset:offset + n] = Y_s
-            if has_db and (shard_dir / f"D_{s}.npy").exists():
-                D_s = np.load(shard_dir / f"D_{s}.npy")
-                D_out[offset:offset + n] = D_s
-                del D_s
             if has_teacher and (shard_dir / f"T_{s}.npy").exists():
                 T_s = np.load(shard_dir / f"T_{s}.npy")
                 T_out[offset:offset + n] = T_s
@@ -1222,16 +1163,12 @@ def main():
 
         X_out.flush()
         Y_out.flush()
-        if D_out is not None:
-            D_out.flush()
         if T_out is not None:
             T_out.flush()
             pos_ratio = (T_out > 0.1).mean()
             print(f"  Teacher labels: {T_out.shape}, pos_ratio={pos_ratio:.3f}")
 
         del X_out, Y_out
-        if D_out is not None:
-            del D_out
         if T_out is not None:
             del T_out
 
@@ -1296,11 +1233,6 @@ def main():
     # 4. Check for NaN/Inf
     if np.any(~np.isfinite(mel_sample)):
         issues.append("NaN or Inf detected in mel spectrograms!")
-
-    if (output_dir / "Y_db_train.npy").exists():
-        Y_db = np.load(output_dir / "Y_db_train.npy", mmap_mode='r')
-        db_pos = (Y_db[train_idx] > 0.5).mean()
-        print(f"  Downbeat ratio: {db_pos:.4f}")
 
     if issues:
         print(f"\n  VALIDATION FAILED — {len(issues)} issue(s):")

@@ -17,7 +17,6 @@ model:
   kernel_sizes: [7, 7, 5]        # Wider kernels: RF=17 (272ms at 62.5 Hz)
   window_frames: 32               # Firmware sliding window (32 frames = 512ms)
   dropout: 0.1
-  downbeat: true
 
 export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"
