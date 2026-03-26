@@ -45,6 +45,11 @@ labels:
   labels_type: "onset_consensus"
   onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
   neighbor_weight: 0.25           # Frames at onset±1 get 0.25× onset value
+  label_shift_frames: 1           # Shift targets 1 frame earlier (16ms) — compensates for
+                                  # median-of-systems delay in consensus labels (Schluter 2014)
+  early_neighbor_frames: 2        # 2 frames before onset get decaying weight
+  early_neighbor_weight: 0.5      # Frame -1 gets 0.5×, frame -2 gets 0.25× onset value
+                                  # Asymmetric: wider acceptance before onset, narrow after
 
 features:
   use_delta: true                 # Append first-order mel differences (26→52 input)

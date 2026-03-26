@@ -154,7 +154,10 @@ def _gaussian_targets(times: np.ndarray, n_frames: int, frame_rate: float,
 def _binary_targets(times: np.ndarray, n_frames: int,
                     frame_rate: float,
                     strengths: np.ndarray | None = None,
-                    neighbor_weight: float = 0.0) -> np.ndarray:
+                    neighbor_weight: float = 0.0,
+                    label_shift_frames: int = 0,
+                    early_neighbor_frames: int = 0,
+                    early_neighbor_weight: float = 0.0) -> np.ndarray:
     """Create binary activation targets (at nearest frame to each event).
 
     If strengths is provided, uses per-beat strength values (0-1) instead of
@@ -163,21 +166,42 @@ def _binary_targets(times: np.ndarray, n_frames: int,
 
     If neighbor_weight > 0, sets the frames immediately adjacent to each onset
     (onset-1 and onset+1) to neighbor_weight × onset_value. This provides
-    gradient signal at neighboring frames, reducing the hard boundary between
-    onset and non-onset (Rong Gong et al. 2018).
+    gradient signal at neighboring frames (Rong Gong et al. 2018).
+
+    label_shift_frames: shift all targets earlier by N frames (negative = shift
+    onset labels backward in time). Compensates for median-of-systems delay
+    in consensus labels. Schluter & Böck (2014) validated that models faithfully
+    track label timing shifts.
+
+    early_neighbor_frames + early_neighbor_weight: Asymmetric target shape.
+    Sets frames BEFORE the onset (up to early_neighbor_frames) to a decaying
+    value. Trains the model to prefer early firing (wider acceptance before
+    onset, narrow after). sigma_early > sigma_late effect.
     """
     targets = np.zeros(n_frames, dtype=np.float32)
     for i, t in enumerate(times):
-        frame_idx = round(t * frame_rate)
+        frame_idx = round(t * frame_rate) - label_shift_frames
         if 0 <= frame_idx < n_frames:
             val = float(strengths[i]) if strengths is not None else 1.0
             targets[frame_idx] = max(targets[frame_idx], val)
+
+            # Symmetric neighbor weighting (onset ± 1 frame)
             if neighbor_weight > 0:
                 nval = val * neighbor_weight
                 if frame_idx > 0:
                     targets[frame_idx - 1] = max(targets[frame_idx - 1], nval)
                 if frame_idx < n_frames - 1:
                     targets[frame_idx + 1] = max(targets[frame_idx + 1], nval)
+
+            # Asymmetric early-side weighting: wider acceptance BEFORE onset.
+            # Decaying weight from onset backward: frame-1 gets full early_weight,
+            # frame-2 gets early_weight * 0.5, etc.
+            if early_neighbor_frames > 0 and early_neighbor_weight > 0:
+                for ef in range(1, early_neighbor_frames + 1):
+                    eidx = frame_idx - ef
+                    if eidx >= 0:
+                        decay = early_neighbor_weight * (1.0 - (ef - 1) / early_neighbor_frames)
+                        targets[eidx] = max(targets[eidx], val * decay)
     return targets
 
 
@@ -208,7 +232,10 @@ def make_teacher_targets(beat_times: np.ndarray, n_frames: int, frame_rate: floa
 def make_onset_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
                       sigma: float, target_type: str = "gaussian",
                       strengths: np.ndarray | None = None,
-                      neighbor_weight: float = 0.0) -> np.ndarray:
+                      neighbor_weight: float = 0.0,
+                      label_shift_frames: int = 0,
+                      early_neighbor_frames: int = 0,
+                      early_neighbor_weight: float = 0.0) -> np.ndarray:
     """Create onset activation targets (binary or Gaussian-smoothed).
 
     If target_type is "binary" and strengths is provided, uses per-beat
@@ -216,10 +243,16 @@ def make_onset_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
 
     If neighbor_weight > 0, adjacent frames get onset_value × neighbor_weight
     (Rong Gong et al. 2018 — provides gradient at neighboring frames).
+
+    label_shift_frames: shift targets earlier by N frames (for snappy detection).
+    early_neighbor_frames/weight: asymmetric early-side weighting.
     """
     if target_type == "binary":
         return _binary_targets(beat_times, n_frames, frame_rate, strengths,
-                               neighbor_weight=neighbor_weight)
+                               neighbor_weight=neighbor_weight,
+                               label_shift_frames=label_shift_frames,
+                               early_neighbor_frames=early_neighbor_frames,
+                               early_neighbor_weight=early_neighbor_weight)
     return _gaussian_targets(beat_times, n_frames, frame_rate, sigma)
 
 
@@ -469,6 +502,9 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
     onset_consensus_dir = cfg.get("labels", {}).get("onset_consensus_dir", "")
     neighbor_weight = cfg.get("labels", {}).get("neighbor_weight", 0.0)
+    label_shift_frames = cfg.get("labels", {}).get("label_shift_frames", 0)
+    early_neighbor_frames = cfg.get("labels", {}).get("early_neighbor_frames", 0)
+    early_neighbor_weight = cfg.get("labels", {}).get("early_neighbor_weight", 0.0)
 
     if labels_type == "onset_consensus" and onset_consensus_dir:
         # Multi-system onset consensus labels (madmom + librosa + essentia).
@@ -668,7 +704,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 targets = make_onset_targets(src_beats, n_frames, frame_rate, sigma,
                                             target_type=target_type,
                                             strengths=src_strengths,
-                                            neighbor_weight=neighbor_weight)
+                                            neighbor_weight=neighbor_weight,
+                                            label_shift_frames=label_shift_frames,
+                                            early_neighbor_frames=early_neighbor_frames,
+                                            early_neighbor_weight=early_neighbor_weight)
 
             result = {
                 "mel": mel,
@@ -778,7 +817,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     targets = make_onset_targets(beat_times, n_frames, frame_rate,
                                                 sigma, target_type=target_type,
                                                 strengths=beat_strengths,
-                                                neighbor_weight=neighbor_weight)
+                                                neighbor_weight=neighbor_weight,
+                                                label_shift_frames=label_shift_frames,
+                                                early_neighbor_frames=early_neighbor_frames,
+                                                early_neighbor_weight=early_neighbor_weight)
                     stem_result = {
                         "mel": mel,
                         "target": targets,

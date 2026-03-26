@@ -208,6 +208,8 @@ private:
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
+    float prevOdf_ = 0.0f;             // Previous frame ODF (for rising-edge detection)
+
     // === Raw NN activation tracking (before threshold/cooldown) ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
     uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
