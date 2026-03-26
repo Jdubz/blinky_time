@@ -32,7 +32,7 @@ from scripts.audio import load_config
 
 def build_tf_onset_cnn(n_mels: int, channels: int, kernel_size: int,
                       dilations: list[int], chunk_frames: int,
-                      downbeat: bool, fuse_bn: bool = False,
+                      fuse_bn: bool = False,
                       model_type: str = "causal_cnn",
                       residual: bool = False) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch OnsetCNN or DSTCNOnsetCNN.
@@ -43,9 +43,9 @@ def build_tf_onset_cnn(n_mels: int, channels: int, kernel_size: int,
     """
     if model_type == "ds_tcn":
         return _build_tf_ds_tcn(n_mels, channels, kernel_size, dilations,
-                                chunk_frames, downbeat, fuse_bn, residual)
+                                chunk_frames, fuse_bn, residual)
 
-    out_channels = 2 if downbeat else 1
+    out_channels = 1
     inputs = keras.Input(shape=(chunk_frames, n_mels), name="mel_input")
     x = inputs
 
@@ -72,13 +72,13 @@ def build_tf_onset_cnn(n_mels: int, channels: int, kernel_size: int,
 
 def _build_tf_ds_tcn(n_mels: int, channels: int, kernel_size: int,
                      dilations: list[int], chunk_frames: int,
-                     downbeat: bool, fuse_bn: bool, residual: bool) -> keras.Model:
+                     fuse_bn: bool, residual: bool) -> keras.Model:
     """Build TF/Keras equivalent of DSTCNOnsetCNN.
 
     Depthwise separable blocks: ZeroPad → DepthwiseConv1D → [BN] → ReLU →
                                 Conv1D(1×1) → [BN] → ReLU → [+ residual]
     """
-    out_channels = 2 if downbeat else 1
+    out_channels = 1
     inputs = keras.Input(shape=(chunk_frames, n_mels), name="mel_input")
 
     # Input projection (standard conv, n_mels → channels)
@@ -321,8 +321,6 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
 
 def build_tf_frame_conv1d(n_mels: int, channels: list[int],
                           kernel_sizes: list[int], window_frames: int,
-                          downbeat: bool,
-                          sum_head: bool = False,
                           freq_pos_encoding: bool = False,
                           num_output_channels: int = 0) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameOnsetConv1D.
@@ -330,16 +328,12 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
     Causal Conv1D layers with ReLU fused into Conv ops (no separate ReLU op).
     No BatchNorm — no fusion needed. ZeroPadding1D for causal padding.
 
-    If sum_head: output_conv produces raw logits, then:
-      ch0 = sigmoid(logit_0)  (beat)
-      ch1 = ch0 * sigmoid(logit_1)  (downbeat ≤ beat)
-
     If freq_pos_encoding: adds a learnable per-mel-band bias before convolutions
     (FAC positional encoding, helps discriminate kicks from hi-hats).
 
-    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Mul, Add, Quantize, Dequantize.
+    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Quantize, Dequantize.
     """
-    out_channels = num_output_channels if num_output_channels > 0 else (2 if downbeat else 1)
+    out_channels = num_output_channels if num_output_channels > 0 else 1
     inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
     x = inputs
 
@@ -362,34 +356,22 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
         x = layers.Conv1D(ch, k, padding="valid", use_bias=True,
                           activation="relu", name=f"conv{i+1}")(x)
 
-    if sum_head and downbeat:
-        # Raw logits (no activation on conv)
-        logits = layers.Conv1D(out_channels, 1, padding="valid",
-                               activation=None, name="output_conv")(x)
-        # Onset = sigmoid(logit_0)
-        onset_logit = logits[:, :, 0:1]
-        db_logit = logits[:, :, 1:2]
-        onset = layers.Activation("sigmoid", name="onset_sigmoid")(onset_logit)
-        db_gate = layers.Activation("sigmoid", name="db_sigmoid")(db_logit)
-        db = layers.Multiply(name="db_multiply")([onset, db_gate])
-        x = layers.Concatenate(axis=-1, name="output_concat")([onset, db])
-    else:
-        x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
-                          name="output_conv")(x)
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
 
     return keras.Model(inputs=inputs, outputs=x, name="frame_onset_conv1d")
 
 
 def build_tf_frame_conv1d_pool(n_mels: int, channels: list[int],
                                kernel_sizes: list[int], pool_sizes: list[int],
-                               window_frames: int, downbeat: bool,
+                               window_frames: int,
                                use_stride: bool = False) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameOnsetConv1DPool.
 
     Conv1D with interleaved AveragePooling1D or strided conv for temporal compression.
     Strided mode uses fewer TFLite ops (no separate AvgPool), reducing dispatch overhead.
     """
-    out_channels = 2 if downbeat else 1
+    out_channels = 1
     inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
     x = inputs
 
@@ -508,8 +490,7 @@ def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
         yield [window.reshape(1, window_frames, n_mels)]
 
 
-def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
-                      downbeat: bool) -> keras.Model:
+def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int]) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameOnsetFC.
 
     Takes flat input (1, window_frames * n_mels) — no Reshape op needed in
@@ -518,7 +499,7 @@ def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
     TFLite ops: FullyConnected (with fused ReLU/Logistic), Quantize, Dequantize.
     All already in FrameOnsetNN.h resolver (5 slots).
     """
-    out_channels = 2 if downbeat else 1
+    out_channels = 1
     input_dim = window_frames * n_mels
 
     inputs = keras.Input(shape=(input_dim,), name="flat_input")
@@ -578,7 +559,7 @@ def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
 
 
 def build_tf_frame_fc_enhanced(n_mels: int, window_frames: int,
-                                hidden_dims: list[int], downbeat: bool,
+                                hidden_dims: list[int],
                                 se_ratio: int = 0, conv_channels: int = 0,
                                 conv_kernel: int = 5, short_window: int = 0,
                                 short_hidden: int = 0) -> keras.Model:
@@ -592,7 +573,7 @@ def build_tf_frame_fc_enhanced(n_mels: int, window_frames: int,
       - Conv1D: Reshape, ZeroPad, Conv1D (→Conv2D), Reshape
       - Multi-window: StridedSlice (or Lambda), Concatenate
     """
-    out_channels = 2 if downbeat else 1
+    out_channels = 1
     use_se = se_ratio > 0
     use_conv = conv_channels > 0
     use_multiwindow = short_window > 0
@@ -1072,8 +1053,6 @@ def main():
             channels=channels,
             kernel_sizes=kernel_sizes,
             window_frames=window_frames,
-            downbeat=False,
-            sum_head=False,
             freq_pos_encoding=freq_pos_encoding,
             num_output_channels=num_output_channels,
         )
@@ -1128,7 +1107,6 @@ def main():
             kernel_sizes=kernel_sizes,
             pool_sizes=pool_sizes,
             window_frames=window_frames,
-            downbeat=False,
             use_stride=use_stride,
         )
         # Reuse conv1d weight transfer — pooling layers are parameter-free
@@ -1171,7 +1149,6 @@ def main():
             kernel_size=cfg["model"]["kernel_size"],
             dilations=dilations,
             chunk_frames=inference_frames,
-            downbeat=False,
             fuse_bn=fuse_bn,
             model_type=model_type,
             residual=residual,
