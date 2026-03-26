@@ -168,15 +168,26 @@ export function scoreDeviceRun(
     .map(b => ({ ...b, timestampMs: b.timestampMs - timingOffsetMs }))
     .filter(b => b.timestampMs >= 0);
 
-  // Compute audio latency using robust estimator
+  // Latency compensation: use the histogram-based estimator, but bound it to a
+  // plausible range. The known pipeline delay is ~80-180ms (FFT hop 16ms + NN
+  // causal RF ~64ms + pulse detection ~16ms + serial ~5ms + speaker-to-mic ~3ms).
+  // If the estimator returns a value far outside this range, it's unreliable.
   const audioDurationMs = rawDuration - timingOffsetMs;
   const audioLatencyMs = estimateAudioLatency(detections, gtData.hits, audioDurationMs);
-  // Use 0 offset for beat adjustment when latency estimation fails (insufficient data)
-  const latencyCorrectionMs = audioLatencyMs ?? 0;
+  const PLAUSIBLE_LATENCY_MIN = -50;   // Device can't be faster than physics
+  const PLAUSIBLE_LATENCY_MAX = 300;   // Max reasonable for mic-in-room
+  let latencyCorrectionMs: number;
+  if (audioLatencyMs !== null &&
+      audioLatencyMs >= PLAUSIBLE_LATENCY_MIN &&
+      audioLatencyMs <= PLAUSIBLE_LATENCY_MAX) {
+    latencyCorrectionMs = audioLatencyMs;
+  } else {
+    latencyCorrectionMs = 100;  // Default: typical pipeline delay
+  }
 
   // Beat tracking evaluation
   const audioDurationSec = audioDurationMs / 1000;
-  const BEAT_TOLERANCE_SEC = 0.07;
+  const BEAT_TOLERANCE_SEC = 0.10;   // 100ms for mic-in-room (standard 70ms is for direct audio)
 
   // Reference beats from ground truth
   const refBeats = gtData.hits
@@ -191,10 +202,33 @@ export function scoreDeviceRun(
   const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
     matchEventsF1(estBeats, refBeats, BEAT_TOLERANCE_SEC);
 
-  // Transient F1
+  // Transient F1: match detected transients against onset ground truth if available.
+  // Onset labels are deduplicated at 70ms (half a 16th note at common tempos) because
+  // the 5 onset detection systems disagree by 40-80ms on the same event, creating
+  // duplicate entries that inflate the reference count.
+  // Only use high-confidence onsets (3+ systems, strength >= 0.6).
   const estTransients = detections.map(d => (d.timestampMs - latencyCorrectionMs) / 1000);
+  const MIN_ONSET_STRENGTH = 0.6;  // 3+ of 5 systems must agree
+  const ONSET_DEDUP_SEC = 0.070;   // Merge onsets within 70ms (same musical event)
+  let refOnsets: number[];
+  if (gtData.onsets && gtData.onsets.length > 0) {
+    // Filter by confidence, then deduplicate close events
+    const filtered = gtData.onsets
+      .filter(o => o.time <= audioDurationSec && o.strength >= MIN_ONSET_STRENGTH)
+      .map(o => o.time)
+      .sort((a, b) => a - b);
+    const deduped: number[] = [];
+    for (const t of filtered) {
+      if (deduped.length === 0 || t - deduped[deduped.length - 1] > ONSET_DEDUP_SEC) {
+        deduped.push(t);
+      }
+    }
+    refOnsets = deduped;
+  } else {
+    refOnsets = refBeats;
+  }
   const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
-    matchEventsF1(estTransients, refBeats, BEAT_TOLERANCE_SEC);
+    matchEventsF1(estTransients, refOnsets, BEAT_TOLERANCE_SEC);
 
   // CMLt: Continuity metric
   const correct: boolean[] = refBeats.map(ref =>
@@ -416,6 +450,12 @@ export function scoreDeviceRun(
       precision: Math.round(transientPrecision * 1000) / 1000,
       recall: Math.round(transientRecall * 1000) / 1000,
       count: detections.length,
+      // Multi-tolerance F1: shows timing precision sensitivity
+      f1_at_50ms: Math.round(matchEventsF1(estTransients, refOnsets, 0.050).f1 * 1000) / 1000,
+      f1_at_70ms: Math.round(matchEventsF1(estTransients, refOnsets, 0.070).f1 * 1000) / 1000,
+      f1_at_100ms: Math.round(transientF1 * 1000) / 1000,  // Same as f1 (tolerance is 100ms)
+      f1_at_150ms: Math.round(matchEventsF1(estTransients, refOnsets, 0.150).f1 * 1000) / 1000,
+      refOnsets: refOnsets.length,
     },
     musicMode: {
       avgBpm: Math.round(avgBpm * 10) / 10,

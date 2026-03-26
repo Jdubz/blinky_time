@@ -8,6 +8,8 @@ export type GroundTruth = {
   durationMs: number;
   bpm?: number;
   hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
+  /** Onset consensus times (from 5-system onset detection). Used for transientF1. */
+  onsets?: Array<{ time: number; strength: number }>;
 };
 
 /** Result of scoring a single device run against ground truth. */
@@ -22,6 +24,8 @@ export interface DeviceRunScore {
   };
   transientTracking: {
     f1: number; precision: number; recall: number; count: number;
+    f1_at_50ms?: number; f1_at_70ms?: number; f1_at_100ms?: number; f1_at_150ms?: number;
+    refOnsets?: number;
   };
   musicMode: {
     avgBpm: number; expectedBpm: number;

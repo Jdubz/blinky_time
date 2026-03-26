@@ -246,8 +246,6 @@ void SerialConsole::registerTrackerSettings() {
     // (rayleighBpm + combFeedback removed v80 — comb filter bank removed)
 
     // PLP pattern-learned pulse
-    settings_.registerFloat("plpactivation", &audioCtrl_->plpActivation, "tracker",
-        "[VESTIGIAL] Unused since soft blend (v81)", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("plpconfalpha", &audioCtrl_->plpConfAlpha, "tracker",
         "PLP confidence EMA smoothing rate", 0.01f, 0.5f, onParamChanged);
     settings_.registerFloat("plpnovgain", &audioCtrl_->plpNovGain, "tracker",
@@ -950,17 +948,35 @@ void SerialConsole::restoreDefaults() {
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
     }
 
-    // Restore audio tracker defaults
+    // Restore audio tracker defaults (all tunable params)
     if (audioCtrl_) {
-        audioCtrl_->bpmMin = 60.0f;
+        // Core tempo
+        audioCtrl_->bpmMin = 15.0f;
         audioCtrl_->bpmMax = 200.0f;
-        audioCtrl_->plpActivation = 0.3f;
+        audioCtrl_->tempoSmoothing = 0.85f;
+        audioCtrl_->activationThreshold = 0.3f;
+        audioCtrl_->odfContrast = 1.25f;
+        // PLP
         audioCtrl_->plpConfAlpha = 0.15f;
         audioCtrl_->plpNovGain = 1.5f;
         audioCtrl_->plpSignalFloor = 0.10f;
-        audioCtrl_->activationThreshold = 0.3f;
-        audioCtrl_->tempoSmoothing = 0.85f;
-        audioCtrl_->odfContrast = 1.25f;
+        // Pulse detection
+        audioCtrl_->pulseThresholdMult = 2.0f;
+        audioCtrl_->pulseMinLevel = 0.03f;
+        audioCtrl_->pulseOnsetFloor = 0.1f;
+        audioCtrl_->baselineFastDrop = 0.05f;
+        audioCtrl_->baselineSlowRise = 0.005f;
+        audioCtrl_->odfPeakHoldDecay = 0.85f;
+        // Energy synthesis
+        audioCtrl_->energyMicWeight = 0.30f;
+        audioCtrl_->energyMelWeight = 0.30f;
+        audioCtrl_->energyOdfWeight = 0.40f;
+        // Pattern slot cache
+        audioCtrl_->slotSwitchThreshold = 0.70f;
+        audioCtrl_->slotNewThreshold = 0.40f;
+        audioCtrl_->slotUpdateRate = 0.15f;
+        audioCtrl_->slotSaveMinConf = 0.50f;
+        audioCtrl_->slotSeedBlend = 0.70f;
 
         // Restore spectral processing defaults
         SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
@@ -1431,6 +1447,8 @@ void SerialConsole::streamTick() {
             Serial.print(audio.pulse, 2);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
+            Serial.print(F(",\"nn\":"));
+            Serial.print(audioCtrl_->getRawNNActivation(), 3);
 
             // Debug mode: add diagnostics
             if (streamDebug_) {

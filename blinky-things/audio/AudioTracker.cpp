@@ -8,12 +8,6 @@
 
 static constexpr float TWO_PI_F = 6.28318530718f;
 
-// Adaptive phase correction constants (from parameter sweep data)
-static constexpr float PHASE_ALPHA_ERR = 0.15f;   // Error EMA rate (~6-7 sample window at 150ms cadence)
-static constexpr float PHASE_SIGMA_REF = 0.08f;   // Expected RMS phase error when locked
-static constexpr float PHASE_ALPHA_MIN = 0.10f;    // Correction rate when locked (sweep: stability=0.87)
-static constexpr float PHASE_ALPHA_MAX = 0.50f;    // Correction rate when converging (sweep: atTransient=0.50)
-
 // Cold-start template bank: 8 common rhythmic patterns (16 bins = 16th-note resolution).
 // Used ONLY for 1-bar seeding during cold start — not for runtime matching or caching.
 // ~512 bytes flash. Each pattern normalized to sum ~1.0.
@@ -59,10 +53,13 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     bool nnOk = frameOnsetNN_.begin();
     nnActive_ = nnOk && frameOnsetNN_.isReady();
 
-    // Initialize time-based state to current time to avoid
-    // instant flush on first update (nowMs >> 0 would fire immediately)
+    // Initialize all time-based state to current time to avoid
+    // instant triggers on first update (nowMs >> 0 would fire immediately)
     uint32_t now = time_.millis();
     onsetDensityWindowStart_ = now;
+    lastSignificantAudioMs_ = now;   // Prevent premature silence decay on boot
+    lastAcfMs_ = now;                // Prevent immediate ACF fire
+    lastPulseMs_ = now;
     resetSlots();
 
     return true;
@@ -125,6 +122,13 @@ const AudioControl& AudioTracker::update(float dt) {
         odf = frameOnsetNN_.infer(spectral_.getRawMelBands());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
+
+        // Track raw NN activation peaks (before pulse detection threshold/cooldown).
+        // Record timestamp when activation exceeds previous value (rising edge).
+        if (odf > rawNNActivation_ && odf > 0.3f) {
+            rawNNPeakMs_ = nowMs;
+        }
+        rawNNActivation_ = odf;
     } else if (!nnActive_) {
         // Fallback: use mic level as simple energy ODF
         odf = mic_.getLevel();
@@ -159,7 +163,14 @@ const AudioControl& AudioTracker::update(float dt) {
             fluxContrast = powf(flux, odfContrast);
         }
         fluxContrast = clampf(fluxContrast, 0.0f, 1.0f);
-        addOssSample(fluxContrast);
+
+        // NN-gated flux for epoch-fold pattern extraction only. The soft gate
+        // emphasizes kicks/snares (NN F1=0.787) and suppresses hi-hats/fills,
+        // biasing the epoch-fold toward the stable rhythmic skeleton.
+        // The ungated flux goes into ossBuffer_ for ACF/tempogram period detection
+        // (NN-independent, per architecture contract).
+        float nnGatedFlux = fluxContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
+        addOssSample(fluxContrast, nnGatedFlux);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;
@@ -176,7 +187,7 @@ const AudioControl& AudioTracker::update(float dt) {
         if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
     }
 
-    // 9. Periodic ACF for tempo estimation + IOI analysis
+    // 9. Periodic ACF for tempo estimation
     //    First ACF fires after ~1s (ossCount_ >= 60 at ~66 Hz), then every
     //    acfPeriodMs (~150ms = ~9 frames). The 60-sample minimum ensures
     //    enough OSS data for meaningful autocorrelation.
@@ -189,9 +200,15 @@ const AudioControl& AudioTracker::update(float dt) {
     // 10. PLP phase update (free-running + pattern-based correction)
     updatePlpPhase();
 
-    // 11. Decay periodicity during silence (between ACF runs)
+    // 11. Decay during silence + reset stale state for clean warm-up
     if (nowMs - lastSignificantAudioMs_ > 2000) {
         periodicityStrength_ *= 0.998f;  // ~0.5s half-life at 62.5 Hz
+    }
+    // After 5s of silence, reset analysis state so new music starts clean.
+    // Without this, old OSS/bass/NN buffers, pattern, and phase correction
+    // state contaminate warm-up on the next track.
+    if (nowMs - lastSignificantAudioMs_ > 5000 && ossCount_ > 0) {
+        resetAnalysisState();
     }
 
     // 12. Pattern slot cache: check every bar (4 beats)
@@ -209,11 +226,37 @@ const AudioControl& AudioTracker::update(float dt) {
 }
 
 // ============================================================================
+// State Reset
+// ============================================================================
+
+void AudioTracker::resetAnalysisState() {
+    memset(ossBuffer_, 0, sizeof(ossBuffer_));
+    memset(gatedFluxBuffer_, 0, sizeof(gatedFluxBuffer_));
+    memset(bassBuffer_, 0, sizeof(bassBuffer_));
+    memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
+    ossWriteIdx_ = 0; ossCount_ = 0;
+    bassWriteIdx_ = 0; bassCount_ = 0;
+    nnWriteIdx_ = 0; nnCount_ = 0;
+    memset(plpPattern_, 0, sizeof(plpPattern_));
+    memset(pulseBuf_, 0, sizeof(pulseBuf_));
+    pulseHead_ = 0;
+    olaPeakEma_ = 1.0f;
+    odfBaseline_ = 0.0f;
+    odfPeakHold_ = 0.0f;
+    plpConfidence_ = 0.0f;
+    periodicityStrength_ = 0.0f;
+    plpPhase_ = 0.0f;
+    beatCount_ = 0;
+    resetSlots();
+}
+
+// ============================================================================
 // OSS Buffer
 // ============================================================================
 
-void AudioTracker::addOssSample(float odf) {
-    ossBuffer_[ossWriteIdx_] = odf;
+void AudioTracker::addOssSample(float ungatedFlux, float gatedFlux) {
+    ossBuffer_[ossWriteIdx_] = ungatedFlux;
+    gatedFluxBuffer_[ossWriteIdx_] = gatedFlux;
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
@@ -223,10 +266,13 @@ void AudioTracker::addOssSample(float odf) {
 // ============================================================================
 
 void AudioTracker::runFourierTempogram() {
-    // Linearize all 3 source circular buffers into class members
+    // Linearize all source circular buffers into class members.
+    // ossLinear_ = ungated flux (NN-independent, for tempogram period detection).
+    // gatedFluxLinear_ = NN-gated flux (for epoch-fold pattern extraction only).
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
         ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
+        gatedFluxLinear_[i] = gatedFluxBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
     int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
     for (int i = 0; i < bassCount_; i++) bassLinear_[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
@@ -256,21 +302,37 @@ void AudioTracker::runFourierTempogram() {
         mean /= count;
         for (int i = 0; i < count; i++) sources[src][i] -= mean;
     }
+    // Also mean-subtract gatedFluxLinear_ for epoch-fold use
+    if (ossCount_ >= 20) {
+        float mean = 0.0f;
+        for (int i = 0; i < ossCount_; i++) mean += gatedFluxLinear_[i];
+        mean /= ossCount_;
+        for (int i = 0; i < ossCount_; i++) gatedFluxLinear_[i] -= mean;
+    }
 
-    float bestMag = 0.0f;
-    int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
-    float bestPhase = 0.0f;
-    int bestSource = 0;
+    // --- Pass 1: Goertzel DFT scan to find top-N candidates ---
+    // Collect top candidates by DFT magnitude across all sources.
+    static constexpr int TOP_N = 5;
+    struct Candidate {
+        float mag;
+        float phase;
+        int period;
+        int source;
+    };
+    Candidate topCandidates[TOP_N] = {};
 
     // Scan candidate periods from bpmMin to bpmMax
     int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
     int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
     if (minLag < 10) minLag = 10;
-    if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;  // Keep period ≤ pattern buffer
-    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1; // Avoid scanning past buffer at startup
+    if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;
+    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
 
-    for (int lag = minLag; lag <= maxLag; lag++) {
-        // Goertzel recurrence: computes one DFT bin with 2 multiply-adds per sample.
+    // Step size: 1 frame for short periods (beat-level), 2 for longer periods
+    // (bar-level). Halves Goertzel scan cost for the extended range without
+    // losing resolution where it matters. At lag=66, 1-frame step = 0.9 BPM
+    // resolution; at lag=132, 2-frame step = 0.4 BPM resolution (still fine).
+    for (int lag = minLag; lag <= maxLag; lag += (lag < 66 ? 1 : 2)) {
         float omega = TWO_PI_F / static_cast<float>(lag);
         float cosOmega = cosf(omega);
         float sinOmega = sinf(omega);
@@ -281,7 +343,6 @@ void AudioTracker::runFourierTempogram() {
             if (count < lag * 2) continue;
             const float* buf = sources[src];
 
-            // Goertzel recurrence: s[n] = x[n] + coeff*s[n-1] - s[n-2]
             float s1 = 0.0f, s2 = 0.0f;
             for (int i = 0; i < count; i++) {
                 float s0 = buf[i] + coeff * s1 - s2;
@@ -289,40 +350,112 @@ void AudioTracker::runFourierTempogram() {
                 s1 = s0;
             }
 
-            // Extract real + imag from Goertzel final state
             float dftReal = s1 - s2 * cosOmega;
             float dftImag = s2 * sinOmega;
-
-            // Magnitude (normalize by sqrt(count) for fair comparison across sources)
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
 
-            if (mag > bestMag) {
-                bestMag = mag;
-                bestPeriod = lag;
-                bestSource = src;
-                // Phase at the END of the buffer (most recent sample).
-                // Goertzel DFT phase is relative to index 0 (oldest sample).
-                // Advance by (count-1) periods to get phase at the newest sample.
-                float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
-                float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
-                bestPhase = rawPhase + phaseAdvance;
-                bestPhase -= floorf(bestPhase);  // Wrap to [0, 1)
+            // Compute DFT phase (done once, used by both insertion paths below).
+            // Phase = unwrapped DFT angle normalized to [0, 1) within the period.
+            float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
+            float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
+            float phase = rawPhase + phaseAdvance;
+            phase -= floorf(phase);
+
+            // Insert into top-N if large enough.
+            // Enforce minimum 10% period separation to prevent near-duplicate
+            // candidates (e.g., lag 32/33/34 from different sources) from
+            // crowding out genuinely different tempo hypotheses.
+            bool tooClose = false;
+            for (int k = 0; k < TOP_N; k++) {
+                if (topCandidates[k].mag > 0.01f &&
+                    abs(lag - topCandidates[k].period) <= topCandidates[k].period / 10) {
+                    // Near-duplicate: keep the stronger one
+                    if (mag > topCandidates[k].mag) {
+                        topCandidates[k] = { mag, phase, lag, src };
+                    }
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (!tooClose) {
+                int minIdx = 0;
+                for (int k = 1; k < TOP_N; k++) {
+                    if (topCandidates[k].mag < topCandidates[minIdx].mag) minIdx = k;
+                }
+                if (mag > topCandidates[minIdx].mag) {
+                    topCandidates[minIdx] = { mag, phase, lag, src };
+                }
             }
         }
     }
 
-    plpDftMag_ = bestMag;
-    // Fisher's g-statistic: max magnitude / sum of all magnitudes.
-    // Measures how concentrated the periodic energy is at one frequency.
-    // g > 0.3 → highly significant periodicity (p < 0.01)
-    // g ~ 0.05 → no significant periodicity (uniform spectrum)
-    // Fisher's g removed v82 — penalizes syncopated music. DFT magnitude used for confidence instead.
+    // --- Pass 2: Score candidates by epoch-fold pattern quality ---
+    // The period that produces the highest-contrast pattern is the one that
+    // creates the best visual pulse, regardless of which has higher DFT magnitude.
+    // Combined score: DFT magnitude (periodicity) × pattern variance (visual quality).
+    float bestScore = -1.0f;
+    float bestMag = 0.0f;
+    int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
+    float bestPhase = 0.0f;
+    int bestSource = 0;
 
-    // Reset adaptive phase correction state on significant period change
-    // (>10% shift). Prevents old low-variance state from suppressing
-    // the fast correction needed to re-converge at the new period.
+    for (int k = 0; k < TOP_N; k++) {
+        if (topCandidates[k].mag < 0.01f) continue;  // Skip empty slots
+
+        int cPeriod = topCandidates[k].period;
+        int cSource = topCandidates[k].source;
+        const float* cBuf = sources[cSource];
+        int cCount = sourceCounts[cSource];
+
+        if (cCount < cPeriod * 2) continue;
+
+        // Epoch-fold at this candidate period with recency weighting
+        float fold[MAX_PATTERN_LEN] = {0};
+        float totalWeight = 0.0f;
+        int epochs = 0;
+        for (int offset = cCount - cPeriod; offset >= 0; offset -= cPeriod) {
+            float weight = expf(-0.3f * epochs);  // ~3-epoch half-life
+            for (int j = 0; j < cPeriod; j++) {
+                fold[j] += cBuf[offset + j] * weight;
+            }
+            totalWeight += weight;
+            epochs++;
+        }
+        if (epochs < 2) continue;
+        for (int j = 0; j < cPeriod; j++) fold[j] /= totalWeight;
+
+        // Pattern variance (contrast) — higher = more structured
+        float mean = 0.0f;
+        for (int j = 0; j < cPeriod; j++) mean += fold[j];
+        mean /= cPeriod;
+        float variance = 0.0f;
+        for (int j = 0; j < cPeriod; j++) {
+            float d = fold[j] - mean;
+            variance += d * d;
+        }
+        variance /= cPeriod;
+
+        // Combined score: DFT magnitude × pattern variance
+        // Both are important: DFT confirms periodicity, variance confirms visual quality
+        float score = topCandidates[k].mag * sqrtf(variance);
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMag = topCandidates[k].mag;
+            bestPeriod = topCandidates[k].period;
+            bestPhase = topCandidates[k].phase;
+            bestSource = topCandidates[k].source;
+        }
+    }
+
+    plpDftMag_ = bestMag;
+
+    // Clear pulse buffer on significant period change (>10% shift)
+    // so old kernels at the wrong frequency don't contaminate the new period.
     if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
-        phaseErrVar_ = 0.25f;  // Force fast convergence
+        memset(pulseBuf_, 0, sizeof(pulseBuf_));
+        pulseHead_ = 0;
+        olaPeakEma_ = 1.0f;
     }
 
     plpBestPeriod_ = bestPeriod;
@@ -363,20 +496,20 @@ void AudioTracker::addBassSample(float bassEnergy) {
 }
 
 void AudioTracker::updatePlpAnalysis() {
-    // --- 1. Use raw period from grid search (not BPM-smoothed) ---
-    // The grid search found the exact period with best PMR. Using the BPM-smoothed
-    // beatPeriodFrames_ introduces a round-trip error (period→BPM→EMA→period)
-    // that can shift the fold by ±1 frame and degrade coherence.
+    // --- 1. Use raw period from Fourier tempogram (not BPM-smoothed) ---
     int patLen = plpBestPeriod_;
     if (patLen < 2) patLen = 2;
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // --- 2. Epoch-fold the WINNING source at the winning period ---
-    // All linearized buffers populated by runFourierTempogram() (class members).
-    // NOTE: buffers are mean-subtracted by runFourierTempogram() — epoch-fold
-    // produces zero-centered values, hence min-max normalization below.
-    const float* sourceBuf = ossLinear_;
+    // --- 2. Recency-weighted epoch fold for PATTERN DIGEST (slot cache only) ---
+    // Epoch-fold is NOT used for pulse output (cosine OLA handles that).
+    // The pattern digest captures the actual rhythmic shape for section detection
+    // via the slot cache's cosine similarity matching.
+    // Use NN-gated flux (gatedFluxLinear_) for source 0 to emphasize kicks/snares
+    // in the pattern shape. The ungated ossLinear_ is reserved for ACF/tempogram
+    // period detection (NN-independent per architecture contract).
+    const float* sourceBuf = gatedFluxLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
         sourceBuf = bassLinear_;
@@ -388,91 +521,88 @@ void AudioTracker::updatePlpAnalysis() {
 
     if (sourceCount < patLen * 2) return;
 
-    // Fold and average
-    float patternAccum[MAX_PATTERN_LEN] = {0};
+    // Variance-gated epoch fold: track both sum and sum-of-squares per bin.
+    // Bins with low cross-epoch variance are consistent (kick on beat 1 always
+    // lands here). Bins with high variance are unreliable (hi-hat pattern changes
+    // bar-to-bar). Weight each bin inversely by its variance.
+    // (Stellingwerf 1978 Phase Dispersion Minimization, adapted for music)
+    float foldSum[MAX_PATTERN_LEN] = {0};
+    float foldSumSq[MAX_PATTERN_LEN] = {0};
+    float totalWeight = 0.0f;
     int epochs = 0;
     for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
+        float weight = expf(-0.3f * epochs);
         for (int j = 0; j < patLen; j++) {
-            patternAccum[j] += sourceBuf[offset + j];
+            float val = sourceBuf[offset + j];
+            foldSum[j] += val * weight;
+            foldSumSq[j] += val * val * weight;
         }
+        totalWeight += weight;
         epochs++;
     }
     if (epochs < 2) return;
 
-    // Normalize to [0, 1] using min-max (signal is mean-subtracted, may have negatives)
-    float minVal = patternAccum[0], maxVal = patternAccum[0];
+    // Compute per-bin mean, variance, and reliability-weighted pattern
+    static constexpr float VARIANCE_SENSITIVITY = 10.0f;  // Higher = more aggressive suppression
+    float minVal = 1e30f, maxVal = -1e30f;
+    float patternRaw[MAX_PATTERN_LEN];
     for (int j = 0; j < patLen; j++) {
-        patternAccum[j] /= epochs;
-        if (patternAccum[j] < minVal) minVal = patternAccum[j];
-        if (patternAccum[j] > maxVal) maxVal = patternAccum[j];
+        float mean = foldSum[j] / totalWeight;
+        float meanSq = foldSumSq[j] / totalWeight;
+        float variance = meanSq - mean * mean;
+        if (variance < 0.0f) variance = 0.0f;  // Numerical safety
+
+        // Reliability: consistent bins (low variance) get full weight,
+        // variable bins (high variance) get suppressed
+        float reliability = 1.0f / (1.0f + variance * VARIANCE_SENSITIVITY);
+        patternRaw[j] = mean * reliability;
+
+        if (patternRaw[j] < minVal) minVal = patternRaw[j];
+        if (patternRaw[j] > maxVal) maxVal = patternRaw[j];
     }
+
+    // Normalize to [0, 1] using min-max
     float range = maxVal - minVal;
     if (range > 1e-10f) {
         for (int j = 0; j < patLen; j++) {
-            float normalized = (patternAccum[j] - minVal) / range;
+            float normalized = (patternRaw[j] - minVal) / range;
             plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
         }
     } else {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. Phase alignment: adaptive correction rate ---
-    // Combines DFT coarse phase and pattern-peak fine phase into a single error,
-    // then applies an adaptive correction rate that's fast during convergence
-    // and slow once locked. Based on EMA variance of recent phase errors.
-
-    // Compute phase error from pattern peak (most precise alignment)
-    float phaseError = 0.0f;
-    bool hasPatternPeak = false;
+    // --- 3. Canonical PLP: add Hann-windowed cosine kernel to pulse buffer ---
+    // Each ACF update contributes one kernel. The buffer rolls forward 1 position
+    // per frame in updatePlpPhase(). Overlap-add of many kernels produces peaks
+    // where the DFT says periodicity is — anti-correlation is impossible because
+    // cosine peaks are always positively correlated with the dominant periodic
+    // component. (Grosche & Mueller 2011, Meier et al. 2024)
+    //
+    // Kernel: k(t) = hann(t) * cos(2*pi*(t * omega - phase))
+    //   omega = 1/period (cycles per frame)
+    //   phase = DFT phase at winning frequency (Meier 2024 eq. 3)
+    //   Window length = 2 * period (covers 2 full beat cycles)
     {
-        int peakIdx = 0;
-        float peakVal = plpPattern_[0];
-        for (int j = 1; j < patLen; j++) {
-            if (plpPattern_[j] > peakVal) { peakVal = plpPattern_[j]; peakIdx = j; }
-        }
-        // After min-max normalization, max=1.0 and min=0.0 for any non-flat pattern.
-        // peakVal > 0.5 always true for non-flat signals. Falls through to DFT phase
-        // fallback only when pattern is flat (range < 1e-10, all values set to 0.0).
-        if (peakVal > 0.5f) {
-            float peakPhase = static_cast<float>(peakIdx) / static_cast<float>(patLen);
-            phaseError = peakPhase - plpPhase_;
-            hasPatternPeak = true;
+        float omega = 1.0f / static_cast<float>(patLen);  // cycles per frame
+        int halfWin = patLen;  // 1 period each side = 2-period window
+        if (halfWin > PULSE_BUF_LEN / 2 - 1) halfWin = PULSE_BUF_LEN / 2 - 1;
+        int winLen = halfWin * 2 + 1;
+
+        // Kernel is centered at pulseHead_ (current frame in ring buffer).
+        // Negative indices address past samples, positive address future predictions.
+        // The Hann window tapers both ends smoothly.
+        for (int i = -halfWin; i <= halfWin; i++) {
+            float w = 0.5f + 0.5f * cosf(TWO_PI_F * static_cast<float>(i) / static_cast<float>(winLen - 1));
+            float kernel = w * cosf(TWO_PI_F * (static_cast<float>(i) * omega - plpDftPhase_));
+            int idx = (pulseHead_ + i) % PULSE_BUF_LEN;
+            if (idx < 0) idx += PULSE_BUF_LEN;
+            pulseBuf_[idx] += kernel;
         }
     }
-
-    // Fall back to DFT phase if pattern peak is weak
-    if (!hasPatternPeak) {
-        phaseError = plpDftPhase_ - plpPhase_;
-    }
-
-    // Wrap error to [-0.5, 0.5]
-    if (phaseError > 0.5f) phaseError -= 1.0f;
-    if (phaseError < -0.5f) phaseError += 1.0f;
-
-    // Adaptive correction rate from phase error variance (EMA)
-    // High variance → still converging → aggressive correction
-    // Low variance → locked → gentle correction (prevents jitter)
-    phaseErrEma_ += PHASE_ALPHA_ERR * (phaseError - phaseErrEma_);
-    float deviation = phaseError - phaseErrEma_;
-    phaseErrVar_ += PHASE_ALPHA_ERR * (deviation * deviation - phaseErrVar_);
-
-    float sigma = sqrtf(phaseErrVar_ > 0.0f ? phaseErrVar_ : 0.0f);
-    float lambda = sigma / (sigma + PHASE_SIGMA_REF);
-    float alpha = PHASE_ALPHA_MIN + (PHASE_ALPHA_MAX - PHASE_ALPHA_MIN) * lambda;
-
-    plpPhase_ += alpha * phaseError;
-    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-    if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
 
     // --- 4. PLP confidence from DFT magnitude + steep signal gate ---
-    // Use DFT magnitude directly (not Fisher's g — g penalizes tracks with multiple
-    // similarly-strong periods, common in syncopated music). Soft blend handles the
-    // confidence-to-output mapping without needing a principled [0,1] scale.
     float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
-
-    // Steep signal gate: transition from 0→1 over a narrow range near noise floor.
-    // Once there's clearly audio (>2x noise floor), presence is 1.0 and doesn't
-    // attenuate DFT confidence. Only suppresses during true silence.
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
     float targetConf = dftConf * signalPresence;
@@ -480,40 +610,44 @@ void AudioTracker::updatePlpAnalysis() {
 }
 
 void AudioTracker::updatePlpPhase() {
-    // Free-running phase advance at the PMR-winning period (not BPM-smoothed)
-    int period = (plpBestPeriod_ > 0) ? plpBestPeriod_ : 33;  // Guard against zero
+    // --- Advance pulse ring buffer by 1 frame (Meier 2024 real-time PLP) ---
+    // Read current value, then zero and advance head. Ring buffer avoids
+    // the O(N) memmove (~3KB/frame at 62.5Hz) of a linear shift.
+    // Old kernel contributions naturally fall off as head wraps around.
+
+    // --- Read pulse from cosine OLA buffer at head (current frame) ---
+    // Half-wave rectify: only positive lobes become pulse peaks (Grosche & Mueller 2011).
+    float rawPulse = fmaxf(pulseBuf_[pulseHead_], 0.0f);
+
+    // Zero the slot we just read and advance head
+    pulseBuf_[pulseHead_] = 0.0f;
+    pulseHead_ = (pulseHead_ + 1) % PULSE_BUF_LEN;
+
+    // Normalize with slow-tracking peak EMA to keep output in [0, 1].
+    // EMA avoids hard peak-hold artifacts. Floor prevents division issues during silence.
+    static constexpr float PEAK_EMA_ALPHA = 0.01f;   // ~100-frame (~1.5s) time constant
+    static constexpr float PEAK_FLOOR = 0.1f;
+    olaPeakEma_ += PEAK_EMA_ALPHA * (rawPulse - olaPeakEma_);
+    if (olaPeakEma_ < PEAK_FLOOR) olaPeakEma_ = PEAK_FLOOR;
+    float normalizedPulse = clampf(rawPulse / olaPeakEma_, 0.0f, 1.0f);
+
+    // Blend OLA pulse with cosine fallback when confidence is low.
+    // During silence, confidence→0 and the output degrades to a smooth cosine.
+    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
+    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
+    plpPulseValue_ = cosinePulse * (1.0f - blend) + normalizedPulse * blend;
+
+    // --- Free-running phase advance (for beat counting + cosine fallback) ---
+    int period = (plpBestPeriod_ > 0) ? plpBestPeriod_ : 33;
     float phaseIncrement = 1.0f / static_cast<float>(period);
     plpPhase_ += phaseIncrement;
-
-    // Beat wrap
     if (plpPhase_ >= 1.0f) {
         plpPhase_ -= 1.0f;
         beatCount_++;
     }
 
-    // Read PLP pattern and cosine fallback, blend by confidence.
-    // No hard threshold — published PLP systems run continuously (Meier 2024, librosa).
-    // Confidence naturally approaches 0 during silence/ambient, making the output
-    // smoothly degrade to the cosine fallback without a discontinuous switch.
-    float patternPulse = 0.5f;
-    if (plpPatternLen_ > 0) {
-        float patPos = plpPhase_ * plpPatternLen_;
-        int idx0 = static_cast<int>(patPos) % plpPatternLen_;
-        float frac = patPos - floorf(patPos);
-        int idx1 = (idx0 + 1) % plpPatternLen_;
-        patternPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
-    }
-    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
-    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
-    plpPulseValue_ = cosinePulse * (1.0f - blend) + patternPulse * blend;
-
     // --- Beat stability tracking ---
-    // Track PLP peak amplitude via EMA. Stability = current peak / EMA.
-    // High stability (>0.7) = pattern is locked and repeating.
-    // Low stability (<0.3) = disrupted (fill, breakdown, section change).
-    // Used to gate bar histogram learning rate (fill/breakdown immunity).
     if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
-        // Near phase=0 (beat position): measure current PLP peak amplitude
         float peakAmp = plpPulseValue_;
         static constexpr float STABILITY_ALPHA = 0.1f;
         plpPeakEma_ += STABILITY_ALPHA * (peakAmp - plpPeakEma_);
@@ -531,9 +665,8 @@ void AudioTracker::updatePlpPhase() {
 // ============================================================================
 
 void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
-    // Floor-tracking baseline (matched to AudioController):
+    // Floor-tracking baseline:
     // Slow rise (peaks don't inflate baseline), fast drop (floor drops caught quickly).
-    // Uses fixed alpha, not dt-based exponential, to match proven AudioController behavior.
     if (odf < odfBaseline_) {
         odfBaseline_ += (odf - odfBaseline_) * baselineFastDrop;   // fast drop
     } else {
@@ -547,7 +680,10 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    // Pulse detection: fire when ODF exceeds baseline threshold
+    // Pulse detection: fire on the RISING EDGE of NN activation crossing threshold.
+    // This fires at the start of the transient (the leading edge), not at the peak.
+    // Gives 16-48ms earlier detection compared to peak-based triggering.
+    // (Brossier 2006: predictive onset detection fires on the rising slope)
     float pulseThreshold = odfBaseline_ * pulseThresholdMult;
     if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
 
@@ -558,9 +694,14 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     // Guard against ms wraparound
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
+    // Rising-edge detection: fire when ODF crosses threshold from below while rising.
+    // prevOdf_ < threshold AND odf > threshold = the leading edge of a transient.
+    bool risingEdge = (odf > pulseThreshold) && (prevOdf_ <= pulseThreshold);
+    prevOdf_ = odf;
+
     float pulseStrength = 0.0f;
     if (mic_.getLevel() > pulseMinLevel &&
-        odf > pulseThreshold &&
+        risingEdge &&
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
         lastPulseMs_ = nowMs;
@@ -648,10 +789,8 @@ void AudioTracker::checkPatternSlots() {
         }
         // Confidence boost
         plpConfidence_ = fmaxf(plpConfidence_, slots_[activeSlot_].confidence * 0.8f);
-        // Reset phase correction for fast re-convergence at new section
-        phaseErrVar_ = 0.25f;
 
-    } else if (bestSlot == activeSlot_ && bestSim > 0.50f && plpConfidence_ > slotSaveMinConf) {
+    } else if (bestSlot == activeSlot_ && bestSim > slotNewThreshold && plpConfidence_ > slotSaveMinConf) {
         // REINFORCE active slot with current PLP pattern
         for (int i = 0; i < SLOT_BINS; i++) {
             slots_[activeSlot_].bins[i] =
@@ -660,6 +799,7 @@ void AudioTracker::checkPatternSlots() {
         }
         slots_[activeSlot_].totalBars++;
         slots_[activeSlot_].confidence = plpConfidence_;
+        slots_[activeSlot_].age = 0;  // Keep active slot fresh for LRU
 
     } else if (bestSim < slotNewThreshold && plpConfidence_ > slotSaveMinConf) {
         // NEW SECTION: allocate a new slot
@@ -700,16 +840,17 @@ void AudioTracker::checkPatternSlots() {
             }
         }
         if (bestTemplate >= 0 && bestTemplateSim > 0.50f) {
-            // Blend template into slot
+            // Blend template into slot (use slotSeedBlend for consistency with recall path)
+            float seedBlend = slotSeedBlend;
             for (int i = 0; i < SLOT_BINS; i++) {
                 slots_[activeSlot_].bins[i] =
-                    0.5f * slots_[activeSlot_].bins[i] + 0.5f * SEED_TEMPLATES[bestTemplate][i];
+                    (1.0f - seedBlend) * slots_[activeSlot_].bins[i] + seedBlend * SEED_TEMPLATES[bestTemplate][i];
             }
             // Also seed PLP pattern
             float tempPattern[MAX_PATTERN_LEN];
             resamplePattern(slots_[activeSlot_].bins, SLOT_BINS, tempPattern, plpPatternLen_);
             for (int j = 0; j < plpPatternLen_; j++) {
-                plpPattern_[j] = tempPattern[j] * 0.5f + plpPattern_[j] * 0.5f;
+                plpPattern_[j] = tempPattern[j] * seedBlend + plpPattern_[j] * (1.0f - seedBlend);
             }
         }
         slots_[activeSlot_].seeded = true;  // One-shot: don't re-seed this slot

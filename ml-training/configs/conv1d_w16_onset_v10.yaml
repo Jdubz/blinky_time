@@ -1,0 +1,61 @@
+# Conv1D W16 v10 — onset detection, building on v3 (best: F1=0.787)
+#
+# Changes from v3:
+#   1. Shift-tolerant asymmetric focal loss (combines two proven techniques)
+#      - Shift tolerance: ±3 frames (±48ms) handles annotation jitter
+#      - Asymmetric focal: gamma_pos=0.5, gamma_neg=2.0 handles class imbalance
+#      - These address orthogonal problems (Beat This! + Imoto 2022)
+#   2. SWA (Stochastic Weight Averaging) over final 10 epochs
+#      - Finds flatter optima, +0.5-1.5% on small models (Izmailov 2018)
+#      - Zero inference cost
+#   3. Increased SpecAugment (num_freq=3, max_width=6)
+#      - Beat This! ablation: mask augmentation worth 0.4 F1
+#
+# Retained from v3 (proven, do not change):
+#   - Architecture: Conv1D(26→24, k=5) → Conv1D(24→32, k=5) → Conv1D(32→1, k=1)
+#   - Frequency positional encoding (26-dim learnable)
+#   - Online mixup (Beta(0.4,0.4), p=0.5)
+#   - Full augmentation pipeline (time stretch, pitch shift, gain, noise, RIR)
+#   - consensus_v5 binary labels
+#
+# NOT included (proven harmful or useless at this scale):
+#   - Tempo auxiliary head (256ms RF too short for tempo, Bock 2019 is for beat tracking)
+#   - Knowledge distillation (no dark knowledge in binary task, v9 catastrophic regression)
+#   - Larger windows (W64, W192 all regressed)
+#
+# Target: All Onsets F1 > 0.80 (v3 baseline: 0.787)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true
+
+loss:
+  type: "shift_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+  shift_tolerance: 3              # ±3 frames = ±48ms at 62.5 Hz
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  epochs: 60
+  patience: 15
+
+# Override SpecAugment from base.yaml (more aggressive)
+augmentation:
+  spec_augment:
+    enabled: true
+    num_freq_masks: 3             # Up from 2
+    max_freq_width: 6             # Up from 4
+    num_time_masks: 1
+    max_time_width: 8
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v10.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15

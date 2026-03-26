@@ -13,10 +13,10 @@
 //
 // Output is used for:
 //   - Visual pulse detection (sparks, flashes on kicks/snares)
-//   - PLL phase refinement (onset-gated correction near expected beats)
+//   - PLP source comparison (Fourier tempogram evaluates NN onset alongside flux/bass)
 //   - Energy synthesis (ODF peak-hold blend)
 //
-// NOT used for BPM estimation — spectral flux drives ACF/comb tempo instead.
+// NOT used for BPM estimation — spectral flux drives ACF tempo instead.
 //
 // Consumes raw mel bands from SharedSpectralAnalysis::getRawMelBands().
 // Falls back to mic energy if model fails to load.
@@ -36,7 +36,8 @@
 
 class FrameOnsetNN {
 public:
-    static constexpr int INPUT_MEL_BANDS = 26;
+    static constexpr int INPUT_MEL_BANDS = 26;     // Raw mel bands from SharedSpectralAnalysis
+    static constexpr int MAX_INPUT_FEATURES = 52;  // Mel + delta (model auto-detects)
 
     /**
      * Initialize TFLite interpreter and allocate tensors.
@@ -75,10 +76,15 @@ public:
         for (int i = 0; i < input_->dims->size; i++) {
             inputSize *= input_->dims->data[i];
         }
-        if (inputSize < INPUT_MEL_BANDS || inputSize % INPUT_MEL_BANDS != 0) {
+        // Detect input features per frame: 26 (mel only) or 52 (mel + delta).
+        // Model input shape is [1, windowFrames, featuresPerFrame].
+        int featuresPerFrame = input_->dims->data[input_->dims->size - 1];
+        if (featuresPerFrame != INPUT_MEL_BANDS && featuresPerFrame != INPUT_MEL_BANDS * 2) {
             initError_ = 5; return false;
         }
-        windowFrames_ = inputSize / INPUT_MEL_BANDS;
+        useDelta_ = (featuresPerFrame == INPUT_MEL_BANDS * 2);
+        inputFeatures_ = featuresPerFrame;
+        windowFrames_ = inputSize / featuresPerFrame;
         if (windowFrames_ > MAX_WINDOW_FRAMES) { initError_ = 6; return false; }
 
         // Detect output shape
@@ -106,22 +112,33 @@ public:
     float infer(const float* melBands) {
         if (!ready_) return 0.0f;
 
-        // Sliding window: push new frame
+        // Build the feature vector for this frame: mel bands + optional delta
+        float frameFeatures[MAX_INPUT_FEATURES];
+        memcpy(frameFeatures, melBands, INPUT_MEL_BANDS * sizeof(float));
+        if (useDelta_) {
+            // Delta = mel[t] - mel[t-1]. First frame gets zero delta.
+            for (int i = 0; i < INPUT_MEL_BANDS; i++) {
+                frameFeatures[INPUT_MEL_BANDS + i] = melBands[i] - prevMel_[i];
+            }
+            memcpy(prevMel_, melBands, INPUT_MEL_BANDS * sizeof(float));
+        }
+
+        // Sliding window: push new frame (using inputFeatures_ width)
         if (windowFilled_ < windowFrames_) {
-            memcpy(&windowBuffer_[windowFilled_ * INPUT_MEL_BANDS],
-                   melBands, INPUT_MEL_BANDS * sizeof(float));
+            memcpy(&windowBuffer_[windowFilled_ * inputFeatures_],
+                   frameFeatures, inputFeatures_ * sizeof(float));
             windowFilled_++;
         } else {
-            memmove(windowBuffer_, windowBuffer_ + INPUT_MEL_BANDS,
-                    (windowFrames_ - 1) * INPUT_MEL_BANDS * sizeof(float));
-            memcpy(&windowBuffer_[(windowFrames_ - 1) * INPUT_MEL_BANDS],
-                   melBands, INPUT_MEL_BANDS * sizeof(float));
+            memmove(windowBuffer_, windowBuffer_ + inputFeatures_,
+                    (windowFrames_ - 1) * inputFeatures_ * sizeof(float));
+            memcpy(&windowBuffer_[(windowFrames_ - 1) * inputFeatures_],
+                   frameFeatures, inputFeatures_ * sizeof(float));
         }
 
         if (windowFilled_ < windowFrames_) return 0.0f;
 
         // Quantize input
-        int totalInputs = windowFrames_ * INPUT_MEL_BANDS;
+        int totalInputs = windowFrames_ * inputFeatures_;
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;
             if (scale <= 0.0f) { invokeErrors_++; return 0.0f; }
@@ -219,7 +236,7 @@ public:
                 Serial.print(lastDownbeat_, 4);
             }
             if (input_->type == kTfLiteInt8 && windowFilled_ >= windowFrames_) {
-                int lastFrameStart = (windowFrames_ - 1) * INPUT_MEL_BANDS;
+                int lastFrameStart = (windowFrames_ - 1) * inputFeatures_;
                 Serial.print(F("\n  last_mel=["));
                 Serial.print(windowBuffer_[lastFrameStart], 4);
                 Serial.print(F(","));
@@ -227,6 +244,13 @@ public:
                 Serial.print(F(",...,"));
                 Serial.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS - 1], 4);
                 Serial.print(F("]"));
+                if (useDelta_) {
+                    Serial.print(F(" delta=["));
+                    Serial.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS], 4);
+                    Serial.print(F(",...,"));
+                    Serial.print(windowBuffer_[lastFrameStart + inputFeatures_ - 1], 4);
+                    Serial.print(F("]"));
+                }
             }
         } else {
             Serial.print(F(" error="));
@@ -285,9 +309,12 @@ private:
     static constexpr int MAX_WINDOW_FRAMES = 64;      // Max 64 frames (1.024s) — increase if a wider model is used
 
     alignas(16) uint8_t arena_[ARENA_SIZE];
-    float windowBuffer_[MAX_WINDOW_FRAMES * INPUT_MEL_BANDS];  // 6.5 KB max (64 * 26 * 4)
+    float windowBuffer_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // 13 KB max (64 * 52 * 4)
+    float prevMel_[INPUT_MEL_BANDS] = {0};      // Previous frame mel bands (for delta computation)
     int windowFrames_ = 0;
     int windowFilled_ = 0;
+    int inputFeatures_ = INPUT_MEL_BANDS;       // 26 (mel) or 52 (mel+delta), auto-detected from model
+    bool useDelta_ = false;                      // True when model expects 52-dim input
 
     const tflite::Model* model_ = nullptr;
     tflite::MicroInterpreter* interpreter_ = nullptr;

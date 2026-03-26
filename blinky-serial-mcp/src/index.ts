@@ -36,34 +36,31 @@ const TEST_RUNNER_PATH = join(__dirname, 'test-runner.js');
  * then spawns the test runner which manages its own connections.
  * Returns the parsed JSON result from stdout.
  */
-async function spawnTestRunner(
+// Fire-and-forget: spawn test runner as detached subprocess, return immediately.
+// Results are written to --output path; use check_test_result to poll.
+async function spawnTestRunnerAsync(
   args: string[],
   portsToRelease: string[],
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  outputPath: string,
+): Promise<{ output_path: string; pid: number | null; error?: string }> {
   // Disconnect MCP sessions on ports the test runner will use
   for (const port of portsToRelease) {
     try { await manager.disconnect(port); } catch { /* already disconnected */ }
   }
 
-  return new Promise((resolve) => {
+  try {
     const child = spawn('node', [TEST_RUNNER_PATH, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'inherit'],  // stdout ignored (writes to --output), stderr visible
+      detached: true,
     });
 
-    let stdout = '';
-    let stderr = '';
+    const pid = child.pid ?? null;
+    child.unref();  // Don't wait for child — let it run independently
 
-    child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-    child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-
-    child.on('close', (code: number | null) => {
-      resolve({ stdout, stderr, exitCode: code ?? 1 });
-    });
-
-    child.on('error', (err: Error) => {
-      resolve({ stdout: '', stderr: err.message, exitCode: 1 });
-    });
-  });
+    return { output_path: outputPath, pid };
+  } catch (err) {
+    return { output_path: outputPath, pid: null, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // Ensure test results directory exists
@@ -454,7 +451,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'run_music_test',
-        description: 'Run a real-music beat tracking test. Plays an audio file through speakers, records device detections (transients + music mode BPM/phase/confidence), compares against ground truth beat annotations using standard beat tracking metrics (F-measure@70ms, CMLt continuity, AMLt allowed metrical levels, BPM accuracy). Automatically connects and disconnects.',
+        description: 'Launch a real-music beat tracking test (async — returns immediately with output_path). Use check_test_result to poll for results. Plays audio, records device detections, compares against ground truth.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -493,7 +490,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'run_music_test_multi',
-        description: 'Run a real-music beat tracking test on MULTIPLE devices simultaneously. Connects all ports, optionally sends per-port configuration commands, starts streaming/recording on all, plays audio ONCE through speakers, then scores each device independently. Returns per-device Beat F1, BPM accuracy, transient F1. Use for A/B testing different parameter configurations across devices.',
+        description: 'Launch a multi-device music test (async — returns immediately with output_path). Use check_test_result to poll for results. Plays audio once, scores each device independently.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -536,7 +533,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'run_validation_suite',
-        description: 'Run a complete validation suite: auto-discovers tracks, runs multi-device multi-run tests on all tracks, saves full results to disk, returns compact summary. Replaces 18+ manual tool calls with one.',
+        description: 'Launch a full validation suite (async — returns immediately with output_path). Use check_test_result to poll for results. Auto-discovers tracks, runs multi-device multi-run tests on all tracks.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1978,22 +1975,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           cliArgs.push('--commands', preTestCommands.join(','));
         }
 
-        const result = await spawnTestRunner(cliArgs, [port]);
-
-        if (result.exitCode !== 0) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}`, output_path: outputPath }) }],
-          };
-        }
-
-        // Parse stdout and inject output_path
-        try {
-          const parsed = JSON.parse(result.stdout);
-          parsed.output_path = outputPath;
-          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
-        } catch {
-          return { content: [{ type: 'text', text: result.stdout }] };
-        }
+        const result = await spawnTestRunnerAsync(cliArgs, [port], outputPath);
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'launched', ...result }, null, 2) }] };
       }
 
       case 'run_music_test_multi': {
@@ -2028,21 +2011,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (multiRequestedRuns) cliArgs.push('--runs', String(multiRequestedRuns));
         if (multiPortCommands) cliArgs.push('--port-commands', JSON.stringify(multiPortCommands));
 
-        const result = await spawnTestRunner(cliArgs, multiPorts);
-
-        if (result.exitCode !== 0) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}`, output_path: multiOutputPath }) }],
-          };
-        }
-
-        try {
-          const parsed = JSON.parse(result.stdout);
-          parsed.output_path = multiOutputPath;
-          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
-        } catch {
-          return { content: [{ type: 'text', text: result.stdout }] };
-        }
+        const result = await spawnTestRunnerAsync(cliArgs, multiPorts, multiOutputPath);
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'launched', ...result }, null, 2) }] };
       }
 
       case 'run_validation_suite': {
@@ -2077,29 +2047,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (valTrackDir) cliArgs.push('--track-dir', valTrackDir);
         if (valPortCommands) cliArgs.push('--port-commands', JSON.stringify(valPortCommands));
 
-        const result = await spawnTestRunner(cliArgs, valPorts);
-
-        if (result.exitCode !== 0) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: result.stderr || `Test runner exited with code ${result.exitCode}`, output_path: valOutputPath }) }],
-          };
-        }
-
-        try {
-          const parsed = JSON.parse(result.stdout);
-          parsed.output_path = valOutputPath;
-          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
-        } catch {
-          return { content: [{ type: 'text', text: result.stdout }] };
-        }
+        const result = await spawnTestRunnerAsync(cliArgs, valPorts, valOutputPath);
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'launched', ...result }, null, 2) }] };
       }
 
       case 'check_test_result': {
         const { output_path: checkPath } = args as { output_path: string };
         if (!checkPath) throw new Error('output_path is required');
         if (!existsSync(checkPath)) {
+          // Check if a test runner is still running (audio lock present)
+          const lockPath = '/tmp/blinky-audio.lock';
+          const lockExists = existsSync(lockPath);
+          let status: string;
+          let message: string;
+          if (lockExists) {
+            // Lock file exists — check if it's stale (older than 10 minutes)
+            try {
+              const lockStat = statSync(lockPath);
+              const ageMs = Date.now() - lockStat.mtimeMs;
+              if (ageMs > 10 * 60 * 1000) {
+                status = 'stale_lock';
+                message = `Audio lock file exists but is ${Math.round(ageMs / 60000)}min old — test runner may have crashed. Lock: ${lockPath}`;
+              } else {
+                status = 'running';
+                message = 'Test is still running (audio lock present). Try again later.';
+              }
+            } catch {
+              status = 'running';
+              message = 'Test is still running (audio lock present). Try again later.';
+            }
+          } else {
+            status = 'not_found';
+            message = `Results file not found: ${checkPath}. If the test was just launched, it may still be starting up — wait a few seconds and retry.`;
+          }
           return {
-            content: [{ type: 'text', text: JSON.stringify({ error: `Results file not found: ${checkPath}` }) }],
+            content: [{ type: 'text', text: JSON.stringify({ status, message }) }],
           };
         }
         const fileContents = readFileSync(checkPath, 'utf-8');

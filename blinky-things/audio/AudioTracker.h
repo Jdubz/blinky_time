@@ -87,6 +87,10 @@ public:
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
 
+    // Raw NN activation (before pulse detection threshold/cooldown)
+    float getRawNNActivation() const { return rawNNActivation_; }
+    uint32_t getRawNNPeakMs() const { return rawNNPeakMs_; }
+
     // Pattern slot cache (v82)
     int getActiveSlotId() const { return activeSlot_; }
     const struct PatternSlot& getSlot(int i) const { return slots_[i]; }
@@ -95,7 +99,7 @@ public:
 
     // === Tunable parameters ===
     // Core tempo
-    float bpmMin = 60.0f;
+    float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
@@ -104,7 +108,6 @@ public:
     float activationThreshold = 0.3f;
 
     // PLP (Predominant Local Pulse)
-    float plpActivation = 0.3f;        // [VESTIGIAL] Unused since soft blend (v81). Kept for settings compat.
     float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
     float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
@@ -149,12 +152,15 @@ private:
     bool nnActive_ = false;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
-    // === OSS buffer (~5.5 seconds: 360 samples @ ~66 Hz) ===
-    static constexpr int OSS_BUFFER_SIZE = 360;
+    // === OSS buffer (~12 seconds: 792 samples @ ~66 Hz) ===
+    // Sized for 3 epochs at MAX_PATTERN_LEN (264 × 3 = 792)
+    static constexpr int OSS_BUFFER_SIZE = 792;
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
-    float ossBuffer_[OSS_BUFFER_SIZE] = {0};
-    float ossLinear_[OSS_BUFFER_SIZE] = {0};  // Linearized OSS (shared by ACF + PLP)
+    float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF/tempogram)
+    float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
+    float gatedFluxBuffer_[OSS_BUFFER_SIZE] = {0};  // NN-gated flux (for epoch-fold pattern extraction only)
+    float gatedFluxLinear_[OSS_BUFFER_SIZE] = {0};   // Linearized NN-gated flux (for epoch-fold)
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -164,9 +170,9 @@ private:
     float periodicityStrength_ = 0.0f;
 
     // === PLP state (Predominant Local Pulse) ===
-    static constexpr int BASS_BUFFER_SIZE = 360;  // Same size as OSS buffer
-    static constexpr int NN_BUFFER_SIZE = 360;    // NN onset activation history
-    static constexpr int MAX_PATTERN_LEN = 66;    // Max period in frames (66 Hz / 60 BPM)
+    static constexpr int BASS_BUFFER_SIZE = 792;  // Same size as OSS buffer
+    static constexpr int NN_BUFFER_SIZE = 792;    // NN onset activation history
+    static constexpr int MAX_PATTERN_LEN = 264;   // 1 bar at 60 BPM (4 beats × 66 frames/beat)
     float bassBuffer_[BASS_BUFFER_SIZE] = {0};
     float bassLinear_[BASS_BUFFER_SIZE] = {0};    // Linearized bass (shared by ACF + PLP)
     int bassWriteIdx_ = 0;
@@ -180,24 +186,37 @@ private:
     int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
     float plpPhase_ = 0.0f;                     // 0→1 phase within pattern cycle
     float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
-    float plpPulseValue_ = 0.5f;               // Current pattern value at phase position
-    float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
+    float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
     int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
-    float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency (coarse alignment)
-    float phaseErrEma_ = 0.0f;                // Running mean of phase errors (adaptive correction)
-    float phaseErrVar_ = 0.25f;               // Running variance of phase errors (start high → fast convergence)
+    float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
+
+    // === Canonical PLP: cosine OLA pulse buffer (Grosche & Mueller 2011, Meier 2024) ===
+    // Ring buffer with head index. Each ACF update adds a Hann-windowed cosine kernel
+    // at detected period+phase. Head advances 1 position per frame (no memmove).
+    // Pulse read from head position. Anti-correlation impossible: cosine kernel
+    // peaks where DFT says periodicity is.
+    static constexpr int PULSE_BUF_LEN = 792;   // 3× MAX_PATTERN_LEN for cosine OLA accumulation
+    float pulseBuf_[PULSE_BUF_LEN] = {0};
+    int pulseHead_ = 0;                          // Ring buffer head (current frame position)
+    float olaPeakEma_ = 1.0f;                   // Running peak EMA for normalization
 
     // === Pulse detection ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
+
+    float prevOdf_ = 0.0f;             // Previous frame ODF (for rising-edge detection)
+
+    // === Raw NN activation tracking (before threshold/cooldown) ===
+    float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
+    uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
 
     // === Onset density ===
     float onsetDensity_ = 0.0f;
@@ -221,8 +240,9 @@ private:
     AudioControl control_;
 
     // === Internal methods ===
-    void addOssSample(float odf);
+    void addOssSample(float ungatedFlux, float gatedFlux);
     void addBassSample(float bassEnergy);
+    void resetAnalysisState();
     void runFourierTempogram();
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)

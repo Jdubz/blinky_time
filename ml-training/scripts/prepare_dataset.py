@@ -85,6 +85,7 @@ def _file_rng(seed: int, track_stem: str) -> np.random.Generator:
     return np.random.default_rng(seed ^ track_hash)
 
 from scripts.audio import (
+    append_delta_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
@@ -153,19 +154,55 @@ def _gaussian_targets(times: np.ndarray, n_frames: int, frame_rate: float,
 
 def _binary_targets(times: np.ndarray, n_frames: int,
                     frame_rate: float,
-                    strengths: np.ndarray | None = None) -> np.ndarray:
+                    strengths: np.ndarray | None = None,
+                    neighbor_weight: float = 0.0,
+                    label_shift_frames: int = 0,
+                    early_neighbor_frames: int = 0,
+                    early_neighbor_weight: float = 0.0) -> np.ndarray:
     """Create binary activation targets (at nearest frame to each event).
 
     If strengths is provided, uses per-beat strength values (0-1) instead of
     binary 1.0. This gives softer supervision for lower-confidence beats
     (e.g., 2/4 system agreement → 0.5 target vs 4/4 → 1.0 target).
+
+    If neighbor_weight > 0, sets the frames immediately adjacent to each onset
+    (onset-1 and onset+1) to neighbor_weight × onset_value. This provides
+    gradient signal at neighboring frames (Rong Gong et al. 2018).
+
+    label_shift_frames: shift all targets earlier by N frames (negative = shift
+    onset labels backward in time). Compensates for median-of-systems delay
+    in consensus labels. Schluter & Böck (2014) validated that models faithfully
+    track label timing shifts.
+
+    early_neighbor_frames + early_neighbor_weight: Asymmetric target shape.
+    Sets frames BEFORE the onset (up to early_neighbor_frames) to a decaying
+    value. Trains the model to prefer early firing (wider acceptance before
+    onset, narrow after). sigma_early > sigma_late effect.
     """
     targets = np.zeros(n_frames, dtype=np.float32)
     for i, t in enumerate(times):
-        frame_idx = round(t * frame_rate)
+        frame_idx = round(t * frame_rate) - label_shift_frames
         if 0 <= frame_idx < n_frames:
             val = float(strengths[i]) if strengths is not None else 1.0
             targets[frame_idx] = max(targets[frame_idx], val)
+
+            # Symmetric neighbor weighting (onset ± 1 frame)
+            if neighbor_weight > 0:
+                nval = val * neighbor_weight
+                if frame_idx > 0:
+                    targets[frame_idx - 1] = max(targets[frame_idx - 1], nval)
+                if frame_idx < n_frames - 1:
+                    targets[frame_idx + 1] = max(targets[frame_idx + 1], nval)
+
+            # Asymmetric early-side weighting: wider acceptance BEFORE onset.
+            # Decaying weight from onset backward: frame-1 gets full early_weight,
+            # frame-2 gets early_weight * 0.5, etc.
+            if early_neighbor_frames > 0 and early_neighbor_weight > 0:
+                for ef in range(1, early_neighbor_frames + 1):
+                    eidx = frame_idx - ef
+                    if eidx >= 0:
+                        decay = early_neighbor_weight * (1.0 - (ef - 1) / early_neighbor_frames)
+                        targets[eidx] = max(targets[eidx], val * decay)
     return targets
 
 
@@ -195,14 +232,28 @@ def make_teacher_targets(beat_times: np.ndarray, n_frames: int, frame_rate: floa
 
 def make_onset_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
                       sigma: float, target_type: str = "gaussian",
-                      strengths: np.ndarray | None = None) -> np.ndarray:
+                      strengths: np.ndarray | None = None,
+                      neighbor_weight: float = 0.0,
+                      label_shift_frames: int = 0,
+                      early_neighbor_frames: int = 0,
+                      early_neighbor_weight: float = 0.0) -> np.ndarray:
     """Create onset activation targets (binary or Gaussian-smoothed).
 
     If target_type is "binary" and strengths is provided, uses per-beat
     strength values as targets instead of 1.0.
+
+    If neighbor_weight > 0, adjacent frames get onset_value × neighbor_weight
+    (Rong Gong et al. 2018 — provides gradient at neighboring frames).
+
+    label_shift_frames: shift targets earlier by N frames (for snappy detection).
+    early_neighbor_frames/weight: asymmetric early-side weighting.
     """
     if target_type == "binary":
-        return _binary_targets(beat_times, n_frames, frame_rate, strengths)
+        return _binary_targets(beat_times, n_frames, frame_rate, strengths,
+                               neighbor_weight=neighbor_weight,
+                               label_shift_frames=label_shift_frames,
+                               early_neighbor_frames=early_neighbor_frames,
+                               early_neighbor_weight=early_neighbor_weight)
     return _gaussian_targets(beat_times, n_frames, frame_rate, sigma)
 
 
@@ -447,13 +498,31 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
     audio_gpu = torch.from_numpy(audio_np).to(device)
 
-    # Load labels — either kick-weighted onset labels or consensus beat labels.
-    # Kick-weighted labels teach the model to fire strongly on kicks and snares
-    # (equally important), and not at all on hi-hats (see generate_kick_weighted_targets.py).
+    # Load labels — onset consensus, kick-weighted, or consensus beat labels.
     labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
     kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
+    onset_consensus_dir = cfg.get("labels", {}).get("onset_consensus_dir", "")
+    neighbor_weight = cfg.get("labels", {}).get("neighbor_weight", 0.0)
+    label_shift_frames = cfg.get("labels", {}).get("label_shift_frames", 0)
+    early_neighbor_frames = cfg.get("labels", {}).get("early_neighbor_frames", 0)
+    early_neighbor_weight = cfg.get("labels", {}).get("early_neighbor_weight", 0.0)
 
-    if labels_type == "instrument" and kick_weighted_dir:
+    if labels_type == "onset_consensus" and onset_consensus_dir:
+        # Multi-system onset consensus labels (5 systems).
+        # These are acoustic onset positions, not metrical beats — directly
+        # matching the onset detection task. Each onset has a strength field
+        # encoding the number of agreeing systems (1/5 to 5/5).
+        onset_path = Path(onset_consensus_dir) / f"{audio_path.stem}.onsets.json"
+        if not onset_path.exists():
+            raise FileNotFoundError(
+                f"Onset consensus labels missing for {audio_path.stem}: {onset_path}\n"
+                f"Run: python scripts/generate_onset_consensus.py"
+            )
+        with open(onset_path) as f:
+            onset_data = json.load(f)
+        beat_times = np.array([o["time"] for o in onset_data["onsets"]])
+        beat_strengths = np.array([o["strength"] for o in onset_data["onsets"]])
+    elif labels_type == "instrument" and kick_weighted_dir:
         # Per-instrument onset targets: 3 channels (kick/snare/hihat).
         # Each channel gets an independent binary target from the kick_weighted
         # label type field. The model learns to classify onset type, and the
@@ -511,7 +580,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         beat_times = np.array([h["time"] for h in hits])
         beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
 
-    downbeat_times = np.array([]) if labels_type in ("kick_weighted", "instrument") else np.array([
+    downbeat_times = np.array([]) if labels_type in ("kick_weighted", "instrument", "onset_consensus") else np.array([
         h["time"] for h in hits if h.get("isDownbeat", False)
     ]) if use_downbeat else np.array([])
 
@@ -635,7 +704,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             else:
                 targets = make_onset_targets(src_beats, n_frames, frame_rate, sigma,
                                             target_type=target_type,
-                                            strengths=src_strengths)
+                                            strengths=src_strengths,
+                                            neighbor_weight=neighbor_weight,
+                                            label_shift_frames=label_shift_frames,
+                                            early_neighbor_frames=early_neighbor_frames,
+                                            early_neighbor_weight=early_neighbor_weight)
 
             result = {
                 "mel": mel,
@@ -675,6 +748,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 }
                 if use_downbeat:
                     cond_result["downbeat_target"] = result["downbeat_target"]
+                if generate_teacher and "teacher" in result:
+                    cond_result["teacher"] = result["teacher"]  # Same beats, different mel
                 results.append(cond_result)
 
     # Stem augmentation: generate additional variants from Demucs-separated stems.
@@ -742,7 +817,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     n_frames = mel.shape[0]
                     targets = make_onset_targets(beat_times, n_frames, frame_rate,
                                                 sigma, target_type=target_type,
-                                                strengths=beat_strengths)
+                                                strengths=beat_strengths,
+                                                neighbor_weight=neighbor_weight,
+                                                label_shift_frames=label_shift_frames,
+                                                early_neighbor_frames=early_neighbor_frames,
+                                                early_neighbor_weight=early_neighbor_weight)
                     stem_result = {
                         "mel": mel,
                         "target": targets,
@@ -753,6 +832,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                         stem_result["downbeat_target"] = make_downbeat_targets(
                             downbeat_times, n_frames, frame_rate, sigma,
                             target_type=target_type)
+                    if generate_teacher:
+                        stem_result["teacher"] = make_teacher_targets(
+                            beat_times, n_frames, frame_rate,
+                            strengths=beat_strengths, sigma=1.5)
                     results.append(stem_result)
 
     return results
@@ -761,9 +844,19 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
                downbeat_target: np.ndarray | None = None,
-               teacher_target: np.ndarray | None = None) -> tuple:
-    """Split mel/target arrays into overlapping fixed-length chunks."""
+               teacher_target: np.ndarray | None = None,
+               use_delta: bool = False) -> tuple:
+    """Split mel/target arrays into overlapping fixed-length chunks.
+
+    If use_delta=True, appends first-order mel differences as additional
+    channels: mel[t] - mel[t-1]. Output shape becomes (N, chunk_frames, 2*n_mels).
+    Delta features explicitly provide spectral flux — the #1 traditional onset
+    detection signal (Rong Gong et al. 2018, Schluter & Bock 2014).
+    """
     n_frames = mel.shape[0]
+
+    if use_delta:
+        mel = append_delta_features(mel)
     has_downbeat = downbeat_target is not None
     has_teacher = teacher_target is not None
 
@@ -824,6 +917,8 @@ def main():
                              "Options: drums, no_vocals, drums_bass (default: drums)")
     parser.add_argument("--teacher", action="store_true",
                         help="Generate consensus-strength-weighted teacher labels (Y_teacher_*.npy) for distillation")
+    parser.add_argument("--delta", action="store_true",
+                        help="Append first-order mel differences as additional input channels (26→52 features)")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
     parser.add_argument("--no-cache", action="store_true",
@@ -987,8 +1082,10 @@ def main():
     train_pairs = pairs_shuffled[n_val_files:]
 
     generate_teacher = getattr(args, 'teacher', False)
+    use_delta = getattr(args, 'delta', False) or cfg.get("features", {}).get("use_delta", False)
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}"
-          f"{' + Teacher labels' if generate_teacher else ''}")
+          f"{' + Teacher labels' if generate_teacher else ''}"
+          f"{' + Delta features' if use_delta else ''}")
     if stems_dir:
         # Count how many tracks have stems available
         stems_found = sum(
@@ -1032,6 +1129,7 @@ def main():
                         r["mel"], r["target"], chunk_frames, chunk_stride,
                         downbeat_target=r.get("downbeat_target"),
                         teacher_target=r.get("teacher"),
+                        use_delta=use_delta,
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)
@@ -1075,9 +1173,13 @@ def main():
             shutil.rmtree(shard_dir)
             continue
 
+        # Detect X feature dimension from first shard (26 for mel, 52 with delta features)
+        x_first = np.load(shard_dir / "X_0.npy", mmap_mode='r')
+        x_features = x_first.shape[2]  # n_mels or n_mels*2 with deltas
+        del x_first
         X_out = np.lib.format.open_memmap(
             str(output_dir / f"X_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=(total, chunk_frames, n_mels))
+            dtype=np.float32, shape=(total, chunk_frames, x_features))
         # Detect Y shape from first shard: 1D (chunk_frames,) or 2D (chunk_frames, channels)
         y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
         y_shape = (total,) + y_first.shape[1:]  # (total, chunk_frames) or (total, chunk_frames, 3)

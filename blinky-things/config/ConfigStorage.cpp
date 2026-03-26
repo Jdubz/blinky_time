@@ -195,7 +195,7 @@ void ConfigStorage::loadSettingsDefaults() {
     //  spectral processing, forward filter, particle filter, HMM, noise estimation, etc.)
 
     // AudioTracker defaults (v74+)
-    data_.tracker.bpmMin = 60.0f;
+    data_.tracker.bpmMin = 15.0f;
     data_.tracker.bpmMax = 200.0f;
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 150;
@@ -572,11 +572,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // AudioTracker params (v74)
     if (tracker) {
         // Validate tracker params
-        validateFloat(data_.tracker.bpmMin, 40.0f, 120.0f, F("tracker.bpmMin"));
+        validateFloat(data_.tracker.bpmMin, 10.0f, 120.0f, F("tracker.bpmMin"));
         validateFloat(data_.tracker.bpmMax, 120.0f, 240.0f, F("tracker.bpmMax"));
         // Cross-field: ensure bpmMin < bpmMax after individual clamping
         if (data_.tracker.bpmMin >= data_.tracker.bpmMax) {
-            data_.tracker.bpmMin = 60.0f;
+            data_.tracker.bpmMin = 15.0f;
             data_.tracker.bpmMax = 200.0f;
             fixedCount++;
         }
@@ -624,7 +624,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->energyMicWeight = data_.tracker.energyMicWeight;
         tracker->energyMelWeight = data_.tracker.energyMelWeight;
         tracker->energyOdfWeight = data_.tracker.energyOdfWeight;
-        tracker->plpActivation = data_.tracker.plpActivation;
+        // plpActivation removed v83 (vestigial since v81 soft blend). Field kept in StoredTrackerParams for binary compat.
         tracker->plpConfAlpha = data_.tracker.plpConfAlpha;
         tracker->plpNovGain = data_.tracker.plpNovGain;
         tracker->plpSignalFloor = data_.tracker.plpSignalFloor;
@@ -745,7 +745,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.energyMicWeight = tracker->energyMicWeight;
         data_.tracker.energyMelWeight = tracker->energyMelWeight;
         data_.tracker.energyOdfWeight = tracker->energyOdfWeight;
-        data_.tracker.plpActivation = tracker->plpActivation;
+        // plpActivation: vestigial field kept for binary compat, not saved from tracker
         data_.tracker.plpConfAlpha = tracker->plpConfAlpha;
         data_.tracker.plpNovGain = tracker->plpNovGain;
         data_.tracker.plpSignalFloor = tracker->plpSignalFloor;

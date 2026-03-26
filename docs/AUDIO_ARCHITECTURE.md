@@ -6,7 +6,7 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 
 **Current Version:** AudioTracker with ACF+PLP architecture + pattern slot cache (v82, March 2026)
 **BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF → period estimate
-**Phase/Pattern:** PLP Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Epoch-fold pattern extraction for visual pattern shape.
+**Phase/Pattern:** PLP Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset). Epoch-fold quality scoring selects period (top-5 diverse candidates, DFT mag × pattern variance). Canonical cosine OLA (Grosche & Mueller 2011, Meier 2024) for plpPulse output. Epoch-fold pattern retained for slot cache digest only.
 **Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 PLP sources. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
@@ -80,13 +80,14 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       +--- [PHASE PATH: PLP → Fourier tempogram → phase + pattern]
            3 sources mean-subtracted: spectral flux, bass energy, NN onset
            Goertzel DFT at candidate frequencies
-           DFT magnitude → period selection (suppresses sub-harmonics)
-           DFT phase → beat alignment (no cross-correlation needed)
-           Epoch-fold pattern → plpPulse (visual pattern shape)
+           Epoch-fold quality scoring: top-5 diverse candidates (min 10% separation)
+             scored by DFT magnitude × pattern variance
+           Canonical cosine OLA → plpPulse (Grosche & Mueller 2011, Meier 2024)
+           Recency-weighted epoch fold (~3-epoch half-life) → pattern digest (slot cache only)
            Confidence = DFT magnitude × signal presence (steep mic level gate)
-           Soft blend: PLP pattern ↔ cosine fallback (continuous, no hard threshold)
+           Soft blend: cosine OLA ↔ cosine fallback (continuous, no hard threshold)
            Cold-start template seeding (8 patterns, cosine similarity > 0.50)
-           Adaptive phase correction (EMA variance: fast during convergence, slow when locked)
+           Silence state reset after 5s (clears all analysis buffers)
                 |
 AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
       |
@@ -199,7 +200,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
-| `bpmMin` | `bpmmin` | 60 | 40-120 | Minimum detectable BPM |
+| `bpmMin` | `bpmmin` | 15 | 10-120 | Minimum period frequency (15 = full-bar at 60 BPM) |
 | `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 

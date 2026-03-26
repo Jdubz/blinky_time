@@ -303,9 +303,9 @@ public:
         // Pulse detection
         float pulseThresholdMult;
         float pulseMinLevel;
-        float pulseOnsetFloor;        // Renamed from pllOnsetFloor (still used in pulse detection)
+        float pulseOnsetFloor;
 
-        // (Percival ACF + comb filter bank removed v80 — rayleighBpm, combFeedback, percivalWeight2/4)
+        // (Percival ACF + comb filter bank removed v80)
 
         // ODF baseline tracking
         float baselineFastDrop;

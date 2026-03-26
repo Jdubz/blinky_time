@@ -962,7 +962,8 @@ def main():
         use_downbeat = cfg["model"].get("downbeat", False)
 
     model_type = cfg["model"].get("type", "causal_cnn")
-    n_mels = cfg["audio"]["n_mels"]
+    use_delta = cfg.get("features", {}).get("use_delta", False)
+    n_mels = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
 
     if model_type == "frame_fc_enhanced":
         # --- Enhanced FC model ---
