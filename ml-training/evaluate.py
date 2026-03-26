@@ -29,6 +29,7 @@ import torch
 
 from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
+    append_delta_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
@@ -224,9 +225,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
 
         # Append delta features if configured
         if cfg.get("features", {}).get("use_delta", False):
-            delta = np.zeros_like(mel)
-            delta[1:] = mel[1:] - mel[:-1]
-            mel = np.concatenate([mel, delta], axis=-1)  # (N, 52)
+            mel = append_delta_features(mel)
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -565,9 +564,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
         mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
 
         if cfg.get("features", {}).get("use_delta", False):
-            delta = np.zeros_like(mel)
-            delta[1:] = mel[1:] - mel[:-1]
-            mel = np.concatenate([mel, delta], axis=-1)
+            mel = append_delta_features(mel)
 
         n_frames = mel.shape[0]
         n_out_ch = model.out_channels

@@ -85,6 +85,7 @@ def _file_rng(seed: int, track_stem: str) -> np.random.Generator:
     return np.random.default_rng(seed ^ track_hash)
 
 from scripts.audio import (
+    append_delta_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
@@ -579,7 +580,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         beat_times = np.array([h["time"] for h in hits])
         beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
 
-    downbeat_times = np.array([]) if labels_type in ("kick_weighted", "instrument") else np.array([
+    downbeat_times = np.array([]) if labels_type in ("kick_weighted", "instrument", "onset_consensus") else np.array([
         h["time"] for h in hits if h.get("isDownbeat", False)
     ]) if use_downbeat else np.array([])
 
@@ -855,9 +856,7 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
     n_frames = mel.shape[0]
 
     if use_delta:
-        delta = np.zeros_like(mel)
-        delta[1:] = mel[1:] - mel[:-1]
-        mel = np.concatenate([mel, delta], axis=-1)  # (n_frames, 2*n_mels)
+        mel = append_delta_features(mel)
     has_downbeat = downbeat_target is not None
     has_teacher = teacher_target is not None
 

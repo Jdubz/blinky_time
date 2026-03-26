@@ -254,3 +254,17 @@ def _deep_merge(base: dict, overrides: dict) -> None:
             _deep_merge(base[key], value)
         else:
             base[key] = value
+
+
+def append_delta_features(mel: np.ndarray) -> np.ndarray:
+    """Append first-order mel differences as additional input channels.
+
+    Input shape: (n_frames, n_mels)
+    Output shape: (n_frames, 2*n_mels)
+
+    Delta features explicitly provide spectral flux -- the #1 traditional onset
+    detection signal (Rong Gong et al. 2018, Schluter & Bock 2014).
+    """
+    delta = np.zeros_like(mel)
+    delta[1:] = mel[1:] - mel[:-1]
+    return np.concatenate([mel, delta], axis=-1)

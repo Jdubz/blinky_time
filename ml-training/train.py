@@ -661,11 +661,11 @@ def main():
     # (Goyal et al. 2017). Prevents overshooting when batch_size/dataset is large.
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     total_steps = epochs * len(train_loader)
-    warmup_steps = 3 * len(train_loader)  # 3 epochs
+    warmup_steps = min(3 * len(train_loader), total_steps // 2)  # 3 epochs, clamped to half total
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps)
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=max(warmup_steps, 1))
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=total_steps - warmup_steps)
+        optimizer, T_max=max(total_steps - warmup_steps, 1))
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
         milestones=[warmup_steps])
@@ -1000,9 +1000,7 @@ def main():
 
         # Replace model weights with SWA average
         torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
-        model.load_state_dict({k.replace('module.', ''): v
-                               for k, v in swa_model.state_dict().items()
-                               if k.startswith('module.')})
+        model.load_state_dict(swa_model.module.state_dict())
         print("  SWA weights applied")
 
     # Save final model

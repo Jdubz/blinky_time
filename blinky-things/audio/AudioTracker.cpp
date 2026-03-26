@@ -164,12 +164,13 @@ const AudioControl& AudioTracker::update(float dt) {
         }
         fluxContrast = clampf(fluxContrast, 0.0f, 1.0f);
 
-        // NN-weighted flux: emphasize consistent rhythmic elements (kicks/snares)
-        // and suppress variable ornamental elements (hi-hats, fills). The NN fires
-        // primarily on kicks and snares (F1=0.716), naturally biasing the epoch-fold
-        // toward the stable rhythmic skeleton. Soft gate preserves some non-NN energy.
+        // NN-gated flux for epoch-fold pattern extraction only. The soft gate
+        // emphasizes kicks/snares (NN F1=0.787) and suppresses hi-hats/fills,
+        // biasing the epoch-fold toward the stable rhythmic skeleton.
+        // The ungated flux goes into ossBuffer_ for ACF/tempogram period detection
+        // (NN-independent, per architecture contract).
         float nnGatedFlux = fluxContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
-        addOssSample(nnGatedFlux);
+        addOssSample(fluxContrast, nnGatedFlux);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;
@@ -207,20 +208,7 @@ const AudioControl& AudioTracker::update(float dt) {
     // Without this, old OSS/bass/NN buffers, pattern, and phase correction
     // state contaminate warm-up on the next track.
     if (nowMs - lastSignificantAudioMs_ > 5000 && ossCount_ > 0) {
-        memset(ossBuffer_, 0, sizeof(ossBuffer_));
-        memset(bassBuffer_, 0, sizeof(bassBuffer_));
-        memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
-        ossWriteIdx_ = 0; ossCount_ = 0;
-        bassWriteIdx_ = 0; bassCount_ = 0;
-        nnWriteIdx_ = 0; nnCount_ = 0;
-        memset(plpPattern_, 0, sizeof(plpPattern_));
-        memset(pulseBuf_, 0, sizeof(pulseBuf_));
-        olaPeakEma_ = 1.0f;
-        odfBaseline_ = 0.0f;
-        odfPeakHold_ = 0.0f;
-        plpConfidence_ = 0.0f;
-        periodicityStrength_ = 0.0f;
-        resetSlots();
+        resetAnalysisState();
     }
 
     // 12. Pattern slot cache: check every bar (4 beats)
@@ -238,11 +226,35 @@ const AudioControl& AudioTracker::update(float dt) {
 }
 
 // ============================================================================
+// State Reset
+// ============================================================================
+
+void AudioTracker::resetAnalysisState() {
+    memset(ossBuffer_, 0, sizeof(ossBuffer_));
+    memset(gatedFluxBuffer_, 0, sizeof(gatedFluxBuffer_));
+    memset(bassBuffer_, 0, sizeof(bassBuffer_));
+    memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
+    ossWriteIdx_ = 0; ossCount_ = 0;
+    bassWriteIdx_ = 0; bassCount_ = 0;
+    nnWriteIdx_ = 0; nnCount_ = 0;
+    memset(plpPattern_, 0, sizeof(plpPattern_));
+    memset(pulseBuf_, 0, sizeof(pulseBuf_));
+    pulseHead_ = 0;
+    olaPeakEma_ = 1.0f;
+    odfBaseline_ = 0.0f;
+    odfPeakHold_ = 0.0f;
+    plpConfidence_ = 0.0f;
+    periodicityStrength_ = 0.0f;
+    resetSlots();
+}
+
+// ============================================================================
 // OSS Buffer
 // ============================================================================
 
-void AudioTracker::addOssSample(float odf) {
-    ossBuffer_[ossWriteIdx_] = odf;
+void AudioTracker::addOssSample(float ungatedFlux, float gatedFlux) {
+    ossBuffer_[ossWriteIdx_] = ungatedFlux;
+    gatedFluxBuffer_[ossWriteIdx_] = gatedFlux;
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
@@ -252,10 +264,13 @@ void AudioTracker::addOssSample(float odf) {
 // ============================================================================
 
 void AudioTracker::runFourierTempogram() {
-    // Linearize all 3 source circular buffers into class members
+    // Linearize all source circular buffers into class members.
+    // ossLinear_ = ungated flux (NN-independent, for tempogram period detection).
+    // gatedFluxLinear_ = NN-gated flux (for epoch-fold pattern extraction only).
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
         ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
+        gatedFluxLinear_[i] = gatedFluxBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
     int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
     for (int i = 0; i < bassCount_; i++) bassLinear_[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
@@ -284,6 +299,13 @@ void AudioTracker::runFourierTempogram() {
         for (int i = 0; i < count; i++) mean += sources[src][i];
         mean /= count;
         for (int i = 0; i < count; i++) sources[src][i] -= mean;
+    }
+    // Also mean-subtract gatedFluxLinear_ for epoch-fold use
+    if (ossCount_ >= 20) {
+        float mean = 0.0f;
+        for (int i = 0; i < ossCount_; i++) mean += gatedFluxLinear_[i];
+        mean /= ossCount_;
+        for (int i = 0; i < ossCount_; i++) gatedFluxLinear_[i] -= mean;
     }
 
     // --- Pass 1: Goertzel DFT scan to find top-N candidates ---
@@ -330,6 +352,13 @@ void AudioTracker::runFourierTempogram() {
             float dftImag = s2 * sinOmega;
             float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
 
+            // Compute DFT phase (done once, used by both insertion paths below).
+            // Phase = unwrapped DFT angle normalized to [0, 1) within the period.
+            float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
+            float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
+            float phase = rawPhase + phaseAdvance;
+            phase -= floorf(phase);
+
             // Insert into top-N if large enough.
             // Enforce minimum 10% period separation to prevent near-duplicate
             // candidates (e.g., lag 32/33/34 from different sources) from
@@ -340,10 +369,6 @@ void AudioTracker::runFourierTempogram() {
                     abs(lag - topCandidates[k].period) <= topCandidates[k].period / 10) {
                     // Near-duplicate: keep the stronger one
                     if (mag > topCandidates[k].mag) {
-                        float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
-                        float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
-                        float phase = rawPhase + phaseAdvance;
-                        phase -= floorf(phase);
                         topCandidates[k] = { mag, phase, lag, src };
                     }
                     tooClose = true;
@@ -356,10 +381,6 @@ void AudioTracker::runFourierTempogram() {
                     if (topCandidates[k].mag < topCandidates[minIdx].mag) minIdx = k;
                 }
                 if (mag > topCandidates[minIdx].mag) {
-                    float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
-                    float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
-                    float phase = rawPhase + phaseAdvance;
-                    phase -= floorf(phase);
                     topCandidates[minIdx] = { mag, phase, lag, src };
                 }
             }
@@ -431,6 +452,7 @@ void AudioTracker::runFourierTempogram() {
     // so old kernels at the wrong frequency don't contaminate the new period.
     if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
         memset(pulseBuf_, 0, sizeof(pulseBuf_));
+        pulseHead_ = 0;
         olaPeakEma_ = 1.0f;
     }
 
@@ -482,7 +504,10 @@ void AudioTracker::updatePlpAnalysis() {
     // Epoch-fold is NOT used for pulse output (cosine OLA handles that).
     // The pattern digest captures the actual rhythmic shape for section detection
     // via the slot cache's cosine similarity matching.
-    const float* sourceBuf = ossLinear_;
+    // Use NN-gated flux (gatedFluxLinear_) for source 0 to emphasize kicks/snares
+    // in the pattern shape. The ungated ossLinear_ is reserved for ACF/tempogram
+    // period detection (NN-independent per architecture contract).
+    const float* sourceBuf = gatedFluxLinear_;
     int sourceCount = ossCount_;
     if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
         sourceBuf = bassLinear_;
@@ -562,15 +587,14 @@ void AudioTracker::updatePlpAnalysis() {
         if (halfWin > PULSE_BUF_LEN / 2 - 1) halfWin = PULSE_BUF_LEN / 2 - 1;
         int winLen = halfWin * 2 + 1;
 
-        // Kernel is centered at position 0 (current frame = buffer position 0).
+        // Kernel is centered at pulseHead_ (current frame in ring buffer).
         // Negative indices address past samples, positive address future predictions.
         // The Hann window tapers both ends smoothly.
         for (int i = -halfWin; i <= halfWin; i++) {
             float w = 0.5f + 0.5f * cosf(TWO_PI_F * static_cast<float>(i) / static_cast<float>(winLen - 1));
             float kernel = w * cosf(TWO_PI_F * (static_cast<float>(i) * omega - plpDftPhase_));
-            int idx = i;  // Relative to current position (0 = now)
+            int idx = (pulseHead_ + i) % PULSE_BUF_LEN;
             if (idx < 0) idx += PULSE_BUF_LEN;
-            if (idx >= PULSE_BUF_LEN) idx -= PULSE_BUF_LEN;
             pulseBuf_[idx] += kernel;
         }
     }
@@ -584,16 +608,18 @@ void AudioTracker::updatePlpAnalysis() {
 }
 
 void AudioTracker::updatePlpPhase() {
-    // --- Roll pulse buffer forward by 1 frame (Meier 2024 real-time PLP) ---
-    // Shift all values left by 1; zero the tail. This advances the "now" cursor
-    // so position 0 always represents the current frame. Old kernel contributions
-    // naturally fall off the left end — no explicit decay needed.
-    memmove(pulseBuf_, pulseBuf_ + 1, (PULSE_BUF_LEN - 1) * sizeof(float));
-    pulseBuf_[PULSE_BUF_LEN - 1] = 0.0f;
+    // --- Advance pulse ring buffer by 1 frame (Meier 2024 real-time PLP) ---
+    // Read current value, then zero and advance head. Ring buffer avoids
+    // the O(N) memmove (~3KB/frame at 62.5Hz) of a linear shift.
+    // Old kernel contributions naturally fall off as head wraps around.
 
-    // --- Read pulse from cosine OLA buffer at position 0 (current frame) ---
+    // --- Read pulse from cosine OLA buffer at head (current frame) ---
     // Half-wave rectify: only positive lobes become pulse peaks (Grosche & Mueller 2011).
-    float rawPulse = fmaxf(pulseBuf_[0], 0.0f);
+    float rawPulse = fmaxf(pulseBuf_[pulseHead_], 0.0f);
+
+    // Zero the slot we just read and advance head
+    pulseBuf_[pulseHead_] = 0.0f;
+    pulseHead_ = (pulseHead_ + 1) % PULSE_BUF_LEN;
 
     // Normalize with slow-tracking peak EMA to keep output in [0, 1].
     // EMA avoids hard peak-hold artifacts. Floor prevents division issues during silence.

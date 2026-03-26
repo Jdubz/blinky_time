@@ -155,14 +155,7 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
                 if t["stem"] == stem:
                     audio_path = Path(t["audio_path"])
                     if audio_path.exists():
-                        content_type = mimetypes.guess_type(str(audio_path))[0] or "audio/mpeg"
-                        self.send_response(200)
-                        self.send_header("Content-Type", content_type)
-                        self.send_header("Content-Length", str(audio_path.stat().st_size))
-                        self.send_header("Accept-Ranges", "bytes")
-                        self.end_headers()
-                        with open(audio_path, "rb") as f:
-                            self.wfile.write(f.read())
+                        self.serve_audio(audio_path)
                         return
             self.send_error(404)
         else:
@@ -217,6 +210,53 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
+
+    def serve_audio(self, audio_path: Path):
+        """Serve audio file with HTTP Range request support for seeking."""
+        file_size = audio_path.stat().st_size
+        content_type = mimetypes.guess_type(str(audio_path))[0] or "audio/mpeg"
+        range_header = self.headers.get("Range")
+
+        if range_header:
+            # Parse Range: bytes=start-end
+            try:
+                range_spec = range_header.replace("bytes=", "")
+                parts = range_spec.split("-")
+                start = int(parts[0]) if parts[0] else 0
+                end = int(parts[1]) if parts[1] else file_size - 1
+            except (ValueError, IndexError):
+                self.send_error(416, "Invalid Range")
+                return
+
+            if start >= file_size or end >= file_size or start > end:
+                self.send_error(416, "Range Not Satisfiable")
+                self.send_header("Content-Range", f"bytes */{file_size}")
+                self.end_headers()
+                return
+
+            content_length = end - start + 1
+            self.send_response(206)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_header("Content-Length", str(content_length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(audio_path, "rb") as f:
+                f.seek(start)
+                self.wfile.write(f.read(content_length))
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(audio_path, "rb") as f:
+                # Stream in 64KB chunks instead of reading entire file into memory
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
 
     def log_message(self, format, *args):
         # Suppress access logs for cleaner output

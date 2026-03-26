@@ -83,8 +83,8 @@
 </div>
 
 <div class="tab-bar">
-  <button class="active" onclick="showTab('viewer')">Viewer</button>
-  <button onclick="showTab('browser')">Track Browser</button>
+  <button class="active" onclick="showTab('viewer', this)">Viewer</button>
+  <button onclick="showTab('browser', this)">Track Browser</button>
 </div>
 
 <div id="tab-viewer" class="tab-content active">
@@ -202,11 +202,11 @@ function togglePlay() { ws.playPause(); }
 
 function setZoom(pxPerSec) { ws.zoom(Number(pxPerSec)); }
 
-function showTab(name) {
+function showTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-bar button').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  event.target.classList.add('active');
+  if (btn) btn.classList.add('active');
   if (name === 'browser') loadTrackList();
 }
 
@@ -247,9 +247,7 @@ function jumpToTrack(stem) {
   if (idx >= 0) {
     currentIndex = idx;
     loadCurrentTrack();
-    showTab('viewer');
-    document.querySelectorAll('.tab-bar button')[0].classList.add('active');
-    document.querySelectorAll('.tab-bar button')[1].classList.remove('active');
+    showTab('viewer', document.querySelectorAll('.tab-bar button')[0]);
   }
 }
 

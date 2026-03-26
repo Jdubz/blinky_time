@@ -157,8 +157,10 @@ private:
     static constexpr int OSS_BUFFER_SIZE = 792;
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
-    float ossBuffer_[OSS_BUFFER_SIZE] = {0};
-    float ossLinear_[OSS_BUFFER_SIZE] = {0};  // Linearized OSS (shared by ACF + PLP)
+    float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF/tempogram)
+    float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
+    float gatedFluxBuffer_[OSS_BUFFER_SIZE] = {0};  // NN-gated flux (for epoch-fold pattern extraction only)
+    float gatedFluxLinear_[OSS_BUFFER_SIZE] = {0};   // Linearized NN-gated flux (for epoch-fold)
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -195,11 +197,13 @@ private:
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
     // === Canonical PLP: cosine OLA pulse buffer (Grosche & Mueller 2011, Meier 2024) ===
-    // Each ACF update adds a Hann-windowed cosine kernel at detected period+phase.
-    // Buffer rolls forward 1 position per frame. Pulse read from current position.
-    // Anti-correlation impossible: cosine kernel peaks where DFT says periodicity is.
+    // Ring buffer with head index. Each ACF update adds a Hann-windowed cosine kernel
+    // at detected period+phase. Head advances 1 position per frame (no memmove).
+    // Pulse read from head position. Anti-correlation impossible: cosine kernel
+    // peaks where DFT says periodicity is.
     static constexpr int PULSE_BUF_LEN = 792;   // 3× MAX_PATTERN_LEN for cosine OLA accumulation
     float pulseBuf_[PULSE_BUF_LEN] = {0};
+    int pulseHead_ = 0;                          // Ring buffer head (current frame position)
     float olaPeakEma_ = 1.0f;                   // Running peak EMA for normalization
 
     // === Pulse detection ===
@@ -236,8 +240,9 @@ private:
     AudioControl control_;
 
     // === Internal methods ===
-    void addOssSample(float odf);
+    void addOssSample(float ungatedFlux, float gatedFlux);
     void addBassSample(float bassEnergy);
+    void resetAnalysisState();
     void runFourierTempogram();
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
