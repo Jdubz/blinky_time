@@ -122,6 +122,13 @@ const AudioControl& AudioTracker::update(float dt) {
         odf = frameOnsetNN_.infer(spectral_.getRawMelBands());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
+
+        // Track raw NN activation peaks (before pulse detection threshold/cooldown).
+        // Record timestamp when activation exceeds previous value (rising edge).
+        if (odf > rawNNActivation_ && odf > 0.3f) {
+            rawNNPeakMs_ = nowMs;
+        }
+        rawNNActivation_ = odf;
     } else if (!nnActive_) {
         // Fallback: use mic level as simple energy ODF
         odf = mic_.getLevel();

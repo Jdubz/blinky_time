@@ -24,6 +24,8 @@ export interface DeviceRunScore {
   };
   transientTracking: {
     f1: number; precision: number; recall: number; count: number;
+    f1_at_50ms?: number; f1_at_70ms?: number; f1_at_100ms?: number; f1_at_150ms?: number;
+    refOnsets?: number;
   };
   musicMode: {
     avgBpm: number; expectedBpm: number;

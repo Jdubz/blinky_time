@@ -168,15 +168,26 @@ export function scoreDeviceRun(
     .map(b => ({ ...b, timestampMs: b.timestampMs - timingOffsetMs }))
     .filter(b => b.timestampMs >= 0);
 
-  // Compute audio latency using robust estimator
+  // Latency compensation: use the histogram-based estimator, but bound it to a
+  // plausible range. The known pipeline delay is ~80-180ms (FFT hop 16ms + NN
+  // causal RF ~64ms + pulse detection ~16ms + serial ~5ms + speaker-to-mic ~3ms).
+  // If the estimator returns a value far outside this range, it's unreliable.
   const audioDurationMs = rawDuration - timingOffsetMs;
   const audioLatencyMs = estimateAudioLatency(detections, gtData.hits, audioDurationMs);
-  // Use 0 offset for beat adjustment when latency estimation fails (insufficient data)
-  const latencyCorrectionMs = audioLatencyMs ?? 0;
+  const PLAUSIBLE_LATENCY_MIN = -50;   // Device can't be faster than physics
+  const PLAUSIBLE_LATENCY_MAX = 300;   // Max reasonable for mic-in-room
+  let latencyCorrectionMs: number;
+  if (audioLatencyMs !== null &&
+      audioLatencyMs >= PLAUSIBLE_LATENCY_MIN &&
+      audioLatencyMs <= PLAUSIBLE_LATENCY_MAX) {
+    latencyCorrectionMs = audioLatencyMs;
+  } else {
+    latencyCorrectionMs = 100;  // Default: typical pipeline delay
+  }
 
   // Beat tracking evaluation
   const audioDurationSec = audioDurationMs / 1000;
-  const BEAT_TOLERANCE_SEC = 0.07;
+  const BEAT_TOLERANCE_SEC = 0.10;   // 100ms for mic-in-room (standard 70ms is for direct audio)
 
   // Reference beats from ground truth
   const refBeats = gtData.hits
@@ -439,6 +450,12 @@ export function scoreDeviceRun(
       precision: Math.round(transientPrecision * 1000) / 1000,
       recall: Math.round(transientRecall * 1000) / 1000,
       count: detections.length,
+      // Multi-tolerance F1: shows timing precision sensitivity
+      f1_at_50ms: Math.round(matchEventsF1(estTransients, refOnsets, 0.050).f1 * 1000) / 1000,
+      f1_at_70ms: Math.round(matchEventsF1(estTransients, refOnsets, 0.070).f1 * 1000) / 1000,
+      f1_at_100ms: Math.round(transientF1 * 1000) / 1000,  // Same as f1 (tolerance is 100ms)
+      f1_at_150ms: Math.round(matchEventsF1(estTransients, refOnsets, 0.150).f1 * 1000) / 1000,
+      refOnsets: refOnsets.length,
     },
     musicMode: {
       avgBpm: Math.round(avgBpm * 10) / 10,

@@ -1447,6 +1447,8 @@ void SerialConsole::streamTick() {
             Serial.print(audio.pulse, 2);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
+            Serial.print(F(",\"nn\":"));
+            Serial.print(audioCtrl_->getRawNNActivation(), 3);
 
             // Debug mode: add diagnostics
             if (streamDebug_) {

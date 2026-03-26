@@ -87,6 +87,10 @@ public:
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
 
+    // Raw NN activation (before pulse detection threshold/cooldown)
+    float getRawNNActivation() const { return rawNNActivation_; }
+    uint32_t getRawNNPeakMs() const { return rawNNPeakMs_; }
+
     // Pattern slot cache (v82)
     int getActiveSlotId() const { return activeSlot_; }
     const struct PatternSlot& getSlot(int i) const { return slots_[i]; }
@@ -203,6 +207,10 @@ private:
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
+
+    // === Raw NN activation tracking (before threshold/cooldown) ===
+    float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
+    uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
 
     // === Onset density ===
     float onsetDensity_ = 0.0f;
