@@ -367,6 +367,15 @@ void SerialConsole::update() {
     streamTick();
 }
 
+void SerialConsole::handleCommand(const char* cmd, Print& output) {
+    // Temporarily redirect output to the specified Print target (e.g., TCP client).
+    // Saves and restores the TeeStream's secondary to avoid permanent state change.
+    Print* savedSecondary = out_.secondary();
+    out_.setSecondary(&output);
+    handleCommand(cmd);
+    out_.setSecondary(savedSecondary);
+}
+
 void SerialConsole::handleCommand(const char* cmd) {
     // (handleEnsembleCommand dispatch removed v67 — BandFlux pipeline removed)
 

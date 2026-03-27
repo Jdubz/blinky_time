@@ -61,6 +61,7 @@
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   #include "comms/BleAdvertiser.h"
   #include "comms/WifiManager.h"
+  #include "comms/WifiCommandServer.h"
 #endif
 
 // Testing (for development/debugging)

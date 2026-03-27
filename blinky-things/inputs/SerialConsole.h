@@ -205,6 +205,8 @@ public:
 
     /// Process a command line (from USB serial, BLE NUS, or BLE broadcast).
     void handleCommand(const char* cmd);
+    /// Process a command and route response to a specific output (e.g., TCP client).
+    void handleCommand(const char* cmd, Print& output);
 
 private:
     // Friend declaration for parameter change callback

@@ -81,6 +81,7 @@ BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fl
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
 WifiManager wifiManager;           // WiFi credential storage and connection
+WifiCommandServer tcpServer;       // TCP command server for wireless fleet management
 #endif
 
 uint32_t lastMs = 0;
@@ -373,8 +374,10 @@ void setup() {
   // bleAdvertiser.begin();
   // console->setBleAdvertiser(&bleAdvertiser);
   wifiManager.begin();
+  tcpServer.setConsole(console);
+  tcpServer.begin();  // Starts listening when WiFi is connected (deferred if not yet)
   console->setWifiManager(&wifiManager);
-  SerialConsole::logDebug(F("WiFi manager initialized (BLE disabled — NimBLE core 3.3.7 bug)"));
+  SerialConsole::logDebug(F("WiFi + TCP server initialized (BLE disabled — NimBLE core 3.3.7 bug)"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
@@ -480,10 +483,12 @@ void loop() {
     console->update();
   }
 
-  // Process BLE data (nRF52840 only)
+  // Process wireless data
 #ifdef BLINKY_PLATFORM_NRF52840
   bleNus.update();       // NUS peripheral (serial-over-BLE)
   bleScanner.update();   // Fleet broadcast receiver
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  tcpServer.update();    // WiFi TCP command server
 #endif
 
   // Battery monitoring - periodic voltage check
