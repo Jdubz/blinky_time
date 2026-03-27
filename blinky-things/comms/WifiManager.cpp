@@ -83,6 +83,9 @@ bool WifiManager::connect() {
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
+        // Disable WiFi power management — prevents the radio from sleeping
+        // and dropping TCP connections during idle periods.
+        WiFi.setSleep(false);
         Serial.print(F("[WiFi] Connected! IP: "));
         Serial.print(WiFi.localIP());
         Serial.print(F(" RSSI: "));
