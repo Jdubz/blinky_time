@@ -12,6 +12,13 @@
 #include "../render/RenderPipeline.h"
 #include "../effects/HueRotationEffect.h"
 #include <ArduinoJson.h>  // v28: JSON parsing for device config upload
+#ifdef BLINKY_PLATFORM_NRF52840
+#include "../comms/BleScanner.h"
+#include "../comms/BleNus.h"
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+#include "../comms/BleAdvertiser.h"
+#include "../comms/WifiManager.h"
+#endif
 
 extern DeviceConfig config;  // v28: Changed to non-const for runtime loading
 
@@ -67,12 +74,27 @@ SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
     }
 }
 
+#ifdef BLINKY_PLATFORM_NRF52840
+void SerialConsole::setBleNus(BleNus* nus) {
+    bleNus_ = nus;
+    if (nus) {
+        // Tee output to both USB Serial and BLE NUS
+        out_.setSecondary(nus);  // BleNus is-a Print (writes to paced ring buffer)
+        settings_.setOutput(&out_);
+    } else {
+        out_.setSecondary(nullptr);
+        settings_.setOutput(&out_);
+    }
+}
+#endif
+
 void SerialConsole::begin() {
     // Note: Serial.begin() should be called by main setup() before this
+    settings_.setOutput(&out_);  // Route settings output through our tee
     settings_.begin();
     registerSettings();
 
-    Serial.println(F("Serial console ready."));
+    out_.println(F("Serial console ready."));
 }
 
 void SerialConsole::registerSettings() {
@@ -367,15 +389,15 @@ void SerialConsole::handleCommand(const char* cmd) {
         return;
     }
 
-    Serial.println(F("Unknown command. Try 'settings' for help."));
+    out_.println(F("Unknown command. Try 'settings' for help."));
 }
 
 bool SerialConsole::handleSpecialCommand(const char* cmd) {
     // Assert error counter
     if (strcmp(cmd, "show errors") == 0) {
-        Serial.print(F("{\"assertFails\":"));
-        Serial.print(BlinkyAssert::failCount);
-        Serial.println(F("}"));
+        out_.print(F("{\"assertFails\":"));
+        out_.print(BlinkyAssert::failCount);
+        out_.println(F("}"));
         return true;
     }
 
@@ -396,6 +418,8 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleLogCommand(cmd)) return true;
     if (handleDebugCommand(cmd)) return true;     // Debug channel commands
     if (handleFakeAudioCommand(cmd)) return true; // Fake audio for visual debug
+    if (handleBleCommand(cmd)) return true;       // BLE diagnostics
+    if (handleWifiCommand(cmd)) return true;      // WiFi config (ESP32-S3)
     return false;
 }
 
@@ -415,56 +439,56 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "json info") == 0) {
-        Serial.print(F("{\"version\":\""));
-        Serial.print(F(BLINKY_VERSION_STRING));
-        Serial.print(F("\""));
+        out_.print(F("{\"version\":\""));
+        out_.print(F(BLINKY_VERSION_STRING));
+        out_.print(F("\""));
 
         // Device configuration status (v28+)
         if (configStorage_ && configStorage_->isDeviceConfigValid()) {
             const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();
-            Serial.print(F(",\"device\":{\"id\":\""));
-            Serial.print(cfg.deviceId);
-            Serial.print(F("\",\"name\":\""));
-            Serial.print(cfg.deviceName);
-            Serial.print(F("\",\"width\":"));
-            Serial.print(cfg.ledWidth);
-            Serial.print(F(",\"height\":"));
-            Serial.print(cfg.ledHeight);
-            Serial.print(F(",\"leds\":"));
-            Serial.print(cfg.ledWidth * cfg.ledHeight);
-            Serial.print(F(",\"configured\":true}"));
+            out_.print(F(",\"device\":{\"id\":\""));
+            out_.print(cfg.deviceId);
+            out_.print(F("\",\"name\":\""));
+            out_.print(cfg.deviceName);
+            out_.print(F("\",\"width\":"));
+            out_.print(cfg.ledWidth);
+            out_.print(F(",\"height\":"));
+            out_.print(cfg.ledHeight);
+            out_.print(F(",\"leds\":"));
+            out_.print(cfg.ledWidth * cfg.ledHeight);
+            out_.print(F(",\"configured\":true}"));
         } else {
-            Serial.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
+            out_.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
         }
 
-        Serial.println(F("}"));
+        out_.println(F("}"));
         return true;
     }
 
     if (strcmp(cmd, "json state") == 0) {
         if (!pipeline_) {
-            Serial.println(F("{\"error\":\"Pipeline not available\"}"));
+            out_.println(F("{\"error\":\"Pipeline not available\"}"));
             return true;
         }
-        Serial.print(F("{\"generator\":\""));
-        Serial.print(pipeline_->getGeneratorName());
-        Serial.print(F("\",\"effect\":\""));
-        Serial.print(pipeline_->getEffectName());
-        Serial.print(F("\",\"generators\":["));
+        out_.print(F("{\"generator\":\""));
+        out_.print(pipeline_->getGeneratorName());
+        out_.print(F("\",\"effect\":\""));
+        out_.print(pipeline_->getEffectName());
+        out_.print(F("\",\"generators\":["));
         for (int i = 0; i < RenderPipeline::NUM_GENERATORS; i++) {
-            if (i > 0) Serial.print(',');
-            Serial.print('"');
-            Serial.print(RenderPipeline::getGeneratorNameByIndex(i));
-            Serial.print('"');
+            if (i > 0) out_.print(',');
+            out_.print('"');
+            out_.print(RenderPipeline::getGeneratorNameByIndex(i));
+            out_.print('"');
         }
-        Serial.print(F("],\"effects\":["));
+        out_.print(F("],\"effects\":["));
         for (int i = 0; i < RenderPipeline::NUM_EFFECTS; i++) {
-            if (i > 0) Serial.print(',');
-            Serial.print('"');
-            Serial.print(RenderPipeline::getEffectNameByIndex(i));
-            Serial.print('"');
+            if (i > 0) out_.print(',');
+            out_.print('"');
+            out_.print(RenderPipeline::getEffectNameByIndex(i));
+            out_.print('"');
         }
-        Serial.println(F("]}"));
+        out_.println(F("]}"));
         return true;
     }
 
@@ -475,20 +499,20 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
 bool SerialConsole::handleBatteryCommand(const char* cmd) {
     if (strcmp(cmd, "battery debug") == 0 || strcmp(cmd, "batt debug") == 0) {
         if (battery_) {
-            Serial.println(F("=== Battery Debug Info ==="));
-            Serial.print(F("Connected: "));
-            Serial.println(battery_->isBatteryConnected() ? F("Yes") : F("No"));
-            Serial.print(F("Voltage: "));
-            Serial.print(battery_->getVoltage(), 3);
-            Serial.println(F("V"));
-            Serial.print(F("Percent: "));
-            Serial.print(battery_->getPercent());
-            Serial.println(F("%"));
-            Serial.print(F("Charging: "));
-            Serial.println(battery_->isCharging() ? F("Yes") : F("No"));
-            Serial.println(F("(Use 'battery raw' for detailed ADC values)"));
+            out_.println(F("=== Battery Debug Info ==="));
+            out_.print(F("Connected: "));
+            out_.println(battery_->isBatteryConnected() ? F("Yes") : F("No"));
+            out_.print(F("Voltage: "));
+            out_.print(battery_->getVoltage(), 3);
+            out_.println(F("V"));
+            out_.print(F("Percent: "));
+            out_.print(battery_->getPercent());
+            out_.println(F("%"));
+            out_.print(F("Charging: "));
+            out_.println(battery_->isCharging() ? F("Yes") : F("No"));
+            out_.println(F("(Use 'battery raw' for detailed ADC values)"));
         } else {
-            Serial.println(F("Battery monitor not available"));
+            out_.println(F("Battery monitor not available"));
         }
         return true;
     }
@@ -500,18 +524,18 @@ bool SerialConsole::handleBatteryCommand(const char* cmd) {
             bool charging = battery_->isCharging();
             bool connected = battery_->isBatteryConnected();
 
-            Serial.print(F("{\"battery\":{"));
-            Serial.print(F("\"voltage\":"));
-            Serial.print(voltage, 2);
-            Serial.print(F(",\"percent\":"));
-            Serial.print(percent);
-            Serial.print(F(",\"charging\":"));
-            Serial.print(charging ? F("true") : F("false"));
-            Serial.print(F(",\"connected\":"));
-            Serial.print(connected ? F("true") : F("false"));
-            Serial.println(F("}}"));
+            out_.print(F("{\"battery\":{"));
+            out_.print(F("\"voltage\":"));
+            out_.print(voltage, 2);
+            out_.print(F(",\"percent\":"));
+            out_.print(percent);
+            out_.print(F(",\"charging\":"));
+            out_.print(charging ? F("true") : F("false"));
+            out_.print(F(",\"connected\":"));
+            out_.print(connected ? F("true") : F("false"));
+            out_.println(F("}}"));
         } else {
-            Serial.println(F("{\"error\":\"Battery monitor not available\"}"));
+            out_.println(F("{\"error\":\"Battery monitor not available\"}"));
         }
         return true;
     }
@@ -523,21 +547,21 @@ bool SerialConsole::handleBatteryCommand(const char* cmd) {
 bool SerialConsole::handleStreamCommand(const char* cmd) {
     if (strcmp(cmd, "stream on") == 0) {
         streamEnabled_ = true;
-        Serial.println(F("OK"));
+        out_.println(F("OK"));
         return true;
     }
 
     if (strcmp(cmd, "stream off") == 0) {
         streamEnabled_ = false;
         streamNN_ = false;
-        Serial.println(F("OK"));
+        out_.println(F("OK"));
         return true;
     }
 
     if (strcmp(cmd, "stream debug") == 0) {
         streamEnabled_ = true;
         streamDebug_ = true;
-        Serial.println(F("OK debug"));
+        out_.println(F("OK debug"));
         return true;
     }
 
@@ -545,7 +569,7 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
         streamDebug_ = false;
         streamFast_ = false;
         streamNN_ = false;
-        Serial.println(F("OK normal"));
+        out_.println(F("OK normal"));
         return true;
     }
 
@@ -553,14 +577,14 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
         streamEnabled_ = false;  // Disable timer-based stream to avoid TX overflow
         streamNN_ = true;        // NN stream fires independently on isFrameReady()
         streamFast_ = false;
-        Serial.println(F("OK nn"));
+        out_.println(F("OK nn"));
         return true;
     }
 
     if (strcmp(cmd, "stream fast") == 0) {
         streamEnabled_ = true;
         streamFast_ = true;
-        Serial.println(F("OK fast"));
+        out_.println(F("OK fast"));
         return true;
     }
 
@@ -580,37 +604,37 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
     if (strcmp(cmd, "music") == 0 || strcmp(cmd, "rhythm") == 0 || strcmp(cmd, "audio") == 0) {
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
-            Serial.println(F("=== Audio Controller Status ==="));
-            Serial.print(F("Rhythm Active: "));
-            Serial.println(audio.rhythmStrength > audioCtrl_->activationThreshold ? F("YES") : F("NO"));
-            Serial.print(F("BPM: "));
-            Serial.println(audioCtrl_->getCurrentBpm(), 1);
-            Serial.print(F("Phase: "));
-            Serial.println(audio.phase, 2);
-            Serial.print(F("Rhythm Strength: "));
-            Serial.println(audio.rhythmStrength, 2);
-            Serial.print(F("Periodicity: "));
-            Serial.println(audioCtrl_->getPeriodicityStrength(), 2);
-            Serial.print(F("Energy: "));
-            Serial.println(audio.energy, 2);
-            Serial.print(F("Pulse: "));
-            Serial.println(audio.pulse, 2);
-            Serial.print(F("Onset Density: "));
-            Serial.print(audio.onsetDensity, 1);
-            Serial.println(F(" /s"));
-            Serial.print(F("BPM Range: "));
-            Serial.print(audioCtrl_->getBpmMin(), 0);
-            Serial.print(F("-"));
-            Serial.println(audioCtrl_->getBpmMax(), 0);
+            out_.println(F("=== Audio Controller Status ==="));
+            out_.print(F("Rhythm Active: "));
+            out_.println(audio.rhythmStrength > audioCtrl_->activationThreshold ? F("YES") : F("NO"));
+            out_.print(F("BPM: "));
+            out_.println(audioCtrl_->getCurrentBpm(), 1);
+            out_.print(F("Phase: "));
+            out_.println(audio.phase, 2);
+            out_.print(F("Rhythm Strength: "));
+            out_.println(audio.rhythmStrength, 2);
+            out_.print(F("Periodicity: "));
+            out_.println(audioCtrl_->getPeriodicityStrength(), 2);
+            out_.print(F("Energy: "));
+            out_.println(audio.energy, 2);
+            out_.print(F("Pulse: "));
+            out_.println(audio.pulse, 2);
+            out_.print(F("Onset Density: "));
+            out_.print(audio.onsetDensity, 1);
+            out_.println(F(" /s"));
+            out_.print(F("BPM Range: "));
+            out_.print(audioCtrl_->getBpmMin(), 0);
+            out_.print(F("-"));
+            out_.println(audioCtrl_->getBpmMax(), 0);
 
             // Advanced metrics
-            Serial.println(F("--- Advanced Metrics ---"));
-            Serial.print(F("Periodicity: "));
-            Serial.println(audioCtrl_->getPeriodicityStrength(), 2);
-            Serial.print(F("PLP Confidence: "));
-            Serial.println(audioCtrl_->getPlpConfidence(), 4);
+            out_.println(F("--- Advanced Metrics ---"));
+            out_.print(F("Periodicity: "));
+            out_.println(audioCtrl_->getPeriodicityStrength(), 2);
+            out_.print(F("PLP Confidence: "));
+            out_.println(audioCtrl_->getPlpConfidence(), 4);
         } else {
-            Serial.println(F("Audio controller not available"));
+            out_.println(F("Audio controller not available"));
         }
         return true;
     }
@@ -621,24 +645,24 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
 // === DETECTION MODE STATUS ===
 bool SerialConsole::handleModeCommand(const char* cmd) {
     if (strcmp(cmd, "mode") == 0) {
-        Serial.println(F("=== Audio Detection Status ==="));
+        out_.println(F("=== Audio Detection Status ==="));
         if (audioCtrl_) {
-            Serial.print(F("Pulse Strength: "));
-            Serial.println(audioCtrl_->getLastPulseStrength(), 3);
-            Serial.print(F("BPM: "));
-            Serial.println(audioCtrl_->getCurrentBpm(), 1);
-            Serial.print(F("Rhythm Strength: "));
-            Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
-            Serial.print(F("Beat Count: "));
-            Serial.println(audioCtrl_->getBeatCount());
+            out_.print(F("Pulse Strength: "));
+            out_.println(audioCtrl_->getLastPulseStrength(), 3);
+            out_.print(F("BPM: "));
+            out_.println(audioCtrl_->getCurrentBpm(), 1);
+            out_.print(F("Rhythm Strength: "));
+            out_.println(audioCtrl_->getPeriodicityStrength(), 3);
+            out_.print(F("Beat Count: "));
+            out_.println(audioCtrl_->getBeatCount());
         } else {
-            Serial.println(F("Audio controller not available"));
+            out_.println(F("Audio controller not available"));
         }
         if (mic_) {
-            Serial.print(F("Audio Level: "));
-            Serial.println(mic_->getLevel(), 3);
-            Serial.print(F("Hardware Gain: "));
-            Serial.println(mic_->getHwGain());
+            out_.print(F("Audio Level: "));
+            out_.println(mic_->getLevel(), 3);
+            out_.print(F("Hardware Gain: "));
+            out_.println(mic_->getHwGain());
         }
         return true;
     }
@@ -657,9 +681,9 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 *mic_,
                 audioCtrl_
             );
-            Serial.println(F("OK"));
+            out_.println(F("OK"));
         } else {
-            Serial.println(F("ERROR"));
+            out_.println(F("ERROR"));
         }
         return true;
     }
@@ -673,9 +697,9 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 *mic_,
                 audioCtrl_
             );
-            Serial.println(F("OK"));
+            out_.println(F("OK"));
         } else {
-            Serial.println(F("ERROR"));
+            out_.println(F("ERROR"));
         }
         return true;
     }
@@ -683,7 +707,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     if (strcmp(cmd, "defaults") == 0) {
         restoreDefaults();
 
-        Serial.println(F("OK"));
+        out_.println(F("OK"));
         return true;
     }
 
@@ -691,15 +715,15 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         if (configStorage_) {
             configStorage_->factoryReset();
             restoreDefaults();
-            Serial.println(F("OK"));
+            out_.println(F("OK"));
         } else {
-            Serial.println(F("ERROR"));
+            out_.println(F("ERROR"));
         }
         return true;
     }
 
     if (strcmp(cmd, "reboot") == 0) {
-        Serial.println(F("Rebooting..."));
+        out_.println(F("Rebooting..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
 #ifdef BLINKY_PLATFORM_NRF52840
@@ -713,7 +737,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
 
     if (strcmp(cmd, "bootloader") == 0) {
 #ifdef BLINKY_PLATFORM_NRF52840
-        Serial.println(F("Entering UF2 bootloader..."));
+        out_.println(F("Entering UF2 bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
         // Set GPREGRET magic byte so the UF2 bootloader is entered on reset.
@@ -741,7 +765,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         }
         NVIC_SystemReset();
 #else
-        Serial.println(F("UF2 bootloader not available on this platform"));
+        out_.println(F("UF2 bootloader not available on this platform"));
 #endif
         return true;
     }
@@ -761,21 +785,21 @@ bool SerialConsole::handleDeviceConfigCommand(const char* cmd) {
         return true;
     }
 
-    Serial.println(F("Device configuration commands:"));
-    Serial.println(F("  device show          - Display current device config"));
-    Serial.println(F("  device upload <JSON> - Upload device config from JSON"));
-    Serial.println(F("\nExample JSON at: devices/registry/README.md"));
+    out_.println(F("Device configuration commands:"));
+    out_.println(F("  device show          - Display current device config"));
+    out_.println(F("  device upload <JSON> - Upload device config from JSON"));
+    out_.println(F("\nExample JSON at: devices/registry/README.md"));
     return false;
 }
 
 void SerialConsole::showDeviceConfig() {
     if (!configStorage_) {
-        Serial.println(F("{\"error\":\"ConfigStorage not available\"}"));
+        out_.println(F("{\"error\":\"ConfigStorage not available\"}"));
         return;
     }
 
     if (!configStorage_->isDeviceConfigValid()) {
-        Serial.println(F("{\"error\":\"No device config\",\"status\":\"unconfigured\",\"safeMode\":true}"));
+        out_.println(F("{\"error\":\"No device config\",\"status\":\"unconfigured\",\"safeMode\":true}"));
         return;
     }
 
@@ -824,12 +848,12 @@ void SerialConsole::showDeviceConfig() {
 
     // Serialize with pretty printing for readability
     serializeJsonPretty(doc, Serial);
-    Serial.println();
+    out_.println();
 }
 
 void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     if (!configStorage_) {
-        Serial.println(F("ERROR: ConfigStorage not available"));
+        out_.println(F("ERROR: ConfigStorage not available"));
         return;
     }
 
@@ -838,9 +862,9 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     DeserializationError error = deserializeJson(doc, jsonStr);
 
     if (error) {
-        Serial.print(F("ERROR: JSON parse failed - "));
-        Serial.println(error.c_str());
-        Serial.println(F("Example: device upload {\"deviceId\":\"hat_v1\",\"ledWidth\":89,...}"));
+        out_.print(F("ERROR: JSON parse failed - "));
+        out_.println(error.c_str());
+        out_.println(F("Example: device upload {\"deviceId\":\"hat_v1\",\"ledWidth\":89,...}"));
         return;
     }
 
@@ -890,8 +914,8 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
 
     // Validate configuration
     if (!DeviceConfigLoader::validate(newConfig)) {
-        Serial.println(F("ERROR: Device config validation failed"));
-        Serial.println(F("Check LED count, pin numbers, and voltage ranges"));
+        out_.println(F("ERROR: Device config validation failed"));
+        out_.println(F("Check LED count, pin numbers, and voltage ranges"));
         return;
     }
 
@@ -923,17 +947,17 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             *mic_
         );
     } else {
-        Serial.println(F("ERROR: Cannot save config - mic not initialized"));
+        out_.println(F("ERROR: Cannot save config - mic not initialized"));
         return;
     }
 
-    Serial.println(F("✓ Device config saved to flash"));
-    Serial.print(F("Device: "));
-    Serial.print(newConfig.deviceName);
-    Serial.print(F(" ("));
-    Serial.print(newConfig.ledWidth * newConfig.ledHeight);
-    Serial.println(F(" LEDs)"));
-    Serial.println(F("\n**REBOOT DEVICE TO APPLY CONFIGURATION**"));
+    out_.println(F("✓ Device config saved to flash"));
+    out_.print(F("Device: "));
+    out_.print(newConfig.deviceName);
+    out_.print(F(" ("));
+    out_.print(newConfig.ledWidth * newConfig.ledHeight);
+    out_.println(F(" LEDs)"));
+    out_.println(F("\n**REBOOT DEVICE TO APPLY CONFIGURATION**"));
 }
 
 void SerialConsole::restoreDefaults() {
@@ -1014,14 +1038,14 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
 
     // "gen list" - list available generators
     if (strcmp(cmd, "gen list") == 0 || strcmp(cmd, "gen") == 0) {
-        Serial.println(F("Available generators:"));
+        out_.println(F("Available generators:"));
         for (int i = 0; i < RenderPipeline::NUM_GENERATORS; i++) {
             const char* name = RenderPipeline::getGeneratorNameByIndex(i);
             bool active = (RenderPipeline::getGeneratorTypeByIndex(i) == pipeline_->getGeneratorType());
-            Serial.print(F("  "));
-            Serial.print(name);
-            if (active) Serial.print(F(" (active)"));
-            Serial.println();
+            out_.print(F("  "));
+            out_.print(name);
+            if (active) out_.print(F(" (active)"));
+            out_.println();
         }
         return true;
     }
@@ -1053,15 +1077,15 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
 
         if (found) {
             if (pipeline_->setGenerator(type)) {
-                Serial.print(F("OK switched to "));
-                Serial.println(pipeline_->getGeneratorName());
+                out_.print(F("OK switched to "));
+                out_.println(pipeline_->getGeneratorName());
             } else {
-                Serial.println(F("ERROR: Failed to switch generator"));
+                out_.println(F("ERROR: Failed to switch generator"));
             }
         } else {
-            Serial.print(F("Unknown generator: "));
-            Serial.println(name);
-            Serial.println(F("Use: fire, water, lightning, audio"));
+            out_.print(F("Unknown generator: "));
+            out_.println(name);
+            out_.println(F("Use: fire, water, lightning, audio"));
         }
         return true;
     }
@@ -1075,14 +1099,14 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
 
     // "effect list" - list available effects
     if (strcmp(cmd, "effect list") == 0 || strcmp(cmd, "effect") == 0) {
-        Serial.println(F("Available effects:"));
+        out_.println(F("Available effects:"));
         for (int i = 0; i < RenderPipeline::NUM_EFFECTS; i++) {
             const char* name = RenderPipeline::getEffectNameByIndex(i);
             bool active = (RenderPipeline::getEffectTypeByIndex(i) == pipeline_->getEffectType());
-            Serial.print(F("  "));
-            Serial.print(name);
-            if (active) Serial.print(F(" (active)"));
-            Serial.println();
+            out_.print(F("  "));
+            out_.print(name);
+            if (active) out_.print(F(" (active)"));
+            out_.println();
         }
         return true;
     }
@@ -1105,15 +1129,15 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
 
         if (found) {
             if (pipeline_->setEffect(type)) {
-                Serial.print(F("OK effect: "));
-                Serial.println(pipeline_->getEffectName());
+                out_.print(F("OK effect: "));
+                out_.println(pipeline_->getEffectName());
             } else {
-                Serial.println(F("ERROR: Failed to set effect"));
+                out_.println(F("ERROR: Failed to set effect"));
             }
         } else {
-            Serial.print(F("Unknown effect: "));
-            Serial.println(name);
-            Serial.println(F("Use: none, hue"));
+            out_.print(F("Unknown effect: "));
+            out_.println(name);
+            out_.println(F("Use: none, hue"));
         }
         return true;
     }
@@ -1306,32 +1330,32 @@ void SerialConsole::streamTick() {
             lastNNFrameCount_ = fc;
             const float* mel = spectral.getRawMelBands();
 
-            Serial.print(F("{\"type\":\"NN\",\"ts\":"));
-            Serial.print(now);
-            Serial.print(F(",\"mel\":["));
+            out_.print(F("{\"type\":\"NN\",\"ts\":"));
+            out_.print(now);
+            out_.print(F(",\"mel\":["));
             for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
-                if (i > 0) Serial.print(',');
-                Serial.print(mel[i], 4);
+                if (i > 0) out_.print(',');
+                out_.print(mel[i], 4);
             }
             // onset = last pulse strength (NN activation or mic level fallback)
-            Serial.print(F("],\"onset\":"));
-            Serial.print(audioCtrl_->getLastOnsetStrength(), 4);
+            out_.print(F("],\"onset\":"));
+            out_.print(audioCtrl_->getLastOnsetStrength(), 4);
             // Note (v65): "nn" field is now always present in both NN and non-NN builds.
             // Previously it was ifdef-guarded; non-NN builds emitted "nn":0 via #else.
             // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
-            Serial.print(F(",\"nn\":"));
-            Serial.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
-            Serial.print(F(",\"bpm\":"));
-            Serial.print(audioCtrl_->getCurrentBpm(), 1);
-            Serial.print(F(",\"phase\":"));
-            Serial.print(audioCtrl_->getControl().phase, 4);
-            Serial.print(F(",\"rstr\":"));
-            Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
-            Serial.print(F(",\"lvl\":"));
-            Serial.print(mic_->getLevel(), 3);
-            Serial.print(F(",\"gain\":"));
-            Serial.print(mic_->getHwGain());
-            Serial.println(F("}"));
+            out_.print(F(",\"nn\":"));
+            out_.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
+            out_.print(F(",\"bpm\":"));
+            out_.print(audioCtrl_->getCurrentBpm(), 1);
+            out_.print(F(",\"phase\":"));
+            out_.print(audioCtrl_->getControl().phase, 4);
+            out_.print(F(",\"rstr\":"));
+            out_.print(audioCtrl_->getControl().rhythmStrength, 3);
+            out_.print(F(",\"lvl\":"));
+            out_.print(mic_->getLevel(), 3);
+            out_.print(F(",\"gain\":"));
+            out_.print(mic_->getHwGain());
+            out_.println(F("}"));
         }
     }
 
@@ -1339,16 +1363,16 @@ void SerialConsole::streamTick() {
     static uint32_t lastStatusMs = 0;
     if (mic_ && (now - lastStatusMs >= 1000)) {
         lastStatusMs = now;
-        Serial.print(F("{\"type\":\"STATUS\",\"ts\":"));
-        Serial.print(now);
-        Serial.print(F(",\"mode\":\"ensemble\""));
-        Serial.print(F(",\"hwGain\":"));
-        Serial.print(mic_->getHwGain());
-        Serial.print(F(",\"level\":"));
-        Serial.print(mic_->getLevel(), 2);
-        Serial.print(F(",\"peakLevel\":"));
-        Serial.print(mic_->getPeakLevel(), 2);
-        Serial.println(F("}"));
+        out_.print(F("{\"type\":\"STATUS\",\"ts\":"));
+        out_.print(now);
+        out_.print(F(",\"mode\":\"ensemble\""));
+        out_.print(F(",\"hwGain\":"));
+        out_.print(mic_->getHwGain());
+        out_.print(F(",\"level\":"));
+        out_.print(mic_->getLevel(), 2);
+        out_.print(F(",\"peakLevel\":"));
+        out_.print(mic_->getPeakLevel(), 2);
+        out_.println(F("}"));
     }
 
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
@@ -1373,41 +1397,41 @@ void SerialConsole::streamTick() {
         // Debug mode additional fields:
         // agree → detector agreement : 0-7 (how many detectors fired)
         // conf  → ensemble confidence: 0-1 (combined confidence score)
-        Serial.print(F("{\"a\":{\"l\":"));
-        Serial.print(mic_->getLevel(), 2);
-        Serial.print(F(",\"t\":"));
+        out_.print(F("{\"a\":{\"l\":"));
+        out_.print(mic_->getLevel(), 2);
+        out_.print(F(",\"t\":"));
         // Pulse strength from ODF-derived pulse detection (v67)
         float transient = 0.0f;
         if (audioCtrl_) {
             transient = audioCtrl_->getLastPulseStrength();
         }
-        Serial.print(transient, 2);
-        Serial.print(F(",\"pk\":"));
-        Serial.print(mic_->getPeakLevel(), 2);
-        Serial.print(F(",\"vl\":"));
-        Serial.print(mic_->getValleyLevel(), 2);
-        Serial.print(F(",\"raw\":"));
-        Serial.print(mic_->getRawLevel(), 2);
-        Serial.print(F(",\"h\":"));
-        Serial.print(mic_->getHwGain());
-        Serial.print(F(",\"alive\":"));
-        Serial.print(mic_->isPdmAlive() ? 1 : 0);
+        out_.print(transient, 2);
+        out_.print(F(",\"pk\":"));
+        out_.print(mic_->getPeakLevel(), 2);
+        out_.print(F(",\"vl\":"));
+        out_.print(mic_->getValleyLevel(), 2);
+        out_.print(F(",\"raw\":"));
+        out_.print(mic_->getRawLevel(), 2);
+        out_.print(F(",\"h\":"));
+        out_.print(mic_->getHwGain());
+        out_.print(F(",\"alive\":"));
+        out_.print(mic_->isPdmAlive() ? 1 : 0);
 
         // Debug mode: add pulse and spectral state
         // (BandFlux per-band flux fields removed v67 — BandFlux pipeline removed)
         if (streamDebug_ && audioCtrl_) {
-            Serial.print(F(",\"pulse\":"));
-            Serial.print(audioCtrl_->getLastPulseStrength(), 3);
+            out_.print(F(",\"pulse\":"));
+            out_.print(audioCtrl_->getLastPulseStrength(), 3);
 
             // Spectral processing state (compressor + whitening)
             const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-            Serial.print(F(",\"rms\":"));
-            Serial.print(spectral.getFrameRmsDb(), 1);
-            Serial.print(F(",\"cg\":"));
-            Serial.print(spectral.getSmoothedGainDb(), 2);
+            out_.print(F(",\"rms\":"));
+            out_.print(spectral.getFrameRmsDb(), 1);
+            out_.print(F(",\"cg\":"));
+            out_.print(spectral.getSmoothedGainDb(), 2);
         }
 
-        Serial.print(F("}"));
+        out_.print(F("}"));
 
         // AudioTracker music stream (v79 — PLP architecture)
         // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2}
@@ -1424,43 +1448,43 @@ void SerialConsole::streamTick() {
             int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > audioCtrl_->activationThreshold) ? 1 : 0;
             lastStreamPhase = currentPhase;
 
-            Serial.print(F(",\"m\":{\"a\":"));
-            Serial.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
-            Serial.print(F(",\"bpm\":"));
-            Serial.print(audioCtrl_->getCurrentBpm(), 1);
-            Serial.print(F(",\"ph\":"));
-            Serial.print(currentPhase, 2);
-            Serial.print(F(",\"pp\":"));
-            Serial.print(audio.plpPulse, 3);
-            Serial.print(F(",\"str\":"));
-            Serial.print(audio.rhythmStrength, 2);
-            Serial.print(F(",\"q\":"));
-            Serial.print(beatEvent);
-            Serial.print(F(",\"e\":"));
-            Serial.print(audio.energy, 2);
-            Serial.print(F(",\"p\":"));
-            Serial.print(audio.pulse, 2);
-            Serial.print(F(",\"od\":"));
-            Serial.print(audioCtrl_->getOnsetDensity(), 1);
-            Serial.print(F(",\"nn\":"));
-            Serial.print(audioCtrl_->getRawNNActivation(), 3);
+            out_.print(F(",\"m\":{\"a\":"));
+            out_.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
+            out_.print(F(",\"bpm\":"));
+            out_.print(audioCtrl_->getCurrentBpm(), 1);
+            out_.print(F(",\"ph\":"));
+            out_.print(currentPhase, 2);
+            out_.print(F(",\"pp\":"));
+            out_.print(audio.plpPulse, 3);
+            out_.print(F(",\"str\":"));
+            out_.print(audio.rhythmStrength, 2);
+            out_.print(F(",\"q\":"));
+            out_.print(beatEvent);
+            out_.print(F(",\"e\":"));
+            out_.print(audio.energy, 2);
+            out_.print(F(",\"p\":"));
+            out_.print(audio.pulse, 2);
+            out_.print(F(",\"od\":"));
+            out_.print(audioCtrl_->getOnsetDensity(), 1);
+            out_.print(F(",\"nn\":"));
+            out_.print(audioCtrl_->getRawNNActivation(), 3);
 
             // Debug mode: add diagnostics
             if (streamDebug_) {
-                Serial.print(F(",\"conf\":"));
-                Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-                Serial.print(F(",\"sl\":{\"id\":"));
-                Serial.print(audioCtrl_->getActiveSlotId());
-                Serial.print(F(",\"conf\":["));
+                out_.print(F(",\"conf\":"));
+                out_.print(audioCtrl_->getPeriodicityStrength(), 3);
+                out_.print(F(",\"sl\":{\"id\":"));
+                out_.print(audioCtrl_->getActiveSlotId());
+                out_.print(F(",\"conf\":["));
                 for (int si = 0; si < audioCtrl_->getSlotCount(); si++) {
-                    if (si > 0) Serial.print(F(","));
+                    if (si > 0) out_.print(F(","));
                     const PatternSlot& slot = audioCtrl_->getSlot(si);
-                    Serial.print(slot.valid ? slot.confidence : 0.0f, 2);
+                    out_.print(slot.valid ? slot.confidence : 0.0f, 2);
                 }
-                Serial.print(F("]}"));
+                out_.print(F("]}"));
             }
 
-            Serial.print(F("}"));
+            out_.print(F("}"));
         }
 
         // LED brightness telemetry
@@ -1468,7 +1492,7 @@ void SerialConsole::streamTick() {
         // in the same way, so these stats are not available
         // TODO: Add particle pool statistics (active count, etc.)
 
-        Serial.println(F("}"));
+        out_.println(F("}"));
     }
 
     // Battery streaming at ~1Hz
@@ -1481,15 +1505,15 @@ void SerialConsole::streamTick() {
         // c = charging (true if charging)
         // v = voltage (in volts)
         // p = percent (0-100)
-        Serial.print(F("{\"b\":{\"n\":"));
-        Serial.print(battery_->isBatteryConnected() ? F("true") : F("false"));
-        Serial.print(F(",\"c\":"));
-        Serial.print(battery_->isCharging() ? F("true") : F("false"));
-        Serial.print(F(",\"v\":"));
-        Serial.print(battery_->getVoltage(), 2);
-        Serial.print(F(",\"p\":"));
-        Serial.print(battery_->getPercent());
-        Serial.println(F("}}"));
+        out_.print(F("{\"b\":{\"n\":"));
+        out_.print(battery_->isBatteryConnected() ? F("true") : F("false"));
+        out_.print(F(",\"c\":"));
+        out_.print(battery_->isCharging() ? F("true") : F("false"));
+        out_.print(F(",\"v\":"));
+        out_.print(battery_->getVoltage(), 2);
+        out_.print(F(",\"p\":"));
+        out_.print(battery_->getPercent());
+        out_.println(F("}}"));
     }
 }
 
@@ -1502,13 +1526,13 @@ void SerialConsole::streamTick() {
 bool SerialConsole::handleLogCommand(const char* cmd) {
     // "log" - show current level
     if (strcmp(cmd, "log") == 0) {
-        Serial.print(F("Log level: "));
+        out_.print(F("Log level: "));
         switch (logLevel_) {
-            case LogLevel::OFF:   Serial.println(F("off")); break;
-            case LogLevel::ERROR: Serial.println(F("error")); break;
-            case LogLevel::WARN:  Serial.println(F("warn")); break;
-            case LogLevel::INFO:  Serial.println(F("info")); break;
-            case LogLevel::DEBUG: Serial.println(F("debug")); break;
+            case LogLevel::OFF:   out_.println(F("off")); break;
+            case LogLevel::ERROR: out_.println(F("error")); break;
+            case LogLevel::WARN:  out_.println(F("warn")); break;
+            case LogLevel::INFO:  out_.println(F("info")); break;
+            case LogLevel::DEBUG: out_.println(F("debug")); break;
         }
         return true;
     }
@@ -1516,35 +1540,35 @@ bool SerialConsole::handleLogCommand(const char* cmd) {
     // "log off" - disable logging
     if (strcmp(cmd, "log off") == 0) {
         logLevel_ = LogLevel::OFF;
-        Serial.println(F("OK log off"));
+        out_.println(F("OK log off"));
         return true;
     }
 
     // "log error" - errors only
     if (strcmp(cmd, "log error") == 0) {
         logLevel_ = LogLevel::ERROR;
-        Serial.println(F("OK log error"));
+        out_.println(F("OK log error"));
         return true;
     }
 
     // "log warn" - warnings and errors
     if (strcmp(cmd, "log warn") == 0) {
         logLevel_ = LogLevel::WARN;
-        Serial.println(F("OK log warn"));
+        out_.println(F("OK log warn"));
         return true;
     }
 
     // "log info" - info and above (default)
     if (strcmp(cmd, "log info") == 0) {
         logLevel_ = LogLevel::INFO;
-        Serial.println(F("OK log info"));
+        out_.println(F("OK log info"));
         return true;
     }
 
     // "log debug" - all messages
     if (strcmp(cmd, "log debug") == 0) {
         logLevel_ = LogLevel::DEBUG;
-        Serial.println(F("OK log debug"));
+        out_.println(F("OK log debug"));
         return true;
     }
 
@@ -1556,12 +1580,12 @@ bool SerialConsole::handleLogCommand(const char* cmd) {
 bool SerialConsole::handleDebugCommand(const char* cmd) {
     // "debug" - show enabled channels
     if (strcmp(cmd, "debug") == 0) {
-        Serial.println(F("Debug channels:"));
-        Serial.print(F("  transient:  ")); Serial.println(isDebugChannelEnabled(DebugChannel::TRANSIENT) ? F("ON") : F("off"));
-        Serial.print(F("  rhythm:     ")); Serial.println(isDebugChannelEnabled(DebugChannel::RHYTHM) ? F("ON") : F("off"));
-        Serial.print(F("  audio:      ")); Serial.println(isDebugChannelEnabled(DebugChannel::AUDIO) ? F("ON") : F("off"));
-        Serial.print(F("  generator:  ")); Serial.println(isDebugChannelEnabled(DebugChannel::GENERATOR) ? F("ON") : F("off"));
-        Serial.print(F("  ensemble:   ")); Serial.println(isDebugChannelEnabled(DebugChannel::ENSEMBLE) ? F("ON") : F("off"));
+        out_.println(F("Debug channels:"));
+        out_.print(F("  transient:  ")); out_.println(isDebugChannelEnabled(DebugChannel::TRANSIENT) ? F("ON") : F("off"));
+        out_.print(F("  rhythm:     ")); out_.println(isDebugChannelEnabled(DebugChannel::RHYTHM) ? F("ON") : F("off"));
+        out_.print(F("  audio:      ")); out_.println(isDebugChannelEnabled(DebugChannel::AUDIO) ? F("ON") : F("off"));
+        out_.print(F("  generator:  ")); out_.println(isDebugChannelEnabled(DebugChannel::GENERATOR) ? F("ON") : F("off"));
+        out_.print(F("  ensemble:   ")); out_.println(isDebugChannelEnabled(DebugChannel::ENSEMBLE) ? F("ON") : F("off"));
         return true;
     }
 
@@ -1589,35 +1613,35 @@ bool SerialConsole::handleDebugCommand(const char* cmd) {
 
             DebugChannel channel = parseChannel(channelName);
             if (channel == DebugChannel::NONE) {
-                Serial.print(F("Unknown channel: "));
-                Serial.println(channelName);
-                Serial.println(F("Valid: transient, rhythm, audio, generator, ensemble, all"));
+                out_.print(F("Unknown channel: "));
+                out_.println(channelName);
+                out_.println(F("Valid: transient, rhythm, audio, generator, ensemble, all"));
                 return true;
             }
 
             const char* action = space + 1;
             if (strcmp(action, "on") == 0) {
                 enableDebugChannel(channel);
-                Serial.print(F("OK debug "));
-                Serial.print(channelName);
-                Serial.println(F(" on"));
+                out_.print(F("OK debug "));
+                out_.print(channelName);
+                out_.println(F(" on"));
                 return true;
             } else if (strcmp(action, "off") == 0) {
                 disableDebugChannel(channel);
-                Serial.print(F("OK debug "));
-                Serial.print(channelName);
-                Serial.println(F(" off"));
+                out_.print(F("OK debug "));
+                out_.print(channelName);
+                out_.println(F(" off"));
                 return true;
             } else {
-                Serial.print(F("Invalid action: "));
-                Serial.println(action);
-                Serial.println(F("Use 'on' or 'off'"));
+                out_.print(F("Invalid action: "));
+                out_.println(action);
+                out_.println(F("Use 'on' or 'off'"));
                 return true;
             }
         }
 
-        Serial.println(F("Usage: debug <channel> on|off"));
-        Serial.println(F("Channels: transient, rhythm, audio, generator, ensemble, all"));
+        out_.println(F("Usage: debug <channel> on|off"));
+        out_.println(F("Channels: transient, rhythm, audio, generator, ensemble, all"));
         return true;
     }
 
@@ -1635,31 +1659,213 @@ bool SerialConsole::handleFakeAudioCommand(const char* cmd) {
 
     if (*arg == '\0') {
         // "fakeaudio" — show current state
-        Serial.print(F("fakeaudio: "));
-        Serial.println(fakeAudio_ && fakeAudio_->isEnabled() ? F("ON") : F("off"));
-        Serial.println(F("Usage: fakeaudio on|off"));
+        out_.print(F("fakeaudio: "));
+        out_.println(fakeAudio_ && fakeAudio_->isEnabled() ? F("ON") : F("off"));
+        out_.println(F("Usage: fakeaudio on|off"));
         return true;
     }
 
     if (!fakeAudio_) {
-        Serial.println(F("ERROR: FakeAudio not available"));
+        out_.println(F("ERROR: FakeAudio not available"));
         return true;
     }
 
     if (strcmp(arg, "on") == 0) {
         fakeAudio_->enable();
-        Serial.println(F("OK fakeaudio ON — 120 BPM 4/4 synthetic pattern active"));
+        out_.println(F("OK fakeaudio ON — 120 BPM 4/4 synthetic pattern active"));
         return true;
     }
 
     if (strcmp(arg, "off") == 0) {
         fakeAudio_->disable();
-        Serial.println(F("OK fakeaudio off"));
+        out_.println(F("OK fakeaudio off"));
         return true;
     }
 
-    Serial.println(F("Usage: fakeaudio on|off"));
+    out_.println(F("Usage: fakeaudio on|off"));
     return true;
+}
+
+// === BLE DIAGNOSTICS ===
+bool SerialConsole::handleBleCommand(const char* cmd) {
+    if (strncmp(cmd, "ble", 3) != 0) return false;
+
+    const char* arg = cmd + 3;
+    while (*arg == ' ') arg++;
+
+#ifdef BLINKY_PLATFORM_NRF52840
+    if (*arg == '\0') {
+        // "ble" — show NUS and scanner status
+        if (bleNus_) {
+            bleNus_->printDiagnostics();
+        }
+        if (bleScanner_) {
+            bleScanner_->printDiagnostics();
+        }
+        if (!bleNus_ && !bleScanner_) {
+            out_.println(F("[BLE] Not initialized"));
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "nus") == 0) {
+        if (bleNus_) {
+            bleNus_->printDiagnostics();
+        } else {
+            out_.println(F("[BLE] NUS not initialized"));
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "scan") == 0) {
+        // "ble scan" — show what the scanner has seen
+        if (bleScanner_) {
+            out_.println(F("[BLE] Passive scan active (matching packets shown via 'ble')"));
+            out_.print(F("[BLE] Total received: "));
+            out_.println(bleScanner_->getPacketsReceived());
+            if (bleScanner_->getPacketsReceived() > 0) {
+                out_.print(F("[BLE] Last RSSI: "));
+                out_.print(bleScanner_->getLastRssi());
+                out_.println(F("dBm"));
+            }
+        } else {
+            out_.println(F("[BLE] Scanner not initialized"));
+        }
+        return true;
+    }
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+    if (*arg == '\0') {
+        // "ble" — show advertiser status
+        if (bleAdvertiser_) {
+            bleAdvertiser_->printDiagnostics();
+        } else {
+            out_.println(F("[BLE] Advertiser not initialized"));
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "status") == 0) {
+        if (bleAdvertiser_) {
+            bleAdvertiser_->printDiagnostics();
+        } else {
+            out_.println(F("[BLE] Advertiser not initialized"));
+        }
+        return true;
+    }
+
+    if (strncmp(arg, "broadcast ", 10) == 0) {
+        // "ble broadcast <payload>" — send a command to fleet
+        const char* payload = arg + 10;
+        while (*payload == ' ') payload++;
+        if (*payload == '\0') {
+            out_.println(F("Usage: ble broadcast <json_or_command>"));
+            return true;
+        }
+        if (!bleAdvertiser_) {
+            out_.println(F("[BLE] Advertiser not initialized"));
+            return true;
+        }
+        bool ok = bleAdvertiser_->broadcastCommand(payload);
+        if (ok) {
+            out_.print(F("[BLE] Broadcast sent: "));
+            out_.println(payload);
+        } else {
+            out_.println(F("[BLE] Broadcast failed"));
+        }
+        return true;
+    }
+#else
+    if (*arg == '\0') {
+        out_.println(F("[BLE] Not available on this platform"));
+        return true;
+    }
+#endif
+
+    out_.println(F("Usage: ble [scan|status|broadcast <payload>]"));
+    return true;
+}
+
+// === WIFI COMMANDS (ESP32-S3 only) ===
+bool SerialConsole::handleWifiCommand(const char* cmd) {
+    if (strncmp(cmd, "wifi", 4) != 0) return false;
+
+    const char* arg = cmd + 4;
+    while (*arg == ' ') arg++;
+
+#ifdef BLINKY_PLATFORM_ESP32S3
+    if (*arg == '\0') {
+        // "wifi" — show status
+        if (wifiManager_) {
+            wifiManager_->printStatus();
+        } else {
+            out_.println(F("[WiFi] Not initialized"));
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "status") == 0) {
+        if (wifiManager_) {
+            wifiManager_->printStatus();
+        } else {
+            out_.println(F("[WiFi] Not initialized"));
+        }
+        return true;
+    }
+
+    if (strncmp(arg, "ssid ", 5) == 0) {
+        const char* ssid = arg + 5;
+        while (*ssid == ' ') ssid++;
+        if (*ssid == '\0') {
+            out_.println(F("Usage: wifi ssid <name>"));
+            return true;
+        }
+        if (wifiManager_) {
+            wifiManager_->setSsid(ssid);
+        }
+        return true;
+    }
+
+    if (strncmp(arg, "pass ", 5) == 0) {
+        const char* pass = arg + 5;
+        while (*pass == ' ') pass++;
+        if (*pass == '\0') {
+            out_.println(F("Usage: wifi pass <key>"));
+            return true;
+        }
+        if (wifiManager_) {
+            wifiManager_->setPassword(pass);
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "connect") == 0) {
+        if (wifiManager_) {
+            wifiManager_->connect();
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "disconnect") == 0) {
+        if (wifiManager_) {
+            wifiManager_->disconnect();
+        }
+        return true;
+    }
+
+    if (strcmp(arg, "clear") == 0) {
+        if (wifiManager_) {
+            wifiManager_->clearCredentials();
+        }
+        return true;
+    }
+
+    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|status]"));
+    return true;
+#else
+    // WiFi not available on nRF52840
+    out_.println(F("[WiFi] Not available on this platform"));
+    return true;
+#endif
 }
 
 // === TRACKER COMMANDS (AudioTracker) ===
@@ -1674,177 +1880,177 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show beat" - tracker state
     if (strcmp(cmd, "show beat") == 0) {
-        Serial.println(F("=== AudioTracker (ACF+PLP) ==="));
-        Serial.print(F("BPM: "));
-        Serial.println(audioCtrl_->getCurrentBpm(), 1);
-        Serial.print(F("Phase: "));
-        Serial.println(audioCtrl_->getPlpPhase(), 3);
-        Serial.print(F("Periodicity: "));
-        Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F("Beat Count: "));
-        Serial.println(audioCtrl_->getBeatCount());
-        Serial.print(F("PLP Confidence: "));
-        Serial.println(audioCtrl_->getPlpConfidence(), 4);
-        Serial.print(F("PLP Pulse: "));
-        Serial.println(audioCtrl_->getPlpPulseValue(), 3);
-        Serial.print(F("PLP DFT Mag: "));
-        Serial.println(audioCtrl_->getPlpDftMag(), 3);
+        out_.println(F("=== AudioTracker (ACF+PLP) ==="));
+        out_.print(F("BPM: "));
+        out_.println(audioCtrl_->getCurrentBpm(), 1);
+        out_.print(F("Phase: "));
+        out_.println(audioCtrl_->getPlpPhase(), 3);
+        out_.print(F("Periodicity: "));
+        out_.println(audioCtrl_->getPeriodicityStrength(), 3);
+        out_.print(F("Beat Count: "));
+        out_.println(audioCtrl_->getBeatCount());
+        out_.print(F("PLP Confidence: "));
+        out_.println(audioCtrl_->getPlpConfidence(), 4);
+        out_.print(F("PLP Pulse: "));
+        out_.println(audioCtrl_->getPlpPulseValue(), 3);
+        out_.print(F("PLP DFT Mag: "));
+        out_.println(audioCtrl_->getPlpDftMag(), 3);
         { const char* srcNames[] = {"flux", "bass", "nn"};
-          Serial.print(F("PLP Source: "));
-          Serial.println(srcNames[audioCtrl_->getPlpBestSource()]); }
-        Serial.print(F("Beat Stability: "));
-        Serial.println(audioCtrl_->getBeatStability(), 3);
-        Serial.print(F("Pulse: "));
-        Serial.println(audioCtrl_->getLastPulseStrength(), 3);
-        Serial.print(F("Onset Density: "));
-        Serial.print(audioCtrl_->getControl().onsetDensity, 1);
-        Serial.println(F(" /s"));
-        Serial.println();
+          out_.print(F("PLP Source: "));
+          out_.println(srcNames[audioCtrl_->getPlpBestSource()]); }
+        out_.print(F("Beat Stability: "));
+        out_.println(audioCtrl_->getBeatStability(), 3);
+        out_.print(F("Pulse: "));
+        out_.println(audioCtrl_->getLastPulseStrength(), 3);
+        out_.print(F("Onset Density: "));
+        out_.print(audioCtrl_->getControl().onsetDensity, 1);
+        out_.println(F(" /s"));
+        out_.println();
         return true;
     }
 
     // "json rhythm" / "json beat" - JSON output for test automation
     if (strcmp(cmd, "json rhythm") == 0 || strcmp(cmd, "json beat") == 0) {
-        Serial.print(F("{\"bpm\":"));
-        Serial.print(audioCtrl_->getCurrentBpm(), 1);
-        Serial.print(F(",\"phase\":"));
-        Serial.print(audioCtrl_->getPlpPhase(), 3);
-        Serial.print(F(",\"periodicity\":"));
-        Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F(",\"beatCount\":"));
-        Serial.print(audioCtrl_->getBeatCount());
-        Serial.print(F(",\"rhythmStrength\":"));
-        Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
-        Serial.print(F(",\"pulse\":"));
-        Serial.print(audioCtrl_->getLastPulseStrength(), 3);
-        Serial.print(F(",\"plpConf\":"));
-        Serial.print(audioCtrl_->getPlpConfidence(), 3);
-        Serial.print(F(",\"plpPulse\":"));
-        Serial.print(audioCtrl_->getPlpPulseValue(), 3);
-        Serial.print(F(",\"onsetDensity\":"));
-        Serial.print(audioCtrl_->getControl().onsetDensity, 1);
-        Serial.println(F("}"));
+        out_.print(F("{\"bpm\":"));
+        out_.print(audioCtrl_->getCurrentBpm(), 1);
+        out_.print(F(",\"phase\":"));
+        out_.print(audioCtrl_->getPlpPhase(), 3);
+        out_.print(F(",\"periodicity\":"));
+        out_.print(audioCtrl_->getPeriodicityStrength(), 3);
+        out_.print(F(",\"beatCount\":"));
+        out_.print(audioCtrl_->getBeatCount());
+        out_.print(F(",\"rhythmStrength\":"));
+        out_.print(audioCtrl_->getControl().rhythmStrength, 3);
+        out_.print(F(",\"pulse\":"));
+        out_.print(audioCtrl_->getLastPulseStrength(), 3);
+        out_.print(F(",\"plpConf\":"));
+        out_.print(audioCtrl_->getPlpConfidence(), 3);
+        out_.print(F(",\"plpPulse\":"));
+        out_.print(audioCtrl_->getPlpPulseValue(), 3);
+        out_.print(F(",\"onsetDensity\":"));
+        out_.print(audioCtrl_->getControl().onsetDensity, 1);
+        out_.println(F("}"));
         return true;
     }
 
     // "json pattern" / "json slots" - compact JSON for test automation (v82)
     if (strcmp(cmd, "json pattern") == 0 || strcmp(cmd, "json slots") == 0) {
-        Serial.print(F("{\"active\":"));
-        Serial.print(audioCtrl_->getActiveSlotId());
-        Serial.print(F(",\"slots\":["));
+        out_.print(F("{\"active\":"));
+        out_.print(audioCtrl_->getActiveSlotId());
+        out_.print(F(",\"slots\":["));
         for (int i = 0; i < audioCtrl_->getSlotCount(); i++) {
-            if (i > 0) Serial.print(F(","));
+            if (i > 0) out_.print(F(","));
             const PatternSlot& slot = audioCtrl_->getSlot(i);
-            Serial.print(F("{\"conf\":"));
-            Serial.print(slot.confidence, 3);
-            Serial.print(F(",\"bars\":"));
-            Serial.print(slot.totalBars);
-            Serial.print(F(",\"valid\":"));
-            Serial.print(slot.valid ? F("true") : F("false"));
-            Serial.print(F(",\"bb\":["));
+            out_.print(F("{\"conf\":"));
+            out_.print(slot.confidence, 3);
+            out_.print(F(",\"bars\":"));
+            out_.print(slot.totalBars);
+            out_.print(F(",\"valid\":"));
+            out_.print(slot.valid ? F("true") : F("false"));
+            out_.print(F(",\"bb\":["));
             for (int j = 0; j < SLOT_BINS; j++) {
-                if (j > 0) Serial.print(F(","));
-                Serial.print(slot.bins[j], 3);
+                if (j > 0) out_.print(F(","));
+                out_.print(slot.bins[j], 3);
             }
-            Serial.print(F("]}"));
+            out_.print(F("]}"));
         }
-        Serial.println(F("]}"));
+        out_.println(F("]}"));
         return true;
     }
 
     // "reset pattern" / "reset slots" - zero all slot cache state (for test automation)
     if (strcmp(cmd, "reset pattern") == 0 || strcmp(cmd, "reset slots") == 0) {
         audioCtrl_->resetSlots();
-        Serial.println(F("OK"));
+        out_.println(F("OK"));
         return true;
     }
 
     // "show pattern" / "show slots" - pattern slot cache state (v82)
     if (strcmp(cmd, "show pattern") == 0 || strcmp(cmd, "show slots") == 0) {
-        Serial.println(F("=== Pattern Slot Cache ==="));
-        Serial.print(F("  Active Slot: "));
-        Serial.println(audioCtrl_->getActiveSlotId());
-        Serial.print(F("  PLP Confidence: "));
-        Serial.println(audioCtrl_->getPlpConfidence(), 3);
-        Serial.print(F("  BPM: "));
-        Serial.println(audioCtrl_->getCurrentBpm(), 1);
+        out_.println(F("=== Pattern Slot Cache ==="));
+        out_.print(F("  Active Slot: "));
+        out_.println(audioCtrl_->getActiveSlotId());
+        out_.print(F("  PLP Confidence: "));
+        out_.println(audioCtrl_->getPlpConfidence(), 3);
+        out_.print(F("  BPM: "));
+        out_.println(audioCtrl_->getCurrentBpm(), 1);
         for (int i = 0; i < audioCtrl_->getSlotCount(); i++) {
             const PatternSlot& slot = audioCtrl_->getSlot(i);
-            Serial.print(F("  Slot "));
-            Serial.print(i);
-            Serial.print(F(": "));
+            out_.print(F("  Slot "));
+            out_.print(i);
+            out_.print(F(": "));
             if (!slot.valid) {
-                Serial.println(F("[empty]"));
+                out_.println(F("[empty]"));
                 continue;
             }
-            Serial.print(F("conf="));
-            Serial.print(slot.confidence, 3);
-            Serial.print(F(" bars="));
-            Serial.print(slot.totalBars);
-            Serial.print(F(" age="));
-            Serial.print(slot.age);
-            if (i == audioCtrl_->getActiveSlotId()) Serial.print(F(" *ACTIVE*"));
-            Serial.print(F("\n    bins=["));
+            out_.print(F("conf="));
+            out_.print(slot.confidence, 3);
+            out_.print(F(" bars="));
+            out_.print(slot.totalBars);
+            out_.print(F(" age="));
+            out_.print(slot.age);
+            if (i == audioCtrl_->getActiveSlotId()) out_.print(F(" *ACTIVE*"));
+            out_.print(F("\n    bins=["));
             for (int j = 0; j < SLOT_BINS; j++) {
-                if (j > 0) Serial.print(F(","));
-                Serial.print(slot.bins[j], 2);
+                if (j > 0) out_.print(F(","));
+                out_.print(slot.bins[j], 2);
             }
-            Serial.println(F("]"));
+            out_.println(F("]"));
         }
-        Serial.println();
+        out_.println();
         return true;
     }
 
     // "show spectral" - spectral processing state
     if (strcmp(cmd, "show spectral") == 0) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-        Serial.println(F("=== Spectral Processing ==="));
-        Serial.println(F("-- Compressor --"));
-        Serial.print(F("  Enabled: ")); Serial.println(spectral.compressorEnabled ? "yes" : "no");
-        Serial.print(F("  Threshold: ")); Serial.print(spectral.compThresholdDb, 1); Serial.println(F(" dB"));
-        Serial.print(F("  Ratio: ")); Serial.print(spectral.compRatio, 1); Serial.println(F(":1"));
-        Serial.print(F("  Knee: ")); Serial.print(spectral.compKneeDb, 1); Serial.println(F(" dB"));
-        Serial.print(F("  Makeup: ")); Serial.print(spectral.compMakeupDb, 1); Serial.println(F(" dB"));
-        Serial.print(F("  Attack: ")); Serial.print(spectral.compAttackTau * 1000.0f, 1); Serial.println(F(" ms"));
-        Serial.print(F("  Release: ")); Serial.print(spectral.compReleaseTau, 2); Serial.println(F(" s"));
-        Serial.print(F("  Frame RMS: ")); Serial.print(spectral.getFrameRmsDb(), 1); Serial.println(F(" dB"));
-        Serial.print(F("  Smoothed Gain: ")); Serial.print(spectral.getSmoothedGainDb(), 2); Serial.println(F(" dB"));
-        Serial.println(F("-- Whitening --"));
-        Serial.print(F("  Enabled: ")); Serial.println(spectral.whitenEnabled ? "yes" : "no");
-        Serial.print(F("  Decay: ")); Serial.println(spectral.whitenDecay, 4);
-        Serial.print(F("  Floor: ")); Serial.println(spectral.whitenFloor, 4);
-        Serial.println();
+        out_.println(F("=== Spectral Processing ==="));
+        out_.println(F("-- Compressor --"));
+        out_.print(F("  Enabled: ")); out_.println(spectral.compressorEnabled ? "yes" : "no");
+        out_.print(F("  Threshold: ")); out_.print(spectral.compThresholdDb, 1); out_.println(F(" dB"));
+        out_.print(F("  Ratio: ")); out_.print(spectral.compRatio, 1); out_.println(F(":1"));
+        out_.print(F("  Knee: ")); out_.print(spectral.compKneeDb, 1); out_.println(F(" dB"));
+        out_.print(F("  Makeup: ")); out_.print(spectral.compMakeupDb, 1); out_.println(F(" dB"));
+        out_.print(F("  Attack: ")); out_.print(spectral.compAttackTau * 1000.0f, 1); out_.println(F(" ms"));
+        out_.print(F("  Release: ")); out_.print(spectral.compReleaseTau, 2); out_.println(F(" s"));
+        out_.print(F("  Frame RMS: ")); out_.print(spectral.getFrameRmsDb(), 1); out_.println(F(" dB"));
+        out_.print(F("  Smoothed Gain: ")); out_.print(spectral.getSmoothedGainDb(), 2); out_.println(F(" dB"));
+        out_.println(F("-- Whitening --"));
+        out_.print(F("  Enabled: ")); out_.println(spectral.whitenEnabled ? "yes" : "no");
+        out_.print(F("  Decay: ")); out_.println(spectral.whitenDecay, 4);
+        out_.print(F("  Floor: ")); out_.println(spectral.whitenFloor, 4);
+        out_.println();
         return true;
     }
 
     // "json spectral" - spectral processing state as JSON (for test automation)
     if (strcmp(cmd, "json spectral") == 0) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-        Serial.print(F("{\"compEnabled\":"));
-        Serial.print(spectral.compressorEnabled ? 1 : 0);
-        Serial.print(F(",\"compThreshDb\":"));
-        Serial.print(spectral.compThresholdDb, 1);
-        Serial.print(F(",\"compRatio\":"));
-        Serial.print(spectral.compRatio, 1);
-        Serial.print(F(",\"compKneeDb\":"));
-        Serial.print(spectral.compKneeDb, 1);
-        Serial.print(F(",\"compMakeupDb\":"));
-        Serial.print(spectral.compMakeupDb, 1);
-        Serial.print(F(",\"compAttackMs\":"));
-        Serial.print(spectral.compAttackTau * 1000.0f, 2);
-        Serial.print(F(",\"compReleaseS\":"));
-        Serial.print(spectral.compReleaseTau, 2);
-        Serial.print(F(",\"rmsDb\":"));
-        Serial.print(spectral.getFrameRmsDb(), 1);
-        Serial.print(F(",\"gainDb\":"));
-        Serial.print(spectral.getSmoothedGainDb(), 2);
-        Serial.print(F(",\"whitenEnabled\":"));
-        Serial.print(spectral.whitenEnabled ? 1 : 0);
-        Serial.print(F(",\"whitenDecay\":"));
-        Serial.print(spectral.whitenDecay, 4);
-        Serial.print(F(",\"whitenFloor\":"));
-        Serial.print(spectral.whitenFloor, 4);
-        Serial.println(F("}"));
+        out_.print(F("{\"compEnabled\":"));
+        out_.print(spectral.compressorEnabled ? 1 : 0);
+        out_.print(F(",\"compThreshDb\":"));
+        out_.print(spectral.compThresholdDb, 1);
+        out_.print(F(",\"compRatio\":"));
+        out_.print(spectral.compRatio, 1);
+        out_.print(F(",\"compKneeDb\":"));
+        out_.print(spectral.compKneeDb, 1);
+        out_.print(F(",\"compMakeupDb\":"));
+        out_.print(spectral.compMakeupDb, 1);
+        out_.print(F(",\"compAttackMs\":"));
+        out_.print(spectral.compAttackTau * 1000.0f, 2);
+        out_.print(F(",\"compReleaseS\":"));
+        out_.print(spectral.compReleaseTau, 2);
+        out_.print(F(",\"rmsDb\":"));
+        out_.print(spectral.getFrameRmsDb(), 1);
+        out_.print(F(",\"gainDb\":"));
+        out_.print(spectral.getSmoothedGainDb(), 2);
+        out_.print(F(",\"whitenEnabled\":"));
+        out_.print(spectral.whitenEnabled ? 1 : 0);
+        out_.print(F(",\"whitenDecay\":"));
+        out_.print(spectral.whitenDecay, 4);
+        out_.print(F(",\"whitenFloor\":"));
+        out_.print(spectral.whitenFloor, 4);
+        out_.println(F("}"));
         return true;
     }
 
@@ -1852,30 +2058,35 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 }
 
 // === LOGGING HELPERS ===
+// These are static methods — use instance_->out_ when available, fall back to Serial.
 void SerialConsole::logDebug(const __FlashStringHelper* msg) {
     if (getGlobalLogLevel() >= LogLevel::DEBUG) {
-        Serial.print(F("[DEBUG] "));
-        Serial.println(msg);
+        Print& p = instance_ ? (Print&)instance_->out_ : Serial;
+        p.print(F("[DEBUG] "));
+        p.println(msg);
     }
 }
 
 void SerialConsole::logInfo(const __FlashStringHelper* msg) {
     if (getGlobalLogLevel() >= LogLevel::INFO) {
-        Serial.print(F("[INFO] "));
-        Serial.println(msg);
+        Print& p = instance_ ? (Print&)instance_->out_ : Serial;
+        p.print(F("[INFO] "));
+        p.println(msg);
     }
 }
 
 void SerialConsole::logWarn(const __FlashStringHelper* msg) {
     if (getGlobalLogLevel() >= LogLevel::WARN) {
-        Serial.print(F("[WARN] "));
-        Serial.println(msg);
+        Print& p = instance_ ? (Print&)instance_->out_ : Serial;
+        p.print(F("[WARN] "));
+        p.println(msg);
     }
 }
 
 void SerialConsole::logError(const __FlashStringHelper* msg) {
     if (getGlobalLogLevel() >= LogLevel::ERROR) {
-        Serial.print(F("[ERROR] "));
-        Serial.println(msg);
+        Print& p = instance_ ? (Print&)instance_->out_ : Serial;
+        p.print(F("[ERROR] "));
+        p.println(msg);
     }
 }

@@ -52,6 +52,17 @@
 #include "audio/AudioControl.h"
 #include "audio/AudioTracker.h"
 
+// Communications
+#include "comms/BleProtocol.h"
+#include "hal/PlatformDetect.h"
+#ifdef BLINKY_PLATFORM_NRF52840
+  #include "comms/BleScanner.h"
+  #include "comms/BleNus.h"
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  #include "comms/BleAdvertiser.h"
+  #include "comms/WifiManager.h"
+#endif
+
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING
 #include "tests/GeneratorTestRunner.h"

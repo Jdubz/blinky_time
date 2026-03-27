@@ -75,6 +75,13 @@ BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
+#ifdef BLINKY_PLATFORM_NRF52840
+BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
+BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
+WifiManager wifiManager;           // WiFi credential storage and connection
+#endif
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -331,6 +338,40 @@ void setup() {
   console->begin();
   SerialConsole::logDebug(F("Serial console initialized"));
 
+  // Initialize BLE (nRF52840 only)
+#ifdef BLINKY_PLATFORM_NRF52840
+  // Initialize SoftDevice with 1 peripheral connection (NUS) + observer (scanner)
+  Bluefruit.begin(1, 0);
+  Bluefruit.setName("Blinky");
+  Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
+
+  // NUS peripheral — bidirectional serial-over-BLE for fleet server
+  bleNus.begin();
+  bleNus.setLineCallback([](const char* line) {
+      if (console) {
+          console->handleCommand(line);
+      }
+  });
+  console->setBleNus(&bleNus);
+  SerialConsole::logDebug(F("BLE NUS peripheral initialized"));
+
+  // Passive scanner — receives fleet broadcasts from ESP32-S3 gateway
+  bleScanner.begin();
+  bleScanner.setCommandCallback([](const char* payload, size_t len) {
+      if (console) {
+          console->handleCommand(payload);
+      }
+  });
+  console->setBleScanner(&bleScanner);
+  SerialConsole::logDebug(F("BLE scanner initialized"));
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  bleAdvertiser.begin();
+  wifiManager.begin();
+  console->setBleAdvertiser(&bleAdvertiser);
+  console->setWifiManager(&wifiManager);
+  SerialConsole::logDebug(F("BLE advertiser + WiFi manager initialized"));
+#endif
+
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
 
@@ -433,6 +474,12 @@ void loop() {
   if (console) {
     console->update();
   }
+
+  // Process BLE data (nRF52840 only)
+#ifdef BLINKY_PLATFORM_NRF52840
+  bleNus.update();       // NUS peripheral (serial-over-BLE)
+  bleScanner.update();   // Fleet broadcast receiver
+#endif
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;

@@ -101,6 +101,9 @@ public:
     // Type name helper (for JSON output)
     static const char* typeString(SettingType t);
 
+    // Output stream (defaults to Serial, can be set to tee for BLE NUS)
+    void setOutput(Print* out) { out_ = out ? out : &Serial; }
+
     // Utility
     Setting* findSetting(const char* name);
     uint8_t getSettingCount() const { return numSettings_; }
@@ -112,6 +115,7 @@ public:
 private:
     Setting settings_[MAX_SETTINGS];
     uint8_t numSettings_;
+    Print* out_ = &Serial;
 
     bool registerSetting(const Setting& setting);
     bool setValue(Setting* s, const char* valueStr);
