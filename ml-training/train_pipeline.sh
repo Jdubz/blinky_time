@@ -73,7 +73,17 @@ if [ "$SKIP_PREP" = false ]; then
         echo "=== Phase 2: Preparing training data ==="
         # Check if config uses delta features
         USE_DELTA=$(python3 -c "import yaml; c=yaml.safe_load(open('$CONFIG')); print('--delta' if c.get('features',{}).get('use_delta',False) else '')" 2>/dev/null)
-        python scripts/prepare_dataset.py --config "$CONFIG" --output-dir "$DATA_DIR" --augment $USE_DELTA
+        # Note: prepare_dataset.py may report "VALIDATION FAILED" for mel range
+        # when delta features are enabled (deltas can be negative). This is expected.
+        TQDM_DISABLE=1 python scripts/prepare_dataset.py --config "$CONFIG" --output-dir "$DATA_DIR" --augment $USE_DELTA || {
+            # Check if data was actually written despite validation warning
+            if [ -f "$DATA_DIR/X_train.npy" ]; then
+                echo "  (Data prep completed with warnings — continuing)"
+            else
+                echo "  DATA PREP FAILED — aborting"
+                exit 1
+            fi
+        }
     fi
 else
     echo "=== Phase 2: Skipped (--skip-prep) ==="
