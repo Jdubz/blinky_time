@@ -37,6 +37,7 @@
 #ifdef BLINKY_PLATFORM_ESP32S3
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
+#include <HTTPUpdate.h>
 #endif
 
 // Runtime Device Configuration (v28+)
@@ -81,6 +82,8 @@ IMUHelper imu;                     // IMU sensor interface; auto-initializes, us
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
 #ifdef BLINKY_PLATFORM_NRF52840
+#include <services/BLEDfu.h>
+BLEDfu bleDfu;                     // BLE DFU service (wireless firmware updates)
 BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
 BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
 #elif defined(BLINKY_PLATFORM_ESP32S3)
@@ -351,6 +354,9 @@ void setup() {
   Bluefruit.setName("Blinky");
   Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
 
+  // BLE DFU service — allows wireless firmware updates from fleet server
+  bleDfu.begin();
+
   // NUS peripheral — bidirectional serial-over-BLE for fleet server
   bleNus.begin();
   bleNus.setLineCallback([](const char* line) {
@@ -516,6 +522,9 @@ void loop() {
       static bool servicesStarted = false;
       bool isConnected = (WiFi.status() == WL_CONNECTED);
       if (isConnected && !wasConnected) {
+          // Always disable power management and set max TX on (re)connect
+          WiFi.setSleep(false);
+          WiFi.setTxPower(WIFI_POWER_19_5dBm);
           if (!servicesStarted) {
               // First connection: start TCP server, mDNS, and OTA
               MDNS.begin("blinky");
