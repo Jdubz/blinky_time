@@ -10,7 +10,11 @@ from ..transport.base import Transport
 log = logging.getLogger(__name__)
 
 COMMAND_TIMEOUT_S = 2.0
-RESPONSE_LINE_TIMEOUT_S = 0.1
+RESPONSE_LINE_TIMEOUT_S = 0.1  # Gap between lines to finalize response
+
+# BLE is much slower — MTU fragmentation adds 200-500ms gaps between lines
+BLE_COMMAND_TIMEOUT_S = 5.0
+BLE_RESPONSE_LINE_TIMEOUT_S = 0.5
 
 
 class DeviceProtocol:
@@ -26,6 +30,11 @@ class DeviceProtocol:
         self._transport = transport
         self._streaming = False
         self._command_lock = asyncio.Lock()
+
+        # Adjust timeouts for transport speed
+        is_ble = transport.transport_type == "ble"
+        self._cmd_timeout = BLE_COMMAND_TIMEOUT_S if is_ble else COMMAND_TIMEOUT_S
+        self._line_timeout = BLE_RESPONSE_LINE_TIMEOUT_S if is_ble else RESPONSE_LINE_TIMEOUT_S
 
         # Response collection state
         self._response_buf: list[str] = []
@@ -52,11 +61,14 @@ class DeviceProtocol:
         """Register callback for non-streaming lines (log output, etc.)."""
         self._on_raw_line = callback
 
-    async def send_command(self, command: str, timeout: float = COMMAND_TIMEOUT_S) -> str:
+    async def send_command(self, command: str, timeout: float | None = None) -> str:
         """Send a command and wait for the multi-line response.
 
         Automatically pauses/resumes streaming if active.
         """
+        if timeout is None:
+            timeout = self._cmd_timeout
+
         is_stream_enable = command.startswith("stream ") and command.split()[1] in (
             "on",
             "fast",
@@ -183,10 +195,10 @@ class DeviceProtocol:
         # Cancel previous timer
         if self._response_timer:
             self._response_timer.cancel()
-        # Set new timer - finalize after 100ms of silence
+        # Set new timer - finalize after silence gap (transport-dependent)
         loop = asyncio.get_event_loop()
         self._response_timer = loop.call_later(
-            RESPONSE_LINE_TIMEOUT_S,
+            self._line_timeout,
             self._finalize_response,
         )
 
