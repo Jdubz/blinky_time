@@ -185,6 +185,50 @@ class FleetManager:
                     disc.transport_type, device_id[:12], disc.address, e,
                 )
 
+        # Deduplicate: if a device is connected via both serial and BLE/WiFi,
+        # prefer serial (faster, more reliable) and disconnect the wireless one.
+        await self._deduplicate_transports()
+
+    async def _deduplicate_transports(self) -> None:
+        """Remove duplicate connections to the same physical device.
+
+        If a device is connected via serial AND BLE/WiFi, keep the serial
+        connection (faster, more reliable) and disconnect the wireless one.
+        Detection: same device_type + device_name on different transports.
+        """
+        # Build a map of device identity → (device_id, transport_type)
+        identity_map: dict[str, list[tuple[str, str]]] = {}
+        for did, dev in self._devices.items():
+            if dev.state != DeviceState.CONNECTED or not dev.device_type:
+                continue
+            # Identity: device_type + device_name (unique per physical device)
+            identity = f"{dev.device_type}:{dev.device_name}"
+            entry = (did, dev.transport.transport_type)
+            identity_map.setdefault(identity, []).append(entry)
+
+        # Find duplicates and remove wireless ones
+        to_remove: list[str] = []
+        for identity, entries in identity_map.items():
+            if len(entries) <= 1:
+                continue
+            # Check if there's a serial connection
+            serial_entries = [e for e in entries if e[1] == "serial"]
+            wireless_entries = [e for e in entries if e[1] != "serial"]
+            if serial_entries and wireless_entries:
+                for did, ttype in wireless_entries:
+                    log.info(
+                        "Dedup: %s (%s) is duplicate of serial device, disconnecting %s",
+                        identity, did[:12], ttype,
+                    )
+                    to_remove.append(did)
+
+        for did in to_remove:
+            dev = self._devices.get(did)
+            if dev:
+                await dev.disconnect()
+                del self._devices[did]
+                self._device_discovery.pop(did, None)
+
     async def _reconnect_disconnected(self) -> None:
         """Try to reconnect any devices in error/disconnected state."""
         for device_id, device in self._devices.items():
