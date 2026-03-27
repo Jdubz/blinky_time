@@ -365,11 +365,15 @@ void setup() {
   console->setBleScanner(&bleScanner);
   SerialConsole::logDebug(F("BLE scanner initialized"));
 #elif defined(BLINKY_PLATFORM_ESP32S3)
-  bleAdvertiser.begin();
+  // BLE advertiser disabled — causes NimBLE mutex crash on ESP32-S3 XIAO
+  // with USBMode=hwcdc. The npl_freertos_mutex_init assertion fails during
+  // BLEDevice::init(). Needs investigation — may be a core/BLE library
+  // incompatibility with the hwcdc USB mode.
+  // bleAdvertiser.begin();
+  // console->setBleAdvertiser(&bleAdvertiser);
   wifiManager.begin();
-  console->setBleAdvertiser(&bleAdvertiser);
   console->setWifiManager(&wifiManager);
-  SerialConsole::logDebug(F("BLE advertiser + WiFi manager initialized"));
+  SerialConsole::logDebug(F("WiFi manager initialized (BLE advertiser disabled — mutex crash)"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
