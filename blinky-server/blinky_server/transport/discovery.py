@@ -96,21 +96,71 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
     return devices
 
 
-def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[DiscoveredDevice]:
-    """Return WiFi devices from a static registry.
+async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[DiscoveredDevice]:
+    """Discover WiFi devices via mDNS and/or static registry.
 
-    WiFi devices can't be auto-discovered without mDNS. For now, this uses
-    a list of known host:port pairs. Future: mDNS discovery for _blinky._tcp.
+    Scans for _blinky._tcp mDNS services (advertised by ESP32-S3 firmware).
+    Also includes any statically configured host:port pairs.
 
     Args:
         known_hosts: List of {"host": "ip", "port": 3333, "device_id": "..."}
     """
-    if not known_hosts:
-        return []
-
     devices = []
-    for entry in known_hosts:
+    seen_hosts: set[str] = set()
+
+    # mDNS discovery for _blinky._tcp
+    try:
+        from zeroconf import Zeroconf, ServiceBrowser
+        import socket
+
+        zc = Zeroconf()
+        found: list[dict] = []
+
+        class Listener:
+            def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+                info = zc.get_service_info(type_, name)
+                if info and info.addresses:
+                    host = socket.inet_ntoa(info.addresses[0])
+                    port = info.port or 3333
+                    found.append({"host": host, "port": port, "name": name})
+
+            def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+                pass
+
+            def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+                pass
+
+        browser = ServiceBrowser(zc, "_blinky._tcp.local.", Listener())
+        await asyncio.sleep(3.0)  # Wait for responses
+        browser.cancel()
+        zc.close()
+
+        for entry in found:
+            host = entry["host"]
+            port = entry["port"]
+            device_id = host
+            seen_hosts.add(host)
+            devices.append(
+                DiscoveredDevice(
+                    device_id=device_id,
+                    platform="esp32s3",
+                    transport_type="wifi",
+                    address=f"{host}:{port}",
+                    description=f"mDNS: {entry['name']}",
+                    extra={"host": host, "port": port},
+                )
+            )
+            log.info("Discovered WiFi device via mDNS: %s:%d", host, port)
+    except ImportError:
+        log.debug("zeroconf not installed, skipping mDNS WiFi discovery")
+    except Exception as e:
+        log.warning("mDNS WiFi scan failed: %s", e)
+
+    # Static registry (skip hosts already found via mDNS)
+    for entry in known_hosts or []:
         host = entry["host"]
+        if host in seen_hosts:
+            continue
         port = entry.get("port", 3333)
         device_id = entry.get("device_id", host)
         devices.append(
@@ -119,11 +169,12 @@ def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[Discove
                 platform="esp32s3",
                 transport_type="wifi",
                 address=f"{host}:{port}",
-                description=f"WiFi device at {host}",
+                description=f"Static: {host}",
                 extra={"host": host, "port": port},
             )
         )
         log.info("Registered WiFi device %s at %s:%d", device_id, host, port)
+
     return devices
 
 
@@ -138,7 +189,7 @@ async def discover_all(
     WiFi uses a static registry for now.
     """
     serial_devs = discover_serial_devices()
-    wifi_devs = discover_wifi_devices(wifi_hosts)
+    wifi_devs = await discover_wifi_devices(wifi_hosts)
 
     ble_devs: list[DiscoveredDevice] = []
     if ble_scan:

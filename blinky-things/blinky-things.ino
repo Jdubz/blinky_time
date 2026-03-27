@@ -519,6 +519,7 @@ void loop() {
           if (!servicesStarted) {
               // First connection: start TCP server, mDNS, and OTA
               MDNS.begin("blinky");
+              MDNS.addService("blinky", "tcp", 3333);  // Fleet discovery
               tcpServer.begin();
               ArduinoOTA.begin();
               servicesStarted = true;
