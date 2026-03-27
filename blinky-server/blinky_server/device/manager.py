@@ -4,7 +4,8 @@ import asyncio
 import contextlib
 import logging
 
-from ..transport.discovery import discover_serial_devices
+from ..transport.base import Transport
+from ..transport.discovery import DiscoveredDevice, discover_all, discover_serial_devices
 from ..transport.serial_transport import SerialTransport
 from .device import Device, DeviceState
 from .protocol import DeviceProtocol
@@ -15,13 +16,39 @@ DISCOVERY_INTERVAL_S = 10
 RECONNECT_INTERVAL_S = 5
 
 
+def _create_transport(disc: DiscoveredDevice) -> Transport:
+    """Create the appropriate transport for a discovered device."""
+    if disc.transport_type == "serial":
+        return SerialTransport(disc.address)
+    elif disc.transport_type == "ble":
+        from ..transport.ble_transport import BleTransport
+        return BleTransport(disc.address)
+    elif disc.transport_type == "wifi":
+        from ..transport.wifi_transport import WifiTransport
+        host = disc.extra.get("host", disc.address.split(":")[0])
+        port = disc.extra.get("port", 3333)
+        return WifiTransport(host, port)
+    else:
+        raise ValueError(f"Unknown transport type: {disc.transport_type}")
+
+
 class FleetManager:
     """Manages all connected blinky devices across all transport types."""
 
-    def __init__(self) -> None:
-        self._devices: dict[str, Device] = {}  # keyed by device_id (serial number)
+    def __init__(
+        self,
+        enable_ble: bool = True,
+        ble_timeout: float = 5.0,
+        wifi_hosts: list[dict] | None = None,
+    ) -> None:
+        self._devices: dict[str, Device] = {}  # keyed by device_id
         self._discovery_task: asyncio.Task[None] | None = None
         self._running = False
+        self._enable_ble = enable_ble
+        self._ble_timeout = ble_timeout
+        self._wifi_hosts = wifi_hosts or []
+        # Track discovery metadata for reconnection
+        self._device_discovery: dict[str, DiscoveredDevice] = {}
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -43,10 +70,8 @@ class FleetManager:
         self._running = True
         await self._discover_and_connect()
         self._discovery_task = asyncio.create_task(self._background_loop())
-        log.info(
-            "Fleet manager started: %d devices connected",
-            sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED),
-        )
+        connected = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
+        log.info("Fleet manager started: %d devices connected", connected)
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
@@ -58,6 +83,7 @@ class FleetManager:
         for device in self._devices.values():
             await device.disconnect()
         self._devices.clear()
+        self._device_discovery.clear()
         log.info("Fleet manager stopped")
 
     async def release_device(self, device_id: str) -> bool:
@@ -76,8 +102,14 @@ class FleetManager:
             return False
         if device.state == DeviceState.CONNECTED:
             return True
+
+        disc = self._device_discovery.get(device_id)
+        if not disc:
+            log.error("No discovery info for device %s", device_id[:12])
+            return False
+
         try:
-            transport = SerialTransport(device.port)
+            transport = _create_transport(disc)
             device.transport = transport
             device.protocol = DeviceProtocol(transport)
             device.protocol.on_stream_line(device._route_stream_line)
@@ -103,63 +135,75 @@ class FleetManager:
                 results[device_id] = f"error: {e}"
         return results
 
+    def add_wifi_host(self, host: str, port: int = 3333, device_id: str | None = None) -> None:
+        """Add a WiFi device to the discovery list at runtime."""
+        entry = {"host": host, "port": port}
+        if device_id:
+            entry["device_id"] = device_id
+        self._wifi_hosts.append(entry)
+
     # ── Internal ──
 
     async def _discover_and_connect(self) -> None:
-        """Discover serial devices and connect to any new ones."""
-        discovered = discover_serial_devices()
+        """Discover devices across all transports and connect to new ones."""
+        discovered = await discover_all(
+            ble_scan=self._enable_ble,
+            ble_timeout=self._ble_timeout,
+            wifi_hosts=self._wifi_hosts,
+        )
         known_ids = set(self._devices.keys())
 
         for disc in discovered:
-            device_id = disc.serial_number
-            if not device_id:
-                device_id = disc.port  # Fallback if no serial number
+            device_id = disc.device_id
 
             if device_id in known_ids:
-                # Update port if it changed (USB re-enumeration)
                 existing = self._devices[device_id]
-                if existing.port != disc.port:
+                # Update address if it changed (USB re-enumeration)
+                if existing.port != disc.address:
                     log.info(
-                        "Device %s port changed: %s → %s",
-                        device_id[:12],
-                        existing.port,
-                        disc.port,
+                        "Device %s address changed: %s → %s",
+                        device_id[:12], existing.port, disc.address,
                     )
-                    existing.port = disc.port
+                    existing.port = disc.address
                 continue
 
             # New device - connect
-            transport = SerialTransport(disc.port)
-            device = Device(
-                device_id=device_id,
-                port=disc.port,
-                platform=disc.platform,
-                transport=transport,
-            )
-            self._devices[device_id] = device
             try:
+                transport = _create_transport(disc)
+                device = Device(
+                    device_id=device_id,
+                    port=disc.address,
+                    platform=disc.platform,
+                    transport=transport,
+                )
+                self._devices[device_id] = device
+                self._device_discovery[device_id] = disc
                 await device.connect()
             except Exception as e:
                 log.error(
-                    "Failed to connect new device %s on %s: %s",
-                    device_id[:12],
-                    disc.port,
-                    e,
+                    "Failed to connect %s %s on %s: %s",
+                    disc.transport_type, device_id[:12], disc.address, e,
                 )
 
     async def _reconnect_disconnected(self) -> None:
         """Try to reconnect any devices in error/disconnected state."""
-        for device in self._devices.values():
-            if device.state in (DeviceState.DISCONNECTED, DeviceState.ERROR):
-                try:
-                    transport = SerialTransport(device.port)
-                    device.transport = transport
-                    device.protocol = DeviceProtocol(transport)
-                    device.protocol.on_stream_line(device._route_stream_line)
-                    device.protocol.on_raw_line(device._on_raw_line)
-                    await device.connect()
-                except Exception:
-                    pass  # Will retry next cycle
+        for device_id, device in self._devices.items():
+            if device.state not in (DeviceState.DISCONNECTED, DeviceState.ERROR):
+                continue
+
+            disc = self._device_discovery.get(device_id)
+            if not disc:
+                continue
+
+            try:
+                transport = _create_transport(disc)
+                device.transport = transport
+                device.protocol = DeviceProtocol(transport)
+                device.protocol.on_stream_line(device._route_stream_line)
+                device.protocol.on_raw_line(device._on_raw_line)
+                await device.connect()
+            except Exception:
+                pass  # Will retry next cycle
 
     async def _background_loop(self) -> None:
         """Periodic discovery and reconnection."""
