@@ -365,15 +365,16 @@ void setup() {
   console->setBleScanner(&bleScanner);
   SerialConsole::logDebug(F("BLE scanner initialized"));
 #elif defined(BLINKY_PLATFORM_ESP32S3)
-  // BLE advertiser disabled — causes NimBLE mutex crash on ESP32-S3 XIAO
-  // with USBMode=hwcdc. The npl_freertos_mutex_init assertion fails during
-  // BLEDevice::init(). Needs investigation — may be a core/BLE library
-  // incompatibility with the hwcdc USB mode.
+  // BLE disabled on ESP32-S3 — NimBLE porting layer crashes on core 3.3.7
+  // (npl_freertos_sem_init / npl_freertos_mutex_init assertion failure).
+  // Known bug: arduino-esp32 #12357, #12362. Fix requires external
+  // NimBLE-Arduino library v2.3.8+ (PRs #1090, #1117).
+  // ESP32-S3 uses WiFi TCP for fleet communication instead.
   // bleAdvertiser.begin();
   // console->setBleAdvertiser(&bleAdvertiser);
   wifiManager.begin();
   console->setWifiManager(&wifiManager);
-  SerialConsole::logDebug(F("WiFi manager initialized (BLE advertiser disabled — mutex crash)"));
+  SerialConsole::logDebug(F("WiFi manager initialized (BLE disabled — NimBLE core 3.3.7 bug)"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
