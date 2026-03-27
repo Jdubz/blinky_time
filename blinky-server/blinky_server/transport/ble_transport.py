@@ -152,20 +152,22 @@ async def scan_nus_devices(timeout: float = 5.0) -> list[dict]:
     """Scan for BLE devices advertising the NUS service.
 
     Returns list of {address, name, rssi} dicts for discovered devices.
+    Uses bleak 3.x API with return_adv=True for RSSI data.
     """
     log.info("Scanning for BLE NUS devices (%ds)...", timeout)
     devices = await BleakScanner.discover(
         timeout=timeout,
         service_uuids=[NUS_SERVICE_UUID],
+        return_adv=True,
     )
 
     results = []
-    for d in devices:
+    for addr, (dev, adv) in devices.items():
         results.append({
-            "address": d.address,
-            "name": d.name or "Unknown",
-            "rssi": d.rssi,
+            "address": addr,
+            "name": dev.name or "Unknown",
+            "rssi": adv.rssi,
         })
-        log.info("  Found: %s (%s) RSSI=%d", d.name, d.address, d.rssi)
+        log.info("  Found: %s (%s) RSSI=%d", dev.name, addr, adv.rssi)
 
     return results
