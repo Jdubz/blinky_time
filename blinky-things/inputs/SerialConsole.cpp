@@ -1723,7 +1723,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
             out_.println(F("[BLE] Passive scan active (matching packets shown via 'ble')"));
             out_.print(F("[BLE] Total received: "));
             out_.println(bleScanner_->getPacketsReceived());
-            if (bleScanner_->getPacketsReceived() > 0) {
+            if (bleScanner_->getPacketsReceived() > 0) {  // cppcheck-suppress knownConditionTrueFalse
                 out_.print(F("[BLE] Last RSSI: "));
                 out_.print(bleScanner_->getLastRssi());
                 out_.println(F("dBm"));
