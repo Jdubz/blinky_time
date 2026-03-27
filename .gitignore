@@ -1,163 +1,25 @@
-# ===========================================
-# Blinky Time - Professional .gitignore
-# ===========================================
+# TFLite model binaries (the .h C header is tracked, the binary is not)
+*.tflite
 
-# Build Artifacts
-build-*/
-*.elf
-*.hex
-*.map
-*.zip
-*.bin
-*.uf2
+# Python
+__pycache__/
+*.pyc
+*.pyo
 
-# Arduino IDE Build Files
-build.options.json
-compile_commands.json
-includes.cache
-libraries.cache
-.arduino15/
-.vscode/c_cpp_properties.json
+# ML training artifacts (large, regenerated)
+ml-training/data/processed/
+ml-training/data/mel_cache/
 
-# Arduino CLI Build Directory
-build/
+# Node
+node_modules/
+dist/
 
-# Compilation Artifacts
-*.o
-*.a
-*.so
-*.dll
-*.exe
-
-# Platform-Specific Build Folders
-# Arduino IDE
-.arduino/
-# VS Code Arduino Extension
-.vscode/arduino.json
-.vscode/launch.json
-
-# Temporary Files
-*.tmp
-*.temp
-*~
-*.bak
-*.swp
-*.swo
-.cache/
-tmpclaude-*
-
-# IDE and Editor Files
+# IDE
 .vscode/
 .idea/
-*.sublime-*
-*.code-workspace
+*.swp
+*.swo
 
-# OS Files
+# OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-Desktop.ini
-
-# Python (for test automation)
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyo
-*.pyd
-.Python
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Test Reports and Artifacts
-test_report.html
-*.log
-test-results/
-coverage/
-blinky-test-player/tuning-results/
-blinky-test-player/dist/
-blinky-serial-mcp/dist/
-
-# Scratch and Experimental Code
-scratch/
-experimental/
-temp/
-debug/
-archive-local/
-
-# Hardware-Specific Files
-# Serial capture files
-*.cap
-*.pcap
-
-# Documentation Build Artifacts
-_build/
-.doctrees/
-
-# Node.js (if using any JS tools)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Package Management
-.pioenvs/
-.piolibdeps/
-.pio/
-
-# Personal Configuration
-config.local.*
-secrets.*
-*.key
-*.pem
-.env
-
-# Backup Files
-*.backup
-*_backup.*
-*.orig
-
-# ===========================================
-# Project-Specific Ignores
-# ===========================================
-
-# Claude Code settings (user-specific)
-.claude/
-
-# Tool output files
-audio_recording.json
-audio_timeline.png
-recommended_params.json
-serial_log.txt
-
-# Simulator preview outputs
-blinky-simulator/previews/
-previews/
-
-# Windows artifacts
-nul
-
-# Hardware test recordings
-recordings/
-captures/
-
-# Personal hardware configurations
-my-config/
-local-config/
-
-# Development database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Large audio files (keep MP3s under version control, exclude bulk downloads)
-blinky-test-player/music/*.tar.gz
-
-# Playwright MCP workspace scratch files
-.playwright-mcp/
-
-# TFLite binary copies (canonical version in ml-training outputs, .h is tracked)
-blinky-things/audio/beat_model.tflite

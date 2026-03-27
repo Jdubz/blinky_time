@@ -269,9 +269,9 @@ private:
         resolver_.AddReshape();         // Tensor shape conversion
         resolver_.AddExpandDims();      // 1D→2D input expansion
         resolver_.AddLogistic();        // Sigmoid activation
-        resolver_.AddMul();             // Multi-output models
-        resolver_.AddStridedSlice();    // Multi-output: split channels
-        resolver_.AddConcatenation();   // Multi-output: join channels
+        resolver_.AddMul();             // Kept for model compatibility (was sum_head)
+        resolver_.AddStridedSlice();    // Kept for model compatibility (was multi-output split)
+        resolver_.AddConcatenation();   // Kept for model compatibility (was multi-output join)
         resolver_.AddQuantize();
         resolver_.AddDequantize();
         resolverInited_ = true;

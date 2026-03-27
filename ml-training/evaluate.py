@@ -636,7 +636,7 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
             _print_frame_metrics(ch_name.capitalize(), Y_pred_all[:, :, ch_idx], Y_val[:, :, ch_idx])
     else:
         Y_pred_beat = Y_pred_all[:, :, 0]
-        _print_frame_metrics("Beat", Y_pred_beat, Y_val)
+        _print_frame_metrics("Onset", Y_pred_beat, Y_val)
 
 
 def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):

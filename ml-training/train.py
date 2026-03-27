@@ -818,7 +818,7 @@ def main():
             if (batch_idx + 1) % log_interval == 0:
                 elapsed = time.time() - epoch_start
                 eta = elapsed / (batch_idx + 1) * (num_train_batches - batch_idx - 1)
-                running_loss = train_loss / train_total
+                running_loss = train_loss / max(train_samples, 1)
                 print(f"  [{batch_idx+1}/{num_train_batches}] "
                       f"loss={running_loss:.4f} "
                       f"elapsed={elapsed:.0f}s eta={eta:.0f}s", flush=True)
