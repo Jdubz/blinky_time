@@ -258,9 +258,9 @@ def main():
     parser.add_argument("--labels-dir", type=Path, default=LABELS_DIR)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--librosa-dir", type=Path, default=LIBROSA_DIR)
-    parser.add_argument("--test-dir", type=Path,
-                        default=Path(__file__).parent.parent.parent / "blinky-test-player/music/edm",
-                        help="Also generate labels for test tracks (output alongside audio)")
+    parser.add_argument("--test-dir", type=Path, default=None,
+                        help="Also generate labels for test tracks (output alongside audio). "
+                             "Not processed unless explicitly passed.")
     parser.add_argument("--workers", type=int, default=1,
                         help="Workers (madmom subprocess limits parallelism)")
     args = parser.parse_args()
