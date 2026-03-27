@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "../hal/PlatformDetect.h"
 #include "../audio/FakeAudio.h"
 #include "../generators/Fire.h"
 #include "../generators/HeatFire.h"
@@ -11,6 +12,11 @@
 
 // Forward declarations
 class ConfigStorage;
+class BleScanner;
+class BleNus;
+class BleAdvertiser;
+class WifiManager;
+class WifiCommandServer;
 class Fire;
 class Water;
 class Lightning;
@@ -119,12 +125,40 @@ inline DebugChannel& operator&=(DebugChannel& a, DebugChannel b) {
     a = a & b;
     return a;
 }
+/// Print adapter that tees output to two targets (e.g., USB Serial + BLE NUS).
+/// The secondary receives a direct copy of all writes.  Pacing/buffering is
+/// the secondary's responsibility (BleNus has its own ring buffer + paced drain).
+class TeeStream : public Print {
+public:
+    TeeStream() : a_(&Serial), b_(nullptr) {}
+    void setPrimary(Print* p) { a_ = p ? p : &Serial; }
+    void setSecondary(Print* p) { b_ = p; }
+    Print* secondary() const { return b_; }
+
+    size_t write(uint8_t c) override {
+        size_t n = a_->write(c);
+        if (b_) b_->write(c);
+        return n;
+    }
+    size_t write(const uint8_t* data, size_t size) override {
+        size_t n = a_->write(data, size);
+        if (b_) b_->write(data, size);
+        return n;
+    }
+private:
+    Print* a_;
+    Print* b_;
+};
+
 class SerialConsole {
 public:
     SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic);
 
     void begin();
     void update();
+
+    /// Get the current output stream (Serial, or tee to Serial+BLE when connected).
+    Print& out() { return out_; }
 
     // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
@@ -136,6 +170,14 @@ public:
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     void setAudioController(AudioTracker* audioCtrl) { audioCtrl_ = audioCtrl; }
     void setFakeAudio(FakeAudio* fa) { fakeAudio_ = fa; }
+#ifdef BLINKY_PLATFORM_NRF52840
+    void setBleScanner(BleScanner* scanner) { bleScanner_ = scanner; }
+    void setBleNus(BleNus* nus);
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+    void setBleAdvertiser(BleAdvertiser* adv) { bleAdvertiser_ = adv; }
+    void setWifiManager(WifiManager* wifi) { wifiManager_ = wifi; }
+    void setTcpServer(WifiCommandServer* tcp) { tcpServer_ = tcp; }
+#endif
     SettingsRegistry& getSettings() { return settings_; }
 
     // Logging control
@@ -163,12 +205,16 @@ public:
     static void logWarn(const __FlashStringHelper* msg);
     static void logError(const __FlashStringHelper* msg);
 
+    /// Process a command line (from USB serial, BLE NUS, or BLE broadcast).
+    void handleCommand(const char* cmd);
+    /// Process a command and route response to a specific output (e.g., TCP client).
+    void handleCommand(const char* cmd, Print& output);
+
 private:
     // Friend declaration for parameter change callback
     friend void onParamChanged();
 
     void registerSettings();
-    void handleCommand(const char* cmd);
     bool handleSpecialCommand(const char* cmd);
     void restoreDefaults();
     void streamTick();
@@ -194,6 +240,8 @@ private:
     bool handleLogCommand(const char* cmd);
     bool handleDebugCommand(const char* cmd);     // Debug channel control
     bool handleFakeAudioCommand(const char* cmd); // Synthetic audio for visual debug
+    bool handleBleCommand(const char* cmd);       // BLE diagnostics (all platforms)
+    bool handleWifiCommand(const char* cmd);      // WiFi config (ESP32-S3 only)
     // (handleEnsembleCommand removed v67 — BandFlux pipeline removed; show nn moved to handleBeatTrackingCommand)
     bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
     bool handleDeviceConfigCommand(const char* cmd);  // Device configuration commands (v28+)
@@ -219,8 +267,17 @@ private:
     BatteryMonitor* battery_;
     AudioTracker* audioCtrl_;
     FakeAudio* fakeAudio_ = nullptr;
+#ifdef BLINKY_PLATFORM_NRF52840
+    BleScanner* bleScanner_ = nullptr;
+    BleNus* bleNus_ = nullptr;
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+    BleAdvertiser* bleAdvertiser_ = nullptr;
+    WifiManager* wifiManager_ = nullptr;
+    WifiCommandServer* tcpServer_ = nullptr;
+#endif
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
+    TeeStream out_;  // Output tee: Serial + optional BLE NUS
 
     // JSON streaming state (for web app)
     bool streamEnabled_ = false;

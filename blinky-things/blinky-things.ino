@@ -75,6 +75,14 @@ BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
+#ifdef BLINKY_PLATFORM_NRF52840
+BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
+BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
+WifiManager wifiManager;           // WiFi credential storage and connection
+WifiCommandServer tcpServer;       // TCP command server for wireless fleet management
+#endif
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -331,6 +339,54 @@ void setup() {
   console->begin();
   SerialConsole::logDebug(F("Serial console initialized"));
 
+  // Initialize BLE (nRF52840 only)
+#ifdef BLINKY_PLATFORM_NRF52840
+  // Initialize SoftDevice with 1 peripheral connection (NUS) + observer (scanner)
+  Bluefruit.begin(1, 0);
+  Bluefruit.setName("Blinky");
+  Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
+
+  // NUS peripheral — bidirectional serial-over-BLE for fleet server
+  bleNus.begin();
+  bleNus.setLineCallback([](const char* line) {
+      if (console) {
+          console->handleCommand(line);
+      }
+  });
+  console->setBleNus(&bleNus);
+  SerialConsole::logDebug(F("BLE NUS peripheral initialized"));
+
+  // Passive scanner — receives fleet broadcasts from ESP32-S3 gateway
+  bleScanner.begin();
+  bleScanner.setCommandCallback([](const char* payload, size_t len) {
+      if (console) {
+          console->handleCommand(payload);
+      }
+  });
+  console->setBleScanner(&bleScanner);
+  SerialConsole::logDebug(F("BLE scanner initialized"));
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  // BLE disabled on ESP32-S3 — NimBLE porting layer crashes on core 3.3.7
+  // (npl_freertos_sem_init / npl_freertos_mutex_init assertion failure).
+  // Known bug: arduino-esp32 #12357, #12362. Fix requires external
+  // NimBLE-Arduino library v2.3.8+ (PRs #1090, #1117).
+  // ESP32-S3 uses WiFi TCP for fleet communication instead.
+  // bleAdvertiser.begin();
+  // console->setBleAdvertiser(&bleAdvertiser);
+  wifiManager.begin();  // Loads stored credentials from NVS
+  console->setWifiManager(&wifiManager);
+  // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
+  // then hand off the TCP server to Core 0 for non-blocking accept/read/write.
+  tcpServer.setConsole(console);
+  console->setTcpServer(&tcpServer);
+  if (wifiManager.hasCredentials()) {
+      if (wifiManager.connect()) {  // Blocking connect on Core 1 (up to 10s)
+          tcpServer.begin();  // Start TCP server after WiFi connected
+      }
+  }
+  SerialConsole::logDebug(F("WiFi (BLE disabled — NimBLE core 3.3.7 bug)"));
+#endif
+
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
 
@@ -433,6 +489,28 @@ void loop() {
   if (console) {
     console->update();
   }
+
+  // Process wireless data
+#ifdef BLINKY_PLATFORM_NRF52840
+  bleNus.update();       // NUS peripheral (serial-over-BLE)
+  bleScanner.update();   // Fleet broadcast receiver
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
+  // Monitor WiFi and auto-reconnect
+  {
+      static bool wasConnected = false;
+      bool isConnected = (WiFi.status() == WL_CONNECTED);
+      if (isConnected && !wasConnected) {
+          tcpServer.begin();  // Start/restart TCP server
+          Serial.print(F("[WiFi] Connected: "));
+          Serial.println(WiFi.localIP());
+      } else if (!isConnected && wasConnected) {
+          Serial.println(F("[WiFi] Disconnected, reconnecting..."));
+          WiFi.reconnect();
+      }
+      wasConnected = isConnected;
+  }
+#endif
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;

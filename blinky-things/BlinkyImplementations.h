@@ -67,6 +67,17 @@
 #include "audio/SharedSpectralAnalysis.cpp"
 #include "audio/AudioTracker.cpp"
 
+// Communications implementations
+#include "hal/PlatformDetect.h"
+#ifdef BLINKY_PLATFORM_NRF52840
+  #include "comms/BleScanner.cpp"
+  #include "comms/BleNus.cpp"
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  #include "comms/BleAdvertiser.cpp"
+  #include "comms/WifiManager.cpp"
+  #include "comms/WifiCommandServer.cpp"
+#endif
+
 // Test implementations (only when testing enabled)
 #ifdef ENABLE_TESTING
 #include "tests/GeneratorTestRunner.cpp"
