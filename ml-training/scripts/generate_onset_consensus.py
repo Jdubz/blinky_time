@@ -258,6 +258,9 @@ def main():
     parser.add_argument("--labels-dir", type=Path, default=LABELS_DIR)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--librosa-dir", type=Path, default=LIBROSA_DIR)
+    parser.add_argument("--test-dir", type=Path,
+                        default=Path(__file__).parent.parent.parent / "blinky-test-player/music/edm",
+                        help="Also generate labels for test tracks (output alongside audio)")
     parser.add_argument("--workers", type=int, default=1,
                         help="Workers (madmom subprocess limits parallelism)")
     args = parser.parse_args()
@@ -277,7 +280,7 @@ def main():
             audio_index[f.stem] = f
     print(f"Found {len(audio_index)} audio files")
 
-    # Build work items
+    # Build work items: training labels
     work_items = []
     already_done = 0
     for stem in sorted(label_stems):
@@ -290,7 +293,23 @@ def main():
         librosa_cache = args.librosa_dir / f"{stem}.onsets.json"
         work_items.append((audio_index[stem], out_path, librosa_cache))
 
+    # Also add test tracks (output as .onsets_consensus.json alongside audio)
+    test_added = 0
+    if args.test_dir and args.test_dir.exists():
+        for f in sorted(args.test_dir.iterdir()):
+            if f.suffix.lower() not in audio_extensions:
+                continue
+            out_path = args.test_dir / f"{f.stem}.onsets_consensus.json"
+            if out_path.exists():
+                already_done += 1
+                continue
+            librosa_cache = args.librosa_dir / f"{f.stem}.onsets.json"
+            work_items.append((f, out_path, librosa_cache))
+            test_added += 1
+
     print(f"  {already_done} already done, {len(work_items)} to process")
+    if test_added > 0:
+        print(f"  (includes {test_added} test tracks)")
     print(f"  {TOTAL_SYSTEMS} onset detection systems")
 
     if not work_items:
