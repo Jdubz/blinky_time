@@ -10,10 +10,8 @@ struct FrameOnsetNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }
     bool isReady() const                            { return false; }
-    bool hasDownbeatOutput() const                  { return false; }
     float infer(const float*)                       { return 0.0f; }
     float getLastOnset() const                       { return 0.0f; }
-    float getLastDownbeat() const                   { return 0.0f; }
     void setProfileEnabled(bool)                    {}
     void printDiagnostics() const                   {}
 };

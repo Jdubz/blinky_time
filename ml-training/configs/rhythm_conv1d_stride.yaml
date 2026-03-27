@@ -15,7 +15,6 @@
 # Override pos_weight for pooled labels (base.yaml values are for full-res)
 training:
   pos_weight: 1.5             # ~44% positive after 16x max-pool (base: 20.0 for ~4.5%)
-  downbeat_pos_weight: 5.0    # ~12% positive after 16x max-pool (base: 60.0 for ~0.6%)
 
 model:
   type: "frame_conv1d_pool"
@@ -25,7 +24,6 @@ model:
   use_stride: true                  # Strided conv instead of Conv+AvgPool
   window_frames: 192
   dropout: 0.1
-  downbeat: true
 
 export:
   output_header: "../blinky-things/audio/rhythm_model_data.h"

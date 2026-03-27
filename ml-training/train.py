@@ -29,10 +29,9 @@ from scripts.audio import load_config
 class MemmapBeatDataset(Dataset):
     """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
-    def __init__(self, x_path, y_path, y_db_path=None, y_teacher_path=None):
+    def __init__(self, x_path, y_path, y_teacher_path=None):
         self.X = np.load(x_path, mmap_mode='r')
         self.Y = np.load(y_path, mmap_mode='r')
-        self.Y_db = np.load(y_db_path, mmap_mode='r') if y_db_path else None
         self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
         self._empty_teacher = torch.empty(0)  # Shared placeholder (avoid per-sample alloc)
 
@@ -42,10 +41,7 @@ class MemmapBeatDataset(Dataset):
     def __getitem__(self, idx):
         x = torch.from_numpy(self.X[idx].copy()).float()
         y = torch.from_numpy(self.Y[idx].copy()).float()
-        if self.Y_db is not None:
-            y_db = torch.from_numpy(self.Y_db[idx].copy()).float()
-            y_out = torch.stack([y, y_db], dim=-1)
-        elif y.dim() == 2:
+        if y.dim() == 2:
             # Multi-channel targets (e.g., instrument model: chunk_frames × 3)
             y_out = y
         else:
@@ -108,8 +104,7 @@ def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
 
     Args:
         pos_weight: scalar (same weight for all channels) or 1D tensor with
-                    one weight per output channel (e.g., [10.0, 40.0] for
-                    beat + downbeat).
+                    one weight per output channel (e.g., per-instrument weights).
     """
     y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
     pw = _broadcast_pos_weight(pos_weight, y_true)
@@ -130,7 +125,7 @@ def shift_tolerant_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     At 62.5 Hz, tolerance_frames=3 means ±48ms tolerance, matching
     typical annotation jitter in consensus labels.
 
-    Beat This! paper reports +12.6 F1 on downbeat detection with this loss.
+    Beat This! paper reports significant F1 improvement with this loss.
 
     Args:
         tolerance_frames: Half-window for max pooling (default 3 = ±48ms at 62.5 Hz)
@@ -145,8 +140,8 @@ def shift_tolerant_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
         kernel_size=pool_size, stride=1, padding=tolerance_frames
     ).permute(0, 2, 1)  # back to (batch, time, channels)
 
-    # Use pooled predictions where target is positive (beat/downbeat frames),
-    # original predictions where target is negative (non-beat frames)
+    # Use pooled predictions where target is positive (onset frames),
+    # original predictions where target is negative (non-onset frames)
     y_effective = torch.where(y_true > 0.5, y_pooled, y_pred)
 
     bce = nn.functional.binary_cross_entropy(y_effective, y_true, reduction="none")
@@ -393,8 +388,6 @@ def main():
     batch_size = args.batch_size or cfg["training"]["batch_size"]
     lr = args.lr or cfg["training"]["learning_rate"]
     beat_pos_weight = cfg["training"].get("pos_weight", 0)  # 0 = auto-calculate from data
-    downbeat_pos_weight = cfg["training"].get("downbeat_pos_weight", 0)
-    use_downbeat = cfg["model"].get("downbeat", False)
 
     if args.device is None or args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -404,30 +397,6 @@ def main():
 
     # Load data (memory-mapped for low RAM usage)
     print(f"Loading data from {data_dir}...")
-
-    db_train_path = data_dir / "Y_db_train.npy"
-    db_val_path = data_dir / "Y_db_val.npy"
-    has_db = False
-
-    if use_downbeat:
-        if not db_train_path.exists() or not db_val_path.exists():
-            print("WARNING: downbeat=true but Y_db_train.npy and/or Y_db_val.npy not found. "
-                  "Training beat-only.")
-            use_downbeat = False
-        else:
-            # Validate shapes match beat targets before committing to downbeat mode
-            y_train_shape = np.load(data_dir / "Y_train.npy", mmap_mode='r').shape
-            y_db_train_shape = np.load(db_train_path, mmap_mode='r').shape
-            y_val_shape = np.load(data_dir / "Y_val.npy", mmap_mode='r').shape
-            y_db_val_shape = np.load(db_val_path, mmap_mode='r').shape
-            if y_db_train_shape != y_train_shape or y_db_val_shape != y_val_shape:
-                print(f"WARNING: Downbeat target shapes don't match beat targets "
-                      f"(Y_db_train: {y_db_train_shape} vs Y_train: {y_train_shape}, "
-                      f"Y_db_val: {y_db_val_shape} vs Y_val: {y_val_shape}). "
-                      f"Training beat-only.")
-                use_downbeat = False
-            else:
-                has_db = True
 
     # Resolve teacher label paths for knowledge distillation
     teacher_train_path = None
@@ -452,11 +421,9 @@ def main():
 
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
-        y_db_path=db_train_path if has_db else None,
         y_teacher_path=teacher_train_path)
     val_ds = MemmapBeatDataset(
         data_dir / "X_val.npy", data_dir / "Y_val.npy",
-        y_db_path=db_val_path if has_db else None,
         y_teacher_path=teacher_val_path)
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
@@ -500,17 +467,6 @@ def main():
         auto_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
         if beat_pos_weight <= 0:
             beat_pos_weight = auto_pw
-        if downbeat_pos_weight <= 0:
-            if has_db and db_train_path is not None and Path(db_train_path).exists():
-                y_db_sample = np.load(db_train_path, mmap_mode='r')[:sample_size]
-                db_pos_mean = y_db_sample.mean()
-                downbeat_pos_weight = (1 - db_pos_mean) / max(db_pos_mean, 1e-10)
-                print(f"  Downbeat positive ratio: mean={db_pos_mean:.4f}")
-                print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (auto)")
-            else:
-                # Heuristic: downbeats occur ~1/4 as often as beats
-                downbeat_pos_weight = beat_pos_weight * 4
-                print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (heuristic 4x beat)")
         print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
         print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
 
@@ -539,7 +495,6 @@ def main():
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
             dropout=cfg["model"]["dropout"],
-            downbeat=use_downbeat,
         ).to(device)
     elif model_type == "frame_fc_enhanced":
         from models.onset_fc_enhanced import build_onset_fc_enhanced
@@ -548,7 +503,6 @@ def main():
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
             dropout=cfg["model"]["dropout"],
-            downbeat=use_downbeat,
             se_ratio=cfg["model"].get("se_ratio", 0),
             conv_channels=cfg["model"].get("conv_channels", 0),
             conv_kernel=cfg["model"].get("conv_kernel", 5),
@@ -566,8 +520,6 @@ def main():
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"]["dropout"],
-            downbeat=use_downbeat,
-            sum_head=cfg["model"].get("sum_head", False),
             num_tempo_bins=num_tempo_bins,
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
             num_output_channels=cfg["model"].get("num_output_channels", 0),
@@ -580,7 +532,6 @@ def main():
             kernel_sizes=cfg["model"]["kernel_sizes"],
             pool_sizes=cfg["model"]["pool_sizes"],
             dropout=cfg["model"]["dropout"],
-            downbeat=use_downbeat,
             use_stride=cfg["model"].get("use_stride", False),
         ).to(device)
     else:
@@ -591,7 +542,6 @@ def main():
             dilations=cfg["model"]["dilations"],
             dropout=cfg["model"]["dropout"],
             chunk_frames=cfg["training"]["chunk_frames"],
-            downbeat=use_downbeat,
             model_type=model_type,
             residual=cfg["model"].get("residual", False),
         ).to(device)
@@ -674,9 +624,6 @@ def main():
     if multichannel_targets:
         pos_weight = torch.tensor(per_channel_pw, dtype=torch.float32, device=device)
         print(f"Pos weights (per-channel): {per_channel_pw}")
-    elif use_downbeat:
-        pos_weight = torch.tensor([beat_pos_weight, downbeat_pos_weight], device=device)
-        print(f"Pos weights: beat={beat_pos_weight}, downbeat={downbeat_pos_weight}")
     else:
         pos_weight = beat_pos_weight
 
@@ -747,7 +694,7 @@ def main():
     print(f"  {steps_per_epoch} steps/epoch, {epochs * steps_per_epoch} total steps")
     patience = args.patience or cfg["training"].get("patience", 15)
     print(f"  Patience: {patience} epochs")
-    print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
+    print(f"Output channels: {model.out_channels}")
     if use_distill:
         print(f"Distillation: alpha={distill_alpha}, temp={distill_temp}")
 
@@ -871,7 +818,7 @@ def main():
             if (batch_idx + 1) % log_interval == 0:
                 elapsed = time.time() - epoch_start
                 eta = elapsed / (batch_idx + 1) * (num_train_batches - batch_idx - 1)
-                running_loss = train_loss / train_total * (2 if use_downbeat else 1)
+                running_loss = train_loss / max(train_samples, 1)
                 print(f"  [{batch_idx+1}/{num_train_batches}] "
                       f"loss={running_loss:.4f} "
                       f"elapsed={elapsed:.0f}s eta={eta:.0f}s", flush=True)
@@ -1009,7 +956,6 @@ def main():
     torch.save({
         "state_dict": model.state_dict(),
         "config": cfg,
-        "use_downbeat": use_downbeat,
         "loss": loss_type,
         "focal_gamma": args.focal_gamma if loss_type == "focal" else None,
         "shift_tolerance": shift_tolerance if loss_type in ("shift_bce", "shift_focal") else None,

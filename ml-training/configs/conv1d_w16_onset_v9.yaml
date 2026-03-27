@@ -25,7 +25,6 @@ model:
   kernel_sizes: [5, 5]
   window_frames: 16
   dropout: 0.1
-  downbeat: false
   freq_pos_encoding: true     # Proven in v3: helps kick/hi-hat discrimination
   num_tempo_bins: 40           # NEW: tempo auxiliary head (60-200 BPM, stripped at export)
 

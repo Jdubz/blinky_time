@@ -1,4 +1,4 @@
-"""Frame-level Conv1D with temporal pooling for downbeat/bar detection.
+"""Frame-level Conv1D with temporal pooling for long-context detection.
 
 Designed for long-context windows (192 frames = 3.07s) where plain FC
 flattening destroys temporal locality. Conv1D preserves local patterns,
@@ -23,7 +23,7 @@ import torch.nn as nn
 
 
 class FrameOnsetConv1DPool(nn.Module):
-    """Causal Conv1D with temporal pooling for long-context onset/downbeat.
+    """Causal Conv1D with temporal pooling for long-context onset detection.
 
     Input:  (batch, time, n_mels)
     Output: (batch, time // pool_factor, out_channels)
@@ -37,13 +37,12 @@ class FrameOnsetConv1DPool(nn.Module):
                  kernel_sizes: list[int] = [5, 5, 3],
                  pool_sizes: list[int] = [4, 4, 1],
                  dropout: float = 0.1,
-                 downbeat: bool = True,
                  use_stride: bool = False):
         super().__init__()
         assert len(channels) == len(kernel_sizes) == len(pool_sizes), \
             "channels, kernel_sizes, and pool_sizes must have same length"
 
-        self.out_channels = 2 if downbeat else 1
+        self.out_channels = 1
         self.n_mels = n_mels
         self.channels = channels
         self.kernel_sizes = kernel_sizes
@@ -92,10 +91,9 @@ def build_onset_conv1d_pool(n_mels: int = 26,
                            kernel_sizes: list[int] = [5, 5, 3],
                            pool_sizes: list[int] = [4, 4, 1],
                            dropout: float = 0.1,
-                           downbeat: bool = True,
                            use_stride: bool = False) -> nn.Module:
-    """Build a Conv1D+Pool onset/downbeat model."""
+    """Build a Conv1D+Pool onset model."""
     return FrameOnsetConv1DPool(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
-        pool_sizes=pool_sizes, dropout=dropout, downbeat=downbeat,
+        pool_sizes=pool_sizes, dropout=dropout,
         use_stride=use_stride)

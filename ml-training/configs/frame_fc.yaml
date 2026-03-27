@@ -1,4 +1,4 @@
-# Frame-level FC — sliding window of mel frames → FC → beat/downbeat
+# Frame-level FC — sliding window of mel frames → FC → onset activation
 #
 # Shared settings are in base.yaml and merged automatically by load_config().
 # This file only contains model-specific overrides.
@@ -12,7 +12,6 @@ model:
   window_frames: 32         # Sliding window size (32 frames = 512ms at 62.5 Hz)
   hidden_dims: [64, 32]     # FC hidden layer sizes
   dropout: 0.1
-  downbeat: true
 
 export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"

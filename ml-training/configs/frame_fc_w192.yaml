@@ -1,8 +1,7 @@
-# Frame-level FC — 192-frame window (3.07s) for full-bar downbeat detection
+# Frame-level FC — 192-frame window (3.07s) for full-bar context (legacy)
 #
 # At 120 BPM: 6.1 beats = 1.5 bars. At 90 BPM: 4.6 beats = 1.15 bars.
-# Guarantees visibility of a complete bar at all common EDM tempos (90-180 BPM),
-# giving the model the context it needs to identify downbeat position within a bar.
+# Wide temporal context for onset detection.
 #
 # 192×26 = 4992 input features. ~322K params, ~314 KB INT8.
 # Flash: 314 KB of ~500 KB budget. RAM: 19.5 KB mel buffer + ~4 KB arena.
@@ -17,7 +16,6 @@ model:
   window_frames: 192        # 192 frames = 3072ms at 62.5 Hz
   hidden_dims: [64, 32]     # Same hidden layers — input layer dominates params
   dropout: 0.1
-  downbeat: true
 
 # Override base.yaml training params for W192:
 # - chunk_frames must be >= window_frames. 384 = 2×window gives 50% of timesteps

@@ -40,7 +40,6 @@ model:
   kernel_sizes: [5, 5]
   window_frames: 16
   dropout: 0.1
-  downbeat: false
   freq_pos_encoding: true
   num_output_channels: 3
   output_channel_names: ["kick", "snare", "hihat"]

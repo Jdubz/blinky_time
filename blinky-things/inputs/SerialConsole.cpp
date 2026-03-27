@@ -1295,10 +1295,9 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nn":<0|1>,"nndb":<float>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
+    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
     // "onset" = raw ODF (NN onset activation or mic level fallback)
     // "nn" = 1 if NN loaded, 0 if stub/fallback
-    // "nndb" = NN downbeat activation (only present if model has downbeat head)
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
@@ -1322,10 +1321,6 @@ void SerialConsole::streamTick() {
             // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
             Serial.print(F(",\"nn\":"));
             Serial.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
-            if (audioCtrl_->getFrameOnsetNN().hasDownbeatOutput()) {
-                Serial.print(F(",\"nndb\":"));
-                Serial.print(audioCtrl_->getFrameOnsetNN().getLastDownbeat(), 4);
-            }
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"phase\":"));

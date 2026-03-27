@@ -20,17 +20,16 @@ import torch.nn as nn
 
 
 class OnsetCNN(nn.Module):
-    """Causal 1D CNN for onset (and optional downbeat) activation.
+    """Causal 1D CNN for onset activation.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels)  — 1 = onset only, 2 = onset + downbeat
+    Output: (batch, time, 1)
     """
 
     def __init__(self, n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
-                 dilations: list[int] = [1, 2, 4], dropout: float = 0.1,
-                 downbeat: bool = False):
+                 dilations: list[int] = [1, 2, 4], dropout: float = 0.1):
         super().__init__()
-        self.out_channels = 2 if downbeat else 1
+        self.out_channels = 1
 
         layers = []
         in_ch = n_mels
@@ -132,9 +131,9 @@ class DSTCNOnsetCNN(nn.Module):
 
     def __init__(self, n_mels: int = 26, channels: int = 24, kernel_size: int = 3,
                  dilations: list[int] = [1, 2, 4, 8, 16], dropout: float = 0.1,
-                 downbeat: bool = False, residual: bool = True):
+                 residual: bool = True):
         super().__init__()
-        self.out_channels = 2 if downbeat else 1
+        self.out_channels = 1
         if dilations[0] != 1:
             raise ValueError(f"First dilation must be 1 (got {dilations[0]})")
 
@@ -179,7 +178,7 @@ class DSTCNOnsetCNN(nn.Module):
 
 def build_onset_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
                    dilations: list[int] = [1, 2, 4], dropout: float = 0.1,
-                   chunk_frames: int = 128, downbeat: bool = False,
+                   chunk_frames: int = 128,
                    model_type: str = "causal_cnn",
                    residual: bool = False) -> nn.Module:
     """Build an onset activation model.
@@ -193,10 +192,10 @@ def build_onset_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
     """
     if model_type == "ds_tcn":
         return DSTCNOnsetCNN(n_mels=n_mels, channels=channels, kernel_size=kernel_size,
-                            dilations=dilations, dropout=dropout, downbeat=downbeat,
+                            dilations=dilations, dropout=dropout,
                             residual=residual)
     return OnsetCNN(n_mels=n_mels, channels=channels, kernel_size=kernel_size,
-                   dilations=dilations, dropout=dropout, downbeat=downbeat)
+                   dilations=dilations, dropout=dropout)
 
 
 def model_summary(cfg: dict) -> None:
@@ -209,7 +208,6 @@ def model_summary(cfg: dict) -> None:
         dilations=cfg["model"]["dilations"],
         dropout=cfg["model"]["dropout"],
         chunk_frames=cfg["training"]["chunk_frames"],
-        downbeat=cfg["model"].get("downbeat", False),
         model_type=model_type,
         residual=cfg["model"].get("residual", False),
     )

@@ -107,7 +107,6 @@ public:
 
     /**
      * Feed one frame of mel bands, run inference, return onset activation [0,1].
-     * Downbeat result cached — access via getLastDownbeat().
      */
     float infer(const float* melBands) {
         if (!ready_) return 0.0f;
@@ -173,11 +172,8 @@ public:
             Serial.println(ARENA_SIZE);
         }
 
-        // Extract outputs
+        // Extract onset output
         lastOnset_ = extractOutput(0);
-        if (outputChannels_ >= 2) {
-            lastDownbeat_ = extractOutput(1);
-        }
 
         return lastOnset_;
     }
@@ -185,12 +181,10 @@ public:
     // --- Status ---
 
     bool isReady() const { return ready_; }
-    bool hasDownbeatOutput() const { return ready_ && outputChannels_ >= 2; }
 
     // --- Output accessors ---
 
     float getLastOnset() const { return lastOnset_; }
-    float getLastDownbeat() const { return lastDownbeat_; }
 
     // --- Profiling ---
 
@@ -231,10 +225,6 @@ public:
             Serial.print(output_->params.zero_point);
             Serial.print(F("\n  onset="));
             Serial.print(lastOnset_, 4);
-            if (outputChannels_ >= 2) {
-                Serial.print(F(" db="));
-                Serial.print(lastDownbeat_, 4);
-            }
             if (input_->type == kTfLiteInt8 && windowFilled_ >= windowFrames_) {
                 int lastFrameStart = (windowFrames_ - 1) * inputFeatures_;
                 Serial.print(F("\n  last_mel=["));
@@ -260,10 +250,10 @@ public:
     }
 
 private:
-    // Op resolver — supports FC, Conv1D, and Conv1D+sum_head models:
+    // Op resolver — supports FC, Conv1D, and multi-output models:
     // FC: FullyConnected, Logistic, Quantize, Dequantize, Reshape
     // Conv1D: Conv2D, Pad, Reshape, ExpandDims, Logistic
-    // Sum head adds: Mul, StridedSlice, Concatenation, extra Quantize
+    // Multi-output: Mul, StridedSlice, Concatenation, extra Quantize
     static constexpr int OP_RESOLVER_SLOTS = 12;
 
     tflite::MicroErrorReporter errorReporter_;
@@ -279,9 +269,9 @@ private:
         resolver_.AddReshape();         // Tensor shape conversion
         resolver_.AddExpandDims();      // 1D→2D input expansion
         resolver_.AddLogistic();        // Sigmoid activation
-        resolver_.AddMul();             // Sum head: beat * sigmoid(db_logit)
-        resolver_.AddStridedSlice();    // Sum head: split channels
-        resolver_.AddConcatenation();   // Sum head: join beat + downbeat
+        resolver_.AddMul();             // Kept for model compatibility (was sum_head)
+        resolver_.AddStridedSlice();    // Kept for model compatibility (was multi-output split)
+        resolver_.AddConcatenation();   // Kept for model compatibility (was multi-output join)
         resolver_.AddQuantize();
         resolver_.AddDequantize();
         resolverInited_ = true;
@@ -323,7 +313,6 @@ private:
     int outputChannels_ = 1;
     int outputOffset_ = 0;
     float lastOnset_ = 0.0f;
-    float lastDownbeat_ = 0.0f;
     bool ready_ = false;
     int initError_ = 0;
     size_t arenaUsed_ = 0;

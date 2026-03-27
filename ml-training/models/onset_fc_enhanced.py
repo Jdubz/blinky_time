@@ -58,7 +58,7 @@ class EnhancedOnsetFC(nn.Module):
     """Enhanced frame-level FC with optional SE, Conv1D, multi-window, and tempo head.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels) onset/downbeat activations
+    Output: (batch, time, 1) onset activations
             Optionally also returns tempo logits for auxiliary loss.
 
     All enhancements are optional and independently configured.
@@ -66,7 +66,6 @@ class EnhancedOnsetFC(nn.Module):
 
     def __init__(self, n_mels: int = 26, window_frames: int = 32,
                  hidden_dims: list[int] | None = None, dropout: float = 0.1,
-                 downbeat: bool = False,
                  # SE block
                  se_ratio: int = 0,  # 0 = disabled, 4 = squeeze 26→6→26
                  # Conv1D front-end
@@ -81,7 +80,7 @@ class EnhancedOnsetFC(nn.Module):
         super().__init__()
         self.n_mels = n_mels
         self.window_frames = window_frames
-        self.out_channels = 2 if downbeat else 1
+        self.out_channels = 1
         self.short_window = short_window
         self.num_tempo_bins = num_tempo_bins
         self.use_se = se_ratio > 0
@@ -219,7 +218,7 @@ class EnhancedOnsetFC(nn.Module):
 
 def build_onset_fc_enhanced(n_mels: int = 26, window_frames: int = 32,
                             hidden_dims: list[int] | None = None,
-                            dropout: float = 0.1, downbeat: bool = False,
+                            dropout: float = 0.1,
                             se_ratio: int = 0, conv_channels: int = 0,
                             conv_kernel: int = 5, short_window: int = 0,
                             short_hidden: int = 0,
@@ -227,7 +226,7 @@ def build_onset_fc_enhanced(n_mels: int = 26, window_frames: int = 32,
     """Build an enhanced frame-level FC onset activation model."""
     return EnhancedOnsetFC(
         n_mels=n_mels, window_frames=window_frames,
-        hidden_dims=hidden_dims, dropout=dropout, downbeat=downbeat,
+        hidden_dims=hidden_dims, dropout=dropout,
         se_ratio=se_ratio, conv_channels=conv_channels,
         conv_kernel=conv_kernel, short_window=short_window,
         short_hidden=short_hidden, num_tempo_bins=num_tempo_bins,
@@ -245,7 +244,6 @@ def enhanced_model_summary(cfg: dict) -> None:
         window_frames=cfg["model"]["window_frames"],
         hidden_dims=cfg["model"]["hidden_dims"],
         dropout=cfg["model"]["dropout"],
-        downbeat=cfg["model"].get("downbeat", False),
         se_ratio=cfg["model"].get("se_ratio", 0),
         conv_channels=cfg["model"].get("conv_channels", 0),
         conv_kernel=cfg["model"].get("conv_kernel", 5),

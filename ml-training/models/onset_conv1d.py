@@ -1,10 +1,10 @@
-"""Frame-level 1D Conv model for onset/downbeat activation.
+"""Frame-level 1D Conv model for onset activation.
 
 Designed for XIAO nRF52840 Sense (Cortex-M4F @ 64 MHz, 256 KB RAM)
 via TFLite Micro. Target inference: 3-8ms per frame for 32-frame window.
 
 Architecture: causal Conv1D layers (no dilation, no BatchNorm)
-  Input: (batch, time, n_mels) → per-frame output: (batch, time, 2)
+  Input: (batch, time, n_mels) → per-frame output: (batch, time, out_channels)
 
 No dilated convolutions — avoids SpaceToBatch/BatchToSpace TFLite overhead
 that made the old CNN 79-98ms (SpaceToBatch alone was ~20ms).
@@ -29,13 +29,13 @@ import torch.nn as nn
 
 
 class FrameOnsetConv1D(nn.Module):
-    """Causal 1D Conv for onset (and optional downbeat) activation.
+    """Causal 1D Conv for onset activation.
 
     No BatchNorm, no dilation. Variable channel widths and kernel sizes
     per layer for flexible architecture search.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels)  — 1 = onset only, 2 = onset + downbeat
+    Output: (batch, time, out_channels)  — 1 for single onset, or N for instrument models
             During training with tempo head: tuple of (predictions, tempo_logits)
     """
 
@@ -43,8 +43,6 @@ class FrameOnsetConv1D(nn.Module):
                  channels: list[int] = [32, 48, 32],
                  kernel_sizes: list[int] = [5, 5, 3],
                  dropout: float = 0.1,
-                 downbeat: bool = False,
-                 sum_head: bool = False,
                  num_tempo_bins: int = 0,
                  freq_pos_encoding: bool = False,
                  num_output_channels: int = 0):
@@ -52,10 +50,8 @@ class FrameOnsetConv1D(nn.Module):
         assert len(channels) == len(kernel_sizes), \
             f"channels ({len(channels)}) and kernel_sizes ({len(kernel_sizes)}) must match"
 
-        # num_output_channels > 0 overrides the downbeat-based channel count.
-        # Used for instrument-aware models (e.g., 3 channels: kick/snare/hihat).
-        self.out_channels = num_output_channels if num_output_channels > 0 else (2 if downbeat else 1)
-        self.sum_head = sum_head and downbeat
+        # num_output_channels > 0 for instrument-aware models (e.g., 3 channels: kick/snare/hihat).
+        self.out_channels = num_output_channels if num_output_channels > 0 else 1
         self.n_mels = n_mels
         self.channels = channels
         self.kernel_sizes = kernel_sizes
@@ -94,8 +90,6 @@ class FrameOnsetConv1D(nn.Module):
             x: (batch, time, n_mels)
         Returns:
             (batch, time, out_channels) with sigmoid activation.
-            If sum_head: ch0 = onset, ch1 = onset * sigmoid(db_logit)
-            so downbeat is structurally constrained to be ≤ onset.
             During training with tempo head: (predictions, tempo_logits)
         """
         if self.freq_pos_encoding:
@@ -105,12 +99,7 @@ class FrameOnsetConv1D(nn.Module):
         h = self.backbone(x)     # (batch, last_ch, time)
         logits = self.output_conv(h)  # (batch, out_channels, time)
 
-        if self.sum_head:
-            onset = torch.sigmoid(logits[:, 0:1, :])
-            db = onset * torch.sigmoid(logits[:, 1:2, :])
-            out = torch.cat([onset, db], dim=1)
-        else:
-            out = torch.sigmoid(logits)
+        out = torch.sigmoid(logits)
 
         out = out.permute(0, 2, 1)  # (batch, time, channels)
 
@@ -126,8 +115,6 @@ def build_onset_conv1d(n_mels: int = 26,
                       channels: list[int] = [32, 48, 32],
                       kernel_sizes: list[int] = [5, 5, 3],
                       dropout: float = 0.1,
-                      downbeat: bool = False,
-                      sum_head: bool = False,
                       num_tempo_bins: int = 0,
                       freq_pos_encoding: bool = False,
                       num_output_channels: int = 0) -> nn.Module:
@@ -138,15 +125,13 @@ def build_onset_conv1d(n_mels: int = 26,
         channels: Per-layer channel widths (e.g. [32, 48, 32])
         kernel_sizes: Per-layer kernel sizes (e.g. [5, 5, 3])
         dropout: Dropout rate between layers
-        downbeat: If True, output 2 channels (onset + downbeat)
-        sum_head: If True, constrain downbeat ≤ onset (Beat This! technique)
         num_tempo_bins: If > 0, add training-only tempo auxiliary head
         freq_pos_encoding: If True, add learnable frequency position vector
         num_output_channels: If > 0, override output channel count (e.g., 3 for kick/snare/hihat)
     """
     return FrameOnsetConv1D(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
-        dropout=dropout, downbeat=downbeat, sum_head=sum_head,
+        dropout=dropout,
         num_tempo_bins=num_tempo_bins, freq_pos_encoding=freq_pos_encoding,
         num_output_channels=num_output_channels)
 
@@ -158,7 +143,6 @@ def conv1d_model_summary(cfg: dict) -> None:
         channels=cfg["model"]["channels"],
         kernel_sizes=cfg["model"]["kernel_sizes"],
         dropout=cfg["model"]["dropout"],
-        downbeat=cfg["model"].get("downbeat", False),
     )
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)

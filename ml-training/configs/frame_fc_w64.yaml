@@ -1,6 +1,6 @@
 # Frame-level FC — 64-frame window (1024ms) for maximum temporal context
 #
-# Sees ~2 full beats at 120 BPM. Maximum context for downbeat detection.
+# Sees ~2 full beats at 120 BPM. Maximum temporal context.
 # 64×26=1664 input features. Full [64,32] hidden dims — flash has ~635 KB free.
 # ~109K params, ~106 KB INT8. Inference ~400µs on Cortex-M4F (well under 10ms budget).
 
@@ -9,7 +9,6 @@ model:
   window_frames: 64         # 64 frames = 1024ms at 62.5 Hz
   hidden_dims: [64, 32]     # Full capacity — 106 KB INT8 fits easily in flash
   dropout: 0.1
-  downbeat: true
 
 export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"

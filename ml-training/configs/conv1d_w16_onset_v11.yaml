@@ -37,19 +37,18 @@ model:
   kernel_sizes: [5, 5]
   window_frames: 16
   dropout: 0.1
-  downbeat: false
   freq_pos_encoding: true
 
 labels:
   target_type: "binary"
   labels_type: "onset_consensus"
   onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
-  neighbor_weight: 0.25           # Frames at onset±1 get 0.25× onset value
-  label_shift_frames: 0           # No additional shift — backtrack_onset_labels.py already
-                                  # aligned all labels to spectral flux rising edge (~44ms earlier)
-  early_neighbor_frames: 2        # 2 frames before onset get decaying weight
-  early_neighbor_weight: 0.5      # Frame -1 gets 0.5×, frame -2 gets 0.25× onset value
-                                  # Asymmetric: wider acceptance before onset, narrow after
+  neighbor_weight: 0.25           # Frames at onset±1 get 0.25× onset value (Schluter/Bock 2014)
+  label_shift_frames: 1           # Shift targets 1 frame earlier — compensates for inherent
+                                  # 1-frame causal delay (Bock 2012 online onset detection).
+                                  # Model learns to predict next frame's onset state.
+  early_neighbor_frames: 0        # Disabled — backtracking showed that shifting labels beyond
+  early_neighbor_weight: 0.0      # the energy rise start degrades F1 (0.709 → 0.511)
 
 features:
   use_delta: true                 # Append first-order mel differences (26→52 input)

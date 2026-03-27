@@ -1,11 +1,11 @@
-"""Frame-level FC model for onset/downbeat activation.
+"""Frame-level FC model for onset activation.
 
 Designed for XIAO nRF52840 Sense (Cortex-M4F @ 64 MHz, 256 KB RAM)
 via TFLite Micro. Runs every spectral frame (~62.5 Hz), ~60-200us
 per inference.
 
 Architecture: sliding window of N raw mel frames x 26 bands
-  -> flatten -> FC hidden layers -> onset_activation + downbeat_activation
+  -> flatten -> FC hidden layers -> onset_activation
 
 TFLite ops needed: FullyConnected, ReLU, Logistic, Quantize, Dequantize
 (all already in FrameOnsetNN.h resolver — no Reshape needed since firmware
@@ -27,10 +27,10 @@ import torch.nn.functional as F
 
 
 class FrameOnsetFC(nn.Module):
-    """Frame-level FC for onset (and optional downbeat) activation.
+    """Frame-level FC for onset activation.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels)  — 1 = onset only, 2 = onset + downbeat
+    Output: (batch, time, 1)
 
     Maintains a causal sliding window of `window_frames` mel frames.
     During training, all timesteps are processed in parallel via unfolding.
@@ -39,12 +39,11 @@ class FrameOnsetFC(nn.Module):
     """
 
     def __init__(self, n_mels: int = 26, window_frames: int = 32,
-                 hidden_dims: list[int] | None = None, dropout: float = 0.1,
-                 downbeat: bool = False):
+                 hidden_dims: list[int] | None = None, dropout: float = 0.1):
         super().__init__()
         self.n_mels = n_mels
         self.window_frames = window_frames
-        self.out_channels = 2 if downbeat else 1
+        self.out_channels = 1
 
         if hidden_dims is None:
             hidden_dims = [64, 32]
@@ -89,8 +88,7 @@ class FrameOnsetFC(nn.Module):
 
 
 def build_onset_fc(n_mels: int = 26, window_frames: int = 32,
-                  hidden_dims: list[int] | None = None, dropout: float = 0.1,
-                  downbeat: bool = False) -> nn.Module:
+                  hidden_dims: list[int] | None = None, dropout: float = 0.1) -> nn.Module:
     """Build a frame-level FC onset activation model.
 
     Args:
@@ -98,11 +96,9 @@ def build_onset_fc(n_mels: int = 26, window_frames: int = 32,
         window_frames: Sliding window size in frames (e.g. 32 = 512ms at 62.5 Hz)
         hidden_dims: List of hidden layer sizes (e.g. [64, 32])
         dropout: Dropout rate between hidden layers
-        downbeat: If True, output 2 channels (onset + downbeat)
     """
     return FrameOnsetFC(n_mels=n_mels, window_frames=window_frames,
-                       hidden_dims=hidden_dims, dropout=dropout,
-                       downbeat=downbeat)
+                       hidden_dims=hidden_dims, dropout=dropout)
 
 
 def fc_model_summary(cfg: dict) -> None:
@@ -112,11 +108,10 @@ def fc_model_summary(cfg: dict) -> None:
         window_frames=cfg["model"]["window_frames"],
         hidden_dims=cfg["model"]["hidden_dims"],
         dropout=cfg["model"]["dropout"],
-        downbeat=cfg["model"].get("downbeat", False),
     )
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    out_ch = 2 if cfg["model"].get("downbeat", False) else 1
+    out_ch = 1
     print(f"FrameOnsetFC: {total_params} params ({trainable} trainable)")
 
     int8_size_kb = total_params / 1024

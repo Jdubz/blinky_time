@@ -14,7 +14,6 @@ model:
   window_frames: 32
   hidden_dims: [64, 32]
   dropout: 0.1
-  downbeat: true
   conv_channels: 32        # Conv1D output channels
   conv_kernel: 5            # k=5 → 80ms receptive field at 62.5 Hz
 

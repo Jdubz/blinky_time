@@ -26,7 +26,6 @@ model:
   window_frames: 48         # Long window: 768ms
   hidden_dims: [64, 32]
   dropout: 0.1
-  downbeat: true
   # SE block
   se_ratio: 4               # 26 → 6 → 26 channel attention
   # Conv1D front-end

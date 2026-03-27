@@ -22,7 +22,6 @@ model:
   window_frames: 32         # Sliding window size (32 frames = 512ms at 62.5 Hz)
   hidden_dims: [64, 32]     # FC hidden layer sizes
   dropout: 0.1
-  downbeat: true
 
 audio:
   target_rms_db: -30        # ESP32-S3 calibrated value (vs -63 for nRF52840)

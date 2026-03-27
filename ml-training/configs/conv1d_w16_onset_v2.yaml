@@ -21,7 +21,6 @@ model:
   kernel_sizes: [5, 5]
   window_frames: 16
   dropout: 0.1
-  downbeat: false             # Onset only — single output channel
   num_tempo_bins: 300         # Tempo auxiliary head (Bock 2019, +1-5% F1)
   tempo:
     min_bpm: 60

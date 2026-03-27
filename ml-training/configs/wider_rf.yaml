@@ -12,7 +12,6 @@ model:
   kernel_size: 3
   dilations: [1, 2, 4, 8, 16]    # RF: 63 frames = 1008ms
   dropout: 0.1
-  downbeat: true
 
 export:
   max_model_size_kb: 50
