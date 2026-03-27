@@ -34,6 +34,11 @@
 #include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
 #include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
 
+#ifdef BLINKY_PLATFORM_ESP32S3
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+#endif
+
 // Runtime Device Configuration (v28+)
 // Device config is now loaded from flash at boot time instead of compile-time selection.
 // This allows a single firmware to support multiple device types without recompilation.
@@ -382,6 +387,18 @@ void setup() {
   if (wifiManager.hasCredentials()) {
       if (wifiManager.connect()) {  // Blocking connect on Core 1 (up to 10s)
           tcpServer.begin();  // Start TCP server after WiFi connected
+          // OTA firmware update server (port 3232, password protected)
+          ArduinoOTA.setHostname("blinky");
+          ArduinoOTA.setPassword("blinkyota");
+          ArduinoOTA.onStart([]() { Serial.println(F("[OTA] Start")); });
+          ArduinoOTA.onEnd([]() { Serial.println(F("[OTA] Done, rebooting")); });
+          ArduinoOTA.onError([](ota_error_t e) {
+              Serial.print(F("[OTA] Error: ")); Serial.println(e);
+          });
+          ArduinoOTA.begin();
+          Serial.print(F("[OTA] Ready at "));
+          Serial.print(WiFi.localIP());
+          Serial.println(F(":3232"));
       }
   }
   SerialConsole::logDebug(F("WiFi (BLE disabled — NimBLE core 3.3.7 bug)"));
@@ -496,6 +513,7 @@ void loop() {
   bleScanner.update();   // Fleet broadcast receiver
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
+  ArduinoOTA.handle();  // Non-blocking OTA check (~0.5ms)
   // Monitor WiFi and auto-reconnect
   {
       static bool wasConnected = false;
