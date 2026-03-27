@@ -384,22 +384,18 @@ void setup() {
   // then hand off the TCP server to Core 0 for non-blocking accept/read/write.
   tcpServer.setConsole(console);
   console->setTcpServer(&tcpServer);
+  // Configure OTA callbacks once (begin() called when WiFi connects)
+  ArduinoOTA.setHostname("blinky");
+  ArduinoOTA.setPort(3232);
+  ArduinoOTA.setPassword("blinkyota");
+  ArduinoOTA.onStart([]() { Serial.println(F("[OTA] Start")); });
+  ArduinoOTA.onEnd([]() { Serial.println(F("[OTA] Done, rebooting")); });
+  ArduinoOTA.onError([](ota_error_t e) {
+      Serial.print(F("[OTA] Error: ")); Serial.println(e);
+  });
+  // Try WiFi connect in setup (up to 10s). If it fails, auto-reconnect in loop().
   if (wifiManager.hasCredentials()) {
-      if (wifiManager.connect()) {  // Blocking connect on Core 1 (up to 10s)
-          tcpServer.begin();  // Start TCP server after WiFi connected
-          // OTA firmware update server (port 3232, password protected)
-          ArduinoOTA.setHostname("blinky");
-          ArduinoOTA.setPassword("blinkyota");
-          ArduinoOTA.onStart([]() { Serial.println(F("[OTA] Start")); });
-          ArduinoOTA.onEnd([]() { Serial.println(F("[OTA] Done, rebooting")); });
-          ArduinoOTA.onError([](ota_error_t e) {
-              Serial.print(F("[OTA] Error: ")); Serial.println(e);
-          });
-          ArduinoOTA.begin();
-          Serial.print(F("[OTA] Ready at "));
-          Serial.print(WiFi.localIP());
-          Serial.println(F(":3232"));
-      }
+      wifiManager.connect();
   }
   SerialConsole::logDebug(F("WiFi (BLE disabled — NimBLE core 3.3.7 bug)"));
 #endif
@@ -517,11 +513,23 @@ void loop() {
   // Monitor WiFi and auto-reconnect
   {
       static bool wasConnected = false;
+      static bool servicesStarted = false;
       bool isConnected = (WiFi.status() == WL_CONNECTED);
       if (isConnected && !wasConnected) {
-          tcpServer.begin();  // Start/restart TCP server
+          if (!servicesStarted) {
+              // First connection: start TCP server, mDNS, and OTA
+              MDNS.begin("blinky");
+              tcpServer.begin();
+              ArduinoOTA.begin();
+              servicesStarted = true;
+              Serial.print(F("[WiFi] Services started. OTA at "));
+              Serial.print(WiFi.localIP());
+              Serial.println(F(":3232"));
+          }
           Serial.print(F("[WiFi] Connected: "));
-          Serial.println(WiFi.localIP());
+          Serial.print(WiFi.localIP());
+          Serial.print(F(" RSSI="));
+          Serial.println(WiFi.RSSI());
       } else if (!isConnected && wasConnected) {
           Serial.println(F("[WiFi] Disconnected, reconnecting..."));
           WiFi.reconnect();
