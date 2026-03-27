@@ -373,11 +373,18 @@ void setup() {
   // ESP32-S3 uses WiFi TCP for fleet communication instead.
   // bleAdvertiser.begin();
   // console->setBleAdvertiser(&bleAdvertiser);
-  wifiManager.begin();
-  tcpServer.setConsole(console);
-  tcpServer.begin();  // Starts listening when WiFi is connected (deferred if not yet)
+  wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
-  SerialConsole::logDebug(F("WiFi + TCP server initialized (BLE disabled — NimBLE core 3.3.7 bug)"));
+  // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
+  // then hand off the TCP server to Core 0 for non-blocking accept/read/write.
+  tcpServer.setConsole(console);
+  console->setTcpServer(&tcpServer);
+  if (wifiManager.hasCredentials()) {
+      if (wifiManager.connect()) {  // Blocking connect on Core 1 (up to 10s)
+          tcpServer.begin();  // Start TCP server after WiFi connected
+      }
+  }
+  SerialConsole::logDebug(F("WiFi (BLE disabled — NimBLE core 3.3.7 bug)"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
@@ -488,7 +495,21 @@ void loop() {
   bleNus.update();       // NUS peripheral (serial-over-BLE)
   bleScanner.update();   // Fleet broadcast receiver
 #elif defined(BLINKY_PLATFORM_ESP32S3)
-  tcpServer.update();    // WiFi TCP command server
+  tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
+  // Monitor WiFi and auto-reconnect
+  {
+      static bool wasConnected = false;
+      bool isConnected = (WiFi.status() == WL_CONNECTED);
+      if (isConnected && !wasConnected) {
+          tcpServer.begin();  // Start/restart TCP server
+          Serial.print(F("[WiFi] Connected: "));
+          Serial.println(WiFi.localIP());
+      } else if (!isConnected && wasConnected) {
+          Serial.println(F("[WiFi] Disconnected, reconnecting..."));
+          WiFi.reconnect();
+      }
+      wasConnected = isConnected;
+  }
 #endif
 
   // Battery monitoring - periodic voltage check

@@ -18,6 +18,7 @@
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/WifiManager.h"
+#include "../comms/WifiCommandServer.h"
 #endif
 
 extern DeviceConfig config;  // v28: Changed to non-const for runtime loading
@@ -1804,7 +1805,9 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
 #ifdef BLINKY_PLATFORM_ESP32S3
     if (*arg == '\0') {
         // "wifi" — show status
-        if (wifiManager_) {
+        if (tcpServer_) {
+            tcpServer_->printDiagnostics(out_);
+        } else if (wifiManager_) {
             wifiManager_->printStatus();
         } else {
             out_.println(F("[WiFi] Not initialized"));
@@ -1813,7 +1816,9 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
     }
 
     if (strcmp(arg, "status") == 0) {
-        if (wifiManager_) {
+        if (tcpServer_) {
+            tcpServer_->printDiagnostics(out_);
+        } else if (wifiManager_) {
             wifiManager_->printStatus();
         } else {
             out_.println(F("[WiFi] Not initialized"));
@@ -1851,13 +1856,14 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
         if (wifiManager_) {
             wifiManager_->connect();
         }
+        if (tcpServer_) {
+            tcpServer_->printDiagnostics(out_);
+        }
         return true;
     }
 
     if (strcmp(arg, "disconnect") == 0) {
-        if (wifiManager_) {
-            wifiManager_->disconnect();
-        }
+        out_.println(F("[WiFi] Connection managed by Core 0 TCP task"));
         return true;
     }
 
@@ -1868,7 +1874,29 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
         return true;
     }
 
-    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|status]"));
+    if (strcmp(arg, "scan") == 0) {
+        out_.println(F("[WiFi] Scanning..."));
+        int n = WiFi.scanNetworks();
+        if (n == 0) {
+            out_.println(F("[WiFi] No networks found"));
+        } else {
+            out_.print(F("[WiFi] Found "));
+            out_.print(n);
+            out_.println(F(" networks:"));
+            for (int i = 0; i < n && i < 10; i++) {
+                out_.print(F("  "));
+                out_.print(WiFi.SSID(i));
+                out_.print(F(" ("));
+                out_.print(WiFi.RSSI(i));
+                out_.print(F("dBm) ch="));
+                out_.println(WiFi.channel(i));
+            }
+        }
+        WiFi.scanDelete();
+        return true;
+    }
+
+    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|scan|status]"));
     return true;
 #else
     // WiFi not available on nRF52840

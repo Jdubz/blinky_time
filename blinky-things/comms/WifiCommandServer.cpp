@@ -2,81 +2,63 @@
 #include "../inputs/SerialConsole.h"
 
 WifiCommandServer::WifiCommandServer(uint16_t port)
-    : server_(port), port_(port) {
-    memset(rxBuf_, 0, sizeof(rxBuf_));
-}
+    : port_(port), server_(port) {}
 
 void WifiCommandServer::begin() {
-    if (WiFi.status() == WL_CONNECTED) {
-        server_.begin();
-        started_ = true;
-        Serial.print(F("[TCP] Server listening on port "));
-        Serial.println(port_);
-    } else {
-        Serial.println(F("[TCP] WiFi not connected — server deferred"));
-    }
+    server_.begin();
+    server_.setNoDelay(true);
+    serverStarted_ = true;
+    Serial.print(F("[TCP] Listening on port "));
+    Serial.println(port_);
 }
 
-void WifiCommandServer::update() {
-    // Start server if WiFi came up after begin()
-    if (!started_ && WiFi.status() == WL_CONNECTED) {
-        server_.begin();
-        started_ = true;
-        Serial.print(F("[TCP] Server started on "));
-        Serial.print(WiFi.localIP());
-        Serial.print(F(":"));
-        Serial.println(port_);
+bool WifiCommandServer::poll() {
+    if (!serverStarted_) return false;
+
+    // Accept new client (non-blocking, replaces existing)
+    WiFiClient newClient = server_.available();
+    if (newClient) {
+        if (client_) client_.stop();
+        client_ = newClient;
+        client_.setNoDelay(true);
+        clientConnected_ = true;
+        connectCount_++;
+        rxPos_ = 0;
+        Serial.print(F("[TCP] Client from "));
+        Serial.println(client_.remoteIP());
     }
 
-    if (!started_) return;
-
-    // Accept new client (one at a time)
-    if (!client_ || !client_.connected()) {
-        WiFiClient newClient = server_.available();
-        if (newClient) {
-            // Disconnect old client if any
-            if (client_) client_.stop();
-            client_ = newClient;
-            client_.setNoDelay(true);  // Disable Nagle for responsive commands
-            connectCount_++;
-            rxPos_ = 0;
-            Serial.print(F("[TCP] Client connected from "));
-            Serial.println(client_.remoteIP());
-        }
-    }
-
-    // Read data from connected client
+    // Read data from client (non-blocking)
+    bool processed = false;
     if (client_ && client_.connected()) {
         while (client_.available()) {
             uint8_t b = client_.read();
-            processRxByte(b);
-        }
-    }
-}
-
-void WifiCommandServer::processRxByte(uint8_t b) {
-    if (b == '\n' || b == '\r') {
-        if (rxPos_ > 0) {
-            rxBuf_[rxPos_] = '\0';
-            linesRx_++;
-
-            // Route command through SerialConsole.
-            // The response goes to the TeeStream (Serial + BLE/TCP secondary).
-            // We set ourselves as the secondary to capture the output.
-            if (console_) {
-                console_->handleCommand(rxBuf_, *this);
+            if (b == '\n' || b == '\r') {
+                if (rxPos_ > 0) {
+                    rxBuf_[rxPos_] = '\0';
+                    linesRx_++;
+                    if (console_) {
+                        console_->handleCommand(rxBuf_, *this);
+                    }
+                    rxPos_ = 0;
+                    processed = true;
+                }
+            } else if (rxPos_ < CMD_MAX_LEN - 1) {
+                rxBuf_[rxPos_++] = b;
             }
-
-            rxPos_ = 0;
         }
-    } else if (rxPos_ < RX_BUF_SIZE - 1) {
-        rxBuf_[rxPos_++] = b;
+    } else {
+        if (clientConnected_) {
+            clientConnected_ = false;
+            Serial.println(F("[TCP] Client disconnected"));
+        }
     }
+
+    return processed;
 }
 
 size_t WifiCommandServer::write(uint8_t c) {
     if (client_ && client_.connected()) {
-        if (c == '\n') linesTx_++;
         return client_.write(c);
     }
     return 0;
@@ -84,25 +66,28 @@ size_t WifiCommandServer::write(uint8_t c) {
 
 size_t WifiCommandServer::write(const uint8_t* buf, size_t size) {
     if (client_ && client_.connected()) {
-        for (size_t i = 0; i < size; i++) {
-            if (buf[i] == '\n') linesTx_++;
-        }
         return client_.write(buf, size);
     }
     return 0;
 }
 
+void WifiCommandServer::printDiagnostics(Print& out) {
+    out.print(F("[TCP] port="));
+    out.print(port_);
+    out.print(F(" wifi="));
+    out.print(isWifiConnected() ? F("yes") : F("no"));
+    if (isWifiConnected()) {
+        out.print(F(" ip="));
+        out.print(WiFi.localIP());
+    }
+    out.print(F(" client="));
+    out.print(clientConnected_ ? F("yes") : F("no"));
+    out.print(F(" connects="));
+    out.print(connectCount_);
+    out.print(F(" rx="));
+    out.println(linesRx_);
+}
+
 void WifiCommandServer::printDiagnostics() {
-    Serial.print(F("[TCP] port="));
-    Serial.print(port_);
-    Serial.print(F(" started="));
-    Serial.print(started_ ? F("yes") : F("no"));
-    Serial.print(F(" client="));
-    Serial.print(hasClient() ? F("connected") : F("none"));
-    Serial.print(F(" connects="));
-    Serial.print(connectCount_);
-    Serial.print(F(" rx="));
-    Serial.print(linesRx_);
-    Serial.print(F(" tx="));
-    Serial.println(linesTx_);
+    printDiagnostics(Serial);
 }

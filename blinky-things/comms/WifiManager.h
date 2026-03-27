@@ -32,6 +32,7 @@ public:
 
     // Getters for stored values
     const char* getSsid() const { return ssid_; }
+    const char* getPassword() const { return password_; }
 
 private:
     void loadCredentials();

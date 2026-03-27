@@ -16,6 +16,7 @@ class BleScanner;
 class BleNus;
 class BleAdvertiser;
 class WifiManager;
+class WifiCommandServer;
 class Fire;
 class Water;
 class Lightning;
@@ -175,6 +176,7 @@ public:
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     void setBleAdvertiser(BleAdvertiser* adv) { bleAdvertiser_ = adv; }
     void setWifiManager(WifiManager* wifi) { wifiManager_ = wifi; }
+    void setTcpServer(WifiCommandServer* tcp) { tcpServer_ = tcp; }
 #endif
     SettingsRegistry& getSettings() { return settings_; }
 
@@ -271,6 +273,7 @@ private:
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     BleAdvertiser* bleAdvertiser_ = nullptr;
     WifiManager* wifiManager_ = nullptr;
+    WifiCommandServer* tcpServer_ = nullptr;
 #endif
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
