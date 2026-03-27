@@ -106,52 +106,49 @@ Server foundation exists but transports are stubs:
 
 ---
 
-## Next Steps
+## Next Steps (Priority Order)
 
-### Step 2: BleTransport in blinky-server
+### Step 2: BleTransport in blinky-server — DONE
 
-Implement the BLE transport using `bleak` so the Pi can manage nRF52840 devices wirelessly with the same API as serial.
+BLE NUS transport implemented using `bleak`. See `blinky-server/blinky_server/transport/ble_transport.py`.
+- BleakClient connection with timeout + MTU negotiation
+- NUS TX notification subscription, write-with-response to RX
+- Line reassembly for MTU-fragmented responses
+- `scan_nus_devices()` for BLE discovery
+- **Needs testing on blinkyhost against real device**
 
-**Files to create/modify:**
-- `blinky-server/blinky_server/transport/ble_transport.py` — Implement Transport interface using bleak
-- `blinky-server/blinky_server/transport/discovery.py` — Add BLE NUS device scanning
+### Step 3: Fleet Management via blinky-server — HIGH PRIORITY
 
-**Key design decisions:**
-- Use `bleak.BleakClient` for connection management
-- Subscribe to NUS TXD notifications (UUID `6e400003-...`) for device output
-- Write commands to NUS RXD (UUID `6e400002-...`) with `response=True` for reliability
-- Line-reassembly buffer on receive side (notifications may split across MTU boundaries)
-- Use `response=True` (write-with-response) to avoid bluez write failures from rapid fire-and-forget
-- Add 300ms delay between commands to allow BLE stack to settle
-- Longer timeouts than serial (~5s vs 100ms) due to BLE latency
+Make the Pi fleet server operational for managing all devices (BLE + serial) from a single interface.
 
-**Transport interface to implement:**
-```python
-class BleTransport(Transport):
-    async def connect(self) -> None: ...     # BleakClient connect + start_notify
-    async def disconnect(self) -> None: ...  # stop_notify + disconnect
-    async def send(self, data: bytes) -> None: ...  # write to RXD
-    async def receive(self) -> bytes: ...    # read from notification buffer
-    @property
-    def is_connected(self) -> bool: ...
-```
+- **Test BleTransport** against real nRF52840 device on blinkyhost
+- **Integrate BLE discovery** into fleet manager (auto-scan for NUS devices)
+- **Device registry**: persist known devices (BLE address, serial port, device config)
+- **Fleet commands**: push settings, switch scenes, get status across all devices
+- **REST API testing**: verify device/command endpoints work end-to-end
 
-### Step 3: BLE Discovery
+### Step 4: OTA Firmware Updates — HIGH PRIORITY
 
-Add BLE device scanning to the fleet manager so it can find NUS-advertising nRF52840 devices automatically.
+Enable wireless firmware updates to avoid physically accessing devices.
 
-- Scan for devices advertising NUS service UUID `6e400001-b5a3-f393-e0a9-e50e24dcca9e`
-- Match by name prefix "Blinky"
-- Store BLE address for reconnection
-- Integrate with existing device registry
+**nRF52840 (BLE DFU):**
+- Adafruit nRF52 Bootloader supports OTA DFU via BLE (DFU service UUID)
+- `adafruit-nrfutil` can package UF2 into DFU zip
+- Need: Python script to initiate DFU over BLE from Pi
+- Fallback: `bootloader` serial command + UF2 over USB (existing, working)
+- Risk: single-bank DFU on nRF52840 — if interrupted, device needs manual recovery
 
-### Step 4: Web Bluetooth in blinky-console
+**ESP32-S3 (WiFi OTA):**
+- ArduinoOTA library provides WiFi-based OTA
+- Need: ESP32 firmware to include OTA partition + ArduinoOTA.begin()
+- Pi pushes binary via HTTP or ArduinoOTA protocol
+- Much safer than nRF52840 DFU (dual partition, automatic rollback)
 
-Add Web Bluetooth NUS support to the React web app alongside existing WebSerial.
-
-- `bluetooth.ts` service (NUS-based, same command protocol)
-- "Bluetooth" button in ConnectionBar
-- Chrome Desktop + Android support
+**Fleet OTA workflow:**
+1. Compile firmware once on Pi (or receive from devtop)
+2. For each device: initiate OTA via BLE DFU (nRF) or WiFi OTA (ESP32)
+3. Verify each device reboots with correct version (`json info`)
+4. Rollback on failure
 
 ### Step 5: WiFi TCP on ESP32-S3
 
@@ -162,13 +159,21 @@ Add WiFi-based TCP transport for ESP32-S3 devices.
 - `WifiTransport` in blinky-server
 - WiFi credentials already configurable via `wifi ssid/pass/connect` serial commands
 
-### Step 6: Wireless Discovery
+### Step 6: Unified Discovery
 
 Unified discovery across serial, BLE, and WiFi.
 
 - mDNS for WiFi devices (ESP32-S3 advertises `_blinky._tcp`)
 - BLE scanning for NUS devices (nRF52840)
 - USB VID/PID for serial (existing)
+
+### Future: Web Bluetooth in blinky-console
+
+Not a priority — fleet management is via Pi server, not browser.
+
+- `bluetooth.ts` service (NUS-based, same command protocol)
+- "Bluetooth" button in ConnectionBar
+- Chrome Desktop + Android support
 
 ---
 
