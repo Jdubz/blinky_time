@@ -177,17 +177,13 @@ async def upload_uf2(
     except Exception as e:
         log.debug("Bootloader write (may disconnect): %s", e)
 
-    # Wait for device to process: console.update() reads buffer → handleCommand →
-    # set GPREGRET → disable SD → reset. The device loop runs at ~15-60 Hz,
-    # so worst case is ~66ms before the command is read. Add margin for the
-    # GPREGRET write + SD disable + USB re-enumeration.
+    # DON'T disconnect the transport — the device resets on its own after
+    # processing the bootloader command, which naturally closes the USB
+    # connection. Explicitly closing the transport can interfere with the
+    # device's reset sequence (DTR/RTS state changes, USB control transfers).
+    # Just wait for the device to reset and the UF2 drive to appear.
     progress("bootloader", "Waiting for device reset...", 15)
-    await asyncio.sleep(5)
-
-    try:
-        await transport.disconnect()
-    except Exception:
-        pass  # Transport already dead from device reset
+    await asyncio.sleep(8)  # Generous: device needs 200ms + USB re-enum 2-3s
 
     # Wait a moment for USB re-enumeration
     await asyncio.sleep(3)
