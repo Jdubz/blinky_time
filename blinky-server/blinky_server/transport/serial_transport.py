@@ -103,6 +103,33 @@ class SerialTransport(Transport):
             raise ConnectionError(f"Not connected to {self._port}")
         self._serial_transport.write((line + "\n").encode("utf-8"))
 
+    async def trigger_bootloader(self) -> None:
+        """Enter UF2 bootloader via 1200-baud touch.
+
+        This is the most reliable bootloader entry method — it triggers
+        the TinyUSB CDC callback directly at interrupt level, avoiding
+        main loop timing issues. The firmware's Uf2BootloaderOverride
+        handles GPREGRET + direct jump to bootloader.
+        """
+        # Close existing async connection first
+        if self._serial_transport:
+            self._serial_transport.close()
+        self._serial_transport = None
+        self._protocol = None
+        self._connected = False
+
+        # Open at 1200 baud with DTR toggle (standard Arduino bootloader protocol)
+        import serial
+        try:
+            with serial.Serial(self._port, 1200, dsrdtr=False) as s:
+                s.dtr = True
+                await asyncio.sleep(0.05)
+                s.dtr = False
+        except Exception as e:
+            log.debug("1200-baud touch: %s (expected if device reset fast)", e)
+
+        log.info("1200-baud touch sent to %s", self._port)
+
     def on_line(self, callback: Callable[[str], None]) -> None:
         self._line_callback = callback
 

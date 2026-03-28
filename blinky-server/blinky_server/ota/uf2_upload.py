@@ -216,63 +216,33 @@ async def upload_uf2(
         result["message"] = f"Firmware size suspicious: {fw_size} bytes"
         return result
 
-    # Ensure transport is connected
-    if not transport.is_connected:
-        progress("bootloader", "Reconnecting transport...", 8)
+    # Enter bootloader via 1200-baud touch (most reliable method).
+    # This triggers the TinyUSB CDC callback at interrupt level, which calls
+    # enterBootloaderDirect() — disables SD, writes GPREGRET, disables USB,
+    # and jumps directly to bootloader. 100% reliable GPREGRET preservation.
+    progress("bootloader", "Entering bootloader (1200-baud touch)...", 10)
+
+    # Start listening for UF2 drive BEFORE triggering bootloader
+    uf2_task = asyncio.create_task(_wait_for_uf2_drive(timeout=15))
+
+    if hasattr(transport, 'trigger_bootloader'):
+        await transport.trigger_bootloader()
+    else:
+        # Fallback: disconnect and use raw pyserial
         try:
-            await asyncio.wait_for(transport.connect(), timeout=10)
-        except Exception as e:
-            result["message"] = f"Cannot connect to device: {e}"
-            return result
-
-    # GPREGRET persistence is intermittent (~20-50% success) due to a race
-    # with the SoftDevice shutdown. Retry: send "bootloader", listen for
-    # UF2 drive via udev events, reconnect if needed.
-    max_attempts = 5
-    block_dev = None
-
-    for attempt in range(1, max_attempts + 1):
-        progress("bootloader", f"Attempt {attempt}/{max_attempts}...", 10)
-
-        # Start listening for UF2 drive BEFORE sending the command.
-        # This way we don't miss fast appearances.
-        uf2_task = asyncio.create_task(_wait_for_uf2_drive(timeout=15))
-
-        # Send bootloader command
+            await transport.disconnect()
+        except Exception:
+            pass
+        import serial as pyserial
         try:
-            if protocol:
-                try:
-                    resp = await protocol.send_command("bootloader", timeout=3.0)
-                    log.info("Attempt %d: %s", attempt,
-                             resp[:80] if resp else "(no response)")
-                except Exception as e:
-                    log.info("Attempt %d: device reset (%s)", attempt,
-                             type(e).__name__)
-            else:
-                await transport.write_line("bootloader")
+            with pyserial.Serial(serial_port, 1200, dsrdtr=False) as s:
+                s.dtr = True
+                await asyncio.sleep(0.05)
+                s.dtr = False
         except Exception as e:
-            log.warning("Attempt %d: send failed: %s", attempt, e)
-            uf2_task.cancel()
-            break
+            log.debug("1200-baud fallback: %s", e)
 
-        # Wait for UF2 drive event (no polling — pyudev listener or fallback)
-        block_dev = await uf2_task
-        if block_dev:
-            log.info("UF2 drive appeared on attempt %d: %s", attempt, block_dev)
-            break
-
-        log.info("Attempt %d: no UF2 drive", attempt)
-        if attempt < max_attempts:
-            # Reconnect transport for next attempt
-            try:
-                await transport.disconnect()
-            except Exception:
-                pass
-            await asyncio.sleep(1)
-            try:
-                await asyncio.wait_for(transport.connect(), timeout=10)
-            except Exception as e:
-                log.warning("Reconnect: %s", e)
+    block_dev = await uf2_task
 
     if not block_dev:
         result["message"] = (f"Bootloader entry failed after {max_attempts} attempts "

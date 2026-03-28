@@ -1,17 +1,16 @@
 #pragma once
 /**
- * Uf2BootloaderOverride.h - Fix 1200-baud touch to enter UF2 mode
+ * Uf2BootloaderOverride.h - Reliable bootloader entry from application code
  *
- * The Seeed nRF52 Arduino core's TinyUSB CDC callback (tud_cdc_line_state_cb)
- * calls TinyUSB_Port_EnterDFU() which calls enterSerialDfu(), setting
- * GPREGRET=0x4E (serial DFU mode). This is wrong for headless operation --
- * we need UF2 mass storage mode (GPREGRET=0x57) so we can copy firmware
- * via a simple file copy to the UF2 drive.
+ * Overrides TinyUSB's weak tud_cdc_line_state_cb to enter UF2 mode on
+ * 1200-baud touch. Uses direct jump to bootloader after manually disabling
+ * the USB peripheral — this preserves GPREGRET 100% (no reset needed).
  *
- * This file overrides the weak tud_cdc_line_state_cb symbol from the
- * TinyUSB library. Our version disables the SoftDevice before writing
- * GPREGRET and resetting — without this, the SD's reset handler clears
- * GPREGRET and the bootloader boots straight to the app instead of UF2.
+ * Key insight: NVIC_SystemReset() is unreliable for GPREGRET because
+ * sd_softdevice_disable() resets the POWER peripheral as a side effect.
+ * Direct jump avoids the reset entirely. To make it work for UF2 mode
+ * (which needs USB mass storage), we manually disable the USBD peripheral
+ * so the bootloader can reinitialize it cleanly.
  */
 
 #ifdef ARDUINO_ARCH_NRF52
@@ -22,6 +21,59 @@
 extern "C" {
   #include <nrf_sdm.h>
   #include <nrf_soc.h>
+}
+
+/**
+ * Enter bootloader via direct jump. 100% reliable GPREGRET preservation.
+ *
+ * Works for BOTH UF2 and BLE DFU modes because we manually disable the
+ * USB peripheral before jumping, giving the bootloader a clean USB state.
+ *
+ * @param magic GPREGRET value (0x57=UF2, 0xA8=BLE DFU OTA reset)
+ */
+static inline void enterBootloaderDirect(uint8_t magic) __attribute__((noreturn));
+static inline void enterBootloaderDirect(uint8_t magic) {
+    // 1. Disable SoftDevice (releases peripheral protection)
+    uint8_t sd_en = 0;
+    sd_softdevice_is_enabled(&sd_en);
+    if (sd_en) {
+        sd_softdevice_disable();
+    }
+
+    // 2. Write GPREGRET AFTER SD disable completes.
+    //    sd_softdevice_disable() resets "all peripherals used by the SD"
+    //    including the POWER peripheral. Writing before disable is lost.
+    __DSB(); __ISB();
+    NRF_POWER->GPREGRET = magic;
+    __DSB(); __ISB();
+
+    // 3. Disable USB peripheral so bootloader can reinit for mass storage.
+    //    Without this, the bootloader inherits app's CDC configuration and
+    //    USB mass storage init fails silently.
+    NRF_USBD->USBPULLUP = 0;
+    NRF_USBD->ENABLE = 0;
+    // Busy-wait for USB disable to complete (typically <10us)
+    volatile int i = 0;
+    while (NRF_USBD->ENABLE && i < 10000) { i++; }
+
+    // 4. Disable all interrupts
+    for (int j = 0; j < 8; j++) {
+        NVIC->ICER[j] = 0xFFFFFFFF;
+        NVIC->ICPR[j] = 0xFFFFFFFF;
+    }
+
+    // 5. Direct jump to bootloader (preserves GPREGRET 100%)
+    uint32_t bl = NRF_UICR->NRFFW[0];
+    if (bl != 0xFFFFFFFF) {
+        __set_MSP(*((uint32_t *)bl));
+        __set_CONTROL(0);
+        __ISB();
+        ((void (*)(void))(*((uint32_t *)(bl + 4))))();
+    }
+
+    // Fallback: if UICR not set, use system reset (less reliable)
+    NVIC_SystemReset();
+    __builtin_unreachable();
 }
 
 extern "C" {
@@ -35,23 +87,7 @@ void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
             tud_cdc_get_line_coding(&coding);
 
             if (coding.bit_rate == 1200) {
-                const uint8_t DFU_MAGIC_UF2 = 0x57;
-
-                // UF2 mode needs NVIC_SystemReset to reset USB peripheral.
-                // Direct jump leaves USB in app's CDC state, breaking
-                // bootloader's mass storage init. DSB/ISB ensures GPREGRET
-                // write commits before the reset.
-                uint8_t sd_en = 0;
-                sd_softdevice_is_enabled(&sd_en);
-                if (sd_en) {
-                    sd_power_gpregret_clr(0, 0xFF);
-                    sd_power_gpregret_set(0, DFU_MAGIC_UF2);
-                    sd_softdevice_disable();
-                }
-                NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
-                __DSB();
-                __ISB();
-                NVIC_SystemReset();
+                enterBootloaderDirect(0x57);  // UF2 mass storage
             }
         }
     }

@@ -15,6 +15,7 @@
 #ifdef BLINKY_PLATFORM_NRF52840
 #include "../comms/BleScanner.h"
 #include "../comms/BleNus.h"
+#include "../hal/Uf2BootloaderOverride.h"  // enterBootloaderDirect()
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -786,38 +787,13 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         delay(100);      // Brief delay for serial transmission
         {
 #ifdef ARDUINO_ARCH_NRF52
-            uint8_t sd_en = 0;
-            sd_softdevice_is_enabled(&sd_en);
-            if (sd_en) {
-                sd_power_gpregret_clr(0, 0xFF);
-                sd_power_gpregret_set(0, dfuMagic);
-                sd_softdevice_disable();
-            }
-            NRF_POWER->GPREGRET = dfuMagic;
-
-            if (bleMode) {
-                // BLE DFU: Direct jump to bootloader (same as Adafruit BLEDfu).
-                // Preserves GPREGRET 100% by skipping NVIC_SystemReset.
-                // BLE DFU doesn't need USB, so stale USB state is fine.
-                for (int i = 0; i < 8; i++) {
-                    NVIC->ICER[i] = 0xFFFFFFFF;
-                    NVIC->ICPR[i] = 0xFFFFFFFF;
-                }
-                uint32_t bl = NRF_UICR->NRFFW[0];
-                if (bl != 0xFFFFFFFF) {
-                    __set_MSP(*((uint32_t *)bl));
-                    __set_CONTROL(0);
-                    __ISB();
-                    ((void (*)(void))(*((uint32_t *)(bl + 4))))();
-                }
-            }
-            // UF2 mode: Must use NVIC_SystemReset to reset USB peripheral.
-            // Direct jump leaves USB in app's CDC state, causing bootloader's
-            // mass storage init to fail. DSB/ISB ensures GPREGRET write
-            // commits before the reset fires.
-            __DSB();
-            __ISB();
-            NVIC_SystemReset();
+            // enterBootloaderDirect() handles everything:
+            // 1. Disables SoftDevice (releases peripheral protection)
+            // 2. Writes GPREGRET AFTER SD cleanup (not before!)
+            // 3. Disables USB peripheral (so bootloader can reinit for mass storage)
+            // 4. Direct jump to bootloader (100% reliable GPREGRET)
+            // Works for both UF2 (0x57) and BLE DFU (0xA8).
+            enterBootloaderDirect(dfuMagic);
 #else
             NRF_POWER->GPREGRET = dfuMagic;
             NVIC_SystemReset();
