@@ -177,10 +177,12 @@ async def upload_uf2(
     except Exception as e:
         log.debug("Bootloader write (may disconnect): %s", e)
 
-    # Wait for device to process: flush serial → set GPREGRET → disable SD → reset
-    # This takes ~200ms on the device but USB re-enumeration adds 2-3s
+    # Wait for device to process: console.update() reads buffer → handleCommand →
+    # set GPREGRET → disable SD → reset. The device loop runs at ~15-60 Hz,
+    # so worst case is ~66ms before the command is read. Add margin for the
+    # GPREGRET write + SD disable + USB re-enumeration.
     progress("bootloader", "Waiting for device reset...", 15)
-    await asyncio.sleep(3)
+    await asyncio.sleep(5)
 
     try:
         await transport.disconnect()
