@@ -760,20 +760,21 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         return true;  // Never reached
     }
 
-    if (strcmp(cmd, "bootloader") == 0) {
+    // "bootloader" = UF2 mass storage mode (for USB firmware upload)
+    // "bootloader ble" = BLE OTA DFU mode (for wireless firmware upload)
+    if (strcmp(cmd, "bootloader") == 0 || strcmp(cmd, "bootloader ble") == 0) {
 #ifdef BLINKY_PLATFORM_NRF52840
-        out_.println(F("Entering UF2 bootloader..."));
+        // GPREGRET magic bytes for Adafruit nRF52 bootloader:
+        //   0x57 = UF2 mass storage mode (USB firmware upload)
+        //   0xB1 = BLE OTA DFU mode (wireless firmware upload, advertises as "AdaDFU")
+        const bool bleMode = (strcmp(cmd, "bootloader ble") == 0);
+        const uint8_t dfuMagic = bleMode ? 0xB1 : 0x57;
+        out_.print(F("Entering "));
+        out_.print(bleMode ? F("BLE DFU") : F("UF2"));
+        out_.println(F(" bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
-        // Set GPREGRET magic byte so the UF2 bootloader is entered on reset.
-        // The Seeed/Adafruit non-mbed nRF52 core uses the SoftDevice — writing
-        // GPREGRET directly is unreliable when the SoftDevice owns the POWER
-        // peripheral (it clears the register during reset). Use the SD API when
-        // the SoftDevice is active, otherwise write the register directly.
-        // The mbed core does not link the SoftDevice API, so the inner guard
-        // must remain as ARDUINO_ARCH_NRF52 (non-mbed core check).
         {
-            const uint8_t DFU_MAGIC_UF2 = 0x57;
 #ifdef ARDUINO_ARCH_NRF52
             // Disable SoftDevice before writing GPREGRET and resetting.
             // When the SoftDevice is active, its reset handler may clear
@@ -784,22 +785,23 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             if (sd_en) {
                 // Write GPREGRET via SD API first (while SD still owns POWER)
                 sd_power_gpregret_clr(0, 0xFF);
-                sd_power_gpregret_set(0, DFU_MAGIC_UF2);
+                sd_power_gpregret_set(0, dfuMagic);
                 // Disable SoftDevice so it doesn't interfere with the reset
                 sd_softdevice_disable();
             }
             // Write GPREGRET directly (SD is now disabled or was never enabled)
-            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+            NRF_POWER->GPREGRET = dfuMagic;
 #else
-            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+            NRF_POWER->GPREGRET = dfuMagic;
 #endif
             // Verify GPREGRET was written
             uint32_t readback = NRF_POWER->GPREGRET;
-            if (readback != DFU_MAGIC_UF2) {
+            if (readback != dfuMagic) {
                 Serial.print(F("[WARN] GPREGRET readback: 0x"));
                 Serial.println(readback, HEX);
             } else {
-                Serial.println(F("[OK] GPREGRET=0x57"));
+                Serial.print(F("[OK] GPREGRET=0x"));
+                Serial.println(dfuMagic, HEX);
             }
             Serial.flush();
             delay(10);
