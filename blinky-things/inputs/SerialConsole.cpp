@@ -798,10 +798,14 @@ bool SerialConsole::handleDeviceConfigCommand(const char* cmd) {
         return true;
     }
 
-    out_.println(F("Device configuration commands:"));
-    out_.println(F("  device show          - Display current device config"));
-    out_.println(F("  device upload <JSON> - Upload device config from JSON"));
-    out_.println(F("\nExample JSON at: devices/registry/README.md"));
+    // Only show help if the command actually starts with "device"
+    if (strncmp(cmd, "device", 6) == 0) {
+        out_.println(F("Device configuration commands:"));
+        out_.println(F("  device show          - Display current device config"));
+        out_.println(F("  device upload <JSON> - Upload device config from JSON"));
+        out_.println(F("\nExample JSON at: devices/registry/README.md"));
+        return true;
+    }
     return false;
 }
 

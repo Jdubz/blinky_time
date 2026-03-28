@@ -122,6 +122,16 @@ class BleDfu:
         await self._connect_bootloader()
 
         try:
+            # Read DFU Revision to check protocol version and unlock state machine
+            try:
+                DFU_REVISION_UUID = "00001534-1212-efde-1523-785feabcd123"
+                rev_data = await self._client.read_gatt_char(DFU_REVISION_UUID)
+                rev = int.from_bytes(rev_data[:2], 'little') if len(rev_data) >= 2 else 0
+                log.info("DFU Revision: 0x%04x (%s)",
+                         rev, "Legacy" if rev <= 1 else "Secure DFU v2+")
+            except Exception as e:
+                log.warning("Could not read DFU Revision: %s", e)
+
             # Phase 3: START_DFU + image size
             await self._send_start_dfu(len(firmware_bin))
 
@@ -191,6 +201,20 @@ class BleDfu:
 
     async def _connect_bootloader(self):
         """Connect to device in bootloader DFU mode."""
+        # Clear BlueZ GATT cache — the bootloader has a different GATT table
+        # than the app, but BlueZ reuses cached handles for the same address.
+        import subprocess
+        cache_dir = f"/var/lib/bluetooth/*/cache/{self.address.replace(':', '_')}"
+        subprocess.run(f"sudo rm -rf {cache_dir}", shell=True,
+                       capture_output=True, timeout=5)
+        # Also try without sudo (some systems allow user access)
+        subprocess.run(f"rm -rf {cache_dir}", shell=True,
+                       capture_output=True, timeout=5)
+        # Restart bluetooth to pick up cache removal
+        subprocess.run(["sudo", "systemctl", "restart", "bluetooth"],
+                       capture_output=True, timeout=10)
+        await asyncio.sleep(2)  # Let BlueZ restart
+
         # The bootloader re-advertises with the same address
         for attempt in range(10):
             try:
@@ -200,11 +224,22 @@ class BleDfu:
                 log.info("Connected to bootloader, MTU=%d (payload=%d)",
                          self._client.mtu_size, self._mtu)
 
-                # Subscribe to DFU Control notifications (required before any write)
+                # Subscribe to DFU Control notifications (required before any write).
+                # Force StartNotify (not AcquireNotify) — the Adafruit bootloader
+                # requires CCCD to be written for notifications, and AcquireNotify
+                # bypasses the CCCD write on some BlueZ versions.
                 await self._client.start_notify(
-                    DFU_CONTROL_UUID, self._on_notification
+                    DFU_CONTROL_UUID, self._on_notification,
+                    bluez={"use_start_notify": True},
                 )
                 await asyncio.sleep(1.0)  # Let subscription propagate
+
+                # List services for debugging
+                for svc in self._client.services:
+                    log.debug("  Bootloader service: %s", svc.uuid)
+                    for char in svc.characteristics:
+                        log.debug("    Char: %s [%s]", char.uuid,
+                                  ','.join(char.properties))
                 return
             except Exception as e:
                 log.debug("Bootloader connect attempt %d: %s", attempt + 1, e)
@@ -219,11 +254,13 @@ class BleDfu:
         log.info("Sending START_DFU (app_size=%d)...", app_size)
 
         # Write START_DFU opcode + mode byte to CONTROL
+        # Legacy DFU uses write-with-response for control point
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID,
             bytes([DfuOpcode.START_DFU, DFU_MODE_APPLICATION]),
             response=True,
         )
+        log.debug("START_DFU opcode sent, sending image size packet...")
 
         # Write 12-byte image size packet to PACKET:
         #   SD size (u32 LE) = 0, BL size (u32 LE) = 0, App size (u32 LE)
@@ -231,6 +268,7 @@ class BleDfu:
         await self._client.write_gatt_char(
             DFU_PACKET_UUID, size_packet, response=False
         )
+        log.debug("Image size packet sent, waiting for response...")
 
         # Wait for response: [0x10, 0x01, 0x01] = RESPONSE, START_DFU, SUCCESS
         await self._wait_for_response(DfuOpcode.START_DFU)
@@ -404,6 +442,7 @@ class BleDfu:
 
     def _on_notification(self, sender, data: bytearray):
         """Handle DFU Control notification."""
+        log.debug("DFU notification: %s", data.hex())
         self._response_data = data
         self._response_event.set()
 

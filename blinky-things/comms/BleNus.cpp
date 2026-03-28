@@ -177,25 +177,30 @@ void BleNus::processRxByte(char c) {
 }
 
 void BleNus::printDiagnostics() const {
+    // Connection state
     Serial.print(F("[BLE] NUS: "));
     if (connected_) {
         Serial.println(F("connected"));
         BLEConnection* conn = Bluefruit.Connection(connHandle_);
         if (conn) {
-            Serial.print(F("[BLE] MTU="));
+            Serial.print(F("[BLE]   MTU="));
             Serial.print(conn->getMtu());
             Serial.print(F(" RSSI="));
             Serial.print(conn->getRssi());
             Serial.println(F("dBm"));
         }
-        Serial.print(F("[BLE] uptime="));
+        Serial.print(F("[BLE]   conn_uptime="));
         Serial.print((millis() - connectTimeMs_) / 1000);
         Serial.println(F("s"));
     } else {
-        Serial.print(F("advertising="));
-        Serial.println(Bluefruit.Advertising.isRunning() ? F("yes") : F("no"));
+        Serial.println(F("disconnected"));
     }
 
+    // Advertising state
+    Serial.print(F("[BLE] advertising="));
+    Serial.println(Bluefruit.Advertising.isRunning() ? F("yes") : F("no"));
+
+    // BLE address (for direct connection from ble_dfu.py)
     Serial.print(F("[BLE] addr="));
     uint8_t mac[6];
     Bluefruit.getAddr(mac);
@@ -205,6 +210,18 @@ void BleNus::printDiagnostics() const {
         if (i > 0) Serial.print(':');
     }
     Serial.println();
+
+    // TX power
+    Serial.print(F("[BLE] tx_power="));
+    Serial.print(Bluefruit.getTxPower());
+    Serial.println(F("dBm"));
+
+    // Peer count
+    Serial.print(F("[BLE] connections="));
+    Serial.println(Bluefruit.connected());
+
+    // DFU service status
+    Serial.println(F("[BLE] services: NUS DFU DIS"));
 
     // TX buffer utilization
     size_t used = (txHead_ >= txTail_) ? (txHead_ - txTail_) : (TX_BUF_SIZE - txTail_ + txHead_);
