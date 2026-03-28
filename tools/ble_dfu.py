@@ -264,7 +264,13 @@ class BleDfu:
 
         # Must subscribe to DFU Control notifications BEFORE writing START_DFU.
         # The BLEDfu authorization callback rejects writes if notifications aren't enabled.
-        await self._client.start_notify(DFU_CONTROL_UUID, self._on_notification)
+        # Use StartNotify (not AcquireNotify) — bleak 3.x defaults to
+        # AcquireNotify which uses FD-based notification routing and can lose
+        # notifications from some peripherals. StartNotify uses D-Bus signals.
+        await self._client.start_notify(
+            DFU_CONTROL_UUID, self._on_notification,
+            bluez={"use_start_notify": True},
+        )
         await asyncio.sleep(0.5)  # Let subscription propagate
 
         # Write 0x01 to DFU Control to trigger bootloader entry
@@ -344,9 +350,12 @@ class BleDfu:
                 # GATT state. Without this, CCCD writes may not take effect.
                 await asyncio.sleep(2)
 
-                # Enable DFU Control notifications via start_notify.
+                # Enable DFU Control notifications via StartNotify (not
+                # AcquireNotify). AcquireNotify uses FD-based routing which
+                # loses notifications from the bootloader's DFU service.
                 await self._client.start_notify(
-                    DFU_CONTROL_UUID, self._on_notification
+                    DFU_CONTROL_UUID, self._on_notification,
+                    bluez={"use_start_notify": True},
                 )
                 await asyncio.sleep(1)  # Let subscription propagate
 
@@ -679,7 +688,7 @@ async def main():
     parser.add_argument("--sd-req", default="0xCB",
                         help="SoftDevice requirement (default: 0xCB for S140 7.3.0)")
     parser.add_argument("--prn", type=int, default=None,
-                        help=f"Packet receipt notification interval (default: {PRN_INTERVAL}, 0=disable)")
+                        help="Packet receipt notification interval (default: 8, 0=disable)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
