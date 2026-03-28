@@ -160,30 +160,39 @@ async def upload_uf2(
         result["message"] = f"Firmware size suspicious: {fw_size} bytes"
         return result
 
+    # Ensure transport is actually connected before sending
+    if not transport.is_connected:
+        progress("bootloader", "Reconnecting transport...", 8)
+        try:
+            await transport.connect()
+            await asyncio.sleep(1)
+        except Exception as e:
+            result["message"] = f"Cannot connect to device: {e}"
+            return result
+
     progress("bootloader", "Sending bootloader command...", 10)
     try:
-        # Stop streaming first if active, then send bootloader command.
-        # Use write_line directly — protocol.send_command races with
-        # the device reset (tries to collect response but device is gone).
-        if hasattr(transport, 'write_line'):
-            # Ensure we're not in streaming mode
-            try:
-                await transport.write_line("stream off")
-                await asyncio.sleep(0.3)
-            except Exception:
-                pass
-            await transport.write_line("bootloader")
-            log.info("Bootloader command sent via transport")
+        await transport.write_line("stream off")
+        await asyncio.sleep(0.5)
+        await transport.write_line("bootloader")
+        log.info("Bootloader command sent")
     except Exception as e:
-        log.debug("Bootloader write (may disconnect): %s", e)
+        log.warning("Bootloader write failed: %s — retrying with fresh connection", e)
+        try:
+            await transport.disconnect()
+            await asyncio.sleep(1)
+            await transport.connect()
+            await asyncio.sleep(1)
+            await transport.write_line("bootloader")
+            log.info("Bootloader command sent (retry)")
+        except Exception as e2:
+            result["message"] = f"Failed to send bootloader command: {e2}"
+            return result
 
-    # DON'T disconnect the transport — the device resets on its own after
-    # processing the bootloader command, which naturally closes the USB
-    # connection. Explicitly closing the transport can interfere with the
-    # device's reset sequence (DTR/RTS state changes, USB control transfers).
-    # Just wait for the device to reset and the UF2 drive to appear.
+    # Wait for device to reset. DON'T disconnect — the device resets on its
+    # own. Explicitly closing the transport can race with the USB reset.
     progress("bootloader", "Waiting for device reset...", 15)
-    await asyncio.sleep(8)  # Generous: device needs 200ms + USB re-enum 2-3s
+    await asyncio.sleep(8)
 
     # Wait a moment for USB re-enumeration
     await asyncio.sleep(3)
