@@ -3,6 +3,9 @@
 Called by blinky-server when it already owns the serial connection.
 No port contention — the server disconnects its transport, enters
 bootloader, copies firmware, and reconnects.
+
+Event-driven: uses pyudev to listen for USB device events instead of
+polling with sleep loops. Reacts immediately when hardware state changes.
 """
 from __future__ import annotations
 
@@ -17,27 +20,119 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 UF2_FAMILY_NRF52840 = 0xADA52840
-BOOTLOADER_ENTRY_TIMEOUT = 15  # seconds to wait for UF2 drive
-UF2_REBOOT_TIMEOUT = 15  # seconds to wait for device to reboot after flash
 
 
-def _find_uf2_drive(timeout: float = 10.0) -> Path | None:
-    """Wait for a UF2 mass storage drive to appear."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        # Check by label first (most reliable)
-        label_path = Path("/dev/disk/by-label/XIAO-SENSE")
-        if label_path.exists():
-            return label_path.resolve()
-        # Fallback: check /sys/block for UF2 devices
-        for dev in Path("/sys/block").iterdir():
-            if dev.name.startswith("sd"):
-                model = (dev / "device" / "model").read_text().strip() \
-                    if (dev / "device" / "model").exists() else ""
-                if "UF2" in model or "nRF" in model:
-                    return Path(f"/dev/{dev.name}")
-        time.sleep(0.3)
-    return None
+async def _wait_for_uf2_drive(timeout: float = 30.0) -> Path | None:
+    """Wait for UF2 mass storage drive using udev events.
+
+    Listens for block device add events instead of polling. Returns
+    immediately when the drive appears, or None on timeout.
+    """
+    # Check if already present
+    label_path = Path("/dev/disk/by-label/XIAO-SENSE")
+    if label_path.exists():
+        return label_path.resolve()
+
+    loop = asyncio.get_event_loop()
+    found = asyncio.Event()
+    result_path: list[Path] = []
+
+    def _monitor_thread():
+        """Run pyudev monitor in a thread (it blocks)."""
+        try:
+            import pyudev
+            context = pyudev.Context()
+            monitor = pyudev.Monitor.from_netlink(context)
+            monitor.filter_by(subsystem='block', device_type='disk')
+            monitor.start()
+
+            deadline = time.monotonic() + timeout
+            for device in iter(monitor.poll, None):
+                if time.monotonic() > deadline:
+                    break
+                if device.action == 'add':
+                    # Check if this is the UF2 drive
+                    label = device.get('ID_FS_LABEL', '')
+                    model = device.get('ID_MODEL', '')
+                    if label == 'XIAO-SENSE' or 'UF2' in model:
+                        dev_path = Path(device.device_node)
+                        result_path.append(dev_path)
+                        loop.call_soon_threadsafe(found.set)
+                        return
+        except ImportError:
+            # pyudev not available — fall back to polling
+            log.debug("pyudev not available, falling back to polling")
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if label_path.exists():
+                    result_path.append(label_path.resolve())
+                    loop.call_soon_threadsafe(found.set)
+                    return
+                time.sleep(0.5)
+
+    thread_task = asyncio.to_thread(_monitor_thread)
+
+    try:
+        # Wait for either the event or timeout
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(found.wait()), thread_task],
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+    except Exception:
+        pass
+
+    return result_path[0] if result_path else None
+
+
+async def _wait_for_uf2_gone(timeout: float = 30.0) -> bool:
+    """Wait for UF2 drive to disappear (device rebooted) using udev events."""
+    label_path = Path("/dev/disk/by-label/XIAO-SENSE")
+    if not label_path.exists():
+        return True
+
+    loop = asyncio.get_event_loop()
+    gone = asyncio.Event()
+
+    def _monitor_thread():
+        try:
+            import pyudev
+            context = pyudev.Context()
+            monitor = pyudev.Monitor.from_netlink(context)
+            monitor.filter_by(subsystem='block', device_type='disk')
+            monitor.start()
+
+            deadline = time.monotonic() + timeout
+            for device in iter(monitor.poll, None):
+                if time.monotonic() > deadline:
+                    break
+                if device.action == 'remove':
+                    loop.call_soon_threadsafe(gone.set)
+                    return
+        except ImportError:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if not label_path.exists():
+                    loop.call_soon_threadsafe(gone.set)
+                    return
+                time.sleep(0.5)
+
+    thread_task = asyncio.to_thread(_monitor_thread)
+
+    try:
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(gone.wait()), thread_task],
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+    except Exception:
+        pass
+
+    return gone.is_set()
 
 
 def _mount_uf2(block_dev: Path) -> Path:
@@ -72,15 +167,6 @@ def _unmount_uf2(mount_point: Path) -> None:
     subprocess.run(["sudo", "umount", str(mount_point)],
                    capture_output=True, timeout=10)
 
-
-def _wait_uf2_gone(timeout: float = 15.0) -> bool:
-    """Wait for UF2 drive to disappear (device rebooted)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not Path("/dev/disk/by-label/XIAO-SENSE").exists():
-            return True
-        time.sleep(0.3)
-    return False
 
 
 def _find_uf2conv() -> Path | None:
@@ -162,76 +248,68 @@ async def upload_uf2(
         result["message"] = f"Firmware size suspicious: {fw_size} bytes"
         return result
 
-    # Ensure transport is actually connected before sending
+    # Ensure transport is connected
     if not transport.is_connected:
         progress("bootloader", "Reconnecting transport...", 8)
         try:
-            await transport.connect()
-            await asyncio.sleep(1)
+            await asyncio.wait_for(transport.connect(), timeout=10)
         except Exception as e:
             result["message"] = f"Cannot connect to device: {e}"
             return result
 
-    # GPREGRET persistence is intermittent due to race condition with the
-    # SoftDevice shutdown. Retry up to 5 times. Each attempt: send "bootloader",
-    # wait for UF2 drive, reconnect if it didn't appear.
+    # GPREGRET persistence is intermittent (~20-50% success) due to a race
+    # with the SoftDevice shutdown. Retry: send "bootloader", listen for
+    # UF2 drive via udev events, reconnect if needed.
     max_attempts = 5
-    uf2_found = False
+    block_dev = None
 
     for attempt in range(1, max_attempts + 1):
-        progress("bootloader", f"Bootloader entry attempt {attempt}/{max_attempts}...", 10)
+        progress("bootloader", f"Attempt {attempt}/{max_attempts}...", 10)
+
+        # Start listening for UF2 drive BEFORE sending the command.
+        # This way we don't miss fast appearances.
+        uf2_task = asyncio.create_task(_wait_for_uf2_drive(timeout=15))
 
         # Send bootloader command
         try:
             if protocol:
                 try:
                     resp = await protocol.send_command("bootloader", timeout=3.0)
-                    log.info("Attempt %d: response=%s", attempt,
-                             resp[:80] if resp else "(empty)")
+                    log.info("Attempt %d: %s", attempt,
+                             resp[:80] if resp else "(no response)")
                 except Exception as e:
                     log.info("Attempt %d: device reset (%s)", attempt,
                              type(e).__name__)
             else:
                 await transport.write_line("bootloader")
         except Exception as e:
-            log.warning("Attempt %d: write failed: %s", attempt, e)
-            # Try to reconnect for next attempt
-            try:
-                await transport.disconnect()
-                await asyncio.sleep(2)
-                await transport.connect()
-                await asyncio.sleep(1)
-            except Exception:
-                pass
-            continue
-
-        # Wait for device to reset and UF2 drive to appear
-        await asyncio.sleep(5)
-        block_dev = await asyncio.to_thread(_find_uf2_drive, 10)
-        if block_dev:
-            uf2_found = True
-            log.info("UF2 drive found on attempt %d!", attempt)
+            log.warning("Attempt %d: send failed: %s", attempt, e)
+            uf2_task.cancel()
             break
 
-        log.info("Attempt %d: no UF2 drive, retrying...", attempt)
-        # Device rebooted to app — reconnect for next attempt
-        try:
-            await transport.disconnect()
-        except Exception:
-            pass
-        await asyncio.sleep(3)
-        try:
-            await transport.connect()
-            await asyncio.sleep(1)
-        except Exception as e:
-            log.warning("Reconnect failed: %s", e)
+        # Wait for UF2 drive event (no polling — pyudev listener or fallback)
+        block_dev = await uf2_task
+        if block_dev:
+            log.info("UF2 drive appeared on attempt %d: %s", attempt, block_dev)
+            break
 
-    if not uf2_found:
+        log.info("Attempt %d: no UF2 drive", attempt)
+        if attempt < max_attempts:
+            # Reconnect transport for next attempt
+            try:
+                await transport.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+            try:
+                await asyncio.wait_for(transport.connect(), timeout=10)
+            except Exception as e:
+                log.warning("Reconnect: %s", e)
+
+    if not block_dev:
         result["message"] = (f"Bootloader entry failed after {max_attempts} attempts "
                              "(GPREGRET race condition)")
         return result
-
-    # block_dev was found in the retry loop above
 
     progress("mount", "Mounting UF2 drive...", 30)
     try:
@@ -258,7 +336,7 @@ async def upload_uf2(
         return result
 
     progress("reboot", "Waiting for device to reboot...", 80)
-    rebooted = await asyncio.to_thread(_wait_uf2_gone, UF2_REBOOT_TIMEOUT)
+    rebooted = await _wait_for_uf2_gone(timeout=30)
     if not rebooted:
         result["message"] = "Device did not reboot after firmware copy"
         return result
