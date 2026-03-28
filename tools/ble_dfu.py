@@ -193,8 +193,57 @@ class BleDfu:
             firmware_bin = zf.read(bin_file)
             return init_packet, firmware_bin
 
+    def _clear_bluez_state(self):
+        """Thoroughly clear ALL BlueZ state for this device.
+
+        CRITICAL: The bootloader has a completely different GATT table than
+        the app firmware. If BlueZ uses cached app-mode GATT handles when
+        talking to the bootloader, writes go to the wrong characteristics
+        and the SoftDevice returns ATT error 0x0E (Unlikely Error).
+
+        This clears:
+        1. BlueZ device entry (via bluetoothctl remove)
+        2. GATT cache files (/var/lib/bluetooth/*/cache/<addr>)
+        3. Device info files (/var/lib/bluetooth/*/<addr>)
+        4. Restarts BlueZ to ensure clean state
+        """
+        import subprocess
+        addr_underscore = self.address.replace(':', '_')
+
+        # Remove device via bluetoothctl (clears bonding, pairing, etc.)
+        subprocess.run(
+            f"echo 'remove {self.address}' | bluetoothctl",
+            shell=True, capture_output=True, timeout=5
+        )
+        # Remove GATT cache
+        subprocess.run(
+            f"sudo rm -rf /var/lib/bluetooth/*/cache/{addr_underscore}",
+            shell=True, capture_output=True, timeout=5
+        )
+        # Also try without sudo
+        subprocess.run(
+            f"rm -rf /var/lib/bluetooth/*/cache/{addr_underscore}",
+            shell=True, capture_output=True, timeout=5
+        )
+        # Remove device info directory (contains stored GATT handles)
+        subprocess.run(
+            f"sudo rm -rf /var/lib/bluetooth/*/{addr_underscore}",
+            shell=True, capture_output=True, timeout=5
+        )
+        # Restart bluetooth to pick up cache removal
+        subprocess.run(
+            ["sudo", "systemctl", "restart", "bluetooth"],
+            capture_output=True, timeout=10
+        )
+        log.info("Cleared BlueZ state for %s", self.address)
+
     async def _enter_dfu_mode(self):
         """Connect to app-mode device and trigger reboot into DFU bootloader."""
+        # Clear BlueZ state BEFORE connecting to app mode.
+        # This ensures fresh GATT discovery for the app connection too.
+        self._clear_bluez_state()
+        await asyncio.sleep(3)  # Let BlueZ restart
+
         self._client = BleakClient(self.address, timeout=10.0)
         await self._client.connect()
         log.info("Connected (app mode), MTU=%d", self._client.mtu_size)
@@ -213,7 +262,8 @@ class BleDfu:
                 DFU_CONTROL_UUID, bytes([0x01]), response=True
             )
         except Exception as e:
-            # Device may disconnect immediately after processing
+            # Device may disconnect immediately after processing.
+            # GATT error 0x0E here is OK -- the device still reboots.
             log.debug("Write result (may disconnect): %s", e)
 
         # Device will disconnect and reboot into bootloader
@@ -226,18 +276,12 @@ class BleDfu:
 
     async def _connect_bootloader(self):
         """Connect to device in bootloader DFU mode."""
-        # Clear BlueZ GATT cache -- the bootloader has a different GATT table
-        # than the app, but BlueZ reuses cached handles for the same address.
-        import subprocess
-        cache_dir = f"/var/lib/bluetooth/*/cache/{self.address.replace(':', '_')}"
-        subprocess.run(f"sudo rm -rf {cache_dir}", shell=True,
-                       capture_output=True, timeout=5)
-        subprocess.run(f"rm -rf {cache_dir}", shell=True,
-                       capture_output=True, timeout=5)
-        # Restart bluetooth to pick up cache removal
-        subprocess.run(["sudo", "systemctl", "restart", "bluetooth"],
-                       capture_output=True, timeout=10)
-        await asyncio.sleep(2)  # Let BlueZ restart
+        # CRITICAL: Clear BlueZ state again before connecting to bootloader.
+        # The bootloader has a completely different GATT table (different
+        # handles, no NUS service, different DFU revision value). If BlueZ
+        # reuses app-mode cached handles, all writes will fail with 0x0E.
+        self._clear_bluez_state()
+        await asyncio.sleep(4)  # Let BlueZ restart + bootloader start advertising
 
         # The bootloader re-advertises with the same address
         for attempt in range(10):
@@ -248,13 +292,49 @@ class BleDfu:
                 log.info("Connected to bootloader, MTU=%d (payload=%d)",
                          self._client.mtu_size, self._mtu)
 
+                # Verify we're actually talking to the bootloader, not app
+                # Bootloader DFU revision = 0x0008, app = 0x0001
+                try:
+                    rev_data = await self._client.read_gatt_char(
+                        DFU_REVISION_UUID
+                    )
+                    rev = int.from_bytes(rev_data[:2], 'little')
+                    if rev == 0x0001:
+                        log.warning(
+                            "DFU revision 0x0001 = app mode! "
+                            "Stale BlueZ cache. Retrying..."
+                        )
+                        await self._client.disconnect()
+                        self._clear_bluez_state()
+                        await asyncio.sleep(4)
+                        continue
+                    log.info("DFU Revision: 0x%04x (bootloader)", rev)
+                except Exception as e:
+                    log.debug("Could not read DFU revision: %s", e)
+
+                # Wait for SoftDevice sys_attr processing before enabling
+                # notifications. The SoftDevice needs time to process the
+                # BLE_GATTS_EVT_SYS_ATTR_MISSING event and set up internal
+                # GATT state. Without this, CCCD writes may not take effect.
+                await asyncio.sleep(2)
+
                 # Enable DFU Control notifications via start_notify.
-                # The bootloader uses notifications (not indications) on
-                # the Control Point characteristic (CCCD = 0x0100).
                 await self._client.start_notify(
                     DFU_CONTROL_UUID, self._on_notification
                 )
-                await asyncio.sleep(0.5)  # Let subscription propagate
+                await asyncio.sleep(1)  # Let subscription propagate
+
+                # Verify no NUS service (bootloader doesn't have it)
+                has_nus = any(
+                    "6e400001" in str(svc.uuid).lower()
+                    for svc in self._client.services
+                )
+                if has_nus:
+                    log.warning("NUS service found - still in app mode!")
+                    await self._client.disconnect()
+                    self._clear_bluez_state()
+                    await asyncio.sleep(4)
+                    continue
 
                 # Log discovered services for debugging
                 for svc in self._client.services:
@@ -567,7 +647,7 @@ async def main():
                         help="Path to raw .bin firmware (auto-generates .zip)")
     parser.add_argument("--sd-req", default="0xCB",
                         help="SoftDevice requirement (default: 0xCB for S140 7.3.0)")
-    parser.add_argument("--prn", type=int, default=PRN_INTERVAL,
+    parser.add_argument("--prn", type=int, default=None,
                         help=f"Packet receipt notification interval (default: {PRN_INTERVAL}, 0=disable)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -580,7 +660,8 @@ async def main():
 
     # Allow overriding PRN interval
     global PRN_INTERVAL
-    PRN_INTERVAL = args.prn
+    if args.prn is not None:
+        PRN_INTERVAL = args.prn
 
     if args.scan:
         await scan_devices()
