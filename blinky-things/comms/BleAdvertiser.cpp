@@ -1,10 +1,10 @@
 #include "BleAdvertiser.h"
 
 void BleAdvertiser::begin() {
-    BLEDevice::init("Blinky-GW");
-    advertising_ = BLEDevice::getAdvertising();
+    NimBLEDevice::init("Blinky-GW");
+    advertising_ = NimBLEDevice::getAdvertising();
     ready_ = true;
-    Serial.println(F("[BLE] Advertiser initialized"));
+    Serial.println(F("[BLE] Advertiser initialized (NimBLE)"));
 }
 
 void BleAdvertiser::stop() {
@@ -35,8 +35,13 @@ bool BleAdvertiser::broadcast(BleProtocol::PacketType type,
         return false;
     }
 
+    // Skip broadcast if a NUS client is connected — stopping advertising
+    // would disrupt the active GATT connection (shared NimBLE advertising instance).
+    if (NimBLEDevice::getServer() && NimBLEDevice::getServer()->getConnectedCount() > 0) {
+        return false;
+    }
+
     if (len > BleProtocol::MAX_PAYLOAD) {
-        // TODO: fragmentation support for large payloads
         Serial.print(F("[BLE] Payload too large: "));
         Serial.print(len);
         Serial.print(F(" > "));
@@ -53,7 +58,6 @@ void BleAdvertiser::buildAndSendPacket(BleProtocol::PacketType type,
                                        const uint8_t* payload, size_t payloadLen) {
     // Build manufacturer-specific data:
     // [company_id_lo, company_id_hi, header(4 bytes), payload...]
-    // setManufacturerData expects the company ID as the first 2 bytes.
     size_t msdLen = 2 + BleProtocol::HEADER_SIZE + payloadLen;
     uint8_t msd[2 + BleProtocol::HEADER_SIZE + BleProtocol::MAX_PAYLOAD];
 
@@ -72,26 +76,22 @@ void BleAdvertiser::buildAndSendPacket(BleProtocol::PacketType type,
     // Payload
     memcpy(&msd[2 + BleProtocol::HEADER_SIZE], payload, payloadLen);
 
-    // Stop any current advertising before updating data
+    // Stop current advertising before updating data
     advertising_->stop();
 
-    // Set the advertising data
-    BLEAdvertisementData advData;
-    // setManufacturerData takes a String of raw bytes (includes company ID)
-    advData.setManufacturerData(String(reinterpret_cast<char*>(msd), msdLen));
-
+    // Set manufacturer data (NimBLE takes raw uint8_t* + length)
+    NimBLEAdvertisementData advData;
+    advData.setManufacturerData(std::string(reinterpret_cast<char*>(msd), msdLen));
     advertising_->setAdvertisementData(advData);
 
-    // Broadcast for a short burst (100ms at fast interval), then stop.
-    // The advertising interval is set to minimum (20ms) for quick delivery.
-    advertising_->setMinInterval(0x20);  // 20ms (32 * 0.625ms)
-    advertising_->setMaxInterval(0x40);  // 40ms (64 * 0.625ms)
+    // Broadcast at fast interval for quick delivery
+    advertising_->setMinInterval(0x20);  // 20ms
+    advertising_->setMaxInterval(0x40);  // 40ms
 
-    // Start advertising — duration 0 means indefinite, we'll stop manually
     advertising_->start();
-
-    // Advertise for 150ms (3-7 packets at 20-40ms interval) then stop.
-    // This is enough for nearby scanners to pick up the packet.
+    // Blocking: NimBLE needs time to send 3-7 packets at the 20-40ms advertising
+    // interval configured above. Without this delay, stop() cancels before any
+    // packets are actually transmitted.
     delay(150);
     advertising_->stop();
 
@@ -101,12 +101,10 @@ void BleAdvertiser::buildAndSendPacket(BleProtocol::PacketType type,
 void BleAdvertiser::printDiagnostics() const {
     Serial.print(F("[BLE] role=advertiser state="));
     Serial.println(ready_ ? F("ready") : F("not_initialized"));
-
     Serial.print(F("[BLE] packets_tx="));
     Serial.print(packetsSent_);
     Serial.print(F(" errors="));
     Serial.println(errors_);
-
     Serial.print(F("[BLE] next_seq="));
     Serial.println(sequence_);
 }

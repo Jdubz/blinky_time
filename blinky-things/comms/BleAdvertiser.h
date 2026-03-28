@@ -7,13 +7,11 @@
  * manufacturer-specific data. nRF52840 devices passively scan
  * and apply matching packets.
  *
- * Uses ESP32 BLE library (NimBLE or Bluedroid backend).
- * Advertising runs on Core 0 by default — no impact on Core 1 render loop.
+ * Uses NimBLE-Arduino library (v2.3.8+ required for ESP32-S3).
  */
 
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEAdvertising.h>
+#include <NimBLEDevice.h>
 #include "BleProtocol.h"
 
 class BleAdvertiser {
@@ -22,7 +20,6 @@ public:
     void stop();
 
     // Broadcast a payload to all scanning devices.
-    // Returns true if the packet was sent successfully.
     bool broadcastSettings(const char* json);
     bool broadcastScene(const char* json);
     bool broadcastCommand(const char* cmd);
@@ -38,7 +35,7 @@ private:
     void buildAndSendPacket(BleProtocol::PacketType type,
                             const uint8_t* payload, size_t payloadLen);
 
-    BLEAdvertising* advertising_ = nullptr;
+    NimBLEAdvertising* advertising_ = nullptr;
     uint8_t sequence_ = 0;
     uint32_t packetsSent_ = 0;
     uint32_t errors_ = 0;

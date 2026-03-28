@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import serial.tools.list_ports
 
@@ -14,12 +15,23 @@ KNOWN_DEVICES = {
 
 @dataclass
 class DiscoveredDevice:
-    port: str
-    platform: str  # "nrf52840" or "esp32s3"
-    serial_number: str  # USB serial number (stable device ID)
-    vid: int
-    pid: int
-    description: str
+    """A device found during discovery."""
+    device_id: str          # Stable ID (serial number, BLE address, or IP)
+    platform: str           # "nrf52840" or "esp32s3"
+    transport_type: str     # "serial", "ble", or "wifi"
+    address: str            # Port path, BLE address, or host:port
+    description: str = ""
+    rssi: int | None = None  # BLE/WiFi signal strength
+    extra: dict = field(default_factory=dict)
+
+    # Legacy compat
+    @property
+    def port(self) -> str:
+        return self.address
+
+    @property
+    def serial_number(self) -> str:
+        return self.device_id
 
 
 def discover_serial_devices() -> list[DiscoveredDevice]:
@@ -31,20 +43,165 @@ def discover_serial_devices() -> list[DiscoveredDevice]:
         platform = KNOWN_DEVICES.get((info.vid, info.pid))
         if platform is None:
             continue
+        device_id = info.serial_number or info.device
         devices.append(
             DiscoveredDevice(
-                port=info.device,
+                device_id=device_id,
                 platform=platform,
-                serial_number=info.serial_number or "",
-                vid=info.vid,
-                pid=info.pid,
+                transport_type="serial",
+                address=info.device,
                 description=info.description or "",
+                extra={"vid": info.vid, "pid": info.pid},
             )
         )
-        log.info(
-            "Discovered %s on %s (SN: %s)",
-            platform,
-            info.device,
-            info.serial_number,
-        )
+        log.info("Discovered serial %s on %s (SN: %s)", platform, info.device, device_id[:12])
     return devices
+
+
+async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
+    """Scan for BLE devices advertising the NUS service.
+
+    Requires bleak. Returns empty list if bleak is not available
+    or no Bluetooth adapter is present.
+    """
+    try:
+        from bleak import BleakScanner
+        from .ble_transport import NUS_SERVICE_UUID
+    except ImportError:
+        log.debug("bleak not installed, skipping BLE discovery")
+        return []
+
+    devices = []
+    try:
+        discovered = await BleakScanner.discover(
+            timeout=timeout,
+            service_uuids=[NUS_SERVICE_UUID],
+            return_adv=True,
+        )
+        for addr, (dev, adv) in discovered.items():
+            devices.append(
+                DiscoveredDevice(
+                    device_id=addr,  # BLE address as stable ID
+                    platform="unknown",  # Cannot determine from BLE advertisement alone
+                    transport_type="ble",
+                    address=addr,
+                    description=dev.name or "BLE device",
+                    rssi=adv.rssi,
+                )
+            )
+            log.info("Discovered BLE %s (%s) RSSI=%d", dev.name, addr, adv.rssi)
+    except Exception as e:
+        log.warning("BLE scan failed: %s", e)
+
+    return devices
+
+
+async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[DiscoveredDevice]:
+    """Discover WiFi devices via mDNS and/or static registry.
+
+    Scans for _blinky._tcp mDNS services (advertised by ESP32-S3 firmware).
+    Also includes any statically configured host:port pairs.
+
+    Args:
+        known_hosts: List of {"host": "ip", "port": 3333, "device_id": "..."}
+    """
+    devices = []
+    seen_hosts: set[str] = set()
+
+    # mDNS discovery for _blinky._tcp
+    try:
+        from zeroconf import Zeroconf, ServiceBrowser
+
+        zc = Zeroconf()
+        found: list[dict] = []
+
+        class Listener:
+            def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+                info = zc.get_service_info(type_, name)
+                if info:
+                    addrs = info.parsed_addresses()
+                    if not addrs:
+                        return
+                    host = addrs[0]  # First address (IPv4 or IPv6)
+                    port = info.port or 3333
+                    found.append({"host": host, "port": port, "name": name})
+
+            def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+                pass
+
+            def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+                pass
+
+        browser = ServiceBrowser(zc, "_blinky._tcp.local.", Listener())
+        await asyncio.sleep(3.0)  # Wait for responses
+        browser.cancel()
+        zc.close()
+
+        for entry in found:
+            host = entry["host"]
+            port = entry["port"]
+            # IP address as device_id — not stable across DHCP renewals.
+            # A future improvement could query the device for a hardware serial number.
+            device_id = host
+            seen_hosts.add(host)
+            devices.append(
+                DiscoveredDevice(
+                    device_id=device_id,
+                    platform="esp32s3",
+                    transport_type="wifi",
+                    address=f"{host}:{port}",
+                    description=f"mDNS: {entry['name']}",
+                    extra={"host": host, "port": port},
+                )
+            )
+            log.info("Discovered WiFi device via mDNS: %s:%d", host, port)
+    except ImportError:
+        log.debug("zeroconf not installed, skipping mDNS WiFi discovery")
+    except Exception as e:
+        log.warning("mDNS WiFi scan failed: %s", e)
+
+    # Static registry (skip hosts already found via mDNS)
+    for entry in known_hosts or []:
+        host = entry["host"]
+        if host in seen_hosts:
+            continue
+        port = entry.get("port", 3333)
+        device_id = entry.get("device_id", host)
+        devices.append(
+            DiscoveredDevice(
+                device_id=device_id,
+                platform="esp32s3",
+                transport_type="wifi",
+                address=f"{host}:{port}",
+                description=f"Static: {host}",
+                extra={"host": host, "port": port},
+            )
+        )
+        log.info("Registered WiFi device %s at %s:%d", device_id, host, port)
+
+    return devices
+
+
+async def discover_all(
+    ble_scan: bool = True,
+    ble_timeout: float = 5.0,
+    wifi_hosts: list[dict] | None = None,
+) -> list[DiscoveredDevice]:
+    """Discover devices across all transport types.
+
+    Serial discovery is synchronous (fast) and runs first. BLE and WiFi/mDNS
+    discovery are both async (slow) and run concurrently via asyncio.gather().
+    """
+    serial_devs = discover_serial_devices()
+
+    ble_coro = discover_ble_devices(timeout=ble_timeout) if ble_scan else asyncio.sleep(0, result=[])
+    wifi_coro = discover_wifi_devices(wifi_hosts)
+
+    ble_devs, wifi_devs = await asyncio.gather(ble_coro, wifi_coro)
+
+    all_devs = serial_devs + list(ble_devs) + list(wifi_devs)
+    log.info(
+        "Discovery: %d serial, %d BLE, %d WiFi",
+        len(serial_devs), len(ble_devs), len(wifi_devs),
+    )
+    return all_devs

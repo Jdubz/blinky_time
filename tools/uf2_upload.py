@@ -33,7 +33,10 @@ import json
 import shutil
 import subprocess
 import argparse
+import signal
 from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
 try:
     import serial
@@ -124,6 +127,144 @@ PORT_REAPPEAR_TIMEOUT = 10
 # --- UF2 drive identification ---
 UF2_INFO_FILE = "INFO_UF2.TXT"
 UF2_DRIVE_LABEL = "XIAO-SENSE"
+
+# --- Serial port safety ---
+SERIAL_OPEN_TIMEOUT = 5  # seconds — max time to wait for serial port open
+BLINKY_SERVER_URL = os.environ.get("BLINKY_SERVER_URL", "http://localhost:8420")
+
+
+def _port_holders(port):
+    """Return list of PIDs holding a serial port, using fuser.
+
+    Returns empty list if port is free or fuser is unavailable.
+    """
+    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
+    try:
+        result = subprocess.run(
+            ["fuser", real_port],
+            capture_output=True, text=True, timeout=5,
+        )
+        # fuser writes PIDs to stderr
+        pids = result.stderr.strip().split()
+        return [int(p) for p in pids if p.strip().isdigit()]
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        return []
+
+
+def _serial_open_with_timeout(port, baudrate=115200, timeout=1, open_timeout=None):
+    """Open a serial port with a timeout on the open() call itself.
+
+    serial.Serial(timeout=...) only applies to read operations. The
+    open() syscall itself can block indefinitely if another process
+    holds the port. On Linux/macOS this wrapper uses SIGALRM to abort
+    a stuck open. On platforms without SIGALRM (e.g. Windows), the
+    open() call is made directly without a timeout guard.
+
+    Returns the serial.Serial object, or raises serial.SerialException.
+    """
+    if open_timeout is None:
+        open_timeout = SERIAL_OPEN_TIMEOUT
+
+    if not hasattr(signal, 'SIGALRM'):
+        # SIGALRM is unavailable (e.g. Windows) — open without timeout guard
+        return serial.Serial(port, baudrate, timeout=timeout)
+
+    def _alarm_handler(signum, frame):
+        raise serial.SerialException(
+            f"Timed out opening {port} after {open_timeout}s "
+            f"(port may be held by another process)"
+        )
+
+    old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.alarm(open_timeout)
+    try:
+        ser = serial.Serial(port, baudrate, timeout=timeout)
+        signal.alarm(0)  # Cancel alarm
+        return ser
+    except Exception:
+        signal.alarm(0)
+        raise
+    finally:
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+def _request_server_release(port, verbose=False):
+    """Ask blinky-server to release a device on the given port.
+
+    Looks up the device by port, then calls POST /devices/{id}/release.
+    Returns True if released (or server not running), False on error.
+    """
+    try:
+        req = Request(f"{BLINKY_SERVER_URL}/devices",
+                      headers={"Accept": "application/json"})
+        resp = urlopen(req, timeout=3)
+        devices = json.loads(resp.read())
+    except (URLError, OSError, json.JSONDecodeError):
+        if verbose:
+            print(f"  blinky-server not reachable at {BLINKY_SERVER_URL} (OK if not running)")
+        return True  # Server not running — nothing to release
+
+    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
+
+    # Find device on this port
+    device_id = None
+    for dev in devices:
+        dev_port = dev.get("port", "")
+        if dev_port == port or dev_port == real_port:
+            device_id = dev.get("id")
+            break
+
+    if not device_id:
+        if verbose:
+            print(f"  blinky-server has no device on {port}")
+        return True
+
+    # Release it
+    try:
+        req = Request(
+            f"{BLINKY_SERVER_URL}/devices/{device_id}/release",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=b"{}",
+        )
+        resp = urlopen(req, timeout=5)
+        print(f"  Released {device_id[:12]} from blinky-server")
+        time.sleep(2)  # Let OS release the FD
+        return True
+    except (URLError, OSError) as e:
+        print(f"  WARNING: Failed to release device via blinky-server: {e}")
+        return False
+
+
+def _request_server_reconnect(port, verbose=False):
+    """Ask blinky-server to reconnect a device on the given port."""
+    try:
+        req = Request(f"{BLINKY_SERVER_URL}/devices",
+                      headers={"Accept": "application/json"})
+        resp = urlopen(req, timeout=3)
+        devices = json.loads(resp.read())
+    except (URLError, OSError, json.JSONDecodeError):
+        return  # Server not running
+
+    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
+
+    for dev in devices:
+        dev_port = dev.get("port", "")
+        if dev_port == port or dev_port == real_port:
+            device_id = dev.get("id")
+            try:
+                req = Request(
+                    f"{BLINKY_SERVER_URL}/devices/{device_id}/reconnect",
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                    data=b"{}",
+                )
+                urlopen(req, timeout=5)
+                if verbose:
+                    print(f"  Reconnected {device_id[:12]} via blinky-server")
+            except (URLError, OSError):
+                pass
+            return
 
 
 # ============================================================
@@ -471,7 +612,7 @@ def find_port_by_id_path(serial_number):
     return None
 
 
-MAX_BOOTLOADER_RETRIES = 3
+MAX_BOOTLOADER_RETRIES = 5
 
 
 # ============================================================
@@ -650,29 +791,30 @@ def _check_port_available(port, verbose=False):
               f" serial={port_info.serial_number}")
 
     # Check 2: Verify port is not locked by another process.
-    # Use real path for serial.Serial() (some pyserial versions don't follow symlinks)
-    open_port = real_port if real_port != port else port
-    try:
-        ser = serial.Serial(open_port, 115200, timeout=0.1, dsrdtr=False, rtscts=False)
-        ser.close()
-        return True
-    except serial.SerialException as e:
-        err_str = str(e)
-        if "Device or resource busy" in err_str or "EBUSY" in err_str:
-            print(f"\n  ERROR: {port} is locked by another process!")
-            print(f"  This usually means an MCP server or console session is still connected.")
-            print(f"  Fix: Disconnect all MCP sessions, or kill stale processes:")
-            print(f"    pkill -f 'node.*blinky-serial-mcp'")
+    # Use fuser (non-blocking) instead of probe-open (which can block
+    # indefinitely if another process holds the port exclusively).
+    holders = _port_holders(port)
+    if holders:
+        my_pid = os.getpid()
+        other_pids = [p for p in holders if p != my_pid]
+        if other_pids:
+            # Identify what's holding the port
+            holder_names = []
+            for pid in other_pids:
+                try:
+                    cmdline = Path(f"/proc/{pid}/cmdline").read_text().replace('\0', ' ').strip()
+                    holder_names.append(f"  PID {pid}: {cmdline[:120]}")
+                except OSError:
+                    holder_names.append(f"  PID {pid}: (unknown)")
+
+            print(f"\n  ERROR: {port} is held by another process!")
+            for name in holder_names:
+                print(name)
+            print(f"\n  Fix: Disconnect MCP sessions, stop blinky-server, or kill the process.")
             print(f"  Then wait 2-3 seconds for the port to be released.\n")
             return False
-        if verbose:
-            print(f"  Port check warning: {e}")
-        # Other errors (e.g., port not found) may be transient
-        return True
-    except OSError as e:
-        if verbose:
-            print(f"  Port check OS error: {e}")
-        return True
+
+    return True
 
 
 def trigger_bootloader(port, verbose=False):
@@ -693,7 +835,10 @@ def trigger_bootloader(port, verbose=False):
     """
     print_section("ENTERING BOOTLOADER")
 
-    # Pre-flight: verify port is not locked by another process
+    # Pre-flight: if blinky-server is running, ask it to release the port
+    _request_server_release(port, verbose)
+
+    # Verify port is not locked by another process
     if not _check_port_available(port, verbose):
         print(f"\n  ABORTING: Port {port} is not available.")
         print(f"  Resolve the port lock and retry.")
@@ -749,19 +894,16 @@ def trigger_bootloader(port, verbose=False):
         # Send 'bootloader' serial command
         if attempt == 1:
             print(f"  Trying serial command: bootloader")
+        ser = None
         try:
-            ser = serial.Serial(current_port, 115200, timeout=1)
+            ser = _serial_open_with_timeout(current_port, 115200, timeout=1)
             time.sleep(0.1)
             ser.reset_input_buffer()
             ser.write(b'bootloader\n')
             ser.flush()
             time.sleep(0.1)
-            try:
-                ser.close()
-            except (BrokenPipeError, OSError):
-                pass
 
-            if _wait_for_uf2_drive(pre_existing_blocks, timeout=3, verbose=verbose):
+            if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
                 return device_serial
 
             # Check if device disconnected but UF2 drive didn't appear.
@@ -774,8 +916,13 @@ def trigger_bootloader(port, verbose=False):
                 continue
 
         except (serial.SerialException, OSError) as e:
-            if verbose:
-                print(f"  Serial error: {e}")
+            print(f"  Serial error: {e}")
+        finally:
+            if ser:
+                try:
+                    ser.close()
+                except (BrokenPipeError, OSError):
+                    pass
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on
@@ -788,12 +935,10 @@ def trigger_bootloader(port, verbose=False):
         if attempt == 1:
             pre_existing_blocks = _get_usb_block_devices()
             print(f"  Trying 1200 baud touch on {current_port}...")
+            ser = None
             try:
-                ser = serial.Serial()
-                ser.port = current_port
-                ser.baudrate = 1200
+                ser = _serial_open_with_timeout(current_port, 1200, timeout=1)
                 ser.dtr = True
-                ser.open()
                 time.sleep(0.1)
                 try:
                     ser.dtr = False
@@ -801,20 +946,20 @@ def trigger_bootloader(port, verbose=False):
                     ser.dtr = True
                     time.sleep(0.1)
                 except (BrokenPipeError, OSError):
-                    if verbose:
-                        print(f"  Device reset during DTR toggle (expected)")
-                try:
-                    ser.close()
-                except (BrokenPipeError, OSError):
-                    pass
+                    print(f"  Device reset during DTR toggle (expected)")
                 print(f"  1200 baud touch complete")
 
                 if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
                     return device_serial
 
             except serial.SerialException as e:
-                if verbose:
-                    print(f"  1200 baud touch failed: {e}")
+                print(f"  1200 baud touch failed: {e}")
+            finally:
+                if ser:
+                    try:
+                        ser.close()
+                    except (BrokenPipeError, OSError):
+                        pass
 
         print(f"  UF2 drive not detected (attempt {attempt})")
 
@@ -914,81 +1059,80 @@ def find_uf2_block_device(timeout):
 
 
 def _get_usb_block_devices():
-    """Get set of USB block device paths from lsblk, with sysfs/label fallbacks.
+    """Get set of USB block device paths.
 
-    Strategy:
-    1. Try lsblk -J for USB block devices (standard method)
-    2. Fallback: scan /sys/block/sd* for devices with Seeed VID (0x2886)
-    3. Fallback: check /dev/disk/by-label/ for XIAO-SENSE label
+    Strategy (ordered fastest-first to avoid subprocess delays eating
+    the drive detection timeout on slow systems like Raspberry Pi):
+    1. Check /dev/disk/by-label/ for UF2 drive label (instant, no subprocess)
+    2. Scan /sys/block/sd* for devices with Seeed/bootloader VID
+    3. Fallback: lsblk -J for USB block devices (subprocess, can be slow)
     """
     devices = set()
 
-    # Strategy 1: lsblk
+    # Strategy 1: check /dev/disk/by-label/ for UF2 drive label (instant)
+    drive_label = _active_board.get("drive_label", UF2_DRIVE_LABEL)
+    for label in (drive_label, UF2_DRIVE_LABEL):
+        by_label = Path("/dev/disk/by-label") / label
+        if by_label.exists():
+            try:
+                real_dev = str(by_label.resolve())
+                devices.add(real_dev)
+            except OSError:
+                pass
+
+    if devices:
+        return devices
+
+    # Strategy 2: scan /sys/block/sd* for Seeed VID (0x2886)
+    bootloader_vid = _active_board.get("bootloader_vid", NORMAL_VID)
+    for block_dir in glob.glob("/sys/block/sd*"):
+        block_name = os.path.basename(block_dir)
+        # Walk up the sysfs tree to find the USB device's idVendor
+        try:
+            real_path = os.path.realpath(os.path.join(block_dir, "device"))
+            check_path = real_path
+            for _ in range(10):
+                vendor_file = os.path.join(check_path, "idVendor")
+                if os.path.exists(vendor_file):
+                    with open(vendor_file) as f:
+                        vid = f.read().strip()
+                    if vid in (f"{NORMAL_VID:04x}", f"{bootloader_vid:04x}"):
+                        part_path = Path(f"/dev/{block_name}1")
+                        if part_path.exists():
+                            devices.add(str(part_path))
+                        else:
+                            devices.add(f"/dev/{block_name}")
+                    break
+                check_path = os.path.dirname(check_path)
+                if check_path in ("", "/"):
+                    break
+        except OSError:
+            continue
+
+    if devices:
+        return devices
+
+    # Strategy 3: lsblk (subprocess — timeout kept short to avoid eating
+    # the drive detection window on slow systems)
     try:
         result = subprocess.run(
             ["lsblk", "-o", "NAME,TRAN,RM,TYPE", "-J"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=2,
         )
         if result.returncode == 0:
             try:
                 data = json.loads(result.stdout)
                 for dev in data.get("blockdevices", []):
                     if dev.get("tran") == "usb":
-                        # Check partitions
                         for child in dev.get("children", []):
                             if child.get("type") in ("part", "disk"):
                                 devices.add(f"/dev/{child['name']}")
-                        # If no partitions, use disk itself
                         if not dev.get("children"):
                             devices.add(f"/dev/{dev['name']}")
             except (json.JSONDecodeError, KeyError):
                 pass
     except subprocess.TimeoutExpired:
         pass
-
-    if devices:
-        return devices
-
-    # Strategy 2: scan /sys/block/sd* for Seeed VID (0x2886)
-    sys_block = Path("/sys/block")
-    if sys_block.exists():
-        for block_dir in glob.glob("/sys/block/sd*"):
-            block_name = os.path.basename(block_dir)
-            # Walk up the sysfs tree to find the USB device's idVendor
-            try:
-                real_path = os.path.realpath(os.path.join(block_dir, "device"))
-                # Walk up directories looking for idVendor
-                check_path = real_path
-                for _ in range(10):
-                    vendor_file = os.path.join(check_path, "idVendor")
-                    if os.path.exists(vendor_file):
-                        with open(vendor_file) as f:
-                            vid = f.read().strip()
-                        if vid == f"{NORMAL_VID:04x}":
-                            # Found a Seeed device, check for partitions
-                            part_path = Path(f"/dev/{block_name}1")
-                            if part_path.exists():
-                                devices.add(str(part_path))
-                            else:
-                                devices.add(f"/dev/{block_name}")
-                        break
-                    check_path = os.path.dirname(check_path)
-                    if check_path in ("", "/"):
-                        break
-            except OSError:
-                continue
-
-    if devices:
-        return devices
-
-    # Strategy 3: check /dev/disk/by-label/ for UF2 drive label
-    by_label = Path("/dev/disk/by-label") / UF2_DRIVE_LABEL
-    if by_label.exists():
-        try:
-            real_dev = str(by_label.resolve())
-            devices.add(real_dev)
-        except OSError:
-            pass
 
     return devices
 
@@ -1396,8 +1540,9 @@ def verify_firmware(port, verbose=False):
     print(f"  Waiting for firmware to initialize...")
     time.sleep(3)
 
+    ser = None
     try:
-        ser = serial.Serial(real_port, 115200, timeout=2)
+        ser = _serial_open_with_timeout(real_port, 115200, timeout=2)
         time.sleep(0.5)  # Let serial settle
         ser.reset_input_buffer()
 
@@ -1451,7 +1596,6 @@ def verify_firmware(port, verbose=False):
             for line in nn_lines:
                 print(f"    {line}")
 
-        ser.close()
         return True
 
     except serial.SerialException as e:
@@ -1460,6 +1604,12 @@ def verify_firmware(port, verbose=False):
     except OSError as e:
         print(f"  [WARN] OS error during verification: {e}")
         return False
+    finally:
+        if ser:
+            try:
+                ser.close()
+            except (BrokenPipeError, OSError):
+                pass
 
 
 # ============================================================
@@ -1686,6 +1836,9 @@ def upload_to_device(port, uf2_path, verbose=False):
         # Phase 6: Verify reboot + post-flash verification
         reboot_ok, new_port = verify_reboot(mount_point, port, device_serial, verbose=verbose)
         if reboot_ok:
+            # Ask blinky-server to reconnect (best-effort)
+            reconnect_port = new_port or port
+            _request_server_reconnect(reconnect_port, verbose=verbose)
             elapsed = _elapsed(dev_start)
             msg = f"OK in {elapsed} (now on {new_port})" if new_port else f"OK in {elapsed}"
             return True, msg

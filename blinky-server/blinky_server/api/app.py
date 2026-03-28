@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    fm = FleetManager()
+    fm = FleetManager(**app.state.fleet_kwargs)
     set_fleet(fm)
     await fm.start()
     yield
@@ -21,13 +21,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     set_fleet(None)
 
 
-def create_app() -> FastAPI:
+def create_app(
+    enable_ble: bool = True,
+    wifi_hosts: list[dict] | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="Blinky Server",
         description="Fleet management API for Blinky Time LED art devices",
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.state.fleet_kwargs = {"enable_ble": enable_ble, "wifi_hosts": wifi_hosts}
 
     app.add_middleware(
         CORSMiddleware,

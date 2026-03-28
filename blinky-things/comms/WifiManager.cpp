@@ -72,6 +72,7 @@ bool WifiManager::connect() {
     Serial.print(F("..."));
 
     WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);  // ESP-IDF handles reconnection
     WiFi.begin(ssid_, password_);
 
     // Wait up to 10 seconds for connection
@@ -86,10 +87,15 @@ bool WifiManager::connect() {
         // Disable WiFi power management — prevents the radio from sleeping
         // and dropping TCP connections during idle periods.
         WiFi.setSleep(false);
+        // Max TX power for XIAO ESP32-S3 Sense (antenna switch may route
+        // to u.FL connector with no external antenna attached)
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);
         Serial.print(F("[WiFi] Connected! IP: "));
         Serial.print(WiFi.localIP());
         Serial.print(F(" RSSI: "));
         Serial.print(WiFi.RSSI());
+        Serial.print(F("dBm TX: "));
+        Serial.print(WiFi.getTxPower());
         Serial.println(F("dBm"));
         return true;
     } else {

@@ -34,6 +34,12 @@
 #include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
 #include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
 
+#ifdef BLINKY_PLATFORM_ESP32S3
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+#include <HTTPUpdate.h>
+#endif
+
 // Runtime Device Configuration (v28+)
 // Device config is now loaded from flash at boot time instead of compile-time selection.
 // This allows a single firmware to support multiple device types without recompilation.
@@ -76,10 +82,14 @@ IMUHelper imu;                     // IMU sensor interface; auto-initializes, us
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
 #ifdef BLINKY_PLATFORM_NRF52840
+#include <services/BLEDfu.h>
+BLEDfu bleDfu;                     // BLE DFU service (wireless firmware updates)
 BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
 BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
 #elif defined(BLINKY_PLATFORM_ESP32S3)
+#include "comms/Esp32BleNus.h"
 BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
+Esp32BleNus esp32BleNus;           // BLE NUS peripheral (serial-over-BLE for fleet server)
 WifiManager wifiManager;           // WiFi credential storage and connection
 WifiCommandServer tcpServer;       // TCP command server for wireless fleet management
 #endif
@@ -346,6 +356,9 @@ void setup() {
   Bluefruit.setName("Blinky");
   Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
 
+  // BLE DFU service — allows wireless firmware updates from fleet server
+  bleDfu.begin();
+
   // NUS peripheral — bidirectional serial-over-BLE for fleet server
   bleNus.begin();
   bleNus.setLineCallback([](const char* line) {
@@ -366,25 +379,42 @@ void setup() {
   console->setBleScanner(&bleScanner);
   SerialConsole::logDebug(F("BLE scanner initialized"));
 #elif defined(BLINKY_PLATFORM_ESP32S3)
-  // BLE disabled on ESP32-S3 — NimBLE porting layer crashes on core 3.3.7
-  // (npl_freertos_sem_init / npl_freertos_mutex_init assertion failure).
-  // Known bug: arduino-esp32 #12357, #12362. Fix requires external
-  // NimBLE-Arduino library v2.3.8+ (PRs #1090, #1117).
-  // ESP32-S3 uses WiFi TCP for fleet communication instead.
-  // bleAdvertiser.begin();
-  // console->setBleAdvertiser(&bleAdvertiser);
+  // BLE on ESP32-S3 requires external NimBLE-Arduino v2.3.8+ (installed 2.4.0)
+  // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
+  bleAdvertiser.begin();
+  console->setBleAdvertiser(&bleAdvertiser);
+  // NUS peripheral — bidirectional serial-over-BLE (same as nRF52840 BleNus)
+  esp32BleNus.begin();
+  esp32BleNus.setLineCallback([](const char* line) {
+      if (console) {
+          console->handleCommand(line);
+      }
+  });
+  // NOTE: BLE NUS TX not yet wired as TeeStream secondary — NUS connections
+  // can send commands (RX works) but responses are not echoed back over BLE.
+  // Wire esp32BleNus as a Print output alongside Serial to enable this.
   wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
   // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
   // then hand off the TCP server to Core 0 for non-blocking accept/read/write.
   tcpServer.setConsole(console);
   console->setTcpServer(&tcpServer);
+  // Configure OTA callbacks once (begin() called when WiFi connects)
+  ArduinoOTA.setHostname("blinky");
+  ArduinoOTA.setPort(3232);
+  // OTA password is intentional plaintext — ArduinoOTA runs on trusted LAN only
+  // and the ESP32 MD5-hashes it before comparison (never sent in cleartext).
+  ArduinoOTA.setPassword("blinkyota");
+  ArduinoOTA.onStart([]() { Serial.println(F("[OTA] Start")); });
+  ArduinoOTA.onEnd([]() { Serial.println(F("[OTA] Done, rebooting")); });
+  ArduinoOTA.onError([](ota_error_t e) {
+      Serial.print(F("[OTA] Error: ")); Serial.println(e);
+  });
+  // Try WiFi connect in setup (up to 10s). If it fails, auto-reconnect in loop().
   if (wifiManager.hasCredentials()) {
-      if (wifiManager.connect()) {  // Blocking connect on Core 1 (up to 10s)
-          tcpServer.begin();  // Start TCP server after WiFi connected
-      }
+      wifiManager.connect();
   }
-  SerialConsole::logDebug(F("WiFi (BLE disabled — NimBLE core 3.3.7 bug)"));
+  SerialConsole::logDebug(F("ESP32-S3 BLE + WiFi initialized"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
@@ -495,15 +525,35 @@ void loop() {
   bleNus.update();       // NUS peripheral (serial-over-BLE)
   bleScanner.update();   // Fleet broadcast receiver
 #elif defined(BLINKY_PLATFORM_ESP32S3)
+  esp32BleNus.update();  // Drain BLE NUS TX buffer
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
+  ArduinoOTA.handle();  // Non-blocking OTA check (~0.5ms)
   // Monitor WiFi and auto-reconnect
   {
       static bool wasConnected = false;
+      static bool servicesStarted = false;
       bool isConnected = (WiFi.status() == WL_CONNECTED);
       if (isConnected && !wasConnected) {
-          tcpServer.begin();  // Start/restart TCP server
+          // Always disable power management and set max TX on (re)connect
+          WiFi.setSleep(false);
+          WiFi.setTxPower(WIFI_POWER_19_5dBm);
+          if (!servicesStarted) {
+              // First connection: start TCP server
+              tcpServer.begin();
+              servicesStarted = true;
+          }
+          // (Re)start mDNS and OTA on every reconnect — IP may have changed
+          MDNS.end();
+          MDNS.begin("blinky");
+          MDNS.addService("blinky", "tcp", 3333);  // Fleet discovery
+          ArduinoOTA.begin();
+          Serial.print(F("[WiFi] Services started. OTA at "));
+          Serial.print(WiFi.localIP());
+          Serial.println(F(":3232"));
           Serial.print(F("[WiFi] Connected: "));
-          Serial.println(WiFi.localIP());
+          Serial.print(WiFi.localIP());
+          Serial.print(F(" RSSI="));
+          Serial.println(WiFi.RSSI());
       } else if (!isConnected && wasConnected) {
           Serial.println(F("[WiFi] Disconnected, reconnecting..."));
           WiFi.reconnect();

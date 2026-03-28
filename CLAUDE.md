@@ -105,6 +105,7 @@ To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<ex
 
 ```bash
 # === ESP32-S3 ===
+# Requires: arduino-cli lib install "NimBLE-Arduino" (BLE support, fixes core 3.3.7 crash)
 # Compile only (MUST use full FQBN — see JTAG/PDM pin conflict above)
 arduino-cli compile --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' blinky-things
 
@@ -150,6 +151,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Development guide (config management, safety procedures) |
 | `docs/SAFETY.md` | Critical safety guidelines for flashing |
+| `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | **Wireless plan** — BLE, WiFi, OTA, fleet server status |
 
 ### Key Architecture Components
 
@@ -452,10 +454,22 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - v82: v77 pattern memory (IOI histogram + bar histogram + onset buffer, ~200 lines, 10 params) replaced by pattern slot cache (4-slot LRU of PLP pattern digests, 5 params). Fisher's g removed (dead code). downbeat/beatInMeasure removed from AudioControl.
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
+**Wireless (March 27, 2026):**
+- ✅ BLE NUS on nRF52840 (Bluefruit52Lib, verified working via bleak)
+- ✅ BLE NUS on ESP32-S3 (NimBLE-Arduino 2.4.0, compiled, untested)
+- ✅ BLE Advertiser on ESP32-S3 (NimBLE 2.x API, verified working)
+- ✅ BLE DFU service on nRF52840 (app→bootloader transition verified)
+- ✅ WiFi TCP server on ESP32-S3 (non-blocking Core 1, verified)
+- ✅ WiFi OTA (ArduinoOTA + HTTP pull, code complete)
+- ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
+- ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
+- ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
+- ⚠️ BLE DFU transfer uses legacy Nordic DFU (SDK v11), custom protocol needed
+- See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
+
 **Planned (Not Started):**
 - NN model improvements: confidence-weighted loss, tempo auxiliary head
 - ESP32-S3 platform-specific model (larger compute budget allows bigger model)
-- Bluetooth/BLE support (design doc complete)
 - Dynamic device switching (runtime config)
 - CI/CD automation
 
