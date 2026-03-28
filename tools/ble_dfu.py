@@ -140,15 +140,21 @@ class BleDfu:
         await self._client.connect()
         log.info("Connected (app mode), MTU=%d", self._client.mtu_size)
 
-        # Subscribe to DFU Control notifications
+        # Must subscribe to DFU Control notifications BEFORE writing START_DFU.
+        # The BLEDfu authorization callback rejects writes if notifications aren't enabled.
         await self._client.start_notify(DFU_CONTROL_UUID, self._on_notification)
+        await asyncio.sleep(0.5)  # Let subscription propagate
 
         # Write START_DFU (0x01) to trigger bootloader entry
         log.info("Sending START_DFU command...")
-        await self._client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x01]), response=True)
+        try:
+            await self._client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x01]), response=True)
+        except Exception as e:
+            # Device may disconnect immediately after processing START_DFU
+            log.debug("Write result (may disconnect): %s", e)
 
-        # Device will disconnect and reboot
-        await asyncio.sleep(1)
+        # Device will disconnect and reboot into bootloader
+        await asyncio.sleep(2)
         try:
             await self._client.disconnect()
         except Exception:
@@ -166,8 +172,9 @@ class BleDfu:
                 log.info("Connected to bootloader, MTU=%d (payload=%d)",
                          self._client.mtu_size, self._mtu)
 
-                # Subscribe to DFU Control notifications
+                # Subscribe to DFU Control notifications (required before any write)
                 await self._client.start_notify(DFU_CONTROL_UUID, self._on_notification)
+                await asyncio.sleep(0.5)  # Let subscription propagate
                 return
             except Exception as e:
                 log.debug("Bootloader connect attempt %d: %s", attempt + 1, e)
@@ -230,7 +237,9 @@ class BleDfu:
         self._response_data = bytearray()
 
         cmd = bytes([opcode]) + data
-        await self._client.write_gatt_char(DFU_CONTROL_UUID, cmd, response=True)
+        # Use write-with-response for SELECT/CRC, write-without-response for CREATE/EXECUTE/SET_PRN
+        use_response = opcode in (DfuOpcode.SELECT, DfuOpcode.CALC_CRC)
+        await self._client.write_gatt_char(DFU_CONTROL_UUID, cmd, response=use_response)
 
         # Wait for notification response
         try:
