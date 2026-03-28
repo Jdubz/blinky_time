@@ -467,7 +467,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
 - ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
-- ⚠️ BLE DFU transfer: `ble_dfu.py` rewritten to Legacy DFU (SDK v11) protocol (Mar 28). Previous 0x0E error was wrong protocol (Secure DFU v2 opcodes sent to Legacy DFU bootloader). Testing pending.
+- ⚠️ BLE DFU transfer: `ble_dfu.py` uses Legacy DFU (SDK v11) protocol. GATT 0x0E error was caused by stale BlueZ GATT cache (app vs bootloader handle mismatch), NOT wrong protocol. Fix: thorough BlueZ cache clearing between app/bootloader connections. Legacy DFU writes now succeed. Remaining: bootloader accepts START_DFU but no notification response — needs further debugging of notification delivery in bootloader mode.
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned (Not Started):**
