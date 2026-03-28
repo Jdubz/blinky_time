@@ -3,15 +3,16 @@
 
 Uploads firmware to nRF52840 devices over BLE using the Nordic Legacy DFU
 protocol (SDK v11 opcodes). The Adafruit nRF52 bootloader (v0.6.2) implements
-this legacy protocol, NOT the newer Secure DFU (SDK v12+). The device must be
-running firmware with the BLEDfu service enabled (Adafruit Bluefruit52Lib).
+this legacy protocol. Despite reporting DFU Revision 0x0008, this is just the
+bootloader version number, NOT Secure DFU v2.
 
 Protocol:
-1. Connect to device via BLE NUS/DFU service
-2. Write START_DFU (0x01) to DFU Control characteristic
+1. Connect to device via BLE (app mode with BLEDfu service)
+2. Write 0x01 to DFU Control characteristic to trigger bootloader entry
 3. Device reboots into Adafruit nRF52 bootloader (BLE DFU mode)
 4. Reconnect to bootloader's DFU service
-5. Transfer firmware using Nordic Legacy DFU protocol
+5. Transfer firmware using Nordic Legacy DFU protocol:
+   START_DFU -> INIT_DFU -> RECEIVE_FIRMWARE -> VALIDATE -> ACTIVATE_AND_RESET
 6. Device reboots into new firmware
 
 Usage:
@@ -44,44 +45,49 @@ log = logging.getLogger(__name__)
 DFU_SERVICE_UUID = "00001530-1212-efde-1523-785feabcd123"
 DFU_CONTROL_UUID = "00001531-1212-efde-1523-785feabcd123"
 DFU_PACKET_UUID = "00001532-1212-efde-1523-785feabcd123"
+DFU_REVISION_UUID = "00001534-1212-efde-1523-785feabcd123"
 # Nordic NUS UUID (for discovering app-mode devices)
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 
 
-# Secure DFU v2 opcodes (nRF SDK v12+, revision 0x0008)
-# Confirmed by reading DFU Revision characteristic from Adafruit bootloader v0.6.2
+# Legacy DFU opcodes (Nordic SDK v11)
+# Reference: Adafruit_nRF52_Bootloader/lib/sdk11/components/libraries/bootloader_dfu/dfu_transport_ble.c
 class DfuOpcode:
-    CREATE = 0x01
-    SET_PRN = 0x02      # Set Packet Receipt Notification interval
-    CALC_CRC = 0x03
-    EXECUTE = 0x04
-    SELECT = 0x06
-    RESPONSE = 0x60
+    START_DFU = 0x01            # Start DFU, param: image type
+    INIT_DFU = 0x02             # Init DFU, param: 0x00=start, 0x01=complete
+    RECEIVE_FIRMWARE = 0x03     # Begin receiving firmware data
+    VALIDATE = 0x04             # Validate received firmware
+    ACTIVATE_AND_RESET = 0x05   # Apply firmware and reset
+    RESET = 0x06                # Reset without applying
+    PKT_RCPT_NOTIF_REQ = 0x08  # Set packet receipt notification interval
+    RESPONSE = 0x10             # Response notification opcode
+    PKT_RCPT_NOTIF = 0x11      # Packet receipt notification
 
-class DfuObjType:
-    COMMAND = 0x01      # Init packet (manifest)
-    DATA = 0x02         # Firmware binary
 
-# Packet Receipt Notification interval (0 = disabled)
-NUM_PACKETS_BETWEEN_NOTIF = 0  # Disabled for simplicity; enable if transfer fails
+# Legacy DFU image types
+class DfuImageType:
+    SOFTDEVICE = 0x01
+    BOOTLOADER = 0x02
+    SD_AND_BL = 0x03
+    APPLICATION = 0x04
 
-# Secure DFU v2 result codes
+
+# Legacy DFU result codes
 class DfuResult:
-    INVALID = 0x00
     SUCCESS = 0x01
-    OP_NOT_SUPPORTED = 0x02
-    INVALID_PARAM = 0x03
-    INSUFFICIENT_RESOURCES = 0x04
-    INVALID_OBJECT = 0x05
-    UNSUPPORTED_TYPE = 0x07
-    OPERATION_NOT_PERMITTED = 0x08
-    OPERATION_FAILED = 0x0A
+    INVALID_STATE = 0x02
+    NOT_SUPPORTED = 0x03
+    DATA_SIZE_EXCEEDS_LIMIT = 0x04
+    CRC_ERROR = 0x05
+    OPERATION_FAILED = 0x06
 
     _NAMES = {
-        0x00: "INVALID", 0x01: "SUCCESS", 0x02: "OP_NOT_SUPPORTED",
-        0x03: "INVALID_PARAM", 0x04: "INSUFFICIENT_RESOURCES",
-        0x05: "INVALID_OBJECT", 0x07: "UNSUPPORTED_TYPE",
-        0x08: "OPERATION_NOT_PERMITTED", 0x0A: "OPERATION_FAILED",
+        0x01: "SUCCESS",
+        0x02: "INVALID_STATE",
+        0x03: "NOT_SUPPORTED",
+        0x04: "DATA_SIZE_EXCEEDS_LIMIT",
+        0x05: "CRC_ERROR",
+        0x06: "OPERATION_FAILED",
     }
 
     @staticmethod
@@ -89,8 +95,14 @@ class DfuResult:
         return DfuResult._NAMES.get(code, f"UNKNOWN(0x{code:02x})")
 
 
+# Packet Receipt Notification interval (number of packets between notifications).
+# Must be <= 8 for the Adafruit bootloader (limited notification buffer).
+# Set to 0 to disable PRN (simpler but no flow control).
+PRN_INTERVAL = 8
+
+
 class BleDfu:
-    """BLE DFU client for Adafruit nRF52 bootloader (Secure DFU v2)."""
+    """BLE DFU client for Adafruit nRF52 bootloader (Legacy DFU, SDK v11)."""
 
     def __init__(self, address: str):
         self.address = address
@@ -122,23 +134,41 @@ class BleDfu:
         await self._connect_bootloader()
 
         try:
-            # Read DFU Revision to confirm protocol version
+            # Read DFU Revision for informational purposes
             try:
-                DFU_REVISION_UUID = "00001534-1212-efde-1523-785feabcd123"
                 rev_data = await self._client.read_gatt_char(DFU_REVISION_UUID)
                 rev = int.from_bytes(rev_data[:2], 'little') if len(rev_data) >= 2 else 0
-                log.info("DFU Revision: 0x%04x (%s)",
-                         rev, "Legacy DFU" if rev <= 1 else "Secure DFU v2")
+                log.info("DFU Revision: 0x%04x (bootloader version, Legacy DFU protocol)",
+                         rev)
             except Exception as e:
                 log.warning("Could not read DFU Revision: %s", e)
 
-            # Phase 3: Transfer init packet (command object)
-            log.info("Sending init packet (%d bytes)...", len(init_packet))
-            await self._transfer_object(DfuObjType.COMMAND, init_packet)
+            # Phase 3: START_DFU
+            log.info("Phase 3: START_DFU (application image, %d bytes)...",
+                     len(firmware_bin))
+            await self._start_dfu(len(firmware_bin))
 
-            # Phase 4: Transfer firmware (data object)
-            log.info("Sending firmware (%d bytes)...", len(firmware_bin))
-            await self._transfer_object(DfuObjType.DATA, firmware_bin)
+            # Phase 4: INIT_DFU (send init packet)
+            log.info("Phase 4: INIT_DFU (%d bytes)...", len(init_packet))
+            await self._init_dfu(init_packet)
+
+            # Phase 5: Set PRN interval
+            if PRN_INTERVAL > 0:
+                log.info("Phase 5: Set PRN interval to %d...", PRN_INTERVAL)
+                await self._set_prn(PRN_INTERVAL)
+
+            # Phase 6: RECEIVE_FIRMWARE_IMAGE (send firmware data)
+            log.info("Phase 6: RECEIVE_FIRMWARE_IMAGE (%d bytes)...",
+                     len(firmware_bin))
+            await self._send_firmware(firmware_bin)
+
+            # Phase 7: VALIDATE
+            log.info("Phase 7: VALIDATE firmware...")
+            await self._validate()
+
+            # Phase 8: ACTIVATE_AND_RESET
+            log.info("Phase 8: ACTIVATE_AND_RESET...")
+            await self._activate_and_reset()
 
             log.info("DFU complete! Device rebooting into new firmware.")
         finally:
@@ -174,14 +204,16 @@ class BleDfu:
         await self._client.start_notify(DFU_CONTROL_UUID, self._on_notification)
         await asyncio.sleep(0.5)  # Let subscription propagate
 
-        # Write START_DFU (0x01) to trigger bootloader entry
-        log.info("Sending START_DFU command...")
+        # Write 0x01 to DFU Control to trigger bootloader entry
+        # (In app mode, this is the BLEDfu service's control characteristic,
+        #  NOT the same as START_DFU opcode in bootloader mode)
+        log.info("Triggering bootloader entry...")
         try:
             await self._client.write_gatt_char(
                 DFU_CONTROL_UUID, bytes([0x01]), response=True
             )
         except Exception as e:
-            # Device may disconnect immediately after processing START_DFU
+            # Device may disconnect immediately after processing
             log.debug("Write result (may disconnect): %s", e)
 
         # Device will disconnect and reboot into bootloader
@@ -194,13 +226,12 @@ class BleDfu:
 
     async def _connect_bootloader(self):
         """Connect to device in bootloader DFU mode."""
-        # Clear BlueZ GATT cache — the bootloader has a different GATT table
+        # Clear BlueZ GATT cache -- the bootloader has a different GATT table
         # than the app, but BlueZ reuses cached handles for the same address.
         import subprocess
         cache_dir = f"/var/lib/bluetooth/*/cache/{self.address.replace(':', '_')}"
         subprocess.run(f"sudo rm -rf {cache_dir}", shell=True,
                        capture_output=True, timeout=5)
-        # Also try without sudo (some systems allow user access)
         subprocess.run(f"rm -rf {cache_dir}", shell=True,
                        capture_output=True, timeout=5)
         # Restart bluetooth to pick up cache removal
@@ -213,44 +244,19 @@ class BleDfu:
             try:
                 self._client = BleakClient(self.address, timeout=5.0)
                 await self._client.connect()
-                self._mtu = min(self._client.mtu_size - 3, 240)
+                self._mtu = min(self._client.mtu_size - 3, 20)
                 log.info("Connected to bootloader, MTU=%d (payload=%d)",
                          self._client.mtu_size, self._mtu)
 
-                # Enable DFU Control notifications.
-                # The Adafruit bootloader requires CCCD to be properly written
-                # before accepting DFU commands (returns Unlikely Error otherwise).
-                # Try multiple approaches to ensure CCCD is set:
-
-                # Approach 1: Write CCCD descriptor directly via handle
-                cccd_written = False
-                try:
-                    ctrl_char = self._client.services.get_characteristic(
-                        DFU_CONTROL_UUID
-                    )
-                    if ctrl_char:
-                        for desc in ctrl_char.descriptors:
-                            if "2902" in str(desc.uuid):
-                                log.debug("Writing CCCD at handle %d", desc.handle)
-                                await self._client.write_gatt_descriptor(
-                                    desc.handle, b'\x01\x00'
-                                )
-                                cccd_written = True
-                                log.info("CCCD enabled via direct descriptor write")
-                                break
-                except Exception as e:
-                    log.debug("Direct CCCD write failed: %s", e)
-
-                # Approach 2: Use start_notify as backup
-                if not cccd_written:
-                    log.debug("Falling back to start_notify for CCCD")
+                # Enable DFU Control notifications via start_notify.
+                # The bootloader uses notifications (not indications) on
+                # the Control Point characteristic (CCCD = 0x0100).
                 await self._client.start_notify(
-                    DFU_CONTROL_UUID, self._on_notification,
-                    bluez={"use_start_notify": True},
+                    DFU_CONTROL_UUID, self._on_notification
                 )
-                await asyncio.sleep(1.0)  # Let subscription propagate
+                await asyncio.sleep(0.5)  # Let subscription propagate
 
-                # List services for debugging
+                # Log discovered services for debugging
                 for svc in self._client.services:
                     log.debug("  Bootloader service: %s", svc.uuid)
                     for char in svc.characteristics:
@@ -263,100 +269,162 @@ class BleDfu:
 
         raise ConnectionError(f"Failed to connect to bootloader at {self.address}")
 
-    # ---- Secure DFU v2 transfer ----
+    # ---- Legacy DFU transfer (SDK v11) ----
+
+    async def _start_dfu(self, firmware_size: int):
+        """Send START_DFU command with image type and size.
+
+        1. Write START_DFU (0x01) + image type to Control Point
+        2. Write 12-byte image size to Packet characteristic
+        3. Wait for response notification
+        """
+        # Write START_DFU with APPLICATION image type
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.START_DFU, DfuImageType.APPLICATION]),
+            response=True,
+        )
+
+        # Write image sizes: [softdevice_size, bootloader_size, app_size] as u32 LE
+        # For application-only DFU, softdevice and bootloader sizes are 0
+        size_data = struct.pack('<III', 0, 0, firmware_size)
+        await self._client.write_gatt_char(
+            DFU_PACKET_UUID, size_data, response=False
+        )
+
+        # Wait for START_DFU response
+        await self._wait_for_response(DfuOpcode.START_DFU)
+        log.info("START_DFU acknowledged")
+
+    async def _init_dfu(self, init_packet: bytes):
+        """Send init packet (.dat file from DFU zip).
+
+        1. Write INIT_DFU start (0x02, 0x00) to Control Point
+        2. Write init packet data to Packet characteristic
+        3. Write INIT_DFU complete (0x02, 0x01) to Control Point
+        4. Wait for response notification
+        """
+        # INIT_DFU start
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.INIT_DFU, 0x00]),
+            response=True,
+        )
+
+        # Write init packet data
+        await self._client.write_gatt_char(
+            DFU_PACKET_UUID, init_packet, response=False
+        )
+
+        # INIT_DFU complete
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.INIT_DFU, 0x01]),
+            response=True,
+        )
+
+        # Wait for INIT_DFU response
+        await self._wait_for_response(DfuOpcode.INIT_DFU)
+        log.info("INIT_DFU acknowledged")
 
     async def _set_prn(self, interval: int):
-        """Set Packet Receipt Notification interval (0 = disabled)."""
-        cmd = bytes([DfuOpcode.SET_PRN]) + struct.pack('<H', interval)
-        await self._send_command(DfuOpcode.SET_PRN, cmd)
-        log.info("PRN interval set to %d", interval)
+        """Set Packet Receipt Notification interval.
 
-    async def _transfer_object(self, obj_type: int, data: bytes):
-        """Transfer a DFU object (init packet or firmware) using Secure DFU v2.
-
-        For each max_size chunk:
-        1. SELECT to get max object size and current state
-        2. CREATE object with chunk size
-        3. Write data in MTU-sized packets via PACKET characteristic
-        4. CALC_CRC to verify
-        5. EXECUTE to finalize
+        When set to N > 0, the bootloader sends a notification every N data
+        packets with the total bytes received so far. Used for flow control.
         """
-        # SELECT to get max object size
-        resp = await self._send_command(
-            DfuOpcode.SELECT,
-            bytes([DfuOpcode.SELECT, obj_type]),
-        )
-        max_size, offset, crc32 = struct.unpack('<III', resp)
-        log.info("SELECT type=%d: max_size=%d, offset=%d, crc32=0x%08x",
-                 obj_type, max_size, offset, crc32)
-
-        # Transfer in chunks of max_size
-        pos = 0
-        while pos < len(data):
-            chunk = data[pos:pos + max_size]
-
-            # CREATE object
-            create_cmd = bytes([DfuOpcode.CREATE, obj_type]) + \
-                struct.pack('<I', len(chunk))
-            await self._send_command(DfuOpcode.CREATE, create_cmd)
-
-            # Write data in MTU-sized packets
-            for i in range(0, len(chunk), self._mtu):
-                pkt = chunk[i:i + self._mtu]
-                await self._client.write_gatt_char(
-                    DFU_PACKET_UUID, pkt, response=False
-                )
-                # Small delay for BLE flow control
-                if i > 0 and i % (self._mtu * 8) == 0:
-                    await asyncio.sleep(0.01)
-
-            # Verify CRC
-            crc_resp = await self._send_command(
-                DfuOpcode.CALC_CRC,
-                bytes([DfuOpcode.CALC_CRC]),
-            )
-            reported_offset, reported_crc = struct.unpack('<II', crc_resp)
-            expected_crc = self._crc32(data[:pos + len(chunk)])
-            if reported_crc != expected_crc:
-                raise RuntimeError(
-                    f"CRC mismatch at offset {pos + len(chunk)}: "
-                    f"expected 0x{expected_crc:08x}, got 0x{reported_crc:08x}"
-                )
-            log.debug("CRC OK at offset %d: 0x%08x", reported_offset, reported_crc)
-
-            # EXECUTE to finalize this chunk
-            await self._send_command(
-                DfuOpcode.EXECUTE,
-                bytes([DfuOpcode.EXECUTE]),
-            )
-
-            pos += len(chunk)
-            pct = (pos * 100) // len(data)
-            log.info("Progress: %d%% (%d/%d bytes)", pct, pos, len(data))
-
-    # ---- Command / response handling ----
-
-    async def _send_command(self, expected_opcode: int, cmd: bytes,
-                            timeout: float = 30.0) -> bytes:
-        """Send a DFU command and wait for response notification.
-
-        Returns the response payload (bytes after the 3-byte header).
-        """
-        self._response_event.clear()
-        self._response_data = bytearray()
-
-        log.debug("DFU cmd: %s (expecting 0x%02x)", cmd.hex(), expected_opcode)
+        cmd = bytes([DfuOpcode.PKT_RCPT_NOTIF_REQ]) + \
+            struct.pack('<H', interval)
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID, cmd, response=True
         )
-        log.debug("DFU cmd acknowledged")
+        # PRN_REQ doesn't generate a response notification per the SDK v11 spec
+
+    async def _send_firmware(self, firmware: bytes):
+        """Send firmware data via RECEIVE_FIRMWARE_IMAGE.
+
+        1. Write RECEIVE_FIRMWARE_IMAGE (0x03) to Control Point
+        2. Stream firmware in MTU-sized packets to Packet characteristic
+        3. Handle PRN notifications every PRN_INTERVAL packets
+        4. Wait for final completion notification
+        """
+        # Signal start of firmware receive
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.RECEIVE_FIRMWARE]),
+            response=True,
+        )
+
+        total = len(firmware)
+        sent = 0
+        pkt_count = 0
+
+        while sent < total:
+            chunk = firmware[sent:sent + self._mtu]
+            await self._client.write_gatt_char(
+                DFU_PACKET_UUID, chunk, response=False
+            )
+            sent += len(chunk)
+            pkt_count += 1
+
+            # Handle PRN: wait for notification every PRN_INTERVAL packets
+            if PRN_INTERVAL > 0 and pkt_count % PRN_INTERVAL == 0:
+                await self._wait_for_prn(sent)
+
+            # Progress reporting every ~10%
+            pct = (sent * 100) // total
+            prev_pct = ((sent - len(chunk)) * 100) // total
+            if pct // 10 > prev_pct // 10:
+                log.info("Progress: %d%% (%d/%d bytes)", pct, sent, total)
+
+        # Wait for final completion notification (RECEIVE_FIRMWARE response)
+        log.info("Firmware data sent, waiting for completion notification...")
+        await self._wait_for_response(DfuOpcode.RECEIVE_FIRMWARE, timeout=60.0)
+        log.info("RECEIVE_FIRMWARE complete (%d bytes)", total)
+
+    async def _validate(self):
+        """Send VALIDATE command and wait for response."""
+        self._response_event.clear()
+        self._response_data = bytearray()
+
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.VALIDATE]),
+            response=True,
+        )
+
+        await self._wait_for_response(DfuOpcode.VALIDATE)
+        log.info("Firmware validated successfully")
+
+    async def _activate_and_reset(self):
+        """Send ACTIVATE_AND_RESET to apply firmware and reboot."""
+        try:
+            await self._client.write_gatt_char(
+                DFU_CONTROL_UUID,
+                bytes([DfuOpcode.ACTIVATE_AND_RESET]),
+                response=True,
+            )
+        except Exception as e:
+            # Device may disconnect immediately after reset
+            log.debug("Activate result (may disconnect): %s", e)
+
+    # ---- Notification handling ----
+
+    async def _wait_for_response(self, expected_procedure: int,
+                                 timeout: float = 30.0):
+        """Wait for a response notification (opcode 0x10).
+
+        Response format: [0x10, procedure_opcode, result_code]
+        """
+        self._response_event.clear()
+        self._response_data = bytearray()
 
         try:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             raise RuntimeError(
                 f"Timeout ({timeout}s) waiting for response to "
-                f"opcode 0x{expected_opcode:02x}"
+                f"opcode 0x{expected_procedure:02x}"
             )
 
         resp = self._response_data
@@ -364,25 +432,68 @@ class BleDfu:
             raise RuntimeError(f"Short response ({len(resp)} bytes): {resp.hex()}")
 
         if resp[0] != DfuOpcode.RESPONSE:
+            # Could be a PRN notification (0x11) arriving out of order
+            if resp[0] == DfuOpcode.PKT_RCPT_NOTIF:
+                log.debug("Got PRN while waiting for response, retrying...")
+                return await self._wait_for_response(expected_procedure, timeout)
             raise RuntimeError(
-                f"Unexpected response type: 0x{resp[0]:02x} "
-                f"(expected 0x{DfuOpcode.RESPONSE:02x})"
+                f"Unexpected notification type: 0x{resp[0]:02x} "
+                f"(expected RESPONSE 0x{DfuOpcode.RESPONSE:02x}), "
+                f"data: {resp.hex()}"
             )
-        if resp[1] != expected_opcode:
+
+        if resp[1] != expected_procedure:
             raise RuntimeError(
-                f"Response opcode mismatch: expected 0x{expected_opcode:02x}, "
+                f"Response procedure mismatch: expected 0x{expected_procedure:02x}, "
                 f"got 0x{resp[1]:02x}"
             )
+
         if resp[2] != DfuResult.SUCCESS:
             raise RuntimeError(
                 f"DFU error: {DfuResult.lookup(resp[2])} "
-                f"for opcode 0x{expected_opcode:02x}"
+                f"for procedure 0x{expected_procedure:02x}"
             )
 
-        return bytes(resp[3:])
+    async def _wait_for_prn(self, expected_bytes: int, timeout: float = 10.0):
+        """Wait for a Packet Receipt Notification (opcode 0x11).
+
+        PRN format: [0x11, bytes_received (u32 LE)]
+        """
+        self._response_event.clear()
+        self._response_data = bytearray()
+
+        try:
+            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"Timeout ({timeout}s) waiting for PRN "
+                f"(expected {expected_bytes} bytes received)"
+            )
+
+        resp = self._response_data
+        if len(resp) < 5:
+            # Might be a response notification instead of PRN
+            if len(resp) >= 3 and resp[0] == DfuOpcode.RESPONSE:
+                if resp[2] != DfuResult.SUCCESS:
+                    raise RuntimeError(
+                        f"DFU error during transfer: "
+                        f"{DfuResult.lookup(resp[2])} "
+                        f"for procedure 0x{resp[1]:02x}"
+                    )
+                log.debug("Got response notification during PRN wait: %s",
+                          resp.hex())
+                return
+            raise RuntimeError(f"Short PRN ({len(resp)} bytes): {resp.hex()}")
+
+        if resp[0] != DfuOpcode.PKT_RCPT_NOTIF:
+            log.debug("Expected PRN (0x11), got 0x%02x: %s", resp[0], resp.hex())
+            return
+
+        received = struct.unpack('<I', resp[1:5])[0]
+        log.debug("PRN: %d bytes received (expected %d)", received, expected_bytes)
 
     def _on_notification(self, sender, data: bytearray):
-        """Handle DFU Control notification."""
+        """Handle DFU Control Point notification."""
         log.debug("DFU notification: %s", data.hex())
         self._response_data = data
         self._response_event.set()
@@ -394,12 +505,6 @@ class BleDfu:
             except Exception:
                 pass
             self._client = None
-
-    @staticmethod
-    def _crc32(data: bytes) -> int:
-        """Calculate CRC32 matching Nordic DFU protocol."""
-        import binascii
-        return binascii.crc32(data) & 0xFFFFFFFF
 
 
 async def scan_devices(timeout: float = 5.0):
@@ -450,7 +555,7 @@ def generate_dfu_package(firmware_bin: str, output_zip: str,
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="BLE DFU for nRF52840 devices (Secure DFU v2)"
+        description="BLE DFU for nRF52840 devices (Legacy DFU, SDK v11)"
     )
     parser.add_argument("--scan", action="store_true",
                         help="Scan for DFU-capable devices")
@@ -462,6 +567,8 @@ async def main():
                         help="Path to raw .bin firmware (auto-generates .zip)")
     parser.add_argument("--sd-req", default="0xCB",
                         help="SoftDevice requirement (default: 0xCB for S140 7.3.0)")
+    parser.add_argument("--prn", type=int, default=PRN_INTERVAL,
+                        help=f"Packet receipt notification interval (default: {PRN_INTERVAL}, 0=disable)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -470,6 +577,10 @@ async def main():
         format="%(asctime)s %(levelname)-5s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # Allow overriding PRN interval
+    global PRN_INTERVAL
+    PRN_INTERVAL = args.prn
 
     if args.scan:
         await scan_devices()

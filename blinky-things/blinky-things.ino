@@ -390,9 +390,9 @@ void setup() {
           console->handleCommand(line);
       }
   });
-  // NOTE: BLE NUS TX not yet wired as TeeStream secondary — NUS connections
-  // can send commands (RX works) but responses are not echoed back over BLE.
-  // Wire esp32BleNus as a Print output alongside Serial to enable this.
+  // Wire BLE NUS TX as TeeStream secondary — serial output goes to both
+  // USB Serial and BLE NUS, enabling bidirectional serial-over-BLE.
+  console->setEsp32BleNus(&esp32BleNus);
   wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
   // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
@@ -455,6 +455,13 @@ void loop() {
   if (audioController) {
     audioController->update(dt);
   }
+
+  // Yield to SoftDevice after heavy audio processing.
+  // AudioTracker::update() includes Fourier tempogram (200-300ms blocking) and
+  // NN inference (~10ms), which starves BLE event processing. Without this yield,
+  // BLE connection negotiation times out and peers disconnect during service
+  // discovery. yield() processes queued SoftDevice events (~1-5ms).
+  yield();
 
   // Advance fake audio clock when enabled
   fakeAudio.update(dt);
@@ -519,6 +526,10 @@ void loop() {
   if (console) {
     console->update();
   }
+
+  // Second yield point: after rendering + serial, before BLE processing.
+  // Ensures SoftDevice gets serviced even when rendering is heavy.
+  yield();
 
   // Process wireless data
 #ifdef BLINKY_PLATFORM_NRF52840

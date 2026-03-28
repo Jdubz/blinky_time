@@ -467,7 +467,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
 - ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
-- ⚠️ BLE DFU transfer blocked: bootloader rejects DFU commands (GATT 0x0E Unlikely Error — likely CCCD notification setup issue)
+- ⚠️ BLE DFU transfer: `ble_dfu.py` rewritten to Legacy DFU (SDK v11) protocol (Mar 28). Previous 0x0E error was wrong protocol (Secure DFU v2 opcodes sent to Legacy DFU bootloader). Testing pending.
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned (Not Started):**

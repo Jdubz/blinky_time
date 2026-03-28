@@ -49,7 +49,7 @@ Web browser (blinky-console)
 | Feature | Blocker | Notes |
 |---------|---------|-------|
 | **WiFi on ESP32-S3** | Hardware antenna | XIAO ESP32-S3 Sense routes to u.FL connector only. No external antenna = -70 dBm at close range. WiFi code is correct but connection too unstable. |
-| **BLE DFU transfer** | CCCD notification setup | App→bootloader works. Bootloader uses Secure DFU v2 (revision 0x0008). Reconnection to bootloader succeeds (must clear BlueZ GATT cache). Bootloader rejects DFU commands with GATT Unlikely Error (0x0E) — investigating manual CCCD descriptor write. |
+| **BLE DFU transfer** | Protocol rewritten (testing) | App→bootloader works. Bootloader uses **Legacy DFU (SDK v11)** — DFU Revision 0x0008 is the bootloader version, NOT Secure DFU v2. Previous code sent wrong opcodes causing GATT 0x0E. `ble_dfu.py` rewritten to Legacy DFU protocol (Mar 28). |
 | **BLE scan from Pi** | BlueZ filtering | Direct connection by address works (e.g. F4:15:6D:FA:4D:93 for 06ACEB). `bleak` scan doesn't find nRF52840 devices — BlueZ scan filtering issue, not radio. |
 
 ### Not Started
@@ -73,7 +73,7 @@ Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3 (`npl_freertos_mutex_
 
 ### nRF52840 BLE DFU: Secure DFU v2
 
-Adafruit nRF52 bootloader v0.6.2 uses **Secure DFU v2 (revision 0x0008)**, reported via the DFU Revision characteristic. The app-side BLEDfu service (Bluefruit52Lib) triggers bootloader entry via GPREGRET=0xB1 (write 0x01 to DFU Control in app mode). The bootloader re-advertises as "AdaDFU" with DFU service UUID. Reconnection requires clearing BlueZ GATT cache between connections. BLE scanning from the Pi doesn't find nRF52840 devices (BlueZ scan filtering issue), but direct connection by address works (e.g. device 06ACEB at F4:15:6D:FA:4D:93). Current blocker: bootloader rejects DFU commands with GATT Unlikely Error (0x0E) — likely CCCD notification setup issue.
+Adafruit nRF52 bootloader v0.6.2 uses **Legacy DFU (SDK v11)** protocol. The DFU Revision characteristic reports 0x0008, but this is the bootloader version number (DFU_REV_MAJOR=0x00, DFU_REV_MINOR=0x08), NOT a Secure DFU v2 protocol indicator. The app-side BLEDfu service (Bluefruit52Lib) triggers bootloader entry via GPREGRET=0xB1 (write 0x01 to DFU Control in app mode). The bootloader re-advertises as "AdaDFU" with DFU service UUID. Reconnection requires clearing BlueZ GATT cache between connections. BLE scanning from the Pi doesn't find nRF52840 devices (BlueZ scan filtering issue), but direct connection by address works (e.g. device 06ACEB at F4:15:6D:FA:4D:93). Previous blocker (GATT 0x0E Unlikely Error) was caused by sending Secure DFU v2 opcodes to a Legacy DFU bootloader — `ble_dfu.py` rewritten to use correct Legacy DFU protocol (Mar 28).
 
 ### ESP32-S3 WiFi antenna
 
@@ -140,8 +140,9 @@ REST API verified:
 - App→bootloader transition works: write 0x01 to DFU Control, device reboots into "AdaDFU" mode
 - Reconnection to bootloader succeeds (must clear BlueZ GATT cache between connections)
 - BLE scanning from Pi doesn't find nRF52840 devices (BlueZ scan filtering issue); direct connection by address works (e.g. F4:15:6D:FA:4D:93 for 06ACEB)
-- Bootloader reports DFU Revision 0x0008 (Secure DFU v2, NOT legacy SDK v11)
-- Firmware transfer blocked: bootloader rejects DFU commands with GATT Unlikely Error (0x0E) — likely CCCD notification setup issue
+- Bootloader reports DFU Revision 0x0008 (bootloader version, **Legacy DFU protocol**)
+- Previous firmware transfer blocker (GATT 0x0E) was caused by sending Secure DFU v2 opcodes to Legacy DFU bootloader
+- `ble_dfu.py` rewritten to use Legacy DFU (SDK v11) protocol (Mar 28) — testing pending
 
 ---
 

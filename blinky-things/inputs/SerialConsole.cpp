@@ -17,6 +17,7 @@
 #include "../comms/BleNus.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
+#include "../comms/Esp32BleNus.h"
 #include "../comms/WifiManager.h"
 #include "../comms/WifiCommandServer.h"
 #ifdef BLINKY_PLATFORM_ESP32S3
@@ -84,6 +85,17 @@ void SerialConsole::setBleNus(BleNus* nus) {
     if (nus) {
         // Tee output to both USB Serial and BLE NUS
         out_.setSecondary(nus);  // BleNus is-a Print (writes to paced ring buffer)
+        settings_.setOutput(&out_);
+    } else {
+        out_.setSecondary(nullptr);
+        settings_.setOutput(&out_);
+    }
+}
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+void SerialConsole::setEsp32BleNus(Esp32BleNus* nus) {
+    if (nus) {
+        // Tee output to both USB Serial and BLE NUS
+        out_.setSecondary(nus);  // Esp32BleNus is-a Print (writes to paced ring buffer)
         settings_.setOutput(&out_);
     } else {
         out_.setSecondary(nullptr);
