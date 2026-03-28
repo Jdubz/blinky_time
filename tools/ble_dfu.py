@@ -47,34 +47,50 @@ DFU_PACKET_UUID = "00001532-1212-efde-1523-785feabcd123"
 # Nordic NUS UUID (for discovering app-mode devices)
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 
-# Adafruit nRF52 bootloader DFU protocol opcodes
+
+# Legacy Nordic DFU opcodes (SDK v11)
+# Reference: nordicsemi/dfu/dfu_transport_ble.py (DfuOpcodesBle)
 class DfuOpcode:
-    CREATE = 0x01
-    SET_PRN = 0x02  # Set Packet Receipt Notification
-    CALC_CRC = 0x03
-    EXECUTE = 0x04
-    SELECT = 0x06
-    RESPONSE = 0x60
+    START_DFU = 1
+    INITIALIZE_DFU = 2
+    RECEIVE_FIRMWARE_IMAGE = 3
+    VALIDATE_FIRMWARE_IMAGE = 4
+    ACTIVATE_FIRMWARE_AND_RESET = 5
+    SYSTEM_RESET = 6
+    REQ_PKT_RCPT_NOTIFICATION = 8
+    RESPONSE = 16           # 0x10
+    PKT_RCPT_NOTIF = 17     # 0x11
 
-class DfuObjType:
-    COMMAND = 0x01  # Init packet (manifest)
-    DATA = 0x02     # Firmware binary
 
-# DFU result codes
+# Program mode for START_DFU (from nordicsemi.dfu.model.HexType)
+DFU_MODE_APPLICATION = 4
+
+# Packet Receipt Notification interval (0 = disabled)
+NUM_PACKETS_BETWEEN_NOTIF = 10
+
+
+# Legacy DFU result codes
+# Reference: nordicsemi/dfu/dfu_transport_ble.py (DfuErrorCodeBle)
 class DfuResult:
-    INVALID = 0x00
-    SUCCESS = 0x01
-    OP_NOT_SUPPORTED = 0x02
-    INVALID_PARAM = 0x03
-    INSUFFICIENT_RESOURCES = 0x04
-    INVALID_OBJECT = 0x05
-    UNSUPPORTED_TYPE = 0x07
-    OPERATION_NOT_PERMITTED = 0x08
-    OPERATION_FAILED = 0x0A
+    SUCCESS = 1
+    INVALID_STATE = 2
+    NOT_SUPPORTED = 3
+    DATA_SIZE_EXCEEDS_LIMIT = 4
+    CRC_ERROR = 5
+    OPERATION_FAILED = 6
+
+    _NAMES = {
+        1: "SUCCESS", 2: "INVALID_STATE", 3: "NOT_SUPPORTED",
+        4: "DATA_SIZE_EXCEEDS_LIMIT", 5: "CRC_ERROR", 6: "OPERATION_FAILED",
+    }
+
+    @staticmethod
+    def lookup(code: int) -> str:
+        return DfuResult._NAMES.get(code, f"UNKNOWN(0x{code:02x})")
 
 
 class BleDfu:
-    """BLE DFU client for Adafruit nRF52 bootloader."""
+    """BLE DFU client for Adafruit nRF52 bootloader (Legacy Nordic DFU)."""
 
     def __init__(self, address: str):
         self.address = address
@@ -92,29 +108,39 @@ class BleDfu:
         Returns:
             True if successful
         """
-        # Parse the DFU zip
         init_packet, firmware_bin = self._parse_dfu_zip(dfu_zip_path)
-        log.info("Firmware: %d bytes, init packet: %d bytes", len(firmware_bin), len(init_packet))
+        log.info("Firmware: %d bytes, init packet: %d bytes",
+                 len(firmware_bin), len(init_packet))
 
-        # Step 1: Connect and trigger DFU mode
+        # Phase 1: Connect and trigger DFU mode
         log.info("Connecting to %s in app mode...", self.address)
         await self._enter_dfu_mode()
 
-        # Step 2: Reconnect to bootloader
+        # Phase 2: Reconnect to bootloader
         log.info("Reconnecting to bootloader...")
         await asyncio.sleep(3)  # Wait for bootloader to start advertising
         await self._connect_bootloader()
 
-        # Step 3: Transfer init packet (command object)
-        log.info("Sending init packet...")
-        await self._transfer_object(DfuObjType.COMMAND, init_packet)
+        try:
+            # Phase 3: START_DFU + image size
+            await self._send_start_dfu(len(firmware_bin))
 
-        # Step 4: Transfer firmware (data object)
-        log.info("Sending firmware (%d bytes)...", len(firmware_bin))
-        await self._transfer_object(DfuObjType.DATA, firmware_bin)
+            # Phase 4: INITIALIZE_DFU + init packet (.dat)
+            await self._send_init_packet(init_packet)
 
-        log.info("DFU complete! Device rebooting into new firmware.")
-        await self._disconnect()
+            # Phase 5: Set up PRN + RECEIVE_FIRMWARE_IMAGE + firmware data
+            await self._send_firmware(firmware_bin)
+
+            # Phase 6: VALIDATE_FIRMWARE_IMAGE
+            await self._send_validate()
+
+            # Phase 7: ACTIVATE_FIRMWARE_AND_RESET
+            await self._send_activate()
+
+            log.info("DFU complete! Device rebooting into new firmware.")
+        finally:
+            await self._disconnect()
+
         return True
 
     def _parse_dfu_zip(self, zip_path: str) -> tuple[bytes, bytes]:
@@ -148,7 +174,9 @@ class BleDfu:
         # Write START_DFU (0x01) to trigger bootloader entry
         log.info("Sending START_DFU command...")
         try:
-            await self._client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x01]), response=True)
+            await self._client.write_gatt_char(
+                DFU_CONTROL_UUID, bytes([0x01]), response=True
+            )
         except Exception as e:
             # Device may disconnect immediately after processing START_DFU
             log.debug("Write result (may disconnect): %s", e)
@@ -173,8 +201,10 @@ class BleDfu:
                          self._client.mtu_size, self._mtu)
 
                 # Subscribe to DFU Control notifications (required before any write)
-                await self._client.start_notify(DFU_CONTROL_UUID, self._on_notification)
-                await asyncio.sleep(0.5)  # Let subscription propagate
+                await self._client.start_notify(
+                    DFU_CONTROL_UUID, self._on_notification
+                )
+                await asyncio.sleep(1.0)  # Let subscription propagate
                 return
             except Exception as e:
                 log.debug("Bootloader connect attempt %d: %s", attempt + 1, e)
@@ -182,89 +212,195 @@ class BleDfu:
 
         raise ConnectionError(f"Failed to connect to bootloader at {self.address}")
 
-    async def _transfer_object(self, obj_type: int, data: bytes):
-        """Transfer a DFU object (init packet or firmware) using the Nordic protocol.
+    # ---- Legacy DFU transfer phases ----
 
-        NOTE: The SELECT response returns the current offset and CRC from any
-        previous partial transfer, but we always restart from pos=0. Resuming a
-        partial transfer would require CRC validation of the already-written
-        portion — not yet implemented.
-        """
-        # SELECT to get max object size and current offset
-        resp = await self._send_command(DfuOpcode.SELECT, bytes([obj_type]))
-        max_size, offset, crc32 = struct.unpack('<III', resp)
-        log.info("Object type %d: max_size=%d, offset=%d, crc32=0x%08x",
-                 obj_type, max_size, offset, crc32)
+    async def _send_start_dfu(self, app_size: int):
+        """Phase 3: Send START_DFU + 12-byte image size packet."""
+        log.info("Sending START_DFU (app_size=%d)...", app_size)
 
-        # Set PRN (Packet Receipt Notification) — 0 = disabled
-        await self._send_command(DfuOpcode.SET_PRN, struct.pack('<H', 0))
+        # Write START_DFU opcode + mode byte to CONTROL
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.START_DFU, DFU_MODE_APPLICATION]),
+            response=True,
+        )
 
-        # Transfer in chunks of max_size (always from start; resume not supported)
-        pos = 0
-        while pos < len(data):
-            chunk = data[pos:pos + max_size]
+        # Write 12-byte image size packet to PACKET:
+        #   SD size (u32 LE) = 0, BL size (u32 LE) = 0, App size (u32 LE)
+        size_packet = struct.pack('<III', 0, 0, app_size)
+        await self._client.write_gatt_char(
+            DFU_PACKET_UUID, size_packet, response=False
+        )
 
-            # CREATE object
-            await self._send_command(
-                DfuOpcode.CREATE,
-                bytes([obj_type]) + struct.pack('<I', len(chunk))
+        # Wait for response: [0x10, 0x01, 0x01] = RESPONSE, START_DFU, SUCCESS
+        await self._wait_for_response(DfuOpcode.START_DFU)
+        log.info("START_DFU accepted.")
+
+    async def _send_init_packet(self, init_data: bytes):
+        """Phase 4: Send init packet (.dat file) using INITIALIZE_DFU."""
+        log.info("Sending INITIALIZE_DFU (init packet, %d bytes)...", len(init_data))
+
+        # Signal start of init packet: INITIALIZE_DFU + 0x00
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.INITIALIZE_DFU, 0x00]),
+            response=True,
+        )
+
+        # Write init packet data in 20-byte chunks on PACKET
+        # (Legacy DFU uses fixed 20-byte chunks for init, not MTU-negotiated)
+        chunk_size = 20
+        for i in range(0, len(init_data), chunk_size):
+            pkt = init_data[i:i + chunk_size]
+            await self._client.write_gatt_char(
+                DFU_PACKET_UUID, pkt, response=False
             )
 
-            # Write data in MTU-sized packets
-            for i in range(0, len(chunk), self._mtu):
-                pkt = chunk[i:i + self._mtu]
-                await self._client.write_gatt_char(
-                    DFU_PACKET_UUID, pkt, response=False
-                )
-                # Small delay for flow control
-                if i % (self._mtu * 8) == 0 and i > 0:
-                    await asyncio.sleep(0.01)
+        # Signal end of init packet: INITIALIZE_DFU + 0x01
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.INITIALIZE_DFU, 0x01]),
+            response=True,
+        )
 
-            # Verify CRC
-            resp = await self._send_command(DfuOpcode.CALC_CRC, b'')
-            reported_offset, reported_crc = struct.unpack('<II', resp)
-            expected_crc = self._crc32(data[:pos + len(chunk)])
-            if reported_crc != expected_crc:
-                raise RuntimeError(
-                    f"CRC mismatch: expected 0x{expected_crc:08x}, "
-                    f"got 0x{reported_crc:08x}"
-                )
+        # Wait for response: [0x10, 0x02, 0x01]
+        await self._wait_for_response(DfuOpcode.INITIALIZE_DFU, timeout=60.0)
+        log.info("Init packet accepted.")
 
-            # EXECUTE to finalize this chunk
-            await self._send_command(DfuOpcode.EXECUTE, b'')
+    async def _send_firmware(self, firmware: bytes):
+        """Phase 5: Send firmware binary using RECEIVE_FIRMWARE_IMAGE + PRN."""
+        # Request packet receipt notification every N packets
+        if NUM_PACKETS_BETWEEN_NOTIF:
+            log.info("Setting PRN interval: every %d packets",
+                     NUM_PACKETS_BETWEEN_NOTIF)
+            prn_data = struct.pack('<H', NUM_PACKETS_BETWEEN_NOTIF)
+            await self._client.write_gatt_char(
+                DFU_CONTROL_UUID,
+                bytes([DfuOpcode.REQ_PKT_RCPT_NOTIFICATION]) + prn_data,
+                response=True,
+            )
 
-            pos += len(chunk)
-            pct = (pos * 100) // len(data)
-            log.info("Progress: %d%% (%d/%d)", pct, pos, len(data))
+        # Signal RECEIVE_FIRMWARE_IMAGE
+        log.info("Sending firmware (%d bytes, MTU payload=%d)...",
+                 len(firmware), self._mtu)
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.RECEIVE_FIRMWARE_IMAGE]),
+            response=True,
+        )
 
-    async def _send_command(self, opcode: int, data: bytes) -> bytes:
-        """Send a DFU command and wait for response."""
-        self._response_event.clear()
-        self._response_data = bytearray()
+        # Stream firmware in MTU-sized chunks on PACKET
+        chunk_size = self._mtu
+        packets_sent = 0
+        total = len(firmware)
+        last_pct = -1
 
-        cmd = bytes([opcode]) + data
-        # Use write-with-response for SELECT/CRC, write-without-response for CREATE/EXECUTE/SET_PRN
-        use_response = opcode in (DfuOpcode.SELECT, DfuOpcode.CALC_CRC)
-        await self._client.write_gatt_char(DFU_CONTROL_UUID, cmd, response=use_response)
+        for i in range(0, total, chunk_size):
+            # Wait for PRN before sending next batch
+            if NUM_PACKETS_BETWEEN_NOTIF and packets_sent > 0:
+                if (packets_sent % NUM_PACKETS_BETWEEN_NOTIF) == 0:
+                    await self._wait_for_prn()
 
-        # Wait for notification response
+            pkt = firmware[i:i + chunk_size]
+            await self._client.write_gatt_char(
+                DFU_PACKET_UUID, pkt, response=False
+            )
+            packets_sent += 1
+
+            # Progress reporting
+            pct = min(100, ((i + chunk_size) * 100) // total)
+            if pct >= last_pct + 5:  # Report every 5%
+                log.info("Progress: %d%% (%d/%d bytes)",
+                         pct, min(i + chunk_size, total), total)
+                last_pct = pct
+
+        # Wait for final response: [0x10, 0x03, 0x01]
+        await self._wait_for_response(DfuOpcode.RECEIVE_FIRMWARE_IMAGE)
+        log.info("Firmware transfer complete.")
+
+    async def _send_validate(self):
+        """Phase 6: Send VALIDATE_FIRMWARE_IMAGE."""
+        log.info("Validating firmware...")
+        await self._client.write_gatt_char(
+            DFU_CONTROL_UUID,
+            bytes([DfuOpcode.VALIDATE_FIRMWARE_IMAGE]),
+            response=True,
+        )
+        await self._wait_for_response(DfuOpcode.VALIDATE_FIRMWARE_IMAGE)
+        log.info("Firmware validated OK.")
+
+    async def _send_activate(self):
+        """Phase 7: Send ACTIVATE_FIRMWARE_AND_RESET. Device will reboot."""
+        log.info("Activating firmware and resetting device...")
         try:
-            await asyncio.wait_for(self._response_event.wait(), timeout=10.0)
+            await self._client.write_gatt_char(
+                DFU_CONTROL_UUID,
+                bytes([DfuOpcode.ACTIVATE_FIRMWARE_AND_RESET]),
+                response=True,
+            )
+        except Exception as e:
+            # Device may reset immediately, disconnecting before ATT response
+            log.debug("Activate result (device may reset): %s", e)
+
+    # ---- Response handling ----
+
+    async def _wait_for_response(self, expected_opcode: int,
+                                 timeout: float = 30.0):
+        """Wait for a RESPONSE (0x10) notification from the bootloader."""
+        self._response_event.clear()
+
+        try:
+            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            raise RuntimeError(f"Timeout waiting for response to opcode 0x{opcode:02x}")
+            raise RuntimeError(
+                f"Timeout ({timeout}s) waiting for response to "
+                f"opcode 0x{expected_opcode:02x}"
+            )
 
         resp = self._response_data
         if len(resp) < 3:
-            raise RuntimeError(f"Short response: {resp.hex()}")
+            raise RuntimeError(f"Short response ({len(resp)} bytes): {resp.hex()}")
 
-        if resp[0] != DfuOpcode.RESPONSE:
-            raise RuntimeError(f"Unexpected response type: 0x{resp[0]:02x}")
-        if resp[1] != opcode:
-            raise RuntimeError(f"Response opcode mismatch: expected 0x{opcode:02x}, got 0x{resp[1]:02x}")
-        if resp[2] != DfuResult.SUCCESS:
-            raise RuntimeError(f"DFU error: result=0x{resp[2]:02x} for opcode 0x{opcode:02x}")
+        resp_type = resp[0]
+        resp_opcode = resp[1]
+        resp_result = resp[2]
 
-        return bytes(resp[3:])
+        if resp_type != DfuOpcode.RESPONSE:
+            raise RuntimeError(
+                f"Unexpected response type: 0x{resp_type:02x} "
+                f"(expected RESPONSE=0x{DfuOpcode.RESPONSE:02x})"
+            )
+        if resp_opcode != expected_opcode:
+            raise RuntimeError(
+                f"Response opcode mismatch: expected 0x{expected_opcode:02x}, "
+                f"got 0x{resp_opcode:02x}"
+            )
+        if resp_result != DfuResult.SUCCESS:
+            raise RuntimeError(
+                f"DFU error: {DfuResult.lookup(resp_result)} "
+                f"for opcode 0x{expected_opcode:02x}"
+            )
+
+    async def _wait_for_prn(self, timeout: float = 30.0):
+        """Wait for Packet Receipt Notification (0x11) during firmware transfer."""
+        self._response_event.clear()
+
+        try:
+            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timeout waiting for packet receipt notification")
+
+        resp = self._response_data
+        if len(resp) >= 1 and resp[0] == DfuOpcode.PKT_RCPT_NOTIF:
+            return  # PRN received, continue sending
+        elif len(resp) >= 3 and resp[0] == DfuOpcode.RESPONSE:
+            # Got an error response instead of PRN
+            raise RuntimeError(
+                f"Error during firmware transfer: "
+                f"{DfuResult.lookup(resp[2])} (opcode 0x{resp[1]:02x})"
+            )
+        else:
+            log.warning("Unexpected notification during PRN wait: %s", resp.hex())
 
     def _on_notification(self, sender, data: bytearray):
         """Handle DFU Control notification."""
@@ -300,16 +436,20 @@ async def scan_devices(timeout: float = 5.0):
         has_dfu = DFU_SERVICE_UUID in service_uuids
         has_nus = NUS_SERVICE_UUID in service_uuids
         if has_dfu or has_nus:
-            mode = "DFU bootloader" if has_dfu and not has_nus else "App (NUS+DFU)" if has_dfu else "App (NUS only)"
+            mode = ("DFU bootloader" if has_dfu and not has_nus
+                    else "App (NUS+DFU)" if has_dfu
+                    else "App (NUS only)")
             dfu_devices.append((addr, dev.name, adv.rssi, mode))
-            print(f"  {addr}  {dev.name or 'Unknown':20s}  RSSI={adv.rssi}  {mode}")
+            print(f"  {addr}  {dev.name or 'Unknown':20s}  "
+                  f"RSSI={adv.rssi}  {mode}")
 
     if not dfu_devices:
         print("No DFU-capable devices found.")
     return dfu_devices
 
 
-def generate_dfu_package(firmware_bin: str, output_zip: str, sd_req: str = "0xCB"):
+def generate_dfu_package(firmware_bin: str, output_zip: str,
+                         sd_req: str = "0xCB"):
     """Generate a DFU zip package from a firmware binary.
 
     Uses adafruit-nrfutil genpkg. sd_req=0xCB is SoftDevice S140 v7.3.0.
@@ -329,12 +469,19 @@ def generate_dfu_package(firmware_bin: str, output_zip: str, sd_req: str = "0xCB
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="BLE DFU for nRF52840 devices")
-    parser.add_argument("--scan", action="store_true", help="Scan for DFU-capable devices")
-    parser.add_argument("--address", "-a", help="BLE address of target device")
-    parser.add_argument("--firmware", "-f", help="Path to DFU .zip package")
-    parser.add_argument("--bin", help="Path to raw .bin firmware (auto-generates .zip)")
-    parser.add_argument("--sd-req", default="0xCB", help="SoftDevice requirement (default: 0xCB for S140 7.3.0)")
+    parser = argparse.ArgumentParser(
+        description="BLE DFU for nRF52840 devices (Legacy Nordic DFU)"
+    )
+    parser.add_argument("--scan", action="store_true",
+                        help="Scan for DFU-capable devices")
+    parser.add_argument("--address", "-a",
+                        help="BLE address of target device")
+    parser.add_argument("--firmware", "-f",
+                        help="Path to DFU .zip package")
+    parser.add_argument("--bin",
+                        help="Path to raw .bin firmware (auto-generates .zip)")
+    parser.add_argument("--sd-req", default="0xCB",
+                        help="SoftDevice requirement (default: 0xCB for S140 7.3.0)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
