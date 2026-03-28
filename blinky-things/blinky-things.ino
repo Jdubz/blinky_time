@@ -377,13 +377,10 @@ void setup() {
   console->setBleScanner(&bleScanner);
   SerialConsole::logDebug(F("BLE scanner initialized"));
 #elif defined(BLINKY_PLATFORM_ESP32S3)
-  // BLE disabled on ESP32-S3 — NimBLE porting layer crashes on core 3.3.7
-  // (npl_freertos_sem_init / npl_freertos_mutex_init assertion failure).
-  // Known bug: arduino-esp32 #12357, #12362. Fix requires external
-  // NimBLE-Arduino library v2.3.8+ (PRs #1090, #1117).
-  // ESP32-S3 uses WiFi TCP for fleet communication instead.
-  // bleAdvertiser.begin();
-  // console->setBleAdvertiser(&bleAdvertiser);
+  // BLE on ESP32-S3 requires external NimBLE-Arduino v2.3.8+ (installed 2.4.0)
+  // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
+  bleAdvertiser.begin();
+  console->setBleAdvertiser(&bleAdvertiser);
   wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
   // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
