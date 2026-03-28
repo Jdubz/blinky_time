@@ -245,8 +245,7 @@ async def upload_uf2(
     block_dev = await uf2_task
 
     if not block_dev:
-        result["message"] = (f"Bootloader entry failed after {max_attempts} attempts "
-                             "(GPREGRET race condition)")
+        result["message"] = "UF2 drive not detected after bootloader entry"
         return result
 
     progress("mount", "Mounting UF2 drive...", 30)
