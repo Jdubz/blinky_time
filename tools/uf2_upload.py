@@ -156,12 +156,18 @@ def _serial_open_with_timeout(port, baudrate=115200, timeout=1, open_timeout=Non
 
     serial.Serial(timeout=...) only applies to read operations. The
     open() syscall itself can block indefinitely if another process
-    holds the port. This wrapper uses SIGALRM to abort a stuck open.
+    holds the port. On Linux/macOS this wrapper uses SIGALRM to abort
+    a stuck open. On platforms without SIGALRM (e.g. Windows), the
+    open() call is made directly without a timeout guard.
 
     Returns the serial.Serial object, or raises serial.SerialException.
     """
     if open_timeout is None:
         open_timeout = SERIAL_OPEN_TIMEOUT
+
+    if not hasattr(signal, 'SIGALRM'):
+        # SIGALRM is unavailable (e.g. Windows) — open without timeout guard
+        return serial.Serial(port, baudrate, timeout=timeout)
 
     def _alarm_handler(signum, frame):
         raise serial.SerialException(

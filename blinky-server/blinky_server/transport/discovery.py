@@ -189,17 +189,17 @@ async def discover_all(
 ) -> list[DiscoveredDevice]:
     """Discover devices across all transport types.
 
-    Serial discovery is synchronous (fast). BLE discovery is async (slow).
-    WiFi uses a static registry for now.
+    Serial discovery is synchronous (fast) and runs first. BLE and WiFi/mDNS
+    discovery are both async (slow) and run concurrently via asyncio.gather().
     """
     serial_devs = discover_serial_devices()
-    wifi_devs = await discover_wifi_devices(wifi_hosts)
 
-    ble_devs: list[DiscoveredDevice] = []
-    if ble_scan:
-        ble_devs = await discover_ble_devices(timeout=ble_timeout)
+    ble_coro = discover_ble_devices(timeout=ble_timeout) if ble_scan else asyncio.sleep(0, result=[])
+    wifi_coro = discover_wifi_devices(wifi_hosts)
 
-    all_devs = serial_devs + ble_devs + wifi_devs
+    ble_devs, wifi_devs = await asyncio.gather(ble_coro, wifi_coro)
+
+    all_devs = serial_devs + list(ble_devs) + list(wifi_devs)
     log.info(
         "Discovery: %d serial, %d BLE, %d WiFi",
         len(serial_devs), len(ble_devs), len(wifi_devs),

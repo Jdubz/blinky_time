@@ -25,7 +25,9 @@ def _create_transport(disc: DiscoveredDevice) -> Transport:
         return BleTransport(disc.address)
     elif disc.transport_type == "wifi":
         from ..transport.wifi_transport import WifiTransport
-        host = disc.extra["host"]
+        host = disc.extra.get("host")
+        if not host:
+            raise ValueError(f"WiFi device {disc.device_id!r} has no 'host' in extra: {disc.extra!r}")
         port = disc.extra.get("port", 3333)
         return WifiTransport(host, port)
     else:

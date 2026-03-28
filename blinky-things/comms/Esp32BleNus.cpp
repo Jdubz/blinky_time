@@ -94,6 +94,10 @@ void Esp32BleNus::onDisconnect(uint16_t connId) {
 }
 
 void Esp32BleNus::onRxData(const uint8_t* data, size_t len) {
+    // lineBuf_/lineLen_ are only accessed from NimBLE's BLE task via the
+    // NusRxCallbacks::onWrite() callback. NimBLE serialises all GATT write
+    // events through a single task, so concurrent writes to lineBuf_ from
+    // two BLE packets cannot overlap — no additional lock is needed here.
     for (size_t i = 0; i < len; i++) {
         char c = (char)data[i];
         if (c == '\n' || c == '\r') {
@@ -136,9 +140,16 @@ size_t Esp32BleNus::write(const uint8_t* data, size_t size) {
 }
 
 void Esp32BleNus::drainTxBuffer() {
-    if (!connected_ || !txChar_ || txHead_ == txTail_) return;
+    if (!connected_ || !txChar_) return;
 
     portENTER_CRITICAL(&s_txMux);
+    // Re-check emptiness inside the lock to avoid a TOCTOU race where
+    // write() or onDisconnect() modifies txHead_/txTail_ between the
+    // early-exit check above and the critical section below.
+    if (txHead_ == txTail_) {
+        portEXIT_CRITICAL(&s_txMux);
+        return;
+    }
     // Send up to one MTU-chunk per call
     size_t avail = (txHead_ >= txTail_)
         ? (txHead_ - txTail_)
