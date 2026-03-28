@@ -787,6 +787,14 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             // mbed core: SoftDevice API not available; write GPREGRET directly
             NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
 #endif
+            // Verify GPREGRET was written (debug aid)
+            uint32_t readback = NRF_POWER->GPREGRET;
+            if (readback != DFU_MAGIC_UF2) {
+                out_.print(F("[WARN] GPREGRET readback: 0x"));
+                out_.println(readback, HEX);
+            }
+            // Small delay to ensure GPREGRET write completes before reset
+            delay(10);
         }
         NVIC_SystemReset();
 #else

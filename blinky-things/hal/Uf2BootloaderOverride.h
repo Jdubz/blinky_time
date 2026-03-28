@@ -63,6 +63,8 @@ void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
                 } else {
                     NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
                 }
+                // Brief delay to ensure GPREGRET write completes
+                NRFX_DELAY_US(1000);
                 NVIC_SystemReset();
             }
         }
