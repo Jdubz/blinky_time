@@ -188,10 +188,11 @@ def _serial_open_with_timeout(port, baudrate=115200, timeout=1, open_timeout=Non
         signal.signal(signal.SIGALRM, old_handler)
 
 
-def _request_server_release(port, verbose=False):
+def _request_server_release(port, verbose=False, hold_seconds=None):
     """Ask blinky-server to release a device on the given port.
 
     Looks up the device by port, then calls POST /devices/{id}/release.
+    If hold_seconds is set, the server won't auto-reconnect for that duration.
     Returns True if released (or server not running), False on error.
     """
     try:
@@ -225,10 +226,11 @@ def _request_server_release(port, verbose=False):
             f"{BLINKY_SERVER_URL}/devices/{device_id}/release",
             method="POST",
             headers={"Content-Type": "application/json"},
-            data=b"{}",
+            data=json.dumps({"hold_seconds": hold_seconds} if hold_seconds else {}).encode(),
         )
         resp = urlopen(req, timeout=5)
-        print(f"  Released {device_id[:12]} from blinky-server")
+        hold_msg = f" (hold {hold_seconds}s)" if hold_seconds else ""
+        print(f"  Released {device_id[:12]} from blinky-server{hold_msg}")
         time.sleep(2)  # Let OS release the FD
         return True
     except (URLError, OSError) as e:
@@ -835,11 +837,23 @@ def trigger_bootloader(port, verbose=False):
     """
     print_section("ENTERING BOOTLOADER")
 
-    # Pre-flight: if blinky-server is running, ask it to release the port
-    _request_server_release(port, verbose)
+    # Pre-flight: if blinky-server is running, ask it to release and hold
+    _request_server_release(port, verbose, hold_seconds=90)
 
-    # Verify port is not locked by another process
+    # Acquire serial port lock (prevents blinky-server reconnect race)
+    from serial_lock import acquire as _acquire_lock, is_locked as _is_locked
+    if not _acquire_lock(port, "uf2_upload", "firmware_flash", hold_seconds=90):
+        locked, holder = _is_locked(port)
+        holder_info = f"{holder.get('tool', '?')} (PID {holder.get('pid', '?')})" if holder else "unknown"
+        print(f"\n  ABORTING: Port {port} is locked by {holder_info}")
+        print(f"  Wait for the other process to finish, or remove the lock manually:")
+        print(f"    rm /tmp/blinky-serial/{Path(port).resolve().name}.lock")
+        return None
+
+    # Verify port is not locked by another process (OS-level fuser check)
     if not _check_port_available(port, verbose):
+        from serial_lock import release as _release_lock
+        _release_lock(port)
         print(f"\n  ABORTING: Port {port} is not available.")
         print(f"  Resolve the port lock and retry.")
         return None
@@ -1849,6 +1863,10 @@ def upload_to_device(port, uf2_path, verbose=False):
         return False, f"timeout: {e}"
     except RuntimeError as e:
         return False, f"error: {e}"
+    finally:
+        # Always release serial lock after flash attempt
+        from serial_lock import release as _release_lock
+        _release_lock(port)
 
 
 # ============================================================

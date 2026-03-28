@@ -15,6 +15,10 @@ class SettingValueRequest(BaseModel):
     value: float | int | str = Field(..., description="Setting value to apply")
 
 
+class ReleaseRequest(BaseModel):
+    hold_seconds: int | None = Field(None, description="Don't auto-reconnect for N seconds")
+
+
 # ── Response Models ──
 
 

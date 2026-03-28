@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..device.device import Device
 from .deps import get_fleet
-from .models import CommandResponse, DeviceResponse, SettingValueRequest, StatusResponse
+from .models import CommandResponse, DeviceResponse, ReleaseRequest, SettingValueRequest, StatusResponse
 
 router = APIRouter(tags=["devices"])
 
@@ -76,9 +76,10 @@ async def restore_defaults(device_id: str) -> CommandResponse:
 
 
 @router.post("/devices/{device_id}/release")
-async def release_device(device_id: str) -> StatusResponse:
+async def release_device(device_id: str, body: ReleaseRequest | None = None) -> StatusResponse:
     """Release a device (e.g., for firmware flashing)."""
-    ok = await get_fleet().release_device(device_id)
+    hold_seconds = body.hold_seconds if body else None
+    ok = await get_fleet().release_device(device_id, hold_seconds=hold_seconds)
     if not ok:
         raise HTTPException(404, f"Device not found: {device_id}")
     return StatusResponse(status="released")

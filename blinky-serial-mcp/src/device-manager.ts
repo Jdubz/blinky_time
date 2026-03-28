@@ -6,6 +6,7 @@
 import { SerialPort } from 'serialport';
 import { DeviceSession } from './device-session.js';
 import type { DeviceInfo } from './types.js';
+import { acquireSerialLock, releaseSerialLock, isSerialLocked } from './lib/serial-lock.js';
 
 export class DeviceManager {
   private sessions: Map<string, DeviceSession> = new Map();
@@ -18,6 +19,16 @@ export class DeviceManager {
 
   /** Connect to a device, creating a new session or returning existing */
   async connect(port: string): Promise<{ session: DeviceSession; deviceInfo: DeviceInfo }> {
+    // Check if port is locked by another tool (e.g., firmware flashing)
+    const lockStatus = isSerialLocked(port);
+    if (lockStatus.locked) {
+      const h = lockStatus.holder;
+      throw new Error(
+        `Port ${port} is locked by ${h?.tool ?? 'unknown'} ` +
+        `(purpose: ${h?.purpose ?? '?'}, pid: ${h?.pid ?? '?'})`
+      );
+    }
+
     const existing = this.sessions.get(port);
     if (existing && existing.getState().connected) {
       const info = existing.getState().deviceInfo;
@@ -30,6 +41,7 @@ export class DeviceManager {
     const session = new DeviceSession(port);
     try {
       const deviceInfo = await session.connect();
+      acquireSerialLock(port, 'mcp_session', 3600); // Released on disconnect
       this.sessions.set(port, session);
       return { session, deviceInfo };
     } catch (err) {
@@ -50,12 +62,14 @@ export class DeviceManager {
       this.sessions.delete(port);
       await session.disconnect();
     }
+    releaseSerialLock(port);
   }
 
   /** Disconnect all devices */
   async disconnectAll(): Promise<void> {
-    for (const [, session] of this.sessions) {
+    for (const [port, session] of this.sessions) {
       await session.disconnect();
+      releaseSerialLock(port);
     }
     this.sessions.clear();
   }
