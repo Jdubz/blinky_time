@@ -775,25 +775,33 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         {
             const uint8_t DFU_MAGIC_UF2 = 0x57;
 #ifdef ARDUINO_ARCH_NRF52
+            // Disable SoftDevice before writing GPREGRET and resetting.
+            // When the SoftDevice is active, its reset handler may clear
+            // GPREGRET before the bootloader reads it. Disabling SD first
+            // ensures a clean reset path through the hardware.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
+                // Write GPREGRET via SD API first (while SD still owns POWER)
                 sd_power_gpregret_clr(0, 0xFF);
                 sd_power_gpregret_set(0, DFU_MAGIC_UF2);
-            } else {
-                NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+                // Disable SoftDevice so it doesn't interfere with the reset
+                sd_softdevice_disable();
             }
+            // Write GPREGRET directly (SD is now disabled or was never enabled)
+            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
 #else
-            // mbed core: SoftDevice API not available; write GPREGRET directly
             NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
 #endif
-            // Verify GPREGRET was written (debug aid)
+            // Verify GPREGRET was written
             uint32_t readback = NRF_POWER->GPREGRET;
             if (readback != DFU_MAGIC_UF2) {
-                out_.print(F("[WARN] GPREGRET readback: 0x"));
-                out_.println(readback, HEX);
+                Serial.print(F("[WARN] GPREGRET readback: 0x"));
+                Serial.println(readback, HEX);
+            } else {
+                Serial.println(F("[OK] GPREGRET=0x57"));
             }
-            // Small delay to ensure GPREGRET write completes before reset
+            Serial.flush();
             delay(10);
         }
         NVIC_SystemReset();
