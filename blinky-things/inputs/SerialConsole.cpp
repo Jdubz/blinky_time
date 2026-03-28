@@ -766,9 +766,11 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
 #ifdef BLINKY_PLATFORM_NRF52840
         // GPREGRET magic bytes for Adafruit nRF52 bootloader:
         //   0x57 = UF2 mass storage mode (USB firmware upload)
-        //   0xB1 = BLE OTA DFU mode (wireless firmware upload, advertises as "AdaDFU")
+        //   0xA8 = BLE OTA DFU after soft reset (SD not initialized — correct
+        //          for our path since we call sd_softdevice_disable() before reset)
+        //   0xB1 = BLE OTA DFU app jump (SD already initialized — NOT our case)
         const bool bleMode = (strcmp(cmd, "bootloader ble") == 0);
-        const uint8_t dfuMagic = bleMode ? 0xB1 : 0x57;
+        const uint8_t dfuMagic = bleMode ? 0xA8 : 0x57;
         out_.print(F("Entering "));
         out_.print(bleMode ? F("BLE DFU") : F("UF2"));
         out_.println(F(" bootloader..."));
