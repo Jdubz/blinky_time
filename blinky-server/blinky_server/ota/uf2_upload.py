@@ -172,38 +172,66 @@ async def upload_uf2(
             result["message"] = f"Cannot connect to device: {e}"
             return result
 
-    progress("bootloader", "Sending bootloader command...", 10)
-    try:
-        if protocol:
-            # Use protocol.send_command which properly handles the serial state
-            # (pauses streaming, writes command, collects response). The device
-            # will reset during/after the response, so we expect a timeout or
-            # partial response — that's OK.
+    # GPREGRET persistence is intermittent due to race condition with the
+    # SoftDevice shutdown. Retry up to 5 times. Each attempt: send "bootloader",
+    # wait for UF2 drive, reconnect if it didn't appear.
+    max_attempts = 5
+    uf2_found = False
+
+    for attempt in range(1, max_attempts + 1):
+        progress("bootloader", f"Bootloader entry attempt {attempt}/{max_attempts}...", 10)
+
+        # Send bootloader command
+        try:
+            if protocol:
+                try:
+                    resp = await protocol.send_command("bootloader", timeout=3.0)
+                    log.info("Attempt %d: response=%s", attempt,
+                             resp[:80] if resp else "(empty)")
+                except Exception as e:
+                    log.info("Attempt %d: device reset (%s)", attempt,
+                             type(e).__name__)
+            else:
+                await transport.write_line("bootloader")
+        except Exception as e:
+            log.warning("Attempt %d: write failed: %s", attempt, e)
+            # Try to reconnect for next attempt
             try:
-                resp = await protocol.send_command("bootloader", timeout=3.0)
-                log.info("Bootloader response: %s", resp[:100] if resp else "(empty)")
-            except Exception as e:
-                log.info("Bootloader command sent (device reset: %s)", type(e).__name__)
-        else:
-            await transport.write_line("bootloader")
-            log.info("Bootloader command sent via transport")
-    except Exception as e:
-        result["message"] = f"Failed to send bootloader command: {e}"
+                await transport.disconnect()
+                await asyncio.sleep(2)
+                await transport.connect()
+                await asyncio.sleep(1)
+            except Exception:
+                pass
+            continue
+
+        # Wait for device to reset and UF2 drive to appear
+        await asyncio.sleep(5)
+        block_dev = await asyncio.to_thread(_find_uf2_drive, 10)
+        if block_dev:
+            uf2_found = True
+            log.info("UF2 drive found on attempt %d!", attempt)
+            break
+
+        log.info("Attempt %d: no UF2 drive, retrying...", attempt)
+        # Device rebooted to app — reconnect for next attempt
+        try:
+            await transport.disconnect()
+        except Exception:
+            pass
+        await asyncio.sleep(3)
+        try:
+            await transport.connect()
+            await asyncio.sleep(1)
+        except Exception as e:
+            log.warning("Reconnect failed: %s", e)
+
+    if not uf2_found:
+        result["message"] = (f"Bootloader entry failed after {max_attempts} attempts "
+                             "(GPREGRET race condition)")
         return result
 
-    # Wait for device to reset. DON'T disconnect — the device resets on its
-    # own. Explicitly closing the transport can race with the USB reset.
-    progress("bootloader", "Waiting for device reset...", 15)
-    await asyncio.sleep(8)
-
-    # Wait a moment for USB re-enumeration
-    await asyncio.sleep(3)
-
-    progress("detect", "Waiting for UF2 drive...", 20)
-    block_dev = await asyncio.to_thread(_find_uf2_drive, BOOTLOADER_ENTRY_TIMEOUT)
-    if not block_dev:
-        result["message"] = "UF2 drive not detected — bootloader entry may have failed"
-        return result
+    # block_dev was found in the retry loop above
 
     progress("mount", "Mounting UF2 drive...", 30)
     try:
