@@ -89,6 +89,12 @@ namespace SafeBootWatchdog {
 
     /**
      * Enter UF2 mass storage bootloader (never returns).
+     *
+     * Always enters UF2 mode (0x57, USB mass storage) — NOT BLE DFU.
+     * UF2 is the safest recovery: user just copies a .uf2 file via USB.
+     * BLE DFU (0xA8) has no automatic exit and can leave the device
+     * stuck if the BLE connection fails. UF2 always provides a working
+     * USB interface for recovery.
      */
     inline void enterUf2Bootloader() {
         const uint8_t DFU_MAGIC_UF2 = 0x57;
@@ -99,10 +105,14 @@ namespace SafeBootWatchdog {
             sd_power_gpregret_set(0, DFU_MAGIC_UF2);
             // Clear boot counter so new firmware gets a clean start
             sd_power_gpregret_clr(1, 0xFF);
-        } else {
-            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
-            NRF_POWER->GPREGRET2 = 0;
+            // Disable SoftDevice before reset — without this, the SD's
+            // reset handler clears GPREGRET and the bootloader boots the
+            // app instead of entering UF2 mode.
+            sd_softdevice_disable();
         }
+        NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+        NRF_POWER->GPREGRET2 = 0;
+        NRFX_DELAY_US(1000);
         NVIC_SystemReset();
     }
 
