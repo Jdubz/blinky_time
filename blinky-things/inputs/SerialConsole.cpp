@@ -786,12 +786,6 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         delay(100);      // Brief delay for serial transmission
         {
 #ifdef ARDUINO_ARCH_NRF52
-            // Use DIRECT JUMP to bootloader instead of NVIC_SystemReset().
-            // This is the same approach Adafruit's BLEDfu uses. A direct jump
-            // preserves GPREGRET 100% because there is no reset cycle — the CPU
-            // simply branches to the bootloader entry point. NVIC_SystemReset()
-            // passes through the MBR which can race with GPREGRET writes,
-            // causing 20-50% failure rate.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
@@ -801,27 +795,29 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             }
             NRF_POWER->GPREGRET = dfuMagic;
 
-            // Disable all interrupts
-            for (int i = 0; i < 8; i++) {
-                NVIC->ICER[i] = 0xFFFFFFFF;
-                NVIC->ICPR[i] = 0xFFFFFFFF;
+            if (bleMode) {
+                // BLE DFU: Direct jump to bootloader (same as Adafruit BLEDfu).
+                // Preserves GPREGRET 100% by skipping NVIC_SystemReset.
+                // BLE DFU doesn't need USB, so stale USB state is fine.
+                for (int i = 0; i < 8; i++) {
+                    NVIC->ICER[i] = 0xFFFFFFFF;
+                    NVIC->ICPR[i] = 0xFFFFFFFF;
+                }
+                uint32_t bl = NRF_UICR->NRFFW[0];
+                if (bl != 0xFFFFFFFF) {
+                    __set_MSP(*((uint32_t *)bl));
+                    __set_CONTROL(0);
+                    __ISB();
+                    ((void (*)(void))(*((uint32_t *)(bl + 4))))();
+                }
             }
-
-            // Read bootloader address from UICR
-            uint32_t bootloader_addr = NRF_UICR->NRFFW[0];
-            if (bootloader_addr == 0xFFFFFFFF) {
-                // UICR not set — fall back to NVIC_SystemReset
-                __DSB();
-                __ISB();
-                NVIC_SystemReset();
-            }
-
-            // Switch to MSP (Main Stack Pointer) and jump directly to bootloader
-            __set_MSP(*((uint32_t *)bootloader_addr));
-            __set_CONTROL(0);
+            // UF2 mode: Must use NVIC_SystemReset to reset USB peripheral.
+            // Direct jump leaves USB in app's CDC state, causing bootloader's
+            // mass storage init to fail. DSB/ISB ensures GPREGRET write
+            // commits before the reset fires.
+            __DSB();
             __ISB();
-            ((void (*)(void))(*((uint32_t *)(bootloader_addr + 4))))();
-            // Never reaches here
+            NVIC_SystemReset();
 #else
             NRF_POWER->GPREGRET = dfuMagic;
             NVIC_SystemReset();

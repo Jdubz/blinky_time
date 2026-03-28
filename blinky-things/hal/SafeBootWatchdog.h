@@ -108,20 +108,10 @@ namespace SafeBootWatchdog {
         }
         NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
         NRF_POWER->GPREGRET2 = 0;
-
-        // Direct jump to bootloader (same as Adafruit BLEDfu).
-        for (int i = 0; i < 8; i++) {
-            NVIC->ICER[i] = 0xFFFFFFFF;
-            NVIC->ICPR[i] = 0xFFFFFFFF;
-        }
-        uint32_t bl = NRF_UICR->NRFFW[0];
-        if (bl != 0xFFFFFFFF) {
-            __set_MSP(*((uint32_t *)bl));
-            __set_CONTROL(0);
-            __ISB();
-            ((void (*)(void))(*((uint32_t *)(bl + 4))))();
-        }
-        __DSB(); __ISB();
+        // UF2 mode needs NVIC_SystemReset for USB peripheral reset.
+        // DSB/ISB ensures GPREGRET write commits first.
+        __DSB();
+        __ISB();
         NVIC_SystemReset();
     }
 
