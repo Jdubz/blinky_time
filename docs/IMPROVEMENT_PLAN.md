@@ -8,7 +8,7 @@
 
 **Firmware:** v82 (SETTINGS_VERSION 82). AudioTracker with ACF+PLP architecture + pattern slot cache. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. Fisher's g removed (penalized syncopated music). v77 pattern memory (IOI histogram + bar histogram) replaced by slot cache. ~20 tunable params persisted to flash. 16,464 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v3 deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 model backed up. All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Next model: v9. Downbeat detection deferred.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v11-final deployed on 4/5 blinkyhost devices (2 ESP32-S3, 2 nRF52840). Trained on de-duplicated onset labels. Kick recall 0.743, Snare recall 0.727, HiHat recall 0.701. 13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
@@ -68,7 +68,7 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 ### Priority 2: NN Training Improvements (When Retrained)
 
-**Status: v3 model deployed (All Onsets F1=0.787). v10 training in progress with exact v3 recipe + SWA + pos_weight=20.**
+**Status: v11-final deployed on 4/5 blinkyhost devices (Kick recall 0.743, Snare 0.727, HiHat 0.701). Trained on de-duplicated onset labels.**
 
 Failed attempts (all regressed from v3):
 - v9 (tempo head + distillation): F1=0.233. Root cause: data prep crash → non-augmented data (209K vs 3M chunks) + tempo head useless (256ms RF can't encode tempo, Bock 2019 applies to beat tracking not onset detection).

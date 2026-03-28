@@ -59,6 +59,8 @@ A failed bootloader entry leaves the device running old firmware but wastes time
 
 **Why this matters:** If an MCP server or console session holds the serial port, `uf2_upload.py` cannot send the bootloader entry command. The device resets but doesn't enter UF2 mode. The script retries 5 times (40+ seconds wasted), then fails. The `uf2_upload.py` script includes a port availability pre-check that will detect and report this condition.
 
+**Serial port lock system:** `/tmp/blinky-serial/<port>.lock` files coordinate blinky-server, blinky-serial-mcp, and uf2_upload.py. Advisory file-based locking with atomic `O_CREAT|O_EXCL`. The `uf2_upload.py` safety overhaul includes SIGALRM timeout on serial open, fuser-based port checks, guaranteed cleanup, blinky-server auto-release/reconnect, and UF2 detection reordered (by-label first).
+
 ### Safe Operations Summary
 
 **ESP32-S3:**
@@ -244,6 +246,7 @@ RenderPipeline → LED Output
      - Single output channel: onset activation (kicks/snares — cannot distinguish on-beat from off-beat)
      - v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704)
      - v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806)
+     - v11-final deployed (4/5 blinkyhost): de-duplicated onset labels, Kick recall 0.743, Snare 0.727, HiHat 0.701
      - Arena: 3404/32768 bytes
      - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
@@ -434,7 +437,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+PLP (Fourier tempogram) + pulse baseline tracking + pattern slot cache (v82)
-- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, All Onsets F1=0.681, deployed on all 7 devices)
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, v11-final deployed on 4/5 blinkyhost devices)
 - ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
@@ -464,7 +467,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
 - ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
-- ⚠️ BLE DFU transfer uses legacy Nordic DFU (SDK v11), custom protocol needed
+- ⚠️ BLE DFU transfer blocked: bootloader rejects DFU commands (GATT 0x0E Unlikely Error — likely CCCD notification setup issue)
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned (Not Started):**
@@ -508,7 +511,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
 **Current (v82, deployed):** ACF+PLP architecture with pattern slot cache. ACF provides period estimate from spectral flux. PLP uses Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset) — DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50, cuts warm-up from ~8 to ~2 bars). Pattern slot cache (4-slot LRU of 16-bin PLP pattern digests) enables instant section recall on verse/chorus transitions. Steep signal gate for mic level. Beat stability gated learning (fill/breakdown immunity). Epoch-fold pattern extraction for visual pattern shape. NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
-- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
+- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). v11-final deployed (4/5 blinkyhost): de-duplicated onset labels, Kick recall 0.743, Snare 0.727, HiHat 0.701. Arena: 3404/32768 bytes.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLP phase/pattern extraction. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
