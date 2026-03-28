@@ -155,26 +155,26 @@ void BleScanner::update() {
     }
 }
 
-void BleScanner::printDiagnostics() const {
-    Serial.print(F("[BLE] role=scanner state="));
-    Serial.println(active_ ? F("active") : F("inactive"));
+void BleScanner::printDiagnostics(Print& out) const {
+    out.print(F("[BLE] role=scanner state="));
+    out.println(active_ ? F("active") : F("inactive"));
 
-    Serial.print(F("[BLE] packets_rx="));
-    Serial.print(packetsReceived_);
-    Serial.print(F(" duped="));
-    Serial.print(packetsDuped_);
-    Serial.print(F(" dropped="));
-    Serial.print(packetsDropped_);
+    out.print(F("[BLE] packets_rx="));
+    out.print(packetsReceived_);
+    out.print(F(" duped="));
+    out.print(packetsDuped_);
+    out.print(F(" dropped="));
+    out.print(packetsDropped_);
     if (packetsReceived_ > 0) {
-        Serial.print(F(" last_rssi="));
-        Serial.print(lastRssi_);
-        Serial.print(F("dBm"));
+        out.print(F(" last_rssi="));
+        out.print(lastRssi_);
+        out.print(F("dBm"));
     }
-    Serial.println();
+    out.println();
 
-    Serial.print(F("[BLE] last_seq="));
-    Serial.print(lastSequence_);
-    Serial.print(F(" uptime="));
-    Serial.print(getUptimeMs() / 1000);
-    Serial.println(F("s"));
+    out.print(F("[BLE] last_seq="));
+    out.print(lastSequence_);
+    out.print(F(" uptime="));
+    out.print(getUptimeMs() / 1000);
+    out.println(F("s"));
 }

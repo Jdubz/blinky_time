@@ -88,51 +88,19 @@ async def _wait_for_uf2_drive(timeout: float = 30.0) -> Path | None:
 
 
 async def _wait_for_uf2_gone(timeout: float = 30.0) -> bool:
-    """Wait for UF2 drive to disappear (device rebooted) using udev events."""
+    """Wait for UF2 drive to disappear (device rebooted).
+
+    The UF2 bootloader reboots immediately after accepting firmware — the
+    drive typically disappears within 1-2 seconds. Simple async polling
+    is fast enough and avoids pyudev thread/event-loop complexity.
+    """
     label_path = Path("/dev/disk/by-label/XIAO-SENSE")
-    if not label_path.exists():
-        return True
-
-    loop = asyncio.get_event_loop()
-    gone = asyncio.Event()
-
-    def _monitor_thread():
-        try:
-            import pyudev
-            context = pyudev.Context()
-            monitor = pyudev.Monitor.from_netlink(context)
-            monitor.filter_by(subsystem='block', device_type='disk')
-            monitor.start()
-
-            deadline = time.monotonic() + timeout
-            for device in iter(monitor.poll, None):
-                if time.monotonic() > deadline:
-                    break
-                if device.action == 'remove':
-                    loop.call_soon_threadsafe(gone.set)
-                    return
-        except ImportError:
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                if not label_path.exists():
-                    loop.call_soon_threadsafe(gone.set)
-                    return
-                time.sleep(0.5)
-
-    thread_task = asyncio.to_thread(_monitor_thread)
-
-    try:
-        done, pending = await asyncio.wait(
-            [asyncio.create_task(gone.wait()), thread_task],
-            timeout=timeout,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for t in pending:
-            t.cancel()
-    except Exception:
-        pass
-
-    return gone.is_set()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not label_path.exists():
+            return True
+        await asyncio.sleep(0.3)
+    return False
 
 
 def _mount_uf2(block_dev: Path) -> Path:

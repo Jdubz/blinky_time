@@ -176,62 +176,62 @@ void BleNus::processRxByte(char c) {
     }
 }
 
-void BleNus::printDiagnostics() const {
+void BleNus::printDiagnostics(Print& out) const {
     // Connection state
-    Serial.print(F("[BLE] NUS: "));
+    out.print(F("[BLE] NUS: "));
     if (connected_) {
-        Serial.println(F("connected"));
+        out.println(F("connected"));
         BLEConnection* conn = Bluefruit.Connection(connHandle_);
         if (conn) {
-            Serial.print(F("[BLE]   MTU="));
-            Serial.print(conn->getMtu());
-            Serial.print(F(" RSSI="));
-            Serial.print(conn->getRssi());
-            Serial.println(F("dBm"));
+            out.print(F("[BLE]   MTU="));
+            out.print(conn->getMtu());
+            out.print(F(" RSSI="));
+            out.print(conn->getRssi());
+            out.println(F("dBm"));
         }
-        Serial.print(F("[BLE]   conn_uptime="));
-        Serial.print((millis() - connectTimeMs_) / 1000);
-        Serial.println(F("s"));
+        out.print(F("[BLE]   conn_uptime="));
+        out.print((millis() - connectTimeMs_) / 1000);
+        out.println(F("s"));
     } else {
-        Serial.println(F("disconnected"));
+        out.println(F("disconnected"));
     }
 
     // Advertising state
-    Serial.print(F("[BLE] advertising="));
-    Serial.println(Bluefruit.Advertising.isRunning() ? F("yes") : F("no"));
+    out.print(F("[BLE] advertising="));
+    out.println(Bluefruit.Advertising.isRunning() ? F("yes") : F("no"));
 
     // BLE address (for direct connection from ble_dfu.py)
-    Serial.print(F("[BLE] addr="));
+    out.print(F("[BLE] addr="));
     uint8_t mac[6];
     Bluefruit.getAddr(mac);
     for (int i = 5; i >= 0; i--) {
-        if (mac[i] < 0x10) Serial.print('0');
-        Serial.print(mac[i], HEX);
-        if (i > 0) Serial.print(':');
+        if (mac[i] < 0x10) out.print('0');
+        out.print(mac[i], HEX);
+        if (i > 0) out.print(':');
     }
-    Serial.println();
+    out.println();
 
     // TX power
-    Serial.print(F("[BLE] tx_power="));
-    Serial.print(Bluefruit.getTxPower());
-    Serial.println(F("dBm"));
+    out.print(F("[BLE] tx_power="));
+    out.print(Bluefruit.getTxPower());
+    out.println(F("dBm"));
 
     // Peer count
-    Serial.print(F("[BLE] connections="));
-    Serial.println(Bluefruit.connected());
+    out.print(F("[BLE] connections="));
+    out.println(Bluefruit.connected());
 
     // DFU service status
-    Serial.println(F("[BLE] services: NUS DFU DIS"));
+    out.println(F("[BLE] services: NUS DFU DIS"));
 
     // TX buffer utilization
     size_t used = (txHead_ >= txTail_) ? (txHead_ - txTail_) : (TX_BUF_SIZE - txTail_ + txHead_);
-    Serial.print(F("[BLE] tx_buf="));
-    Serial.print(used);
-    Serial.print(F("/"));
-    Serial.println(TX_BUF_SIZE);
+    out.print(F("[BLE] tx_buf="));
+    out.print(used);
+    out.print(F("/"));
+    out.println(TX_BUF_SIZE);
 
-    Serial.print(F("[BLE] lines_rx="));
-    Serial.print(linesRx_);
-    Serial.print(F(" lines_tx="));
-    Serial.println(linesTx_);
+    out.print(F("[BLE] lines_rx="));
+    out.print(linesRx_);
+    out.print(F(" lines_tx="));
+    out.println(linesTx_);
 }

@@ -169,16 +169,16 @@ void Esp32BleNus::drainTxBuffer() {
     txChar_->notify();
 }
 
-void Esp32BleNus::printDiagnostics() const {
-    Serial.print(F("[BLE] NUS connected="));
-    Serial.print(connected_ ? F("yes") : F("no"));
-    Serial.print(F(" mtu="));
-    Serial.print(mtu_);
-    Serial.print(F(" rx="));
-    Serial.print(linesRx_);
-    Serial.print(F(" tx_pending="));
+void Esp32BleNus::printDiagnostics(Print& out) const {
+    out.print(F("[BLE] NUS connected="));
+    out.print(connected_ ? F("yes") : F("no"));
+    out.print(F(" mtu="));
+    out.print(mtu_);
+    out.print(F(" rx="));
+    out.print(linesRx_);
+    out.print(F(" tx_pending="));
     size_t pending = (txHead_ >= txTail_)
         ? (txHead_ - txTail_)
         : (TX_BUF_SIZE - txTail_ + txHead_);
-    Serial.println(pending);
+    out.println(pending);
 }

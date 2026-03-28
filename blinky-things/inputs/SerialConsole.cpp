@@ -1756,10 +1756,10 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
     if (*arg == '\0') {
         // "ble" — show NUS and scanner status
         if (bleNus_) {
-            bleNus_->printDiagnostics();
+            bleNus_->printDiagnostics(out_);
         }
         if (bleScanner_) {
-            bleScanner_->printDiagnostics();
+            bleScanner_->printDiagnostics(out_);
         }
         if (!bleNus_ && !bleScanner_) {
             out_.println(F("[BLE] Not initialized"));
@@ -1769,7 +1769,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
 
     if (strcmp(arg, "nus") == 0) {
         if (bleNus_) {
-            bleNus_->printDiagnostics();
+            bleNus_->printDiagnostics(out_);
         } else {
             out_.println(F("[BLE] NUS not initialized"));
         }
@@ -1796,7 +1796,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
     if (*arg == '\0') {
         // "ble" — show advertiser status
         if (bleAdvertiser_) {
-            bleAdvertiser_->printDiagnostics();
+            bleAdvertiser_->printDiagnostics(out_);
         } else {
             out_.println(F("[BLE] Advertiser not initialized"));
         }
@@ -1805,7 +1805,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
 
     if (strcmp(arg, "status") == 0) {
         if (bleAdvertiser_) {
-            bleAdvertiser_->printDiagnostics();
+            bleAdvertiser_->printDiagnostics(out_);
         } else {
             out_.println(F("[BLE] Advertiser not initialized"));
         }
@@ -1995,7 +1995,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
-        audioCtrl_->getFrameOnsetNN().printDiagnostics();
+        audioCtrl_->getFrameOnsetNN().printDiagnostics(out_);
         return true;
     }
 

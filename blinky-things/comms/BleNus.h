@@ -51,7 +51,7 @@ public:
     /// Get connection handle.
     uint16_t getConnectionHandle() const { return connHandle_; }
 
-    void printDiagnostics() const;
+    void printDiagnostics(Print& out) const;
 
 private:
     static void onConnect(uint16_t conn_hdl);

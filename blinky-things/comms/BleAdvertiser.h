@@ -28,7 +28,7 @@ public:
     uint32_t getPacketsSent() const { return packetsSent_; }
     uint32_t getErrors() const { return errors_; }
     bool isReady() const { return ready_; }
-    void printDiagnostics() const;
+    void printDiagnostics(Print& out) const;
 
 private:
     bool broadcast(BleProtocol::PacketType type, const uint8_t* data, size_t len);
