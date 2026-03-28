@@ -15,6 +15,8 @@ def main() -> None:
         "--log-level", default="info", choices=["debug", "info", "warning", "error"]
     )
     parser.add_argument("--no-ble", action="store_true", help="Disable BLE discovery")
+    parser.add_argument("--no-serial", action="store_true",
+                        help="Disable serial discovery (wireless-only mode)")
     parser.add_argument(
         "--wifi-device", action="append", metavar="HOST:PORT",
         help="Add a WiFi device (e.g., 192.168.86.238:3333). Repeatable.",
@@ -41,7 +43,11 @@ def main() -> None:
             parser.error(f"Invalid port in --wifi-device spec: {spec}")
         wifi_hosts.append({"host": host, "port": port})
 
-    app = create_app(enable_ble=not args.no_ble, wifi_hosts=wifi_hosts)
+    app = create_app(
+        enable_ble=not args.no_ble,
+        enable_serial=not args.no_serial,
+        wifi_hosts=wifi_hosts,
+    )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 
 

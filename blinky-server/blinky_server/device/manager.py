@@ -41,6 +41,7 @@ class FleetManager:
     def __init__(
         self,
         enable_ble: bool = True,
+        enable_serial: bool = True,
         ble_timeout: float = 5.0,
         wifi_hosts: list[dict] | None = None,
     ) -> None:
@@ -48,6 +49,7 @@ class FleetManager:
         self._discovery_task: asyncio.Task[None] | None = None
         self._running = False
         self._enable_ble = enable_ble
+        self._enable_serial = enable_serial
         self._ble_timeout = ble_timeout
         self._wifi_hosts = wifi_hosts or []
         # Track discovery metadata for reconnection
@@ -161,6 +163,7 @@ class FleetManager:
     async def _discover_and_connect(self) -> None:
         """Discover devices across all transports and connect to new ones."""
         discovered = await discover_all(
+            serial_scan=self._enable_serial,
             ble_scan=self._enable_ble,
             ble_timeout=self._ble_timeout,
             wifi_hosts=self._wifi_hosts,

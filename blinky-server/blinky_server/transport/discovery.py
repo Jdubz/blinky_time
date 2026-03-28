@@ -183,6 +183,7 @@ async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[D
 
 
 async def discover_all(
+    serial_scan: bool = True,
     ble_scan: bool = True,
     ble_timeout: float = 5.0,
     wifi_hosts: list[dict] | None = None,
@@ -191,8 +192,9 @@ async def discover_all(
 
     Serial discovery is synchronous (fast) and runs first. BLE and WiFi/mDNS
     discovery are both async (slow) and run concurrently via asyncio.gather().
+    Use serial_scan=False for wireless-only mode (no USB serial).
     """
-    serial_devs = discover_serial_devices()
+    serial_devs = discover_serial_devices() if serial_scan else []
 
     ble_coro = discover_ble_devices(timeout=ble_timeout) if ble_scan else asyncio.sleep(0, result=[])
     wifi_coro = discover_wifi_devices(wifi_hosts)

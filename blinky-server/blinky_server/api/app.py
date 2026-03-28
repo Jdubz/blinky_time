@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(
     enable_ble: bool = True,
+    enable_serial: bool = True,
     wifi_hosts: list[dict] | None = None,
 ) -> FastAPI:
     app = FastAPI(
@@ -31,7 +32,11 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
-    app.state.fleet_kwargs = {"enable_ble": enable_ble, "wifi_hosts": wifi_hosts}
+    app.state.fleet_kwargs = {
+        "enable_ble": enable_ble,
+        "enable_serial": enable_serial,
+        "wifi_hosts": wifi_hosts,
+    }
 
     app.add_middleware(
         CORSMiddleware,
