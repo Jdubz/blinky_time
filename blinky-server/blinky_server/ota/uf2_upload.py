@@ -83,12 +83,26 @@ def _wait_uf2_gone(timeout: float = 15.0) -> bool:
     return False
 
 
+def _find_uf2conv() -> Path | None:
+    """Find uf2conv.py in Arduino packages or project tools."""
+    search_paths = [
+        # Arduino Seeeduino core (installed via arduino-cli)
+        Path.home() / ".arduino15" / "packages" / "Seeeduino" / "hardware" /
+        "nrf52" / "1.1.12" / "tools" / "uf2conv" / "uf2conv.py",
+        # Project tools directory
+        Path(__file__).parent.parent.parent.parent / "tools" / "uf2conv.py",
+    ]
+    for p in search_paths:
+        if p.exists():
+            return p
+    return None
+
+
 def hex_to_uf2(hex_path: str, uf2_path: str) -> bool:
-    """Convert Intel HEX to UF2 using uf2conv.py from tools/."""
-    tools_dir = Path(__file__).parent.parent.parent.parent / "tools"
-    uf2conv = tools_dir / "uf2conv.py"
-    if not uf2conv.exists():
-        log.error("uf2conv.py not found at %s", uf2conv)
+    """Convert Intel HEX to UF2."""
+    uf2conv = _find_uf2conv()
+    if not uf2conv:
+        log.error("uf2conv.py not found in Arduino packages or tools/")
         return False
 
     result = subprocess.run(
