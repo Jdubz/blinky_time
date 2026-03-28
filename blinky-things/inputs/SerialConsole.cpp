@@ -466,6 +466,14 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
     if (strcmp(cmd, "json info") == 0) {
         out_.print(F("{\"version\":\""));
         out_.print(F(BLINKY_VERSION_STRING));
+        out_.print(F("\",\"platform\":\""));
+#ifdef BLINKY_PLATFORM_NRF52840
+        out_.print(F("nrf52840"));
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+        out_.print(F("esp32s3"));
+#else
+        out_.print(F("unknown"));
+#endif
         out_.print(F("\""));
 
         // Device configuration status (v28+)
@@ -905,8 +913,8 @@ void SerialConsole::showDeviceConfig() {
     doc["sampleRate"] = cfg.sampleRate;
     doc["bufferSize"] = cfg.bufferSize;
 
-    // Serialize with pretty printing for readability
-    serializeJsonPretty(doc, Serial);
+    // Serialize through TeeStream (routes to Serial + BLE NUS)
+    serializeJsonPretty(doc, out_);
     out_.println();
 }
 
