@@ -162,16 +162,26 @@ async def upload_uf2(
 
     progress("bootloader", "Sending bootloader command...", 10)
     try:
-        # Write directly to transport — don't use protocol.send_command() which
-        # tries to collect a response. The device resets immediately after
-        # processing "bootloader", racing with response collection.
-        await transport.write_line("bootloader")
-        # Give the device time to process GPREGRET write + sd_softdevice_disable + reset
-        await asyncio.sleep(2)
+        # Stop streaming first if active, then send bootloader command.
+        # Use write_line directly — protocol.send_command races with
+        # the device reset (tries to collect response but device is gone).
+        if hasattr(transport, 'write_line'):
+            # Ensure we're not in streaming mode
+            try:
+                await transport.write_line("stream off")
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+            await transport.write_line("bootloader")
+            log.info("Bootloader command sent via transport")
     except Exception as e:
         log.debug("Bootloader write (may disconnect): %s", e)
 
-    progress("bootloader", "Disconnecting transport...", 15)
+    # Wait for device to process: flush serial → set GPREGRET → disable SD → reset
+    # This takes ~200ms on the device but USB re-enumeration adds 2-3s
+    progress("bootloader", "Waiting for device reset...", 15)
+    await asyncio.sleep(3)
+
     try:
         await transport.disconnect()
     except Exception:
