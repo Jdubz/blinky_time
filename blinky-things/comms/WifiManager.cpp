@@ -72,6 +72,7 @@ bool WifiManager::connect() {
     Serial.print(F("..."));
 
     WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);  // ESP-IDF handles reconnection
     WiFi.begin(ssid_, password_);
 
     // Wait up to 10 seconds for connection

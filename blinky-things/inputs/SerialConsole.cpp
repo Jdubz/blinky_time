@@ -19,6 +19,9 @@
 #include "../comms/BleAdvertiser.h"
 #include "../comms/WifiManager.h"
 #include "../comms/WifiCommandServer.h"
+#ifdef BLINKY_PLATFORM_ESP32S3
+#include <HTTPUpdate.h>
+#endif
 #endif
 
 extern DeviceConfig config;  // v28: Changed to non-const for runtime loading
@@ -1896,7 +1899,38 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
         return true;
     }
 
-    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|scan|status]"));
+    if (strncmp(arg, "ota ", 4) == 0) {
+        const char* url = arg + 4;
+        while (*url == ' ') url++;
+        if (*url == '\0') {
+            out_.println(F("Usage: wifi ota <http://host:port/firmware.bin>"));
+            return true;
+        }
+        if (WiFi.status() != WL_CONNECTED) {
+            out_.println(F("[OTA] WiFi not connected"));
+            return true;
+        }
+        out_.print(F("[OTA] Pulling firmware from "));
+        out_.println(url);
+        WiFiClient client;
+        httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        t_httpUpdate_return ret = httpUpdate.update(client, url);
+        switch (ret) {
+            case HTTP_UPDATE_FAILED:
+                out_.print(F("[OTA] Failed: "));
+                out_.println(httpUpdate.getLastErrorString());
+                break;
+            case HTTP_UPDATE_NO_UPDATES:
+                out_.println(F("[OTA] No update available"));
+                break;
+            case HTTP_UPDATE_OK:
+                out_.println(F("[OTA] Success, rebooting..."));
+                break;
+        }
+        return true;
+    }
+
+    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|scan|ota <url>|status]"));
     return true;
 #else
     // WiFi not available on nRF52840
