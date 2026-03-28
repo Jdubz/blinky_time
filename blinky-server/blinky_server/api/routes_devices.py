@@ -150,7 +150,24 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
             raise HTTPException(500, result["message"])
 
     elif transport_type == "ble":
-        raise HTTPException(501, "BLE DFU upload not yet implemented in server")
+        from ..ota.ble_dfu import upload_ble_dfu
+
+        fleet = get_fleet()
+        fleet._reconnect_blackout[device_id] = __import__("time").monotonic() + 180
+
+        result = await upload_ble_dfu(
+            app_ble_address=device.port,  # BLE address is stored as port
+            dfu_zip_path=body.firmware_path,
+            # BLE devices don't have serial — bootloader entry via BLE DFU trigger
+            enter_bootloader_via_serial=None,
+        )
+
+        fleet._reconnect_blackout.pop(device_id, None)
+
+        if result["status"] == "ok":
+            return OtaResponse(**result)
+        else:
+            raise HTTPException(500, result["message"])
 
     else:
         raise HTTPException(400, f"OTA not supported for transport: {transport_type}")

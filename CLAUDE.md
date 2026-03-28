@@ -43,23 +43,21 @@ make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 - Bootloader protects itself (hardware-enforced)
 - If interrupted, old firmware stays intact
 
-See `tools/uf2_upload.py --help` for all options.
+**Firmware upload is managed by blinky-server** (no standalone scripts):
+```bash
+# Compile and flash a single device
+curl -X POST http://blinkyhost.local:8420/api/ota/compile
+curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota \
+  -H 'Content-Type: application/json' \
+  -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
 
-### nRF52840 Pre-Flash Checklist
+# Flash ALL connected nRF52840 devices
+curl -X POST http://blinkyhost.local:8420/api/fleet/ota \
+  -H 'Content-Type: application/json' \
+  -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
+```
 
-**Devices are physically installed — double-tap reset is NOT an option.**
-Bootloader entry MUST succeed via software (serial command or 1200-baud touch).
-A failed bootloader entry leaves the device running old firmware but wastes time.
-
-**Before EVERY nRF52840 flash attempt:**
-1. **Disconnect ALL MCP sessions** — `mcp__blinky-serial__disconnect` on every port, or verify `mcp__blinky-serial__status` shows no connections
-2. **Wait 3 seconds** after MCP disconnect — the Node.js `SerialPort.close()` is async; the OS file descriptor may not be released immediately
-3. **Do NOT flash immediately after interactive serial use** — always disconnect and wait
-4. **Flash one device at a time** unless using `--parallel` mode
-
-**Why this matters:** If an MCP server or console session holds the serial port, `uf2_upload.py` cannot send the bootloader entry command. The device resets but doesn't enter UF2 mode. The script retries 5 times (40+ seconds wasted), then fails. The `uf2_upload.py` script includes a port availability pre-check that will detect and report this condition.
-
-**Serial port lock system:** `/tmp/blinky-serial/<port>.lock` files coordinate blinky-server, blinky-serial-mcp, and uf2_upload.py. Advisory file-based locking with atomic `O_CREAT|O_EXCL`. The `uf2_upload.py` safety overhaul includes SIGALRM timeout on serial open, fuser-based port checks, guaranteed cleanup, blinky-server auto-release/reconnect, and UF2 detection reordered (by-label first).
+The server owns all serial/BLE connections — no port contention, no lock files, no race conditions. It handles bootloader entry, UF2 copy/BLE DFU transfer, and automatic reconnection.
 
 ### Safe Operations Summary
 
@@ -83,7 +81,7 @@ A failed bootloader entry leaves the device running old firmware but wastes time
 **nRF52840** devices are physically installed and reset buttons are NOT accessible.
 If a device stops responding to serial commands:
 1. Try power-cycling via USB hub: `uhubctl -a cycle -p <port>`
-2. Re-run: `python3 tools/uf2_upload.py --build-dir /tmp/blinky-build /dev/ttyACMx`
+2. Use blinky-server OTA: `curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota -d '{"firmware_path":"/tmp/blinky-build/blinky-things.ino.hex"}'`
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
 
@@ -467,7 +465,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
 - ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
-- ⚠️ BLE DFU transfer: `ble_dfu.py` uses Legacy DFU (SDK v11) protocol. GATT 0x0E error was caused by stale BlueZ GATT cache (app vs bootloader handle mismatch), NOT wrong protocol. Fix: thorough BlueZ cache clearing between app/bootloader connections. Legacy DFU writes now succeed. Remaining: bootloader accepts START_DFU but no notification response — needs further debugging of notification delivery in bootloader mode.
+- ✅ BLE DFU transfer: Legacy DFU (SDK v11) protocol working. START_DFU notification received (0x10 0x01 0x01). Key findings: write-without-response required for DFU Control, bootloader BLE addr = app+1, force StartNotify over AcquireNotify, GPREGRET=0xA8 for serial-triggered BLE DFU. Full transfer pending end-to-end test after physical device reset. OTA managed by blinky-server (`POST /api/devices/{id}/ota`).
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned (Not Started):**

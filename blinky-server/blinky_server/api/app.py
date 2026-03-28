@@ -44,10 +44,12 @@ def create_app(
     # Import routers here to avoid circular imports
     from .routes_commands import router as commands_router
     from .routes_devices import router as devices_router
+    from .routes_ota import router as ota_router
     from .ws import router as ws_router
 
     app.include_router(devices_router, prefix="/api")
     app.include_router(commands_router, prefix="/api")
+    app.include_router(ota_router, prefix="/api")
     app.include_router(ws_router)
 
     return app
