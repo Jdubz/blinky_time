@@ -101,11 +101,25 @@ class DfuResult:
 PRN_INTERVAL = 8
 
 
+def bootloader_address(app_address: str) -> str:
+    """Compute the bootloader's BLE address from the app address.
+
+    The Adafruit nRF52 bootloader advertises with the app address + 1
+    (last octet incremented). This is a SoftDevice behavior for random
+    static addresses when the bootloader re-initializes the SD.
+    """
+    parts = app_address.split(':')
+    last = int(parts[-1], 16)
+    parts[-1] = f"{(last + 1) & 0xFF:02X}"
+    return ':'.join(parts)
+
+
 class BleDfu:
     """BLE DFU client for Adafruit nRF52 bootloader (Legacy DFU, SDK v11)."""
 
     def __init__(self, address: str):
         self.address = address
+        self.bootloader_addr = bootloader_address(address)
         self._client: BleakClient | None = None
         self._response_event = asyncio.Event()
         self._response_data: bytearray = bytearray()
@@ -283,10 +297,22 @@ class BleDfu:
         self._clear_bluez_state()
         await asyncio.sleep(4)  # Let BlueZ restart + bootloader start advertising
 
-        # The bootloader re-advertises with the same address
+        # The bootloader advertises with address+1 (SoftDevice re-init behavior)
+        log.info("Bootloader address: %s (app was %s)",
+                 self.bootloader_addr, self.address)
         for attempt in range(10):
             try:
-                self._client = BleakClient(self.address, timeout=5.0)
+                # Scan first so BlueZ discovers the bootloader
+                dev = await BleakScanner.find_device_by_address(
+                    self.bootloader_addr, timeout=5.0
+                )
+                if not dev:
+                    log.debug("Bootloader not found in scan, attempt %d",
+                              attempt + 1)
+                    await asyncio.sleep(2)
+                    continue
+                log.info("Found bootloader: %s", dev.name)
+                self._client = BleakClient(dev, timeout=5.0)
                 await self._client.connect()
                 self._mtu = min(self._client.mtu_size - 3, 20)
                 log.info("Connected to bootloader, MTU=%d (payload=%d)",
@@ -358,11 +384,16 @@ class BleDfu:
         2. Write 12-byte image size to Packet characteristic
         3. Wait for response notification
         """
-        # Write START_DFU with APPLICATION image type
+        # Write START_DFU with APPLICATION image type.
+        # CRITICAL: Must use write-without-response. The Adafruit bootloader's
+        # DFU Control characteristic supports both write and write-without-response,
+        # but only processes DFU commands via the write-without-response path.
+        # Write-with-response succeeds at the GATT level but doesn't trigger
+        # DFU command processing (no notification sent).
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID,
             bytes([DfuOpcode.START_DFU, DfuImageType.APPLICATION]),
-            response=True,
+            response=False,
         )
 
         # Write image sizes: [softdevice_size, bootloader_size, app_size] as u32 LE
@@ -388,7 +419,7 @@ class BleDfu:
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID,
             bytes([DfuOpcode.INIT_DFU, 0x00]),
-            response=True,
+            response=False,
         )
 
         # Write init packet data
@@ -400,7 +431,7 @@ class BleDfu:
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID,
             bytes([DfuOpcode.INIT_DFU, 0x01]),
-            response=True,
+            response=False,
         )
 
         # Wait for INIT_DFU response
@@ -416,7 +447,7 @@ class BleDfu:
         cmd = bytes([DfuOpcode.PKT_RCPT_NOTIF_REQ]) + \
             struct.pack('<H', interval)
         await self._client.write_gatt_char(
-            DFU_CONTROL_UUID, cmd, response=True
+            DFU_CONTROL_UUID, cmd, response=False
         )
         # PRN_REQ doesn't generate a response notification per the SDK v11 spec
 
@@ -432,7 +463,7 @@ class BleDfu:
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID,
             bytes([DfuOpcode.RECEIVE_FIRMWARE]),
-            response=True,
+            response=False,
         )
 
         total = len(firmware)
@@ -470,7 +501,7 @@ class BleDfu:
         await self._client.write_gatt_char(
             DFU_CONTROL_UUID,
             bytes([DfuOpcode.VALIDATE]),
-            response=True,
+            response=False,
         )
 
         await self._wait_for_response(DfuOpcode.VALIDATE)
@@ -482,7 +513,7 @@ class BleDfu:
             await self._client.write_gatt_char(
                 DFU_CONTROL_UUID,
                 bytes([DfuOpcode.ACTIVATE_AND_RESET]),
-                response=True,
+                response=False,
             )
         except Exception as e:
             # Device may disconnect immediately after reset

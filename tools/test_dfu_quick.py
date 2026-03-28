@@ -37,7 +37,7 @@ async def main():
     log.info("Scanning for %s...", addr)
     dev = await BleakScanner.find_device_by_address(addr, timeout=10.0)
     if dev:
-        log.info("Found: %s RSSI=%s", dev.name, dev.rssi)
+        log.info("Found: %s", dev.name)
     else:
         log.warning("Not found in scan, trying direct connect anyway...")
 
