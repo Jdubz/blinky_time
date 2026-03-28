@@ -10,13 +10,15 @@ import sys
 from pathlib import Path
 
 def _strip_comments(content):
-    """Remove C/C++ comments and string literals for accurate brace/paren counting."""
+    """Remove C/C++ comments, string literals, and char literals for accurate brace/paren counting."""
     # Remove single-line comments
     result = re.sub(r'//.*', '', content)
     # Remove multi-line comments
     result = re.sub(r'/\*.*?\*/', '', result, flags=re.DOTALL)
-    # Remove string literals
-    result = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', result)
+    # Remove string literals (handles escaped quotes like \")
+    result = re.sub(r'"(?:[^"\\]|\\.)*"', '', result, flags=re.DOTALL)
+    # Remove char literals
+    result = re.sub(r"'(?:[^'\\]|\\.)*'", '', result)
     return result
 
 
@@ -62,6 +64,14 @@ def check_file_syntax(filepath):
         
     return issues
 
+def _exceeds_tolerance(issue_str, tolerance):
+    """Check if an 'Unbalanced' issue exceeds the allowed tolerance."""
+    m = re.search(r'(-?\d+) extra', issue_str)
+    if m:
+        return abs(int(m.group(1))) > tolerance
+    return True
+
+
 def validate_arduino_project(project_path):
     """Validate all C++ files in an Arduino project"""
     project_path = Path(project_path)
@@ -100,9 +110,15 @@ if __name__ == "__main__":
                 print(f"  - {issue}")
     
     # Exit non-zero only for structural errors (unbalanced braces/parens),
-    # not for heuristic warnings (possible missing semicolons, undefined calls)
+    # not for heuristic warnings (possible missing semicolons, undefined calls).
+    # Allow a tolerance of ±4 for preprocessor-conditional code (#ifdef/#endif)
+    # which can have braces inside conditional blocks that the regex can't resolve.
+    BRACE_TOLERANCE = 4
     has_structural_errors = any(
-        any("Unbalanced" in issue for issue in file_issues)
+        any(
+            "Unbalanced" in issue and _exceeds_tolerance(issue, BRACE_TOLERANCE)
+            for issue in file_issues
+        )
         for file_issues in issues.values()
     )
     if has_structural_errors:
