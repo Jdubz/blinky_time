@@ -87,6 +87,7 @@ async def fleet_ota(body: OtaRequest) -> dict:
                     serial_port=device.port,
                     firmware_path=body.firmware_path,
                     transport=device.transport,
+                    protocol=device.protocol,
                 )
             elif transport_type == "ble":
                 from ..ota.ble_dfu import upload_ble_dfu

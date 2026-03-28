@@ -138,6 +138,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
             serial_port=device.port,
             firmware_path=body.firmware_path,
             transport=device.transport,
+            protocol=device.protocol,
         )
 
         # Clear blackout — fleet manager will auto-reconnect on next cycle

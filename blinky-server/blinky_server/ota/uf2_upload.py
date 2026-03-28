@@ -120,6 +120,7 @@ async def upload_uf2(
     serial_port: str,
     firmware_path: str,
     transport,
+    protocol=None,
     progress_callback: callable | None = None,
 ) -> dict:
     """Upload firmware to an nRF52840 device via UF2.
@@ -127,7 +128,8 @@ async def upload_uf2(
     Args:
         serial_port: The serial port path (e.g., /dev/ttyACM3)
         firmware_path: Path to .hex or .uf2 firmware file
-        transport: The serial Transport instance (for write_line and disconnect)
+        transport: The serial Transport instance
+        protocol: The DeviceProtocol instance (for send_command)
         progress_callback: optional callable(phase, message, pct) for progress
 
     Returns:
@@ -172,22 +174,22 @@ async def upload_uf2(
 
     progress("bootloader", "Sending bootloader command...", 10)
     try:
-        await transport.write_line("stream off")
-        await asyncio.sleep(0.5)
-        await transport.write_line("bootloader")
-        log.info("Bootloader command sent")
-    except Exception as e:
-        log.warning("Bootloader write failed: %s — retrying with fresh connection", e)
-        try:
-            await transport.disconnect()
-            await asyncio.sleep(1)
-            await transport.connect()
-            await asyncio.sleep(1)
+        if protocol:
+            # Use protocol.send_command which properly handles the serial state
+            # (pauses streaming, writes command, collects response). The device
+            # will reset during/after the response, so we expect a timeout or
+            # partial response — that's OK.
+            try:
+                resp = await protocol.send_command("bootloader", timeout=3.0)
+                log.info("Bootloader response: %s", resp[:100] if resp else "(empty)")
+            except Exception as e:
+                log.info("Bootloader command sent (device reset: %s)", type(e).__name__)
+        else:
             await transport.write_line("bootloader")
-            log.info("Bootloader command sent (retry)")
-        except Exception as e2:
-            result["message"] = f"Failed to send bootloader command: {e2}"
-            return result
+            log.info("Bootloader command sent via transport")
+    except Exception as e:
+        result["message"] = f"Failed to send bootloader command: {e}"
+        return result
 
     # Wait for device to reset. DON'T disconnect — the device resets on its
     # own. Explicitly closing the transport can race with the USB reset.
