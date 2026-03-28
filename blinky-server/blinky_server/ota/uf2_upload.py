@@ -119,8 +119,7 @@ def hex_to_uf2(hex_path: str, uf2_path: str) -> bool:
 async def upload_uf2(
     serial_port: str,
     firmware_path: str,
-    send_command: callable,
-    disconnect: callable,
+    transport,
     progress_callback: callable | None = None,
 ) -> dict:
     """Upload firmware to an nRF52840 device via UF2.
@@ -128,8 +127,7 @@ async def upload_uf2(
     Args:
         serial_port: The serial port path (e.g., /dev/ttyACM3)
         firmware_path: Path to .hex or .uf2 firmware file
-        send_command: async callable to send serial command (from DeviceProtocol)
-        disconnect: async callable to disconnect the transport
+        transport: The serial Transport instance (for write_line and disconnect)
         progress_callback: optional callable(phase, message, pct) for progress
 
     Returns:
@@ -164,17 +162,20 @@ async def upload_uf2(
 
     progress("bootloader", "Sending bootloader command...", 10)
     try:
-        # Send bootloader command via the server's existing serial connection.
-        # The device will print "[OK] GPREGRET=0x57" and then reset.
-        resp = await send_command("bootloader")
-        if "GPREGRET" not in resp and "bootloader" not in resp.lower():
-            log.warning("Unexpected bootloader response: %s", resp)
+        # Write directly to transport — don't use protocol.send_command() which
+        # tries to collect a response. The device resets immediately after
+        # processing "bootloader", racing with response collection.
+        await transport.write_line("bootloader")
+        # Give the device time to process GPREGRET write + sd_softdevice_disable + reset
+        await asyncio.sleep(2)
     except Exception as e:
-        # The device may disconnect before we read the response — that's OK
-        log.debug("Bootloader command result (may disconnect): %s", e)
+        log.debug("Bootloader write (may disconnect): %s", e)
 
     progress("bootloader", "Disconnecting transport...", 15)
-    await disconnect()
+    try:
+        await transport.disconnect()
+    except Exception:
+        pass  # Transport already dead from device reset
 
     # Wait a moment for USB re-enumeration
     await asyncio.sleep(3)

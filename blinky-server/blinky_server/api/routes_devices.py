@@ -137,8 +137,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         result = await upload_uf2(
             serial_port=device.port,
             firmware_path=body.firmware_path,
-            send_command=device.protocol.send_command,
-            disconnect=device.transport.disconnect,
+            transport=device.transport,
         )
 
         # Clear blackout — fleet manager will auto-reconnect on next cycle
