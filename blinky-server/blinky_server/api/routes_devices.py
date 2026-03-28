@@ -4,9 +4,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ..device.device import Device
+from ..device.device import Device, DeviceState
 from .deps import get_fleet
-from .models import CommandResponse, DeviceResponse, ReleaseRequest, SettingValueRequest, StatusResponse
+from .models import (
+    CommandResponse, DeviceResponse, OtaRequest, OtaResponse,
+    ReleaseRequest, SettingValueRequest, StatusResponse,
+)
 
 router = APIRouter(tags=["devices"])
 
@@ -92,3 +95,62 @@ async def reconnect_device(device_id: str) -> StatusResponse:
     if not ok:
         raise HTTPException(500, f"Failed to reconnect: {device_id}")
     return StatusResponse(status="connected")
+
+
+@router.post("/devices/{device_id}/ota")
+async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
+    """Upload firmware to a device via OTA (UF2 for serial, BLE DFU for BLE).
+
+    The server handles the entire flow:
+    1. Sends bootloader command via its existing transport
+    2. Disconnects the transport
+    3. Detects UF2 drive / establishes BLE DFU connection
+    4. Copies firmware / performs DFU transfer
+    5. Waits for device to reboot
+    6. Reconnects automatically via fleet manager
+
+    No port contention — the server owns the connection throughout.
+    """
+    import os
+    device = _get_device_or_404(device_id)
+
+    if device.state != DeviceState.CONNECTED:
+        raise HTTPException(409, f"Device not connected (state={device.state.value})")
+
+    # Validate firmware path
+    if not os.path.isfile(body.firmware_path):
+        raise HTTPException(400, f"Firmware file not found: {body.firmware_path}")
+
+    transport_type = device.transport.transport_type
+    platform = device.platform
+
+    if platform != "nrf52840":
+        raise HTTPException(400, f"OTA not yet supported for platform: {platform}")
+
+    if transport_type == "serial":
+        from ..ota.uf2_upload import upload_uf2
+
+        # Blackout auto-reconnect while we do the upload
+        fleet = get_fleet()
+        fleet._reconnect_blackout[device_id] = __import__("time").monotonic() + 120
+
+        result = await upload_uf2(
+            serial_port=device.port,
+            firmware_path=body.firmware_path,
+            send_command=device.protocol.send_command,
+            disconnect=device.transport.disconnect,
+        )
+
+        # Clear blackout — fleet manager will auto-reconnect on next cycle
+        fleet._reconnect_blackout.pop(device_id, None)
+
+        if result["status"] == "ok":
+            return OtaResponse(**result)
+        else:
+            raise HTTPException(500, result["message"])
+
+    elif transport_type == "ble":
+        raise HTTPException(501, "BLE DFU upload not yet implemented in server")
+
+    else:
+        raise HTTPException(400, f"OTA not supported for transport: {transport_type}")
