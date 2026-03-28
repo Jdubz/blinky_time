@@ -82,7 +82,7 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
             devices.append(
                 DiscoveredDevice(
                     device_id=addr,  # BLE address as stable ID
-                    platform="nrf52840",  # NUS = nRF52840
+                    platform="unknown",  # Cannot determine from BLE advertisement alone
                     transport_type="ble",
                     address=addr,
                     description=dev.name or "BLE device",
@@ -111,7 +111,6 @@ async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[D
     # mDNS discovery for _blinky._tcp
     try:
         from zeroconf import Zeroconf, ServiceBrowser
-        import socket
 
         zc = Zeroconf()
         found: list[dict] = []
@@ -119,8 +118,11 @@ async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[D
         class Listener:
             def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
                 info = zc.get_service_info(type_, name)
-                if info and info.addresses:
-                    host = socket.inet_ntoa(info.addresses[0])
+                if info:
+                    addrs = info.parsed_addresses()
+                    if not addrs:
+                        return
+                    host = addrs[0]  # First address (IPv4 or IPv6)
                     port = info.port or 3333
                     found.append({"host": host, "port": port, "name": name})
 
@@ -138,6 +140,8 @@ async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[D
         for entry in found:
             host = entry["host"]
             port = entry["port"]
+            # IP address as device_id — not stable across DHCP renewals.
+            # A future improvement could query the device for a hardware serial number.
             device_id = host
             seen_hosts.add(host)
             devices.append(

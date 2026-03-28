@@ -25,7 +25,7 @@ def _create_transport(disc: DiscoveredDevice) -> Transport:
         return BleTransport(disc.address)
     elif disc.transport_type == "wifi":
         from ..transport.wifi_transport import WifiTransport
-        host = disc.extra.get("host", disc.address.split(":")[0])
+        host = disc.extra["host"]
         port = disc.extra.get("port", 3333)
         return WifiTransport(host, port)
     else:
@@ -246,8 +246,8 @@ class FleetManager:
                 device.protocol.on_stream_line(device._route_stream_line)
                 device.protocol.on_raw_line(device._on_raw_line)
                 await device.connect()
-            except Exception:
-                pass  # Will retry next cycle
+            except Exception as e:
+                log.warning("Reconnect failed for %s: %s", device_id[:12], e)
 
     async def _background_loop(self) -> None:
         """Periodic discovery and reconnection."""

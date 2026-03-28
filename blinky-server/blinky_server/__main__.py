@@ -1,5 +1,6 @@
 import argparse
 import logging
+from urllib.parse import urlparse
 
 import uvicorn
 
@@ -26,12 +27,18 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Parse WiFi device specs
+    # Parse WiFi device specs (supports IPv6 bracket notation via urlparse)
     wifi_hosts = []
     for spec in args.wifi_device or []:
-        parts = spec.rsplit(":", 1)
-        host = parts[0]
-        port = int(parts[1]) if len(parts) > 1 else 3333
+        # Wrap in a scheme so urlparse handles [::1]:3333 and 1.2.3.4:3333
+        parsed = urlparse(f"tcp://{spec}")
+        if not parsed.hostname:
+            parser.error(f"Invalid --wifi-device spec: {spec}")
+        host = parsed.hostname
+        try:
+            port = parsed.port or 3333
+        except ValueError:
+            parser.error(f"Invalid port in --wifi-device spec: {spec}")
         wifi_hosts.append({"host": host, "port": port})
 
     app = create_app(enable_ble=not args.no_ble, wifi_hosts=wifi_hosts)

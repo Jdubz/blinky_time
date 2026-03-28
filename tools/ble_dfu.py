@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """BLE DFU (Device Firmware Update) tool for nRF52840 devices.
 
-Uploads firmware to nRF52840 devices over BLE using the Nordic Secure DFU
-protocol. The device must be running firmware with the BLEDfu service enabled
-(Adafruit Bluefruit52Lib).
+Uploads firmware to nRF52840 devices over BLE using the Nordic Legacy DFU
+protocol (SDK v11 opcodes). The Adafruit nRF52 bootloader (v0.6.2) implements
+this legacy protocol, NOT the newer Secure DFU (SDK v12+). The device must be
+running firmware with the BLEDfu service enabled (Adafruit Bluefruit52Lib).
 
 Protocol:
 1. Connect to device via BLE NUS/DFU service
 2. Write START_DFU (0x01) to DFU Control characteristic
 3. Device reboots into Adafruit nRF52 bootloader (BLE DFU mode)
 4. Reconnect to bootloader's DFU service
-5. Transfer firmware using Nordic Secure DFU protocol
+5. Transfer firmware using Nordic Legacy DFU protocol
 6. Device reboots into new firmware
 
 Usage:
@@ -20,6 +21,8 @@ Usage:
 Requires: bleak >= 0.22, adafruit-nrfutil (for genpkg)
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
@@ -27,7 +30,6 @@ import struct
 import sys
 import zipfile
 import json
-import hashlib
 from pathlib import Path
 
 try:
@@ -42,8 +44,6 @@ log = logging.getLogger(__name__)
 DFU_SERVICE_UUID = "00001530-1212-efde-1523-785feabcd123"
 DFU_CONTROL_UUID = "00001531-1212-efde-1523-785feabcd123"
 DFU_PACKET_UUID = "00001532-1212-efde-1523-785feabcd123"
-DFU_REVISION_UUID = "00001534-1212-efde-1523-785feabcd123"
-
 # Nordic NUS UUID (for discovering app-mode devices)
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 
@@ -183,7 +183,13 @@ class BleDfu:
         raise ConnectionError(f"Failed to connect to bootloader at {self.address}")
 
     async def _transfer_object(self, obj_type: int, data: bytes):
-        """Transfer a DFU object (init packet or firmware) using the Nordic protocol."""
+        """Transfer a DFU object (init packet or firmware) using the Nordic protocol.
+
+        NOTE: The SELECT response returns the current offset and CRC from any
+        previous partial transfer, but we always restart from pos=0. Resuming a
+        partial transfer would require CRC validation of the already-written
+        portion — not yet implemented.
+        """
         # SELECT to get max object size and current offset
         resp = await self._send_command(DfuOpcode.SELECT, bytes([obj_type]))
         max_size, offset, crc32 = struct.unpack('<III', resp)
@@ -193,7 +199,7 @@ class BleDfu:
         # Set PRN (Packet Receipt Notification) — 0 = disabled
         await self._send_command(DfuOpcode.SET_PRN, struct.pack('<H', 0))
 
-        # Transfer in chunks of max_size
+        # Transfer in chunks of max_size (always from start; resume not supported)
         pos = 0
         while pos < len(data):
             chunk = data[pos:pos + max_size]

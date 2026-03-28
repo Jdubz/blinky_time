@@ -33,11 +33,15 @@ class NusRxCallbacks : public NimBLECharacteristicCallbacks {
 
 static NusServerCallbacks serverCb;
 static NusRxCallbacks rxCb;
+static portMUX_TYPE s_txMux = portMUX_INITIALIZER_UNLOCKED;
 
 void Esp32BleNus::begin() {
     s_instance = this;
 
-    // NimBLEDevice::init() should already be called by BleAdvertiser::begin()
+    // Idempotent: safe to call if BleAdvertiser::begin() already initialized NimBLE
+    if (!NimBLEDevice::isInitialized()) {
+        NimBLEDevice::init("Blinky");
+    }
     server_ = NimBLEDevice::createServer();
     server_->setCallbacks(&serverCb);
 
@@ -75,13 +79,17 @@ void Esp32BleNus::update() {
 }
 
 void Esp32BleNus::onConnect(uint16_t connId) {
+    portENTER_CRITICAL(&s_txMux);
     connected_ = true;
+    portEXIT_CRITICAL(&s_txMux);
     Serial.println(F("[BLE] NUS client connected"));
 }
 
 void Esp32BleNus::onDisconnect(uint16_t connId) {
+    portENTER_CRITICAL(&s_txMux);
     connected_ = false;
     txHead_ = txTail_ = 0;  // Clear TX buffer
+    portEXIT_CRITICAL(&s_txMux);
     Serial.println(F("[BLE] NUS client disconnected"));
 }
 
@@ -99,15 +107,22 @@ void Esp32BleNus::onRxData(const uint8_t* data, size_t len) {
             }
         } else if (lineLen_ < LINE_BUF_SIZE - 1) {
             lineBuf_[lineLen_++] = c;
+        } else {
+            Serial.println(F("[BLE] NUS RX line truncated"));
         }
     }
 }
 
 size_t Esp32BleNus::write(uint8_t c) {
+    portENTER_CRITICAL(&s_txMux);
     size_t nextHead = (txHead_ + 1) % TX_BUF_SIZE;
-    if (nextHead == txTail_) return 0;  // Buffer full
+    if (nextHead == txTail_) {
+        portEXIT_CRITICAL(&s_txMux);
+        return 0;  // Buffer full
+    }
     txBuf_[txHead_] = c;
     txHead_ = nextHead;
+    portEXIT_CRITICAL(&s_txMux);
     return 1;
 }
 
@@ -123,6 +138,7 @@ size_t Esp32BleNus::write(const uint8_t* data, size_t size) {
 void Esp32BleNus::drainTxBuffer() {
     if (!connected_ || !txChar_ || txHead_ == txTail_) return;
 
+    portENTER_CRITICAL(&s_txMux);
     // Send up to one MTU-chunk per call
     size_t avail = (txHead_ >= txTail_)
         ? (txHead_ - txTail_)
@@ -136,6 +152,7 @@ void Esp32BleNus::drainTxBuffer() {
         chunk[i] = txBuf_[txTail_];
         txTail_ = (txTail_ + 1) % TX_BUF_SIZE;
     }
+    portEXIT_CRITICAL(&s_txMux);
 
     txChar_->setValue(chunk, chunkSize);
     txChar_->notify();

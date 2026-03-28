@@ -1910,6 +1910,10 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
             out_.println(F("[OTA] WiFi not connected"));
             return true;
         }
+        // WARNING: HTTP pull OTA has no TLS — firmware is fetched in plaintext.
+        // Only use on a trusted LAN. An attacker on the same network could MITM
+        // the connection and push arbitrary firmware.
+        out_.println(F("[OTA] WARNING: HTTP (no TLS) — trusted LAN only"));
         out_.print(F("[OTA] Pulling firmware from "));
         out_.println(url);
         WiFiClient client;

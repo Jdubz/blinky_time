@@ -196,7 +196,7 @@ class DeviceProtocol:
         if self._response_timer:
             self._response_timer.cancel()
         # Set new timer - finalize after silence gap (transport-dependent)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._response_timer = loop.call_later(
             self._line_timeout,
             self._finalize_response,

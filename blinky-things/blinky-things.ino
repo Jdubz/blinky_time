@@ -390,7 +390,9 @@ void setup() {
           console->handleCommand(line);
       }
   });
-  // TODO: Wire esp32BleNus as TeeStream secondary for NUS response output
+  // NOTE: BLE NUS TX not yet wired as TeeStream secondary — NUS connections
+  // can send commands (RX works) but responses are not echoed back over BLE.
+  // Wire esp32BleNus as a Print output alongside Serial to enable this.
   wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
   // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
@@ -400,6 +402,8 @@ void setup() {
   // Configure OTA callbacks once (begin() called when WiFi connects)
   ArduinoOTA.setHostname("blinky");
   ArduinoOTA.setPort(3232);
+  // OTA password is intentional plaintext — ArduinoOTA runs on trusted LAN only
+  // and the ESP32 MD5-hashes it before comparison (never sent in cleartext).
   ArduinoOTA.setPassword("blinkyota");
   ArduinoOTA.onStart([]() { Serial.println(F("[OTA] Start")); });
   ArduinoOTA.onEnd([]() { Serial.println(F("[OTA] Done, rebooting")); });
@@ -410,7 +414,7 @@ void setup() {
   if (wifiManager.hasCredentials()) {
       wifiManager.connect();
   }
-  SerialConsole::logDebug(F("WiFi (BLE disabled — NimBLE core 3.3.7 bug)"));
+  SerialConsole::logDebug(F("ESP32-S3 BLE + WiFi initialized"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
@@ -534,16 +538,18 @@ void loop() {
           WiFi.setSleep(false);
           WiFi.setTxPower(WIFI_POWER_19_5dBm);
           if (!servicesStarted) {
-              // First connection: start TCP server, mDNS, and OTA
-              MDNS.begin("blinky");
-              MDNS.addService("blinky", "tcp", 3333);  // Fleet discovery
+              // First connection: start TCP server
               tcpServer.begin();
-              ArduinoOTA.begin();
               servicesStarted = true;
-              Serial.print(F("[WiFi] Services started. OTA at "));
-              Serial.print(WiFi.localIP());
-              Serial.println(F(":3232"));
           }
+          // (Re)start mDNS and OTA on every reconnect — IP may have changed
+          MDNS.end();
+          MDNS.begin("blinky");
+          MDNS.addService("blinky", "tcp", 3333);  // Fleet discovery
+          ArduinoOTA.begin();
+          Serial.print(F("[WiFi] Services started. OTA at "));
+          Serial.print(WiFi.localIP());
+          Serial.println(F(":3232"));
           Serial.print(F("[WiFi] Connected: "));
           Serial.print(WiFi.localIP());
           Serial.print(F(" RSSI="));

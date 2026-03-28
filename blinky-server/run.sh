@@ -8,6 +8,7 @@
 #   ./run.sh status       Check if running
 #   ./run.sh logs         Attach to tmux session (Ctrl-B D to detach)
 #   ./run.sh restart      Stop + start
+#   ./run.sh start --no-ble --wifi-device 192.168.86.238:3333
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +17,8 @@ VENV="$SCRIPT_DIR/venv"
 LOG="/tmp/blinky-server.log"
 
 cmd="${1:-start}"
+shift 2>/dev/null || true  # Remove the command, forward remaining args
+EXTRA_ARGS="$*"  # Capture remaining args for embedding in tmux command
 
 case "$cmd" in
   stop)
@@ -39,7 +42,7 @@ case "$cmd" in
   restart)
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     sleep 1
-    exec "$0" start
+    exec "$0" start $EXTRA_ARGS
     ;;
 
   start)
@@ -60,7 +63,7 @@ case "$cmd" in
       cd '$SCRIPT_DIR'
       while true; do
         echo '=== blinky-server starting at \$(date) ===' | tee -a '$LOG'
-        '$VENV/bin/python' -m blinky_server \"\$@\" 2>&1 | tee -a '$LOG'
+        '$VENV/bin/python' -m blinky_server $EXTRA_ARGS 2>&1 | tee -a '$LOG'
         echo '=== crashed at \$(date), restarting in 3s ===' | tee -a '$LOG'
         sleep 3
       done

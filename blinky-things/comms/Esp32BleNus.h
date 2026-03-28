@@ -65,5 +65,4 @@ private:
     bool connected_ = false;
     uint16_t mtu_ = 20;
     uint32_t linesRx_ = 0;
-    uint32_t linesTx_ = 0;
 };

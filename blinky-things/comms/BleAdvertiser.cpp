@@ -35,6 +35,12 @@ bool BleAdvertiser::broadcast(BleProtocol::PacketType type,
         return false;
     }
 
+    // Skip broadcast if a NUS client is connected — stopping advertising
+    // would disrupt the active GATT connection (shared NimBLE advertising instance).
+    if (NimBLEDevice::getServer() && NimBLEDevice::getServer()->getConnectedCount() > 0) {
+        return false;
+    }
+
     if (len > BleProtocol::MAX_PAYLOAD) {
         Serial.print(F("[BLE] Payload too large: "));
         Serial.print(len);
@@ -83,7 +89,10 @@ void BleAdvertiser::buildAndSendPacket(BleProtocol::PacketType type,
     advertising_->setMaxInterval(0x40);  // 40ms
 
     advertising_->start();
-    delay(150);  // 3-7 packets at 20-40ms interval
+    // Blocking: NimBLE needs time to send 3-7 packets at the 20-40ms advertising
+    // interval configured above. Without this delay, stop() cancels before any
+    // packets are actually transmitted.
+    delay(150);
     advertising_->stop();
 
     packetsSent_++;
