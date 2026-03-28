@@ -64,6 +64,16 @@ class SerialTransport(Transport):
         self._protocol = protocol  # type: ignore[assignment]
         self._connected = True
 
+        # Toggle DTR to wake up TinyUSB CDC on nRF52840.
+        # After a previous connection closes, TinyUSB's CDC may be stuck in
+        # "disconnected" state where it silently drops output. Toggling DTR
+        # forces TinyUSB to reinitialize its connected state.
+        serial_obj = transport.serial
+        if hasattr(serial_obj, 'dtr'):
+            serial_obj.dtr = False
+            await asyncio.sleep(0.1)
+            serial_obj.dtr = True
+
         # Wait for device to be ready
         await asyncio.sleep(INIT_DELAY_S)
 

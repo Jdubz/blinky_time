@@ -37,11 +37,9 @@ void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
             if (coding.bit_rate == 1200) {
                 const uint8_t DFU_MAGIC_UF2 = 0x57;
 
-                // CRITICAL: Disable SoftDevice BEFORE writing GPREGRET.
-                // Without this, the SD's reset handler clears GPREGRET during
-                // NVIC_SystemReset(), causing the bootloader to boot the app
-                // instead of entering UF2 mode. This was the root cause of
-                // uf2_upload.py's 1200-baud touch consistently failing.
+                // Direct jump to bootloader (same as Adafruit BLEDfu).
+                // NVIC_SystemReset() passes through the MBR which races with
+                // GPREGRET writes. Direct jump preserves GPREGRET 100%.
                 uint8_t sd_en = 0;
                 sd_softdevice_is_enabled(&sd_en);
                 if (sd_en) {
@@ -49,9 +47,23 @@ void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
                     sd_power_gpregret_set(0, DFU_MAGIC_UF2);
                     sd_softdevice_disable();
                 }
-                // Write directly after SD is disabled
                 NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
-                NRFX_DELAY_US(1000);
+
+                // Disable all interrupts
+                for (int i = 0; i < 8; i++) {
+                    NVIC->ICER[i] = 0xFFFFFFFF;
+                    NVIC->ICPR[i] = 0xFFFFFFFF;
+                }
+
+                uint32_t bl = NRF_UICR->NRFFW[0];
+                if (bl != 0xFFFFFFFF) {
+                    __set_MSP(*((uint32_t *)bl));
+                    __set_CONTROL(0);
+                    __ISB();
+                    ((void (*)(void))(*((uint32_t *)(bl + 4))))();
+                }
+                // Fallback if UICR not set
+                __DSB(); __ISB();
                 NVIC_SystemReset();
             }
         }

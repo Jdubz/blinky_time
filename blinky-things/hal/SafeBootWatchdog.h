@@ -103,16 +103,25 @@ namespace SafeBootWatchdog {
         if (sd_en) {
             sd_power_gpregret_clr(0, 0xFF);
             sd_power_gpregret_set(0, DFU_MAGIC_UF2);
-            // Clear boot counter so new firmware gets a clean start
             sd_power_gpregret_clr(1, 0xFF);
-            // Disable SoftDevice before reset — without this, the SD's
-            // reset handler clears GPREGRET and the bootloader boots the
-            // app instead of entering UF2 mode.
             sd_softdevice_disable();
         }
         NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
         NRF_POWER->GPREGRET2 = 0;
-        NRFX_DELAY_US(1000);
+
+        // Direct jump to bootloader (same as Adafruit BLEDfu).
+        for (int i = 0; i < 8; i++) {
+            NVIC->ICER[i] = 0xFFFFFFFF;
+            NVIC->ICPR[i] = 0xFFFFFFFF;
+        }
+        uint32_t bl = NRF_UICR->NRFFW[0];
+        if (bl != 0xFFFFFFFF) {
+            __set_MSP(*((uint32_t *)bl));
+            __set_CONTROL(0);
+            __ISB();
+            ((void (*)(void))(*((uint32_t *)(bl + 4))))();
+        }
+        __DSB(); __ISB();
         NVIC_SystemReset();
     }
 

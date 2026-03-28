@@ -456,12 +456,12 @@ void loop() {
     audioController->update(dt);
   }
 
-  // Yield to SoftDevice after heavy audio processing.
-  // AudioTracker::update() includes Fourier tempogram (200-300ms blocking) and
-  // NN inference (~10ms), which starves BLE event processing. Without this yield,
-  // BLE connection negotiation times out and peers disconnect during service
-  // discovery. yield() processes queued SoftDevice events (~1-5ms).
-  yield();
+  // Give BLE task a chance to run after heavy audio processing.
+  // AudioTracker::update() includes Fourier tempogram (200-300ms blocking).
+  // NOTE: yield() is a NO-OP on the Adafruit nRF52 core (empty weak function).
+  // vTaskDelay(1) actually yields to FreeRTOS, letting the higher-priority
+  // Bluefruit BLE event task process pending SoftDevice events.
+  vTaskDelay(1);
 
   // Advance fake audio clock when enabled
   fakeAudio.update(dt);
@@ -527,9 +527,8 @@ void loop() {
     console->update();
   }
 
-  // Second yield point: after rendering + serial, before BLE processing.
-  // Ensures SoftDevice gets serviced even when rendering is heavy.
-  yield();
+  // Second yield: after rendering + serial, before BLE processing.
+  vTaskDelay(1);
 
   // Process wireless data
 #ifdef BLINKY_PLATFORM_NRF52840
