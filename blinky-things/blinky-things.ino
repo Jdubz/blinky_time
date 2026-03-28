@@ -87,7 +87,9 @@ BLEDfu bleDfu;                     // BLE DFU service (wireless firmware updates
 BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
 BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
 #elif defined(BLINKY_PLATFORM_ESP32S3)
+#include "comms/Esp32BleNus.h"
 BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
+Esp32BleNus esp32BleNus;           // BLE NUS peripheral (serial-over-BLE for fleet server)
 WifiManager wifiManager;           // WiFi credential storage and connection
 WifiCommandServer tcpServer;       // TCP command server for wireless fleet management
 #endif
@@ -381,6 +383,14 @@ void setup() {
   // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
   bleAdvertiser.begin();
   console->setBleAdvertiser(&bleAdvertiser);
+  // NUS peripheral — bidirectional serial-over-BLE (same as nRF52840 BleNus)
+  esp32BleNus.begin();
+  esp32BleNus.setLineCallback([](const char* line) {
+      if (console) {
+          console->handleCommand(line);
+      }
+  });
+  // TODO: Wire esp32BleNus as TeeStream secondary for NUS response output
   wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
   // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
@@ -511,6 +521,7 @@ void loop() {
   bleNus.update();       // NUS peripheral (serial-over-BLE)
   bleScanner.update();   // Fleet broadcast receiver
 #elif defined(BLINKY_PLATFORM_ESP32S3)
+  esp32BleNus.update();  // Drain BLE NUS TX buffer
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
   ArduinoOTA.handle();  // Non-blocking OTA check (~0.5ms)
   // Monitor WiFi and auto-reconnect
