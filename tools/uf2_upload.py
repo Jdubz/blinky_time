@@ -905,38 +905,40 @@ def trigger_bootloader(port, verbose=False):
 
         pre_existing_blocks = _get_usb_block_devices()
 
-        # Send 'bootloader' serial command
+        # Send 'bootloader' serial command.
+        # CRITICAL: Keep the port open between retries. Closing the port
+        # drops DTR which puts TinyUSB CDC in "disconnected" state. Once
+        # stuck, subsequent opens/commands get no response.
         if attempt == 1:
             print(f"  Trying serial command: bootloader")
-        ser = None
-        try:
-            ser = _serial_open_with_timeout(current_port, 115200, timeout=1)
-            time.sleep(0.1)
-            ser.reset_input_buffer()
-            ser.write(b'bootloader\n')
-            ser.flush()
-            time.sleep(0.1)
+            try:
+                ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
+                time.sleep(1)  # Wait for TinyUSB CDC to init
+            except (serial.SerialException, OSError) as e:
+                print(f"  Serial open error: {e}")
+                ser = None
+        if ser:
+            try:
+                ser.reset_input_buffer()
+                ser.write(b'bootloader\r\n')
+                ser.flush()
+                time.sleep(2)  # Give device time to process + reset
+            except (serial.SerialException, OSError, BrokenPipeError) as e:
+                print(f"  Serial write error (device may have reset): {e}")
 
-            if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
-                return device_serial
-
-            # Check if device disconnected but UF2 drive didn't appear.
-            # If so, the device may be stuck in a failed USB enumeration
-            # state. Skip the 1200 baud touch (port is dead) and go
-            # straight to recovery on the next attempt.
-            if not _device_port_exists(current_port):
-                print(f"  Device disconnected but UF2 drive not detected")
-                # Don't try 1200 baud touch — port is gone
-                continue
-
-        except (serial.SerialException, OSError) as e:
-            print(f"  Serial error: {e}")
-        finally:
-            if ser:
+            if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
                 try:
                     ser.close()
-                except (BrokenPipeError, OSError):
+                except Exception:
                     pass
+                return device_serial
+
+            if not _device_port_exists(current_port):
+                print(f"  Device disconnected but UF2 drive not detected")
+                ser = None  # Port is gone, don't try to close
+                continue
+        else:
+            print(f"  No serial connection available")
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on
