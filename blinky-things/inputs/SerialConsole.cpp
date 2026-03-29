@@ -15,7 +15,6 @@
 #ifdef BLINKY_PLATFORM_NRF52840
 #include "../comms/BleScanner.h"
 #include "../comms/BleNus.h"
-#include "../hal/Uf2BootloaderOverride.h"  // enterBootloaderDirect()
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -787,13 +786,18 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         delay(100);      // Brief delay for serial transmission
         {
 #ifdef ARDUINO_ARCH_NRF52
-            // enterBootloaderDirect() handles everything:
-            // 1. Disables SoftDevice (releases peripheral protection)
-            // 2. Writes GPREGRET AFTER SD cleanup (not before!)
-            // 3. Disables USB peripheral (so bootloader can reinit for mass storage)
-            // 4. Direct jump to bootloader (100% reliable GPREGRET)
-            // Works for both UF2 (0x57) and BLE DFU (0xA8).
-            enterBootloaderDirect(dfuMagic);
+            // Disable SD FIRST — releases peripheral protection and resets
+            // POWER peripheral (clears any prior GPREGRET writes).
+            // Then write GPREGRET AFTER SD cleanup, then reset.
+            uint8_t sd_en = 0;
+            sd_softdevice_is_enabled(&sd_en);
+            if (sd_en) {
+                sd_softdevice_disable();
+            }
+            __DSB(); __ISB();
+            NRF_POWER->GPREGRET = dfuMagic;
+            __DSB(); __ISB();
+            NVIC_SystemReset();
 #else
             NRF_POWER->GPREGRET = dfuMagic;
             NVIC_SystemReset();

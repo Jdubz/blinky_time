@@ -97,10 +97,7 @@ namespace SafeBootWatchdog {
      * USB interface for recovery.
      */
     inline void enterUf2Bootloader() {
-        // Use the shared direct-jump function from Uf2BootloaderOverride.h.
-        // This disables SD, writes GPREGRET AFTER SD cleanup, disables USB,
-        // and jumps directly to bootloader — 100% reliable GPREGRET.
-        // Also clear boot counter so new firmware gets a clean start.
+        const uint8_t DFU_MAGIC_UF2 = 0x57;
         uint8_t sd_en = 0;
         sd_softdevice_is_enabled(&sd_en);
         if (sd_en) {
@@ -108,8 +105,10 @@ namespace SafeBootWatchdog {
             sd_softdevice_disable();
         }
         __DSB(); __ISB();
-        NRF_POWER->GPREGRET2 = 0;  // Clear boot counter directly
-        enterBootloaderDirect(0x57);  // UF2 mass storage (defined in Uf2BootloaderOverride.h)
+        NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+        NRF_POWER->GPREGRET2 = 0;
+        __DSB(); __ISB();
+        NVIC_SystemReset();
     }
 
     /**
