@@ -70,30 +70,26 @@ async def upload_uf2(
         result["message"] = f"Firmware file not found: {firmware_path}"
         return result
 
-    # Send bootloader command via server's transport (port is already open,
-    # TinyUSB CDC is in good state). Then disconnect and let the tool handle
-    # UF2 detection + firmware copy. This avoids the DTR-drop-before-tool-opens
-    # issue that corrupts TinyUSB state.
-    progress("prepare", "Sending bootloader command...", 10)
+    # Disconnect transport WITHOUT dropping DTR. Setting DTR=True before
+    # close prevents TinyUSB CDC from entering "disconnected" state, so the
+    # tool can reopen the port cleanly.
+    progress("prepare", "Releasing serial port...", 10)
     try:
-        await transport.write_line("bootloader")
-        await asyncio.sleep(3)  # Wait for device to process + reset
-    except Exception as e:
-        log.debug("Bootloader command (device may have reset): %s", e)
-
-    try:
+        serial_obj = transport._serial_transport.serial if transport._serial_transport else None
+        if serial_obj and hasattr(serial_obj, 'dtr'):
+            serial_obj.dtr = True  # Keep DTR high to prevent TinyUSB CDC state corruption
         await transport.disconnect()
     except Exception:
         pass
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
 
-    # Run uf2_upload.py with --already-in-bootloader since we already
-    # sent the command. The tool handles UF2 detection, mount, copy.
+    # Let the tool handle EVERYTHING: bootloader entry (with retries),
+    # UF2 detection, firmware copy, verification.
     progress("upload", f"Running uf2_upload.py on {serial_port}...", 20)
     cmd = [
         "python3", str(tool),
         "--hex", firmware_path,
-        "--already-in-bootloader",
+        serial_port,
         "-v",
     ]
 
