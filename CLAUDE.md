@@ -455,17 +455,19 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - v82: v77 pattern memory (IOI histogram + bar histogram + onset buffer, ~200 lines, 10 params) replaced by pattern slot cache (4-slot LRU of PLP pattern digests, 5 params). Fisher's g removed (dead code). downbeat/beatInMeasure removed from AudioControl.
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
-**Wireless (March 27, 2026):**
-- ✅ BLE NUS on nRF52840 (Bluefruit52Lib, verified working via bleak)
-- ✅ BLE NUS on ESP32-S3 (NimBLE-Arduino 2.4.0, compiled, untested)
-- ✅ BLE Advertiser on ESP32-S3 (NimBLE 2.x API, verified working)
-- ✅ BLE DFU service on nRF52840 (app→bootloader transition verified)
-- ✅ WiFi TCP server on ESP32-S3 (non-blocking Core 1, verified)
-- ✅ WiFi OTA (ArduinoOTA + HTTP pull, code complete)
-- ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
-- ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
+**Wireless (March 28, 2026):**
+- ✅ BLE NUS bidirectional on nRF52840 (Print& refactor, all commands work over BLE)
+- ✅ BLE NUS bidirectional on ESP32-S3 (NUS TX wired, verified `show nn` over BLE)
+- ✅ Wireless-only mode (`--no-serial`, 6 devices managed via BLE only)
+- ✅ Server OTA: `POST /api/devices/{id}/ota` + `POST /api/fleet/ota` (delegates to uf2_upload.py)
+- ✅ BLE DFU protocol reverse-engineered (Legacy DFU SDK v11, START_DFU notification verified)
+- ✅ Platform detection via `json info` (`"platform":"nrf52840"` / `"esp32s3"`)
+- ✅ vTaskDelay(1) for BLE stability (yield() was no-op on Adafruit core)
+- ✅ StartNotify fix for reliable bleak notifications
+- ✅ Bootloader entry: sd_softdevice_disable → DSB/ISB → GPREGRET → NVIC_SystemReset
+- ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, dedup, REST API)
+- ⚠️ BLE DFU full transfer untested end-to-end (protocol verified, transfer pending)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
-- ✅ BLE DFU transfer: Legacy DFU (SDK v11) protocol working. START_DFU notification received (0x10 0x01 0x01). Key findings: write-without-response required for DFU Control, bootloader BLE addr = app+1, force StartNotify over AcquireNotify, GPREGRET=0xA8 for serial-triggered BLE DFU. Full transfer pending end-to-end test after physical device reset. OTA managed by blinky-server (`POST /api/devices/{id}/ota`).
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned (Not Started):**

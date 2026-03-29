@@ -875,6 +875,7 @@ def trigger_bootloader(port, verbose=False):
         print(f"  Warning: Could not determine USB hub location for {port}")
 
     current_port = port  # Track port across re-enumerations
+    ser = None  # Kept open across retries to avoid TinyUSB CDC DTR issues
 
     for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
         if attempt > 1:
@@ -906,39 +907,40 @@ def trigger_bootloader(port, verbose=False):
         pre_existing_blocks = _get_usb_block_devices()
 
         # Send 'bootloader' serial command.
-        # CRITICAL: Keep the port open between retries. Closing the port
-        # drops DTR which puts TinyUSB CDC in "disconnected" state. Once
-        # stuck, subsequent opens/commands get no response.
-        if attempt == 1:
-            print(f"  Trying serial command: bootloader")
+        # Open port ONCE and keep it open across retries. Each open/close
+        # cycle risks breaking TinyUSB CDC state (DTR drop on close).
+        # Only reopen if the port disappeared (device reset to different port).
+        if ser is None:
+            if attempt == 1:
+                print(f"  Trying serial command: bootloader")
             try:
                 ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
-                time.sleep(1)  # Wait for TinyUSB CDC to init
+                time.sleep(2)  # Wait for TinyUSB CDC to fully initialize
             except (serial.SerialException, OSError) as e:
                 print(f"  Serial open error: {e}")
-                ser = None
-        if ser:
-            try:
-                ser.reset_input_buffer()
-                ser.write(b'bootloader\r\n')
-                ser.flush()
-                time.sleep(2)  # Give device time to process + reset
-            except (serial.SerialException, OSError, BrokenPipeError) as e:
-                print(f"  Serial write error (device may have reset): {e}")
-
-            if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
-                try:
-                    ser.close()
-                except Exception:
-                    pass
-                return device_serial
-
-            if not _device_port_exists(current_port):
-                print(f"  Device disconnected but UF2 drive not detected")
-                ser = None  # Port is gone, don't try to close
                 continue
-        else:
-            print(f"  No serial connection available")
+
+        try:
+            ser.reset_input_buffer()
+            ser.write(b'bootloader\r\n')
+            ser.flush()
+            time.sleep(2)  # Give device time to process + reset
+        except (serial.SerialException, OSError, BrokenPipeError) as e:
+            print(f"  Serial write error: {e}")
+            ser = None  # Port dead, will reopen next attempt
+            continue
+
+        if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+            try:
+                ser.close()
+            except Exception:
+                pass
+            return device_serial
+
+        if not _device_port_exists(current_port):
+            print(f"  Device disconnected but UF2 drive not detected")
+            ser = None  # Port gone, will reopen after re-discovery
+            continue
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on
@@ -979,6 +981,12 @@ def trigger_bootloader(port, verbose=False):
 
         print(f"  UF2 drive not detected (attempt {attempt})")
 
+    # Clean up serial port
+    if ser:
+        try:
+            ser.close()
+        except Exception:
+            pass
     print(f"  ERROR: Bootloader entry failed after {MAX_BOOTLOADER_RETRIES} attempts")
     print(f"  Device did not enter UF2 mode (no block device appeared).")
     print(f"  Possible causes:")
