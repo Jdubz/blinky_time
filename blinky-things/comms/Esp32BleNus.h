@@ -34,7 +34,7 @@ public:
     size_t write(const uint8_t* data, size_t size) override;
 
     bool isConnected() const { return connected_; }
-    void printDiagnostics() const;
+    void printDiagnostics(Print& out) const;
 
 private:
     friend class NusServerCallbacks;

@@ -98,13 +98,13 @@ void BleAdvertiser::buildAndSendPacket(BleProtocol::PacketType type,
     packetsSent_++;
 }
 
-void BleAdvertiser::printDiagnostics() const {
-    Serial.print(F("[BLE] role=advertiser state="));
-    Serial.println(ready_ ? F("ready") : F("not_initialized"));
-    Serial.print(F("[BLE] packets_tx="));
-    Serial.print(packetsSent_);
-    Serial.print(F(" errors="));
-    Serial.println(errors_);
-    Serial.print(F("[BLE] next_seq="));
-    Serial.println(sequence_);
+void BleAdvertiser::printDiagnostics(Print& out) const {
+    out.print(F("[BLE] role=advertiser state="));
+    out.println(ready_ ? F("ready") : F("not_initialized"));
+    out.print(F("[BLE] packets_tx="));
+    out.print(packetsSent_);
+    out.print(F(" errors="));
+    out.println(errors_);
+    out.print(F("[BLE] next_seq="));
+    out.println(sequence_);
 }

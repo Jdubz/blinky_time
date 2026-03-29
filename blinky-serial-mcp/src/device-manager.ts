@@ -6,6 +6,7 @@
 import { SerialPort } from 'serialport';
 import { DeviceSession } from './device-session.js';
 import type { DeviceInfo } from './types.js';
+import { acquireSerialLock, releaseSerialLock, isSerialLocked } from './lib/serial-lock.js';
 
 export class DeviceManager {
   private sessions: Map<string, DeviceSession> = new Map();
@@ -18,6 +19,16 @@ export class DeviceManager {
 
   /** Connect to a device, creating a new session or returning existing */
   async connect(port: string): Promise<{ session: DeviceSession; deviceInfo: DeviceInfo }> {
+    // Check if port is locked by another tool (e.g., firmware flashing)
+    const lockStatus = isSerialLocked(port);
+    if (lockStatus.locked) {
+      const h = lockStatus.holder;
+      throw new Error(
+        `Port ${port} is locked by ${h?.tool ?? 'unknown'} ` +
+        `(purpose: ${h?.purpose ?? '?'}, pid: ${h?.pid ?? '?'})`
+      );
+    }
+
     const existing = this.sessions.get(port);
     if (existing && existing.getState().connected) {
       const info = existing.getState().deviceInfo;
@@ -25,6 +36,16 @@ export class DeviceManager {
       // Session exists but has no deviceInfo — clean up the orphaned session
       await existing.disconnect().catch(() => {});
       this.sessions.delete(port);
+    }
+
+    // Acquire lock BEFORE connecting to avoid TOCTOU race
+    if (!acquireSerialLock(port, 'mcp_session', 3600)) {
+      const status = isSerialLocked(port);
+      const h = status.holder;
+      throw new Error(
+        `Port ${port} is locked by ${h?.tool ?? 'unknown'} ` +
+        `(purpose: ${h?.purpose ?? '?'}, pid: ${h?.pid ?? '?'})`
+      );
     }
 
     const session = new DeviceSession(port);
@@ -37,6 +58,7 @@ export class DeviceManager {
       // Without this, a timed-out connect leaves an orphaned DeviceSession
       // with an open port that can never be reached by disconnect().
       await session.disconnect().catch(() => {});
+      releaseSerialLock(port);
       throw err;
     }
   }
@@ -50,12 +72,19 @@ export class DeviceManager {
       this.sessions.delete(port);
       await session.disconnect();
     }
+    releaseSerialLock(port);
   }
 
   /** Disconnect all devices */
   async disconnectAll(): Promise<void> {
-    for (const [, session] of this.sessions) {
-      await session.disconnect();
+    for (const [port, session] of this.sessions) {
+      try {
+        await session.disconnect();
+      } catch {
+        // Continue disconnecting remaining devices even if one fails
+      } finally {
+        releaseSerialLock(port);
+      }
     }
     this.sessions.clear();
   }

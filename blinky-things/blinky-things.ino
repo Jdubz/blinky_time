@@ -351,7 +351,7 @@ void setup() {
 
   // Initialize BLE (nRF52840 only)
 #ifdef BLINKY_PLATFORM_NRF52840
-  // Initialize SoftDevice with 1 peripheral connection (NUS) + observer (scanner)
+  // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
   Bluefruit.begin(1, 0);
   Bluefruit.setName("Blinky");
   Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
@@ -390,9 +390,9 @@ void setup() {
           console->handleCommand(line);
       }
   });
-  // NOTE: BLE NUS TX not yet wired as TeeStream secondary — NUS connections
-  // can send commands (RX works) but responses are not echoed back over BLE.
-  // Wire esp32BleNus as a Print output alongside Serial to enable this.
+  // Wire BLE NUS TX as TeeStream secondary — serial output goes to both
+  // USB Serial and BLE NUS, enabling bidirectional serial-over-BLE.
+  console->setEsp32BleNus(&esp32BleNus);
   wifiManager.begin();  // Loads stored credentials from NVS
   console->setWifiManager(&wifiManager);
   // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
@@ -455,6 +455,13 @@ void loop() {
   if (audioController) {
     audioController->update(dt);
   }
+
+  // Give BLE task a chance to run after heavy audio processing.
+  // AudioTracker::update() includes Fourier tempogram (200-300ms blocking).
+  // NOTE: yield() is a NO-OP on the Adafruit nRF52 core (empty weak function).
+  // vTaskDelay(1) actually yields to FreeRTOS, letting the higher-priority
+  // BLE event task process pending BLE stack events.
+  vTaskDelay(1);
 
   // Advance fake audio clock when enabled
   fakeAudio.update(dt);
@@ -519,6 +526,9 @@ void loop() {
   if (console) {
     console->update();
   }
+
+  // Second yield: after rendering + serial, before BLE processing.
+  vTaskDelay(1);
 
   // Process wireless data
 #ifdef BLINKY_PLATFORM_NRF52840

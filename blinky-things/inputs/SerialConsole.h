@@ -15,6 +15,7 @@ class ConfigStorage;
 class BleScanner;
 class BleNus;
 class BleAdvertiser;
+class Esp32BleNus;
 class WifiManager;
 class WifiCommandServer;
 class Fire;
@@ -175,6 +176,7 @@ public:
     void setBleNus(BleNus* nus);
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     void setBleAdvertiser(BleAdvertiser* adv) { bleAdvertiser_ = adv; }
+    void setEsp32BleNus(Esp32BleNus* nus);
     void setWifiManager(WifiManager* wifi) { wifiManager_ = wifi; }
     void setTcpServer(WifiCommandServer* tcp) { tcpServer_ = tcp; }
 #endif

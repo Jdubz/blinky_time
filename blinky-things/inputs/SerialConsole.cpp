@@ -17,6 +17,7 @@
 #include "../comms/BleNus.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
+#include "../comms/Esp32BleNus.h"
 #include "../comms/WifiManager.h"
 #include "../comms/WifiCommandServer.h"
 #ifdef BLINKY_PLATFORM_ESP32S3
@@ -84,6 +85,17 @@ void SerialConsole::setBleNus(BleNus* nus) {
     if (nus) {
         // Tee output to both USB Serial and BLE NUS
         out_.setSecondary(nus);  // BleNus is-a Print (writes to paced ring buffer)
+        settings_.setOutput(&out_);
+    } else {
+        out_.setSecondary(nullptr);
+        settings_.setOutput(&out_);
+    }
+}
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+void SerialConsole::setEsp32BleNus(Esp32BleNus* nus) {
+    if (nus) {
+        // Tee output to both USB Serial and BLE NUS
+        out_.setSecondary(nus);  // Esp32BleNus is-a Print (writes to paced ring buffer)
         settings_.setOutput(&out_);
     } else {
         out_.setSecondary(nullptr);
@@ -454,6 +466,14 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
     if (strcmp(cmd, "json info") == 0) {
         out_.print(F("{\"version\":\""));
         out_.print(F(BLINKY_VERSION_STRING));
+        out_.print(F("\",\"platform\":\""));
+#ifdef BLINKY_PLATFORM_NRF52840
+        out_.print(F("nrf52840"));
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+        out_.print(F("esp32s3"));
+#else
+        out_.print(F("unknown"));
+#endif
         out_.print(F("\""));
 
         // Device configuration status (v28+)
@@ -748,35 +768,41 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         return true;  // Never reached
     }
 
-    if (strcmp(cmd, "bootloader") == 0) {
+    // "bootloader" = UF2 mass storage mode (for USB firmware upload)
+    // "bootloader ble" = BLE OTA DFU mode (for wireless firmware upload)
+    if (strcmp(cmd, "bootloader") == 0 || strcmp(cmd, "bootloader ble") == 0) {
 #ifdef BLINKY_PLATFORM_NRF52840
-        out_.println(F("Entering UF2 bootloader..."));
+        // GPREGRET magic bytes for Adafruit nRF52 bootloader:
+        //   0x57 = UF2 mass storage mode (USB firmware upload)
+        //   0xA8 = BLE OTA DFU after soft reset (SD not initialized — correct
+        //          for our path since we call sd_softdevice_disable() before reset)
+        //   0xB1 = BLE OTA DFU app jump (SD already initialized — NOT our case)
+        const bool bleMode = (strcmp(cmd, "bootloader ble") == 0);
+        const uint8_t dfuMagic = bleMode ? 0xA8 : 0x57;
+        out_.print(F("Entering "));
+        out_.print(bleMode ? F("BLE DFU") : F("UF2"));
+        out_.println(F(" bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
-        // Set GPREGRET magic byte so the UF2 bootloader is entered on reset.
-        // The Seeed/Adafruit non-mbed nRF52 core uses the SoftDevice — writing
-        // GPREGRET directly is unreliable when the SoftDevice owns the POWER
-        // peripheral (it clears the register during reset). Use the SD API when
-        // the SoftDevice is active, otherwise write the register directly.
-        // The mbed core does not link the SoftDevice API, so the inner guard
-        // must remain as ARDUINO_ARCH_NRF52 (non-mbed core check).
         {
-            const uint8_t DFU_MAGIC_UF2 = 0x57;
 #ifdef ARDUINO_ARCH_NRF52
+            // Disable SD FIRST — releases peripheral protection and resets
+            // POWER peripheral (clears any prior GPREGRET writes).
+            // Then write GPREGRET AFTER SD cleanup, then reset.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
-                sd_power_gpregret_clr(0, 0xFF);
-                sd_power_gpregret_set(0, DFU_MAGIC_UF2);
-            } else {
-                NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+                sd_softdevice_disable();
             }
+            __DSB(); __ISB();
+            NRF_POWER->GPREGRET = dfuMagic;
+            __DSB(); __ISB();
+            NVIC_SystemReset();
 #else
-            // mbed core: SoftDevice API not available; write GPREGRET directly
-            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+            NRF_POWER->GPREGRET = dfuMagic;
+            NVIC_SystemReset();
 #endif
         }
-        NVIC_SystemReset();
 #else
         out_.println(F("UF2 bootloader not available on this platform"));
 #endif
@@ -798,10 +824,14 @@ bool SerialConsole::handleDeviceConfigCommand(const char* cmd) {
         return true;
     }
 
-    out_.println(F("Device configuration commands:"));
-    out_.println(F("  device show          - Display current device config"));
-    out_.println(F("  device upload <JSON> - Upload device config from JSON"));
-    out_.println(F("\nExample JSON at: devices/registry/README.md"));
+    // Only show help if the command actually starts with "device"
+    if (strncmp(cmd, "device", 6) == 0) {
+        out_.println(F("Device configuration commands:"));
+        out_.println(F("  device show          - Display current device config"));
+        out_.println(F("  device upload <JSON> - Upload device config from JSON"));
+        out_.println(F("\nExample JSON at: devices/registry/README.md"));
+        return true;
+    }
     return false;
 }
 
@@ -859,8 +889,8 @@ void SerialConsole::showDeviceConfig() {
     doc["sampleRate"] = cfg.sampleRate;
     doc["bufferSize"] = cfg.bufferSize;
 
-    // Serialize with pretty printing for readability
-    serializeJsonPretty(doc, Serial);
+    // Serialize through TeeStream (routes to Serial + BLE NUS)
+    serializeJsonPretty(doc, out_);
     out_.println();
 }
 
@@ -1710,10 +1740,10 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
     if (*arg == '\0') {
         // "ble" — show NUS and scanner status
         if (bleNus_) {
-            bleNus_->printDiagnostics();
+            bleNus_->printDiagnostics(out_);
         }
         if (bleScanner_) {
-            bleScanner_->printDiagnostics();
+            bleScanner_->printDiagnostics(out_);
         }
         if (!bleNus_ && !bleScanner_) {
             out_.println(F("[BLE] Not initialized"));
@@ -1723,7 +1753,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
 
     if (strcmp(arg, "nus") == 0) {
         if (bleNus_) {
-            bleNus_->printDiagnostics();
+            bleNus_->printDiagnostics(out_);
         } else {
             out_.println(F("[BLE] NUS not initialized"));
         }
@@ -1750,7 +1780,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
     if (*arg == '\0') {
         // "ble" — show advertiser status
         if (bleAdvertiser_) {
-            bleAdvertiser_->printDiagnostics();
+            bleAdvertiser_->printDiagnostics(out_);
         } else {
             out_.println(F("[BLE] Advertiser not initialized"));
         }
@@ -1759,7 +1789,7 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
 
     if (strcmp(arg, "status") == 0) {
         if (bleAdvertiser_) {
-            bleAdvertiser_->printDiagnostics();
+            bleAdvertiser_->printDiagnostics(out_);
         } else {
             out_.println(F("[BLE] Advertiser not initialized"));
         }
@@ -1949,7 +1979,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
-        audioCtrl_->getFrameOnsetNN().printDiagnostics();
+        audioCtrl_->getFrameOnsetNN().printDiagnostics(out_);
         return true;
     }
 

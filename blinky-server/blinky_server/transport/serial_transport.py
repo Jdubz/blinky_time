@@ -64,6 +64,16 @@ class SerialTransport(Transport):
         self._protocol = protocol  # type: ignore[assignment]
         self._connected = True
 
+        # Toggle DTR to wake up TinyUSB CDC on nRF52840.
+        # After a previous connection closes, TinyUSB's CDC may be stuck in
+        # "disconnected" state where it silently drops output. Toggling DTR
+        # forces TinyUSB to reinitialize its connected state.
+        serial_obj = transport.serial
+        if hasattr(serial_obj, 'dtr'):
+            serial_obj.dtr = False
+            await asyncio.sleep(0.1)
+            serial_obj.dtr = True
+
         # Wait for device to be ready
         await asyncio.sleep(INIT_DELAY_S)
 
@@ -92,6 +102,33 @@ class SerialTransport(Transport):
         if not self._serial_transport:
             raise ConnectionError(f"Not connected to {self._port}")
         self._serial_transport.write((line + "\n").encode("utf-8"))
+
+    async def trigger_bootloader(self) -> None:
+        """Enter UF2 bootloader via 1200-baud touch.
+
+        This is the most reliable bootloader entry method — it triggers
+        the TinyUSB CDC callback directly at interrupt level, avoiding
+        main loop timing issues. The firmware's Uf2BootloaderOverride
+        handles GPREGRET + direct jump to bootloader.
+        """
+        # Close existing async connection first
+        if self._serial_transport:
+            self._serial_transport.close()
+        self._serial_transport = None
+        self._protocol = None
+        self._connected = False
+
+        # Open at 1200 baud with DTR toggle (standard Arduino bootloader protocol)
+        import serial
+        try:
+            with serial.Serial(self._port, 1200, dsrdtr=False) as s:
+                s.dtr = True
+                await asyncio.sleep(0.05)
+                s.dtr = False
+        except Exception as e:
+            log.debug("1200-baud touch: %s (expected if device reset fast)", e)
+
+        log.info("1200-baud touch sent to %s", self._port)
 
     def on_line(self, callback: Callable[[str], None]) -> None:
         self._line_callback = callback

@@ -127,6 +127,11 @@ class Device:
         self.configured = dev.get("configured", False)
         self.safe_mode = dev.get("safeMode", False)
 
+        # Detect platform from firmware's json info response
+        platform = info.get("platform")
+        if platform and platform != "unknown":
+            self.platform = platform
+
     def _route_stream_line(self, line: str) -> None:
         """Parse a streaming JSON line and fan out to subscribers."""
         try:

@@ -162,6 +162,9 @@ public:
         inferCount_++;
 
         if (profileEnabled_ && (inferCount_ % 100 == 0)) {
+            // Profiling output goes to Serial directly — this runs in the
+            // hot audio path (~62.5 Hz) and cannot take a Print& parameter.
+            // Profile data is developer-only and not routed to BLE/WiFi.
             Serial.print(F("[NNPROF] cnt="));
             Serial.print(inferCount_);
             Serial.print(F(" infer="));
@@ -194,59 +197,59 @@ public:
     uint32_t getInferCount() const { return inferCount_; }
     uint32_t getInvokeErrors() const { return invokeErrors_; }
 
-    /** Print diagnostic info to Serial. */
-    void printDiagnostics() const {
-        Serial.print(F("[NN] ready="));
-        Serial.print(ready_ ? F("yes") : F("no"));
+    /** Print diagnostic info to the given output stream. */
+    void printDiagnostics(Print& out) const {
+        out.print(F("[NN] ready="));
+        out.print(ready_ ? F("yes") : F("no"));
         if (ready_) {
-            Serial.print(F(" arena="));
-            Serial.print(arenaUsed_);
-            Serial.print(F("/"));
-            Serial.print(ARENA_SIZE);
-            Serial.print(F(" window="));
-            Serial.print(windowFrames_);
-            Serial.print(F(" outputs="));
-            Serial.print(outputChannels_);
-            Serial.print(F(" infer="));
-            Serial.print(lastInferUs_);
-            Serial.print(F("us cnt="));
-            Serial.print(inferCount_);
+            out.print(F(" arena="));
+            out.print(arenaUsed_);
+            out.print(F("/"));
+            out.print(ARENA_SIZE);
+            out.print(F(" window="));
+            out.print(windowFrames_);
+            out.print(F(" outputs="));
+            out.print(outputChannels_);
+            out.print(F(" infer="));
+            out.print(lastInferUs_);
+            out.print(F("us cnt="));
+            out.print(inferCount_);
             if (invokeErrors_ > 0) {
-                Serial.print(F(" ERRORS="));
-                Serial.print(invokeErrors_);
+                out.print(F(" ERRORS="));
+                out.print(invokeErrors_);
             }
-            Serial.print(F("\n  iscale="));
-            Serial.print(input_->params.scale, 8);
-            Serial.print(F(" izp="));
-            Serial.print(input_->params.zero_point);
-            Serial.print(F(" oscale="));
-            Serial.print(output_->params.scale, 8);
-            Serial.print(F(" ozp="));
-            Serial.print(output_->params.zero_point);
-            Serial.print(F("\n  onset="));
-            Serial.print(lastOnset_, 4);
+            out.print(F("\n  iscale="));
+            out.print(input_->params.scale, 8);
+            out.print(F(" izp="));
+            out.print(input_->params.zero_point);
+            out.print(F(" oscale="));
+            out.print(output_->params.scale, 8);
+            out.print(F(" ozp="));
+            out.print(output_->params.zero_point);
+            out.print(F("\n  onset="));
+            out.print(lastOnset_, 4);
             if (input_->type == kTfLiteInt8 && windowFilled_ >= windowFrames_) {
                 int lastFrameStart = (windowFrames_ - 1) * inputFeatures_;
-                Serial.print(F("\n  last_mel=["));
-                Serial.print(windowBuffer_[lastFrameStart], 4);
-                Serial.print(F(","));
-                Serial.print(windowBuffer_[lastFrameStart + 1], 4);
-                Serial.print(F(",...,"));
-                Serial.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS - 1], 4);
-                Serial.print(F("]"));
+                out.print(F("\n  last_mel=["));
+                out.print(windowBuffer_[lastFrameStart], 4);
+                out.print(F(","));
+                out.print(windowBuffer_[lastFrameStart + 1], 4);
+                out.print(F(",...,"));
+                out.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS - 1], 4);
+                out.print(F("]"));
                 if (useDelta_) {
-                    Serial.print(F(" delta=["));
-                    Serial.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS], 4);
-                    Serial.print(F(",...,"));
-                    Serial.print(windowBuffer_[lastFrameStart + inputFeatures_ - 1], 4);
-                    Serial.print(F("]"));
+                    out.print(F(" delta=["));
+                    out.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS], 4);
+                    out.print(F(",...,"));
+                    out.print(windowBuffer_[lastFrameStart + inputFeatures_ - 1], 4);
+                    out.print(F("]"));
                 }
             }
         } else {
-            Serial.print(F(" error="));
-            Serial.print(initError_);
+            out.print(F(" error="));
+            out.print(initError_);
         }
-        Serial.println();
+        out.println();
     }
 
 private:

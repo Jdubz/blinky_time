@@ -34,7 +34,7 @@ public:
     bool isActive() const { return active_; }
     uint32_t getUptimeMs() const { return active_ ? (millis() - startMs_) : 0; }
 
-    void printDiagnostics() const;
+    void printDiagnostics(Print& out) const;
 
 private:
     static void scanCallback(ble_gap_evt_adv_report_t* report);

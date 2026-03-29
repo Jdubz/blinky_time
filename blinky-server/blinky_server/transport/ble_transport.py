@@ -62,8 +62,13 @@ class BleTransport(Transport):
         self._mtu = self._client.mtu_size - 3  # ATT overhead
         log.info("BLE connected: %s (MTU %d)", self._address, self._mtu)
 
-        # Subscribe to NUS TX notifications (device → host)
-        await self._client.start_notify(NUS_TX_UUID, self._on_notification)
+        # Subscribe to NUS TX notifications (device → host).
+        # Force StartNotify over AcquireNotify — bleak 3.x defaults to
+        # AcquireNotify which drops notifications from some peripherals.
+        await self._client.start_notify(
+            NUS_TX_UUID, self._on_notification,
+            bluez={"use_start_notify": True},
+        )
 
         self._connected = True
 
@@ -128,6 +133,7 @@ class BleTransport(Transport):
         Notifications may split across MTU boundaries. Reassemble into
         complete lines and dispatch via callback.
         """
+        log.info("BLE RX %s: %d bytes", self._address[:12], len(data))
         self._rx_buf += bytes(data)
         while b"\n" in self._rx_buf:
             line, self._rx_buf = self._rx_buf.split(b"\n", 1)

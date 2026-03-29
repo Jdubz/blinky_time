@@ -4,9 +4,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ..device.device import Device
+from ..device.device import Device, DeviceState
 from .deps import get_fleet
-from .models import CommandResponse, DeviceResponse, SettingValueRequest, StatusResponse
+from .models import (
+    CommandResponse, DeviceResponse, OtaRequest, OtaResponse,
+    ReleaseRequest, SettingValueRequest, StatusResponse,
+)
 
 router = APIRouter(tags=["devices"])
 
@@ -76,9 +79,10 @@ async def restore_defaults(device_id: str) -> CommandResponse:
 
 
 @router.post("/devices/{device_id}/release")
-async def release_device(device_id: str) -> StatusResponse:
+async def release_device(device_id: str, body: ReleaseRequest | None = None) -> StatusResponse:
     """Release a device (e.g., for firmware flashing)."""
-    ok = await get_fleet().release_device(device_id)
+    hold_seconds = body.hold_seconds if body else None
+    ok = await get_fleet().release_device(device_id, hold_seconds=hold_seconds)
     if not ok:
         raise HTTPException(404, f"Device not found: {device_id}")
     return StatusResponse(status="released")
@@ -91,3 +95,84 @@ async def reconnect_device(device_id: str) -> StatusResponse:
     if not ok:
         raise HTTPException(500, f"Failed to reconnect: {device_id}")
     return StatusResponse(status="connected")
+
+
+@router.post("/devices/{device_id}/ota")
+async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
+    """Upload firmware to a device via OTA (UF2 for serial, BLE DFU for BLE).
+
+    The server handles the entire flow:
+    1. Sends bootloader command via its existing transport
+    2. Disconnects the transport
+    3. Detects UF2 drive / establishes BLE DFU connection
+    4. Copies firmware / performs DFU transfer
+    5. Waits for device to reboot
+    6. Reconnects automatically via fleet manager
+
+    No port contention — the server owns the connection throughout.
+    """
+    from pathlib import Path
+
+    device = _get_device_or_404(device_id)
+
+    if device.state != DeviceState.CONNECTED:
+        raise HTTPException(409, f"Device not connected (state={device.state.value})")
+
+    # Validate firmware path — restrict to allowed directories
+    firmware = Path(body.firmware_path).resolve()
+    allowed_dirs = [Path("/tmp"), Path.home()]
+    if not any(firmware.is_relative_to(d) for d in allowed_dirs):
+        raise HTTPException(400, f"Firmware path not in allowed directory: {firmware}")
+    if not firmware.is_file():
+        raise HTTPException(400, f"Firmware file not found: {firmware}")
+
+    transport_type = device.transport.transport_type
+    platform = device.platform
+
+    if platform != "nrf52840":
+        raise HTTPException(400, f"OTA not yet supported for platform: {platform}")
+
+    fleet = get_fleet()
+
+    if transport_type == "serial":
+        from ..ota.uf2_upload import upload_uf2
+
+        # Blackout auto-reconnect while we do the upload
+        fleet.hold_reconnect(device_id, 120)
+        try:
+            result = await upload_uf2(
+                serial_port=device.port,
+                firmware_path=str(firmware),
+                transport=device.transport,
+                protocol=device.protocol,
+            )
+        finally:
+            # Always clear blackout — fleet manager will auto-reconnect on next cycle
+            fleet.resume_reconnect(device_id)
+
+        if result["status"] == "ok":
+            return OtaResponse(**result)
+        else:
+            raise HTTPException(500, result["message"])
+
+    elif transport_type == "ble":
+        from ..ota.ble_dfu import upload_ble_dfu
+
+        fleet.hold_reconnect(device_id, 180)
+        try:
+            result = await upload_ble_dfu(
+                app_ble_address=device.port,  # BLE address is stored as port
+                dfu_zip_path=str(firmware),
+                # BLE devices don't have serial — bootloader entry via BLE DFU trigger
+                enter_bootloader_via_serial=None,
+            )
+        finally:
+            fleet.resume_reconnect(device_id)
+
+        if result["status"] == "ok":
+            return OtaResponse(**result)
+        else:
+            raise HTTPException(500, result["message"])
+
+    else:
+        raise HTTPException(400, f"OTA not supported for transport: {transport_type}")

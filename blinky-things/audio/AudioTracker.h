@@ -13,7 +13,7 @@ struct FrameOnsetNN {
     float infer(const float*)                       { return 0.0f; }
     float getLastOnset() const                       { return 0.0f; }
     void setProfileEnabled(bool)                    {}
-    void printDiagnostics() const                   {}
+    void printDiagnostics(Print&) const              {}
 };
 #endif
 

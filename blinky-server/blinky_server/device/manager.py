@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time as _time
 
 from ..transport.base import Transport
 from ..transport.discovery import DiscoveredDevice, discover_all, discover_serial_devices
@@ -40,6 +41,7 @@ class FleetManager:
     def __init__(
         self,
         enable_ble: bool = True,
+        enable_serial: bool = True,
         ble_timeout: float = 5.0,
         wifi_hosts: list[dict] | None = None,
     ) -> None:
@@ -47,10 +49,13 @@ class FleetManager:
         self._discovery_task: asyncio.Task[None] | None = None
         self._running = False
         self._enable_ble = enable_ble
+        self._enable_serial = enable_serial
         self._ble_timeout = ble_timeout
         self._wifi_hosts = wifi_hosts or []
         # Track discovery metadata for reconnection
         self._device_discovery: dict[str, DiscoveredDevice] = {}
+        # In-memory reconnect blackout (device_id -> monotonic deadline)
+        self._reconnect_blackout: dict[str, float] = {}
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -88,13 +93,30 @@ class FleetManager:
         self._device_discovery.clear()
         log.info("Fleet manager stopped")
 
-    async def release_device(self, device_id: str) -> bool:
-        """Temporarily release a device (e.g., for firmware flashing)."""
+    def hold_reconnect(self, device_id: str, seconds: float) -> None:
+        """Prevent auto-reconnect for a device for the given duration."""
+        self._reconnect_blackout[device_id] = _time.monotonic() + seconds
+
+    def resume_reconnect(self, device_id: str) -> None:
+        """Clear reconnect blackout for a device, allowing auto-reconnect."""
+        self._reconnect_blackout.pop(device_id, None)
+
+    async def release_device(self, device_id: str,
+                             hold_seconds: int | None = None) -> bool:
+        """Temporarily release a device (e.g., for firmware flashing).
+
+        If hold_seconds is set, the device won't be auto-reconnected for
+        that duration (in-memory blackout). The caller should also acquire
+        a serial lock file for cross-process coordination.
+        """
         device = self.get_device(device_id)
         if not device:
             return False
         await device.disconnect()
-        log.info("Released device %s on %s", device_id[:12], device.port)
+        if hold_seconds is not None:
+            self.hold_reconnect(device_id, hold_seconds)
+        log.info("Released device %s on %s (hold=%ss)",
+                 device_id[:12], device.port, hold_seconds)
         return True
 
     async def reconnect_device(self, device_id: str) -> bool:
@@ -149,6 +171,7 @@ class FleetManager:
     async def _discover_and_connect(self) -> None:
         """Discover devices across all transports and connect to new ones."""
         discovered = await discover_all(
+            serial_scan=self._enable_serial,
             ble_scan=self._enable_ble,
             ble_timeout=self._ble_timeout,
             wifi_hosts=self._wifi_hosts,
@@ -168,6 +191,15 @@ class FleetManager:
                     )
                     existing.port = disc.address
                 continue
+
+            # Skip locked serial ports (e.g., firmware flashing in progress)
+            if disc.transport_type == "serial":
+                from ..transport.serial_lock import is_locked
+                locked, _ = is_locked(disc.address)
+                if locked:
+                    log.debug("Skipping discovery connect for %s — port locked",
+                              device_id[:12])
+                    continue
 
             # New device - connect
             try:
@@ -233,13 +265,31 @@ class FleetManager:
 
     async def _reconnect_disconnected(self) -> None:
         """Try to reconnect any devices in error/disconnected state."""
+        from ..transport.serial_lock import is_locked
+
         for device_id, device in self._devices.items():
             if device.state not in (DeviceState.DISCONNECTED, DeviceState.ERROR):
                 continue
 
+            # Check in-memory blackout (set by release_device with hold_seconds)
+            blackout = self._reconnect_blackout.get(device_id)
+            if blackout:
+                if _time.monotonic() < blackout:
+                    continue
+                del self._reconnect_blackout[device_id]
+
             disc = self._device_discovery.get(device_id)
             if not disc:
                 continue
+
+            # Check serial port lock file (cross-process coordination)
+            if disc.transport_type == "serial":
+                locked, holder = is_locked(disc.address)
+                if locked:
+                    log.debug("Skipping reconnect for %s — port locked by %s",
+                              device_id[:12],
+                              holder.get("tool") if holder else "unknown")
+                    continue
 
             try:
                 transport = _create_transport(disc)
