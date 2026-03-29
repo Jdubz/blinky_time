@@ -98,15 +98,19 @@ namespace SafeBootWatchdog {
      */
     inline void enterUf2Bootloader() {
         const uint8_t DFU_MAGIC_UF2 = 0x57;
+        // Write GPREGRET via SoftDevice API while SD is still enabled.
+        // Do NOT call sd_softdevice_disable() — it resets the POWER
+        // peripheral which can clear GPREGRET.
         uint8_t sd_en = 0;
         sd_softdevice_is_enabled(&sd_en);
         if (sd_en) {
-            sd_power_gpregret_clr(1, 0xFF);  // Clear boot counter via SD API
-            sd_softdevice_disable();
+            sd_power_gpregret_clr(0, 0xFF);
+            sd_power_gpregret_set(0, DFU_MAGIC_UF2);
+            sd_power_gpregret_clr(1, 0xFF);  // Clear boot counter
+        } else {
+            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+            NRF_POWER->GPREGRET2 = 0;
         }
-        __DSB(); __ISB();
-        NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
-        NRF_POWER->GPREGRET2 = 0;
         __DSB(); __ISB();
         NVIC_SystemReset();
     }

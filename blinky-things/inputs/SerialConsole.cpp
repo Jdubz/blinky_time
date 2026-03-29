@@ -786,16 +786,18 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         delay(100);      // Brief delay for serial transmission
         {
 #ifdef ARDUINO_ARCH_NRF52
-            // Disable SD FIRST — releases peripheral protection and resets
-            // POWER peripheral (clears any prior GPREGRET writes).
-            // Then write GPREGRET AFTER SD cleanup, then reset.
+            // Write GPREGRET via SoftDevice API while SD is still enabled.
+            // Do NOT call sd_softdevice_disable() — it resets the POWER
+            // peripheral which can clear GPREGRET. The MBR handles SD state.
+            // This matches Nordic's own buttonless DFU implementation.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
-                sd_softdevice_disable();
+                sd_power_gpregret_clr(0, 0xFF);
+                sd_power_gpregret_set(0, dfuMagic);
+            } else {
+                NRF_POWER->GPREGRET = dfuMagic;
             }
-            __DSB(); __ISB();
-            NRF_POWER->GPREGRET = dfuMagic;
             __DSB(); __ISB();
             NVIC_SystemReset();
 #else

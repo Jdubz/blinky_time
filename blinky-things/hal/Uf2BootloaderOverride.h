@@ -3,13 +3,12 @@
  * Uf2BootloaderOverride.h - Enter UF2 bootloader on 1200-baud touch
  *
  * Overrides TinyUSB's weak tud_cdc_line_state_cb. On 1200-baud DTR drop,
- * disables SoftDevice, writes GPREGRET=0x57, and resets. The GPREGRET
- * write is AFTER sd_softdevice_disable() because the disable resets the
- * POWER peripheral (documented side effect) which clears any prior writes.
+ * writes GPREGRET=0x57 via the SoftDevice API (while SD is still enabled)
+ * then resets. Do NOT call sd_softdevice_disable() — it resets the POWER
+ * peripheral which can clear GPREGRET. The MBR handles SD state after reset.
  *
- * This is intermittent (~50-80% success) due to MBR interaction with
- * GPREGRET during reset. The upload tool (uf2_upload.py) retries up to
- * 5 times to compensate.
+ * This matches Nordic's own buttonless DFU implementation in nRF5 SDK:
+ * sd_power_gpregret_clr() + sd_power_gpregret_set() + NVIC_SystemReset().
  */
 
 #ifdef ARDUINO_ARCH_NRF52
@@ -35,20 +34,19 @@ void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
             if (coding.bit_rate == 1200) {
                 const uint8_t DFU_MAGIC_UF2 = 0x57;
 
-                // 1. Disable SoftDevice FIRST — releases peripheral protection
-                //    and resets POWER peripheral (clears any prior GPREGRET writes)
+                // Write GPREGRET via SoftDevice API while SD is still enabled.
+                // Do NOT call sd_softdevice_disable() — it resets the POWER
+                // peripheral (documented: "reserved peripherals are reset upon
+                // SoftDevice disable") which can clear GPREGRET.
+                // The MBR/bootloader handles SD state after reset.
                 uint8_t sd_en = 0;
                 sd_softdevice_is_enabled(&sd_en);
                 if (sd_en) {
-                    sd_softdevice_disable();
+                    sd_power_gpregret_clr(0, 0xFF);
+                    sd_power_gpregret_set(0, DFU_MAGIC_UF2);
+                } else {
+                    NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
                 }
-
-                // 2. Write GPREGRET AFTER SD disable completes
-                __DSB();
-                __ISB();
-                NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
-
-                // 3. Ensure write commits before reset
                 __DSB();
                 __ISB();
                 NVIC_SystemReset();
