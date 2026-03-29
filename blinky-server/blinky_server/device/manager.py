@@ -93,6 +93,14 @@ class FleetManager:
         self._device_discovery.clear()
         log.info("Fleet manager stopped")
 
+    def hold_reconnect(self, device_id: str, seconds: float) -> None:
+        """Prevent auto-reconnect for a device for the given duration."""
+        self._reconnect_blackout[device_id] = _time.monotonic() + seconds
+
+    def resume_reconnect(self, device_id: str) -> None:
+        """Clear reconnect blackout for a device, allowing auto-reconnect."""
+        self._reconnect_blackout.pop(device_id, None)
+
     async def release_device(self, device_id: str,
                              hold_seconds: int | None = None) -> bool:
         """Temporarily release a device (e.g., for firmware flashing).
@@ -105,8 +113,8 @@ class FleetManager:
         if not device:
             return False
         await device.disconnect()
-        if hold_seconds:
-            self._reconnect_blackout[device_id] = _time.monotonic() + hold_seconds
+        if hold_seconds is not None:
+            self.hold_reconnect(device_id, hold_seconds)
         log.info("Released device %s on %s (hold=%ss)",
                  device_id[:12], device.port, hold_seconds)
         return True

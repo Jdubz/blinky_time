@@ -59,11 +59,15 @@ async def fleet_ota(body: OtaRequest) -> dict:
     Flashes each device one at a time to avoid USB contention.
     Returns per-device results.
     """
-    import os
-    import time
+    from pathlib import Path
 
-    if not os.path.isfile(body.firmware_path):
-        raise HTTPException(400, f"Firmware file not found: {body.firmware_path}")
+    # Validate firmware path — restrict to allowed directories
+    firmware = Path(body.firmware_path).resolve()
+    allowed_dirs = [Path("/tmp"), Path.home()]
+    if not any(firmware.is_relative_to(d) for d in allowed_dirs):
+        raise HTTPException(400, f"Firmware path not in allowed directory: {firmware}")
+    if not firmware.is_file():
+        raise HTTPException(400, f"Firmware file not found: {firmware}")
 
     fleet = get_fleet()
     devices = [d for d in fleet.get_all_devices()
@@ -78,14 +82,14 @@ async def fleet_ota(body: OtaRequest) -> dict:
                  device.id[:12], device.port, device.transport.transport_type)
 
         transport_type = device.transport.transport_type
-        fleet._reconnect_blackout[device.id] = time.monotonic() + 120
+        fleet.hold_reconnect(device.id, 120)
 
         try:
             if transport_type == "serial":
                 from ..ota.uf2_upload import upload_uf2
                 result = await upload_uf2(
                     serial_port=device.port,
-                    firmware_path=body.firmware_path,
+                    firmware_path=str(firmware),
                     transport=device.transport,
                     protocol=device.protocol,
                 )
@@ -93,7 +97,7 @@ async def fleet_ota(body: OtaRequest) -> dict:
                 from ..ota.ble_dfu import upload_ble_dfu
                 result = await upload_ble_dfu(
                     app_ble_address=device.port,
-                    dfu_zip_path=body.firmware_path,
+                    dfu_zip_path=str(firmware),
                 )
             else:
                 result = {"status": "skip", "message": f"Unsupported transport: {transport_type}"}
@@ -102,7 +106,7 @@ async def fleet_ota(body: OtaRequest) -> dict:
         except Exception as e:
             results[device.id[:12]] = {"status": "error", "message": str(e)}
         finally:
-            fleet._reconnect_blackout.pop(device.id, None)
+            fleet.resume_reconnect(device.id)
 
         # Brief pause between devices for USB stability
         await asyncio.sleep(3)
@@ -112,5 +116,5 @@ async def fleet_ota(body: OtaRequest) -> dict:
     return {
         "status": "ok" if ok_count == total else "partial",
         "message": f"{ok_count}/{total} devices updated",
-        "results": results,
+        "per_device": results,
     }

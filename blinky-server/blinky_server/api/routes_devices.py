@@ -111,15 +111,20 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     No port contention — the server owns the connection throughout.
     """
-    import os
+    from pathlib import Path
+
     device = _get_device_or_404(device_id)
 
     if device.state != DeviceState.CONNECTED:
         raise HTTPException(409, f"Device not connected (state={device.state.value})")
 
-    # Validate firmware path
-    if not os.path.isfile(body.firmware_path):
-        raise HTTPException(400, f"Firmware file not found: {body.firmware_path}")
+    # Validate firmware path — restrict to allowed directories
+    firmware = Path(body.firmware_path).resolve()
+    allowed_dirs = [Path("/tmp"), Path.home()]
+    if not any(firmware.is_relative_to(d) for d in allowed_dirs):
+        raise HTTPException(400, f"Firmware path not in allowed directory: {firmware}")
+    if not firmware.is_file():
+        raise HTTPException(400, f"Firmware file not found: {firmware}")
 
     transport_type = device.transport.transport_type
     platform = device.platform
@@ -127,22 +132,23 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     if platform != "nrf52840":
         raise HTTPException(400, f"OTA not yet supported for platform: {platform}")
 
+    fleet = get_fleet()
+
     if transport_type == "serial":
         from ..ota.uf2_upload import upload_uf2
 
         # Blackout auto-reconnect while we do the upload
-        fleet = get_fleet()
-        fleet._reconnect_blackout[device_id] = __import__("time").monotonic() + 120
-
-        result = await upload_uf2(
-            serial_port=device.port,
-            firmware_path=body.firmware_path,
-            transport=device.transport,
-            protocol=device.protocol,
-        )
-
-        # Clear blackout — fleet manager will auto-reconnect on next cycle
-        fleet._reconnect_blackout.pop(device_id, None)
+        fleet.hold_reconnect(device_id, 120)
+        try:
+            result = await upload_uf2(
+                serial_port=device.port,
+                firmware_path=str(firmware),
+                transport=device.transport,
+                protocol=device.protocol,
+            )
+        finally:
+            # Always clear blackout — fleet manager will auto-reconnect on next cycle
+            fleet.resume_reconnect(device_id)
 
         if result["status"] == "ok":
             return OtaResponse(**result)
@@ -152,17 +158,16 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     elif transport_type == "ble":
         from ..ota.ble_dfu import upload_ble_dfu
 
-        fleet = get_fleet()
-        fleet._reconnect_blackout[device_id] = __import__("time").monotonic() + 180
-
-        result = await upload_ble_dfu(
-            app_ble_address=device.port,  # BLE address is stored as port
-            dfu_zip_path=body.firmware_path,
-            # BLE devices don't have serial — bootloader entry via BLE DFU trigger
-            enter_bootloader_via_serial=None,
-        )
-
-        fleet._reconnect_blackout.pop(device_id, None)
+        fleet.hold_reconnect(device_id, 180)
+        try:
+            result = await upload_ble_dfu(
+                app_ble_address=device.port,  # BLE address is stored as port
+                dfu_zip_path=str(firmware),
+                # BLE devices don't have serial — bootloader entry via BLE DFU trigger
+                enter_bootloader_via_serial=None,
+            )
+        finally:
+            fleet.resume_reconnect(device_id)
 
         if result["status"] == "ok":
             return OtaResponse(**result)

@@ -32,7 +32,8 @@ DFU_CONTROL_UUID = "00001531-1212-efde-1523-785feabcd123"
 DFU_PACKET_UUID = "00001532-1212-efde-1523-785feabcd123"
 DFU_REVISION_UUID = "00001534-1212-efde-1523-785feabcd123"
 
-PRN_INTERVAL = 8  # Packet Receipt Notification interval (max 8 for Adafruit bootloader)
+PRN_INTERVAL = 8  # Packet Receipt Notification interval (0-65535, max 8 recommended for Adafruit bootloader)
+assert 0 <= PRN_INTERVAL <= 65535, f"PRN_INTERVAL must be 0-65535, got {PRN_INTERVAL}"
 
 
 def bootloader_address(app_address: str) -> str:
@@ -43,17 +44,29 @@ def bootloader_address(app_address: str) -> str:
     return ':'.join(parts)
 
 
+def _validate_ble_address(address: str) -> None:
+    """Validate BLE address format (XX:XX:XX:XX:XX:XX)."""
+    import re
+    if not re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', address):
+        raise ValueError(f"Invalid BLE address format: {address!r}")
+
+
 def clear_bluez_state(address: str):
     """Clear BlueZ GATT cache for an address. Required between app/bootloader."""
+    _validate_ble_address(address)
     addr_u = address.replace(':', '_')
-    subprocess.run(f"echo 'remove {address}' | bluetoothctl",
-                   shell=True, capture_output=True, timeout=5)
-    subprocess.run(f"sudo rm -rf /var/lib/bluetooth/*/cache/{addr_u}",
-                   shell=True, capture_output=True, timeout=5)
-    subprocess.run(f"rm -rf /var/lib/bluetooth/*/cache/{addr_u}",
-                   shell=True, capture_output=True, timeout=5)
-    subprocess.run(f"sudo rm -rf /var/lib/bluetooth/*/{addr_u}",
-                   shell=True, capture_output=True, timeout=5)
+    subprocess.run(["bluetoothctl", "remove", address],
+                   capture_output=True, timeout=5)
+    # Clean cache directories — use glob to expand wildcards safely
+    import glob as _glob
+    for cache_dir in _glob.glob(f"/var/lib/bluetooth/*/cache/{addr_u}"):
+        subprocess.run(["sudo", "rm", "-rf", cache_dir],
+                       capture_output=True, timeout=5)
+        subprocess.run(["rm", "-rf", cache_dir],
+                       capture_output=True, timeout=5)
+    for dev_dir in _glob.glob(f"/var/lib/bluetooth/*/{addr_u}"):
+        subprocess.run(["sudo", "rm", "-rf", dev_dir],
+                       capture_output=True, timeout=5)
 
 
 def parse_dfu_zip(zip_path: str) -> tuple[bytes, bytes]:
@@ -146,24 +159,18 @@ async def upload_ble_dfu(
 
     # Wait for sys_attr, subscribe to notifications
     await asyncio.sleep(2)
-    response_event = asyncio.Event()
-    response_data = bytearray()
+    notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
     def on_notify(sender, data):
-        nonlocal response_data
-        response_data = data
-        response_event.set()
+        notify_queue.put_nowait(bytes(data))
 
     await client.start_notify(DFU_CONTROL_UUID, on_notify,
                               bluez={"use_start_notify": True})
     await asyncio.sleep(1)
 
     async def wait_response(name, timeout=30.0):
-        nonlocal response_data
-        response_event.clear()
-        response_data = bytearray()
         try:
-            await asyncio.wait_for(response_event.wait(), timeout=timeout)
+            response_data = await asyncio.wait_for(notify_queue.get(), timeout=timeout)
             if len(response_data) >= 3 and response_data[2] != 0x01:
                 msg = f"{name} failed: result=0x{response_data[2]:02x}"
                 log.error(msg)
@@ -217,9 +224,8 @@ async def upload_ble_dfu(
             pkt_count += 1
 
             if PRN_INTERVAL > 0 and pkt_count % PRN_INTERVAL == 0:
-                response_event.clear()
                 try:
-                    await asyncio.wait_for(response_event.wait(), timeout=10.0)
+                    await asyncio.wait_for(notify_queue.get(), timeout=10.0)
                 except asyncio.TimeoutError:
                     log.warning("PRN timeout at %d/%d bytes", sent, len(firmware))
 

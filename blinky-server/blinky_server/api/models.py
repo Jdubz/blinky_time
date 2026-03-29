@@ -16,7 +16,7 @@ class SettingValueRequest(BaseModel):
 
 
 class ReleaseRequest(BaseModel):
-    hold_seconds: int | None = Field(None, description="Don't auto-reconnect for N seconds")
+    hold_seconds: int | None = Field(None, ge=0, description="Don't auto-reconnect for N seconds")
 
 
 class OtaRequest(BaseModel):

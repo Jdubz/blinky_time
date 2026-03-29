@@ -71,7 +71,7 @@ ESP32-S3 WiFi driver + lwIP are NOT thread-safe across cores. `WiFi.status()`, `
 
 Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3 (`npl_freertos_mutex_init` assertion failure, issues #12357/#12362). External NimBLE-Arduino v2.3.8+ fixes this. Install: `arduino-cli lib install "NimBLE-Arduino"`. BleAdvertiser uses `NimBLEDevice` API (NimBLE 2.x dropped old BLEDevice aliases).
 
-### nRF52840 BLE DFU: Secure DFU v2
+### nRF52840 BLE DFU: Legacy DFU (SDK v11)
 
 Adafruit nRF52 bootloader v0.6.2 uses **Legacy DFU (SDK v11)** protocol. The DFU Revision characteristic reports 0x0008, but this is the bootloader version number (DFU_REV_MAJOR=0x00, DFU_REV_MINOR=0x08), NOT a Secure DFU v2 protocol indicator. The app-side BLEDfu service (Bluefruit52Lib) triggers bootloader entry via GPREGRET=0xB1 (write 0x01 to DFU Control in app mode). The bootloader re-advertises as "AdaDFU" with DFU service UUID. Reconnection requires clearing BlueZ GATT cache between connections. BLE scanning from the Pi doesn't find nRF52840 devices (BlueZ scan filtering issue), but direct connection by address works (e.g. device 06ACEB at F4:15:6D:FA:4D:93). Previous blocker (GATT 0x0E Unlikely Error) was caused by sending Secure DFU v2 opcodes to a Legacy DFU bootloader — `ble_dfu.py` rewritten to use correct Legacy DFU protocol (Mar 28).
 

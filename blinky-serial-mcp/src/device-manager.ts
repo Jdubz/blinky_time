@@ -38,10 +38,19 @@ export class DeviceManager {
       this.sessions.delete(port);
     }
 
+    // Acquire lock BEFORE connecting to avoid TOCTOU race
+    if (!acquireSerialLock(port, 'mcp_session', 3600)) {
+      const status = isSerialLocked(port);
+      const h = status.holder;
+      throw new Error(
+        `Port ${port} is locked by ${h?.tool ?? 'unknown'} ` +
+        `(purpose: ${h?.purpose ?? '?'}, pid: ${h?.pid ?? '?'})`
+      );
+    }
+
     const session = new DeviceSession(port);
     try {
       const deviceInfo = await session.connect();
-      acquireSerialLock(port, 'mcp_session', 3600); // Released on disconnect
       this.sessions.set(port, session);
       return { session, deviceInfo };
     } catch (err) {
@@ -49,6 +58,7 @@ export class DeviceManager {
       // Without this, a timed-out connect leaves an orphaned DeviceSession
       // with an open port that can never be reached by disconnect().
       await session.disconnect().catch(() => {});
+      releaseSerialLock(port);
       throw err;
     }
   }
@@ -68,8 +78,13 @@ export class DeviceManager {
   /** Disconnect all devices */
   async disconnectAll(): Promise<void> {
     for (const [port, session] of this.sessions) {
-      await session.disconnect();
-      releaseSerialLock(port);
+      try {
+        await session.disconnect();
+      } catch {
+        // Continue disconnecting remaining devices even if one fails
+      } finally {
+        releaseSerialLock(port);
+      }
     }
     this.sessions.clear();
   }

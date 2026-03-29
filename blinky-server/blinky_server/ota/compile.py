@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import tempfile
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -18,8 +19,6 @@ FQBN_ESP32S3 = ("esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,"
 
 # Project paths (relative to blinky_time root)
 SKETCH_DIR = "blinky-things"
-BUILD_DIR = "/tmp/blinky-build"
-BUILD_DIR_ESP32 = "/tmp/blinky-build-esp32"
 
 
 def find_arduino_cli() -> str | None:
@@ -63,16 +62,18 @@ def compile_firmware(platform: str = "nrf52840") -> dict:
 
     if platform == "nrf52840":
         fqbn = FQBN_NRF52840
-        build_dir = BUILD_DIR
+        build_dir = tempfile.mkdtemp(prefix="blinky-build-nrf-")
         hex_path = Path(build_dir) / f"{SKETCH_DIR}.ino.hex"
     elif platform == "esp32s3":
         fqbn = FQBN_ESP32S3
-        build_dir = BUILD_DIR_ESP32
+        build_dir = tempfile.mkdtemp(prefix="blinky-build-esp32-")
         hex_path = Path(build_dir) / f"{SKETCH_DIR}.ino.bin"
     else:
         return {"status": "error", "message": f"Unknown platform: {platform}"}
 
-    Path(build_dir).mkdir(parents=True, exist_ok=True)
+    # Delete any stale output file so we don't mistake it for a fresh build
+    if hex_path.exists():
+        hex_path.unlink()
 
     log.info("Compiling %s firmware (%s)...", platform, fqbn)
     result = subprocess.run(

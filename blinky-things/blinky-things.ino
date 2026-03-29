@@ -351,7 +351,7 @@ void setup() {
 
   // Initialize BLE (nRF52840 only)
 #ifdef BLINKY_PLATFORM_NRF52840
-  // Initialize SoftDevice with 1 peripheral connection (NUS) + observer (scanner)
+  // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
   Bluefruit.begin(1, 0);
   Bluefruit.setName("Blinky");
   Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
@@ -460,7 +460,7 @@ void loop() {
   // AudioTracker::update() includes Fourier tempogram (200-300ms blocking).
   // NOTE: yield() is a NO-OP on the Adafruit nRF52 core (empty weak function).
   // vTaskDelay(1) actually yields to FreeRTOS, letting the higher-priority
-  // Bluefruit BLE event task process pending SoftDevice events.
+  // BLE event task process pending BLE stack events.
   vTaskDelay(1);
 
   // Advance fake audio clock when enabled

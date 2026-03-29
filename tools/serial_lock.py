@@ -56,7 +56,7 @@ def acquire(port: str, tool: str, purpose: str,
 
     Uses atomic file creation (O_CREAT|O_EXCL) so two processes racing
     will never both succeed. If a stale lock is detected (dead PID), it
-    is removed and acquisition retried once.
+    is removed and acquisition retried once (max 2 attempts).
 
     Returns True if acquired, False if held by a live process.
     """
@@ -76,34 +76,37 @@ def acquire(port: str, tool: str, purpose: str,
         "hold_until": hold_until.isoformat(),
     }
 
-    try:
-        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        os.write(fd, json.dumps(info).encode())
-        os.close(fd)
-        return True
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
+    for _attempt in range(2):
+        try:
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.write(fd, json.dumps(info).encode())
+            os.close(fd)
+            return True
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                raise
 
-    # Lock file exists — check if holder is alive
-    try:
-        raw = lock_file.read_text()
-        holder = json.loads(raw)
-        holder_pid = holder.get("pid", 0)
+        # Lock file exists — check if holder is alive
+        try:
+            raw = lock_file.read_text()
+            holder = json.loads(raw)
+            holder_pid = holder.get("pid", 0)
 
-        if not _pid_alive(holder_pid):
-            # Stale lock — remove and retry once
-            try:
-                lock_file.unlink()
-            except OSError:
-                pass  # Race with another cleaner
-            return acquire(port, tool, purpose, hold_seconds)
+            if not _pid_alive(holder_pid):
+                # Stale lock — remove and retry
+                try:
+                    lock_file.unlink()
+                except OSError:
+                    pass  # Race with another cleaner
+                continue  # Retry once
 
-        # Process is alive — lock is legitimately held
-        return False
-    except (OSError, json.JSONDecodeError):
-        # Can't read lock file — treat as held (conservative)
-        return False
+            # Process is alive — lock is legitimately held
+            return False
+        except (OSError, json.JSONDecodeError):
+            # Can't read lock file — treat as held (conservative)
+            return False
+
+    return False
 
 
 def release(port: str) -> None:

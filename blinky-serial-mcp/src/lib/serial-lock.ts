@@ -89,43 +89,48 @@ export function acquireSerialLock(
     hold_until: holdUntil.toISOString(),
   };
 
-  try {
-    const fd = fs.openSync(
-      lp,
-      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-    );
-    fs.writeSync(fd, JSON.stringify(info));
-    fs.closeSync(fd);
-    heldPorts.add(port);
-    return true;
-  } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'EEXIST') {
-      throw e;
-    }
-  }
-
-  // Lock exists — check if holder is alive
-  try {
-    const raw = fs.readFileSync(lp, 'utf-8');
-    const holder: SerialLockInfo = JSON.parse(raw);
-
-    if (!pidAlive(holder.pid)) {
-      // Stale lock — remove and retry once
-      try {
-        fs.unlinkSync(lp);
-      } catch {
-        // Race with another cleaner
+  // Bounded loop: max 2 attempts (initial + one retry after stale lock cleanup)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(
+        lp,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+      );
+      fs.writeSync(fd, JSON.stringify(info));
+      fs.closeSync(fd);
+      heldPorts.add(port);
+      return true;
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code !== 'EEXIST') {
+        throw e;
       }
-      return acquireSerialLock(port, purpose, holdSeconds);
     }
 
-    // Process is alive — lock is legitimately held
-    return false;
-  } catch {
-    // Can't read lock file — treat as held (conservative)
-    return false;
+    // Lock exists — check if holder is alive
+    try {
+      const raw = fs.readFileSync(lp, 'utf-8');
+      const holder: SerialLockInfo = JSON.parse(raw);
+
+      if (!pidAlive(holder.pid)) {
+        // Stale lock — remove and retry
+        try {
+          fs.unlinkSync(lp);
+        } catch {
+          // Race with another cleaner
+        }
+        continue; // Retry once
+      }
+
+      // Process is alive — lock is legitimately held
+      return false;
+    } catch {
+      // Can't read lock file — treat as held (conservative)
+      return false;
+    }
   }
+
+  return false;
 }
 
 /**

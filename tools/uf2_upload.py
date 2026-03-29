@@ -226,10 +226,10 @@ def _request_server_release(port, verbose=False, hold_seconds=None):
             f"{BLINKY_SERVER_URL}/devices/{device_id}/release",
             method="POST",
             headers={"Content-Type": "application/json"},
-            data=json.dumps({"hold_seconds": hold_seconds} if hold_seconds else {}).encode(),
+            data=json.dumps({"hold_seconds": hold_seconds} if hold_seconds is not None else {}).encode(),
         )
         resp = urlopen(req, timeout=5)
-        hold_msg = f" (hold {hold_seconds}s)" if hold_seconds else ""
+        hold_msg = f" (hold {hold_seconds}s)" if hold_seconds is not None else ""
         print(f"  Released {device_id[:12]} from blinky-server{hold_msg}")
         time.sleep(2)  # Let OS release the FD
         return True
