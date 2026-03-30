@@ -101,9 +101,7 @@ void PixelMatrix::setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
 
 void PixelMatrix::clear() {
     if (!pixels_) return;
-    for (int i = 0; i < width_ * height_; i++) {
-        pixels_[i] = RGB(0, 0, 0);
-    }
+    memset(pixels_, 0, width_ * height_ * sizeof(RGB));
 }
 
 void PixelMatrix::fill(const RGB& color) {

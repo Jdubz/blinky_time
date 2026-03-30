@@ -87,7 +87,9 @@ void RenderPipeline::render(const AudioControl& audio) {
     // initialized_ guarantees all pointers are valid (set in begin())
     pixelMatrix_->clear();
     currentGenerator_->generate(*pixelMatrix_, audio);
-    currentEffect_->apply(pixelMatrix_);
+    if (effectType_ != EffectType::NONE) {
+        currentEffect_->apply(pixelMatrix_);
+    }
     renderer_->render(*pixelMatrix_);
 }
 

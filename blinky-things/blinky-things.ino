@@ -27,7 +27,8 @@
 #include "types/Version.h"           // Version information from repository
 #include "tests/SafeMode.h"          // Crash recovery system
 #include "hal/DefaultHal.h"          // HAL singleton instances
-#include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper
+#include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper (Adafruit)
+#include "hal/hardware/Nrf52PwmLedStrip.h"  // Async PWM driver (nRF52840)
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
 #include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
@@ -61,7 +62,7 @@ LEDMapper ledMapper;
 // Use pointers to avoid static initialization order fiasco
 // Adafruit_NeoPixel allocates memory in constructor - unsafe at global scope
 Adafruit_NeoPixel* neoPixelStrip = nullptr;
-NeoPixelLedStrip* leds = nullptr;
+ILedStrip* leds = nullptr;
 
 // New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
@@ -149,7 +150,9 @@ void setup() {
 
   // Initialize serial with default baud rate (config not loaded yet)
   // Increase RX buffer to handle large device config JSON commands (default 256 is too small)
+#ifdef BLINKY_PLATFORM_ESP32S3
   Serial.setRxBufferSize(1024);
+#endif
   Serial.begin(115200);
   delay(1000);  // Give serial time to initialize
 
@@ -231,16 +234,31 @@ void setup() {
     Serial.println(F("\n=== Initializing LED System ==="));
 
     // Initialize LED strip (must be done in setup, not global scope)
-    neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
-        config.matrix.width * config.matrix.height,
-        config.matrix.ledPin,
-        config.matrix.ledType);
-    if (!neoPixelStrip) {
-      haltWithError(F("ERROR: NeoPixel allocation failed"));
-    }
-    leds = new(std::nothrow) NeoPixelLedStrip(*neoPixelStrip);
-    if (!leds || !leds->isValid()) {
-      haltWithError(F("ERROR: LED strip wrapper allocation failed"));
+    uint16_t numLeds = config.matrix.width * config.matrix.height;
+#ifdef BLINKY_PLATFORM_NRF52840
+    if (numLeds > 256) {
+      // High LED count: use async PWM driver (pre-allocated buffers, non-blocking show)
+      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
+      leds = asyncStrip;  // Assign before validity check so cleanup() can free it
+      if (!asyncStrip || !asyncStrip->isValid()) {
+        haltWithError(F("ERROR: Async LED strip allocation failed"));
+      }
+      Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
+      Serial.print(numLeds);
+      Serial.println(F(" LEDs)"));
+    } else
+#endif
+    {
+      // Standard path: Adafruit NeoPixel (reliable for smaller LED counts)
+      neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
+          numLeds, config.matrix.ledPin, config.matrix.ledType);
+      if (!neoPixelStrip) {
+        haltWithError(F("ERROR: NeoPixel allocation failed"));
+      }
+      leds = new(std::nothrow) NeoPixelLedStrip(*neoPixelStrip);
+      if (!leds) {
+        haltWithError(F("ERROR: LED strip wrapper allocation failed"));
+      }
     }
 
     leds->begin();
@@ -444,20 +462,35 @@ void loop() {
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 
-  // FPS counter: report actual frame rate every 5 seconds at INFO log level
+  // FPS counter with min/max frame time tracking
   static uint32_t fpsFrameCount = 0;
   static uint32_t fpsWindowStart = 0;
+  static uint32_t fpsMinFrameMs = 999;
+  static uint32_t fpsMaxFrameMs = 0;
+  uint32_t frameMs = (lastMs == 0) ? 0 : (now - lastMs);
   fpsFrameCount++;
+  if (frameMs > 0 && frameMs < fpsMinFrameMs) fpsMinFrameMs = frameMs;
+  if (frameMs > fpsMaxFrameMs) fpsMaxFrameMs = frameMs;
   if (now - fpsWindowStart >= 5000) {
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
       uint32_t elapsed = now - fpsWindowStart;
       float fps = fpsFrameCount * 1000.0f / (elapsed > 0 ? elapsed : 1);
       Serial.print(F("[FPS] "));
       Serial.print(fps, 1);
-      Serial.println(F(" fps"));
+      Serial.print(F(" fps  frame: "));
+      Serial.print(fpsMinFrameMs);
+      Serial.print(F("-"));
+      Serial.print(fpsMaxFrameMs);
+      Serial.print(F("ms  tgram="));
+      Serial.print(audioController ? audioController->getLastTempogramMs() : 0);
+      Serial.print(F("+"));
+      Serial.print(audioController ? audioController->getLastPlpMs() : 0);
+      Serial.println(F("ms"));
     }
     fpsFrameCount = 0;
     fpsWindowStart = now;
+    fpsMinFrameMs = 999;
+    fpsMaxFrameMs = 0;
   }
 
   // Frame time diagnostics: only warn for unexpectedly long frames.
@@ -480,11 +513,7 @@ void loop() {
     audioController->update(dt);
   }
 
-  // Give BLE task a chance to run after heavy audio processing.
-  // AudioTracker::update() includes Fourier tempogram (200-300ms blocking).
-  // NOTE: yield() is a NO-OP on the Adafruit nRF52 core (empty weak function).
-  // vTaskDelay(1) actually yields to FreeRTOS, letting the higher-priority
-  // BLE event task process pending BLE stack events.
+  // Yield to BLE task after audio processing.
   vTaskDelay(1);
 
   // Advance fake audio clock when enabled
@@ -551,9 +580,6 @@ void loop() {
     console->update();
   }
 
-  // Second yield: after rendering + serial, before BLE processing.
-  vTaskDelay(1);
-
   // Process wireless data
 #ifdef BLINKY_PLATFORM_NRF52840
   bleNus.update();       // NUS peripheral (serial-over-BLE)
@@ -615,4 +641,5 @@ void loop() {
       }
     }
   }
+
 }

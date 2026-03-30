@@ -249,10 +249,14 @@ protected:
         }
 
         if (p->hasFlag(ParticleFlags::FADE) && p->maxAge > 0) {
-            // Linear fade based on age
-            float ageRatio = (float)p->age / p->maxAge;
-            float newIntensity = (float)p->intensity * (1.0f - ageRatio);
-            p->intensity = (uint8_t)max(0.0f, newIntensity);
+            // Frame-rate-independent linear fade: subtract fixed amount per second
+            // so intensity reaches 0 at maxAge regardless of frame rate.
+            // (Old code multiplied intensity by (1-ageRatio) every frame, which is
+            // compound decay — particles died at ~30% of lifespan at high FPS.)
+            float fadePerSec = 255.0f / (p->maxAge * 0.01f);
+            int loss = (int)(fadePerSec * dt);
+            if (loss < 1) loss = 1;
+            p->intensity = (loss >= (int)p->intensity) ? 0 : p->intensity - (uint8_t)loss;
         }
     }
 

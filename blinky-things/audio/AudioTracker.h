@@ -81,6 +81,8 @@ public:
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
+    uint32_t getLastTempogramMs() const { return lastTempogramMs_; }
+    uint32_t getLastPlpMs() const { return lastPlpMs_; }
 
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
@@ -223,6 +225,8 @@ private:
 
     // === ACF timing ===
     uint32_t lastAcfMs_ = 0;
+    uint32_t lastTempogramMs_ = 0;  // Timing: last runFourierTempogram() duration
+    uint32_t lastPlpMs_ = 0;       // Timing: last updatePlpAnalysis() duration
 
     // === Silence detection ===
     uint32_t lastSignificantAudioMs_ = 0;

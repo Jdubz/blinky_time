@@ -44,10 +44,13 @@ struct FireParams {
         // All velocity/force/count params are stored as FRACTIONS of device
         // dimensions.  The generator multiplies by traversalDim_ or crossDim_
         // at use-time, so no per-device calibration is needed.
+        //
+        // Tuned for linear fade (frame-rate-independent). Particles should
+        // fill ~70-80% of traversalDim at ambient energy levels.
         baseSpawnChance = 0.05f;      // × crossDim → sparks/frame; 0.05×32=1.6/frame on Display
         audioSpawnBoost = 0.15f;      // × crossDim → extra sparks at peak energy
         maxParticles = 0.75f;         // Pool sized at begin(); changing at runtime has no effect
-        defaultLifespan = 100;        // 1.0s (centiseconds)
+        defaultLifespan = 60;         // 0.6s base (centiseconds) — scaled by traversalDim in spawnParticles
         intensityMin = 150;
         intensityMax = 220;
         windVariation = 1.5f;         // × crossDim → LEDs/sec of curl turbulence
@@ -55,8 +58,8 @@ struct FireParams {
         musicSpawnPulse = 0.95f;      // Deep phase breathing
         organicTransientMin = 0.25f;
         burstSparks = 0.5f;           // × crossDim → sparks per burst
-        sparkVelocityMin = 0.33f;
-        sparkVelocityMax = 0.67f;
+        sparkVelocityMin = 0.33f;     // × traversalDim → min upward velocity
+        sparkVelocityMax = 0.67f;     // × traversalDim → max upward velocity
         sparkSpread = 1.0f;           // × crossDim → horizontal scatter
         thermalForce = 2.0f;          // × traversalDim → buoyancy in LEDs/sec^2
         gridCoolRate = 0.88f;         // ~8-frame decay at 30fps → visible flame columns

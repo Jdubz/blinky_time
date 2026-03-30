@@ -102,7 +102,10 @@ void Fire::spawnParticles(float dt) {
         sparkCount += (uint8_t)(burst * audio_.rhythmStrength);
     }
 
-    // Density-based lifespan: ambient fire lingers, dense/fast fire burns quick
+    // Lifespan scales with device height so particles fill ~80% of traversalDim.
+    // Base lifespan (defaultLifespan) is for a ~20px reference height.
+    // Taller devices → longer life, shorter devices → shorter life.
+    float heightScale = traversalDim_ / 20.0f;
     float densityNorm = min(1.0f, audio_.onsetDensity / 6.0f);
     float densityLifeMult = 1.5f - 0.75f * densityNorm;
 
@@ -138,7 +141,7 @@ void Fire::spawnParticles(float dt) {
             intensity = (uint8_t)min(255, (int)intensity + boost);
         }
 
-        uint8_t lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * densityLifeMult);
+        uint8_t lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * heightScale * densityLifeMult);
 
         pool_.spawn(x, y, vx, vy, intensity, lifespan, 1.0f,
                    ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE);

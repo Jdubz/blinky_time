@@ -34,7 +34,7 @@ void NeoPixelLedStrip::show() {
 
 void NeoPixelLedStrip::setPixelColor(uint16_t index, uint8_t r, uint8_t g, uint8_t b) {
     if (strip_) {
-        strip_->setPixelColor(index, strip_->Color(r, g, b));
+        strip_->setPixelColor(index, r, g, b);
     }
 }
 

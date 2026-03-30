@@ -5,7 +5,7 @@
 enum MatrixOrientation {
   HORIZONTAL = 0,  // Standard horizontal layout (fire-totem)
   VERTICAL = 1,    // Vertical layout (tube-light)
-  PANEL_GRID = 2   // 2×2 grid of equal panels, chained TL→TR→BL→BR
+  PANEL_GRID = 2   // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
 };
 
 enum LayoutType {

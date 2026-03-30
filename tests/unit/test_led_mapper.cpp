@@ -117,80 +117,69 @@ static void testVertical() {
 }
 
 // ---------------------------------------------------------------------------
-// PANEL_GRID — 4×4 with 2×2 panels
+// PANEL_GRID — generic 4×4 with 2×2 panels (no transpose, no swap)
 //
-// Expected mapping (hand-computed from LEDMapper algorithm):
+// Expected mapping:
+//   Panel 0 (TL, gx=0-1, gy=0-1): LEDs 0-3
+//   Panel 1 (TR, gx=2-3, gy=0-1): LEDs 4-7
+//   Panel 2 (BL, gx=0-1, gy=2-3): LEDs 8-11
+//   Panel 3 (BR, gx=2-3, gy=2-3): LEDs 12-15
 //
-//   Logical grid     → LED index
-//   (gx, gy)
-//   (0,0)=12  (1,0)=15  (2,0)= 8  (3,0)=11
-//   (0,1)=13  (1,1)=14  (2,1)= 9  (3,1)=10
-//   (0,2)= 4  (1,2)= 7  (2,2)= 0  (3,2)= 3
-//   (0,3)= 5  (1,3)= 6  (2,3)= 1  (3,3)= 2
-//
-// Panel layout (chain order after TL↔BR swap):
-//   Logical TL (gx=0-1, gy=0-1) → chain 3, LEDs 12-15
-//   Logical TR (gx=2-3, gy=0-1) → chain 2, LEDs  8-11
-//   Logical BL (gx=0-1, gy=2-3) → chain 1, LEDs  4- 7
-//   Logical BR (gx=2-3, gy=2-3) → chain 0, LEDs  0- 3
+//   (0,0)= 0  (1,0)= 1  (2,0)= 4  (3,0)= 5
+//   (0,1)= 3  (1,1)= 2  (2,1)= 7  (3,1)= 6
+//   (0,2)= 8  (1,2)= 9  (2,2)=12  (3,2)=13
+//   (0,3)=11  (1,3)=10  (2,3)=15  (3,3)=14
 // ---------------------------------------------------------------------------
 static void testPanelGrid4x4() {
-    printf("[PANEL_GRID 4x4]\n");
+    printf("[PANEL_GRID 4x4 generic]\n");
 
     LEDMapper m;
     DeviceConfig cfg = makeConfig(4, 4, PANEL_GRID);
     EXPECT(m.begin(cfg));
     EXPECT(m.isValid());
 
-    // --- Forward mapping (gx, gy) → LED ---
-    // Top-left logical panel (chain 3, LEDs 12-15)
-    EXPECT_EQ(m.getIndex(0, 0), 12);
-    EXPECT_EQ(m.getIndex(1, 0), 15);
-    EXPECT_EQ(m.getIndex(0, 1), 13);
-    EXPECT_EQ(m.getIndex(1, 1), 14);
+    // Panel 0 (TL)
+    EXPECT_EQ(m.getIndex(0, 0), 0);
+    EXPECT_EQ(m.getIndex(1, 0), 1);
+    EXPECT_EQ(m.getIndex(0, 1), 3);
+    EXPECT_EQ(m.getIndex(1, 1), 2);
 
-    // Top-right logical panel (chain 2, LEDs 8-11)
-    EXPECT_EQ(m.getIndex(2, 0),  8);
-    EXPECT_EQ(m.getIndex(3, 0), 11);
-    EXPECT_EQ(m.getIndex(2, 1),  9);
-    EXPECT_EQ(m.getIndex(3, 1), 10);
+    // Panel 1 (TR)
+    EXPECT_EQ(m.getIndex(2, 0), 4);
+    EXPECT_EQ(m.getIndex(3, 0), 5);
+    EXPECT_EQ(m.getIndex(2, 1), 7);
+    EXPECT_EQ(m.getIndex(3, 1), 6);
 
-    // Bottom-left logical panel (chain 1, LEDs 4-7)
-    EXPECT_EQ(m.getIndex(0, 2), 4);
-    EXPECT_EQ(m.getIndex(1, 2), 7);
-    EXPECT_EQ(m.getIndex(0, 3), 5);
-    EXPECT_EQ(m.getIndex(1, 3), 6);
+    // Panel 2 (BL)
+    EXPECT_EQ(m.getIndex(0, 2), 8);
+    EXPECT_EQ(m.getIndex(1, 2), 9);
+    EXPECT_EQ(m.getIndex(0, 3), 11);
+    EXPECT_EQ(m.getIndex(1, 3), 10);
 
-    // Bottom-right logical panel (chain 0, LEDs 0-3)
-    EXPECT_EQ(m.getIndex(2, 2), 0);
-    EXPECT_EQ(m.getIndex(3, 2), 3);
-    EXPECT_EQ(m.getIndex(2, 3), 1);
-    EXPECT_EQ(m.getIndex(3, 3), 2);
+    // Panel 3 (BR)
+    EXPECT_EQ(m.getIndex(2, 2), 12);
+    EXPECT_EQ(m.getIndex(3, 2), 13);
+    EXPECT_EQ(m.getIndex(2, 3), 15);
+    EXPECT_EQ(m.getIndex(3, 3), 14);
 
-    // --- Inverse mapping: LED → (gx, gy) ---
-    EXPECT_EQ(m.getX(12), 0);  EXPECT_EQ(m.getY(12), 0);
-    EXPECT_EQ(m.getX(15), 1);  EXPECT_EQ(m.getY(15), 0);
-    EXPECT_EQ(m.getX(13), 0);  EXPECT_EQ(m.getY(13), 1);
-    EXPECT_EQ(m.getX(14), 1);  EXPECT_EQ(m.getY(14), 1);
+    // Inverse
+    EXPECT_EQ(m.getX(0), 0);  EXPECT_EQ(m.getY(0), 0);
+    EXPECT_EQ(m.getX(1), 1);  EXPECT_EQ(m.getY(1), 0);
+    EXPECT_EQ(m.getX(3), 0);  EXPECT_EQ(m.getY(3), 1);
+    EXPECT_EQ(m.getX(12), 2); EXPECT_EQ(m.getY(12), 2);
 
-    EXPECT_EQ(m.getX(0), 2);   EXPECT_EQ(m.getY(0), 2);
-    EXPECT_EQ(m.getX(3), 3);   EXPECT_EQ(m.getY(3), 2);
-    EXPECT_EQ(m.getX(1), 2);   EXPECT_EQ(m.getY(1), 3);
-    EXPECT_EQ(m.getX(2), 3);   EXPECT_EQ(m.getY(2), 3);
-
-    // --- Every index is unique (bijection check) ---
+    // Bijection
     bool seen[16] = {};
-    for (int gy = 0; gy < 4; ++gy) {
+    for (int gy = 0; gy < 4; ++gy)
         for (int gx = 0; gx < 4; ++gx) {
             int idx = m.getIndex(gx, gy);
             EXPECT(idx >= 0 && idx < 16);
             if (idx >= 0 && idx < 16) {
-                EXPECT(!seen[idx]);   // no duplicate
+                EXPECT(!seen[idx]);
                 seen[idx] = true;
             }
         }
-    }
-    for (int i = 0; i < 16; ++i) EXPECT(seen[i]);  // all 16 covered
+    for (int i = 0; i < 16; ++i) EXPECT(seen[i]);
 }
 
 // ---------------------------------------------------------------------------

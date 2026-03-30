@@ -191,11 +191,14 @@ const AudioControl& AudioTracker::update(float dt) {
     //    First ACF fires after ~1s (ossCount_ >= 60 at ~66 Hz), then every
     //    acfPeriodMs (~150ms = ~9 frames). The 60-sample minimum ensures
     //    enough OSS data for meaningful autocorrelation.
-    if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
-        lastAcfMs_ = nowMs;
-        runFourierTempogram();
-        updatePlpAnalysis();  // PLP epoch-fold + bass ACF + cross-correlate
-    }
+    // Fourier Tempogram DISABLED — costs 75ms at full buffer, destroys frame timing.
+    // TODO: replace with lightweight tempo estimation (IOI tracking or short ACF)
+    // that fits within the frame budget.
+    // if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
+    //     lastAcfMs_ = nowMs;
+    //     runFourierTempogram();
+    //     updatePlpAnalysis();
+    // }
 
     // 10. PLP phase update (free-running + pattern-based correction)
     updatePlpPhase();
@@ -698,8 +701,11 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     // prevOdf_ < threshold AND odf > threshold = the leading edge of a transient.
     bool risingEdge = (odf > pulseThreshold) && (prevOdf_ <= pulseThreshold);
 
+    // Gate on spectral activity (not mic level — mic level normalization can
+    // read 0 despite active audio, killing all pulse detection).
+    float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
     float pulseStrength = 0.0f;
-    if (mic_.getLevel() > pulseMinLevel &&
+    if (signalPresence > pulseMinLevel &&
         risingEdge &&
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
