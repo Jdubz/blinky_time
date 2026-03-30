@@ -5,13 +5,8 @@ EffectRenderer::EffectRenderer(ILedStrip& leds, LEDMapper& mapper)
 }
 
 void EffectRenderer::render(const PixelMatrix& matrix) {
-    // CRITICAL: Clear physical LEDs before rendering to prevent stuck pixels
-    // Without this, LEDs not updated in current frame retain previous values
-    for (int i = 0; i < leds_.numPixels(); i++) {
-        leds_.setPixelColor(i, 0);
-    }
-
-    // Render matrix to LEDs
+    // No pre-clear needed: PixelMatrix::clear() runs before generation on every frame,
+    // so every LED index maps to a matrix pixel that has already been written (black or color).
     int width = matrix.getWidth();
     int height = matrix.getHeight();
 

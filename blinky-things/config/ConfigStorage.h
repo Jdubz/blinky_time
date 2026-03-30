@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 82;  // v82: Pattern slot cache replaces v77 pattern memory
+    static const uint8_t SETTINGS_VERSION = 86;  // v86: Reduce fire defaultLifespan 170->100, disable WiFi radio when unconfigured
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -129,8 +129,6 @@ public:
         float baseSpawnChance;
         float audioSpawnBoost;
         // Physics
-        float gravity;
-        float windBase;
         float windVariation;
         float drag;
         // Spark appearance
@@ -140,13 +138,13 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
-        // Background
-        float backgroundIntensity;
-        // Particle variety
-        float fastSparkRatio;
         float thermalForce;       // × traversalDim → buoyancy LEDs/sec^2
-        float maxParticles;       // Fraction of numLeds (clamped to pool)
+        float maxParticles;       // Fraction of numLeds (pool sized at begin() only)
         float burstSparks;        // × crossDim → sparks per burst
+        // Fluid dynamics grid (v84)
+        float gridCoolRate;       // Heat grid decay per frame (default 0.88)
+        float buoyancyCoupling;   // Grid heat → upward force multiplier (default 1.0)
+        float pressureCoupling;   // Lateral gradient → clustering multiplier (default 0.5)
         // Lifecycle
         uint8_t defaultLifespan;
         uint8_t intensityMin;
@@ -352,8 +350,8 @@ public:
     // VERSION BUMPING RULES:
     // - StoredDeviceConfig changes -> bump DEVICE_VERSION (rare, wipes device identity)
     // - Any other struct changes -> bump SETTINGS_VERSION (preserves device config)
-    static_assert(sizeof(StoredFireParams) == 68,
-        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 3 uint8 + padding)");
+    static_assert(sizeof(StoredFireParams) == 64,
+        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 15 floats + 3 uint8 + padding)");
     static_assert(sizeof(StoredWaterParams) == 68,
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 4 uint8 + padding)");
     static_assert(sizeof(StoredLightningParams) == 36,
