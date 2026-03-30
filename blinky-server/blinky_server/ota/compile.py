@@ -45,11 +45,15 @@ def find_project_root() -> Path:
     raise FileNotFoundError("Cannot find blinky_time project root")
 
 
-def compile_firmware(platform: str = "nrf52840") -> dict:
+def compile_firmware(platform: str = "nrf52840",
+                     ble_dfu_recovery: bool = True) -> dict:
     """Compile firmware for the given platform.
 
     Args:
         platform: "nrf52840" or "esp32s3"
+        ble_dfu_recovery: If True, SafeBootWatchdog enters BLE DFU mode
+            instead of UF2 on crash recovery. Use for physically installed
+            devices without USB access. Default True for fleet management.
 
     Returns:
         dict with status, hex_path/bin_path, message
@@ -75,10 +79,19 @@ def compile_firmware(platform: str = "nrf52840") -> dict:
     if hex_path.exists():
         hex_path.unlink()
 
-    log.info("Compiling %s firmware (%s)...", platform, fqbn)
+    # Build command
+    cmd = [cli, "compile", "--fqbn", fqbn, SKETCH_DIR,
+           "--build-path", build_dir]
+
+    # Enable BLE DFU recovery for fleet devices (nRF52840 only)
+    if ble_dfu_recovery and platform == "nrf52840":
+        cmd += ["--build-property",
+                "compiler.cpp.extra_flags=-DSAFEBOOT_BLE_DFU_RECOVERY"]
+
+    log.info("Compiling %s firmware (%s, ble_dfu_recovery=%s)...",
+             platform, fqbn, ble_dfu_recovery)
     result = subprocess.run(
-        [cli, "compile", "--fqbn", fqbn, SKETCH_DIR,
-         "--build-path", build_dir],
+        cmd,
         capture_output=True, text=True, timeout=600,
         cwd=str(root),
     )
@@ -100,14 +113,14 @@ def compile_firmware(platform: str = "nrf52840") -> dict:
         }
 
 
-def generate_dfu_package(hex_path: str, sd_req: str = "0xCB") -> dict:
+def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
     """Generate a DFU zip package from firmware hex/bin.
 
     Uses adafruit-nrfutil genpkg for nRF52840.
 
     Args:
         hex_path: Path to .hex firmware file
-        sd_req: SoftDevice requirement (default: 0xCB for S140 v7.3.0)
+        sd_req: SoftDevice requirement (default: 0xFFFE = any SoftDevice)
 
     Returns:
         dict with status, zip_path, message

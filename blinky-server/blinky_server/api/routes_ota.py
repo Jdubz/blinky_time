@@ -95,9 +95,17 @@ async def fleet_ota(body: OtaRequest) -> dict:
                 )
             elif transport_type == "ble":
                 from ..ota.ble_dfu import upload_ble_dfu
+                ble_transport = device.transport
+
+                async def _enter_bl(cmd, _t=ble_transport):
+                    await _t.write_line(cmd)
+                    await asyncio.sleep(0.5)
+                    await _t.disconnect()
+
                 result = await upload_ble_dfu(
                     app_ble_address=device.port,
                     dfu_zip_path=str(firmware),
+                    enter_bootloader_via_ble=_enter_bl,
                 )
             else:
                 result = {"status": "skip", "message": f"Unsupported transport: {transport_type}"}

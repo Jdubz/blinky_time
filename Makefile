@@ -237,6 +237,33 @@ uf2-check: compile-out
 uf2-test:
 	python3 $(UF2_UPLOAD_TOOL) --self-test
 
+# --- Bootloader update (BLE DFU recovery mode) ---
+
+BOOTLOADER_UF2 = bootloader/update-bootloader-ota-default.uf2
+
+# Update bootloader on a single device (enters UF2, copies bootloader update UF2)
+# The MBR performs a power-fail-safe copy into the bootloader region.
+.PHONY: bootloader-update
+bootloader-update:
+	@echo ""
+	@echo "========================================"
+	@echo "Bootloader Update: $(UPLOAD_PORT)"
+	@echo "  UF2: $(BOOTLOADER_UF2)"
+	@echo "  This updates the bootloader to default to BLE DFU"
+	@echo "  mode when no valid app exists (wireless recovery)."
+	@echo "========================================"
+	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --uf2 $(BOOTLOADER_UF2) $(if $(VERBOSE),--verbose)
+
+# Update bootloader on all connected nRF52840 devices
+.PHONY: bootloader-update-all
+bootloader-update-all:
+	@echo ""
+	@echo "========================================"
+	@echo "Bootloader Update: ALL connected devices"
+	@echo "  UF2: $(BOOTLOADER_UF2)"
+	@echo "========================================"
+	python3 $(UF2_UPLOAD_TOOL) $(if $(UPLOAD_PORTS),$(UPLOAD_PORTS),--all) --uf2 $(BOOTLOADER_UF2) $(if $(VERBOSE),--verbose)
+
 # Install TFLite Micro Arduino library (required for NN=1 builds)
 .PHONY: setup-tflite
 setup-tflite:

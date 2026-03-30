@@ -1469,13 +1469,48 @@ def copy_firmware(uf2_path, mount_point):
     if current_uf2.exists():
         print(f"  Existing firmware backup: {current_uf2.stat().st_size:,} bytes")
 
-    print(f"  Copying...")
+    # Write firmware data using raw I/O — NOT shutil.copy2.
+    #
+    # The UF2 bootloader's ghostfat layer processes 512-byte UF2 blocks in
+    # real-time as they're written to the FAT filesystem. Once all blocks are
+    # received, the bootloader immediately flashes and reboots — often before
+    # the host OS finishes its file operations.
+    #
+    # shutil.copy2 calls os.utime() AFTER the data write to copy timestamps.
+    # This utime() hits a dead mount point (device already rebooted) and throws
+    # ENOENT. Using raw write + fsync avoids this: we write data, sync it to
+    # the USB device, and don't touch metadata.
+    #
+    # Drive-eject errors (ENOENT, EIO) during or after write are EXPECTED and
+    # indicate the bootloader received and processed the firmware. Verification
+    # happens in the reboot check phase.
+    print(f"  Copying (raw write + fsync)...")
+    data = uf2_path.read_bytes()
+    bytes_written = 0
     try:
-        shutil.copy2(str(uf2_path), str(dest))
-        os.sync()
-        print(f"  [PASS] Copy complete, synced to disk")
+        fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        try:
+            bytes_written = os.write(fd, data)
+            os.fsync(fd)
+        except OSError:
+            pass  # Drive may eject during fsync — data was already delivered
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass  # Close may fail on dead mount — OK
+        print(f"  [PASS] Wrote {bytes_written:,} / {uf2_size:,} bytes")
         return True
-    except (OSError, IOError) as e:
+    except OSError as e:
+        import errno
+        if e.errno in (errno.ENOENT, errno.EIO, errno.ENODEV):
+            # Drive ejected during open/write — bootloader processed the data
+            # and rebooted. This is expected for fast devices and self-updates.
+            if bytes_written > 0:
+                print(f"  [PASS] Wrote {bytes_written:,} bytes before drive ejected (expected)")
+            else:
+                print(f"  [WARN] Drive ejected before write started — may need retry")
+            return bytes_written > 0
         print(f"  [FAIL] Copy failed: {e}")
         return False
 
