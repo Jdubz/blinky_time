@@ -95,6 +95,16 @@ async def fleet_ota(body: OtaRequest) -> dict:
                 )
             elif transport_type == "ble":
                 from ..ota.ble_dfu import upload_ble_dfu
+                from ..ota.compile import ensure_dfu_zip
+
+                # Auto-convert .hex → .dfu.zip if needed
+                try:
+                    dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
+                except ValueError as e:
+                    result = {"status": "error", "message": str(e)}
+                    results[device.id[:12]] = result
+                    continue
+
                 ble_transport = device.transport
 
                 async def _enter_bl(cmd, _t=ble_transport):
@@ -104,7 +114,7 @@ async def fleet_ota(body: OtaRequest) -> dict:
 
                 result = await upload_ble_dfu(
                     app_ble_address=device.port,
-                    dfu_zip_path=str(firmware),
+                    dfu_zip_path=dfu_zip,
                     enter_bootloader_via_ble=_enter_bl,
                 )
             else:

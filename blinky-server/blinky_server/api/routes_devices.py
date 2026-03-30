@@ -158,6 +158,13 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     elif transport_type == "ble":
         from ..ota.ble_dfu import upload_ble_dfu
+        from ..ota.compile import ensure_dfu_zip
+
+        # Ensure we have a DFU zip (auto-converts .hex if needed)
+        try:
+            dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
         # Capture transport write_line before hold (which may disconnect)
         ble_transport = device.transport
@@ -172,7 +179,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         try:
             result = await upload_ble_dfu(
                 app_ble_address=device.port,  # BLE address is stored as port
-                dfu_zip_path=str(firmware),
+                dfu_zip_path=dfu_zip,
                 enter_bootloader_via_ble=enter_bootloader_via_ble,
             )
         finally:

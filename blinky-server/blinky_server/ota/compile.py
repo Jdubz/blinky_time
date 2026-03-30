@@ -139,3 +139,23 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
 
     log.info("DFU package: %s", zip_path)
     return {"status": "ok", "zip_path": zip_path, "message": "DFU package generated"}
+
+
+def ensure_dfu_zip(firmware_path: str) -> str:
+    """Ensure firmware_path is a .dfu.zip, generating one from .hex if needed.
+
+    Returns path to the .dfu.zip file.
+    Raises ValueError if the file can't be used for BLE DFU.
+    """
+    p = Path(firmware_path)
+    if p.suffix == ".zip":
+        return firmware_path
+    if p.suffix == ".hex":
+        result = generate_dfu_package(firmware_path)
+        if result["status"] != "ok":
+            raise ValueError(f"Failed to generate DFU zip from {firmware_path}: {result['message']}")
+        return result["zip_path"]
+    raise ValueError(
+        f"BLE DFU requires .dfu.zip or .hex file, got: {p.name}. "
+        f"Use POST /ota/compile-dfu to generate one."
+    )

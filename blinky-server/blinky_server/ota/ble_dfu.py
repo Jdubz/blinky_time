@@ -170,7 +170,7 @@ async def upload_ble_dfu(
     except Exception as e:
         result["message"] = f"Failed to connect to bootloader: {e}"
         return result
-    mtu = min(client.mtu_size - 3, 20)
+    mtu = max(client.mtu_size - 3, 20)
     progress("connect", f"Connected, MTU={client.mtu_size}", 30)
 
     # Verify bootloader mode
@@ -320,18 +320,54 @@ async def upload_ble_dfu(
         except Exception:
             pass  # Device disconnects immediately
 
-        progress("done", "BLE DFU complete!", 100)
-        elapsed = time.monotonic() - t0
-        result.update(status="ok", message="BLE DFU upload successful",
-                      elapsed_s=round(elapsed, 1))
-
-    except Exception as e:
-        result["message"] = f"DFU transfer error: {e}"
-    finally:
+        # Disconnect from bootloader (it's resetting anyway)
         try:
             await client.disconnect()
         except Exception:
             pass
+        client = None  # Prevent double-disconnect in finally
+
+        # Post-DFU verification: wait for device to reboot and verify it's alive
+        progress("verify", "Waiting for device to reboot...", 99)
+        await asyncio.sleep(5)  # Device needs time to boot new firmware
+
+        # Clear BlueZ cache again (bootloader → app transition)
+        await asyncio.to_thread(clear_bluez_state, boot_addr)
+        await asyncio.to_thread(clear_bluez_state, app_ble_address)
+        await asyncio.sleep(2)
+
+        # Scan for device at its original app BLE address
+        verified = False
+        for verify_attempt in range(3):
+            progress("verify", f"Scanning for rebooted device (attempt {verify_attempt + 1}/3)...", 99)
+            dev = await BleakScanner.find_device_by_address(
+                app_ble_address, timeout=10.0)
+            if dev:
+                verified = True
+                break
+            await asyncio.sleep(2)
+
+        if verified:
+            progress("done", "BLE DFU complete — device verified!", 100)
+            elapsed = time.monotonic() - t0
+            result.update(status="ok",
+                          message="BLE DFU upload successful, device verified",
+                          elapsed_s=round(elapsed, 1), verified=True)
+        else:
+            progress("done", "BLE DFU transfer complete but device not seen advertising", 100)
+            elapsed = time.monotonic() - t0
+            result.update(status="ok",
+                          message="BLE DFU transfer complete (device not yet seen — may still be booting)",
+                          elapsed_s=round(elapsed, 1), verified=False)
+
+    except Exception as e:
+        result["message"] = f"DFU transfer error: {e}"
+    finally:
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
     result["elapsed_s"] = round(time.monotonic() - t0, 1)
     return result
