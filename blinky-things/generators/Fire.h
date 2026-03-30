@@ -41,30 +41,29 @@ struct FireParams {
     float pressureCoupling;       // Lateral heat gradient → clustering force multiplier (default 0.5)
 
     FireParams() {
-        // All velocity/force/count params are stored as FRACTIONS of device
-        // dimensions.  The generator multiplies by traversalDim_ or crossDim_
-        // at use-time, so no per-device calibration is needed.
+        // Velocity/force params are FRACTIONS of device dimensions, scaled at use-time.
         //
-        // Tuned for linear fade (frame-rate-independent). Particles should
-        // fill ~70-80% of traversalDim at ambient energy levels.
-        baseSpawnChance = 0.05f;      // × crossDim → sparks/frame; 0.05×32=1.6/frame on Display
-        audioSpawnBoost = 0.15f;      // × crossDim → extra sparks at peak energy
+        // Design: 30% height at ambient (vigor=0.3, no audio), 100%+ on hits.
+        // Per-particle vigor [0.3-1.0] × velocity gives organic variation.
+        // Audio energy/pulse multiply ALL living particles in real time.
+        baseSpawnChance = 0.12f;      // × crossDim → sparks/frame (denser than before)
+        audioSpawnBoost = 0.25f;      // × crossDim → extra sparks at peak energy
         maxParticles = 0.75f;         // Pool sized at begin(); changing at runtime has no effect
-        defaultLifespan = 60;         // 0.6s base (centiseconds) — scaled by traversalDim in spawnParticles
-        intensityMin = 150;
-        intensityMax = 220;
+        defaultLifespan = 80;         // 0.8s base (centiseconds), vigor-scaled at spawn
+        intensityMin = 180;
+        intensityMax = 255;
         windVariation = 1.5f;         // × crossDim → LEDs/sec of curl turbulence
-        drag = 0.985f;
-        musicSpawnPulse = 0.95f;      // Deep phase breathing
+        drag = 0.985f;            // Gentle deceleration (thermal removed, no acceleration to fight)
+        musicSpawnPulse = 0.95f;      // Deep phase breathing (reserved for future rhythm)
         organicTransientMin = 0.25f;
-        burstSparks = 0.5f;           // × crossDim → sparks per burst
-        sparkVelocityMin = 0.33f;     // × traversalDim → min upward velocity
-        sparkVelocityMax = 0.67f;     // × traversalDim → max upward velocity
+        burstSparks = 0.8f;           // × crossDim → sparks per burst
+        sparkVelocityMin = 1.0f;      // × traversalDim → min upward velocity (3x original)
+        sparkVelocityMax = 2.0f;      // × traversalDim → max upward velocity (3x original)
         sparkSpread = 1.0f;           // × crossDim → horizontal scatter
-        thermalForce = 2.0f;          // × traversalDim → buoyancy in LEDs/sec^2
-        gridCoolRate = 0.88f;         // ~8-frame decay at 30fps → visible flame columns
-        buoyancyCoupling = 1.0f;      // Grid heat reinforces upward plumes
-        pressureCoupling = 0.5f;      // Lateral clustering (pulls particles toward hot columns)
+        thermalForce = 3.0f;          // × traversalDim → buoyancy in LEDs/sec^2 (stronger)
+        gridCoolRate = 0.88f;
+        buoyancyCoupling = 1.0f;
+        pressureCoupling = 0.5f;
     }
 };
 
@@ -140,8 +139,8 @@ private:
 
     // Coarse heat grid for fluid dynamics (Eulerian velocity field)
     // Particles splat heat onto the grid; grid gradients push particles into flame columns.
-    static const int FIRE_GRID_W = 8;
-    static const int FIRE_GRID_H = 8;
+    static constexpr int FIRE_GRID_W = 8;
+    static constexpr int FIRE_GRID_H = 8;
     float heatGrid_[FIRE_GRID_W * FIRE_GRID_H];  // row-major [gy * FIRE_GRID_W + gx]
     int gridW_;      // actual used columns (≤ FIRE_GRID_W, clipped to width_)
     int gridH_;      // actual used rows    (≤ FIRE_GRID_H, clipped to height_)

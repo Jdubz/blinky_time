@@ -145,8 +145,11 @@ const AudioControl& AudioTracker::update(float dt) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 5. Pulse detection runs every frame (uses raw ODF, before gating)
-    updatePulseDetection(odf, dt, nowMs);
+    // 5. Pulse detection uses spectral flux directly — it has sharp transient
+    //    peaks with near-zero baseline, unlike NN onset which hovers at ~0.4.
+    //    NN onset still feeds energy synthesis and onset density.
+    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevOdf_;
+    updatePulseDetection(pulseOdf, dt, nowMs);
 
     // 6. Feed DSP components only on new spectral frames.
     if (newSpectralFrame) {
@@ -187,18 +190,8 @@ const AudioControl& AudioTracker::update(float dt) {
         if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
     }
 
-    // 9. Periodic ACF for tempo estimation
-    //    First ACF fires after ~1s (ossCount_ >= 60 at ~66 Hz), then every
-    //    acfPeriodMs (~150ms = ~9 frames). The 60-sample minimum ensures
-    //    enough OSS data for meaningful autocorrelation.
-    // Fourier Tempogram DISABLED — costs 75ms at full buffer, destroys frame timing.
-    // TODO: replace with lightweight tempo estimation (IOI tracking or short ACF)
-    // that fits within the frame budget.
-    // if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
-    //     lastAcfMs_ = nowMs;
-    //     runFourierTempogram();
-    //     updatePlpAnalysis();
-    // }
+    // Fourier Tempogram DELETED (v83). Cost 75ms, destroyed frame timing.
+    // Tempo estimation not needed — generators use energy + pulse + plpPulse directly.
 
     // 10. PLP phase update (free-running + pattern-based correction)
     updatePlpPhase();
@@ -704,6 +697,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     // Gate on spectral activity (not mic level — mic level normalization can
     // read 0 despite active audio, killing all pulse detection).
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
+
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
         risingEdge &&
@@ -877,77 +871,69 @@ void AudioTracker::checkPatternSlots() {
 // ============================================================================
 
 void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
-    // --- Energy ---
-    // Hybrid: mic level + bass mel energy (cached) + ODF peak-hold
-    float micLevel = mic_.getLevel();
-    float rawEnergy = energyMicWeight * micLevel + energyMelWeight * cachedBassEnergy_ + energyOdfWeight * odfPeakHold_;
+    // ========================================================================
+    // Clean 3-signal audio API for generators:
+    //
+    //   energy    (0-1)  Normalized mic amplitude. Auto-ranged to fill 0-1
+    //                    regardless of absolute volume. THE primary signal.
+    //
+    //   pulse     (0-1)  Onset envelope. Spikes to ~1.0 on transients (kicks,
+    //                    snares), decays exponentially. Triggers visual events.
+    //
+    //   plpPulse  (0-1)  Breathing curve. Repeating pattern shape at detected
+    //                    tempo. Cosine fallback when no rhythm detected.
+    //
+    // Generators consume ONLY these signals. They don't know about mic levels,
+    // FFT, BPM, or detection internals.
+    // ========================================================================
 
-    // Beat-proximity energy boost via PLP pulse (replaces subdivision-aware proximity)
-    rawEnergy *= (1.0f + plpPulseValue_ * 0.3f * plpConfidence_);
+    // --- Energy: normalized mic amplitude ---
+    // AdaptiveMic::getLevel() already auto-ranges via peak/valley tracking.
+    // This is the most reliable, responsive signal we have.
+    control_.energy = clampf(mic_.getLevel(), 0.0f, 1.0f);
 
-    // Pattern prediction via PLP pattern (replaces v77 bar histogram prediction)
-    float patternPrediction = plpPulseValue_ * plpConfidence_;
+    // --- Pulse: onset envelope from spectral flux ---
+    // Auto-normalize flux by its own recent peak, then trigger a decaying
+    // envelope. No hardcoded thresholds — adapts to any mic sensitivity.
+    float flux = spectral_.getSpectralFlux();
+    // Track running peak of flux (slow decay for normalization reference)
+    if (flux > fluxPeak_) fluxPeak_ = flux;
+    fluxPeak_ *= 0.998f;  // ~0.5s half-life at 50fps
+    if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
 
-    // Anticipatory energy: read PLP pattern at lookahead phase
-    static constexpr float ANTICIPATION_GAIN = 0.1f;
-    static constexpr float ANTICIPATION_LOOKAHEAD = 0.05f;
-    if (ANTICIPATION_GAIN > 0.0f && plpPatternLen_ > 0 && plpConfidence_ > 0.2f) {
-        float lookaheadPhase = plpPhase_ + ANTICIPATION_LOOKAHEAD;
-        if (lookaheadPhase >= 1.0f) lookaheadPhase -= 1.0f;
-        float patPos = lookaheadPhase * plpPatternLen_;
-        int idx0 = static_cast<int>(patPos) % plpPatternLen_;
-        float frac = patPos - floorf(patPos);
-        int idx1 = (idx0 + 1) % plpPatternLen_;
-        float lookaheadPulse = plpPattern_[idx0] * (1.0f - frac) + plpPattern_[idx1] * frac;
-        rawEnergy += lookaheadPulse * ANTICIPATION_GAIN * plpConfidence_;
+    // Normalized flux: 0-1 relative to recent peak
+    float normFlux = clampf(flux / fluxPeak_, 0.0f, 1.0f);
+
+    // Trigger envelope: any normalized flux above 0.4 pushes the envelope up
+    if (normFlux > 0.4f) {
+        float trigger = (normFlux - 0.4f) / 0.6f;  // 0-1 above threshold
+        if (trigger > pulseEnvelope_) {
+            pulseEnvelope_ = trigger;
+        }
     }
+    // Exponential decay: ~100ms at 50fps (0.92^50 ≈ 0.02)
+    pulseEnvelope_ *= 0.92f;
+    if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 
-    control_.energy = clampf(rawEnergy, 0.0f, 1.0f);
+    control_.pulse = clampf(pulseEnvelope_, 0.0f, 1.0f);
 
-    // --- Pulse ---
-    // Raw onset strength with pattern prediction boost.
-    // PLP pulse (via phaseToPulse()) provides beat-synced breathing separately.
-    float pulse = lastPulseStrength_;
-
-    static constexpr float PATTERN_GAIN = 0.3f;
-    if (pulse > 0.0f && patternPrediction > 0.3f) {
-        pulse *= (1.0f + patternPrediction * PATTERN_GAIN);
-    }
-
-    control_.pulse = clampf(pulse, 0.0f, 1.0f);
-
-    // --- Phase + PLP Pulse ---
+    // --- Phase + PLP Pulse: breathing curve ---
+    // Free-running phase at detected or default tempo.
+    // plpPulseValue_ is set by updatePlpPhase() — cosine fallback when
+    // no rhythm pattern is available.
     control_.phase = plpPhase_;
     control_.plpPulse = plpPulseValue_;
 
     // --- Rhythm Strength ---
-    // PLP confidence can only boost, never drag down ACF periodicity.
-    float strength = (plpConfidence_ > periodicityStrength_) ? plpConfidence_ : periodicityStrength_;
-
-    // Active slot confidence can only boost
-    if (activeSlot_ >= 0 && slots_[activeSlot_].valid) {
-        float slotConf = slots_[activeSlot_].confidence;
-        if (slotConf > strength) strength = slotConf;
-    }
-
-    // Soft activation gate (quadratic falloff below threshold)
-    if (strength < activationThreshold) {
-        float ratio = strength / (activationThreshold + 0.001f);
-        strength *= ratio;
-    }
-
-    // Decay during silence
-    if (nowMs - lastSignificantAudioMs_ > 3000) {
-        strength *= 0.95f;
-    }
-
-    control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
+    // Currently 0 (tempogram disabled). Will be driven by onset pattern
+    // analysis when implemented.
+    control_.rhythmStrength = 0.0f;
 
     // --- Onset Density ---
-    // Count pulses per second (1-second window)
-    if (lastPulseStrength_ > 0.0f) {
+    if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {
         onsetCountInWindow_++;
     }
+    prevPulseOutput_ = control_.pulse;
     if (nowMs - onsetDensityWindowStart_ >= 1000) {
         float newDensity = static_cast<float>(onsetCountInWindow_);
         onsetDensity_ = onsetDensity_ * 0.7f + newDensity * 0.3f;

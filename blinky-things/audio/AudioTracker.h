@@ -121,7 +121,7 @@ public:
     // Pulse detection thresholds
     float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-    float pulseOnsetFloor = 0.1f;      // ODF floor for pulse detection scaling
+    float pulseOnsetFloor = 0.005f;    // ODF floor — tuned for spectral flux range (0.001-0.05)
 
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
@@ -222,6 +222,11 @@ private:
     float onsetDensity_ = 0.0f;
     int onsetCountInWindow_ = 0;
     uint32_t onsetDensityWindowStart_ = 0;
+
+    // === Pulse envelope (spectral flux auto-normalized) ===
+    float fluxPeak_ = 0.001f;        // Running peak of spectral flux (for normalization)
+    float pulseEnvelope_ = 0.0f;     // Decaying envelope triggered by onset events
+    float prevPulseOutput_ = 0.0f;   // For onset density counting
 
     // === ACF timing ===
     uint32_t lastAcfMs_ = 0;

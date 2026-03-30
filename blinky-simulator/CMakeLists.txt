@@ -9,6 +9,9 @@ if(WIN32)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 endif()
 
+# Simulator runs on desktop — define nRF52840 platform for code compatibility
+add_definitions(-DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840)
+
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -22,7 +25,6 @@ set(BLINKY_SOURCES
     ../blinky-things/physics/PhysicsContext.cpp
     ../blinky-things/math/SimplexNoise.cpp
     ../blinky-things/generators/Fire.cpp
-    ../blinky-things/generators/HeatFire.cpp
     ../blinky-things/generators/Water.cpp
     ../blinky-things/generators/Lightning.cpp
     ../blinky-things/generators/Audio.cpp
