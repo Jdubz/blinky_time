@@ -103,8 +103,11 @@ def _find_uf2conv():
     search_bases = [
         # Seeeduino nRF52 package (primary — ships uf2conv.py)
         Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52",
+        # Windows: arduino-cli stores packages in AppData/Local/Arduino15
+        Path.home() / "AppData/Local/Arduino15/packages/Seeeduino/hardware/nrf52",
         # arduino-esp32 package (some versions ship their own copy)
         Path.home() / ".arduino15/packages/esp32/hardware/esp32",
+        Path.home() / "AppData/Local/Arduino15/packages/esp32/hardware/esp32",
     ]
     for base in search_bases:
         if base.exists():

@@ -8,7 +8,7 @@
  *
  * ARCHITECTURE STATUS:
  * ✅ Core: Generator→Effect(optional)→Render pipeline operational
- * ✅ Fire: Layout-aware fire with orientation support
+ * ✅ Fire: Particle-based fire with audio reactivity
  * ✅ Water: Flowing water effects (float hit interface)
  * ✅ Lightning: Electric bolt effects (float hit interface)
  * ✅ Effects: HueRotation, NoOp
@@ -30,7 +30,6 @@
 
 // Generator implementations
 #include "generators/Fire.cpp"
-#include "generators/HeatFire.cpp"
 #include "generators/Water.cpp"
 #include "generators/Lightning.cpp"
 #include "generators/Audio.cpp"

@@ -148,6 +148,8 @@ void setup() {
   SafeMode::check();
 
   // Initialize serial with default baud rate (config not loaded yet)
+  // Increase RX buffer to handle large device config JSON commands (default 256 is too small)
+  Serial.setRxBufferSize(1024);
   Serial.begin(115200);
   delay(1000);  // Give serial time to initialize
 
@@ -413,6 +415,12 @@ void setup() {
   // Try WiFi connect in setup (up to 10s). If it fails, auto-reconnect in loop().
   if (wifiManager.hasCredentials()) {
       wifiManager.connect();
+  } else {
+      // No credentials — disable the radio entirely.
+      // Without this, the WiFi event task keeps running at high FreeRTOS priority
+      // and preempts the render loop with irregular ~5-20ms bursts, causing frame jitter.
+      WiFi.mode(WIFI_OFF);
+      SerialConsole::logDebug(F("WiFi disabled (no credentials)"));
   }
   SerialConsole::logDebug(F("ESP32-S3 BLE + WiFi initialized"));
 #endif
@@ -435,6 +443,22 @@ void loop() {
   SafeBootWatchdog::feed();  // Keep hardware WDT alive
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
+
+  // FPS counter: report actual frame rate every 5 seconds at INFO log level
+  static uint32_t fpsFrameCount = 0;
+  static uint32_t fpsWindowStart = 0;
+  fpsFrameCount++;
+  if (now - fpsWindowStart >= 5000) {
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+      uint32_t elapsed = now - fpsWindowStart;
+      float fps = fpsFrameCount * 1000.0f / (elapsed > 0 ? elapsed : 1);
+      Serial.print(F("[FPS] "));
+      Serial.print(fps, 1);
+      Serial.println(F(" fps"));
+    }
+    fpsFrameCount = 0;
+    fpsWindowStart = now;
+  }
 
   // Frame time diagnostics: only warn for unexpectedly long frames.
   // When NN inference is active (~98ms per frame), long frames are expected

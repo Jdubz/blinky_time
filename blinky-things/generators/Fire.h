@@ -1,37 +1,25 @@
 #pragma once
 
 #include "../particles/ParticleGenerator.h"
-#include "../physics/BackgroundModel.h"
 #include "../types/ColorPalette.h"
 #include "../math/SimplexNoise.h"
-
-/**
- * SparkType - Defines different visual behaviors for fire particles
- */
-enum class SparkType : uint8_t {
-    FAST_SPARK = 0,    // Short-lived, bright, normal speed (primary sparks)
-    SLOW_EMBER = 1,    // Long-lived, dim, slow speed (glowing embers)
-    BURST_SPARK = 2    // Medium speed, maximum brightness (transient bursts)
-};
 
 /**
  * FireParams - Fire-specific particle parameters
  */
 struct FireParams {
-    // Spawn behavior
-    float baseSpawnChance;        // Baseline spark spawn probability (0-1)
-    float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
+    // Spawn behavior (density: expected sparks per crossDim-unit per frame, scaled at use-time like burstSparks)
+    float baseSpawnChance;        // Ambient spawn density (× crossDim → sparks/frame)
+    float audioSpawnBoost;        // Additional density at max energy (× crossDim → sparks/frame)
 
     // Lifecycle
-    float maxParticles;           // Fraction of numLeds for max active particles
+    float maxParticles;           // Fraction of numLeds for pool capacity (init-time only)
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Physics (fractions × device dimensions, scaled at use-time)
-    float gravity;                // × traversalDim → gravity strength (negative = upward)
-    float windBase;               // Base wind force (absolute, typically 0)
-    float windVariation;          // × crossDim → turbulence amplitude
+    float windVariation;          // × crossDim → curl noise turbulence amplitude (LEDs/sec)
     float drag;                   // Drag coefficient (0-1, per frame damping)
 
     // Spark appearance (fractions × device dimensions, scaled at use-time)
@@ -40,44 +28,40 @@ struct FireParams {
     float sparkSpread;            // × crossDim → horizontal velocity variation (LEDs/sec)
 
     // Audio reactivity
-    float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
+    float musicSpawnPulse;        // Phase modulation depth for spawn rate (0=flat, 1=full breathing)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
     float burstSparks;            // × crossDim → sparks per burst
 
-    // Background
-    float backgroundIntensity;    // Noise background brightness (0-1)
-
-    // Particle variety
-    float fastSparkRatio;         // Ratio of fast sparks (0-1, rest are embers)
+    // Thermal physics
     float thermalForce;           // × traversalDim → thermal buoyancy (LEDs/sec^2)
+
+    // Fluid dynamics heat grid
+    float gridCoolRate;           // Grid heat decay per frame (0=instant, 1=no decay; default 0.88)
+    float buoyancyCoupling;       // Grid heat → additional upward force multiplier (default 1.0)
+    float pressureCoupling;       // Lateral heat gradient → clustering force multiplier (default 0.5)
 
     FireParams() {
         // All velocity/force/count params are stored as FRACTIONS of device
         // dimensions.  The generator multiplies by traversalDim_ or crossDim_
         // at use-time, so no per-device calibration is needed.
-        baseSpawnChance = 0.5f;       // Continuous sparks for constant fire
-        audioSpawnBoost = 1.5f;       // Strong audio response
-        maxParticles = 0.75f;         // Fraction of numLeds (pool auto-sized in begin())
-        defaultLifespan = 170;        // 1.7 seconds to rise (centiseconds, time-based, device-independent)
-        intensityMin = 150;           // BRIGHT red/orange
-        intensityMax = 220;           // Very bright (orange range)
-        gravity = 0.0f;              // No gravity (thermal force provides upward push)
-        windBase = 0.0f;
-        windVariation = 1.5f;         // × crossDim → turbulence amplitude in LEDs/sec
-        drag = 0.985f;               // Smoother flow
-        musicSpawnPulse = 0.95f;      // Deep phase breathing (0=flat, 1=full off-beat silence)
-        organicTransientMin = 0.25f;  // Responsive to softer transients
+        baseSpawnChance = 0.05f;      // × crossDim → sparks/frame; 0.05×32=1.6/frame on Display
+        audioSpawnBoost = 0.15f;      // × crossDim → extra sparks at peak energy
+        maxParticles = 0.75f;         // Pool sized at begin(); changing at runtime has no effect
+        defaultLifespan = 100;        // 1.0s (centiseconds)
+        intensityMin = 150;
+        intensityMax = 220;
+        windVariation = 1.5f;         // × crossDim → LEDs/sec of curl turbulence
+        drag = 0.985f;
+        musicSpawnPulse = 0.95f;      // Deep phase breathing
+        organicTransientMin = 0.25f;
         burstSparks = 0.5f;           // × crossDim → sparks per burst
-        backgroundIntensity = 0.15f;  // Subtle noise background
-
-        // Velocities: fraction of traversal per second (~0.33-0.67 → traverse in 1.5-3s)
-        sparkVelocityMin = 0.33f;     // × traversalDim → LEDs/sec upward
-        sparkVelocityMax = 0.67f;     // × traversalDim → LEDs/sec upward
-        sparkSpread = 1.0f;           // × crossDim → horizontal scatter in LEDs/sec
-
-        // Particle variety: 70% fast sparks, 30% slow embers
-        fastSparkRatio = 0.7f;
+        sparkVelocityMin = 0.33f;
+        sparkVelocityMax = 0.67f;
+        sparkSpread = 1.0f;           // × crossDim → horizontal scatter
         thermalForce = 2.0f;          // × traversalDim → buoyancy in LEDs/sec^2
+        gridCoolRate = 0.88f;         // ~8-frame decay at 30fps → visible flame columns
+        buoyancyCoupling = 1.0f;      // Grid heat reinforces upward plumes
+        pressureCoupling = 0.5f;      // Lateral clustering (pulls particles toward hot columns)
     }
 };
 
@@ -113,10 +97,9 @@ public:
 
     // Sync physics parameters to force adapter (call after params change at runtime)
     void syncPhysicsParams() {
-        gravity_ = params_.gravity * traversalDim_;
         drag_ = params_.drag;
         if (forceAdapter_) {
-            forceAdapter_->setWind(params_.windBase, scaledWindVar());
+            forceAdapter_->setWind(0.0f, scaledWindVar());
         }
     }
 
@@ -131,11 +114,6 @@ protected:
     uint32_t particleColor(uint8_t intensity) const override;
 
 private:
-    /**
-     * Spawn a particle with specific type characteristics
-     */
-    void spawnTypedParticle(SparkType type, float x, float y, float baseSpeed);
-
     // Pool sizing: density comes from params_.maxParticles
     float particleDensity() const override { return params_.maxParticles; }
 
@@ -153,14 +131,21 @@ private:
     }
 
     FireParams params_;
-    float noiseTime_;             // Animation time for noise field
 
     // Palette blending state (low-pass filtered to avoid jarring shifts)
     float paletteBias_;          // 0.0 = warm/cool, 1.0 = hot (smoothed energy*rhythm)
 
-    // Fire-specific physics components
-    BackgroundModel* background_;
+    // Coarse heat grid for fluid dynamics (Eulerian velocity field)
+    // Particles splat heat onto the grid; grid gradients push particles into flame columns.
+    static const int FIRE_GRID_W = 8;
+    static const int FIRE_GRID_H = 8;
+    float heatGrid_[FIRE_GRID_W * FIRE_GRID_H];  // row-major [gy * FIRE_GRID_W + gx]
+    int gridW_;      // actual used columns (≤ FIRE_GRID_W, clipped to width_)
+    int gridH_;      // actual used rows    (≤ FIRE_GRID_H, clipped to height_)
+    float cellW_;    // LED width of each grid cell
+    float cellH_;    // LED height of each grid cell
 
-    // Static buffer for placement new
-    uint8_t backgroundBuffer_[64];
+    void initGrid();
+    void updateHeatGrid();
+    void applyGridForce(Particle* p, float dt);
 };
