@@ -128,7 +128,7 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
     zip_path = str(Path(hex_path).with_suffix(".dfu.zip"))
 
     result = subprocess.run(
-        ["adafruit-nrfutil", "dfu", "genpkg",
+        ["adafruit-nrfutil", "pkg", "generate",
          "--application", hex_path,
          "--sd-req", sd_req,
          zip_path],
