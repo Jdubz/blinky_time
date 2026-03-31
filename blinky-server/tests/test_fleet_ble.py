@@ -203,21 +203,24 @@ async def test_dedup_exclusion_set() -> None:
         await d.disconnect()
 
 
-async def test_dedup_exclusion_clears_on_serial_disconnect() -> None:
-    """Exclusions should clear when a serial device disconnects."""
+async def test_dedup_exclusion_clears_when_all_serial_disconnected() -> None:
+    """Exclusions should clear when no serial device is connected."""
     fleet = await _make_fleet_with_sn()
     fleet._dedup_excluded.add("BLE_ADDR_001")
     fleet._dedup_excluded.add("BLE_ADDR_002")
 
-    # Disconnect a serial device
-    serial_dev = fleet.get_device("SERIAL_001")
-    assert serial_dev is not None
-    await serial_dev.disconnect()
-
-    # Refresh exclusions
+    # Disconnect ONE serial device — exclusions should persist (other still connected)
+    serial_dev1 = fleet.get_device("SERIAL_001")
+    assert serial_dev1 is not None
+    await serial_dev1.disconnect()
     fleet._refresh_dedup_exclusions()
+    assert len(fleet._dedup_excluded) == 2  # Still excluded
 
-    # Exclusions should be cleared
+    # Disconnect ALL serial devices — exclusions should now clear
+    serial_dev2 = fleet.get_device("SERIAL_002")
+    assert serial_dev2 is not None
+    await serial_dev2.disconnect()
+    fleet._refresh_dedup_exclusions()
     assert len(fleet._dedup_excluded) == 0
 
     # Cleanup
@@ -238,6 +241,17 @@ async def test_dedup_exclusion_persists_when_all_serial_connected() -> None:
     # Cleanup
     for d in fleet.get_all_devices():
         await d.disconnect()
+
+
+async def test_dedup_exclusion_clears_when_no_serial_devices() -> None:
+    """Exclusions should clear when no serial devices exist at all."""
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+    fleet._dedup_excluded.add("BLE_ADDR_001")
+
+    # No devices at all — should clear exclusions
+    fleet._refresh_dedup_exclusions()
+
+    assert len(fleet._dedup_excluded) == 0
 
 
 # ── Release Hold Fix ──
@@ -316,25 +330,27 @@ async def test_failure_limit_removes_device() -> None:
         await d.disconnect()
 
 
-async def test_failure_count_incremented() -> None:
-    """Failed reconnect attempts should increment the failure counter."""
-    fleet = FleetManager()
+async def test_device_without_discovery_info_skipped() -> None:
+    """Devices without discovery info should be skipped during reconnect."""
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
 
     transport = MockTransport()
     device = Device(
-        device_id="FAIL_DEV",
+        device_id="NO_DISC",
         port="/dev/fail",
         platform="nrf52840",
         transport=transport,  # type: ignore[arg-type]
     )
     device.state = DeviceState.ERROR
     fleet._devices[device.id] = device
+    # No entry in _device_discovery — device should be skipped
 
-    # No discovery info → reconnect will fail
-    assert fleet._reconnect_failures.get("FAIL_DEV", 0) == 0
-
-    # Won't actually attempt because no discovery info, but structure is tested
     await fleet._reconnect_disconnected()
+
+    # Device should remain in fleet (not removed, not reconnected)
+    assert "NO_DISC" in fleet._devices
+    # No failure counter should be set (skipped, not attempted)
+    assert fleet._reconnect_failures.get("NO_DISC", 0) == 0
 
     # Cleanup
     await device.disconnect()

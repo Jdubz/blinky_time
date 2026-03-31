@@ -403,20 +403,21 @@ class FleetManager:
                 )
 
     def _refresh_dedup_exclusions(self) -> None:
-        """Clear dedup exclusions if any serial device is disconnected.
+        """Clear dedup exclusions when serial transports are gone or disconnected.
 
         Must run BEFORE discovery so BLE can take over for lost serial devices.
+        Clears when: any serial device is disconnected/error, OR no serial
+        devices exist at all (e.g., all unplugged and removed by failure limit).
         """
         if not self._dedup_excluded:
             return
-        serial_disconnected = any(
-            d.transport.transport_type == "serial"
-            and d.state in (DeviceState.DISCONNECTED, DeviceState.ERROR)
+        has_connected_serial = any(
+            d.transport.transport_type == "serial" and d.state == DeviceState.CONNECTED
             for d in self._devices.values()
         )
-        if serial_disconnected:
+        if not has_connected_serial:
             log.info(
-                "Serial device disconnected — clearing %d dedup exclusions",
+                "No connected serial devices — clearing %d dedup exclusions",
                 len(self._dedup_excluded),
             )
             self._dedup_excluded.clear()
@@ -459,14 +460,12 @@ class FleetManager:
             # is likely not a Blinky or is permanently out of range.
             fail_count = self._reconnect_failures.get(device_id, 0)
             if fail_count >= 10:
-                if fail_count == 10:  # Log once
-                    log.info(
-                        "Giving up on %s after %d failures — removing from fleet",
-                        device_id[:12],
-                        fail_count,
-                    )
-                    self._reconnect_failures[device_id] = 11  # Prevent re-logging
-                    to_remove_after.append(device_id)
+                log.info(
+                    "Giving up on %s after %d failures — removing from fleet",
+                    device_id[:12],
+                    fail_count,
+                )
+                to_remove_after.append(device_id)
                 continue
             if fail_count > 0:
                 # Backoff: skip N-1 discovery cycles (10s each) per failure,
@@ -516,6 +515,9 @@ class FleetManager:
             self._device_discovery.pop(did, None)
             self._reconnect_failures.pop(did, None)
             if dev:
+                # Best-effort cleanup: ensure underlying transport is closed
+                with contextlib.suppress(Exception):
+                    await dev.disconnect()
                 log.info("Removed unreachable device %s from fleet", did[:12])
 
     async def _check_liveness(self) -> None:

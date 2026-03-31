@@ -60,18 +60,26 @@ def _validate_ble_address(address: str) -> None:
 
 
 def clear_bluez_state(address: str) -> None:
-    """Clear BlueZ GATT cache for an address. Required between app/bootloader."""
+    """Clear BlueZ GATT cache for an address. Required between app/bootloader.
+
+    Uses ``bluetoothctl remove`` which clears the device from BlueZ's database
+    including GATT cache. Falls back to direct cache directory removal (without
+    sudo) if the user has permissions — typically when running as the same user
+    that owns the BlueZ data directory.
+    """
     _validate_ble_address(address)
     addr_u = address.replace(":", "_")
     subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=5)
-    # Clean cache directories — use glob to expand wildcards safely
+    # Best-effort cache cleanup (no sudo — will succeed only if user has permissions)
     import glob as _glob
+    import shutil
 
     for cache_dir in _glob.glob(f"/var/lib/bluetooth/*/cache/{addr_u}"):
-        subprocess.run(["sudo", "rm", "-rf", cache_dir], capture_output=True, timeout=5)
-        subprocess.run(["rm", "-rf", cache_dir], capture_output=True, timeout=5)
+        with contextlib.suppress(OSError):
+            shutil.rmtree(cache_dir)
     for dev_dir in _glob.glob(f"/var/lib/bluetooth/*/{addr_u}"):
-        subprocess.run(["sudo", "rm", "-rf", dev_dir], capture_output=True, timeout=5)
+        with contextlib.suppress(OSError):
+            shutil.rmtree(dev_dir)
 
 
 def parse_dfu_zip(zip_path: str) -> tuple[bytes, bytes, int]:

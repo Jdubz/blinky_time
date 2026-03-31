@@ -229,26 +229,33 @@ class BleTransport(Transport):
     async def read_rssi(self) -> int | None:
         """Read RSSI from the connected device via BlueZ D-Bus.
 
-        Returns RSSI in dBm, or None if unavailable. BlueZ exposes RSSI
-        on the D-Bus device proxy even for connected devices (updated by
-        the controller periodically).
+        Returns RSSI in dBm, or None if unavailable. This relies on bleak's
+        BlueZ D-Bus backend internals (_backend/_device) which may change
+        across bleak versions. Guarded with backend type checks so failures
+        are predictable and logged at debug level.
         """
         if not self._client or not self._connected:
             return None
+
         try:
-            # bleak 3.x BlueZ backend stores the D-Bus device proxy
+            from bleak.backends.bluezdbus.client import BleakClientBlueZDBus
+        except ImportError:
+            return None  # Not on BlueZ (e.g., macOS/Windows)
+
+        try:
             backend = getattr(self._client, "_backend", None)
-            if backend is None:
+            if backend is None or not isinstance(backend, BleakClientBlueZDBus):
                 return None
-            # BleakClientBlueZDBus._device is the D-Bus proxy dict
+
             device = getattr(backend, "_device", None)
-            if device is None:
+            if not isinstance(device, dict):
                 return None
+
             rssi = device.get("RSSI")
             if isinstance(rssi, int):
                 return rssi
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            log.debug("Failed to read RSSI from BLE backend: %s", exc)
         return None
 
 
