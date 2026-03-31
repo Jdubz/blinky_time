@@ -188,7 +188,10 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
     # Format: device_type (uint16 LE) + device_rev (uint16 LE) +
     #         app_version (uint32 LE) + softdevice_count (uint16 LE) +
     #         sd_req[0] (uint16 LE) + CRC16 of firmware (uint16 LE)
-    device_type = 0x0052  # nRF52840
+    # ADAFRUIT_DEVICE_TYPE constant from bootloader's dfu_init.c — the
+    # bootloader validates device_type == 0x0052 exactly. Verified working
+    # end-to-end on Seeeduino nRF52840 bootloader v0.6.1 (Mar 30, 2026).
+    device_type = 0x0052
     device_rev = 0xFFFF   # Any revision
     app_version = 0xFFFFFFFF  # Any version (no version check)
     sd_req_val = int(sd_req, 16)

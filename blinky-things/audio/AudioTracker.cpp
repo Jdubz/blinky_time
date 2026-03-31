@@ -889,8 +889,12 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
 
     // --- Energy: normalized mic amplitude ---
     // AdaptiveMic::getLevel() already auto-ranges via peak/valley tracking.
-    // This is the most reliable, responsive signal we have.
-    control_.energy = clampf(mic_.getLevel(), 0.0f, 1.0f);
+    // Smolder floor: inject gentle random noise in silence so generators
+    // always have baseline ember activity. Generators are agnostic — they
+    // just see energy and don't know if it's real audio or smolder noise.
+    float micEnergy = mic_.getLevel();
+    float smolder = 0.12f + 0.08f * ((nowMs * 7 + nowMs / 3) % 100) * 0.01f;  // 0.12-0.20 deterministic noise
+    control_.energy = clampf(max(micEnergy, smolder), 0.0f, 1.0f);
 
     // --- Pulse: onset envelope from spectral flux ---
     // Auto-normalize flux by its own recent peak, then trigger a decaying
@@ -898,7 +902,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     float flux = spectral_.getSpectralFlux();
     // Track running peak of flux (slow decay for normalization reference)
     if (flux > fluxPeak_) fluxPeak_ = flux;
-    fluxPeak_ *= 0.998f;  // ~0.5s half-life at 50fps
+    fluxPeak_ *= 0.998f;  // ~7s half-life at 50fps (stable normalization reference)
     if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
 
     // Normalized flux: 0-1 relative to recent peak

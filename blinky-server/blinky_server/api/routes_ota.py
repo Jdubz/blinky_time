@@ -109,7 +109,8 @@ async def fleet_ota(body: OtaRequest) -> dict:
 
                     ble_transport = device.transport
 
-                    async def _enter_bl(cmd, _t=ble_transport):
+                    async def enter_bootloader_via_ble(cmd: str, _t=ble_transport):
+                        """Send bootloader command over BLE NUS, then disconnect."""
                         await _t.write_line(cmd)
                         await asyncio.sleep(0.5)
                         await _t.disconnect()
@@ -117,7 +118,7 @@ async def fleet_ota(body: OtaRequest) -> dict:
                     result = await upload_ble_dfu(
                         app_ble_address=device.port,
                         dfu_zip_path=dfu_zip,
-                        enter_bootloader_via_ble=_enter_bl,
+                        enter_bootloader_via_ble=enter_bootloader_via_ble,
                     )
                 else:
                     result = {"status": "skip", "message": f"Unsupported transport: {transport_type}"}

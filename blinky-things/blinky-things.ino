@@ -465,7 +465,7 @@ void loop() {
   // FPS counter with min/max frame time tracking
   static uint32_t fpsFrameCount = 0;
   static uint32_t fpsWindowStart = 0;
-  static uint32_t fpsMinFrameMs = 999;
+  static uint32_t fpsMinFrameMs = UINT32_MAX;
   static uint32_t fpsMaxFrameMs = 0;
   uint32_t frameMs = (lastMs == 0) ? 0 : (now - lastMs);
   fpsFrameCount++;

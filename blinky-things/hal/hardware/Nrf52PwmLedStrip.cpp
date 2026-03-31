@@ -47,6 +47,7 @@ void Nrf52PwmLedStrip::begin() {
 
     // PWM SEQ[n].CNT is 15 bits (max 32767). Each LED = 24 PWM values + 2 end markers.
     // Max LEDs per sequence = (32767 - 2) / 24 = 1365.
+    // Check before claiming PWM peripheral to avoid leaking the slot on error.
     if (pwmBufferLen_ > 32767) {
         Serial.print(F("[ERROR] Too many LEDs for PWM DMA ("));
         Serial.print(numPixels_);
@@ -131,7 +132,8 @@ void Nrf52PwmLedStrip::setBrightness(uint8_t brightness) {
 }
 
 uint8_t Nrf52PwmLedStrip::getBrightness() const {
-    return brightness_ - 1;  // Undo +1 storage offset
+    // brightness_==0 means setBrightness() was never called → max brightness (255)
+    return brightness_ ? (brightness_ - 1) : 255;
 }
 
 uint16_t Nrf52PwmLedStrip::numPixels() const {
@@ -178,7 +180,7 @@ void Nrf52PwmLedStrip::convertAndTransmit() {
 void Nrf52PwmLedStrip::waitForDma() {
     if (!transmitting_ || !pwm_) return;
     while (!pwm_->EVENTS_SEQEND[0]) {
-        yield();  // Let FreeRTOS BLE task run
+        vTaskDelay(1);  // yield() is a no-op on Adafruit nRF52 core
     }
     pwm_->EVENTS_SEQEND[0] = 0;
     transmitting_ = false;

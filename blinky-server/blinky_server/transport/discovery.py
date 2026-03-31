@@ -191,13 +191,14 @@ async def cleanup_stale_ble_connections() -> None:
     devices and disconnects them so the new server session can reconnect cleanly.
     """
     import subprocess
-    try:
+
+    def _cleanup():
         result = subprocess.run(
             ["bluetoothctl", "devices", "Connected"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
-            return
+            return 0
 
         disconnected = 0
         for line in result.stdout.strip().split("\n"):
@@ -208,14 +209,17 @@ async def cleanup_stale_ble_connections() -> None:
             if len(parts) >= 2 and parts[0] == "Device":
                 addr = parts[1]
                 name = " ".join(parts[2:]) if len(parts) > 2 else ""
-                # Only disconnect Blinky/AdaDFU devices
-                if name in ("Blinky", "AdaDFU") or not name:
+                # Only disconnect Blinky/AdaDFU devices (not other BLE peripherals)
+                if name in ("Blinky", "AdaDFU"):
                     subprocess.run(
                         ["bluetoothctl", "disconnect", addr],
                         capture_output=True, timeout=5,
                     )
                     disconnected += 1
+        return disconnected
 
+    try:
+        disconnected = await asyncio.to_thread(_cleanup)
         if disconnected:
             log.info("Cleaned up %d stale BLE connections", disconnected)
     except Exception as e:

@@ -171,8 +171,9 @@ async def upload_ble_dfu(
     except Exception as e:
         result["message"] = f"Failed to connect to bootloader: {e}"
         return result
-    # Bootloader caps at 20-byte payload regardless of negotiated MTU
-    mtu = min(max(client.mtu_size - 3, 20), 20)
+    # Legacy DFU bootloader caps packet payload at 20 bytes regardless of
+    # negotiated MTU (BLEGATT_ATT_MTU_MAX=23 in bootloader firmware).
+    mtu = 20
     progress("connect", f"Connected, MTU={client.mtu_size}, DFU chunk={mtu}", 30)
 
     # Verify bootloader mode

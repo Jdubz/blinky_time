@@ -5,6 +5,9 @@ EffectRenderer::EffectRenderer(ILedStrip& leds, LEDMapper& mapper)
 }
 
 void EffectRenderer::render(const PixelMatrix& matrix) {
+    // Clear first — unmapped LEDs must be black, not stale from previous frame
+    leds_.clear();
+
     // Iterate by LED index (0..N-1) so writes to the output buffer are sequential
     // (cache-friendly). Reads from PixelMatrix are random-access via indexToX/indexToY.
     const int numLeds = leds_.numPixels();
