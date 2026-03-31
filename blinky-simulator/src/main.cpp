@@ -46,7 +46,7 @@
 #include "../../blinky-things/generators/Water.h"
 #include "../../blinky-things/generators/Lightning.h"
 #include "../../blinky-things/generators/Audio.h"
-#include "../../blinky-things/generators/HeatFire.h"
+// HeatFire removed — Fire handles all fire effects now
 #include "../../blinky-things/effects/Effect.h"
 #include "../../blinky-things/effects/HueRotationEffect.h"
 
@@ -290,8 +290,6 @@ int main(int argc, char* argv[]) {
         genType = GeneratorType::LIGHTNING;
     } else if (config.generator == "audio") {
         genType = GeneratorType::AUDIO;
-    } else if (config.generator == "heatfire") {
-        genType = GeneratorType::HEAT_FIRE;
     }
     pipeline.setGenerator(genType);
 
@@ -326,9 +324,6 @@ int main(int argc, char* argv[]) {
     } else if (genType == GeneratorType::AUDIO && pipeline.getAudioVisGenerator()) {
         applyParams(pipeline.getAudioVisGenerator()->getParamsMutable(), paramOverrides);
         allParams = getParamMap(pipeline.getAudioVisGenerator()->getParams());
-    } else if (genType == GeneratorType::HEAT_FIRE && pipeline.getHeatFireGenerator()) {
-        applyParams(pipeline.getHeatFireGenerator()->getParamsMutable(), paramOverrides);
-        allParams = getParamMap(pipeline.getHeatFireGenerator()->getParams());
     }
 
     if (config.verbose && !paramOverrides.empty()) {

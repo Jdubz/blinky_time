@@ -70,15 +70,21 @@ async def upload_uf2(
         result["message"] = f"Firmware file not found: {firmware_path}"
         return result
 
-    # Disconnect transport so the tool can access the port
-    progress("prepare", "Disconnecting transport...", 10)
+    # Disconnect transport WITHOUT dropping DTR. Setting DTR=True before
+    # close prevents TinyUSB CDC from entering "disconnected" state, so the
+    # tool can reopen the port cleanly.
+    progress("prepare", "Releasing serial port...", 10)
     try:
+        serial_obj = transport._serial_transport.serial if transport._serial_transport else None
+        if serial_obj and hasattr(serial_obj, 'dtr'):
+            serial_obj.dtr = True  # Keep DTR high to prevent TinyUSB CDC state corruption
         await transport.disconnect()
     except Exception:
         pass
     await asyncio.sleep(1)
 
-    # Run uf2_upload.py as subprocess
+    # Let the tool handle EVERYTHING: bootloader entry (with retries),
+    # UF2 detection, firmware copy, verification.
     progress("upload", f"Running uf2_upload.py on {serial_port}...", 20)
     cmd = [
         "python3", str(tool),

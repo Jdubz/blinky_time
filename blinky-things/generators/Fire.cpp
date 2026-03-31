@@ -1,7 +1,5 @@
 #include "Fire.h"
 #include "../physics/PhysicsContext.h"
-#include "../physics/MatrixBackground.h"
-#include "../physics/LinearBackground.h"
 #include "../physics/EdgeSpawnRegion.h"
 #include "../physics/RandomSpawnRegion.h"
 #include "../physics/KillBoundary.h"
@@ -11,8 +9,11 @@
 #include <Arduino.h>
 
 Fire::Fire()
-    : params_(), noiseTime_(0.0f),
-      paletteBias_(0.0f), background_(nullptr) {}
+    : params_(), paletteBias_(0.0f),
+      gridW_(FIRE_GRID_W), gridH_(FIRE_GRID_H),
+      cellW_(1.0f), cellH_(1.0f) {
+    memset(heatGrid_, 0, sizeof(heatGrid_));
+}
 
 Fire::~Fire() {
     // Physics components use placement new, no delete needed
@@ -20,289 +21,233 @@ Fire::~Fire() {
 
 bool Fire::begin(const DeviceConfig& config) {
     if (!ParticleGenerator::begin(config)) return false;
-
+    initGrid();
     return true;
 }
 
 void Fire::initPhysicsContext() {
-    // Set physics parameters from FireParams (dimension-scaled)
-    gravity_ = params_.gravity * traversalDim_;
     drag_ = params_.drag;
 
-    // Create layout-appropriate physics components
     bool wrap = PhysicsContext::shouldWrapByDefault(layout_);
 
-    // Spawn region: bottom edge for matrix, random for linear
     spawnRegion_ = PhysicsContext::createSpawnRegion(
         layout_, GeneratorType::FIRE, width_, height_, spawnBuffer_);
 
-    // Boundary: kill for matrix, wrap for linear
     boundary_ = PhysicsContext::createBoundary(
         layout_, GeneratorType::FIRE, wrap, boundaryBuffer_);
 
-    // Force adapter: 2D for matrix, 1D for linear
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);
     if (forceAdapter_) {
-        forceAdapter_->setWind(params_.windBase, scaledWindVar());
+        forceAdapter_->setWind(0.0f, scaledWindVar());
     }
-
-    // Background model: height-falloff for matrix, uniform for linear
-    background_ = PhysicsContext::createBackground(
-        layout_, BackgroundStyle::FIRE, backgroundBuffer_);
 }
 
 void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    // onset density (0-10+): normalize to 0-1 for modulation
-    float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
+    // Palette bias driven by energy
+    float targetBias = audio.energy;
+    paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f / 60.0f);
 
-    // Advance noise animation time
-    // High onset density → faster, more jittery noise; low → slow, languid
-    float organicSpeed = (0.008f + 0.012f * densityNorm) + 0.005f * audio.energy;
-    float musicSpeed   = (0.025f + 0.020f * densityNorm) + 0.020f * audio.energy;
-    noiseTime_ += organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
-
-    // Smooth palette bias toward target (energy × rhythmStrength)
-    // Low-pass with ~0.5s time constant to avoid jarring palette shifts
-    float targetBias = audio.energy * audio.rhythmStrength;
-    paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f / 60.0f);  // ~0.5s at 60 Hz
-
-    // Render noise background first (underlayer)
-    // Energy modulates background brightness: louder → brighter ember bed
-    if (background_) {
-        float bgIntensity = params_.backgroundIntensity * (0.3f + 0.7f * audio.energy);
-        background_->setIntensity(bgIntensity);
-        background_->render(matrix, width_, height_, noiseTime_, audio);
-    }
-
-    // Modulate wind turbulence by audio (phase breathing + transient gusts + onset density)
+    // Wind: baseline turbulence + transient gusts
     if (forceAdapter_) {
-        float phasePulse = audio.phaseToPulse();  // 1.0 on beat, 0.0 off-beat
-        // Wind breathes: 30% base + 70% phase modulation (dramatic calming between beats)
-        float phaseWind = 0.3f + 0.7f * phasePulse;
-        // Transient gusts: spike to 3x on strong hits
-        float transientGust = 1.0f + 2.0f * audio.pulse;
-        // Blend modulation by rhythmStrength (no modulation when no rhythm detected)
-        float mod = 1.0f * (1.0f - audio.rhythmStrength) +
-                    phaseWind * transientGust * audio.rhythmStrength;
-        // High onset density → more turbulence (jittery energetic fire)
-        float densityWindMod = 1.0f + 0.6f * densityNorm;
-        forceAdapter_->setWind(params_.windBase, scaledWindVar() * mod * densityWindMod);
+        float gust = 1.0f + 2.0f * audio.pulse;
+        forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
     }
 
-    // Run particle system (spawn → physics → render)
-    // Particles are the only visual primitive; no heat buffer, no secondary layer
+    updateHeatGrid();
+
     ParticleGenerator::generate(matrix, audio);
 }
 
 void Fire::reset() {
     ParticleGenerator::reset();
-    noiseTime_ = 0.0f;
-    paletteBias_        = 0.0f;
+    paletteBias_ = 0.0f;
+    memset(heatGrid_, 0, sizeof(heatGrid_));
 }
 
 void Fire::spawnParticles(float dt) {
-    float spawnProb;
-    uint8_t sparkCount = 0;
+    // Energy is the PRIMARY driver. Ambient (energy ~0.1) = small embers.
+    // Full music (energy ~0.9) = roaring flames filling 100% of height.
+    float e = audio_.energy;
 
-    // MUSIC-DRIVEN behavior (rhythmStrength weighted)
-    float phasePulse = audio_.phaseToPulse();
-    // musicSpawnPulse controls phase depth: 0=flat (no modulation), 1=full range (silent off-beat)
-    float phasePump = (1.0f - params_.musicSpawnPulse) + params_.musicSpawnPulse * phasePulse;
+    // Spawn rate scales dramatically with energy: 3x at full vs ambient
+    float spawnProb = params_.baseSpawnChance * (0.5f + 2.5f * e);
+    float expectedSparks = spawnProb * crossDim_;
+    uint8_t sparkCount = (uint8_t)min(expectedSparks, 255.0f);
+    float frac = expectedSparks - sparkCount;
+    if (frac > 0.0f && random(1000) < (int)(frac * 1000)) sparkCount++;
 
-    float musicSpawnProb = params_.baseSpawnChance * phasePump + params_.audioSpawnBoost * audio_.energy;
-
-    // Transient response (stronger in music mode)
-    uint8_t burst = scaledBurstSparks();
+    // Transient burst
     if (audio_.pulse > params_.organicTransientMin) {
-        float transientStrength = (audio_.pulse - params_.organicTransientMin) /
-                                 (1.0f - params_.organicTransientMin);
-        uint8_t musicSparks = (uint8_t)(burst * transientStrength);
-        uint8_t organicSparks = 2;  // Small boost in organic mode
-        sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength) +
-                                musicSparks * audio_.rhythmStrength);
+        float strength = (audio_.pulse - params_.organicTransientMin)
+                       / (1.0f - params_.organicTransientMin);
+        sparkCount += (uint8_t)(scaledBurstSparks() * strength);
     }
 
-    // Extra burst on predicted beats (only when rhythm is strong)
-    if (beatHappened() && audio_.rhythmStrength > 0.3f) {
-        sparkCount += (uint8_t)(burst * audio_.rhythmStrength);
-    }
-
-    // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
-    float organicSpawnProb = params_.baseSpawnChance + params_.audioSpawnBoost * audio_.energy;
-
-    // Continuous spark rate proportional to energy (organic mode)
-    if (audio_.energy > 0.05f) {
-        uint8_t organicSparks = (uint8_t)((audio_.energy - 0.05f) * burst * 0.5f);
-        sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength));
-    }
-
-    // BLEND spawn probability between modes
-    spawnProb = organicSpawnProb * (1.0f - audio_.rhythmStrength) +
-                musicSpawnProb * audio_.rhythmStrength;
-
-    // Random baseline spawning
-    if (random(1000) < spawnProb * 1000) {
-        sparkCount++;
-    }
-
-    // Spawn sparks using layout-aware spawn region with variety
     uint16_t maxParts = scaledMaxParticles();
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
         getSpawnPosition(x, y);
 
-        // Base speed for this spark (dimension-scaled)
+        // Per-particle random vigor adds organic variation (±20%)
+        float vigor = 0.8f + random(400) * 0.001f;  // 0.8-1.2
+
+        // Velocity: energy drives 30-100% of full speed. Vigor adds variation.
         float baseSpeed = scaledVelMin() +
                          random(100) * (scaledVelMax() - scaledVelMin()) / 100.0f;
+        float velMult = (0.3f + 0.7f * e) * vigor;
+        baseSpeed *= velMult;
 
-        // Determine spark type (more variety during music mode)
-        SparkType type;
-        float varietyRoll = random(1000) / 1000.0f;
+        float vx, vy;
+        getInitialVelocity(baseSpeed, vx, vy);
 
-        // Music mode: favor burst sparks on transients, fast sparks otherwise
-        // Organic mode: mix of fast sparks and slow embers
-        if (audio_.rhythmStrength > 0.5f && audio_.pulse > 0.3f) {
-            type = SparkType::BURST_SPARK;  // High-energy transient
-        } else if (varietyRoll < params_.fastSparkRatio) {
-            type = SparkType::FAST_SPARK;   // Primary sparks
+        // Perpendicular spread
+        float spreadAmount = (random(200) - 100) * scaledSpread() / 100.0f;
+        if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
+            vx += spreadAmount;
         } else {
-            type = SparkType::SLOW_EMBER;   // Glowing embers
+            vy += spreadAmount * 0.3f;
         }
 
-        spawnTypedParticle(type, x, y, baseSpeed);
-    }
-}
-
-void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed) {
-    float vx, vy;
-    getInitialVelocity(baseSpeed, vx, vy);
-
-    // Add spread perpendicular to main direction (dimension-scaled)
-    float spreadAmount = (random(200) - 100) * scaledSpread() / 100.0f;
-    if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
-        vx += spreadAmount;  // Matrix: horizontal spread
-    } else {
-        vy += spreadAmount * 0.3f;  // Linear: minimal vertical spread
-    }
-
-    // Blend velocity multiplier between organic and music modes
-    float organicVelMult = 0.8f;
-    float phasePulse = audio_.phaseToPulse();
-    float musicVelMult = 0.8f + 0.4f * phasePulse + 0.3f * audio_.pulse;  // Faster on-beat + transient boost
-    float velocityMult = organicVelMult * (1.0f - audio_.rhythmStrength) +
-                        musicVelMult * audio_.rhythmStrength;
-
-    // Onset density modulates particle character (0=ambient/languid, 1=dense/jittery)
-    float densityNorm = min(1.0f, audio_.onsetDensity / 6.0f);
-    // High density: shorter lifespan (0.75×), low density: longer (1.5×)
-    float densityLifeMult = 1.5f - 0.75f * densityNorm;
-
-    // Type-specific characteristics
-    uint8_t intensity, lifespan;
-    float speedMult;
-
-    switch (type) {
-    case SparkType::FAST_SPARK: {
-        // Sort min/max so random() always gets valid (lo, hi) even if misconfigured via serial
+        // Intensity: energy-driven base + vigor variation
         int lo = min((int)params_.intensityMin, (int)params_.intensityMax);
         int hi = max((int)params_.intensityMin, (int)params_.intensityMax) + 1;
-        intensity = (uint8_t)random(lo, hi);
-        lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * densityLifeMult);
-        speedMult = 1.0f;
-        break;
+        uint8_t intensity = (uint8_t)min(255.0f, random(lo, hi) * (0.3f + 0.7f * e) * vigor);
+
+        // Lifespan: energy-driven. Low energy = short embers, high = tall flames.
+        float lifeMult = 0.4f + 0.8f * e;  // 0.4x at ambient, 1.2x at max
+        uint8_t lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * lifeMult * vigor);
+
+        // Store vigor in mass field (used by updateParticle for sustained buoyancy)
+        float mass = 1.0f / max(0.3f, vigor);  // High vigor = low mass = more buoyancy
+
+        pool_.spawn(x, y, vx, vy, intensity, lifespan, mass,
+                   ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE);
     }
-
-    case SparkType::SLOW_EMBER: {
-        // Embers are dimmer than sparks; guard bounds to prevent inverted/zero range
-        // which would cause UB (random() requires max > min)
-        int lo = max(0, (int)params_.intensityMin - 30);
-        int hi = max(0, (int)params_.intensityMax - 50);
-        if (hi <= lo) hi = lo + 1;              // Prevent random(x, x) or inverted range
-        intensity = (uint8_t)max(1L, random(lo, hi));  // max(1,...) ensures spawn succeeds
-        // Embers already long-lived; density further modulates: languid embers linger even longer
-        lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * 1.5f * densityLifeMult);
-        speedMult = 0.6f;  // 40% slower
-        break;
-    }
-
-    case SparkType::BURST_SPARK:
-        // Maximum brightness on transient
-        intensity = params_.intensityMax;
-        lifespan = (uint8_t)(params_.defaultLifespan * 0.8f);  // always short-lived
-        speedMult = 1.0f;
-        break;
-
-    default:
-        intensity = params_.intensityMax;
-        lifespan = params_.defaultLifespan;
-        speedMult = 1.0f;
-        break;
-    }
-
-    // Phase-driven intensity boost: brighter on-beat, dimmer off-beat
-    if (audio_.rhythmStrength > 0.3f) {
-        int boost = (int)(phasePulse * 35 * audio_.rhythmStrength);
-        intensity = (uint8_t)min(255, (int)intensity + boost);
-    }
-
-    // Apply speed and velocity multipliers
-    vx *= velocityMult * speedMult;
-    vy *= velocityMult * speedMult;
-
-    pool_.spawn(x, y, vx, vy, intensity, lifespan, 1.0f,
-               ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE);
 }
 
 void Fire::updateParticle(Particle* p, float dt) {
-    if (params_.thermalForce <= 0.0f) return;
+    // No per-frame intensity modification — fade handles brightness decay,
+    // spawn handles initial brightness. Energy modulation happens at render time.
 
-    // Thermal buoyancy: hotter particles rise faster.
-    // As FADE flag reduces intensity over lifetime, buoyancy decreases naturally.
-    float heat = p->intensity / 255.0f;
-
-    // Phase-driven breathing: surge upward on-beat (1.0), hover off-beat (0.5)
-    // Only in music mode; in organic mode phasePulse is ~0.5 regardless
-    float phaseMod = 1.0f;
-    if (audio_.rhythmStrength > 0.3f) {
-        float phasePulse = audio_.phaseToPulse();  // 1.0 on-beat, 0.0 off-beat
-        phaseMod = 0.5f + 0.5f * phasePulse;      // 0.5 off-beat → 1.0 on-beat
+    // Extend lifespan when energy is high (all particles get more life = taller flame)
+    if (audio_.energy > 0.5f && p->maxAge < 250) {
+        p->maxAge += 1;
     }
 
-    // At full intensity (1.0): applies params_.thermalForce LEDs/sec^2 upward.
-    // p->mass is clamped to 0.01 minimum by ParticlePool::spawn, no div-by-zero risk.
-    float thermal = scaledThermalForce() * phaseMod;
-    if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
-        p->vy -= (heat * thermal / p->mass) * dt;  // Matrix: upward = negative Y
-    } else {
-        p->vx += (heat * thermal / p->mass) * dt;  // Linear: forward = positive X
+    // Fluid grid forces
+    applyGridForce(p, dt);
+}
+
+void Fire::initGrid() {
+    gridW_ = min(FIRE_GRID_W, (int)width_);
+    gridH_ = min(FIRE_GRID_H, (int)height_);
+    cellW_ = (float)width_ / gridW_;
+    cellH_ = (float)height_ / gridH_;
+    memset(heatGrid_, 0, sizeof(heatGrid_));
+}
+
+void Fire::updateHeatGrid() {
+    // Cool all cells (exponential decay each frame)
+    for (int i = 0; i < FIRE_GRID_W * FIRE_GRID_H; i++) {
+        heatGrid_[i] *= params_.gridCoolRate;
     }
 
-    // Phase-driven drag: slightly more drag off-beat (lazy float), less on-beat (fast rise)
-    if (audio_.rhythmStrength > 0.3f) {
-        float phasePulse = audio_.phaseToPulse();
-        float extraDrag = 1.0f - 0.015f * (1.0f - phasePulse) * audio_.rhythmStrength;
-        p->vx *= extraDrag;
-        p->vy *= extraDrag;
+    // Splat heat from alive particles onto nearest grid cell.
+    // SPLAT_GAIN chosen so a cell with ~3 particles at avg intensity reaches ~0.5 steady-state.
+    // Steady-state: heat_ss = N * gain * intensity / (1 - coolRate)
+    // At coolRate=0.88, 3 particles intensity=0.7: 3*0.04*0.7/0.12 = 0.7
+    static const float SPLAT_GAIN = 0.04f;
+    pool_.forEach([this](const Particle* p) {
+        int gx = constrain((int)(p->x / cellW_), 0, gridW_ - 1);
+        int gy = constrain((int)(p->y / cellH_), 0, gridH_ - 1);
+        float& cell = heatGrid_[gy * FIRE_GRID_W + gx];
+        cell += (p->intensity / 255.0f) * SPLAT_GAIN;
+        if (cell > 1.0f) cell = 1.0f;
+    });
+}
+
+void Fire::applyGridForce(Particle* p, float dt) {
+    if (params_.buoyancyCoupling <= 0.0f && params_.pressureCoupling <= 0.0f) return;
+
+    int gx = constrain((int)(p->x / cellW_), 0, gridW_ - 1);
+    int gy = constrain((int)(p->y / cellH_), 0, gridH_ - 1);
+    float heat = heatGrid_[gy * FIRE_GRID_W + gx];
+
+    // Plume buoyancy: grid hot cells reinforce upward velocity in existing columns
+    if (params_.buoyancyCoupling > 0.0f) {
+        float buoyScale = traversalDim_ * params_.buoyancyCoupling;
+        if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
+            p->vy -= (heat * buoyScale / p->mass) * dt;  // upward = negative Y
+        } else {
+            p->vx += (heat * buoyScale / p->mass) * dt;  // forward = positive X
+        }
+    }
+
+    // Lateral pressure: heat gradient pulls particles toward hot columns.
+    // dHeat/dx > 0 means more heat to the right → push particle right (toward heat).
+    if (params_.pressureCoupling > 0.0f) {
+        float dHeatDx = 0.0f;
+        if (gx > 0 && gx < gridW_ - 1) {
+            dHeatDx = (heatGrid_[gy * FIRE_GRID_W + (gx + 1)] - heatGrid_[gy * FIRE_GRID_W + (gx - 1)]) * 0.5f;
+        } else if (gx == 0 && gridW_ > 1) {
+            dHeatDx = heatGrid_[gy * FIRE_GRID_W + 1] - heat;
+        } else if (gx > 0) {
+            dHeatDx = heat - heatGrid_[gy * FIRE_GRID_W + (gx - 1)];
+        }
+
+        float pressScale = crossDim_ * params_.pressureCoupling;
+        if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
+            p->vx += (dHeatDx * pressScale / p->mass) * dt;
+        } else {
+            p->vy += (dHeatDx * pressScale / p->mass) * dt;
+        }
     }
 }
 
 void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
-    int x = (int)p->x;
-    int y = (int)p->y;
+    // Sub-pixel splat: distribute particle color to up to 4 neighboring pixels
+    // based on fractional position. Creates glow instead of sharp dots.
+    float fx = p->x - 0.5f;  // Center on pixel
+    float fy = p->y - 0.5f;
+    int x0 = (int)floorf(fx);
+    int y0 = (int)floorf(fy);
+    float dx = fx - x0;  // Fractional offset 0-1
+    float dy = fy - y0;
 
-    if (x >= 0 && x < width_ && y >= 0 && y < height_) {
-        uint32_t color = particleColor(p->intensity);
-        uint8_t r = (color >> 16) & 0xFF;
-        uint8_t g = (color >> 8) & 0xFF;
-        uint8_t b = color & 0xFF;
+    uint32_t color = particleColor(p->intensity);
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
 
-        // ADDITIVE BLENDING: Particles add to existing colors
-        RGB existing = matrix.getPixel(x, y);
-        matrix.setPixel(x, y,
-                       min(255, (int)existing.r + r),
-                       min(255, (int)existing.g + g),
-                       min(255, (int)existing.b + b));
-    }
+    // Energy modulation at render time: whole flame breathes with audio.
+    // Base brightness 40% + energy drives remaining 60% + pulse adds 40% spike.
+    float brightnessScale = 0.4f + 0.6f * audio_.energy + 0.4f * audio_.pulse;
+    if (brightnessScale > 1.0f) brightnessScale = 1.0f;
+    r = (uint8_t)(r * brightnessScale);
+    g = (uint8_t)(g * brightnessScale);
+    b = (uint8_t)(b * brightnessScale);
+
+    // Bilinear weights for 4 pixels
+    float w00 = (1.0f - dx) * (1.0f - dy);
+    float w10 = dx * (1.0f - dy);
+    float w01 = (1.0f - dx) * dy;
+    float w11 = dx * dy;
+
+    // Splat to each pixel with weight
+    auto splat = [&](int px, int py, float w) {
+        if (px >= 0 && px < width_ && py >= 0 && py < height_ && w > 0.01f) {
+            RGB existing = matrix.getPixel(px, py);
+            matrix.setPixel(px, py,
+                min(255, (int)existing.r + (int)(r * w)),
+                min(255, (int)existing.g + (int)(g * w)),
+                min(255, (int)existing.b + (int)(b * w)));
+        }
+    };
+
+    splat(x0, y0, w00);
+    splat(x0 + 1, y0, w10);
+    splat(x0, y0 + 1, w01);
+    splat(x0 + 1, y0 + 1, w11);
 }
 
 uint32_t Fire::particleColor(uint8_t intensity) const {

@@ -63,7 +63,7 @@ static float effectRotationSpeed_ = 0.0f;
 
 // New constructor with RenderPipeline
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
-    : pipeline_(pipeline), fireGenerator_(nullptr), heatFireGenerator_(nullptr),
+    : pipeline_(pipeline), fireGenerator_(nullptr),
       waterGenerator_(nullptr),
       lightningGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
       battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
@@ -71,7 +71,6 @@ SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
     // Get generator pointers from pipeline
     if (pipeline_) {
         fireGenerator_ = pipeline_->getFireGenerator();
-        heatFireGenerator_ = pipeline_->getHeatFireGenerator();
         waterGenerator_ = pipeline_->getWaterGenerator();
         lightningGenerator_ = pipeline_->getLightningGenerator();
         audioVisGenerator_ = pipeline_->getAudioVisGenerator();
@@ -123,11 +122,6 @@ void SerialConsole::registerSettings() {
     // Register all settings by category
     registerFireSettings(fp);
 
-    // Register HeatFire generator settings
-    if (heatFireGenerator_) {
-        registerHeatFireSettings(&heatFireGenerator_->getParamsMutable());
-    }
-
     // Register Water generator settings (use mutable ref so changes apply directly)
     if (waterGenerator_) {
         registerWaterSettings(&waterGenerator_->getParamsMutable());
@@ -160,17 +154,13 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Spawn behavior
     settings_.registerFloat("basespawnchance", &fp->baseSpawnChance, "fire",
-        "Baseline spark spawn probability", 0.0f, 1.0f, onParamChanged);
+        "Ambient spawn density (x crossDim -> sparks/frame)", 0.0f, 0.5f, onParamChanged);
     settings_.registerFloat("audiospawnboost", &fp->audioSpawnBoost, "fire",
-        "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
+        "Extra spawn density at peak energy (x crossDim -> sparks/frame)", 0.0f, 0.5f, onParamChanged);
     settings_.registerFloat("burstsparks", &fp->burstSparks, "fire",
         "Burst sparks (x crossDim -> count)", 0.1f, 2.0f, onParamChanged);
 
     // Physics
-    settings_.registerFloat("gravity", &fp->gravity, "fire",
-        "Gravity (x traversalDim -> LEDs/sec^2, neg=up)", -10.0f, 10.0f, onParamChanged);
-    settings_.registerFloat("windbase", &fp->windBase, "fire",
-        "Base wind force", -50.0f, 50.0f, onParamChanged);
     settings_.registerFloat("windvariation", &fp->windVariation, "fire",
         "Wind variation (x crossDim -> LEDs/sec)", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("drag", &fp->drag, "fire",
@@ -185,8 +175,6 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
         "Spread (x crossDim -> LEDs/sec)", 0.0f, 5.0f, onParamChanged);
 
     // Lifecycle
-    settings_.registerFloat("maxparticles", &fp->maxParticles, "fire",
-        "Max particles (× numLeds, clamped to pool)", 0.1f, 1.0f, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
         "Default particle lifespan (centiseconds, 100=1s)", 1, 255, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
@@ -200,55 +188,17 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fire",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 
-    // Background
-    settings_.registerFloat("bgintensity", &fp->backgroundIntensity, "fire",
-        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
-
-    // Particle variety
-    settings_.registerFloat("fastsparks", &fp->fastSparkRatio, "fire",
-        "Fast spark ratio (0=all embers, 1=all sparks)", 0.0f, 1.0f, onParamChanged);
-
     // Thermal physics
     settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
         "Thermal buoyancy (x traversalDim -> LEDs/sec^2)", 0.0f, 10.0f, onParamChanged);
-}
 
-// === HEAT FIRE SETTINGS (Noise-field fire) ===
-// Prefixed with "hf_" to avoid name collisions with particle fire settings.
-void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
-    if (!hfp) return;
-
-    auto heatFireParamChanged = []() {};  // Noise-field params take effect immediately
-
-    // Intensity threshold
-    settings_.registerFloat("hf_silencethresh", &hfp->silenceThreshold, "heatfire",
-        "Noise threshold at silence (higher = less fire)", 0.3f, 0.8f, heatFireParamChanged);
-    settings_.registerFloat("hf_energydrop", &hfp->energyThresholdDrop, "heatfire",
-        "Max threshold reduction from energy", 0.1f, 0.6f, heatFireParamChanged);
-    settings_.registerFloat("hf_beatpulsedepth", &hfp->beatPulseDepth, "heatfire",
-        "Phase breathing height amplitude", 0.0f, 0.5f, heatFireParamChanged);
-    settings_.registerFloat("hf_burststrength", &hfp->burstStrength, "heatfire",
-        "Transient pulse height flare", 0.0f, 0.5f, heatFireParamChanged);
-    settings_.registerFloat("hf_organictransmin", &hfp->organicTransientMin, "heatfire",
-        "Min transient to trigger burst", 0.0f, 1.0f, heatFireParamChanged);
-
-    // Flame shape
-    settings_.registerFloat("hf_flamebaseheight", &hfp->flameBaseHeight, "heatfire",
-        "Flame height fraction at silence (0-1)", 0.1f, 0.8f, heatFireParamChanged);
-    settings_.registerFloat("hf_warpstrength", &hfp->warpStrength, "heatfire",
-        "Domain warp amplitude (lateral sway)", 0.0f, 1.0f, heatFireParamChanged);
-
-    // Animation
-    settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
-        "Base noise scroll speed (units/sec)", 1.0f, 30.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
-        "Beat sync depth for scroll speed (0-1)", 0.0f, 1.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_densityscrollboost", &hfp->densityScrollBoost, "heatfire",
-        "OnsetDensity extra scroll speed (0=none, 1=+100%)", 0.0f, 1.0f, heatFireParamChanged);
-
-    // Output
-    settings_.registerFloat("hf_brightness", &hfp->brightness, "heatfire",
-        "Master output brightness (0-1)", 0.0f, 1.0f, heatFireParamChanged);
+    // Fluid dynamics heat grid
+    settings_.registerFloat("gridcoolrate", &fp->gridCoolRate, "fire",
+        "Heat grid decay per frame (0=instant, 0.99=persistent)", 0.0f, 0.99f, onParamChanged);
+    settings_.registerFloat("buoyancycoupling", &fp->buoyancyCoupling, "fire",
+        "Grid heat -> upward force multiplier", 0.0f, 5.0f, onParamChanged);
+    settings_.registerFloat("pressurecoupling", &fp->pressureCoupling, "fire",
+        "Lateral heat gradient -> clustering force", 0.0f, 3.0f, onParamChanged);
 }
 
 // === AUDIO SETTINGS ===
@@ -786,16 +736,18 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         delay(100);      // Brief delay for serial transmission
         {
 #ifdef ARDUINO_ARCH_NRF52
-            // Disable SD FIRST — releases peripheral protection and resets
-            // POWER peripheral (clears any prior GPREGRET writes).
-            // Then write GPREGRET AFTER SD cleanup, then reset.
+            // Write GPREGRET via SoftDevice API while SD is still enabled.
+            // Do NOT call sd_softdevice_disable() — it resets the POWER
+            // peripheral which can clear GPREGRET. The MBR handles SD state.
+            // This matches Nordic's own buttonless DFU implementation.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
-                sd_softdevice_disable();
+                sd_power_gpregret_clr(0, 0xFF);
+                sd_power_gpregret_set(0, dfuMagic);
+            } else {
+                NRF_POWER->GPREGRET = dfuMagic;
             }
-            __DSB(); __ISB();
-            NRF_POWER->GPREGRET = dfuMagic;
             __DSB(); __ISB();
             NVIC_SystemReset();
 #else
@@ -1112,9 +1064,6 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
             found = true;
         } else if (strcmp(name, "audio") == 0) {
             type = GeneratorType::AUDIO;
-            found = true;
-        } else if (strcmp(name, "heatfire") == 0) {
-            type = GeneratorType::HEAT_FIRE;
             found = true;
         }
 

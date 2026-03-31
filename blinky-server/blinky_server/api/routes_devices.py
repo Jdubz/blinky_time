@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -157,16 +158,37 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     elif transport_type == "ble":
         from ..ota.ble_dfu import upload_ble_dfu
+        from ..ota.compile import ensure_dfu_zip
+
+        # Ensure we have a DFU zip (auto-converts .hex if needed)
+        try:
+            dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        # Capture transport write_line before hold (which may disconnect)
+        ble_transport = device.transport
+
+        async def enter_bootloader_via_ble(cmd: str):
+            """Send bootloader command over BLE NUS, then disconnect."""
+            await ble_transport.write_line(cmd)
+            await asyncio.sleep(0.5)  # Let command transmit before disconnect
+            await ble_transport.disconnect()
 
         fleet.hold_reconnect(device_id, 180)
+        fleet.pause_discovery()  # Prevent BleakScanner conflict during DFU
         try:
             result = await upload_ble_dfu(
                 app_ble_address=device.port,  # BLE address is stored as port
-                dfu_zip_path=str(firmware),
-                # BLE devices don't have serial — bootloader entry via BLE DFU trigger
-                enter_bootloader_via_serial=None,
+                dfu_zip_path=dfu_zip,
+                enter_bootloader_via_ble=enter_bootloader_via_ble,
             )
         finally:
+            # Mark device as disconnected so auto-reconnect picks it up.
+            # The old transport was disconnected during DFU — device is
+            # rebooting with new firmware and will re-advertise on BLE.
+            device.state = DeviceState.DISCONNECTED
+            fleet.resume_discovery()
             fleet.resume_reconnect(device_id)
 
         if result["status"] == "ok":

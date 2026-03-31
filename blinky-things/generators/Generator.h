@@ -11,8 +11,7 @@ enum class GeneratorType {
     FIRE,
     WATER,
     LIGHTNING,
-    AUDIO,
-    HEAT_FIRE
+    AUDIO
 };
 
 /**

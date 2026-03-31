@@ -117,8 +117,6 @@ inline void applyParams(FireParams& p, const ParamMap& params) {
     p.defaultLifespan = ParamParser::getInt(params, "defaultLifespan", p.defaultLifespan);
     p.intensityMin = ParamParser::getInt(params, "intensityMin", p.intensityMin);
     p.intensityMax = ParamParser::getInt(params, "intensityMax", p.intensityMax);
-    p.gravity = ParamParser::getFloat(params, "gravity", p.gravity);
-    p.windBase = ParamParser::getFloat(params, "windBase", p.windBase);
     p.windVariation = ParamParser::getFloat(params, "windVariation", p.windVariation);
     p.drag = ParamParser::getFloat(params, "drag", p.drag);
     p.sparkVelocityMin = ParamParser::getFloat(params, "sparkVelocityMin", p.sparkVelocityMin);
@@ -127,9 +125,10 @@ inline void applyParams(FireParams& p, const ParamMap& params) {
     p.musicSpawnPulse = ParamParser::getFloat(params, "musicSpawnPulse", p.musicSpawnPulse);
     p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
     p.burstSparks = ParamParser::getFloat(params, "burstSparks", p.burstSparks);
-    p.backgroundIntensity = ParamParser::getFloat(params, "backgroundIntensity", p.backgroundIntensity);
-    p.fastSparkRatio = ParamParser::getFloat(params, "fastSparkRatio", p.fastSparkRatio);
     p.thermalForce = ParamParser::getFloat(params, "thermalForce", p.thermalForce);
+    p.gridCoolRate = ParamParser::getFloat(params, "gridCoolRate", p.gridCoolRate);
+    p.buoyancyCoupling = ParamParser::getFloat(params, "buoyancyCoupling", p.buoyancyCoupling);
+    p.pressureCoupling = ParamParser::getFloat(params, "pressureCoupling", p.pressureCoupling);
 }
 
 inline ParamMap getParamMap(const FireParams& p) {
@@ -140,8 +139,6 @@ inline ParamMap getParamMap(const FireParams& p) {
     m["defaultLifespan"] = std::to_string(p.defaultLifespan);
     m["intensityMin"] = std::to_string(p.intensityMin);
     m["intensityMax"] = std::to_string(p.intensityMax);
-    m["gravity"] = std::to_string(p.gravity);
-    m["windBase"] = std::to_string(p.windBase);
     m["windVariation"] = std::to_string(p.windVariation);
     m["drag"] = std::to_string(p.drag);
     m["sparkVelocityMin"] = std::to_string(p.sparkVelocityMin);
@@ -150,43 +147,14 @@ inline ParamMap getParamMap(const FireParams& p) {
     m["musicSpawnPulse"] = std::to_string(p.musicSpawnPulse);
     m["organicTransientMin"] = std::to_string(p.organicTransientMin);
     m["burstSparks"] = std::to_string(p.burstSparks);
-    m["backgroundIntensity"] = std::to_string(p.backgroundIntensity);
-    m["fastSparkRatio"] = std::to_string(p.fastSparkRatio);
     m["thermalForce"] = std::to_string(p.thermalForce);
+    m["gridCoolRate"] = std::to_string(p.gridCoolRate);
+    m["buoyancyCoupling"] = std::to_string(p.buoyancyCoupling);
+    m["pressureCoupling"] = std::to_string(p.pressureCoupling);
     return m;
 }
 
-// Apply parsed params to HeatFireParams (noise-field fire, v70+)
-#include "../../blinky-things/generators/HeatFire.h"
-inline void applyParams(HeatFireParams& p, const ParamMap& params) {
-    p.silenceThreshold = ParamParser::getFloat(params, "silenceThreshold", p.silenceThreshold);
-    p.energyThresholdDrop = ParamParser::getFloat(params, "energyThresholdDrop", p.energyThresholdDrop);
-    p.beatPulseDepth = ParamParser::getFloat(params, "beatPulseDepth", p.beatPulseDepth);
-    p.burstStrength = ParamParser::getFloat(params, "burstStrength", p.burstStrength);
-    p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
-    p.flameBaseHeight = ParamParser::getFloat(params, "flameBaseHeight", p.flameBaseHeight);
-    p.warpStrength = ParamParser::getFloat(params, "warpStrength", p.warpStrength);
-    p.noiseSpeed = ParamParser::getFloat(params, "noiseSpeed", p.noiseSpeed);
-    p.musicBeatDepth = ParamParser::getFloat(params, "musicBeatDepth", p.musicBeatDepth);
-    p.densityScrollBoost = ParamParser::getFloat(params, "densityScrollBoost", p.densityScrollBoost);
-    p.brightness = ParamParser::getFloat(params, "brightness", p.brightness);
-}
-
-inline ParamMap getParamMap(const HeatFireParams& p) {
-    ParamMap m;
-    m["silenceThreshold"] = std::to_string(p.silenceThreshold);
-    m["energyThresholdDrop"] = std::to_string(p.energyThresholdDrop);
-    m["beatPulseDepth"] = std::to_string(p.beatPulseDepth);
-    m["burstStrength"] = std::to_string(p.burstStrength);
-    m["organicTransientMin"] = std::to_string(p.organicTransientMin);
-    m["flameBaseHeight"] = std::to_string(p.flameBaseHeight);
-    m["warpStrength"] = std::to_string(p.warpStrength);
-    m["noiseSpeed"] = std::to_string(p.noiseSpeed);
-    m["musicBeatDepth"] = std::to_string(p.musicBeatDepth);
-    m["densityScrollBoost"] = std::to_string(p.densityScrollBoost);
-    m["brightness"] = std::to_string(p.brightness);
-    return m;
-}
+// HeatFire removed — all fire effects now use Fire generator
 
 // Apply parsed params to WaterParams
 #include "../../blinky-things/generators/Water.h"

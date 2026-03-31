@@ -8,7 +8,7 @@ Upload safety depends on the platform. ESP32-S3 and nRF52840 use completely diff
 
 ```bash
 # MUST use full FQBN with USBMode=hwcdc — see note below
-arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' -p /dev/ttyACM0 blinky-things
+arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PSRAM=opi' -p /dev/ttyACM0 blinky-things
 ```
 
 `arduino-cli upload` on ESP32-S3 calls **esptool**, which talks to the chip's hardware ROM bootloader. The ROM bootloader is burned into silicon and cannot be bricked. esptool verifies every write. If interrupted, the ROM bootloader still works and you just re-flash.
@@ -76,6 +76,14 @@ The server owns all serial/BLE connections — no port contention, no lock files
 - `arduino-cli core list/install` — Safe
 - Reading serial ports — Safe
 
+### Test Chips (Unenclosed) — Use First for Risky Firmware
+
+There are bare (unenclosed) chips attached to blinkyhost. **Always test untested bootloader changes or risky firmware on these first.**
+
+- Reset button is directly accessible — no disassembly required
+- SWD recovery pads are accessible — no emergency disassembly in worst case
+- Safe to experiment on before flashing any installed device
+
 ### If a Device Becomes Unresponsive
 
 **nRF52840** devices are physically installed and reset buttons are NOT accessible.
@@ -84,8 +92,6 @@ If a device stops responding to serial commands:
 2. Use blinky-server OTA: `curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota -d '{"firmware_path":"/tmp/blinky-build/blinky-things.ino.hex"}'`
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
-
-**ESP32-S3**: Just re-run `arduino-cli compile --upload`. The ROM bootloader always survives.
 
 ## CRITICAL: Long-Running Scripts
 
@@ -106,11 +112,13 @@ To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<ex
 ```bash
 # === ESP32-S3 ===
 # Requires: arduino-cli lib install "NimBLE-Arduino" (BLE support, fixes core 3.3.7 crash)
+# NimBLE 2.4.0 must be installed manually from GitHub (not in registry): h2zero/NimBLE-Arduino@2.4.0
+# PSRAM=opi is required — without it, BLE controller malloc(36KB) fails due to internal SRAM exhaustion
 # Compile only (MUST use full FQBN — see JTAG/PDM pin conflict above)
-arduino-cli compile --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' blinky-things
+arduino-cli compile --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PSRAM=opi' blinky-things
 
 # Compile + upload (safe — uses esptool)
-arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' -p /dev/ttyACM0 blinky-things
+arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PSRAM=opi' -p /dev/ttyACM0 blinky-things
 
 # === nRF52840 ===
 # Compile only (in-tree build, requires TFLite library)
@@ -433,19 +441,20 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ### Current Status (March 2026)
 
+> **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
+
 **Production Ready:**
 - ✅ AudioTracker with ACF+PLP (Fourier tempogram) + pulse baseline tracking + pattern slot cache (v82)
 - ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, v11-final deployed on 4/5 blinkyhost devices)
-- ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
 - ✅ Multi-layer safety mechanisms
 - ✅ 3 device configurations (Hat, Tube, Bucket) + Display (32x32 matrix)
 - ✅ Mic calibration pipeline + gain-aware training augmentation
-- ✅ Fixed hardware gain (AGC removed v72; nRF52840: 32, ESP32-S3: 30)
+- ✅ Fixed hardware gain (AGC removed v72; nRF52840: gain=32)
 - ✅ Simulator working (rebuilds with current firmware code)
-- ✅ 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local
+- ✅ Active devices: nRF52840 on blinkyhost + 1 nRF52840 tube local
 
 **Removed (v64-v82):**
 - v64: Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking, template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux (~1500 lines)
@@ -455,17 +464,21 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - v82: v77 pattern memory (IOI histogram + bar histogram + onset buffer, ~200 lines, 10 params) replaced by pattern slot cache (4-slot LRU of PLP pattern digests, 5 params). Fisher's g removed (dead code). downbeat/beatInMeasure removed from AudioControl.
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
-**Wireless (March 27, 2026):**
-- ✅ BLE NUS on nRF52840 (Bluefruit52Lib, verified working via bleak)
-- ✅ BLE NUS on ESP32-S3 (NimBLE-Arduino 2.4.0, compiled, untested)
-- ✅ BLE Advertiser on ESP32-S3 (NimBLE 2.x API, verified working)
-- ✅ BLE DFU service on nRF52840 (app→bootloader transition verified)
-- ✅ WiFi TCP server on ESP32-S3 (non-blocking Core 1, verified)
-- ✅ WiFi OTA (ArduinoOTA + HTTP pull, code complete)
-- ✅ Fleet server (blinky-server) on blinkyhost (4 serial + 2 BLE devices)
-- ✅ Multi-transport discovery (serial + BLE + WiFi/mDNS)
+**Wireless (March 28, 2026):**
+- ✅ BLE NUS bidirectional on nRF52840 (Print& refactor, all commands work over BLE)
+- ✅ BLE NUS bidirectional on ESP32-S3 (NUS TX wired, verified `show nn` over BLE)
+- ✅ Wireless-only mode (`--no-serial`, 6 devices managed via BLE only)
+- ✅ Server OTA: `POST /api/devices/{id}/ota` + `POST /api/fleet/ota` (delegates to uf2_upload.py)
+- ✅ BLE DFU protocol reverse-engineered (Legacy DFU SDK v11, START_DFU notification verified)
+- ✅ Platform detection via `json info` (`"platform":"nrf52840"` / `"esp32s3"`)
+- ✅ vTaskDelay(1) for BLE stability (yield() was no-op on Adafruit core)
+- ✅ StartNotify fix for reliable bleak notifications
+- ✅ Bootloader entry: sd_softdevice_disable → DSB/ISB → GPREGRET → NVIC_SystemReset
+- ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, dedup, REST API)
+- ✅ BLE DFU proven end-to-end (Legacy DFU SDK v11, 510KB in ~5.5min, tested Mar 30 on bare chip)
+- ✅ BLE-only OTA via server API (`POST /devices/{id}/ota`, bootloader entry via BLE NUS)
+- ⚠️ Post-BLE-DFU: device needs physical power cycle for USB/BLE re-enumeration (uhubctl insufficient on Pi)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
-- ✅ BLE DFU transfer: Legacy DFU (SDK v11) protocol working. START_DFU notification received (0x10 0x01 0x01). Key findings: write-without-response required for DFU Control, bootloader BLE addr = app+1, force StartNotify over AcquireNotify, GPREGRET=0xA8 for serial-triggered BLE DFU. Full transfer pending end-to-end test after physical device reset. OTA managed by blinky-server (`POST /api/devices/{id}/ota`).
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned (Not Started):**

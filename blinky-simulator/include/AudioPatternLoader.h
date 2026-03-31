@@ -246,6 +246,81 @@ public:
     }
 
     // Get pattern by name
+    // Realistic audio: quiet intro, music builds, drops, dynamic energy.
+    // Models what the mic actually captures — noisy energy baseline, imperfect
+    // pulse detection, variable onset density. No rhythmStrength (tempogram disabled).
+    static AudioPattern createRealistic(uint32_t durationMs) {
+        AudioPattern pattern("realistic");
+        pattern.setBPM(126.0f);
+        pattern.setDuration(durationMs);
+
+        // Simple PRNG for deterministic "random" variation
+        uint32_t seed = 12345;
+        auto rng = [&seed]() -> float {
+            seed = seed * 1664525 + 1013904223;
+            return (seed >> 16) / 65535.0f;
+        };
+
+        for (uint32_t t = 0; t <= durationMs; t += 20) { // 50 FPS
+            float timeSec = t / 1000.0f;
+
+            // Section structure: quiet(0-3s) → build(3-6s) → drop(6-8s) → full(8-15s) → breakdown(15-18s) → outro(18+)
+            float sectionGain;
+            if (timeSec < 3.0f)       sectionGain = 0.15f + 0.05f * rng();  // Quiet ambient
+            else if (timeSec < 6.0f)  sectionGain = 0.15f + (timeSec - 3.0f) / 3.0f * 0.55f; // Build
+            else if (timeSec < 8.0f)  sectionGain = 0.3f + 0.1f * rng();    // Drop (quiet before drop)
+            else if (timeSec < 15.0f) sectionGain = 0.7f + 0.3f * rng();    // Full energy
+            else if (timeSec < 18.0f) sectionGain = 0.7f - (timeSec - 15.0f) / 3.0f * 0.4f; // Breakdown
+            else                      sectionGain = 0.2f + 0.1f * rng();    // Outro
+
+            // Energy: section gain + beat-aligned oscillation + noise
+            float beatPhase = fmodf(timeSec * 126.0f / 60.0f, 1.0f);
+            float beatOsc = 0.5f + 0.5f * cosf(beatPhase * 6.28318f);
+            float noise = (rng() - 0.5f) * 0.15f;
+            float energy = sectionGain * (0.6f + 0.4f * beatOsc) + noise;
+            energy = std::max(0.0f, std::min(1.0f, energy));
+
+            // Pulse: imperfect detection. Fires on ~70% of beats, sometimes slightly off-beat.
+            // Spectral flux-style: sharp spike that decays quickly.
+            float pulse = 0.0f;
+            bool isBeatRegion = beatPhase < 0.08f;
+            bool detected = rng() < 0.7f;  // 70% detection rate
+            if (isBeatRegion && detected && sectionGain > 0.3f) {
+                pulse = (0.5f + 0.5f * rng()) * sectionGain;  // Strength varies
+            }
+            // Occasional false positives
+            if (rng() < 0.02f && sectionGain > 0.4f) {
+                pulse = 0.2f * rng();
+            }
+
+            // No rhythmStrength (tempogram disabled in current firmware)
+            pattern.addKeyframe(t, energy, pulse, beatPhase, 0.0f);
+        }
+
+        return pattern;
+    }
+
+    // Ambient: no music, just mic noise floor with occasional random spikes
+    static AudioPattern createAmbient(uint32_t durationMs) {
+        AudioPattern pattern("ambient");
+        pattern.setDuration(durationMs);
+
+        uint32_t seed = 67890;
+        auto rng = [&seed]() -> float {
+            seed = seed * 1664525 + 1013904223;
+            return (seed >> 16) / 65535.0f;
+        };
+
+        for (uint32_t t = 0; t <= durationMs; t += 20) {
+            float noise = 0.05f + 0.1f * rng();
+            float spike = (rng() < 0.01f) ? 0.3f * rng() : 0.0f;  // Rare random spike
+            float energy = noise + spike;
+            pattern.addKeyframe(t, energy, 0.0f, 0.0f, 0.0f);
+        }
+
+        return pattern;
+    }
+
     static AudioPattern getPattern(const std::string& name, uint32_t durationMs = 3000) {
         if (name == "steady-120bpm" || name == "steady") {
             return createSteadyBeat(120.0f, durationMs);
@@ -259,6 +334,10 @@ public:
             return createBurst(durationMs);
         } else if (name == "complex") {
             return createComplex(durationMs);
+        } else if (name == "realistic" || name == "real") {
+            return createRealistic(durationMs);
+        } else if (name == "ambient" || name == "quiet") {
+            return createAmbient(durationMs);
         } else {
             // Try to load from file
             AudioPattern pattern = loadFromFile(name);

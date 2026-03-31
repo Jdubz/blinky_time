@@ -6,7 +6,10 @@ import logging
 import time as _time
 
 from ..transport.base import Transport
-from ..transport.discovery import DiscoveredDevice, discover_all, discover_serial_devices
+from ..transport.discovery import (
+    DiscoveredDevice, cleanup_stale_ble_connections, discover_all,
+    discover_serial_devices,
+)
 from ..transport.serial_transport import SerialTransport
 from .device import Device, DeviceState
 from .protocol import DeviceProtocol
@@ -56,6 +59,11 @@ class FleetManager:
         self._device_discovery: dict[str, DiscoveredDevice] = {}
         # In-memory reconnect blackout (device_id -> monotonic deadline)
         self._reconnect_blackout: dict[str, float] = {}
+        # Reconnect failure count for exponential backoff (device_id -> count)
+        self._reconnect_failures: dict[str, int] = {}
+        # Discovery pause counter — when > 0, background loop skips discovery/reconnect.
+        # Used during BLE DFU to avoid BleakScanner conflicts (only one scan at a time).
+        self._discovery_pause_count: int = 0
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -75,6 +83,9 @@ class FleetManager:
     async def start(self) -> None:
         """Discover devices and connect to all of them."""
         self._running = True
+        if self._enable_ble:
+            await cleanup_stale_ble_connections()
+            await asyncio.sleep(2)  # Let devices re-advertise after disconnect
         await self._discover_and_connect()
         self._discovery_task = asyncio.create_task(self._background_loop())
         connected = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
@@ -101,6 +112,16 @@ class FleetManager:
         """Clear reconnect blackout for a device, allowing auto-reconnect."""
         self._reconnect_blackout.pop(device_id, None)
 
+    def pause_discovery(self) -> None:
+        """Pause background discovery (e.g., during BLE DFU scan)."""
+        self._discovery_pause_count += 1
+        log.info("Discovery paused (depth=%d)", self._discovery_pause_count)
+
+    def resume_discovery(self) -> None:
+        """Resume background discovery after pause."""
+        self._discovery_pause_count = max(0, self._discovery_pause_count - 1)
+        log.info("Discovery resumed (depth=%d)", self._discovery_pause_count)
+
     async def release_device(self, device_id: str,
                              hold_seconds: int | None = None) -> bool:
         """Temporarily release a device (e.g., for firmware flashing).
@@ -126,6 +147,7 @@ class FleetManager:
             return False
         if device.state == DeviceState.CONNECTED:
             return True
+        self._reconnect_failures.pop(device_id, None)  # Reset backoff
 
         disc = self._device_discovery.get(device_id)
         if not disc:
@@ -264,7 +286,12 @@ class FleetManager:
                 self._device_discovery.pop(did, None)
 
     async def _reconnect_disconnected(self) -> None:
-        """Try to reconnect any devices in error/disconnected state."""
+        """Try to reconnect any devices in error/disconnected state.
+
+        Uses exponential backoff: after each failure, waits longer before
+        retrying (10s, 20s, 40s, 80s, 160s, capped at 5 min). Resets on
+        successful connect or when device is released/reconnected manually.
+        """
         from ..transport.serial_lock import is_locked
 
         for device_id, device in self._devices.items():
@@ -282,6 +309,20 @@ class FleetManager:
             if not disc:
                 continue
 
+            # Exponential backoff for repeated failures (BLE devices that
+            # consistently fail waste 20s per attempt on timeout)
+            fail_count = self._reconnect_failures.get(device_id, 0)
+            if fail_count > 0:
+                # Backoff: skip N-1 discovery cycles (10s each) per failure,
+                # doubling each time, capped at 30 cycles (5 min)
+                skip_cycles = min(2 ** (fail_count - 1), 30)
+                backoff_key = f"_backoff_skip_{device_id}"
+                counter = getattr(self, backoff_key, 0)
+                if counter < skip_cycles:
+                    setattr(self, backoff_key, counter + 1)
+                    continue
+                setattr(self, backoff_key, 0)
+
             # Check serial port lock file (cross-process coordination)
             if disc.transport_type == "serial":
                 locked, holder = is_locked(disc.address)
@@ -298,14 +339,21 @@ class FleetManager:
                 device.protocol.on_stream_line(device._route_stream_line)
                 device.protocol.on_raw_line(device._on_raw_line)
                 await device.connect()
+                # Success — reset failure counter
+                self._reconnect_failures.pop(device_id, None)
             except Exception as e:
-                log.warning("Reconnect failed for %s: %s", device_id[:12], e)
+                self._reconnect_failures[device_id] = fail_count + 1
+                backoff_s = min(2 ** fail_count, 30) * DISCOVERY_INTERVAL_S
+                log.warning("Reconnect failed for %s (attempt %d, next in ~%ds): %s",
+                            device_id[:12], fail_count + 1, backoff_s, e)
 
     async def _background_loop(self) -> None:
         """Periodic discovery and reconnection."""
         while self._running:
             try:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
+                if self._discovery_pause_count > 0:
+                    continue  # Skip discovery while BLE DFU or other ops in progress
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
             except asyncio.CancelledError:

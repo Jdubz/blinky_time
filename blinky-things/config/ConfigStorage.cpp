@@ -124,25 +124,24 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Fire defaults (particle-based) - dimension-independent fractions (v69)
     // Values are multiplied by device dimensions at use-time.
-    data_.fire.baseSpawnChance = 0.5f;      // Continuous sparks for constant fire
-    data_.fire.audioSpawnBoost = 1.5f;      // Strong audio response
-    data_.fire.gravity = 0.0f;              // No gravity (thermal force provides upward push)
-    data_.fire.windBase = 0.0f;
-    data_.fire.windVariation = 1.5f;        // × crossDim → turbulence amplitude
-    data_.fire.drag = 0.985f;               // Smoother flow
-    data_.fire.sparkVelocityMin = 0.33f;    // × traversalDim/sec → upward velocity
-    data_.fire.sparkVelocityMax = 0.67f;    // × traversalDim/sec → upward velocity
-    data_.fire.sparkSpread = 1.0f;          // × crossDim → horizontal scatter
-    data_.fire.musicSpawnPulse = 0.95f;     // Tight beat sync
-    data_.fire.organicTransientMin = 0.25f; // Responsive to softer transients
-    data_.fire.backgroundIntensity = 0.15f; // Subtle noise background
-    data_.fire.fastSparkRatio = 0.7f;       // 70% fast sparks, 30% embers
-    data_.fire.thermalForce = 2.0f;          // × traversalDim → buoyancy LEDs/sec^2
-    data_.fire.maxParticles = 0.75f;        // Fraction of numLeds (clamped to pool 64)
-    data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds)
+    data_.fire.baseSpawnChance = 0.05f;   // density: expected sparks per crossDim-unit per frame
+    data_.fire.audioSpawnBoost = 0.15f;   // additional density at max energy
+    data_.fire.windVariation = 1.5f;        // × crossDim → curl turbulence amplitude
+    data_.fire.drag = 0.985f;
+    data_.fire.sparkVelocityMin = 0.33f;
+    data_.fire.sparkVelocityMax = 0.67f;
+    data_.fire.sparkSpread = 1.0f;
+    data_.fire.musicSpawnPulse = 0.95f;
+    data_.fire.organicTransientMin = 0.25f;
+    data_.fire.thermalForce = 2.0f;         // × traversalDim → buoyancy LEDs/sec^2
+    data_.fire.maxParticles = 0.75f;        // Pool sized at begin() only
+    data_.fire.burstSparks = 0.5f;          // × crossDim → sparks per burst
+    data_.fire.gridCoolRate = 0.88f;        // ~8-frame heat decay at 30fps
+    data_.fire.buoyancyCoupling = 1.0f;     // Grid heat → plume upward reinforcement
+    data_.fire.pressureCoupling = 0.5f;     // Lateral clustering toward hot columns
+    data_.fire.defaultLifespan = 100;       // 1.0s (centiseconds)
     data_.fire.intensityMin = 150;
     data_.fire.intensityMax = 220;
-    data_.fire.burstSparks = 0.5f;          // × crossDim → sparks per burst
 
     // Water defaults (particle-based) - dimension-independent fractions (v69)
     data_.water.baseSpawnChance = 0.8f;
@@ -484,36 +483,27 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
     // Debug: show loaded values
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
-        Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.print(data_.fire.baseSpawnChance, 2);
-        Serial.print(F(" gravity=")); Serial.println(data_.fire.gravity);
+        Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.println(data_.fire.baseSpawnChance, 2);
     }
 
-    // Spawn behavior
     fireParams.baseSpawnChance = data_.fire.baseSpawnChance;
     fireParams.audioSpawnBoost = data_.fire.audioSpawnBoost;
-    // Physics
-    fireParams.gravity = data_.fire.gravity;
-    fireParams.windBase = data_.fire.windBase;
     fireParams.windVariation = data_.fire.windVariation;
     fireParams.drag = data_.fire.drag;
-    // Spark appearance
     fireParams.sparkVelocityMin = data_.fire.sparkVelocityMin;
     fireParams.sparkVelocityMax = data_.fire.sparkVelocityMax;
     fireParams.sparkSpread = data_.fire.sparkSpread;
-    // Audio reactivity
     fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
     fireParams.organicTransientMin = data_.fire.organicTransientMin;
-    // Background
-    fireParams.backgroundIntensity = data_.fire.backgroundIntensity;
-    // Particle variety
-    fireParams.fastSparkRatio = data_.fire.fastSparkRatio;
     fireParams.thermalForce = data_.fire.thermalForce;
-    // Lifecycle
     fireParams.maxParticles = data_.fire.maxParticles;
+    fireParams.burstSparks = data_.fire.burstSparks;
+    fireParams.gridCoolRate = data_.fire.gridCoolRate;
+    fireParams.buoyancyCoupling = data_.fire.buoyancyCoupling;
+    fireParams.pressureCoupling = data_.fire.pressureCoupling;
     fireParams.defaultLifespan = data_.fire.defaultLifespan;
     fireParams.intensityMin = data_.fire.intensityMin;
     fireParams.intensityMax = data_.fire.intensityMax;
-    fireParams.burstSparks = data_.fire.burstSparks;
 
     // === WATER PARAMETERS ===
     // Spawn behavior
@@ -647,32 +637,24 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
                                       const AdaptiveMic& mic, AudioTracker* tracker) {
-    // Spawn behavior
     data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
     data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
-    // Physics
-    data_.fire.gravity = fireParams.gravity;
-    data_.fire.windBase = fireParams.windBase;
     data_.fire.windVariation = fireParams.windVariation;
     data_.fire.drag = fireParams.drag;
-    // Spark appearance
     data_.fire.sparkVelocityMin = fireParams.sparkVelocityMin;
     data_.fire.sparkVelocityMax = fireParams.sparkVelocityMax;
     data_.fire.sparkSpread = fireParams.sparkSpread;
-    // Audio reactivity
     data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
     data_.fire.organicTransientMin = fireParams.organicTransientMin;
-    // Background
-    data_.fire.backgroundIntensity = fireParams.backgroundIntensity;
-    // Particle variety
-    data_.fire.fastSparkRatio = fireParams.fastSparkRatio;
     data_.fire.thermalForce = fireParams.thermalForce;
-    // Lifecycle
     data_.fire.maxParticles = fireParams.maxParticles;
+    data_.fire.burstSparks = fireParams.burstSparks;
+    data_.fire.gridCoolRate = fireParams.gridCoolRate;
+    data_.fire.buoyancyCoupling = fireParams.buoyancyCoupling;
+    data_.fire.pressureCoupling = fireParams.pressureCoupling;
     data_.fire.defaultLifespan = fireParams.defaultLifespan;
     data_.fire.intensityMin = fireParams.intensityMin;
     data_.fire.intensityMax = fireParams.intensityMax;
-    data_.fire.burstSparks = fireParams.burstSparks;
 
     // === WATER PARAMETERS ===
     // Spawn behavior

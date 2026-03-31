@@ -249,10 +249,18 @@ protected:
         }
 
         if (p->hasFlag(ParticleFlags::FADE) && p->maxAge > 0) {
-            // Linear fade based on age
-            float ageRatio = (float)p->age / p->maxAge;
-            float newIntensity = (float)p->intensity * (1.0f - ageRatio);
-            p->intensity = (uint8_t)max(0.0f, newIntensity);
+            // Adaptive linear fade: computes the per-frame loss needed to reach
+            // intensity=0 at exactly maxAge, regardless of starting intensity.
+            // A particle spawned at 200 fades at 200/lifespan per second.
+            // A particle spawned at 150 fades at 150/lifespan per second.
+            // Both reach 0 at the same age. Frame-rate independent.
+            float remainingSec = (float)(p->maxAge - p->age) * 0.01f;
+            if (remainingSec > 0.01f) {
+                int loss = max(1, (int)((float)p->intensity / remainingSec * dt));
+                p->intensity = (loss >= (int)p->intensity) ? 0 : p->intensity - (uint8_t)loss;
+            } else {
+                p->intensity = 0;
+            }
         }
     }
 

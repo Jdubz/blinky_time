@@ -1,6 +1,6 @@
 # Wireless Communication Plan
 
-*Created: December 2025, Updated: March 27, 2026*
+*Created: December 2025, Updated: March 30, 2026*
 
 ## Goal
 
@@ -14,145 +14,131 @@ Pi fleet server (blinky-server)
   ├── BLE NUS (BleTransport — working, both platforms)
   └── WiFi TCP (WifiTransport — implemented, blocked by ESP32-S3 antenna)
 
-Web browser (blinky-console)
-  ├── WebSerial (working)
-  └── Web Bluetooth NUS (future)
+REST API: http://blinkyhost.local:8420/api/
+  ├── GET  /devices               — list all devices
+  ├── POST /devices/{id}/command  — send command
+  ├── POST /devices/{id}/ota      — firmware upload (UF2 or BLE DFU, auto-detected)
+  ├── POST /fleet/ota             — flash all nRF52840 devices (accepts .hex or .dfu.zip)
+  ├── POST /fleet/deploy          — compile + generate DFU zip + flash all devices
+  ├── POST /ota/compile           — compile firmware
+  ├── POST /ota/compile-dfu       — compile + generate DFU zip
+  └── --no-serial flag            — BLE-only fleet management mode
 ```
 
-**Use case**: Fleet management — settings changes, mode/scene selection, device configuration, status monitoring, OTA firmware updates. No real-time streaming over wireless.
+**Use case**: Fleet management — settings changes, mode/scene selection, device configuration, status monitoring, OTA firmware updates.
 
-## Current Status (March 27, 2026)
+## Current Status (March 28, 2026)
 
-### Completed
+### Working
 
-| Feature | Platform | Status | Notes |
-|---------|----------|--------|-------|
-| **BLE NUS** | nRF52840 | Working | Bluefruit52Lib, SoftDevice S140, verified via bleak |
-| **BLE NUS** | ESP32-S3 | Compiled, untested | NimBLE-Arduino 2.4.0, Esp32BleNus.h/cpp |
-| **BLE Advertiser** | ESP32-S3 | Working | Ported to NimBLE 2.x API |
-| **BLE Scanner** | nRF52840 | Working | Passive scan for advertising packets |
-| **BLE DFU service** | nRF52840 | Working | BLEDfu (Bluefruit52Lib), app→bootloader transition verified |
-| **WiFi TCP server** | ESP32-S3 | Working | Non-blocking poll() on Core 1 |
-| **WiFi OTA (ArduinoOTA)** | ESP32-S3 | Code complete | Needs stable WiFi signal to test (antenna issue) |
-| **WiFi HTTP OTA** | ESP32-S3 | Code complete | `wifi ota <url>` serial command |
-| **mDNS advertisement** | ESP32-S3 | Code complete | `_blinky._tcp` on port 3333 |
-| **Fleet server (serial)** | Pi | Working | 4 serial devices auto-discovered and managed |
-| **Fleet server (BLE)** | Pi | Working | 2 BLE devices auto-discovered via bleak |
-| **Multi-transport discovery** | Pi | Working | Serial (VID/PID) + BLE (NUS UUID) + WiFi (mDNS + static) |
-| **Device deduplication** | Pi | Working | Prefers serial over BLE for same physical device |
-| **BLE protocol timeouts** | Pi | Done | 500ms line gap for BLE (vs 100ms serial) |
-| **Fleet server launcher** | Pi | Working | `run.sh` (tmux + auto-restart), crontab @reboot |
-| **REST API** | Pi | Working | FastAPI on port 8420 |
+| Feature | Platform | Notes |
+|---------|----------|-------|
+| **BLE NUS bidirectional** | nRF52840 | All command output routed through TeeStream → BLE NUS via Print& refactor |
+| **BLE NUS bidirectional** | ESP32-S3 | NUS TX wired via setEsp32BleNus(), `show nn` verified over BLE |
+| **BLE device discovery** | Pi | 6 devices found wirelessly (3 nRF52840 + 2 ESP32-S3 + 1 extra nRF52840) |
+| **BLE connections stable** | nRF52840 | vTaskDelay(1) replaces no-op yield(), StartNotify for reliable notifications |
+| **Wireless-only mode** | Pi | `--no-serial` flag, all 6 devices managed via BLE only |
+| **Platform detection** | Both | Firmware reports `"platform":"nrf52840"` or `"esp32s3"` in `json info` |
+| **Server OTA (UF2)** | nRF52840 | `POST /api/devices/{id}/ota` delegates to `tools/uf2_upload.py` for serial devices |
+| **BLE DFU OTA** | nRF52840 | `POST /api/devices/{id}/ota` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
+| **Fleet OTA** | Pi | `POST /api/fleet/ota` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
+| **Fleet deploy** | Pi | `POST /api/fleet/deploy` one-shot compile + DFU zip + flash all devices |
+| **BLE DFU proven** | nRF52840 | End-to-end tested Mar 30: 510KB in ~5.5 min, 2/2 fleet OTA success, auto-reconnect after DFU |
+| **Compile endpoint** | Pi | `POST /api/ota/compile` and `/ota/compile-dfu` (pure-Python DFU zip, no adafruit-nrfutil dependency) |
+| **UF2 bootloader entry** | nRF52840 | `sd_softdevice_disable()` → DSB/ISB → GPREGRET → DSB/ISB → NVIC_SystemReset |
+| **BLE DFU protocol** | nRF52840 | Legacy DFU (SDK v11): write-with-response on control, 60s START_DFU timeout for flash erase, 20-byte chunks, word-aligned padding |
+| **BlueZ stale cleanup** | Pi | Auto-disconnects stale BLE connections from previous server sessions on startup |
+| **BLE reconnect backoff** | Pi | Exponential backoff for failing BLE devices (10s, 20s, 40s... capped at 5 min) |
+| **Discovery pause** | Pi | Background BLE discovery pauses during DFU to avoid BleakScanner conflicts |
+| **BLE connect timeout** | Pi | Hard 20s timeout wrapping BLE connect sequence (prevents server hang on stuck connections) |
+| **Serial port stability** | Pi | DTR toggle on connect, port kept open during bootloader entry |
+| **Print& abstraction** | Both | All printDiagnostics() accept Print& — output goes to any transport |
+| **Fleet server** | Pi | Serial + BLE + WiFi discovery, dedup, auto-reconnect, REST API |
 
-### Blocked
-
-| Feature | Blocker | Notes |
-|---------|---------|-------|
-| **WiFi on ESP32-S3** | Hardware antenna | XIAO ESP32-S3 Sense routes to u.FL connector only. No external antenna = -70 dBm at close range. WiFi code is correct but connection too unstable. |
-| **BLE DFU transfer** | Protocol rewritten (testing) | App→bootloader works. Bootloader uses **Legacy DFU (SDK v11)** — DFU Revision 0x0008 is the bootloader version, NOT Secure DFU v2. Previous code sent wrong opcodes causing GATT 0x0E. `ble_dfu.py` rewritten to Legacy DFU protocol (Mar 28). |
-| **BLE scan from Pi** | BlueZ filtering | Direct connection by address works (e.g. F4:15:6D:FA:4D:93 for 06ACEB). `bleak` scan doesn't find nRF52840 devices — BlueZ scan filtering issue, not radio. |
-
-### Not Started
+### Remaining Work
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
-| Web Bluetooth (blinky-console) | Low | Fleet management is via Pi server |
-| Device registry persistence | Low | In-memory discovery works |
+| **Post-DFU USB re-enumeration** | Medium | After BLE DFU, USB serial doesn't re-enumerate (host-side issue). BLE reconnects fine. Not blocking for BLE-only fleet management. |
+| **BLE DFU as UF2 fallback** | Medium | Server should try BLE DFU when UF2 fails for installed devices |
+| **WiFi on ESP32-S3** | Low (ESP32 deprioritized) | Hardware antenna issue. BLE is primary wireless transport. |
+| **Web Bluetooth (blinky-console)** | Low | Fleet management is via Pi server |
+
+### Known Limitations
+
+- **GPREGRET race condition**: UF2 bootloader entry is ~50-80% per attempt due to MBR interaction. Mitigated by uf2_upload.py's 5-retry logic (>97% cumulative).
+- **BLE DFU transfer speed**: ~1.7 KB/s (20-byte BLE packets), ~5.5 min per device for 510 KB firmware. Sequential only (Pi's BLE adapter handles one DFU at a time).
+- **Post-DFU USB**: After BLE DFU boot, USB serial doesn't re-enumerate without physical power cycle. uhubctl on Pi doesn't fully cut power. BLE reconnection works fine.
+- **BlueZ stale connections**: Server restart leaves stale BLE connections in BlueZ. Auto-cleanup runs on startup but some devices (e.g., FA:E6:7D:A9:8B:3A) resist disconnect.
+- **BLE discovery stops after connection**: Connected devices stop advertising. Server can't discover new devices while holding connections.
 
 ---
 
 ## Key Architecture Decisions
 
+### Firmware Output: Print& Abstraction
+
+All diagnostic output (`printDiagnostics`, `showDeviceConfig`, `json info`, etc.) goes through `Print& out` parameter, routed by TeeStream to both USB Serial AND BLE NUS. Zero `Serial.print` calls in command handlers. This enables full wireless operation.
+
+### Server OTA: Delegate to uf2_upload.py
+
+The server's OTA module delegates to `tools/uf2_upload.py` as a subprocess rather than reimplementing upload logic. The tool has 2360 lines of battle-tested safety checks (retries, USB recovery, port validation, firmware verification).
+
+### Bootloader Entry: sd_softdevice_disable + NVIC_SystemReset
+
+All bootloader entry paths (serial command, 1200-baud touch, SafeBootWatchdog) use the same sequence: disable SoftDevice → DSB/ISB barrier → write GPREGRET → DSB/ISB barrier → NVIC_SystemReset. Direct jump approaches were tested but abandoned (broke USB mass storage).
+
+### BLE DFU Protocol (nRF52840) — Proven End-to-End (Mar 30, 2026)
+
+Adafruit bootloader v0.6.1 uses Legacy DFU (SDK v11). DFU Revision = 0x0008 (v0.8, NOT Secure DFU).
+
+**Protocol sequence**: START_DFU (with 60s timeout for flash erase) → INIT_DFU (12-byte init packet with CRC-16) → SET_PRN (interval=8) → RECEIVE_FW (20-byte chunks, word-aligned) → VALIDATE → ACTIVATE_AND_RESET.
+
+**Key protocol details** (all verified via HCI capture and testing):
+- DFU Control writes MUST use write-with-response (`response=True` in bleak)
+- DFU Packet writes use write-without-response (`response=False`)
+- START_DFU triggers flash erase: ~25s for 500KB firmware — needs 60s timeout
+- Bootloader caps payload at 20 bytes regardless of negotiated MTU
+- Last firmware chunk must be padded to 4-byte word alignment
+- Bootloader BLE address = app address + 1 (last octet)
+- Must force StartNotify (not AcquireNotify) in bleak for reliable notifications
+- BlueZ GATT cache must be cleared between app/bootloader connections
+- GPREGRET=0xA8 for BLE DFU entry (via serial `bootloader ble` or BLE NUS command)
+- Bootloader retains DFU state across BLE disconnections (need power cycle or SYS_RESET 0x06 to clear)
+- DFU zip generated via pure-Python (`compile.py`) — adafruit-nrfutil broken on Python 3.13
+- Init packet: device_type=0x0052, sd_req=0xFFFE, CRC-16/CCITT of firmware binary
+
+**Test results**: 510 KB firmware transferred in ~5.5 min per device. Fleet OTA: 2/2 devices flashed successfully with auto-reconnect.
+
 ### ESP32-S3 WiFi: All operations on Core 1
 
-ESP32-S3 WiFi driver + lwIP are NOT thread-safe across cores. `WiFi.status()`, `server.available()`, and client read/write must all run on the same core. The WifiCommandServer uses non-blocking `poll()` in the main loop (Core 1). WiFi.begin() blocks once in setup (up to 10s). HWCDC Serial output doesn't work from Core 0.
+WiFi driver + lwIP not thread-safe across cores. WifiCommandServer uses non-blocking `poll()` on Core 1. BLE is primary wireless transport (WiFi blocked by antenna hardware).
 
 ### ESP32-S3 BLE: NimBLE-Arduino required
 
-Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3 (`npl_freertos_mutex_init` assertion failure, issues #12357/#12362). External NimBLE-Arduino v2.3.8+ fixes this. Install: `arduino-cli lib install "NimBLE-Arduino"`. BleAdvertiser uses `NimBLEDevice` API (NimBLE 2.x dropped old BLEDevice aliases).
-
-### nRF52840 BLE DFU: Legacy DFU (SDK v11)
-
-Adafruit nRF52 bootloader v0.6.2 uses **Legacy DFU (SDK v11)** protocol. The DFU Revision characteristic reports 0x0008, but this is the bootloader version number (DFU_REV_MAJOR=0x00, DFU_REV_MINOR=0x08), NOT a Secure DFU v2 protocol indicator. The app-side BLEDfu service (Bluefruit52Lib) triggers bootloader entry via GPREGRET=0xB1 (write 0x01 to DFU Control in app mode). The bootloader re-advertises as "AdaDFU" with DFU service UUID. Reconnection requires clearing BlueZ GATT cache between connections. BLE scanning from the Pi doesn't find nRF52840 devices (BlueZ scan filtering issue), but direct connection by address works (e.g. device 06ACEB at F4:15:6D:FA:4D:93). Previous blocker (GATT 0x0E Unlikely Error) was caused by sending Secure DFU v2 opcodes to a Legacy DFU bootloader — `ble_dfu.py` rewritten to use correct Legacy DFU protocol (Mar 28).
-
-### ESP32-S3 WiFi antenna
-
-XIAO ESP32-S3 Sense routes RF to u.FL connector only (hardware resistor, no software switch). Without external antenna module attached, RSSI is -70 dBm at close range. WiFi functional but unreliable. BLE is the primary wireless transport.
+Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3. External NimBLE-Arduino v2.4.0 fixes this.
 
 ---
 
-## Firmware Components
+## BLE Addresses (blinkyhost devices)
 
-### nRF52840
-
-| File | Purpose |
-|------|---------|
-| `comms/BleNus.h/cpp` | NUS peripheral (serial-over-BLE) |
-| `comms/BleScanner.h/cpp` | Passive BLE scan for fleet broadcasts |
-| `services/BLEDfu` (Bluefruit52Lib) | DFU service for wireless firmware updates |
-
-### ESP32-S3
-
-| File | Purpose |
-|------|---------|
-| `comms/BleAdvertiser.h/cpp` | BLE broadcast (NimBLE 2.x API) |
-| `comms/Esp32BleNus.h/cpp` | NUS peripheral (NimBLE 2.x API) |
-| `comms/WifiManager.h/cpp` | WiFi credential storage (NVS) |
-| `comms/WifiCommandServer.h/cpp` | TCP server (non-blocking Core 1) |
-
-### blinky-server (Pi)
-
-| File | Purpose |
-|------|---------|
-| `transport/serial_transport.py` | USB serial (pyserial-asyncio) |
-| `transport/ble_transport.py` | BLE NUS (bleak) |
-| `transport/wifi_transport.py` | WiFi TCP (asyncio streams) |
-| `transport/discovery.py` | Multi-transport device discovery |
-| `device/manager.py` | Fleet manager with dedup + auto-reconnect |
-| `device/protocol.py` | Command/response with transport-aware timeouts |
-| `run.sh` | tmux launcher with auto-restart |
-
-### Tools
-
-| File | Purpose |
-|------|---------|
-| `tools/ble_dfu.py` | BLE DFU upload tool (app→bootloader working, transfer WIP) |
-
----
-
-## Testing Results (March 27, 2026)
-
-### Fleet Server on blinkyhost
-
-6 devices discovered and managed:
-- 2x nRF52840 via serial (Test Chip, Long Tube)
-- 2x ESP32-S3 via serial (Hat, Hat)
-- 2x nRF52840 via BLE (Test Chip RSSI=-36, Tube Light RSSI=-88)
-
-REST API verified:
-- `GET /api/devices` — lists all 6 devices
-- `POST /api/devices/{id}/command` — command execution over BLE
-- `POST /api/fleet/command` — fleet-wide broadcast
-
-### BLE DFU (nRF52840)
-
-- `ble_dfu.py --scan` discovers DFU-capable devices
-- App→bootloader transition works: write 0x01 to DFU Control, device reboots into "AdaDFU" mode
-- Reconnection to bootloader succeeds (must clear BlueZ GATT cache between connections)
-- BLE scanning from Pi doesn't find nRF52840 devices (BlueZ scan filtering issue); direct connection by address works (e.g. F4:15:6D:FA:4D:93 for 06ACEB)
-- Bootloader reports DFU Revision 0x0008 (bootloader version, **Legacy DFU protocol**)
-- Previous firmware transfer blocker (GATT 0x0E) was caused by sending Secure DFU v2 opcodes to Legacy DFU bootloader
-- `ble_dfu.py` rewritten to use Legacy DFU (SDK v11) protocol (Mar 28) — testing pending
+| Serial Number | App BLE Address | Bootloader BLE Address | USB Hub | Notes |
+|--------------|-----------------|----------------------|---------|-------|
+| ABFBC412 | E3:8D:10:5F:17:66 | E3:8D:10:5F:17:67 | 1-1.2 port 3 | Bare chip, BLE DFU tested |
+| 2A798EF8 | CF:52:2F:EF:C5:23 | CF:52:2F:EF:C5:24 | 1-1.2 port 1 | Bare chip, BLE DFU tested |
+| 659C8DD3 (Long Tube) | FA:E6:7D:A9:8B:3A | FA:E6:7D:A9:8B:3B | 1-1.2 port 2 | Installed, BLE connect unreliable |
+| 062CBD12 | unknown | unknown+1 | 1-1.2 port 4 | DO NOT TOUCH (SWD recovered) |
+| (remote) | E9:A8:5C:A5:BB:BE | E9:A8:5C:A5:BB:BF | BLE only | Bare chip, BLE DFU tested |
 
 ---
 
 ## Resource Usage
 
-### nRF52840 (with NUS + DFU)
+### nRF52840 (with NUS + DFU + Print& refactor)
 
 | Resource | Usage | Available | Headroom |
 |----------|-------|-----------|----------|
-| Flash | ~393 KB (48%) | 811 KB | 418 KB (52%) |
+| Flash | ~394 KB (48%) | 811 KB | 417 KB (51%) |
 | RAM | 24.4 KB (10%) | 237 KB | 213 KB (90%) |
 
 ### ESP32-S3 (with BLE + WiFi + OTA)

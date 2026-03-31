@@ -100,7 +100,17 @@ public:
         outputOffset_ = totalOutputs - outputChannels_;
 
         memset(windowBuffer_, 0, sizeof(windowBuffer_));
+        memset(quantizedWindow_, 0, sizeof(quantizedWindow_));
         windowFilled_ = 0;
+        windowWriteIdx_ = 0;
+
+        // Cache quantization params for incremental quantization
+        if (input_->type == kTfLiteInt8) {
+            float scale = input_->params.scale;
+            quantInvScale_ = (scale > 0.0f) ? (1.0f / scale) : 1.0f;
+            quantZeroPoint_ = input_->params.zero_point;
+        }
+
         ready_ = true;
         return true;
     }
@@ -122,35 +132,57 @@ public:
             memcpy(prevMel_, melBands, INPUT_MEL_BANDS * sizeof(float));
         }
 
-        // Sliding window: push new frame (using inputFeatures_ width)
-        if (windowFilled_ < windowFrames_) {
-            memcpy(&windowBuffer_[windowFilled_ * inputFeatures_],
-                   frameFeatures, inputFeatures_ * sizeof(float));
-            windowFilled_++;
-        } else {
-            memmove(windowBuffer_, windowBuffer_ + inputFeatures_,
-                    (windowFrames_ - 1) * inputFeatures_ * sizeof(float));
-            memcpy(&windowBuffer_[(windowFrames_ - 1) * inputFeatures_],
-                   frameFeatures, inputFeatures_ * sizeof(float));
+        // Circular window buffer: write new frame and quantize it incrementally.
+        // Only the new frame (inputFeatures_ elements) is quantized per inference,
+        // not the entire window. The quantized circular buffer is then copied to
+        // the tensor input in chronological order via two memcpy's.
+        int writeSlot = windowWriteIdx_;
+        memcpy(&windowBuffer_[writeSlot * inputFeatures_],
+               frameFeatures, inputFeatures_ * sizeof(float));
+
+        // Incrementally quantize just this frame into the int8 circular buffer
+        if (input_ && input_->type == kTfLiteInt8) {
+            float invScale = quantInvScale_;
+            int32_t zp = quantZeroPoint_;
+            const float* src = frameFeatures;
+            int8_t* dst = &quantizedWindow_[writeSlot * inputFeatures_];
+            for (int j = 0; j < inputFeatures_; j++) {
+                int32_t q = (int32_t)(src[j] * invScale + (src[j] >= 0 ? 0.5f : -0.5f)) + zp;
+                dst[j] = (int8_t)(q < -128 ? -128 : (q > 127 ? 127 : q));
+            }
         }
+
+        windowWriteIdx_ = (windowWriteIdx_ + 1) % windowFrames_;
+        if (windowFilled_ < windowFrames_) windowFilled_++;
 
         if (windowFilled_ < windowFrames_) return 0.0f;
 
-        // Quantize input
-        int totalInputs = windowFrames_ * inputFeatures_;
+        // Copy quantized circular buffer → tensor input in chronological order.
+        // windowWriteIdx_ now points to the oldest frame.
+        int frameBytes = inputFeatures_ * sizeof(int8_t);
         if (input_->type == kTfLiteInt8) {
-            float scale = input_->params.scale;
-            if (scale <= 0.0f) { invokeErrors_++; return 0.0f; }
-            int32_t zero_point = input_->params.zero_point;
             int8_t* input_data = input_->data.int8;
-            for (int i = 0; i < totalInputs; i++) {
-                int32_t q = static_cast<int32_t>(roundf(windowBuffer_[i] / scale) + zero_point);
-                if (q < -128) q = -128;
-                if (q > 127) q = 127;
-                input_data[i] = static_cast<int8_t>(q);
+            int oldest = windowWriteIdx_;  // Oldest frame index
+            int tailFrames = windowFrames_ - oldest;  // Frames from oldest to end of buffer
+            // Copy tail (oldest → end of buffer)
+            memcpy(input_data, &quantizedWindow_[oldest * inputFeatures_],
+                   tailFrames * frameBytes);
+            // Copy head (start of buffer → newest)
+            if (oldest > 0) {
+                memcpy(input_data + tailFrames * inputFeatures_,
+                       quantizedWindow_, oldest * frameBytes);
             }
         } else {
-            memcpy(input_->data.f, windowBuffer_, totalInputs * sizeof(float));
+            // Float model: copy in chronological order
+            float* input_data = input_->data.f;
+            int oldest = windowWriteIdx_;
+            int tailFrames = windowFrames_ - oldest;
+            memcpy(input_data, &windowBuffer_[oldest * inputFeatures_],
+                   tailFrames * inputFeatures_ * sizeof(float));
+            if (oldest > 0) {
+                memcpy(input_data + tailFrames * inputFeatures_,
+                       windowBuffer_, oldest * inputFeatures_ * sizeof(float));
+            }
         }
 
         unsigned long t0 = micros();
@@ -298,16 +330,20 @@ private:
 
     // --- Model state ---
 
-    static constexpr int ARENA_SIZE = 32768;          // 32 KB (Conv1D W64 measured 7340 — headroom for model updates)
+    static constexpr int ARENA_SIZE = 8192;            // 8 KB (Conv1D W16 arena varies by device: 3404-4564 observed)
     static constexpr int MAX_WINDOW_FRAMES = 64;      // Max 64 frames (1.024s) — increase if a wider model is used
 
     alignas(16) uint8_t arena_[ARENA_SIZE];
     float windowBuffer_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // 13 KB max (64 * 52 * 4)
+    int8_t quantizedWindow_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // Pre-quantized circular buffer
     float prevMel_[INPUT_MEL_BANDS] = {0};      // Previous frame mel bands (for delta computation)
     int windowFrames_ = 0;
     int windowFilled_ = 0;
+    int windowWriteIdx_ = 0;                    // Circular write position in windowBuffer_
     int inputFeatures_ = INPUT_MEL_BANDS;       // 26 (mel) or 52 (mel+delta), auto-detected from model
     bool useDelta_ = false;                      // True when model expects 52-dim input
+    float quantInvScale_ = 1.0f;                // Cached 1.0/input_scale for quantization
+    int32_t quantZeroPoint_ = 0;                // Cached input zero point
 
     const tflite::Model* model_ = nullptr;
     tflite::MicroInterpreter* interpreter_ = nullptr;

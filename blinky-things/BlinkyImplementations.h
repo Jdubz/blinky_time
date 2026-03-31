@@ -8,7 +8,7 @@
  *
  * ARCHITECTURE STATUS:
  * ✅ Core: Generator→Effect(optional)→Render pipeline operational
- * ✅ Fire: Layout-aware fire with orientation support
+ * ✅ Fire: Particle-based fire with audio reactivity
  * ✅ Water: Flowing water effects (float hit interface)
  * ✅ Lightning: Electric bolt effects (float hit interface)
  * ✅ Effects: HueRotation, NoOp
@@ -30,7 +30,6 @@
 
 // Generator implementations
 #include "generators/Fire.cpp"
-#include "generators/HeatFire.cpp"
 #include "generators/Water.cpp"
 #include "generators/Lightning.cpp"
 #include "generators/Audio.cpp"
@@ -44,7 +43,8 @@
 #include "render/RenderPipeline.cpp"
 
 // HAL implementations
-#include "hal/hardware/NeoPixelLedStrip.cpp"  // LED strip wrapper
+#include "hal/hardware/NeoPixelLedStrip.cpp"  // LED strip wrapper (Adafruit, used by default)
+#include "hal/hardware/Nrf52PwmLedStrip.cpp"  // Async PWM driver (nRF52840, for high-LED-count devices)
 // NOTE: Nrf52PdmMic.cpp is in sketch root for separate compilation (avoids pinDefinitions.h conflict on nRF52 mbed core)
 // On ESP32-S3 the I2S library has no such conflict so Esp32PdmMic.cpp compiles normally here.
 #include "hal/PlatformDetect.h"

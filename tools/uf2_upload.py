@@ -103,8 +103,11 @@ def _find_uf2conv():
     search_bases = [
         # Seeeduino nRF52 package (primary — ships uf2conv.py)
         Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52",
+        # Windows: arduino-cli stores packages in AppData/Local/Arduino15
+        Path.home() / "AppData/Local/Arduino15/packages/Seeeduino/hardware/nrf52",
         # arduino-esp32 package (some versions ship their own copy)
         Path.home() / ".arduino15/packages/esp32/hardware/esp32",
+        Path.home() / "AppData/Local/Arduino15/packages/esp32/hardware/esp32",
     ]
     for base in search_bases:
         if base.exists():
@@ -875,6 +878,7 @@ def trigger_bootloader(port, verbose=False):
         print(f"  Warning: Could not determine USB hub location for {port}")
 
     current_port = port  # Track port across re-enumerations
+    ser = None  # Kept open across retries to avoid TinyUSB CDC DTR issues
 
     for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
         if attempt > 1:
@@ -906,39 +910,40 @@ def trigger_bootloader(port, verbose=False):
         pre_existing_blocks = _get_usb_block_devices()
 
         # Send 'bootloader' serial command.
-        # CRITICAL: Keep the port open between retries. Closing the port
-        # drops DTR which puts TinyUSB CDC in "disconnected" state. Once
-        # stuck, subsequent opens/commands get no response.
-        if attempt == 1:
-            print(f"  Trying serial command: bootloader")
+        # Open port ONCE and keep it open across retries. Each open/close
+        # cycle risks breaking TinyUSB CDC state (DTR drop on close).
+        # Only reopen if the port disappeared (device reset to different port).
+        if ser is None:
+            if attempt == 1:
+                print(f"  Trying serial command: bootloader")
             try:
                 ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
-                time.sleep(1)  # Wait for TinyUSB CDC to init
+                time.sleep(2)  # Wait for TinyUSB CDC to fully initialize
             except (serial.SerialException, OSError) as e:
                 print(f"  Serial open error: {e}")
-                ser = None
-        if ser:
-            try:
-                ser.reset_input_buffer()
-                ser.write(b'bootloader\r\n')
-                ser.flush()
-                time.sleep(2)  # Give device time to process + reset
-            except (serial.SerialException, OSError, BrokenPipeError) as e:
-                print(f"  Serial write error (device may have reset): {e}")
-
-            if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
-                try:
-                    ser.close()
-                except Exception:
-                    pass
-                return device_serial
-
-            if not _device_port_exists(current_port):
-                print(f"  Device disconnected but UF2 drive not detected")
-                ser = None  # Port is gone, don't try to close
                 continue
-        else:
-            print(f"  No serial connection available")
+
+        try:
+            ser.reset_input_buffer()
+            ser.write(b'bootloader\r\n')
+            ser.flush()
+            time.sleep(2)  # Give device time to process + reset
+        except (serial.SerialException, OSError, BrokenPipeError) as e:
+            print(f"  Serial write error: {e}")
+            ser = None  # Port dead, will reopen next attempt
+            continue
+
+        if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+            try:
+                ser.close()
+            except Exception:
+                pass
+            return device_serial
+
+        if not _device_port_exists(current_port):
+            print(f"  Device disconnected but UF2 drive not detected")
+            ser = None  # Port gone, will reopen after re-discovery
+            continue
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on
@@ -979,6 +984,12 @@ def trigger_bootloader(port, verbose=False):
 
         print(f"  UF2 drive not detected (attempt {attempt})")
 
+    # Clean up serial port
+    if ser:
+        try:
+            ser.close()
+        except Exception:
+            pass
     print(f"  ERROR: Bootloader entry failed after {MAX_BOOTLOADER_RETRIES} attempts")
     print(f"  Device did not enter UF2 mode (no block device appeared).")
     print(f"  Possible causes:")
@@ -1461,13 +1472,48 @@ def copy_firmware(uf2_path, mount_point):
     if current_uf2.exists():
         print(f"  Existing firmware backup: {current_uf2.stat().st_size:,} bytes")
 
-    print(f"  Copying...")
+    # Write firmware data using raw I/O — NOT shutil.copy2.
+    #
+    # The UF2 bootloader's ghostfat layer processes 512-byte UF2 blocks in
+    # real-time as they're written to the FAT filesystem. Once all blocks are
+    # received, the bootloader immediately flashes and reboots — often before
+    # the host OS finishes its file operations.
+    #
+    # shutil.copy2 calls os.utime() AFTER the data write to copy timestamps.
+    # This utime() hits a dead mount point (device already rebooted) and throws
+    # ENOENT. Using raw write + fsync avoids this: we write data, sync it to
+    # the USB device, and don't touch metadata.
+    #
+    # Drive-eject errors (ENOENT, EIO) during or after write are EXPECTED and
+    # indicate the bootloader received and processed the firmware. Verification
+    # happens in the reboot check phase.
+    print(f"  Copying (raw write + fsync)...")
+    data = uf2_path.read_bytes()
+    bytes_written = 0
     try:
-        shutil.copy2(str(uf2_path), str(dest))
-        os.sync()
-        print(f"  [PASS] Copy complete, synced to disk")
+        fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        try:
+            bytes_written = os.write(fd, data)
+            os.fsync(fd)
+        except OSError:
+            pass  # Drive may eject during fsync — data was already delivered
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass  # Close may fail on dead mount — OK
+        print(f"  [PASS] Wrote {bytes_written:,} / {uf2_size:,} bytes")
         return True
-    except (OSError, IOError) as e:
+    except OSError as e:
+        import errno
+        if e.errno in (errno.ENOENT, errno.EIO, errno.ENODEV):
+            # Drive ejected during open/write — bootloader processed the data
+            # and rebooted. This is expected for fast devices and self-updates.
+            if bytes_written > 0:
+                print(f"  [PASS] Wrote {bytes_written:,} bytes before drive ejected (expected)")
+            else:
+                print(f"  [WARN] Drive ejected before write started — may need retry")
+            return bytes_written > 0
         print(f"  [FAIL] Copy failed: {e}")
         return False
 

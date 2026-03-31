@@ -1,7 +1,16 @@
 #include "SharedSpectralAnalysis.h"
 #include "../types/BlinkyAssert.h"
-#include <arduinoFFT.h>
 #include <math.h>
+
+// CMSIS-DSP Radix-4 FFT — ~2x faster than ArduinoFFT's Radix-2 on Cortex-M4F.
+// The library is already linked by the Seeeduino BSP (-larm_cortexM4lf_math).
+#ifdef BLINKY_PLATFORM_NRF52840
+#include <arm_math.h>
+static arm_rfft_fast_instance_f32 rfftInstance;
+static bool rfftInitialized = false;
+#else
+#include <arduinoFFT.h>
+#endif
 
 // Band-weighted spectral flux constants.
 // Weights emphasize rhythmically informative frequencies for BPM estimation.
@@ -243,23 +252,55 @@ void SharedSpectralAnalysis::process() {
     sampleCount_ = 0;
 }
 
-void SharedSpectralAnalysis::applyHammingWindow() {
-    // Hamming window: w(n) = 0.54 - 0.46 * cos(2*pi*n/(N-1))
+// Precomputed Hamming window (avoids cosf() per sample every frame)
+static float hammingWindow_[SpectralConstants::FFT_SIZE];
+static bool hammingInitialized_ = false;
+
+static void initHammingWindow() {
+    if (hammingInitialized_) return;
     const float alpha = 0.54f;
     const float beta = 0.46f;
     const float twoPiOverN = 2.0f * 3.14159265f / (SpectralConstants::FFT_SIZE - 1);
-
     for (int i = 0; i < SpectralConstants::FFT_SIZE; i++) {
-        float window = alpha - beta * cosf(twoPiOverN * i);
-        vReal_[i] *= window;
+        hammingWindow_[i] = alpha - beta * cosf(twoPiOverN * i);
+    }
+    hammingInitialized_ = true;
+}
+
+void SharedSpectralAnalysis::applyHammingWindow() {
+    initHammingWindow();
+    for (int i = 0; i < SpectralConstants::FFT_SIZE; i++) {
+        vReal_[i] *= hammingWindow_[i];
     }
 }
 
 void SharedSpectralAnalysis::computeFFT() {
-    // ArduinoFFT requires buffer references at construction time
+#ifdef BLINKY_PLATFORM_NRF52840
+    // CMSIS-DSP Radix-4 real FFT — hardware-optimized for Cortex-M4F.
+    // arm_rfft_fast_f32 operates in-place: input is real samples in vReal_,
+    // output is interleaved complex [Re0, Re(N/2), Re1, Im1, Re2, Im2, ...].
+    if (!rfftInitialized) {
+        arm_rfft_fast_init_f32(&rfftInstance, SpectralConstants::FFT_SIZE);
+        rfftInitialized = true;
+    }
+    // rfft needs a separate output buffer (cannot be truly in-place for real FFT)
+    float fftOutput[SpectralConstants::FFT_SIZE];
+    arm_rfft_fast_f32(&rfftInstance, vReal_, fftOutput, 0);
+
+    // Unpack interleaved complex output into separate real/imag arrays.
+    // CMSIS format: [DC_real, Nyquist_real, Re1, Im1, Re2, Im2, ...]
+    vReal_[0] = fftOutput[0];   // DC component (real only)
+    vImag_[0] = 0.0f;
+    for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+        vReal_[i] = fftOutput[2 * i];
+        vImag_[i] = fftOutput[2 * i + 1];
+    }
+#else
+    // Fallback: ArduinoFFT (ESP32-S3 and other platforms)
     ArduinoFFT<float> fft(vReal_, vImag_, SpectralConstants::FFT_SIZE,
                           SpectralConstants::SAMPLE_RATE);
     fft.compute(FFTDirection::Forward);
+#endif
 }
 
 void SharedSpectralAnalysis::computeMagnitudesAndPhases() {

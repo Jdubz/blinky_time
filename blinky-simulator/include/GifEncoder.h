@@ -56,27 +56,41 @@ private:
         fwrite(data, 1, len, file_);
     }
 
-    // Build optimized color palette from frame
+    // Build 6×6×6 uniform RGB palette (216 colors) + 40 grayscale ramp
     void buildPalette(const uint8_t* rgba, int numPixels) {
-        // Use median cut algorithm for better palette
-        // For simplicity, we'll use a fixed RGB332 palette
+        (void)rgba; (void)numPixels;
         palette_.resize(256 * 3);
 
-        for (int i = 0; i < 256; i++) {
-            // RGB332 palette (3 bits R, 3 bits G, 2 bits B)
-            int r = ((i >> 5) & 0x07) * 255 / 7;
-            int g = ((i >> 2) & 0x07) * 255 / 7;
-            int b = (i & 0x03) * 255 / 3;
-            palette_[i * 3 + 0] = r;
-            palette_[i * 3 + 1] = g;
-            palette_[i * 3 + 2] = b;
+        // 216 uniform colors (6 levels per channel)
+        for (int i = 0; i < 216; i++) {
+            palette_[i * 3 + 0] = (i / 36) * 51;        // R: 0,51,102,153,204,255
+            palette_[i * 3 + 1] = ((i / 6) % 6) * 51;   // G: 0,51,102,153,204,255
+            palette_[i * 3 + 2] = (i % 6) * 51;          // B: 0,51,102,153,204,255
+        }
+        // 40 grayscale entries for smooth dark gradients (important for fire)
+        for (int i = 0; i < 40; i++) {
+            uint8_t v = (uint8_t)(i * 255 / 39);
+            palette_[(216 + i) * 3 + 0] = v;
+            palette_[(216 + i) * 3 + 1] = v;
+            palette_[(216 + i) * 3 + 2] = v;
         }
     }
 
-    // Find nearest palette color for RGB
+    // Find nearest palette color for RGB (brute-force, accurate)
     uint8_t findNearestColor(uint8_t r, uint8_t g, uint8_t b) {
-        // RGB332 encoding
-        return ((r / 32) << 5) | ((g / 32) << 2) | (b / 64);
+        int bestIdx = 0;
+        int bestDist = 999999;
+        for (int i = 0; i < 256; i++) {
+            int dr = (int)r - palette_[i * 3 + 0];
+            int dg = (int)g - palette_[i * 3 + 1];
+            int db = (int)b - palette_[i * 3 + 2];
+            int dist = dr * dr + dg * dg + db * db;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = i;
+            }
+        }
+        return (uint8_t)bestIdx;
     }
 
     // Convert RGBA image to indexed
@@ -187,16 +201,8 @@ public:
         if (frameDelay_ < 1) frameDelay_ = 1;
         firstFrame_ = true;
 
-        // Build default palette
-        palette_.resize(256 * 3);
-        for (int i = 0; i < 256; i++) {
-            int r = ((i >> 5) & 0x07) * 255 / 7;
-            int g = ((i >> 2) & 0x07) * 255 / 7;
-            int b = (i & 0x03) * 255 / 3;
-            palette_[i * 3 + 0] = r;
-            palette_[i * 3 + 1] = g;
-            palette_[i * 3 + 2] = b;
-        }
+        // Build default palette (6×6×6 RGB cube + grayscale ramp)
+        buildPalette(nullptr, 0);
 
         // GIF89a header
         writeBytes((const uint8_t*)"GIF89a", 6);

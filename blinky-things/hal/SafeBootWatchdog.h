@@ -5,18 +5,19 @@
  * Prevents permanent device bricking by combining:
  * 1. GPREGRET2-based boot counter (persists across ALL reset types)
  * 2. Hardware WDT (catches HardFaults, infinite loops, heap exhaustion)
- * 3. Auto-entry to UF2 bootloader after consecutive boot failures
+ * 3. Auto-entry to bootloader after consecutive boot failures
  *
  * How it works:
  * - On each boot, GPREGRET2 is incremented (persists across WDT/soft reset)
- * - If GPREGRET2 >= BOOT_FAIL_THRESHOLD, device enters UF2 bootloader
+ * - If GPREGRET2 >= BOOT_FAIL_THRESHOLD, device enters bootloader
  * - Hardware WDT starts with 15s timeout — catches any hang during init
  * - After successful init, markStable() clears the counter
  * - Main loop feeds the WDT every iteration
  *
- * Recovery flow for users:
- *   Device crashes → WDT fires → reset → counter incremented
- *   After 3 resets → auto-enters UF2 bootloader → copy firmware.uf2 → fixed
+ * Recovery mode (compile-time):
+ *   Default: UF2 mass storage (0x57) — user copies .uf2 file via USB
+ *   SAFEBOOT_BLE_DFU_RECOVERY: BLE DFU (0xA8) — fleet server pushes firmware
+ *     wirelessly. Use this for physically installed devices without USB access.
  *
  * GPREGRET2 is cleared on power-on reset (hardware behavior), so a USB
  * power cycle always gives the device a fresh start.
@@ -88,27 +89,56 @@ namespace SafeBootWatchdog {
     }
 
     /**
-     * Enter UF2 mass storage bootloader (never returns).
+     * Enter bootloader with specified GPREGRET magic value (never returns).
      *
-     * Always enters UF2 mode (0x57, USB mass storage) — NOT BLE DFU.
-     * UF2 is the safest recovery: user just copies a .uf2 file via USB.
-     * BLE DFU (0xA8) has no automatic exit and can leave the device
-     * stuck if the BLE connection fails. UF2 always provides a working
-     * USB interface for recovery.
+     * Write GPREGRET via SoftDevice API while SD is still enabled.
+     * Do NOT call sd_softdevice_disable() — it resets the POWER
+     * peripheral which can clear GPREGRET.
      */
-    inline void enterUf2Bootloader() {
-        const uint8_t DFU_MAGIC_UF2 = 0x57;
+    inline void enterBootloaderWithMagic(uint8_t magic) {
         uint8_t sd_en = 0;
         sd_softdevice_is_enabled(&sd_en);
         if (sd_en) {
-            sd_power_gpregret_clr(1, 0xFF);  // Clear boot counter via SD API
-            sd_softdevice_disable();
+            sd_power_gpregret_clr(0, 0xFF);
+            sd_power_gpregret_set(0, magic);
+            sd_power_gpregret_clr(1, 0xFF);  // Clear boot counter
+        } else {
+            NRF_POWER->GPREGRET = magic;
+            NRF_POWER->GPREGRET2 = 0;
         }
         __DSB(); __ISB();
-        NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
-        NRF_POWER->GPREGRET2 = 0;
-        __DSB(); __ISB();
         NVIC_SystemReset();
+    }
+
+    /**
+     * Enter UF2 mass storage bootloader (never returns).
+     * User copies .uf2 file via USB to recover.
+     */
+    inline void enterUf2Bootloader() {
+        enterBootloaderWithMagic(0x57);
+    }
+
+    /**
+     * Enter BLE DFU bootloader (never returns).
+     * Fleet server pushes firmware wirelessly to recover.
+     * Use for physically installed devices without USB access.
+     */
+    inline void enterBleDfuBootloader() {
+        enterBootloaderWithMagic(0xA8);
+    }
+
+    /**
+     * Enter the appropriate recovery bootloader (never returns).
+     * Mode selected at compile time:
+     *   Default: UF2 (0x57) — safe USB recovery
+     *   SAFEBOOT_BLE_DFU_RECOVERY: BLE DFU (0xA8) — wireless recovery
+     */
+    inline void enterRecoveryBootloader() {
+#ifdef SAFEBOOT_BLE_DFU_RECOVERY
+        enterBleDfuBootloader();
+#else
+        enterUf2Bootloader();
+#endif
     }
 
     /**
@@ -146,8 +176,8 @@ namespace SafeBootWatchdog {
 
         if (bootCount_ >= BOOT_FAIL_THRESHOLD) {
             // Too many consecutive failed boots — enter bootloader for recovery.
-            // The UF2 bootloader is safe: invalid firmware is silently rejected.
-            enterUf2Bootloader();  // Never returns
+            // Recovery mode selected at compile time (UF2 or BLE DFU).
+            enterRecoveryBootloader();  // Never returns
         }
 
         // Increment boot counter BEFORE doing anything else.

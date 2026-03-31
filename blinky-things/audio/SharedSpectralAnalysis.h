@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "../hal/PlatformDetect.h"
 
 /**
  * SharedSpectralAnalysis - Shared FFT computation for ensemble detectors
