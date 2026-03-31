@@ -219,6 +219,9 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     if not firmware.is_file():
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
+    # Set recovery firmware for auto-recovery of stuck DFU devices
+    fleet.set_recovery_firmware(str(firmware))
+
     platform = device.platform
 
     if platform != "nrf52840":

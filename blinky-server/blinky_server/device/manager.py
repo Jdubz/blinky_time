@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import time as _time
+from pathlib import Path
 from typing import Any
 
 from ..transport.base import Transport
@@ -581,15 +582,35 @@ class FleetManager:
             with contextlib.suppress(Exception):
                 device._on_transport_disconnect()
 
+    # Persistent state file for recovery firmware path (survives server restarts)
+    _RECOVERY_FIRMWARE_STATE = Path("/tmp/blinky-recovery-firmware.path")
+
     def set_recovery_firmware(self, firmware_path: str) -> None:
         """Set the firmware path used for automatic DFU recovery.
 
         When set, the fleet manager will automatically attempt BLE DFU on
         devices discovered in DFU_RECOVERY state (stuck in bootloader after
         a failed update). This eliminates the need for operator intervention.
+
+        Persisted to /tmp so it survives server restarts (but not reboots,
+        which is fine — a reboot means the firmware file in /tmp is gone too).
         """
         self._recovery_firmware_path = firmware_path
+        try:
+            self._RECOVERY_FIRMWARE_STATE.write_text(firmware_path)
+        except OSError:
+            pass
         log.info("Recovery firmware set: %s", firmware_path)
+
+    def _load_recovery_firmware(self) -> str | None:
+        """Load persisted recovery firmware path from state file."""
+        try:
+            path = self._RECOVERY_FIRMWARE_STATE.read_text().strip()
+            if path and Path(path).is_file():
+                return path
+        except OSError:
+            pass
+        return None
 
     async def _auto_recover_dfu_devices(self) -> None:
         """Automatically push firmware to devices stuck in DFU bootloader.
@@ -599,6 +620,11 @@ class FleetManager:
         backoff to avoid flooding BLE with retry attempts.
         """
         firmware_path = getattr(self, "_recovery_firmware_path", None)
+        if not firmware_path:
+            # Try loading from persistent state (survives server restarts)
+            firmware_path = self._load_recovery_firmware()
+            if firmware_path:
+                self._recovery_firmware_path = firmware_path
         if not firmware_path:
             return  # No recovery firmware configured
 

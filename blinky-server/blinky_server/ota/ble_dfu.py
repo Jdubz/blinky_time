@@ -512,6 +512,9 @@ async def upload_ble_dfu(
                            "DFU aborted to protect device (app flash not erased).",
                 "elapsed_s": round(time.monotonic() - t0, 1),
             }
+        # Brief pause for BlueZ to fully clean up the pre-flight connection
+        # before the bootloader entry creates a new one.
+        await asyncio.sleep(2)
 
     last_result: dict[str, Any] = {"status": "error", "message": "No attempts made"}
 
