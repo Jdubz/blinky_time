@@ -21,6 +21,7 @@ class WifiTransport(Transport):
     """WiFi TCP transport using asyncio streams."""
 
     def __init__(self, host: str, port: int = DEFAULT_PORT) -> None:
+        super().__init__()
         self._host = host
         self._port = port
         self._reader: asyncio.StreamReader | None = None

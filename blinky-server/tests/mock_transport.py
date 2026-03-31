@@ -23,6 +23,7 @@ class MockTransport:
     ) -> None:
         self._connected = False
         self._line_callback: Callable[[str], None] | None = None
+        self._disconnect_callback: Callable[[], None] | None = None
         self._sent_commands: list[str] = []
 
         self._device_info = device_info or {
@@ -85,6 +86,9 @@ class MockTransport:
 
     def on_line(self, callback: Callable[[str], None]) -> None:
         self._line_callback = callback
+
+    def on_disconnect(self, callback: Callable[[], None]) -> None:
+        self._disconnect_callback = callback
 
     async def write_line(self, line: str) -> None:
         if not self._connected:

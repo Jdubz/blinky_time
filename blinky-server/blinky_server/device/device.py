@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time as _time
 from enum import StrEnum
 from typing import Any
 
@@ -16,6 +17,7 @@ class DeviceState(StrEnum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     ERROR = "error"
+    DFU_RECOVERY = "dfu_recovery"
 
 
 class Device:
@@ -45,6 +47,14 @@ class Device:
         self.configured: bool = False
         self.safe_mode: bool = False
 
+        # Cross-transport identity (populated from firmware json info)
+        self.hardware_sn: str | None = None   # FICR DEVICEID (matches USB serial number)
+        self.ble_address: str | None = None   # BLE MAC address (for BLE DFU fallback)
+
+        # Connection health
+        self.last_seen: float | None = None   # monotonic timestamp of last successful comms
+        self.rssi: int | None = None          # BLE signal strength (dBm, from discovery)
+
         # Cached settings
         self.settings: list[dict[str, Any]] = []
 
@@ -60,8 +70,10 @@ class Device:
         self.state = DeviceState.CONNECTING
         try:
             await self.transport.connect()
+            self.transport.on_disconnect(self._on_transport_disconnect)
             info = await self.protocol.get_info()
             self._apply_info(info)
+            self.last_seen = _time.monotonic()
             self.state = DeviceState.CONNECTED
             log.info(
                 "Device connected: %s (%s) on %s - %s",
@@ -81,6 +93,19 @@ class Device:
             await self.transport.disconnect()
         self.state = DeviceState.DISCONNECTED
         # Notify all stream subscribers that device disconnected
+        for q in self._stream_subscribers:
+            q.put_nowait(None)
+        self._stream_subscribers.clear()
+
+    def _on_transport_disconnect(self) -> None:
+        """Called when the transport detects an unexpected disconnect."""
+        if self.state == DeviceState.DISCONNECTED:
+            return  # Already handled
+        log.warning("Device %s transport disconnected unexpectedly", self.id[:12])
+        self.state = DeviceState.DISCONNECTED
+        # Wake up any pending command so it fails fast instead of timing out
+        self.protocol.cancel_pending()
+        # Notify stream subscribers
         for q in self._stream_subscribers:
             q.put_nowait(None)
         self._stream_subscribers.clear()
@@ -111,6 +136,10 @@ class Device:
             "configured": self.configured,
             "safe_mode": self.safe_mode,
             "streaming": self.protocol.streaming,
+            "hardware_sn": self.hardware_sn,
+            "ble_address": self.ble_address,
+            "rssi": self.rssi,
+            "last_seen": round(self.last_seen, 1) if self.last_seen else None,
         }
 
     # ── Internal ──
@@ -132,8 +161,17 @@ class Device:
         if platform and platform != "unknown":
             self.platform = platform
 
+        # Cross-transport identity fields (firmware v83+)
+        sn = info.get("sn")
+        if sn:
+            self.hardware_sn = sn
+        ble = info.get("ble")
+        if ble:
+            self.ble_address = ble
+
     def _route_stream_line(self, line: str) -> None:
         """Parse a streaming JSON line and fan out to subscribers."""
+        self.last_seen = _time.monotonic()
         try:
             data = json.loads(line)
         except json.JSONDecodeError:

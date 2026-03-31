@@ -55,6 +55,10 @@ class DeviceResponse(BaseModel):
     configured: bool = False
     safe_mode: bool = False
     streaming: bool = False
+    hardware_sn: str | None = None
+    ble_address: str | None = None
+    rssi: int | None = None
+    last_seen: float | None = None
 
 
 class SettingResponse(BaseModel):

@@ -464,19 +464,22 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - v82: v77 pattern memory (IOI histogram + bar histogram + onset buffer, ~200 lines, 10 params) replaced by pattern slot cache (4-slot LRU of PLP pattern digests, 5 params). Fisher's g removed (dead code). downbeat/beatInMeasure removed from AudioControl.
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
-**Wireless (March 28, 2026):**
+**Wireless (March 31, 2026):**
 - ✅ BLE NUS bidirectional on nRF52840 (Print& refactor, all commands work over BLE)
 - ✅ BLE NUS bidirectional on ESP32-S3 (NUS TX wired, verified `show nn` over BLE)
 - ✅ Wireless-only mode (`--no-serial`, 6 devices managed via BLE only)
 - ✅ Server OTA: `POST /api/devices/{id}/ota` + `POST /api/fleet/ota` (delegates to uf2_upload.py)
 - ✅ BLE DFU protocol reverse-engineered (Legacy DFU SDK v11, START_DFU notification verified)
 - ✅ Platform detection via `json info` (`"platform":"nrf52840"` / `"esp32s3"`)
-- ✅ vTaskDelay(1) for BLE stability (yield() was no-op on Adafruit core)
-- ✅ StartNotify fix for reliable bleak notifications
-- ✅ Bootloader entry: sd_softdevice_disable → DSB/ISB → GPREGRET → NVIC_SystemReset
-- ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, dedup, REST API)
+- ✅ Cross-transport identity: `json info` reports `"sn"` (FICR DEVICEID) and `"ble"` (BLE MAC address)
+- ✅ BLE disconnect detection: bleak `disconnected_callback` → auto-reconnect within 10s
+- ✅ BLE liveness checks: background ping every ~30s catches silent disconnects
+- ✅ BLE DFU as UF2 fallback: serial OTA auto-falls back to BLE DFU when UF2 fails
+- ✅ DFU recovery detection: scans for DFU service UUID, detects SafeBoot crash recovery, surfaces `dfu_recovery` state
+- ✅ DFU recovery OTA: `POST /devices/{id}/ota` pushes firmware directly to devices in DFU bootloader
+- ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, hardware_sn dedup, REST API)
 - ✅ BLE DFU proven end-to-end (Legacy DFU SDK v11, 510KB in ~5.5min, tested Mar 30 on bare chip)
-- ✅ BLE-only OTA via server API (`POST /devices/{id}/ota`, bootloader entry via BLE NUS)
+- ✅ API enrichment: `GET /devices` includes `hardware_sn`, `ble_address`, `rssi`, `last_seen`
 - ⚠️ Post-BLE-DFU: device needs physical power cycle for USB/BLE re-enumeration (uhubctl insufficient on Pi)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details

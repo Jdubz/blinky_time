@@ -142,6 +142,15 @@ class DeviceProtocol:
     async def stop_stream(self) -> str:
         return await self.send_command("stream off")
 
+    def cancel_pending(self) -> None:
+        """Signal any pending command to return immediately.
+
+        Called by Device when the transport disconnects unexpectedly, so
+        send_command() fails fast instead of waiting the full timeout.
+        """
+        if self._pending:
+            self._response_event.set()
+
     # ── Internal ──
 
     async def _raw_send(self, line: str) -> None:
