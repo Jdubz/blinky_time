@@ -426,6 +426,47 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
 #endif
         out_.print(F("\""));
 
+        // Hardware serial number (FICR DEVICEID — matches USB serial number)
+        out_.print(F(",\"sn\":\""));
+#ifdef BLINKY_PLATFORM_NRF52840
+        {
+            char snBuf[17];
+            snprintf(snBuf, sizeof(snBuf), "%08lX%08lX",
+                     (unsigned long)NRF_FICR->DEVICEID[1],
+                     (unsigned long)NRF_FICR->DEVICEID[0]);
+            out_.print(snBuf);
+        }
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+        {
+            uint64_t mac = ESP.getEfuseMac();
+            char snBuf[17];
+            snprintf(snBuf, sizeof(snBuf), "%08lX%08lX",
+                     (unsigned long)(mac >> 32),
+                     (unsigned long)(mac & 0xFFFFFFFF));
+            out_.print(snBuf);
+        }
+#endif
+        out_.print(F("\""));
+
+        // BLE address
+        out_.print(F(",\"ble\":\""));
+#ifdef BLINKY_PLATFORM_NRF52840
+        if (bleNus_) {
+            uint8_t mac[6];
+            Bluefruit.getAddr(mac);
+            char bleBuf[18];
+            snprintf(bleBuf, sizeof(bleBuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]);
+            out_.print(bleBuf);
+        }
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+        {
+            NimBLEAddress addr = NimBLEDevice::getAddress();
+            out_.print(addr.toString().c_str());
+        }
+#endif
+        out_.print(F("\""));
+
         // Device configuration status (v28+)
         if (configStorage_ && configStorage_->isDeviceConfigValid()) {
             const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();

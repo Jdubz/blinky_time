@@ -22,6 +22,17 @@ def _get_device_or_404(device_id: str) -> Device:
     return device
 
 
+def _get_connected_device(device_id: str) -> Device:
+    device = _get_device_or_404(device_id)
+    if device.state != DeviceState.CONNECTED:
+        raise HTTPException(
+            409,
+            f"Device {device_id[:12]} is not connected (state={device.state.value}). "
+            + ("Use POST /devices/{id}/ota to recover." if device.state == DeviceState.DFU_RECOVERY else ""),
+        )
+    return device
+
+
 @router.get("/devices")
 async def list_devices() -> list[DeviceResponse]:
     """List all known devices."""
@@ -38,14 +49,14 @@ async def get_device(device_id: str) -> DeviceResponse:
 @router.get("/devices/{device_id}/settings")
 async def get_settings(device_id: str) -> list[dict[str, Any]]:
     """Get all settings for a device."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     return await device.protocol.get_settings()
 
 
 @router.get("/devices/{device_id}/settings/{category}")
 async def get_settings_by_category(device_id: str, category: str) -> list[dict[str, Any]]:
     """Get settings for a device filtered by category."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     all_settings = await device.protocol.get_settings()
     return [s for s in all_settings if s.get("cat") == category]
 
@@ -53,28 +64,28 @@ async def get_settings_by_category(device_id: str, category: str) -> list[dict[s
 @router.put("/devices/{device_id}/settings/{name}")
 async def set_setting(device_id: str, name: str, body: SettingValueRequest) -> CommandResponse:
     """Set a single setting value."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.set_setting(name, body.value)
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/settings/save")
 async def save_settings(device_id: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.save_settings()
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/settings/load")
 async def load_settings(device_id: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.load_settings()
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/settings/defaults")
 async def restore_defaults(device_id: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.restore_defaults()
     return CommandResponse(response=resp)
 
@@ -116,7 +127,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     device = _get_device_or_404(device_id)
 
-    if device.state != DeviceState.CONNECTED:
+    if device.state not in (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY):
         raise HTTPException(409, f"Device not connected (state={device.state.value})")
 
     # Validate firmware path — restrict to allowed directories
@@ -127,7 +138,6 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     if not firmware.is_file():
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
-    transport_type = device.transport.transport_type
     platform = device.platform
 
     if platform != "nrf52840":
@@ -135,20 +145,59 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     fleet = get_fleet()
 
+    # Device is stuck in BLE DFU bootloader (SafeBoot crash recovery).
+    # Push firmware directly — no bootloader entry needed.
+    if device.state == DeviceState.DFU_RECOVERY:
+        from ..ota.ble_dfu import upload_ble_dfu
+        from ..ota.compile import ensure_dfu_zip
+
+        # Use ble_address (app address) — NOT device.port which may be the
+        # bootloader address for placeholder devices.
+        app_ble_addr = device.ble_address
+        if not app_ble_addr:
+            raise HTTPException(400, "Device in DFU recovery but BLE app address unknown")
+
+        try:
+            dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        fleet.hold_reconnect(device.id, 180)
+        fleet.pause_discovery()
+        try:
+            result = await upload_ble_dfu(
+                app_ble_address=app_ble_addr,
+                dfu_zip_path=dfu_zip,
+                # No bootloader entry — device is already in DFU bootloader
+            )
+        finally:
+            device.state = DeviceState.DISCONNECTED
+            fleet.resume_discovery()
+            fleet.resume_reconnect(device.id)
+
+        if result["status"] == "ok":
+            return OtaResponse(**result)
+        else:
+            raise HTTPException(500, result["message"])
+
+    transport_type = device.transport.transport_type
+
     if transport_type == "serial":
-        from ..ota.uf2_upload import upload_uf2
+        from ..ota import upload_with_ble_fallback
 
         # Blackout auto-reconnect while we do the upload
         fleet.hold_reconnect(device_id, 120)
+        fleet.pause_discovery()  # Prevent BleakScanner conflict if BLE fallback triggers
         try:
-            result = await upload_uf2(
+            result = await upload_with_ble_fallback(
                 serial_port=device.port,
                 firmware_path=str(firmware),
                 transport=device.transport,
-                protocol=device.protocol,
+                ble_address=device.ble_address,
             )
         finally:
-            # Always clear blackout — fleet manager will auto-reconnect on next cycle
+            device.state = DeviceState.DISCONNECTED
+            fleet.resume_discovery()
             fleet.resume_reconnect(device_id)
 
         if result["status"] == "ok":

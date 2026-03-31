@@ -27,7 +27,7 @@ REST API: http://blinkyhost.local:8420/api/
 
 **Use case**: Fleet management — settings changes, mode/scene selection, device configuration, status monitoring, OTA firmware updates.
 
-## Current Status (March 28, 2026)
+## Current Status (March 31, 2026)
 
 ### Working
 
@@ -39,6 +39,11 @@ REST API: http://blinkyhost.local:8420/api/
 | **BLE connections stable** | nRF52840 | vTaskDelay(1) replaces no-op yield(), StartNotify for reliable notifications |
 | **Wireless-only mode** | Pi | `--no-serial` flag, all 6 devices managed via BLE only |
 | **Platform detection** | Both | Firmware reports `"platform":"nrf52840"` or `"esp32s3"` in `json info` |
+| **Cross-transport identity** | Both | Firmware reports `"sn"` (FICR DEVICEID) and `"ble"` (BLE MAC) in `json info`. Server uses `hardware_sn` for dedup. |
+| **BLE disconnect detection** | Pi | `BleTransport` registers bleak `disconnected_callback` → auto-transitions Device to DISCONNECTED → fleet auto-reconnects |
+| **BLE liveness checks** | Pi | Background loop pings BLE devices every ~30s if no recent comms, detects silent disconnects |
+| **DFU recovery detection** | Pi | Discovery scans for DFU service UUID (00001530), detects devices in SafeBoot BLE DFU bootloader, surfaces `dfu_recovery` state |
+| **BLE DFU as UF2 fallback** | Pi | Serial OTA auto-falls back to BLE DFU when UF2 fails and `device.ble_address` is known |
 | **Server OTA (UF2)** | nRF52840 | `POST /api/devices/{id}/ota` delegates to `tools/uf2_upload.py` for serial devices |
 | **BLE DFU OTA** | nRF52840 | `POST /api/devices/{id}/ota` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
 | **Fleet OTA** | Pi | `POST /api/fleet/ota` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
@@ -54,13 +59,13 @@ REST API: http://blinkyhost.local:8420/api/
 | **Serial port stability** | Pi | DTR toggle on connect, port kept open during bootloader entry |
 | **Print& abstraction** | Both | All printDiagnostics() accept Print& — output goes to any transport |
 | **Fleet server** | Pi | Serial + BLE + WiFi discovery, dedup, auto-reconnect, REST API |
+| **API enrichment** | Pi | `GET /devices` includes `hardware_sn`, `ble_address`, `rssi`, `last_seen` per device |
 
 ### Remaining Work
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
 | **Post-DFU USB re-enumeration** | Medium | After BLE DFU, USB serial doesn't re-enumerate (host-side issue). BLE reconnects fine. Not blocking for BLE-only fleet management. |
-| **BLE DFU as UF2 fallback** | Medium | Server should try BLE DFU when UF2 fails for installed devices |
 | **WiFi on ESP32-S3** | Low (ESP32 deprioritized) | Hardware antenna issue. BLE is primary wireless transport. |
 | **Web Bluetooth (blinky-console)** | Low | Fleet management is via Pi server |
 

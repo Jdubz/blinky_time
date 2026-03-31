@@ -5,6 +5,18 @@ from collections.abc import Callable
 class Transport(ABC):
     """Abstract bidirectional text transport to a blinky device."""
 
+    def __init__(self) -> None:
+        self._disconnect_callback: Callable[[], None] | None = None
+
+    def on_disconnect(self, callback: Callable[[], None]) -> None:
+        """Register callback invoked when the transport disconnects unexpectedly."""
+        self._disconnect_callback = callback
+
+    def _fire_disconnect(self) -> None:
+        """Subclasses call this when an unexpected disconnect is detected."""
+        if self._disconnect_callback:
+            self._disconnect_callback()
+
     @abstractmethod
     async def connect(self) -> None: ...
 

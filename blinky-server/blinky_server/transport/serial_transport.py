@@ -40,6 +40,7 @@ class SerialTransport(Transport):
     """Serial port transport using pyserial-asyncio."""
 
     def __init__(self, port: str, baud: int = BAUD_RATE) -> None:
+        super().__init__()
         self._port = port
         self._baud = baud
         self._protocol: _LineProtocol | None = None

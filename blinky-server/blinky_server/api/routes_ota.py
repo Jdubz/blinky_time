@@ -70,32 +70,60 @@ async def fleet_ota(body: OtaRequest) -> dict:
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
     fleet = get_fleet()
+    # Include CONNECTED devices and DFU_RECOVERY devices (stuck in bootloader)
+    flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
     devices = [d for d in fleet.get_all_devices()
-               if d.platform == "nrf52840" and d.state == DeviceState.CONNECTED]
+               if d.platform == "nrf52840" and d.state in flashable_states]
 
     if not devices:
-        raise HTTPException(404, "No connected nRF52840 devices")
+        raise HTTPException(404, "No flashable nRF52840 devices")
 
     results = {}
     fleet.pause_discovery()  # Prevent BleakScanner conflict during fleet DFU
     try:
         for device in devices:
-            log.info("Fleet OTA: flashing %s (%s via %s)...",
-                     device.id[:12], device.port, device.transport.transport_type)
+            log.info("Fleet OTA: flashing %s (%s, state=%s)...",
+                     device.id[:12], device.port, device.state.value)
 
-            transport_type = device.transport.transport_type
-            fleet.hold_reconnect(device.id, 120)
+            # BLE DFU takes ~5.5min (330s) — use longer hold for DFU recovery devices
+            hold_secs = 360 if device.state == DeviceState.DFU_RECOVERY else 120
+            fleet.hold_reconnect(device.id, hold_secs)
 
             try:
-                if transport_type == "serial":
-                    from ..ota.uf2_upload import upload_uf2
-                    result = await upload_uf2(
+                # Device in DFU bootloader (SafeBoot crash recovery) —
+                # push firmware directly, no bootloader entry needed.
+                if device.state == DeviceState.DFU_RECOVERY:
+                    from ..ota.ble_dfu import upload_ble_dfu
+                    from ..ota.compile import ensure_dfu_zip
+
+                    app_ble_addr = device.ble_address
+                    if not app_ble_addr:
+                        result = {"status": "error",
+                                  "message": "DFU recovery device has no BLE app address"}
+                        results[device.id[:12]] = result
+                        continue
+
+                    try:
+                        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
+                    except ValueError as e:
+                        result = {"status": "error", "message": str(e)}
+                        results[device.id[:12]] = result
+                        continue
+
+                    result = await upload_ble_dfu(
+                        app_ble_address=app_ble_addr,
+                        dfu_zip_path=dfu_zip,
+                    )
+
+                elif device.transport.transport_type == "serial":
+                    from ..ota import upload_with_ble_fallback
+                    result = await upload_with_ble_fallback(
                         serial_port=device.port,
                         firmware_path=str(firmware),
                         transport=device.transport,
-                        protocol=device.protocol,
+                        ble_address=device.ble_address,
                     )
-                elif transport_type == "ble":
+                elif device.transport.transport_type == "ble":
                     from ..ota.ble_dfu import upload_ble_dfu
                     from ..ota.compile import ensure_dfu_zip
 
@@ -121,7 +149,8 @@ async def fleet_ota(body: OtaRequest) -> dict:
                         enter_bootloader_via_ble=enter_bootloader_via_ble,
                     )
                 else:
-                    result = {"status": "skip", "message": f"Unsupported transport: {transport_type}"}
+                    result = {"status": "skip",
+                              "message": f"Unsupported transport: {device.transport.transport_type}"}
 
                 results[device.id[:12]] = result
             except Exception as e:

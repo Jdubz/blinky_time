@@ -58,8 +58,32 @@ def discover_serial_devices() -> list[DiscoveredDevice]:
     return devices
 
 
+DFU_SERVICE_UUID = "00001530-1212-efde-1523-785feabcd123"
+
+
+def _bootloader_to_app_address(boot_addr: str) -> str:
+    """Convert bootloader BLE address to app address (subtract 1 from 6-byte addr).
+
+    Handles borrow propagation across octets (e.g., XX:XX:XX:XX:XX:00 → XX:XX:XX:XX:WW:FF).
+    """
+    parts = boot_addr.split(':')
+    octets = [int(p, 16) for p in parts]
+    borrow = 1
+    for i in range(len(octets) - 1, -1, -1):
+        octets[i] -= borrow
+        if octets[i] < 0:
+            octets[i] += 256
+            borrow = 1
+        else:
+            break
+    return ':'.join(f"{o:02X}" for o in octets)
+
+
 async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
-    """Scan for BLE devices advertising the NUS service.
+    """Scan for BLE devices advertising NUS or DFU services.
+
+    NUS devices are normal app-mode devices. DFU devices are stuck in
+    BLE DFU bootloader (SafeBoot crash recovery or manual entry).
 
     Requires bleak. Returns empty list if bleak is not available
     or no Bluetooth adapter is present.
@@ -73,23 +97,55 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
 
     devices = []
     try:
+        # Scan for both NUS (app mode) and DFU (bootloader mode) devices
         discovered = await BleakScanner.discover(
             timeout=timeout,
-            service_uuids=[NUS_SERVICE_UUID],
+            service_uuids=[NUS_SERVICE_UUID, DFU_SERVICE_UUID],
             return_adv=True,
         )
         for addr, (dev, adv) in discovered.items():
-            devices.append(
-                DiscoveredDevice(
-                    device_id=addr,  # BLE address as stable ID
-                    platform="unknown",  # Cannot determine from BLE advertisement alone
-                    transport_type="ble",
-                    address=addr,
-                    description=dev.name or "BLE device",
-                    rssi=adv.rssi,
+            svc_uuids = [str(u).lower() for u in (adv.service_uuids or [])]
+            has_dfu = DFU_SERVICE_UUID in svc_uuids
+            has_nus = NUS_SERVICE_UUID in svc_uuids
+            # Bootloader mode: DFU service only (no NUS), or name is "AdaDFU".
+            # App mode with Adafruit BSP advertises BOTH NUS + DFU (buttonless DFU).
+            is_bootloader = has_dfu and (not has_nus or (dev.name or "").startswith("AdaDFU"))
+            if is_bootloader:
+                # Device is in BLE DFU bootloader mode.
+                # Use the app-mode address as device_id so the same physical
+                # device keeps the same identity after recovery.
+                app_addr = _bootloader_to_app_address(addr)
+                devices.append(
+                    DiscoveredDevice(
+                        device_id=app_addr,
+                        platform="nrf52840",
+                        transport_type="ble_dfu",
+                        address=addr,
+                        description=dev.name or "DFU bootloader",
+                        rssi=adv.rssi,
+                        extra={
+                            "app_address": app_addr,
+                            "bootloader_address": addr,
+                        },
+                    )
                 )
-            )
-            log.info("Discovered BLE %s (%s) RSSI=%d", dev.name, addr, adv.rssi)
+                log.warning(
+                    "Discovered BLE DFU bootloader %s (%s) RSSI=%d — "
+                    "device in crash recovery (app addr: %s)",
+                    dev.name, addr, adv.rssi, app_addr,
+                )
+            else:
+                devices.append(
+                    DiscoveredDevice(
+                        device_id=addr,
+                        platform="unknown",
+                        transport_type="ble",
+                        address=addr,
+                        description=dev.name or "BLE device",
+                        rssi=adv.rssi,
+                    )
+                )
+                log.info("Discovered BLE %s (%s) RSSI=%d", dev.name, addr, adv.rssi)
     except Exception as e:
         log.warning("BLE scan failed: %s", e)
 

@@ -2,17 +2,23 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..device.device import Device
+from ..device.device import Device, DeviceState
 from .deps import get_fleet
 from .models import CommandRequest, CommandResponse, SettingValueRequest
 
 router = APIRouter(tags=["commands"])
 
 
-def _get_device_or_404(device_id: str) -> Device:
+def _get_connected_device(device_id: str) -> Device:
     device = get_fleet().get_device(device_id)
     if not device:
         raise HTTPException(404, f"Device not found: {device_id}")
+    if device.state != DeviceState.CONNECTED:
+        raise HTTPException(
+            409,
+            f"Device {device_id[:12]} is not connected (state={device.state.value}). "
+            + ("Use POST /devices/{id}/ota to recover." if device.state == DeviceState.DFU_RECOVERY else ""),
+        )
     return device
 
 
@@ -22,21 +28,21 @@ def _get_device_or_404(device_id: str) -> Device:
 @router.post("/devices/{device_id}/command")
 async def send_command(device_id: str, body: CommandRequest) -> CommandResponse:
     """Send a raw command to a device."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.send_command(body.command)
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/generator/{name}")
 async def set_generator(device_id: str, name: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.set_generator(name)
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/effect/{name}")
 async def set_effect(device_id: str, name: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.set_effect(name)
     return CommandResponse(response=resp)
 
@@ -44,7 +50,7 @@ async def set_effect(device_id: str, name: str) -> CommandResponse:
 @router.post("/devices/{device_id}/stream/{mode}")
 async def control_stream(device_id: str, mode: str) -> CommandResponse:
     """Start or stop streaming. mode: on, off, fast, debug, nn."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     if mode == "off":
         resp = await device.protocol.stop_stream()
     else:

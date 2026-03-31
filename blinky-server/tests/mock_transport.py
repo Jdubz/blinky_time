@@ -8,8 +8,10 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from blinky_server.transport.base import Transport
 
-class MockTransport:
+
+class MockTransport(Transport):
     """In-memory transport that simulates a blinky device.
 
     Responds to known commands with realistic device responses.
@@ -21,6 +23,7 @@ class MockTransport:
         device_info: dict[str, Any] | None = None,
         settings: list[dict[str, Any]] | None = None,
     ) -> None:
+        super().__init__()
         self._connected = False
         self._line_callback: Callable[[str], None] | None = None
         self._sent_commands: list[str] = []
@@ -85,6 +88,11 @@ class MockTransport:
 
     def on_line(self, callback: Callable[[str], None]) -> None:
         self._line_callback = callback
+
+    def fire_disconnect(self) -> None:
+        """Simulate an unexpected transport disconnect (for testing)."""
+        self._connected = False
+        self._fire_disconnect()
 
     async def write_line(self, line: str) -> None:
         if not self._connected:

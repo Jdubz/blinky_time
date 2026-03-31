@@ -40,12 +40,14 @@ class BleTransport(Transport):
     """
 
     def __init__(self, ble_address: str) -> None:
+        super().__init__()
         self._address = ble_address
         self._client: BleakClient | None = None
         self._line_callback: Callable[[str], None] | None = None
         self._rx_buf = b""
         self._connected = False
         self._mtu = 20  # Default min MTU, negotiated on connect
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def connect(self) -> None:
         if self._connected:
@@ -71,9 +73,11 @@ class BleTransport(Transport):
 
     async def _connect_inner(self) -> None:
         log.info("BLE connecting to %s...", self._address)
+        self._loop = asyncio.get_running_loop()
         self._client = BleakClient(
             self._address,
             timeout=CONNECT_TIMEOUT_S,
+            disconnected_callback=self._on_ble_disconnect,
         )
         await self._client.connect()
 
@@ -99,6 +103,16 @@ class BleTransport(Transport):
         await asyncio.sleep(COMMAND_DELAY_S)
 
         log.info("BLE ready: %s", self._address)
+
+    def _on_ble_disconnect(self, client: BleakClient) -> None:
+        """Called by bleak from a background thread when BLE disconnects."""
+        if not self._connected:
+            return  # Already handled (intentional disconnect)
+        self._connected = False
+        log.warning("BLE unexpected disconnect: %s", self._address)
+        # Fire callback on the event loop (bleak calls from a bg thread)
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._fire_disconnect)
 
     async def disconnect(self) -> None:
         if not self._connected:
