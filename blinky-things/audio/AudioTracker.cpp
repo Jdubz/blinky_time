@@ -170,7 +170,7 @@ const AudioControl& AudioTracker::update(float dt) {
         // NN-gated flux for epoch-fold pattern extraction only. The soft gate
         // emphasizes kicks/snares (NN F1=0.787) and suppresses hi-hats/fills,
         // biasing the epoch-fold toward the stable rhythmic skeleton.
-        // The ungated flux goes into ossBuffer_ for ACF/tempogram period detection
+        // The ungated flux goes into ossBuffer_ for ACF period detection
         // (NN-independent, per architecture contract).
         float nnGatedFlux = fluxContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
         addOssSample(fluxContrast, nnGatedFlux);
@@ -190,10 +190,16 @@ const AudioControl& AudioTracker::update(float dt) {
         if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
     }
 
-    // Fourier Tempogram DELETED (v83). Cost 75ms, destroyed frame timing.
-    // Tempo estimation not needed — generators use energy + pulse + plpPulse directly.
+    // 7. ACF period detection + PLP pattern analysis on timer (~4ms every 150ms)
+    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 40) {
+        uint32_t t0 = time_.millis();
+        runAcf();
+        updatePlpAnalysis();
+        lastAcfMs_ = nowMs;
+        lastTempogramMs_ = time_.millis() - t0;  // Profile: ACF+PLP total ms
+    }
 
-    // 10. PLP phase update (free-running + pattern-based correction)
+    // 8. PLP phase update (free-running + pattern-based correction)
     updatePlpPhase();
 
     // 11. Decay during silence + reset stale state for clean warm-up
@@ -258,13 +264,16 @@ void AudioTracker::addOssSample(float ungatedFlux, float gatedFlux) {
 }
 
 // ============================================================================
-// Fourier Tempogram — Period + Phase Selection
+// Multi-Source ACF — Period Detection + Epoch-Fold Pattern Scoring
 // ============================================================================
+// Replaces the Fourier Tempogram (Goertzel DFT, 75ms) with autocorrelation
+// (~4ms). ACF scans beat-level lags (20-80) on 3 sources, then generates
+// bar-level candidates via integer multiples (2×/3×/4×). Epoch-fold variance
+// scoring selects the period with the best pattern contrast, biasing toward
+// full-bar patterns over single-beat periods.
 
-void AudioTracker::runFourierTempogram() {
+void AudioTracker::runAcf() {
     // Linearize all source circular buffers into class members.
-    // ossLinear_ = ungated flux (NN-independent, for tempogram period detection).
-    // gatedFluxLinear_ = NN-gated flux (for epoch-fold pattern extraction only).
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
         ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
@@ -275,21 +284,11 @@ void AudioTracker::runFourierTempogram() {
     int nStart = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
     for (int i = 0; i < nnCount_; i++) nnLinear_[i] = nnOnsetBuffer_[(nStart + i) % NN_BUFFER_SIZE];
 
-    // --- Fourier Tempogram: DFT at candidate tempo frequencies ---
-    // For each candidate BPM, compute the DFT coefficient (Goertzel-style).
-    // DFT magnitude selects the period. DFT phase gives beat alignment for free.
-    // Unlike epoch-fold PMR, the Fourier tempogram inherently suppresses
-    // sub-harmonics (half-time) because a sub-harmonic sinusoid anti-correlates
-    // with half the onset peaks. (Grosche & Mueller 2011)
-
+    // Mean-subtract each source IN-PLACE (removes DC for clean ACF/epoch-fold).
+    // NOTE: updatePlpAnalysis() reads these mean-subtracted buffers.
     float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
     const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
 
-    // Mean-subtract each source IN-PLACE (critical for DFT — DC leakage otherwise
-    // dominates all frequency bins, making periodic components invisible).
-    // NOTE: this mutates ossLinear_/bassLinear_/nnLinear_ — updatePlpAnalysis()
-    // reads these mean-subtracted values; its min-max normalization handles
-    // the zero-centered epoch-fold output. Do not reorder these calls.
     for (int src = 0; src < 3; src++) {
         int count = sourceCounts[src];
         if (count < 20) continue;
@@ -306,106 +305,129 @@ void AudioTracker::runFourierTempogram() {
         for (int i = 0; i < ossCount_; i++) gatedFluxLinear_[i] -= mean;
     }
 
-    // --- Pass 1: Goertzel DFT scan to find top-N candidates ---
-    // Collect top candidates by DFT magnitude across all sources.
+    // --- Pass 1: Multi-source ACF at beat-level lags ---
+    // Scan lags 20-80 (200-49 BPM beat rate) with step=2.
+    // Bar-level candidates are generated from multiples, not scanned directly.
+    // This keeps ACF cost to ~62 lags × 3 sources × ~700 overlap ≈ 130K MACs.
     static constexpr int TOP_N = 5;
-    struct Candidate {
-        float mag;
-        float phase;
+    static constexpr int ACF_MIN_LAG = 20;    // ~200 BPM beat rate
+    static constexpr int ACF_MAX_LAG = 80;    // ~49 BPM beat rate
+    static constexpr int ACF_STEP = 2;
+
+    struct AcfPeak {
+        float strength;   // Normalized ACF value at peak (0-1)
         int period;
         int source;
     };
-    Candidate topCandidates[TOP_N] = {};
+    AcfPeak beatPeaks[TOP_N] = {};
 
-    // Scan candidate periods from bpmMin to bpmMax
-    int minLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMax);
-    int maxLag = static_cast<int>(OSS_FRAMES_PER_MIN / bpmMin);
-    if (minLag < 10) minLag = 10;
-    if (maxLag > MAX_PATTERN_LEN) maxLag = MAX_PATTERN_LEN;
-    if (maxLag >= ossCount_ / 2) maxLag = ossCount_ / 2 - 1;
+    for (int src = 0; src < 3; src++) {
+        int count = sourceCounts[src];
+        if (count < ACF_MAX_LAG * 2) continue;
+        const float* buf = sources[src];
 
-    // Step size: 1 frame for short periods (beat-level), 2 for longer periods
-    // (bar-level). Halves Goertzel scan cost for the extended range without
-    // losing resolution where it matters. At lag=66, 1-frame step = 0.9 BPM
-    // resolution; at lag=132, 2-frame step = 0.4 BPM resolution (still fine).
-    for (int lag = minLag; lag <= maxLag; lag += (lag < 66 ? 1 : 2)) {
-        float omega = TWO_PI_F / static_cast<float>(lag);
-        float cosOmega = cosf(omega);
-        float sinOmega = sinf(omega);
-        float coeff = 2.0f * cosOmega;
+        // Zero-lag energy for normalization (unbiased ACF)
+        float zeroLag = 0.0f;
+        for (int i = 0; i < count; i++) zeroLag += buf[i] * buf[i];
+        if (zeroLag < 1e-10f) continue;
 
-        for (int src = 0; src < 3; src++) {
-            int count = sourceCounts[src];
-            if (count < lag * 2) continue;
-            const float* buf = sources[src];
-
-            float s1 = 0.0f, s2 = 0.0f;
-            for (int i = 0; i < count; i++) {
-                float s0 = buf[i] + coeff * s1 - s2;
-                s2 = s1;
-                s1 = s0;
+        // Scan ACF with local-maximum peak detection
+        float prevAcf = 0.0f, prevPrevAcf = 0.0f;
+        for (int lag = ACF_MIN_LAG; lag <= ACF_MAX_LAG; lag += ACF_STEP) {
+            float sum = 0.0f;
+            int overlap = count - lag;
+            for (int i = 0; i < overlap; i++) {
+                sum += buf[i] * buf[i + lag];
             }
+            float acfVal = sum / zeroLag;
 
-            float dftReal = s1 - s2 * cosOmega;
-            float dftImag = s2 * sinOmega;
-            float mag = sqrtf(dftReal * dftReal + dftImag * dftImag) / sqrtf(static_cast<float>(count));
+            // Peak: previous sample was a local maximum above threshold
+            if (prevAcf > prevPrevAcf && prevAcf > acfVal && prevAcf > 0.05f) {
+                int peakLag = lag - ACF_STEP;
+                float peakStrength = prevAcf;
 
-            // Compute DFT phase (done once, used by both insertion paths below).
-            // Phase = unwrapped DFT angle normalized to [0, 1) within the period.
-            float rawPhase = -atan2f(dftImag, dftReal) / TWO_PI_F;
-            float phaseAdvance = static_cast<float>(count - 1) / static_cast<float>(lag);
-            float phase = rawPhase + phaseAdvance;
-            phase -= floorf(phase);
-
-            // Insert into top-N if large enough.
-            // Enforce minimum 10% period separation to prevent near-duplicate
-            // candidates (e.g., lag 32/33/34 from different sources) from
-            // crowding out genuinely different tempo hypotheses.
-            bool tooClose = false;
-            for (int k = 0; k < TOP_N; k++) {
-                if (topCandidates[k].mag > 0.01f &&
-                    abs(lag - topCandidates[k].period) <= topCandidates[k].period / 10) {
-                    // Near-duplicate: keep the stronger one
-                    if (mag > topCandidates[k].mag) {
-                        topCandidates[k] = { mag, phase, lag, src };
+                // Insert into top-N with 10% minimum period separation
+                bool tooClose = false;
+                for (int k = 0; k < TOP_N; k++) {
+                    if (beatPeaks[k].strength > 0.01f &&
+                        abs(peakLag - beatPeaks[k].period) <= beatPeaks[k].period / 10) {
+                        if (peakStrength > beatPeaks[k].strength) {
+                            beatPeaks[k] = { peakStrength, peakLag, src };
+                        }
+                        tooClose = true;
+                        break;
                     }
-                    tooClose = true;
-                    break;
+                }
+                if (!tooClose) {
+                    int minIdx = 0;
+                    for (int k = 1; k < TOP_N; k++) {
+                        if (beatPeaks[k].strength < beatPeaks[minIdx].strength) minIdx = k;
+                    }
+                    if (peakStrength > beatPeaks[minIdx].strength) {
+                        beatPeaks[minIdx] = { peakStrength, peakLag, src };
+                    }
                 }
             }
-            if (!tooClose) {
-                int minIdx = 0;
-                for (int k = 1; k < TOP_N; k++) {
-                    if (topCandidates[k].mag < topCandidates[minIdx].mag) minIdx = k;
-                }
-                if (mag > topCandidates[minIdx].mag) {
-                    topCandidates[minIdx] = { mag, phase, lag, src };
-                }
+            prevPrevAcf = prevAcf;
+            prevAcf = acfVal;
+        }
+    }
+
+    // --- Generate bar-level candidates from beat-peak multiples ---
+    // Bar patterns are 2×/3×/4× the beat period. Epoch-fold variance scoring
+    // selects bar-length periods over beat-length when the pattern is structured
+    // (e.g., kick-snare-kick-snare has higher variance at 4× than at 1×).
+    static constexpr int MULTIPLIERS[] = { 1, 2, 3, 4 };
+    static constexpr int NUM_MULTIPLIERS = 4;
+    static constexpr int MAX_CANDIDATES = TOP_N * NUM_MULTIPLIERS;
+
+    struct ScoredCandidate {
+        float acfStrength;
+        int period;
+        int source;
+    };
+    ScoredCandidate candidates[MAX_CANDIDATES] = {};
+    int numCandidates = 0;
+
+    for (int k = 0; k < TOP_N; k++) {
+        if (beatPeaks[k].strength < 0.01f) continue;
+        for (int m = 0; m < NUM_MULTIPLIERS; m++) {
+            int cPeriod = beatPeaks[k].period * MULTIPLIERS[m];
+            if (cPeriod > MAX_PATTERN_LEN) continue;
+            if (cPeriod >= ossCount_ / 2) continue;  // Need 2+ epochs
+
+            // Skip near-duplicates
+            bool dup = false;
+            for (int c = 0; c < numCandidates; c++) {
+                if (abs(cPeriod - candidates[c].period) <= cPeriod / 10) { dup = true; break; }
+            }
+            if (dup) continue;
+
+            if (numCandidates < MAX_CANDIDATES) {
+                candidates[numCandidates++] = { beatPeaks[k].strength, cPeriod, beatPeaks[k].source };
             }
         }
     }
 
     // --- Pass 2: Score candidates by epoch-fold pattern quality ---
-    // The period that produces the highest-contrast pattern is the one that
-    // creates the best visual pulse, regardless of which has higher DFT magnitude.
-    // Combined score: DFT magnitude (periodicity) × pattern variance (visual quality).
+    // Reuses tempogram Pass 2 logic: the period that produces the highest-contrast
+    // pattern is the one that creates the best visual pulse. Each candidate is
+    // scored using its own source buffer for fair cross-source comparison.
     float bestScore = -1.0f;
-    float bestMag = 0.0f;
+    float bestStrength = 0.0f;
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
     float bestPhase = 0.0f;
     int bestSource = 0;
 
-    for (int k = 0; k < TOP_N; k++) {
-        if (topCandidates[k].mag < 0.01f) continue;  // Skip empty slots
-
-        int cPeriod = topCandidates[k].period;
-        int cSource = topCandidates[k].source;
+    for (int c = 0; c < numCandidates; c++) {
+        int cPeriod = candidates[c].period;
+        int cSource = candidates[c].source;
         const float* cBuf = sources[cSource];
         int cCount = sourceCounts[cSource];
 
         if (cCount < cPeriod * 2) continue;
 
-        // Epoch-fold at this candidate period with recency weighting
+        // Recency-weighted epoch fold
         float fold[MAX_PATTERN_LEN] = {0};
         float totalWeight = 0.0f;
         int epochs = 0;
@@ -431,23 +453,28 @@ void AudioTracker::runFourierTempogram() {
         }
         variance /= cPeriod;
 
-        // Combined score: DFT magnitude × pattern variance
-        // Both are important: DFT confirms periodicity, variance confirms visual quality
-        float score = topCandidates[k].mag * sqrtf(variance);
+        // Combined score: ACF periodicity × pattern contrast
+        float score = candidates[c].acfStrength * sqrtf(variance);
 
         if (score > bestScore) {
+            // Phase from epoch-fold peak position (where the main accent falls)
+            int peakBin = 0;
+            float peakVal = fold[0];
+            for (int j = 1; j < cPeriod; j++) {
+                if (fold[j] > peakVal) { peakVal = fold[j]; peakBin = j; }
+            }
+
             bestScore = score;
-            bestMag = topCandidates[k].mag;
-            bestPeriod = topCandidates[k].period;
-            bestPhase = topCandidates[k].phase;
-            bestSource = topCandidates[k].source;
+            bestStrength = candidates[c].acfStrength;
+            bestPeriod = cPeriod;
+            bestPhase = static_cast<float>(peakBin) / static_cast<float>(cPeriod);
+            bestSource = cSource;
         }
     }
 
-    plpDftMag_ = bestMag;
+    plpDftMag_ = bestStrength;  // Reused field (now ACF strength, not DFT magnitude)
 
     // Clear pulse buffer on significant period change (>10% shift)
-    // so old kernels at the wrong frequency don't contaminate the new period.
     if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
         memset(pulseBuf_, 0, sizeof(pulseBuf_));
         pulseHead_ = 0;
@@ -458,11 +485,8 @@ void AudioTracker::runFourierTempogram() {
     plpBestSource_ = static_cast<uint8_t>(bestSource);
     plpDftPhase_ = bestPhase;
 
-    // --- Periodicity strength from DFT magnitude ---
-    // With sqrt(N) normalization, magnitude ~1.0 for a clearly periodic signal.
-    // This is not a normalized cross-correlation [-1,1] but a spectral magnitude
-    // where ~1.0 indicates strong periodicity. Clamp to [0,1] for rhythmStrength.
-    float newStrength = clampf(bestMag, 0.0f, 1.0f);
+    // Periodicity strength from ACF peak (already normalized 0-1)
+    float newStrength = clampf(bestStrength, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
 
     // BPM from best period (informational — PLP uses plpBestPeriod_ directly)
@@ -492,7 +516,7 @@ void AudioTracker::addBassSample(float bassEnergy) {
 }
 
 void AudioTracker::updatePlpAnalysis() {
-    // --- 1. Use raw period from Fourier tempogram (not BPM-smoothed) ---
+    // --- 1. Use raw period from ACF (not BPM-smoothed) ---
     int patLen = plpBestPeriod_;
     if (patLen < 2) patLen = 2;
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
@@ -503,7 +527,7 @@ void AudioTracker::updatePlpAnalysis() {
     // The pattern digest captures the actual rhythmic shape for section detection
     // via the slot cache's cosine similarity matching.
     // Use NN-gated flux (gatedFluxLinear_) for source 0 to emphasize kicks/snares
-    // in the pattern shape. The ungated ossLinear_ is reserved for ACF/tempogram
+    // in the pattern shape. The ungated ossLinear_ is reserved for ACF
     // period detection (NN-independent per architecture contract).
     const float* sourceBuf = gatedFluxLinear_;
     int sourceCount = ossCount_;
@@ -929,9 +953,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.plpPulse = plpPulseValue_;
 
     // --- Rhythm Strength ---
-    // Currently 0 (tempogram disabled). Will be driven by onset pattern
-    // analysis when implemented.
-    control_.rhythmStrength = 0.0f;
+    // Driven by ACF periodicity strength. Enables music-reactive mode in
+    // Water/Lightning generators when periodic rhythm is detected.
+    control_.rhythmStrength = periodicityStrength_;
 
     // --- Onset Density ---
     if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {

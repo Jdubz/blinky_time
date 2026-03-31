@@ -13,7 +13,7 @@
 //
 // Output is used for:
 //   - Visual pulse detection (sparks, flashes on kicks/snares)
-//   - PLP source comparison (Fourier tempogram evaluates NN onset alongside flux/bass)
+//   - PLP source comparison (ACF evaluates NN onset alongside flux/bass)
 //   - Energy synthesis (ODF peak-hold blend)
 //
 // NOT used for BPM estimation — spectral flux drives ACF tempo instead.

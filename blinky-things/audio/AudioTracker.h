@@ -39,13 +39,14 @@ struct PatternSlot {
  * AudioTracker - Audio analysis with decoupled tempo/onset architecture
  *
  * ACF + PLP architecture:
- *   BPM path:  spectral flux → OSS buffer → ACF → period estimate
- *   Onset path: FrameOnsetNN → pulse detection (visual sparks)
- *   Pulse path: PLP epoch-folds flux at detected period → repeating energy pattern
+ *   Period path:  spectral flux + bass energy → ACF → beat period → bar multipliers
+ *   Onset path:   FrameOnsetNN → pulse detection (visual sparks)
+ *   Pattern path:  PLP epoch-folds NN-gated flux at detected period → repeating pattern
  *
- * Key design: BPM estimation uses spectral flux (NN-independent). NN onset
- * drives visual pulse only. PLP extracts the dominant repeating energy pattern
- * without needing onset-beat classification.
+ * Key design: Period estimation uses multi-source ACF (bass + flux, NN-independent).
+ * Beat-level ACF peaks are multiplied (2×/3×/4×) to find bar-level candidates.
+ * Epoch-fold variance scoring selects the period with the best pattern contrast.
+ * NN onset drives visual pulse and gates the epoch-fold source for pattern quality.
  */
 class AudioTracker {
 public:
@@ -81,7 +82,7 @@ public:
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
-    uint32_t getLastTempogramMs() const { return lastTempogramMs_; }
+    uint32_t getLastAcfMs() const { return lastTempogramMs_; }
     uint32_t getLastPlpMs() const { return lastPlpMs_; }
 
     // Alias for JSON audio stream ("onset" field)
@@ -157,7 +158,7 @@ private:
     static constexpr int OSS_BUFFER_SIZE = 792;
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
-    float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF/tempogram)
+    float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF period detection)
     float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
     float gatedFluxBuffer_[OSS_BUFFER_SIZE] = {0};  // NN-gated flux (for epoch-fold pattern extraction only)
     float gatedFluxLinear_[OSS_BUFFER_SIZE] = {0};   // Linearized NN-gated flux (for epoch-fold)
@@ -189,7 +190,7 @@ private:
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
-    int plpBestPeriod_ = 33;                   // Winning period from Fourier tempogram (frames)
+    int plpBestPeriod_ = 33;                   // Winning period from ACF + epoch-fold scoring (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
@@ -230,7 +231,7 @@ private:
 
     // === ACF timing ===
     uint32_t lastAcfMs_ = 0;
-    uint32_t lastTempogramMs_ = 0;  // Timing: last runFourierTempogram() duration
+    uint32_t lastTempogramMs_ = 0;  // Timing: last runAcf()+updatePlpAnalysis() duration
     uint32_t lastPlpMs_ = 0;       // Timing: last updatePlpAnalysis() duration
 
     // === Silence detection ===
@@ -250,7 +251,7 @@ private:
     void addOssSample(float ungatedFlux, float gatedFlux);
     void addBassSample(float bassEnergy);
     void resetAnalysisState();
-    void runFourierTempogram();
+    void runAcf();
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
     void updatePlpPhase();          // Advance phase + read pattern value (every frame)
