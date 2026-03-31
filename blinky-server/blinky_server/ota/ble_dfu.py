@@ -6,7 +6,8 @@ bootloader entry) or BLE (for direct DFU).
 
 Key protocol details (all discovered via testing, Mar 2026):
 - Adafruit bootloader v0.6.1 uses Legacy DFU, NOT Secure DFU v2
-- DFU Control writes MUST use write-without-response
+- DFU Control writes MUST use write-with-response (characteristic only advertises 'write', not 'write-without-response')
+- DFU Packet writes use write-without-response for speed
 - Bootloader BLE address = app_address + 1 (last octet)
 - Must force StartNotify (not AcquireNotify) for reliable notifications
 - BlueZ GATT cache must be cleared between app and bootloader connections
@@ -237,7 +238,7 @@ async def upload_ble_dfu(
         # Size packet: [sd_size, bl_size, app_size] as 3x uint32 LE
         progress("dfu", f"START_DFU (type=0x{image_type:02x})...", 35)
         await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x01, image_type]), response=False)
+                                     bytes([0x01, image_type]), response=True)
         if image_type == 0x04:
             size_pkt = struct.pack('<III', 0, 0, len(firmware))
         elif image_type == 0x02:
@@ -253,11 +254,11 @@ async def upload_ble_dfu(
         # INIT_DFU
         progress("dfu", "INIT_DFU...", 40)
         await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x02, 0x00]), response=False)
+                                     bytes([0x02, 0x00]), response=True)
         await client.write_gatt_char(DFU_PACKET_UUID,
                                      init_packet, response=False)
         await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x02, 0x01]), response=False)
+                                     bytes([0x02, 0x01]), response=True)
         ok, msg = await wait_response("INIT_DFU", expected_opcode=0x02, timeout=60.0)
         if not ok:
             result["message"] = msg
@@ -265,12 +266,12 @@ async def upload_ble_dfu(
 
         # Set PRN
         prn_cmd = bytes([0x08]) + struct.pack('<H', PRN_INTERVAL)
-        await client.write_gatt_char(DFU_CONTROL_UUID, prn_cmd, response=False)
+        await client.write_gatt_char(DFU_CONTROL_UUID, prn_cmd, response=True)
 
         # RECEIVE_FIRMWARE
         progress("transfer", f"Sending {len(firmware)} bytes...", 45)
         await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x03]), response=False)
+                                     bytes([0x03]), response=True)
 
         sent = 0
         pkt_count = 0
@@ -306,7 +307,7 @@ async def upload_ble_dfu(
         # VALIDATE
         progress("validate", "Validating firmware...", 97)
         await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x04]), response=False)
+                                     bytes([0x04]), response=True)
         ok, msg = await wait_response("VALIDATE", expected_opcode=0x04)
         if not ok:
             result["message"] = msg
@@ -316,7 +317,7 @@ async def upload_ble_dfu(
         progress("activate", "Activating and resetting...", 99)
         try:
             await client.write_gatt_char(DFU_CONTROL_UUID,
-                                         bytes([0x05]), response=False)
+                                         bytes([0x05]), response=True)
         except Exception:
             pass  # Device disconnects immediately
 
