@@ -475,7 +475,9 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ StartNotify fix for reliable bleak notifications
 - ✅ Bootloader entry: sd_softdevice_disable → DSB/ISB → GPREGRET → NVIC_SystemReset
 - ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, dedup, REST API)
-- ⚠️ BLE DFU full transfer untested end-to-end (protocol verified, transfer pending)
+- ✅ BLE DFU proven end-to-end (Legacy DFU SDK v11, 510KB in ~5.5min, tested Mar 30 on bare chip)
+- ✅ BLE-only OTA via server API (`POST /devices/{id}/ota`, bootloader entry via BLE NUS)
+- ⚠️ Post-BLE-DFU: device needs physical power cycle for USB/BLE re-enumeration (uhubctl insufficient on Pi)
 - ⚠️ ESP32-S3 WiFi blocked by antenna (u.FL only, no PCB antenna on Sense variant)
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
