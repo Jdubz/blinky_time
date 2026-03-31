@@ -142,3 +142,44 @@ async def fleet_ota(body: OtaRequest) -> dict:
         "message": f"{ok_count}/{total} devices updated",
         "per_device": results,
     }
+
+
+@router.post("/fleet/deploy")
+async def fleet_deploy(platform: str = "nrf52840") -> dict:
+    """One-shot compile + flash all connected devices.
+
+    Compiles firmware, generates DFU zip, then flashes every connected
+    nRF52840 device sequentially. Returns compilation info + per-device
+    results. This is the primary fleet management endpoint.
+    """
+    from ..ota.compile import compile_firmware as _compile, generate_dfu_package
+
+    # 1. Compile firmware
+    log.info("Fleet deploy: compiling %s firmware...", platform)
+    compile_result = await asyncio.to_thread(_compile, platform)
+    if compile_result["status"] != "ok":
+        raise HTTPException(500, f"Compilation failed: {compile_result['message']}")
+    hex_path = compile_result["hex_path"]
+
+    # 2. Generate DFU zip
+    log.info("Fleet deploy: generating DFU package...")
+    dfu_result = await asyncio.to_thread(generate_dfu_package, hex_path)
+    if dfu_result["status"] != "ok":
+        raise HTTPException(500, f"DFU package failed: {dfu_result['message']}")
+    zip_path = dfu_result["zip_path"]
+
+    # 3. Flash all connected devices (reuse fleet_ota logic)
+    from .models import OtaRequest
+    body = OtaRequest(firmware_path=zip_path)
+    try:
+        ota_result = await fleet_ota(body)
+    except HTTPException as e:
+        raise HTTPException(e.status_code, f"Fleet flash failed: {e.detail}")
+
+    return {
+        "status": ota_result["status"],
+        "message": ota_result["message"],
+        "hex_path": hex_path,
+        "zip_path": zip_path,
+        "per_device": ota_result.get("per_device", {}),
+    }
