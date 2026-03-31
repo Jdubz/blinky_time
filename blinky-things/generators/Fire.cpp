@@ -48,8 +48,12 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f / 60.0f);
 
     // Wind: baseline turbulence + transient gusts
+    // Music mode: stronger, beat-synced gusts. Organic mode: pulse-driven gusts.
     if (forceAdapter_) {
-        float gust = 1.0f + 2.0f * audio.pulse;
+        float organicGust = 1.0f + 2.0f * audio.pulse;
+        float musicGust = 1.0f + 3.0f * audio.plpPulse;
+        float gust = organicGust * (1.0f - audio.rhythmStrength) +
+                     musicGust * audio.rhythmStrength;
         forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
     }
 
@@ -70,19 +74,31 @@ void Fire::spawnParticles(float dt) {
     float e = audio_.energy;
 
     // Spawn rate scales dramatically with energy: 3x at full vs ambient
-    float spawnProb = params_.baseSpawnChance * (0.5f + 2.5f * e);
+    // Music mode: plpPulse modulates spawn rate for breathing flame at beat tempo
+    float rs = audio_.rhythmStrength;
+    float spawnMod = 0.5f + 2.5f * e;
+    if (rs > 0.0f) {
+        float breathe = 0.5f + 0.5f * audio_.plpPulse;  // 0.5-1.0 at beat rate
+        spawnMod *= (1.0f - rs) + breathe * rs;
+    }
+    float spawnProb = params_.baseSpawnChance * spawnMod;
     float expectedSparks = spawnProb * crossDim_;
-    uint8_t sparkCount = (uint8_t)min(expectedSparks, 255.0f);
-    float frac = expectedSparks - sparkCount;
-    if (frac > 0.0f && random(1000) < (int)(frac * 1000)) sparkCount++;
+    uint16_t totalSparks = (uint16_t)min(expectedSparks, 255.0f);
+    float frac = expectedSparks - totalSparks;
+    if (frac > 0.0f && random(1000) < (int)(frac * 1000)) totalSparks++;
 
-    // Transient burst
+    // Transient burst: single lerp between organic and music intensity.
+    // Organic: full burst at rs=0, fades out. Music: scales up with rs.
     if (audio_.pulse > params_.organicTransientMin) {
         float strength = (audio_.pulse - params_.organicTransientMin)
                        / (1.0f - params_.organicTransientMin);
-        sparkCount += (uint8_t)(scaledBurstSparks() * strength);
+        float organicBurst = strength;
+        float musicBurst = strength * (0.5f + 0.5f * rs);
+        float burstBlend = organicBurst * (1.0f - rs) + musicBurst * rs;
+        totalSparks += (uint16_t)(scaledBurstSparks() * burstBlend);
     }
 
+    uint8_t sparkCount = (uint8_t)min((int)totalSparks, 255);
     uint16_t maxParts = scaledMaxParticles();
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
@@ -220,8 +236,11 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
     uint8_t b = color & 0xFF;
 
     // Energy modulation at render time: whole flame breathes with audio.
-    // Base brightness 40% + energy drives remaining 60% + pulse adds 40% spike.
-    float brightnessScale = 0.4f + 0.6f * audio_.energy + 0.4f * audio_.pulse;
+    // Organic: energy + pulse. Music: energy + plpPulse breathing.
+    float organicBright = 0.4f + 0.6f * audio_.energy + 0.4f * audio_.pulse;
+    float musicBright = 0.3f + 0.4f * audio_.energy + 0.5f * audio_.plpPulse;
+    float brightnessScale = organicBright * (1.0f - audio_.rhythmStrength) +
+                           musicBright * audio_.rhythmStrength;
     if (brightnessScale > 1.0f) brightnessScale = 1.0f;
     r = (uint8_t)(r * brightnessScale);
     g = (uint8_t)(g * brightnessScale);

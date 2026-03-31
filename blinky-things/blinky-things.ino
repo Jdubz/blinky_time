@@ -481,8 +481,8 @@ void loop() {
       Serial.print(fpsMinFrameMs);
       Serial.print(F("-"));
       Serial.print(fpsMaxFrameMs);
-      Serial.print(F("ms  tgram="));
-      Serial.print(audioController ? audioController->getLastTempogramMs() : 0);
+      Serial.print(F("ms  acf="));
+      Serial.print(audioController ? audioController->getLastAcfMs() : 0);
       Serial.print(F("+"));
       Serial.print(audioController ? audioController->getLastPlpMs() : 0);
       Serial.println(F("ms"));

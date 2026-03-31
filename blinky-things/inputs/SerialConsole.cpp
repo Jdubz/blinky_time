@@ -1947,8 +1947,8 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         out_.println(audioCtrl_->getPlpConfidence(), 4);
         out_.print(F("PLP Pulse: "));
         out_.println(audioCtrl_->getPlpPulseValue(), 3);
-        out_.print(F("PLP DFT Mag: "));
-        out_.println(audioCtrl_->getPlpDftMag(), 3);
+        out_.print(F("ACF Peak: "));
+        out_.println(audioCtrl_->getAcfPeakStrength(), 3);
         { const char* srcNames[] = {"flux", "bass", "nn"};
           out_.print(F("PLP Source: "));
           out_.println(srcNames[audioCtrl_->getPlpBestSource()]); }
