@@ -16,9 +16,9 @@ Only fire on obvious strong musical events (kicks, snares, big transitions). Don
 
 The continuous `rhythmStrength` (0-1) blend between organic and music-reactive mode matters more than perfect beat placement. When the system can't confidently track beats, it should gracefully fall back to organic mode (breathing, slow evolution) rather than guessing wrong.
 
-### 3. BPM Stability > BPM Accuracy
+### 3. Pattern Quality > BPM Accuracy
 
-A stable wrong BPM (e.g., half-time at 60 BPM instead of 120 BPM) looks fine visually — the LEDs pulse in a consistent rhythmic pattern that still feels musical. A jittery correct BPM that jumps between values looks terrible — the visual rhythm constantly breaks and resets.
+The system selects the period that produces the best visual pattern, not the "correct" BPM. A half-time period capturing a kick-snare-kick-snare bar is MORE CORRECT than a beat-level period capturing just a kick — it has more rhythmic structure and drives better visuals. **Octave-matched periods (half-time, double-time) are valid results, not errors.** A stable pattern at any octave is always preferable to a jittery correct BPM.
 
 ### 4. False Positives Are the #1 Visual Problem
 
@@ -50,7 +50,7 @@ Tracks like ambient, trap, or machine-drum scoring low onset F1 may actually rep
 ### What Doesn't Matter (Much)
 
 1. **Onset F1 on ambient tracks** — Low F1 is correct if the system goes organic
-2. **BPM octave accuracy** — Half-time or double-time still looks rhythmic because events still align with beat grid subdivisions (1/4, 1/8, 1/16 notes). A stable half-time BPM is vastly preferable to a jittery correct BPM. **Octave errors are NOT a visual problem — phase alignment is.**
+2. **BPM at the "correct" octave** — Half-time or double-time periods often capture MORE rhythmic structure (e.g., a 2-bar pattern) and are the correct choice for visualization. The system intentionally selects the period with the best epoch-fold pattern, not the musicologically "correct" BPM. BPM accuracy scoring uses octave-tolerant ratios.
 3. **Transient F1 on sparse content** — Missing quiet onsets is fine
 4. **Per-track beat offset** — 50-80ms variation is invisible at LED update rates
 

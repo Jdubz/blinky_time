@@ -993,9 +993,12 @@ def trigger_bootloader(port, verbose=False):
     print(f"  ERROR: Bootloader entry failed after {MAX_BOOTLOADER_RETRIES} attempts")
     print(f"  Device did not enter UF2 mode (no block device appeared).")
     print(f"  Possible causes:")
-    print(f"    - Intermittent GPREGRET race condition (nRF52 SoftDevice clears register)")
+    print(f"    - GPREGRET race condition (SoftDevice clears register during reset)")
     print(f"    - USB bus instability (too many recent re-enumerations)")
     print(f"    - Device firmware not responding to bootloader command")
+    print(f"")
+    print(f"  MANUAL RECOVERY: Double-tap the physical reset button, then run:")
+    print(f"    python3 tools/uf2_upload.py --already-in-bootloader --build-dir /tmp/blinky-build")
     return None
 
 
@@ -1090,11 +1093,26 @@ def _get_usb_block_devices():
 
     Strategy (ordered fastest-first to avoid subprocess delays eating
     the drive detection timeout on slow systems like Raspberry Pi):
+    0. Glob /dev/sd* for any SCSI block devices (fastest — catches drives
+       before sysfs attributes or labels are fully populated)
     1. Check /dev/disk/by-label/ for UF2 drive label (instant, no subprocess)
     2. Scan /sys/block/sd* for devices with Seeed/bootloader VID
     3. Fallback: lsblk -J for USB block devices (subprocess, can be slow)
     """
     devices = set()
+
+    # Strategy 0: glob /dev/sd[a-z] for any SCSI block devices (instant).
+    # On Raspberry Pi, /dev/disk/by-label may not exist for UF2 drives and
+    # sysfs idVendor may not be populated yet when the SCSI layer first
+    # creates the block device. This catches drives as early as possible.
+    for dev_path in glob.glob("/dev/sd[a-z]"):
+        devices.add(dev_path)
+    # Also check partition nodes (e.g., /dev/sda1)
+    for dev_path in glob.glob("/dev/sd[a-z][0-9]"):
+        devices.add(dev_path)
+
+    if devices:
+        return devices
 
     # Strategy 1: check /dev/disk/by-label/ for UF2 drive label (instant)
     drive_label = _active_board.get("drive_label", UF2_DRIVE_LABEL)

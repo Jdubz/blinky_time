@@ -54,12 +54,10 @@ export interface BeatEvent {
   predicted?: boolean;  // Whether beat came from prediction vs fallback
 }
 
+// MusicModeMetrics removed — BPM accuracy is not a valid metric.
+// Pattern quality (plp.atTransient, plp.autoCorr, plp.peakiness) is the only objective.
 export interface MusicModeMetrics {
-  bpmAccuracy: number;       // % accuracy vs expected BPM
-  expectedBPM: number;
-  detectedBPM: number;
   activationTimeMs: number;  // Time until active=true
-  beatF1Score: number;       // Beat detection F1
   confidenceAvg: number;     // Average confidence while active
 }
 

@@ -313,6 +313,7 @@ void AudioTracker::runAcf() {
     // Scan lags 20-80 (200-49 BPM beat rate) with step=2.
     // Bar-level candidates are generated from multiples, not scanned directly.
     // Cost: ~31 lags × 3 sources × ~700 overlap ≈ 65K MACs (~4ms on M4F).
+    // Parabolic interpolation on peaks recovers sub-step resolution (odd lags).
     static constexpr int TOP_N = 5;
     static constexpr int ACF_MIN_LAG = 20;    // ~200 BPM beat rate
     static constexpr int ACF_MAX_LAG = 80;    // ~49 BPM beat rate
@@ -355,6 +356,20 @@ void AudioTracker::runAcf() {
                 int peakLag = lag - ACF_STEP;
                 float peakStrength = prevAcf;
 
+                // Parabolic interpolation: refine peak position and strength
+                // from 3 equidistant ACF samples (step=2 → recovers odd lags)
+                float denom = prevPrevAcf - 2.0f * prevAcf + acfVal;
+                if (fabsf(denom) > 1e-10f) {
+                    float delta = 0.5f * (prevPrevAcf - acfVal) / denom;
+                    if (delta > -1.0f && delta < 1.0f) {
+                        int refined = peakLag + static_cast<int>(roundf(delta * ACF_STEP));
+                        if (refined >= ACF_MIN_LAG && refined <= ACF_MAX_LAG) {
+                            peakLag = refined;
+                        }
+                        peakStrength = prevAcf - 0.25f * (prevPrevAcf - acfVal) * delta;
+                    }
+                }
+
                 // Insert into top-N with 10% minimum period separation
                 bool tooClose = false;
                 for (int k = 0; k < TOP_N; k++) {
@@ -394,6 +409,7 @@ void AudioTracker::runAcf() {
         float acfStrength;
         int period;
         int source;
+        int multiplier;   // 1=beat, 2/3/4=bar-level
     };
     static_assert(MAX_CANDIDATES == TOP_N * NUM_MULTIPLIERS, "MAX_CANDIDATES invariant");
     ScoredCandidate candidates[MAX_CANDIDATES] = {};
@@ -414,7 +430,7 @@ void AudioTracker::runAcf() {
             if (dup) continue;
 
             if (numCandidates < MAX_CANDIDATES) {
-                candidates[numCandidates++] = { beatPeaks[k].strength, cPeriod, beatPeaks[k].source };
+                candidates[numCandidates++] = { beatPeaks[k].strength, cPeriod, beatPeaks[k].source, MULTIPLIERS[m] };
             }
         }
     }
@@ -463,8 +479,14 @@ void AudioTracker::runAcf() {
         }
         variance /= cPeriod;
 
-        // Combined score: ACF periodicity × pattern contrast
-        float score = candidates[c].acfStrength * sqrtf(variance);
+        // Combined score: ACF periodicity × pattern contrast.
+        // Multiplier penalty: higher multipliers (2×/3×/4×) must produce
+        // proportionally more variance to beat the base period. Without this,
+        // 4× bar periods always win because they capture more structure.
+        // Penalty: divide by sqrt(multiplier) — 2× needs 1.41× more contrast,
+        // 4× needs 2× more contrast to win over the beat-level period.
+        float multiplierPenalty = sqrtf(static_cast<float>(candidates[c].multiplier));
+        float score = candidates[c].acfStrength * sqrtf(variance) / multiplierPenalty;
 
         if (score > bestScore) {
             // Phase from epoch-fold peak position (where the main accent falls).
@@ -496,7 +518,7 @@ void AudioTracker::runAcf() {
 
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
-    plpDftPhase_ = bestPhase;
+    plpAccentPhase_ = bestPhase;
 
     // Periodicity strength from ACF peak (already normalized 0-1)
     float newStrength = clampf(bestStrength, 0.0f, 1.0f);
@@ -608,13 +630,13 @@ void AudioTracker::updatePlpAnalysis() {
     // --- 3. Canonical PLP: add Hann-windowed cosine kernel to pulse buffer ---
     // Each ACF update contributes one kernel. The buffer rolls forward 1 position
     // per frame in updatePlpPhase(). Overlap-add of many kernels produces peaks
-    // where the DFT says periodicity is — anti-correlation is impossible because
+    // where the ACF says periodicity is — anti-correlation is impossible because
     // cosine peaks are always positively correlated with the dominant periodic
     // component. (Grosche & Mueller 2011, Meier et al. 2024)
     //
     // Kernel: k(t) = hann(t) * cos(2*pi*(t * omega - phase))
     //   omega = 1/period (cycles per frame)
-    //   phase = DFT phase at winning frequency (Meier 2024 eq. 3)
+    //   phase = epoch-fold accent position (0-1 within period)
     //   Window length = 2 * period (covers 2 full beat cycles)
     {
         float omega = 1.0f / static_cast<float>(patLen);  // cycles per frame
@@ -627,14 +649,14 @@ void AudioTracker::updatePlpAnalysis() {
         // The Hann window tapers both ends smoothly.
         for (int i = -halfWin; i <= halfWin; i++) {
             float w = 0.5f + 0.5f * cosf(TWO_PI_F * static_cast<float>(i) / static_cast<float>(winLen - 1));
-            float kernel = w * cosf(TWO_PI_F * (static_cast<float>(i) * omega - plpDftPhase_));
+            float kernel = w * cosf(TWO_PI_F * (static_cast<float>(i) * omega - plpAccentPhase_));
             int idx = (pulseHead_ + i) % PULSE_BUF_LEN;
             if (idx < 0) idx += PULSE_BUF_LEN;
             pulseBuf_[idx] += kernel;
         }
     }
 
-    // --- 4. PLP confidence from DFT magnitude + steep signal gate ---
+    // --- 4. PLP confidence from ACF strength + steep signal gate ---
     float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
