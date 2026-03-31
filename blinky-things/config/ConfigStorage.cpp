@@ -131,7 +131,6 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.fire.sparkVelocityMin = 0.33f;
     data_.fire.sparkVelocityMax = 0.67f;
     data_.fire.sparkSpread = 1.0f;
-    data_.fire.musicSpawnPulse = 0.95f;
     data_.fire.organicTransientMin = 0.25f;
     data_.fire.thermalForce = 2.0f;         // × traversalDim → buoyancy LEDs/sec^2
     data_.fire.maxParticles = 0.75f;        // Pool sized at begin() only
@@ -155,7 +154,6 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.water.dropSpread = 0.375f;        // × crossDim
     data_.water.splashVelocityMin = 0.27f;  // × traversalDim
     data_.water.splashVelocityMax = 0.53f;  // × traversalDim
-    data_.water.musicSpawnPulse = 0.4f;
     data_.water.organicTransientMin = 0.5f;
     data_.water.backgroundIntensity = 0.15f;
     data_.water.maxParticles = 0.5f;  // Fraction of numLeds (clamped to pool 30)
@@ -169,7 +167,6 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.lightning.baseSpawnChance = 0.15f;
     data_.lightning.audioSpawnBoost = 0.5f;
     data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
-    data_.lightning.musicSpawnPulse = 0.6f;
     data_.lightning.organicTransientMin = 0.3f;
     data_.lightning.backgroundIntensity = 0.15f;
     data_.lightning.maxParticles = 0.67f;  // Fraction of numLeds (clamped to pool 40)
@@ -493,7 +490,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     fireParams.sparkVelocityMin = data_.fire.sparkVelocityMin;
     fireParams.sparkVelocityMax = data_.fire.sparkVelocityMax;
     fireParams.sparkSpread = data_.fire.sparkSpread;
-    fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
     fireParams.organicTransientMin = data_.fire.organicTransientMin;
     fireParams.thermalForce = data_.fire.thermalForce;
     fireParams.maxParticles = data_.fire.maxParticles;
@@ -522,7 +518,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     waterParams.splashVelocityMin = data_.water.splashVelocityMin;
     waterParams.splashVelocityMax = data_.water.splashVelocityMax;
     // Audio reactivity
-    waterParams.musicSpawnPulse = data_.water.musicSpawnPulse;
     waterParams.organicTransientMin = data_.water.organicTransientMin;
     // Background
     waterParams.backgroundIntensity = data_.water.backgroundIntensity;
@@ -541,7 +536,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Branching
     lightningParams.branchAngleSpread = data_.lightning.branchAngleSpread;
     // Audio reactivity
-    lightningParams.musicSpawnPulse = data_.lightning.musicSpawnPulse;
     lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
     // Background
     lightningParams.backgroundIntensity = data_.lightning.backgroundIntensity;
@@ -644,7 +638,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.fire.sparkVelocityMin = fireParams.sparkVelocityMin;
     data_.fire.sparkVelocityMax = fireParams.sparkVelocityMax;
     data_.fire.sparkSpread = fireParams.sparkSpread;
-    data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
     data_.fire.organicTransientMin = fireParams.organicTransientMin;
     data_.fire.thermalForce = fireParams.thermalForce;
     data_.fire.maxParticles = fireParams.maxParticles;
@@ -673,7 +666,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.water.splashVelocityMin = waterParams.splashVelocityMin;
     data_.water.splashVelocityMax = waterParams.splashVelocityMax;
     // Audio reactivity
-    data_.water.musicSpawnPulse = waterParams.musicSpawnPulse;
     data_.water.organicTransientMin = waterParams.organicTransientMin;
     // Background
     data_.water.backgroundIntensity = waterParams.backgroundIntensity;
@@ -692,7 +684,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Branching
     data_.lightning.branchAngleSpread = lightningParams.branchAngleSpread;
     // Audio reactivity
-    data_.lightning.musicSpawnPulse = lightningParams.musicSpawnPulse;
     data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
     // Background
     data_.lightning.backgroundIntensity = lightningParams.backgroundIntensity;

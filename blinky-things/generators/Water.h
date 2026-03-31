@@ -37,7 +37,6 @@ struct WaterParams {
     uint8_t splashIntensity;      // Splash particle intensity multiplier (0-255)
 
     // Audio reactivity
-    float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     // Background
@@ -56,7 +55,6 @@ struct WaterParams {
         windBase = 0.0f;
         windVariation = 0.2f;         // × crossDim → slight wind sway
         drag = 0.995f;               // Almost no drag
-        musicSpawnPulse = 0.4f;
         organicTransientMin = 0.5f;
         backgroundIntensity = 0.15f;
 

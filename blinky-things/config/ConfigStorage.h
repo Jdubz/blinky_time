@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 86;  // v86: Reduce fire defaultLifespan 170->100, disable WiFi radio when unconfigured
+    static const uint8_t SETTINGS_VERSION = 87;  // v87: Remove dead musicSpawnPulse from all generators, wire up energy weights + onsetDensity
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -136,7 +136,6 @@ public:
         float sparkVelocityMax;
         float sparkSpread;
         // Audio reactivity
-        float musicSpawnPulse;
         float organicTransientMin;
         float thermalForce;       // × traversalDim → buoyancy LEDs/sec^2
         float maxParticles;       // Fraction of numLeds (pool sized at begin() only)
@@ -169,7 +168,6 @@ public:
         float splashVelocityMax;
         float splashParticles;    // × crossDim → particles per splash
         // Audio reactivity
-        float musicSpawnPulse;
         float organicTransientMin;
         // Background
         float backgroundIntensity;
@@ -188,7 +186,6 @@ public:
         // Branching
         float branchAngleSpread;
         // Audio reactivity
-        float musicSpawnPulse;
         float organicTransientMin;
         // Background
         float backgroundIntensity;
@@ -350,12 +347,12 @@ public:
     // VERSION BUMPING RULES:
     // - StoredDeviceConfig changes -> bump DEVICE_VERSION (rare, wipes device identity)
     // - Any other struct changes -> bump SETTINGS_VERSION (preserves device config)
-    static_assert(sizeof(StoredFireParams) == 64,
-        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 15 floats + 3 uint8 + padding)");
-    static_assert(sizeof(StoredWaterParams) == 68,
-        "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 4 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 36,
-        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (36 bytes = 7 floats + 7 uint8 + padding)");
+    static_assert(sizeof(StoredFireParams) == 60,
+        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (60 bytes = 14 floats + 3 uint8 + padding)");
+    static_assert(sizeof(StoredWaterParams) == 64,
+        "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 15 floats + 4 uint8 + padding)");
+    static_assert(sizeof(StoredLightningParams) == 32,
+        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 7 uint8 + padding)");
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)

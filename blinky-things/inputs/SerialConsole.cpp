@@ -183,8 +183,6 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
-    settings_.registerFloat("musicspawnpulse", &fp->musicSpawnPulse, "fire",
-        "Beat spawn depth (0=flat, 1=full breathing)", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fire",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 
@@ -228,7 +226,7 @@ void SerialConsole::registerTrackerSettings() {
 
     // Tempo range
     settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "tracker",
-        "Minimum detectable BPM", 40.0f, 120.0f, onParamChanged);
+        "Minimum detectable BPM", 10.0f, 120.0f, onParamChanged);
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "tracker",
         "Maximum detectable BPM", 120.0f, 240.0f, onParamChanged);
     // (rayleighBpm + combFeedback removed v80 — comb filter bank removed)
@@ -1229,8 +1227,6 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
-    settings_.registerFloat("w_musicpulse", &wp->musicSpawnPulse, "water",
-        "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("w_transmin", &wp->organicTransientMin, "water",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 
@@ -1276,8 +1272,6 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
-    settings_.registerFloat("l_musicpulse", &lp->musicSpawnPulse, "lightning",
-        "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("l_transmin", &lp->organicTransientMin, "lightning",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 

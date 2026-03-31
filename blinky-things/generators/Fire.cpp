@@ -89,11 +89,14 @@ void Fire::spawnParticles(float dt) {
 
     // Transient burst: single lerp between organic and music intensity.
     // Organic: full burst at rs=0, fades out. Music: scales up with rs.
+    // Onset density scales burst magnitude: dance (4-6/s) = full bursts,
+    // ambient (0-1/s) = gentler bursts. Normalized to 0-1 range.
     if (audio_.pulse > params_.organicTransientMin) {
         float strength = (audio_.pulse - params_.organicTransientMin)
                        / (1.0f - params_.organicTransientMin);
+        float densityScale = 0.5f + 0.5f * min(audio_.onsetDensity / 6.0f, 1.0f);
         float organicBurst = strength;
-        float musicBurst = strength * (0.5f + 0.5f * rs);
+        float musicBurst = strength * (0.5f + 0.5f * rs) * densityScale;
         float burstBlend = organicBurst * (1.0f - rs) + musicBurst * rs;
         totalSparks += (uint16_t)(scaledBurstSparks() * burstBlend);
     }

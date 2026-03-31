@@ -924,22 +924,29 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // FFT, BPM, or detection internals.
     // ========================================================================
 
-    // --- Energy: normalized mic amplitude ---
-    // AdaptiveMic::getLevel() already auto-ranges via peak/valley tracking.
-    // Smolder floor: inject gentle random noise in silence so generators
-    // always have baseline ember activity. Generators are agnostic — they
-    // just see energy and don't know if it's real audio or smolder noise.
+    // --- Energy: weighted blend of mic, bass mel, and ODF peak-hold ---
+    // Three complementary signals: broadband mic level (overall loudness),
+    // bass mel energy (low-frequency punch), ODF peak-hold (transient accent).
+    // Smolder floor: deterministic noise in silence for baseline ember activity.
     float micEnergy = mic_.getLevel();
-    float smolder = 0.12f + 0.08f * ((nowMs * 7 + nowMs / 3) % 100) * 0.01f;  // 0.12-0.20 deterministic noise
-    control_.energy = clampf(max(micEnergy, smolder), 0.0f, 1.0f);
+    float bassEnergy = clampf(cachedBassEnergy_, 0.0f, 1.0f);
+    float odfEnergy = clampf(odfPeakHold_, 0.0f, 1.0f);
+    float weightedEnergy = micEnergy * energyMicWeight
+                         + bassEnergy * energyMelWeight
+                         + odfEnergy * energyOdfWeight;
+    // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity
+    uint32_t h = nowMs;
+    h ^= h >> 16; h *= 0x45d9f3bU; h ^= h >> 16;
+    float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
+    control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
     // --- Pulse: onset envelope from spectral flux ---
     // Auto-normalize flux by its own recent peak, then trigger a decaying
     // envelope. No hardcoded thresholds — adapts to any mic sensitivity.
     float flux = spectral_.getSpectralFlux();
-    // Track running peak of flux (slow decay for normalization reference)
+    // Track running peak of flux (frame-rate-independent ~10s time constant)
     if (flux > fluxPeak_) fluxPeak_ = flux;
-    fluxPeak_ *= 0.998f;  // ~7s half-life at 50fps (stable normalization reference)
+    fluxPeak_ *= expf(-dt / 10.0f);  // ~7s half-life (tau=10s)
     if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
 
     // Normalized flux: 0-1 relative to recent peak
@@ -952,8 +959,8 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
             pulseEnvelope_ = trigger;
         }
     }
-    // Exponential decay: ~100ms at 50fps (0.92^50 ≈ 0.02)
-    pulseEnvelope_ *= 0.92f;
+    // Frame-rate-independent decay (~165ms half-life, tau=0.24s)
+    pulseEnvelope_ *= expf(-dt / 0.24f);
     if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 
     control_.pulse = clampf(pulseEnvelope_, 0.0f, 1.0f);

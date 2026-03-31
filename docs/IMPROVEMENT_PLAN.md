@@ -86,23 +86,43 @@ Key finding: v3's pos_weight=20 is critical. Auto-calculation gives ~35.6 which 
 | Snare F1 (200-4k Hz) | 0.666 | **0.773** |
 | HiHat F1 (>4k Hz) | 0.704 | **0.806** |
 
-**High-impact techniques to include in next training run** (all code exists, never activated):
+**v12 (in progress): Low-risk architectural improvements.**
+Wider [48,48,32] channels (28K params, ~28 KB INT8), 3rd conv layer (RF 144→176ms), SWA, stronger SpecAugment (3+2 masks), longer training (80 epochs). All existing proven code paths, no new implementations. See `configs/conv1d_w16_onset_v12.yaml`.
 
-1. **Knowledge distillation** (+2-5% F1) — Beat This! soft labels as teacher. `generate_teacher_labels.py` and `distillation_loss()` already implemented. Train with `--distill`, alpha=0.3, temperature=2.0. **Highest expected ROI.**
+**Already deployed in v11 (proven):**
+- ✅ Online mixup augmentation (Beta(0.4,0.4), p=0.5) — Source: SpecMix (2021), DCASE 2024
+- ✅ Frequency positional encoding (52-dim learnable vector) — Source: FAC (ICASSP 2024)
+- ✅ Asymmetric focal loss (γ_pos=0.5, γ_neg=2.0) — Source: Imoto & Mishima (2022)
+- ✅ Delta features (spectral flux as explicit input) — Source: Bock 2012
+- ✅ Label neighbor weighting (0.25) — Source: Schlüter & Bock 2014
+- ✅ nRF52840 gain calibration (hw_gain_max=32 in base.yaml)
 
-2. **Online mixup augmentation** (+1-3% F1) — Batch-level feature+label mixing, Beta(0.4, 0.4). ~15 lines in training loop. Complementary to existing SpecAugment. Source: SpecMix (2021), DCASE 2024.
+**Future training improvements (research-backed, not yet implemented):**
 
-3. **Frequency positional encoding** (+1-3% F1) — Learnable 26-dim vector added to mel input before first conv. Helps discriminate kicks (low bands) from hi-hats (high bands). 26 extra params, negligible compute. Source: FAC (ICASSP 2024).
+1. **Onset-specific knowledge distillation** (+2-5% F1, medium effort) — Use madmom CNN OnsetDetector as teacher (NOT Beat This! — that's a beat tracker). The teacher's continuous probability output encodes onset activation shape (gradual rise before attack, sharp drop after) that binary labels can't express. Requires modifying `generate_teacher_labels.py` to use madmom OnsetDetector. Source: Shi et al. (Interspeech 2019): +15% error reduction; Hyperconnect (ICASSP 2022): +25.3% mAP. ~~Beat This! distillation~~: INVALID for onset detection — would suppress off-beat onsets and inject phantom beat targets.
 
-4. **Asymmetric focal loss** (+1-3% F1) — Split gamma into gamma_pos=0.5 (preserve onset gradients), gamma_neg=2.0 (suppress silence). Addresses 96% class imbalance. Source: Imoto & Mishima (2022).
+2. **SpecMix (CutMix for spectrograms)** (+2-4% F1, low effort) — Rectangular spectral patches cut from one sample and pasted into another with label mixing. Published as outperforming standard mixup by +2.59% and SpecAugment by +4.45%. Zero inference cost. Simple implementation: cut random (time, freq) rectangle from sample B, paste into sample A, mix labels proportionally. Source: Kim et al. 2021.
 
-5. **Fix nRF52840 gain calibration** — Update `hw_gain_max` to 32 in base.yaml. Current mic_profile.npz has gain=30 but devices run at gain=32. Minor impact but should be fixed before any retrain.
+3. **Onset-Weighted BCE (OWBCE)** (+1-3% event-F1, low effort) — Sinusoidal weighting window around onset frames. Published +6.43% event-F1 over standard BCE. Similar to our neighbor_weight=0.25 but more sophisticated (continuous sinusoidal envelope). Source: Song et al. 2024.
+
+4. **Quantization-Aware Training (QAT)** (+1-3% F1, high effort) — Simulate INT8 quantization during training so model compensates for quantization noise. Larger benefit for small models where each weight matters. Complex to integrate: our PyTorch → Keras → TFLite pipeline requires QAT in the Keras domain, not PyTorch. Source: NVIDIA QAT benchmarks, DCASE 2024 low-complexity task.
+
+5. **Reduce mel bands 26 → 23** (minor, medium effort) — Mel bands 23-25 are degenerate (identical `{116,127,127}` filterbank). Removes 11.5% wasted NN input bandwidth. Requires firmware `NUM_MEL_BANDS` change + retraining. Firmware change trivial, but breaks model compatibility.
+
+6. **Increase mel bands 26 → 40** (+2-5% F1 estimated, high effort) — All published onset detection systems use 80 mel bands. Our 26 gives 1/3 the frequency resolution, limiting spectral discrimination. Going to 40 would double first conv layer size but fits within 60 KB budget. Requires firmware mel filterbank expansion, NN input shape change, and full reprocessing of training data. High impact for distinguishing spectrally similar events.
+
+7. **Multi-resolution FFT input** (+3-5% F1, high effort) — Schlüter & Bock 2014 used 3 FFT window sizes (23ms, 46ms, 93ms) stacked as 3-channel input. Captures both transient detail (short window) and harmonic structure (long window). Requires additional FFT computation on MCU (~4% → ~12% CPU). Source: Schlüter & Bock (ICASSP 2014).
 
 **Not worth pursuing:**
 - Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
 - Curriculum learning: inconsistent evidence, moderate effort
-- Wider windows (W32/W64): architecture already validated as W16-optimal for onset detection
-- Onset-specific labels for training: current labels work well enough (model learns onset patterns regardless)
+- Wider windows (W32/W64): 150ms RF is optimal for onset detection (Schlüter 2014). Our 176ms is ample.
+- Transformer/Conformer: 1.4M+ params, far too large for Cortex-M4F
+- Bidirectional models: can't run in real-time. Only ~2-5% F1 gain for onset detection (Bock 2012)
+- SE attention blocks: global pooling over 16-frame window loses temporal position info critical for onset detection
+- Structured pruning: model already tiny (28K params). Pruning helps at 100K+ scale.
+- Beat This! distillation: INVALID — beat tracker soft labels suppress off-beat onsets and inject phantom targets on empty strong beats
+- Multi-class output (kick/snare/hihat): firmware uses single-channel onset. Per-instrument adds quantization overhead with no visual benefit.
 
 ### Priority 3: Test Metric Alignment
 

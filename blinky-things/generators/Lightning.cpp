@@ -74,10 +74,12 @@ void Lightning::spawnParticles(float dt) {
     float musicSpawnProb = params_.baseSpawnChance * (0.3f + 0.7f * phasePulse) +
                            params_.audioSpawnBoost * audio_.pulse * phasePulse;
 
-    // Dramatic bolt burst on beat (scales with rhythmStrength)
+    // Dramatic bolt burst on beat (scales with rhythmStrength and onset density)
+    // Onset density: dance (4-6/s) = full bolt barrage, ambient (0-1/s) = single strikes
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
+        float densityScale = 0.5f + 0.5f * min(audio_.onsetDensity / 6.0f, 1.0f);
         uint8_t baseBolts = 2 + (uint8_t)(2 * audio_.rhythmStrength);
-        boltCount += (uint8_t)(baseBolts * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
+        boltCount += (uint8_t)(baseBolts * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength * densityScale);
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
