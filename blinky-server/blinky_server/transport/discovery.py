@@ -182,6 +182,46 @@ async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[D
     return devices
 
 
+async def cleanup_stale_ble_connections() -> None:
+    """Disconnect stale BlueZ BLE connections from previous server sessions.
+
+    When the server restarts, BlueZ may retain connections from the previous
+    session. These stale connections consume the device's single BLE peripheral
+    slot, preventing new connections. This function finds all connected Blinky
+    devices and disconnects them so the new server session can reconnect cleanly.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "devices", "Connected"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return
+
+        disconnected = 0
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            # Format: "Device XX:XX:XX:XX:XX:XX Name"
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "Device":
+                addr = parts[1]
+                name = " ".join(parts[2:]) if len(parts) > 2 else ""
+                # Only disconnect Blinky/AdaDFU devices
+                if name in ("Blinky", "AdaDFU") or not name:
+                    subprocess.run(
+                        ["bluetoothctl", "disconnect", addr],
+                        capture_output=True, timeout=5,
+                    )
+                    disconnected += 1
+
+        if disconnected:
+            log.info("Cleaned up %d stale BLE connections", disconnected)
+    except Exception as e:
+        log.warning("BLE stale connection cleanup failed: %s", e)
+
+
 async def discover_all(
     serial_scan: bool = True,
     ble_scan: bool = True,

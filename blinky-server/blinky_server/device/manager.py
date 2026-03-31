@@ -6,7 +6,10 @@ import logging
 import time as _time
 
 from ..transport.base import Transport
-from ..transport.discovery import DiscoveredDevice, discover_all, discover_serial_devices
+from ..transport.discovery import (
+    DiscoveredDevice, cleanup_stale_ble_connections, discover_all,
+    discover_serial_devices,
+)
 from ..transport.serial_transport import SerialTransport
 from .device import Device, DeviceState
 from .protocol import DeviceProtocol
@@ -78,6 +81,9 @@ class FleetManager:
     async def start(self) -> None:
         """Discover devices and connect to all of them."""
         self._running = True
+        if self._enable_ble:
+            await cleanup_stale_ble_connections()
+            await asyncio.sleep(2)  # Let devices re-advertise after disconnect
         await self._discover_and_connect()
         self._discovery_task = asyncio.create_task(self._background_loop())
         connected = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
