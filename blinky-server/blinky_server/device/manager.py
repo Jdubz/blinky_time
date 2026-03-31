@@ -581,8 +581,89 @@ class FleetManager:
             with contextlib.suppress(Exception):
                 device._on_transport_disconnect()
 
+    def set_recovery_firmware(self, firmware_path: str) -> None:
+        """Set the firmware path used for automatic DFU recovery.
+
+        When set, the fleet manager will automatically attempt BLE DFU on
+        devices discovered in DFU_RECOVERY state (stuck in bootloader after
+        a failed update). This eliminates the need for operator intervention.
+        """
+        self._recovery_firmware_path = firmware_path
+        log.info("Recovery firmware set: %s", firmware_path)
+
+    async def _auto_recover_dfu_devices(self) -> None:
+        """Automatically push firmware to devices stuck in DFU bootloader.
+
+        Runs periodically. For each DFU_RECOVERY device with a known BLE
+        address, attempts BLE DFU using the recovery firmware. Uses exponential
+        backoff to avoid flooding BLE with retry attempts.
+        """
+        firmware_path = getattr(self, "_recovery_firmware_path", None)
+        if not firmware_path:
+            return  # No recovery firmware configured
+
+        import os
+        if not os.path.isfile(firmware_path):
+            return
+
+        dfu_devices = [
+            d for d in self._devices.values()
+            if d.state == DeviceState.DFU_RECOVERY and d.ble_address
+        ]
+        if not dfu_devices:
+            return
+
+        for device in dfu_devices:
+            # Check backoff — don't retry too aggressively
+            fail_key = f"_dfu_recovery_fails_{device.id}"
+            fail_count = getattr(self, fail_key, 0)
+            backoff_key = f"_dfu_recovery_backoff_{device.id}"
+            backoff_counter = getattr(self, backoff_key, 0)
+            if fail_count > 0:
+                # Exponential backoff: 6, 12, 24, 48 cycles (1, 2, 4, 8 min at 10s/cycle)
+                skip_cycles = min(6 * (2 ** (fail_count - 1)), 48)
+                if backoff_counter < skip_cycles:
+                    setattr(self, backoff_key, backoff_counter + 1)
+                    continue
+                setattr(self, backoff_key, 0)
+
+            log.info(
+                "Auto-recovering DFU device %s (BLE: %s, attempt %d)...",
+                device.id[:12], device.ble_address, fail_count + 1,
+            )
+
+            self.pause_discovery()
+            self.hold_reconnect(device.id, 600)
+            try:
+                from ..ota.ble_dfu import upload_ble_dfu
+                from ..ota.compile import ensure_dfu_zip
+
+                dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
+                result = await upload_ble_dfu(
+                    app_ble_address=device.ble_address,
+                    dfu_zip_path=dfu_zip,
+                )
+
+                if result.get("status") == "ok":
+                    log.info("Auto-recovery succeeded for %s!", device.id[:12])
+                    device.state = DeviceState.DISCONNECTED  # Let reconnect pick it up
+                    setattr(self, fail_key, 0)
+                    setattr(self, backoff_key, 0)
+                else:
+                    setattr(self, fail_key, fail_count + 1)
+                    log.warning(
+                        "Auto-recovery failed for %s (attempt %d): %s",
+                        device.id[:12], fail_count + 1, result.get("message", ""),
+                    )
+            except Exception as e:
+                setattr(self, fail_key, fail_count + 1)
+                log.error("Auto-recovery error for %s: %s", device.id[:12], e)
+            finally:
+                self.resume_discovery()
+                self.resume_reconnect(device.id)
+
     async def _background_loop(self) -> None:
-        """Periodic discovery, reconnection, and BLE liveness checks."""
+        """Periodic discovery, reconnection, liveness checks, and DFU recovery."""
         cycle = 0
         while self._running:
             try:
@@ -595,6 +676,9 @@ class FleetManager:
                 # Liveness check every 3rd cycle (~30s) for all transports
                 if cycle % 3 == 0:
                     await self._check_liveness()
+                # DFU recovery check every 6th cycle (~60s)
+                if cycle % 6 == 0:
+                    await self._auto_recover_dfu_devices()
             except asyncio.CancelledError:
                 break
             except Exception as e:

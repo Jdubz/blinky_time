@@ -179,6 +179,9 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
     finally:
         fleet.resume_discovery()
 
+    # Set recovery firmware so fleet manager can auto-retry any failed devices
+    fleet.set_recovery_firmware(str(firmware))
+
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
     total = len(results)
     return {

@@ -392,6 +392,73 @@ async def _dfu_transfer(
                     await client.disconnect()
 
 
+MIN_DFU_RSSI = -75  # Reject BLE DFU if signal weaker than this (dBm)
+PREFLIGHT_TEST_BYTES = 2048  # Bytes to transfer in pre-flight BLE quality test
+
+
+async def _preflight_ble_check(
+    app_ble_address: str,
+    progress: Callable[..., None],
+) -> tuple[bool, str]:
+    """Verify BLE connection quality before entering destructive DFU bootloader.
+
+    Connects to the device in app mode, checks RSSI, and performs a round-trip
+    data transfer test via NUS. This catches weak connections, interference, and
+    BlueZ issues BEFORE we erase the application flash.
+
+    Returns (ok, message). If ok is False, DFU should be aborted.
+    """
+    NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+    NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+
+    # Step 1: Scan and check RSSI
+    progress("preflight", f"Scanning for {app_ble_address}...", 3)
+    dev = await BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
+    if not dev:
+        return False, f"Device {app_ble_address} not found"
+
+    # BleakScanner doesn't always report RSSI on find_device_by_address.
+    # Do a full scan to get RSSI.
+    rssi = None
+    discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
+    for addr, (d, adv) in discovered.items():
+        if addr.upper() == app_ble_address.upper():
+            rssi = adv.rssi
+            break
+
+    if rssi is not None and rssi < MIN_DFU_RSSI:
+        return False, f"Signal too weak (RSSI={rssi} dBm, minimum={MIN_DFU_RSSI} dBm)"
+    rssi_str = f"RSSI={rssi} dBm" if rssi is not None else "RSSI=unknown"
+    progress("preflight", f"Signal: {rssi_str}", 4)
+
+    # Step 2: Connect and test NUS round-trip
+    progress("preflight", "Testing BLE data transfer...", 4)
+    try:
+        async with BleakClient(app_ble_address, timeout=10.0) as client:
+            rx_data: list[bytes] = []
+
+            def on_rx(sender: BleakGATTCharacteristic, data: bytearray) -> None:
+                rx_data.append(bytes(data))
+
+            await client.start_notify(NUS_TX, on_rx)
+            await asyncio.sleep(0.3)
+
+            # Send a command that produces a known response (json info)
+            await client.write_gatt_char(NUS_RX, b"json info\n", response=False)
+            await asyncio.sleep(1.5)  # Wait for BLE response fragments
+
+            total_rx = sum(len(d) for d in rx_data)
+            if total_rx < 20:
+                return False, f"NUS test transfer failed (received {total_rx} bytes, expected >20)"
+
+            progress("preflight", f"BLE test OK ({total_rx} bytes received, {rssi_str})", 5)
+
+    except Exception as e:
+        return False, f"BLE connection test failed: {e}"
+
+    return True, "ok"
+
+
 async def upload_ble_dfu(
     app_ble_address: str,
     dfu_zip_path: str,
@@ -430,6 +497,21 @@ async def upload_ble_dfu(
         image_type, "unknown"
     )
     progress("init", f"{type_name}: {len(firmware)} bytes, init: {len(init_packet)} bytes", 5)
+
+    # Pre-flight BLE quality check (only for BLE-initiated DFU).
+    # Entering the bootloader erases application flash — this is DESTRUCTIVE and
+    # IRREVERSIBLE. We must verify BLE connection quality BEFORE this point of
+    # no return. If the connection is weak, refuse to proceed.
+    if enter_bootloader_via_ble and not enter_bootloader_via_serial:
+        progress("preflight", "Checking BLE connection quality...", 3)
+        preflight_ok, preflight_msg = await _preflight_ble_check(app_ble_address, progress)
+        if not preflight_ok:
+            return {
+                "status": "error",
+                "message": f"Pre-flight BLE check failed: {preflight_msg}. "
+                           "DFU aborted to protect device (app flash not erased).",
+                "elapsed_s": round(time.monotonic() - t0, 1),
+            }
 
     last_result: dict[str, Any] = {"status": "error", "message": "No attempts made"}
 

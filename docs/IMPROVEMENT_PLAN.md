@@ -753,3 +753,47 @@ See **[VISUALIZER_GOALS.md](VISUALIZER_GOALS.md)** for the guiding philosophy. K
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator design patterns |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Calibration history |
 | `blinky-test-player/NEXT_TESTS.md` | Current testing priorities |
+
+## OTA Firmware Update Safety (March 31, 2026)
+
+### Current State
+
+**UF2 (USB mass storage):** 100% safe. Invalid/corrupt files silently rejected. Bootloader protects itself. Old firmware survives interrupted copy. No bricking risk.
+
+**BLE DFU (wireless):** Reliable with caveats. Legacy DFU (SDK v11) is single-bank — START_DFU erases application flash BEFORE data transfer. If transfer fails, device has no app and stays in bootloader. Mitigations implemented:
+- Pre-flight BLE quality check (RSSI + NUS round-trip test) blocks DFU if connection weak
+- 3 retry attempts with SYSTEM_RESET recovery between attempts
+- Speculative VALIDATE recovers from lost BLE completion notification
+- HCI adapter reset clears corrupted BlueZ state
+- Fleet manager auto-retries DFU_RECOVERY devices with exponential backoff
+- Device stays in DFU bootloader indefinitely — never permanently stuck, just waiting for firmware
+
+**Remaining risk:** A device that fails all DFU retries stays in bootloader with erased flash. The fleet manager will keep retrying (exponential backoff: 1 min, 2 min, 4 min, 8 min). The only scenario requiring physical USB access is a dead BLE radio (hardware failure).
+
+### Roadmap: QSPI Dual-Bank OTA (eliminates destructive flash erase)
+
+**Goal:** New firmware written to XIAO's 2 MB QSPI flash as a staging area. Old firmware stays intact in internal flash. Only after complete transfer + CRC validation does the bootloader erase and copy. Failed transfer = device boots old firmware.
+
+**Flash layout:**
+
+| Region | Location | Size | Purpose |
+|--------|----------|------|---------|
+| MBR + SoftDevice | Internal 0x00000-0x27000 | 156 KB | Protected, never erased |
+| Application (Bank 0) | Internal 0x27000-0xF4000 | 820 KB | Running firmware |
+| Bootloader | Internal 0xF4000-0x100000 | 48 KB | Protected, handles DFU |
+| Staging (Bank 1) | **QSPI 0x000000-0x200000** | **2048 KB** | New firmware staged here |
+
+**Why internal dual-bank doesn't work:** Our firmware is 510 KB. Internal dual-bank splits 780 KB usable into two 388 KB banks. 510 KB > 388 KB — doesn't fit.
+
+**Implementation (requires custom bootloader):**
+1. Add QSPI driver to Adafruit bootloader (nrfx_qspi, minimal init)
+2. Modify `dfu_dual_bank.c`: redirect Bank 1 writes to QSPI flash
+3. After transfer + CRC pass: erase internal Bank 0, copy from QSPI
+4. If transfer fails: QSPI staging area is discarded, internal app intact
+5. Test exhaustively on bare chips before fleet deployment
+
+**Effort:** Medium-high. Custom bootloader work (~1 week). Risk: bootloader bugs require SWD recovery. Mitigated by testing on bare test chips first (reset button + SWD pads accessible).
+
+**Alternative: MCUboot.** Full bootloader replacement with automatic rollback support. Requires migration from Arduino to Zephyr RTOS. Not feasible without rewriting the entire firmware stack.
+
+**Priority:** Low until a device is permanently lost to failed BLE DFU. Current mitigations (pre-flight check + auto-retry) make this extremely unlikely.
