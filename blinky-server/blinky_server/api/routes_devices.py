@@ -22,6 +22,17 @@ def _get_device_or_404(device_id: str) -> Device:
     return device
 
 
+def _get_connected_device(device_id: str) -> Device:
+    device = _get_device_or_404(device_id)
+    if device.state != DeviceState.CONNECTED:
+        raise HTTPException(
+            409,
+            f"Device {device_id[:12]} is not connected (state={device.state.value}). "
+            + ("Use POST /devices/{id}/ota to recover." if device.state == DeviceState.DFU_RECOVERY else ""),
+        )
+    return device
+
+
 @router.get("/devices")
 async def list_devices() -> list[DeviceResponse]:
     """List all known devices."""
@@ -38,14 +49,14 @@ async def get_device(device_id: str) -> DeviceResponse:
 @router.get("/devices/{device_id}/settings")
 async def get_settings(device_id: str) -> list[dict[str, Any]]:
     """Get all settings for a device."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     return await device.protocol.get_settings()
 
 
 @router.get("/devices/{device_id}/settings/{category}")
 async def get_settings_by_category(device_id: str, category: str) -> list[dict[str, Any]]:
     """Get settings for a device filtered by category."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     all_settings = await device.protocol.get_settings()
     return [s for s in all_settings if s.get("cat") == category]
 
@@ -53,28 +64,28 @@ async def get_settings_by_category(device_id: str, category: str) -> list[dict[s
 @router.put("/devices/{device_id}/settings/{name}")
 async def set_setting(device_id: str, name: str, body: SettingValueRequest) -> CommandResponse:
     """Set a single setting value."""
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.set_setting(name, body.value)
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/settings/save")
 async def save_settings(device_id: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.save_settings()
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/settings/load")
 async def load_settings(device_id: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.load_settings()
     return CommandResponse(response=resp)
 
 
 @router.post("/devices/{device_id}/settings/defaults")
 async def restore_defaults(device_id: str) -> CommandResponse:
-    device = _get_device_or_404(device_id)
+    device = _get_connected_device(device_id)
     resp = await device.protocol.restore_defaults()
     return CommandResponse(response=resp)
 
@@ -182,7 +193,6 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
                 serial_port=device.port,
                 firmware_path=str(firmware),
                 transport=device.transport,
-                protocol=device.protocol,
                 ble_address=device.ble_address,
             )
         finally:

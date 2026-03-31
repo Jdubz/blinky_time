@@ -7,14 +7,15 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from ..transport.base import Transport
+
 log = logging.getLogger(__name__)
 
 
 async def upload_with_ble_fallback(
     serial_port: str,
     firmware_path: str,
-    transport,
-    protocol=None,
+    transport: Transport,
     ble_address: str | None = None,
 ) -> dict:
     """Upload firmware via UF2, falling back to BLE DFU if UF2 fails.
@@ -23,7 +24,6 @@ async def upload_with_ble_fallback(
         serial_port: Serial port path (e.g., /dev/ttyACM0)
         firmware_path: Path to .hex firmware file
         transport: SerialTransport instance (disconnected by upload_uf2)
-        protocol: DeviceProtocol (unused, API compat)
         ble_address: Device's BLE address for DFU fallback (None = no fallback)
 
     Returns:
@@ -35,7 +35,6 @@ async def upload_with_ble_fallback(
         serial_port=serial_port,
         firmware_path=firmware_path,
         transport=transport,
-        protocol=protocol,
     )
 
     if result["status"] == "ok" or not ble_address:
@@ -64,7 +63,7 @@ async def upload_with_ble_fallback(
     async def enter_bootloader_via_serial(cmd: str):
         tmp_transport = SerialTransport(serial_port)
         try:
-            await tmp_transport.connect()
+            await asyncio.wait_for(tmp_transport.connect(), timeout=5.0)
             await tmp_transport.write_line(cmd)
             await asyncio.sleep(0.5)
         finally:

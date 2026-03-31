@@ -62,11 +62,21 @@ DFU_SERVICE_UUID = "00001530-1212-efde-1523-785feabcd123"
 
 
 def _bootloader_to_app_address(boot_addr: str) -> str:
-    """Convert bootloader BLE address to app address (last octet - 1)."""
+    """Convert bootloader BLE address to app address (subtract 1 from 6-byte addr).
+
+    Handles borrow propagation across octets (e.g., XX:XX:XX:XX:XX:00 → XX:XX:XX:XX:WW:FF).
+    """
     parts = boot_addr.split(':')
-    last = int(parts[-1], 16)
-    parts[-1] = f"{(last - 1) & 0xFF:02X}"
-    return ':'.join(parts)
+    octets = [int(p, 16) for p in parts]
+    borrow = 1
+    for i in range(len(octets) - 1, -1, -1):
+        octets[i] -= borrow
+        if octets[i] < 0:
+            octets[i] += 256
+            borrow = 1
+        else:
+            break
+    return ':'.join(f"{o:02X}" for o in octets)
 
 
 async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
@@ -101,17 +111,22 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
             # App mode with Adafruit BSP advertises BOTH NUS + DFU (buttonless DFU).
             is_bootloader = has_dfu and (not has_nus or (dev.name or "").startswith("AdaDFU"))
             if is_bootloader:
-                # Device is in BLE DFU bootloader mode
+                # Device is in BLE DFU bootloader mode.
+                # Use the app-mode address as device_id so the same physical
+                # device keeps the same identity after recovery.
                 app_addr = _bootloader_to_app_address(addr)
                 devices.append(
                     DiscoveredDevice(
-                        device_id=addr,
+                        device_id=app_addr,
                         platform="nrf52840",
                         transport_type="ble_dfu",
                         address=addr,
                         description=dev.name or "DFU bootloader",
                         rssi=adv.rssi,
-                        extra={"app_address": app_addr},
+                        extra={
+                            "app_address": app_addr,
+                            "bootloader_address": addr,
+                        },
                     )
                 )
                 log.warning(

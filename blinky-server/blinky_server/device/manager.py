@@ -313,6 +313,9 @@ class FleetManager:
         Matches it to an existing device by BLE address (bootloader addr = app
         addr + 1) and sets its state to DFU_RECOVERY. If no match is found,
         creates a placeholder device entry so it appears in the API.
+
+        Uses the app-mode address as device_id so the same physical device
+        keeps a stable identity after recovery.
         """
         app_addr = disc.extra.get("app_address", "")
         boot_addr = disc.address
@@ -320,7 +323,7 @@ class FleetManager:
         # Try to match to an existing device by BLE address
         matched_dev = None
         for dev in self._devices.values():
-            if dev.ble_address and dev.ble_address.upper() == app_addr.upper():
+            if app_addr and dev.ble_address and dev.ble_address.upper() == app_addr.upper():
                 matched_dev = dev
                 break
 
@@ -334,19 +337,20 @@ class FleetManager:
                 )
                 matched_dev.state = DeviceState.DFU_RECOVERY
         else:
-            # No match — create a placeholder entry
-            if boot_addr not in self._devices:
+            # No match — create a placeholder entry using app_addr as stable ID
+            placeholder_id = disc.device_id  # app_addr (stable across boot/app mode)
+            if placeholder_id not in self._devices:
                 from ..transport.ble_transport import BleTransport
                 placeholder = Device(
-                    device_id=boot_addr,
+                    device_id=placeholder_id,
                     port=boot_addr,
                     platform="nrf52840",
                     transport=BleTransport(boot_addr),
                 )
                 placeholder.state = DeviceState.DFU_RECOVERY
                 placeholder.ble_address = app_addr
-                self._devices[boot_addr] = placeholder
-                self._device_discovery[boot_addr] = disc
+                self._devices[placeholder_id] = placeholder
+                self._device_discovery[placeholder_id] = disc
                 log.warning(
                     "Unknown device in DFU bootloader at %s (app addr: %s). "
                     "Push firmware to recover.",
@@ -375,6 +379,11 @@ class FleetManager:
 
             disc = self._device_discovery.get(device_id)
             if not disc:
+                continue
+
+            # Skip DFU bootloader placeholders — they can't be reconnected
+            # normally (ble_dfu transport is not a connectable transport type).
+            if disc.transport_type == "ble_dfu":
                 continue
 
             # Exponential backoff for repeated failures (BLE devices that
@@ -416,15 +425,19 @@ class FleetManager:
                             device_id[:12], fail_count + 1, backoff_s, e)
 
     async def _check_ble_liveness(self) -> None:
-        """Ping BLE devices that haven't communicated recently.
+        """Ping BLE devices that haven't communicated recently (~30s worst case).
 
         BLE connections can silently drop without bleak's disconnected_callback
         firing (e.g., device moved out of range gradually). A lightweight
-        command verifies the connection is alive.
+        command verifies the connection is alive. Pings run concurrently to
+        avoid blocking the loop when multiple devices are unresponsive.
         """
         now = _time.monotonic()
-        stale_threshold = 30.0  # seconds since last successful comms
+        # 20s threshold guarantees ~30s worst-case detection (check runs every 3rd
+        # cycle at 10s intervals, so up to 30s between checks)
+        stale_threshold = 20.0
 
+        tasks = []
         for device in list(self._devices.values()):
             if device.state != DeviceState.CONNECTED:
                 continue
@@ -432,15 +445,22 @@ class FleetManager:
                 continue
             if device.last_seen and (now - device.last_seen) < stale_threshold:
                 continue
+            tasks.append(self._ping_ble_device(device))
 
-            try:
-                info = await device.protocol.get_info()
-                device.last_seen = _time.monotonic()
-                device._apply_info(info)
-            except Exception:
-                log.warning("BLE liveness check failed for %s — marking disconnected",
-                            device.id[:12])
-                device.state = DeviceState.DISCONNECTED
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def _ping_ble_device(self, device: Device) -> None:
+        """Ping a single BLE device; trigger disconnect handling on failure."""
+        try:
+            info = await device.protocol.get_info()
+            device.last_seen = _time.monotonic()
+            device.apply_info(info)
+        except Exception:
+            log.warning("BLE liveness check failed for %s — triggering disconnect",
+                        device.id[:12])
+            with contextlib.suppress(Exception):
+                device._on_transport_disconnect()
 
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, and BLE liveness checks."""

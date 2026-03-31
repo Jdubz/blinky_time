@@ -41,6 +41,7 @@ class DeviceProtocol:
         self._response_event = asyncio.Event()
         self._response_timer: asyncio.TimerHandle | None = None
         self._pending = False
+        self._cancelled = False
 
         # Streaming data callbacks
         self._on_stream_line: Callable[[str], None] | None = None
@@ -146,9 +147,16 @@ class DeviceProtocol:
         """Signal any pending command to return immediately.
 
         Called by Device when the transport disconnects unexpectedly, so
-        send_command() fails fast instead of waiting the full timeout.
+        send_command() raises ConnectionError instead of waiting the full
+        timeout or returning partial/empty data.
         """
         if self._pending:
+            self._cancelled = True
+            self._response_buf.clear()
+            self._pending = False
+            if self._response_timer:
+                self._response_timer.cancel()
+                self._response_timer = None
             self._response_event.set()
 
     # ── Internal ──
@@ -157,9 +165,10 @@ class DeviceProtocol:
         await self._transport.write_line(line)
 
     async def _send_and_collect(self, command: str, timeout: float) -> str:
-        """Send command and accumulate response lines until a 100ms gap."""
+        """Send command and accumulate response lines until a silence gap."""
         self._response_buf.clear()
         self._pending = True
+        self._cancelled = False
         self._response_event.clear()
 
         await self._raw_send(command)
@@ -168,6 +177,11 @@ class DeviceProtocol:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
 
         self._pending = False
+
+        if self._cancelled:
+            self._cancelled = False
+            raise ConnectionError("Command cancelled: transport disconnected")
+
         result = "\n".join(self._response_buf)
         self._response_buf.clear()
         return result

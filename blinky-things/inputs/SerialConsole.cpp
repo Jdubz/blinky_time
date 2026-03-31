@@ -451,7 +451,7 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         // BLE address
         out_.print(F(",\"ble\":\""));
 #ifdef BLINKY_PLATFORM_NRF52840
-        {
+        if (bleNus_) {
             uint8_t mac[6];
             Bluefruit.getAddr(mac);
             char bleBuf[18];

@@ -72,7 +72,7 @@ class Device:
             await self.transport.connect()
             self.transport.on_disconnect(self._on_transport_disconnect)
             info = await self.protocol.get_info()
-            self._apply_info(info)
+            self.apply_info(info)
             self.last_seen = _time.monotonic()
             self.state = DeviceState.CONNECTED
             log.info(
@@ -94,7 +94,8 @@ class Device:
         self.state = DeviceState.DISCONNECTED
         # Notify all stream subscribers that device disconnected
         for q in self._stream_subscribers:
-            q.put_nowait(None)
+            with contextlib.suppress(asyncio.QueueFull):
+                q.put_nowait(None)
         self._stream_subscribers.clear()
 
     def _on_transport_disconnect(self) -> None:
@@ -105,9 +106,15 @@ class Device:
         self.state = DeviceState.DISCONNECTED
         # Wake up any pending command so it fails fast instead of timing out
         self.protocol.cancel_pending()
-        # Notify stream subscribers
+        # Notify stream subscribers (suppress QueueFull — subscriber may be backed up)
+        dead: list[asyncio.Queue[dict[str, Any] | None]] = []
         for q in self._stream_subscribers:
-            q.put_nowait(None)
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                dead.append(q)
+        for q in dead:
+            self._stream_subscribers.discard(q)
         self._stream_subscribers.clear()
 
     def subscribe_stream(self) -> asyncio.Queue[dict[str, Any] | None]:
@@ -139,12 +146,12 @@ class Device:
             "hardware_sn": self.hardware_sn,
             "ble_address": self.ble_address,
             "rssi": self.rssi,
-            "last_seen": round(self.last_seen, 1) if self.last_seen else None,
+            "last_seen_ago": round(_time.monotonic() - self.last_seen, 1) if self.last_seen else None,
         }
 
     # ── Internal ──
 
-    def _apply_info(self, info: dict[str, Any]) -> None:
+    def apply_info(self, info: dict[str, Any]) -> None:
         """Apply parsed json info response to device state."""
         self.version = info.get("version")
         dev = info.get("device", {})

@@ -85,7 +85,9 @@ async def fleet_ota(body: OtaRequest) -> dict:
             log.info("Fleet OTA: flashing %s (%s, state=%s)...",
                      device.id[:12], device.port, device.state.value)
 
-            fleet.hold_reconnect(device.id, 120)
+            # BLE DFU takes ~5.5min (330s) — use longer hold for DFU recovery devices
+            hold_secs = 360 if device.state == DeviceState.DFU_RECOVERY else 120
+            fleet.hold_reconnect(device.id, hold_secs)
 
             try:
                 # Device in DFU bootloader (SafeBoot crash recovery) —
@@ -119,7 +121,6 @@ async def fleet_ota(body: OtaRequest) -> dict:
                         serial_port=device.port,
                         firmware_path=str(firmware),
                         transport=device.transport,
-                        protocol=device.protocol,
                         ble_address=device.ble_address,
                     )
                 elif device.transport.transport_type == "ble":
