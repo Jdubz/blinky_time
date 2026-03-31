@@ -3,6 +3,7 @@
 Compiles Arduino firmware and generates DFU packages.
 Uses arduino-cli (must be installed and configured).
 """
+
 from __future__ import annotations
 
 import json
@@ -12,13 +13,16 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 # Supported board FQBNs
 FQBN_NRF52840 = "Seeeduino:nrf52:xiaonRF52840Sense"
-FQBN_ESP32S3 = ("esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,"
-                "MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240")
+FQBN_ESP32S3 = (
+    "esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,"
+    "MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240"
+)
 
 # Project paths (relative to blinky_time root)
 SKETCH_DIR = "blinky-things"
@@ -26,8 +30,11 @@ SKETCH_DIR = "blinky-things"
 
 def find_arduino_cli() -> str | None:
     """Find arduino-cli binary."""
-    for path in ["/usr/local/bin/arduino-cli", "/usr/bin/arduino-cli",
-                 str(Path.home() / "bin" / "arduino-cli")]:
+    for path in [
+        "/usr/local/bin/arduino-cli",
+        "/usr/bin/arduino-cli",
+        str(Path.home() / "bin" / "arduino-cli"),
+    ]:
         if Path(path).is_file():
             return path
     # Try PATH
@@ -48,8 +55,7 @@ def find_project_root() -> Path:
     raise FileNotFoundError("Cannot find blinky_time project root")
 
 
-def compile_firmware(platform: str = "nrf52840",
-                     ble_dfu_recovery: bool = True) -> dict:
+def compile_firmware(platform: str = "nrf52840", ble_dfu_recovery: bool = True) -> dict[str, Any]:
     """Compile firmware for the given platform.
 
     Args:
@@ -83,19 +89,18 @@ def compile_firmware(platform: str = "nrf52840",
         hex_path.unlink()
 
     # Build command
-    cmd = [cli, "compile", "--fqbn", fqbn, SKETCH_DIR,
-           "--build-path", build_dir]
+    cmd = [cli, "compile", "--fqbn", fqbn, SKETCH_DIR, "--build-path", build_dir]
 
     # Enable BLE DFU recovery for fleet devices (nRF52840 only)
     if ble_dfu_recovery and platform == "nrf52840":
-        cmd += ["--build-property",
-                "compiler.cpp.extra_flags=-DSAFEBOOT_BLE_DFU_RECOVERY"]
+        cmd += ["--build-property", "compiler.cpp.extra_flags=-DSAFEBOOT_BLE_DFU_RECOVERY"]
 
-    log.info("Compiling %s firmware (%s, ble_dfu_recovery=%s)...",
-             platform, fqbn, ble_dfu_recovery)
+    log.info("Compiling %s firmware (%s, ble_dfu_recovery=%s)...", platform, fqbn, ble_dfu_recovery)
     result = subprocess.run(
         cmd,
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
         cwd=str(root),
     )
 
@@ -119,16 +124,19 @@ def compile_firmware(platform: str = "nrf52840",
 def _find_objcopy() -> str | None:
     """Find arm-none-eabi-objcopy for hex→bin conversion."""
     import glob as _glob
+
     # Check standard locations
     for pattern in [
-        str(Path.home() / ".arduino15/packages/*/tools/arm-none-eabi-gcc/*/bin/arm-none-eabi-objcopy"),
+        str(
+            Path.home()
+            / ".arduino15/packages/*/tools/arm-none-eabi-gcc/*/bin/arm-none-eabi-objcopy"
+        ),
         "/usr/bin/arm-none-eabi-objcopy",
     ]:
         matches = _glob.glob(pattern)
         if matches:
             return sorted(matches)[-1]  # Latest version
-    result = subprocess.run(["which", "arm-none-eabi-objcopy"],
-                            capture_output=True, text=True)
+    result = subprocess.run(["which", "arm-none-eabi-objcopy"], capture_output=True, text=True)
     if result.returncode == 0:
         return result.stdout.strip()
     return None
@@ -147,7 +155,7 @@ def _crc16(data: bytes) -> int:
     return crc
 
 
-def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
+def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict[str, Any]:
     """Generate a DFU zip package from firmware hex.
 
     Pure-Python implementation — avoids broken adafruit-nrfutil on Python 3.13.
@@ -175,7 +183,9 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
 
     result = subprocess.run(
         [objcopy, "-I", "ihex", "-O", "binary", hex_path, bin_path],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode != 0:
         return {"status": "error", "message": f"objcopy failed: {result.stderr}"}
@@ -192,15 +202,15 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
     # bootloader validates device_type == 0x0052 exactly. Verified working
     # end-to-end on Seeeduino nRF52840 bootloader v0.6.1 (Mar 30, 2026).
     device_type = 0x0052
-    device_rev = 0xFFFF   # Any revision
+    device_rev = 0xFFFF  # Any revision
     app_version = 0xFFFFFFFF  # Any version (no version check)
     sd_req_val = int(sd_req, 16)
     firmware_crc = _crc16(firmware)
 
-    init_packet = struct.pack('<HHIHH',
-                              device_type, device_rev, app_version,
-                              1, sd_req_val)  # 1 = softdevice count
-    init_packet += struct.pack('<H', firmware_crc)
+    init_packet = struct.pack(
+        "<HHIHH", device_type, device_rev, app_version, 1, sd_req_val
+    )  # 1 = softdevice count
+    init_packet += struct.pack("<H", firmware_crc)
 
     # Build the DFU zip
     dat_name = "application.dat"
@@ -216,19 +226,24 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict:
                     "device_type": 0x0052,
                     "firmware_crc16": firmware_crc,
                     "softdevice_req": [sd_req_val],
-                }
+                },
             }
         }
     }
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(bin_name, firmware)
         zf.writestr(dat_name, init_packet)
         zf.writestr("manifest.json", json.dumps(manifest, indent=2))
 
     zip_size = Path(zip_path).stat().st_size
-    log.info("DFU package: %s (%d bytes, firmware %d bytes, CRC 0x%04X)",
-             zip_path, zip_size, len(firmware), firmware_crc)
+    log.info(
+        "DFU package: %s (%d bytes, firmware %d bytes, CRC 0x%04X)",
+        zip_path,
+        zip_size,
+        len(firmware),
+        firmware_crc,
+    )
     return {"status": "ok", "zip_path": zip_path, "message": "DFU package generated"}
 
 
@@ -244,8 +259,11 @@ def ensure_dfu_zip(firmware_path: str) -> str:
     if p.suffix == ".hex":
         result = generate_dfu_package(firmware_path)
         if result["status"] != "ok":
-            raise ValueError(f"Failed to generate DFU zip from {firmware_path}: {result['message']}")
-        return result["zip_path"]
+            raise ValueError(
+                f"Failed to generate DFU zip from {firmware_path}: {result['message']}"
+            )
+        zip_path: str = result["zip_path"]
+        return zip_path
     raise ValueError(
         f"BLE DFU requires .dfu.zip or .hex file, got: {p.name}. "
         f"Use POST /ota/compile-dfu to generate one."

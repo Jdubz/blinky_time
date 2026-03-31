@@ -15,11 +15,16 @@ Pi fleet server (blinky-server)
   └── WiFi TCP (WifiTransport — implemented, blocked by ESP32-S3 antenna)
 
 REST API: http://blinkyhost.local:8420/api/
-  ├── GET  /devices               — list all devices
+  ├── GET  /devices               — list all devices (incl. RSSI, MTU, BLE addr)
+  ├── GET  /fleet/status          — fleet health summary (counts, per-device health)
+  ├── POST /fleet/discover        — trigger immediate BLE/serial scan
   ├── POST /devices/{id}/command  — send command
   ├── POST /devices/{id}/ota      — firmware upload (UF2 or BLE DFU, auto-detected)
   ├── POST /fleet/ota             — flash all nRF52840 devices (accepts .hex or .dfu.zip)
   ├── POST /fleet/deploy          — compile + generate DFU zip + flash all devices
+  ├── POST /fleet/settings/save   — save settings on all devices
+  ├── POST /fleet/settings/load   — load settings on all devices
+  ├── POST /fleet/settings/defaults — restore defaults on all devices
   ├── POST /ota/compile           — compile firmware
   ├── POST /ota/compile-dfu       — compile + generate DFU zip
   └── --no-serial flag            — BLE-only fleet management mode
@@ -55,11 +60,18 @@ REST API: http://blinkyhost.local:8420/api/
 | **BlueZ stale cleanup** | Pi | Auto-disconnects stale BLE connections from previous server sessions on startup |
 | **BLE reconnect backoff** | Pi | Exponential backoff for failing BLE devices (10s, 20s, 40s... capped at 5 min) |
 | **Discovery pause** | Pi | Background BLE discovery pauses during DFU to avoid BleakScanner conflicts |
-| **BLE connect timeout** | Pi | Hard 20s timeout wrapping BLE connect sequence (prevents server hang on stuck connections) |
+| **BLE connect timeout** | Pi | Hard 25s timeout wrapping BLE connect sequence (includes GATT rediscovery after cache clear) |
 | **Serial port stability** | Pi | DTR toggle on connect, port kept open during bootloader entry |
 | **Print& abstraction** | Both | All printDiagnostics() accept Print& — output goes to any transport |
 | **Fleet server** | Pi | Serial + BLE + WiFi discovery, dedup, auto-reconnect, REST API |
-| **API enrichment** | Pi | `GET /devices` includes `hardware_sn`, `ble_address`, `rssi`, `last_seen` per device |
+| **API enrichment** | Pi | `GET /devices` includes `hardware_sn`, `ble_address`, `rssi`, `mtu`, `last_seen` per device |
+| **Fleet health API** | Pi | `GET /fleet/status` returns aggregate fleet stats (counts by state/transport, per-device health) |
+| **Manual discovery** | Pi | `POST /fleet/discover` triggers immediate BLE/serial scan, returns new devices |
+| **Fleet settings ops** | Pi | `POST /fleet/settings/save\|load\|defaults` — fleet-wide settings management |
+| **BLE RSSI updates** | Pi | RSSI refreshed from BlueZ D-Bus during liveness pings (~30s), not just discovery-time |
+| **Serial liveness checks** | Pi | Serial devices now get periodic `json info` pings (~30s) to detect stale connections |
+| **BLE GATT cache clear** | Pi | `bluetoothctl remove` before each BLE connect prevents notification stacking across reconnections |
+| **Failure limit** | Pi | BLE devices that fail 10 consecutive connection attempts are removed from the fleet |
 
 ### Remaining Work
 
@@ -74,8 +86,16 @@ REST API: http://blinkyhost.local:8420/api/
 - **GPREGRET race condition**: UF2 bootloader entry is ~50-80% per attempt due to MBR interaction. Mitigated by uf2_upload.py's 5-retry logic (>97% cumulative).
 - **BLE DFU transfer speed**: ~1.7 KB/s (20-byte BLE packets), ~5.5 min per device for 510 KB firmware. Sequential only (Pi's BLE adapter handles one DFU at a time).
 - **Post-DFU USB**: After BLE DFU boot, USB serial doesn't re-enumerate without physical power cycle. uhubctl on Pi doesn't fully cut power. BLE reconnection works fine.
-- **BlueZ stale connections**: Server restart leaves stale BLE connections in BlueZ. Auto-cleanup runs on startup but some devices (e.g., FA:E6:7D:A9:8B:3A) resist disconnect.
+- **BlueZ stale connections**: Server restart leaves stale BLE connections in BlueZ. Auto-cleanup runs on startup. Per-device `bluetoothctl disconnect` runs before each BLE connect to prevent notification stacking.
 - **BLE discovery stops after connection**: Connected devices stop advertising. Server can't discover new devices while holding connections.
+- **BLE throughput at weak signal**: Devices with RSSI < -80 dBm may have BLE throughput as low as 1 notification/sec. Large responses (e.g., `json settings`) may time out. Commands and `json info` work reliably.
+
+### Bugs Fixed (Mar 31, 2026)
+
+- **Dedup false positives**: Previously deduped by `device_type:device_name` (config-based), which matched different physical devices with the same config. Now only dedupes by `hardware_sn` (chip-unique FICR DEVICEID).
+- **Dedup thrashing loop**: Deduped BLE devices were immediately rediscovered and reconnected on the next cycle. Now tracked in an exclusion set, cleared when serial device disconnects.
+- **BLE notification stacking**: Repeated connect/disconnect cycles caused BlueZ to stack GATT subscriptions, delivering each notification N times (garbled responses). Fixed by running `bluetoothctl disconnect` before each BLE connect.
+- **Release hold ID mismatch**: `release_device()` stored reconnect blackout under the shortened API ID (e.g., `ABFBC412`) instead of the full device ID (`ABFBC41283E2D211`), causing the hold to be silently ignored.
 
 ---
 

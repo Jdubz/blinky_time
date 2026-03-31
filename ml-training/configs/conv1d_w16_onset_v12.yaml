@@ -1,0 +1,103 @@
+# Conv1D W16 v12 — v11 + wider architecture + SWA + stronger augmentation
+#
+# Changes from v11-final (onset F1=0.623, kick=0.743, snare=0.727, hihat=0.701):
+#
+#   1. Wider architecture: [48, 48] channels
+#      - v11 used 20 KB of 60 KB budget — significant headroom
+#      - ~22K params, ~25 KB INT8, ~8-9ms inference (within 10ms frame budget)
+#      - More capacity for complex onset spectral patterns
+#
+#   2. 3rd conv layer: adds Conv1D(48→32, k=3) before output
+#      - Expands receptive field: 9 → 11 frames (144ms → 176ms)
+#      - Tapering channels (48→48→32→1) gives progressive abstraction
+#      - +2K params, ~2 KB more INT8
+#
+#   3. Stochastic Weight Averaging (SWA)
+#      - 10 epochs at LR=1e-4 after main training
+#      - Averages weight snapshots → flatter optima, better generalization
+#      - Pass --swa flag to train.py
+#
+#   4. Stronger SpecAugment
+#      - 3 freq masks (was 2), max width 5 (was 4)
+#      - 2 time masks (was 1), max width 10 (was 8)
+#      - Forces model to use full spectral bandwidth, not memorize bands
+#
+#   5. Longer training with higher patience
+#      - 80 epochs (was 60), patience 20 (was 15)
+#      - SWA uses last 10 epochs — needs room after convergence
+#
+# Retained from v11 (all proven):
+#   - Onset consensus labels (madmom CNN + librosa + essentia)
+#   - Delta features (26 mel + 26 delta = 52 input channels)
+#   - Asymmetric focal loss (gamma_pos=0.5, gamma_neg=2.0)
+#   - Auto pos_weight (~15.5 for onset labels ~6% positive)
+#   - Online mixup (Beta(0.4,0.4), p=0.5)
+#   - Frequency positional encoding (52-dim with deltas)
+#   - Label neighbor weighting (0.25 at onset±1)
+#   - Label shift (-1 frame for causal delay compensation)
+#
+# NOT included:
+#   - Knowledge distillation from Beat This!: Beat This! detects BEATS, not
+#     onsets. Its soft labels would suppress off-beat onsets (hi-hats, syncopated
+#     kicks) and inject phantom targets on empty strong beats. Fundamentally
+#     incompatible with onset detection. The onset consensus labels from 5 onset
+#     detection systems ARE the teacher — consensus strengths already encode
+#     detection confidence.
+#   - Shift-tolerant focal: incompatible with focal loss (v10: F1=0.11)
+#   - Mel band reduction 26→23: deferred (breaking firmware change)
+#
+# Architecture: Conv1D(52→48,k=5) → Conv1D(48→48,k=5) → Conv1D(48→32,k=3) → Conv1D(32→1,k=1)
+# ~24K params, ~27 KB INT8, ~9ms inference
+# Receptive field: 11 frames = 176ms
+#
+# Training command:
+#   tmux new-session -d -s training "cd ml-training && source venv/bin/activate && \
+#     PYTHONUNBUFFERED=1 python train.py \
+#       --config configs/conv1d_w16_onset_v12.yaml --swa \
+#       --output-dir /mnt/storage/blinky-ml-data/outputs/v12-wider-swa \
+#       2>&1 | tee /mnt/storage/blinky-ml-data/outputs/v12-wider-swa.log"
+
+model:
+  type: "frame_conv1d"
+  channels: [48, 48, 32]           # 3 layers, tapering: wider → narrow → output
+  kernel_sizes: [5, 5, 3]          # RF: (5-1)+(5-1)+(3-1) = 10 → 11 frames = 176ms
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25           # Frames at onset±1 get 0.25× onset value
+  label_shift_frames: 1           # Shift targets 1 frame earlier (causal delay compensation)
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: true                 # 26 mel + 26 delta = 52 input channels
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  epochs: 80                      # Longer: SWA needs room after convergence
+  patience: 20                    # Higher: don't abort during late-training gains
+  pos_weight: 0                   # Auto-calculate (~15.5 for onset labels)
+
+augmentation:
+  spec_augment:
+    enabled: true
+    num_freq_masks: 3             # Was 2 in v11 — stronger frequency regularization
+    max_freq_width: 5             # Was 4 — masks up to 5 of 26 mel bands
+    num_time_masks: 2             # Was 1 — stronger temporal regularization
+    max_time_width: 10            # Was 8 — masks up to 10 of 16 frames
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v12.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 30           # Budget: ~27 KB expected, 30 KB ceiling

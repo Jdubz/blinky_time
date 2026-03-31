@@ -78,10 +78,12 @@ void Water::spawnParticles(float dt) {
     float phaseWave = 0.4f + 0.6f * phasePulse;
     float musicSpawnProb = params_.baseSpawnChance * phaseWave + params_.audioSpawnBoost * audio_.pulse * phasePulse;
 
-    // Wave burst on beat (scales with rhythmStrength and device width)
+    // Wave burst on beat (scales with rhythmStrength, device width, and onset density)
+    // Onset density scales burst: dance (4-6/s) = full wave, ambient (0-1/s) = gentle drip
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
+        float densityScale = 0.5f + 0.5f * min(audio_.onsetDensity / 6.0f, 1.0f);
         uint8_t waveDrops = (uint8_t)min(8.0f, max(2.0f, 0.5f * crossDim_ * (1.0f + audio_.rhythmStrength)));
-        dropCount += (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
+        dropCount += (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength * densityScale);
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 import serial.tools.list_ports
 
@@ -16,13 +17,14 @@ KNOWN_DEVICES = {
 @dataclass
 class DiscoveredDevice:
     """A device found during discovery."""
-    device_id: str          # Stable ID (serial number, BLE address, or IP)
-    platform: str           # "nrf52840" or "esp32s3"
-    transport_type: str     # "serial", "ble", or "wifi"
-    address: str            # Port path, BLE address, or host:port
+
+    device_id: str  # Stable ID (serial number, BLE address, or IP)
+    platform: str  # "nrf52840" or "esp32s3"
+    transport_type: str  # "serial", "ble", or "wifi"
+    address: str  # Port path, BLE address, or host:port
     description: str = ""
     rssi: int | None = None  # BLE/WiFi signal strength
-    extra: dict = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     # Legacy compat
     @property
@@ -66,7 +68,7 @@ def _bootloader_to_app_address(boot_addr: str) -> str:
 
     Handles borrow propagation across octets (e.g., XX:XX:XX:XX:XX:00 → XX:XX:XX:XX:WW:FF).
     """
-    parts = boot_addr.split(':')
+    parts = boot_addr.split(":")
     octets = [int(p, 16) for p in parts]
     borrow = 1
     for i in range(len(octets) - 1, -1, -1):
@@ -76,7 +78,7 @@ def _bootloader_to_app_address(boot_addr: str) -> str:
             borrow = 1
         else:
             break
-    return ':'.join(f"{o:02X}" for o in octets)
+    return ":".join(f"{o:02X}" for o in octets)
 
 
 async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
@@ -90,6 +92,7 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
     """
     try:
         from bleak import BleakScanner
+
         from .ble_transport import NUS_SERVICE_UUID
     except ImportError:
         log.debug("bleak not installed, skipping BLE discovery")
@@ -132,7 +135,10 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
                 log.warning(
                     "Discovered BLE DFU bootloader %s (%s) RSSI=%d — "
                     "device in crash recovery (app addr: %s)",
-                    dev.name, addr, adv.rssi, app_addr,
+                    dev.name,
+                    addr,
+                    adv.rssi,
+                    app_addr,
                 )
             else:
                 devices.append(
@@ -152,7 +158,9 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
     return devices
 
 
-async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[DiscoveredDevice]:
+async def discover_wifi_devices(
+    known_hosts: list[dict[str, Any]] | None = None,
+) -> list[DiscoveredDevice]:
     """Discover WiFi devices via mDNS and/or static registry.
 
     Scans for _blinky._tcp mDNS services (advertised by ESP32-S3 firmware).
@@ -166,10 +174,10 @@ async def discover_wifi_devices(known_hosts: list[dict] | None = None) -> list[D
 
     # mDNS discovery for _blinky._tcp
     try:
-        from zeroconf import Zeroconf, ServiceBrowser
+        from zeroconf import ServiceBrowser, Zeroconf  # type: ignore[import-not-found]
 
         zc = Zeroconf()
-        found: list[dict] = []
+        found: list[dict[str, Any]] = []
 
         class Listener:
             def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
@@ -248,10 +256,12 @@ async def cleanup_stale_ble_connections() -> None:
     """
     import subprocess
 
-    def _cleanup():
+    def _cleanup() -> int:
         result = subprocess.run(
             ["bluetoothctl", "devices", "Connected"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode != 0:
             return 0
@@ -269,7 +279,8 @@ async def cleanup_stale_ble_connections() -> None:
                 if name in ("Blinky", "AdaDFU"):
                     subprocess.run(
                         ["bluetoothctl", "disconnect", addr],
-                        capture_output=True, timeout=5,
+                        capture_output=True,
+                        timeout=5,
                     )
                     disconnected += 1
         return disconnected
@@ -286,7 +297,7 @@ async def discover_all(
     serial_scan: bool = True,
     ble_scan: bool = True,
     ble_timeout: float = 5.0,
-    wifi_hosts: list[dict] | None = None,
+    wifi_hosts: list[dict[str, Any]] | None = None,
 ) -> list[DiscoveredDevice]:
     """Discover devices across all transport types.
 
@@ -296,7 +307,9 @@ async def discover_all(
     """
     serial_devs = discover_serial_devices() if serial_scan else []
 
-    ble_coro = discover_ble_devices(timeout=ble_timeout) if ble_scan else asyncio.sleep(0, result=[])
+    ble_coro = (
+        discover_ble_devices(timeout=ble_timeout) if ble_scan else asyncio.sleep(0, result=[])
+    )
     wifi_coro = discover_wifi_devices(wifi_hosts)
 
     ble_devs, wifi_devs = await asyncio.gather(ble_coro, wifi_coro)
@@ -304,6 +317,8 @@ async def discover_all(
     all_devs = serial_devs + list(ble_devs) + list(wifi_devs)
     log.info(
         "Discovery: %d serial, %d BLE, %d WiFi",
-        len(serial_devs), len(ble_devs), len(wifi_devs),
+        len(serial_devs),
+        len(ble_devs),
+        len(wifi_devs),
     )
     return all_devs

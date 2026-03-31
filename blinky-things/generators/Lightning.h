@@ -29,7 +29,6 @@ struct LightningParams {
     uint8_t branchIntensityLoss;  // Intensity reduction for branches (0-100%)
 
     // Audio reactivity
-    float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     // Background
@@ -44,7 +43,6 @@ struct LightningParams {
         defaultLifespan = 30;     // 0.3 seconds - quick flash (30 centiseconds)
         intensityMin = 220;       // VERY BRIGHT
         intensityMax = 255;       // MAXIMUM brightness
-        musicSpawnPulse = 0.7f;   // Phase modulation
         organicTransientMin = 0.35f;
         backgroundIntensity = 0.15f;  // Visible but subtle background
 

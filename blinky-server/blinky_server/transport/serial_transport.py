@@ -69,11 +69,12 @@ class SerialTransport(Transport):
         # After a previous connection closes, TinyUSB's CDC may be stuck in
         # "disconnected" state where it silently drops output. Toggling DTR
         # forces TinyUSB to reinitialize its connected state.
-        serial_obj = transport.serial
-        if hasattr(serial_obj, 'dtr'):
-            serial_obj.dtr = False
-            await asyncio.sleep(0.1)
-            serial_obj.dtr = True
+        if self._serial_transport is not None:
+            serial_obj = getattr(self._serial_transport, "serial", None)
+            if serial_obj is not None and hasattr(serial_obj, "dtr"):
+                serial_obj.dtr = False
+                await asyncio.sleep(0.1)
+                serial_obj.dtr = True
 
         # Wait for device to be ready
         await asyncio.sleep(INIT_DELAY_S)
@@ -121,6 +122,7 @@ class SerialTransport(Transport):
 
         # Open at 1200 baud with DTR toggle (standard Arduino bootloader protocol)
         import serial
+
         try:
             with serial.Serial(self._port, 1200, dsrdtr=False) as s:
                 s.dtr = True

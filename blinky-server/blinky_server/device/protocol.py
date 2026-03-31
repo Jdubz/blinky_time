@@ -12,8 +12,10 @@ log = logging.getLogger(__name__)
 COMMAND_TIMEOUT_S = 2.0
 RESPONSE_LINE_TIMEOUT_S = 0.1  # Gap between lines to finalize response
 
-# BLE is much slower — MTU fragmentation adds 200-500ms gaps between lines
-BLE_COMMAND_TIMEOUT_S = 5.0
+# BLE is much slower — MTU fragmentation adds 200-500ms gaps between lines.
+# Large responses (json settings ~3KB) need time to arrive at degraded BLE rates.
+# Quick commands still return fast thanks to BLE_RESPONSE_LINE_TIMEOUT_S.
+BLE_COMMAND_TIMEOUT_S = 15.0
 BLE_RESPONSE_LINE_TIMEOUT_S = 0.5
 
 

@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app(
     enable_ble: bool = True,
     enable_serial: bool = True,
-    wifi_hosts: list[dict] | None = None,
+    wifi_hosts: list[dict[str, Any]] | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Blinky Server",

@@ -194,6 +194,40 @@ jobs:
           echo "⚠️  VERSION file not found"
         fi
 
+  blinky-server-tests:
+    name: Blinky Server Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: blinky-server
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install dependencies
+      run: |
+        python -m venv venv
+        venv/bin/pip install -e ".[dev,ble]"
+
+    - name: Run linting
+      run: venv/bin/python -m ruff check blinky_server/ tests/
+
+    - name: Check formatting
+      run: venv/bin/python -m ruff format --check blinky_server/ tests/
+
+    - name: Run type checking
+      run: venv/bin/python -m mypy blinky_server/
+
+    - name: Run tests
+      run: venv/bin/python -m pytest tests/ -v
+
   blinky-console-tests:
     name: Blinky Console Tests
     runs-on: ubuntu-latest
@@ -212,7 +246,7 @@ jobs:
         node-version: '20'
 
     - name: Install dependencies
-      run: rm -f package-lock.json && npm install
+      run: npm ci
 
     - name: Run linting
       run: npm run lint

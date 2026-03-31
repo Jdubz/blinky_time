@@ -28,7 +28,6 @@ struct FireParams {
     float sparkSpread;            // × crossDim → horizontal velocity variation (LEDs/sec)
 
     // Audio reactivity
-    float musicSpawnPulse;        // Phase modulation depth for spawn rate (0=flat, 1=full breathing)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
     float burstSparks;            // × crossDim → sparks per burst
 
@@ -54,7 +53,6 @@ struct FireParams {
         intensityMax = 255;
         windVariation = 1.5f;         // × crossDim → LEDs/sec of curl turbulence
         drag = 0.985f;            // Gentle deceleration (thermal removed, no acceleration to fight)
-        musicSpawnPulse = 0.95f;      // Deep phase breathing (reserved for future rhythm)
         organicTransientMin = 0.25f;
         burstSparks = 0.8f;           // × crossDim → sparks per burst
         sparkVelocityMin = 1.0f;      // × traversalDim → min upward velocity (3x original)
