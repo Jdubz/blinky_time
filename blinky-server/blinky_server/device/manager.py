@@ -4,11 +4,13 @@ import asyncio
 import contextlib
 import logging
 import time as _time
+from typing import Any
 
 from ..transport.base import Transport
 from ..transport.discovery import (
-    DiscoveredDevice, cleanup_stale_ble_connections, discover_all,
-    discover_serial_devices,
+    DiscoveredDevice,
+    cleanup_stale_ble_connections,
+    discover_all,
 )
 from ..transport.serial_transport import SerialTransport
 from .device import Device, DeviceState
@@ -26,12 +28,16 @@ def _create_transport(disc: DiscoveredDevice) -> Transport:
         return SerialTransport(disc.address)
     elif disc.transport_type == "ble":
         from ..transport.ble_transport import BleTransport
+
         return BleTransport(disc.address)
     elif disc.transport_type == "wifi":
         from ..transport.wifi_transport import WifiTransport
+
         host = disc.extra.get("host")
         if not host:
-            raise ValueError(f"WiFi device {disc.device_id!r} has no 'host' in extra: {disc.extra!r}")
+            raise ValueError(
+                f"WiFi device {disc.device_id!r} has no 'host' in extra: {disc.extra!r}"
+            )
         port = disc.extra.get("port", 3333)
         return WifiTransport(host, port)
     else:
@@ -46,7 +52,7 @@ class FleetManager:
         enable_ble: bool = True,
         enable_serial: bool = True,
         ble_timeout: float = 5.0,
-        wifi_hosts: list[dict] | None = None,
+        wifi_hosts: list[dict[str, Any]] | None = None,
     ) -> None:
         self._devices: dict[str, Device] = {}  # keyed by device_id
         self._discovery_task: asyncio.Task[None] | None = None
@@ -64,6 +70,10 @@ class FleetManager:
         # Discovery pause counter — when > 0, background loop skips discovery/reconnect.
         # Used during BLE DFU to avoid BleakScanner conflicts (only one scan at a time).
         self._discovery_pause_count: int = 0
+        # BLE addresses excluded from discovery because they were deduped with a
+        # serial device. Prevents the thrashing loop where a deduped device is
+        # immediately rediscovered and reconnected on every cycle.
+        self._dedup_excluded: set[str] = set()
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -122,8 +132,7 @@ class FleetManager:
         self._discovery_pause_count = max(0, self._discovery_pause_count - 1)
         log.info("Discovery resumed (depth=%d)", self._discovery_pause_count)
 
-    async def release_device(self, device_id: str,
-                             hold_seconds: int | None = None) -> bool:
+    async def release_device(self, device_id: str, hold_seconds: int | None = None) -> bool:
         """Temporarily release a device (e.g., for firmware flashing).
 
         If hold_seconds is set, the device won't be auto-reconnected for
@@ -135,9 +144,10 @@ class FleetManager:
             return False
         await device.disconnect()
         if hold_seconds is not None:
-            self.hold_reconnect(device_id, hold_seconds)
-        log.info("Released device %s on %s (hold=%ss)",
-                 device_id[:12], device.port, hold_seconds)
+            # Use the full device ID (not the potentially-shortened API param)
+            # so the blackout check in _reconnect_disconnected matches.
+            self.hold_reconnect(device.id, hold_seconds)
+        log.info("Released device %s on %s (hold=%ss)", device.id[:12], device.port, hold_seconds)
         return True
 
     async def reconnect_device(self, device_id: str) -> bool:
@@ -147,11 +157,14 @@ class FleetManager:
             return False
         if device.state == DeviceState.CONNECTED:
             return True
-        self._reconnect_failures.pop(device_id, None)  # Reset backoff
+        # Use full device ID for internal lookups
+        full_id = device.id
+        self._reconnect_failures.pop(full_id, None)  # Reset backoff
+        self._reconnect_blackout.pop(full_id, None)  # Clear hold
 
-        disc = self._device_discovery.get(device_id)
+        disc = self._device_discovery.get(full_id)
         if not disc:
-            log.error("No discovery info for device %s", device_id[:12])
+            log.error("No discovery info for device %s", full_id[:12])
             return False
 
         try:
@@ -181,6 +194,11 @@ class FleetManager:
                 results[device_id] = f"error: {e}"
         return results
 
+    async def discover_now(self) -> None:
+        """Run discovery + reconnect immediately (called by API endpoint)."""
+        await self._discover_and_connect()
+        await self._reconnect_disconnected()
+
     def add_wifi_host(self, host: str, port: int = 3333, device_id: str | None = None) -> None:
         """Add a WiFi device to the discovery list at runtime."""
         entry = {"host": host, "port": port}
@@ -192,6 +210,7 @@ class FleetManager:
 
     async def _discover_and_connect(self) -> None:
         """Discover devices across all transports and connect to new ones."""
+        self._refresh_dedup_exclusions()
         discovered = await discover_all(
             serial_scan=self._enable_serial,
             ble_scan=self._enable_ble,
@@ -215,18 +234,26 @@ class FleetManager:
                 if existing.port != disc.address:
                     log.info(
                         "Device %s address changed: %s → %s",
-                        device_id[:12], existing.port, disc.address,
+                        device_id[:12],
+                        existing.port,
+                        disc.address,
                     )
                     existing.port = disc.address
+                continue
+
+            # Skip BLE devices that were previously deduped with a serial device.
+            # Without this, deduped devices get rediscovered immediately and thrash
+            # in a connect → dedup → disconnect → rediscover loop.
+            if device_id in self._dedup_excluded:
                 continue
 
             # Skip locked serial ports (e.g., firmware flashing in progress)
             if disc.transport_type == "serial":
                 from ..transport.serial_lock import is_locked
+
                 locked, _ = is_locked(disc.address)
                 if locked:
-                    log.debug("Skipping discovery connect for %s — port locked",
-                              device_id[:12])
+                    log.debug("Skipping discovery connect for %s — port locked", device_id[:12])
                     continue
 
             # New device - connect
@@ -246,7 +273,10 @@ class FleetManager:
             except Exception as e:
                 log.error(
                     "Failed to connect %s %s on %s: %s",
-                    disc.transport_type, device_id[:12], disc.address, e,
+                    disc.transport_type,
+                    device_id[:12],
+                    disc.address,
+                    e,
                 )
 
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
@@ -258,20 +288,23 @@ class FleetManager:
 
         If a device is connected via serial AND BLE/WiFi, keep the serial
         connection (faster, more reliable) and disconnect the wireless one.
-        Detection: hardware_sn (preferred) or device_type:device_name (fallback).
+        Detection: hardware_sn ONLY (unique per chip). The previous
+        device_type:device_name fallback was removed because it false-positives
+        on different physical devices with the same configuration.
         When removing a wireless duplicate, preserve its BLE address on the
-        kept serial device (enables BLE DFU fallback).
+        kept serial device (enables BLE DFU fallback), and add the wireless
+        address to the exclusion set to prevent rediscovery thrashing.
         """
         # Build a map of device identity → (device_id, transport_type)
         identity_map: dict[str, list[tuple[str, str]]] = {}
         for did, dev in self._devices.items():
             if dev.state != DeviceState.CONNECTED:
                 continue
-            # Prefer hardware_sn for identity (unique per chip)
+            # Only dedup by hardware_sn (unique per chip).
+            # device_type:device_name causes false positives when multiple
+            # physical devices share the same config.
             if dev.hardware_sn:
                 identity = f"sn:{dev.hardware_sn}"
-            elif dev.device_type:
-                identity = f"{dev.device_type}:{dev.device_name}"
             else:
                 continue
             entry = (did, dev.transport.transport_type)
@@ -292,18 +325,27 @@ class FleetManager:
                     # Preserve BLE address on the serial device for DFU fallback
                     if not serial_dev.ble_address and wireless_dev.ble_address:
                         serial_dev.ble_address = wireless_dev.ble_address
-                        log.info("Dedup: preserved BLE address %s on serial device %s",
-                                 wireless_dev.ble_address, serial_did[:12])
+                        log.info(
+                            "Dedup: preserved BLE address %s on serial device %s",
+                            wireless_dev.ble_address,
+                            serial_did[:12],
+                        )
                     log.info(
                         "Dedup: %s (%s) is duplicate of serial device, disconnecting %s",
-                        identity, did[:12], ttype,
+                        identity,
+                        did[:12],
+                        ttype,
                     )
                     to_remove.append(did)
 
         for did in to_remove:
-            dev = self._devices.get(did)
-            if dev:
-                await dev.disconnect()
+            removed_dev = self._devices.get(did)
+            if removed_dev:
+                await removed_dev.disconnect()
+                # Add to exclusion set so discovery doesn't re-add it.
+                # This prevents the thrashing loop where a deduped BLE device
+                # is immediately rediscovered and reconnected every cycle.
+                self._dedup_excluded.add(did)
                 del self._devices[did]
                 self._device_discovery.pop(did, None)
 
@@ -327,12 +369,13 @@ class FleetManager:
                 matched_dev = dev
                 break
 
-        if matched_dev:
+        if matched_dev is not None:
             if matched_dev.state != DeviceState.DFU_RECOVERY:
                 log.warning(
                     "Device %s (%s) is in DFU bootloader — SafeBoot crash recovery. "
                     "Push firmware via POST /api/devices/%s/ota to recover.",
-                    matched_dev.id[:12], matched_dev.device_name or "unknown",
+                    matched_dev.id[:12],
+                    matched_dev.device_name or "unknown",
                     matched_dev.id,
                 )
                 matched_dev.state = DeviceState.DFU_RECOVERY
@@ -341,6 +384,7 @@ class FleetManager:
             placeholder_id = disc.device_id  # app_addr (stable across boot/app mode)
             if placeholder_id not in self._devices:
                 from ..transport.ble_transport import BleTransport
+
                 placeholder = Device(
                     device_id=placeholder_id,
                     port=boot_addr,
@@ -354,8 +398,28 @@ class FleetManager:
                 log.warning(
                     "Unknown device in DFU bootloader at %s (app addr: %s). "
                     "Push firmware to recover.",
-                    boot_addr, app_addr,
+                    boot_addr,
+                    app_addr,
                 )
+
+    def _refresh_dedup_exclusions(self) -> None:
+        """Clear dedup exclusions if any serial device is disconnected.
+
+        Must run BEFORE discovery so BLE can take over for lost serial devices.
+        """
+        if not self._dedup_excluded:
+            return
+        serial_disconnected = any(
+            d.transport.transport_type == "serial"
+            and d.state in (DeviceState.DISCONNECTED, DeviceState.ERROR)
+            for d in self._devices.values()
+        )
+        if serial_disconnected:
+            log.info(
+                "Serial device disconnected — clearing %d dedup exclusions",
+                len(self._dedup_excluded),
+            )
+            self._dedup_excluded.clear()
 
     async def _reconnect_disconnected(self) -> None:
         """Try to reconnect any devices in error/disconnected state.
@@ -363,8 +427,11 @@ class FleetManager:
         Uses exponential backoff: after each failure, waits longer before
         retrying (10s, 20s, 40s, 80s, 160s, capped at 5 min). Resets on
         successful connect or when device is released/reconnected manually.
+        After 10 consecutive failures, removes the device from the fleet.
         """
         from ..transport.serial_lock import is_locked
+
+        to_remove_after: list[str] = []
 
         for device_id, device in self._devices.items():
             if device.state not in (DeviceState.DISCONNECTED, DeviceState.ERROR):
@@ -387,8 +454,20 @@ class FleetManager:
                 continue
 
             # Exponential backoff for repeated failures (BLE devices that
-            # consistently fail waste 20s per attempt on timeout)
+            # consistently fail waste 20s per attempt on timeout).
+            # After 10 consecutive failures, give up entirely — the device
+            # is likely not a Blinky or is permanently out of range.
             fail_count = self._reconnect_failures.get(device_id, 0)
+            if fail_count >= 10:
+                if fail_count == 10:  # Log once
+                    log.info(
+                        "Giving up on %s after %d failures — removing from fleet",
+                        device_id[:12],
+                        fail_count,
+                    )
+                    self._reconnect_failures[device_id] = 11  # Prevent re-logging
+                    to_remove_after.append(device_id)
+                continue
             if fail_count > 0:
                 # Backoff: skip N-1 discovery cycles (10s each) per failure,
                 # doubling each time, capped at 30 cycles (5 min)
@@ -404,9 +483,11 @@ class FleetManager:
             if disc.transport_type == "serial":
                 locked, holder = is_locked(disc.address)
                 if locked:
-                    log.debug("Skipping reconnect for %s — port locked by %s",
-                              device_id[:12],
-                              holder.get("tool") if holder else "unknown")
+                    log.debug(
+                        "Skipping reconnect for %s — port locked by %s",
+                        device_id[:12],
+                        holder.get("tool") if holder else "unknown",
+                    )
                     continue
 
             try:
@@ -420,17 +501,31 @@ class FleetManager:
                 self._reconnect_failures.pop(device_id, None)
             except Exception as e:
                 self._reconnect_failures[device_id] = fail_count + 1
-                backoff_s = min(2 ** fail_count, 30) * DISCOVERY_INTERVAL_S
-                log.warning("Reconnect failed for %s (attempt %d, next in ~%ds): %s",
-                            device_id[:12], fail_count + 1, backoff_s, e)
+                backoff_s = min(2**fail_count, 30) * DISCOVERY_INTERVAL_S
+                log.warning(
+                    "Reconnect failed for %s (attempt %d, next in ~%ds): %s",
+                    device_id[:12],
+                    fail_count + 1,
+                    backoff_s,
+                    e,
+                )
 
-    async def _check_ble_liveness(self) -> None:
-        """Ping BLE devices that haven't communicated recently (~30s worst case).
+        # Remove devices that exceeded the failure limit
+        for did in to_remove_after:
+            dev = self._devices.pop(did, None)
+            self._device_discovery.pop(did, None)
+            self._reconnect_failures.pop(did, None)
+            if dev:
+                log.info("Removed unreachable device %s from fleet", did[:12])
 
-        BLE connections can silently drop without bleak's disconnected_callback
-        firing (e.g., device moved out of range gradually). A lightweight
-        command verifies the connection is alive. Pings run concurrently to
-        avoid blocking the loop when multiple devices are unresponsive.
+    async def _check_liveness(self) -> None:
+        """Ping devices that haven't communicated recently.
+
+        Detects stale connections on both BLE and serial transports.
+        BLE connections can silently drop; serial connections can become
+        unresponsive if the device resets or enters bootloader. A lightweight
+        `json info` command verifies the connection is alive and refreshes
+        device metadata.
         """
         now = _time.monotonic()
         # 20s threshold guarantees ~30s worst-case detection (check runs every 3rd
@@ -441,24 +536,34 @@ class FleetManager:
         for device in list(self._devices.values()):
             if device.state != DeviceState.CONNECTED:
                 continue
-            if device.transport.transport_type != "ble":
-                continue
             if device.last_seen and (now - device.last_seen) < stale_threshold:
                 continue
-            tasks.append(self._ping_ble_device(device))
+            tasks.append(self._ping_device(device))
 
         if tasks:
             await asyncio.gather(*tasks)
 
-    async def _ping_ble_device(self, device: Device) -> None:
-        """Ping a single BLE device; trigger disconnect handling on failure."""
+    async def _ping_device(self, device: Device) -> None:
+        """Ping a single device; trigger disconnect handling on failure.
+
+        For BLE devices, also updates RSSI from the BlueZ D-Bus proxy so
+        signal strength stays current for fleet monitoring.
+        """
         try:
             info = await device.protocol.get_info()
             device.last_seen = _time.monotonic()
             device.apply_info(info)
+            # Update RSSI from connected BLE transport
+            if hasattr(device.transport, "read_rssi"):
+                rssi = await device.transport.read_rssi()
+                if rssi is not None:
+                    device.rssi = rssi
         except Exception:
-            log.warning("BLE liveness check failed for %s — triggering disconnect",
-                        device.id[:12])
+            log.warning(
+                "Liveness check failed for %s (%s) — triggering disconnect",
+                device.id[:12],
+                device.transport.transport_type,
+            )
             with contextlib.suppress(Exception):
                 device._on_transport_disconnect()
 
@@ -473,9 +578,9 @@ class FleetManager:
                     continue  # Skip discovery while BLE DFU or other ops in progress
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
-                # BLE liveness check every 3rd cycle (~30s)
+                # Liveness check every 3rd cycle (~30s) for all transports
                 if cycle % 3 == 0:
-                    await self._check_ble_liveness()
+                    await self._check_liveness()
             except asyncio.CancelledError:
                 break
             except Exception as e:

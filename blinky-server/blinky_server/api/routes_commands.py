@@ -17,7 +17,11 @@ def _get_connected_device(device_id: str) -> Device:
         raise HTTPException(
             409,
             f"Device {device_id[:12]} is not connected (state={device.state.value}). "
-            + ("Use POST /devices/{id}/ota to recover." if device.state == DeviceState.DFU_RECOVERY else ""),
+            + (
+                "Use POST /devices/{id}/ota to recover."
+                if device.state == DeviceState.DFU_RECOVERY
+                else ""
+            ),
         )
     return device
 
@@ -83,3 +87,21 @@ async def fleet_effect(name: str) -> dict[str, str]:
 async def fleet_set_setting(name: str, body: SettingValueRequest) -> dict[str, str]:
     """Set a setting on all devices."""
     return await get_fleet().send_to_all(f"set {name} {body.value}")
+
+
+@router.post("/fleet/settings/save")
+async def fleet_save_settings() -> dict[str, str]:
+    """Save settings on all connected devices to flash."""
+    return await get_fleet().send_to_all("save")
+
+
+@router.post("/fleet/settings/load")
+async def fleet_load_settings() -> dict[str, str]:
+    """Load settings from flash on all connected devices."""
+    return await get_fleet().send_to_all("load")
+
+
+@router.post("/fleet/settings/defaults")
+async def fleet_restore_defaults() -> dict[str, str]:
+    """Restore factory defaults on all connected devices."""
+    return await get_fleet().send_to_all("defaults")

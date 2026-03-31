@@ -48,12 +48,12 @@ class Device:
         self.safe_mode: bool = False
 
         # Cross-transport identity (populated from firmware json info)
-        self.hardware_sn: str | None = None   # FICR DEVICEID (matches USB serial number)
-        self.ble_address: str | None = None   # BLE MAC address (for BLE DFU fallback)
+        self.hardware_sn: str | None = None  # FICR DEVICEID (matches USB serial number)
+        self.ble_address: str | None = None  # BLE MAC address (for BLE DFU fallback)
 
         # Connection health
-        self.last_seen: float | None = None   # monotonic timestamp of last successful comms
-        self.rssi: int | None = None          # BLE signal strength (dBm, from discovery)
+        self.last_seen: float | None = None  # monotonic timestamp of last successful comms
+        self.rssi: int | None = None  # BLE signal strength (dBm, from discovery)
 
         # Cached settings
         self.settings: list[dict[str, Any]] = []
@@ -128,7 +128,7 @@ class Device:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize device state for API responses."""
-        return {
+        d: dict[str, Any] = {
             "id": self.id,
             "port": self.port,
             "platform": self.platform,
@@ -146,8 +146,14 @@ class Device:
             "hardware_sn": self.hardware_sn,
             "ble_address": self.ble_address,
             "rssi": self.rssi,
-            "last_seen_ago": round(_time.monotonic() - self.last_seen, 1) if self.last_seen else None,
+            "last_seen_ago": round(_time.monotonic() - self.last_seen, 1)
+            if self.last_seen
+            else None,
         }
+        # BLE-specific: expose negotiated MTU for diagnostics
+        if hasattr(self.transport, "mtu"):
+            d["mtu"] = self.transport.mtu
+        return d
 
     # ── Internal ──
 

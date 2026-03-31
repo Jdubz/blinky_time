@@ -4,10 +4,10 @@ The canonical implementation lives in tools/serial_lock.py (used by
 uf2_upload.py and other standalone tools). This module re-exports it
 so blinky-server code can import via the package namespace.
 """
+
 from __future__ import annotations
 
 import importlib.util
-import sys
 from pathlib import Path
 
 # Find tools/serial_lock.py relative to the project root
@@ -16,6 +16,8 @@ if not _tools_lock.exists():
     raise ImportError(f"Cannot find canonical serial_lock.py at {_tools_lock}")
 
 _spec = importlib.util.spec_from_file_location("_serial_lock_impl", str(_tools_lock))
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"Cannot load serial_lock.py from {_tools_lock}")
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 

@@ -22,11 +22,13 @@ class MockTransport(Transport):
         self,
         device_info: dict[str, Any] | None = None,
         settings: list[dict[str, Any]] | None = None,
+        transport_type: str = "mock",
     ) -> None:
         super().__init__()
         self._connected = False
         self._line_callback: Callable[[str], None] | None = None
         self._sent_commands: list[str] = []
+        self._transport_type = transport_type
 
         self._device_info = device_info or {
             "version": "1.0.1",
@@ -70,7 +72,7 @@ class MockTransport(Transport):
 
     @property
     def transport_type(self) -> str:
-        return "mock"
+        return self._transport_type
 
     @property
     def address(self) -> str:

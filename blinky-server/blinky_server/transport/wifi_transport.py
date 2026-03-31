@@ -5,6 +5,7 @@ Same line-based protocol as serial and BLE NUS.
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 
@@ -28,7 +29,7 @@ class WifiTransport(Transport):
         self._writer: asyncio.StreamWriter | None = None
         self._line_callback: Callable[[str], None] | None = None
         self._connected = False
-        self._read_task: asyncio.Task | None = None
+        self._read_task: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
         if self._connected:
@@ -54,10 +55,8 @@ class WifiTransport(Transport):
         self._connected = False
         if self._read_task:
             self._read_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._read_task
-            except asyncio.CancelledError:
-                pass
             self._read_task = None
         if self._writer:
             try:

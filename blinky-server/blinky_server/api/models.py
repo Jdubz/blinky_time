@@ -58,6 +58,7 @@ class DeviceResponse(BaseModel):
     hardware_sn: str | None = None
     ble_address: str | None = None
     rssi: int | None = None
+    mtu: int | None = None
     last_seen_ago: float | None = None
 
 

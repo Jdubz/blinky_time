@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time as _time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -8,8 +9,13 @@ from fastapi import APIRouter, HTTPException
 from ..device.device import Device, DeviceState
 from .deps import get_fleet
 from .models import (
-    CommandResponse, DeviceResponse, OtaRequest, OtaResponse,
-    ReleaseRequest, SettingValueRequest, StatusResponse,
+    CommandResponse,
+    DeviceResponse,
+    OtaRequest,
+    OtaResponse,
+    ReleaseRequest,
+    SettingValueRequest,
+    StatusResponse,
 )
 
 router = APIRouter(tags=["devices"])
@@ -28,7 +34,11 @@ def _get_connected_device(device_id: str) -> Device:
         raise HTTPException(
             409,
             f"Device {device_id[:12]} is not connected (state={device.state.value}). "
-            + ("Use POST /devices/{id}/ota to recover." if device.state == DeviceState.DFU_RECOVERY else ""),
+            + (
+                "Use POST /devices/{id}/ota to recover."
+                if device.state == DeviceState.DFU_RECOVERY
+                else ""
+            ),
         )
     return device
 
@@ -109,6 +119,77 @@ async def reconnect_device(device_id: str) -> StatusResponse:
     return StatusResponse(status="connected")
 
 
+@router.get("/fleet/status")
+async def fleet_status() -> dict[str, Any]:
+    """Fleet health summary — aggregate stats across all devices.
+
+    Returns counts by state and transport, plus per-device health info
+    (RSSI, last_seen, transport type). Designed for BLE-only fleet
+    monitoring dashboards.
+    """
+    fleet = get_fleet()
+    devices = fleet.get_all_devices()
+    now = _time.monotonic()
+
+    by_state: dict[str, int] = {}
+    by_transport: dict[str, int] = {}
+    device_health: list[dict[str, Any]] = []
+
+    for d in devices:
+        by_state[d.state.value] = by_state.get(d.state.value, 0) + 1
+        ttype = d.transport.transport_type
+        by_transport[ttype] = by_transport.get(ttype, 0) + 1
+        device_health.append(
+            {
+                "id": d.id,
+                "name": d.device_name,
+                "transport": ttype,
+                "state": d.state.value,
+                "rssi": d.rssi,
+                "last_seen_ago": round(now - d.last_seen, 1) if d.last_seen else None,
+                "version": d.version,
+                "ble_address": d.ble_address,
+            }
+        )
+
+    connected = by_state.get("connected", 0)
+    return {
+        "total": len(devices),
+        "connected": connected,
+        "by_state": by_state,
+        "by_transport": by_transport,
+        "devices": device_health,
+    }
+
+
+@router.post("/fleet/discover")
+async def fleet_discover() -> dict[str, Any]:
+    """Trigger immediate device discovery scan.
+
+    Runs BLE + serial discovery now instead of waiting for the 10s
+    background loop. Returns newly discovered devices. Useful when
+    adding a new device to the fleet.
+    """
+    fleet = get_fleet()
+    before = set(fleet.devices.keys())
+    await fleet.discover_now()
+    after = set(fleet.devices.keys())
+    new_ids = after - before
+
+    new_devices = []
+    for did in new_ids:
+        dev = fleet.devices.get(did)
+        if dev:
+            new_devices.append(dev.to_dict())
+
+    return {
+        "status": "ok",
+        "total": len(after),
+        "new_devices": new_devices,
+        "message": f"Found {len(new_ids)} new device(s)" if new_ids else "No new devices found",
+    }
+
+
 @router.post("/devices/{device_id}/ota")
 async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     """Upload firmware to a device via OTA (UF2 for serial, BLE DFU for BLE).
@@ -160,7 +241,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         try:
             dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
         except ValueError as e:
-            raise HTTPException(400, str(e))
+            raise HTTPException(400, str(e)) from e
 
         fleet.hold_reconnect(device.id, 180)
         fleet.pause_discovery()
@@ -213,12 +294,12 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         try:
             dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
         except ValueError as e:
-            raise HTTPException(400, str(e))
+            raise HTTPException(400, str(e)) from e
 
         # Capture transport write_line before hold (which may disconnect)
         ble_transport = device.transport
 
-        async def enter_bootloader_via_ble(cmd: str):
+        async def enter_bootloader_via_ble(cmd: str) -> None:
             """Send bootloader command over BLE NUS, then disconnect."""
             await ble_transport.write_line(cmd)
             await asyncio.sleep(0.5)  # Let command transmit before disconnect

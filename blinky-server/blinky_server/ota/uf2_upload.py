@@ -5,13 +5,16 @@ than reimplementing upload logic. The server handles transport release and
 reconnection; the tool handles bootloader entry, UF2 detection, firmware
 copy, and verification.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -31,10 +34,10 @@ def _find_uf2_tool() -> Path | None:
 async def upload_uf2(
     serial_port: str,
     firmware_path: str,
-    transport,
-    protocol=None,
-    progress_callback: callable | None = None,
-) -> dict:
+    transport: Any,
+    protocol: Any = None,
+    progress_callback: Callable[..., None] | None = None,
+) -> dict[str, Any]:
     """Upload firmware to an nRF52840 device via UF2.
 
     Disconnects the server's transport, runs uf2_upload.py as a subprocess
@@ -54,9 +57,9 @@ async def upload_uf2(
     t0 = time.monotonic()
     result = {"status": "error", "message": "", "elapsed_s": 0}
 
-    def progress(phase, msg, pct=None):
+    def progress(phase: str, msg: str, pct: int | None = None) -> None:
         log.info("[OTA %s] %s", phase, msg)
-        if progress_callback:
+        if progress_callback is not None:
             progress_callback(phase, msg, pct)
 
     # Find the upload tool
@@ -76,7 +79,7 @@ async def upload_uf2(
     progress("prepare", "Releasing serial port...", 10)
     try:
         serial_obj = transport._serial_transport.serial if transport._serial_transport else None
-        if serial_obj and hasattr(serial_obj, 'dtr'):
+        if serial_obj and hasattr(serial_obj, "dtr"):
             serial_obj.dtr = True  # Keep DTR high to prevent TinyUSB CDC state corruption
         await transport.disconnect()
     except Exception:
@@ -87,8 +90,10 @@ async def upload_uf2(
     # UF2 detection, firmware copy, verification.
     progress("upload", f"Running uf2_upload.py on {serial_port}...", 20)
     cmd = [
-        "python3", str(tool),
-        "--hex", firmware_path,
+        "python3",
+        str(tool),
+        "--hex",
+        firmware_path,
         serial_port,
         "-v",
     ]
@@ -115,12 +120,12 @@ async def upload_uf2(
         else:
             # Extract error message from tool output
             lines = output.strip().split("\n")
-            error_lines = [l for l in lines if "ERROR" in l or "FAILED" in l]
+            error_lines = [line for line in lines if "ERROR" in line or "FAILED" in line]
             msg = error_lines[-1] if error_lines else lines[-1] if lines else "Unknown error"
             result["message"] = msg.strip()
             result["output"] = output[-500:]
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         result["message"] = "Upload timed out after 120s"
     except Exception as e:
         result["message"] = f"Upload failed: {e}"

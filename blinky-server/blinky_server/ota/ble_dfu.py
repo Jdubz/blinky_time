@@ -13,18 +13,22 @@ Key protocol details (all discovered via testing, Mar 2026):
 - BlueZ GATT cache must be cleared between app and bootloader connections
 - GPREGRET=0xA8 for serial-triggered BLE DFU entry
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import struct
 import subprocess
 import time
 import zipfile
-import json
-from pathlib import Path
+from collections.abc import Callable
+from typing import Any
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.characteristic import BleakGATTCharacteristic
 
 log = logging.getLogger(__name__)
 
@@ -33,41 +37,41 @@ DFU_CONTROL_UUID = "00001531-1212-efde-1523-785feabcd123"
 DFU_PACKET_UUID = "00001532-1212-efde-1523-785feabcd123"
 DFU_REVISION_UUID = "00001534-1212-efde-1523-785feabcd123"
 
-PRN_INTERVAL = 8  # Packet Receipt Notification interval (0-65535, max 8 recommended for Adafruit bootloader)
+PRN_INTERVAL = (
+    8  # Packet Receipt Notification interval (0-65535, max 8 recommended for Adafruit bootloader)
+)
 assert 0 <= PRN_INTERVAL <= 65535, f"PRN_INTERVAL must be 0-65535, got {PRN_INTERVAL}"
 
 
 def bootloader_address(app_address: str) -> str:
     """Bootloader advertises at app_address + 1 (last octet)."""
-    parts = app_address.split(':')
+    parts = app_address.split(":")
     last = int(parts[-1], 16)
     parts[-1] = f"{(last + 1) & 0xFF:02X}"
-    return ':'.join(parts)
+    return ":".join(parts)
 
 
 def _validate_ble_address(address: str) -> None:
     """Validate BLE address format (XX:XX:XX:XX:XX:XX)."""
     import re
-    if not re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', address):
+
+    if not re.match(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", address):
         raise ValueError(f"Invalid BLE address format: {address!r}")
 
 
-def clear_bluez_state(address: str):
+def clear_bluez_state(address: str) -> None:
     """Clear BlueZ GATT cache for an address. Required between app/bootloader."""
     _validate_ble_address(address)
-    addr_u = address.replace(':', '_')
-    subprocess.run(["bluetoothctl", "remove", address],
-                   capture_output=True, timeout=5)
+    addr_u = address.replace(":", "_")
+    subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=5)
     # Clean cache directories — use glob to expand wildcards safely
     import glob as _glob
+
     for cache_dir in _glob.glob(f"/var/lib/bluetooth/*/cache/{addr_u}"):
-        subprocess.run(["sudo", "rm", "-rf", cache_dir],
-                       capture_output=True, timeout=5)
-        subprocess.run(["rm", "-rf", cache_dir],
-                       capture_output=True, timeout=5)
+        subprocess.run(["sudo", "rm", "-rf", cache_dir], capture_output=True, timeout=5)
+        subprocess.run(["rm", "-rf", cache_dir], capture_output=True, timeout=5)
     for dev_dir in _glob.glob(f"/var/lib/bluetooth/*/{addr_u}"):
-        subprocess.run(["sudo", "rm", "-rf", dev_dir],
-                       capture_output=True, timeout=5)
+        subprocess.run(["sudo", "rm", "-rf", dev_dir], capture_output=True, timeout=5)
 
 
 def parse_dfu_zip(zip_path: str) -> tuple[bytes, bytes, int]:
@@ -78,21 +82,21 @@ def parse_dfu_zip(zip_path: str) -> tuple[bytes, bytes, int]:
     """
     IMAGE_TYPES = {"application": 0x04, "bootloader": 0x02, "softdevice": 0x01}
     with zipfile.ZipFile(zip_path) as zf:
-        manifest = json.loads(zf.read('manifest.json'))['manifest']
+        manifest = json.loads(zf.read("manifest.json"))["manifest"]
         for key, img_type in IMAGE_TYPES.items():
             if key in manifest:
                 entry = manifest[key]
-                return zf.read(entry['dat_file']), zf.read(entry['bin_file']), img_type
+                return zf.read(entry["dat_file"]), zf.read(entry["bin_file"]), img_type
         raise ValueError(f"No recognized image type in manifest: {list(manifest.keys())}")
 
 
 async def upload_ble_dfu(
     app_ble_address: str,
     dfu_zip_path: str,
-    enter_bootloader_via_serial: callable | None = None,
-    enter_bootloader_via_ble: callable | None = None,
-    progress_callback: callable | None = None,
-) -> dict:
+    enter_bootloader_via_serial: Callable[..., Any] | None = None,
+    enter_bootloader_via_ble: Callable[..., Any] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+) -> dict[str, Any]:
     """Upload firmware via BLE DFU.
 
     Args:
@@ -112,9 +116,9 @@ async def upload_ble_dfu(
     result = {"status": "error", "message": "", "elapsed_s": 0}
     boot_addr = bootloader_address(app_ble_address)
 
-    def progress(phase, msg, pct=None):
+    def progress(phase: str, msg: str, pct: int | None = None) -> None:
         log.info("[BLE-DFU %s] %s", phase, msg)
-        if progress_callback:
+        if progress_callback is not None:
             progress_callback(phase, msg, pct)
 
     # Parse firmware
@@ -123,7 +127,9 @@ async def upload_ble_dfu(
     except Exception as e:
         result["message"] = f"Failed to parse DFU zip: {e}"
         return result
-    type_name = {0x04: "application", 0x02: "bootloader", 0x01: "softdevice"}.get(image_type, "unknown")
+    type_name = {0x04: "application", 0x02: "bootloader", 0x01: "softdevice"}.get(
+        image_type, "unknown"
+    )
     progress("init", f"{type_name}: {len(firmware)} bytes, init: {len(init_packet)} bytes", 5)
 
     # Enter bootloader (serial or BLE — device resets immediately)
@@ -152,11 +158,15 @@ async def upload_ble_dfu(
     # Scan for bootloader (retry with cache-clear — bootloader advertises ~30s)
     dev = None
     for scan_attempt in range(3):
-        progress("scan", f"Scanning for bootloader at {boot_addr} (attempt {scan_attempt + 1}/3)...", 20)
+        progress(
+            "scan", f"Scanning for bootloader at {boot_addr} (attempt {scan_attempt + 1}/3)...", 20
+        )
         dev = await BleakScanner.find_device_by_address(boot_addr, timeout=15.0)
         if dev:
             break
-        log.warning("Bootloader not found on attempt %d, clearing cache and retrying", scan_attempt + 1)
+        log.warning(
+            "Bootloader not found on attempt %d, clearing cache and retrying", scan_attempt + 1
+        )
         await asyncio.to_thread(clear_bluez_state, boot_addr)
         await asyncio.sleep(2)
     if not dev:
@@ -166,6 +176,7 @@ async def upload_ble_dfu(
 
     # Connect
     client = BleakClient(dev, timeout=15.0)
+    needs_disconnect = True
     try:
         await client.connect()
     except Exception as e:
@@ -179,7 +190,7 @@ async def upload_ble_dfu(
     # Verify bootloader mode
     try:
         rev = await client.read_gatt_char(DFU_REVISION_UUID)
-        rev_val = int.from_bytes(rev[:2], 'little')
+        rev_val = int.from_bytes(rev[:2], "little")
         if rev_val <= 1:
             await client.disconnect()
             result["message"] = f"Device in app mode (revision=0x{rev_val:04x}), not bootloader"
@@ -191,23 +202,23 @@ async def upload_ble_dfu(
     await asyncio.sleep(2)
     notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
-    def on_notify(sender, data):
+    def on_notify(sender: BleakGATTCharacteristic, data: bytearray) -> None:
         notify_queue.put_nowait(bytes(data))
 
-    await client.start_notify(DFU_CONTROL_UUID, on_notify,
-                              bluez={"use_start_notify": True})
+    await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
     await asyncio.sleep(1)
 
-    async def wait_response(name, expected_opcode=None, timeout=30.0):
+    async def wait_response(
+        name: str, expected_opcode: int | None = None, timeout: float = 30.0
+    ) -> tuple[bool, str]:
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False, f"{name} timeout ({timeout}s)"
             try:
-                response_data = await asyncio.wait_for(
-                    notify_queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+                response_data = await asyncio.wait_for(notify_queue.get(), timeout=remaining)
+            except TimeoutError:
                 return False, f"{name} timeout ({timeout}s)"
 
             if len(response_data) < 3:
@@ -225,8 +236,11 @@ async def upload_ble_dfu(
                 continue
 
             if expected_opcode is not None and response_data[1] != expected_opcode:
-                log.warning("Response for opcode 0x%02x, expected 0x%02x, ignoring",
-                            response_data[1], expected_opcode)
+                log.warning(
+                    "Response for opcode 0x%02x, expected 0x%02x, ignoring",
+                    response_data[1],
+                    expected_opcode,
+                )
                 continue
 
             if response_data[2] != 0x01:
@@ -239,14 +253,13 @@ async def upload_ble_dfu(
         # START_DFU — image_type: 0x04=app, 0x02=bootloader, 0x01=softdevice
         # Size packet: [sd_size, bl_size, app_size] as 3x uint32 LE
         progress("dfu", f"START_DFU (type=0x{image_type:02x})...", 35)
-        await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x01, image_type]), response=True)
+        await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x01, image_type]), response=True)
         if image_type == 0x04:
-            size_pkt = struct.pack('<III', 0, 0, len(firmware))
+            size_pkt = struct.pack("<III", 0, 0, len(firmware))
         elif image_type == 0x02:
-            size_pkt = struct.pack('<III', 0, len(firmware), 0)
+            size_pkt = struct.pack("<III", 0, len(firmware), 0)
         else:  # softdevice
-            size_pkt = struct.pack('<III', len(firmware), 0, 0)
+            size_pkt = struct.pack("<III", len(firmware), 0, 0)
         await client.write_gatt_char(DFU_PACKET_UUID, size_pkt, response=False)
         # Flash erase takes ~25s for 500KB firmware (85ms per 4KB page)
         ok, msg = await wait_response("START_DFU", expected_opcode=0x01, timeout=60.0)
@@ -256,25 +269,21 @@ async def upload_ble_dfu(
 
         # INIT_DFU
         progress("dfu", "INIT_DFU...", 40)
-        await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x02, 0x00]), response=True)
-        await client.write_gatt_char(DFU_PACKET_UUID,
-                                     init_packet, response=False)
-        await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x02, 0x01]), response=True)
+        await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x02, 0x00]), response=True)
+        await client.write_gatt_char(DFU_PACKET_UUID, init_packet, response=False)
+        await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x02, 0x01]), response=True)
         ok, msg = await wait_response("INIT_DFU", expected_opcode=0x02, timeout=60.0)
         if not ok:
             result["message"] = msg
             return result
 
         # Set PRN
-        prn_cmd = bytes([0x08]) + struct.pack('<H', PRN_INTERVAL)
+        prn_cmd = bytes([0x08]) + struct.pack("<H", PRN_INTERVAL)
         await client.write_gatt_char(DFU_CONTROL_UUID, prn_cmd, response=True)
 
         # RECEIVE_FIRMWARE
         progress("transfer", f"Sending {len(firmware)} bytes...", 45)
-        await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x03]), response=True)
+        await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x03]), response=True)
 
         sent = 0
         pkt_count = 0
@@ -284,7 +293,7 @@ async def upload_ble_dfu(
             chunk = firmware[sent:end]
             # Pad last chunk to word alignment (4 bytes) per bootloader requirement
             if end >= len(firmware) and len(chunk) % 4 != 0:
-                chunk = chunk + b'\x00' * (4 - len(chunk) % 4)
+                chunk = chunk + b"\x00" * (4 - len(chunk) % 4)
             await client.write_gatt_char(DFU_PACKET_UUID, chunk, response=False)
             sent = end
             pkt_count += 1
@@ -293,16 +302,18 @@ async def upload_ble_dfu(
                 try:
                     prn_data = await asyncio.wait_for(notify_queue.get(), timeout=10.0)
                     if len(prn_data) >= 1 and prn_data[0] == 0x11:
-                        rcvd = int.from_bytes(prn_data[1:5], 'little') if len(prn_data) >= 5 else 0
+                        rcvd = int.from_bytes(prn_data[1:5], "little") if len(prn_data) >= 5 else 0
                         log.debug("PRN: bootloader received %d bytes", rcvd)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     log.error("PRN timeout at %d/%d bytes — aborting", sent, len(firmware))
-                    result["message"] = f"PRN timeout at {sent}/{len(firmware)} bytes (connection lost or buffer overflow)"
+                    result["message"] = (
+                        f"PRN timeout at {sent}/{len(firmware)} bytes (connection lost or buffer overflow)"
+                    )
                     return result
 
             pct = 45 + (sent * 50) // len(firmware)
             if pct >= last_pct + 5:
-                progress("transfer", f"{(sent*100)//len(firmware)}%", pct)
+                progress("transfer", f"{(sent * 100) // len(firmware)}%", pct)
                 last_pct = pct
 
         progress("transfer", "Waiting for completion...", 95)
@@ -313,8 +324,7 @@ async def upload_ble_dfu(
 
         # VALIDATE
         progress("validate", "Validating firmware...", 97)
-        await client.write_gatt_char(DFU_CONTROL_UUID,
-                                     bytes([0x04]), response=True)
+        await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x04]), response=True)
         ok, msg = await wait_response("VALIDATE", expected_opcode=0x04)
         if not ok:
             result["message"] = msg
@@ -322,18 +332,13 @@ async def upload_ble_dfu(
 
         # ACTIVATE_AND_RESET
         progress("activate", "Activating and resetting...", 99)
-        try:
-            await client.write_gatt_char(DFU_CONTROL_UUID,
-                                         bytes([0x05]), response=True)
-        except Exception:
-            pass  # Device disconnects immediately
+        with contextlib.suppress(Exception):
+            await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x05]), response=True)
 
         # Disconnect from bootloader (it's resetting anyway)
-        try:
+        with contextlib.suppress(Exception):
             await client.disconnect()
-        except Exception:
-            pass
-        client = None  # Prevent double-disconnect in finally
+        needs_disconnect = False  # Prevent double-disconnect in finally
 
         # Post-DFU verification: wait for device to reboot and verify it's alive
         progress("verify", "Waiting for device to reboot...", 99)
@@ -347,9 +352,10 @@ async def upload_ble_dfu(
         # Scan for device at its original app BLE address
         verified = False
         for verify_attempt in range(3):
-            progress("verify", f"Scanning for rebooted device (attempt {verify_attempt + 1}/3)...", 99)
-            dev = await BleakScanner.find_device_by_address(
-                app_ble_address, timeout=10.0)
+            progress(
+                "verify", f"Scanning for rebooted device (attempt {verify_attempt + 1}/3)...", 99
+            )
+            dev = await BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
             if dev:
                 verified = True
                 break
@@ -358,24 +364,28 @@ async def upload_ble_dfu(
         if verified:
             progress("done", "BLE DFU complete — device verified!", 100)
             elapsed = time.monotonic() - t0
-            result.update(status="ok",
-                          message="BLE DFU upload successful, device verified",
-                          elapsed_s=round(elapsed, 1), verified=True)
+            result.update(
+                status="ok",
+                message="BLE DFU upload successful, device verified",
+                elapsed_s=round(elapsed, 1),
+                verified=True,
+            )
         else:
             progress("done", "BLE DFU transfer complete but device not seen advertising", 100)
             elapsed = time.monotonic() - t0
-            result.update(status="ok",
-                          message="BLE DFU transfer complete (device not yet seen — may still be booting)",
-                          elapsed_s=round(elapsed, 1), verified=False)
+            result.update(
+                status="ok",
+                message="BLE DFU transfer complete (device not yet seen — may still be booting)",
+                elapsed_s=round(elapsed, 1),
+                verified=False,
+            )
 
     except Exception as e:
         result["message"] = f"DFU transfer error: {e}"
     finally:
-        if client:
-            try:
+        if needs_disconnect:
+            with contextlib.suppress(Exception):
                 await client.disconnect()
-            except Exception:
-                pass
 
     result["elapsed_s"] = round(time.monotonic() - t0, 1)
     return result
