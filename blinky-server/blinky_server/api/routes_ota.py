@@ -77,57 +77,61 @@ async def fleet_ota(body: OtaRequest) -> dict:
         raise HTTPException(404, "No connected nRF52840 devices")
 
     results = {}
-    for device in devices:
-        log.info("Fleet OTA: flashing %s (%s via %s)...",
-                 device.id[:12], device.port, device.transport.transport_type)
+    fleet.pause_discovery()  # Prevent BleakScanner conflict during fleet DFU
+    try:
+        for device in devices:
+            log.info("Fleet OTA: flashing %s (%s via %s)...",
+                     device.id[:12], device.port, device.transport.transport_type)
 
-        transport_type = device.transport.transport_type
-        fleet.hold_reconnect(device.id, 120)
+            transport_type = device.transport.transport_type
+            fleet.hold_reconnect(device.id, 120)
 
-        try:
-            if transport_type == "serial":
-                from ..ota.uf2_upload import upload_uf2
-                result = await upload_uf2(
-                    serial_port=device.port,
-                    firmware_path=str(firmware),
-                    transport=device.transport,
-                    protocol=device.protocol,
-                )
-            elif transport_type == "ble":
-                from ..ota.ble_dfu import upload_ble_dfu
-                from ..ota.compile import ensure_dfu_zip
+            try:
+                if transport_type == "serial":
+                    from ..ota.uf2_upload import upload_uf2
+                    result = await upload_uf2(
+                        serial_port=device.port,
+                        firmware_path=str(firmware),
+                        transport=device.transport,
+                        protocol=device.protocol,
+                    )
+                elif transport_type == "ble":
+                    from ..ota.ble_dfu import upload_ble_dfu
+                    from ..ota.compile import ensure_dfu_zip
 
-                # Auto-convert .hex → .dfu.zip if needed
-                try:
-                    dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
-                except ValueError as e:
-                    result = {"status": "error", "message": str(e)}
-                    results[device.id[:12]] = result
-                    continue
+                    # Auto-convert .hex → .dfu.zip if needed
+                    try:
+                        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
+                    except ValueError as e:
+                        result = {"status": "error", "message": str(e)}
+                        results[device.id[:12]] = result
+                        continue
 
-                ble_transport = device.transport
+                    ble_transport = device.transport
 
-                async def _enter_bl(cmd, _t=ble_transport):
-                    await _t.write_line(cmd)
-                    await asyncio.sleep(0.5)
-                    await _t.disconnect()
+                    async def _enter_bl(cmd, _t=ble_transport):
+                        await _t.write_line(cmd)
+                        await asyncio.sleep(0.5)
+                        await _t.disconnect()
 
-                result = await upload_ble_dfu(
-                    app_ble_address=device.port,
-                    dfu_zip_path=dfu_zip,
-                    enter_bootloader_via_ble=_enter_bl,
-                )
-            else:
-                result = {"status": "skip", "message": f"Unsupported transport: {transport_type}"}
+                    result = await upload_ble_dfu(
+                        app_ble_address=device.port,
+                        dfu_zip_path=dfu_zip,
+                        enter_bootloader_via_ble=_enter_bl,
+                    )
+                else:
+                    result = {"status": "skip", "message": f"Unsupported transport: {transport_type}"}
 
-            results[device.id[:12]] = result
-        except Exception as e:
-            results[device.id[:12]] = {"status": "error", "message": str(e)}
-        finally:
-            fleet.resume_reconnect(device.id)
+                results[device.id[:12]] = result
+            except Exception as e:
+                results[device.id[:12]] = {"status": "error", "message": str(e)}
+            finally:
+                fleet.resume_reconnect(device.id)
 
-        # Brief pause between devices for USB stability
-        await asyncio.sleep(3)
+            # Brief pause between devices
+            await asyncio.sleep(3)
+    finally:
+        fleet.resume_discovery()
 
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
     total = len(results)

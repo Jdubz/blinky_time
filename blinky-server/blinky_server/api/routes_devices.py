@@ -176,6 +176,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
             await ble_transport.disconnect()
 
         fleet.hold_reconnect(device_id, 180)
+        fleet.pause_discovery()  # Prevent BleakScanner conflict during DFU
         try:
             result = await upload_ble_dfu(
                 app_ble_address=device.port,  # BLE address is stored as port
@@ -183,6 +184,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
                 enter_bootloader_via_ble=enter_bootloader_via_ble,
             )
         finally:
+            fleet.resume_discovery()
             fleet.resume_reconnect(device_id)
 
         if result["status"] == "ok":

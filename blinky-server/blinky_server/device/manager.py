@@ -56,6 +56,9 @@ class FleetManager:
         self._device_discovery: dict[str, DiscoveredDevice] = {}
         # In-memory reconnect blackout (device_id -> monotonic deadline)
         self._reconnect_blackout: dict[str, float] = {}
+        # Discovery pause counter — when > 0, background loop skips discovery/reconnect.
+        # Used during BLE DFU to avoid BleakScanner conflicts (only one scan at a time).
+        self._discovery_pause_count: int = 0
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -100,6 +103,16 @@ class FleetManager:
     def resume_reconnect(self, device_id: str) -> None:
         """Clear reconnect blackout for a device, allowing auto-reconnect."""
         self._reconnect_blackout.pop(device_id, None)
+
+    def pause_discovery(self) -> None:
+        """Pause background discovery (e.g., during BLE DFU scan)."""
+        self._discovery_pause_count += 1
+        log.info("Discovery paused (depth=%d)", self._discovery_pause_count)
+
+    def resume_discovery(self) -> None:
+        """Resume background discovery after pause."""
+        self._discovery_pause_count = max(0, self._discovery_pause_count - 1)
+        log.info("Discovery resumed (depth=%d)", self._discovery_pause_count)
 
     async def release_device(self, device_id: str,
                              hold_seconds: int | None = None) -> bool:
@@ -306,6 +319,8 @@ class FleetManager:
         while self._running:
             try:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
+                if self._discovery_pause_count > 0:
+                    continue  # Skip discovery while BLE DFU or other ops in progress
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
             except asyncio.CancelledError:
