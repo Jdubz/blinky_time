@@ -153,27 +153,27 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // 6. Feed DSP components only on new spectral frames.
     if (newSpectralFrame) {
-        float flux = spectral_.getSpectralFlux();
-        // Contrast sharpening (power-law) before buffering — sharpens peaks for ACF.
-        float fluxContrast;
+        // Bass-only flux for ACF period detection — isolates kick energy.
+        // Hi-hats/snares in the high band create non-periodic ACF peaks that
+        // overwhelm the kick pattern (especially in breakbeat/DnB).
+        float bassFlux = spectral_.getBassFlux();
+        float bassContrast;
         if (odfContrast == 2.0f) {
-            fluxContrast = flux * flux;
+            bassContrast = bassFlux * bassFlux;
         } else if (odfContrast == 1.0f) {
-            fluxContrast = flux;
+            bassContrast = bassFlux;
         } else if (odfContrast == 0.5f) {
-            fluxContrast = sqrtf(flux);
+            bassContrast = sqrtf(bassFlux);
         } else {
-            fluxContrast = powf(flux, odfContrast);
+            bassContrast = powf(bassFlux, odfContrast);
         }
-        fluxContrast = clampf(fluxContrast, 0.0f, 1.0f);
+        bassContrast = clampf(bassContrast, 0.0f, 1.0f);
 
-        // NN-gated flux for epoch-fold pattern extraction only. The soft gate
-        // emphasizes kicks/snares (NN F1=0.787) and suppresses hi-hats/fills,
+        // NN-gated bass flux for epoch-fold pattern extraction.
+        // Soft gate emphasizes kicks (NN F1=0.787) and suppresses fills,
         // biasing the epoch-fold toward the stable rhythmic skeleton.
-        // The ungated flux goes into ossBuffer_ for ACF period detection
-        // (NN-independent, per architecture contract).
-        float nnGatedFlux = fluxContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
-        addOssSample(fluxContrast, nnGatedFlux);
+        float nnGatedFlux = bassContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
+        addOssSample(bassContrast, nnGatedFlux);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;

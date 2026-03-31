@@ -216,11 +216,13 @@ void SharedSpectralAnalysis::process() {
         // Normalize each band by its bin count so the weights reflect
         // actual emphasis rather than bin-count dominance (bass=6, mid=26,
         // high=95 bins — without normalization, high band would dominate).
-        spectralFlux_ = bassFluxWeight * (bassFlux / BASS_BIN_COUNT)
+        bassFlux_ = bassFlux / BASS_BIN_COUNT;
+        spectralFlux_ = bassFluxWeight * bassFlux_
                        + midFluxWeight * (midFlux / MID_BIN_COUNT)
                        + highFluxWeight * (highFlux / HIGH_BIN_COUNT);
     } else {
         spectralFlux_ = 0.0f;
+        bassFlux_ = 0.0f;
     }
 
     // Save compressed magnitudes for next frame's flux computation.

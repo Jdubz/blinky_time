@@ -781,12 +781,25 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             // This matches Nordic's own buttonless DFU implementation.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
+            uint32_t err1 = 0, err2 = 0;
             if (sd_en) {
-                sd_power_gpregret_clr(0, 0xFF);
-                sd_power_gpregret_set(0, dfuMagic);
+                err1 = sd_power_gpregret_clr(0, 0xFF);
+                err2 = sd_power_gpregret_set(0, dfuMagic);
             } else {
                 NRF_POWER->GPREGRET = dfuMagic;
             }
+            // Verify-read: confirm GPREGRET actually holds the magic value
+            uint32_t readback = 0;
+            if (sd_en) {
+                sd_power_gpregret_get(0, &readback);
+            } else {
+                readback = NRF_POWER->GPREGRET;
+            }
+            out_.print(F("  SD=")); out_.print(sd_en);
+            out_.print(F(" err=")); out_.print(err1); out_.print(F("/")); out_.print(err2);
+            out_.print(F(" GPREGRET=0x")); out_.println(readback, HEX);
+            Serial.flush();
+            delay(100);
             __DSB(); __ISB();
             NVIC_SystemReset();
 #else
