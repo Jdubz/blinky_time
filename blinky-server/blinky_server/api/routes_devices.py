@@ -184,6 +184,10 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
                 enter_bootloader_via_ble=enter_bootloader_via_ble,
             )
         finally:
+            # Mark device as disconnected so auto-reconnect picks it up.
+            # The old transport was disconnected during DFU — device is
+            # rebooting with new firmware and will re-advertise on BLE.
+            device.state = DeviceState.DISCONNECTED
             fleet.resume_discovery()
             fleet.resume_reconnect(device_id)
 

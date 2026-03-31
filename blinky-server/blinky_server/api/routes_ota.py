@@ -126,6 +126,8 @@ async def fleet_ota(body: OtaRequest) -> dict:
             except Exception as e:
                 results[device.id[:12]] = {"status": "error", "message": str(e)}
             finally:
+                # Mark device as disconnected for auto-reconnect after DFU
+                device.state = DeviceState.DISCONNECTED
                 fleet.resume_reconnect(device.id)
 
             # Brief pause between devices
