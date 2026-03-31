@@ -196,7 +196,7 @@ const AudioControl& AudioTracker::update(float dt) {
         runAcf();
         updatePlpAnalysis();
         lastAcfMs_ = nowMs;
-        lastTempogramMs_ = time_.millis() - t0;  // Profile: ACF+PLP total ms
+        lastAcfDurationMs_ = time_.millis() - t0;  // Profile: ACF+PLP total ms
     }
 
     // 8. PLP phase update (free-running + pattern-based correction)
@@ -308,7 +308,7 @@ void AudioTracker::runAcf() {
     // --- Pass 1: Multi-source ACF at beat-level lags ---
     // Scan lags 20-80 (200-49 BPM beat rate) with step=2.
     // Bar-level candidates are generated from multiples, not scanned directly.
-    // This keeps ACF cost to ~62 lags × 3 sources × ~700 overlap ≈ 130K MACs.
+    // Cost: ~31 lags × 3 sources × ~700 overlap ≈ 65K MACs (~4ms on M4F).
     static constexpr int TOP_N = 5;
     static constexpr int ACF_MIN_LAG = 20;    // ~200 BPM beat rate
     static constexpr int ACF_MAX_LAG = 80;    // ~49 BPM beat rate
@@ -331,9 +331,12 @@ void AudioTracker::runAcf() {
         for (int i = 0; i < count; i++) zeroLag += buf[i] * buf[i];
         if (zeroLag < 1e-10f) continue;
 
-        // Scan ACF with local-maximum peak detection
+        // Scan ACF with local-maximum peak detection.
+        // Extend one step past ACF_MAX_LAG so a peak AT the boundary is detected
+        // (the 3-point detector looks one step back).
+        int scanEnd = min(ACF_MAX_LAG + ACF_STEP, count / 2 - 1);
         float prevAcf = 0.0f, prevPrevAcf = 0.0f;
-        for (int lag = ACF_MIN_LAG; lag <= ACF_MAX_LAG; lag += ACF_STEP) {
+        for (int lag = ACF_MIN_LAG; lag <= scanEnd; lag += ACF_STEP) {
             float sum = 0.0f;
             int overlap = count - lag;
             for (int i = 0; i < overlap; i++) {
@@ -342,7 +345,9 @@ void AudioTracker::runAcf() {
             float acfVal = sum / zeroLag;
 
             // Peak: previous sample was a local maximum above threshold
-            if (prevAcf > prevPrevAcf && prevAcf > acfVal && prevAcf > 0.05f) {
+            // Only record if the peak lag is within the valid scan range
+            if (prevAcf > prevPrevAcf && prevAcf > acfVal && prevAcf > 0.05f
+                && (lag - ACF_STEP) >= ACF_MIN_LAG && (lag - ACF_STEP) <= ACF_MAX_LAG) {
                 int peakLag = lag - ACF_STEP;
                 float peakStrength = prevAcf;
 
@@ -386,6 +391,7 @@ void AudioTracker::runAcf() {
         int period;
         int source;
     };
+    static_assert(MAX_CANDIDATES == TOP_N * NUM_MULTIPLIERS, "MAX_CANDIDATES invariant");
     ScoredCandidate candidates[MAX_CANDIDATES] = {};
     int numCandidates = 0;
 
@@ -457,7 +463,10 @@ void AudioTracker::runAcf() {
         float score = candidates[c].acfStrength * sqrtf(variance);
 
         if (score > bestScore) {
-            // Phase from epoch-fold peak position (where the main accent falls)
+            // Phase from epoch-fold peak position (where the main accent falls).
+            // Unlike DFT phase (continuous sub-frame precision from atan2), this is
+            // quantized to 1-frame resolution (~3% at 120 BPM). The downstream
+            // cosine OLA accumulates many kernels and self-corrects over time.
             int peakBin = 0;
             float peakVal = fold[0];
             for (int j = 1; j < cPeriod; j++) {
@@ -472,7 +481,7 @@ void AudioTracker::runAcf() {
         }
     }
 
-    plpDftMag_ = bestStrength;  // Reused field (now ACF strength, not DFT magnitude)
+    acfPeakStrength_ = bestStrength;
 
     // Clear pulse buffer on significant period change (>10% shift)
     if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
@@ -622,10 +631,10 @@ void AudioTracker::updatePlpAnalysis() {
     }
 
     // --- 4. PLP confidence from DFT magnitude + steep signal gate ---
-    float dftConf = clampf(plpDftMag_, 0.0f, 1.0f);
+    float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
-    float targetConf = dftConf * signalPresence;
+    float targetConf = acfConf * signalPresence;
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
 

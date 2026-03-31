@@ -76,13 +76,13 @@ public:
     float getPlpConfidence() const { return plpConfidence_; }
     float getPlpPulseValue() const { return plpPulseValue_; }
     int getPlpPatternLen() const { return plpPatternLen_; }
-    float getPlpDftMag() const { return plpDftMag_; }
+    float getAcfPeakStrength() const { return acfPeakStrength_; }
     int getPlpBestSource() const { return plpBestSource_; }
     float getBeatStability() const { return beatStability_; }
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
-    uint32_t getLastAcfMs() const { return lastTempogramMs_; }
+    uint32_t getLastAcfMs() const { return lastAcfDurationMs_; }
     uint32_t getLastPlpMs() const { return lastPlpMs_; }
 
     // Alias for JSON audio stream ("onset" field)
@@ -189,7 +189,7 @@ private:
     float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
-    float plpDftMag_ = 0.0f;                   // DFT magnitude of winning frequency (diagnostic)
+    float acfPeakStrength_ = 0.0f;                   // Normalized ACF peak of winning period (0-1)
     int plpBestPeriod_ = 33;                   // Winning period from ACF + epoch-fold scoring (frames)
     float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
@@ -231,7 +231,7 @@ private:
 
     // === ACF timing ===
     uint32_t lastAcfMs_ = 0;
-    uint32_t lastTempogramMs_ = 0;  // Timing: last runAcf()+updatePlpAnalysis() duration
+    uint32_t lastAcfDurationMs_ = 0;  // Timing: last runAcf()+updatePlpAnalysis() duration
     uint32_t lastPlpMs_ = 0;       // Timing: last updatePlpAnalysis() duration
 
     // === Silence detection ===

@@ -75,10 +75,11 @@ void Fire::spawnParticles(float dt) {
 
     // Spawn rate scales dramatically with energy: 3x at full vs ambient
     // Music mode: plpPulse modulates spawn rate for breathing flame at beat tempo
+    float rs = audio_.rhythmStrength;
     float spawnMod = 0.5f + 2.5f * e;
-    if (audio_.rhythmStrength > 0.3f) {
+    if (rs > 0.0f) {
         float breathe = 0.5f + 0.5f * audio_.plpPulse;  // 0.5-1.0 at beat rate
-        spawnMod *= (1.0f - audio_.rhythmStrength) + breathe * audio_.rhythmStrength;
+        spawnMod *= (1.0f - rs) + breathe * rs;
     }
     float spawnProb = params_.baseSpawnChance * spawnMod;
     float expectedSparks = spawnProb * crossDim_;
@@ -86,18 +87,15 @@ void Fire::spawnParticles(float dt) {
     float frac = expectedSparks - sparkCount;
     if (frac > 0.0f && random(1000) < (int)(frac * 1000)) sparkCount++;
 
-    // MUSIC-DRIVEN burst: beat-synced spark bursts (scales with rhythmStrength)
-    if (audio_.rhythmStrength > 0.3f && audio_.pulse > params_.organicTransientMin) {
+    // Transient burst: single lerp between organic and music intensity.
+    // Organic: full burst at rs=0, fades out. Music: scales up with rs.
+    if (audio_.pulse > params_.organicTransientMin) {
         float strength = (audio_.pulse - params_.organicTransientMin)
                        / (1.0f - params_.organicTransientMin);
-        sparkCount += (uint8_t)(scaledBurstSparks() * strength * (0.5f + 0.5f * audio_.rhythmStrength));
-    }
-
-    // ORGANIC burst: transient-driven (fades as rhythm takes over)
-    if (audio_.rhythmStrength < 0.5f && audio_.pulse > params_.organicTransientMin) {
-        float strength = (audio_.pulse - params_.organicTransientMin)
-                       / (1.0f - params_.organicTransientMin);
-        sparkCount += (uint8_t)(scaledBurstSparks() * strength * (1.0f - audio_.rhythmStrength));
+        float organicBurst = strength;
+        float musicBurst = strength * (0.5f + 0.5f * rs);
+        float burstBlend = organicBurst * (1.0f - rs) + musicBurst * rs;
+        sparkCount += (uint8_t)(scaledBurstSparks() * burstBlend);
     }
 
     uint16_t maxParts = scaledMaxParticles();
