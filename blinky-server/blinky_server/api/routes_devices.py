@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import time as _time
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -129,7 +129,7 @@ async def fleet_status() -> dict[str, Any]:
     """
     fleet = get_fleet()
     devices = fleet.get_all_devices()
-    now = _time.monotonic()
+    now = time.monotonic()
 
     by_state: dict[str, int] = {}
     by_transport: dict[str, int] = {}

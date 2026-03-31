@@ -13,6 +13,7 @@ NUS UUIDs:
 import asyncio
 import contextlib
 import logging
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -51,6 +52,7 @@ class BleTransport(Transport):
         self._connected = False
         self._mtu = 20  # Default min MTU, negotiated on connect
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._has_connected_before = False  # Track for conditional GATT cache clear
 
     async def connect(self) -> None:
         if self._connected:
@@ -75,13 +77,14 @@ class BleTransport(Transport):
         log.info("BLE connecting to %s...", self._address)
         self._loop = asyncio.get_running_loop()
 
-        # Clear BlueZ GATT cache for this device before connecting.
-        # Without this, repeated connect/disconnect cycles (e.g., from dedup
-        # thrashing) cause BlueZ to stack notification subscriptions, delivering
-        # each notification N times. Removing the device from BlueZ forces a
-        # fresh GATT discovery on the next connection.
-        await self._clear_bluez_cache()
-        await asyncio.sleep(1.0)  # Let BlueZ finish any pending disconnect
+        # Clear BlueZ GATT cache only on reconnects (not first connect).
+        # Without this, repeated connect/disconnect cycles cause BlueZ to
+        # stack notification subscriptions, delivering each notification N
+        # times. Skipping on first connect avoids 1s+ latency at startup.
+        if self._has_connected_before:
+            await self._clear_bluez_cache()
+            await asyncio.sleep(1.0)  # Let BlueZ finish cleanup
+        self._has_connected_before = True
 
         self._client = BleakClient(
             self._address,
@@ -91,8 +94,6 @@ class BleTransport(Transport):
         await self._client.connect()
 
         # Get negotiated MTU (bleak 3.x may warn if MTU exchange hasn't completed)
-        import warnings
-
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:

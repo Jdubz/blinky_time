@@ -67,6 +67,8 @@ class FleetManager:
         self._reconnect_blackout: dict[str, float] = {}
         # Reconnect failure count for exponential backoff (device_id -> count)
         self._reconnect_failures: dict[str, int] = {}
+        # Per-device backoff skip counter (device_id -> cycles skipped so far)
+        self._backoff_skip: dict[str, int] = {}
         # Discovery pause counter — when > 0, background loop skips discovery/reconnect.
         # Used during BLE DFU to avoid BleakScanner conflicts (only one scan at a time).
         self._discovery_pause_count: int = 0
@@ -195,7 +197,17 @@ class FleetManager:
         return results
 
     async def discover_now(self) -> None:
-        """Run discovery + reconnect immediately (called by API endpoint)."""
+        """Run discovery + reconnect immediately (called by API endpoint).
+
+        Debounced: refuses if last discovery was < 5s ago to prevent
+        overlapping BleakScanner scans from rapid API calls.
+        """
+        now = _time.monotonic()
+        last = getattr(self, "_last_discovery_time", 0.0)
+        if now - last < 5.0:
+            log.debug("discover_now() debounced (%.1fs since last)", now - last)
+            return
+        self._last_discovery_time = now
         await self._discover_and_connect()
         await self._reconnect_disconnected()
 
@@ -471,12 +483,11 @@ class FleetManager:
                 # Backoff: skip N-1 discovery cycles (10s each) per failure,
                 # doubling each time, capped at 30 cycles (5 min)
                 skip_cycles = min(2 ** (fail_count - 1), 30)
-                backoff_key = f"_backoff_skip_{device_id}"
-                counter = getattr(self, backoff_key, 0)
+                counter = self._backoff_skip.get(device_id, 0)
                 if counter < skip_cycles:
-                    setattr(self, backoff_key, counter + 1)
+                    self._backoff_skip[device_id] = counter + 1
                     continue
-                setattr(self, backoff_key, 0)
+                self._backoff_skip[device_id] = 0
 
             # Check serial port lock file (cross-process coordination)
             if disc.transport_type == "serial":
@@ -514,6 +525,7 @@ class FleetManager:
             dev = self._devices.pop(did, None)
             self._device_discovery.pop(did, None)
             self._reconnect_failures.pop(did, None)
+            self._backoff_skip.pop(did, None)
             if dev:
                 # Best-effort cleanup: ensure underlying transport is closed
                 with contextlib.suppress(Exception):
