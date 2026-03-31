@@ -243,7 +243,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
 
-        fleet.hold_reconnect(device.id, 180)
+        fleet.hold_reconnect(device.id, 600)  # BLE DFU takes ~8 min (488s measured)
         fleet.pause_discovery()
         try:
             result = await upload_ble_dfu(
@@ -305,7 +305,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
             await asyncio.sleep(0.5)  # Let command transmit before disconnect
             await ble_transport.disconnect()
 
-        fleet.hold_reconnect(device_id, 180)
+        fleet.hold_reconnect(device_id, 600)  # BLE DFU takes ~8 min (488s measured)
         fleet.pause_discovery()  # Prevent BleakScanner conflict during DFU
         try:
             result = await upload_ble_dfu(
