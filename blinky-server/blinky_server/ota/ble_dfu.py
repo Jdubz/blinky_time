@@ -171,8 +171,9 @@ async def upload_ble_dfu(
     except Exception as e:
         result["message"] = f"Failed to connect to bootloader: {e}"
         return result
-    mtu = max(client.mtu_size - 3, 20)
-    progress("connect", f"Connected, MTU={client.mtu_size}", 30)
+    # Bootloader caps at 20-byte payload regardless of negotiated MTU
+    mtu = min(max(client.mtu_size - 3, 20), 20)
+    progress("connect", f"Connected, MTU={client.mtu_size}, DFU chunk={mtu}", 30)
 
     # Verify bootloader mode
     try:
@@ -246,7 +247,8 @@ async def upload_ble_dfu(
         else:  # softdevice
             size_pkt = struct.pack('<III', len(firmware), 0, 0)
         await client.write_gatt_char(DFU_PACKET_UUID, size_pkt, response=False)
-        ok, msg = await wait_response("START_DFU", expected_opcode=0x01)
+        # Flash erase takes ~25s for 500KB firmware (85ms per 4KB page)
+        ok, msg = await wait_response("START_DFU", expected_opcode=0x01, timeout=60.0)
         if not ok:
             result["message"] = msg
             return result
@@ -277,9 +279,13 @@ async def upload_ble_dfu(
         pkt_count = 0
         last_pct = 0
         while sent < len(firmware):
-            chunk = firmware[sent:sent + mtu]
+            end = min(sent + mtu, len(firmware))
+            chunk = firmware[sent:end]
+            # Pad last chunk to word alignment (4 bytes) per bootloader requirement
+            if end >= len(firmware) and len(chunk) % 4 != 0:
+                chunk = chunk + b'\x00' * (4 - len(chunk) % 4)
             await client.write_gatt_char(DFU_PACKET_UUID, chunk, response=False)
-            sent += len(chunk)
+            sent = end
             pkt_count += 1
 
             if PRN_INTERVAL > 0 and pkt_count % PRN_INTERVAL == 0:
