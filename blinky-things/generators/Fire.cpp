@@ -83,9 +83,9 @@ void Fire::spawnParticles(float dt) {
     }
     float spawnProb = params_.baseSpawnChance * spawnMod;
     float expectedSparks = spawnProb * crossDim_;
-    uint8_t sparkCount = (uint8_t)min(expectedSparks, 255.0f);
-    float frac = expectedSparks - sparkCount;
-    if (frac > 0.0f && random(1000) < (int)(frac * 1000)) sparkCount++;
+    uint16_t totalSparks = (uint16_t)min(expectedSparks, 255.0f);
+    float frac = expectedSparks - totalSparks;
+    if (frac > 0.0f && random(1000) < (int)(frac * 1000)) totalSparks++;
 
     // Transient burst: single lerp between organic and music intensity.
     // Organic: full burst at rs=0, fades out. Music: scales up with rs.
@@ -95,9 +95,10 @@ void Fire::spawnParticles(float dt) {
         float organicBurst = strength;
         float musicBurst = strength * (0.5f + 0.5f * rs);
         float burstBlend = organicBurst * (1.0f - rs) + musicBurst * rs;
-        sparkCount += (uint8_t)(scaledBurstSparks() * burstBlend);
+        totalSparks += (uint16_t)(scaledBurstSparks() * burstBlend);
     }
 
+    uint8_t sparkCount = (uint8_t)min((int)totalSparks, 255);
     uint16_t maxParts = scaledMaxParticles();
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;

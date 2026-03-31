@@ -191,12 +191,16 @@ const AudioControl& AudioTracker::update(float dt) {
     }
 
     // 7. ACF period detection + PLP pattern analysis on timer (~4ms every 150ms)
-    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 40) {
+    // Warmup: ACF_MAX_LAG*2 = 160 frames (~2.4s) needed before any source qualifies.
+    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 160) {
         uint32_t t0 = time_.millis();
         runAcf();
+        uint32_t t1 = time_.millis();
         updatePlpAnalysis();
+        uint32_t t2 = time_.millis();
         lastAcfMs_ = nowMs;
-        lastAcfDurationMs_ = time_.millis() - t0;  // Profile: ACF+PLP total ms
+        lastAcfDurationMs_ = t1 - t0;  // Profile: ACF only
+        lastPlpMs_ = t2 - t1;          // Profile: PLP analysis only
     }
 
     // 8. PLP phase update (free-running + pattern-based correction)
