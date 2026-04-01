@@ -2249,18 +2249,16 @@ bool SerialConsole::handleOtaCommand(const char* cmd) {
 
     // "ota chunk <offset> <base64_data>" — write chunk
     if (strncmp(sub, "chunk ", 6) == 0) {
-        uint32_t offset = 0;
         const char* rest = sub + 6;
-        // Parse offset
-        offset = strtoul(rest, nullptr, 10);
-        // Find base64 data (after the space following offset)
-        const char* b64 = strchr(rest, ' ');
-        if (b64) {
-            b64++;  // Skip the space
-            qspiOta_->writeChunk(offset, b64, out_);
-        } else {
-            out_.println(F("ERR usage: ota chunk <offset> <base64_data>"));
+        char* endptr = nullptr;
+        uint32_t offset = strtoul(rest, &endptr, 10);
+        // Detect parse failure: endptr didn't advance or didn't land on a space
+        if (endptr == rest || (endptr && *endptr != ' ')) {
+            out_.println(F("ERR invalid offset"));
+            return true;
         }
+        const char* b64 = endptr + 1;  // Skip the space
+        qspiOta_->writeChunk(offset, b64, out_);
         return true;
     }
 

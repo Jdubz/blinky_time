@@ -611,8 +611,9 @@ async def upload_ble_dfu(
         discovered = await BleakScanner.discover(timeout=8.0, return_adv=True)
         for addr, (_d, adv) in discovered.items():
             svc_uuids = [str(u).lower() for u in (adv.service_uuids or [])]
-            if NUS_SERVICE_UUID in svc_uuids and adv.rssi > MIN_DFU_RSSI:
-                # Strong signal + NUS service = likely our device with a new address
+            name = adv.local_name or ""
+            if NUS_SERVICE_UUID in svc_uuids and "Blinky" in name and adv.rssi > MIN_DFU_RSSI:
+                # Strong signal + NUS service + Blinky name = likely our device with a new address
                 log.info(
                     "Post-DFU: found Blinky at %s (RSSI=%d) — address may have changed from %s",
                     addr,

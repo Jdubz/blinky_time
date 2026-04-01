@@ -142,7 +142,7 @@ def _find_objcopy() -> str | None:
     return None
 
 
-def _crc16(data: bytes) -> int:
+def crc16(data: bytes) -> int:
     """CRC-16/CCITT for Nordic DFU init packet."""
     crc = 0xFFFF
     for byte in data:
@@ -205,7 +205,7 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict[str, Any
     device_rev = 0xFFFF  # Any revision
     app_version = 0xFFFFFFFF  # Any version (no version check)
     sd_req_val = int(sd_req, 16)
-    firmware_crc = _crc16(firmware)
+    firmware_crc = crc16(firmware)
 
     init_packet = struct.pack(
         "<HHIHH", device_type, device_rev, app_version, 1, sd_req_val
@@ -224,7 +224,7 @@ def generate_dfu_package(hex_path: str, sd_req: str = "0xFFFE") -> dict[str, Any
                     "application_version": 0xFFFFFFFF,
                     "device_revision": 0xFFFF,
                     "device_type": 0x0052,
-                    "firmware_crc16": firmware_crc,
+                    "firmwarecrc16": firmware_crc,
                     "softdevice_req": [sd_req_val],
                 },
             }

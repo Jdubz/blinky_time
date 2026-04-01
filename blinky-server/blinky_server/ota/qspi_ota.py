@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .compile import _crc16
+from .compile import crc16
 
 log = logging.getLogger(__name__)
 
@@ -75,11 +75,17 @@ async def upload_qspi_ota(
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
             bin_path = tmp.name
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [objcopy, "-I", "ihex", "-O", "binary", str(fw_path), bin_path],
                 capture_output=True,
                 timeout=30,
             )
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "message": f"objcopy failed: {result.stderr.decode().strip()}",
+                    "elapsed_s": 0,
+                }
             firmware = Path(bin_path).read_bytes()
         finally:
             Path(bin_path).unlink(missing_ok=True)
@@ -89,7 +95,7 @@ async def upload_qspi_ota(
     if len(firmware) == 0:
         return {"status": "error", "message": "Firmware is empty", "elapsed_s": 0}
 
-    crc = _crc16(firmware)
+    crc = crc16(firmware)
     progress("init", f"{len(firmware)} bytes, CRC=0x{crc:04X}", 5)
 
     # Step 1: Begin -- erase QSPI staging area

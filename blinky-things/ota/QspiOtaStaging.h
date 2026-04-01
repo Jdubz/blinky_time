@@ -305,7 +305,10 @@ public:
         hdr.size = fwSize;
         hdr.crc16 = internalCrc;
         hdr.magic = 0x0000;  // NOT HEADER_MAGIC — bootloader will ignore this
-        eraseSector(0);  // Must erase before writing header sector
+        if (!eraseSector(0)) {  // Must erase before writing header sector
+            out.println(F("ERR sector 0 erase failed"));
+            return false;
+        }
         SafeBootWatchdog::feed();
         qspiWrite(&hdr, sizeof(hdr), HEADER_ADDR);
 
@@ -376,7 +379,10 @@ public:
 
         // Write header with valid magic — this arms the bootloader
         out.println(F("Writing commit header..."));
-        eraseSector(0);
+        if (!eraseSector(0)) {
+            out.println(F("ERR sector 0 erase failed"));
+            return false;
+        }
         SafeBootWatchdog::feed();
         hdr.magic = HEADER_MAGIC;
         qspiWrite(&hdr, sizeof(hdr), HEADER_ADDR);

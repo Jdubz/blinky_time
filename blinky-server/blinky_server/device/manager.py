@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time as _time
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,7 @@ class FleetManager:
         # Bool guard is async-safe: check happens before any await, so the
         # single-threaded event loop cannot interleave another call between
         # check and set. The finally block guarantees reset on any exit path.
+        self._recovery_firmware_path: str | None = None
         self._dfu_recovery_state: dict[str, dict[str, int]] = {}
         self._dfu_recovery_in_progress: bool = False
 
@@ -626,15 +628,13 @@ class FleetManager:
         if self._dfu_recovery_in_progress:
             return  # Previous recovery still running — skip
 
-        firmware_path = getattr(self, "_recovery_firmware_path", None)
+        firmware_path = self._recovery_firmware_path
         if not firmware_path:
             firmware_path = self._load_recovery_firmware()
             if firmware_path:
                 self._recovery_firmware_path = firmware_path
         if not firmware_path:
             return
-
-        import os
 
         if not os.path.isfile(firmware_path):
             return
