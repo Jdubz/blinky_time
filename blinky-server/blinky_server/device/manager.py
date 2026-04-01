@@ -77,6 +77,9 @@ class FleetManager:
         # serial device. Prevents the thrashing loop where a deduped device is
         # immediately rediscovered and reconnected on every cycle.
         self._dedup_excluded: set[str] = set()
+        # DFU recovery state (per-device tracking for auto-retry)
+        self._dfu_recovery_state: dict[str, dict[str, int]] = {}
+        self._dfu_recovery_in_progress: bool = False
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -619,14 +622,16 @@ class FleetManager:
         address, attempts BLE DFU using the recovery firmware. Uses exponential
         backoff to avoid flooding BLE with retry attempts.
         """
+        if self._dfu_recovery_in_progress:
+            return  # Previous recovery still running — skip
+
         firmware_path = getattr(self, "_recovery_firmware_path", None)
         if not firmware_path:
-            # Try loading from persistent state (survives server restarts)
             firmware_path = self._load_recovery_firmware()
             if firmware_path:
                 self._recovery_firmware_path = firmware_path
         if not firmware_path:
-            return  # No recovery firmware configured
+            return
 
         import os
         if not os.path.isfile(firmware_path):
@@ -640,24 +645,25 @@ class FleetManager:
             return
 
         for device in dfu_devices:
-            # Check backoff — don't retry too aggressively
-            fail_key = f"_dfu_recovery_fails_{device.id}"
-            fail_count = getattr(self, fail_key, 0)
-            backoff_key = f"_dfu_recovery_backoff_{device.id}"
-            backoff_counter = getattr(self, backoff_key, 0)
+            state = self._dfu_recovery_state.setdefault(
+                device.id, {"fails": 0, "backoff": 0}
+            )
+            fail_count = state["fails"]
+
             if fail_count > 0:
-                # Exponential backoff: 6, 12, 24, 48 cycles (1, 2, 4, 8 min at 10s/cycle)
-                skip_cycles = min(6 * (2 ** (fail_count - 1)), 48)
-                if backoff_counter < skip_cycles:
-                    setattr(self, backoff_key, backoff_counter + 1)
+                # Exponential backoff: 1, 2, 4, 8 min (called every 60s)
+                skip_calls = min(2 ** (fail_count - 1), 8)
+                if state["backoff"] < skip_calls:
+                    state["backoff"] += 1
                     continue
-                setattr(self, backoff_key, 0)
+                state["backoff"] = 0
 
             log.info(
                 "Auto-recovering DFU device %s (BLE: %s, attempt %d)...",
                 device.id[:12], device.ble_address, fail_count + 1,
             )
 
+            self._dfu_recovery_in_progress = True
             self.pause_discovery()
             self.hold_reconnect(device.id, 600)
             try:
@@ -672,19 +678,20 @@ class FleetManager:
 
                 if result.get("status") == "ok":
                     log.info("Auto-recovery succeeded for %s!", device.id[:12])
-                    device.state = DeviceState.DISCONNECTED  # Let reconnect pick it up
-                    setattr(self, fail_key, 0)
-                    setattr(self, backoff_key, 0)
+                    device.state = DeviceState.DISCONNECTED
+                    state["fails"] = 0
+                    state["backoff"] = 0
                 else:
-                    setattr(self, fail_key, fail_count + 1)
+                    state["fails"] = fail_count + 1
                     log.warning(
                         "Auto-recovery failed for %s (attempt %d): %s",
                         device.id[:12], fail_count + 1, result.get("message", ""),
                     )
             except Exception as e:
-                setattr(self, fail_key, fail_count + 1)
+                state["fails"] = fail_count + 1
                 log.error("Auto-recovery error for %s: %s", device.id[:12], e)
             finally:
+                self._dfu_recovery_in_progress = False
                 self.resume_discovery()
                 self.resume_reconnect(device.id)
 

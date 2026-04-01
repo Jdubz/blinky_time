@@ -113,38 +113,47 @@ def parse_dfu_zip(zip_path: str) -> tuple[bytes, bytes, int]:
 async def _reset_bootloader(client: BleakClient) -> None:
     """Send SYSTEM_RESET (0x06) to unstick a bootloader in invalid state.
 
-    Also resets the HCI adapter to clear BlueZ connection state that can
-    become corrupted after forced BLE disconnects. Without this, subsequent
-    connections to the same bootloader address may silently fail.
+    Clears BlueZ state for this address. Does NOT reset the HCI adapter
+    (that would disconnect all BLE devices). HCI reset is done between
+    retry attempts in upload_ble_dfu() instead.
     """
     addr = client.address if hasattr(client, "address") else "unknown"
-    with contextlib.suppress(Exception):
+    try:
         await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x06]), response=True)
-    with contextlib.suppress(Exception):
+    except Exception as e:
+        log.debug("SYSTEM_RESET write (expected to fail): %s", e)
+    try:
         await client.disconnect()
-    # Clear BlueZ state for this address and reset adapter
+    except Exception as e:
+        log.debug("Disconnect after SYSTEM_RESET (expected): %s", e)
     await asyncio.to_thread(clear_bluez_state, addr)
-    await asyncio.to_thread(_reset_hci_adapter)
 
 
 def _reset_hci_adapter() -> None:
     """Reset the default HCI adapter to clear stale BLE connection state.
 
-    BlueZ can retain corrupt connection/GATT state after forced disconnects
-    (e.g., device resets mid-write). Resetting the adapter clears all of this.
+    Best-effort: catches all subprocess errors so DFU retry logic isn't
+    disrupted if hciconfig is missing or permissions are insufficient.
     """
-    # Try hci0 first (most common), then hci1
     for adapter in ("hci0", "hci1"):
-        result = subprocess.run(
-            ["hciconfig", adapter, "reset"],
-            capture_output=True, timeout=5,
-        )
+        try:
+            result = subprocess.run(
+                ["hciconfig", adapter, "reset"],
+                capture_output=True, timeout=5,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            log.warning("Failed to reset BLE adapter %s: %s", adapter, e)
+            continue
         if result.returncode == 0:
             log.info("Reset BLE adapter %s", adapter)
             return
     # Fallback: bluetoothctl power cycle
-    subprocess.run(["bluetoothctl", "power", "off"], capture_output=True, timeout=5)
-    subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, timeout=5)
+    for cmd in (["bluetoothctl", "power", "off"], ["bluetoothctl", "power", "on"]):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            log.warning("BLE adapter reset fallback failed: %s", e)
+            return
     log.info("Power-cycled BLE adapter via bluetoothctl")
 
 
@@ -393,9 +402,6 @@ async def _dfu_transfer(
 
 
 MIN_DFU_RSSI = -75  # Reject BLE DFU if signal weaker than this (dBm)
-PREFLIGHT_TEST_BYTES = 2048  # Bytes to transfer in pre-flight BLE quality test
-
-
 async def _preflight_ble_check(
     app_ble_address: str,
     progress: Callable[..., None],
@@ -521,9 +527,11 @@ async def upload_ble_dfu(
     for attempt in range(MAX_DFU_ATTEMPTS):
         if attempt > 0:
             progress("retry", f"Retry attempt {attempt + 1}/{MAX_DFU_ATTEMPTS}...", 10)
+            # Reset HCI adapter between attempts to clear BlueZ corruption.
+            # Done here (between attempts) rather than in _reset_bootloader
+            # to avoid disconnecting all BLE devices on every failure.
+            await asyncio.to_thread(_reset_hci_adapter)
             # Wait for bootloader to finish resetting + BLE re-advertising.
-            # After SYSTEM_RESET with erased flash: bootloader restarts, inits
-            # SoftDevice, starts advertising. This takes 5-10s. Use 20s for margin.
             await asyncio.sleep(20)
 
         # Enter bootloader (only on first attempt — retries assume already in bootloader)

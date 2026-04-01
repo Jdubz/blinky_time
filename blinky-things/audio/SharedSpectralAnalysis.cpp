@@ -135,6 +135,7 @@ void SharedSpectralAnalysis::reset() {
     smoothedGainDb_ = 0.0f;
     frameRmsDb_ = -200.0f;
     spectralFlux_ = 0.0f;
+    bassFlux_ = 0.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {

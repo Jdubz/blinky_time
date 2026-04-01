@@ -204,6 +204,7 @@ public:
         uint32_t appEnd = 0xF4000;  // BOOTLOADER_REGION_START
         uint32_t fwSize = 0;
         for (uint32_t addr = appEnd - 4; addr >= appStart; addr -= 4) {
+            if ((addr & 0x3FFF) == 0) SafeBootWatchdog::feed();  // Every 16K
             if (*(volatile uint32_t*)addr != 0xFFFFFFFF) {
                 fwSize = (addr + 4) - appStart;
                 // Round up to 4-byte alignment

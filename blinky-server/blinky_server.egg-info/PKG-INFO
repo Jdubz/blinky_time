@@ -11,6 +11,8 @@ Requires-Dist: pydantic>=2.0
 Requires-Dist: websockets>=13.0
 Provides-Extra: ble
 Requires-Dist: bleak>=0.22; extra == "ble"
+Provides-Extra: ota
+Requires-Dist: pyudev>=0.24; extra == "ota"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.24; extra == "dev"
