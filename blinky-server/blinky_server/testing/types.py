@@ -46,6 +46,7 @@ class MusicState:
     bpm: float
     phase: float
     confidence: float
+    oss: float | None = None
     plp_pulse: float | None = None
 
 

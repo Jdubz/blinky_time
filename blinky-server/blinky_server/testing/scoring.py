@@ -32,6 +32,11 @@ def _js_round(x: float, decimals: int = 3) -> float:
     return math.floor(x * factor + 0.5) / factor
 
 
+def _js_round_int(x: float) -> int:
+    """Round to nearest int like JavaScript Math.round (rounds .5 up)."""
+    return math.floor(x + 0.5)
+
+
 # ---------------------------------------------------------------------------
 # Core matching
 # ---------------------------------------------------------------------------
@@ -123,7 +128,7 @@ def estimate_audio_latency(
     BUCKET = 10
     histogram: dict[int, int] = defaultdict(int)
     for o in offsets:
-        bucket = round(o / BUCKET) * BUCKET
+        bucket = _js_round_int(o / BUCKET) * BUCKET
         histogram[bucket] += 1
 
     peak_bucket = 0
@@ -136,7 +141,7 @@ def estimate_audio_latency(
     sum_weight = 0
     sum_offset = 0.0
     for o in offsets:
-        if abs(round(o / BUCKET) * BUCKET - peak_bucket) <= BUCKET:
+        if abs(_js_round_int(o / BUCKET) * BUCKET - peak_bucket) <= BUCKET:
             sum_offset += o
             sum_weight += 1
 
@@ -176,6 +181,7 @@ def score_device_run(
             "bpm": s.bpm,
             "phase": s.phase,
             "confidence": s.confidence,
+            "oss": s.oss,
             "plp_pulse": s.plp_pulse,
         }
         for s in test_data.music_states
@@ -345,8 +351,8 @@ def score_device_run(
         # PLP autocorrelation at detected BPM lag
         if avg_bpm > 0 and len(plp_values) > 10:
             stream_rate = len(plp_values) / (audio_duration_sec or 1)
-            bpm_lag = round(stream_rate * 60 / avg_bpm)
-            if 0 < bpm_lag < len(plp_values) // 2:
+            bpm_lag = _js_round_int(stream_rate * 60 / avg_bpm)
+            if 0 < bpm_lag < len(plp_values) / 2:
                 sum_xy = 0.0
                 sum_x2 = 0.0
                 n = len(plp_values) - bpm_lag
@@ -367,7 +373,7 @@ def score_device_run(
             if abs(offset) < abs(best_offset):
                 best_offset = offset
         if abs(best_offset) < 0.5:
-            transient_beat_offsets.append(round(best_offset * 1000))
+            transient_beat_offsets.append(_js_round_int(best_offset * 1000))
 
     phase_offset_stats = _compute_offset_stats(transient_beat_offsets)
 
@@ -380,13 +386,13 @@ def score_device_run(
             if abs(offset) < abs(best_offset):
                 best_offset = offset
         if abs(best_offset) < 0.5:
-            beat_event_offsets.append(round(best_offset * 1000))
+            beat_event_offsets.append(_js_round_int(best_offset * 1000))
 
     beat_offset_stats = _compute_offset_stats(beat_event_offsets)
 
     beat_offset_histogram: dict[str, int] = {}
     for offset in beat_event_offsets:
-        bucket = round(offset / 10) * 10
+        bucket = _js_round_int(offset / 10) * 10
         key = str(bucket)
         beat_offset_histogram[key] = beat_offset_histogram.get(key, 0) + 1
 
@@ -470,7 +476,11 @@ def _compute_offset_stats(offsets: list[int]) -> OffsetStats | None:
     std_dev = math.sqrt(sum((v - mean) ** 2 for v in sorted_offsets) / n)
     q1 = sorted_offsets[int(n * 0.25)]
     q3 = sorted_offsets[int(n * 0.75)]
-    return OffsetStats(median=round(median), std_dev=round(std_dev), iqr=round(q3 - q1))
+    return OffsetStats(
+        median=_js_round_int(median),
+        std_dev=_js_round_int(std_dev),
+        iqr=_js_round_int(q3 - q1),
+    )
 
 
 # ---------------------------------------------------------------------------

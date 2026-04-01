@@ -8,6 +8,7 @@ and CJS implementations at /tmp/blinky-audio.lock.
 from __future__ import annotations
 
 import atexit
+import errno
 import json
 import logging
 import os
@@ -40,13 +41,15 @@ def acquire_audio_lock(device_ids: list[str] | None = None) -> bool:
                 info = json.load(f)
             try:
                 os.kill(info["pid"], 0)  # Check existence
-            except OSError:
-                # Dead process — stale lock, remove and retry once
-                try:
-                    os.unlink(LOCK_PATH)
-                except OSError:
-                    pass
-                return acquire_audio_lock(device_ids)
+            except OSError as e:
+                if e.errno == errno.ESRCH:
+                    # No such process — stale lock, remove and retry once
+                    try:
+                        os.unlink(LOCK_PATH)
+                    except OSError:
+                        pass
+                    return acquire_audio_lock(device_ids)
+                # EPERM = process exists but owned by another user — lock is valid
             # Process alive — lock legitimately held
             log.warning(
                 "Audio lock held by PID %d on %s (started %s)",
@@ -79,13 +82,15 @@ def is_audio_locked() -> tuple[bool, dict | None]:
             info = json.load(f)
         try:
             os.kill(info["pid"], 0)
-        except OSError:
-            # Stale lock
-            try:
-                os.unlink(LOCK_PATH)
-            except OSError:
-                pass
-            return False, None
+        except OSError as e:
+            if e.errno == errno.ESRCH:
+                # Stale lock — dead process
+                try:
+                    os.unlink(LOCK_PATH)
+                except OSError:
+                    pass
+                return False, None
+            # EPERM = process exists, lock is valid
         return True, info
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return False, None
