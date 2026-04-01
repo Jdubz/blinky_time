@@ -512,13 +512,31 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
 
     thresholds = np.arange(0.1, 0.95, 0.05)
 
-    # Collect activations + ref beats for all tracks
+    # Collect activations + ref onsets for all tracks
+    # Use kick-weighted onset labels (preferred) or librosa onsets as sweep target.
+    # Previous versions used .beats.json (beat F1) which created threshold artifacts
+    # when comparing models with different activation distributions.
     tracks = []
     for audio_path in sorted(f for f in audio_dir.rglob("*")
                               if f.suffix.lower() in {".mp3", ".wav", ".flac"}):
+        # Need at least .beats.json for full eval, but sweep uses onset labels
         label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
         if not label_path.exists():
             continue
+
+        # Load onset reference: prefer kick-weighted, fall back to .onsets.json
+        kw_path = audio_path.parent / "kick_weighted" / f"{audio_path.stem}.kick_weighted.json"
+        onset_path = audio_path.parent / f"{audio_path.stem}.onsets.json"
+        if kw_path.exists():
+            with open(kw_path) as f:
+                kw_data = json.load(f)
+            ref_onsets = np.array([o["time"] for o in kw_data["onsets"]])
+        elif onset_path.exists():
+            with open(onset_path) as f:
+                onset_data = json.load(f)
+            ref_onsets = np.array(onset_data["onsets"])
+        else:
+            continue  # skip tracks without onset labels
 
         audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
         target_rms_db = cfg["audio"].get("target_rms_db", -35)
@@ -564,13 +582,9 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
         else:
             activations = all_act[:, 0]
 
-        with open(label_path) as f:
-            labels = json.load(f)
-        ref_beats = np.array([h["time"] for h in labels["hits"]
-                              if h.get("expectTrigger", True)])
-        tracks.append((audio_path.stem, activations, ref_beats))
+        tracks.append((audio_path.stem, activations, ref_onsets))
 
-    # Sweep thresholds
+    # Sweep thresholds against onset F1 (not beat F1)
     print(f"\n{'Thresh':>8} {'Mean F1':>8} {'Median':>8} {'Min':>8} {'Max':>8} {'Est/Ref':>8}")
     best_t, best_f1 = 0.5, 0.0
     for thresh in thresholds:
@@ -591,7 +605,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
             best_f1 = mean_f1
             best_t = thresh
 
-    print(f"\nBest threshold: {best_t:.2f} (F1={best_f1:.3f})")
+    print(f"\nBest threshold: {best_t:.2f} (onset F1={best_f1:.3f})")
 
     # Run full eval at best threshold
     print(f"\n--- Full evaluation at threshold={best_t:.2f} ---")

@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 22, 2026*
+*Last Updated: April 1, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
@@ -90,11 +90,31 @@ Key finding: v3's pos_weight=20 is critical. Auto-calculation gives ~35.6 which 
 | Snare F1 (200-4k Hz) | 0.666 | **0.773** |
 | HiHat F1 (>4k Hz) | 0.704 | **0.806** |
 
-**v12 (evaluated, not deployed): Wider architecture validated, SWA unhelpful.**
-Wider [48,48,32] channels (24K params, ~27 KB INT8), 3rd conv layer (RF 144→176ms). At correct threshold (0.40 vs v11's 0.50), v12 shows +17% kick/snare/hihat recall over v11. However, Est/Ref ratio is 1.85x (46% false positives vs v11's 1.48x). Stronger SpecAugment (3+2 masks) compressed activation range, making threshold selection fragile. SWA model was slightly worse than best checkpoint. Architecture retained for v13; augmentation/loss changes needed to sharpen activation peaks.
+**v12/v13 post-mortem (April 1): Apparent regressions were eval pipeline artifacts.**
 
-**v13 (training, March 31): SpecMix + onset-proximity focal loss.**
-Builds on v12's [48,48,32] architecture. SpecMix (CutMix for spectrograms) replaces standard mixup. Onset-proximity focal loss (OWBCE-inspired sinusoidal weighting) boosts gradients near onsets to produce sharper activation peaks (addressing v12's compressed activation range). SpecAugment backed to v11 levels (2+1 masks). SWA dropped. Target: v12's recall with Est/Ref < 1.3x. See `configs/conv1d_w16_onset_v13.yaml`.
+Both v12 and v13 appeared to regress massively vs v11 (onset F1 0.56/0.53 vs 0.62, kick recall 0.47/0.42 vs 0.74). Deep investigation revealed this was a **threshold selection artifact**, not a real model quality difference. At equal thresholds (t=0.40), all three models are nearly identical:
+
+| Metric | v11 @ t=0.40 | v12-best @ t=0.40 | v13 @ t=0.40 |
+|--------|-------------|-------------------|--------------|
+| KW Onset F1 | 0.649 | 0.645 | **0.653** |
+| Kick recall | 0.709 | 0.696 | **0.721** |
+| Snare recall | 0.692 | **0.695** | 0.700 |
+| HiHat recall | 0.685 | **0.695** | 0.689 |
+
+**Root causes of apparent regression:**
+1. **Eval pipeline bug**: `sweep_thresholds()` in `evaluate.py` optimizes threshold against **beat F1** (`.beats.json`), not onset F1. Since v12/v13 have higher activation baselines, the sweep picks higher thresholds that massively under-detect. Fix: sweep against KW onset F1.
+2. **Pipeline evaluates wrong model**: `train_pipeline.sh:113` hardcodes `final_model.pt` (SWA-averaged) instead of `best_model.pt`.
+3. **SpecMix label bug (v13)**: `specmix()` in `train.py:120` applies a global area-ratio scalar to mix labels across all time frames. For frame-level onset labels, only the pasted time range should get mixed labels. Additionally, frequency-domain cuts break broadband onset semantics (onsets are defined by co-occurring energy across many bands).
+4. **OWBCE proximity applied to all frames (v13)**: `train.py:359` multiplies `onset_weight` into loss for ALL frames (positive + negative). Per Song et al. 2024, proximity boost should apply only to positive class weight. Boosting negatives near onsets penalizes the model for correctly predicting low values near onset boundaries.
+5. **Wider architecture ([48,48,32]) didn't help**: 28K params produces identical discrimination as 13K params. The task is data/label-limited, not capacity-limited.
+
+**Per-genre findings**: v12/v13 genuinely improved on syncopated genres where v11 over-detects (amapiano +0.19 onset F1, garage +0.16, breakbeat +0.07). Catastrophic on trance (trance-infected-vibes: 0.16 vs 0.67). The wider models' conservatism helps complex rhythms but kills sparse content.
+
+**What we learned:**
+- The [32,32] v11 architecture is sufficient — extra capacity doesn't help onset detection with current training data
+- SpecMix is theoretically unsound for frame-level sequence labeling (designed for per-clip classification)
+- OWBCE concept has merit (v13 marginally best kick recall at equal threshold) but implementation was wrong
+- The primary bottleneck is data/label quality, not model capacity
 
 **Already deployed in v11 (proven):**
 - ✅ Online mixup augmentation (Beta(0.4,0.4), p=0.5) — Source: SpecMix (2021), DCASE 2024
@@ -104,9 +124,29 @@ Builds on v12's [48,48,32] architecture. SpecMix (CutMix for spectrograms) repla
 - ✅ Label neighbor weighting (0.25) — Source: Schlüter & Bock 2014
 - ✅ nRF52840 gain calibration (hw_gain_max=32 in base.yaml)
 
-**Implemented in v13 (training):**
-- ✅ **SpecMix (CutMix for spectrograms)** — Replaces standard mixup. Rectangular spectral patches cut from shuffled batch and pasted. Labels mixed by area ratio. Source: Kim et al. 2021.
-- ✅ **Onset-proximity focal loss (OWBCE-inspired)** — Sinusoidal kernel convolved over onset map boosts gradients ±5 frames (±80ms) around onsets. Combined with asymmetric focal loss. Source: Song et al. 2024.
+**Attempted in v12/v13 (not deployed — see post-mortem above):**
+- ❌ **SpecMix (CutMix for spectrograms)** — Theoretically unsound for frame-level tasks. Label mixing uses global area scalar across all time frames (should be per-frame for sequence labeling). Frequency-domain cuts break broadband onset semantics. Designed for per-clip classification (Kim et al. 2021), not frame-level sequence labeling.
+- ⚠️ **OWBCE onset-proximity focal loss** — Concept valid, implementation wrong. Proximity boost applied to all frames (should only boost positive class weight). Neighbor frames (y=0.25) excluded from onset map. v13 showed marginally best kick recall at equal threshold, suggesting the idea has merit with correct implementation.
+- ❌ **Wider architecture [48,48,32]** — Same discrimination as [32,32] at 3x the model size and inference cost. Task is data/label-limited, not capacity-limited.
+- ❌ **SWA** — Slightly worse than best checkpoint in v12. No benefit for this model size.
+
+**v14 plan: Infrastructure fixes + correct OWBCE on v11 architecture.**
+
+Prerequisites (code fixes before training):
+1. **Fix `evaluate.py` threshold sweep** — Optimize against KW onset F1 (or onset F1), not beat F1. The beat F1 target creates arbitrary operating points that make equivalent models look very different.
+2. **Fix `train_pipeline.sh`** — Evaluate and export `best_model.pt`, not `final_model.pt`. SWA is dropped, but the pipeline should use the best validation checkpoint regardless.
+3. **Fix OWBCE loss** — Apply proximity boost to positive class weight only: `class_weight = torch.where(is_positive, pw * onset_weight, 1.0)` instead of multiplying `onset_weight` into the full loss. Also lower the `is_positive` threshold to include neighbor frames (y > 0.1 instead of y > 0.5).
+4. **Drop SpecMix** — Not salvageable for frame-level tasks without a complete rewrite. Standard mixup (proven in v11) is better.
+
+Training config (`conv1d_w16_onset_v14.yaml`):
+- Architecture: [32, 32] from v11 (13K params, 13.4 KB INT8) — wider architecture proved unnecessary
+- Loss: `asymmetric_focal_owbce` with corrected implementation (proximity on positives only)
+- Augmentation: standard mixup (v11's Beta(0.4,0.4), p=0.5) — SpecMix dropped
+- SpecAugment: v11 levels (2 freq masks, 1 time mask)
+- All other hyperparams from v11 (LR=0.001, batch=4096, dropout=0.1, epochs=60, patience=15)
+- No SWA
+
+Expected outcome: if corrected OWBCE improves peak sharpness, we should see better onset F1 at optimal threshold (not just equal performance at fixed threshold). If OWBCE still shows no improvement, the v11 training recipe is the ceiling for this data.
 
 **Future training improvements (research-backed, not yet implemented):**
 
@@ -123,13 +163,16 @@ Builds on v12's [48,48,32] architecture. SpecMix (CutMix for spectrograms) repla
 **Not worth pursuing:**
 - Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
 - Curriculum learning: inconsistent evidence, moderate effort
+- Wider architecture ([48,48,32]): **proven equivalent to [32,32]** at 3x size (v12/v13 post-mortem)
 - Wider windows (W32/W64): 150ms RF is optimal for onset detection (Schlüter 2014). Our 176ms is ample.
 - Transformer/Conformer: 1.4M+ params, far too large for Cortex-M4F
 - Bidirectional models: can't run in real-time. Only ~2-5% F1 gain for onset detection (Bock 2012)
 - SE attention blocks: global pooling over 16-frame window loses temporal position info critical for onset detection
-- Structured pruning: model already tiny (28K params). Pruning helps at 100K+ scale.
+- Structured pruning: model already tiny (13K params). Pruning helps at 100K+ scale.
 - Beat This! distillation: INVALID — beat tracker soft labels suppress off-beat onsets and inject phantom targets on empty strong beats
 - Multi-class output (kick/snare/hihat): firmware uses single-channel onset. Per-instrument adds quantization overhead with no visual benefit.
+- SpecMix / CutMix: **proven unsound** for frame-level onset detection (v13 post-mortem). Label mixing is wrong for sequence labeling tasks.
+- SWA: **proven unhelpful** at this model scale (v12 post-mortem)
 
 ### Priority 3: Test Metric Alignment
 

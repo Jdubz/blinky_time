@@ -322,13 +322,12 @@ def asymmetric_focal_owbce(y_pred: torch.Tensor, y_true: torch.Tensor,
 
     Combines asymmetric focal (Imoto & Mishima 2022) with onset-proximity
     boost (Song et al. 2024). A sinusoidal kernel convolved over the onset
-    map produces a smooth proximity signal that boosts gradients near onsets,
-    training the model to produce sharper activation peaks.
+    map produces a smooth proximity signal that boosts the positive class
+    weight near onsets, training the model to produce sharper activation peaks.
 
-    This addresses the activation compression problem: without proximity
-    weighting, strong regularization causes outputs to cluster in a narrow
-    band (0.3-0.6). The proximity boost encourages high activation AT onsets
-    and low activation between them, widening the gap for threshold selection.
+    The proximity boost is applied ONLY to the positive class weight (not the
+    total loss). This avoids penalizing the model for correctly predicting low
+    values near onset boundaries.
     """
     y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
     pw = _broadcast_pos_weight(pos_weight, y_true)
@@ -341,22 +340,24 @@ def asymmetric_focal_owbce(y_pred: torch.Tensor, y_true: torch.Tensor,
                         torch.tensor(gamma_pos, device=y_pred.device),
                         torch.tensor(gamma_neg, device=y_pred.device))
     focal_weight = (1 - pt) ** gamma
-    class_weight = torch.where(is_positive, pw, 1.0)
 
     # Onset-proximity boost: sinusoidal kernel (1.0 at center, 0.0 at edges)
     hw = proximity_window
     ks = 2 * hw + 1
     t = torch.linspace(-1, 1, ks, device=y_pred.device)
     kernel = (0.5 + 0.5 * torch.cos(math.pi * t)).view(1, 1, ks)
-    # Conv1d over onset map -> smooth proximity signal (0-1)
+    # Use low threshold to include neighbor frames (y=0.25) in onset map
     C = y_true.shape[2]
-    onset_map = is_positive.float().permute(0, 2, 1)  # (B,C,T)
+    onset_map = (y_true > 0.1).float().permute(0, 2, 1)  # (B,C,T)
     proximity = F.conv1d(onset_map, kernel.expand(C, -1, -1),
                          padding=hw, groups=C)
     proximity = proximity.permute(0, 2, 1).clamp(0, 1)  # (B,T,C)
-    onset_weight = 1.0 + proximity_boost * proximity
 
-    return (bce * focal_weight * class_weight * onset_weight).mean()
+    # Apply proximity boost to positive class weight ONLY (not total loss)
+    onset_weight = 1.0 + proximity_boost * proximity
+    class_weight = torch.where(is_positive, pw * onset_weight, 1.0)
+
+    return (bce * focal_weight * class_weight).mean()
 
 
 def distillation_loss(student_pred: torch.Tensor, teacher_pred: torch.Tensor,
