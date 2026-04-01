@@ -781,8 +781,23 @@ def _check_port_available(port, verbose=False):
 
     exp_vid = _active_board["normal_vid"]
     exp_pid = _active_board["normal_pid"]
+    bl_vid = _active_board.get("bootloader_vid", exp_vid)
+    bl_pid = _active_board.get("bootloader_pid")
     board_name = _active_board["name"]
     if port_info.vid != exp_vid or port_info.pid != exp_pid:
+        # Check if device is already in bootloader CDC mode
+        if port_info.vid == bl_vid and port_info.pid == bl_pid:
+            print(f"\n  Device is in BOOTLOADER CDC mode (VID:PID {port_info.vid:#06x}:{port_info.pid:#06x})")
+            print(f"  Will check for UF2 mass storage drive...")
+            # Device is in bootloader — check if UF2 drive is already present
+            uf2_devices = _get_usb_block_devices()
+            if uf2_devices:
+                print(f"  UF2 drive found: {sorted(uf2_devices)[0]}")
+                print(f"  Use --already-in-bootloader to flash directly.")
+            else:
+                print(f"  No UF2 drive detected. Device is in serial DFU mode, not UF2 mode.")
+                print(f"  Try power-cycling the USB port to reset to application mode.")
+            return False
         print(f"\n  ERROR: {port} is not a {board_name} in application mode!")
         print(f"  Expected VID:PID {exp_vid:#06x}:{exp_pid:#06x}")
         print(f"  Found    VID:PID {port_info.vid:#06x}:{port_info.pid:#06x}" if port_info.vid else
@@ -928,6 +943,21 @@ def trigger_bootloader(port, verbose=False):
             ser.write(b'bootloader\r\n')
             ser.flush()
             time.sleep(2)  # Give device time to process + reset
+            # Read bootloader command response for diagnostics
+            try:
+                response = ser.read(500).decode('utf-8', errors='replace').strip()
+                if response and verbose:
+                    for line in response.split('\n'):
+                        line = line.strip()
+                        if line:
+                            print(f"    {line}")
+                # Check for GPREGRET diagnostic output
+                if 'GPREGRET=0x' in response:
+                    gpregret_val = response.split('GPREGRET=0x')[-1].split()[0].strip()
+                    if gpregret_val.upper() != '57':
+                        print(f"  WARNING: GPREGRET={gpregret_val} (expected 57 for UF2 mode)")
+            except (serial.SerialException, OSError):
+                pass  # Device may have already reset
         except (serial.SerialException, OSError, BrokenPipeError) as e:
             print(f"  Serial write error: {e}")
             ser = None  # Port dead, will reopen next attempt
@@ -942,6 +972,17 @@ def trigger_bootloader(port, verbose=False):
 
         if not _device_port_exists(current_port):
             print(f"  Device disconnected but UF2 drive not detected")
+            # Try USB power-cycle recovery if we know the hub location
+            if hub_path and attempt < MAX_BOOTLOADER_RETRIES:
+                print(f"  Attempting USB power-cycle recovery (hub={hub_path} port={hub_port})...")
+                recovered_port = _recover_usb_port(
+                    hub_path, hub_port, device_serial, verbose
+                )
+                if recovered_port:
+                    current_port = recovered_port
+                    print(f"  Device recovered on {current_port}")
+                else:
+                    print(f"  USB recovery failed — device may need bootloader update")
             ser = None  # Port gone, will reopen after re-discovery
             continue
 
