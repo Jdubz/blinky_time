@@ -22,6 +22,7 @@ blinky_server/device/protocol.py
 blinky_server/ota/__init__.py
 blinky_server/ota/ble_dfu.py
 blinky_server/ota/compile.py
+blinky_server/ota/qspi_ota.py
 blinky_server/ota/uf2_upload.py
 blinky_server/transport/__init__.py
 blinky_server/transport/base.py
@@ -33,6 +34,7 @@ blinky_server/transport/wifi_transport.py
 tests/test_api.py
 tests/test_device.py
 tests/test_discovery.py
+tests/test_fleet_ble.py
 tests/test_fleet_manager.py
 tests/test_models.py
 tests/test_protocol.py

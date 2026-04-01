@@ -1,13 +1,12 @@
-"""OTA firmware update orchestration.
+"""Firmware upload orchestration.
 
-Three OTA methods, in order of preference:
-1. UF2 (USB mass storage) — safest, fastest, serial-only
-2. QSPI staged OTA — non-destructive, works over BLE and serial
-3. BLE DFU (Legacy Nordic) — destructive flash erase, last resort
+Single dispatch: upload_firmware() picks the best method per device.
 
-Provides:
-- upload_with_ble_fallback(): UF2 → BLE DFU for serial devices
-- upload_qspi_ota(): from qspi_ota module, for any connected device
+Upload priority (serial UF2 always preferred over wireless):
+1. UF2 (USB mass storage) — safest, fastest, requires serial connection
+2. BLE DFU (Legacy Nordic) — fallback when UF2 fails or device is BLE-only
+
+Also provides upload_with_ble_fallback() as the serial-device implementation.
 """
 
 from __future__ import annotations
@@ -99,3 +98,69 @@ async def upload_with_ble_fallback(
 
     result["message"] += f" (BLE DFU fallback also failed: {dfu_result.get('message', '')})"
     return result
+
+
+async def upload_firmware(
+    device: Any,
+    firmware_path: str,
+) -> dict[str, Any]:
+    """Upload firmware using the best available method for this device.
+
+    Single dispatch point — picks the best upload method automatically:
+      1. Serial UF2 (fastest, safest) — with BLE DFU fallback if UF2 fails
+      2. BLE DFU (wireless, slower) — for BLE-only devices
+      3. BLE DFU direct — for devices already in DFU recovery bootloader
+
+    Args:
+        device: Device instance (has .transport, .port, .ble_address, .state)
+        firmware_path: Path to .hex firmware file
+
+    Returns:
+        dict with status, message, elapsed_s
+    """
+    from ..device.device import DeviceState
+
+    # DFU recovery: device is stuck in bootloader, push firmware directly
+    if device.state == DeviceState.DFU_RECOVERY:
+        from .ble_dfu import upload_ble_dfu
+        from .compile import ensure_dfu_zip
+
+        if not device.ble_address:
+            return {"status": "error", "message": "DFU recovery but BLE address unknown"}
+        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
+        return await upload_ble_dfu(
+            app_ble_address=device.ble_address,
+            dfu_zip_path=dfu_zip,
+        )
+
+    transport_type = device.transport.transport_type
+
+    # Serial devices: UF2 first, BLE DFU fallback
+    if transport_type == "serial":
+        return await upload_with_ble_fallback(
+            serial_port=device.port,
+            firmware_path=firmware_path,
+            transport=device.transport,
+            ble_address=device.ble_address,
+        )
+
+    # BLE-only devices: BLE DFU with bootloader entry over BLE
+    if transport_type == "ble":
+        from .ble_dfu import upload_ble_dfu
+        from .compile import ensure_dfu_zip
+
+        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
+        ble_transport = device.transport
+
+        async def enter_bootloader_via_ble(cmd: str) -> None:
+            await ble_transport.write_line(cmd)
+            await asyncio.sleep(0.5)
+            await ble_transport.disconnect()
+
+        return await upload_ble_dfu(
+            app_ble_address=device.port,
+            dfu_zip_path=dfu_zip,
+            enter_bootloader_via_ble=enter_bootloader_via_ble,
+        )
+
+    return {"status": "error", "message": f"No upload method for transport: {transport_type}"}

@@ -1,0 +1,85 @@
+# Conv1D W16 v14 — v11 architecture + corrected OWBCE proximity loss
+#
+# Based on v12/v13 post-mortem (April 1, 2026):
+#
+#   - v11, v12, v13 all produce IDENTICAL onset detection at equal thresholds
+#   - Wider [48,48,32] architecture proved unnecessary (same F1 at 3x size)
+#   - SpecMix label mixing wrong for frame-level tasks (global scalar, not per-frame)
+#   - OWBCE had bugs: proximity applied to all frames, neighbor frames excluded
+#
+# v14 changes from v11:
+#
+#   1. Corrected OWBCE onset-proximity focal loss
+#      - Proximity boost applied to POSITIVE CLASS WEIGHT ONLY (not total loss)
+#      - Neighbor frames (y=0.25) included in onset map (threshold 0.1, not 0.5)
+#      - Goal: sharper activation peaks → better threshold separation
+#      - Source: Song et al. 2024 (corrected implementation)
+#
+#   2. No SpecMix — standard mixup retained (proven in v11)
+#      SpecMix is theoretically unsound for frame-level sequence labeling
+#
+#   3. No SWA — proven unhelpful at this model scale (v12 post-mortem)
+#
+#   4. No wider architecture — [32,32] is sufficient (v12/v13 post-mortem)
+#
+# Architecture: Conv1D(52→32, k=5) → Conv1D(32→32, k=5) → Conv1D(32→1, k=1)
+# ~10K params, <15 KB INT8
+#
+# If OWBCE shows no improvement over v11's plain asymmetric focal, the v11
+# training recipe is the ceiling for this data and future gains require
+# data/label improvements.
+#
+# Training command:
+#   tmux new-session -d -s training "cd ml-training && source venv/bin/activate && \
+#     PYTHONUNBUFFERED=1 python train.py \
+#       --config configs/conv1d_w16_onset_v14.yaml \
+#       --output-dir /mnt/storage/blinky-ml-data/outputs/v14-owbce-fixed \
+#       2>&1 | tee /mnt/storage/blinky-ml-data/outputs/v14-owbce-fixed.log"
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]              # v11 architecture (wider proved unnecessary)
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25           # Frames at onset±1 get 0.25× onset value
+  label_shift_frames: 1           # Shift targets 1 frame earlier (causal delay compensation)
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: true                 # 26 mel + 26 delta = 52 input channels
+
+loss:
+  type: "asymmetric_focal_owbce"
+  gamma_pos: 0.5                  # Preserve gradient for ALL onset frames
+  gamma_neg: 2.0                  # Suppress easy negative (silence) frames
+  proximity_window: 5             # +-5 frames = +-80ms sinusoidal boost around onsets
+  proximity_boost: 0.5            # 50% extra weight on positive class near onsets
+
+training:
+  mixup: true                    # Standard mixup (proven in v11, SpecMix dropped)
+  mixup_alpha: 0.4
+  specmix: false                  # Dropped — wrong for frame-level tasks
+  epochs: 60
+  patience: 15
+  pos_weight: 0                   # Auto-calculate (~15.5 for onset labels ~6% positive)
+
+augmentation:
+  spec_augment:
+    enabled: true
+    num_freq_masks: 2             # v11 levels (v12's aggressive 3+2 compressed activations)
+    max_freq_width: 4
+    num_time_masks: 1
+    max_time_width: 8
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v14.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15           # Budget: ~13.4 KB expected (same as v11)

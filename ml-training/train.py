@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
 import time
 
@@ -88,6 +89,47 @@ def spec_augment(x: torch.Tensor, num_freq_masks: int = 2,
         mask &= ~((time_idx >= starts) & (time_idx < ends))
 
     return x * mask
+
+
+def specmix(x: torch.Tensor, y: torch.Tensor,
+            alpha: float = 0.4) -> tuple[torch.Tensor, torch.Tensor]:
+    """SpecMix: CutMix for mel spectrograms (Kim et al. 2021).
+
+    Cuts a random rectangular region from a shuffled batch and pastes it
+    into the original. For frame-level targets, labels are mixed only in
+    the pasted time window (not globally) to avoid corrupting supervision
+    for unmodified frames.
+
+    Note: SpecMix is not recommended for frame-level onset detection —
+    frequency-domain cuts break broadband onset semantics. Prefer standard
+    mixup for onset models. See v13 post-mortem in IMPROVEMENT_PLAN.md.
+
+    Args:
+        x: (batch, time, n_mels) mel spectrogram tensor
+        y: (batch, time, channels) target tensor
+        alpha: Beta distribution parameter for lambda sampling
+    Returns:
+        (mixed_x, mixed_y)
+    """
+    B, T, F = x.shape
+    lam = torch.distributions.Beta(alpha, alpha).sample().item()
+    cut_ratio = math.sqrt(1 - lam)
+    cut_t = max(1, int(T * cut_ratio))
+    cut_f = max(1, int(F * cut_ratio))
+    t0 = torch.randint(0, max(1, T - cut_t + 1), (1,)).item()
+    f0 = torch.randint(0, max(1, F - cut_f + 1), (1,)).item()
+    idx = torch.randperm(B, device=x.device)
+    x_out = x.clone()
+    x_out[:, t0:t0 + cut_t, f0:f0 + cut_f] = x[idx, t0:t0 + cut_t, f0:f0 + cut_f]
+    # Mix labels only in the pasted time window (not globally).
+    # freq_ratio captures that only part of the frequency range was replaced.
+    freq_ratio = cut_f / F
+    y_out = y.clone()
+    y_out[:, t0:t0 + cut_t, :] = (
+        (1.0 - freq_ratio) * y[:, t0:t0 + cut_t, :]
+        + freq_ratio * y[idx, t0:t0 + cut_t, :]
+    )
+    return x_out, y_out
 
 
 def _broadcast_pos_weight(pos_weight: torch.Tensor | float,
@@ -281,6 +323,59 @@ def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * focal_weight * class_weight).mean()
 
 
+_owbce_kernel_cache: dict[tuple, torch.Tensor] = {}
+
+
+def asymmetric_focal_owbce(y_pred: torch.Tensor, y_true: torch.Tensor,
+                           pos_weight: torch.Tensor | float,
+                           gamma_pos: float = 0.5,
+                           gamma_neg: float = 2.0,
+                           proximity_window: int = 5,
+                           proximity_boost: float = 0.5) -> torch.Tensor:
+    """Asymmetric focal loss + onset-proximity weighting (OWBCE).
+
+    Combines asymmetric focal (Imoto & Mishima 2022) with onset-proximity
+    boost (Song et al. 2024). A sinusoidal kernel convolved over the onset
+    map produces a smooth proximity signal that boosts the positive class
+    weight near onsets, training the model to produce sharper activation peaks.
+
+    The proximity boost is applied ONLY to the positive class weight (not the
+    total loss). This avoids penalizing the model for correctly predicting low
+    values near onset boundaries.
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+    bce = F.binary_cross_entropy(y_pred, y_true, reduction='none')
+    is_positive = y_true > 0.5
+
+    # Asymmetric focal modulation (no per-batch tensor allocation)
+    focal_weight = torch.where(is_positive,
+                               (1 - y_pred) ** gamma_pos,
+                               y_pred ** gamma_neg)
+
+    # Cached proximity kernel (constant for a given window/device)
+    hw = proximity_window
+    ks = 2 * hw + 1
+    cache_key = (ks, y_pred.device)
+    if cache_key not in _owbce_kernel_cache:
+        t = torch.linspace(-1, 1, ks, device=y_pred.device)
+        _owbce_kernel_cache[cache_key] = (0.5 + 0.5 * torch.cos(math.pi * t)).view(1, 1, ks)
+    kernel = _owbce_kernel_cache[cache_key]
+
+    # Use low threshold to include neighbor frames (y=0.25) in onset map
+    C = y_true.shape[2]
+    onset_map = (y_true > 0.1).float().permute(0, 2, 1)  # (B,C,T)
+    proximity = F.conv1d(onset_map, kernel.expand(C, -1, -1),
+                         padding=hw, groups=C)
+    proximity = proximity.permute(0, 2, 1).clamp(0, 1)  # (B,T,C)
+
+    # Apply proximity boost to positive class weight ONLY (not total loss)
+    onset_weight = 1.0 + proximity_boost * proximity
+    class_weight = torch.where(is_positive, pw * onset_weight, 1.0)
+
+    return (bce * focal_weight * class_weight).mean()
+
+
 def distillation_loss(student_pred: torch.Tensor, teacher_pred: torch.Tensor,
                       temperature: float = 2.0) -> torch.Tensor:
     """Knowledge distillation loss (KL divergence on softened predictions).
@@ -321,7 +416,8 @@ def main():
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     parser.add_argument("--loss", default=None,
                         choices=["bce", "focal", "shift_bce", "confidence_shift_bce",
-                                 "asymmetric_focal", "shift_focal"],
+                                 "asymmetric_focal", "asymmetric_focal_owbce",
+                                 "shift_focal"],
                         help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
@@ -652,6 +748,17 @@ def main():
         loss_fn = partial(asymmetric_focal_bce, pos_weight=pos_weight,
                           gamma_pos=gamma_pos, gamma_neg=gamma_neg)
         print(f"Loss: asymmetric focal (gamma_pos={gamma_pos}, gamma_neg={gamma_neg})")
+    elif loss_type == "asymmetric_focal_owbce":
+        loss_cfg = cfg.get("loss", {})
+        gamma_pos = loss_cfg.get("gamma_pos", 0.5)
+        gamma_neg = loss_cfg.get("gamma_neg", 2.0)
+        prox_window = loss_cfg.get("proximity_window", 5)
+        prox_boost = loss_cfg.get("proximity_boost", 0.5)
+        loss_fn = partial(asymmetric_focal_owbce, pos_weight=pos_weight,
+                          gamma_pos=gamma_pos, gamma_neg=gamma_neg,
+                          proximity_window=prox_window, proximity_boost=prox_boost)
+        print(f"Loss: asymmetric focal + OWBCE (gamma_pos={gamma_pos}, gamma_neg={gamma_neg}, "
+              f"proximity_window=±{prox_window} frames, boost={prox_boost})")
     elif loss_type == "focal":
         loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
         print(f"Loss: focal (gamma={args.focal_gamma})")
@@ -682,10 +789,14 @@ def main():
         print(f"SpecAugment: {sa_num_freq} freq masks (max {sa_max_freq} bands), "
               f"{sa_num_time} time masks (max {sa_max_time} frames)")
 
-    # Online mixup config (SpecMix 2021, DCASE 2024)
-    use_mixup = cfg.get("training", {}).get("mixup", False)
+    # Online mixup / SpecMix config
+    use_specmix = cfg.get("training", {}).get("specmix", False)
+    specmix_alpha = cfg.get("training", {}).get("specmix_alpha", 0.4)
+    use_mixup = cfg.get("training", {}).get("mixup", False) and not use_specmix
     mixup_alpha = cfg.get("training", {}).get("mixup_alpha", 0.4)
-    if use_mixup:
+    if use_specmix:
+        print(f"SpecMix (CutMix): Beta({specmix_alpha}, {specmix_alpha}), p=0.5")
+    elif use_mixup:
         print(f"Mixup: Beta({mixup_alpha}, {mixup_alpha}), p=0.5")
 
     # Training loop
@@ -745,8 +856,10 @@ def main():
                 X_batch = spec_augment(X_batch, sa_num_freq, sa_max_freq,
                                        sa_num_time, sa_max_time)
 
-            # Online mixup augmentation (SpecMix 2021, DCASE 2024)
-            if use_mixup and np.random.random() < 0.5:
+            # Online augmentation: SpecMix (CutMix) or standard mixup
+            if use_specmix and np.random.random() < 0.5:
+                X_batch, Y_batch = specmix(X_batch, Y_batch, specmix_alpha)
+            elif use_mixup and np.random.random() < 0.5:
                 lam = np.random.beta(mixup_alpha, mixup_alpha)
                 idx = torch.randperm(X_batch.size(0), device=X_batch.device)
                 X_batch = lam * X_batch + (1 - lam) * X_batch[idx]

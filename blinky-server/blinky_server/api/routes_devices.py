@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
 
@@ -192,19 +191,18 @@ async def fleet_discover() -> dict[str, Any]:
 
 @router.post("/devices/{device_id}/ota")
 async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
-    """Upload firmware to a device via OTA (UF2 for serial, BLE DFU for BLE).
+    """Upload firmware to a device using the best available method.
 
-    The server handles the entire flow:
-    1. Sends bootloader command via its existing transport
-    2. Disconnects the transport
-    3. Detects UF2 drive / establishes BLE DFU connection
-    4. Copies firmware / performs DFU transfer
-    5. Waits for device to reboot
-    6. Reconnects automatically via fleet manager
+    Automatically selects the upload method based on device transport:
+      - Serial devices: UF2 (USB mass storage), BLE DFU fallback
+      - BLE devices: BLE DFU with bootloader entry over BLE
+      - DFU recovery: BLE DFU direct (device already in bootloader)
 
-    No port contention — the server owns the connection throughout.
+    Serial UF2 is always preferred over wireless methods.
     """
     from pathlib import Path
+
+    from ..ota import upload_firmware
 
     device = _get_device_or_404(device_id)
 
@@ -219,115 +217,28 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     if not firmware.is_file():
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
-    platform = device.platform
-
-    if platform != "nrf52840":
-        raise HTTPException(400, f"OTA not yet supported for platform: {platform}")
+    if device.platform != "nrf52840":
+        raise HTTPException(400, f"Upload not yet supported for platform: {device.platform}")
 
     fleet = get_fleet()
-
-    # Set recovery firmware for auto-recovery of stuck DFU devices
     fleet.set_recovery_firmware(str(firmware))
 
-    # Device is stuck in BLE DFU bootloader (SafeBoot crash recovery).
-    # Push firmware directly — no bootloader entry needed.
-    if device.state == DeviceState.DFU_RECOVERY:
-        from ..ota.ble_dfu import upload_ble_dfu
-        from ..ota.compile import ensure_dfu_zip
+    # Hold time: UF2 takes ~60s, BLE DFU takes ~8 min
+    is_ble_only = (
+        device.state == DeviceState.DFU_RECOVERY or device.transport.transport_type == "ble"
+    )
+    hold_time = 600 if is_ble_only else 120
 
-        # Use ble_address (app address) — NOT device.port which may be the
-        # bootloader address for placeholder devices.
-        app_ble_addr = device.ble_address
-        if not app_ble_addr:
-            raise HTTPException(400, "Device in DFU recovery but BLE app address unknown")
+    fleet.hold_reconnect(device_id, hold_time)
+    fleet.pause_discovery()
+    try:
+        result = await upload_firmware(device, str(firmware))
+    finally:
+        device.state = DeviceState.DISCONNECTED
+        fleet.resume_discovery()
+        fleet.resume_reconnect(device_id)
 
-        try:
-            dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
-        except ValueError as e:
-            raise HTTPException(400, str(e)) from e
-
-        fleet.hold_reconnect(device.id, 600)  # BLE DFU takes ~8 min (488s measured)
-        fleet.pause_discovery()
-        try:
-            result = await upload_ble_dfu(
-                app_ble_address=app_ble_addr,
-                dfu_zip_path=dfu_zip,
-                # No bootloader entry — device is already in DFU bootloader
-            )
-        finally:
-            device.state = DeviceState.DISCONNECTED
-            fleet.resume_discovery()
-            fleet.resume_reconnect(device.id)
-
-        if result["status"] == "ok":
-            return OtaResponse(**result)
-        else:
-            raise HTTPException(500, result["message"])
-
-    transport_type = device.transport.transport_type
-
-    if transport_type == "serial":
-        from ..ota import upload_with_ble_fallback
-
-        # Blackout auto-reconnect while we do the upload
-        fleet.hold_reconnect(device_id, 120)
-        fleet.pause_discovery()  # Prevent BleakScanner conflict if BLE fallback triggers
-        try:
-            result = await upload_with_ble_fallback(
-                serial_port=device.port,
-                firmware_path=str(firmware),
-                transport=device.transport,
-                ble_address=device.ble_address,
-            )
-        finally:
-            device.state = DeviceState.DISCONNECTED
-            fleet.resume_discovery()
-            fleet.resume_reconnect(device_id)
-
-        if result["status"] == "ok":
-            return OtaResponse(**result)
-        else:
-            raise HTTPException(500, result["message"])
-
-    elif transport_type == "ble":
-        from ..ota.ble_dfu import upload_ble_dfu
-        from ..ota.compile import ensure_dfu_zip
-
-        # Ensure we have a DFU zip (auto-converts .hex if needed)
-        try:
-            dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
-        except ValueError as e:
-            raise HTTPException(400, str(e)) from e
-
-        # Capture transport write_line before hold (which may disconnect)
-        ble_transport = device.transport
-
-        async def enter_bootloader_via_ble(cmd: str) -> None:
-            """Send bootloader command over BLE NUS, then disconnect."""
-            await ble_transport.write_line(cmd)
-            await asyncio.sleep(0.5)  # Let command transmit before disconnect
-            await ble_transport.disconnect()
-
-        fleet.hold_reconnect(device_id, 600)  # BLE DFU takes ~8 min (488s measured)
-        fleet.pause_discovery()  # Prevent BleakScanner conflict during DFU
-        try:
-            result = await upload_ble_dfu(
-                app_ble_address=device.port,  # BLE address is stored as port
-                dfu_zip_path=dfu_zip,
-                enter_bootloader_via_ble=enter_bootloader_via_ble,
-            )
-        finally:
-            # Mark device as disconnected so auto-reconnect picks it up.
-            # The old transport was disconnected during DFU — device is
-            # rebooting with new firmware and will re-advertise on BLE.
-            device.state = DeviceState.DISCONNECTED
-            fleet.resume_discovery()
-            fleet.resume_reconnect(device_id)
-
-        if result["status"] == "ok":
-            return OtaResponse(**result)
-        else:
-            raise HTTPException(500, result["message"])
-
+    if result["status"] == "ok":
+        return OtaResponse(**result)
     else:
-        raise HTTPException(400, f"OTA not supported for transport: {transport_type}")
+        raise HTTPException(500, result["message"])

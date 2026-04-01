@@ -191,8 +191,9 @@ const AudioControl& AudioTracker::update(float dt) {
     }
 
     // 7. ACF period detection + PLP pattern analysis on timer (~4ms every 150ms)
-    // Warmup: ACF_MAX_LAG*2 = 160 frames (~2.4s) needed before any source qualifies.
-    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 160) {
+    // Warmup: 120 frames (~1.8s). Minimum is ACF_MAX_LAG (80) for valid correlation;
+    // 120 gives 1.5x the max lag for stable first ACF without over-delaying cold start.
+    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 120) {
         uint32_t t0 = time_.millis();
         runAcf();
         uint32_t t1 = time_.millis();

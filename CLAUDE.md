@@ -163,7 +163,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 
 ### Key Architecture Components
 
-- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF → period; NN onset → visual pulse. Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset) selects best period via DFT magnitude + phase alignment for free.
+- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF → period; NN onset → visual pulse. Multi-source ACF at beat-level lags (20-80) across 3 mean-subtracted sources (flux, bass, NN onset), parabolic interpolation, bar multipliers with epoch-fold variance scoring.
 - **FrameOnsetNN** (`blinky-things/audio/FrameOnsetNN.h`) - Conv1D W16 TFLite NN onset detection (single-channel, 13.4 KB INT8, ~7ms). Detects acoustic onsets (kicks/snares), not metrical beats.
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands + spectral flux (HWR)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with fixed hardware gain (AGC removed v72)
@@ -226,7 +226,7 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands + spe
     ↓
     ├── [BPM] Spectral flux (HWR) → contrast² → OSS buffer → ACF → period estimate
     ├── [ONSET] FrameOnsetNN (Conv1D W16, ~7ms) → onset activation → pulse (visual sparks)
-    ├── [PLP] Fourier tempogram (Goertzel DFT) across 3 sources (flux, bass, NN onset) → best period + pattern
+    ├── [PLP] Multi-source ACF across 3 sources (flux, bass, NN onset) → best period + pattern
     ↓
 AudioTracker (decoupled: spectral flux → tempo, NN onset → pulse, PLP → phase/pattern)
     ↓
@@ -377,8 +377,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 5. ACF every 150ms → raw peak-finding → BPM / period estimate
 6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
 7. Onset activation → pulse detection (visual sparks)
-8. [PLP PATH] Fourier tempogram (Goertzel DFT) across 3 mean-subtracted sources (flux, bass, NN onset)
-9. DFT magnitude selects period, DFT phase gives alignment → epoch-fold pattern → phase + plpPulse output
+8. [PLP PATH] Multi-source ACF across 3 mean-subtracted sources (flux, bass, NN onset)
+9. ACF peak selects period, epoch-fold peak gives phase alignment → pattern → phase + plpPulse output
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
      onsetDensity=3.2}
 11. Fire generator:
@@ -444,7 +444,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
 **Production Ready:**
-- ✅ AudioTracker with ACF+PLP (Fourier tempogram) + pulse baseline tracking + pattern slot cache (v82)
+- ✅ AudioTracker with ACF+PLP (multi-source ACF) + pulse baseline tracking + pattern slot cache (v83)
 - ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, v11-final deployed on 4/5 blinkyhost devices)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
@@ -529,11 +529,13 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, pattern-quality-driven period detection, PLP phase/pattern extraction. No downbeat tracking. **Pattern accuracy is the primary metric — BPM accuracy is irrelevant; octave-matched periods (half/double time) are correct if they produce better visual patterns.** Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
+- **v12 evaluated (not deployed):** Wider [48,48,32] channels, 24K params, ~27 KB INT8. +17% per-instrument recall at threshold 0.40 but Est/Ref=1.85x (too many false positives). SWA unhelpful.
+- **v12/v13 not deployed (April 1 post-mortem):** Apparent regressions were eval pipeline artifacts — `sweep_thresholds()` optimized against beat F1 (wrong metric), picking different operating points. At equal thresholds (t=0.40), all three models are nearly identical (v13 marginally best: KW F1=0.653, Kick=0.721). SpecMix label mixing was wrong for frame-level tasks (global scalar, not per-frame). OWBCE proximity boost was applied to all frames instead of positives only. Wider [48,48,32] architecture proved equivalent to [32,32] — task is data-limited, not capacity-limited. See IMPROVEMENT_PLAN.md for v14 plan.
 
 ### Key Features
 - **Multi-source ACF + PLP architecture** (v83): ACF scans beat-level lags (20-80) on 3 mean-subtracted sources (flux, bass, NN onset). Parabolic interpolation refines peaks. Bar multipliers (2×/3×/4×) generate candidates scored by ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier). **Pattern quality is the objective — period selection optimizes for visual pattern contrast, not BPM accuracy. Half/double time matches are correct if they produce better patterns.** PLP epoch-folds NN-gated flux at detected period for visual pattern shape. Cosine OLA pulse buffer for smooth PLP output. Pattern slot cache (4-slot LRU of 16-bin PLP digests) for instant section recall. NN onset used for visual pulse only.
 - **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
-- **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP Fourier tempogram.
+- **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP pattern extraction.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 - **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold

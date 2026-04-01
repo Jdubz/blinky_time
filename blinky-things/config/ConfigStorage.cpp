@@ -207,7 +207,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.energyMelWeight = 0.30f;
     data_.tracker.energyOdfWeight = 0.40f;
     data_.tracker.plpActivation = 0.3f;
-    data_.tracker.plpConfAlpha = 0.15f;
+    data_.tracker.plpConfAlpha = 0.25f;
     data_.tracker.plpNovGain = 1.5f;
     data_.tracker.plpSignalFloor = 0.10f;
     data_.tracker.bassFluxWeight = 0.5f;
@@ -218,7 +218,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.slotSwitchThreshold = 0.70f;
     data_.tracker.slotNewThreshold = 0.40f;
     data_.tracker.slotUpdateRate = 0.15f;
-    data_.tracker.slotSaveMinConf = 0.50f;
+    data_.tracker.slotSaveMinConf = 0.25f;
     data_.tracker.slotSeedBlend = 0.70f;
 
     data_.brightness = 100;

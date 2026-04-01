@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 87;  // v87: Remove dead musicSpawnPulse from all generators, wire up energy weights + onsetDensity
+    static const uint8_t SETTINGS_VERSION = 88;  // v88: ACF convergence fix (plpConfAlpha 0.15→0.25, slotSaveMinConf 0.50→0.25)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {

@@ -1,12 +1,12 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 22, 2026*
+*Last Updated: April 1, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v82 (SETTINGS_VERSION 82). AudioTracker with ACF+PLP architecture + pattern slot cache. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. Fisher's g removed (penalized syncopated music). v77 pattern memory (IOI histogram + bar histogram) replaced by slot cache. ~20 tunable params persisted to flash. 16,464 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v88 (SETTINGS_VERSION 88). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) replaces Fourier tempogram (75ms) for period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring selects period. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. ACF convergence fix (v88): plpConfAlpha 0.15→0.25, slotSaveMinConf 0.50→0.25, warmup 160→120 frames. ~20 tunable params persisted to flash. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 3 nRF52840 on blinkyhost (v88), 1 nRF52840 needs SWD recovery (2A798EF8).
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v11-final deployed on 4/5 blinkyhost devices (2 ESP32-S3, 2 nRF52840). Trained on de-duplicated onset labels. Kick recall 0.743, Snare recall 0.727, HiHat recall 0.701. 13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
@@ -30,12 +30,12 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ### Priority 1: Predominant Local Pulse (PLP) — DEPLOYED (v81)
 
-**Status: DEPLOYED. Fourier tempogram (Goertzel DFT) period selection across 3 sources. Soft blend (no hard threshold). Cold-start template seeding. Fisher's g computed but NOT used for confidence (reverted). PLL abandoned (March 20). Grid-search PMR replaced by Fourier tempogram (March 22).**
+**Status: DEPLOYED. Multi-source ACF period detection (replaced Fourier tempogram March 31). Soft blend (no hard threshold). Cold-start template seeding. Pattern slot cache. Convergence fix in progress (slotSaveMinConf 0.50→0.25, plpConfAlpha 0.15→0.25, warmup 160→120 frames).**
 
 See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 **What was built:**
-- **Fourier tempogram period selection**: Goertzel DFT at candidate frequencies across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step).
+- **Multi-source ACF period detection (v83, replaced Fourier tempogram)**: ACF at beat-level lags (20-80) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Parabolic interpolation refines peaks. Bar multipliers (2x/3x/4x) with sqrt penalty. Epoch-fold variance scoring selects period with best pattern contrast. ~4ms per update (vs 75ms old DFT tempogram).
 - **Soft blend (no hard threshold)**: PLP cosine OLA and cosine fallback are continuously blended by confidence (0=pure cosine, 1=pure cosine OLA). No discontinuous switch. Confidence naturally approaches 0 during silence/ambient.
 - **Cold-start template seeding**: 8 canonical patterns (four-on-floor, backbeat, halftime, breakbeat, 8th-note, dnb, dembow, sparse). After 1 bar of data, cosine similarity > 0.50 triggers a 50/50 blend of template and observed histogram. Validated: activation time dropped from 8-22s to 0-2.4s on most tracks (amapiano 0.3s, techno-minimal-emotion 1.3s, trance-goa 1.2s). Some tracks still slow (afrobeat 13.5s, breakbeat-bg 16.9s — patterns don't match templates well).
 - **Steep signal gate**: Mic level gates confidence with a steep transition near noise floor (`plpSignalFloor`). Once audio is clearly present (>2x floor), gate is fully open. Only suppresses during true silence.
@@ -43,14 +43,18 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 - **Fisher's g tried and reverted**: Fisher's g-statistic (ratio of max DFT magnitude to sum) was implemented as a principled [0,1] confidence measure, but penalizes tracks with multiple similarly-strong periods (common in syncopated music). DFT magnitude used instead — soft blend handles the confidence-to-output mapping without needing a principled scale.
 - **Epoch-fold pattern extraction** retained for slot cache pattern digest only (recency-weighted, ~3-epoch half-life). plpPulse output uses canonical cosine OLA.
 - **Pattern normalization** uses min-max (signal is mean-subtracted, may have negatives)
-- **Confidence** = DFT magnitude x signal presence (steep mic level gate)
+- **Confidence** = ACF peak strength x signal presence (steep mic level gate)
 - **Adaptive phase correction** removed — phase is implicit in cosine OLA
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
-**Current test results:**
-- atTransient 0.37-0.48 (strong improvement from grid-search PMR's 0.10-0.13)
-- autoCorr up to +0.93 (pattern repeats strongly)
-- BPM accuracy 0.91-0.98
+**Current test results (ACF system, March 31 validation suite):**
+- plpAtTransient 0.39-0.67 across 12 tracks (dubstep best at 0.665)
+- plpAutoCorr up to 0.98 (amapiano)
+- Music mode activation: 25-60s on most tracks, DnB never activates (0/6)
+- Activation reliability: only 2/12 tracks activate on all 6 runs
+
+**ACF convergence bottleneck (identified March 31):**
+The slot cache and template seeding features were functionally blocked by `slotSaveMinConf = 0.50` — unreachable with ACF peak strengths (typically 0.1-0.4 on real mic audio, lower than old DFT magnitude values). Fix applied: `slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames. Awaiting validation.
 
 **Remaining work:**
 - Further phase correction tuning if needed
@@ -86,8 +90,31 @@ Key finding: v3's pos_weight=20 is critical. Auto-calculation gives ~35.6 which 
 | Snare F1 (200-4k Hz) | 0.666 | **0.773** |
 | HiHat F1 (>4k Hz) | 0.704 | **0.806** |
 
-**v12 (in progress): Low-risk architectural improvements.**
-Wider [48,48,32] channels (28K params, ~28 KB INT8), 3rd conv layer (RF 144→176ms), SWA, stronger SpecAugment (3+2 masks), longer training (80 epochs). All existing proven code paths, no new implementations. See `configs/conv1d_w16_onset_v12.yaml`.
+**v12/v13 post-mortem (April 1): Apparent regressions were eval pipeline artifacts.**
+
+Both v12 and v13 appeared to regress massively vs v11 (onset F1 0.56/0.53 vs 0.62, kick recall 0.47/0.42 vs 0.74). Deep investigation revealed this was a **threshold selection artifact**, not a real model quality difference. At equal thresholds (t=0.40), all three models are nearly identical:
+
+| Metric | v11 @ t=0.40 | v12-best @ t=0.40 | v13 @ t=0.40 |
+|--------|-------------|-------------------|--------------|
+| KW Onset F1 | 0.649 | 0.645 | **0.653** |
+| Kick recall | 0.709 | 0.696 | **0.721** |
+| Snare recall | 0.692 | **0.695** | 0.700 |
+| HiHat recall | 0.685 | **0.695** | 0.689 |
+
+**Root causes of apparent regression:**
+1. **Eval pipeline bug**: `sweep_thresholds()` in `evaluate.py` optimizes threshold against **beat F1** (`.beats.json`), not onset F1. Since v12/v13 have higher activation baselines, the sweep picks higher thresholds that massively under-detect. Fix: sweep against KW onset F1.
+2. **Pipeline evaluates wrong model**: `train_pipeline.sh:113` hardcodes `final_model.pt` (SWA-averaged) instead of `best_model.pt`.
+3. **SpecMix label bug (v13)**: `specmix()` in `train.py:120` applies a global area-ratio scalar to mix labels across all time frames. For frame-level onset labels, only the pasted time range should get mixed labels. Additionally, frequency-domain cuts break broadband onset semantics (onsets are defined by co-occurring energy across many bands).
+4. **OWBCE proximity applied to all frames (v13)**: `train.py:359` multiplies `onset_weight` into loss for ALL frames (positive + negative). Per Song et al. 2024, proximity boost should apply only to positive class weight. Boosting negatives near onsets penalizes the model for correctly predicting low values near onset boundaries.
+5. **Wider architecture ([48,48,32]) didn't help**: 28K params produces identical discrimination as 13K params. The task is data/label-limited, not capacity-limited.
+
+**Per-genre findings**: v12/v13 genuinely improved on syncopated genres where v11 over-detects (amapiano +0.19 onset F1, garage +0.16, breakbeat +0.07). Catastrophic on trance (trance-infected-vibes: 0.16 vs 0.67). The wider models' conservatism helps complex rhythms but kills sparse content.
+
+**What we learned:**
+- The [32,32] v11 architecture is sufficient — extra capacity doesn't help onset detection with current training data
+- SpecMix is theoretically unsound for frame-level sequence labeling (designed for per-clip classification)
+- OWBCE concept has merit (v13 marginally best kick recall at equal threshold) but implementation was wrong
+- The primary bottleneck is data/label quality, not model capacity
 
 **Already deployed in v11 (proven):**
 - ✅ Online mixup augmentation (Beta(0.4,0.4), p=0.5) — Source: SpecMix (2021), DCASE 2024
@@ -97,13 +124,33 @@ Wider [48,48,32] channels (28K params, ~28 KB INT8), 3rd conv layer (RF 144→17
 - ✅ Label neighbor weighting (0.25) — Source: Schlüter & Bock 2014
 - ✅ nRF52840 gain calibration (hw_gain_max=32 in base.yaml)
 
+**Attempted in v12/v13 (not deployed — see post-mortem above):**
+- ❌ **SpecMix (CutMix for spectrograms)** — Theoretically unsound for frame-level tasks. Label mixing uses global area scalar across all time frames (should be per-frame for sequence labeling). Frequency-domain cuts break broadband onset semantics. Designed for per-clip classification (Kim et al. 2021), not frame-level sequence labeling.
+- ⚠️ **OWBCE onset-proximity focal loss** — Concept valid, implementation wrong. Proximity boost applied to all frames (should only boost positive class weight). Neighbor frames (y=0.25) excluded from onset map. v13 showed marginally best kick recall at equal threshold, suggesting the idea has merit with correct implementation.
+- ❌ **Wider architecture [48,48,32]** — Same discrimination as [32,32] at 3x the model size and inference cost. Task is data/label-limited, not capacity-limited.
+- ❌ **SWA** — Slightly worse than best checkpoint in v12. No benefit for this model size.
+
+**v14 plan: Infrastructure fixes + correct OWBCE on v11 architecture.**
+
+Prerequisites (code fixes before training):
+1. **Fix `evaluate.py` threshold sweep** — Optimize against KW onset F1 (or onset F1), not beat F1. The beat F1 target creates arbitrary operating points that make equivalent models look very different.
+2. **Fix `train_pipeline.sh`** — Evaluate and export `best_model.pt`, not `final_model.pt`. SWA is dropped, but the pipeline should use the best validation checkpoint regardless.
+3. **Fix OWBCE loss** — Apply proximity boost to positive class weight only: `class_weight = torch.where(is_positive, pw * onset_weight, 1.0)` instead of multiplying `onset_weight` into the full loss. Also lower the `is_positive` threshold to include neighbor frames (y > 0.1 instead of y > 0.5).
+4. **Drop SpecMix** — Not salvageable for frame-level tasks without a complete rewrite. Standard mixup (proven in v11) is better.
+
+Training config (`conv1d_w16_onset_v14.yaml`):
+- Architecture: [32, 32] from v11 (13K params, 13.4 KB INT8) — wider architecture proved unnecessary
+- Loss: `asymmetric_focal_owbce` with corrected implementation (proximity on positives only)
+- Augmentation: standard mixup (v11's Beta(0.4,0.4), p=0.5) — SpecMix dropped
+- SpecAugment: v11 levels (2 freq masks, 1 time mask)
+- All other hyperparams from v11 (LR=0.001, batch=4096, dropout=0.1, epochs=60, patience=15)
+- No SWA
+
+Expected outcome: if corrected OWBCE improves peak sharpness, we should see better onset F1 at optimal threshold (not just equal performance at fixed threshold). If OWBCE still shows no improvement, the v11 training recipe is the ceiling for this data.
+
 **Future training improvements (research-backed, not yet implemented):**
 
 1. **Onset-specific knowledge distillation** (+2-5% F1, medium effort) — Use madmom CNN OnsetDetector as teacher (NOT Beat This! — that's a beat tracker). The teacher's continuous probability output encodes onset activation shape (gradual rise before attack, sharp drop after) that binary labels can't express. Requires modifying `generate_teacher_labels.py` to use madmom OnsetDetector. Source: Shi et al. (Interspeech 2019): +15% error reduction; Hyperconnect (ICASSP 2022): +25.3% mAP. ~~Beat This! distillation~~: INVALID for onset detection — would suppress off-beat onsets and inject phantom beat targets.
-
-2. **SpecMix (CutMix for spectrograms)** (+2-4% F1, low effort) — Rectangular spectral patches cut from one sample and pasted into another with label mixing. Published as outperforming standard mixup by +2.59% and SpecAugment by +4.45%. Zero inference cost. Simple implementation: cut random (time, freq) rectangle from sample B, paste into sample A, mix labels proportionally. Source: Kim et al. 2021.
-
-3. **Onset-Weighted BCE (OWBCE)** (+1-3% event-F1, low effort) — Sinusoidal weighting window around onset frames. Published +6.43% event-F1 over standard BCE. Similar to our neighbor_weight=0.25 but more sophisticated (continuous sinusoidal envelope). Source: Song et al. 2024.
 
 4. **Quantization-Aware Training (QAT)** (+1-3% F1, high effort) — Simulate INT8 quantization during training so model compensates for quantization noise. Larger benefit for small models where each weight matters. Complex to integrate: our PyTorch → Keras → TFLite pipeline requires QAT in the Keras domain, not PyTorch. Source: NVIDIA QAT benchmarks, DCASE 2024 low-complexity task.
 
@@ -116,24 +163,35 @@ Wider [48,48,32] channels (28K params, ~28 KB INT8), 3rd conv layer (RF 144→17
 **Not worth pursuing:**
 - Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
 - Curriculum learning: inconsistent evidence, moderate effort
+- Wider architecture ([48,48,32]): **proven equivalent to [32,32]** at 3x size (v12/v13 post-mortem)
 - Wider windows (W32/W64): 150ms RF is optimal for onset detection (Schlüter 2014). Our 176ms is ample.
 - Transformer/Conformer: 1.4M+ params, far too large for Cortex-M4F
 - Bidirectional models: can't run in real-time. Only ~2-5% F1 gain for onset detection (Bock 2012)
 - SE attention blocks: global pooling over 16-frame window loses temporal position info critical for onset detection
-- Structured pruning: model already tiny (28K params). Pruning helps at 100K+ scale.
+- Structured pruning: model already tiny (13K params). Pruning helps at 100K+ scale.
 - Beat This! distillation: INVALID — beat tracker soft labels suppress off-beat onsets and inject phantom targets on empty strong beats
 - Multi-class output (kick/snare/hihat): firmware uses single-channel onset. Per-instrument adds quantization overhead with no visual benefit.
+- SpecMix / CutMix: **proven unsound** for frame-level onset detection (v13 post-mortem). Label mixing is wrong for sequence labeling tasks.
+- SWA: **proven unhelpful** at this model scale (v12 post-mortem)
 
-### Priority 3: Test Metric Alignment
+### Priority 3: Server Consolidation — IN PROGRESS
 
-**Status: MOSTLY DONE. PLP metrics implemented. Scoring consolidated.**
+**Status: Phase 1 complete. Canonical scoring engine ported to blinky-server.**
 
+Three parallel test/scoring systems (blinky-server, blinky-serial-mcp, 16 CJS scripts) being consolidated into blinky-server as single source of truth. See `docs/SERVER_CONSOLIDATION_PLAN.md` for full details.
+
+- ✅ Phase 1: Scoring engine + audio foundations ported to Python (scoring.py, types.py, audio_lock.py, audio_player.py, track_discovery.py). 6 review bugs fixed.
+- [ ] Phase 2: Test session infrastructure (per-device recording buffers)
+- [ ] Phase 3: Test runner REST endpoints (run-track, validate, job management)
+- [ ] Phase 4: Advanced test tools (param sweep, A/B test, pattern memory)
+- [ ] Phase 5: MCP server → thin HTTP client
+- [ ] Phase 6: Synthetic patterns + ensemble tuning
+- [ ] Phase 7: Delete 14 CJS scripts + MCP internals
+
+**Previously completed (retained):**
 - ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
-- ✅ Octave error penalty removed from param_sweep_multidev.cjs scoring
 - ✅ PLP metrics implemented: `plp.atTransient`, `plp.autoCorr`, `plp.peakiness`, `plp.mean`
-- ✅ Update evaluate.py aggregate to show onset F1 as primary metric
-- ✅ `formatScoreSummary` consolidation — unified score formatting across sweep/A-B/validation tools
-- [ ] Add phase alignment visualization (onset time vs grid position scatter plot)
+- ✅ BPM accuracy scoring removed from canonical scoring (still present in stale CJS scripts — deleted in Phase 7)
 
 ### Architecture History (Collapsed — see git log for details)
 

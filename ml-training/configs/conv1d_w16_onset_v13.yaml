@@ -1,0 +1,88 @@
+# Conv1D W16 v13 — v12 architecture + SpecMix + OWBCE
+#
+# Changes from v12 (onset F1=0.607 @ t=0.40, KW F1=0.645, kick=0.696, snare=0.695, hihat=0.695):
+#
+#   1. SpecMix (CutMix for spectrograms) replaces standard mixup
+#      - Cuts random (time x freq) rectangle from shuffled batch, pastes into original
+#      - Labels mixed proportionally to pasted area
+#      - Published +2.59% over standard mixup (Kim et al. 2021)
+#      - Better spectral coherence than global linear mixing
+#
+#   2. Onset-proximity focal loss (OWBCE-inspired, Song et al. 2024)
+#      - Sinusoidal kernel convolved over onset map produces proximity signal
+#      - Boosts gradients near onsets: model learns sharper activation peaks
+#      - Addresses v12's activation compression (outputs cluster 0.3-0.6)
+#      - Goal: wider activation gap -> better precision at any threshold
+#      - Published +6.43% event-F1 over standard BCE
+#
+#   3. SpecAugment back to v11 levels
+#      - v12's aggressive masking (3+2) compressed activation range
+#      - v11 levels (2+1) + SpecMix provide sufficient regularization
+#
+#   4. SWA dropped
+#      - v12 SWA model (final_model.pt) was slightly worse than best checkpoint
+#
+# Retained from v12 (all proven):
+#   - Architecture: [48,48,32] channels (17% better kick/snare/hihat recall than v11)
+#   - Delta features, freq positional encoding
+#   - Onset consensus labels, neighbor_weight=0.25
+#   - Label shift (-1 frame)
+#
+# Architecture: Conv1D(52->48,k=5) -> Conv1D(48->48,k=5) -> Conv1D(48->32,k=3) -> Conv1D(32->1,k=1)
+# ~24K params, ~27 KB INT8, ~9ms inference
+# Receptive field: 11 frames = 176ms
+#
+# Training command:
+#   tmux new-session -d -s training "cd ml-training && source venv/bin/activate && \
+#     PYTHONUNBUFFERED=1 python train.py \
+#       --config configs/conv1d_w16_onset_v13.yaml \
+#       --output-dir /mnt/storage/blinky-ml-data/outputs/v13-specmix-owbce \
+#       2>&1 | tee /mnt/storage/blinky-ml-data/outputs/v13-specmix-owbce.log"
+
+model:
+  type: "frame_conv1d"
+  channels: [48, 48, 32]           # NOTE: post-mortem showed wider arch is equivalent to v11's [32,32] at equal thresholds
+  kernel_sizes: [5, 5, 3]          # RF: (5-1)+(5-1)+(3-1) = 10 -> 11 frames = 176ms
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25           # Frames at onset+-1 get 0.25x onset value
+  label_shift_frames: 1           # Shift targets 1 frame earlier (causal delay compensation)
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: true                 # 26 mel + 26 delta = 52 input channels
+
+loss:
+  type: "asymmetric_focal_owbce"
+  gamma_pos: 0.5                  # Preserve gradient for ALL onset frames
+  gamma_neg: 2.0                  # Suppress easy negative (silence) frames
+  proximity_window: 5             # +-5 frames = +-80ms sinusoidal boost around onsets
+  proximity_boost: 0.5            # 50% extra weight near onsets
+
+training:
+  specmix: true                   # CutMix for spectrograms (replaces standard mixup)
+  specmix_alpha: 0.4              # Beta(0.4, 0.4) distribution for cut ratio
+  mixup: false                    # Disabled -- SpecMix replaces it
+  epochs: 60
+  patience: 15
+  pos_weight: 0                   # Auto-calculate (~15.5 for onset labels ~6% positive)
+
+augmentation:
+  spec_augment:
+    enabled: true
+    num_freq_masks: 2             # Back to v11 levels (v12's 3 compressed activations)
+    max_freq_width: 4
+    num_time_masks: 1
+    max_time_width: 8
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v13.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 30           # Budget: ~27 KB expected, 30 KB ceiling
