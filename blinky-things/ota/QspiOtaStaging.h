@@ -416,6 +416,94 @@ public:
     }
 
     /**
+     * Begin a new OTA transfer: erase QSPI staging area and record expected
+     * size + CRC. Called by server before sending chunks.
+     */
+    bool beginTransfer(uint32_t size, uint16_t expectedCrc, Print& out) {
+        if (!ready_) {
+            out.println(F("ERR QSPI not initialized"));
+            return false;
+        }
+        if (size == 0 || size > MAX_FW_SIZE) {
+            out.print(F("ERR invalid size: "));
+            out.println(size);
+            return false;
+        }
+
+        // Erase staging area (header + firmware region)
+        uint32_t eraseBytes = FIRMWARE_ADDR + size;
+        uint32_t eraseSectors = (eraseBytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
+        for (uint32_t s = 0; s < eraseSectors; s++) {
+            SafeBootWatchdog::feed();
+            if (!eraseSector(s)) {
+                out.println(F("ERR erase failed"));
+                return false;
+            }
+        }
+
+        // Write header WITHOUT magic (uncommitted)
+        StagingHeader hdr;
+        hdr.size = size;
+        hdr.crc16 = expectedCrc;
+        hdr.magic = 0x0000;
+        qspiWrite(&hdr, sizeof(hdr), HEADER_ADDR);
+
+        transferSize_ = size;
+        transferCrc_ = expectedCrc;
+        transferActive_ = true;
+
+        out.print(F("OK ota begin size="));
+        out.print(size);
+        out.print(F(" crc=0x"));
+        out.println(expectedCrc, HEX);
+        return true;
+    }
+
+    /**
+     * Write a chunk of firmware data to QSPI at the given offset.
+     * Data is base64-encoded in the command string.
+     */
+    bool writeChunk(uint32_t offset, const char* base64Data, Print& out) {
+        if (!ready_ || !transferActive_) {
+            out.println(F("ERR no active transfer"));
+            return false;
+        }
+
+        // Decode base64
+        size_t b64Len = strlen(base64Data);
+        // Base64 output is at most 3/4 of input length
+        size_t maxDecoded = (b64Len * 3) / 4 + 4;
+        if (maxDecoded > 256) {
+            out.println(F("ERR chunk too large"));
+            return false;
+        }
+
+        uint8_t decoded[256] __attribute__((aligned(4)));
+        int decodedLen = base64Decode(base64Data, b64Len, decoded, sizeof(decoded));
+        if (decodedLen <= 0) {
+            out.println(F("ERR base64 decode failed"));
+            return false;
+        }
+
+        if (offset + decodedLen > transferSize_) {
+            out.println(F("ERR chunk exceeds firmware size"));
+            return false;
+        }
+
+        SafeBootWatchdog::feed();
+        if (!qspiWrite(decoded, decodedLen, FIRMWARE_ADDR + offset)) {
+            out.println(F("ERR QSPI write failed"));
+            return false;
+        }
+
+        out.print(F("OK ota chunk offset="));
+        out.print(offset);
+        out.print(F(" len="));
+        out.println(decodedLen);
+        return true;
+    }
+
+    /**
      * Clear the staging header (abort any pending OTA).
      */
     bool abort(Print& out) {
@@ -431,6 +519,40 @@ public:
 
 private:
     bool ready_ = false;
+    bool transferActive_ = false;
+    uint32_t transferSize_ = 0;
+    uint16_t transferCrc_ = 0;
+
+    /**
+     * Minimal base64 decoder. Returns decoded length, or -1 on error.
+     */
+    static int base64Decode(const char* in, size_t inLen, uint8_t* out, size_t outMax) {
+        size_t o = 0;
+        uint32_t accum = 0;
+        int bits = 0;
+
+        for (size_t i = 0; i < inLen; i++) {
+            char c = in[i];
+            uint8_t val;
+            if (c >= 'A' && c <= 'Z')      val = c - 'A';
+            else if (c >= 'a' && c <= 'z')  val = c - 'a' + 26;
+            else if (c >= '0' && c <= '9')  val = c - '0' + 52;
+            else if (c == '+')              val = 62;
+            else if (c == '/')              val = 63;
+            else if (c == '=')              break;  // Padding
+            else                            continue;  // Skip whitespace/invalid
+
+            accum = (accum << 6) | val;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                if (o >= outMax) return -1;
+                out[o++] = (uint8_t)(accum >> bits);
+                accum &= (1 << bits) - 1;
+            }
+        }
+        return (int)o;
+    }
 };
 
 #else

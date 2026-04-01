@@ -2234,11 +2234,43 @@ bool SerialConsole::handleOtaCommand(const char* cmd) {
         return true;
     }
 
+    // "ota begin <size> <crc16_hex>" — start transfer
+    if (strncmp(sub, "begin ", 6) == 0) {
+        uint32_t size = 0;
+        char crcStr[8] = {0};
+        if (sscanf(sub + 6, "%u %6s", &size, crcStr) == 2) {
+            uint16_t crc = (uint16_t)strtoul(crcStr, nullptr, 16);
+            qspiOta_->beginTransfer(size, crc, out_);
+        } else {
+            out_.println(F("ERR usage: ota begin <size> <crc16_hex>"));
+        }
+        return true;
+    }
+
+    // "ota chunk <offset> <base64_data>" — write chunk
+    if (strncmp(sub, "chunk ", 6) == 0) {
+        uint32_t offset = 0;
+        const char* rest = sub + 6;
+        // Parse offset
+        offset = strtoul(rest, nullptr, 10);
+        // Find base64 data (after the space following offset)
+        const char* b64 = strchr(rest, ' ');
+        if (b64) {
+            b64++;  // Skip the space
+            qspiOta_->writeChunk(offset, b64, out_);
+        } else {
+            out_.println(F("ERR usage: ota chunk <offset> <base64_data>"));
+        }
+        return true;
+    }
+
     // Help
     out_.println(F("OTA commands:"));
     out_.println(F("  ota selftest  — Copy firmware to QSPI, verify CRC"));
     out_.println(F("  ota status    — Show staging area state"));
     out_.println(F("  ota commit    — Apply staged firmware (device resets)"));
     out_.println(F("  ota abort     — Clear staging area"));
+    out_.println(F("  ota begin <size> <crc16> — Start transfer"));
+    out_.println(F("  ota chunk <offset> <b64> — Write chunk"));
     return true;
 }

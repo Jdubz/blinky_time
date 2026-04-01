@@ -1,6 +1,13 @@
 """OTA firmware update orchestration.
 
-Provides upload_with_ble_fallback() for seamless UF2 → BLE DFU fallback.
+Three OTA methods, in order of preference:
+1. UF2 (USB mass storage) — safest, fastest, serial-only
+2. QSPI staged OTA — non-destructive, works over BLE and serial
+3. BLE DFU (Legacy Nordic) — destructive flash erase, last resort
+
+Provides:
+- upload_with_ble_fallback(): UF2 → BLE DFU for serial devices
+- upload_qspi_ota(): from qspi_ota module, for any connected device
 """
 
 from __future__ import annotations
