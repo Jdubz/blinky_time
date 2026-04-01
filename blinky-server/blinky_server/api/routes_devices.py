@@ -219,15 +219,15 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     if not firmware.is_file():
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
-    # Set recovery firmware for auto-recovery of stuck DFU devices
-    fleet.set_recovery_firmware(str(firmware))
-
     platform = device.platform
 
     if platform != "nrf52840":
         raise HTTPException(400, f"OTA not yet supported for platform: {platform}")
 
     fleet = get_fleet()
+
+    # Set recovery firmware for auto-recovery of stuck DFU devices
+    fleet.set_recovery_firmware(str(firmware))
 
     # Device is stuck in BLE DFU bootloader (SafeBoot crash recovery).
     # Push firmware directly — no bootloader entry needed.

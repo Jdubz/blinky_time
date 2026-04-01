@@ -599,10 +599,8 @@ class FleetManager:
         which is fine — a reboot means the firmware file in /tmp is gone too).
         """
         self._recovery_firmware_path = firmware_path
-        try:
+        with contextlib.suppress(OSError):
             self._RECOVERY_FIRMWARE_STATE.write_text(firmware_path)
-        except OSError:
-            pass
         log.info("Recovery firmware set: %s", firmware_path)
 
     def _load_recovery_firmware(self) -> str | None:
