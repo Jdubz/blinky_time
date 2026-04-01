@@ -30,12 +30,12 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ### Priority 1: Predominant Local Pulse (PLP) — DEPLOYED (v81)
 
-**Status: DEPLOYED. Fourier tempogram (Goertzel DFT) period selection across 3 sources. Soft blend (no hard threshold). Cold-start template seeding. Fisher's g computed but NOT used for confidence (reverted). PLL abandoned (March 20). Grid-search PMR replaced by Fourier tempogram (March 22).**
+**Status: DEPLOYED. Multi-source ACF period detection (replaced Fourier tempogram March 31). Soft blend (no hard threshold). Cold-start template seeding. Pattern slot cache. Convergence fix in progress (slotSaveMinConf 0.50→0.25, plpConfAlpha 0.15→0.25, warmup 160→120 frames).**
 
 See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 
 **What was built:**
-- **Fourier tempogram period selection**: Goertzel DFT at candidate frequencies across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step).
+- **Multi-source ACF period detection (v83, replaced Fourier tempogram)**: ACF at beat-level lags (20-80) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Parabolic interpolation refines peaks. Bar multipliers (2x/3x/4x) with sqrt penalty. Epoch-fold variance scoring selects period with best pattern contrast. ~4ms per update (vs 75ms old DFT tempogram).
 - **Soft blend (no hard threshold)**: PLP cosine OLA and cosine fallback are continuously blended by confidence (0=pure cosine, 1=pure cosine OLA). No discontinuous switch. Confidence naturally approaches 0 during silence/ambient.
 - **Cold-start template seeding**: 8 canonical patterns (four-on-floor, backbeat, halftime, breakbeat, 8th-note, dnb, dembow, sparse). After 1 bar of data, cosine similarity > 0.50 triggers a 50/50 blend of template and observed histogram. Validated: activation time dropped from 8-22s to 0-2.4s on most tracks (amapiano 0.3s, techno-minimal-emotion 1.3s, trance-goa 1.2s). Some tracks still slow (afrobeat 13.5s, breakbeat-bg 16.9s — patterns don't match templates well).
 - **Steep signal gate**: Mic level gates confidence with a steep transition near noise floor (`plpSignalFloor`). Once audio is clearly present (>2x floor), gate is fully open. Only suppresses during true silence.
@@ -43,14 +43,18 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 - **Fisher's g tried and reverted**: Fisher's g-statistic (ratio of max DFT magnitude to sum) was implemented as a principled [0,1] confidence measure, but penalizes tracks with multiple similarly-strong periods (common in syncopated music). DFT magnitude used instead — soft blend handles the confidence-to-output mapping without needing a principled scale.
 - **Epoch-fold pattern extraction** retained for slot cache pattern digest only (recency-weighted, ~3-epoch half-life). plpPulse output uses canonical cosine OLA.
 - **Pattern normalization** uses min-max (signal is mean-subtracted, may have negatives)
-- **Confidence** = DFT magnitude x signal presence (steep mic level gate)
+- **Confidence** = ACF peak strength x signal presence (steep mic level gate)
 - **Adaptive phase correction** removed — phase is implicit in cosine OLA
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
-**Current test results:**
-- atTransient 0.37-0.48 (strong improvement from grid-search PMR's 0.10-0.13)
-- autoCorr up to +0.93 (pattern repeats strongly)
-- BPM accuracy 0.91-0.98
+**Current test results (ACF system, March 31 validation suite):**
+- plpAtTransient 0.39-0.67 across 12 tracks (dubstep best at 0.665)
+- plpAutoCorr up to 0.98 (amapiano)
+- Music mode activation: 25-60s on most tracks, DnB never activates (0/6)
+- Activation reliability: only 2/12 tracks activate on all 6 runs
+
+**ACF convergence bottleneck (identified March 31):**
+The slot cache and template seeding features were functionally blocked by `slotSaveMinConf = 0.50` — unreachable with ACF peak strengths (typically 0.1-0.4 on real mic audio, lower than old DFT magnitude values). Fix applied: `slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames. Awaiting validation.
 
 **Remaining work:**
 - Further phase correction tuning if needed
@@ -86,8 +90,11 @@ Key finding: v3's pos_weight=20 is critical. Auto-calculation gives ~35.6 which 
 | Snare F1 (200-4k Hz) | 0.666 | **0.773** |
 | HiHat F1 (>4k Hz) | 0.704 | **0.806** |
 
-**v12 (in progress): Low-risk architectural improvements.**
-Wider [48,48,32] channels (28K params, ~28 KB INT8), 3rd conv layer (RF 144→176ms), SWA, stronger SpecAugment (3+2 masks), longer training (80 epochs). All existing proven code paths, no new implementations. See `configs/conv1d_w16_onset_v12.yaml`.
+**v12 (evaluated, not deployed): Wider architecture validated, SWA unhelpful.**
+Wider [48,48,32] channels (24K params, ~27 KB INT8), 3rd conv layer (RF 144→176ms). At correct threshold (0.40 vs v11's 0.50), v12 shows +17% kick/snare/hihat recall over v11. However, Est/Ref ratio is 1.85x (46% false positives vs v11's 1.48x). Stronger SpecAugment (3+2 masks) compressed activation range, making threshold selection fragile. SWA model was slightly worse than best checkpoint. Architecture retained for v13; augmentation/loss changes needed to sharpen activation peaks.
+
+**v13 (training, March 31): SpecMix + onset-proximity focal loss.**
+Builds on v12's [48,48,32] architecture. SpecMix (CutMix for spectrograms) replaces standard mixup. Onset-proximity focal loss (OWBCE-inspired sinusoidal weighting) boosts gradients near onsets to produce sharper activation peaks (addressing v12's compressed activation range). SpecAugment backed to v11 levels (2+1 masks). SWA dropped. Target: v12's recall with Est/Ref < 1.3x. See `configs/conv1d_w16_onset_v13.yaml`.
 
 **Already deployed in v11 (proven):**
 - ✅ Online mixup augmentation (Beta(0.4,0.4), p=0.5) — Source: SpecMix (2021), DCASE 2024
@@ -97,13 +104,13 @@ Wider [48,48,32] channels (28K params, ~28 KB INT8), 3rd conv layer (RF 144→17
 - ✅ Label neighbor weighting (0.25) — Source: Schlüter & Bock 2014
 - ✅ nRF52840 gain calibration (hw_gain_max=32 in base.yaml)
 
+**Implemented in v13 (training):**
+- ✅ **SpecMix (CutMix for spectrograms)** — Replaces standard mixup. Rectangular spectral patches cut from shuffled batch and pasted. Labels mixed by area ratio. Source: Kim et al. 2021.
+- ✅ **Onset-proximity focal loss (OWBCE-inspired)** — Sinusoidal kernel convolved over onset map boosts gradients ±5 frames (±80ms) around onsets. Combined with asymmetric focal loss. Source: Song et al. 2024.
+
 **Future training improvements (research-backed, not yet implemented):**
 
 1. **Onset-specific knowledge distillation** (+2-5% F1, medium effort) — Use madmom CNN OnsetDetector as teacher (NOT Beat This! — that's a beat tracker). The teacher's continuous probability output encodes onset activation shape (gradual rise before attack, sharp drop after) that binary labels can't express. Requires modifying `generate_teacher_labels.py` to use madmom OnsetDetector. Source: Shi et al. (Interspeech 2019): +15% error reduction; Hyperconnect (ICASSP 2022): +25.3% mAP. ~~Beat This! distillation~~: INVALID for onset detection — would suppress off-beat onsets and inject phantom beat targets.
-
-2. **SpecMix (CutMix for spectrograms)** (+2-4% F1, low effort) — Rectangular spectral patches cut from one sample and pasted into another with label mixing. Published as outperforming standard mixup by +2.59% and SpecAugment by +4.45%. Zero inference cost. Simple implementation: cut random (time, freq) rectangle from sample B, paste into sample A, mix labels proportionally. Source: Kim et al. 2021.
-
-3. **Onset-Weighted BCE (OWBCE)** (+1-3% event-F1, low effort) — Sinusoidal weighting window around onset frames. Published +6.43% event-F1 over standard BCE. Similar to our neighbor_weight=0.25 but more sophisticated (continuous sinusoidal envelope). Source: Song et al. 2024.
 
 4. **Quantization-Aware Training (QAT)** (+1-3% F1, high effort) — Simulate INT8 quantization during training so model compensates for quantization noise. Larger benefit for small models where each weight matters. Complex to integrate: our PyTorch → Keras → TFLite pipeline requires QAT in the Keras domain, not PyTorch. Source: NVIDIA QAT benchmarks, DCASE 2024 low-complexity task.
 

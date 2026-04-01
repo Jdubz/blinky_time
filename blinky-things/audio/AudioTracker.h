@@ -109,7 +109,7 @@ public:
     float activationThreshold = 0.3f;
 
     // PLP (Predominant Local Pulse)
-    float plpConfAlpha = 0.15f;        // Confidence EMA smoothing rate
+    float plpConfAlpha = 0.25f;        // Confidence EMA smoothing rate (was 0.15)
     float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
 
@@ -141,7 +141,7 @@ public:
     float slotSwitchThreshold = 0.70f;   // Cosine sim to recall cached slot
     float slotNewThreshold = 0.40f;      // Below this: allocate new slot
     float slotUpdateRate = 0.15f;        // EMA rate for active slot reinforcement
-    float slotSaveMinConf = 0.50f;       // Min PLP confidence to save/update slots
+    float slotSaveMinConf = 0.25f;       // Min PLP confidence to save/update slots (was 0.50)
     float slotSeedBlend = 0.70f;         // Blend ratio when seeding from cached slot
 
 private:
