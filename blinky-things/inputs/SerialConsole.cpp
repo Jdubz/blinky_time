@@ -11,6 +11,7 @@
 #include "../types/Version.h"
 #include "../render/RenderPipeline.h"
 #include "../effects/HueRotationEffect.h"
+#include "../ota/QspiOtaStaging.h"
 #include <ArduinoJson.h>  // v28: JSON parsing for device config upload
 #ifdef BLINKY_PLATFORM_NRF52840
 #include "../comms/BleScanner.h"
@@ -393,6 +394,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleFakeAudioCommand(cmd)) return true; // Fake audio for visual debug
     if (handleBleCommand(cmd)) return true;       // BLE diagnostics
     if (handleWifiCommand(cmd)) return true;      // WiFi config (ESP32-S3)
+    if (handleOtaCommand(cmd)) return true;       // QSPI staged OTA
     return false;
 }
 
@@ -2191,4 +2193,52 @@ void SerialConsole::logError(const __FlashStringHelper* msg) {
         p.print(F("[ERROR] "));
         p.println(msg);
     }
+}
+
+// === QSPI STAGED OTA COMMANDS ===
+bool SerialConsole::handleOtaCommand(const char* cmd) {
+    if (strncmp(cmd, "ota ", 4) != 0 && strcmp(cmd, "ota") != 0) return false;
+
+    const char* sub = cmd + 3;
+    while (*sub == ' ') sub++;
+
+    // Lazy-init QSPI on first ota command
+    if (!qspiOta_) {
+        qspiOta_ = new QspiOtaStaging();
+        // cppcheck-suppress knownConditionTrueFalse -- stub returns false, real impl uses nrfx
+        if (!qspiOta_->begin()) {
+            out_.println(F("ERR QSPI flash init failed"));
+            delete qspiOta_;
+            qspiOta_ = nullptr;
+            return true;
+        }
+    }
+
+    if (strcmp(sub, "selftest") == 0) {
+        qspiOta_->selfTest(out_);
+        return true;
+    }
+
+    if (strcmp(sub, "status") == 0) {
+        qspiOta_->printStatus(out_);
+        return true;
+    }
+
+    if (strcmp(sub, "commit") == 0) {
+        qspiOta_->commit(out_);
+        return true;  // Never reached if commit succeeds (device resets)
+    }
+
+    if (strcmp(sub, "abort") == 0) {
+        qspiOta_->abort(out_);
+        return true;
+    }
+
+    // Help
+    out_.println(F("OTA commands:"));
+    out_.println(F("  ota selftest  — Copy firmware to QSPI, verify CRC"));
+    out_.println(F("  ota status    — Show staging area state"));
+    out_.println(F("  ota commit    — Apply staged firmware (device resets)"));
+    out_.println(F("  ota abort     — Clear staging area"));
+    return true;
 }

@@ -26,6 +26,7 @@ class BatteryMonitor;
 class AudioTracker;
 class RenderPipeline;
 class HueRotationEffect;
+class QspiOtaStaging;
 
 /**
  * SerialConsole - JSON API for web app communication
@@ -243,6 +244,7 @@ private:
     bool handleWifiCommand(const char* cmd);      // WiFi config (ESP32-S3 only)
     // (handleEnsembleCommand removed v67 — BandFlux pipeline removed; show nn moved to handleBeatTrackingCommand)
     bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
+    bool handleOtaCommand(const char* cmd);              // QSPI staged OTA commands
     bool handleDeviceConfigCommand(const char* cmd);  // Device configuration commands (v28+)
     void showDeviceConfig();                          // Display current device config as JSON
     void uploadDeviceConfig(const char* jsonStr);     // Parse and save device config from JSON
@@ -274,6 +276,7 @@ private:
     WifiCommandServer* tcpServer_ = nullptr;
 #endif
     ConfigStorage* configStorage_;
+    QspiOtaStaging* qspiOta_ = nullptr;
     SettingsRegistry settings_;
     TeeStream out_;  // Output tee: Serial + optional BLE NUS
 
