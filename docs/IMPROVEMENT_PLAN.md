@@ -6,7 +6,7 @@
 
 ## Current Status
 
-**Firmware:** v82 (SETTINGS_VERSION 82). AudioTracker with ACF+PLP architecture + pattern slot cache. Fourier tempogram (Goertzel DFT at candidate frequencies) period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period, DFT phase gives beat alignment. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. Fisher's g removed (penalized syncopated music). v77 pattern memory (IOI histogram + bar histogram) replaced by slot cache. ~20 tunable params persisted to flash. 16,464 bytes RAM. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v88 (SETTINGS_VERSION 88). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) replaces Fourier tempogram (75ms) for period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring selects period. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. ACF convergence fix (v88): plpConfAlpha 0.15→0.25, slotSaveMinConf 0.50→0.25, warmup 160→120 frames. ~20 tunable params persisted to flash. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 3 nRF52840 on blinkyhost (v88), 1 nRF52840 needs SWD recovery (2A798EF8).
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v11-final deployed on 4/5 blinkyhost devices (2 ESP32-S3, 2 nRF52840). Trained on de-duplicated onset labels. Kick recall 0.743, Snare recall 0.727, HiHat recall 0.701. 13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
@@ -174,16 +174,24 @@ Expected outcome: if corrected OWBCE improves peak sharpness, we should see bett
 - SpecMix / CutMix: **proven unsound** for frame-level onset detection (v13 post-mortem). Label mixing is wrong for sequence labeling tasks.
 - SWA: **proven unhelpful** at this model scale (v12 post-mortem)
 
-### Priority 3: Test Metric Alignment
+### Priority 3: Server Consolidation — IN PROGRESS
 
-**Status: MOSTLY DONE. PLP metrics implemented. Scoring consolidated.**
+**Status: Phase 1 complete. Canonical scoring engine ported to blinky-server.**
 
+Three parallel test/scoring systems (blinky-server, blinky-serial-mcp, 16 CJS scripts) being consolidated into blinky-server as single source of truth. See `docs/SERVER_CONSOLIDATION_PLAN.md` for full details.
+
+- ✅ Phase 1: Scoring engine + audio foundations ported to Python (scoring.py, types.py, audio_lock.py, audio_player.py, track_discovery.py). 6 review bugs fixed.
+- [ ] Phase 2: Test session infrastructure (per-device recording buffers)
+- [ ] Phase 3: Test runner REST endpoints (run-track, validate, job management)
+- [ ] Phase 4: Advanced test tools (param sweep, A/B test, pattern memory)
+- [ ] Phase 5: MCP server → thin HTTP client
+- [ ] Phase 6: Synthetic patterns + ensemble tuning
+- [ ] Phase 7: Delete 14 CJS scripts + MCP internals
+
+**Previously completed (retained):**
 - ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
-- ✅ Octave error penalty removed from param_sweep_multidev.cjs scoring
 - ✅ PLP metrics implemented: `plp.atTransient`, `plp.autoCorr`, `plp.peakiness`, `plp.mean`
-- ✅ Update evaluate.py aggregate to show onset F1 as primary metric
-- ✅ `formatScoreSummary` consolidation — unified score formatting across sweep/A-B/validation tools
-- [ ] Add phase alignment visualization (onset time vs grid position scatter plot)
+- ✅ BPM accuracy scoring removed from canonical scoring (still present in stale CJS scripts — deleted in Phase 7)
 
 ### Architecture History (Collapsed — see git log for details)
 
