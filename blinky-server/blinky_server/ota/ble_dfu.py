@@ -139,7 +139,8 @@ def _reset_hci_adapter() -> None:
         try:
             result = subprocess.run(
                 ["hciconfig", adapter, "reset"],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
             log.warning("Failed to reset BLE adapter %s: %s", adapter, e)
@@ -402,6 +403,8 @@ async def _dfu_transfer(
 
 
 MIN_DFU_RSSI = -75  # Reject BLE DFU if signal weaker than this (dBm)
+
+
 async def _preflight_ble_check(
     app_ble_address: str,
     progress: Callable[..., None],
@@ -515,7 +518,7 @@ async def upload_ble_dfu(
             return {
                 "status": "error",
                 "message": f"Pre-flight BLE check failed: {preflight_msg}. "
-                           "DFU aborted to protect device (app flash not erased).",
+                "DFU aborted to protect device (app flash not erased).",
                 "elapsed_s": round(time.monotonic() - t0, 1),
             }
         # Brief pause for BlueZ to fully clean up the pre-flight connection
@@ -598,9 +601,7 @@ async def upload_ble_dfu(
     # (nRF52840 random static addresses can change after a full power cycle from DFU).
     verified = False
     for verify_attempt in range(3):
-        progress(
-            "verify", f"Scanning for rebooted device (attempt {verify_attempt + 1}/3)...", 99
-        )
+        progress("verify", f"Scanning for rebooted device (attempt {verify_attempt + 1}/3)...", 99)
         # First: try exact address match
         dev = await BleakScanner.find_device_by_address(app_ble_address, timeout=8.0)
         if dev:
@@ -614,7 +615,9 @@ async def upload_ble_dfu(
                 # Strong signal + NUS service = likely our device with a new address
                 log.info(
                     "Post-DFU: found Blinky at %s (RSSI=%d) — address may have changed from %s",
-                    addr, adv.rssi, app_ble_address,
+                    addr,
+                    adv.rssi,
+                    app_ble_address,
                 )
                 verified = True
                 break

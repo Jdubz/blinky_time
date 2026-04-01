@@ -635,20 +635,20 @@ class FleetManager:
             return
 
         import os
+
         if not os.path.isfile(firmware_path):
             return
 
         dfu_devices = [
-            d for d in self._devices.values()
+            d
+            for d in self._devices.values()
             if d.state == DeviceState.DFU_RECOVERY and d.ble_address
         ]
         if not dfu_devices:
             return
 
         for device in dfu_devices:
-            state = self._dfu_recovery_state.setdefault(
-                device.id, {"fails": 0, "backoff": 0}
-            )
+            state = self._dfu_recovery_state.setdefault(device.id, {"fails": 0, "backoff": 0})
             fail_count = state["fails"]
 
             if fail_count > 0:
@@ -661,7 +661,9 @@ class FleetManager:
 
             log.info(
                 "Auto-recovering DFU device %s (BLE: %s, attempt %d)...",
-                device.id[:12], device.ble_address, fail_count + 1,
+                device.id[:12],
+                device.ble_address,
+                fail_count + 1,
             )
 
             self._dfu_recovery_in_progress = True
@@ -685,7 +687,9 @@ class FleetManager:
                     state["fails"] = fail_count + 1
                     log.warning(
                         "Auto-recovery failed for %s (attempt %d): %s",
-                        device.id[:12], fail_count + 1, result.get("message", ""),
+                        device.id[:12],
+                        fail_count + 1,
+                        result.get("message", ""),
                     )
             except Exception as e:
                 state["fails"] = fail_count + 1

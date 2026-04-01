@@ -59,7 +59,11 @@ async def upload_qspi_ota(
     # Load firmware binary
     fw_path = Path(firmware_path)
     if not fw_path.is_file():
-        return {"status": "error", "message": f"Firmware not found: {firmware_path}", "elapsed_s": 0}
+        return {
+            "status": "error",
+            "message": f"Firmware not found: {firmware_path}",
+            "elapsed_s": 0,
+        }
 
     # Accept .bin directly, or extract from .hex
     if fw_path.suffix == ".hex":
