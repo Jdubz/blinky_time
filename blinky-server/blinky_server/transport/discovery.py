@@ -174,7 +174,7 @@ async def discover_wifi_devices(
 
     # mDNS discovery for _blinky._tcp
     try:
-        from zeroconf import ServiceBrowser, Zeroconf
+        from zeroconf import ServiceBrowser, Zeroconf  # type: ignore[import-not-found]
 
         zc = Zeroconf()
         found: list[dict[str, Any]] = []
