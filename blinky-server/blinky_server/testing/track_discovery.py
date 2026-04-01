@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from .types import GroundTruth, GroundTruthHit, GroundTruthOnset
 
@@ -89,7 +90,7 @@ def load_ground_truth(gt_path: str, onset_path: str | None = None) -> GroundTrut
     )
 
 
-def load_track_manifest(directory: str | Path) -> dict[str, dict]:
+def load_track_manifest(directory: str | Path) -> dict[str, Any]:
     """Load track_manifest.json for seek offsets.
 
     Returns {track_name: {seekOffset, bpm, ...}} or empty dict if not found.
@@ -99,7 +100,8 @@ def load_track_manifest(directory: str | Path) -> dict[str, dict]:
         return {}
     try:
         with open(manifest_path) as f:
-            return json.load(f)
+            result: dict[str, Any] = json.load(f)
+            return result
     except (json.JSONDecodeError, OSError) as e:
         log.warning("Failed to load track manifest: %s", e)
         return {}

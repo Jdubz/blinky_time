@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import signal
+from types import FrameType
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +77,7 @@ def release_audio_lock() -> None:
     _lock_held = False
 
 
-def is_audio_locked() -> tuple[bool, dict | None]:
+def is_audio_locked() -> tuple[bool, dict[str, Any] | None]:
     """Check if the audio lock is held. Cleans up stale locks."""
     try:
         with open(LOCK_PATH) as f:
@@ -107,7 +109,7 @@ _orig_sigint = signal.getsignal(signal.SIGINT)
 _orig_sigterm = signal.getsignal(signal.SIGTERM)
 
 
-def _sigint_handler(signum: int, frame: object) -> None:
+def _sigint_handler(signum: int, frame: FrameType | None) -> None:
     _cleanup()
     if callable(_orig_sigint):
         _orig_sigint(signum, frame)
@@ -115,7 +117,7 @@ def _sigint_handler(signum: int, frame: object) -> None:
         raise KeyboardInterrupt
 
 
-def _sigterm_handler(signum: int, frame: object) -> None:
+def _sigterm_handler(signum: int, frame: FrameType | None) -> None:
     _cleanup()
     raise SystemExit(128 + 15)
 

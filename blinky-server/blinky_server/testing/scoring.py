@@ -28,13 +28,13 @@ from .types import (
 
 def _js_round(x: float, decimals: int = 3) -> float:
     """Round like JavaScript Math.round (rounds .5 up, not banker's)."""
-    factor = 10**decimals
+    factor: float = 10.0**decimals
     return math.floor(x * factor + 0.5) / factor
 
 
 def _js_round_int(x: float) -> int:
     """Round to nearest int like JavaScript Math.round (rounds .5 up)."""
-    return math.floor(x + 0.5)
+    return int(math.floor(x + 0.5))
 
 
 # ---------------------------------------------------------------------------
@@ -222,14 +222,14 @@ def score_device_run(
         if h.expect_trigger and h.time <= audio_duration_sec
     ]
 
-    # Estimated beats
-    est_beats = [(b["timestamp_ms"] - latency_correction_ms) / 1000 for b in beat_events]
+    # Estimated beats (timestamp_ms is always float in these dicts, constructed above)
+    est_beats: list[float] = [(b["timestamp_ms"] - latency_correction_ms) / 1000 for b in beat_events]  # type: ignore[operator]
 
     # Beat F1
     beat_result = match_events_f1(est_beats, ref_beats, BEAT_TOLERANCE_SEC)
 
     # Transient F1
-    est_transients = [(d["timestamp_ms"] - latency_correction_ms) / 1000 for d in detections]
+    est_transients: list[float] = [(d["timestamp_ms"] - latency_correction_ms) / 1000 for d in detections]  # type: ignore[operator]
     if gt_data.onsets:
         filtered = sorted(
             [o.time for o in gt_data.onsets if o.time <= audio_duration_sec and o.strength >= MIN_ONSET_STRENGTH]
@@ -291,11 +291,11 @@ def score_device_run(
 
     # Music mode metrics
     active_states = [s for s in music_states if s["active"]]
-    avg_bpm = (
-        sum(s["bpm"] for s in active_states) / len(active_states) if active_states else 0.0
+    avg_bpm: float = (
+        sum(s["bpm"] for s in active_states) / len(active_states) if active_states else 0.0  # type: ignore[misc]
     )
-    avg_conf = (
-        sum(s["confidence"] for s in active_states) / len(active_states) if active_states else 0.0
+    avg_conf: float = (
+        sum(s["confidence"] for s in active_states) / len(active_states) if active_states else 0.0  # type: ignore[misc]
     )
 
     # Phase stability
@@ -303,7 +303,7 @@ def score_device_run(
     if len(active_states) > 1:
         phase_diffs: list[float] = []
         for i in range(1, len(active_states)):
-            diff = active_states[i]["phase"] - active_states[i - 1]["phase"]
+            diff: float = active_states[i]["phase"] - active_states[i - 1]["phase"]  # type: ignore[operator]
             if diff < -0.5:
                 diff += 1.0
             if diff > 0.5:
@@ -315,7 +315,7 @@ def score_device_run(
             phase_stability = max(0.0, 1.0 - math.sqrt(variance) * 10)
 
     # PLP metrics
-    plp_values = [s["plp_pulse"] for s in active_states if s.get("plp_pulse") is not None]
+    plp_values: list[float] = [s["plp_pulse"] for s in active_states if s.get("plp_pulse") is not None]  # type: ignore[misc]
     plp_at_transient = 0.0
     plp_auto_corr = 0.0
     plp_peakiness = 0.0
@@ -335,7 +335,7 @@ def score_device_run(
             best_state: dict[str, Any] | None = None
             best_dist = float("inf")
             for si in range(search_start, len(active_states)):
-                dist = abs(active_states[si]["timestamp_ms"] - onset_ms)
+                dist = abs(active_states[si]["timestamp_ms"] - onset_ms)  # type: ignore[operator]
                 if dist < best_dist:
                     best_dist = dist
                     best_state = active_states[si]
@@ -366,7 +366,7 @@ def score_device_run(
     # Diagnostics: transient-beat offsets
     transient_beat_offsets: list[int] = []
     for det in detections:
-        det_sec = (det["timestamp_ms"] - latency_correction_ms) / 1000
+        det_sec: float = (det["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
         best_offset = float("inf")
         for ref in ref_beats:
             offset = det_sec - ref
