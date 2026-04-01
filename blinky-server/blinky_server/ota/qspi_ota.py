@@ -164,7 +164,7 @@ async def upload_qspi_ota(
     progress("commit", "Committing firmware (device will reset)...", 95)
     try:
         await protocol.send_command("ota commit", timeout=30.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass  # Expected: device resets on commit before responding
     except Exception as e:
         elapsed = round(time.monotonic() - t0, 1)
