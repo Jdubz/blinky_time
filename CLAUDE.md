@@ -46,13 +46,13 @@ make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 **Firmware upload is managed by blinky-server** (no standalone scripts):
 ```bash
 # Compile and flash a single device
-curl -X POST http://blinkyhost.local:8420/api/ota/compile
-curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota \
+curl -X POST http://blinkyhost.local:8420/api/firmware/compile
+curl -X POST http://blinkyhost.local:8420/api/devices/{id}/flash \
   -H 'Content-Type: application/json' \
   -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
 
 # Flash ALL connected nRF52840 devices
-curl -X POST http://blinkyhost.local:8420/api/fleet/ota \
+curl -X POST http://blinkyhost.local:8420/api/fleet/flash \
   -H 'Content-Type: application/json' \
   -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
 ```
@@ -89,7 +89,7 @@ There are bare (unenclosed) chips attached to blinkyhost. **Always test untested
 **nRF52840** devices are physically installed and reset buttons are NOT accessible.
 If a device stops responding to serial commands:
 1. Try power-cycling via USB hub: `uhubctl -a cycle -p <port>`
-2. Use blinky-server OTA: `curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota -d '{"firmware_path":"/tmp/blinky-build/blinky-things.ino.hex"}'`
+2. Use blinky-server: `curl -X POST http://blinkyhost.local:8420/api/devices/{id}/flash -d '{"firmware_path":"/tmp/blinky-build/blinky-things.ino.hex"}'`
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
 
@@ -468,15 +468,15 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ BLE NUS bidirectional on nRF52840 (Print& refactor, all commands work over BLE)
 - ✅ BLE NUS bidirectional on ESP32-S3 (NUS TX wired, verified `show nn` over BLE)
 - ✅ Wireless-only mode (`--no-serial`, 6 devices managed via BLE only)
-- ✅ Server OTA: `POST /api/devices/{id}/ota` + `POST /api/fleet/ota` (delegates to uf2_upload.py)
+- ✅ Server firmware upload: `POST /api/devices/{id}/flash` + `POST /api/fleet/flash` (delegates to uf2_upload.py)
 - ✅ BLE DFU protocol reverse-engineered (Legacy DFU SDK v11, START_DFU notification verified)
 - ✅ Platform detection via `json info` (`"platform":"nrf52840"` / `"esp32s3"`)
 - ✅ Cross-transport identity: `json info` reports `"sn"` (FICR DEVICEID) and `"ble"` (BLE MAC address)
 - ✅ BLE disconnect detection: bleak `disconnected_callback` → auto-reconnect within 10s
 - ✅ BLE liveness checks: background ping every ~30s catches silent disconnects
-- ✅ BLE DFU as UF2 fallback: serial OTA auto-falls back to BLE DFU when UF2 fails
+- ✅ BLE DFU as UF2 fallback: serial flash auto-falls back to BLE DFU when UF2 fails
 - ✅ DFU recovery detection: scans for DFU service UUID, detects SafeBoot crash recovery, surfaces `dfu_recovery` state
-- ✅ DFU recovery OTA: `POST /devices/{id}/ota` pushes firmware directly to devices in DFU bootloader
+- ✅ DFU recovery flash: `POST /devices/{id}/flash` pushes firmware directly to devices in DFU bootloader
 - ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, hardware_sn dedup, REST API)
 - ✅ BLE DFU proven end-to-end (Legacy DFU SDK v11, 510KB in ~5.5min, tested Mar 30 on bare chip)
 - ✅ API enrichment: `GET /devices` includes `hardware_sn`, `ble_address`, `rssi`, `last_seen`

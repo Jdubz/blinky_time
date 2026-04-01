@@ -19,14 +19,14 @@ REST API: http://blinkyhost.local:8420/api/
   ├── GET  /fleet/status          — fleet health summary (counts, per-device health)
   ├── POST /fleet/discover        — trigger immediate BLE/serial scan
   ├── POST /devices/{id}/command  — send command
-  ├── POST /devices/{id}/ota      — firmware upload (UF2 or BLE DFU, auto-detected)
-  ├── POST /fleet/ota             — flash all nRF52840 devices (accepts .hex or .dfu.zip)
+  ├── POST /devices/{id}/flash    — firmware upload (UF2 or BLE DFU, auto-detected)
+  ├── POST /fleet/flash           — flash all nRF52840 devices (accepts .hex or .dfu.zip)
   ├── POST /fleet/deploy          — compile + generate DFU zip + flash all devices
   ├── POST /fleet/settings/save   — save settings on all devices
   ├── POST /fleet/settings/load   — load settings on all devices
   ├── POST /fleet/settings/defaults — restore defaults on all devices
-  ├── POST /ota/compile           — compile firmware
-  ├── POST /ota/compile-dfu       — compile + generate DFU zip
+  ├── POST /firmware/compile      — compile firmware
+  ├── POST /firmware/compile-dfu  — compile + generate DFU zip
   └── --no-serial flag            — BLE-only fleet management mode
 ```
 
@@ -48,13 +48,13 @@ REST API: http://blinkyhost.local:8420/api/
 | **BLE disconnect detection** | Pi | `BleTransport` registers bleak `disconnected_callback` → auto-transitions Device to DISCONNECTED → fleet auto-reconnects |
 | **BLE liveness checks** | Pi | Background loop pings BLE devices every ~30s if no recent comms, detects silent disconnects |
 | **DFU recovery detection** | Pi | Discovery scans for DFU service UUID (00001530), detects devices in SafeBoot BLE DFU bootloader, surfaces `dfu_recovery` state |
-| **BLE DFU as UF2 fallback** | Pi | Serial OTA auto-falls back to BLE DFU when UF2 fails and `device.ble_address` is known |
-| **Server OTA (UF2)** | nRF52840 | `POST /api/devices/{id}/ota` delegates to `tools/uf2_upload.py` for serial devices |
-| **BLE DFU OTA** | nRF52840 | `POST /api/devices/{id}/ota` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
-| **Fleet OTA** | Pi | `POST /api/fleet/ota` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
+| **BLE DFU as UF2 fallback** | Pi | Serial flash auto-falls back to BLE DFU when UF2 fails and `device.ble_address` is known |
+| **Server flash (UF2)** | nRF52840 | `POST /api/devices/{id}/flash` delegates to `uf2_upload.py` for serial devices |
+| **BLE DFU flash** | nRF52840 | `POST /api/devices/{id}/flash` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
+| **Fleet flash** | Pi | `POST /api/fleet/flash` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
 | **Fleet deploy** | Pi | `POST /api/fleet/deploy` one-shot compile + DFU zip + flash all devices |
-| **BLE DFU proven** | nRF52840 | End-to-end tested Mar 30: 510KB in ~5.5 min, 2/2 fleet OTA success, auto-reconnect after DFU |
-| **Compile endpoint** | Pi | `POST /api/ota/compile` and `/ota/compile-dfu` (pure-Python DFU zip, no adafruit-nrfutil dependency) |
+| **BLE DFU proven** | nRF52840 | End-to-end tested Mar 30: 510KB in ~5.5 min, 2/2 fleet flash success, auto-reconnect after DFU |
+| **Compile endpoint** | Pi | `POST /api/firmware/compile` and `/firmware/compile-dfu` (pure-Python DFU zip, no adafruit-nrfutil dependency) |
 | **UF2 bootloader entry** | nRF52840 | `sd_softdevice_disable()` → DSB/ISB → GPREGRET → DSB/ISB → NVIC_SystemReset |
 | **BLE DFU protocol** | nRF52840 | Legacy DFU (SDK v11): write-with-response on control, 60s START_DFU timeout for flash erase, 20-byte chunks, word-aligned padding |
 | **BlueZ stale cleanup** | Pi | Auto-disconnects stale BLE connections from previous server sessions on startup |
