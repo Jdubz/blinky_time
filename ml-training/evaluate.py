@@ -519,11 +519,8 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
     tracks = []
     for audio_path in sorted(f for f in audio_dir.rglob("*")
                               if f.suffix.lower() in {".mp3", ".wav", ".flac"}):
-        # Need at least .beats.json for full eval, but sweep uses onset labels
-        label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
-        if not label_path.exists():
-            continue
-
+        # Sweep only needs onset labels — .beats.json is NOT required here.
+        # (The full eval at the end will skip tracks without .beats.json.)
         # Load onset reference: prefer kick-weighted, fall back to .onsets.json
         kw_path = audio_path.parent / "kick_weighted" / f"{audio_path.stem}.kick_weighted.json"
         onset_path = audio_path.parent / f"{audio_path.stem}.onsets.json"

@@ -41,7 +41,7 @@
 
 model:
   type: "frame_conv1d"
-  channels: [48, 48, 32]           # From v12: proven +17% per-instrument recall over v11's [32,32]
+  channels: [48, 48, 32]           # NOTE: post-mortem showed wider arch is equivalent to v11's [32,32] at equal thresholds
   kernel_sizes: [5, 5, 3]          # RF: (5-1)+(5-1)+(3-1) = 10 -> 11 frames = 176ms
   window_frames: 16
   dropout: 0.1
