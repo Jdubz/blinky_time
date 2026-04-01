@@ -5,18 +5,21 @@ commands, then triggers the bootloader to apply it. The device's current
 firmware stays intact until the complete image is validated in QSPI.
 
 Protocol (text commands over existing serial/BLE NUS transport):
-  ota begin <size> <crc16_hex>  → erase QSPI staging, prepare for chunks
-  ota chunk <offset> <base64>   → write decoded data to QSPI
-  ota status                    → report staged bytes
-  ota commit                    → validate CRC, apply via bootloader
-  ota abort                     → clear staging
+  ota begin <size> <crc16_hex>  -> erase QSPI staging, prepare for chunks
+  ota chunk <offset> <base64>   -> write decoded data to QSPI
+  ota status                    -> report staged bytes
+  ota commit                    -> validate CRC, apply via bootloader
+  ota abort                     -> clear staging
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -35,7 +38,7 @@ async def upload_qspi_ota(
 ) -> dict[str, Any]:
     """Transfer firmware to device QSPI flash and trigger bootloader apply.
 
-    Uses the device's existing serial/BLE NUS command interface — no special
+    Uses the device's existing serial/BLE NUS command interface -- no special
     DFU protocol needed. The device stays running its current firmware
     throughout the transfer. Only after commit does it reset.
 
@@ -62,15 +65,16 @@ async def upload_qspi_ota(
     # Accept .bin directly, or extract from .hex
     if fw_path.suffix == ".hex":
         from .compile import _find_objcopy
-        import subprocess
-        import tempfile
 
         objcopy = _find_objcopy()
         if not objcopy:
-            return {"status": "error", "message": "objcopy not found for hex→bin", "elapsed_s": 0}
+            return {"status": "error", "message": "objcopy not found for hex->bin", "elapsed_s": 0}
         bin_path = tempfile.mktemp(suffix=".bin")
-        subprocess.run([objcopy, "-I", "ihex", "-O", "binary", str(fw_path), bin_path],
-                       capture_output=True, timeout=30)
+        subprocess.run(
+            [objcopy, "-I", "ihex", "-O", "binary", str(fw_path), bin_path],
+            capture_output=True,
+            timeout=30,
+        )
         firmware = Path(bin_path).read_bytes()
     else:
         firmware = fw_path.read_bytes()
@@ -81,7 +85,7 @@ async def upload_qspi_ota(
     crc = _crc16(firmware)
     progress("init", f"{len(firmware)} bytes, CRC=0x{crc:04X}", 5)
 
-    # Step 1: Begin — erase QSPI staging area
+    # Step 1: Begin -- erase QSPI staging area
     progress("begin", "Erasing QSPI staging area...", 10)
     try:
         resp = await protocol.send_command(
@@ -149,14 +153,11 @@ async def upload_qspi_ota(
         }
     progress("verify", resp.strip(), 90)
 
-    # Step 4: Commit — device validates CRC, writes header, resets
+    # Step 4: Commit -- device validates CRC, writes header, resets
     progress("commit", "Committing firmware (device will reset)...", 95)
-    try:
-        # commit causes device reset — the command may not return a response
-        resp = await protocol.send_command("ota commit", timeout=30.0)
-    except Exception:
-        # Expected: device resets mid-response
-        pass
+    with contextlib.suppress(Exception):
+        # commit causes device reset -- the command may not return a response
+        await protocol.send_command("ota commit", timeout=30.0)
 
     elapsed = round(time.monotonic() - t0, 1)
     progress("done", f"QSPI OTA complete ({elapsed}s)", 100)

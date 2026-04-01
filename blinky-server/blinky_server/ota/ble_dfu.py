@@ -427,7 +427,7 @@ async def _preflight_ble_check(
     # Do a full scan to get RSSI.
     rssi = None
     discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
-    for addr, (d, adv) in discovered.items():
+    for addr, (_d, adv) in discovered.items():
         if addr.upper() == app_ble_address.upper():
             rssi = adv.rssi
             break
@@ -608,7 +608,7 @@ async def upload_ble_dfu(
             break
         # Fallback: scan for any nearby Blinky device with NUS service
         discovered = await BleakScanner.discover(timeout=8.0, return_adv=True)
-        for addr, (d, adv) in discovered.items():
+        for addr, (_d, adv) in discovered.items():
             svc_uuids = [str(u).lower() for u in (adv.service_uuids or [])]
             if NUS_SERVICE_UUID in svc_uuids and adv.rssi > -65:
                 # Strong signal + NUS service = likely our device with a new address
