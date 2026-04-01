@@ -96,8 +96,13 @@ def specmix(x: torch.Tensor, y: torch.Tensor,
     """SpecMix: CutMix for mel spectrograms (Kim et al. 2021).
 
     Cuts a random rectangular region from a shuffled batch and pastes it
-    into the original. Labels mixed proportionally to the pasted area.
-    Published: +2.59% over standard mixup, +4.45% over SpecAugment alone.
+    into the original. For frame-level targets, labels are mixed only in
+    the pasted time window (not globally) to avoid corrupting supervision
+    for unmodified frames.
+
+    Note: SpecMix is not recommended for frame-level onset detection —
+    frequency-domain cuts break broadband onset semantics. Prefer standard
+    mixup for onset models. See v13 post-mortem in IMPROVEMENT_PLAN.md.
 
     Args:
         x: (batch, time, n_mels) mel spectrogram tensor
@@ -107,17 +112,23 @@ def specmix(x: torch.Tensor, y: torch.Tensor,
         (mixed_x, mixed_y)
     """
     B, T, F = x.shape
-    lam = np.random.beta(alpha, alpha)
+    lam = torch.distributions.Beta(alpha, alpha).sample().item()
     cut_ratio = math.sqrt(1 - lam)
     cut_t = max(1, int(T * cut_ratio))
     cut_f = max(1, int(F * cut_ratio))
-    t0 = np.random.randint(0, max(1, T - cut_t + 1))
-    f0 = np.random.randint(0, max(1, F - cut_f + 1))
+    t0 = torch.randint(0, max(1, T - cut_t + 1), (1,)).item()
+    f0 = torch.randint(0, max(1, F - cut_f + 1), (1,)).item()
     idx = torch.randperm(B, device=x.device)
     x_out = x.clone()
     x_out[:, t0:t0 + cut_t, f0:f0 + cut_f] = x[idx, t0:t0 + cut_t, f0:f0 + cut_f]
-    actual_lam = 1.0 - (cut_t * cut_f) / (T * F)
-    y_out = actual_lam * y + (1 - actual_lam) * y[idx]
+    # Mix labels only in the pasted time window (not globally).
+    # freq_ratio captures that only part of the frequency range was replaced.
+    freq_ratio = cut_f / F
+    y_out = y.clone()
+    y_out[:, t0:t0 + cut_t, :] = (
+        (1.0 - freq_ratio) * y[:, t0:t0 + cut_t, :]
+        + freq_ratio * y[idx, t0:t0 + cut_t, :]
+    )
     return x_out, y_out
 
 
@@ -312,6 +323,9 @@ def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * focal_weight * class_weight).mean()
 
 
+_owbce_kernel_cache: dict[tuple, torch.Tensor] = {}
+
+
 def asymmetric_focal_owbce(y_pred: torch.Tensor, y_true: torch.Tensor,
                            pos_weight: torch.Tensor | float,
                            gamma_pos: float = 0.5,
@@ -334,18 +348,20 @@ def asymmetric_focal_owbce(y_pred: torch.Tensor, y_true: torch.Tensor,
     bce = F.binary_cross_entropy(y_pred, y_true, reduction='none')
     is_positive = y_true > 0.5
 
-    # Asymmetric focal modulation
-    pt = torch.where(is_positive, y_pred, 1 - y_pred)
-    gamma = torch.where(is_positive,
-                        torch.tensor(gamma_pos, device=y_pred.device),
-                        torch.tensor(gamma_neg, device=y_pred.device))
-    focal_weight = (1 - pt) ** gamma
+    # Asymmetric focal modulation (no per-batch tensor allocation)
+    focal_weight = torch.where(is_positive,
+                               (1 - y_pred) ** gamma_pos,
+                               y_pred ** gamma_neg)
 
-    # Onset-proximity boost: sinusoidal kernel (1.0 at center, 0.0 at edges)
+    # Cached proximity kernel (constant for a given window/device)
     hw = proximity_window
     ks = 2 * hw + 1
-    t = torch.linspace(-1, 1, ks, device=y_pred.device)
-    kernel = (0.5 + 0.5 * torch.cos(math.pi * t)).view(1, 1, ks)
+    cache_key = (ks, y_pred.device)
+    if cache_key not in _owbce_kernel_cache:
+        t = torch.linspace(-1, 1, ks, device=y_pred.device)
+        _owbce_kernel_cache[cache_key] = (0.5 + 0.5 * torch.cos(math.pi * t)).view(1, 1, ks)
+    kernel = _owbce_kernel_cache[cache_key]
+
     # Use low threshold to include neighbor frames (y=0.25) in onset map
     C = y_true.shape[2]
     onset_map = (y_true > 0.1).float().permute(0, 2, 1)  # (B,C,T)
@@ -400,7 +416,8 @@ def main():
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     parser.add_argument("--loss", default=None,
                         choices=["bce", "focal", "shift_bce", "confidence_shift_bce",
-                                 "asymmetric_focal", "shift_focal"],
+                                 "asymmetric_focal", "asymmetric_focal_owbce",
+                                 "shift_focal"],
                         help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")

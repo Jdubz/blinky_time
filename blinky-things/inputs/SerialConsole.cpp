@@ -1030,7 +1030,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->activationThreshold = 0.3f;
         audioCtrl_->odfContrast = 1.25f;
         // PLP
-        audioCtrl_->plpConfAlpha = 0.15f;
+        audioCtrl_->plpConfAlpha = 0.25f;
         audioCtrl_->plpNovGain = 1.5f;
         audioCtrl_->plpSignalFloor = 0.10f;
         // Pulse detection
@@ -1048,7 +1048,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->slotSwitchThreshold = 0.70f;
         audioCtrl_->slotNewThreshold = 0.40f;
         audioCtrl_->slotUpdateRate = 0.15f;
-        audioCtrl_->slotSaveMinConf = 0.50f;
+        audioCtrl_->slotSaveMinConf = 0.25f;
         audioCtrl_->slotSeedBlend = 0.70f;
 
         // Restore spectral processing defaults
