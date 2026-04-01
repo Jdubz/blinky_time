@@ -19,11 +19,11 @@ class ReleaseRequest(BaseModel):
     hold_seconds: int | None = Field(None, ge=0, description="Don't auto-reconnect for N seconds")
 
 
-class OtaRequest(BaseModel):
+class FlashRequest(BaseModel):
     firmware_path: str = Field(..., description="Path to .hex or .uf2 firmware file on the server")
 
 
-class OtaResponse(BaseModel):
+class FlashResponse(BaseModel):
     status: str
     message: str
     elapsed_s: float = 0

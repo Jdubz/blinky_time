@@ -5,6 +5,7 @@
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # ML training artifacts (large, regenerated)
 ml-training/data/processed/

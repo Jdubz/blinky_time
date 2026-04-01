@@ -1,7 +1,11 @@
-"""Pure scoring functions for music test evaluation.
+"""Pure scoring functions for onset and PLP pattern evaluation.
 
 Ported from blinky-serial-mcp/src/lib/scoring.ts — canonical implementation.
 No side effects, no I/O. All rounding uses JS-compatible math.round pattern.
+
+Only two things are scored:
+1. Onset accuracy — do detected onsets match ground truth kicks/snares?
+2. PLP pattern quality — does the PLP pattern lock on and show structure?
 """
 
 from __future__ import annotations
@@ -11,15 +15,13 @@ from collections import defaultdict
 from typing import Any
 
 from .types import (
-    BeatTracking,
     DeviceRunScore,
     Diagnostics,
     GroundTruth,
-    MusicMode,
     OffsetStats,
+    OnsetTracking,
     PlpMetrics,
     TestData,
-    TransientTracking,
 )
 
 
@@ -67,26 +69,14 @@ def match_events_f1(
 
 
 # ---------------------------------------------------------------------------
-# Statistics
-# ---------------------------------------------------------------------------
-
-
-def compute_stats(values: list[float]) -> dict[str, float]:
-    """Mean, std, min, max. Returns zeros for empty arrays."""
-    if not values:
-        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
-    mean = sum(values) / len(values)
-    variance = sum((v - mean) ** 2 for v in values) / len(values)
-    return {"mean": mean, "std": math.sqrt(variance), "min": min(values), "max": max(values)}
-
-
-def round_stats(s: dict[str, float]) -> dict[str, float]:
-    return {k: _js_round(v) for k, v in s.items()}
-
-
-# ---------------------------------------------------------------------------
 # Audio latency estimation
 # ---------------------------------------------------------------------------
+
+PLAUSIBLE_LATENCY_MIN = -50
+PLAUSIBLE_LATENCY_MAX = 300
+ONSET_TOLERANCE_SEC = 0.10
+MIN_ONSET_STRENGTH = 0.6
+ONSET_DEDUP_SEC = 0.070
 
 
 def estimate_audio_latency(
@@ -151,19 +141,16 @@ def estimate_audio_latency(
 # Main scoring
 # ---------------------------------------------------------------------------
 
-BEAT_TOLERANCE_SEC = 0.10
-PLAUSIBLE_LATENCY_MIN = -50
-PLAUSIBLE_LATENCY_MAX = 300
-MIN_ONSET_STRENGTH = 0.6
-ONSET_DEDUP_SEC = 0.070
-
 
 def score_device_run(
     test_data: TestData,
     audio_start_time: float,
     gt_data: GroundTruth,
 ) -> DeviceRunScore:
-    """Score a single device's test recording against ground truth."""
+    """Score a single device's test recording against ground truth.
+
+    Computes onset F1 (at multiple tolerances) and PLP pattern metrics.
+    """
     raw_duration = test_data.duration
     timing_offset_ms = audio_start_time - test_data.start_time
 
@@ -177,24 +164,14 @@ def score_device_run(
         {
             "timestamp_ms": s.timestamp_ms - timing_offset_ms,
             "active": s.active,
-            "bpm": s.bpm,
             "phase": s.phase,
             "confidence": s.confidence,
+            "period_steps": s.period_steps,
             "oss": s.oss,
             "plp_pulse": s.plp_pulse,
         }
         for s in test_data.music_states
         if s.timestamp_ms - timing_offset_ms >= 0
-    ]
-    beat_events = [
-        {
-            "timestamp_ms": b.timestamp_ms - timing_offset_ms,
-            "bpm": b.bpm,
-            "type": b.type,
-            "predicted": b.predicted,
-        }
-        for b in test_data.beat_events
-        if b.timestamp_ms - timing_offset_ms >= 0
     ]
 
     # Latency estimation
@@ -214,23 +191,7 @@ def score_device_run(
 
     audio_duration_sec = audio_duration_ms / 1000
 
-    # Reference beats
-    ref_beats = [h.time for h in gt_data.hits if h.expect_trigger and h.time <= audio_duration_sec]
-
-    # Estimated beats (timestamp_ms is always float in these dicts, constructed above)
-    est_beats: list[float] = [
-        (b["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
-        for b in beat_events
-    ]
-
-    # Beat F1
-    beat_result = match_events_f1(est_beats, ref_beats, BEAT_TOLERANCE_SEC)
-
-    # Transient F1
-    est_transients: list[float] = [
-        (d["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
-        for d in detections
-    ]
+    # Reference onsets
     if gt_data.onsets:
         filtered = sorted(
             [
@@ -245,81 +206,23 @@ def score_device_run(
                 deduped.append(t)
         ref_onsets = deduped
     else:
-        ref_onsets = ref_beats
-
-    transient_result = match_events_f1(est_transients, ref_onsets, BEAT_TOLERANCE_SEC)
-
-    # CMLt: continuity metric
-    correct = [any(abs(est - ref) <= BEAT_TOLERANCE_SEC for est in est_beats) for ref in ref_beats]
-    total_correct, longest, current = 0, 0, 0
-    for c in correct:
-        if c:
-            current += 1
-        else:
-            if current > 0:
-                total_correct += current
-                longest = max(longest, current)
-                current = 0
-    if current > 0:
-        total_correct += current
-        longest = max(longest, current)
-    cmlt = total_correct / len(ref_beats) if ref_beats else 0.0
-    cmlc = longest / len(ref_beats) if ref_beats else 0.0
-
-    # AMLt: also check half-time and double-time
-    double_time: list[float] = []
-    for i, b in enumerate(est_beats):
-        double_time.append(b)
-        if i < len(est_beats) - 1:
-            double_time.append((b + est_beats[i + 1]) / 2)
-    half_time = [b for i, b in enumerate(est_beats) if i % 2 == 0]
-
-    best_aml_correct = correct
-    for alt_est in [double_time, half_time]:
-        alt_correct = [
-            any(abs(est - ref) <= BEAT_TOLERANCE_SEC for est in alt_est) for ref in ref_beats
+        ref_onsets = [
+            h.time for h in gt_data.hits if h.expect_trigger and h.time <= audio_duration_sec
         ]
-        if sum(alt_correct) > sum(best_aml_correct):
-            best_aml_correct = alt_correct
 
-    aml_total, aml_longest, aml_current = 0, 0, 0
-    for c in best_aml_correct:
-        if c:
-            aml_current += 1
-        else:
-            if aml_current > 0:
-                aml_total += aml_current
-                aml_longest = max(aml_longest, aml_current)
-                aml_current = 0
-    if aml_current > 0:
-        aml_total += aml_current
-        aml_longest = max(aml_longest, aml_current)
-    amlt = aml_total / len(ref_beats) if ref_beats else 0.0
+    # Onset F1 at multiple tolerances
+    est_onsets: list[float] = [
+        (d["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
+        for d in detections
+    ]
+    onset_result = match_events_f1(est_onsets, ref_onsets, ONSET_TOLERANCE_SEC)
 
-    # Music mode metrics
+    # Rhythm tracking diagnostics (confidence, activation)
     active_states = [s for s in music_states if s["active"]]
-    avg_bpm: float = (
-        sum(s["bpm"] for s in active_states) / len(active_states) if active_states else 0.0  # type: ignore[misc]
-    )
     avg_conf: float = (
         sum(s["confidence"] for s in active_states) / len(active_states) if active_states else 0.0  # type: ignore[misc]
     )
-
-    # Phase stability
-    phase_stability = 0.0
-    if len(active_states) > 1:
-        phase_diffs: list[float] = []
-        for i in range(1, len(active_states)):
-            diff: float = active_states[i]["phase"] - active_states[i - 1]["phase"]  # type: ignore[operator]
-            if diff < -0.5:
-                diff += 1.0
-            if diff > 0.5:
-                diff -= 1.0
-            phase_diffs.append(diff)
-        if phase_diffs:
-            mean_diff = sum(phase_diffs) / len(phase_diffs)
-            variance = sum((d - mean_diff) ** 2 for d in phase_diffs) / len(phase_diffs)
-            phase_stability = max(0.0, 1.0 - math.sqrt(variance) * 10)
+    activation_ms: float | None = active_states[0]["timestamp_ms"] if active_states else None
 
     # PLP metrics
     plp_values: list[float] = [
@@ -359,87 +262,60 @@ def score_device_run(
         if gt_onset_plp_values:
             plp_at_transient = sum(gt_onset_plp_values) / len(gt_onset_plp_values)
 
-        # PLP autocorrelation at detected BPM lag
-        if avg_bpm > 0 and len(plp_values) > 10:
-            stream_rate = len(plp_values) / (audio_duration_sec or 1)
-            bpm_lag = _js_round_int(stream_rate * 60 / avg_bpm)
-            if 0 < bpm_lag < len(plp_values) / 2:
-                sum_xy = 0.0
-                sum_x2 = 0.0
-                n = len(plp_values) - bpm_lag
-                for i in range(n):
-                    x = plp_values[i] - plp_mean
-                    y = plp_values[i + bpm_lag] - plp_mean
-                    sum_xy += x * y
-                    sum_x2 += x * x
-                plp_auto_corr = sum_xy / sum_x2 if sum_x2 > 0 else 0.0
+        # PLP autocorrelation at detected period lag
+        # Use period_steps from music state (firmware streams this directly)
+        # rather than deriving from BPM.
+        period_steps_values = [
+            s["period_steps"]
+            for s in active_states
+            if s.get("period_steps") is not None and s["period_steps"] > 0  # type: ignore[operator]
+        ]
+        avg_period = (
+            sum(period_steps_values) / len(period_steps_values)  # type: ignore[arg-type]
+            if period_steps_values
+            else 0
+        )
+        period_lag = _js_round_int(avg_period) if avg_period > 0 else 0
 
-    # Diagnostics: transient-beat offsets
-    transient_beat_offsets: list[int] = []
+        if 0 < period_lag < len(plp_values) / 2:
+            sum_xy = 0.0
+            sum_x2 = 0.0
+            n = len(plp_values) - period_lag
+            for i in range(n):
+                x = plp_values[i] - plp_mean
+                y = plp_values[i + period_lag] - plp_mean
+                sum_xy += x * y
+                sum_x2 += x * x
+            plp_auto_corr = sum_xy / sum_x2 if sum_x2 > 0 else 0.0
+
+    # Diagnostics: onset-to-GT offsets
+    onset_offsets: list[int] = []
     for det in detections:
         det_sec: float = (det["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
         best_offset = float("inf")
-        for ref in ref_beats:
+        for ref in ref_onsets:
             offset = det_sec - ref
             if abs(offset) < abs(best_offset):
                 best_offset = offset
         if abs(best_offset) < 0.5:
-            transient_beat_offsets.append(_js_round_int(best_offset * 1000))
+            onset_offsets.append(_js_round_int(best_offset * 1000))
 
-    phase_offset_stats = _compute_offset_stats(transient_beat_offsets)
-
-    # Diagnostics: beat event offsets
-    beat_event_offsets: list[int] = []
-    for est in est_beats:
-        best_offset = float("inf")
-        for ref in ref_beats:
-            offset = est - ref
-            if abs(offset) < abs(best_offset):
-                best_offset = offset
-        if abs(best_offset) < 0.5:
-            beat_event_offsets.append(_js_round_int(best_offset * 1000))
-
-    beat_offset_stats = _compute_offset_stats(beat_event_offsets)
-
-    beat_offset_histogram: dict[str, int] = {}
-    for offset in beat_event_offsets:
-        bucket = _js_round_int(offset / 10) * 10
-        key = str(bucket)
-        beat_offset_histogram[key] = beat_offset_histogram.get(key, 0) + 1
-
-    predicted_beats = sum(1 for b in beat_events if b.get("predicted") is True)
-    fallback_beats = sum(1 for b in beat_events if b.get("predicted") is not True)
+    onset_offset_stats = _compute_offset_stats(onset_offsets)
 
     return DeviceRunScore(
         audio_latency_ms=audio_latency_ms,
         audio_duration_sec=audio_duration_sec,
         timing_offset_ms=timing_offset_ms,
-        beat_tracking=BeatTracking(
-            f1=_js_round(beat_result["f1"]),
-            precision=_js_round(beat_result["precision"]),
-            recall=_js_round(beat_result["recall"]),
-            cmlt=_js_round(cmlt),
-            cmlc=_js_round(cmlc),
-            amlt=_js_round(amlt),
-            ref_beats=len(ref_beats),
-            est_beats=len(est_beats),
-        ),
-        transient_tracking=TransientTracking(
-            f1=_js_round(transient_result["f1"]),
-            precision=_js_round(transient_result["precision"]),
-            recall=_js_round(transient_result["recall"]),
+        onset_tracking=OnsetTracking(
+            f1=_js_round(onset_result["f1"]),
+            precision=_js_round(onset_result["precision"]),
+            recall=_js_round(onset_result["recall"]),
             count=len(detections),
-            f1_at_50ms=_js_round(match_events_f1(est_transients, ref_onsets, 0.050)["f1"]),
-            f1_at_70ms=_js_round(match_events_f1(est_transients, ref_onsets, 0.070)["f1"]),
-            f1_at_100ms=_js_round(transient_result["f1"]),
-            f1_at_150ms=_js_round(match_events_f1(est_transients, ref_onsets, 0.150)["f1"]),
+            f1_50ms=_js_round(match_events_f1(est_onsets, ref_onsets, 0.050)["f1"]),
+            f1_70ms=_js_round(match_events_f1(est_onsets, ref_onsets, 0.070)["f1"]),
+            f1_100ms=_js_round(onset_result["f1"]),
+            f1_150ms=_js_round(match_events_f1(est_onsets, ref_onsets, 0.150)["f1"]),
             ref_onsets=len(ref_onsets),
-        ),
-        music_mode=MusicMode(
-            avg_confidence=_js_round(avg_conf, 2),
-            phase_stability=_js_round(phase_stability),
-            activation_ms=active_states[0]["timestamp_ms"] if active_states else None,
-            detected_bpm=_js_round(avg_bpm, 1),
         ),
         plp=PlpMetrics(
             at_transient=_js_round(plp_at_transient),
@@ -449,34 +325,14 @@ def score_device_run(
             peakiness=_js_round(plp_peakiness, 2),
             mean=_js_round(plp_mean),
         ),
+        avg_confidence=_js_round(avg_conf, 2),
+        activation_ms=activation_ms,
         diagnostics=Diagnostics(
-            transient_rate=len(detections) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
-            expected_beat_rate=len(ref_beats) / audio_duration_sec
-            if audio_duration_sec > 0
-            else 0.0,
-            beat_event_rate=len(est_beats) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
-            phase_offset_stats=phase_offset_stats,
-            beat_offset_stats=beat_offset_stats,
-            beat_offset_histogram=beat_offset_histogram,
-            beat_vs_reference={
-                "matched": int(beat_result["tp"]),
-                "extra": len(est_beats) - int(beat_result["tp"]),
-                "missed": len(ref_beats) - int(beat_result["tp"]),
-            },
-            prediction_ratio=(
-                {
-                    "predicted": predicted_beats,
-                    "fallback": fallback_beats,
-                    "total": len(beat_events),
-                }
-                if beat_events
-                else None
-            ),
-            transient_beat_offsets=transient_beat_offsets,
-            beat_event_offsets=beat_event_offsets,
+            onset_rate=len(detections) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
+            onset_offset_stats=onset_offset_stats,
+            onset_offsets=onset_offsets,
         ),
         adjusted_detections=[dict(d) for d in detections],
-        adjusted_beat_events=[dict(b) for b in beat_events],
         adjusted_music_states=[dict(s) for s in music_states],
     )
 
@@ -505,34 +361,19 @@ def _compute_offset_stats(offsets: list[int]) -> OffsetStats | None:
 
 def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
     """Convert DeviceRunScore to compact JSON summary (removes raw data)."""
-    bt = score.beat_tracking
-    tt = score.transient_tracking
-    mm = score.music_mode
+    ot = score.onset_tracking
     d = score.diagnostics
     return {
-        "beatTracking": {
-            "f1": bt.f1,
-            "precision": bt.precision,
-            "recall": bt.recall,
-            "refBeats": bt.ref_beats,
-            "estBeats": bt.est_beats,
-        },
-        "transientTracking": {
-            "f1": tt.f1,
-            "precision": tt.precision,
-            "recall": tt.recall,
-            "count": tt.count,
-            "f1_at_50ms": tt.f1_at_50ms,
-            "f1_at_70ms": tt.f1_at_70ms,
-            "f1_at_100ms": tt.f1_at_100ms,
-            "f1_at_150ms": tt.f1_at_150ms,
-            "refOnsets": tt.ref_onsets,
-        },
-        "musicMode": {
-            "avgConfidence": mm.avg_confidence,
-            "phaseStability": mm.phase_stability,
-            "activationMs": mm.activation_ms,
-            "detectedBpm": mm.detected_bpm,
+        "onsetTracking": {
+            "f1": ot.f1,
+            "precision": ot.precision,
+            "recall": ot.recall,
+            "count": ot.count,
+            "f1_50ms": ot.f1_50ms,
+            "f1_70ms": ot.f1_70ms,
+            "f1_100ms": ot.f1_100ms,
+            "f1_150ms": ot.f1_150ms,
+            "refOnsets": ot.ref_onsets,
         },
         "plp": {
             "atTransient": score.plp.at_transient,
@@ -542,33 +383,21 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             "peakiness": score.plp.peakiness,
             "mean": score.plp.mean,
         },
+        "rhythm": {
+            "avgConfidence": score.avg_confidence,
+            "activationMs": score.activation_ms,
+        },
         "diagnostics": {
-            "transientRate": _js_round(d.transient_rate, 1),
-            "expectedBeatRate": _js_round(d.expected_beat_rate, 1),
-            "beatEventRate": _js_round(d.beat_event_rate, 1),
-            "transientOffsetMs": (
+            "onsetRate": _js_round(d.onset_rate, 1),
+            "onsetOffsetMs": (
                 {
-                    "median": d.phase_offset_stats.median,
-                    "stdDev": d.phase_offset_stats.std_dev,
-                    "iqr": d.phase_offset_stats.iqr,
+                    "median": d.onset_offset_stats.median,
+                    "stdDev": d.onset_offset_stats.std_dev,
+                    "iqr": d.onset_offset_stats.iqr,
                 }
-                if d.phase_offset_stats
+                if d.onset_offset_stats
                 else None
             ),
-            "beatOffsetMs": (
-                {
-                    "median": d.beat_offset_stats.median,
-                    "stdDev": d.beat_offset_stats.std_dev,
-                    "iqr": d.beat_offset_stats.iqr,
-                }
-                if d.beat_offset_stats
-                else None
-            ),
-            "beatOffsetHistogram": d.beat_offset_histogram,
-            "predictionRatio": d.prediction_ratio,
-            "matched": d.beat_vs_reference["matched"],
-            "extra": d.beat_vs_reference["extra"],
-            "missed": d.beat_vs_reference["missed"],
         },
         "timing": {
             "latencyMs": round(score.audio_latency_ms)

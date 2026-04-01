@@ -10,8 +10,8 @@ from .deps import get_fleet
 from .models import (
     CommandResponse,
     DeviceResponse,
-    OtaRequest,
-    OtaResponse,
+    FlashRequest,
+    FlashResponse,
     ReleaseRequest,
     SettingValueRequest,
     StatusResponse,
@@ -34,7 +34,7 @@ def _get_connected_device(device_id: str) -> Device:
             409,
             f"Device {device_id[:12]} is not connected (state={device.state.value}). "
             + (
-                "Use POST /devices/{id}/ota to recover."
+                "Use POST /devices/{id}/flash to recover."
                 if device.state == DeviceState.DFU_RECOVERY
                 else ""
             ),
@@ -189,8 +189,8 @@ async def fleet_discover() -> dict[str, Any]:
     }
 
 
-@router.post("/devices/{device_id}/ota")
-async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
+@router.post("/devices/{device_id}/flash")
+async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     """Upload firmware to a device using the best available method.
 
     Automatically selects the upload method based on device transport:
@@ -202,7 +202,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
     """
     from pathlib import Path
 
-    from ..ota import upload_firmware
+    from ..firmware import upload_firmware
 
     device = _get_device_or_404(device_id)
 
@@ -239,6 +239,6 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         fleet.resume_reconnect(device_id)
 
     if result["status"] == "ok":
-        return OtaResponse(**result)
+        return FlashResponse(**result)
     else:
         raise HTTPException(500, result["message"])

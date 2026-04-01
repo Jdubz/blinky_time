@@ -1,2 +1,0 @@
-[console_scripts]
-blinky-server = blinky_server.__main__:main

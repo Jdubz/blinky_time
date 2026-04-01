@@ -147,8 +147,7 @@ class FleetManager:
         """Temporarily release a device (e.g., for firmware flashing).
 
         If hold_seconds is set, the device won't be auto-reconnected for
-        that duration (in-memory blackout). The caller should also acquire
-        a serial lock file for cross-process coordination.
+        that duration (in-memory blackout).
         """
         device = self.get_device(device_id)
         if not device:
@@ -268,15 +267,6 @@ class FleetManager:
             if device_id in self._dedup_excluded:
                 continue
 
-            # Skip locked serial ports (e.g., firmware flashing in progress)
-            if disc.transport_type == "serial":
-                from ..transport.serial_lock import is_locked
-
-                locked, _ = is_locked(disc.address)
-                if locked:
-                    log.debug("Skipping discovery connect for %s — port locked", device_id[:12])
-                    continue
-
             # New device - connect
             try:
                 transport = _create_transport(disc)
@@ -394,7 +384,7 @@ class FleetManager:
             if matched_dev.state != DeviceState.DFU_RECOVERY:
                 log.warning(
                     "Device %s (%s) is in DFU bootloader — SafeBoot crash recovery. "
-                    "Push firmware via POST /api/devices/%s/ota to recover.",
+                    "Push firmware via POST /api/devices/%s/flash to recover.",
                     matched_dev.id[:12],
                     matched_dev.device_name or "unknown",
                     matched_dev.id,
@@ -451,8 +441,6 @@ class FleetManager:
         successful connect or when device is released/reconnected manually.
         After 10 consecutive failures, removes the device from the fleet.
         """
-        from ..transport.serial_lock import is_locked
-
         to_remove_after: list[str] = []
 
         for device_id, device in self._devices.items():
@@ -497,17 +485,6 @@ class FleetManager:
                     self._backoff_skip[device_id] = counter + 1
                     continue
                 self._backoff_skip[device_id] = 0
-
-            # Check serial port lock file (cross-process coordination)
-            if disc.transport_type == "serial":
-                locked, holder = is_locked(disc.address)
-                if locked:
-                    log.debug(
-                        "Skipping reconnect for %s — port locked by %s",
-                        device_id[:12],
-                        holder.get("tool") if holder else "unknown",
-                    )
-                    continue
 
             try:
                 transport = _create_transport(disc)
@@ -670,8 +647,8 @@ class FleetManager:
             self.pause_discovery()
             self.hold_reconnect(device.id, 600)
             try:
-                from ..ota.ble_dfu import upload_ble_dfu
-                from ..ota.compile import ensure_dfu_zip
+                from ..firmware.ble_dfu import upload_ble_dfu
+                from ..firmware.compile import ensure_dfu_zip
 
                 dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
                 assert device.ble_address is not None  # filtered above
