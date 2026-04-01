@@ -674,6 +674,7 @@ class FleetManager:
                 from ..ota.compile import ensure_dfu_zip
 
                 dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
+                assert device.ble_address is not None  # filtered above
                 result = await upload_ble_dfu(
                     app_ble_address=device.ble_address,
                     dfu_zip_path=dfu_zip,
