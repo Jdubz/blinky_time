@@ -225,8 +225,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     # Hold time: UF2 takes ~60s, BLE DFU takes ~8 min
     is_ble_only = (
-        device.state == DeviceState.DFU_RECOVERY
-        or device.transport.transport_type == "ble"
+        device.state == DeviceState.DFU_RECOVERY or device.transport.transport_type == "ble"
     )
     hold_time = 600 if is_ble_only else 120
 

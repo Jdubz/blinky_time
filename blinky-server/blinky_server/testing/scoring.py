@@ -101,7 +101,9 @@ def estimate_audio_latency(
     """
     strong_det = [d for d in detections if d["strength"] > 0.5]
     all_expected = [
-        h for h in gt_hits if h.get("expect_trigger", True) and h["time"] * 1000 <= audio_duration_ms
+        h
+        for h in gt_hits
+        if h.get("expect_trigger", True) and h["time"] * 1000 <= audio_duration_ms
     ]
     strong_expected = [h for h in all_expected if h["strength"] >= 0.8]
 
@@ -213,23 +215,29 @@ def score_device_run(
     audio_duration_sec = audio_duration_ms / 1000
 
     # Reference beats
-    ref_beats = [
-        h.time
-        for h in gt_data.hits
-        if h.expect_trigger and h.time <= audio_duration_sec
-    ]
+    ref_beats = [h.time for h in gt_data.hits if h.expect_trigger and h.time <= audio_duration_sec]
 
     # Estimated beats (timestamp_ms is always float in these dicts, constructed above)
-    est_beats: list[float] = [(b["timestamp_ms"] - latency_correction_ms) / 1000 for b in beat_events]  # type: ignore[operator]
+    est_beats: list[float] = [
+        (b["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
+        for b in beat_events
+    ]
 
     # Beat F1
     beat_result = match_events_f1(est_beats, ref_beats, BEAT_TOLERANCE_SEC)
 
     # Transient F1
-    est_transients: list[float] = [(d["timestamp_ms"] - latency_correction_ms) / 1000 for d in detections]  # type: ignore[operator]
+    est_transients: list[float] = [
+        (d["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
+        for d in detections
+    ]
     if gt_data.onsets:
         filtered = sorted(
-            [o.time for o in gt_data.onsets if o.time <= audio_duration_sec and o.strength >= MIN_ONSET_STRENGTH]
+            [
+                o.time
+                for o in gt_data.onsets
+                if o.time <= audio_duration_sec and o.strength >= MIN_ONSET_STRENGTH
+            ]
         )
         deduped: list[float] = []
         for t in filtered:
@@ -268,7 +276,9 @@ def score_device_run(
 
     best_aml_correct = correct
     for alt_est in [double_time, half_time]:
-        alt_correct = [any(abs(est - ref) <= BEAT_TOLERANCE_SEC for est in alt_est) for ref in ref_beats]
+        alt_correct = [
+            any(abs(est - ref) <= BEAT_TOLERANCE_SEC for est in alt_est) for ref in ref_beats
+        ]
         if sum(alt_correct) > sum(best_aml_correct):
             best_aml_correct = alt_correct
 
@@ -312,7 +322,11 @@ def score_device_run(
             phase_stability = max(0.0, 1.0 - math.sqrt(variance) * 10)
 
     # PLP metrics
-    plp_values: list[float] = [s["plp_pulse"] for s in active_states if s.get("plp_pulse") is not None]  # type: ignore[misc]
+    plp_values: list[float] = [
+        s["plp_pulse"]  # type: ignore[misc]
+        for s in active_states
+        if s.get("plp_pulse") is not None
+    ]
     plp_at_transient = 0.0
     plp_auto_corr = 0.0
     plp_peakiness = 0.0
@@ -394,9 +408,7 @@ def score_device_run(
         beat_offset_histogram[key] = beat_offset_histogram.get(key, 0) + 1
 
     predicted_beats = sum(1 for b in beat_events if b.get("predicted") is True)
-    fallback_beats = sum(
-        1 for b in beat_events if b.get("predicted") is not True
-    )
+    fallback_beats = sum(1 for b in beat_events if b.get("predicted") is not True)
 
     return DeviceRunScore(
         audio_latency_ms=audio_latency_ms,
@@ -439,7 +451,9 @@ def score_device_run(
         ),
         diagnostics=Diagnostics(
             transient_rate=len(detections) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
-            expected_beat_rate=len(ref_beats) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
+            expected_beat_rate=len(ref_beats) / audio_duration_sec
+            if audio_duration_sec > 0
+            else 0.0,
             beat_event_rate=len(est_beats) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
             phase_offset_stats=phase_offset_stats,
             beat_offset_stats=beat_offset_stats,
@@ -450,7 +464,11 @@ def score_device_run(
                 "missed": len(ref_beats) - int(beat_result["tp"]),
             },
             prediction_ratio=(
-                {"predicted": predicted_beats, "fallback": fallback_beats, "total": len(beat_events)}
+                {
+                    "predicted": predicted_beats,
+                    "fallback": fallback_beats,
+                    "total": len(beat_events),
+                }
                 if beat_events
                 else None
             ),
@@ -529,12 +547,20 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             "expectedBeatRate": _js_round(d.expected_beat_rate, 1),
             "beatEventRate": _js_round(d.beat_event_rate, 1),
             "transientOffsetMs": (
-                {"median": d.phase_offset_stats.median, "stdDev": d.phase_offset_stats.std_dev, "iqr": d.phase_offset_stats.iqr}
+                {
+                    "median": d.phase_offset_stats.median,
+                    "stdDev": d.phase_offset_stats.std_dev,
+                    "iqr": d.phase_offset_stats.iqr,
+                }
                 if d.phase_offset_stats
                 else None
             ),
             "beatOffsetMs": (
-                {"median": d.beat_offset_stats.median, "stdDev": d.beat_offset_stats.std_dev, "iqr": d.beat_offset_stats.iqr}
+                {
+                    "median": d.beat_offset_stats.median,
+                    "stdDev": d.beat_offset_stats.std_dev,
+                    "iqr": d.beat_offset_stats.iqr,
+                }
                 if d.beat_offset_stats
                 else None
             ),
@@ -545,7 +571,9 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             "missed": d.beat_vs_reference["missed"],
         },
         "timing": {
-            "latencyMs": round(score.audio_latency_ms) if score.audio_latency_ms is not None else None,
+            "latencyMs": round(score.audio_latency_ms)
+            if score.audio_latency_ms is not None
+            else None,
         },
     }
 

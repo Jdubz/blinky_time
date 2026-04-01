@@ -90,7 +90,9 @@ async def kill_orphan_audio() -> None:
     """Kill any orphan ffplay processes from previous test runs."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "pkill", "-f", "ffplay",
+            "pkill",
+            "-f",
+            "ffplay",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
