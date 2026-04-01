@@ -993,9 +993,12 @@ def trigger_bootloader(port, verbose=False):
     print(f"  ERROR: Bootloader entry failed after {MAX_BOOTLOADER_RETRIES} attempts")
     print(f"  Device did not enter UF2 mode (no block device appeared).")
     print(f"  Possible causes:")
-    print(f"    - Intermittent GPREGRET race condition (nRF52 SoftDevice clears register)")
+    print(f"    - GPREGRET race condition (SoftDevice clears register during reset)")
     print(f"    - USB bus instability (too many recent re-enumerations)")
     print(f"    - Device firmware not responding to bootloader command")
+    print(f"")
+    print(f"  MANUAL RECOVERY: Double-tap the physical reset button, then run:")
+    print(f"    python3 tools/uf2_upload.py --already-in-bootloader --build-dir /tmp/blinky-build")
     return None
 
 
@@ -1091,7 +1094,7 @@ def _get_usb_block_devices():
     Strategy (ordered fastest-first to avoid subprocess delays eating
     the drive detection timeout on slow systems like Raspberry Pi):
     1. Check /dev/disk/by-label/ for UF2 drive label (instant, no subprocess)
-    2. Scan /sys/block/sd* for devices with Seeed/bootloader VID
+    2. Scan /sys/block/sd* for removable USB devices with Seeed/bootloader VID
     3. Fallback: lsblk -J for USB block devices (subprocess, can be slow)
     """
     devices = set()

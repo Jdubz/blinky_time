@@ -191,7 +191,7 @@ private:
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float acfPeakStrength_ = 0.0f;                   // Normalized ACF peak of winning period (0-1)
     int plpBestPeriod_ = 33;                   // Winning period from ACF + epoch-fold scoring (frames)
-    float plpDftPhase_ = 0.0f;                // DFT phase of winning frequency
+    float plpAccentPhase_ = 0.0f;             // Epoch-fold accent position (0-1 within period)
     float plpPeakEma_ = 0.0f;                // EMA of PLP peak amplitudes (beat stability tracking)
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)

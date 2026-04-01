@@ -4,11 +4,12 @@
 
 AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.
 
-**Current Version:** AudioTracker with ACF+PLP architecture + pattern slot cache (v82, March 2026)
-**BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF → period estimate
-**Phase/Pattern:** PLP Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (flux, bass, NN onset). Epoch-fold quality scoring selects period (top-5 diverse candidates, DFT mag × pattern variance). Canonical cosine OLA (Grosche & Mueller 2011, Meier 2024) for plpPulse output. Epoch-fold pattern retained for slot cache digest only.
-**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 PLP sources. Non-NN fallback: mic level.
+**Current Version:** AudioTracker with multi-source ACF + PLP architecture + pattern slot cache (v83, March 2026)
+**Period Detection:** Multi-source ACF (spectral flux + bass energy + NN onset, lags 20-80, ~4ms) → parabolic interpolation → bar multipliers (2×/3×/4×) → epoch-fold variance scoring with sqrt(multiplier) penalty. **Pattern quality is the objective — the system selects whichever period produces the best visual pattern. Half/double time matches are correct if they capture more rhythmic structure.**
+**Phase/Pattern:** PLP epoch-folds NN-gated flux at detected period. Canonical cosine OLA (Grosche & Mueller 2011, Meier 2024) for plpPulse output. Epoch-fold pattern retained for slot cache digest only.
+**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 ACF sources. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
+**Primary Test Metrics:** plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure). BPM accuracy uses octave-tolerant scoring.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -17,7 +18,8 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 - **v4 (February 2026)**: CBSS beat tracking (deterministic phase, counter-based beats)
 - **v5 (March 2026)**: AudioTracker — ACF+Comb+PLL, replaces AudioController CBSS. ~400 lines, ~10 params (vs ~2100 lines, ~56 params). No CBSS, no Bayesian fusion.
 - **v6 (March 2026)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram. Soft blend, cold-start template seeding, beat stability gated learning. PLL proven ineffective (phase consistency ~0.04).
-- **v7 (March 2026, deployed)**: Pattern slot cache — 4-slot LRU of 16-bin PLP pattern digests for instant section recall. v77 pattern memory (IOI histogram + bar histogram) replaced. Fisher's g removed (penalized syncopated music). downbeat/beatInMeasure removed from AudioControl. Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
+- **v7 (March 2026)**: Pattern slot cache — 4-slot LRU of 16-bin PLP pattern digests for instant section recall. v77 pattern memory replaced. Fisher's g removed.
+- **v8 (March 2026, deployed)**: Multi-source ACF replaces Fourier tempogram (75ms → ~4ms). Parabolic interpolation on ACF peaks. Bar multipliers (2×/3×/4×) with sqrt penalty. Pattern-quality-driven period selection — octave matches are valid.
 
 ---
 
@@ -98,21 +100,21 @@ Generators (HeatFire, Water, Lightning)
 
 1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
 
-2. **PLP Phase/Pattern Extraction (deployed)**: Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics). DFT phase gives beat alignment for free (no separate cross-correlation step). Epoch-fold pattern extraction used for the actual visual pattern shape. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold — confidence naturally approaches 0 during silence). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests for instant section recall. This replaced the PLL, which was proven ineffective (phase consistency ~0.04, essentially random).
+2. **Multi-Source ACF Period Detection (deployed)**: ACF scans beat-level lags (20-80) on 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Parabolic interpolation refines peak position and strength. Bar multipliers (2×/3×/4×) generate candidates from beat peaks. Epoch-fold variance scoring with sqrt(multiplier) penalty selects the period producing the best visual pattern.
 
-3. **ACF Tempo Estimation**: Bare ACF peak-finding on spectral flux. Percival harmonic enhancement, Rayleigh prior, and comb filter bank removed in v80 — octave errors are non-issues with PLP.
+3. **Pattern Quality Over BPM Accuracy**: The system is a visualizer, not a BPM detector. Half/double time periods are correct if they capture more rhythmic structure (e.g., a 2-bar kick-snare-kick-snare pattern at half BPM is better than a 1-bar kick pattern at the "true" BPM). Test metrics focus on plpAtTransient, plpAutoCorr, and plpPeakiness — not BPM accuracy.
 
-4. **NN Onset → Visual Pulse + PLP Source**: NN onset activation drives visual effects (sparks, flashes) and serves as one of 3 PLP sources. It does not influence ACF tempo estimation. This is the correct use for a signal that fires on every acoustic transient regardless of metrical position.
+4. **PLP Phase/Pattern Extraction**: Epoch-fold at ACF-detected period, NN-gated flux for pattern source. Canonical cosine OLA (Grosche & Mueller 2011) for plpPulse output. Soft blend with cosine fallback by confidence. Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall.
 
-5. **No Tempo Prior Needed**: PLP's Fourier tempogram inherently suppresses sub-harmonics through DFT magnitude. No Rayleigh prior or other disambiguation needed.
+5. **NN Onset → Visual Pulse + ACF Source**: NN onset activation drives visual effects (sparks, flashes) and serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources.
 
 ---
 
 ## Rhythm Tracking Algorithm
 
-### ACF + PLP (v6 - Currently Deployed)
+### Multi-Source ACF + PLP (v8 - Currently Deployed)
 
-> **NOTE:** PLL was replaced by PLP (Predominant Local Pulse) in March 2026. PLP uses a Fourier tempogram (Goertzel DFT at candidate frequencies) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). DFT magnitude selects period (inherently suppresses sub-harmonics), DFT phase gives beat alignment for free. Current test results: atTransient 0.37-0.48, autoCorr up to +0.93, BPM accuracy 0.91-0.98.
+> **NOTE:** The Fourier tempogram (Goertzel DFT, 75ms) was replaced by multi-source ACF (~4ms) in March 2026. ACF scans beat-level lags on 3 sources, bar multipliers generate longer candidates, and epoch-fold variance scoring selects the best visual pattern period. BPM accuracy uses octave-tolerant scoring — half/double time matches are valid.
 
 **Every frame (~62.5 Hz, on new spectral frame):**
 1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (for pulse + PLP source)

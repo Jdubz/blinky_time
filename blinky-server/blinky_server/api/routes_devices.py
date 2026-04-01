@@ -226,6 +226,9 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
 
     fleet = get_fleet()
 
+    # Set recovery firmware for auto-recovery of stuck DFU devices
+    fleet.set_recovery_firmware(str(firmware))
+
     # Device is stuck in BLE DFU bootloader (SafeBoot crash recovery).
     # Push firmware directly — no bootloader entry needed.
     if device.state == DeviceState.DFU_RECOVERY:
@@ -243,7 +246,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
 
-        fleet.hold_reconnect(device.id, 180)
+        fleet.hold_reconnect(device.id, 600)  # BLE DFU takes ~8 min (488s measured)
         fleet.pause_discovery()
         try:
             result = await upload_ble_dfu(
@@ -305,7 +308,7 @@ async def ota_upload(device_id: str, body: OtaRequest) -> OtaResponse:
             await asyncio.sleep(0.5)  # Let command transmit before disconnect
             await ble_transport.disconnect()
 
-        fleet.hold_reconnect(device_id, 180)
+        fleet.hold_reconnect(device_id, 600)  # BLE DFU takes ~8 min (488s measured)
         fleet.pause_discovery()  # Prevent BleakScanner conflict during DFU
         try:
             result = await upload_ble_dfu(

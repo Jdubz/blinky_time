@@ -36,12 +36,9 @@ export function matchEventsF1(
 }
 
 /** Computes BPM accuracy and error percentage. */
-export function computeBpmMetrics(avgBpm: number, expectedBpm: number): { accuracy: number; error: number } | null {
-  if (expectedBpm <= 0 || avgBpm <= 0) return null;
-  const error = Math.abs(avgBpm - expectedBpm) / expectedBpm * 100;
-  const accuracy = Math.max(0, 1 - error / 100);
-  return { accuracy, error };
-}
+// BPM accuracy scoring removed — pattern quality is the only metric that matters.
+// The system is a visualizer; half/double time periods are correct if they produce
+// better visual patterns. Reporting BPM accuracy causes regression and confusion.
 
 /** Compute mean, std, min, max of a numeric array.
  *  Returns zeros for empty arrays — callers filter upstream so this rarely triggers. */
@@ -303,8 +300,7 @@ export function scoreDeviceRun(
   const avgConf = activeStates.length > 0
     ? activeStates.reduce((sum, s) => sum + s.confidence, 0) / activeStates.length : 0;
 
-  const expectedBPM = gtData.bpm || 0;
-  const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
+  // avgBpm is used internally for autoCorr lag calculation, not as a scored metric.
 
   // Phase stability
   let phaseStability = 0;
@@ -323,11 +319,12 @@ export function scoreDeviceRun(
     }
   }
 
-  // PLP accuracy metrics
+  // PLP accuracy metrics — pattern quality is the primary objective
   const plpValues = activeStates.filter(s => s.plpPulse !== undefined).map(s => s.plpPulse!);
   let plpAtTransient = 0;
   let plpAutoCorr = 0;
   let plpPeakiness = 0;
+  let gtOnsetPlpValues: number[] = [];
   let plpMean = 0;
 
   if (plpValues.length > 0) {
@@ -335,24 +332,28 @@ export function scoreDeviceRun(
     const plpMax = Math.max(...plpValues);
     plpPeakiness = plpMean > 0.01 ? plpMax / plpMean : 0;
 
-    // PLP value at transient times: for each transient, find nearest music state
-    // Use a sliding search start index since both arrays are sorted by time
-    const transientPlpValues: number[] = [];
+    // PLP value at GROUND TRUTH onset times: for each reference onset, find
+    // nearest music state and sample its plpPulse. This measures whether the
+    // PLP pattern aligns with actual musical events, not device-detected ones.
+    // Use sliding search start since both arrays are time-sorted.
+    gtOnsetPlpValues = [];
     let searchStart = 0;
-    for (const det of detections) {
+    const latencyOffsetSec = latencyCorrectionMs / 1000;
+    for (const onsetSec of refOnsets) {
+      const onsetMs = (onsetSec + latencyOffsetSec) * 1000;  // GT time → device time
       let bestState: (typeof activeStates)[0] | null = null;
       let bestDist = Infinity;
       for (let si = searchStart; si < activeStates.length; si++) {
-        const dist = Math.abs(activeStates[si].timestampMs - det.timestampMs);
+        const dist = Math.abs(activeStates[si].timestampMs - onsetMs);
         if (dist < bestDist) { bestDist = dist; bestState = activeStates[si]; }
-        else if (dist > bestDist) { searchStart = Math.max(0, si - 2); break; }  // past minimum, advance start
+        else if (dist > bestDist) { searchStart = Math.max(0, si - 2); break; }
       }
-      if (bestState && bestState.plpPulse !== undefined && bestDist < 100) {
-        transientPlpValues.push(bestState.plpPulse);
+      if (bestState && bestState.plpPulse !== undefined && bestDist < 150) {
+        gtOnsetPlpValues.push(bestState.plpPulse);
       }
     }
-    if (transientPlpValues.length > 0) {
-      plpAtTransient = transientPlpValues.reduce((s, v) => s + v, 0) / transientPlpValues.length;
+    if (gtOnsetPlpValues.length > 0) {
+      plpAtTransient = gtOnsetPlpValues.reduce((s, v) => s + v, 0) / gtOnsetPlpValues.length;
     }
 
     // PLP autocorrelation at detected BPM lag
@@ -458,17 +459,16 @@ export function scoreDeviceRun(
       refOnsets: refOnsets.length,
     },
     musicMode: {
-      avgBpm: Math.round(avgBpm * 10) / 10,
-      expectedBpm: expectedBPM,
-      bpmError: bpmMetrics ? Math.round(bpmMetrics.error * 10) / 10 : null,
-      bpmAccuracy: bpmMetrics ? Math.round(bpmMetrics.accuracy * 1000) / 1000 : null,
       avgConfidence: Math.round(avgConf * 100) / 100,
       phaseStability: Math.round(phaseStability * 1000) / 1000,
       activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
+      detectedBpm: Math.round(avgBpm * 10) / 10,  // informational only — not scored
     },
     plp: {
-      atTransient: Math.round(plpAtTransient * 1000) / 1000,  // avg PLP pulse when transients fire (1.0 = perfect alignment)
-      autoCorr: Math.round(plpAutoCorr * 1000) / 1000,        // autocorrelation at BPM lag (1.0 = perfectly periodic)
+      atTransient: Math.round(plpAtTransient * 1000) / 1000,  // avg PLP pulse at ground truth onset times (1.0 = pattern peaks align with real music events)
+      gtOnsetsMatched: gtOnsetPlpValues.length,                // how many ground truth onsets had a nearby PLP sample
+      gtOnsetsTotal: refOnsets.length,                         // total ground truth onsets in this segment
+      autoCorr: Math.round(plpAutoCorr * 1000) / 1000,        // autocorrelation at detected period lag (1.0 = perfectly periodic)
       peakiness: Math.round(plpPeakiness * 100) / 100,        // peak/mean ratio (1.0 = flat/cosine, >2 = strong pattern)
       mean: Math.round(plpMean * 1000) / 1000,                // average PLP value (0.5 = cosine fallback)
     },

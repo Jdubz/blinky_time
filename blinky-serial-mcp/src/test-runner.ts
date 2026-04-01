@@ -212,12 +212,10 @@ async function unlockGain(sessions: DeviceSession[]): Promise<void> {
 
 function buildPerDeviceAggregate(scores: DeviceRunScore[]) {
   return {
+    plpAtTransient: roundStats(computeStats(scores.map(s => s.plp.atTransient))),
+    plpAutoCorr: roundStats(computeStats(scores.map(s => s.plp.autoCorr))),
+    plpPeakiness: roundStats(computeStats(scores.map(s => s.plp.peakiness))),
     beatF1: roundStats(computeStats(scores.map(s => s.beatTracking.f1))),
-    beatPrecision: roundStats(computeStats(scores.map(s => s.beatTracking.precision))),
-    beatRecall: roundStats(computeStats(scores.map(s => s.beatTracking.recall))),
-    bpmAccuracy: roundStats(computeStats(
-      scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!),
-    )),
     transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
     latencyMs: roundStats(computeStats(
       scores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!),
@@ -343,7 +341,8 @@ async function runTrack(args: RunTrackArgs): Promise<void> {
       for (const { port, data } of deviceResults) {
         const score = scoreDeviceRun(data, audioStartTime, gtData);
         allRunScores.get(port)!.push(score);
-        log(`  ${port}: transient F1=${score.transientTracking.f1}, beat F1=${score.beatTracking.f1}, BPM=${score.musicMode.avgBpm} (expected ${score.musicMode.expectedBpm})`);
+        const plp = score.plp;
+        log(`  ${port}: plp={at=${plp.atTransient} ac=${plp.autoCorr} pk=${plp.peakiness}} str=${score.musicMode.avgConfidence} (${plp.gtOnsetsMatched}/${plp.gtOnsetsTotal} onsets)`);
       }
 
       // Inter-run gap
@@ -565,7 +564,7 @@ async function validate(args: ValidateArgs): Promise<void> {
         for (const s of sessions) {
           const scores = trackDeviceScores.get(s.port)!;
           const latest = scores[scores.length - 1];
-          log(`    ${s.port}: tF1=${latest.transientTracking.f1} bF1=${latest.beatTracking.f1} BPM=${latest.musicMode.avgBpm}`);
+          log(`    ${s.port}: plp={at=${latest.plp.atTransient} ac=${latest.plp.autoCorr} pk=${latest.plp.peakiness}} str=${latest.musicMode.avgConfidence}`);
         }
 
         // Inter-run gap
@@ -638,7 +637,8 @@ async function validate(args: ValidateArgs): Promise<void> {
     for (const s of sessions) {
       const trackMeanBeatF1: number[] = [];
       const trackMeanTransientF1: number[] = [];
-      const trackMeanBpmAccuracy: number[] = [];
+      const trackMeanPlpAtTransient: number[] = [];
+      const trackMeanPlpAutoCorr: number[] = [];
 
       for (const trackResult of trackResults) {
         if (trackResult.error) continue;
@@ -650,32 +650,36 @@ async function validate(args: ValidateArgs): Promise<void> {
           // Single-run format: direct scores
           const bt = deviceEntry.beatTracking as { f1: number };
           const tt = deviceEntry.transientTracking as { f1: number };
-          const mm = deviceEntry.musicMode as { bpmAccuracy: number | null };
+          const plp = deviceEntry.plp as { atTransient: number; autoCorr: number } | undefined;
           trackMeanBeatF1.push(bt.f1);
           trackMeanTransientF1.push(tt.f1);
-          if (mm.bpmAccuracy !== null) trackMeanBpmAccuracy.push(mm.bpmAccuracy);
+          if (plp) {
+            trackMeanPlpAtTransient.push(plp.atTransient);
+            trackMeanPlpAutoCorr.push(plp.autoCorr);
+          }
         } else {
           // Multi-run format: use aggregate mean
           const agg = deviceEntry.aggregate as {
             beatF1: { mean: number };
             transientF1: { mean: number };
-            bpmAccuracy: { mean: number };
+            plpAtTransient?: { mean: number };
+            plpAutoCorr?: { mean: number };
           };
           if (agg) {
             trackMeanBeatF1.push(agg.beatF1.mean);
             trackMeanTransientF1.push(agg.transientF1.mean);
-            if (typeof agg.bpmAccuracy?.mean === 'number' && !Number.isNaN(agg.bpmAccuracy.mean)) {
-              trackMeanBpmAccuracy.push(agg.bpmAccuracy.mean);
-            }
+            if (agg.plpAtTransient) trackMeanPlpAtTransient.push(agg.plpAtTransient.mean);
+            if (agg.plpAutoCorr) trackMeanPlpAutoCorr.push(agg.plpAutoCorr.mean);
           }
         }
       }
 
       suiteAggregate[s.port] = {
         tracksScored: trackMeanBeatF1.length,
+        plpAtTransient: roundStats(computeStats(trackMeanPlpAtTransient)),
+        plpAutoCorr: roundStats(computeStats(trackMeanPlpAutoCorr)),
         beatF1: roundStats(computeStats(trackMeanBeatF1)),
         transientF1: roundStats(computeStats(trackMeanTransientF1)),
-        bpmAccuracy: roundStats(computeStats(trackMeanBpmAccuracy)),
       };
     }
 
@@ -710,8 +714,8 @@ async function validate(args: ValidateArgs): Promise<void> {
     log(`Duration: ${suiteDurationSec}s`);
     log(`Tracks: ${tracks.length} total, ${trackResults.filter(t => t.error).length} failed`);
     for (const [port, agg] of Object.entries(suiteAggregate)) {
-      const a = agg as { tracksScored: number; beatF1: { mean: number }; transientF1: { mean: number }; bpmAccuracy: { mean: number } };
-      log(`  ${port}: beat F1=${a.beatF1.mean}, transient F1=${a.transientF1.mean}, BPM acc=${a.bpmAccuracy.mean} (${a.tracksScored} tracks)`);
+      const a = agg as { tracksScored: number; plpAtTransient: { mean: number }; plpAutoCorr: { mean: number }; transientF1: { mean: number } };
+      log(`  ${port}: plp={at=${a.plpAtTransient.mean} ac=${a.plpAutoCorr.mean}} transient F1=${a.transientF1.mean} (${a.tracksScored} tracks)`);
     }
 
     // Cleanup

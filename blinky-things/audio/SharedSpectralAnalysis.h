@@ -238,6 +238,13 @@ public:
      */
     float getSpectralFlux() const { return spectralFlux_; }
 
+    /**
+     * Get bass-only half-wave rectified spectral flux (bins 1-6, 62-375 Hz).
+     * Isolates kick drum energy — the primary periodic signal for pattern detection.
+     * Normalized by bass bin count for consistent scaling.
+     */
+    float getBassFlux() const { return bassFlux_; }
+
     // --- Compressor/whitening debug accessors ---
 
     /**
@@ -293,6 +300,7 @@ private:
     float totalEnergy_;
     float spectralCentroid_;
     float spectralFlux_;
+    float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
 
     // State
     bool frameReady_;

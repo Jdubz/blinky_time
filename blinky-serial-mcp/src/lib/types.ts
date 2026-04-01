@@ -28,10 +28,9 @@ export interface DeviceRunScore {
     refOnsets?: number;
   };
   musicMode: {
-    avgBpm: number; expectedBpm: number;
-    bpmError: number | null; bpmAccuracy: number | null;
     avgConfidence: number; phaseStability: number;
     activationMs: number | null;
+    detectedBpm: number;  // informational only — not scored
   };
   diagnostics: {
     transientRate: number; expectedBeatRate: number; beatEventRate: number;
@@ -44,10 +43,12 @@ export interface DeviceRunScore {
     beatEventOffsets: number[];
   };
   plp: {
-    atTransient: number;  // avg PLP pulse when transients fire (1.0 = perfect alignment)
-    autoCorr: number;     // autocorrelation at BPM lag (1.0 = perfectly periodic)
-    peakiness: number;    // peak/mean ratio (1.0 = flat, >2 = strong pattern)
-    mean: number;         // average PLP value (0.5 = cosine fallback)
+    atTransient: number;     // avg PLP pulse at ground truth onset times (1.0 = pattern peaks align with real music)
+    gtOnsetsMatched: number; // ground truth onsets that had a nearby PLP sample
+    gtOnsetsTotal: number;   // total ground truth onsets in this segment
+    autoCorr: number;        // autocorrelation at detected period lag (1.0 = perfectly periodic)
+    peakiness: number;       // peak/mean ratio (1.0 = flat, >2 = strong pattern)
+    mean: number;            // average PLP value (0.5 = cosine fallback)
   };
   // Adjusted raw data
   adjustedDetections: Array<{ timestampMs: number; type: string; strength: number }>;

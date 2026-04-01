@@ -11,6 +11,7 @@
 #include "../types/Version.h"
 #include "../render/RenderPipeline.h"
 #include "../effects/HueRotationEffect.h"
+#include "../ota/QspiOtaStaging.h"
 #include <ArduinoJson.h>  // v28: JSON parsing for device config upload
 #ifdef BLINKY_PLATFORM_NRF52840
 #include "../comms/BleScanner.h"
@@ -393,6 +394,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleFakeAudioCommand(cmd)) return true; // Fake audio for visual debug
     if (handleBleCommand(cmd)) return true;       // BLE diagnostics
     if (handleWifiCommand(cmd)) return true;      // WiFi config (ESP32-S3)
+    if (handleOtaCommand(cmd)) return true;       // QSPI staged OTA
     return false;
 }
 
@@ -781,12 +783,25 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             // This matches Nordic's own buttonless DFU implementation.
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
+            uint32_t err1 = 0, err2 = 0;
             if (sd_en) {
-                sd_power_gpregret_clr(0, 0xFF);
-                sd_power_gpregret_set(0, dfuMagic);
+                err1 = sd_power_gpregret_clr(0, 0xFF);
+                err2 = sd_power_gpregret_set(0, dfuMagic);
             } else {
                 NRF_POWER->GPREGRET = dfuMagic;
             }
+            // Verify-read: confirm GPREGRET actually holds the magic value
+            uint32_t readback = 0;
+            if (sd_en) {
+                sd_power_gpregret_get(0, &readback);
+            } else {
+                readback = NRF_POWER->GPREGRET;
+            }
+            out_.print(F("  SD=")); out_.print(sd_en);
+            out_.print(F(" err=")); out_.print(err1); out_.print(F("/")); out_.print(err2);
+            out_.print(F(" GPREGRET=0x")); out_.println(readback, HEX);
+            Serial.flush();
+            delay(100);
             __DSB(); __ISB();
             NVIC_SystemReset();
 #else
@@ -2178,4 +2193,82 @@ void SerialConsole::logError(const __FlashStringHelper* msg) {
         p.print(F("[ERROR] "));
         p.println(msg);
     }
+}
+
+// === QSPI STAGED OTA COMMANDS ===
+bool SerialConsole::handleOtaCommand(const char* cmd) {
+    if (strncmp(cmd, "ota ", 4) != 0 && strcmp(cmd, "ota") != 0) return false;
+
+    const char* sub = cmd + 3;
+    while (*sub == ' ') sub++;
+
+    // Lazy-init QSPI on first ota command
+    if (!qspiOta_) {
+        qspiOta_ = new QspiOtaStaging();
+        // cppcheck-suppress knownConditionTrueFalse -- stub returns false, real impl uses nrfx
+        if (!qspiOta_->begin()) {
+            out_.println(F("ERR QSPI flash init failed"));
+            delete qspiOta_;
+            qspiOta_ = nullptr;
+            return true;
+        }
+    }
+
+    if (strcmp(sub, "selftest") == 0) {
+        qspiOta_->selfTest(out_);
+        return true;
+    }
+
+    if (strcmp(sub, "status") == 0) {
+        qspiOta_->printStatus(out_);
+        return true;
+    }
+
+    if (strcmp(sub, "commit") == 0) {
+        qspiOta_->commit(out_);
+        return true;  // Never reached if commit succeeds (device resets)
+    }
+
+    if (strcmp(sub, "abort") == 0) {
+        qspiOta_->abort(out_);
+        return true;
+    }
+
+    // "ota begin <size> <crc16_hex>" — start transfer
+    if (strncmp(sub, "begin ", 6) == 0) {
+        uint32_t size = 0;
+        char crcStr[8] = {0};
+        if (sscanf(sub + 6, "%u %6s", &size, crcStr) == 2) {
+            uint16_t crc = (uint16_t)strtoul(crcStr, nullptr, 16);
+            qspiOta_->beginTransfer(size, crc, out_);
+        } else {
+            out_.println(F("ERR usage: ota begin <size> <crc16_hex>"));
+        }
+        return true;
+    }
+
+    // "ota chunk <offset> <base64_data>" — write chunk
+    if (strncmp(sub, "chunk ", 6) == 0) {
+        const char* rest = sub + 6;
+        char* endptr = nullptr;
+        uint32_t offset = strtoul(rest, &endptr, 10);
+        // Detect parse failure: endptr didn't advance or didn't land on a space
+        if (endptr == rest || (endptr && *endptr != ' ')) {
+            out_.println(F("ERR invalid offset"));
+            return true;
+        }
+        const char* b64 = endptr + 1;  // Skip the space
+        qspiOta_->writeChunk(offset, b64, out_);
+        return true;
+    }
+
+    // Help
+    out_.println(F("OTA commands:"));
+    out_.println(F("  ota selftest  — Copy firmware to QSPI, verify CRC"));
+    out_.println(F("  ota status    — Show staging area state"));
+    out_.println(F("  ota commit    — Apply staged firmware (device resets)"));
+    out_.println(F("  ota abort     — Clear staging area"));
+    out_.println(F("  ota begin <size> <crc16> — Start transfer"));
+    out_.println(F("  ota chunk <offset> <b64> — Write chunk"));
+    return true;
 }
