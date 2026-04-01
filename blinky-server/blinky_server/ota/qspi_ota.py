@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import logging
 import subprocess
 import tempfile
@@ -69,13 +68,17 @@ async def upload_qspi_ota(
         objcopy = _find_objcopy()
         if not objcopy:
             return {"status": "error", "message": "objcopy not found for hex->bin", "elapsed_s": 0}
-        bin_path = tempfile.mktemp(suffix=".bin")
-        subprocess.run(
-            [objcopy, "-I", "ihex", "-O", "binary", str(fw_path), bin_path],
-            capture_output=True,
-            timeout=30,
-        )
-        firmware = Path(bin_path).read_bytes()
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+            bin_path = tmp.name
+        try:
+            subprocess.run(
+                [objcopy, "-I", "ihex", "-O", "binary", str(fw_path), bin_path],
+                capture_output=True,
+                timeout=30,
+            )
+            firmware = Path(bin_path).read_bytes()
+        finally:
+            Path(bin_path).unlink(missing_ok=True)
     else:
         firmware = fw_path.read_bytes()
 
@@ -155,9 +158,17 @@ async def upload_qspi_ota(
 
     # Step 4: Commit -- device validates CRC, writes header, resets
     progress("commit", "Committing firmware (device will reset)...", 95)
-    with contextlib.suppress(Exception):
-        # commit causes device reset -- the command may not return a response
+    try:
         await protocol.send_command("ota commit", timeout=30.0)
+    except asyncio.TimeoutError:
+        pass  # Expected: device resets on commit before responding
+    except Exception as e:
+        elapsed = round(time.monotonic() - t0, 1)
+        return {
+            "status": "error",
+            "message": f"ota commit failed: {e}",
+            "elapsed_s": elapsed,
+        }
 
     elapsed = round(time.monotonic() - t0, 1)
     progress("done", f"QSPI OTA complete ({elapsed}s)", 100)

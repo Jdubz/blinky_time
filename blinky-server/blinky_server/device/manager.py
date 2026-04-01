@@ -77,7 +77,10 @@ class FleetManager:
         # serial device. Prevents the thrashing loop where a deduped device is
         # immediately rediscovered and reconnected on every cycle.
         self._dedup_excluded: set[str] = set()
-        # DFU recovery state (per-device tracking for auto-retry)
+        # DFU recovery state (per-device tracking for auto-retry).
+        # Bool guard is async-safe: check happens before any await, so the
+        # single-threaded event loop cannot interleave another call between
+        # check and set. The finally block guarantees reset on any exit path.
         self._dfu_recovery_state: dict[str, dict[str, int]] = {}
         self._dfu_recovery_in_progress: bool = False
 
@@ -677,8 +680,7 @@ class FleetManager:
                 if result.get("status") == "ok":
                     log.info("Auto-recovery succeeded for %s!", device.id[:12])
                     device.state = DeviceState.DISCONNECTED
-                    state["fails"] = 0
-                    state["backoff"] = 0
+                    self._dfu_recovery_state.pop(device.id, None)
                 else:
                     state["fails"] = fail_count + 1
                     log.warning(

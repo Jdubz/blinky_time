@@ -83,6 +83,9 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
     if not devices:
         raise HTTPException(404, "No flashable nRF52840 devices")
 
+    # Set recovery firmware early so auto-recovery works if server crashes mid-DFU
+    fleet.set_recovery_firmware(str(firmware))
+
     results = {}
     fleet.pause_discovery()  # Prevent BleakScanner conflict during fleet DFU
     try:
@@ -178,9 +181,6 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
             await asyncio.sleep(3)
     finally:
         fleet.resume_discovery()
-
-    # Set recovery firmware so fleet manager can auto-retry any failed devices
-    fleet.set_recovery_firmware(str(firmware))
 
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
     total = len(results)
