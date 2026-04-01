@@ -1,0 +1,59 @@
+Metadata-Version: 2.4
+Name: pyserial-asyncio-fast
+Version: 0.16
+Summary: Python Serial Port Extension - Asynchronous I/O support
+Author: pySerial-team
+License-Expression: BSD-3-Clause
+Project-URL: Source code, https://github.com/home-assistant-libs/pyserial-asyncio-fast
+Project-URL: Documentation, http://pyserial-asyncio.readthedocs.io
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: Natural Language :: English
+Classifier: Operating System :: POSIX
+Classifier: Operating System :: MacOS :: MacOS X
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Communications
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: Terminals :: Serial
+Requires-Python: >=3.9
+Description-Content-Type: text/x-rst
+License-File: LICENSE.txt
+License-File: CREDITS.rst
+Requires-Dist: pyserial
+Dynamic: license-file
+
+========================================
+ pyserial-asyncio-fast |docs| |codecov|
+========================================
+
+Async I/O extension package for the Python Serial Port Extension for OSX, Linux, BSD
+
+It depends on pySerial and is compatible with Python 3.9 and later.
+
+This version implements eager writes like cpython `asyncio` selector_events does:
+https://github.com/python/cpython/blob/b89b838ebc817e5fbffad1ad8e1a85aa2d9f3113/Lib/asyncio/selector_events.py#L1063
+
+This can significantly reduce overhead since the asyncio writer is no longer added and removed frequently.
+
+Documentation
+=============
+
+- Documentation: http://pyserial-asyncio.readthedocs.io/en/latest/
+- Download Page: https://pypi.python.org/pypi/pyserial-asyncio-fast
+- Project Homepage: https://github.com/home-assistant-libs/pyserial-asyncio-fast
+
+
+.. |docs| image:: https://readthedocs.org/projects/pyserial-asyncio/badge/?version=latest
+   :target: http://pyserial-asyncio.readthedocs.io/
+   :alt: Documentation
+
+.. |codecov| image:: https://codecov.io/gh/home-assistant-libs/pyserial-asyncio-fast/branch/master/graph/badge.svg
+   :target: https://codecov.io/gh/home-assistant-libs/pyserial-asyncio-fast

@@ -8,6 +8,7 @@ and CJS implementations at /tmp/blinky-audio.lock.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import errno
 import json
 import logging
@@ -46,10 +47,8 @@ def acquire_audio_lock(device_ids: list[str] | None = None) -> bool:
             except OSError as e:
                 if e.errno == errno.ESRCH:
                     # No such process — stale lock, remove and retry once
-                    try:
+                    with contextlib.suppress(OSError):
                         os.unlink(LOCK_PATH)
-                    except OSError:
-                        pass
                     return acquire_audio_lock(device_ids)
                 # EPERM = process exists but owned by another user — lock is valid
             # Process alive — lock legitimately held
@@ -70,10 +69,8 @@ def release_audio_lock() -> None:
     global _lock_held
     if not _lock_held:
         return
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(LOCK_PATH)
-    except OSError:
-        pass
     _lock_held = False
 
 
@@ -87,10 +84,8 @@ def is_audio_locked() -> tuple[bool, dict[str, Any] | None]:
         except OSError as e:
             if e.errno == errno.ESRCH:
                 # Stale lock — dead process
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(LOCK_PATH)
-                except OSError:
-                    pass
                 return False, None
             # EPERM = process exists, lock is valid
         return True, info

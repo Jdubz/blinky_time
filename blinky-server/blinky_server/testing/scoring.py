@@ -11,17 +11,14 @@ from collections import defaultdict
 from typing import Any
 
 from .types import (
-    BeatEvent,
     BeatTracking,
     DeviceRunScore,
     Diagnostics,
     GroundTruth,
     MusicMode,
-    MusicState,
     OffsetStats,
     PlpMetrics,
     TestData,
-    TransientEvent,
     TransientTracking,
 )
 
@@ -34,7 +31,7 @@ def _js_round(x: float, decimals: int = 3) -> float:
 
 def _js_round_int(x: float) -> int:
     """Round to nearest int like JavaScript Math.round (rounds .5 up)."""
-    return int(math.floor(x + 0.5))
+    return math.floor(x + 0.5)
 
 
 # ---------------------------------------------------------------------------
