@@ -160,6 +160,19 @@ Training will require:
 - Resample teacher labels from 100Hz to 62.5Hz (firmware frame rate)
 - v15 config: same [32,32] Conv1D, MSE distillation loss, standard augmentation
 
+**NN inference performance (April 2 measurement):**
+
+v11 (with delta features, 52 input channels): **11.7ms** on nRF52840 — 70% of the 16.7ms frame budget. v3 (without delta, 26 channels): **6.8ms** — 41% of budget. Layer 1 (Conv1D 52→32, k=5) accounts for 71% of compute due to the wide input. The 5.3x overhead over theoretical MAC throughput is from memory access, quantization, and TFLite framework dispatch (consistent with earlier optimization work).
+
+**Performance approach: accuracy first, then optimize.** The correct order is:
+1. Identify the optimal feature set for onset detection accuracy (v15 distillation, PLP tuning)
+2. THEN evaluate which features can be dropped without accuracy loss
+3. THEN ship a smaller model that fits the frame budget
+
+**NEVER alternate frame workloads** (running NN every other frame). Alternating high/low latency frames causes visible jerking in LED animations. Every frame must have consistent timing. The solution is a better model, not frame skipping.
+
+**Delta feature evaluation (pending):** Deploy a known model WITHOUT delta features (e.g., retrain v11 config with `use_delta: false`) and compare on-device onset F1 + PLP quality against the delta variant. If onset F1 is comparable, delta features can be safely dropped, saving ~5ms/frame (11.7→6.8ms). Do NOT drop delta features speculatively — prove it first.
+
 **Future training improvements (research-backed):**
 
 1. ~~**Onset-specific knowledge distillation**~~ → **v15 (IN PROGRESS)**, see above
@@ -179,6 +192,7 @@ Training will require:
 - Wider windows (W32/W64): 150ms RF is optimal for onset detection (Schlüter 2014). Our 176ms is ample.
 - Transformer/Conformer: 1.4M+ params, far too large for Cortex-M4F
 - Bidirectional models: can't run in real-time. Only ~2-5% F1 gain for onset detection (Bock 2012)
+- Half-rate NN inference (every other frame): **NEVER** — alternating high/low frame latency causes visible jerking in LED animations. Every frame must have consistent timing.
 - SE attention blocks: global pooling over 16-frame window loses temporal position info critical for onset detection
 - Structured pruning: model already tiny (13K params). Pruning helps at 100K+ scale.
 - Beat This! distillation: INVALID — beat tracker soft labels suppress off-beat onsets and inject phantom targets on empty strong beats
