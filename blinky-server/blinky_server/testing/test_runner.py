@@ -38,16 +38,23 @@ async def _configure_device(device: Device, commands: list[str] | None = None) -
 
 
 async def _start_streaming(devices: list[Device]) -> None:
-    """Start fast streaming on all devices."""
+    """Start fast streaming and enable transient debug channel on all devices.
+
+    The firmware only emits TRANSIENT events when the debug channel is on.
+    Without this, onset detection produces zero results.
+    """
     for device in devices:
         await device.protocol.start_stream("fast")
+        await asyncio.sleep(0.1)
+        await device.protocol.send_command("debug transient on")
         await asyncio.sleep(0.1)
 
 
 async def _stop_streaming(devices: list[Device]) -> None:
-    """Stop streaming on all devices. Best-effort, never raises."""
+    """Stop streaming and disable transient debug channel. Best-effort."""
     for device in devices:
-        try:  # noqa: SIM105
+        try:
+            await device.protocol.send_command("debug transient off")
             await device.protocol.stop_stream()
         except Exception:
             pass
