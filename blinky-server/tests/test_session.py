@@ -23,17 +23,18 @@ def test_empty_session() -> None:
 
 
 def test_ingest_transient() -> None:
-    """Transient events are captured during recording."""
+    """Transient events are captured with system clock timestamps."""
     session = TestSession()
     session.start_recording()
     session.ingest("transient", {"timestampMs": 1000.0, "strength": 0.85})
     session.ingest("transient", {"timestampMs": 1500.0, "strength": 0.60})
     result = session.stop_recording()
     assert len(result.transients) == 2
-    assert result.transients[0].timestamp_ms == 1000.0
+    # Timestamps use system clock (epoch ms), NOT firmware's device uptime
+    assert result.transients[0].timestamp_ms > 1_000_000_000_000  # epoch ms
     assert result.transients[0].strength == 0.85
     assert result.transients[0].type == "onset"
-    assert result.transients[1].timestamp_ms == 1500.0
+    assert result.transients[1].timestamp_ms >= result.transients[0].timestamp_ms
 
 
 def test_ingest_audio_music_state() -> None:
@@ -55,7 +56,7 @@ def test_ingest_audio_music_state() -> None:
     assert ms.plp_pulse == 0.8
     assert ms.confidence == 0.7
     assert ms.oss == 0.5
-    assert ms._bpm == 120.0
+    assert ms.bpm_internal == 120.0
     assert ms.timestamp_ms > 0
 
 

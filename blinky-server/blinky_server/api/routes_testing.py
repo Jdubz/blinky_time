@@ -145,7 +145,16 @@ async def get_job(job_id: str) -> dict[str, Any]:
 
 @router.get("/tracks")
 async def list_tracks(directory: str) -> list[dict[str, str]]:
-    """Discover available test tracks in a directory."""
+    """Discover available test tracks in a directory.
+
+    Directory must be under the user's home or /tmp to prevent traversal.
+    """
+    from pathlib import Path
+
+    resolved = Path(directory).resolve()
+    allowed = [Path.home(), Path("/tmp")]
+    if not any(str(resolved).startswith(str(d)) for d in allowed):
+        raise HTTPException(400, f"Directory not in allowed path: {resolved}")
     try:
         return discover_tracks(directory)
     except FileNotFoundError as e:
@@ -163,10 +172,43 @@ async def check_audio_lock() -> dict[str, Any]:
 
 
 @router.delete("/audio-lock")
-async def force_release_audio_lock() -> dict[str, str]:
-    """Force-release a stuck audio lock (even from another process)."""
-    release_audio_lock()
-    # Also force-remove the file in case another process holds it
+async def force_release_audio_lock() -> dict[str, Any]:
+    """Force-release a stuck audio lock.
+
+    Checks if the holding process is still alive before removing.
+    If the holder is alive, returns a warning instead of force-removing
+    to avoid corrupting an in-progress audio playback.
+    """
+    import errno
+
+    release_audio_lock()  # Release if this process holds it
+
+    # Check if another process holds the lock
+    locked, info = is_audio_locked()
+    if not locked:
+        return {"status": "released"}
+
+    # Lock exists — check if holder is alive
+    holder_pid = info.get("pid") if info else None
+    if holder_pid:
+        try:
+            os.kill(holder_pid, 0)
+            # Process is alive — warn instead of force-removing
+            return {
+                "status": "warning",
+                "message": f"Lock held by live process PID {holder_pid}",
+                "holder": info,
+            }
+        except OSError as e:
+            if e.errno != errno.ESRCH:
+                # EPERM = process exists but owned by another user
+                return {
+                    "status": "warning",
+                    "message": f"Lock held by PID {holder_pid} (permission denied)",
+                    "holder": info,
+                }
+
+    # Stale lock (dead process or no PID) — safe to remove
     with contextlib.suppress(OSError):
         os.unlink(LOCK_PATH)
-    return {"status": "released"}
+    return {"status": "released", "was_stale": True}

@@ -267,7 +267,10 @@ class FleetManager:
             if device_id in self._dedup_excluded:
                 continue
 
-            # New device - connect
+            # New device — connect.
+            # No file-based serial lock check needed: the server is the sole serial
+            # consumer. During firmware flashing, upload routes call pause_discovery()
+            # + hold_reconnect() to prevent contention with the uf2_upload subprocess.
             try:
                 transport = _create_transport(disc)
                 device = Device(

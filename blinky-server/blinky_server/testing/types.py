@@ -47,7 +47,7 @@ class MusicState:
     confidence: float
     oss: float | None = None
     plp_pulse: float | None = None
-    _bpm: float = 0.0  # Internal: used only for PLP autocorrelation lag, never scored
+    bpm_internal: float = 0.0  # Informational: used only for PLP autocorrelation lag, never scored
 
 
 @dataclass

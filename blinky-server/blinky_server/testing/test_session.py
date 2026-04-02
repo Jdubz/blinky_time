@@ -64,9 +64,12 @@ class TestSession:
         now_ms = time.time() * 1000
 
         if msg_type == "transient":
+            # Always use system clock — firmware timestampMs is device uptime,
+            # not epoch. All timestamps must share the same time base for
+            # scoring offset calculations and settle filtering.
             self._transients.append(
                 TransientEvent(
-                    timestamp_ms=data.get("timestampMs", now_ms),
+                    timestamp_ms=now_ms,
                     type="onset",
                     strength=data.get("strength", 0.0),
                 )
@@ -84,6 +87,6 @@ class TestSession:
                     confidence=m.get("str", 0.0),  # rhythm strength as confidence
                     oss=m.get("nn", None),  # raw NN activation
                     plp_pulse=m.get("pp", None),  # PLP pulse value
-                    _bpm=m.get("bpm", 0.0),  # internal: for autocorr lag
+                    bpm_internal=m.get("bpm", 0.0),  # for autocorr lag only, never scored
                 )
             )

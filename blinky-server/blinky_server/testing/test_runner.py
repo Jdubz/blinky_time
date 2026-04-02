@@ -326,9 +326,8 @@ async def run_param_sweep(
                         step += 1
                         if job:
                             job.progress = int(100 * step / total_steps)
-                            job.progress_message = (
-                                f"batch {batch}, {track_name} run {run_idx + 1}/{num_runs}"
-                            )
+                            values_str = "/".join(str(v) for _, v in assignments)
+                            job.progress_message = f"{param_name}={values_str}, {track_name} run {run_idx + 1}/{num_runs}"
 
                         playback, recordings = await _record_and_play(
                             [d for d, _ in assignments],

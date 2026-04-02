@@ -517,13 +517,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'check_test_result': {
-        // Accept both job_id (new server API) and output_path (legacy file-based)
         const { job_id, output_path } = args as { job_id?: string; output_path?: string };
         if (job_id) {
           return ok(await get(`/test/jobs/${job_id}`));
         }
-        // Legacy: read result from file (backward compat with old test runner)
+        // Legacy: read result from file (restrict to test-results/ and /tmp/)
         if (output_path) {
+          const resolved = require('path').resolve(output_path);
+          if (!resolved.startsWith('/tmp/') && !resolved.includes('test-results')) {
+            return ok({ error: 'output_path must be in /tmp/ or test-results/' });
+          }
           try {
             const data = readFileSync(output_path, 'utf-8');
             return ok(JSON.parse(data));

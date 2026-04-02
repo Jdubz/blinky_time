@@ -168,7 +168,7 @@ def score_device_run(
             "confidence": s.confidence,
             "oss": s.oss,
             "plp_pulse": s.plp_pulse,
-            "_bpm": s._bpm,
+            "bpm_internal": s.bpm_internal,
         }
         for s in test_data.music_states
         if s.timestamp_ms - timing_offset_ms >= 0
@@ -265,9 +265,9 @@ def score_device_run(
         # PLP autocorrelation at detected period lag
         # Derive lag from streamed BPM (internal, not scored) and stream rate.
         bpm_values = [
-            s["_bpm"]
+            s["bpm_internal"]
             for s in active_states
-            if s.get("_bpm", 0) > 0  # type: ignore[operator]
+            if s.get("bpm_internal", 0) > 0  # type: ignore[operator]
         ]
         avg_bpm: float = (
             sum(bpm_values) / len(bpm_values)  # type: ignore[arg-type]
@@ -336,7 +336,9 @@ def score_device_run(
             onset_offsets=onset_offsets,
         ),
         adjusted_detections=[dict(d) for d in detections],
-        adjusted_music_states=[{k: v for k, v in s.items() if k != "_bpm"} for s in music_states],
+        adjusted_music_states=[
+            {k: v for k, v in s.items() if k != "bpm_internal"} for s in music_states
+        ],
     )
 
 

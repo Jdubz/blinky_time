@@ -94,6 +94,11 @@ class JobManager:
 
         task = asyncio.create_task(_run())
         self._tasks[job.id] = task
+
+        def _cleanup_task(_: asyncio.Task[None]) -> None:
+            self._tasks.pop(job.id, None)
+
+        task.add_done_callback(_cleanup_task)
         return job
 
     def get(self, job_id: str) -> Job | None:
