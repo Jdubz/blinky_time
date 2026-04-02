@@ -173,7 +173,10 @@ def score_device_run(
     Computes onset F1 (at multiple tolerances) and PLP pattern metrics.
     """
     raw_duration = test_data.duration
-    timing_offset_ms = audio_start_time - test_data.start_time
+    # timing_offset_ms aligns recording-start timestamps to audio-start timestamps.
+    # Detections and music states use system clock (epoch ms). Subtract audio_start_time
+    # to get timestamps relative to audio start (0 = audio begins, in ms).
+    timing_offset_ms = audio_start_time
 
     # Adjust timestamps relative to audio start
     detections: list[_DetectionDict] = [
@@ -200,7 +203,7 @@ def score_device_run(
     ]
 
     # Latency estimation
-    audio_duration_ms = raw_duration - timing_offset_ms
+    audio_duration_ms = raw_duration
     gt_hits_dicts = [
         {"time": h.time, "strength": h.strength, "expect_trigger": h.expect_trigger}
         for h in gt_data.hits
