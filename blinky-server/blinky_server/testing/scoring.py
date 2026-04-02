@@ -54,6 +54,7 @@ class _MusicStateDict(TypedDict):
     confidence: float
     oss: float | None
     plp_pulse: float | None
+    plp_period: int | None
     bpm_internal: float
 
 
@@ -197,6 +198,7 @@ def score_device_run(
             confidence=s.confidence,
             oss=s.oss,
             plp_pulse=s.plp_pulse,
+            plp_period=s.plp_period,
             bpm_internal=s.bpm_internal,
         )
         for s in test_data.music_states
@@ -287,15 +289,28 @@ def score_device_run(
         if gt_onset_plp_values:
             plp_at_transient = sum(gt_onset_plp_values) / len(gt_onset_plp_values)
 
-        # PLP autocorrelation at detected period lag
-        # Derive lag from streamed BPM (internal, not scored) and stream rate.
-        bpm_values = [s["bpm_internal"] for s in active_states if s["bpm_internal"] > 0]
-        avg_bpm: float = sum(bpm_values) / len(bpm_values) if bpm_values else 0.0
-        if avg_bpm > 0 and len(plp_values) > 10:
-            stream_rate = len(plp_values) / (audio_duration_sec or 1)
-            period_lag = _js_round_int(stream_rate * 60 / avg_bpm)
+        # PLP autocorrelation at detected period lag.
+        # Use plp_period directly from firmware (ACF period in ~66Hz frames)
+        # instead of deriving from BPM, which loses precision through
+        # EMA smoothing and float→int conversion. The period IS the lag
+        # because plp_values are sampled at the same ~66Hz rate.
+        # Falls back to BPM-derived lag if period not available (older firmware).
+        period_values = [
+            s["plp_period"]
+            for s in active_states
+            if s["plp_period"] is not None and s["plp_period"] > 0
+        ]
+        if period_values:
+            period_lag = _js_round_int(sum(period_values) / len(period_values))
         else:
-            period_lag = 0
+            # Fallback: derive from BPM (less accurate, octave-error prone)
+            bpm_values = [s["bpm_internal"] for s in active_states if s["bpm_internal"] > 0]
+            avg_bpm: float = sum(bpm_values) / len(bpm_values) if bpm_values else 0.0
+            if avg_bpm > 0 and len(plp_values) > 10:
+                stream_rate = len(plp_values) / (audio_duration_sec or 1)
+                period_lag = _js_round_int(stream_rate * 60 / avg_bpm)
+            else:
+                period_lag = 0
 
         if 0 < period_lag < len(plp_values) / 2:
             sum_xy = 0.0
@@ -354,7 +369,8 @@ def score_device_run(
         ),
         adjusted_detections=[dict(d) for d in detections],
         adjusted_music_states=[
-            {k: v for k, v in s.items() if k != "bpm_internal"} for s in music_states
+            {k: v for k, v in s.items() if k not in ("bpm_internal", "plp_period")}
+            for s in music_states
         ],
     )
 

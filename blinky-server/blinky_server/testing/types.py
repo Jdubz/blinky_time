@@ -47,7 +47,8 @@ class MusicState:
     confidence: float
     oss: float | None = None
     plp_pulse: float | None = None
-    bpm_internal: float = 0.0  # Informational: used only for PLP autocorrelation lag, never scored
+    plp_period: int | None = None  # ACF period in frames (~66Hz) — used for autocorr lag
+    bpm_internal: float = 0.0  # Informational only, never scored
 
 
 @dataclass

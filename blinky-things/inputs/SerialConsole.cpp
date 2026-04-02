@@ -1510,6 +1510,8 @@ void SerialConsole::streamTick() {
             out_.print(audioCtrl_->getOnsetDensity(), 1);
             out_.print(F(",\"nn\":"));
             out_.print(audioCtrl_->getRawNNActivation(), 3);
+            out_.print(F(",\"per\":"));
+            out_.print(audioCtrl_->getPlpPeriod());
 
             // Debug mode: add diagnostics
             if (streamDebug_) {

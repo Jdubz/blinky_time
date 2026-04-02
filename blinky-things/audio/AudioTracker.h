@@ -66,6 +66,7 @@ public:
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
     const FrameOnsetNN& getFrameOnsetNN() const { return frameOnsetNN_; }
     float getCurrentBpm() const { return bpm_; }
+    int getPlpPeriod() const { return plpBestPeriod_; }  // ACF period in frames (~66Hz)
     int getHwGain() const;
 
     // === Debug accessors ===
