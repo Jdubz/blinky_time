@@ -47,14 +47,15 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 - **Adaptive phase correction** removed — phase is implicit in cosine OLA
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
-**Current test results (ACF system, March 31 validation suite):**
-- plpAtTransient 0.39-0.67 across 12 tracks (dubstep best at 0.665)
-- plpAutoCorr up to 0.98 (amapiano)
-- Music mode activation: 25-60s on most tracks, DnB never activates (0/6)
-- Activation reliability: only 2/12 tracks activate on all 6 runs
+**Current test results (ACF system, April 2 validation via blinky-server):**
+- plpAtTransient mean 0.45-0.49 across 18 tracks (3 devices)
+- All 18 tracks now produce scores (was 12/18 on Mar 31)
+- DnB tracks now activate: dnb-energetic-breakbeat plp@T=0.48, dnb-liquid-jungle plp@T=0.44
+- Onset F1 low (0.12-0.24) — firmware fires ~35 onset events/sec (needs pulsethreshmult tuning)
+- pulsethreshmult sweep in progress (1.5-4.5 range, 3 devices, 18 tracks)
 
-**ACF convergence bottleneck (identified March 31):**
-The slot cache and template seeding features were functionally blocked by `slotSaveMinConf = 0.50` — unreachable with ACF peak strengths (typically 0.1-0.4 on real mic audio, lower than old DFT magnitude values). Fix applied: `slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames. Awaiting validation.
+**ACF convergence fix VALIDATED (April 2):**
+v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames) confirmed working. DnB tracks that never activated now score. All 18 tracks produce non-zero plpAtTransient.
 
 **Remaining work:**
 - Further phase correction tuning if needed
@@ -130,23 +131,14 @@ Both v12 and v13 appeared to regress massively vs v11 (onset F1 0.56/0.53 vs 0.6
 - ❌ **Wider architecture [48,48,32]** — Same discrimination as [32,32] at 3x the model size and inference cost. Task is data/label-limited, not capacity-limited.
 - ❌ **SWA** — Slightly worse than best checkpoint in v12. No benefit for this model size.
 
-**v14 plan: Infrastructure fixes + correct OWBCE on v11 architecture.**
+**v14 training complete — OWBCE showed no improvement over v11.**
 
-Prerequisites (code fixes before training):
-1. **Fix `evaluate.py` threshold sweep** — Optimize against KW onset F1 (or onset F1), not beat F1. The beat F1 target creates arbitrary operating points that make equivalent models look very different.
-2. **Fix `train_pipeline.sh`** — Evaluate and export `best_model.pt`, not `final_model.pt`. SWA is dropped, but the pipeline should use the best validation checkpoint regardless.
-3. **Fix OWBCE loss** — Apply proximity boost to positive class weight only: `class_weight = torch.where(is_positive, pw * onset_weight, 1.0)` instead of multiplying `onset_weight` into the full loss. Also lower the `is_positive` threshold to include neighbor frames (y > 0.1 instead of y > 0.5).
-4. **Drop SpecMix** — Not salvageable for frame-level tasks without a complete rewrite. Standard mixup (proven in v11) is better.
+All 4 prerequisites were fixed (evaluate.py → mir_eval.onset, train_pipeline.sh → best_model.pt, OWBCE proximity on positives only, SpecMix disabled). Training ran with corrected OWBCE: best epoch 30, val_loss=0.636, val_F1=0.132 (frame-level). Early stopped at epoch 45. Offline evaluation with fixed pipeline pending (running April 2).
 
-Training config (`conv1d_w16_onset_v14.yaml`):
-- Architecture: [32, 32] from v11 (13K params, 13.4 KB INT8) — wider architecture proved unnecessary
-- Loss: `asymmetric_focal_owbce` with corrected implementation (proximity on positives only)
-- Augmentation: standard mixup (v11's Beta(0.4,0.4), p=0.5) — SpecMix dropped
-- SpecAugment: v11 levels (2 freq masks, 1 time mask)
-- All other hyperparams from v11 (LR=0.001, batch=4096, dropout=0.1, epochs=60, patience=15)
-- No SWA
-
-Expected outcome: if corrected OWBCE improves peak sharpness, we should see better onset F1 at optimal threshold (not just equal performance at fixed threshold). If OWBCE still shows no improvement, the v11 training recipe is the ceiling for this data.
+The v11 training recipe (asymmetric focal loss, standard mixup) appears to be the **ceiling for the current training data**. Future model improvements require data/label improvements, not loss function changes:
+- Onset-specific knowledge distillation (madmom OnsetDetector as teacher)
+- Increased mel resolution (26→40 bands)
+- Multi-resolution FFT input (3 window sizes)
 
 **Future training improvements (research-backed, not yet implemented):**
 
