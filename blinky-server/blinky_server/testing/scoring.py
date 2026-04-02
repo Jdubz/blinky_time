@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Any
+from typing import Any, TypedDict
 
 from .types import (
     DeviceRunScore,
@@ -34,6 +34,27 @@ def _js_round(x: float, decimals: int = 3) -> float:
 def _js_round_int(x: float) -> int:
     """Round to nearest int like JavaScript Math.round (rounds .5 up)."""
     return math.floor(x + 0.5)
+
+
+# ---------------------------------------------------------------------------
+# Typed intermediates (eliminates dict[str, Any] type: ignore comments)
+# ---------------------------------------------------------------------------
+
+
+class _DetectionDict(TypedDict):
+    timestamp_ms: float
+    type: str
+    strength: float
+
+
+class _MusicStateDict(TypedDict):
+    timestamp_ms: float
+    active: bool
+    phase: float
+    confidence: float
+    oss: float | None
+    plp_pulse: float | None
+    bpm_internal: float
 
 
 # ---------------------------------------------------------------------------
@@ -155,21 +176,25 @@ def score_device_run(
     timing_offset_ms = audio_start_time - test_data.start_time
 
     # Adjust timestamps relative to audio start
-    detections = [
-        {"timestamp_ms": d.timestamp_ms - timing_offset_ms, "type": d.type, "strength": d.strength}
+    detections: list[_DetectionDict] = [
+        _DetectionDict(
+            timestamp_ms=d.timestamp_ms - timing_offset_ms,
+            type=d.type,
+            strength=d.strength,
+        )
         for d in test_data.transients
         if d.timestamp_ms - timing_offset_ms >= 0
     ]
-    music_states = [
-        {
-            "timestamp_ms": s.timestamp_ms - timing_offset_ms,
-            "active": s.active,
-            "phase": s.phase,
-            "confidence": s.confidence,
-            "oss": s.oss,
-            "plp_pulse": s.plp_pulse,
-            "bpm_internal": s.bpm_internal,
-        }
+    music_states: list[_MusicStateDict] = [
+        _MusicStateDict(
+            timestamp_ms=s.timestamp_ms - timing_offset_ms,
+            active=s.active,
+            phase=s.phase,
+            confidence=s.confidence,
+            oss=s.oss,
+            plp_pulse=s.plp_pulse,
+            bpm_internal=s.bpm_internal,
+        )
         for s in test_data.music_states
         if s.timestamp_ms - timing_offset_ms >= 0
     ]
@@ -180,7 +205,8 @@ def score_device_run(
         {"time": h.time, "strength": h.strength, "expect_trigger": h.expect_trigger}
         for h in gt_data.hits
     ]
-    audio_latency_ms = estimate_audio_latency(detections, gt_hits_dicts, audio_duration_ms)
+    det_dicts: list[dict[str, Any]] = [dict(d) for d in detections]
+    audio_latency_ms = estimate_audio_latency(det_dicts, gt_hits_dicts, audio_duration_ms)
     if (
         audio_latency_ms is not None
         and PLAUSIBLE_LATENCY_MIN <= audio_latency_ms <= PLAUSIBLE_LATENCY_MAX
@@ -212,24 +238,19 @@ def score_device_run(
 
     # Onset F1 at multiple tolerances
     est_onsets: list[float] = [
-        (d["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
-        for d in detections
+        (d["timestamp_ms"] - latency_correction_ms) / 1000 for d in detections
     ]
     onset_result = match_events_f1(est_onsets, ref_onsets, ONSET_TOLERANCE_SEC)
 
     # Rhythm tracking diagnostics (confidence, activation)
     active_states = [s for s in music_states if s["active"]]
     avg_conf: float = (
-        sum(s["confidence"] for s in active_states) / len(active_states) if active_states else 0.0  # type: ignore[misc]
+        sum(s["confidence"] for s in active_states) / len(active_states) if active_states else 0.0
     )
     activation_ms: float | None = active_states[0]["timestamp_ms"] if active_states else None
 
     # PLP metrics
-    plp_values: list[float] = [
-        s["plp_pulse"]  # type: ignore[misc]
-        for s in active_states
-        if s.get("plp_pulse") is not None
-    ]
+    plp_values: list[float] = [s["plp_pulse"] for s in active_states if s["plp_pulse"] is not None]
     plp_at_transient = 0.0
     plp_auto_corr = 0.0
     plp_peakiness = 0.0
@@ -246,17 +267,17 @@ def score_device_run(
         latency_offset_sec = latency_correction_ms / 1000
         for onset_sec in ref_onsets:
             onset_ms = (onset_sec + latency_offset_sec) * 1000
-            best_state: dict[str, Any] | None = None
+            best_state: _MusicStateDict | None = None
             best_dist = float("inf")
             for si in range(search_start, len(active_states)):
-                dist = abs(active_states[si]["timestamp_ms"] - onset_ms)  # type: ignore[operator]
+                dist = abs(active_states[si]["timestamp_ms"] - onset_ms)
                 if dist < best_dist:
                     best_dist = dist
                     best_state = active_states[si]
                 elif dist > best_dist:
                     search_start = max(0, si - 2)
                     break
-            if best_state and best_state.get("plp_pulse") is not None and best_dist < 150:
+            if best_state and best_state["plp_pulse"] is not None and best_dist < 150:
                 gt_onset_plp_values.append(best_state["plp_pulse"])
 
         if gt_onset_plp_values:
@@ -264,16 +285,8 @@ def score_device_run(
 
         # PLP autocorrelation at detected period lag
         # Derive lag from streamed BPM (internal, not scored) and stream rate.
-        bpm_values = [
-            s["bpm_internal"]
-            for s in active_states
-            if s.get("bpm_internal", 0) > 0  # type: ignore[operator]
-        ]
-        avg_bpm: float = (
-            sum(bpm_values) / len(bpm_values)  # type: ignore[arg-type]
-            if bpm_values
-            else 0.0
-        )
+        bpm_values = [s["bpm_internal"] for s in active_states if s["bpm_internal"] > 0]
+        avg_bpm: float = sum(bpm_values) / len(bpm_values) if bpm_values else 0.0
         if avg_bpm > 0 and len(plp_values) > 10:
             stream_rate = len(plp_values) / (audio_duration_sec or 1)
             period_lag = _js_round_int(stream_rate * 60 / avg_bpm)
@@ -294,7 +307,7 @@ def score_device_run(
     # Diagnostics: onset-to-GT offsets
     onset_offsets: list[int] = []
     for det in detections:
-        det_sec: float = (det["timestamp_ms"] - latency_correction_ms) / 1000  # type: ignore[operator]
+        det_sec: float = (det["timestamp_ms"] - latency_correction_ms) / 1000
         best_offset = float("inf")
         for ref in ref_onsets:
             offset = det_sec - ref

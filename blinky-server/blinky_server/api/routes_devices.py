@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ..device.device import Device, DeviceState
+from ..firmware import upload_firmware
 from .deps import get_fleet
 from .models import (
     CommandResponse,
@@ -201,8 +202,6 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     Serial UF2 is always preferred over wireless methods.
     """
     from pathlib import Path
-
-    from ..firmware import upload_firmware
 
     device = _get_device_or_404(device_id)
 

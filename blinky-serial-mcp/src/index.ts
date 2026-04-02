@@ -58,7 +58,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'disconnect',
-      description: 'Disconnect from a device (server manages connections automatically)',
+      description: 'Stop streaming on a device. Server manages connections automatically — this does not release the transport.',
       inputSchema: {
         type: 'object',
         properties: {
