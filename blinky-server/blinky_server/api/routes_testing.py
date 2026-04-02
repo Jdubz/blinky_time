@@ -12,7 +12,7 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..testing.job_manager import Job, JobManager
@@ -57,6 +57,37 @@ class ParamSweepRequest(BaseModel):
     settle_ms: float = 12000
     num_runs: int = Field(1, ge=1, le=10)
     commands: list[str] | None = None
+
+
+class TuneThresholdRequest(BaseModel):
+    device_id: str = Field(..., min_length=1)
+    param_name: str = Field("odfgate", min_length=1)
+    low: float = 0.05
+    high: float = 0.80
+    track_dir: str = Field(..., description="Directory with audio + .beats.json files")
+    track_names: list[str] | None = None
+    duration_ms: float = 35000
+    settle_ms: float = 12000
+    max_steps: int = Field(
+        8,
+        ge=4,
+        le=20,
+        description="Step budget: ~60% coarse sweep, ~40% refinement. Actual evals may be slightly higher.",
+    )
+    target_metric: str = "onsetF1"
+    commands: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _check_low_lt_high(self) -> TuneThresholdRequest:
+        if self.low >= self.high:
+            msg = f"low ({self.low}) must be less than high ({self.high})"
+            raise ValueError(msg)
+        return self
+
+
+class NnCaptureRequest(BaseModel):
+    duration_ms: float = Field(30000, ge=1000, le=300000)
+    output_path: str | None = None
 
 
 # ── Test Endpoints ──
@@ -122,6 +153,98 @@ async def param_sweep(body: ParamSweepRequest) -> dict[str, Any]:
     return {"job_id": job.id, "status": "submitted"}
 
 
+@router.post("/tune-threshold")
+async def tune_threshold(body: TuneThresholdRequest) -> dict[str, Any]:
+    """Binary search for optimal onset threshold using real music.
+
+    Returns immediately with a job_id. Poll /test/jobs/{id} for results.
+    """
+    from ..testing.test_runner import run_threshold_tune
+
+    fleet = get_fleet()
+    jm = _get_job_manager()
+
+    async def _run(job: Job) -> dict[str, Any]:
+        return await run_threshold_tune(
+            fleet,
+            body.device_id,
+            param_name=body.param_name,
+            low=body.low,
+            high=body.high,
+            track_dir=body.track_dir,
+            track_names=body.track_names,
+            duration_ms=body.duration_ms,
+            settle_ms=body.settle_ms,
+            max_steps=body.max_steps,
+            target_metric=body.target_metric,
+            commands=body.commands,
+            job=job,
+        )
+
+    job = jm.submit("tune-threshold", _run)
+    return {"job_id": job.id, "status": "submitted"}
+
+
+# ── NN Capture ──
+
+
+@router.post("/capture-nn/{device_id}")
+async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
+    """Capture NN diagnostic stream (mel bands + onset activation).
+
+    Enables firmware `stream nn` mode, captures frames for the specified
+    duration, saves JSONL output. Used for offline mel feature parity
+    validation and NN inference verification.
+
+    Returns immediately with a job_id. Poll /test/jobs/{id} for results.
+    """
+    from pathlib import Path
+
+    from ..testing.nn_capture import capture_nn_stream
+
+    fleet = get_fleet()
+    device = fleet.get_device(device_id)
+    if not device:
+        raise HTTPException(404, f"Device not found: {device_id}")
+
+    from ..device.device import DeviceState
+
+    if device.state != DeviceState.CONNECTED:
+        raise HTTPException(409, f"Device not connected (state={device.state.value})")
+
+    import re
+    import uuid
+
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", device_id[:12])
+    output = body.output_path or f"/tmp/nn-capture-{safe_id}-{uuid.uuid4().hex[:8]}.jsonl"
+
+    # Validate output path is under /tmp or home directory
+    resolved = Path(output).resolve()
+    allowed = [Path.home(), Path("/tmp")]
+    if not any(resolved.is_relative_to(d) for d in allowed):
+        raise HTTPException(
+            400, f"Output path must be under /tmp or home directory, got: {resolved}"
+        )
+
+    jm = _get_job_manager()
+
+    async def _run(job: Job) -> dict[str, Any]:
+        result = await capture_nn_stream(device, body.duration_ms, output)
+        return {
+            "status": "ok",
+            "frames": result.frames,
+            "duration_sec": result.duration_sec,
+            "frame_rate": result.frame_rate,
+            "output_path": result.output_path,
+            "nn_active": result.nn_active,
+            "onset_stats": result.onset_stats,
+            "level_stats": result.level_stats,
+        }
+
+    job = jm.submit("capture-nn", _run)
+    return {"job_id": job.id, "status": "submitted"}
+
+
 # ── Job Management ──
 
 
@@ -153,7 +276,7 @@ async def list_tracks(directory: str) -> list[dict[str, str]]:
 
     resolved = Path(directory).resolve()
     allowed = [Path.home(), Path("/tmp")]
-    if not any(str(resolved).startswith(str(d)) for d in allowed):
+    if not any(resolved.is_relative_to(d) for d in allowed):
         raise HTTPException(400, f"Directory not in allowed path: {resolved}")
     try:
         return discover_tracks(directory)

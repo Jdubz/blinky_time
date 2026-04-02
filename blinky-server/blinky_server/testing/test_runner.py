@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .audio_lock import acquire_audio_lock, release_audio_lock
-from .audio_player import PlaybackResult, kill_orphan_audio, play_audio
+from .audio_player import PlaybackResult, kill_orphan_audio, play_audio, stop_audio
 from .job_manager import Job
 from .scoring import format_score_summary, score_device_run
 from .test_session import TestSession
@@ -38,16 +38,23 @@ async def _configure_device(device: Device, commands: list[str] | None = None) -
 
 
 async def _start_streaming(devices: list[Device]) -> None:
-    """Start fast streaming on all devices."""
+    """Start fast streaming and enable transient debug channel on all devices.
+
+    The firmware only emits TRANSIENT events when the debug channel is on.
+    Without this, onset detection produces zero results.
+    """
     for device in devices:
         await device.protocol.start_stream("fast")
+        await asyncio.sleep(0.1)
+        await device.protocol.send_command("debug transient on")
         await asyncio.sleep(0.1)
 
 
 async def _stop_streaming(devices: list[Device]) -> None:
-    """Stop streaming on all devices. Best-effort, never raises."""
+    """Stop streaming and disable transient debug channel. Best-effort."""
     for device in devices:
-        try:  # noqa: SIM105
+        try:
+            await device.protocol.send_command("debug transient off")
             await device.protocol.stop_stream()
         except Exception:
             pass
@@ -227,6 +234,7 @@ async def run_validation(
             await _stop_streaming(devices)
 
     finally:
+        await stop_audio()
         release_audio_lock()
 
 
@@ -311,6 +319,9 @@ async def run_param_sweep(
 
                 for device, value in assignments:
                     await device.protocol.send_command(f"set {param_name} {value}")
+                    # DeviceProtocol resumes with "stream on" after set;
+                    # restore "stream fast" for test data collection.
+                    await device.protocol.send_command("stream fast")
                     await asyncio.sleep(0.1)
 
                 for track in tracks:
@@ -370,6 +381,7 @@ async def run_param_sweep(
             await _stop_streaming(devices)
 
     finally:
+        await stop_audio()
         release_audio_lock()
 
 
@@ -404,6 +416,290 @@ def _aggregate_sweep_results(
             }
         )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Threshold tuning (binary search)
+# ---------------------------------------------------------------------------
+
+
+async def run_threshold_tune(
+    fleet: FleetManager,
+    device_id: str,
+    *,
+    param_name: str = "odfgate",
+    low: float = 0.05,
+    high: float = 0.80,
+    track_dir: str,
+    track_names: list[str] | None = None,
+    duration_ms: float = 35000,
+    settle_ms: float = SETTLE_MS,
+    max_steps: int = 8,
+    target_metric: str = "onsetF1",
+    commands: list[str] | None = None,
+    job: Job | None = None,
+) -> dict[str, Any]:
+    """Coarse sweep + refine for optimal onset threshold using real music.
+
+    Phase 1 (coarse): Tests ~6 evenly spaced values across [low, high].
+    Phase 2 (refine): Narrows to +-1 step around the best coarse value,
+    tests 3-5 finer values. More reliable than hill-climbing for
+    unimodal F1 curves.
+
+    Args:
+        fleet: FleetManager instance
+        device_id: Single device to tune
+        param_name: Setting to tune (default: odfgate)
+        low: Search range lower bound
+        high: Search range upper bound
+        track_dir: Directory with audio + .beats.json
+        track_names: Specific tracks (None = all)
+        duration_ms: Playback duration per track
+        settle_ms: Skip early data (ACF convergence)
+        max_steps: Maximum total evaluation steps (split between coarse + refine)
+        target_metric: Metric to maximize (onsetF1, plpAtTransient, etc.)
+        commands: Setup commands before tuning
+        job: Job for progress updates
+
+    Returns:
+        Results dict with optimal value, per-step history, and final scores.
+    """
+    devices = _resolve_devices(fleet, [device_id])
+    if not devices:
+        return {"status": "error", "message": "Device not connected"}
+    device = devices[0]
+
+    tracks = discover_tracks(track_dir)
+    if track_names:
+        tracks = [t for t in tracks if t["name"] in track_names]
+    if not tracks:
+        return {"status": "error", "message": f"No tracks found in {track_dir}"}
+
+    manifest = load_track_manifest(track_dir)
+
+    if not acquire_audio_lock([device.id[:12]]):
+        return {"status": "error", "message": "Audio lock held by another process"}
+
+    try:
+        await kill_orphan_audio()
+        await _configure_device(device, commands)
+        await _start_streaming([device])
+
+        try:
+            history: list[dict[str, Any]] = []
+
+            # Phase 1: coarse sweep — ~6 evenly spaced values
+            coarse_count = min(6, max_steps - 2)  # Reserve at least 2 for refine
+            coarse_count = max(coarse_count, 3)  # Need at least 3 coarse points
+            coarse_values = [
+                round(low + i * (high - low) / (coarse_count - 1), 4) for i in range(coarse_count)
+            ]
+
+            # Phase 2 budget
+            refine_count = max(max_steps - coarse_count, 3)
+            total_steps = coarse_count + refine_count
+
+            best_value = coarse_values[0]
+            best_score = -1.0
+            step = 0
+
+            # --- Phase 1: coarse sweep ---
+            coarse_scores: list[tuple[float, float]] = []
+            for value in coarse_values:
+                step += 1
+                if job:
+                    job.progress = int(100 * step / total_steps)
+                    job.progress_message = f"coarse {step}/{coarse_count}: {param_name}={value}"
+
+                avg = await _eval_param_value(
+                    device,
+                    value,
+                    param_name,
+                    tracks,
+                    manifest,
+                    duration_ms,
+                    settle_ms,
+                    target_metric,
+                )
+                coarse_scores.append((value, avg))
+                history.append(
+                    {
+                        "step": step,
+                        "phase": "coarse",
+                        "value": value,
+                        "metric": target_metric,
+                        "score": round(avg, 4),
+                    }
+                )
+
+                log.info(
+                    "Tune coarse %d/%d: %s=%.4f -> %s=%.4f",
+                    step,
+                    coarse_count,
+                    param_name,
+                    value,
+                    target_metric,
+                    avg,
+                )
+
+                if avg > best_score:
+                    best_score = avg
+                    best_value = value
+
+                await asyncio.sleep(INTER_RUN_GAP_S)
+
+            # --- Phase 2: refine around best coarse value ---
+            best_idx = max(range(len(coarse_scores)), key=lambda i: coarse_scores[i][1])
+            refine_low = coarse_values[max(best_idx - 1, 0)]
+            refine_high = coarse_values[min(best_idx + 1, len(coarse_values) - 1)]
+
+            # Generate refine values, excluding already-tested coarse values
+            coarse_set = set(coarse_values)
+            refine_values = [
+                round(refine_low + i * (refine_high - refine_low) / (refine_count + 1), 4)
+                for i in range(1, refine_count + 1)
+            ]
+            refine_values = [v for v in refine_values if v not in coarse_set]
+            refine_values = refine_values[:refine_count]
+
+            for value in refine_values:
+                step += 1
+                if job:
+                    job.progress = int(100 * step / total_steps)
+                    job.progress_message = f"refine {step}/{total_steps}: {param_name}={value}"
+
+                avg = await _eval_param_value(
+                    device,
+                    value,
+                    param_name,
+                    tracks,
+                    manifest,
+                    duration_ms,
+                    settle_ms,
+                    target_metric,
+                )
+                history.append(
+                    {
+                        "step": step,
+                        "phase": "refine",
+                        "value": value,
+                        "metric": target_metric,
+                        "score": round(avg, 4),
+                    }
+                )
+
+                log.info(
+                    "Tune refine %d/%d: %s=%.4f -> %s=%.4f",
+                    step,
+                    total_steps,
+                    param_name,
+                    value,
+                    target_metric,
+                    avg,
+                )
+
+                if avg > best_score:
+                    best_score = avg
+                    best_value = value
+
+                await asyncio.sleep(INTER_RUN_GAP_S)
+
+            return {
+                "status": "ok",
+                "param": param_name,
+                "optimal_value": best_value,
+                "optimal_score": round(best_score, 4),
+                "metric": target_metric,
+                "steps": len(history),
+                "history": history,
+            }
+        finally:
+            await _stop_streaming([device])
+
+    finally:
+        await stop_audio()
+        release_audio_lock()
+
+
+async def _eval_param_value(
+    device: Device,
+    value: float,
+    param_name: str,
+    tracks: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    duration_ms: float,
+    settle_ms: float,
+    target_metric: str,
+) -> float:
+    """Set a parameter value, score it across all tracks, return mean metric.
+
+    Restores `stream fast` after the `set` command since DeviceProtocol
+    auto-resumes with `stream on` instead of `stream fast`.
+    """
+    await device.protocol.send_command(f"set {param_name} {value}")
+    # DeviceProtocol resumes with "stream on" after a set command,
+    # but tests need "stream fast" — restore it explicitly.
+    await device.protocol.send_command("stream fast")
+    await asyncio.sleep(0.2)
+
+    track_scores: list[float] = []
+    for track in tracks:
+        track_name = track["name"]
+        gt = load_ground_truth(
+            track["ground_truth"],
+            track.get("onset_ground_truth"),
+        )
+        track_manifest_entry = manifest.get(track_name, {})
+        track_seek = track_manifest_entry.get("seekOffset", 0)
+
+        playback, recordings = await _record_and_play(
+            [device],
+            track["audio_file"],
+            duration_ms=duration_ms,
+            seek_sec=track_seek,
+        )
+        if not playback.success:
+            continue
+
+        test_data = recordings.get(device.id)
+        if not test_data:
+            continue
+        test_data = _apply_settle_filter(test_data, settle_ms)
+        score = score_device_run(test_data, playback.audio_start_time_ms, gt)
+        summary = format_score_summary(score)
+
+        metric_val = _extract_metric(summary, target_metric)
+        track_scores.append(metric_val)
+
+    if not track_scores:
+        log.warning("All tracks failed for %s=%s — returning NaN score", param_name, value)
+        return float("nan")
+    return sum(track_scores) / len(track_scores)
+
+
+_METRIC_PATHS: dict[str, tuple[str, str]] = {
+    "onsetF1": ("onsetTracking", "f1"),
+    "onsetPrecision": ("onsetTracking", "precision"),
+    "onsetRecall": ("onsetTracking", "recall"),
+    "plpAtTransient": ("plp", "atTransient"),
+    "plpAutoCorr": ("plp", "autoCorr"),
+    "plpPeakiness": ("plp", "peakiness"),
+}
+
+
+def _extract_metric(summary: dict[str, Any], metric: str) -> float:
+    """Extract a named metric from a score summary dict.
+
+    Raises ValueError if the metric name is unknown.
+    Returns 0.0 if the metric path exists but the value is missing/non-numeric.
+    """
+    if metric not in _METRIC_PATHS:
+        msg = f"Unknown metric '{metric}'. Valid metrics: {', '.join(sorted(_METRIC_PATHS))}"
+        raise ValueError(msg)
+
+    section, key = _METRIC_PATHS[metric]
+    val = summary.get(section, {}).get(key)
+    return float(val) if isinstance(val, (int, float)) else 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -265,6 +265,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: 'capture_nn',
+      description: 'Capture NN diagnostic stream (mel bands + onset activation) for offline validation. Saves JSONL file with raw firmware mel features.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID' },
+          duration_ms: { type: 'number', description: 'Capture duration in ms (default: 30000)' },
+          output_path: { type: 'string', description: 'Output JSONL file path (default: /tmp/nn-capture-*.jsonl)' },
+        },
+        required: ['port'],
+      },
+    },
+    {
+      name: 'tune_threshold',
+      description: 'Binary search for optimal onset threshold (odfgate) using real music with ground truth. Converges on the value that maximizes onset F1.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID' },
+          param_name: { type: 'string', description: 'Parameter to tune (default: odfgate)' },
+          low: { type: 'number', description: 'Search range lower bound (default: 0.05)' },
+          high: { type: 'number', description: 'Search range upper bound (default: 0.80)' },
+          track_dir: { type: 'string', description: 'Track directory (default: music/edm/)' },
+          tracks: { type: 'array', items: { type: 'string' }, description: 'Specific tracks (default: all)' },
+          max_steps: { type: 'number', description: 'Max binary search steps (default: 8)' },
+          target_metric: { type: 'string', description: 'Metric to maximize: onsetF1, plpAtTransient, etc. (default: onsetF1)' },
+          commands: { type: 'array', items: { type: 'string' }, description: 'Setup commands' },
+        },
+        required: ['port'],
+      },
+    },
   ],
 }));
 
@@ -535,6 +567,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
         return ok({ error: 'Provide job_id (preferred) or output_path' });
+      }
+
+      // ── NN Capture & Threshold Tuning ──
+
+      case 'capture_nn': {
+        const { port, duration_ms = 30000, output_path } = args as {
+          port: string;
+          duration_ms?: number;
+          output_path?: string;
+        };
+        const id = await resolveDeviceId(port);
+        const body: Record<string, unknown> = { duration_ms };
+        if (output_path) body.output_path = output_path;
+        return ok(await post(`/test/capture-nn/${id}`, body));
+      }
+
+      case 'tune_threshold': {
+        const {
+          port,
+          param_name = 'odfgate',
+          low = 0.05,
+          high = 0.80,
+          track_dir,
+          tracks,
+          max_steps = 8,
+          target_metric = 'onsetF1',
+          commands: setupCommands,
+        } = args as {
+          port: string;
+          param_name?: string;
+          low?: number;
+          high?: number;
+          track_dir?: string;
+          tracks?: string[];
+          max_steps?: number;
+          target_metric?: string;
+          commands?: string[];
+        };
+        const id = await resolveDeviceId(port);
+        const result = await post('/test/tune-threshold', {
+          device_id: id,
+          param_name,
+          low,
+          high,
+          track_dir: track_dir || DEFAULT_TRACK_DIR,
+          track_names: tracks,
+          max_steps,
+          target_metric,
+          commands: setupCommands,
+        });
+        return ok(result);
       }
 
       // ── Simulator Preview ──

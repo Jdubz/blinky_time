@@ -270,9 +270,9 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         # detections (the model outputs onset activation, not a beat grid).
         est_beats = _peak_pick(activations, threshold, frame_rate)
 
-        # Beat-level F1 using mir_eval (±70ms tolerance)
+        # Onset F1 using mir_eval.onset (±50ms MIREX standard)
         if len(ref_beats) > 0 and len(est_beats) > 0:
-            scores = mir_eval.beat.f_measure(ref_beats, est_beats, f_measure_threshold=0.07)
+            scores = mir_eval.onset.f_measure(ref_beats, est_beats, window=0.05)[0]
         else:
             scores = 0.0
 
@@ -290,7 +290,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                 onset_data = json.load(f)
             ref_onsets = np.array(onset_data["onsets"])
             if len(ref_onsets) > 0 and len(est_beats) > 0:
-                onset_f1 = mir_eval.beat.f_measure(ref_onsets, est_beats, f_measure_threshold=0.07)
+                onset_f1 = mir_eval.onset.f_measure(ref_onsets, est_beats, window=0.05)[0]
             else:
                 onset_f1 = 0.0
             result["onset_f1"] = float(onset_f1)
@@ -307,8 +307,8 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             # Overall F1: all annotated onsets vs model detections
             all_ref_onsets = np.array([o["time"] for o in kw_data["onsets"]])
             if len(all_ref_onsets) > 0 and len(est_beats) > 0:
-                kw_f1 = mir_eval.beat.f_measure(
-                    all_ref_onsets, est_beats, f_measure_threshold=0.07)
+                kw_f1 = mir_eval.onset.f_measure(
+                    all_ref_onsets, est_beats, window=0.05)[0]
             else:
                 kw_f1 = 0.0
             result["kw_onset_f1"] = float(kw_f1)
@@ -328,7 +328,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                     valid_left = idx > 0
                     left_dist = np.abs(est_sorted[idx[valid_left] - 1] - ref_typed[valid_left])
                     dists[valid_left] = np.minimum(dists[valid_left], left_dist)
-                    typed_recall = float(np.mean(dists <= 0.07))
+                    typed_recall = float(np.mean(dists <= 0.05))
                 else:
                     typed_recall = 0.0
                 result[f"{onset_type}_recall"] = float(typed_recall)
@@ -345,8 +345,8 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                 ref_typed = np.array([o["time"] for o in kw_data["onsets"]
                                       if o["type"] == ch_name])
                 if len(ref_typed) > 0 and len(ch_est) > 0:
-                    ch_f1 = mir_eval.beat.f_measure(
-                        ref_typed, ch_est, f_measure_threshold=0.07)
+                    ch_f1 = mir_eval.onset.f_measure(
+                        ref_typed, ch_est, window=0.05)[0]
                 else:
                     ch_f1 = 0.0
                 result[f"{ch_name}_ch_f1"] = float(ch_f1)
@@ -360,8 +360,8 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             ref_kick_snare = np.array([o["time"] for o in kw_data["onsets"]
                                        if o["type"] in ("kick", "snare")])
             if len(ref_kick_snare) > 0 and len(combined_est) > 0:
-                combined_f1 = mir_eval.beat.f_measure(
-                    ref_kick_snare, combined_est, f_measure_threshold=0.07)
+                combined_f1 = mir_eval.onset.f_measure(
+                    ref_kick_snare, combined_est, window=0.05)[0]
             else:
                 combined_f1 = 0.0
             result["combined_kick_snare_f1"] = float(combined_f1)
@@ -452,8 +452,12 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
 
 
 def _peak_pick(activations: np.ndarray, threshold: float,
-               frame_rate: float, min_interval_s: float = 0.2) -> np.ndarray:
-    """Simple peak-picking on activation signal."""
+               frame_rate: float, min_interval_s: float = 0.05) -> np.ndarray:
+    """Simple peak-picking on activation signal.
+
+    Default min_interval_s=0.05 (50ms) is appropriate for onset detection.
+    Firmware uses 40-150ms tempo-adaptive cooldown.
+    """
     min_frames = int(min_interval_s * frame_rate)
     peaks = []
     last_peak = -min_frames
@@ -581,7 +585,9 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
 
         tracks.append((audio_path.stem, activations, ref_onsets))
 
-    # Sweep thresholds against onset F1 (not beat F1)
+    # Sweep thresholds against onset F1 using mir_eval.onset (MIREX standard).
+    # Uses 50ms window (standard onset detection eval), NOT mir_eval.beat which
+    # has different matching semantics and created threshold artifacts in v12/v13.
     print(f"\n{'Thresh':>8} {'Mean F1':>8} {'Median':>8} {'Min':>8} {'Max':>8} {'Est/Ref':>8}")
     best_t, best_f1 = 0.5, 0.0
     for thresh in thresholds:
@@ -590,7 +596,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
         for name, act, ref in tracks:
             est = _peak_pick(act, thresh, frame_rate)
             if len(ref) > 0 and len(est) > 0:
-                f1 = mir_eval.beat.f_measure(ref, est, f_measure_threshold=0.07)
+                f1 = mir_eval.onset.f_measure(ref, est, window=0.05)[0]
             else:
                 f1 = 0.0
             f1s.append(f1)

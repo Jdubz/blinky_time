@@ -173,21 +173,25 @@ def score_device_run(
     Computes onset F1 (at multiple tolerances) and PLP pattern metrics.
     """
     raw_duration = test_data.duration
-    timing_offset_ms = audio_start_time - test_data.start_time
+    # All timestamps from TestSession are system clock (epoch ms).
+    # Subtract audio_start_time to get relative-to-audio timestamps
+    # (0ms = audio playback begins). Ground truth is in seconds from
+    # audio start, so these relative ms are divided by 1000 for matching.
+    audio_epoch_ms = audio_start_time
 
     # Adjust timestamps relative to audio start
     detections: list[_DetectionDict] = [
         _DetectionDict(
-            timestamp_ms=d.timestamp_ms - timing_offset_ms,
+            timestamp_ms=d.timestamp_ms - audio_epoch_ms,
             type=d.type,
             strength=d.strength,
         )
         for d in test_data.transients
-        if d.timestamp_ms - timing_offset_ms >= 0
+        if d.timestamp_ms - audio_epoch_ms >= 0
     ]
     music_states: list[_MusicStateDict] = [
         _MusicStateDict(
-            timestamp_ms=s.timestamp_ms - timing_offset_ms,
+            timestamp_ms=s.timestamp_ms - audio_epoch_ms,
             active=s.active,
             phase=s.phase,
             confidence=s.confidence,
@@ -196,11 +200,11 @@ def score_device_run(
             bpm_internal=s.bpm_internal,
         )
         for s in test_data.music_states
-        if s.timestamp_ms - timing_offset_ms >= 0
+        if s.timestamp_ms - audio_epoch_ms >= 0
     ]
 
     # Latency estimation
-    audio_duration_ms = raw_duration - timing_offset_ms
+    audio_duration_ms = raw_duration
     gt_hits_dicts = [
         {"time": h.time, "strength": h.strength, "expect_trigger": h.expect_trigger}
         for h in gt_data.hits
@@ -321,7 +325,7 @@ def score_device_run(
     return DeviceRunScore(
         audio_latency_ms=audio_latency_ms,
         audio_duration_sec=audio_duration_sec,
-        timing_offset_ms=timing_offset_ms,
+        timing_offset_ms=audio_epoch_ms - test_data.start_time,
         onset_tracking=OnsetTracking(
             f1=_js_round(onset_result["f1"]),
             precision=_js_round(onset_result["precision"]),

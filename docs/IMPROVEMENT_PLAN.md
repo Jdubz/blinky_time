@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 1, 2026*
+*Last Updated: April 2, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
@@ -10,7 +10,9 @@
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v11-final deployed on 4/5 blinkyhost devices (2 ESP32-S3, 2 nRF52840). Trained on de-duplicated onset labels. Kick recall 0.743, Snare recall 0.727, HiHat recall 0.701. 13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
-**Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
+**Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids. **Soft onset teacher labels** being generated from madmom CNN OnsetDetector (6750 tracks, continuous activations at 100Hz) for v15 knowledge distillation training.
+
+**Eval pipeline fixed (April 2):** `evaluate.py` now uses `mir_eval.onset.f_measure` (MIREX 50ms window) instead of `mir_eval.beat.f_measure` (70ms beat tolerance). Peak-pick min interval reduced from 200ms to 50ms to match firmware onset cooldown. All 4 v14 prerequisites complete. **Note: scores from v14+ are not directly comparable to pre-April-2 benchmarks** (50ms onset window vs 70ms beat window). v11's reported Kick F1=0.688, Snare F1=0.773 etc. used the old metric. v14 KW onset F1=0.659 uses the new metric.
 
 **Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Conv1D W16 inference takes 6.8ms on nRF52840 (well within 16.7ms budget — 60fps achieved). Mel-spectrogram CNNs require 79-98ms (too slow).
 
@@ -47,16 +49,18 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 - **Adaptive phase correction** removed — phase is implicit in cosine OLA
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
-**Current test results (ACF system, March 31 validation suite):**
-- plpAtTransient 0.39-0.67 across 12 tracks (dubstep best at 0.665)
-- plpAutoCorr up to 0.98 (amapiano)
-- Music mode activation: 25-60s on most tracks, DnB never activates (0/6)
-- Activation reliability: only 2/12 tracks activate on all 6 runs
+**Current test results (ACF system, April 2 validation via blinky-server):**
+- plpAtTransient mean 0.45-0.49 across 18 tracks (3 devices)
+- All 18 tracks now produce scores (was 12/18 on Mar 31)
+- DnB tracks now activate: dnb-energetic-breakbeat plp@T=0.48, dnb-liquid-jungle plp@T=0.44
+- Onset F1 low (0.12-0.24) — firmware fires ~35 onset events/sec
+- pulsethreshmult sweep (1.5-4.5) showed parameter has **no significant effect** on onset F1 — device variance dominates. The high detection rate is from the NN activation shape (broad peaks), not the threshold multiplier. Fix requires sharper NN activations (v15 knowledge distillation).
 
-**ACF convergence bottleneck (identified March 31):**
-The slot cache and template seeding features were functionally blocked by `slotSaveMinConf = 0.50` — unreachable with ACF peak strengths (typically 0.1-0.4 on real mic audio, lower than old DFT magnitude values). Fix applied: `slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames. Awaiting validation.
+**ACF convergence fix VALIDATED (April 2):**
+v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames) confirmed working. DnB tracks that never activated now score. All 18 tracks produce non-zero plpAtTransient.
 
 **Remaining work:**
+- v15 knowledge distillation training (sharper onset activations → fewer false triggers)
 - Further phase correction tuning if needed
 - Pattern slot cache tuning (switch/new thresholds, seed blend ratio)
 
@@ -130,27 +134,35 @@ Both v12 and v13 appeared to regress massively vs v11 (onset F1 0.56/0.53 vs 0.6
 - ❌ **Wider architecture [48,48,32]** — Same discrimination as [32,32] at 3x the model size and inference cost. Task is data/label-limited, not capacity-limited.
 - ❌ **SWA** — Slightly worse than best checkpoint in v12. No benefit for this model size.
 
-**v14 plan: Infrastructure fixes + correct OWBCE on v11 architecture.**
+**v14 training complete — OWBCE showed no improvement over v11.**
 
-Prerequisites (code fixes before training):
-1. **Fix `evaluate.py` threshold sweep** — Optimize against KW onset F1 (or onset F1), not beat F1. The beat F1 target creates arbitrary operating points that make equivalent models look very different.
-2. **Fix `train_pipeline.sh`** — Evaluate and export `best_model.pt`, not `final_model.pt`. SWA is dropped, but the pipeline should use the best validation checkpoint regardless.
-3. **Fix OWBCE loss** — Apply proximity boost to positive class weight only: `class_weight = torch.where(is_positive, pw * onset_weight, 1.0)` instead of multiplying `onset_weight` into the full loss. Also lower the `is_positive` threshold to include neighbor frames (y > 0.1 instead of y > 0.5).
-4. **Drop SpecMix** — Not salvageable for frame-level tasks without a complete rewrite. Standard mixup (proven in v11) is better.
+All 4 prerequisites were fixed (evaluate.py → mir_eval.onset, train_pipeline.sh → best_model.pt, OWBCE proximity on positives only, SpecMix disabled). Training ran with corrected OWBCE: best epoch 30, val_loss=0.636, val_F1=0.132 (frame-level). Early stopped at epoch 45.
 
-Training config (`conv1d_w16_onset_v14.yaml`):
-- Architecture: [32, 32] from v11 (13K params, 13.4 KB INT8) — wider architecture proved unnecessary
-- Loss: `asymmetric_focal_owbce` with corrected implementation (proximity on positives only)
-- Augmentation: standard mixup (v11's Beta(0.4,0.4), p=0.5) — SpecMix dropped
-- SpecAugment: v11 levels (2 freq masks, 1 time mask)
-- All other hyperparams from v11 (LR=0.001, batch=4096, dropout=0.1, epochs=60, patience=15)
-- No SWA
+Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 EDM tracks):
+- v14 KW Onset F1: **mean 0.659** (range 0.530-0.761)
+- Kick recall: 0.877, Snare recall: 0.892, HiHat recall: 0.865
+- Comparable to v11 at equal thresholds (~0.649-0.653 from post-mortem)
 
-Expected outcome: if corrected OWBCE improves peak sharpness, we should see better onset F1 at optimal threshold (not just equal performance at fixed threshold). If OWBCE still shows no improvement, the v11 training recipe is the ceiling for this data.
+**Conclusion: the v11 training recipe is the ceiling for the current training data.** OWBCE, SpecMix, wider architectures, and SWA all fail to improve over plain asymmetric focal loss with standard mixup. The bottleneck is **label quality** — current labels are derived from beat trackers, not onset detectors. Beat-derived labels miss off-beat onsets, hallucinate onsets on empty strong beats, and smooth timing to a grid.
 
-**Future training improvements (research-backed, not yet implemented):**
+**v15 plan: Knowledge distillation from madmom CNN onset detector (IN PROGRESS)**
 
-1. **Onset-specific knowledge distillation** (+2-5% F1, medium effort) — Use madmom CNN OnsetDetector as teacher (NOT Beat This! — that's a beat tracker). The teacher's continuous probability output encodes onset activation shape (gradual rise before attack, sharp drop after) that binary labels can't express. Requires modifying `generate_teacher_labels.py` to use madmom OnsetDetector. Source: Shi et al. (Interspeech 2019): +15% error reduction; Hyperconnect (ICASSP 2022): +25.3% mAP. ~~Beat This! distillation~~: INVALID for onset detection — would suppress off-beat onsets and inject phantom beat targets.
+Soft onset teacher labels are being generated from madmom `CNNOnsetProcessor` (6750 tracks at 100Hz continuous activation). This bypasses the dedup problem — the model learns the activation SHAPE (rise/attack/decay) from soft probabilities rather than binary 0/1 labels.
+
+Key insight: madmom's CNN onset detector outputs ~8 onsets/sec on EDM at threshold 0.3 (too aggressive for hard labels). But the continuous activations have the right shape — sharp peaks on kicks (0.93-1.00), near-zero between hits, median 0.005. Using these as soft teacher targets via MSE loss trains sharper, more discriminative activations.
+
+Label dedup is critical: duplicate labels within 70ms teach the model to re-trigger on the same onset. Soft distillation avoids this entirely (no peak-picking during training). For any hard label generation, strict 70ms dedup keeps only the strongest peak per window.
+
+Pipeline: `ml-training/scripts/generate_onset_teacher_labels.py` → soft labels at `/mnt/storage/blinky-ml-data/labels/onset_teacher_soft/`
+
+Training will require:
+- Add distillation loss mode to `train.py` (MSE against teacher activations)
+- Resample teacher labels from 100Hz to 62.5Hz (firmware frame rate)
+- v15 config: same [32,32] Conv1D, MSE distillation loss, standard augmentation
+
+**Future training improvements (research-backed):**
+
+1. ~~**Onset-specific knowledge distillation**~~ → **v15 (IN PROGRESS)**, see above
 
 4. **Quantization-Aware Training (QAT)** (+1-3% F1, high effort) — Simulate INT8 quantization during training so model compensates for quantization noise. Larger benefit for small models where each weight matters. Complex to integrate: our PyTorch → Keras → TFLite pipeline requires QAT in the Keras domain, not PyTorch. Source: NVIDIA QAT benchmarks, DCASE 2024 low-complexity task.
 
@@ -173,25 +185,27 @@ Expected outcome: if corrected OWBCE improves peak sharpness, we should see bett
 - Multi-class output (kick/snare/hihat): firmware uses single-channel onset. Per-instrument adds quantization overhead with no visual benefit.
 - SpecMix / CutMix: **proven unsound** for frame-level onset detection (v13 post-mortem). Label mixing is wrong for sequence labeling tasks.
 - SWA: **proven unhelpful** at this model scale (v12 post-mortem)
+- OWBCE onset-proximity loss: **proven equivalent to plain asymmetric focal** (v14). Corrected implementation (proximity on positives only) showed no improvement. The bottleneck is label quality, not loss function.
 
-### Priority 3: Server Consolidation — IN PROGRESS
+### Priority 3: Server Consolidation — COMPLETE ✅
 
-**Status: Phase 1 complete. Canonical scoring engine ported to blinky-server.**
+**Status: All phases complete. blinky-server is the single owner of all device connections, test orchestration, and scoring.**
 
-Three parallel test/scoring systems (blinky-server, blinky-serial-mcp, 16 CJS scripts) being consolidated into blinky-server as single source of truth. See `docs/SERVER_CONSOLIDATION_PLAN.md` for full details.
+All 14 CJS test scripts, 6 standalone Python/shell tools, and the blinky-test-player CLI were deleted (16,538 lines removed). The MCP server was rewritten as a thin HTTP client (4,985 → 736 lines). Zero callable scripts open serial ports outside the server.
 
-- ✅ Phase 1: Scoring engine + audio foundations ported to Python (scoring.py, types.py, audio_lock.py, audio_player.py, track_discovery.py). 6 review bugs fixed.
-- [ ] Phase 2: Test session infrastructure (per-device recording buffers)
-- [ ] Phase 3: Test runner REST endpoints (run-track, validate, job management)
-- [ ] Phase 4: Advanced test tools (param sweep, A/B test, pattern memory)
-- [ ] Phase 5: MCP server → thin HTTP client
-- [ ] Phase 6: Synthetic patterns + ensemble tuning
-- [ ] Phase 7: Delete 14 CJS scripts + MCP internals
+- ✅ Phase 1: Scoring engine (onset F1 + PLP metrics only, no beat/BPM)
+- ✅ Phase 2: Metric cleanup (beat/BPM removed), OTA→firmware rename, serial lock deleted
+- ✅ Phase 3: Test session infrastructure (per-device recording buffers)
+- ✅ Phase 4: Test runner + REST endpoints (validation, param sweep, threshold tuning)
+- ✅ Phase 5: MCP server → thin HTTP client (21 tools as HTTP wrappers)
+- ✅ Phase 6: External scripts deleted (51 files, 16,538 lines)
 
-**Previously completed (retained):**
-- ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
-- ✅ PLP metrics implemented: `plp.atTransient`, `plp.autoCorr`, `plp.peakiness`, `plp.mean`
-- ✅ BPM accuracy scoring removed from canonical scoring (still present in stale CJS scripts — deleted in Phase 7)
+**Available test endpoints:**
+- `POST /api/test/validate` — run validation suite (onset F1 + PLP metrics)
+- `POST /api/test/param-sweep` — multi-device parameter sweep with batching
+- `POST /api/test/tune-threshold` — binary search for optimal onset threshold
+- `POST /api/test/capture-nn/{id}` — capture NN diagnostic stream (mel bands + onset)
+- `GET /api/test/jobs/{id}` — poll async job results
 
 ### Architecture History (Collapsed — see git log for details)
 

@@ -278,7 +278,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v82)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v88)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
