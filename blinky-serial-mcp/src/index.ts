@@ -295,12 +295,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'disconnect': {
+        // Server manages connections automatically — disconnect is advisory.
+        // Stopping streaming if active, but NOT releasing the transport.
         const { port } = args as { port?: string };
         if (port) {
           try {
             const id = await resolveDeviceId(port);
-            await post(`/devices/${id}/release`);
-            return ok({ status: 'released', device_id: id });
+            await post(`/devices/${id}/stream/off`).catch(() => {});
+            return ok({ status: 'ok', device_id: id, message: 'Streaming stopped. Server manages connections automatically.' });
           } catch {
             return ok({ status: 'ok', message: 'Device not found or already disconnected' });
           }
@@ -345,7 +347,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'get_audio': {
         const { port } = args as { port?: string };
         const id = await resolveDeviceId(port);
-        // Collect one audio frame from WebSocket
+        // Ensure streaming is active, then collect one audio frame
+        await post(`/devices/${id}/stream/fast`).catch(() => {});
         let sample: unknown = null;
         await monitorWs(id, 500, (msg) => {
           if (msg.type === 'audio' && !sample) {
@@ -353,7 +356,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         });
         if (!sample) {
-          return ok({ error: 'No audio data received. Is streaming active? Use stream_start first.' });
+          return ok({ error: 'No audio data received. Device may not be connected.' });
         }
         return ok(sample);
       }
@@ -389,15 +392,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'monitor_audio': {
         const { duration_ms = 1000, port } = args as { duration_ms?: number; port?: string };
         const id = await resolveDeviceId(port);
-        // Ensure streaming is active
         await post(`/devices/${id}/stream/fast`);
         const samples: Array<Record<string, unknown>> = [];
         let transientCount = 0;
-        await monitorWs(id, duration_ms, (msg) => {
-          if (msg.type === 'audio') samples.push(msg.data as Record<string, unknown>);
-          if (msg.type === 'transient') transientCount++;
-        });
-        // Compute stats
+        try {
+          await monitorWs(id, duration_ms, (msg) => {
+            if (msg.type === 'audio') samples.push(msg.data as Record<string, unknown>);
+            if (msg.type === 'transient') transientCount++;
+          });
+        } finally {
+          await post(`/devices/${id}/stream/off`).catch(() => {});
+        }
         const levels = samples
           .map((s) => (s as Record<string, Record<string, number>>)?.a?.l ?? 0)
           .filter((l): l is number => typeof l === 'number');
@@ -411,19 +416,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { duration_ms = 3000, port } = args as { duration_ms?: number; port?: string };
         const id = await resolveDeviceId(port);
         await post(`/devices/${id}/stream/fast`);
-        // Also enable transient debug channel
         await post(`/devices/${id}/command`, { command: 'debug transient on' });
         const transients: Array<{ strength: number; timestampMs: number }> = [];
-        await monitorWs(id, duration_ms, (msg) => {
-          if (msg.type === 'transient') {
-            const d = msg.data as Record<string, unknown>;
-            transients.push({
-              strength: (d.strength as number) ?? 0,
-              timestampMs: (d.timestampMs as number) ?? 0,
-            });
-          }
-        });
-        await post(`/devices/${id}/command`, { command: 'debug transient off' });
+        try {
+          await monitorWs(id, duration_ms, (msg) => {
+            if (msg.type === 'transient') {
+              const d = msg.data as Record<string, unknown>;
+              transients.push({
+                strength: (d.strength as number) ?? 0,
+                timestampMs: (d.timestampMs as number) ?? 0,
+              });
+            }
+          });
+        } finally {
+          await post(`/devices/${id}/command`, { command: 'debug transient off' }).catch(() => {});
+          await post(`/devices/${id}/stream/off`).catch(() => {});
+        }
         const strengths = transients.map((t) => t.strength);
         return ok({
           duration_ms,
@@ -438,7 +446,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'get_music_status': {
         const { port } = args as { port?: string };
         const id = await resolveDeviceId(port);
-        // Get latest music state from one WebSocket frame
+        // Ensure streaming, then get latest music state from one WS frame
+        await post(`/devices/${id}/stream/fast`).catch(() => {});
         let musicState: unknown = null;
         await monitorWs(id, 500, (msg) => {
           if (msg.type === 'audio' && !musicState) {

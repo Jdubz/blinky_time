@@ -87,15 +87,16 @@ interface WsMessage {
 
 /**
  * Connect to a device's WebSocket stream and collect messages for a duration.
- * Calls handler for each message. Returns when duration elapses.
+ * Calls handler for each message. Returns when duration elapses or on error.
  */
 export async function monitorWs(
   deviceId: string,
   durationMs: number,
   handler: (msg: WsMessage) => void,
 ): Promise<void> {
-  const wsUrl = `${BASE_URL.replace(/^http/, 'ws')}/ws/${deviceId}`;
+  const wsUrl = `${BASE_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')}/ws/${deviceId}`;
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
     const ws = new WebSocket(wsUrl);
     const timer = setTimeout(() => {
       ws.close();
@@ -110,11 +111,11 @@ export async function monitorWs(
     });
     ws.on('error', (err: Error) => {
       clearTimeout(timer);
-      reject(err);
+      if (!settled) { settled = true; reject(err); }
     });
     ws.on('close', () => {
       clearTimeout(timer);
-      resolve();
+      if (!settled) { settled = true; resolve(); }
     });
   });
 }
