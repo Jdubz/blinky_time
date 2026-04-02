@@ -208,8 +208,8 @@ The Blinky Time project consists of 5 major components:
 blinky_time/
 ├── blinky-things/          Arduino firmware (nRF52840 + ESP32-S3)
 ├── blinky-console/         React web UI (WebSerial interface)
-├── blinky-test-player/     Node.js testing CLI (parameter tuning)
-├── blinky-serial-mcp/      MCP server (AI integration)
+├── blinky-test-player/     Test audio files, ground truth, pattern definitions
+├── blinky-serial-mcp/      MCP server (thin HTTP client for blinky-server)
 └── blinky-simulator/       Desktop GIF renderer (compiles actual firmware)
 ```
 
@@ -332,35 +332,24 @@ React Components
 - 60+ test patterns (simple-beat, complex-rhythm, polyrhythmic, melodic, etc.)
 
 **blinky-serial-mcp (AI Integration)**
-- 20+ MCP tools for device interaction
-- Connection management (list_ports, connect, status)
+- Thin HTTP client wrapping blinky-server REST API
+- Device management (list_ports, status, send_command)
 - Settings control (get_settings, set_setting, save_settings)
-- Audio streaming (stream_start, get_audio, monitor_audio)
-- Testing (run_test, start_test, stop_test)
-- Pattern library (list_patterns)
+- Audio monitoring (monitor_audio, monitor_transients, get_audio)
+- Testing (run_test, run_validation_suite, check_test_result)
 
 ### MCP Testing Best Practices
 
-**ALWAYS use `run_test` for pattern testing** - it automatically:
-1. Connects to the device
-2. Plays the pattern and records detections
-3. Disconnects when complete
-
+**Use `run_test` for validation** — submits a test job to blinky-server:
 ```
-run_test(pattern: "steady-120bpm", port: "COM11")
+run_test(port: "/dev/ttyACM0")
+run_validation_suite(ports: ["/dev/ttyACM0", "/dev/ttyACM1"])
+check_test_result(job_id: "abc123")
 ```
 
 **Gain is fixed** - AGC was removed in v72. Hardware gain is set at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization handles dynamic range.
 
-**DO NOT manually connect/disconnect** - Using separate `connect`, `stream_start`, `start_test`, `stop_test`, `disconnect` calls:
-- Risks leaving the port locked if an error occurs
-- Prevents firmware flashing until manually disconnected
-- Is more error-prone and verbose
-
-**Exception**: Use manual connection only when:
-- Exploring settings interactively (`get_settings`, `set_setting`)
-- Monitoring audio continuously (`monitor_audio` with long duration)
-- Debugging device state (`status`, `send_command`)
+**Server manages all connections** — the MCP server is a thin HTTP client. No serial port management needed. Use `monitor_audio` and `monitor_transients` for interactive exploration.
 
 **Unit & Integration Tests**
 - `tests/unit/` - Device configs, LED mapping, parameter bounds
@@ -448,7 +437,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, v11-final deployed on 4/5 blinkyhost devices)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
-- ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
+- ✅ Testing infrastructure (blinky-server REST API: validation + param sweep, MCP tools)
 - ✅ Multi-layer safety mechanisms
 - ✅ 3 device configurations (Hat, Tube, Bucket) + Display (32x32 matrix)
 - ✅ Mic calibration pipeline + gain-aware training augmentation

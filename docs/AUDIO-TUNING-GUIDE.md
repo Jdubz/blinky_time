@@ -76,26 +76,26 @@ PDM Microphone (16kHz, mono)
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **blinky-serial-mcp** | `blinky-serial-mcp/` | MCP server for device communication (20+ tools) |
-| **blinky-test-player** | `blinky-test-player/` | Audio pattern playback + ground truth generation |
-| **param-tuner** | `blinky-test-player/src/param-tuner/` | Binary search + sweep optimization |
-| **run_music_test** | MCP tool | Full-track beat tracking evaluation with ground truth |
+| **blinky-server** | `blinky-server/` | Fleet management, test orchestration, scoring (REST API) |
+| **blinky-serial-mcp** | `blinky-serial-mcp/` | MCP tools for Claude (thin HTTP client for blinky-server) |
+| **test audio** | `blinky-test-player/music/` | Audio files + ground truth labels |
 
 ### Quick Commands
 
 ```bash
-# Run a single pattern test via MCP
-run_test(pattern: "strong-beats", port: "/dev/ttyACM0")
+# Run validation suite via server API
+curl -X POST http://blinkyhost.local:8420/api/test/validate \
+  -H 'Content-Type: application/json' \
+  -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/music/edm"}'
 
-# Run a full music track with ground truth evaluation
-run_music_test(audio_file: "blinky-test-player/music/edm/trance-party.mp3",
-               ground_truth: "blinky-test-player/music/edm/trance-party.beats.json",
-               port: "/dev/ttyACM0")
+# Parameter sweep via server API
+curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
+  -H 'Content-Type: application/json' \
+  -d '{"device_ids": ["D1","D2","D3"], "param_name": "onsetthresh", "values": [1,2,3,4,5,6,7,8,9], "track_dir": "/path/to/music/edm"}'
 
-# Multi-device parameter sweep
-cd blinky-test-player
-npm run tuner -- multi-sweep --ports /dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2,/dev/ttyACM3 \
-  --params bayesacf --duration 30
+# Via MCP tools
+run_test(port: "/dev/ttyACM0")
+run_validation_suite(ports: ["/dev/ttyACM0", "/dev/ttyACM1"])
 
 # Monitor audio levels
 monitor_audio(port: "/dev/ttyACM0", duration_ms: 3000)
@@ -104,22 +104,9 @@ monitor_audio(port: "/dev/ttyACM0", duration_ms: 3000)
 monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 ```
 
-### A/B Test Scripts (`ml-training/tools/ab_test_*.cjs`)
+### Testing Methodology
 
-Batch A/B test scripts compare two firmware configurations across all 18 EDM tracks. Each track is played twice (config A, then config B) with BPM accuracy recorded.
-
-**Critical: Always seek to middle of track.** EDM tracks typically have 15-30s intros with no beat. Playing from the start wastes most of the test window on intro/buildup. All scripts use `ffprobe` to get track duration and `ffplay -ss` to seek to the center minus half the play duration. This ensures the beat-tracking section of the track is captured.
-
-**Available scripts:**
-- `ab_test_nnbeat.cjs` — NN Onset ODF comparison (BandFlux removed in v67; historical data only)
-- `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (default OFF in v64; settings still exposed)
-
-```bash
-# Run from blinky-test-player dir (needs serialport module)
-cd blinky-test-player
-NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
-  --port /dev/ttyACM0 --music-dir music/edm --duration 25000
-```
+**Critical: Always seek to middle of track.** EDM tracks typically have 15-30s intros with no beat. The server uses `track_manifest.json` seek offsets to jump to the densest beat region. The first 12 seconds of data are filtered out (ACF convergence settle time).
 
 ### Test Tracks (18 Total)
 
