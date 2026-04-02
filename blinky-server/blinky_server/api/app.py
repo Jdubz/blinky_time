@@ -51,11 +51,13 @@ def create_app(
     from .routes_commands import router as commands_router
     from .routes_devices import router as devices_router
     from .routes_firmware import router as firmware_router
+    from .routes_testing import router as testing_router
     from .ws import router as ws_router
 
     app.include_router(devices_router, prefix="/api")
     app.include_router(commands_router, prefix="/api")
     app.include_router(firmware_router, prefix="/api")
+    app.include_router(testing_router, prefix="/api")
     app.include_router(ws_router)
 
     return app
