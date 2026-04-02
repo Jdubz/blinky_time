@@ -174,24 +174,25 @@ Expected outcome: if corrected OWBCE improves peak sharpness, we should see bett
 - SpecMix / CutMix: **proven unsound** for frame-level onset detection (v13 post-mortem). Label mixing is wrong for sequence labeling tasks.
 - SWA: **proven unhelpful** at this model scale (v12 post-mortem)
 
-### Priority 3: Server Consolidation — IN PROGRESS
+### Priority 3: Server Consolidation — COMPLETE ✅
 
-**Status: Phase 1 complete. Canonical scoring engine ported to blinky-server.**
+**Status: All phases complete. blinky-server is the single owner of all device connections, test orchestration, and scoring.**
 
-Three parallel test/scoring systems (blinky-server, blinky-serial-mcp, 16 CJS scripts) being consolidated into blinky-server as single source of truth. See `docs/SERVER_CONSOLIDATION_PLAN.md` for full details.
+All 14 CJS test scripts, 6 standalone Python/shell tools, and the blinky-test-player CLI were deleted (16,538 lines removed). The MCP server was rewritten as a thin HTTP client (4,985 → 736 lines). Zero callable scripts open serial ports outside the server.
 
-- ✅ Phase 1: Scoring engine + audio foundations ported to Python (scoring.py, types.py, audio_lock.py, audio_player.py, track_discovery.py). 6 review bugs fixed.
-- [ ] Phase 2: Test session infrastructure (per-device recording buffers)
-- [ ] Phase 3: Test runner REST endpoints (run-track, validate, job management)
-- [ ] Phase 4: Advanced test tools (param sweep, A/B test, pattern memory)
-- [ ] Phase 5: MCP server → thin HTTP client
-- [ ] Phase 6: Synthetic patterns + ensemble tuning
-- [ ] Phase 7: Delete 14 CJS scripts + MCP internals
+- ✅ Phase 1: Scoring engine (onset F1 + PLP metrics only, no beat/BPM)
+- ✅ Phase 2: Metric cleanup (beat/BPM removed), OTA→firmware rename, serial lock deleted
+- ✅ Phase 3: Test session infrastructure (per-device recording buffers)
+- ✅ Phase 4: Test runner + REST endpoints (validation, param sweep, threshold tuning)
+- ✅ Phase 5: MCP server → thin HTTP client (21 tools as HTTP wrappers)
+- ✅ Phase 6: External scripts deleted (51 files, 16,538 lines)
 
-**Previously completed (retained):**
-- ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
-- ✅ PLP metrics implemented: `plp.atTransient`, `plp.autoCorr`, `plp.peakiness`, `plp.mean`
-- ✅ BPM accuracy scoring removed from canonical scoring (still present in stale CJS scripts — deleted in Phase 7)
+**Available test endpoints:**
+- `POST /api/test/validate` — run validation suite (onset F1 + PLP metrics)
+- `POST /api/test/param-sweep` — multi-device parameter sweep with batching
+- `POST /api/test/tune-threshold` — binary search for optimal onset threshold
+- `POST /api/test/capture-nn/{id}` — capture NN diagnostic stream (mel bands + onset)
+- `GET /api/test/jobs/{id}` — poll async job results
 
 ### Architecture History (Collapsed — see git log for details)
 
