@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .audio_lock import acquire_audio_lock, release_audio_lock
-from .audio_player import PlaybackResult, kill_orphan_audio, play_audio
+from .audio_player import PlaybackResult, kill_orphan_audio, play_audio, stop_audio
 from .job_manager import Job
 from .scoring import format_score_summary, score_device_run
 from .test_session import TestSession
@@ -234,6 +234,7 @@ async def run_validation(
             await _stop_streaming(devices)
 
     finally:
+        await stop_audio()
         release_audio_lock()
 
 
@@ -380,6 +381,7 @@ async def run_param_sweep(
             await _stop_streaming(devices)
 
     finally:
+        await stop_audio()
         release_audio_lock()
 
 
@@ -615,6 +617,7 @@ async def run_threshold_tune(
             await _stop_streaming([device])
 
     finally:
+        await stop_audio()
         release_audio_lock()
 
 
