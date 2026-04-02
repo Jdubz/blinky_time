@@ -318,6 +318,9 @@ async def run_param_sweep(
 
                 for device, value in assignments:
                     await device.protocol.send_command(f"set {param_name} {value}")
+                    # DeviceProtocol resumes with "stream on" after set;
+                    # restore "stream fast" for test data collection.
+                    await device.protocol.send_command("stream fast")
                     await asyncio.sleep(0.1)
 
                 for track in tracks:
@@ -434,10 +437,12 @@ async def run_threshold_tune(
     commands: list[str] | None = None,
     job: Job | None = None,
 ) -> dict[str, Any]:
-    """Binary search for optimal onset threshold using real music.
+    """Coarse sweep + refine for optimal onset threshold using real music.
 
-    Plays audio tracks, scores onset F1 (or another metric) at each
-    threshold value, and converges on the value that maximizes the target.
+    Phase 1 (coarse): Tests ~6 evenly spaced values across [low, high].
+    Phase 2 (refine): Narrows to +-1 step around the best coarse value,
+    tests 3-5 finer values. More reliable than hill-climbing for
+    unimodal F1 curves.
 
     Args:
         fleet: FleetManager instance
@@ -449,7 +454,7 @@ async def run_threshold_tune(
         track_names: Specific tracks (None = all)
         duration_ms: Playback duration per track
         settle_ms: Skip early data (ACF convergence)
-        max_steps: Maximum binary search iterations
+        max_steps: Maximum total evaluation steps (split between coarse + refine)
         target_metric: Metric to maximize (onsetF1, plpAtTransient, etc.)
         commands: Setup commands before tuning
         job: Job for progress updates
@@ -480,99 +485,120 @@ async def run_threshold_tune(
 
         try:
             history: list[dict[str, Any]] = []
-            best_value = (low + high) / 2
+
+            # Phase 1: coarse sweep — ~6 evenly spaced values
+            coarse_count = min(6, max_steps - 2)  # Reserve at least 2 for refine
+            coarse_count = max(coarse_count, 3)  # Need at least 3 coarse points
+            coarse_values = [
+                round(low + i * (high - low) / (coarse_count - 1), 4) for i in range(coarse_count)
+            ]
+
+            # Phase 2 budget
+            refine_count = max(max_steps - coarse_count, 3)
+            total_steps = coarse_count + refine_count
+
+            best_value = coarse_values[0]
             best_score = -1.0
+            step = 0
 
-            for step in range(max_steps):
-                mid = round((low + high) / 2, 4)
+            # --- Phase 1: coarse sweep ---
+            coarse_scores: list[tuple[float, float]] = []
+            for value in coarse_values:
+                step += 1
                 if job:
-                    job.progress = int(100 * step / max_steps)
-                    job.progress_message = f"step {step + 1}/{max_steps}: {param_name}={mid}"
+                    job.progress = int(100 * step / total_steps)
+                    job.progress_message = f"coarse {step}/{coarse_count}: {param_name}={value}"
 
-                # Set parameter
-                await device.protocol.send_command(f"set {param_name} {mid}")
-                await asyncio.sleep(0.2)
-
-                # Score across all tracks
-                track_scores: list[float] = []
-                for track in tracks:
-                    track_name = track["name"]
-                    gt = load_ground_truth(
-                        track["ground_truth"],
-                        track.get("onset_ground_truth"),
-                    )
-                    track_manifest_entry = manifest.get(track_name, {})
-                    track_seek = track_manifest_entry.get("seekOffset", 0)
-
-                    playback, recordings = await _record_and_play(
-                        [device],
-                        track["audio_file"],
-                        duration_ms=duration_ms,
-                        seek_sec=track_seek,
-                    )
-                    if not playback.success:
-                        continue
-
-                    test_data = recordings.get(device.id)
-                    if not test_data:
-                        continue
-                    test_data = _apply_settle_filter(test_data, settle_ms)
-                    score = score_device_run(test_data, playback.audio_start_time_ms, gt)
-                    summary = format_score_summary(score)
-
-                    # Extract target metric
-                    metric_val = _extract_metric(summary, target_metric)
-                    if metric_val is not None:
-                        track_scores.append(metric_val)
-
-                avg_score = sum(track_scores) / len(track_scores) if track_scores else 0.0
+                avg = await _eval_param_value(
+                    device,
+                    value,
+                    param_name,
+                    tracks,
+                    manifest,
+                    duration_ms,
+                    settle_ms,
+                    target_metric,
+                )
+                coarse_scores.append((value, avg))
                 history.append(
                     {
-                        "step": step + 1,
-                        "value": mid,
+                        "step": step,
+                        "phase": "coarse",
+                        "value": value,
                         "metric": target_metric,
-                        "score": round(avg_score, 4),
-                        "tracks_scored": len(track_scores),
+                        "score": round(avg, 4),
                     }
                 )
 
                 log.info(
-                    "Tune step %d/%d: %s=%.4f → %s=%.4f",
-                    step + 1,
-                    max_steps,
+                    "Tune coarse %d/%d: %s=%.4f -> %s=%.4f",
+                    step,
+                    coarse_count,
                     param_name,
-                    mid,
+                    value,
                     target_metric,
-                    avg_score,
+                    avg,
                 )
 
-                if avg_score > best_score:
-                    best_score = avg_score
-                    best_value = mid
+                if avg > best_score:
+                    best_score = avg
+                    best_value = value
 
-                # Binary search: test neighbors to determine direction
-                if step < max_steps - 1:
-                    # If we haven't narrowed enough, probe both directions
-                    # Use the score trend to decide direction
-                    if len(history) >= 2:
-                        prev = history[-2]
-                        if avg_score >= prev["score"]:
-                            # Current direction is good, keep going
-                            # Score improved going from prev value to mid
-                            if mid > prev["value"]:
-                                low = prev["value"]  # search higher half
-                            else:
-                                high = prev["value"]  # search lower half
-                        else:
-                            # Score got worse, reverse direction
-                            if mid > prev["value"]:
-                                high = mid  # went too high
-                            else:
-                                low = mid  # went too low
+                await asyncio.sleep(INTER_RUN_GAP_S)
 
-                    # Convergence check
-                    if high - low < 0.01:
-                        break
+            # --- Phase 2: refine around best coarse value ---
+            best_idx = max(range(len(coarse_scores)), key=lambda i: coarse_scores[i][1])
+            refine_low = coarse_values[max(best_idx - 1, 0)]
+            refine_high = coarse_values[min(best_idx + 1, len(coarse_values) - 1)]
+
+            # Generate refine values, excluding already-tested coarse values
+            coarse_set = set(coarse_values)
+            refine_values = [
+                round(refine_low + i * (refine_high - refine_low) / (refine_count + 1), 4)
+                for i in range(1, refine_count + 1)
+            ]
+            refine_values = [v for v in refine_values if v not in coarse_set]
+            refine_values = refine_values[:refine_count]
+
+            for value in refine_values:
+                step += 1
+                if job:
+                    job.progress = int(100 * step / total_steps)
+                    job.progress_message = f"refine {step}/{total_steps}: {param_name}={value}"
+
+                avg = await _eval_param_value(
+                    device,
+                    value,
+                    param_name,
+                    tracks,
+                    manifest,
+                    duration_ms,
+                    settle_ms,
+                    target_metric,
+                )
+                history.append(
+                    {
+                        "step": step,
+                        "phase": "refine",
+                        "value": value,
+                        "metric": target_metric,
+                        "score": round(avg, 4),
+                    }
+                )
+
+                log.info(
+                    "Tune refine %d/%d: %s=%.4f -> %s=%.4f",
+                    step,
+                    total_steps,
+                    param_name,
+                    value,
+                    target_metric,
+                    avg,
+                )
+
+                if avg > best_score:
+                    best_score = avg
+                    best_value = value
 
                 await asyncio.sleep(INTER_RUN_GAP_S)
 
@@ -592,22 +618,82 @@ async def run_threshold_tune(
         release_audio_lock()
 
 
-def _extract_metric(summary: dict[str, Any], metric: str) -> float | None:
-    """Extract a named metric from a score summary dict."""
-    val: object = None
-    if metric == "onsetF1":
-        val = summary.get("onsetTracking", {}).get("f1")
-    elif metric == "onsetPrecision":
-        val = summary.get("onsetTracking", {}).get("precision")
-    elif metric == "onsetRecall":
-        val = summary.get("onsetTracking", {}).get("recall")
-    elif metric == "plpAtTransient":
-        val = summary.get("plp", {}).get("atTransient")
-    elif metric == "plpAutoCorr":
-        val = summary.get("plp", {}).get("autoCorr")
-    elif metric == "plpPeakiness":
-        val = summary.get("plp", {}).get("peakiness")
-    return float(val) if isinstance(val, (int, float)) else None
+async def _eval_param_value(
+    device: Device,
+    value: float,
+    param_name: str,
+    tracks: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    duration_ms: float,
+    settle_ms: float,
+    target_metric: str,
+) -> float:
+    """Set a parameter value, score it across all tracks, return mean metric.
+
+    Restores `stream fast` after the `set` command since DeviceProtocol
+    auto-resumes with `stream on` instead of `stream fast`.
+    """
+    await device.protocol.send_command(f"set {param_name} {value}")
+    # DeviceProtocol resumes with "stream on" after a set command,
+    # but tests need "stream fast" — restore it explicitly.
+    await device.protocol.send_command("stream fast")
+    await asyncio.sleep(0.2)
+
+    track_scores: list[float] = []
+    for track in tracks:
+        track_name = track["name"]
+        gt = load_ground_truth(
+            track["ground_truth"],
+            track.get("onset_ground_truth"),
+        )
+        track_manifest_entry = manifest.get(track_name, {})
+        track_seek = track_manifest_entry.get("seekOffset", 0)
+
+        playback, recordings = await _record_and_play(
+            [device],
+            track["audio_file"],
+            duration_ms=duration_ms,
+            seek_sec=track_seek,
+        )
+        if not playback.success:
+            continue
+
+        test_data = recordings.get(device.id)
+        if not test_data:
+            continue
+        test_data = _apply_settle_filter(test_data, settle_ms)
+        score = score_device_run(test_data, playback.audio_start_time_ms, gt)
+        summary = format_score_summary(score)
+
+        metric_val = _extract_metric(summary, target_metric)
+        track_scores.append(metric_val)
+
+    return sum(track_scores) / len(track_scores) if track_scores else 0.0
+
+
+_METRIC_PATHS: dict[str, tuple[str, str]] = {
+    "onsetF1": ("onsetTracking", "f1"),
+    "onsetPrecision": ("onsetTracking", "precision"),
+    "onsetRecall": ("onsetTracking", "recall"),
+    "plpAtTransient": ("plp", "atTransient"),
+    "plpAutoCorr": ("plp", "autoCorr"),
+    "plpPeakiness": ("plp", "peakiness"),
+}
+
+
+def _extract_metric(summary: dict[str, Any], metric: str) -> float:
+    """Extract a named metric from a score summary dict.
+
+    Raises ValueError if the metric name is unknown.
+    Returns 0.0 if the metric path exists but the value is missing/non-numeric.
+    """
+    if metric not in _METRIC_PATHS:
+        msg = f"Unknown metric '{metric}'. Valid metrics: {', '.join(sorted(_METRIC_PATHS))}"
+        raise ValueError(msg)
+
+    section, key = _METRIC_PATHS[metric]
+    val = summary.get(section, {}).get(key)
+    return float(val) if isinstance(val, (int, float)) else 0.0
 
 
 # ---------------------------------------------------------------------------

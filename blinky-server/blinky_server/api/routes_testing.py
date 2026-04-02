@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..testing.job_manager import Job, JobManager
@@ -72,6 +72,13 @@ class TuneThresholdRequest(BaseModel):
     max_steps: int = Field(8, ge=2, le=20)
     target_metric: str = "onsetF1"
     commands: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _check_low_lt_high(self) -> TuneThresholdRequest:
+        if self.low >= self.high:
+            msg = f"low ({self.low}) must be less than high ({self.high})"
+            raise ValueError(msg)
+        return self
 
 
 class NnCaptureRequest(BaseModel):
@@ -184,7 +191,11 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
     Enables firmware `stream nn` mode, captures frames for the specified
     duration, saves JSONL output. Used for offline mel feature parity
     validation and NN inference verification.
+
+    Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
+    from pathlib import Path
+
     from ..testing.nn_capture import capture_nn_stream
 
     fleet = get_fleet()
@@ -199,17 +210,31 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
 
     output = body.output_path or f"/tmp/nn-capture-{device_id[:12]}-{int(time.time())}.jsonl"
 
-    result = await capture_nn_stream(device, body.duration_ms, output)
-    return {
-        "status": "ok",
-        "frames": result.frames,
-        "duration_sec": result.duration_sec,
-        "frame_rate": result.frame_rate,
-        "output_path": result.output_path,
-        "nn_active": result.nn_active,
-        "onset_stats": result.onset_stats,
-        "level_stats": result.level_stats,
-    }
+    # Validate output path is under /tmp or home directory
+    resolved = Path(output).resolve()
+    allowed = [Path.home(), Path("/tmp")]
+    if not any(str(resolved).startswith(str(d)) for d in allowed):
+        raise HTTPException(
+            400, f"Output path must be under /tmp or home directory, got: {resolved}"
+        )
+
+    jm = _get_job_manager()
+
+    async def _run(job: Job) -> dict[str, Any]:
+        result = await capture_nn_stream(device, body.duration_ms, output)
+        return {
+            "status": "ok",
+            "frames": result.frames,
+            "duration_sec": result.duration_sec,
+            "frame_rate": result.frame_rate,
+            "output_path": result.output_path,
+            "nn_active": result.nn_active,
+            "onset_stats": result.onset_stats,
+            "level_stats": result.level_stats,
+        }
+
+    job = jm.submit("capture-nn", _run)
+    return {"job_id": job.id, "status": "submitted"}
 
 
 # ── Job Management ──

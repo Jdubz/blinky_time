@@ -37,37 +37,17 @@ class NnCaptureResult:
     level_stats: dict[str, float]  # min/max/mean of mic level
 
 
-@dataclass
-class _NnFrame:
-    data: dict[str, Any]
+def validate_output_path(output_path: str) -> Path:
+    """Validate output path is under /tmp or user's home directory.
 
-
-class NnCaptureSession:
-    """Captures NN diagnostic frames from a device."""
-
-    def __init__(self) -> None:
-        self._frames: list[dict[str, Any]] = []
-        self._capturing = False
-
-    @property
-    def capturing(self) -> bool:
-        return self._capturing
-
-    def start(self) -> None:
-        self._frames.clear()
-        self._capturing = True
-
-    def ingest(self, data: dict[str, Any]) -> None:
-        """Called for each streaming message from the device."""
-        if not self._capturing:
-            return
-        # NN frames have type "NN" in the raw data
-        if data.get("type") == "NN":
-            self._frames.append(data)
-
-    def stop(self) -> list[dict[str, Any]]:
-        self._capturing = False
-        return list(self._frames)
+    Raises ValueError if the path is outside allowed directories.
+    """
+    resolved = Path(output_path).resolve()
+    allowed = [Path.home(), Path("/tmp")]
+    if not any(str(resolved).startswith(str(d)) for d in allowed):
+        msg = f"Output path must be under /tmp or home directory, got: {resolved}"
+        raise ValueError(msg)
+    return resolved
 
 
 async def capture_nn_stream(
@@ -90,9 +70,8 @@ async def capture_nn_stream(
     """
     t0 = time.monotonic()
 
-    # Create capture session and wire it into the device's stream routing
-    session = NnCaptureSession()
-    session.start()
+    # Validate output path before starting capture
+    out = validate_output_path(output_path)
 
     # Subscribe to the device's stream to receive NN frames
     queue = device.subscribe_stream()
@@ -125,7 +104,6 @@ async def capture_nn_stream(
     elapsed = time.monotonic() - t0
 
     # Save to JSONL
-    out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
         for frame in frames:

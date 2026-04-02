@@ -44,6 +44,28 @@ async def play_audio(
         cmd.extend(["-t", f"{duration_ms / 1000:.1f}"])
     cmd.append(audio_file)
 
+    # Set audio output device. AUDIODEV selects ALSA device for ffplay.
+    # Default: auto-detect USB speakers, fall back to system default.
+    env = dict(__import__("os").environ)
+    if "AUDIODEV" not in env:
+        # Auto-detect USB audio (JBL Pebbles or similar)
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "aplay",
+                "-l",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await result.communicate()
+            for line in stdout.decode().split("\n"):
+                if "USB Audio" in line or "Pebbles" in line:
+                    card = line.split("card ")[1].split(":")[0]
+                    env["AUDIODEV"] = f"hw:{card},0"
+                    log.info("Auto-detected audio device: %s", env["AUDIODEV"])
+                    break
+        except Exception:
+            pass  # Fall back to system default
+
     log.info("Playing: %s", " ".join(cmd))
     t0 = time.time() * 1000
 
@@ -52,6 +74,7 @@ async def play_audio(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            env=env,
         )
         audio_start_time_ms = time.time() * 1000
         await proc.wait()
