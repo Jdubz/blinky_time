@@ -69,7 +69,12 @@ class TuneThresholdRequest(BaseModel):
     track_names: list[str] | None = None
     duration_ms: float = 35000
     settle_ms: float = 12000
-    max_steps: int = Field(8, ge=2, le=20)
+    max_steps: int = Field(
+        8,
+        ge=4,
+        le=20,
+        description="Step budget: ~60% coarse sweep, ~40% refinement. Actual evals may be slightly higher.",
+    )
     target_metric: str = "onsetF1"
     commands: list[str] | None = None
 
@@ -213,7 +218,7 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
     # Validate output path is under /tmp or home directory
     resolved = Path(output).resolve()
     allowed = [Path.home(), Path("/tmp")]
-    if not any(str(resolved).startswith(str(d)) for d in allowed):
+    if not any(resolved.is_relative_to(d) for d in allowed):
         raise HTTPException(
             400, f"Output path must be under /tmp or home directory, got: {resolved}"
         )
@@ -268,7 +273,7 @@ async def list_tracks(directory: str) -> list[dict[str, str]]:
 
     resolved = Path(directory).resolve()
     allowed = [Path.home(), Path("/tmp")]
-    if not any(str(resolved).startswith(str(d)) for d in allowed):
+    if not any(resolved.is_relative_to(d) for d in allowed):
         raise HTTPException(400, f"Directory not in allowed path: {resolved}")
     try:
         return discover_tracks(directory)

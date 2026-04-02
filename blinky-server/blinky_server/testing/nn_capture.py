@@ -37,19 +37,6 @@ class NnCaptureResult:
     level_stats: dict[str, float]  # min/max/mean of mic level
 
 
-def validate_output_path(output_path: str) -> Path:
-    """Validate output path is under /tmp or user's home directory.
-
-    Raises ValueError if the path is outside allowed directories.
-    """
-    resolved = Path(output_path).resolve()
-    allowed = [Path.home(), Path("/tmp")]
-    if not any(str(resolved).startswith(str(d)) for d in allowed):
-        msg = f"Output path must be under /tmp or home directory, got: {resolved}"
-        raise ValueError(msg)
-    return resolved
-
-
 async def capture_nn_stream(
     device: Device,
     duration_ms: float,
@@ -70,8 +57,8 @@ async def capture_nn_stream(
     """
     t0 = time.monotonic()
 
-    # Validate output path before starting capture
-    out = validate_output_path(output_path)
+    # Path validation is done by the route handler before calling this function
+    out = Path(output_path).resolve()
 
     # Subscribe to the device's stream to receive NN frames
     queue = device.subscribe_stream()
