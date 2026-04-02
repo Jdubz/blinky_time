@@ -1,7 +1,6 @@
-"""OTA firmware update routes.
+"""Firmware compilation and fleet-wide flash routes.
 
-Provides endpoints for compiling firmware and fleet-wide updates.
-Device-specific OTA is in routes_devices.py (POST /devices/{id}/ota).
+Device-specific flash is in routes_devices.py (POST /devices/{id}/flash).
 """
 
 from __future__ import annotations
@@ -14,17 +13,17 @@ from fastapi import APIRouter, HTTPException
 
 from ..device.device import DeviceState
 from .deps import get_fleet
-from .models import OtaRequest
+from .models import FlashRequest
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(tags=["ota"])
+router = APIRouter(tags=["firmware"])
 
 
-@router.post("/ota/compile")
+@router.post("/firmware/compile")
 async def compile_firmware(platform: str = "nrf52840") -> dict[str, Any]:
     """Compile firmware for a platform. Returns path to hex file."""
-    from ..ota.compile import compile_firmware as _compile
+    from ..firmware.compile import compile_firmware as _compile
 
     result = await asyncio.to_thread(_compile, platform)
     if result["status"] != "ok":
@@ -32,11 +31,11 @@ async def compile_firmware(platform: str = "nrf52840") -> dict[str, Any]:
     return result
 
 
-@router.post("/ota/compile-dfu")
+@router.post("/firmware/compile-dfu")
 async def compile_dfu_package(platform: str = "nrf52840") -> dict[str, Any]:
     """Compile firmware and generate DFU zip package."""
-    from ..ota.compile import compile_firmware as _compile
-    from ..ota.compile import generate_dfu_package
+    from ..firmware.compile import compile_firmware as _compile
+    from ..firmware.compile import generate_dfu_package
 
     compile_result = await asyncio.to_thread(_compile, platform)
     if compile_result["status"] != "ok":
@@ -54,9 +53,9 @@ async def compile_dfu_package(platform: str = "nrf52840") -> dict[str, Any]:
     }
 
 
-@router.post("/fleet/ota")
-async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
-    """Upload firmware to ALL connected nRF52840 devices sequentially.
+@router.post("/fleet/flash")
+async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
+    """Flash firmware to ALL connected nRF52840 devices sequentially.
 
     Flashes each device one at a time to avoid USB contention.
     Returns per-device results.
@@ -91,7 +90,7 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
     try:
         for device in devices:
             log.info(
-                "Fleet OTA: flashing %s (%s, state=%s)...",
+                "Fleet flash: flashing %s (%s, state=%s)...",
                 device.id[:12],
                 device.port,
                 device.state.value,
@@ -105,8 +104,8 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
                 # Device in DFU bootloader (SafeBoot crash recovery) —
                 # push firmware directly, no bootloader entry needed.
                 if device.state == DeviceState.DFU_RECOVERY:
-                    from ..ota.ble_dfu import upload_ble_dfu
-                    from ..ota.compile import ensure_dfu_zip
+                    from ..firmware.ble_dfu import upload_ble_dfu
+                    from ..firmware.compile import ensure_dfu_zip
 
                     app_ble_addr = device.ble_address
                     if not app_ble_addr:
@@ -130,7 +129,7 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
                     )
 
                 elif device.transport.transport_type == "serial":
-                    from ..ota import upload_with_ble_fallback
+                    from ..firmware import upload_with_ble_fallback
 
                     result = await upload_with_ble_fallback(
                         serial_port=device.port,
@@ -139,8 +138,8 @@ async def fleet_ota(body: OtaRequest) -> dict[str, Any]:
                         ble_address=device.ble_address,
                     )
                 elif device.transport.transport_type == "ble":
-                    from ..ota.ble_dfu import upload_ble_dfu
-                    from ..ota.compile import ensure_dfu_zip
+                    from ..firmware.ble_dfu import upload_ble_dfu
+                    from ..firmware.compile import ensure_dfu_zip
 
                     # Auto-convert .hex → .dfu.zip if needed
                     try:
@@ -199,8 +198,8 @@ async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
     nRF52840 device sequentially. Returns compilation info + per-device
     results. This is the primary fleet management endpoint.
     """
-    from ..ota.compile import compile_firmware as _compile
-    from ..ota.compile import generate_dfu_package
+    from ..firmware.compile import compile_firmware as _compile
+    from ..firmware.compile import generate_dfu_package
 
     # 1. Compile firmware
     log.info("Fleet deploy: compiling %s firmware...", platform)
@@ -216,19 +215,19 @@ async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
         raise HTTPException(500, f"DFU package failed: {dfu_result['message']}")
     zip_path = dfu_result["zip_path"]
 
-    # 3. Flash all connected devices (reuse fleet_ota logic)
-    from .models import OtaRequest
+    # 3. Flash all connected devices
+    from .models import FlashRequest
 
-    body = OtaRequest(firmware_path=zip_path)
+    body = FlashRequest(firmware_path=zip_path)
     try:
-        ota_result = await fleet_ota(body)
+        flash_result = await fleet_flash(body)
     except HTTPException as e:
         raise HTTPException(e.status_code, f"Fleet flash failed: {e.detail}") from e
 
     return {
-        "status": ota_result["status"],
-        "message": ota_result["message"],
+        "status": flash_result["status"],
+        "message": flash_result["message"],
         "hex_path": hex_path,
         "zip_path": zip_path,
-        "per_device": ota_result.get("per_device", {}),
+        "per_device": flash_result.get("per_device", {}),
     }

@@ -1,39 +1,51 @@
 # Testing Guide
 
-This project has a comprehensive testing and parameter tuning system for audio-reactive LED effects.
+All testing is managed through blinky-server (REST API) and the MCP tools.
 
 ## Testing Documentation
 
 | Document | Purpose |
 |----------|---------|
-| [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md) | **Primary guide** - All tunable parameters, test procedures, troubleshooting |
+| [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md) | **Primary guide** - Tunable parameters, test procedures, troubleshooting |
 | [blinky-test-player/PARAMETER_TUNING_HISTORY.md](blinky-test-player/PARAMETER_TUNING_HISTORY.md) | Historical calibration results |
-| [blinky-test-player/NEXT_TESTS.md](blinky-test-player/NEXT_TESTS.md) | Priority testing tasks |
 
 ## Quick Start
 
-### Run A/B Tests via CLI (blinkyhost)
+### Run Tests via blinky-server API
 
 ```bash
-# Multi-device A/B test (18 EDM tracks, 3 devices)
-cd blinky-test-player
-NODE_PATH=node_modules node ../ml-training/tools/ab_test_nnbeat.cjs
+# Run validation suite (all tracks, single device)
+curl -X POST http://blinkyhost.local:8420/api/test/validate \
+  -H 'Content-Type: application/json' \
+  -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/music/edm"}'
+
+# Parameter sweep (3 devices, 9 values)
+curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
+  -H 'Content-Type: application/json' \
+  -d '{"device_ids": ["D1","D2","D3"], "param_name": "onsetthresh", "values": [1,2,3,4,5,6,7,8,9], "track_dir": "/path/to/music/edm"}'
+
+# Poll for results
+curl http://blinkyhost.local:8420/api/test/jobs/{job_id}
 ```
 
 ### Run Tests via MCP
 
-**Always use `run_test`** - it automatically connects, runs the test, and disconnects:
-
 ```
-# MCP tool call (from Claude Code or other MCP client)
-run_test(pattern: "steady-120bpm", port: "/dev/ttyACM0")
+# Validation test (from Claude Code)
+run_test(port: "/dev/ttyACM0")
+
+# Full validation suite
+run_validation_suite(ports: ["/dev/ttyACM0", "/dev/ttyACM1"])
+
+# Poll results
+check_test_result(job_id: "abc123")
 ```
 
-### Run Unit Tests
+### Compile Check
 
 ```bash
-# Compile all device configs (verifies no build errors)
+# Verify firmware compiles without errors
 arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things
 ```
 
-See [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md) for the full test plan and parameter reference.
+See [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md) for the full parameter reference.

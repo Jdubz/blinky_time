@@ -14,12 +14,12 @@ dependencies = [
 
 [project.optional-dependencies]
 ble = ["bleak>=0.22"]
-ota = ["pyudev>=0.24"]  # Event-driven USB device detection for UF2 upload
+firmware = ["pyudev>=0.24"]  # Event-driven USB device detection for UF2 upload
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "httpx>=0.27",           # FastAPI TestClient async support
-    "mypy>=1.11",
+    "mypy>=1.11,<1.20",  # 1.20.0 compiled mypyc builds segfault (https://github.com/python/mypy/issues/19353)
     "ruff>=0.7",
 ]
 
@@ -82,4 +82,5 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
+    "ignore::pytest.PytestCollectionWarning",
 ]

@@ -18,7 +18,7 @@ def _get_connected_device(device_id: str) -> Device:
             409,
             f"Device {device_id[:12]} is not connected (state={device.state.value}). "
             + (
-                "Use POST /devices/{id}/ota to recover."
+                "Use POST /devices/{id}/flash to recover."
                 if device.state == DeviceState.DFU_RECOVERY
                 else ""
             ),

@@ -84,7 +84,6 @@ def load_ground_truth(gt_path: str, onset_path: str | None = None) -> GroundTrut
     return GroundTruth(
         pattern=data.get("pattern", Path(gt_path).stem),
         duration_ms=data.get("durationMs", 0),
-        bpm=data.get("bpm"),
         hits=hits,
         onsets=onsets,
     )
@@ -93,7 +92,7 @@ def load_ground_truth(gt_path: str, onset_path: str | None = None) -> GroundTrut
 def load_track_manifest(directory: str | Path) -> dict[str, Any]:
     """Load track_manifest.json for seek offsets.
 
-    Returns {track_name: {seekOffset, bpm, ...}} or empty dict if not found.
+    Returns {track_name: {seekOffset, ...}} or empty dict if not found.
     """
     manifest_path = Path(directory) / "track_manifest.json"
     if not manifest_path.exists():

@@ -58,7 +58,7 @@ async def upload_uf2(
     result = {"status": "error", "message": "", "elapsed_s": 0}
 
     def progress(phase: str, msg: str, pct: int | None = None) -> None:
-        log.info("[OTA %s] %s", phase, msg)
+        log.info("[FLASH %s] %s", phase, msg)
         if progress_callback is not None:
             progress_callback(phase, msg, pct)
 
@@ -103,7 +103,7 @@ async def upload_uf2(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(tool.parent),  # Run from tools/ dir so serial_lock.py is found
+            cwd=str(tool.parent),  # Run from tools/ dir for relative imports
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
         output = stdout.decode("utf-8", errors="replace")

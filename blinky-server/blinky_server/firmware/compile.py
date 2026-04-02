@@ -1,4 +1,4 @@
-"""Firmware compilation for OTA updates.
+"""Firmware compilation and DFU package generation.
 
 Compiles Arduino firmware and generates DFU packages.
 Uses arduino-cli (must be installed and configured).
@@ -266,5 +266,5 @@ def ensure_dfu_zip(firmware_path: str) -> str:
         return zip_path
     raise ValueError(
         f"BLE DFU requires .dfu.zip or .hex file, got: {p.name}. "
-        f"Use POST /ota/compile-dfu to generate one."
+        f"Use POST /firmware/compile-dfu to generate one."
     )

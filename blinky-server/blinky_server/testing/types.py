@@ -1,6 +1,7 @@
-"""Shared types for music test scoring.
+"""Shared types for test scoring.
 
 Ported from blinky-serial-mcp/src/lib/types.ts — canonical definitions.
+Only onset accuracy and PLP pattern metrics. No beat/BPM scoring.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ class GroundTruth:
     pattern: str
     duration_ms: float
     hits: list[GroundTruthHit]
-    bpm: float | None = None
     onsets: list[GroundTruthOnset] | None = None
 
 
@@ -43,19 +43,11 @@ class TransientEvent:
 class MusicState:
     timestamp_ms: float
     active: bool
-    bpm: float
     phase: float
     confidence: float
     oss: float | None = None
     plp_pulse: float | None = None
-
-
-@dataclass
-class BeatEvent:
-    timestamp_ms: float
-    bpm: float
-    type: str
-    predicted: bool | None = None
+    bpm_internal: float = 0.0  # Informational: used only for PLP autocorrelation lag, never scored
 
 
 @dataclass
@@ -66,7 +58,6 @@ class TestData:
     start_time: float  # ms (epoch)
     transients: list[TransientEvent] = field(default_factory=list)
     music_states: list[MusicState] = field(default_factory=list)
-    beat_events: list[BeatEvent] = field(default_factory=list)
 
 
 @dataclass
@@ -77,36 +68,16 @@ class OffsetStats:
 
 
 @dataclass
-class BeatTracking:
-    f1: float
-    precision: float
-    recall: float
-    cmlt: float
-    cmlc: float
-    amlt: float
-    ref_beats: int
-    est_beats: int
-
-
-@dataclass
-class TransientTracking:
+class OnsetTracking:
     f1: float
     precision: float
     recall: float
     count: int
-    f1_at_50ms: float
-    f1_at_70ms: float
-    f1_at_100ms: float
-    f1_at_150ms: float
+    f1_50ms: float
+    f1_70ms: float
+    f1_100ms: float
+    f1_150ms: float
     ref_onsets: int
-
-
-@dataclass
-class MusicMode:
-    avg_confidence: float
-    phase_stability: float
-    activation_ms: float | None
-    detected_bpm: float  # informational only — not scored
 
 
 @dataclass
@@ -121,16 +92,9 @@ class PlpMetrics:
 
 @dataclass
 class Diagnostics:
-    transient_rate: float
-    expected_beat_rate: float
-    beat_event_rate: float
-    phase_offset_stats: OffsetStats | None
-    beat_offset_stats: OffsetStats | None
-    beat_offset_histogram: dict[str, int]
-    beat_vs_reference: dict[str, int]  # matched, extra, missed
-    prediction_ratio: dict[str, int] | None  # predicted, fallback, total
-    transient_beat_offsets: list[int]
-    beat_event_offsets: list[int]
+    onset_rate: float
+    onset_offset_stats: OffsetStats | None
+    onset_offsets: list[int]
 
 
 @dataclass
@@ -138,11 +102,10 @@ class DeviceRunScore:
     audio_latency_ms: float | None
     audio_duration_sec: float
     timing_offset_ms: float
-    beat_tracking: BeatTracking
-    transient_tracking: TransientTracking
-    music_mode: MusicMode
+    onset_tracking: OnsetTracking
     plp: PlpMetrics
+    avg_confidence: float
+    activation_ms: float | None
     diagnostics: Diagnostics
     adjusted_detections: list[dict[str, Any]]
-    adjusted_beat_events: list[dict[str, Any]]
     adjusted_music_states: list[dict[str, Any]]

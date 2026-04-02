@@ -6,6 +6,7 @@ import time as _time
 from enum import StrEnum
 from typing import Any
 
+from ..testing.test_session import TestSession
 from ..transport.base import Transport
 from .protocol import DeviceProtocol
 
@@ -57,6 +58,9 @@ class Device:
 
         # Cached settings
         self.settings: list[dict[str, Any]] = []
+
+        # Test session (active recording, if any)
+        self._test_session: TestSession | None = None
 
         # Stream subscribers (WebSocket queues)
         self._stream_subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
@@ -182,8 +186,18 @@ class Device:
         if ble:
             self.ble_address = ble
 
+    def start_test_session(self) -> TestSession:
+        """Create and attach a new test recording session."""
+        session = TestSession()
+        self._test_session = session
+        return session
+
+    def stop_test_session(self) -> None:
+        """Detach the current test session (if any)."""
+        self._test_session = None
+
     def _route_stream_line(self, line: str) -> None:
-        """Parse a streaming JSON line and fan out to subscribers."""
+        """Parse a streaming JSON line and fan out to subscribers + test session."""
         self.last_seen = _time.monotonic()
         try:
             data = json.loads(line)
@@ -204,6 +218,10 @@ class Device:
             msg = {"type": "status", "device_id": self.id, "data": data}
         else:
             msg = {"type": "data", "device_id": self.id, "data": data}
+
+        # Forward to test session if recording
+        if self._test_session is not None and self._test_session.recording:
+            self._test_session.ingest(msg["type"], data)
 
         # Fan out to all subscribers, drop if queue full
         dead = []

@@ -46,13 +46,13 @@ make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 **Firmware upload is managed by blinky-server** (no standalone scripts):
 ```bash
 # Compile and flash a single device
-curl -X POST http://blinkyhost.local:8420/api/ota/compile
-curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota \
+curl -X POST http://blinkyhost.local:8420/api/firmware/compile
+curl -X POST http://blinkyhost.local:8420/api/devices/{id}/flash \
   -H 'Content-Type: application/json' \
   -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
 
 # Flash ALL connected nRF52840 devices
-curl -X POST http://blinkyhost.local:8420/api/fleet/ota \
+curl -X POST http://blinkyhost.local:8420/api/fleet/flash \
   -H 'Content-Type: application/json' \
   -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
 ```
@@ -89,7 +89,7 @@ There are bare (unenclosed) chips attached to blinkyhost. **Always test untested
 **nRF52840** devices are physically installed and reset buttons are NOT accessible.
 If a device stops responding to serial commands:
 1. Try power-cycling via USB hub: `uhubctl -a cycle -p <port>`
-2. Use blinky-server OTA: `curl -X POST http://blinkyhost.local:8420/api/devices/{id}/ota -d '{"firmware_path":"/tmp/blinky-build/blinky-things.ino.hex"}'`
+2. Use blinky-server: `curl -X POST http://blinkyhost.local:8420/api/devices/{id}/flash -d '{"firmware_path":"/tmp/blinky-build/blinky-things.ino.hex"}'`
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
 
@@ -208,8 +208,8 @@ The Blinky Time project consists of 5 major components:
 blinky_time/
 ├── blinky-things/          Arduino firmware (nRF52840 + ESP32-S3)
 ├── blinky-console/         React web UI (WebSerial interface)
-├── blinky-test-player/     Node.js testing CLI (parameter tuning)
-├── blinky-serial-mcp/      MCP server (AI integration)
+├── blinky-test-player/     Test audio files, ground truth, pattern definitions
+├── blinky-serial-mcp/      MCP server (thin HTTP client for blinky-server)
 └── blinky-simulator/       Desktop GIF renderer (compiles actual firmware)
 ```
 
@@ -332,35 +332,24 @@ React Components
 - 60+ test patterns (simple-beat, complex-rhythm, polyrhythmic, melodic, etc.)
 
 **blinky-serial-mcp (AI Integration)**
-- 20+ MCP tools for device interaction
-- Connection management (list_ports, connect, status)
+- Thin HTTP client wrapping blinky-server REST API
+- Device management (list_ports, status, send_command)
 - Settings control (get_settings, set_setting, save_settings)
-- Audio streaming (stream_start, get_audio, monitor_audio)
-- Testing (run_test, start_test, stop_test)
-- Pattern library (list_patterns)
+- Audio monitoring (monitor_audio, monitor_transients, get_audio)
+- Testing (run_test, run_validation_suite, check_test_result)
 
 ### MCP Testing Best Practices
 
-**ALWAYS use `run_test` for pattern testing** - it automatically:
-1. Connects to the device
-2. Plays the pattern and records detections
-3. Disconnects when complete
-
+**Use `run_test` for validation** — submits a test job to blinky-server:
 ```
-run_test(pattern: "steady-120bpm", port: "COM11")
+run_test(port: "/dev/ttyACM0")
+run_validation_suite(ports: ["/dev/ttyACM0", "/dev/ttyACM1"])
+check_test_result(job_id: "abc123")
 ```
 
 **Gain is fixed** - AGC was removed in v72. Hardware gain is set at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization handles dynamic range.
 
-**DO NOT manually connect/disconnect** - Using separate `connect`, `stream_start`, `start_test`, `stop_test`, `disconnect` calls:
-- Risks leaving the port locked if an error occurs
-- Prevents firmware flashing until manually disconnected
-- Is more error-prone and verbose
-
-**Exception**: Use manual connection only when:
-- Exploring settings interactively (`get_settings`, `set_setting`)
-- Monitoring audio continuously (`monitor_audio` with long duration)
-- Debugging device state (`status`, `send_command`)
+**Server manages all connections** — the MCP server is a thin HTTP client. No serial port management needed. Use `monitor_audio` and `monitor_transients` for interactive exploration.
 
 **Unit & Integration Tests**
 - `tests/unit/` - Device configs, LED mapping, parameter bounds
@@ -448,7 +437,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, v11-final deployed on 4/5 blinkyhost devices)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
-- ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
+- ✅ Testing infrastructure (blinky-server REST API: validation + param sweep, MCP tools)
 - ✅ Multi-layer safety mechanisms
 - ✅ 3 device configurations (Hat, Tube, Bucket) + Display (32x32 matrix)
 - ✅ Mic calibration pipeline + gain-aware training augmentation
@@ -468,15 +457,15 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ BLE NUS bidirectional on nRF52840 (Print& refactor, all commands work over BLE)
 - ✅ BLE NUS bidirectional on ESP32-S3 (NUS TX wired, verified `show nn` over BLE)
 - ✅ Wireless-only mode (`--no-serial`, 6 devices managed via BLE only)
-- ✅ Server OTA: `POST /api/devices/{id}/ota` + `POST /api/fleet/ota` (delegates to uf2_upload.py)
+- ✅ Server firmware upload: `POST /api/devices/{id}/flash` + `POST /api/fleet/flash` (delegates to uf2_upload.py)
 - ✅ BLE DFU protocol reverse-engineered (Legacy DFU SDK v11, START_DFU notification verified)
 - ✅ Platform detection via `json info` (`"platform":"nrf52840"` / `"esp32s3"`)
 - ✅ Cross-transport identity: `json info` reports `"sn"` (FICR DEVICEID) and `"ble"` (BLE MAC address)
 - ✅ BLE disconnect detection: bleak `disconnected_callback` → auto-reconnect within 10s
 - ✅ BLE liveness checks: background ping every ~30s catches silent disconnects
-- ✅ BLE DFU as UF2 fallback: serial OTA auto-falls back to BLE DFU when UF2 fails
+- ✅ BLE DFU as UF2 fallback: serial flash auto-falls back to BLE DFU when UF2 fails
 - ✅ DFU recovery detection: scans for DFU service UUID, detects SafeBoot crash recovery, surfaces `dfu_recovery` state
-- ✅ DFU recovery OTA: `POST /devices/{id}/ota` pushes firmware directly to devices in DFU bootloader
+- ✅ DFU recovery flash: `POST /devices/{id}/flash` pushes firmware directly to devices in DFU bootloader
 - ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, hardware_sn dedup, REST API)
 - ✅ BLE DFU proven end-to-end (Legacy DFU SDK v11, 510KB in ~5.5min, tested Mar 30 on bare chip)
 - ✅ API enrichment: `GET /devices` includes `hardware_sn`, `ble_address`, `rssi`, `last_seen`
