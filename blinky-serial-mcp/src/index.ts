@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Blinky Serial MCP Server
+ * Blinky Serial MCP Server — Thin HTTP client wrapper.
  *
- * Provides tools for interacting with blinky devices via serial port.
+ * All device interaction goes through blinky-server (localhost:8420).
+ * This MCP server translates tool calls to REST API requests.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -11,1708 +12,520 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { DeviceManager } from './device-manager.js';
-import type { AudioSample, MusicModeState } from './types.js';
 import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
+import { existsSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
-import { writeFileSync, readFileSync, mkdirSync, existsSync, statSync } from 'fs';
+import { fileURLToPath } from 'url';
+
+import { del, get, monitorWs, post, put, resolveDeviceId } from './http-client.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Path to test player CLI
-const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'blinky-test-player', 'dist', 'index.js');
+// Default track directory for validation suites
+const DEFAULT_TRACK_DIR = join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
 
-// Path to test results directory
-const TEST_RESULTS_DIR = join(__dirname, '..', '..', 'test-results');
-
-// Path to standalone test runner
-const TEST_RUNNER_PATH = join(__dirname, 'test-runner.js');
-
-/**
- * Spawn the standalone test runner as a subprocess.
- * Disconnects MCP sessions on the requested ports first (to release serial locks),
- * then spawns the test runner which manages its own connections.
- * Returns the parsed JSON result from stdout.
- */
-// Fire-and-forget: spawn test runner as detached subprocess, return immediately.
-// Results are written to --output path; use check_test_result to poll.
-async function spawnTestRunnerAsync(
-  args: string[],
-  portsToRelease: string[],
-  outputPath: string,
-): Promise<{ output_path: string; pid: number | null; error?: string }> {
-  // Disconnect MCP sessions on ports the test runner will use
-  for (const port of portsToRelease) {
-    try { await manager.disconnect(port); } catch { /* already disconnected */ }
-  }
-
-  try {
-    const child = spawn('node', [TEST_RUNNER_PATH, ...args], {
-      stdio: ['ignore', 'ignore', 'inherit'],  // stdout ignored (writes to --output), stderr visible
-      detached: true,
-    });
-
-    const pid = child.pid ?? null;
-    child.unref();  // Don't wait for child — let it run independently
-
-    return { output_path: outputPath, pid };
-  } catch (err) {
-    return { output_path: outputPath, pid: null, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-// Ensure test results directory exists
-function ensureTestResultsDir(): void {
-  if (!existsSync(TEST_RESULTS_DIR)) {
-    mkdirSync(TEST_RESULTS_DIR, { recursive: true });
-  }
-}
-
-// Multi-device connection manager
-const manager = new DeviceManager();
-
-// Clean up all serial connections on process exit to prevent stale port locks
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, async () => {
-    await manager.disconnectAll().catch(() => {});
-    process.exit(0);
-  });
+// JSON response helper
+function ok(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
+  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
 
 // Create MCP server
 const server = new Server(
-  {
-    name: 'blinky-serial-mcp',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
+  { name: 'blinky-serial-mcp', version: '2.0.0' },
+  { capabilities: { tools: {} } },
 );
 
-// List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: 'list_ports',
-        description: 'List available serial ports',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      {
-        name: 'connect',
-        description: 'Connect to a blinky device on the specified serial port',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port path (e.g., COM3 on Windows, /dev/ttyUSB0 on Linux)',
-            },
-          },
-          required: ['port'],
-        },
-      },
-      {
-        name: 'disconnect',
-        description: 'Disconnect from a device',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port to disconnect (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'status',
-        description: 'Get connection status. Shows all connected devices if no port specified.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port to query (optional — omit to show all devices)',
-            },
-          },
-        },
-      },
-      {
-        name: 'send_command',
-        description: 'Send a raw command to the device and get the response',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            command: {
-              type: 'string',
-              description: 'Command to send (e.g., "show onsetthresh", "set onsetthresh 3.0")',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-          required: ['command'],
-        },
-      },
-      {
-        name: 'stream_start',
-        description: 'Start audio streaming from the device',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'stream_stop',
-        description: 'Stop audio streaming',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'get_audio',
-        description: 'Get the most recent audio sample data (requires streaming)',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'get_settings',
-        description: 'Get all device settings as JSON',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'set_setting',
-        description: 'Set a device setting value',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: 'Setting name (e.g., "basespawnchance", "thermalforce", "drag")',
-            },
-            value: {
-              type: 'number',
-              description: 'New value for the setting',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-          required: ['name', 'value'],
-        },
-      },
-      {
-        name: 'save_settings',
-        description: 'Save current settings to device flash memory',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'reset_defaults',
-        description: 'Reset all settings to factory defaults',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'start_test',
-        description: 'Start recording transient detections for a test',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'stop_test',
-        description: 'Stop recording and get all detected transients',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'run_test',
-        description: 'Run a complete test: play a pattern and record detections simultaneously. Automatically connects and disconnects from the device. If gain is specified, locks hardware gain for the test and unlocks afterward.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            pattern: {
-              type: 'string',
-              description: 'Pattern ID to play (e.g., "simple-beat", "simultaneous")',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port to connect to (e.g., "COM5"). Required.',
-            },
-            gain: {
-              type: 'number',
-              description: 'Optional hardware gain to lock during test (0-80). If specified, gain will be locked before test and unlocked (255) after completion.',
-            },
-          },
-          required: ['pattern', 'port'],
-        },
-      },
-      {
-        name: 'list_patterns',
-        description: 'List available test patterns',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      {
-        name: 'monitor_audio',
-        description: 'Monitor audio for a specified duration and return statistics including transient count, level min/max/avg, and music mode status',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            duration_ms: {
-              type: 'number',
-              description: 'Duration to monitor in milliseconds (default: 1000)',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'monitor_transients',
-        description: 'Monitor transient detections in isolation from rhythm tracking. Reports raw transient count, rate, strength distribution, and detector agreement stats. Uses debug stream mode for per-detection agreement data. Useful for evaluating ensemble detector performance on specific audio content.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            duration_ms: {
-              type: 'number',
-              description: 'Duration to monitor in milliseconds (default: 3000)',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'get_music_status',
-        description: 'Get current music mode status (BPM, confidence, phase, beat counts). Requires streaming to be active.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'monitor_music',
-        description: 'Monitor music mode for BPM tracking assessment over a duration. Returns BPM accuracy, stability, confidence trends, and beat detection metrics.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            duration_ms: {
-              type: 'number',
-              description: 'Duration to monitor in milliseconds (default: 5000)',
-            },
-            expected_bpm: {
-              type: 'number',
-              description: 'Expected BPM for accuracy calculation (optional)',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'get_beat_state',
-        description: 'Get beat tracker state (BPM, phase, confidence). Useful for validating tempo tracking behavior.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            port: {
-              type: 'string',
-              description: 'Serial port of target device (optional if only one device connected)',
-            },
-          },
-        },
-      },
-      {
-        name: 'render_preview',
-        description: 'Render a visual preview of an LED effect to animated GIFs. Runs the actual firmware generator code in simulation. Outputs both low-res (for AI analysis) and high-res (for human viewing) GIFs, plus params.json and metrics.json for agent-assisted optimization.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            generator: {
-              type: 'string',
-              description: 'Generator to use: fire, water, lightning (default: fire)',
-              enum: ['fire', 'water', 'lightning'],
-            },
-            effect: {
-              type: 'string',
-              description: 'Effect to apply: none, hue (default: none)',
-              enum: ['none', 'hue'],
-            },
-            pattern: {
-              type: 'string',
-              description: 'Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm, silence, burst, complex (default: steady-120bpm)',
-            },
-            device: {
-              type: 'string',
-              description: 'Device config: bucket (16x8), tube (4x15), hat (89 string) (default: bucket)',
-              enum: ['bucket', 'tube', 'hat'],
-            },
-            duration_ms: {
-              type: 'number',
-              description: 'Duration in milliseconds (default: 3000)',
-            },
-            fps: {
-              type: 'number',
-              description: 'Frames per second (default: 30)',
-            },
-            hue_shift: {
-              type: 'number',
-              description: 'Hue shift for hue effect (0.0-1.0, default: 0.0)',
-            },
-            params: {
-              type: 'string',
-              description: 'Parameter overrides for generator tuning (e.g., "baseSpawnChance=0.15,gravity=-12,burstSparks=10")',
-            },
-            output_dir: {
-              type: 'string',
-              description: 'Output directory (default: previews in blinky-simulator)',
-            },
-          },
-        },
-      },
-      {
-        name: 'run_music_test',
-        description: 'Launch a real-music beat tracking test (async — returns immediately with output_path). Use check_test_result to poll for results. Plays audio, records device detections, compares against ground truth.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            audio_file: {
-              type: 'string',
-              description: 'Path to audio file to play (WAV, MP3, etc.)',
-            },
-            ground_truth: {
-              type: 'string',
-              description: 'Path to ground truth beat annotations JSON file (from annotate-beats.py)',
-            },
-            port: {
-              type: 'string',
-              description: 'Serial port to connect to (e.g., "COM5")',
-            },
-            gain: {
-              type: 'number',
-              description: 'Optional hardware gain to lock during test (0-80)',
-            },
-            duration_ms: {
-              type: 'number',
-              description: 'Override playback duration in milliseconds (default: full file)',
-            },
-            commands: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Serial commands to send before test (e.g., "set detector_enable drummer 0")',
-            },
-            runs: {
-              type: 'number',
-              description: 'Number of test runs (default 1, max 10). When >1, plays audio multiple times and returns per-run results + aggregate statistics.',
-            },
-          },
-          required: ['audio_file', 'ground_truth', 'port'],
-        },
-      },
-      {
-        name: 'run_music_test_multi',
-        description: 'Launch a multi-device music test (async — returns immediately with output_path). Use check_test_result to poll for results. Plays audio once, scores each device independently.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            ports: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Serial ports to test simultaneously (e.g., ["/dev/ttyACM0", "/dev/ttyACM1"])',
-            },
-            audio_file: {
-              type: 'string',
-              description: 'Path to audio file to play (WAV, MP3, etc.)',
-            },
-            ground_truth: {
-              type: 'string',
-              description: 'Path to ground truth beat annotations JSON file',
-            },
-            duration_ms: {
-              type: 'number',
-              description: 'Override playback duration in milliseconds (default: full file)',
-            },
-            gain: {
-              type: 'number',
-              description: 'Optional hardware gain to lock during test (0-80)',
-            },
-            port_commands: {
-              type: 'object',
-              description: 'Per-port serial commands to send before test for A/B configuration. Keys are port paths, values are arrays of commands. E.g., {"/dev/ttyACM0": ["set unifiedodf 0"], "/dev/ttyACM1": ["set beatboundary 0"]}',
-              additionalProperties: {
-                type: 'array',
-                items: { type: 'string' },
-              },
-            },
-            runs: {
-              type: 'number',
-              description: 'Number of test runs (default 1, max 10). When >1, plays audio multiple times and returns per-run results + aggregate statistics.',
-            },
-          },
-          required: ['ports', 'audio_file', 'ground_truth'],
-        },
-      },
-      {
-        name: 'run_validation_suite',
-        description: 'Launch a full validation suite (async — returns immediately with output_path). Use check_test_result to poll for results. Auto-discovers tracks, runs multi-device multi-run tests on all tracks.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            ports: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Serial ports to test (e.g., ["/dev/ttyACM0"])',
-            },
-            runs: {
-              type: 'number',
-              description: 'Runs per track (default 3, max 10)',
-            },
-            tracks: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Track names to test. Default: all tracks found in music/edm/',
-            },
-            track_dir: {
-              type: 'string',
-              description: 'Directory containing tracks (default: blinky-test-player/music/edm/)',
-            },
-            port_commands: {
-              type: 'object',
-              description: 'Per-port serial commands for A/B configuration',
-              additionalProperties: {
-                type: 'array',
-                items: { type: 'string' },
-              },
-            },
-            gain: {
-              type: 'number',
-              description: 'Optional hardware gain to lock during tests (0-80)',
-            },
-            duration_ms: {
-              type: 'number',
-              description: 'Cap per-track playback duration in milliseconds',
-            },
-          },
-          required: ['ports'],
-        },
-      },
-      {
-        name: 'check_test_result',
-        description: 'Read a previously saved test result from disk. Use the output_path returned by run_music_test, run_music_test_multi, or run_validation_suite.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            output_path: {
-              type: 'string',
-              description: 'Path to the JSON results file (returned by test runner tools)',
-            },
-          },
-          required: ['output_path'],
-        },
-      },
-    ],
-  };
-});
+// ── Tool Definitions ──
 
-// Handle tool calls
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'list_ports',
+      description: 'List available devices managed by blinky-server',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'connect',
+      description: 'Connect to a blinky device (server manages connections automatically)',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port path or device ID' },
+        },
+        required: ['port'],
+      },
+    },
+    {
+      name: 'disconnect',
+      description: 'Disconnect from a device (server manages connections automatically)',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'status',
+      description: 'Get device status. Shows all devices if no port specified.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional — omit for all)' },
+        },
+      },
+    },
+    {
+      name: 'send_command',
+      description: 'Send a raw command to the device and get the response',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Command to send' },
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+        required: ['command'],
+      },
+    },
+    {
+      name: 'stream_start',
+      description: 'Start audio streaming from the device',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'stream_stop',
+      description: 'Stop audio streaming',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'get_audio',
+      description: 'Get the most recent audio sample data (requires streaming)',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'get_settings',
+      description: 'Get all device settings as JSON',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'set_setting',
+      description: 'Set a device setting value',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Setting name' },
+          value: { type: 'number', description: 'New value' },
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+        required: ['name', 'value'],
+      },
+    },
+    {
+      name: 'save_settings',
+      description: 'Save current settings to device flash memory',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'reset_defaults',
+      description: 'Reset all settings to factory defaults',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'monitor_audio',
+      description: 'Monitor audio for a specified duration. Returns transient count, level stats, and rhythm tracking status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          duration_ms: { type: 'number', description: 'Duration in milliseconds (default: 1000)' },
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'monitor_transients',
+      description: 'Monitor transient detections for a duration. Returns count, rate, and strength distribution.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          duration_ms: { type: 'number', description: 'Duration in milliseconds (default: 3000)' },
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'get_music_status',
+      description: 'Get current rhythm tracking status (confidence, phase). Requires streaming.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID (optional)' },
+        },
+      },
+    },
+    {
+      name: 'list_patterns',
+      description: 'List available test tracks',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: { type: 'string', description: 'Track directory (default: blinky-test-player/music/edm/)' },
+        },
+      },
+    },
+    {
+      name: 'run_test',
+      description: 'Run a validation test: play audio tracks and score onset + PLP metrics against ground truth. Returns job_id — poll with check_test_result.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          port: { type: 'string', description: 'Serial port or device ID' },
+          track_dir: { type: 'string', description: 'Directory with audio + .beats.json (default: music/edm/)' },
+          tracks: { type: 'array', items: { type: 'string' }, description: 'Specific track names (default: all)' },
+          duration_ms: { type: 'number', description: 'Playback duration per track (default: 35000)' },
+          runs: { type: 'number', description: 'Runs per track (default: 1)' },
+          commands: { type: 'array', items: { type: 'string' }, description: 'Setup commands to send before test' },
+        },
+        required: ['port'],
+      },
+    },
+    {
+      name: 'run_validation_suite',
+      description: 'Launch full validation suite across multiple devices. Returns job_id — poll with check_test_result.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ports: { type: 'array', items: { type: 'string' }, description: 'Serial ports or device IDs' },
+          track_dir: { type: 'string', description: 'Track directory (default: music/edm/)' },
+          tracks: { type: 'array', items: { type: 'string' }, description: 'Specific tracks (default: all)' },
+          runs: { type: 'number', description: 'Runs per track (default: 3)' },
+          duration_ms: { type: 'number', description: 'Duration per track in ms' },
+          commands: { type: 'array', items: { type: 'string' }, description: 'Setup commands' },
+          per_device_commands: { type: 'object', description: 'Per-device setup commands', additionalProperties: { type: 'array', items: { type: 'string' } } },
+        },
+        required: ['ports'],
+      },
+    },
+    {
+      name: 'check_test_result',
+      description: 'Poll for test job status and results. Use the job_id returned by run_test or run_validation_suite.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          job_id: { type: 'string', description: 'Job ID from a test submission' },
+        },
+        required: ['job_id'],
+      },
+    },
+    {
+      name: 'render_preview',
+      description: 'Render a visual preview of an LED effect to animated GIFs. Runs actual firmware generator code in simulation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          generator: { type: 'string', description: 'Generator: fire, water, lightning', enum: ['fire', 'water', 'lightning'] },
+          effect: { type: 'string', description: 'Effect: none, hue', enum: ['none', 'hue'] },
+          pattern: { type: 'string', description: 'Audio pattern (default: steady-120bpm)' },
+          device: { type: 'string', description: 'Device config: bucket, tube, hat', enum: ['bucket', 'tube', 'hat'] },
+          duration_ms: { type: 'number', description: 'Duration in ms (default: 3000)' },
+          fps: { type: 'number', description: 'Frames per second (default: 30)' },
+          hue_shift: { type: 'number', description: 'Hue shift for hue effect (0.0-1.0)' },
+          params: { type: 'string', description: 'Parameter overrides (e.g., "baseSpawnChance=0.15,gravity=-12")' },
+          output_dir: { type: 'string', description: 'Output directory' },
+        },
+      },
+    },
+  ],
+}));
+
+// ── Tool Handlers ──
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
     switch (name) {
+      // ── Device Management ──
+
       case 'list_ports': {
-        const ports = await manager.listPorts();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ ports }, null, 2),
-            },
-          ],
-        };
+        const devices = await get('/devices');
+        return ok(devices);
       }
 
       case 'connect': {
-        const port = (args as { port: string }).port;
-        const { deviceInfo } = await manager.connect(port);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ success: true, deviceInfo }, null, 2),
-            },
-          ],
-        };
+        const { port } = args as { port: string };
+        // Server manages connections automatically. Just verify device exists.
+        try {
+          const id = await resolveDeviceId(port);
+          const device = await get(`/devices/${id}`);
+          return ok({ status: 'connected', device });
+        } catch {
+          return ok({ status: 'not_found', message: `Device not found: ${port}. Server manages connections automatically — device may not be plugged in.` });
+        }
       }
 
       case 'disconnect': {
-        const disconnectPort = (args as { port?: string }).port;
-        if (disconnectPort) {
-          // Direct disconnect by port — avoids resolveSession which can't find
-          // orphaned sessions from failed connects
-          await manager.disconnect(disconnectPort);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({ success: true, message: `Disconnected from ${disconnectPort}` }, null, 2),
-              },
-            ],
-          };
+        const { port } = args as { port?: string };
+        if (port) {
+          try {
+            const id = await resolveDeviceId(port);
+            await post(`/devices/${id}/release`);
+            return ok({ status: 'released', device_id: id });
+          } catch {
+            return ok({ status: 'ok', message: 'Device not found or already disconnected' });
+          }
         }
-        // No port specified — resolve single connected device
-        const session = manager.resolveSession();
-        await manager.disconnect(session.port);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ success: true, message: `Disconnected from ${session.port}` }, null, 2),
-            },
-          ],
-        };
+        return ok({ status: 'ok', message: 'Server manages connections automatically' });
       }
 
       case 'status': {
-        const statusPort = (args as { port?: string }).port;
-        if (statusPort) {
-          const session = manager.resolveSession(statusPort);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(session.getState(), null, 2),
-              },
-            ],
-          };
+        const { port } = args as { port?: string };
+        if (port) {
+          const id = await resolveDeviceId(port);
+          return ok(await get(`/devices/${id}`));
         }
-        const devices = manager.listConnectedDevices();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ connectedDevices: devices.length, devices }, null, 2),
-            },
-          ],
-        };
+        return ok(await get('/devices'));
       }
+
+      // ── Commands ──
 
       case 'send_command': {
-        const { command, port: cmdPort } = args as { command: string; port?: string };
-        const session = manager.resolveSession(cmdPort);
-        const response = await session.serial.sendCommand(command);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: response,
-            },
-          ],
-        };
+        const { command, port } = args as { command: string; port?: string };
+        const id = await resolveDeviceId(port);
+        const result = await post(`/devices/${id}/command`, { command });
+        return ok(result);
       }
 
+      // ── Streaming ──
+
       case 'stream_start': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        await session.serial.startStream();
-        session.resetStreamState();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ success: true, message: `Streaming started on ${session.port}` }, null, 2),
-            },
-          ],
-        };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        await post(`/devices/${id}/stream/fast`);
+        return ok({ status: 'streaming', device_id: id });
       }
 
       case 'stream_stop': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        await session.serial.stopStream();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: `Streaming stopped on ${session.port}`,
-                samplesReceived: session.audioSampleCount,
-              }, null, 2),
-            },
-          ],
-        };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        await post(`/devices/${id}/stream/off`);
+        return ok({ status: 'stopped', device_id: id });
       }
 
       case 'get_audio': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        const state = session.getState();
-        if (!state.streaming) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({ error: 'Streaming not active. Call stream_start first.' }, null, 2),
-              },
-            ],
-          };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        // Collect one audio frame from WebSocket
+        let sample: unknown = null;
+        await monitorWs(id, 500, (msg) => {
+          if (msg.type === 'audio' && !sample) {
+            sample = msg.data;
+          }
+        });
+        if (!sample) {
+          return ok({ error: 'No audio data received. Is streaming active? Use stream_start first.' });
         }
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                sample: session.lastAudioSample,
-                music: session.lastMusicState,
-                led: session.lastLedSample,
-                sampleCount: session.audioSampleCount,
-              }, null, 2),
-            },
-          ],
-        };
+        return ok(sample);
       }
 
+      // ── Settings ──
+
       case 'get_settings': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        const settings = await session.serial.getSettings();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ settings }, null, 2),
-            },
-          ],
-        };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        return ok(await get(`/devices/${id}/settings`));
       }
 
       case 'set_setting': {
-        const { name: settingName, value, port: setPort } = args as { name: string; value: number; port?: string };
-        const session = manager.resolveSession(setPort);
-        const response = await session.serial.setSetting(settingName, value);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ success: true, response }, null, 2),
-            },
-          ],
-        };
+        const { name: settingName, value, port } = args as { name: string; value: number; port?: string };
+        const id = await resolveDeviceId(port);
+        return ok(await put(`/devices/${id}/settings/${settingName}`, { value }));
       }
 
       case 'save_settings': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        const response = await session.serial.saveSettings();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ success: true, response }, null, 2),
-            },
-          ],
-        };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        return ok(await post(`/devices/${id}/settings/save`));
       }
 
       case 'reset_defaults': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        const response = await session.serial.resetDefaults();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ success: true, response }, null, 2),
-            },
-          ],
-        };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        return ok(await post(`/devices/${id}/settings/defaults`));
       }
 
-      case 'start_test': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        session.startTestRecording();
-
-        // Ensure streaming is on
-        const state = session.getState();
-        if (!state.streaming) {
-          await session.serial.startStream();
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: `Test started on ${session.port}. Transients are being recorded.`,
-                startTime: session.testStartTime,
-              }, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'stop_test': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        if (session.testStartTime === null) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({ error: 'No test in progress' }, null, 2),
-              },
-            ],
-          };
-        }
-
-        const testData = session.stopTestRecording();
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                durationMs: testData.duration,
-                startTime: testData.startTime,
-                totalDetections: testData.transients.length,
-                detections: testData.transients,
-                audioSamples: testData.audioSamples,
-                musicStates: testData.musicStates,
-                beatEvents: testData.beatEvents,
-              }, null, 2),
-            },
-          ],
-        };
-      }
+      // ── Monitoring ──
 
       case 'monitor_audio': {
-        const { duration_ms: monAudioDuration, port: monAudioPort } = args as { duration_ms?: number; port?: string };
-        const durationMs = monAudioDuration || 1000;
-        const session = manager.resolveSession(monAudioPort);
-
-        const state = session.getState();
-        if (!state.streaming) {
-          await session.serial.startStream();
-        }
-
-        // Initialize statistics collectors
+        const { duration_ms = 1000, port } = args as { duration_ms?: number; port?: string };
+        const id = await resolveDeviceId(port);
+        // Ensure streaming is active
+        await post(`/devices/${id}/stream/fast`);
+        const samples: Array<Record<string, unknown>> = [];
         let transientCount = 0;
-        let levelSum = 0;
-        let levelMin = Infinity;
-        let levelMax = -Infinity;
-        let rawSum = 0;
-        let rawMin = Infinity;
-        let rawMax = -Infinity;
-        let musicSampleCount = 0;
-        let musicActiveCount = 0;
-        let bpmSum = 0;
-        let confSum = 0;
-        let beatCount = 0;
-        let samplesDuringMonitor = 0;
-
-        const startCount = session.audioSampleCount;
-
-        // Set up temporary listeners for statistics
-        const onAudio = (sample: AudioSample) => {
-          samplesDuringMonitor++;
-          if (sample.t > 0) transientCount++;
-          levelSum += sample.l;
-          levelMin = Math.min(levelMin, sample.l);
-          levelMax = Math.max(levelMax, sample.l);
-          rawSum += sample.raw;
-          rawMin = Math.min(rawMin, sample.raw);
-          rawMax = Math.max(rawMax, sample.raw);
-        };
-
-        const onMusic = (musicState: MusicModeState) => {
-          musicSampleCount++;
-          if (musicState.a === 1) {
-            musicActiveCount++;
-            bpmSum += musicState.bpm;
-            confSum += musicState.str;
-          }
-          if (musicState.q === 1) beatCount++;
-        };
-
-        session.serial.on('audio', onAudio);
-        session.serial.on('music', onMusic);
-
-        await new Promise(resolve => setTimeout(resolve, durationMs));
-
-        session.serial.off('audio', onAudio);
-        session.serial.off('music', onMusic);
-
-        const endCount = session.audioSampleCount;
-        const samplesReceived = endCount - startCount;
-        const sampleRate = samplesReceived / (durationMs / 1000);
-
-        // Build response with statistics
-        const response: Record<string, unknown> = {
-          durationMs,
-          samplesReceived,
-          sampleRate: sampleRate.toFixed(1) + ' Hz',
-          statistics: {
-            transientCount,
-            transientRate: (transientCount / (durationMs / 1000)).toFixed(2) + ' /sec',
-            level: {
-              min: levelMin === Infinity ? null : parseFloat(levelMin.toFixed(3)),
-              max: levelMax === -Infinity ? null : parseFloat(levelMax.toFixed(3)),
-              avg: samplesDuringMonitor > 0 ? parseFloat((levelSum / samplesDuringMonitor).toFixed(3)) : null,
-            },
-            raw: {
-              min: rawMin === Infinity ? null : parseFloat(rawMin.toFixed(3)),
-              max: rawMax === -Infinity ? null : parseFloat(rawMax.toFixed(3)),
-              avg: samplesDuringMonitor > 0 ? parseFloat((rawSum / samplesDuringMonitor).toFixed(3)) : null,
-            },
-          },
-          currentSample: session.lastAudioSample,
-        };
-
-        // Add music mode statistics if we received any music data
-        if (musicSampleCount > 0) {
-          response.musicMode = {
-            samplesReceived: musicSampleCount,
-            activePercent: parseFloat(((musicActiveCount / musicSampleCount) * 100).toFixed(1)),
-            avgBpm: musicActiveCount > 0 ? parseFloat((bpmSum / musicActiveCount).toFixed(1)) : null,
-            avgConfidence: musicActiveCount > 0 ? parseFloat((confSum / musicActiveCount).toFixed(2)) : null,
-            beatCount,
-            beatRate: (beatCount / (durationMs / 1000)).toFixed(2) + ' /sec',
-          };
-          response.currentMusic = session.lastMusicState;
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
+        await monitorWs(id, duration_ms, (msg) => {
+          if (msg.type === 'audio') samples.push(msg.data as Record<string, unknown>);
+          if (msg.type === 'transient') transientCount++;
+        });
+        // Compute stats
+        const levels = samples
+          .map((s) => (s as Record<string, Record<string, number>>)?.a?.l ?? 0)
+          .filter((l): l is number => typeof l === 'number');
+        const stats = levels.length > 0
+          ? { min: Math.min(...levels), max: Math.max(...levels), avg: +(levels.reduce((a, b) => a + b, 0) / levels.length).toFixed(3) }
+          : { min: 0, max: 0, avg: 0 };
+        return ok({ duration_ms, samples: samples.length, transientCount, level: stats });
       }
 
       case 'monitor_transients': {
-        const { duration_ms: monTransDuration, port: monTransPort } = args as { duration_ms?: number; port?: string };
-        const durationMs = monTransDuration || 3000;
-        const session = manager.resolveSession(monTransPort);
-
-        // Enable debug stream mode for agree/conf fields
-        await session.serial.sendCommand('stream debug');
-
-        const state = session.getState();
-        if (!state.streaming) {
-          await session.serial.startStream();
-        }
-
-        // Statistics collectors
-        let transientCount = 0;
-        let totalSamples = 0;
-        let strengthSum = 0;
-        let strengthMin = Infinity;
-        let strengthMax = 0;
-        const strengthBuckets = [0, 0, 0, 0, 0]; // [0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0]
-        const agreementCounts = [0, 0, 0, 0, 0, 0, 0, 0]; // [0-det, 1-det, ..., 7-det]
-        let confSum = 0;
-        let confSamples = 0;
-
-        const onAudio = (sample: AudioSample) => {
-          totalSamples++;
-          if (sample.t > 0) {
-            transientCount++;
-            strengthSum += sample.t;
-            strengthMin = Math.min(strengthMin, sample.t);
-            strengthMax = Math.max(strengthMax, sample.t);
-            const bucket = Math.min(4, Math.floor(sample.t * 5));
-            strengthBuckets[bucket]++;
+        const { duration_ms = 3000, port } = args as { duration_ms?: number; port?: string };
+        const id = await resolveDeviceId(port);
+        await post(`/devices/${id}/stream/fast`);
+        // Also enable transient debug channel
+        await post(`/devices/${id}/command`, { command: 'debug transient on' });
+        const transients: Array<{ strength: number; timestampMs: number }> = [];
+        await monitorWs(id, duration_ms, (msg) => {
+          if (msg.type === 'transient') {
+            const d = msg.data as Record<string, unknown>;
+            transients.push({
+              strength: (d.strength as number) ?? 0,
+              timestampMs: (d.timestampMs as number) ?? 0,
+            });
           }
-          // Debug fields from debug stream mode
-          if (sample.agree !== undefined) {
-            const agreeIdx = Math.min(7, Math.max(0, sample.agree));
-            if (sample.t > 0) agreementCounts[agreeIdx]++;
-          }
-          if (sample.conf !== undefined && sample.t > 0) {
-            confSum += sample.conf;
-            confSamples++;
-          }
-        };
-
-        try {
-          session.serial.on('audio', onAudio);
-          await new Promise(resolve => setTimeout(resolve, durationMs));
-          session.serial.off('audio', onAudio);
-        } finally {
-          // Always restore normal stream mode, even if monitoring was interrupted
-          await session.serial.sendCommand('stream normal').catch(() => {});
-        }
-
-        const durationSec = durationMs / 1000;
-        const response = {
-          durationMs,
-          totalSamples,
-          sampleRate: (totalSamples / durationSec).toFixed(1) + ' Hz',
-          transients: {
-            count: transientCount,
-            rate: (transientCount / durationSec).toFixed(2) + ' /sec',
-            avgStrength: transientCount > 0 ? parseFloat((strengthSum / transientCount).toFixed(3)) : null,
-            minStrength: transientCount > 0 ? parseFloat(strengthMin.toFixed(3)) : null,
-            maxStrength: transientCount > 0 ? parseFloat(strengthMax.toFixed(3)) : null,
-            strengthDistribution: {
-              '0.0-0.2': strengthBuckets[0],
-              '0.2-0.4': strengthBuckets[1],
-              '0.4-0.6': strengthBuckets[2],
-              '0.6-0.8': strengthBuckets[3],
-              '0.8-1.0': strengthBuckets[4],
-            },
-          },
-          agreement: {
-            distribution: {
-              '1-detector': agreementCounts[1],
-              '2-detectors': agreementCounts[2],
-              '3-detectors': agreementCounts[3],
-              '4+-detectors': agreementCounts[4] + agreementCounts[5] + agreementCounts[6] + agreementCounts[7],
-            },
-            avgConfidence: confSamples > 0 ? parseFloat((confSum / confSamples).toFixed(3)) : null,
-          },
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
+        });
+        await post(`/devices/${id}/command`, { command: 'debug transient off' });
+        const strengths = transients.map((t) => t.strength);
+        return ok({
+          duration_ms,
+          count: transients.length,
+          rate: +((transients.length / duration_ms) * 1000).toFixed(1),
+          strengths: strengths.length > 0
+            ? { min: +Math.min(...strengths).toFixed(3), max: +Math.max(...strengths).toFixed(3), avg: +(strengths.reduce((a, b) => a + b, 0) / strengths.length).toFixed(3) }
+            : null,
+        });
       }
 
       case 'get_music_status': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        const state = session.getState();
-        if (!state.streaming) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: 'Streaming not active. Call stream_start first.',
-                  hint: 'Use stream_start to begin receiving music mode data',
-                }, null, 2),
-              },
-            ],
-          };
+        const { port } = args as { port?: string };
+        const id = await resolveDeviceId(port);
+        // Get latest music state from one WebSocket frame
+        let musicState: unknown = null;
+        await monitorWs(id, 500, (msg) => {
+          if (msg.type === 'audio' && !musicState) {
+            const data = msg.data as Record<string, unknown>;
+            musicState = data.m ?? null;
+          }
+        });
+        if (!musicState) {
+          return ok({ error: 'No music data received. Is streaming active?' });
         }
-
-        if (!session.lastMusicState) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: 'No music mode data received yet',
-                  hint: 'Wait a moment for data to arrive, or check if device supports music mode',
-                }, null, 2),
-              },
-            ],
-          };
-        }
-
-        const ms = session.lastMusicState;
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                active: ms.a === 1,
-                bpm: ms.bpm,
-                phase: ms.ph,
-                plpPulse: ms.pp,
-                rhythmStrength: ms.str,
-                beat: ms.q === 1,
-                energy: ms.e,
-                pulse: ms.p,
-                onsetDensity: ms.od,
-              }, null, 2),
-            },
-          ],
-        };
+        return ok(musicState);
       }
 
-      case 'monitor_music': {
-        const { duration_ms: monMusicDuration, expected_bpm: expectedBpm, port: monMusicPort } = args as { duration_ms?: number; expected_bpm?: number; port?: string };
-        const durationMs = monMusicDuration || 5000;
-        const session = manager.resolveSession(monMusicPort);
-
-        const state = session.getState();
-        if (!state.streaming) {
-          await session.serial.startStream();
-        }
-
-        // Enable debug mode for detailed music tracking
-        await session.serial.sendCommand('stream debug');
-
-        // Collect music mode samples over time
-        interface TimestampedMusic extends MusicModeState {
-          timestampMs: number;
-        }
-        const samples: TimestampedMusic[] = [];
-        const beats: { type: string; timestampMs: number; bpm: number }[] = [];
-        const startTime = Date.now();
-
-        const onMusic = (musicState: MusicModeState) => {
-          const timestampMs = Date.now() - startTime;
-          samples.push({ ...musicState, timestampMs });
-          if (musicState.q === 1) beats.push({ type: 'quarter', timestampMs, bpm: musicState.bpm });
-        };
-
-        try {
-          session.serial.on('music', onMusic);
-          await new Promise(resolve => setTimeout(resolve, durationMs));
-          session.serial.off('music', onMusic);
-        } finally {
-          // Always restore normal stream mode, even if monitoring was interrupted
-          await session.serial.sendCommand('stream normal').catch(() => {});
-        }
-
-        // Calculate metrics
-        const activeStates = samples.filter(s => s.a === 1);
-        const firstActive = activeStates.length > 0 ? activeStates[0] : null;
-        const bpmValues = activeStates.map(s => s.bpm);
-
-        // BPM statistics
-        const avgBpm = bpmValues.length > 0
-          ? bpmValues.reduce((a, b) => a + b, 0) / bpmValues.length : 0;
-        const bpmVariance = bpmValues.length > 1
-          ? bpmValues.reduce((sum, b) => sum + Math.pow(b - avgBpm, 2), 0) / bpmValues.length : 0;
-        const bpmStdDev = Math.sqrt(bpmVariance);
-
-        // Confidence statistics (use str for rhythm strength, conf is debug-only)
-        const confValues = activeStates.map(s => s.str);
-        const avgConf = confValues.length > 0
-          ? confValues.reduce((a, b) => a + b, 0) / confValues.length : 0;
-        const finalConf = samples.length > 0 ? samples[samples.length - 1].str : 0;
-
-        // Stability assessment
-        let stability: string;
-        if (bpmStdDev < 0.5) stability = 'excellent';
-        else if (bpmStdDev < 2) stability = 'good';
-        else if (bpmStdDev < 5) stability = 'fair';
-        else stability = 'poor';
-
-        // BPM accuracy if expected provided
-        const bpmError = expectedBpm && avgBpm > 0
-          ? Math.abs(avgBpm - expectedBpm) / expectedBpm * 100 : null;
-
-        // Get debug fields from last sample
-        const lastSample = samples.length > 0 ? samples[samples.length - 1] : null;
-
-        const response: Record<string, unknown> = {
-          durationMs,
-          totalSamples: samples.length,
-          activation: {
-            activeSamples: activeStates.length,
-            activePercent: samples.length > 0 ? parseFloat(((activeStates.length / samples.length) * 100).toFixed(1)) : 0,
-            activationMs: firstActive?.timestampMs || null,
-          },
-          bpm: {
-            current: lastSample?.bpm || null,
-            average: avgBpm > 0 ? parseFloat(avgBpm.toFixed(1)) : null,
-            stdDev: parseFloat(bpmStdDev.toFixed(2)),
-            stability,
-            expected: expectedBpm || null,
-            errorPercent: bpmError !== null ? parseFloat(bpmError.toFixed(1)) : null,
-          },
-          confidence: {
-            current: finalConf,
-            average: parseFloat(avgConf.toFixed(2)),
-          },
-          beats: {
-            total: beats.length,
-            quarterNotes: beats.filter(b => b.type === 'quarter').length,
-            rate: parseFloat((beats.filter(b => b.type === 'quarter').length / (durationMs / 1000)).toFixed(2)),
-          },
-        };
-
-        // Add PLP debug info if available
-        if (lastSample && lastSample.pp !== undefined) {
-          response.debug = {
-            plpPulse: parseFloat(lastSample.pp.toFixed(3)),
-            periodicityStrength: lastSample.conf !== undefined ? parseFloat(lastSample.conf.toFixed(3)) : null,
-            slotCache: lastSample.sl !== undefined ? lastSample.sl : null,
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'get_beat_state': {
-        const session = manager.resolveSession((args as { port?: string }).port);
-        if (!session.getState().connected) {
-          throw new Error('Not connected to a device');
-        }
-
-        // Send "json beat" command and parse response
-        const response = await session.serial.sendCommand('json beat');
-
-        // Parse JSON response
-        let parsed;
-        try {
-          parsed = JSON.parse(response);
-        } catch (e) {
-          throw new Error(`Failed to parse beat state data: ${response}`);
-        }
-
-        const formatted = {
-          bpm: parsed.bpm,
-          phase: parsed.phase,
-          confidence: parsed.confidence,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(formatted, null, 2),
-            },
-          ],
-        };
-      }
+      // ── Track Discovery ──
 
       case 'list_patterns': {
-        // Available patterns (must match blinky-test-player)
-        const patterns = [
-          // Calibrated patterns (deterministic samples with known loudness)
-          { id: 'strong-beats', name: 'Strong Beats (Calibrated)', durationMs: 16000, description: 'Hard kicks/snares only - baseline test (120 BPM)', calibrated: true },
-          { id: 'medium-beats', name: 'Medium Beats (Calibrated)', durationMs: 16000, description: 'Medium kicks/snares - moderate challenge (120 BPM)', calibrated: true },
-          { id: 'soft-beats', name: 'Soft Beats (Calibrated)', durationMs: 16000, description: 'Soft kicks/snares - sensitivity test (120 BPM)', calibrated: true },
-          { id: 'hat-rejection', name: 'Hat Rejection (Calibrated)', durationMs: 16000, description: 'Hard beats + soft hats - rejection test (120 BPM)', calibrated: true },
-          { id: 'mixed-dynamics', name: 'Mixed Dynamics (Calibrated)', durationMs: 16000, description: 'Varying loudness - realistic simulation (120 BPM)', calibrated: true },
-          { id: 'tempo-sweep', name: 'Tempo Sweep (Calibrated)', durationMs: 16000, description: 'Tests 80, 100, 120, 140 BPM', calibrated: true },
-          // Melodic/harmonic patterns (bass, synth, lead, pad, chord)
-          { id: 'bass-line', name: 'Bass Line (Calibrated)', durationMs: 16000, description: 'Kicks + bass notes - tests low freq transients', calibrated: true },
-          { id: 'synth-stabs', name: 'Synth Stabs (Calibrated)', durationMs: 16000, description: 'Sharp synth stabs - should trigger detection', calibrated: true },
-          { id: 'lead-melody', name: 'Lead Melody (Calibrated)', durationMs: 19200, description: 'Lead notes + drums - tests melodic transients', calibrated: true },
-          { id: 'pad-rejection', name: 'Pad Rejection (Calibrated)', durationMs: 24000, description: 'Sustained pads - tests false positive rejection', calibrated: true },
-          { id: 'chord-rejection', name: 'Chord Rejection (Calibrated)', durationMs: 21333, description: 'Sustained chords - tests false positive rejection', calibrated: true },
-          { id: 'full-mix', name: 'Full Mix (Calibrated)', durationMs: 16000, description: 'Drums + bass + synth + lead - realistic music', calibrated: true },
-          // Legacy patterns (random samples)
-          { id: 'basic-drums', name: 'Basic Drum Pattern', durationMs: 16000, description: 'Kick on 1&3, snare on 2&4, hats on 8ths (120 BPM)' },
-          { id: 'kick-focus', name: 'Kick Focus', durationMs: 12000, description: 'Various kick patterns - tests low-band detection' },
-          { id: 'snare-focus', name: 'Snare Focus', durationMs: 10000, description: 'Snare patterns including rolls - tests high-band detection' },
-          { id: 'hat-patterns', name: 'Hi-Hat Patterns', durationMs: 12000, description: 'Various hi-hat patterns: 8ths, 16ths, offbeats' },
-          { id: 'full-kit', name: 'Full Drum Kit', durationMs: 16000, description: 'All drum elements: kick, snare, hat, tom, clap' },
-          { id: 'simultaneous', name: 'Simultaneous Hits', durationMs: 10000, description: 'Kick + snare/clap at same time - tests concurrent detection' },
-          { id: 'fast-tempo', name: 'Fast Tempo (150 BPM)', durationMs: 10000, description: 'High-speed drum pattern - tests detection at fast tempos' },
-          { id: 'sparse', name: 'Sparse Pattern', durationMs: 15000, description: 'Widely spaced hits - tests detection after silence' },
-        ];
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ patterns }, null, 2),
-            },
-          ],
-        };
+        const { directory } = args as { directory?: string };
+        const dir = directory || DEFAULT_TRACK_DIR;
+        return ok(await get(`/test/tracks?directory=${encodeURIComponent(dir)}`));
       }
+
+      // ── Testing ──
 
       case 'run_test': {
-        const { pattern: patternId, port, gain } = args as { pattern: string; port: string; gain?: number };
-
-        // Connect to device (will disconnect at end)
-        const { session } = await manager.connect(port);
-        try {
-          // Lock hardware gain if specified
-          if (gain !== undefined) {
-            await session.serial.sendCommand(`set hwgainlock ${gain}`);
-          }
-
-          // Use fast streaming (100Hz) for tests to catch transient pulses
-          // Transients are single-frame pulses that last ~16ms at 60Hz update rate
-          // Normal streaming at 20Hz (50ms) would miss most of them
-          await session.serial.sendCommand('stream fast');
-
-          // Start recording AFTER stream fast — avoid capturing events during command response
-          session.startTestRecording();
-
-        // Run the test player CLI and capture output
-        const result = await new Promise<{ success: boolean; groundTruth?: unknown; error?: string }>((resolve) => {
-          const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet', '--headless'], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-
-          let stdout = '';
-          let stderr = '';
-
-          child.stdout.on('data', (data) => {
-            stdout += data.toString();
-          });
-
-          child.stderr.on('data', (data) => {
-            stderr += data.toString();
-          });
-
-          child.on('close', (code) => {
-            if (code === 0) {
-              try {
-                const groundTruth = JSON.parse(stdout);
-                resolve({ success: true, groundTruth });
-              } catch {
-                resolve({ success: false, error: 'Failed to parse ground truth: ' + stdout });
-              }
-            } else {
-              resolve({ success: false, error: stderr || `Process exited with code ${code}` });
-            }
-          });
-
-          child.on('error', (err) => {
-            resolve({ success: false, error: err.message });
-          });
-        });
-
-        // Stop recording
-        const testData = session.stopTestRecording();
-        const rawDuration = testData.duration;
-        let detections = [...testData.transients];
-        let audioSamples = [...testData.audioSamples];
-        let musicStates = [...testData.musicStates];
-        let beatEvents = [...testData.beatEvents];
-
-        const recordStartTime = testData.startTime;
-
-        if (!result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({ error: result.error }, null, 2),
-              },
-            ],
-          };
-        }
-
-        // Calculate timing offset: ground truth startedAt vs our recording start
-        // The ground truth contains the actual audio playback start time
-        // Our recording started earlier (when CLI process launched)
-        const groundTruth = result.groundTruth as {
-          pattern: string;
-          durationMs: number;
-          bpm?: number;
-          startedAt: string;
-          hits: Array<{ timeMs: number; type: string; strength: number; expectTrigger?: boolean }>;
+        const { port, track_dir, tracks, duration_ms, runs, commands } = args as {
+          port: string;
+          track_dir?: string;
+          tracks?: string[];
+          duration_ms?: number;
+          runs?: number;
+          commands?: string[];
         };
-
-        let timingOffsetMs = 0;
-        if (groundTruth.startedAt && recordStartTime) {
-          const audioStartTime = new Date(groundTruth.startedAt).getTime();
-          timingOffsetMs = audioStartTime - recordStartTime;
-
-          // Adjust all timestamps to be relative to actual audio start
-          detections = detections.map(d => ({
-            ...d,
-            timestampMs: d.timestampMs - timingOffsetMs,
-          })).filter(d => d.timestampMs >= 0); // Remove detections before audio started
-
-          audioSamples = audioSamples.map(s => ({
-            ...s,
-            timestampMs: s.timestampMs - timingOffsetMs,
-          })).filter(s => s.timestampMs >= 0);
-
-          musicStates = musicStates.map(s => ({
-            ...s,
-            timestampMs: s.timestampMs - timingOffsetMs,
-          })).filter(s => s.timestampMs >= 0);
-
-          beatEvents = beatEvents.map(b => ({
-            ...b,
-            timestampMs: b.timestampMs - timingOffsetMs,
-          })).filter(b => b.timestampMs >= 0);
-        }
-
-        const duration = groundTruth.durationMs || rawDuration;
-
-        // Calculate F1/precision/recall metrics
-        // Match detections to expected hits within a BPM-aware timing tolerance
-        // Tighter tolerance at faster tempos prevents matching the wrong beat
-        // When BPM is unknown, use the maximum tolerance (200ms) as a safe default
-        const TIMING_TOLERANCE_MS = groundTruth.bpm
-          ? Math.min(200, Math.round(60000 / groundTruth.bpm * 0.25))
-          : 200;
-        const STRONG_BEAT_THRESHOLD = 0.8; // Only count strong beats (kicks, snares) not hi-hats
-        const allHits = groundTruth.hits || [];
-        // Filter to expected transients only:
-        // 1. If expectTrigger is defined, use it (explicit: pads/chords = false)
-        // 2. Otherwise, fall back to strength threshold (hi-hats are weak)
-        const expectedHits = allHits.filter((h: { strength: number; expectTrigger?: boolean }) => {
-          // Use expectTrigger if defined (new patterns with explicit transient marking)
-          if (typeof h.expectTrigger === 'boolean') {
-            return h.expectTrigger;
-          }
-          // Fall back to strength threshold for legacy patterns
-          return h.strength >= STRONG_BEAT_THRESHOLD;
+        const id = await resolveDeviceId(port);
+        const result = await post('/test/validate', {
+          device_ids: [id],
+          track_dir: track_dir || DEFAULT_TRACK_DIR,
+          track_names: tracks,
+          duration_ms: duration_ms ?? 35000,
+          num_runs: runs ?? 1,
+          commands,
         });
-
-        // Group expected hits into "onset events" - multiple instruments hitting
-        // at the same time should count as ONE expected detection, not multiple.
-        // This fixes the architectural issue where kick+hat+bass at t=0 was counted
-        // as 3 expected hits but only 1 detection is physically possible.
-        const ONSET_WINDOW_MS = 30; // Hits within 30ms are considered simultaneous
-        interface OnsetEvent {
-          timeMs: number;  // Representative time (average of hits in event)
-          hitIndices: number[];  // Indices into expectedHits
-        }
-
-        // Sort hits by time and group into onset events
-        const sortedHitData = expectedHits
-          .map((h: { timeMs: number }, i: number) => ({ timeMs: h.timeMs, idx: i }))
-          .sort((a: { timeMs: number }, b: { timeMs: number }) => a.timeMs - b.timeMs);
-
-        const onsetEvents: OnsetEvent[] = [];
-        let currentEvent: OnsetEvent | null = null;
-
-        for (const { timeMs, idx } of sortedHitData) {
-          if (!currentEvent || timeMs - currentEvent.timeMs > ONSET_WINDOW_MS) {
-            // Start new onset event
-            currentEvent = { timeMs, hitIndices: [idx] };
-            onsetEvents.push(currentEvent);
-          } else {
-            // Add to current onset event (simultaneous hit)
-            currentEvent.hitIndices.push(idx);
-          }
-        }
-
-        // Also create onset events for ALL hits (including expectTrigger: false like hi-hats)
-        // Used for FP calculation - detecting a hi-hat shouldn't count as false positive
-        // Use wider grouping window for FP calculation since detector can only fire once per cooldown
-        const FP_ONSET_WINDOW_MS = 100; // Detector cooldown is ~80-100ms, group hits accordingly
-        const allHitsSorted = allHits
-          .map((h: { timeMs: number }, i: number) => ({ timeMs: h.timeMs, idx: i }))
-          .sort((a: { timeMs: number }, b: { timeMs: number }) => a.timeMs - b.timeMs);
-
-        const allOnsetEvents: OnsetEvent[] = [];
-        let currentAllEvent: OnsetEvent | null = null;
-
-        for (const { timeMs, idx } of allHitsSorted) {
-          if (!currentAllEvent || timeMs - currentAllEvent.timeMs > FP_ONSET_WINDOW_MS) {
-            currentAllEvent = { timeMs, hitIndices: [idx] };
-            allOnsetEvents.push(currentAllEvent);
-          } else {
-            currentAllEvent.hitIndices.push(idx);
-          }
-        }
-
-        // First pass: estimate systematic audio latency by finding median offset
-        // This helps compensate for consistent delays (speaker output, air travel, mic processing)
-        const offsets: number[] = [];
-        detections.forEach((detection) => {
-          // Find closest onset event
-          let minDist = Infinity;
-          let closestOffset = 0;
-          onsetEvents.forEach((event) => {
-            const offset = detection.timestampMs - event.timeMs;
-            if (Math.abs(offset) < Math.abs(minDist)) {
-              minDist = offset;
-              closestOffset = offset;
-            }
-          });
-          if (Math.abs(minDist) < 1000) { // Only consider reasonable matches
-            offsets.push(closestOffset);
-          }
-        });
-
-        // Calculate median offset as systematic latency estimate
-        let audioLatencyMs = 0;
-        let latencyStdDev: number | null = null;
-        let latencyWarning: string | null = null;
-        if (offsets.length > 0) {
-          offsets.sort((a, b) => a - b);
-          audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
-
-          // Check latency estimate quality via standard deviation
-          // High variance suggests mixed true/false positive detections
-          if (offsets.length >= 3) {
-            const mean = offsets.reduce((s, v) => s + v, 0) / offsets.length;
-            const variance = offsets.reduce((s, v) => s + (v - mean) ** 2, 0) / offsets.length;
-            latencyStdDev = Math.round(Math.sqrt(variance));
-            if (latencyStdDev > 100) {
-              latencyWarning = `High offset variance (stddev=${latencyStdDev}ms) — latency estimate may be unreliable due to false positives`;
-            }
-          }
-        }
-
-        // Track which onset events were matched
-        const matchedOnsetEvents = new Set<number>();
-        const matchedDetections = new Set<number>();
-        // Store actual match pairs: detection index -> { eventIdx, timingError }
-        const matchPairs = new Map<number, { expectedIdx: number; timingError: number }>();
-
-        // Match each detection to nearest onset event (if within tolerance)
-        // Apply latency correction to detection timestamps
-        detections.forEach((detection, dIdx) => {
-          let bestMatchIdx = -1;
-          let bestMatchDist = Infinity;
-          const correctedTime = detection.timestampMs - audioLatencyMs;
-
-          onsetEvents.forEach((event, eIdx) => {
-            if (matchedOnsetEvents.has(eIdx)) return; // Already matched
-
-            const dist = Math.abs(correctedTime - event.timeMs);
-            if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
-              bestMatchDist = dist;
-              bestMatchIdx = eIdx;
-            }
-          });
-
-          if (bestMatchIdx >= 0) {
-            matchedOnsetEvents.add(bestMatchIdx);
-            matchedDetections.add(dIdx);
-            matchPairs.set(dIdx, { expectedIdx: bestMatchIdx, timingError: bestMatchDist });
-          }
-        });
-
-        // Count detections that match ANY hit (including expectTrigger: false like hi-hats)
-        // These are "acceptable detections" - not false positives
-        // Each detection can match any onset event (no exclusivity for FP calculation)
-        let acceptableDetectionCount = 0;
-        detections.forEach((detection) => {
-          const correctedTime = detection.timestampMs - audioLatencyMs;
-          let foundMatch = false;
-          for (const event of allOnsetEvents) {
-            const dist = Math.abs(correctedTime - event.timeMs);
-            if (dist <= TIMING_TOLERANCE_MS) {
-              foundMatch = true;
-              break;
-            }
-          }
-          if (foundMatch) {
-            acceptableDetectionCount++;
-          }
-        });
-
-        // Metrics are now based on onset events, not individual hits
-        // This correctly reflects that one detection satisfies one musical moment
-        const truePositives = matchedOnsetEvents.size;
-        // FP = detections that don't match ANY hit (expected or acceptable like hi-hats)
-        const falsePositives = Math.max(0, detections.length - acceptableDetectionCount);
-        const falseNegatives = onsetEvents.length - truePositives;
-
-        const precision = detections.length > 0 ? truePositives / detections.length : 0;
-        const recall = onsetEvents.length > 0 ? truePositives / onsetEvents.length : 0;
-        const f1Score = (precision + recall) > 0
-          ? 2 * (precision * recall) / (precision + recall)
-          : 0;
-
-        // Calculate average timing error from matched pairs
-        let totalTimingError = 0;
-        matchPairs.forEach(({ timingError }) => {
-          totalTimingError += timingError;
-        });
-        const avgTimingErrorMs = matchPairs.size > 0 ? totalTimingError / matchPairs.size : null;
-
-        const metrics = {
-          f1Score: Math.round(f1Score * 1000) / 1000,
-          precision: Math.round(precision * 1000) / 1000,
-          recall: Math.round(recall * 1000) / 1000,
-          truePositives,
-          falsePositives,
-          falseNegatives,
-          // Expected is now onset events (distinct musical moments), not raw instrument hits
-          expectedTotal: onsetEvents.length,
-          // Also report raw hits for context (how many instruments were grouped)
-          rawHitCount: expectedHits.length,
-          avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
-          audioLatencyMs: Math.round(audioLatencyMs),
-          latencyStdDev,
-          latencyWarning,
-          timingToleranceMs: TIMING_TOLERANCE_MS,
-          onsetWindowMs: ONSET_WINDOW_MS,
-        };
-
-        // Calculate music mode metrics
-        const activeStates = musicStates.filter(s => s.active);
-        const activationTime = activeStates.length > 0 ? activeStates[0].timestampMs : null;
-        const avgConfidence = activeStates.length > 0
-          ? activeStates.reduce((sum, s) => sum + s.confidence, 0) / activeStates.length
-          : 0;
-        const avgBpm = activeStates.length > 0
-          ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length
-          : 0;
-
-        // Get expected BPM from ground truth if available
-        const expectedBPM = (groundTruth as { bpm?: number }).bpm || 0;
-        const bpmError = expectedBPM > 0 && avgBpm > 0
-          ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100
-          : null;
-
-        const musicMetrics = {
-          activationMs: activationTime,
-          avgConfidence: Math.round(avgConfidence * 100) / 100,
-          avgBpm: Math.round(avgBpm * 10) / 10,
-          expectedBpm: expectedBPM,
-          bpmError: bpmError !== null ? Math.round(bpmError * 10) / 10 : null,
-          beatCount: beatEvents.length,
-        };
-
-        // Write detailed results to file (saves tokens)
-        ensureTestResultsDir();
-        const timestamp = Date.now();
-        const detailsFilename = `${patternId}-${timestamp}.json`;
-        const detailsPath = join(TEST_RESULTS_DIR, detailsFilename);
-
-        const fullResults = {
-          pattern: patternId,
-          timestamp: new Date(timestamp).toISOString(),
-          durationMs: duration,
-          timingOffsetMs,
-          metrics,
-          musicMetrics,
-          groundTruth: result.groundTruth,
-          detections,
-          audioSamples,
-          musicStates,
-          beatEvents,
-        };
-
-        writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
-
-        // Also write to latest.json for quick access
-        writeFileSync(join(TEST_RESULTS_DIR, 'latest.json'), JSON.stringify(fullResults, null, 2));
-
-        // Return compact summary only (saves tokens)
-        const summary = {
-          pattern: patternId,
-          durationMs: duration,
-          transient: {
-            f1: metrics.f1Score,
-            precision: metrics.precision,
-            recall: metrics.recall,
-            tp: truePositives,
-            fp: falsePositives,
-            fn: falseNegatives,
-          },
-          music: {
-            active: activationTime !== null,
-            activationMs: musicMetrics.activationMs,
-            bpm: musicMetrics.avgBpm,
-            bpmError: musicMetrics.bpmError,
-            confidence: musicMetrics.avgConfidence,
-            beats: musicMetrics.beatCount,
-          },
-          timing: {
-            avgErrorMs: metrics.avgTimingErrorMs,
-            latencyMs: metrics.audioLatencyMs,
-          },
-          counts: {
-            expected: onsetEvents.length,  // Distinct onset events (grouped simultaneous hits)
-            rawHits: expectedHits.length,  // Raw instrument hits before grouping
-            detected: detections.length,
-          },
-          detailsFile: detailsFilename,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(summary),
-            },
-          ],
-        };
-        } finally {
-          // Unlock hardware gain if it was locked
-          if (gain !== undefined && session.getState().connected) {
-            try {
-              await session.serial.sendCommand('set hwgainlock 255');
-            } catch (err) {
-              // Log error but don't throw - we still want to disconnect
-              console.error('Failed to unlock hardware gain:', err);
-            }
-          }
-
-          // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
-          await manager.disconnect(port);
-        }
+        return ok(result);
       }
+
+      case 'run_validation_suite': {
+        const { ports, track_dir, tracks, runs, duration_ms, commands, per_device_commands } = args as {
+          ports: string[];
+          track_dir?: string;
+          tracks?: string[];
+          runs?: number;
+          duration_ms?: number;
+          commands?: string[];
+          per_device_commands?: Record<string, string[]>;
+        };
+        const deviceIds = await Promise.all(ports.map((p) => resolveDeviceId(p)));
+        const body: Record<string, unknown> = {
+          device_ids: deviceIds,
+          track_dir: track_dir || DEFAULT_TRACK_DIR,
+          track_names: tracks,
+          num_runs: runs ?? 3,
+          commands,
+          per_device_commands,
+        };
+        if (duration_ms) body.duration_ms = duration_ms;
+        const result = await post('/test/validate', body);
+        return ok(result);
+      }
+
+      case 'check_test_result': {
+        // Accept both job_id (new server API) and output_path (legacy file-based)
+        const { job_id, output_path } = args as { job_id?: string; output_path?: string };
+        if (job_id) {
+          return ok(await get(`/test/jobs/${job_id}`));
+        }
+        // Legacy: read result from file (backward compat with old test runner)
+        if (output_path) {
+          try {
+            const data = readFileSync(output_path, 'utf-8');
+            return ok(JSON.parse(data));
+          } catch {
+            return ok({ status: 'pending', message: `Result file not ready: ${output_path}` });
+          }
+        }
+        return ok({ error: 'Provide job_id (preferred) or output_path' });
+      }
+
+      // ── Simulator Preview ──
 
       case 'render_preview': {
         const {
@@ -1737,386 +550,67 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           output_dir?: string;
         };
 
-        // Path to C++ simulator executable (runs actual firmware code)
-        const isWindows = process.platform === 'win32';
-        const SIMULATOR_EXE = isWindows ? 'blinky-simulator.exe' : 'blinky-simulator';
         const SIMULATOR_DIR = join(__dirname, '..', '..', 'blinky-simulator');
-        const SIMULATOR_PATH = join(SIMULATOR_DIR, 'build', SIMULATOR_EXE);
+        const SIMULATOR_PATH = join(SIMULATOR_DIR, 'build', 'blinky-simulator');
 
-        // Determine output directory (relative to simulator dir)
-        const outputBaseDir = output_dir || join(SIMULATOR_DIR, 'previews');
-
-        // Check if simulator is built
         if (!existsSync(SIMULATOR_PATH)) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: 'Simulator not built',
-                  hint: isWindows
-                    ? 'Build the simulator first: cd blinky-simulator && build_vs.cmd'
-                    : 'Build the simulator first: cd blinky-simulator && ./build.sh',
-                  simulatorPath: SIMULATOR_PATH,
-                  note: 'The simulator compiles actual firmware C++ code. Requires a C++ compiler (Visual Studio, g++, or clang++).',
-                }, null, 2),
-              },
-            ],
-          };
+          return ok({ error: 'Simulator not built. Run: cd blinky-simulator && ./build.sh' });
         }
 
-        // Build CLI arguments
-        const cliArgs = [
-          '-g', generator,
-          '-e', effect,
-          '-p', pattern,
-          '-d', device,
-          '-t', duration_ms.toString(),
-          '-f', fps.toString(),
-        ];
+        const cliArgs = ['-g', generator, '-e', effect, '-p', pattern, '-d', device, '-t', duration_ms.toString(), '-f', fps.toString()];
+        if (output_dir) cliArgs.push('-o', output_dir);
+        if (effect === 'hue' && hue_shift > 0) cliArgs.push('--hue', hue_shift.toString());
+        if (params) cliArgs.push('--params', params);
 
-        if (output_dir) {
-          cliArgs.push('-o', output_dir);
-        }
-
-        if (effect === 'hue' && hue_shift > 0) {
-          cliArgs.push('--hue', hue_shift.toString());
-        }
-
-        if (params) {
-          cliArgs.push('--params', params);
-        }
-
-        // Run C++ simulator (runs actual firmware code)
         const result = await new Promise<{ success: boolean; output?: string; error?: string }>((resolve) => {
           const child = spawn(SIMULATOR_PATH, cliArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
-            cwd: SIMULATOR_DIR,  // Run from simulator directory
+            cwd: SIMULATOR_DIR,
           });
-
           let stdout = '';
           let stderr = '';
-
-          child.stdout.on('data', (data) => {
-            stdout += data.toString();
+          child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+          child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+          child.on('close', (code: number | null) => {
+            resolve(code === 0 ? { success: true, output: stdout } : { success: false, error: stderr || stdout });
           });
-
-          child.stderr.on('data', (data) => {
-            stderr += data.toString();
-          });
-
-          child.on('close', (code) => {
-            if (code === 0) {
-              resolve({ success: true, output: stdout.trim() });
-            } else {
-              resolve({ success: false, error: stderr || stdout || `Process exited with code ${code}` });
-            }
-          });
-
-          child.on('error', (err) => {
-            resolve({ success: false, error: err.message });
-          });
+          child.on('error', (err: Error) => resolve({ success: false, error: err.message }));
         });
 
         if (!result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: 'Simulation failed',
-                  details: result.error,
-                }, null, 2),
-              },
-            ],
-          };
+          return ok({ error: 'Simulator failed', details: result.error });
         }
 
-        // Parse simulator output to extract file paths and metrics
-        // Output format includes "Created:" followed by file paths, then "Metrics summary:"
-        const output = result.output || '';
-        const lines = output.split('\n');
-
-        // Extract run directory and file paths from output
-        // Simulator outputs: "Created: <runDir>/" followed by file listings
-        let runDir = '';
-        let lowResPath = '';
-        let highResPath = '';
-        let paramsJsonPath = '';
-        let metricsJsonPath = '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          const createdMatch = trimmed.match(/^Created:\s*(.+?)\/?\s*$/);
-          if (createdMatch) {
-            runDir = createdMatch[1];
-          } else if (trimmed === 'low-res.gif' || trimmed.includes('low-res.gif')) {
-            lowResPath = runDir ? join(SIMULATOR_DIR, runDir, 'low-res.gif') : '';
-          } else if (trimmed === 'high-res.gif' || trimmed.includes('high-res.gif')) {
-            highResPath = runDir ? join(SIMULATOR_DIR, runDir, 'high-res.gif') : '';
-          } else if (trimmed === 'params.json' || trimmed.includes('params.json')) {
-            paramsJsonPath = runDir ? join(SIMULATOR_DIR, runDir, 'params.json') : '';
-          } else if (trimmed === 'metrics.json' || trimmed.includes('metrics.json')) {
-            metricsJsonPath = runDir ? join(SIMULATOR_DIR, runDir, 'metrics.json') : '';
+        // Read output files
+        const outputBase = output_dir || join(SIMULATOR_DIR, 'previews');
+        const response: Record<string, unknown> = { status: 'ok', generator, effect, pattern, device };
+        for (const file of ['metrics.json', 'params.json']) {
+          const p = join(outputBase, file);
+          if (existsSync(p)) {
+            try { response[file.replace('.json', '')] = JSON.parse(readFileSync(p, 'utf-8')); } catch { /* skip */ }
           }
         }
-
-        // Extract metrics from output
-        const metricsMatch = output.match(/Metrics summary:\s*\n([\s\S]*?)$/);
-        let metrics = {};
-        if (metricsMatch) {
-          const metricsLines = metricsMatch[1].split('\n');
-          for (const line of metricsLines) {
-            const match = line.match(/^\s*(\w+):\s*(.+)$/);
-            if (match) {
-              const key = match[1].toLowerCase();
-              const valueStr = match[2];
-              // Parse key=value pairs from line
-              const values: Record<string, number | string> = {};
-              const pairs = valueStr.split(',');
-              for (const pair of pairs) {
-                const [k, v] = pair.trim().split('=');
-                if (k && v) {
-                  values[k.trim()] = parseFloat(v) || v;
-                }
-              }
-              if (Object.keys(values).length > 0) {
-                metrics = { ...metrics, [key]: values };
-              } else {
-                // Single value (like "Lit pixels: 59%")
-                metrics = { ...metrics, [key]: valueStr.trim() };
-              }
-            }
-          }
-        }
-
-        // Get file sizes (handle race condition if file deleted between check and stat)
-        let lowResSize = 0;
-        let highResSize = 0;
-        try {
-          if (lowResPath && existsSync(lowResPath)) {
-            lowResSize = statSync(lowResPath).size;
-          }
-        } catch (e: unknown) {
-          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-        }
-        try {
-          if (highResPath && existsSync(highResPath)) {
-            highResSize = statSync(highResPath).size;
-          }
-        } catch (e: unknown) {
-          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                outputs: {
-                  lowResGif: lowResPath,
-                  highResGif: highResPath,
-                  paramsJson: paramsJsonPath,
-                  metricsJson: metricsJsonPath,
-                },
-                sizes: {
-                  lowResBytes: lowResSize,
-                  highResBytes: highResSize,
-                },
-                metrics,
-                config: {
-                  generator,
-                  effect,
-                  pattern,
-                  device,
-                  durationMs: duration_ms,
-                  fps,
-                  hueShift: hue_shift,
-                  params: params || null,
-                },
-                rawOutput: output,
-              }, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'run_music_test': {
-        const {
-          audio_file: audioFile,
-          ground_truth: groundTruthFile,
-          port,
-          gain,
-          duration_ms: overrideDurationMs,
-          commands: preTestCommands,
-          runs: requestedRuns,
-        } = args as {
-          audio_file: string;
-          ground_truth: string;
-          port: string;
-          gain?: number;
-          duration_ms?: number;
-          commands?: string[];
-          runs?: number;
-        };
-
-        if (!existsSync(audioFile)) throw new Error(`Audio file not found: ${audioFile}`);
-        if (!existsSync(groundTruthFile)) throw new Error(`Ground truth file not found: ${groundTruthFile}`);
-
-        const outputPath = `/tmp/test-results/run-${Date.now()}.json`;
-        mkdirSync('/tmp/test-results', { recursive: true });
-
-        const cliArgs = ['run-track', '--audio', audioFile, '--ground-truth', groundTruthFile, '--ports', port, '--output', outputPath];
-        if (overrideDurationMs) cliArgs.push('--duration', String(overrideDurationMs));
-        if (gain !== undefined) cliArgs.push('--gain', String(gain));
-        if (requestedRuns) cliArgs.push('--runs', String(requestedRuns));
-        if (preTestCommands) {
-          cliArgs.push('--commands', preTestCommands.join(','));
-        }
-
-        const result = await spawnTestRunnerAsync(cliArgs, [port], outputPath);
-        return { content: [{ type: 'text', text: JSON.stringify({ status: 'launched', ...result }, null, 2) }] };
-      }
-
-      case 'run_music_test_multi': {
-        const {
-          ports: multiPorts,
-          audio_file: multiAudioFile,
-          ground_truth: multiGtFile,
-          gain: multiGain,
-          duration_ms: multiDurationMs,
-          port_commands: multiPortCommands,
-          runs: multiRequestedRuns,
-        } = args as {
-          ports: string[];
-          audio_file: string;
-          ground_truth: string;
-          gain?: number;
-          duration_ms?: number;
-          port_commands?: Record<string, string[]>;
-          runs?: number;
-        };
-
-        if (!existsSync(multiAudioFile)) throw new Error(`Audio file not found: ${multiAudioFile}`);
-        if (!existsSync(multiGtFile)) throw new Error(`Ground truth file not found: ${multiGtFile}`);
-        if (!multiPorts || multiPorts.length === 0) throw new Error('At least one port required');
-
-        const multiOutputPath = `/tmp/test-results/run-${Date.now()}.json`;
-        mkdirSync('/tmp/test-results', { recursive: true });
-
-        const cliArgs = ['run-track', '--audio', multiAudioFile, '--ground-truth', multiGtFile, '--ports', multiPorts.join(','), '--output', multiOutputPath];
-        if (multiDurationMs) cliArgs.push('--duration', String(multiDurationMs));
-        if (multiGain !== undefined) cliArgs.push('--gain', String(multiGain));
-        if (multiRequestedRuns) cliArgs.push('--runs', String(multiRequestedRuns));
-        if (multiPortCommands) cliArgs.push('--port-commands', JSON.stringify(multiPortCommands));
-
-        const result = await spawnTestRunnerAsync(cliArgs, multiPorts, multiOutputPath);
-        return { content: [{ type: 'text', text: JSON.stringify({ status: 'launched', ...result }, null, 2) }] };
-      }
-
-      case 'run_validation_suite': {
-        const {
-          ports: valPorts,
-          runs: valRunsParam,
-          tracks: valTrackNames,
-          track_dir: valTrackDir,
-          port_commands: valPortCommands,
-          gain: valGain,
-          duration_ms: valDurationMs,
-        } = args as {
-          ports: string[];
-          runs?: number;
-          tracks?: string[];
-          track_dir?: string;
-          port_commands?: Record<string, string[]>;
-          gain?: number;
-          duration_ms?: number;
-        };
-
-        if (!valPorts || valPorts.length === 0) throw new Error('At least one port required');
-
-        const valOutputPath = `/tmp/test-results/suite-${Date.now()}.json`;
-        mkdirSync('/tmp/test-results', { recursive: true });
-
-        const cliArgs = ['validate', '--ports', valPorts.join(','), '--output', valOutputPath];
-        if (valDurationMs) cliArgs.push('--duration', String(valDurationMs));
-        if (valRunsParam) cliArgs.push('--runs', String(valRunsParam));
-        if (valGain !== undefined) cliArgs.push('--gain', String(valGain));
-        if (valTrackNames) cliArgs.push('--tracks', valTrackNames.join(','));
-        if (valTrackDir) cliArgs.push('--track-dir', valTrackDir);
-        if (valPortCommands) cliArgs.push('--port-commands', JSON.stringify(valPortCommands));
-
-        const result = await spawnTestRunnerAsync(cliArgs, valPorts, valOutputPath);
-        return { content: [{ type: 'text', text: JSON.stringify({ status: 'launched', ...result }, null, 2) }] };
-      }
-
-      case 'check_test_result': {
-        const { output_path: checkPath } = args as { output_path: string };
-        if (!checkPath) throw new Error('output_path is required');
-        if (!existsSync(checkPath)) {
-          // Check if a test runner is still running (audio lock present)
-          const lockPath = '/tmp/blinky-audio.lock';
-          const lockExists = existsSync(lockPath);
-          let status: string;
-          let message: string;
-          if (lockExists) {
-            // Lock file exists — check if it's stale (older than 10 minutes)
-            try {
-              const lockStat = statSync(lockPath);
-              const ageMs = Date.now() - lockStat.mtimeMs;
-              if (ageMs > 10 * 60 * 1000) {
-                status = 'stale_lock';
-                message = `Audio lock file exists but is ${Math.round(ageMs / 60000)}min old — test runner may have crashed. Lock: ${lockPath}`;
-              } else {
-                status = 'running';
-                message = 'Test is still running (audio lock present). Try again later.';
-              }
-            } catch {
-              status = 'running';
-              message = 'Test is still running (audio lock present). Try again later.';
-            }
-          } else {
-            status = 'not_found';
-            message = `Results file not found: ${checkPath}. If the test was just launched, it may still be starting up — wait a few seconds and retry.`;
-          }
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ status, message }) }],
-          };
-        }
-        const fileContents = readFileSync(checkPath, 'utf-8');
-        return { content: [{ type: 'text', text: fileContents }] };
+        response.gif = join(outputBase, 'high-res.gif');
+        response.gif_lowres = join(outputBase, 'low-res.gif');
+        return ok(response);
       }
 
       default:
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ error: `Unknown tool: ${name}` }, null, 2),
-            },
-          ],
-        };
+        return ok({ error: `Unknown tool: ${name}` });
     }
   } catch (error) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            error: error instanceof Error ? error.message : String(error),
-          }, null, 2),
-        },
-      ],
-    };
+    return ok({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 
-// Start the server
-async function main() {
+// ── Start Server ──
+
+async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Blinky Serial MCP server running');
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error('MCP server error:', error);
+  process.exit(1);
+});
