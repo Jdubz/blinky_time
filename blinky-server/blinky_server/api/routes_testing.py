@@ -7,12 +7,14 @@ progress and results.
 
 from __future__ import annotations
 
+import contextlib
+import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..testing.audio_lock import is_audio_locked, release_audio_lock
+from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..testing.job_manager import Job, JobManager
 from ..testing.track_discovery import discover_tracks
 from .deps import get_fleet
@@ -39,6 +41,7 @@ class ValidateRequest(BaseModel):
     track_names: list[str] | None = None
     duration_ms: float = 35000
     seek_sec: float | None = None
+    settle_ms: float = 0
     num_runs: int = Field(1, ge=1, le=10)
     commands: list[str] | None = None
     per_device_commands: dict[str, list[str]] | None = None
@@ -78,6 +81,7 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
             track_names=body.track_names,
             duration_ms=body.duration_ms,
             seek_sec=body.seek_sec,
+            settle_ms=body.settle_ms,
             num_runs=body.num_runs,
             commands=body.commands,
             per_device_commands=body.per_device_commands,
@@ -160,6 +164,9 @@ async def check_audio_lock() -> dict[str, Any]:
 
 @router.delete("/audio-lock")
 async def force_release_audio_lock() -> dict[str, str]:
-    """Force-release a stuck audio lock."""
+    """Force-release a stuck audio lock (even from another process)."""
     release_audio_lock()
+    # Also force-remove the file in case another process holds it
+    with contextlib.suppress(OSError):
+        os.unlink(LOCK_PATH)
     return {"status": "released"}

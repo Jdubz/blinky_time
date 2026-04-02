@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 INTER_RUN_GAP_S = 5
-SETTLE_MS = 12000  # ACF convergence time
+SETTLE_MS = 12000  # ACF convergence time — skip early readings
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
@@ -45,7 +45,7 @@ async def _start_streaming(devices: list[Device]) -> None:
 
 
 async def _stop_streaming(devices: list[Device]) -> None:
-    """Stop streaming on all devices."""
+    """Stop streaming on all devices. Best-effort, never raises."""
     for device in devices:
         try:  # noqa: SIM105
             await device.protocol.stop_stream()
@@ -63,24 +63,41 @@ async def _record_and_play(
 
     Returns (playback_result, {device_id: TestData}).
     """
-    # Start recording
     sessions: dict[str, TestSession] = {}
     for device in devices:
         session = device.start_test_session()
         session.start_recording()
         sessions[device.id] = session
 
-    # Play audio
-    playback = await play_audio(audio_file, duration_ms=duration_ms, seek_sec=seek_sec)
-
-    # Stop recording
-    results: dict[str, TestData] = {}
-    for device in devices:
-        if device.id in sessions:
-            results[device.id] = sessions[device.id].stop_recording()
-            device.stop_test_session()
+    try:
+        playback = await play_audio(audio_file, duration_ms=duration_ms, seek_sec=seek_sec)
+    finally:
+        # Always stop recording, even if playback fails
+        results: dict[str, TestData] = {}
+        for device in devices:
+            if device.id in sessions:
+                results[device.id] = sessions[device.id].stop_recording()
+                device.stop_test_session()
 
     return playback, results
+
+
+def _apply_settle_filter(test_data: TestData, settle_ms: float) -> TestData:
+    """Filter out data from the settle period (ACF convergence).
+
+    Removes transients and music states from the first settle_ms of recording.
+    The CJS param_sweep_multidev.cjs does this by filtering readings where
+    time < startTime + settleMs.
+    """
+    if settle_ms <= 0:
+        return test_data
+    cutoff = test_data.start_time + settle_ms
+    return TestData(
+        duration=test_data.duration,
+        start_time=test_data.start_time,
+        transients=[t for t in test_data.transients if t.timestamp_ms >= cutoff],
+        music_states=[s for s in test_data.music_states if s.timestamp_ms >= cutoff],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +114,7 @@ async def run_validation(
     duration_ms: float = 35000,
     seek_sec: float | None = None,
     num_runs: int = 1,
+    settle_ms: float = 0,
     commands: list[str] | None = None,
     per_device_commands: dict[str, list[str]] | None = None,
     job: Job | None = None,
@@ -111,6 +129,7 @@ async def run_validation(
         duration_ms: Playback duration per track
         seek_sec: Seek position (None = use track manifest if available)
         num_runs: Number of runs per track
+        settle_ms: Skip data from first N ms of recording (ACF convergence)
         commands: Setup commands sent to all devices
         per_device_commands: Per-device setup commands
         job: Job for progress updates (optional)
@@ -118,12 +137,10 @@ async def run_validation(
     Returns:
         Results dict with per-track, per-device, per-run scores.
     """
-    # Resolve devices
     devices = _resolve_devices(fleet, device_ids)
     if not devices:
         return {"status": "error", "message": "No connected devices found"}
 
-    # Discover tracks
     tracks = discover_tracks(track_dir)
     if track_names:
         tracks = [t for t in tracks if t["name"] in track_names]
@@ -132,14 +149,12 @@ async def run_validation(
 
     manifest = load_track_manifest(track_dir)
 
-    # Acquire audio lock
     if not acquire_audio_lock([d.id[:12] for d in devices]):
         return {"status": "error", "message": "Audio lock held by another process"}
 
     try:
         await kill_orphan_audio()
 
-        # Configure devices
         for device in devices:
             await _configure_device(device, commands)
             device_cmds = (per_device_commands or {}).get(device.id)
@@ -148,60 +163,68 @@ async def run_validation(
 
         await _start_streaming(devices)
 
-        # Run tests
-        all_results: list[dict[str, Any]] = []
-        total_steps = len(tracks) * num_runs
-        step = 0
+        try:
+            all_results: list[dict[str, Any]] = []
+            total_steps = len(tracks) * num_runs
+            step = 0
 
-        for track in tracks:
-            track_name = track["name"]
-            gt = load_ground_truth(
-                track["ground_truth"],
-                track.get("onset_ground_truth"),
-            )
-            track_seek = seek_sec
-            if track_seek is None:
-                track_manifest = manifest.get(track_name, {})
-                track_seek = track_manifest.get("seekOffset", 0)
-
-            for run_idx in range(num_runs):
-                step += 1
-                if job:
-                    job.progress = int(100 * step / total_steps)
-                    job.progress_message = f"{track_name} run {run_idx + 1}/{num_runs}"
-
-                playback, recordings = await _record_and_play(
-                    devices,
-                    track["audio_file"],
-                    duration_ms=duration_ms,
-                    seek_sec=track_seek,
+            for track in tracks:
+                track_name = track["name"]
+                gt = load_ground_truth(
+                    track["ground_truth"],
+                    track.get("onset_ground_truth"),
                 )
+                track_seek = seek_sec
+                if track_seek is None:
+                    track_manifest = manifest.get(track_name, {})
+                    track_seek = track_manifest.get("seekOffset", 0)
 
-                if not playback.success:
-                    log.warning("Playback failed for %s: %s", track_name, playback.error)
-                    continue
+                for run_idx in range(num_runs):
+                    step += 1
+                    if job:
+                        job.progress = int(100 * step / total_steps)
+                        job.progress_message = f"{track_name} run {run_idx + 1}/{num_runs}"
 
-                run_scores: dict[str, Any] = {}
-                for device in devices:
-                    test_data = recordings.get(device.id)
-                    if not test_data:
+                    playback, recordings = await _record_and_play(
+                        devices,
+                        track["audio_file"],
+                        duration_ms=duration_ms,
+                        seek_sec=track_seek,
+                    )
+
+                    if not playback.success:
+                        log.warning("Playback failed for %s: %s", track_name, playback.error)
                         continue
-                    score = score_device_run(test_data, playback.audio_start_time_ms, gt)
-                    run_scores[device.id[:12]] = format_score_summary(score)
 
-                all_results.append(
-                    {
-                        "track": track_name,
-                        "run": run_idx + 1,
-                        "scores": run_scores,
-                    }
-                )
+                    run_scores: dict[str, Any] = {}
+                    for device in devices:
+                        test_data = recordings.get(device.id)
+                        if not test_data:
+                            continue
+                        if settle_ms > 0:
+                            test_data = _apply_settle_filter(test_data, settle_ms)
+                        score = score_device_run(test_data, playback.audio_start_time_ms, gt)
+                        run_scores[device.id[:12]] = format_score_summary(score)
 
-                if run_idx < num_runs - 1:
-                    await asyncio.sleep(INTER_RUN_GAP_S)
+                    all_results.append(
+                        {
+                            "track": track_name,
+                            "run": run_idx + 1,
+                            "scores": run_scores,
+                        }
+                    )
 
-        await _stop_streaming(devices)
-        return {"status": "ok", "tracks": len(tracks), "runs": num_runs, "results": all_results}
+                    if run_idx < num_runs - 1:
+                        await asyncio.sleep(INTER_RUN_GAP_S)
+
+            return {
+                "status": "ok",
+                "tracks": len(tracks),
+                "runs": num_runs,
+                "results": all_results,
+            }
+        finally:
+            await _stop_streaming(devices)
 
     finally:
         release_audio_lock()
@@ -230,6 +253,8 @@ async def run_param_sweep(
 
     Batches parameter values across devices to minimize audio passes.
     With 3 devices and 9 values, only 3 audio passes are needed.
+    Devices in the last batch may be fewer than total if values don't
+    divide evenly (extras reuse their previous param value — harmless).
 
     Args:
         fleet: FleetManager instance
@@ -239,7 +264,7 @@ async def run_param_sweep(
         track_dir: Directory containing audio files
         track_names: Specific tracks (None = all)
         duration_ms: Playback duration per track
-        settle_ms: Wait time before scoring (ACF convergence)
+        settle_ms: Skip data from first N ms of recording (ACF convergence)
         num_runs: Runs per value per track
         commands: Setup commands for all devices
         job: Job for progress updates
@@ -265,86 +290,85 @@ async def run_param_sweep(
     try:
         await kill_orphan_audio()
 
-        # Configure devices
         for device in devices:
             await _configure_device(device, commands)
 
         await _start_streaming(devices)
 
-        # Batch values across devices
-        n_devices = len(devices)
-        batches: list[list[float]] = []
-        for i in range(0, len(values), n_devices):
-            batches.append(values[i : i + n_devices])
+        try:
+            n_devices = len(devices)
+            batches: list[list[float]] = []
+            for i in range(0, len(values), n_devices):
+                batches.append(values[i : i + n_devices])
 
-        total_steps = len(batches) * len(tracks) * num_runs
-        step = 0
-        per_value_results: dict[float, list[dict[str, Any]]] = {v: [] for v in values}
+            total_steps = len(batches) * len(tracks) * num_runs
+            step = 0
+            per_value_results: dict[float, list[dict[str, Any]]] = {v: [] for v in values}
 
-        for batch in batches:
-            # Assign one value to each device
-            assignments: list[tuple[Device, float]] = list(zip(devices, batch, strict=False))
+            for batch in batches:
+                # Assign one value per device; last batch may have fewer values
+                assignments: list[tuple[Device, float]] = list(zip(devices, batch, strict=False))
 
-            for device, value in assignments:
-                await device.protocol.send_command(f"set {param_name} {value}")
-                await asyncio.sleep(0.1)
+                for device, value in assignments:
+                    await device.protocol.send_command(f"set {param_name} {value}")
+                    await asyncio.sleep(0.1)
 
-            for track in tracks:
-                track_name = track["name"]
-                gt = load_ground_truth(
-                    track["ground_truth"],
-                    track.get("onset_ground_truth"),
-                )
-                track_manifest = manifest.get(track_name, {})
-                track_seek = track_manifest.get("seekOffset", 0)
-
-                for run_idx in range(num_runs):
-                    step += 1
-                    if job:
-                        job.progress = int(100 * step / total_steps)
-                        job.progress_message = (
-                            f"batch {batch}, {track_name} run {run_idx + 1}/{num_runs}"
-                        )
-
-                    playback, recordings = await _record_and_play(
-                        [d for d, _ in assignments],
-                        track["audio_file"],
-                        duration_ms=duration_ms,
-                        seek_sec=track_seek,
+                for track in tracks:
+                    track_name = track["name"]
+                    gt = load_ground_truth(
+                        track["ground_truth"],
+                        track.get("onset_ground_truth"),
                     )
+                    track_manifest = manifest.get(track_name, {})
+                    track_seek = track_manifest.get("seekOffset", 0)
 
-                    if not playback.success:
-                        continue
+                    for run_idx in range(num_runs):
+                        step += 1
+                        if job:
+                            job.progress = int(100 * step / total_steps)
+                            job.progress_message = (
+                                f"batch {batch}, {track_name} run {run_idx + 1}/{num_runs}"
+                            )
 
-                    for device, value in assignments:
-                        test_data = recordings.get(device.id)
-                        if not test_data:
-                            continue
-                        score = score_device_run(test_data, playback.audio_start_time_ms, gt)
-                        per_value_results[value].append(
-                            {
-                                "track": track_name,
-                                "run": run_idx + 1,
-                                "device": device.id[:12],
-                                "score": format_score_summary(score),
-                            }
+                        playback, recordings = await _record_and_play(
+                            [d for d, _ in assignments],
+                            track["audio_file"],
+                            duration_ms=duration_ms,
+                            seek_sec=track_seek,
                         )
 
-                    if run_idx < num_runs - 1:
-                        await asyncio.sleep(INTER_RUN_GAP_S)
+                        if not playback.success:
+                            continue
 
-        await _stop_streaming(devices)
+                        for device, value in assignments:
+                            test_data = recordings.get(device.id)
+                            if not test_data:
+                                continue
+                            test_data = _apply_settle_filter(test_data, settle_ms)
+                            score = score_device_run(test_data, playback.audio_start_time_ms, gt)
+                            per_value_results[value].append(
+                                {
+                                    "track": track_name,
+                                    "run": run_idx + 1,
+                                    "device": device.id[:12],
+                                    "score": format_score_summary(score),
+                                }
+                            )
 
-        # Aggregate per-value results
-        aggregated = _aggregate_sweep_results(per_value_results)
-        return {
-            "status": "ok",
-            "param": param_name,
-            "values": values,
-            "tracks": len(tracks),
-            "aggregated": aggregated,
-            "raw": per_value_results,
-        }
+                        if run_idx < num_runs - 1:
+                            await asyncio.sleep(INTER_RUN_GAP_S)
+
+            aggregated = _aggregate_sweep_results(per_value_results)
+            return {
+                "status": "ok",
+                "param": param_name,
+                "values": values,
+                "tracks": len(tracks),
+                "aggregated": aggregated,
+                "raw": per_value_results,
+            }
+        finally:
+            await _stop_streaming(devices)
 
     finally:
         release_audio_lock()
@@ -360,7 +384,6 @@ def _aggregate_sweep_results(
             results.append({"value": value, "n": 0})
             continue
 
-        # Average key metrics across all runs for this value
         plp_at = [r["score"]["plp"]["atTransient"] for r in runs if "plp" in r.get("score", {})]
         plp_ac = [r["score"]["plp"]["autoCorr"] for r in runs if "plp" in r.get("score", {})]
         plp_pk = [r["score"]["plp"]["peakiness"] for r in runs if "plp" in r.get("score", {})]
