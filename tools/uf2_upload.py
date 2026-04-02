@@ -199,7 +199,7 @@ def _request_server_release(port, verbose=False, hold_seconds=None):
     Returns True if released (or server not running), False on error.
     """
     try:
-        req = Request(f"{BLINKY_SERVER_URL}/devices",
+        req = Request(f"{BLINKY_SERVER_URL}/api/devices",
                       headers={"Accept": "application/json"})
         resp = urlopen(req, timeout=3)
         devices = json.loads(resp.read())
@@ -244,7 +244,7 @@ def _request_server_release(port, verbose=False, hold_seconds=None):
 def _request_server_reconnect(port, verbose=False):
     """Ask blinky-server to reconnect a device on the given port."""
     try:
-        req = Request(f"{BLINKY_SERVER_URL}/devices",
+        req = Request(f"{BLINKY_SERVER_URL}/api/devices",
                       headers={"Accept": "application/json"})
         resp = urlopen(req, timeout=3)
         devices = json.loads(resp.read())
