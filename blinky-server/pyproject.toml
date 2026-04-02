@@ -82,4 +82,5 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
+    "ignore::pytest.PytestCollectionWarning",
 ]

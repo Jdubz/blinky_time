@@ -45,9 +45,9 @@ class MusicState:
     active: bool
     phase: float
     confidence: float
-    period_steps: int | None = None  # ACF period in stream steps (for PLP autocorr)
     oss: float | None = None
     plp_pulse: float | None = None
+    _bpm: float = 0.0  # Internal: used only for PLP autocorrelation lag, never scored
 
 
 @dataclass

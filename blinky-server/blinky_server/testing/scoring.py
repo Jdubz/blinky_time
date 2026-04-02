@@ -166,9 +166,9 @@ def score_device_run(
             "active": s.active,
             "phase": s.phase,
             "confidence": s.confidence,
-            "period_steps": s.period_steps,
             "oss": s.oss,
             "plp_pulse": s.plp_pulse,
+            "_bpm": s._bpm,
         }
         for s in test_data.music_states
         if s.timestamp_ms - timing_offset_ms >= 0
@@ -263,19 +263,22 @@ def score_device_run(
             plp_at_transient = sum(gt_onset_plp_values) / len(gt_onset_plp_values)
 
         # PLP autocorrelation at detected period lag
-        # Use period_steps from music state (firmware streams this directly)
-        # rather than deriving from BPM.
-        period_steps_values = [
-            s["period_steps"]
+        # Derive lag from streamed BPM (internal, not scored) and stream rate.
+        bpm_values = [
+            s["_bpm"]
             for s in active_states
-            if s.get("period_steps") is not None and s["period_steps"] > 0  # type: ignore[operator]
+            if s.get("_bpm", 0) > 0  # type: ignore[operator]
         ]
-        avg_period = (
-            sum(period_steps_values) / len(period_steps_values)  # type: ignore[arg-type]
-            if period_steps_values
-            else 0
+        avg_bpm: float = (
+            sum(bpm_values) / len(bpm_values)  # type: ignore[arg-type]
+            if bpm_values
+            else 0.0
         )
-        period_lag = _js_round_int(avg_period) if avg_period > 0 else 0
+        if avg_bpm > 0 and len(plp_values) > 10:
+            stream_rate = len(plp_values) / (audio_duration_sec or 1)
+            period_lag = _js_round_int(stream_rate * 60 / avg_bpm)
+        else:
+            period_lag = 0
 
         if 0 < period_lag < len(plp_values) / 2:
             sum_xy = 0.0
