@@ -407,6 +407,203 @@ def _aggregate_sweep_results(
 
 
 # ---------------------------------------------------------------------------
+# Threshold tuning (binary search)
+# ---------------------------------------------------------------------------
+
+
+async def run_threshold_tune(
+    fleet: FleetManager,
+    device_id: str,
+    *,
+    param_name: str = "odfgate",
+    low: float = 0.05,
+    high: float = 0.80,
+    track_dir: str,
+    track_names: list[str] | None = None,
+    duration_ms: float = 35000,
+    settle_ms: float = SETTLE_MS,
+    max_steps: int = 8,
+    target_metric: str = "onsetF1",
+    commands: list[str] | None = None,
+    job: Job | None = None,
+) -> dict[str, Any]:
+    """Binary search for optimal onset threshold using real music.
+
+    Plays audio tracks, scores onset F1 (or another metric) at each
+    threshold value, and converges on the value that maximizes the target.
+
+    Args:
+        fleet: FleetManager instance
+        device_id: Single device to tune
+        param_name: Setting to tune (default: odfgate)
+        low: Search range lower bound
+        high: Search range upper bound
+        track_dir: Directory with audio + .beats.json
+        track_names: Specific tracks (None = all)
+        duration_ms: Playback duration per track
+        settle_ms: Skip early data (ACF convergence)
+        max_steps: Maximum binary search iterations
+        target_metric: Metric to maximize (onsetF1, plpAtTransient, etc.)
+        commands: Setup commands before tuning
+        job: Job for progress updates
+
+    Returns:
+        Results dict with optimal value, per-step history, and final scores.
+    """
+    devices = _resolve_devices(fleet, [device_id])
+    if not devices:
+        return {"status": "error", "message": "Device not connected"}
+    device = devices[0]
+
+    tracks = discover_tracks(track_dir)
+    if track_names:
+        tracks = [t for t in tracks if t["name"] in track_names]
+    if not tracks:
+        return {"status": "error", "message": f"No tracks found in {track_dir}"}
+
+    manifest = load_track_manifest(track_dir)
+
+    if not acquire_audio_lock([device.id[:12]]):
+        return {"status": "error", "message": "Audio lock held by another process"}
+
+    try:
+        await kill_orphan_audio()
+        await _configure_device(device, commands)
+        await _start_streaming([device])
+
+        try:
+            history: list[dict[str, Any]] = []
+            best_value = (low + high) / 2
+            best_score = -1.0
+
+            for step in range(max_steps):
+                mid = round((low + high) / 2, 4)
+                if job:
+                    job.progress = int(100 * step / max_steps)
+                    job.progress_message = f"step {step + 1}/{max_steps}: {param_name}={mid}"
+
+                # Set parameter
+                await device.protocol.send_command(f"set {param_name} {mid}")
+                await asyncio.sleep(0.2)
+
+                # Score across all tracks
+                track_scores: list[float] = []
+                for track in tracks:
+                    track_name = track["name"]
+                    gt = load_ground_truth(
+                        track["ground_truth"],
+                        track.get("onset_ground_truth"),
+                    )
+                    track_manifest_entry = manifest.get(track_name, {})
+                    track_seek = track_manifest_entry.get("seekOffset", 0)
+
+                    playback, recordings = await _record_and_play(
+                        [device],
+                        track["audio_file"],
+                        duration_ms=duration_ms,
+                        seek_sec=track_seek,
+                    )
+                    if not playback.success:
+                        continue
+
+                    test_data = recordings.get(device.id)
+                    if not test_data:
+                        continue
+                    test_data = _apply_settle_filter(test_data, settle_ms)
+                    score = score_device_run(test_data, playback.audio_start_time_ms, gt)
+                    summary = format_score_summary(score)
+
+                    # Extract target metric
+                    metric_val = _extract_metric(summary, target_metric)
+                    if metric_val is not None:
+                        track_scores.append(metric_val)
+
+                avg_score = sum(track_scores) / len(track_scores) if track_scores else 0.0
+                history.append(
+                    {
+                        "step": step + 1,
+                        "value": mid,
+                        "metric": target_metric,
+                        "score": round(avg_score, 4),
+                        "tracks_scored": len(track_scores),
+                    }
+                )
+
+                log.info(
+                    "Tune step %d/%d: %s=%.4f → %s=%.4f",
+                    step + 1,
+                    max_steps,
+                    param_name,
+                    mid,
+                    target_metric,
+                    avg_score,
+                )
+
+                if avg_score > best_score:
+                    best_score = avg_score
+                    best_value = mid
+
+                # Binary search: test neighbors to determine direction
+                if step < max_steps - 1:
+                    # If we haven't narrowed enough, probe both directions
+                    # Use the score trend to decide direction
+                    if len(history) >= 2:
+                        prev = history[-2]
+                        if avg_score >= prev["score"]:
+                            # Current direction is good, keep going
+                            # Score improved going from prev value to mid
+                            if mid > prev["value"]:
+                                low = prev["value"]  # search higher half
+                            else:
+                                high = prev["value"]  # search lower half
+                        else:
+                            # Score got worse, reverse direction
+                            if mid > prev["value"]:
+                                high = mid  # went too high
+                            else:
+                                low = mid  # went too low
+
+                    # Convergence check
+                    if high - low < 0.01:
+                        break
+
+                await asyncio.sleep(INTER_RUN_GAP_S)
+
+            return {
+                "status": "ok",
+                "param": param_name,
+                "optimal_value": best_value,
+                "optimal_score": round(best_score, 4),
+                "metric": target_metric,
+                "steps": len(history),
+                "history": history,
+            }
+        finally:
+            await _stop_streaming([device])
+
+    finally:
+        release_audio_lock()
+
+
+def _extract_metric(summary: dict[str, Any], metric: str) -> float | None:
+    """Extract a named metric from a score summary dict."""
+    val: object = None
+    if metric == "onsetF1":
+        val = summary.get("onsetTracking", {}).get("f1")
+    elif metric == "onsetPrecision":
+        val = summary.get("onsetTracking", {}).get("precision")
+    elif metric == "onsetRecall":
+        val = summary.get("onsetTracking", {}).get("recall")
+    elif metric == "plpAtTransient":
+        val = summary.get("plp", {}).get("atTransient")
+    elif metric == "plpAutoCorr":
+        val = summary.get("plp", {}).get("autoCorr")
+    elif metric == "plpPeakiness":
+        val = summary.get("plp", {}).get("peakiness")
+    return float(val) if isinstance(val, (int, float)) else None
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
