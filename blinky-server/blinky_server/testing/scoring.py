@@ -336,7 +336,7 @@ def score_device_run(
             onset_offsets=onset_offsets,
         ),
         adjusted_detections=[dict(d) for d in detections],
-        adjusted_music_states=[dict(s) for s in music_states],
+        adjusted_music_states=[{k: v for k, v in s.items() if k != "_bpm"} for s in music_states],
     )
 
 
