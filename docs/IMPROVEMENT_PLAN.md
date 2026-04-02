@@ -12,7 +12,7 @@
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids. **Soft onset teacher labels** being generated from madmom CNN OnsetDetector (6750 tracks, continuous activations at 100Hz) for v15 knowledge distillation training.
 
-**Eval pipeline fixed (April 2):** `evaluate.py` now uses `mir_eval.onset.f_measure` (MIREX 50ms window) instead of `mir_eval.beat.f_measure` (70ms beat tolerance). Peak-pick min interval reduced from 200ms to 50ms to match firmware onset cooldown. All 4 v14 prerequisites complete.
+**Eval pipeline fixed (April 2):** `evaluate.py` now uses `mir_eval.onset.f_measure` (MIREX 50ms window) instead of `mir_eval.beat.f_measure` (70ms beat tolerance). Peak-pick min interval reduced from 200ms to 50ms to match firmware onset cooldown. All 4 v14 prerequisites complete. **Note: scores from v14+ are not directly comparable to pre-April-2 benchmarks** (50ms onset window vs 70ms beat window). v11's reported Kick F1=0.688, Snare F1=0.773 etc. used the old metric. v14 KW onset F1=0.659 uses the new metric.
 
 **Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Conv1D W16 inference takes 6.8ms on nRF52840 (well within 16.7ms budget — 60fps achieved). Mel-spectrogram CNNs require 79-98ms (too slow).
 

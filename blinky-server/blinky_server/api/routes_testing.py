@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -213,7 +212,11 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
     if device.state != DeviceState.CONNECTED:
         raise HTTPException(409, f"Device not connected (state={device.state.value})")
 
-    output = body.output_path or f"/tmp/nn-capture-{device_id[:12]}-{int(time.time())}.jsonl"
+    import re
+    import uuid
+
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", device_id[:12])
+    output = body.output_path or f"/tmp/nn-capture-{safe_id}-{uuid.uuid4().hex[:8]}.jsonl"
 
     # Validate output path is under /tmp or home directory
     resolved = Path(output).resolve()

@@ -30,6 +30,9 @@ class PlaybackResult:
 # ---------------------------------------------------------------------------
 
 _active_proc: asyncio.subprocess.Process | None = None
+# Cached on first call, never refreshed. If the USB speaker is hot-plugged
+# after server start, restart the server to re-detect. This is intentional —
+# audio device changes mid-test would be more disruptive than stale cache.
 _cached_audio_env: dict[str, str] | None = None
 
 
@@ -165,8 +168,11 @@ async def kill_orphan_audio() -> None:
     _active_proc = None
 
     try:
+        # Only kill ffplay owned by current user (avoid killing other users' audio)
         proc = await asyncio.create_subprocess_exec(
             "pgrep",
+            "-u",
+            str(os.getuid()),
             "-f",
             "ffplay",
             stdout=asyncio.subprocess.PIPE,

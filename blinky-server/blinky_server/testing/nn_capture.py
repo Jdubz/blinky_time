@@ -60,6 +60,9 @@ async def capture_nn_stream(
     # Path validation is done by the route handler before calling this function
     out = Path(output_path).resolve()
 
+    # Remember prior streaming state so we can restore after capture
+    was_streaming = device.protocol.streaming
+
     # Subscribe to the device's stream to receive NN frames
     queue = device.subscribe_stream()
 
@@ -81,9 +84,12 @@ async def capture_nn_stream(
             except TimeoutError:
                 continue
     finally:
-        # Restore normal state — stop NN streaming
-        try:  # noqa: SIM105
-            await device.protocol.send_command("stream off")
+        # Restore prior streaming state (NN mode disables normal streaming)
+        try:
+            if was_streaming:
+                await device.protocol.start_stream("fast")
+            else:
+                await device.protocol.send_command("stream off")
         except Exception:
             pass
         device.unsubscribe_stream(queue)

@@ -39,7 +39,13 @@ def generate_soft_labels(audio_path: str, fps: int = 100) -> dict:
     Returns continuous activation at each frame — no peak-picking or dedup.
     The model learns to reproduce the activation shape (rise/attack/decay).
     """
-    import madmom
+    try:
+        import madmom
+    except ImportError:
+        raise ImportError(
+            "madmom is required for onset teacher labels. "
+            "Install via: pip install madmom (requires Python 3.11, use venv311/)"
+        ) from None
 
     proc = madmom.features.onsets.CNNOnsetProcessor()
     activations = proc(audio_path)
@@ -85,8 +91,14 @@ def generate_hard_labels(
         beats: Optional beat times in seconds (for grid snapping)
         snap_window_ms: Max distance to snap an onset to a beat subdivision
     """
-    import madmom
-    from madmom.features.onsets import OnsetPeakPickingProcessor
+    try:
+        import madmom
+        from madmom.features.onsets import OnsetPeakPickingProcessor
+    except ImportError:
+        raise ImportError(
+            "madmom is required for onset teacher labels. "
+            "Install via: pip install madmom (requires Python 3.11, use venv311/)"
+        ) from None
 
     proc = madmom.features.onsets.CNNOnsetProcessor()
     activations = proc(audio_path)

@@ -671,7 +671,10 @@ async def _eval_param_value(
         metric_val = _extract_metric(summary, target_metric)
         track_scores.append(metric_val)
 
-    return sum(track_scores) / len(track_scores) if track_scores else 0.0
+    if not track_scores:
+        log.warning("All tracks failed for %s=%s — returning NaN score", param_name, value)
+        return float("nan")
+    return sum(track_scores) / len(track_scores)
 
 
 _METRIC_PATHS: dict[str, tuple[str, str]] = {
