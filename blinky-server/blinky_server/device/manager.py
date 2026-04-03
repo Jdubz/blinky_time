@@ -79,12 +79,16 @@ class FleetManager:
         # immediately rediscovered and reconnected on every cycle.
         self._dedup_excluded: set[str] = set()
         # DFU recovery state (per-device tracking for auto-retry).
-        # Bool guard is async-safe: check happens before any await, so the
-        # single-threaded event loop cannot interleave another call between
-        # check and set. The finally block guarantees reset on any exit path.
         self._recovery_firmware_path: str | None = None
         self._dfu_recovery_state: dict[str, dict[str, int]] = {}
-        self._dfu_recovery_in_progress: bool = False
+        # Per-device set tracking which devices have active DFU recovery.
+        # Prevents the background loop from starting a second recovery on a
+        # device that's already being recovered (e.g., by a manual flash).
+        self._dfu_recovery_active: set[str] = set()
+        # Per-device DFU locks: prevent auto-recovery and manual flash from
+        # running concurrently on the same device. Lock is acquired before any
+        # DFU operation and held for its entire duration.
+        self._dfu_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -132,6 +136,12 @@ class FleetManager:
     def resume_reconnect(self, device_id: str) -> None:
         """Clear reconnect blackout for a device, allowing auto-reconnect."""
         self._reconnect_blackout.pop(device_id, None)
+
+    def get_dfu_lock(self, device_id: str) -> asyncio.Lock:
+        """Get the per-device DFU lock. Creates one if it doesn't exist."""
+        if device_id not in self._dfu_locks:
+            self._dfu_locks[device_id] = asyncio.Lock()
+        return self._dfu_locks[device_id]
 
     def pause_discovery(self) -> None:
         """Pause background discovery (e.g., during BLE DFU scan)."""
@@ -605,8 +615,11 @@ class FleetManager:
         address, attempts BLE DFU using the recovery firmware. Uses exponential
         backoff to avoid flooding BLE with retry attempts.
         """
-        if self._dfu_recovery_in_progress:
-            return  # Previous recovery still running — skip
+        if self._dfu_recovery_active:
+            # Skip entire cycle if any recovery is in-flight. BLE DFU uses
+            # the adapter exclusively (BleakScanner conflicts with concurrent
+            # scans), so we serialize recovery attempts even across devices.
+            return
 
         firmware_path = self._recovery_firmware_path
         if not firmware_path:
@@ -646,39 +659,50 @@ class FleetManager:
                 fail_count + 1,
             )
 
-            self._dfu_recovery_in_progress = True
-            self.pause_discovery()
-            self.hold_reconnect(device.id, 600)
-            try:
-                from ..firmware.ble_dfu import upload_ble_dfu
-                from ..firmware.compile import ensure_dfu_zip
-
-                dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
-                assert device.ble_address is not None  # filtered above
-                result = await upload_ble_dfu(
-                    app_ble_address=device.ble_address,
-                    dfu_zip_path=dfu_zip,
+            # Acquire per-device DFU lock — if manual flash is in progress,
+            # skip this device rather than blocking the background loop.
+            dfu_lock = self.get_dfu_lock(device.id)
+            if dfu_lock.locked():
+                log.info(
+                    "DFU lock held for %s (manual flash in progress?) — skipping auto-recovery",
+                    device.id[:12],
                 )
+                continue
 
-                if result.get("status") == "ok":
-                    log.info("Auto-recovery succeeded for %s!", device.id[:12])
-                    device.state = DeviceState.DISCONNECTED
-                    self._dfu_recovery_state.pop(device.id, None)
-                else:
-                    state["fails"] = fail_count + 1
-                    log.warning(
-                        "Auto-recovery failed for %s (attempt %d): %s",
-                        device.id[:12],
-                        fail_count + 1,
-                        result.get("message", ""),
+            async with dfu_lock:
+                self._dfu_recovery_active.add(device.id)
+                self.pause_discovery()
+                self.hold_reconnect(device.id, 600)
+                try:
+                    from ..firmware.ble_dfu import upload_ble_dfu
+                    from ..firmware.compile import ensure_dfu_zip
+
+                    dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
+                    assert device.ble_address is not None  # filtered above
+                    result = await upload_ble_dfu(
+                        app_ble_address=device.ble_address,
+                        dfu_zip_path=dfu_zip,
                     )
-            except Exception as e:
-                state["fails"] = fail_count + 1
-                log.error("Auto-recovery error for %s: %s", device.id[:12], e)
-            finally:
-                self._dfu_recovery_in_progress = False
-                self.resume_discovery()
-                self.resume_reconnect(device.id)
+
+                    if result.get("status") == "ok":
+                        log.info("Auto-recovery succeeded for %s!", device.id[:12])
+                        device.state = DeviceState.DISCONNECTED
+                        self._dfu_recovery_state.pop(device.id, None)
+                    else:
+                        state["fails"] = fail_count + 1
+                        log.warning(
+                            "Auto-recovery failed for %s (attempt %d): %s",
+                            device.id[:12],
+                            fail_count + 1,
+                            result.get("message", ""),
+                        )
+                except Exception as e:
+                    state["fails"] = fail_count + 1
+                    log.error("Auto-recovery error for %s: %s", device.id[:12], e)
+                finally:
+                    self._dfu_recovery_active.discard(device.id)
+                    self.resume_discovery()
+                    self.resume_reconnect(device.id)
 
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, liveness checks, and DFU recovery."""

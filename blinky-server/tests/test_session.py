@@ -45,7 +45,7 @@ def test_ingest_audio_music_state() -> None:
         "audio",
         {
             "a": {"l": 0.5},
-            "m": {"a": 1, "bpm": 120.0, "ph": 0.25, "pp": 0.8, "str": 0.7, "nn": 0.5},
+            "m": {"a": 1, "bpm": 120.0, "ph": 0.25, "pp": 0.8, "str": 0.7, "nn": 0.5, "per": 33},
         },
     )
     result = session.stop_recording()
@@ -56,6 +56,7 @@ def test_ingest_audio_music_state() -> None:
     assert ms.plp_pulse == 0.8
     assert ms.confidence == 0.7
     assert ms.oss == 0.5
+    assert ms.plp_period == 33
     assert ms.bpm_internal == 120.0
     assert ms.timestamp_ms > 0
 
@@ -125,7 +126,7 @@ def test_device_routes_to_test_session() -> None:
     audio_json = json.dumps(
         {
             "a": {"l": 0.5},
-            "m": {"a": 1, "bpm": 128.0, "ph": 0.5, "pp": 0.6, "str": 0.8, "nn": 0.3},
+            "m": {"a": 1, "bpm": 128.0, "ph": 0.5, "pp": 0.6, "str": 0.8, "nn": 0.3, "per": 31},
         }
     )
     device._route_stream_line(audio_json)

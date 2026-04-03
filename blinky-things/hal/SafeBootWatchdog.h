@@ -89,23 +89,34 @@ namespace SafeBootWatchdog {
     }
 
     /**
-     * Enter bootloader with specified GPREGRET magic value (never returns).
+     * Enter bootloader via RAM magic (never returns).
      *
-     * Write GPREGRET via SoftDevice API while SD is still enabled.
-     * Do NOT call sd_softdevice_disable() — it resets the POWER
-     * peripheral which can clear GPREGRET.
+     * Writes a magic value to 0x20007F7C (same address as bootloader's
+     * double-reset detection). RAM survives system reset, unlike GPREGRET
+     * which can be cleared by USB hub port power-cycling during reset.
+     * Custom bootloader checks this address BEFORE GPREGRET.
+     *
+     * Also clears boot counter (GPREGRET2) so the device doesn't
+     * immediately re-enter recovery on next normal boot.
      */
     inline void enterBootloaderWithMagic(uint8_t magic) {
+        // RAM-based entry (primary — reliable through USB hubs)
+        volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
+        if (magic == 0x57) {
+            *bootloader_ram = 0xBEEF0057;  // UF2 mode
+        } else if (magic == 0xA8) {
+            *bootloader_ram = 0xBEEF00A8;  // BLE DFU mode
+        }
+
+        // Clear boot counter
         uint8_t sd_en = 0;
         sd_softdevice_is_enabled(&sd_en);
         if (sd_en) {
-            sd_power_gpregret_clr(0, 0xFF);
-            sd_power_gpregret_set(0, magic);
-            sd_power_gpregret_clr(1, 0xFF);  // Clear boot counter
+            sd_power_gpregret_clr(1, 0xFF);
         } else {
-            NRF_POWER->GPREGRET = magic;
             NRF_POWER->GPREGRET2 = 0;
         }
+
         __DSB(); __ISB();
         NVIC_SystemReset();
     }

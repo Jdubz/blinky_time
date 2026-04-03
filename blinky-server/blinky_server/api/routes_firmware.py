@@ -96,96 +96,43 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
                 device.state.value,
             )
 
-            # BLE DFU takes ~5.5min (330s) — use longer hold for DFU recovery devices
             hold_secs = 360 if device.state == DeviceState.DFU_RECOVERY else 120
             fleet.hold_reconnect(device.id, hold_secs)
 
             try:
-                # Device in DFU bootloader (SafeBoot crash recovery) —
-                # push firmware directly, no bootloader entry needed.
-                if device.state == DeviceState.DFU_RECOVERY:
-                    from ..firmware.ble_dfu import upload_ble_dfu
-                    from ..firmware.compile import ensure_dfu_zip
+                # Use central dispatch — no fallback, no duplicated logic
+                from ..firmware import upload_firmware
 
-                    app_ble_addr = device.ble_address
-                    if not app_ble_addr:
-                        result = {
-                            "status": "error",
-                            "message": "DFU recovery device has no BLE app address",
-                        }
-                        results[device.id[:12]] = result
-                        continue
-
-                    try:
-                        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
-                    except ValueError as e:
-                        result = {"status": "error", "message": str(e)}
-                        results[device.id[:12]] = result
-                        continue
-
-                    result = await upload_ble_dfu(
-                        app_ble_address=app_ble_addr,
-                        dfu_zip_path=dfu_zip,
-                    )
-
-                elif device.transport.transport_type == "serial":
-                    from ..firmware import upload_with_ble_fallback
-
-                    result = await upload_with_ble_fallback(
-                        serial_port=device.port,
-                        firmware_path=str(firmware),
-                        transport=device.transport,
-                        ble_address=device.ble_address,
-                    )
-                elif device.transport.transport_type == "ble":
-                    from ..firmware.ble_dfu import upload_ble_dfu
-                    from ..firmware.compile import ensure_dfu_zip
-
-                    # Auto-convert .hex → .dfu.zip if needed
-                    try:
-                        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(firmware))
-                    except ValueError as e:
-                        result = {"status": "error", "message": str(e)}
-                        results[device.id[:12]] = result
-                        continue
-
-                    ble_transport = device.transport
-
-                    async def enter_bootloader_via_ble(cmd: str, _t: Any = ble_transport) -> None:
-                        """Send bootloader command over BLE NUS, then disconnect."""
-                        await _t.write_line(cmd)
-                        await asyncio.sleep(0.5)
-                        await _t.disconnect()
-
-                    result = await upload_ble_dfu(
-                        app_ble_address=device.port,
-                        dfu_zip_path=dfu_zip,
-                        enter_bootloader_via_ble=enter_bootloader_via_ble,
-                    )
-                else:
-                    result = {
-                        "status": "skip",
-                        "message": f"Unsupported transport: {device.transport.transport_type}",
-                    }
-
+                result = await upload_firmware(device, str(firmware))
                 results[device.id[:12]] = result
+
+                # STOP ON FIRST FAILURE — do not flash remaining devices
+                if result.get("status") != "ok":
+                    log.error(
+                        "Fleet flash STOPPED: %s failed (%s). Remaining devices not flashed.",
+                        device.id[:12],
+                        result.get("message", "unknown"),
+                    )
+                    break
             except Exception as e:
                 results[device.id[:12]] = {"status": "error", "message": str(e)}
+                log.error("Fleet flash STOPPED: %s exception: %s", device.id[:12], e)
+                break
             finally:
-                # Mark device as disconnected for auto-reconnect after DFU
                 device.state = DeviceState.DISCONNECTED
                 fleet.resume_reconnect(device.id)
 
-            # Brief pause between devices
             await asyncio.sleep(3)
     finally:
         fleet.resume_discovery()
 
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
-    total = len(results)
+    total_attempted = len(results)
+    total_devices = len(devices)
     return {
-        "status": "ok" if ok_count == total else "partial",
-        "message": f"{ok_count}/{total} devices updated",
+        "status": "ok" if ok_count == total_devices else "error",
+        "message": f"{ok_count}/{total_devices} devices updated"
+        + (f" (stopped after {total_attempted})" if total_attempted < total_devices else ""),
         "per_device": results,
     }
 

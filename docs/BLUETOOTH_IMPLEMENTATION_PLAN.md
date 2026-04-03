@@ -48,14 +48,14 @@ REST API: http://blinkyhost.local:8420/api/
 | **BLE disconnect detection** | Pi | `BleTransport` registers bleak `disconnected_callback` → auto-transitions Device to DISCONNECTED → fleet auto-reconnects |
 | **BLE liveness checks** | Pi | Background loop pings BLE devices every ~30s if no recent comms, detects silent disconnects |
 | **DFU recovery detection** | Pi | Discovery scans for DFU service UUID (00001530), detects devices in SafeBoot BLE DFU bootloader, surfaces `dfu_recovery` state |
-| **BLE DFU as UF2 fallback** | Pi | Serial flash auto-falls back to BLE DFU when UF2 fails and `device.ble_address` is known |
+| **No-fallback dispatch** | Pi | UF2 for serial devices, BLE DFU for BLE-only devices. No silent fallback — failures are returned immediately for investigation |
 | **Server flash (UF2)** | nRF52840 | `POST /api/devices/{id}/flash` delegates to `uf2_upload.py` for serial devices |
 | **BLE DFU flash** | nRF52840 | `POST /api/devices/{id}/flash` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
 | **Fleet flash** | Pi | `POST /api/fleet/flash` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
 | **Fleet deploy** | Pi | `POST /api/fleet/deploy` one-shot compile + DFU zip + flash all devices |
 | **BLE DFU proven** | nRF52840 | End-to-end tested Mar 30: 510KB in ~5.5 min, 2/2 fleet flash success, auto-reconnect after DFU |
 | **Compile endpoint** | Pi | `POST /api/firmware/compile` and `/firmware/compile-dfu` (pure-Python DFU zip, no adafruit-nrfutil dependency) |
-| **UF2 bootloader entry** | nRF52840 | `sd_softdevice_disable()` → DSB/ISB → GPREGRET → DSB/ISB → NVIC_SystemReset |
+| **UF2 bootloader entry** | nRF52840 | Write RAM magic (0xBEEF0057) to 0x20007F7C → DSB/ISB → NVIC_SystemReset (custom bootloader checks RAM before GPREGRET) |
 | **BLE DFU protocol** | nRF52840 | Legacy DFU (SDK v11): write-with-response on control, 60s START_DFU timeout for flash erase, 20-byte chunks, word-aligned padding |
 | **BlueZ stale cleanup** | Pi | Auto-disconnects stale BLE connections from previous server sessions on startup |
 | **BLE reconnect backoff** | Pi | Exponential backoff for failing BLE devices (10s, 20s, 40s... capped at 5 min) |
@@ -83,7 +83,7 @@ REST API: http://blinkyhost.local:8420/api/
 
 ### Known Limitations
 
-- **GPREGRET race condition**: UF2 bootloader entry is ~50-80% per attempt due to MBR interaction. Mitigated by uf2_upload.py's 5-retry logic (>97% cumulative).
+- **GPREGRET race condition (RESOLVED)**: Replaced GPREGRET with RAM magic at 0x20007F7C via custom bootloader (Apr 2026). Bootloader entry now succeeds on first attempt. See `UPLOAD_OVERHAUL_PLAN.md`.
 - **BLE DFU transfer speed**: ~1.7 KB/s (20-byte BLE packets), ~5.5 min per device for 510 KB firmware. Sequential only (Pi's BLE adapter handles one DFU at a time).
 - **Post-DFU USB**: After BLE DFU boot, USB serial doesn't re-enumerate without physical power cycle. uhubctl on Pi doesn't fully cut power. BLE reconnection works fine.
 - **BlueZ stale connections**: Server restart leaves stale BLE connections in BlueZ. Auto-cleanup runs on startup. Per-device `bluetoothctl disconnect` runs before each BLE connect to prevent notification stacking.
@@ -109,9 +109,9 @@ All diagnostic output (`printDiagnostics`, `showDeviceConfig`, `json info`, etc.
 
 The server's OTA module delegates to `tools/uf2_upload.py` as a subprocess rather than reimplementing upload logic. The tool has 2360 lines of battle-tested safety checks (retries, USB recovery, port validation, firmware verification).
 
-### Bootloader Entry: sd_softdevice_disable + NVIC_SystemReset
+### Bootloader Entry: RAM Magic + NVIC_SystemReset
 
-All bootloader entry paths (serial command, 1200-baud touch, SafeBootWatchdog) use the same sequence: disable SoftDevice → DSB/ISB barrier → write GPREGRET → DSB/ISB barrier → NVIC_SystemReset. Direct jump approaches were tested but abandoned (broke USB mass storage).
+All bootloader entry paths (serial command, 1200-baud touch, SafeBootWatchdog, QSPI OTA commit) write a magic value to RAM at `0x20007F7C` → DSB/ISB → NVIC_SystemReset. Custom bootloader (Adafruit fork) checks this address before GPREGRET. RAM survives system reset (proven by double-reset detection at the same address). No `Serial.flush()` before reset — commands may arrive over BLE NUS.
 
 ### BLE DFU Protocol (nRF52840) — Proven End-to-End (Mar 30, 2026)
 
@@ -128,7 +128,7 @@ Adafruit bootloader v0.6.1 uses Legacy DFU (SDK v11). DFU Revision = 0x0008 (v0.
 - Bootloader BLE address = app address + 1 (last octet)
 - Must force StartNotify (not AcquireNotify) in bleak for reliable notifications
 - BlueZ GATT cache must be cleared between app/bootloader connections
-- GPREGRET=0xA8 for BLE DFU entry (via serial `bootloader ble` or BLE NUS command)
+- RAM magic 0xBEEF00A8 for BLE DFU entry (via serial `bootloader ble` or BLE NUS command)
 - Bootloader retains DFU state across BLE disconnections (need power cycle or SYS_RESET 0x06 to clear)
 - DFU zip generated via pure-Python (`compile.py`) — adafruit-nrfutil broken on Python 3.13
 - Init packet: device_type=0x0052, sd_req=0xFFFE, CRC-16/CCITT of firmware binary

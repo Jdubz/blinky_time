@@ -403,19 +403,12 @@ public:
         out.print(F(" crc=0x"));
         out.println(hdr.crc16, HEX);
 
-        // Set GPREGRET=0xCC and reset
-        out.println(F("Setting GPREGRET=0xCC and resetting..."));
-        Serial.flush();
-        delay(100);
-
-        uint8_t sd_en = 0;
-        sd_softdevice_is_enabled(&sd_en);
-        if (sd_en) {
-            sd_power_gpregret_clr(0, 0xFF);
-            sd_power_gpregret_set(0, GPREGRET_QSPI_APPLY);
-        } else {
-            NRF_POWER->GPREGRET = GPREGRET_QSPI_APPLY;
-        }
+        // Write RAM magic and reset. RAM at 0x20007F7C survives system reset
+        // (proven by bootloader double-reset detection at same address).
+        // No Serial.flush() — command may arrive over BLE NUS (no serial).
+        out.println(F("Applying staged firmware..."));
+        volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
+        *bootloader_ram = 0xBEEF00CC;  // DFU_RAM_MAGIC_QSPI
         __DSB(); __ISB();
         NVIC_SystemReset();
 

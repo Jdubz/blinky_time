@@ -763,51 +763,20 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     // "bootloader ble" = BLE OTA DFU mode (for wireless firmware upload)
     if (strcmp(cmd, "bootloader") == 0 || strcmp(cmd, "bootloader ble") == 0) {
 #ifdef BLINKY_PLATFORM_NRF52840
-        // GPREGRET magic bytes for Adafruit nRF52 bootloader:
-        //   0x57 = UF2 mass storage mode (USB firmware upload)
-        //   0xA8 = BLE OTA DFU after soft reset (SD not initialized — correct
-        //          for our path since we call sd_softdevice_disable() before reset)
-        //   0xB1 = BLE OTA DFU app jump (SD already initialized — NOT our case)
         const bool bleMode = (strcmp(cmd, "bootloader ble") == 0);
-        const uint8_t dfuMagic = bleMode ? 0xA8 : 0x57;
         out_.print(F("Entering "));
         out_.print(bleMode ? F("BLE DFU") : F("UF2"));
         out_.println(F(" bootloader..."));
-        Serial.flush();  // Ensure message is sent before reset
-        delay(100);      // Brief delay for serial transmission
+        // No Serial.flush() — reset immediately. Diagnostic output is best-effort.
         {
-#ifdef ARDUINO_ARCH_NRF52
-            // Write GPREGRET via SoftDevice API while SD is still enabled.
-            // Do NOT call sd_softdevice_disable() — it resets the POWER
-            // peripheral which can clear GPREGRET. The MBR handles SD state.
-            // This matches Nordic's own buttonless DFU implementation.
-            uint8_t sd_en = 0;
-            sd_softdevice_is_enabled(&sd_en);
-            uint32_t err1 = 0, err2 = 0;
-            if (sd_en) {
-                err1 = sd_power_gpregret_clr(0, 0xFF);
-                err2 = sd_power_gpregret_set(0, dfuMagic);
-            } else {
-                NRF_POWER->GPREGRET = dfuMagic;
-            }
-            // Verify-read: confirm GPREGRET actually holds the magic value
-            uint32_t readback = 0;
-            if (sd_en) {
-                sd_power_gpregret_get(0, &readback);
-            } else {
-                readback = NRF_POWER->GPREGRET;
-            }
-            out_.print(F("  SD=")); out_.print(sd_en);
-            out_.print(F(" err=")); out_.print(err1); out_.print(F("/")); out_.print(err2);
-            out_.print(F(" GPREGRET=0x")); out_.println(readback, HEX);
-            Serial.flush();
-            delay(100);
+            // RAM-based bootloader entry: write magic to 0x20007F7C (same address
+            // as bootloader's double-reset detection). RAM survives system reset,
+            // unlike GPREGRET which can be cleared by USB hub port power-cycling.
+            // Custom bootloader checks this BEFORE GPREGRET for reliable entry.
+            volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
+            *bootloader_ram = bleMode ? 0xBEEF00A8 : 0xBEEF0057;
             __DSB(); __ISB();
             NVIC_SystemReset();
-#else
-            NRF_POWER->GPREGRET = dfuMagic;
-            NVIC_SystemReset();
-#endif
         }
 #else
         out_.println(F("UF2 bootloader not available on this platform"));
@@ -1476,10 +1445,11 @@ void SerialConsole::streamTick() {
         out_.print(F("}"));
 
         // AudioTracker music stream (v79 — PLP architecture)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2,"nn":0.123,"per":33}
         // a = rhythm active, bpm = tempo, ph = PLP phase (0-1)
         // pp = PLP pulse (extracted pattern value), str = rhythm strength
-        // q = beat event (phase wrap), e = energy, p = pulse (transient), od = onset density
+        // q = beat event (phase wrap), e = energy, p = pulse (transient)
+        // od = onset density, nn = raw NN onset activation, per = ACF period in ~62.5Hz frames
         // Debug adds: conf = ACF periodicity, sl = slot cache {id, conf[]}
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
@@ -1510,6 +1480,8 @@ void SerialConsole::streamTick() {
             out_.print(audioCtrl_->getOnsetDensity(), 1);
             out_.print(F(",\"nn\":"));
             out_.print(audioCtrl_->getRawNNActivation(), 3);
+            out_.print(F(",\"per\":"));  // ACF period in ~66Hz analysis frames
+            out_.print(audioCtrl_->getPlpPeriod());
 
             // Debug mode: add diagnostics
             if (streamDebug_) {

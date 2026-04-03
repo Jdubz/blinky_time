@@ -56,8 +56,8 @@ async def _stop_streaming(devices: list[Device]) -> None:
         try:
             await device.protocol.send_command("debug transient off")
             await device.protocol.stop_stream()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("stream-stop for %s failed (non-fatal): %s", device.id, e)
 
 
 async def _record_and_play(

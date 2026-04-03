@@ -54,6 +54,7 @@ PRN_INTERVAL = (
 assert 0 <= PRN_INTERVAL <= 65535, f"PRN_INTERVAL must be 0-65535, got {PRN_INTERVAL}"
 
 MAX_DFU_ATTEMPTS = 3  # Retry the full DFU sequence on failure
+DFU_TRANSFER_TIMEOUT = 900  # Overall timeout (15 min) for a single DFU transfer attempt
 
 
 def bootloader_address(app_address: str) -> str:
@@ -72,13 +73,17 @@ def _validate_ble_address(address: str) -> None:
         raise ValueError(f"Invalid BLE address format: {address!r}")
 
 
-def clear_bluez_state(address: str) -> None:
+def clear_bluez_state(address: str, power_cycle: bool = False) -> None:
     """Clear BlueZ GATT cache for an address. Required between app/bootloader.
 
     Uses ``bluetoothctl remove`` which clears the device from BlueZ's database
     including GATT cache. Falls back to direct cache directory removal (without
     sudo) if the user has permissions — typically when running as the same user
     that owns the BlueZ data directory.
+
+    If power_cycle is True, also power-cycles the Bluetooth adapter via
+    bluetoothctl to flush BlueZ's in-memory GATT cache. ``bluetoothctl remove``
+    and file deletion don't always clear in-memory state on all BlueZ versions.
     """
     _validate_ble_address(address)
     addr_u = address.replace(":", "_")
@@ -92,6 +97,21 @@ def clear_bluez_state(address: str) -> None:
     for dev_dir in _glob.glob(f"/var/lib/bluetooth/*/{addr_u}"):
         with contextlib.suppress(OSError):
             shutil.rmtree(dev_dir)
+
+    if power_cycle:
+        # Power-cycle the adapter to flush in-memory GATT cache.
+        # WARNING: this drops ALL active BLE connections. Only use when
+        # we're about to enter bootloader anyway (no active BLE needed).
+        with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            subprocess.run(["bluetoothctl", "power", "off"], capture_output=True, timeout=5)
+        # Always attempt power-on, even if power-off failed/timed out —
+        # leaving the adapter off would be catastrophic.
+        try:
+            subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            # Last resort: try once more
+            with contextlib.suppress(Exception):
+                subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, timeout=5)
 
 
 def parse_dfu_zip(zip_path: str) -> tuple[bytes, bytes, int]:
@@ -171,6 +191,34 @@ async def _dfu_transfer(
     """
     result: dict[str, Any] = {"status": "error", "message": ""}
     mtu = 20  # Legacy DFU caps at 20 bytes regardless of negotiated MTU
+
+    try:
+        async with asyncio.timeout(DFU_TRANSFER_TIMEOUT):
+            return await _dfu_transfer_inner(
+                boot_addr,
+                init_packet,
+                firmware,
+                image_type,
+                progress,
+                result,
+                mtu,
+            )
+    except TimeoutError:
+        result["message"] = f"DFU transfer timed out after {DFU_TRANSFER_TIMEOUT}s"
+        log.error(result["message"])
+        return result
+
+
+async def _dfu_transfer_inner(
+    boot_addr: str,
+    init_packet: bytes,
+    firmware: bytes,
+    image_type: int,
+    progress: Callable[..., None],
+    result: dict[str, Any],
+    mtu: int,
+) -> dict[str, Any]:
+    """Inner DFU transfer logic, wrapped by _dfu_transfer's timeout."""
 
     # Clear BlueZ cache for bootloader address
     await asyncio.to_thread(clear_bluez_state, boot_addr)
@@ -312,6 +360,7 @@ async def _dfu_transfer(
         sent = 0
         pkt_count = 0
         last_pct = 0
+        consecutive_prn_misses = 0
         while sent < len(firmware):
             end = min(sent + mtu, len(firmware))
             chunk = firmware[sent:end]
@@ -323,20 +372,35 @@ async def _dfu_transfer(
 
             if PRN_INTERVAL > 0 and pkt_count % PRN_INTERVAL == 0:
                 try:
-                    prn_data = await asyncio.wait_for(notify_queue.get(), timeout=10.0)
+                    prn_data = await asyncio.wait_for(notify_queue.get(), timeout=15.0)
                     if len(prn_data) >= 1 and prn_data[0] == 0x11:
                         rcvd = int.from_bytes(prn_data[1:5], "little") if len(prn_data) >= 5 else 0
                         log.debug("PRN: bootloader received %d bytes", rcvd)
+                        consecutive_prn_misses = 0
                     elif len(prn_data) >= 3 and prn_data[0] == 0x10:
                         # Command response arrived during transfer — re-queue it
                         # so wait_response() can find it after the transfer loop.
                         notify_queue.put_nowait(prn_data)
+                        consecutive_prn_misses = 0
                 except TimeoutError:
-                    log.error("PRN timeout at %d/%d bytes — aborting", sent, len(firmware))
-                    result["message"] = (
-                        f"PRN timeout at {sent}/{len(firmware)} bytes (connection lost or buffer overflow)"
+                    consecutive_prn_misses += 1
+                    if consecutive_prn_misses >= 3:
+                        log.error(
+                            "3 consecutive PRN timeouts at %d/%d bytes — aborting",
+                            sent,
+                            len(firmware),
+                        )
+                        result["message"] = (
+                            f"PRN timeout at {sent}/{len(firmware)} bytes "
+                            f"(3 consecutive misses — connection lost)"
+                        )
+                        return result
+                    log.warning(
+                        "PRN timeout %d/3 at %d/%d bytes — continuing",
+                        consecutive_prn_misses,
+                        sent,
+                        len(firmware),
                     )
-                    return result
 
             pct = 45 + (sent * 50) // len(firmware)
             if pct >= last_pct + 5:
@@ -554,9 +618,11 @@ async def upload_ble_dfu(
                     log.debug("BLE bootloader command result (expected disconnect): %s", e)
                 await asyncio.sleep(3)
 
-            # Clear BlueZ state for both addresses
-            progress("cache", "Clearing BlueZ GATT cache...", 15)
-            await asyncio.to_thread(clear_bluez_state, app_ble_address)
+            # Clear BlueZ state for both addresses.  Power-cycle on first
+            # attempt to flush in-memory GATT cache (bluetoothctl remove alone
+            # doesn't reliably clear it on all BlueZ versions).
+            progress("cache", "Clearing BlueZ GATT cache (with adapter power-cycle)...", 15)
+            await asyncio.to_thread(clear_bluez_state, app_ble_address, power_cycle=True)
             await asyncio.to_thread(clear_bluez_state, boot_addr)
             await asyncio.sleep(3)
 

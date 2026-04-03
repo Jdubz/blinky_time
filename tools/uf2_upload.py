@@ -194,12 +194,12 @@ def _serial_open_with_timeout(port, baudrate=115200, timeout=1, open_timeout=Non
 def _request_server_release(port, verbose=False, hold_seconds=None):
     """Ask blinky-server to release a device on the given port.
 
-    Looks up the device by port, then calls POST /devices/{id}/release.
+    Looks up the device by port, then calls POST /api/devices/{id}/release.
     If hold_seconds is set, the server won't auto-reconnect for that duration.
     Returns True if released (or server not running), False on error.
     """
     try:
-        req = Request(f"{BLINKY_SERVER_URL}/devices",
+        req = Request(f"{BLINKY_SERVER_URL}/api/devices",
                       headers={"Accept": "application/json"})
         resp = urlopen(req, timeout=3)
         devices = json.loads(resp.read())
@@ -226,7 +226,7 @@ def _request_server_release(port, verbose=False, hold_seconds=None):
     # Release it
     try:
         req = Request(
-            f"{BLINKY_SERVER_URL}/devices/{device_id}/release",
+            f"{BLINKY_SERVER_URL}/api/devices/{device_id}/release",
             method="POST",
             headers={"Content-Type": "application/json"},
             data=json.dumps({"hold_seconds": hold_seconds} if hold_seconds is not None else {}).encode(),
@@ -244,7 +244,7 @@ def _request_server_release(port, verbose=False, hold_seconds=None):
 def _request_server_reconnect(port, verbose=False):
     """Ask blinky-server to reconnect a device on the given port."""
     try:
-        req = Request(f"{BLINKY_SERVER_URL}/devices",
+        req = Request(f"{BLINKY_SERVER_URL}/api/devices",
                       headers={"Accept": "application/json"})
         resp = urlopen(req, timeout=3)
         devices = json.loads(resp.read())
@@ -259,7 +259,7 @@ def _request_server_reconnect(port, verbose=False):
             device_id = dev.get("id")
             try:
                 req = Request(
-                    f"{BLINKY_SERVER_URL}/devices/{device_id}/reconnect",
+                    f"{BLINKY_SERVER_URL}/api/devices/{device_id}/reconnect",
                     method="POST",
                     headers={"Content-Type": "application/json"},
                     data=b"{}",
@@ -617,7 +617,7 @@ def find_port_by_id_path(serial_number):
     return None
 
 
-MAX_BOOTLOADER_RETRIES = 5
+MAX_BOOTLOADER_RETRIES = 15
 
 
 # ============================================================
@@ -893,57 +893,71 @@ def trigger_bootloader(port, verbose=False):
         print(f"  Warning: Could not determine USB hub location for {port}")
 
     current_port = port  # Track port across re-enumerations
-    ser = None  # Kept open across retries to avoid TinyUSB CDC DTR issues
 
     for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
         if attempt > 1:
             print(f"  Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
-            time.sleep(1)  # Let device settle between retries
+            # Wait for device to finish rebooting into app mode after failed
+            # bootloader entry (GPREGRET cleared by hub power-cycle).
+            time.sleep(3)
 
-            # Re-discover port if it changed (e.g., after USB recovery)
-            if not _device_port_exists(current_port) and device_serial:
+            # Re-discover port — device may have re-enumerated on a new ACM
+            if device_serial:
                 new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
                 if new_port:
-                    print(f"  Device re-discovered on {new_port}")
-                    current_port = new_port
-                else:
-                    # Device is gone — try USB recovery if we know the hub location
-                    if hub_path:
-                        print(f"  Device not found — attempting USB port recovery...")
-                        recovered_port = _recover_usb_port(
-                            hub_path, hub_port, device_serial, verbose
-                        )
-                        if recovered_port:
-                            current_port = recovered_port
-                        else:
-                            print(f"  USB recovery failed")
-                            continue
+                    if new_port != current_port:
+                        if verbose:
+                            print(f"  Device re-discovered on {new_port}")
+                        current_port = new_port
+                elif hub_path:
+                    print(f"  Device not found — attempting USB port recovery...")
+                    recovered_port = _recover_usb_port(
+                        hub_path, hub_port, device_serial, verbose
+                    )
+                    if recovered_port:
+                        current_port = recovered_port
                     else:
-                        print(f"  Device not found and no hub info for recovery")
+                        print(f"  USB recovery failed")
                         continue
+                else:
+                    print(f"  Device not found, waiting...")
+                    time.sleep(5)
+                    continue
 
         pre_existing_blocks = _get_usb_block_devices()
 
-        # Send 'bootloader' serial command.
-        # Open port ONCE and keep it open across retries. Each open/close
-        # cycle risks breaking TinyUSB CDC state (DTR drop on close).
-        # Only reopen if the port disappeared (device reset to different port).
-        if ser is None:
-            if attempt == 1:
-                print(f"  Trying serial command: bootloader")
-            try:
-                ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
-                time.sleep(2)  # Wait for TinyUSB CDC to fully initialize
-            except (serial.SerialException, OSError) as e:
-                print(f"  Serial open error: {e}")
-                continue
+        # Lock USB hub port power ON before bootloader entry.
+        # VIA Labs hubs (2109:2813) power-cycle ports when a device
+        # disconnects during reset, causing a power-on reset that clears
+        # GPREGRET. Asserting power ON before the reset reduces (but may
+        # not eliminate) this race condition.
+        if hub_path:
+            uhubctl = shutil.which("uhubctl")
+            if uhubctl:
+                subprocess.run(
+                    ["sudo", uhubctl, "-l", hub_path, "-p", str(hub_port), "-a", "1"],
+                    capture_output=True, timeout=5,
+                )
+
+        # Fresh serial connection for each attempt. Reusing across retries
+        # leads to stale fds after the device resets and re-enumerates.
+        if attempt == 1:
+            print(f"  Trying serial command: bootloader")
+        try:
+            ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
+            time.sleep(1)  # Wait for TinyUSB CDC to initialize
+        except (serial.SerialException, OSError) as e:
+            print(f"  Serial open error: {e}")
+            continue
 
         try:
             ser.reset_input_buffer()
-            ser.write(b'bootloader\r\n')
+            ser.write(b'bootloader\n')
             ser.flush()
-            time.sleep(2)  # Give device time to process + reset
-            # Read bootloader command response for diagnostics
+            # Read response IMMEDIATELY — the device's Serial.flush() needs
+            # the host to drain the TX buffer. A blocking read() keeps the
+            # USB IN pipe active. On fixed firmware (no Serial.flush), the
+            # device resets instantly and this read gets whatever arrived.
             try:
                 response = ser.read(500).decode('utf-8', errors='replace').strip()
                 if response and verbose:
@@ -951,40 +965,26 @@ def trigger_bootloader(port, verbose=False):
                         line = line.strip()
                         if line:
                             print(f"    {line}")
-                # Check for GPREGRET diagnostic output
                 if 'GPREGRET=0x' in response:
                     gpregret_val = response.split('GPREGRET=0x')[-1].split()[0].strip()
                     if gpregret_val.upper() != '57':
                         print(f"  WARNING: GPREGRET={gpregret_val} (expected 57 for UF2 mode)")
             except (serial.SerialException, OSError):
-                pass  # Device may have already reset
+                pass  # Device may have already reset — expected
         except (serial.SerialException, OSError, BrokenPipeError) as e:
-            print(f"  Serial write error: {e}")
-            ser = None  # Port dead, will reopen next attempt
+            if verbose:
+                print(f"  Serial error: {e}")
             continue
-
-        if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+        finally:
             try:
                 ser.close()
             except Exception:
                 pass
-            return device_serial
 
-        if not _device_port_exists(current_port):
-            print(f"  Device disconnected but UF2 drive not detected")
-            # Try USB power-cycle recovery if we know the hub location
-            if hub_path and attempt < MAX_BOOTLOADER_RETRIES:
-                print(f"  Attempting USB power-cycle recovery (hub={hub_path} port={hub_port})...")
-                recovered_port = _recover_usb_port(
-                    hub_path, hub_port, device_serial, verbose
-                )
-                if recovered_port:
-                    current_port = recovered_port
-                    print(f"  Device recovered on {current_port}")
-                else:
-                    print(f"  USB recovery failed — device may need bootloader update")
-            ser = None  # Port gone, will reopen after re-discovery
-            continue
+        # Short timeout per attempt (drive appears in 1-2s when GPREGRET survives).
+        # Total time across 15 retries stays reasonable.
+        if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
+            return device_serial
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on
@@ -1537,27 +1537,49 @@ def copy_firmware(uf2_path, mount_point):
     try:
         fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
         try:
-            bytes_written = os.write(fd, data)
+            # Loop os.write() until all bytes are delivered.  A single
+            # os.write() call can return fewer bytes than requested (short
+            # write).  If the UF2 drive ejects mid-write, we catch OSError
+            # below and check whether all data was delivered.
+            while bytes_written < len(data):
+                chunk = os.write(fd, data[bytes_written:])
+                if chunk == 0:
+                    break  # Shouldn't happen on a regular fd, but guard anyway
+                bytes_written += chunk
             os.fsync(fd)
         except OSError:
-            pass  # Drive may eject during fsync — data was already delivered
+            pass  # Drive may eject during write/fsync — check bytes below
         finally:
             try:
                 os.close(fd)
             except OSError:
                 pass  # Close may fail on dead mount — OK
-        print(f"  [PASS] Wrote {bytes_written:,} / {uf2_size:,} bytes")
-        return True
+        if bytes_written >= len(data):
+            print(f"  [PASS] Wrote {bytes_written:,} / {uf2_size:,} bytes")
+            return True
+        elif bytes_written > 0:
+            # Partial write: the bootloader silently rejects incomplete UF2
+            # blocks, so the old firmware stays. Report as failure.
+            print(f"  [FAIL] Partial write: {bytes_written:,} / {uf2_size:,} bytes "
+                  f"(drive ejected before all data delivered)")
+            return False
+        else:
+            print(f"  [FAIL] No bytes written")
+            return False
     except OSError as e:
         import errno
         if e.errno in (errno.ENOENT, errno.EIO, errno.ENODEV):
-            # Drive ejected during open/write — bootloader processed the data
-            # and rebooted. This is expected for fast devices and self-updates.
-            if bytes_written > 0:
+            # Drive ejected during open/write — check if all data was delivered
+            if bytes_written >= len(data):
                 print(f"  [PASS] Wrote {bytes_written:,} bytes before drive ejected (expected)")
+                return True
+            elif bytes_written > 0:
+                print(f"  [FAIL] Partial write: {bytes_written:,} / {uf2_size:,} bytes "
+                      f"(drive ejected mid-transfer)")
+                return False
             else:
                 print(f"  [WARN] Drive ejected before write started — may need retry")
-            return bytes_written > 0
+            return False
         print(f"  [FAIL] Copy failed: {e}")
         return False
 
@@ -2103,19 +2125,30 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     time.sleep(0.1)
 
                 if new_dev:
-                    # Verify block device belongs to this port's device via USB serial number
+                    # Verify block device belongs to this port's device via USB serial number.
+                    # In parallel upload, multiple devices enter bootloader close together —
+                    # we MUST match block devices to the correct device to prevent cross-flashing.
                     expected_sn = mount_map[port]["serial"]
                     if expected_sn:
                         block_sn = _get_block_device_serial(new_dev)
                         if block_sn and block_sn != expected_sn:
-                            print(f"    WARNING: Block device {new_dev} serial '{block_sn}' "
-                                  f"does not match expected '{expected_sn}' — possible mis-assignment")
+                            print(f"    REJECTED: Block device {new_dev} serial '{block_sn}' "
+                                  f"does not match expected '{expected_sn}' — belongs to another device")
+                            # Add to pre_blocks so we don't match it again, then retry
+                            pre_blocks.add(new_dev)
+                            new_dev = None
+                            continue
                         elif block_sn:
                             print(f"    Serial number verified: {block_sn}")
-                    print(f"    UF2 drive detected: {new_dev}")
-                    mount_map[port]["block_dev"] = new_dev
-                    entered = True
-                    break
+                        else:
+                            # Can't read serial — accept with warning in parallel mode
+                            print(f"    WARNING: Could not read block device serial for {new_dev} "
+                                  f"— accepting (verify manually)")
+                    if new_dev:
+                        print(f"    UF2 drive detected: {new_dev}")
+                        mount_map[port]["block_dev"] = new_dev
+                        entered = True
+                        break
                 else:
                     print(f"    No UF2 drive appeared (attempt {attempt})")
 
