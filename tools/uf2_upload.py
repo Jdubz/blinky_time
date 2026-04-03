@@ -617,7 +617,7 @@ def find_port_by_id_path(serial_number):
     return None
 
 
-MAX_BOOTLOADER_RETRIES = 5
+MAX_BOOTLOADER_RETRIES = 15
 
 
 # ============================================================
@@ -893,57 +893,71 @@ def trigger_bootloader(port, verbose=False):
         print(f"  Warning: Could not determine USB hub location for {port}")
 
     current_port = port  # Track port across re-enumerations
-    ser = None  # Kept open across retries to avoid TinyUSB CDC DTR issues
 
     for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
         if attempt > 1:
             print(f"  Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
-            time.sleep(1)  # Let device settle between retries
+            # Wait for device to finish rebooting into app mode after failed
+            # bootloader entry (GPREGRET cleared by hub power-cycle).
+            time.sleep(3)
 
-            # Re-discover port if it changed (e.g., after USB recovery)
-            if not _device_port_exists(current_port) and device_serial:
+            # Re-discover port — device may have re-enumerated on a new ACM
+            if device_serial:
                 new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
                 if new_port:
-                    print(f"  Device re-discovered on {new_port}")
-                    current_port = new_port
-                else:
-                    # Device is gone — try USB recovery if we know the hub location
-                    if hub_path:
-                        print(f"  Device not found — attempting USB port recovery...")
-                        recovered_port = _recover_usb_port(
-                            hub_path, hub_port, device_serial, verbose
-                        )
-                        if recovered_port:
-                            current_port = recovered_port
-                        else:
-                            print(f"  USB recovery failed")
-                            continue
+                    if new_port != current_port:
+                        if verbose:
+                            print(f"  Device re-discovered on {new_port}")
+                        current_port = new_port
+                elif hub_path:
+                    print(f"  Device not found — attempting USB port recovery...")
+                    recovered_port = _recover_usb_port(
+                        hub_path, hub_port, device_serial, verbose
+                    )
+                    if recovered_port:
+                        current_port = recovered_port
                     else:
-                        print(f"  Device not found and no hub info for recovery")
+                        print(f"  USB recovery failed")
                         continue
+                else:
+                    print(f"  Device not found, waiting...")
+                    time.sleep(5)
+                    continue
 
         pre_existing_blocks = _get_usb_block_devices()
 
-        # Send 'bootloader' serial command.
-        # Open port ONCE and keep it open across retries. Each open/close
-        # cycle risks breaking TinyUSB CDC state (DTR drop on close).
-        # Only reopen if the port disappeared (device reset to different port).
-        if ser is None:
-            if attempt == 1:
-                print(f"  Trying serial command: bootloader")
-            try:
-                ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
-                time.sleep(2)  # Wait for TinyUSB CDC to fully initialize
-            except (serial.SerialException, OSError) as e:
-                print(f"  Serial open error: {e}")
-                continue
+        # Lock USB hub port power ON before bootloader entry.
+        # VIA Labs hubs (2109:2813) power-cycle ports when a device
+        # disconnects during reset, causing a power-on reset that clears
+        # GPREGRET. Asserting power ON before the reset reduces (but may
+        # not eliminate) this race condition.
+        if hub_path:
+            uhubctl = shutil.which("uhubctl")
+            if uhubctl:
+                subprocess.run(
+                    ["sudo", uhubctl, "-l", hub_path, "-p", str(hub_port), "-a", "1"],
+                    capture_output=True, timeout=5,
+                )
+
+        # Fresh serial connection for each attempt. Reusing across retries
+        # leads to stale fds after the device resets and re-enumerates.
+        if attempt == 1:
+            print(f"  Trying serial command: bootloader")
+        try:
+            ser = _serial_open_with_timeout(current_port, 115200, timeout=2)
+            time.sleep(1)  # Wait for TinyUSB CDC to initialize
+        except (serial.SerialException, OSError) as e:
+            print(f"  Serial open error: {e}")
+            continue
 
         try:
             ser.reset_input_buffer()
-            ser.write(b'bootloader\r\n')
+            ser.write(b'bootloader\n')
             ser.flush()
-            time.sleep(2)  # Give device time to process + reset
-            # Read bootloader command response for diagnostics
+            # Read response IMMEDIATELY — the device's Serial.flush() needs
+            # the host to drain the TX buffer. A blocking read() keeps the
+            # USB IN pipe active. On fixed firmware (no Serial.flush), the
+            # device resets instantly and this read gets whatever arrived.
             try:
                 response = ser.read(500).decode('utf-8', errors='replace').strip()
                 if response and verbose:
@@ -951,40 +965,26 @@ def trigger_bootloader(port, verbose=False):
                         line = line.strip()
                         if line:
                             print(f"    {line}")
-                # Check for GPREGRET diagnostic output
                 if 'GPREGRET=0x' in response:
                     gpregret_val = response.split('GPREGRET=0x')[-1].split()[0].strip()
                     if gpregret_val.upper() != '57':
                         print(f"  WARNING: GPREGRET={gpregret_val} (expected 57 for UF2 mode)")
             except (serial.SerialException, OSError):
-                pass  # Device may have already reset
+                pass  # Device may have already reset — expected
         except (serial.SerialException, OSError, BrokenPipeError) as e:
-            print(f"  Serial write error: {e}")
-            ser = None  # Port dead, will reopen next attempt
+            if verbose:
+                print(f"  Serial error: {e}")
             continue
-
-        if _wait_for_uf2_drive(pre_existing_blocks, timeout=15, verbose=verbose):
+        finally:
             try:
                 ser.close()
             except Exception:
                 pass
-            return device_serial
 
-        if not _device_port_exists(current_port):
-            print(f"  Device disconnected but UF2 drive not detected")
-            # Device may have re-enumerated on a different port after reset.
-            # Re-discover by serial number instead of USB power-cycling
-            # (power-cycling corrupts xhci_hcd state and makes things worse).
-            if device_serial:
-                new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
-                if new_port:
-                    print(f"  Device re-discovered on {new_port} (was {current_port})")
-                    current_port = new_port
-                else:
-                    print(f"  Device not found by serial number — waiting 5s for re-enumeration")
-                    time.sleep(5)
-            ser = None  # Port gone, will reopen after re-discovery
-            continue
+        # Short timeout per attempt (drive appears in 1-2s when GPREGRET survives).
+        # Total time across 15 retries stays reasonable.
+        if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
+            return device_serial
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on
