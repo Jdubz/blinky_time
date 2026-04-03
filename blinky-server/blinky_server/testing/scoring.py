@@ -291,21 +291,24 @@ def score_device_run(
             plp_at_transient = sum(gt_onset_plp_values) / len(gt_onset_plp_values)
 
         # PLP autocorrelation at detected period lag.
-        # Use plp_period directly from firmware (ACF period in ~66Hz frames)
-        # instead of deriving from BPM, which loses precision through
-        # EMA smoothing and float→int conversion. The period IS the lag
-        # because plp_values are sampled at the same ~66Hz rate.
+        # plp_period is in firmware analysis frames (~62.5 Hz = 16kHz / 256-sample hop).
+        # plp_values are sampled at the stream rate (~20 Hz normal, ~100 Hz fast).
+        # Must convert firmware frames to stream-rate samples for the lag index.
         # Falls back to BPM-derived lag if period not available (older firmware).
+        FIRMWARE_ANALYSIS_HZ = 62.5  # 16 kHz sample rate / 256-sample FFT hop
         period_values = [
             s["plp_period"]
             for s in active_states
             if s["plp_period"] is not None and s["plp_period"] > 0
         ]
-        if period_values:
+        stream_rate = len(plp_values) / (audio_duration_sec or 1)
+        if period_values and stream_rate > 0:
             # Median is more robust than mean: immune to warm-up outliers
             # and tempo-change transients. Period is quantized (integer
             # frames), so median preserves the dominant locked value.
-            period_lag = _js_round_int(statistics.median(period_values))
+            median_period = statistics.median(period_values)
+            # Convert from firmware frames to stream-rate samples
+            period_lag = _js_round_int(median_period * stream_rate / FIRMWARE_ANALYSIS_HZ)
         else:
             # Fallback: derive from BPM (less accurate, octave-error prone)
             bpm_values = [s["bpm_internal"] for s in active_states if s["bpm_internal"] > 0]

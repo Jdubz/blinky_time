@@ -1445,10 +1445,11 @@ void SerialConsole::streamTick() {
         out_.print(F("}"));
 
         // AudioTracker music stream (v79 — PLP architecture)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2,"nn":0.123,"per":33}
         // a = rhythm active, bpm = tempo, ph = PLP phase (0-1)
         // pp = PLP pulse (extracted pattern value), str = rhythm strength
-        // q = beat event (phase wrap), e = energy, p = pulse (transient), od = onset density
+        // q = beat event (phase wrap), e = energy, p = pulse (transient)
+        // od = onset density, nn = raw NN onset activation, per = ACF period in ~62.5Hz frames
         // Debug adds: conf = ACF periodicity, sl = slot cache {id, conf[]}
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();

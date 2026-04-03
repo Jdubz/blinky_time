@@ -194,7 +194,7 @@ def _serial_open_with_timeout(port, baudrate=115200, timeout=1, open_timeout=Non
 def _request_server_release(port, verbose=False, hold_seconds=None):
     """Ask blinky-server to release a device on the given port.
 
-    Looks up the device by port, then calls POST /devices/{id}/release.
+    Looks up the device by port, then calls POST /api/devices/{id}/release.
     If hold_seconds is set, the server won't auto-reconnect for that duration.
     Returns True if released (or server not running), False on error.
     """
