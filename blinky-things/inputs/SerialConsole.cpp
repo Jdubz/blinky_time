@@ -1510,7 +1510,7 @@ void SerialConsole::streamTick() {
             out_.print(audioCtrl_->getOnsetDensity(), 1);
             out_.print(F(",\"nn\":"));
             out_.print(audioCtrl_->getRawNNActivation(), 3);
-            out_.print(F(",\"per\":"));
+            out_.print(F(",\"per\":"));  // ACF period in ~66Hz analysis frames
             out_.print(audioCtrl_->getPlpPeriod());
 
             // Debug mode: add diagnostics

@@ -81,7 +81,10 @@ class FleetManager:
         # DFU recovery state (per-device tracking for auto-retry).
         self._recovery_firmware_path: str | None = None
         self._dfu_recovery_state: dict[str, dict[str, int]] = {}
-        self._dfu_recovery_in_progress: bool = False
+        # Per-device set tracking which devices have active DFU recovery.
+        # Prevents the background loop from starting a second recovery on a
+        # device that's already being recovered (e.g., by a manual flash).
+        self._dfu_recovery_active: set[str] = set()
         # Per-device DFU locks: prevent auto-recovery and manual flash from
         # running concurrently on the same device. Lock is acquired before any
         # DFU operation and held for its entire duration.
@@ -612,8 +615,8 @@ class FleetManager:
         address, attempts BLE DFU using the recovery firmware. Uses exponential
         backoff to avoid flooding BLE with retry attempts.
         """
-        if self._dfu_recovery_in_progress:
-            return  # Previous recovery still running — skip
+        if self._dfu_recovery_active:
+            return  # At least one recovery still running — skip cycle
 
         firmware_path = self._recovery_firmware_path
         if not firmware_path:
@@ -664,7 +667,7 @@ class FleetManager:
                 continue
 
             async with dfu_lock:
-                self._dfu_recovery_in_progress = True
+                self._dfu_recovery_active.add(device.id)
                 self.pause_discovery()
                 self.hold_reconnect(device.id, 600)
                 try:
@@ -694,7 +697,7 @@ class FleetManager:
                     state["fails"] = fail_count + 1
                     log.error("Auto-recovery error for %s: %s", device.id[:12], e)
                 finally:
-                    self._dfu_recovery_in_progress = False
+                    self._dfu_recovery_active.discard(device.id)
                     self.resume_discovery()
                     self.resume_reconnect(device.id)
 

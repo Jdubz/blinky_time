@@ -53,51 +53,17 @@ Before sending the bootloader command, use `uhubctl` to explicitly lock port pow
 - Before sending `bootloader ble`, lock the hub port power
 - Requires knowing the device's USB hub location
 
-## Architecture Changes
+## Sudoers
 
-### Remove fallback
-
-`upload_with_ble_fallback()` in `firmware/__init__.py` should be replaced:
-
-```python
-async def upload_firmware(device, firmware_path):
-    if device.state == DeviceState.DFU_RECOVERY:
-        return await upload_ble_dfu(...)  # Already in bootloader
-    
-    if device.transport.transport_type == "serial":
-        return await upload_uf2(...)  # UF2 only, no fallback
-    
-    if device.transport.transport_type == "ble":
-        return await upload_ble_dfu(...)  # BLE DFU only
-    
-    return {"status": "error", "message": "No upload method"}
-```
-
-No fallback. If UF2 fails on a serial device, the error is returned immediately. The operator must investigate and fix the issue.
-
-### Fleet flash stops on failure
-
-`fleet_flash()` should stop on first device failure instead of continuing:
-
-```python
-for device in devices:
-    result = await upload_firmware(device, firmware_path)
-    if result["status"] != "ok":
-        return {"status": "error", "failed_device": device.id, "result": result}
-```
-
-### Sudoers for uhubctl
-
-Add to `/etc/sudoers.d/blinky`:
+Required in `/etc/sudoers.d/blinky`:
 ```
 blinkytime ALL=(ALL) NOPASSWD: /usr/bin/uhubctl
+blinkytime ALL=(ALL) NOPASSWD: /usr/bin/python3
 ```
 
-## Validation
+## Status
 
-After implementing:
-1. Test on ONE device first (bare chip with accessible reset as backup)
-2. Verify GPREGRET readback shows 0x57 in response
-3. Verify UF2 drive appears within 5s
-4. Verify firmware copied and device reboots successfully
-5. Only after single-device success, test fleet flash on all devices
+- ✅ No-fallback dispatch (implemented, Apr 2026)
+- ✅ Fleet flash stop-on-first-failure (implemented, Apr 2026)
+- ✅ USB reset (USBDEVFS_RESET) after transport disconnect (implemented, Apr 2026)
+- ⬚ Hub port power locking via uhubctl during bootloader entry (not started)

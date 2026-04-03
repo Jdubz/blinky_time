@@ -84,10 +84,12 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
         log.warning("USB device path %s does not exist", usb_dev_path)
         return False
 
-    # USBDEVFS_RESET ioctl requires root. Run via sudo python3 one-liner.
+    # USBDEVFS_RESET = _IO('U', 20) = 0x5514 — linux/usbdevice_fs.h
+    # Ioctl requires root. Pass path as sys.argv[1] (not f-string) to
+    # prevent command injection via crafted device paths.
     USBDEVFS_RESET = 21780
     script = (
-        f"import fcntl,os; fd=os.open('{usb_dev_path}',os.O_WRONLY); "
+        "import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_WRONLY); "
         f"fcntl.ioctl(fd,{USBDEVFS_RESET},0); os.close(fd); print('ok')"
     )
     try:
@@ -96,6 +98,7 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
             "python3",
             "-c",
             script,
+            usb_dev_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
