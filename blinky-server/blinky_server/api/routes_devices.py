@@ -228,14 +228,20 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     )
     hold_time = 600 if is_ble_only else 120
 
-    fleet.hold_reconnect(device_id, hold_time)
-    fleet.pause_discovery()
-    try:
-        result = await upload_firmware(device, str(firmware))
-    finally:
-        device.state = DeviceState.DISCONNECTED
-        fleet.resume_discovery()
-        fleet.resume_reconnect(device_id)
+    # Acquire per-device DFU lock — prevents concurrent DFU from auto-recovery
+    dfu_lock = fleet.get_dfu_lock(device_id)
+    if dfu_lock.locked():
+        raise HTTPException(409, f"DFU already in progress for device {device_id}")
+
+    async with dfu_lock:
+        fleet.hold_reconnect(device_id, hold_time)
+        fleet.pause_discovery()
+        try:
+            result = await upload_firmware(device, str(firmware))
+        finally:
+            device.state = DeviceState.DISCONNECTED
+            fleet.resume_discovery()
+            fleet.resume_reconnect(device_id)
 
     if result["status"] == "ok":
         return FlashResponse(**result)
