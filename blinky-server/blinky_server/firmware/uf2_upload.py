@@ -20,6 +20,7 @@ reinitializes the entire USB device without a power-cycle.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -91,7 +92,10 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
     )
     try:
         proc = await asyncio.create_subprocess_exec(
-            "sudo", "python3", "-c", script,
+            "sudo",
+            "python3",
+            "-c",
+            script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -159,10 +163,8 @@ async def upload_uf2(
                 break
 
     progress("prepare", "Releasing serial port...", 10)
-    try:
+    with contextlib.suppress(Exception):
         await transport.disconnect()
-    except Exception:
-        pass
 
     # === Phase 2: USB-reset to reinitialize TinyUSB CDC ===
     #

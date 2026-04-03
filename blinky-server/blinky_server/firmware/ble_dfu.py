@@ -102,10 +102,8 @@ def clear_bluez_state(address: str, power_cycle: bool = False) -> None:
         # Power-cycle the adapter to flush in-memory GATT cache.
         # WARNING: this drops ALL active BLE connections. Only use when
         # we're about to enter bootloader anyway (no active BLE needed).
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired, FileNotFoundError, OSError):
             subprocess.run(["bluetoothctl", "power", "off"], capture_output=True, timeout=5)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
         # Always attempt power-on, even if power-off failed/timed out —
         # leaving the adapter off would be catastrophic.
         try:
@@ -197,7 +195,13 @@ async def _dfu_transfer(
     try:
         async with asyncio.timeout(DFU_TRANSFER_TIMEOUT):
             return await _dfu_transfer_inner(
-                boot_addr, init_packet, firmware, image_type, progress, result, mtu,
+                boot_addr,
+                init_packet,
+                firmware,
+                image_type,
+                progress,
+                result,
+                mtu,
             )
     except TimeoutError:
         result["message"] = f"DFU transfer timed out after {DFU_TRANSFER_TIMEOUT}s"
@@ -383,7 +387,8 @@ async def _dfu_transfer_inner(
                     if consecutive_prn_misses >= 3:
                         log.error(
                             "3 consecutive PRN timeouts at %d/%d bytes — aborting",
-                            sent, len(firmware),
+                            sent,
+                            len(firmware),
                         )
                         result["message"] = (
                             f"PRN timeout at {sent}/{len(firmware)} bytes "
@@ -392,7 +397,9 @@ async def _dfu_transfer_inner(
                         return result
                     log.warning(
                         "PRN timeout %d/3 at %d/%d bytes — continuing",
-                        consecutive_prn_misses, sent, len(firmware),
+                        consecutive_prn_misses,
+                        sent,
+                        len(firmware),
                     )
 
             pct = 45 + (sent * 50) // len(firmware)
