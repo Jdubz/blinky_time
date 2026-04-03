@@ -616,7 +616,10 @@ class FleetManager:
         backoff to avoid flooding BLE with retry attempts.
         """
         if self._dfu_recovery_active:
-            return  # At least one recovery still running — skip cycle
+            # Skip entire cycle if any recovery is in-flight. BLE DFU uses
+            # the adapter exclusively (BleakScanner conflicts with concurrent
+            # scans), so we serialize recovery attempts even across devices.
+            return
 
         firmware_path = self._recovery_firmware_path
         if not firmware_path:

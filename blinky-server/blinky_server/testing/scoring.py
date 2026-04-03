@@ -11,6 +11,7 @@ Only two things are scored:
 from __future__ import annotations
 
 import math
+import statistics
 from collections import defaultdict
 from typing import Any, TypedDict
 
@@ -301,7 +302,10 @@ def score_device_run(
             if s["plp_period"] is not None and s["plp_period"] > 0
         ]
         if period_values:
-            period_lag = _js_round_int(sum(period_values) / len(period_values))
+            # Median is more robust than mean: immune to warm-up outliers
+            # and tempo-change transients. Period is quantized (integer
+            # frames), so median preserves the dominant locked value.
+            period_lag = _js_round_int(statistics.median(period_values))
         else:
             # Fallback: derive from BPM (less accurate, octave-error prone)
             bpm_values = [s["bpm_internal"] for s in active_states if s["bpm_internal"] > 0]

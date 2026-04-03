@@ -63,6 +63,17 @@ def _get_usb_dev_path(serial_port: str) -> str | None:
     return None
 
 
+def _find_usb_reset_tool() -> Path | None:
+    """Find the usb_reset.py helper in tools/."""
+    p = Path(__file__).resolve()
+    for _ in range(10):
+        p = p.parent
+        candidate = p / "tools" / "usb_reset.py"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 async def _usb_reset_device(usb_dev_path: str | None) -> bool:
     """Send USBDEVFS_RESET ioctl to reinitialize a USB device's stack.
 
@@ -71,10 +82,9 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
     because pyserial's close drops DTR and TinyUSB enters a "no host" state
     that persists across subsequent port opens.
 
-    Uses the USBDEVFS_RESET ioctl directly (more reliable than the usbreset
-    command-line tool which has device-lookup issues).
-
-    Requires root/sudo for /dev/bus/usb access.
+    Delegates to tools/usb_reset.py via sudo. The helper validates the path
+    format (/dev/bus/usb/ prefix) and uses a narrow sudoers rule instead of
+    blanket root Python access.
     """
     if not usb_dev_path:
         log.warning("No USB device path — cannot reset")
@@ -84,20 +94,16 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
         log.warning("USB device path %s does not exist", usb_dev_path)
         return False
 
-    # USBDEVFS_RESET = _IO('U', 20) = 0x5514 — linux/usbdevice_fs.h
-    # Ioctl requires root. Pass path as sys.argv[1] (not f-string) to
-    # prevent command injection via crafted device paths.
-    USBDEVFS_RESET = 21780
-    script = (
-        "import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_WRONLY); "
-        f"fcntl.ioctl(fd,{USBDEVFS_RESET},0); os.close(fd); print('ok')"
-    )
+    tool = _find_usb_reset_tool()
+    if not tool:
+        log.warning("tools/usb_reset.py not found — cannot reset USB device")
+        return False
+
     try:
         proc = await asyncio.create_subprocess_exec(
             "sudo",
             "python3",
-            "-c",
-            script,
+            str(tool),
             usb_dev_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,

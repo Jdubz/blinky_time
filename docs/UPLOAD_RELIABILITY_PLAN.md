@@ -55,15 +55,13 @@ Before sending the bootloader command, use `uhubctl` to explicitly lock port pow
 
 ## Sudoers
 
-Required in `/etc/sudoers.d/blinky`:
+Required in `/etc/sudoers.d/blinky` (narrow rules, no blanket python root):
 ```
 blinkytime ALL=(ALL) NOPASSWD: /usr/bin/uhubctl
-blinkytime ALL=(ALL) NOPASSWD: /usr/bin/python3
+blinkytime ALL=(ALL) NOPASSWD: /usr/bin/python3 /home/blinkytime/blinky_time/tools/usb_reset.py
 ```
 
-## Status
+## TODO
 
-- ✅ No-fallback dispatch (implemented, Apr 2026)
-- ✅ Fleet flash stop-on-first-failure (implemented, Apr 2026)
-- ✅ USB reset (USBDEVFS_RESET) after transport disconnect (implemented, Apr 2026)
-- ⬚ Hub port power locking via uhubctl during bootloader entry (not started)
+- Hub port power locking via uhubctl during bootloader entry
+- See also `UPLOAD_OVERHAUL_PLAN.md` for the long-term fix (custom bootloader with RAM-based entry)
