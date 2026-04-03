@@ -463,7 +463,7 @@ check_test_result(job_id: "abc123")
 - ✅ Cross-transport identity: `json info` reports `"sn"` (FICR DEVICEID) and `"ble"` (BLE MAC address)
 - ✅ BLE disconnect detection: bleak `disconnected_callback` → auto-reconnect within 10s
 - ✅ BLE liveness checks: background ping every ~30s catches silent disconnects
-- ✅ BLE DFU as UF2 fallback: serial flash auto-falls back to BLE DFU when UF2 fails
+- ✅ No-fallback dispatch: UF2 for serial devices, BLE DFU for BLE-only — no silent fallback
 - ✅ DFU recovery detection: scans for DFU service UUID, detects SafeBoot crash recovery, surfaces `dfu_recovery` state
 - ✅ DFU recovery flash: `POST /devices/{id}/flash` pushes firmware directly to devices in DFU bootloader
 - ✅ Fleet server on blinkyhost (5 serial + 6 BLE devices, hardware_sn dedup, REST API)

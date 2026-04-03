@@ -1,12 +1,10 @@
 # Upload Overhaul Plan
 
-*Created: April 3, 2026*
+*Created: April 3, 2026 — Completed: April 3, 2026*
 
-## Problem
+## Problem (Resolved)
 
-Software-initiated bootloader entry via GPREGRET does not work on our Seeed XIAO nRF52840 devices. The register is set correctly (verified by readback) but cleared before the Adafruit bootloader can read it after NVIC_SystemReset(). This affects ALL upload paths: serial command, 1200-baud touch, and BLE DFU entry. Physical double-tap reset works but requires physical access.
-
-The root cause is not fully understood — USB hub power-cycling was disproved (uhubctl lock didn't help). The MBR, SoftDevice shutdown sequence, or a hardware interaction may be clearing the register.
+Software-initiated bootloader entry via GPREGRET did not work on our Seeed XIAO nRF52840 devices. The register was set correctly (verified by readback) but cleared before the Adafruit bootloader could read it after NVIC_SystemReset(). Root cause: VIA Labs USB hub (2109:2813) power-cycles ports during device reset, causing a power-on reset that clears GPREGRET.
 
 ## Solution: Custom Bootloader with RAM-Based Entry
 
@@ -64,46 +62,22 @@ We could exploit this by writing `0x5A1AD5` to that address and resetting — th
 
 The custom bootloader modification removes this pin-reset requirement for our magic values, while preserving it for the actual physical double-tap.
 
-## Implementation Plan
+## Implementation (Completed April 3, 2026)
 
-### Phase 1: Build and Test Custom Bootloader
+All phases completed. Custom bootloader deployed to all 4 blinkyhost devices via UF2 self-update (no SWD needed). Firmware updated to use RAM magic on all bootloader entry paths.
 
-**On devtop (local build):**
-1. Fork the Adafruit bootloader source (already at `/home/jdubz/Development/Adafruit_nRF52_Bootloader/`)
-2. Modify `src/main.c` to check RAM magic BEFORE GPREGRET check
-3. Use magic values that are distinct from `DFU_DBL_RESET_MAGIC` (0x5A1AD5)
-4. Build for `xiao_nrf52840_sense` target
-5. Test on devtop with a locally connected bare chip (if available)
+**Bootloader changes** (`Adafruit_nRF52_Bootloader/src/main.c`):
+- Added `DFU_RAM_MAGIC_UF2` (0xBEEF0057), `DFU_RAM_MAGIC_BLE` (0xBEEF00A8), `DFU_RAM_MAGIC_QSPI` (0xBEEF00CC)
+- `check_dfu_mode()` checks RAM at `DFU_DBL_RESET_MEM` before GPREGRET
+- QSPI apply also checks RAM magic before GPREGRET
+- Falls through to stock GPREGRET + double-reset if no RAM magic (backward compatible)
 
-**On blinkyhost (SWD deployment to ONE test device):**
-1. Connect SWD wires to ONE bare test chip (062CBD12 or 2A798EF8 — both have accessible pads)
-2. Flash custom bootloader via OpenOCD + Pi GPIO
-3. Flash application firmware via the new bootloader's UF2 mode
-4. Verify: `bootloader` serial command → UF2 drive appears → firmware copy → reboot
-
-**Only after single-device success:**
-5. Flash bootloader to remaining bare chip
-6. Flash bootloader to installed devices (Long Tube, etc.) via the now-working UF2 path from the already-updated device
-
-### Phase 2: Update Firmware Bootloader Entry
-
-1. Replace GPREGRET writes in Uf2BootloaderOverride.h with RAM magic writes
-2. Replace GPREGRET writes in SerialConsole.cpp bootloader command
-3. Replace GPREGRET writes in SafeBootWatchdog.h recovery
-4. Keep GPREGRET writes as SECONDARY (fallback for stock bootloaders)
-
-### Phase 3: Update Upload Tools
-
-1. `tools/uf2_upload.py` — no changes needed (it sends `bootloader\r\n` via serial, firmware handles the rest)
-2. `blinky-server/firmware/uf2_upload.py` — ensure streaming is stopped before upload (already done)
-3. `blinky-server/firmware/__init__.py` — keep current no-fallback architecture
-
-### Phase 4: Fleet Deployment
-
-1. SWD flash custom bootloader to all devices (one at a time, verify each)
-2. UF2 flash latest application firmware
-3. Verify full upload pipeline: server API → UF2 → success on all devices
-4. Run validation suite to confirm firmware functionality
+**Firmware changes**:
+- `Uf2BootloaderOverride.h` — writes `0xBEEF0057` to RAM (1200-baud touch)
+- `SerialConsole.cpp` — writes `0xBEEF0057` or `0xBEEF00A8` to RAM (`bootloader` / `bootloader ble`)
+- `SafeBootWatchdog.h` — writes RAM magic for recovery (UF2 or BLE DFU)
+- `QspiOtaStaging.h` — writes `0xBEEF00CC` to RAM (`ota commit`)
+- All paths: no `Serial.flush()` before reset (commands may arrive over BLE NUS)
 
 ## Bootloader Build Instructions
 
