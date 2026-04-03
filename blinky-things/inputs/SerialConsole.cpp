@@ -773,8 +773,11 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         out_.print(F("Entering "));
         out_.print(bleMode ? F("BLE DFU") : F("UF2"));
         out_.println(F(" bootloader..."));
-        Serial.flush();  // Ensure message is sent before reset
-        delay(100);      // Brief delay for serial transmission
+        // Do NOT call Serial.flush() here — the main loop may still be
+        // pumping periodic output (FPS counters, streaming) into the TinyUSB
+        // TX buffer. flush() blocks until ALL pending data is ACKed by the
+        // host, which can stall indefinitely if the buffer fills faster than
+        // the host reads. Just set GPREGRET and reset immediately.
         {
 #ifdef ARDUINO_ARCH_NRF52
             // Write GPREGRET via SoftDevice API while SD is still enabled.
@@ -800,8 +803,8 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             out_.print(F("  SD=")); out_.print(sd_en);
             out_.print(F(" err=")); out_.print(err1); out_.print(F("/")); out_.print(err2);
             out_.print(F(" GPREGRET=0x")); out_.println(readback, HEX);
-            Serial.flush();
-            delay(100);
+            // No flush — reset immediately. Diagnostic output above is
+            // best-effort; GPREGRET is already set and verified.
             __DSB(); __ISB();
             NVIC_SystemReset();
 #else
