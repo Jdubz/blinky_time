@@ -117,7 +117,7 @@ async def upload_uf2(
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(tool.parent),  # Run from tools/ dir for relative imports
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
         output = stdout.decode("utf-8", errors="replace")
 
         if proc.returncode == 0:

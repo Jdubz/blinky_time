@@ -963,7 +963,7 @@ def trigger_bootloader(port, verbose=False):
             ser = None  # Port dead, will reopen next attempt
             continue
 
-        if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+        if _wait_for_uf2_drive(pre_existing_blocks, timeout=15, verbose=verbose):
             try:
                 ser.close()
             except Exception:
@@ -972,17 +972,17 @@ def trigger_bootloader(port, verbose=False):
 
         if not _device_port_exists(current_port):
             print(f"  Device disconnected but UF2 drive not detected")
-            # Try USB power-cycle recovery if we know the hub location
-            if hub_path and attempt < MAX_BOOTLOADER_RETRIES:
-                print(f"  Attempting USB power-cycle recovery (hub={hub_path} port={hub_port})...")
-                recovered_port = _recover_usb_port(
-                    hub_path, hub_port, device_serial, verbose
-                )
-                if recovered_port:
-                    current_port = recovered_port
-                    print(f"  Device recovered on {current_port}")
+            # Device may have re-enumerated on a different port after reset.
+            # Re-discover by serial number instead of USB power-cycling
+            # (power-cycling corrupts xhci_hcd state and makes things worse).
+            if device_serial:
+                new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
+                if new_port:
+                    print(f"  Device re-discovered on {new_port} (was {current_port})")
+                    current_port = new_port
                 else:
-                    print(f"  USB recovery failed — device may need bootloader update")
+                    print(f"  Device not found by serial number — waiting 5s for re-enumeration")
+                    time.sleep(5)
             ser = None  # Port gone, will reopen after re-discovery
             continue
 
