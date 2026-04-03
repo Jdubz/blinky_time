@@ -73,10 +73,22 @@ async def upload_uf2(
         result["message"] = f"Firmware file not found: {firmware_path}"
         return result
 
+    # Stop streaming before disconnect — if the firmware is streaming,
+    # the serial TX buffer floods with data that interferes with the
+    # bootloader command in uf2_upload.py. Serial.flush() in the firmware's
+    # bootloader code blocks on a full TX buffer, and the response is
+    # buried in stream data. Sending 'stream off' first clears this.
+    progress("prepare", "Stopping streaming and releasing serial port...", 10)
+    try:
+        await transport.write_line("stream off")
+        await transport.write_line("debug transient off")
+        await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
     # Disconnect transport WITHOUT dropping DTR. Setting DTR=True before
     # close prevents TinyUSB CDC from entering "disconnected" state, so the
     # tool can reopen the port cleanly.
-    progress("prepare", "Releasing serial port...", 10)
     try:
         serial_obj = transport._serial_transport.serial if transport._serial_transport else None
         if serial_obj and hasattr(serial_obj, "dtr"):
