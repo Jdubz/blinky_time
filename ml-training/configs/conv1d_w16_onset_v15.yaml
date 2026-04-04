@@ -1,0 +1,56 @@
+# Conv1D W16 v15 — madmom CNN onset knowledge distillation
+#
+# Based on v11 (deployed model). Same architecture, same hard loss.
+# Adds MSE distillation from madmom CNN onset detector soft labels.
+#
+# Key change: teacher labels are continuous [0,1] activations from madmom's
+# CNN onset detector (6,750 tracks at 100 Hz, resampled to 62.5 Hz).
+# MSE distillation teaches the student to reproduce the activation SHAPE
+# (sharp peaks on kicks, near-zero between hits) rather than binary 0/1.
+#
+# DCASE 2018-2024 baselines use MSE for teacher-student sigmoid consistency.
+# Kim & Oh (IJCAI 2021) showed MSE outperforms KL for KD.
+#
+# Architecture: Conv1D(52->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# ~10K params, <15 KB INT8
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: true
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+distillation:
+  alpha: 0.3
+  temperature: 2.0    # Ignored by MSE loss, kept for config compat
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v15.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15
