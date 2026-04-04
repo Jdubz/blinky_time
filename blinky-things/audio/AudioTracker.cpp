@@ -145,9 +145,10 @@ const AudioControl& AudioTracker::update(float dt) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 5. Pulse detection uses spectral flux directly — it has sharp transient
-    //    peaks with near-zero baseline, unlike NN onset which hovers at ~0.4.
-    //    NN onset still feeds energy synthesis and onset density.
+    // 5. Pulse detection uses spectral flux for sharp transient edges, gated
+    //    by NN onset activation to suppress non-onset spectral changes (harmonic
+    //    shifts, hi-hat jitter, noise). Spectral flux provides precise timing
+    //    (rising-edge detection), NN provides selectivity (is this a real onset?).
     float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevOdf_;
     updatePulseDetection(pulseOdf, dt, nowMs);
 
@@ -758,9 +759,15 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     // read 0 despite active audio, killing all pulse detection).
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
 
+    // NN gate: suppress spectral flux pulses that aren't corroborated by the
+    // onset NN. Filters harmonic changes, hi-hat jitter, and noise transients.
+    // When NN is not active (fallback mode), gate is always open.
+    bool nnGateOpen = !nnActive_ || (rawNNActivation_ > pulseNNGate);
+
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
         risingEdge &&
+        nnGateOpen &&
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
 
