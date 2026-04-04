@@ -104,7 +104,7 @@ public:
     float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
-    uint16_t acfPeriodMs = 150;
+    uint16_t acfPeriodMs = 100;
 
     // Rhythm activation
     float activationThreshold = 0.3f;

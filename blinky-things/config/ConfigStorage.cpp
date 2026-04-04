@@ -194,7 +194,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.bpmMin = 15.0f;
     data_.tracker.bpmMax = 200.0f;
     data_.tracker.tempoSmoothing = 0.85f;
-    data_.tracker.acfPeriodMs = 150;
+    data_.tracker.acfPeriodMs = 100;
     data_.tracker.activationThreshold = 0.3f;
     data_.tracker.pulseOnsetFloor = 0.1f;
     data_.tracker.odfContrast = 1.25f;

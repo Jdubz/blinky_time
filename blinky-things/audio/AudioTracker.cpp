@@ -192,9 +192,9 @@ const AudioControl& AudioTracker::update(float dt) {
     }
 
     // 7. ACF period detection + PLP pattern analysis on timer (~4ms every 150ms)
-    // Warmup: 120 frames (~1.8s). Minimum is ACF_MAX_LAG (80) for valid correlation;
-    // 120 gives 1.5x the max lag for stable first ACF without over-delaying cold start.
-    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 120) {
+    // Warmup: 100 frames (~1.6s). Minimum is ACF_MAX_LAG (80) for valid correlation;
+    // 100 gives 1.25x the max lag — tight but sufficient for first ACF.
+    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 100) {
         uint32_t t0 = time_.millis();
         runAcf();
         uint32_t t1 = time_.millis();
@@ -492,19 +492,33 @@ void AudioTracker::runAcf() {
 
         if (score > bestScore) {
             // Phase from epoch-fold peak position (where the main accent falls).
-            // Unlike DFT phase (continuous sub-frame precision from atan2), this is
-            // quantized to 1-frame resolution (~3% at 120 BPM). The downstream
-            // cosine OLA accumulates many kernels and self-corrects over time.
+            // Parabolic interpolation on the 3 bins around the peak gives sub-frame
+            // precision (~0.3% vs ~3% integer-bin at 120 BPM). Same technique used
+            // in the ACF peak finder. Handles wrap-around for peaks at bin 0.
             int peakBin = 0;
             float peakVal = fold[0];
             for (int j = 1; j < cPeriod; j++) {
                 if (fold[j] > peakVal) { peakVal = fold[j]; peakBin = j; }
             }
+            // Parabolic interpolation for sub-frame phase
+            float refinedBin = static_cast<float>(peakBin);
+            if (cPeriod >= 3) {
+                int prev = (peakBin - 1 + cPeriod) % cPeriod;  // wrap-around
+                int next = (peakBin + 1) % cPeriod;
+                float denom = fold[prev] - 2.0f * fold[peakBin] + fold[next];
+                if (fabsf(denom) > 1e-6f) {
+                    float delta = 0.5f * (fold[prev] - fold[next]) / denom;
+                    delta = clampf(delta, -0.5f, 0.5f);
+                    refinedBin += delta;
+                    if (refinedBin < 0.0f) refinedBin += cPeriod;
+                    if (refinedBin >= cPeriod) refinedBin -= cPeriod;
+                }
+            }
 
             bestScore = score;
             bestStrength = candidates[c].acfStrength;
             bestPeriod = cPeriod;
-            bestPhase = static_cast<float>(peakBin) / static_cast<float>(cPeriod);
+            bestPhase = refinedBin / static_cast<float>(cPeriod);
             bestSource = cSource;
         }
     }
