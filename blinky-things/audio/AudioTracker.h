@@ -104,7 +104,7 @@ public:
     float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
-    uint16_t acfPeriodMs = 150;
+    uint16_t acfPeriodMs = 100;
 
     // Rhythm activation
     float activationThreshold = 0.3f;
@@ -124,6 +124,7 @@ public:
     float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
     float pulseOnsetFloor = 0.005f;    // ODF floor — tuned for spectral flux range (0.001-0.05)
+    float pulseNNGate = 0.3f;          // NN activation gate — suppress pulse when NN < this
 
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking

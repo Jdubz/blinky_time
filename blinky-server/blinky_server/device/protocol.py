@@ -31,6 +31,7 @@ class DeviceProtocol:
     def __init__(self, transport: Transport) -> None:
         self._transport = transport
         self._streaming = False
+        self._streaming_mode = "on"  # Track mode: "on", "fast", "debug", etc.
         self._command_lock = asyncio.Lock()
 
         # Adjust timeouts for transport speed
@@ -96,10 +97,12 @@ class DeviceProtocol:
             # Update streaming state
             if is_stream_enable:
                 self._streaming = True
+                self._streaming_mode = command.split()[1]  # "on", "fast", "debug", etc.
             elif is_stream_disable:
                 self._streaming = False
             elif was_streaming:
-                await self._raw_send("stream on")
+                # Restore the SAME streaming mode, not always "stream on"
+                await self._raw_send(f"stream {self._streaming_mode}")
                 self._streaming = True
 
             return response

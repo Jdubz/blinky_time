@@ -519,20 +519,21 @@ void loop() {
   // Advance fake audio clock when enabled
   fakeAudio.update(dt);
 
-  // Get pulse from audio control signal for transient logging
-  const AudioControl& audio = audioController ? audioController->getControl() : AudioControl{};
-  float pulse = audio.pulse;
-
-  // Send transient detection events when debug channel is enabled
+  // Send discrete onset events when debug channel is enabled.
+  // Uses lastPulseStrength (floor-tracking baseline + rising-edge + cooldown)
+  // NOT audio.pulse (continuous envelope for generators — nonzero ~60% of
+  // time during music, which floods the serial port with ~35 events/sec).
   // Use: "debug transient on" to enable, "debug transient off" to disable
-  if (audioController && pulse > 0.0f &&
+  if (audioController &&
       SerialConsole::isDebugChannelEnabled(DebugChannel::TRANSIENT)) {
-    // TRANSIENT message: simplified single-band detection
-    Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
-    Serial.print(now);
-    Serial.print(F(",\"strength\":"));
-    Serial.print(pulse, 2);
-    Serial.println(F("}"));
+    float onsetStrength = audioController->getLastOnsetStrength();
+    if (onsetStrength > 0.0f) {
+      Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
+      Serial.print(now);
+      Serial.print(F(",\"strength\":"));
+      Serial.print(onsetStrength, 2);
+      Serial.println(F("}"));
+    }
   }
 
   // Track charging state changes
