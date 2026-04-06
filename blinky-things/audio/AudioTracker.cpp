@@ -125,7 +125,9 @@ const AudioControl& AudioTracker::update(float dt) {
 
         // Track raw NN activation peaks (before pulse detection threshold/cooldown).
         // Record timestamp when activation exceeds previous value (rising edge).
-        if (odf > rawNNActivation_ && odf > 0.3f) {
+        // Uses pulseNNGate as floor so the peak timestamp stays fresh whenever
+        // activation is in the gate-open range (Gemini/Copilot review feedback).
+        if (odf > rawNNActivation_ && odf > pulseNNGate) {
             rawNNPeakMs_ = nowMs;
         }
         rawNNActivation_ = odf;
@@ -529,11 +531,33 @@ void AudioTracker::runAcf() {
         memset(pulseBuf_, 0, sizeof(pulseBuf_));
         pulseHead_ = 0;
         olaPeakEma_ = 1.0f;
+        // Hard-reset free-running phase to match detected accent (OLA buffer is
+        // empty so output is 100% cosine fallback — must align immediately)
+        plpPhase_ = 1.0f - bestPhase;
+        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
     }
 
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
     plpAccentPhase_ = bestPhase;
+
+    // Correct free-running phase toward detected accent phase.
+    // Target: plpPhase_ = 1 - accentPhase (so cosine fallback peaks when
+    // the OLA kernel peak arrives, i.e. accentPhase * period frames from now).
+    // Correction rate scales with confidence: reliable estimates get faster
+    // correction, noisy estimates get ignored. At ~100ms ACF period and
+    // rate 0.25, convergence takes ~400ms (4 updates) at full confidence.
+    {
+        float target = 1.0f - bestPhase;
+        if (target >= 1.0f) target -= 1.0f;
+        float error = target - plpPhase_;
+        if (error > 0.5f) error -= 1.0f;
+        if (error < -0.5f) error += 1.0f;
+        float rate = 0.25f * clampf(plpConfidence_, 0.0f, 1.0f);
+        plpPhase_ += error * rate;
+        if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+    }
 
     // Periodicity strength from ACF peak (already normalized 0-1)
     float newStrength = clampf(bestStrength, 0.0f, 1.0f);
@@ -773,9 +797,15 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
 
     // NN gate: suppress spectral flux pulses that aren't corroborated by the
-    // onset NN. Filters harmonic changes, hi-hat jitter, and noise transients.
+    // onset NN. Two conditions must be met:
+    //   1. Activation above threshold (filters noise/silence)
+    //   2. Activation peaked recently — was rising within ~100ms (filters
+    //      sustained high activation from harmonic content, reverb tails)
     // When NN is not active (fallback mode), gate is always open.
-    bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f || (rawNNActivation_ > pulseNNGate);
+    // Guard against millis() wrap (~49 days) — treat as stale peak
+    uint32_t peakAge = (nowMs >= rawNNPeakMs_) ? (nowMs - rawNNPeakMs_) : 200;
+    bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f ||
+        (rawNNActivation_ > pulseNNGate && peakAge < 100);
 
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
