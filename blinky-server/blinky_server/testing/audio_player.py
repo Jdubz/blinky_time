@@ -37,31 +37,20 @@ _cached_audio_env: dict[str, str] | None = None
 
 
 async def _get_audio_env() -> dict[str, str]:
-    """Get environment with AUDIODEV set to USB speakers if available."""
+    """Get environment for audio playback.
+
+    Does NOT set AUDIODEV — ffplay on Raspberry Pi works best with
+    the default ALSA routing. Setting AUDIODEV=hw:N,0 bypasses dmix
+    and fails with 'audio open failed' on most configurations.
+    """
     global _cached_audio_env
     if _cached_audio_env is not None:
         return _cached_audio_env
 
-    env = dict(os.environ)
-    if "AUDIODEV" not in env:
-        try:
-            result = await asyncio.create_subprocess_exec(
-                "aplay",
-                "-l",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await result.communicate()
-            for line in stdout.decode().split("\n"):
-                if "USB Audio" in line or "Pebbles" in line:
-                    card = line.split("card ")[1].split(":")[0]
-                    env["AUDIODEV"] = f"hw:{card},0"
-                    log.info("Auto-detected audio device: %s", env["AUDIODEV"])
-                    break
-        except Exception:
-            pass
-    _cached_audio_env = env
-    return env
+    _cached_audio_env = dict(os.environ)
+    # Remove any inherited AUDIODEV to ensure ffplay uses system default
+    _cached_audio_env.pop("AUDIODEV", None)
+    return _cached_audio_env
 
 
 async def stop_audio() -> None:

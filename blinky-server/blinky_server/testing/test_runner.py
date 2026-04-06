@@ -319,9 +319,6 @@ async def run_param_sweep(
 
                 for device, value in assignments:
                     await device.protocol.send_command(f"set {param_name} {value}")
-                    # DeviceProtocol resumes with "stream on" after set;
-                    # restore "stream fast" for test data collection.
-                    await device.protocol.send_command("stream fast")
                     await asyncio.sleep(0.1)
 
                 for track in tracks:
@@ -631,15 +628,8 @@ async def _eval_param_value(
     settle_ms: float,
     target_metric: str,
 ) -> float:
-    """Set a parameter value, score it across all tracks, return mean metric.
-
-    Restores `stream fast` after the `set` command since DeviceProtocol
-    auto-resumes with `stream on` instead of `stream fast`.
-    """
+    """Set a parameter value, score it across all tracks, return mean metric."""
     await device.protocol.send_command(f"set {param_name} {value}")
-    # DeviceProtocol resumes with "stream on" after a set command,
-    # but tests need "stream fast" — restore it explicitly.
-    await device.protocol.send_command("stream fast")
     await asyncio.sleep(0.2)
 
     track_scores: list[float] = []

@@ -378,31 +378,19 @@ def asymmetric_focal_owbce(y_pred: torch.Tensor, y_true: torch.Tensor,
 
 def distillation_loss(student_pred: torch.Tensor, teacher_pred: torch.Tensor,
                       temperature: float = 2.0) -> torch.Tensor:
-    """Knowledge distillation loss (KL divergence on softened predictions).
+    """Knowledge distillation loss — MSE between student and teacher activations.
 
-    Uses binary KL divergence since outputs are independent sigmoids, not softmax.
-    Temperature softens the teacher's predictions to expose dark knowledge
-    (relative confidence between beat positions).
+    MSE is the standard loss for sigmoid KD in sound event detection (DCASE
+    2018-2024 baselines). Temperature scaling is not applicable here because
+    we only have the teacher's post-sigmoid probabilities, not raw logits.
+    The temperature parameter is accepted but ignored for backward compat.
 
     Args:
         student_pred: Student model output (batch, time, channels), after sigmoid
-        teacher_pred: Teacher soft labels (batch, time, 1), beat activation only
-        temperature: Softening temperature (higher = softer, more knowledge transfer)
+        teacher_pred: Teacher soft labels (batch, time, 1), continuous [0,1]
+        temperature: Ignored (kept for API compatibility)
     """
-    # Soften predictions with temperature (apply to logits, not probabilities)
-    s_logit = torch.log(student_pred[:, :, :1].clamp(1e-7, 1 - 1e-7) /
-                        (1 - student_pred[:, :, :1].clamp(1e-7, 1 - 1e-7)))
-    t_logit = torch.log(teacher_pred.clamp(1e-7, 1 - 1e-7) /
-                        (1 - teacher_pred.clamp(1e-7, 1 - 1e-7)))
-
-    s_soft = torch.sigmoid(s_logit / temperature)
-    t_soft = torch.sigmoid(t_logit / temperature)
-
-    # Binary KL divergence
-    kl = t_soft * torch.log(t_soft / s_soft.clamp(1e-7)) + \
-         (1 - t_soft) * torch.log((1 - t_soft) / (1 - s_soft).clamp(1e-7))
-
-    return kl.mean() * (temperature ** 2)
+    return torch.nn.functional.mse_loss(student_pred[:, :, :1], teacher_pred)
 
 
 def main():

@@ -206,6 +206,49 @@ def _binary_targets(times: np.ndarray, n_frames: int,
     return targets
 
 
+def load_soft_teacher_labels(teacher_soft_dir: Path, track_stem: str,
+                            n_frames: int, frame_rate: float,
+                            speed: float = 1.0) -> np.ndarray | None:
+    """Load pre-generated madmom CNN onset activations and resample to firmware frame rate.
+
+    Madmom outputs continuous [0,1] activations at 100 Hz. We resample to the
+    firmware frame rate (62.5 Hz) via linear interpolation, which preserves the
+    smooth activation shape. For time-stretched variants, the teacher activations
+    are stretched by the same factor (a 1.2x speed track has 1.2x compressed labels).
+
+    Returns None if the label file doesn't exist for this track.
+    """
+    label_path = teacher_soft_dir / f"{track_stem}.onsets_teacher.json"
+    if not label_path.exists():
+        return None
+
+    with open(label_path) as f:
+        data = json.load(f)
+
+    teacher_fps = data["fps"]  # 100 Hz
+    activations = np.array(data["activations"], dtype=np.float32)
+
+    # For time-stretched audio (speed != 1.0), the audio is compressed/expanded
+    # in time. Teacher labels cover the original duration — resample to match
+    # the stretched duration. At speed=1.2x, the audio is shorter, so we need
+    # fewer teacher frames covering a proportionally shorter time span.
+    teacher_duration = len(activations) / teacher_fps  # original duration in seconds
+    stretched_duration = teacher_duration / speed       # duration after time-stretch
+
+    # Create timestamp arrays for interpolation
+    teacher_times = np.arange(len(activations)) / teacher_fps  # original timestamps
+    target_times = np.arange(n_frames) / frame_rate             # student frame timestamps
+
+    # For stretched audio, teacher timestamps are scaled by 1/speed
+    # (a kick at t=1.0s in original lands at t=0.833s at 1.2x speed)
+    stretched_teacher_times = teacher_times / speed
+
+    # Linear interpolation from stretched teacher times to student frame times
+    resampled = np.interp(target_times, stretched_teacher_times, activations,
+                          left=0.0, right=0.0)
+    return resampled.astype(np.float32)
+
+
 def make_teacher_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
                         strengths: np.ndarray | None = None,
                         sigma: float = 1.5) -> np.ndarray:
@@ -448,7 +491,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  stems_dir: Path | None = None,
                  stem_variants: list[str] | None = None,
                  mel_cache_dir: Path | None = None,
-                 generate_teacher: bool = False) -> list[dict]:
+                 generate_teacher: bool = False,
+                 teacher_soft_dir: Path | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -701,10 +745,25 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 "source": audio_path.stem,
             }
 
-            # Teacher targets for knowledge distillation (consensus-strength-weighted Gaussians)
+            # Teacher targets for knowledge distillation
             if generate_teacher:
-                result["teacher"] = make_teacher_targets(
-                    src_beats, n_frames, frame_rate, strengths=src_strengths, sigma=1.5)
+                if teacher_soft_dir is not None:
+                    # Madmom CNN soft labels: continuous [0,1] activations resampled
+                    # from 100 Hz to firmware frame rate. Preserves activation shape
+                    # (rise/attack/decay) for MSE distillation.
+                    soft = load_soft_teacher_labels(
+                        teacher_soft_dir, audio_path.stem, n_frames, frame_rate,
+                        speed=speed)
+                    if soft is not None:
+                        result["teacher"] = soft
+                    else:
+                        # Soft label missing for this track — fall back to Gaussians
+                        result["teacher"] = make_teacher_targets(
+                            src_beats, n_frames, frame_rate, strengths=src_strengths, sigma=1.5)
+                else:
+                    # Fallback: consensus-strength-weighted Gaussians
+                    result["teacher"] = make_teacher_targets(
+                        src_beats, n_frames, frame_rate, strengths=src_strengths, sigma=1.5)
 
             results.append(result)
 
@@ -806,9 +865,13 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                         "source": audio_path.stem,
                     }
                     if generate_teacher:
-                        stem_result["teacher"] = make_teacher_targets(
-                            beat_times, n_frames, frame_rate,
-                            strengths=beat_strengths, sigma=1.5)
+                        if teacher_soft_dir is not None:
+                            stem_result["teacher"] = load_soft_teacher_labels(
+                                teacher_soft_dir, audio_path.stem, n_frames, frame_rate)
+                        else:
+                            stem_result["teacher"] = make_teacher_targets(
+                                beat_times, n_frames, frame_rate,
+                                strengths=beat_strengths, sigma=1.5)
                     results.append(stem_result)
 
     return results
@@ -879,6 +942,9 @@ def main():
                              "Options: drums, no_vocals, drums_bass (default: drums)")
     parser.add_argument("--teacher", action="store_true",
                         help="Generate consensus-strength-weighted teacher labels (Y_teacher_*.npy) for distillation")
+    parser.add_argument("--teacher-soft-dir", default=None,
+                        help="Directory of madmom soft onset labels (.onsets_teacher.json at 100 Hz). "
+                             "Resampled to firmware frame rate for MSE distillation. Implies --teacher.")
     parser.add_argument("--delta", action="store_true",
                         help="Append first-order mel differences as additional input channels (26→52 features)")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
@@ -1043,10 +1109,12 @@ def main():
     val_pairs = pairs_shuffled[:n_val_files]
     train_pairs = pairs_shuffled[n_val_files:]
 
-    generate_teacher = getattr(args, 'teacher', False)
+    teacher_soft_dir = Path(args.teacher_soft_dir) if args.teacher_soft_dir else None
+    generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
     use_delta = getattr(args, 'delta', False) or cfg.get("features", {}).get("use_delta", False)
+    teacher_src = "madmom soft" if teacher_soft_dir else "consensus Gaussian" if generate_teacher else None
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}"
-          f"{' + Teacher labels' if generate_teacher else ''}"
+          f"{f' + Teacher labels ({teacher_src})' if generate_teacher else ''}"
           f"{' + Delta features' if use_delta else ''}")
     if stems_dir:
         # Count how many tracks have stems available
@@ -1084,7 +1152,8 @@ def main():
                                        stems_dir=stems_dir,
                                        stem_variants=stem_variant_list,
                                        mel_cache_dir=mel_cache_dir,
-                                       generate_teacher=generate_teacher)
+                                       generate_teacher=generate_teacher,
+                                       teacher_soft_dir=teacher_soft_dir)
                 for r in results:
                     mel_chunks, target_chunks, teacher_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,
