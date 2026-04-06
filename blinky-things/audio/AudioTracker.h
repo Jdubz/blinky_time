@@ -114,7 +114,7 @@ public:
     float plpConfAlpha = 0.25f;        // Confidence EMA smoothing rate (was 0.15)
     float plpNovGain = 1.0f;           // Pattern contrast: power-law exponent (>1 sharpens peaks, 1.0=linear)
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
-    float plpVarianceSens = 10.0f;     // Epoch-fold variance suppression (higher = more aggressive)
+    float plpVarianceSens = 0.0f;      // Epoch-fold variance suppression (0=disabled, sweep showed best autoCorr)
 
     // NN profiling
     bool nnProfile = false;

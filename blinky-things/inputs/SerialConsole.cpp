@@ -1006,7 +1006,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpConfAlpha = 0.25f;
         audioCtrl_->plpNovGain = 1.0f;
         audioCtrl_->plpSignalFloor = 0.10f;
-        audioCtrl_->plpVarianceSens = 10.0f;
+        audioCtrl_->plpVarianceSens = 0.0f;
         // Pulse detection
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
