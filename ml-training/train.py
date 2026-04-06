@@ -30,17 +30,22 @@ from scripts.audio import load_config
 class MemmapBeatDataset(Dataset):
     """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
-    def __init__(self, x_path, y_path, y_teacher_path=None):
+    def __init__(self, x_path, y_path, y_teacher_path=None, max_features=None):
         self.X = np.load(x_path, mmap_mode='r')
         self.Y = np.load(y_path, mmap_mode='r')
         self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
         self._empty_teacher = torch.empty(0)  # Shared placeholder (avoid per-sample alloc)
+        # Slice features if data has more channels than model expects
+        # (e.g., data has 52=mel+delta but model wants 26=mel only)
+        self._max_features = max_features
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
         x = torch.from_numpy(self.X[idx].copy()).float()
+        if self._max_features and x.shape[-1] > self._max_features:
+            x = x[..., :self._max_features]
         y = torch.from_numpy(self.Y[idx].copy()).float()
         if y.dim() == 2:
             # Multi-channel targets (e.g., instrument model: chunk_frames × 3)
@@ -503,12 +508,16 @@ def main():
         else:
             print(f"WARNING: Teacher labels not found at {teacher_path}, training without distillation")
 
+    # Determine expected feature count from config (for slicing data with extra channels)
+    use_delta = cfg.get("features", {}).get("use_delta", False)
+    expected_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
-        y_teacher_path=teacher_train_path)
+        y_teacher_path=teacher_train_path, max_features=expected_features)
     val_ds = MemmapBeatDataset(
         data_dir / "X_val.npy", data_dir / "Y_val.npy",
-        y_teacher_path=teacher_val_path)
+        y_teacher_path=teacher_val_path, max_features=expected_features)
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
