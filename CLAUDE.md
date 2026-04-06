@@ -107,10 +107,31 @@ To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<ex
 
 `train.py` enforces this — it will refuse to start outside tmux/screen unless `--allow-foreground` is passed.
 
+## Firmware Versioning
+
+Firmware uses a simple auto-incrementing build number. **Not tied to git** — git is for collaboration, not deployment. "Production" is whatever is on the device.
+
+- `blinky-things/BUILD_NUMBER` — plain text integer, source of truth
+- `blinky-things/types/Version.h` — generated header, do not edit manually
+- `scripts/build.sh` — increments BUILD_NUMBER, regenerates Version.h, compiles
+- Reported via `json info` as `"version": "b91"` (the `b` prefix distinguishes from old semver)
+- SETTINGS_VERSION (config format) is separate and independent
+
+**Always use `scripts/build.sh` to compile.** It auto-increments the build number. Use `--no-bump` to recompile without incrementing (e.g., after a failed upload).
+
 ## Compilation Commands
 
 ```bash
-# === ESP32-S3 ===
+# === Recommended: use build script (auto-increments version) ===
+./scripts/build.sh                        # nRF52840 compile only
+./scripts/build.sh --upload /dev/ttyACM0  # nRF52840 compile + UF2 upload
+./scripts/build.sh --esp32                # ESP32-S3 compile only
+./scripts/build.sh --esp32 --upload /dev/ttyACM0  # ESP32-S3 compile + upload
+./scripts/build.sh --no-bump              # recompile without incrementing
+
+# === Direct arduino-cli (skips version bump — avoid for deployment) ===
+
+# ESP32-S3:
 # Requires: arduino-cli lib install "NimBLE-Arduino" (BLE support, fixes core 3.3.7 crash)
 # NimBLE 2.4.0 must be installed manually from GitHub (not in registry): h2zero/NimBLE-Arduino@2.4.0
 # PSRAM=opi is required — without it, BLE controller malloc(36KB) fails due to internal SRAM exhaustion
@@ -120,7 +141,7 @@ arduino-cli compile --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=def
 # Compile + upload (safe — uses esptool)
 arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PSRAM=opi' -p /dev/ttyACM0 blinky-things
 
-# === nRF52840 ===
+# nRF52840:
 # Compile only (in-tree build, requires TFLite library)
 arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things
 

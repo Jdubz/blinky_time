@@ -417,7 +417,7 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
 
     if (strcmp(cmd, "json info") == 0) {
         out_.print(F("{\"version\":\""));
-        out_.print(F(BLINKY_VERSION_STRING));
+        out_.print(F(FIRMWARE_VERSION));
         out_.print(F("\",\"platform\":\""));
 #ifdef BLINKY_PLATFORM_NRF52840
         out_.print(F("nrf52840"));
