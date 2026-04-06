@@ -83,12 +83,13 @@ class OnsetTracking:
 
 @dataclass
 class PlpMetrics:
-    at_transient: float  # avg PLP pulse at GT onset times (1.0 = aligned)
+    at_transient: float  # avg PLP pulse at GT onset times (raw)
+    at_transient_norm: float  # at_transient / mean — >1.0 means pattern peaks at onsets
     gt_onsets_matched: int
     gt_onsets_total: int
     auto_corr: float  # autocorrelation at detected period lag (1.0 = periodic)
     peakiness: float  # peak/mean ratio (1.0 = flat, >2 = strong)
-    mean: float  # avg PLP value (0.5 = cosine fallback)
+    mean: float  # avg PLP value
 
 
 @dataclass

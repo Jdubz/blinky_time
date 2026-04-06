@@ -672,6 +672,7 @@ _METRIC_PATHS: dict[str, tuple[str, str]] = {
     "onsetPrecision": ("onsetTracking", "precision"),
     "onsetRecall": ("onsetTracking", "recall"),
     "plpAtTransient": ("plp", "atTransient"),
+    "plpAtTransientNorm": ("plp", "atTransientNorm"),
     "plpAutoCorr": ("plp", "autoCorr"),
     "plpPeakiness": ("plp", "peakiness"),
 }
