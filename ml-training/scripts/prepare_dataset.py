@@ -751,9 +751,15 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     # Madmom CNN soft labels: continuous [0,1] activations resampled
                     # from 100 Hz to firmware frame rate. Preserves activation shape
                     # (rise/attack/decay) for MSE distillation.
-                    result["teacher"] = load_soft_teacher_labels(
+                    soft = load_soft_teacher_labels(
                         teacher_soft_dir, audio_path.stem, n_frames, frame_rate,
                         speed=speed)
+                    if soft is not None:
+                        result["teacher"] = soft
+                    else:
+                        # Soft label missing for this track — fall back to Gaussians
+                        result["teacher"] = make_teacher_targets(
+                            src_beats, n_frames, frame_rate, strengths=src_strengths, sigma=1.5)
                 else:
                     # Fallback: consensus-strength-weighted Gaussians
                     result["teacher"] = make_teacher_targets(

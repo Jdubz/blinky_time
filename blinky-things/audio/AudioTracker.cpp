@@ -191,7 +191,7 @@ const AudioControl& AudioTracker::update(float dt) {
         if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
     }
 
-    // 7. ACF period detection + PLP pattern analysis on timer (~4ms every 150ms)
+    // 7. ACF period detection + PLP pattern analysis on timer (~4ms per run;
     // Warmup: 100 frames (~1.6s). Minimum is ACF_MAX_LAG (80) for valid correlation;
     // 100 gives 1.25x the max lag — tight but sufficient for first ACF.
     if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 100) {
@@ -511,7 +511,6 @@ void AudioTracker::runAcf() {
                     delta = clampf(delta, -0.5f, 0.5f);
                     refinedBin += delta;
                     if (refinedBin < 0.0f) refinedBin += cPeriod;
-                    if (refinedBin >= cPeriod) refinedBin -= cPeriod;
                 }
             }
 
@@ -776,7 +775,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     // NN gate: suppress spectral flux pulses that aren't corroborated by the
     // onset NN. Filters harmonic changes, hi-hat jitter, and noise transients.
     // When NN is not active (fallback mode), gate is always open.
-    bool nnGateOpen = !nnActive_ || (rawNNActivation_ > pulseNNGate);
+    bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f || (rawNNActivation_ > pulseNNGate);
 
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&

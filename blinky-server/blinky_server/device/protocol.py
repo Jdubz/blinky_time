@@ -97,7 +97,9 @@ class DeviceProtocol:
             # Update streaming state
             if is_stream_enable:
                 self._streaming = True
-                self._streaming_mode = command.split()[1]  # "on", "fast", "debug", etc.
+                parts = command.split()
+                if len(parts) > 1:
+                    self._streaming_mode = parts[1]
             elif is_stream_disable:
                 self._streaming = False
             elif was_streaming:
