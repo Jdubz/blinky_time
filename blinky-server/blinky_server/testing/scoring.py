@@ -284,7 +284,7 @@ def score_device_run(
                 elif dist > best_dist:
                     search_start = max(0, si - 2)
                     break
-            if best_state and best_state["plp_pulse"] is not None and best_dist < 150:
+            if best_state and best_state["plp_pulse"] is not None and best_dist < 75:
                 gt_onset_plp_values.append(best_state["plp_pulse"])
 
         if gt_onset_plp_values:

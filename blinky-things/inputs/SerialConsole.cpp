@@ -269,6 +269,8 @@ void SerialConsole::registerTrackerSettings() {
         "ODF floor for pulse detection scaling", 0.0f, 0.5f, onParamChanged);
     settings_.registerFloat("pulsenngate", &audioCtrl_->pulseNNGate, "tracker",
         "NN activation gate for pulse detection (0=disabled)", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("phaserate", &audioCtrl_->phaseCorrectRate, "tracker",
+        "PLP phase correction rate (scaled by confidence per ACF update)", 0.0f, 1.0f, onParamChanged);
 
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
@@ -1009,6 +1011,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->pulseMinLevel = 0.03f;
         audioCtrl_->pulseOnsetFloor = 0.1f;
         audioCtrl_->pulseNNGate = 0.3f;
+        audioCtrl_->phaseCorrectRate = 0.50f;
         audioCtrl_->baselineFastDrop = 0.05f;
         audioCtrl_->baselineSlowRise = 0.005f;
         audioCtrl_->odfPeakHoldDecay = 0.85f;
@@ -1490,6 +1493,10 @@ void SerialConsole::streamTick() {
             if (streamDebug_) {
                 out_.print(F(",\"conf\":"));
                 out_.print(audioCtrl_->getPeriodicityStrength(), 3);
+                out_.print(F(",\"plpc\":"));
+                out_.print(audioCtrl_->getPlpConfidence(), 3);
+                out_.print(F(",\"aph\":"));
+                out_.print(audioCtrl_->getPlpAccentPhase(), 3);
                 out_.print(F(",\"sl\":{\"id\":"));
                 out_.print(audioCtrl_->getActiveSlotId());
                 out_.print(F(",\"conf\":["));

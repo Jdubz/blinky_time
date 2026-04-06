@@ -75,6 +75,7 @@ public:
     uint16_t getBeatCount() const { return beatCount_; }
     float getPlpPhase() const { return plpPhase_; }
     float getPlpConfidence() const { return plpConfidence_; }
+    float getPlpAccentPhase() const { return plpAccentPhase_; }
     float getPlpPulseValue() const { return plpPulseValue_; }
     int getPlpPatternLen() const { return plpPatternLen_; }
     float getAcfPeakStrength() const { return acfPeakStrength_; }
@@ -125,6 +126,9 @@ public:
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
     float pulseOnsetFloor = 0.005f;    // ODF floor — tuned for spectral flux range (0.001-0.05)
     float pulseNNGate = 0.3f;          // NN activation gate — suppress pulse when NN < this
+
+    // Phase correction
+    float phaseCorrectRate = 0.50f;    // Phase correction rate (scaled by confidence per ACF update)
 
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking

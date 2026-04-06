@@ -553,7 +553,7 @@ void AudioTracker::runAcf() {
         float error = target - plpPhase_;
         if (error > 0.5f) error -= 1.0f;
         if (error < -0.5f) error += 1.0f;
-        float rate = 0.25f * clampf(plpConfidence_, 0.0f, 1.0f);
+        float rate = phaseCorrectRate * clampf(plpConfidence_, 0.0f, 1.0f);
         plpPhase_ += error * rate;
         if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
         if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;

@@ -201,6 +201,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
     data_.tracker.pulseNNGate = 0.3f;
+    data_.tracker.phaseCorrectRate = 0.50f;
     data_.tracker.baselineFastDrop = 0.05f;
     data_.tracker.baselineSlowRise = 0.005f;
     data_.tracker.odfPeakHoldDecay = 0.85f;
@@ -572,6 +573,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
         validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
         validateFloat(data_.tracker.pulseNNGate, 0.0f, 1.0f, F("tracker.pulseNNGate"));
+        validateFloat(data_.tracker.phaseCorrectRate, 0.0f, 1.0f, F("tracker.phaseRate"));
         validateFloat(data_.tracker.baselineFastDrop, 0.01f, 0.2f, F("tracker.blFastDrop"));
         validateFloat(data_.tracker.baselineSlowRise, 0.001f, 0.05f, F("tracker.blSlowRise"));
         validateFloat(data_.tracker.odfPeakHoldDecay, 0.5f, 0.99f, F("tracker.odfPkDecay"));
@@ -605,6 +607,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
         tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
         tracker->pulseNNGate = data_.tracker.pulseNNGate;
+        tracker->phaseCorrectRate = data_.tracker.phaseCorrectRate;
         tracker->baselineFastDrop = data_.tracker.baselineFastDrop;
         tracker->baselineSlowRise = data_.tracker.baselineSlowRise;
         tracker->odfPeakHoldDecay = data_.tracker.odfPeakHoldDecay;
@@ -716,6 +719,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
         data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
         data_.tracker.pulseNNGate = tracker->pulseNNGate;
+        data_.tracker.phaseCorrectRate = tracker->phaseCorrectRate;
         data_.tracker.baselineFastDrop = tracker->baselineFastDrop;
         data_.tracker.baselineSlowRise = tracker->baselineSlowRise;
         data_.tracker.odfPeakHoldDecay = tracker->odfPeakHoldDecay;
