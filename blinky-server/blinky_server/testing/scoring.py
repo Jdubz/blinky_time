@@ -320,15 +320,26 @@ def score_device_run(
                 period_lag = 0
 
         if 0 < period_lag < len(plp_values) / 2:
-            sum_xy = 0.0
-            sum_x2 = 0.0
-            n = len(plp_values) - period_lag
-            for i in range(n):
-                x = plp_values[i] - plp_mean
-                y = plp_values[i + period_lag] - plp_mean
-                sum_xy += x * y
-                sum_x2 += x * x
-            plp_auto_corr = sum_xy / sum_x2 if sum_x2 > 0 else 0.0
+            # Search a window of lags around the detected period (±10%) and
+            # take the best. Handles period drift and quantization mismatch
+            # between firmware frame rate and stream sample rate.
+            margin = max(1, period_lag // 10)
+            lo = max(1, period_lag - margin)
+            hi = min(len(plp_values) // 2, period_lag + margin + 1)
+            best_ac = -2.0
+            for lag in range(lo, hi):
+                sum_xy = 0.0
+                sum_x2 = 0.0
+                n = len(plp_values) - lag
+                for i in range(n):
+                    x = plp_values[i] - plp_mean
+                    y = plp_values[i + lag] - plp_mean
+                    sum_xy += x * y
+                    sum_x2 += x * x
+                ac = sum_xy / sum_x2 if sum_x2 > 0 else 0.0
+                if ac > best_ac:
+                    best_ac = ac
+            plp_auto_corr = best_ac
 
     # Diagnostics: onset-to-GT offsets
     onset_offsets: list[int] = []
