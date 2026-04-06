@@ -611,7 +611,7 @@ void AudioTracker::updatePlpAnalysis() {
     if (epochs < 2) return;
 
     // Compute per-bin mean, variance, and reliability-weighted pattern
-    static constexpr float VARIANCE_SENSITIVITY = 10.0f;  // Higher = more aggressive suppression
+    float varSens = plpVarianceSens;  // Higher = more aggressive variance suppression
     float minVal = 1e30f, maxVal = -1e30f;
     float patternRaw[MAX_PATTERN_LEN];
     for (int j = 0; j < patLen; j++) {
@@ -622,7 +622,7 @@ void AudioTracker::updatePlpAnalysis() {
 
         // Reliability: consistent bins (low variance) get full weight,
         // variable bins (high variance) get suppressed
-        float reliability = 1.0f / (1.0f + variance * VARIANCE_SENSITIVITY);
+        float reliability = 1.0f / (1.0f + variance * varSens);
         patternRaw[j] = mean * reliability;
 
         if (patternRaw[j] < minVal) minVal = patternRaw[j];

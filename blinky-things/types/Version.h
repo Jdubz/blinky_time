@@ -4,6 +4,6 @@
 // Build number is auto-incremented on each compile.
 // See BUILD_NUMBER file for the current value.
 
-#define FIRMWARE_BUILD 93
-#define FIRMWARE_VERSION "b93"
+#define FIRMWARE_BUILD 94
+#define FIRMWARE_VERSION "b94"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__

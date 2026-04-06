@@ -211,6 +211,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.plpConfAlpha = 0.25f;
     data_.tracker.plpNovGain = 1.5f;
     data_.tracker.plpSignalFloor = 0.10f;
+    data_.tracker.plpVarianceSens = 10.0f;
     data_.tracker.bassFluxWeight = 0.5f;
     data_.tracker.midFluxWeight = 0.2f;
     data_.tracker.highFluxWeight = 0.3f;
@@ -582,6 +583,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.plpConfAlpha, 0.01f, 0.5f, F("tracker.plpConfAlpha"));
         validateFloat(data_.tracker.plpNovGain, 0.1f, 5.0f, F("tracker.plpNovGain"));
         validateFloat(data_.tracker.plpSignalFloor, 0.01f, 0.5f, F("tracker.plpSigFloor"));
+        validateFloat(data_.tracker.plpVarianceSens, 0.0f, 50.0f, F("tracker.plpVarSens"));
         validateFloat(data_.tracker.bassFluxWeight, 0.0f, 1.0f, F("tracker.bassFluxW"));
         validateFloat(data_.tracker.midFluxWeight, 0.0f, 1.0f, F("tracker.midFluxW"));
         validateFloat(data_.tracker.highFluxWeight, 0.0f, 1.0f, F("tracker.highFluxW"));
@@ -615,6 +617,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->plpConfAlpha = data_.tracker.plpConfAlpha;
         tracker->plpNovGain = data_.tracker.plpNovGain;
         tracker->plpSignalFloor = data_.tracker.plpSignalFloor;
+        tracker->plpVarianceSens = data_.tracker.plpVarianceSens;
 
         // Spectral flux weights go to SharedSpectralAnalysis via tracker accessor
         tracker->getSpectral().bassFluxWeight = data_.tracker.bassFluxWeight;
@@ -726,6 +729,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.plpConfAlpha = tracker->plpConfAlpha;
         data_.tracker.plpNovGain = tracker->plpNovGain;
         data_.tracker.plpSignalFloor = tracker->plpSignalFloor;
+        data_.tracker.plpVarianceSens = tracker->plpVarianceSens;
         data_.tracker.bassFluxWeight = tracker->getSpectral().bassFluxWeight;
         data_.tracker.midFluxWeight = tracker->getSpectral().midFluxWeight;
         data_.tracker.highFluxWeight = tracker->getSpectral().highFluxWeight;

@@ -239,6 +239,8 @@ void SerialConsole::registerTrackerSettings() {
         "PLP pattern novelty scaling", 0.1f, 5.0f, onParamChanged);
     settings_.registerFloat("plpsigfloor", &audioCtrl_->plpSignalFloor, "tracker",
         "Mic level for full PLP confidence", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("plpvarsens", &audioCtrl_->plpVarianceSens, "tracker",
+        "Epoch-fold variance suppression (higher=more aggressive)", 0.0f, 50.0f, onParamChanged);
 
     // Rhythm activation
     settings_.registerFloat("activationthreshold", &audioCtrl_->activationThreshold, "tracker",
@@ -1004,6 +1006,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpConfAlpha = 0.25f;
         audioCtrl_->plpNovGain = 1.5f;
         audioCtrl_->plpSignalFloor = 0.10f;
+        audioCtrl_->plpVarianceSens = 10.0f;
         // Pulse detection
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
