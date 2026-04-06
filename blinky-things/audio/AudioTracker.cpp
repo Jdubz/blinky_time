@@ -125,7 +125,9 @@ const AudioControl& AudioTracker::update(float dt) {
 
         // Track raw NN activation peaks (before pulse detection threshold/cooldown).
         // Record timestamp when activation exceeds previous value (rising edge).
-        if (odf > rawNNActivation_ && odf > 0.3f) {
+        // Uses pulseNNGate as floor so the peak timestamp stays fresh whenever
+        // activation is in the gate-open range (Gemini/Copilot review feedback).
+        if (odf > rawNNActivation_ && odf > pulseNNGate) {
             rawNNPeakMs_ = nowMs;
         }
         rawNNActivation_ = odf;
@@ -800,8 +802,10 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     //   2. Activation peaked recently — was rising within ~100ms (filters
     //      sustained high activation from harmonic content, reverb tails)
     // When NN is not active (fallback mode), gate is always open.
+    // Guard against millis() wrap (~49 days) — treat as stale peak
+    uint32_t peakAge = (nowMs >= rawNNPeakMs_) ? (nowMs - rawNNPeakMs_) : 200;
     bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f ||
-        (rawNNActivation_ > pulseNNGate && (nowMs - rawNNPeakMs_) < 100);
+        (rawNNActivation_ > pulseNNGate && peakAge < 100);
 
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
