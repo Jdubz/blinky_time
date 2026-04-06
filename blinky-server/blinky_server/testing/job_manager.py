@@ -1,23 +1,30 @@
-"""In-memory async job tracker for long-running test operations.
+"""Persistent async job tracker for long-running test operations.
 
 Test endpoints return a job_id immediately. The job runs as an asyncio
 background task. Clients poll GET /api/test/jobs/{id} for status and results.
+
+Completed jobs are persisted to disk as JSON files and survive server restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-PRUNE_AGE_S = 3600  # Remove completed/errored jobs after 1 hour
+# Default directory for persisted job results.
+# On blinkyhost this survives reboots. On dev machines it's ephemeral but
+# that's fine — dev results are transient.
+JOBS_DIR = Path("/var/lib/blinky-server/test-jobs")
 
 
 class JobStatus(StrEnum):
@@ -36,7 +43,7 @@ class Job:
     progress_message: str = ""
     result: dict[str, Any] | None = None
     error: str | None = None
-    created_at: float = field(default_factory=time.monotonic)
+    created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,16 +55,60 @@ class Job:
             "progressMessage": self.progress_message,
             "result": self.result,
             "error": self.error,
-            "age_s": round(time.monotonic() - self.created_at, 1),
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
+            "age_s": round(time.time() - self.created_at, 1),
         }
 
 
 class JobManager:
-    """Manages background test jobs."""
+    """Manages background test jobs with disk persistence."""
 
-    def __init__(self) -> None:
+    def __init__(self, jobs_dir: Path | None = None) -> None:
         self._jobs: dict[str, Job] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._jobs_dir = jobs_dir or JOBS_DIR
+
+        # Ensure directory exists (fall back to /tmp if no write access)
+        try:
+            self._jobs_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            self._jobs_dir = Path("/tmp/blinky-test-jobs")
+            self._jobs_dir.mkdir(parents=True, exist_ok=True)
+            log.warning("Using fallback jobs dir: %s", self._jobs_dir)
+
+        self._load_persisted()
+
+    def _load_persisted(self) -> None:
+        """Load completed job results from disk on startup."""
+        loaded = 0
+        for path in sorted(self._jobs_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text())
+                job = Job(
+                    id=data["id"],
+                    kind=data.get("kind", "unknown"),
+                    status=JobStatus(data.get("status", "complete")),
+                    progress=data.get("progress", 100),
+                    result=data.get("result"),
+                    error=data.get("error"),
+                    created_at=data.get("created_at", path.stat().st_mtime),
+                    completed_at=data.get("completed_at"),
+                )
+                self._jobs[job.id] = job
+                loaded += 1
+            except Exception as e:
+                log.warning("Failed to load job %s: %s", path.name, e)
+        if loaded:
+            log.info("Loaded %d persisted job results from %s", loaded, self._jobs_dir)
+
+    def _persist(self, job: Job) -> None:
+        """Write a completed/errored job to disk."""
+        try:
+            path = self._jobs_dir / f"{job.id}.json"
+            path.write_text(json.dumps(job.to_dict(), separators=(",", ":")))
+        except Exception as e:
+            log.warning("Failed to persist job %s: %s", job.id, e)
 
     def submit(
         self,
@@ -74,8 +125,6 @@ class JobManager:
         Returns:
             The created Job (status=PENDING, will transition to RUNNING).
         """
-        self._prune_old()
-
         job = Job(id=uuid.uuid4().hex[:12], kind=kind)
         self._jobs[job.id] = job
 
@@ -89,8 +138,9 @@ class JobManager:
                 job.error = str(e)
                 log.exception("Job %s (%s) failed", job.id, kind)
             finally:
-                job.completed_at = time.monotonic()
+                job.completed_at = time.time()
                 job.progress = 100
+                self._persist(job)
 
         task = asyncio.create_task(_run())
         self._tasks[job.id] = task
@@ -104,18 +154,6 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def list_recent(self, limit: int = 20) -> list[Job]:
+    def list_recent(self, limit: int = 50) -> list[Job]:
         jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
         return jobs[:limit]
-
-    def _prune_old(self) -> None:
-        """Remove completed/errored jobs older than PRUNE_AGE_S."""
-        now = time.monotonic()
-        to_remove = [
-            jid
-            for jid, job in self._jobs.items()
-            if job.completed_at is not None and (now - job.completed_at) > PRUNE_AGE_S
-        ]
-        for jid in to_remove:
-            del self._jobs[jid]
-            self._tasks.pop(jid, None)
