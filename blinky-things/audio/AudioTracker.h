@@ -127,9 +127,6 @@ public:
     float pulseOnsetFloor = 0.005f;    // ODF floor — tuned for spectral flux range (0.001-0.05)
     float pulseNNGate = 0.3f;          // NN activation gate — suppress pulse when NN < this
 
-    // Phase correction
-    float phaseCorrectRate = 0.50f;    // Phase correction rate (scaled by confidence per ACF update)
-
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
     float baselineSlowRise = 0.005f;   // Slow rise rate for floor tracking
@@ -191,7 +188,8 @@ private:
 
     float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period)
     int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
-    float plpPhase_ = 0.0f;                     // 0→1 phase within pattern cycle
+    float patternPosition_ = 0.0f;              // 0→1 position within pattern cycle (advances each frame)
+    float plpPhase_ = 0.0f;                     // 0→1 phase for generators (0 = accent, derived from position)
     float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
@@ -202,16 +200,6 @@ private:
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
-
-    // === Canonical PLP: cosine OLA pulse buffer (Grosche & Mueller 2011, Meier 2024) ===
-    // Ring buffer with head index. Each ACF update adds a Hann-windowed cosine kernel
-    // at detected period+phase. Head advances 1 position per frame (no memmove).
-    // Pulse read from head position. Anti-correlation impossible: cosine kernel
-    // peaks where DFT says periodicity is.
-    static constexpr int PULSE_BUF_LEN = 792;   // 3× MAX_PATTERN_LEN for cosine OLA accumulation
-    float pulseBuf_[PULSE_BUF_LEN] = {0};
-    int pulseHead_ = 0;                          // Ring buffer head (current frame position)
-    float olaPeakEma_ = 1.0f;                   // Running peak EMA for normalization
 
     // === Pulse detection ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline
