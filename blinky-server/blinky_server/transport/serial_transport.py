@@ -10,7 +10,7 @@ from .base import Transport
 log = logging.getLogger(__name__)
 
 BAUD_RATE = 115200
-INIT_DELAY_S = 0.5
+INIT_DELAY_S = 2.0  # nRF52840 boot: SafeBootWatchdog + BLE + NN load takes 1-3s
 DRAIN_DELAY_S = 0.2
 
 
