@@ -121,7 +121,9 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 93;  // v93: plpDecayRate + plpVarianceSens tunable
+    // v89: pulseNNGate. v91: PLP OLA removed (direct pattern interpolation).
+    // v92: plpVarianceSens. v93: plpDecayRate.
+    static const uint8_t SETTINGS_VERSION = 93;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {

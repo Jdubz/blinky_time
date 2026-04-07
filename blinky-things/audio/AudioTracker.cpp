@@ -671,7 +671,8 @@ void AudioTracker::updatePlpPhase() {
         int i0 = static_cast<int>(idx) % patLen;
         float frac = idx - floorf(idx);
         int i1 = (i0 + 1) % patLen;
-        plpPulseValue_ = plpPattern_[i0] * (1.0f - frac) + plpPattern_[i1] * frac;
+        plpPulseValue_ = clampf(
+            plpPattern_[i0] * (1.0f - frac) + plpPattern_[i1] * frac, 0.0f, 1.0f);
     } else {
         plpPulseValue_ = 0.5f;
     }
