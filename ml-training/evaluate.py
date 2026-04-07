@@ -29,6 +29,7 @@ import torch
 
 from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
+    append_band_flux_features,
     append_delta_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
@@ -145,7 +146,13 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
         use_delta = cfg.get("features", {}).get("use_delta", False)
-        input_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+        use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+        if use_delta:
+            input_features = cfg["audio"]["n_mels"] * 2
+        elif use_band_flux:
+            input_features = cfg["audio"]["n_mels"] + 3
+        else:
+            input_features = cfg["audio"]["n_mels"]
         model = build_onset_conv1d(
             n_mels=input_features,
             channels=cfg["model"]["channels"],
@@ -216,9 +223,11 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         audio_gpu = torch.from_numpy(audio_np).to(device)
         mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
 
-        # Append delta features if configured
+        # Append temporal features if configured
         if cfg.get("features", {}).get("use_delta", False):
             mel = append_delta_features(mel)
+        elif cfg.get("features", {}).get("use_band_flux", False):
+            mel = append_band_flux_features(mel)
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -548,6 +557,8 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
 
         if cfg.get("features", {}).get("use_delta", False):
             mel = append_delta_features(mel)
+        elif cfg.get("features", {}).get("use_band_flux", False):
+            mel = append_band_flux_features(mel)
 
         n_frames = mel.shape[0]
         n_out_ch = model.out_channels
