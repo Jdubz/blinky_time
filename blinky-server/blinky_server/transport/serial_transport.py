@@ -59,6 +59,24 @@ class SerialTransport(Transport):
         if self._connected:
             return
 
+        # Toggle DTR with a raw pyserial object BEFORE creating the asyncio
+        # transport. DTR ioctls on the asyncio transport's fd fail with
+        # Broken pipe (the fd is in non-blocking mode for asyncio). Using a
+        # separate Serial object for DTR avoids this. TinyUSB needs DTR
+        # asserted to start transmitting — without it, all output is dropped.
+        try:
+            raw = serial.Serial(self._port, self._baud, timeout=0.5)
+            raw.dtr = False
+            await asyncio.sleep(0.1)
+            raw.dtr = True
+            await asyncio.sleep(0.5)
+            raw.close()
+        except (OSError, serial.SerialException) as e:
+            log.debug("DTR toggle failed on %s (non-fatal): %s", self._port, e)
+
+        # Wait for device to finish booting (NN model load, BLE init)
+        await asyncio.sleep(INIT_DELAY_S)
+
         def factory() -> _LineProtocol:
             proto = _LineProtocol(self._dispatch_line)
             proto._on_disconnect = self._on_connection_lost
@@ -73,23 +91,6 @@ class SerialTransport(Transport):
         self._serial_transport = transport
         self._protocol = protocol  # type: ignore[assignment]
         self._connected = True
-
-        # Toggle DTR to wake up TinyUSB CDC on nRF52840.
-        # After a previous connection closes, TinyUSB's CDC may be stuck in
-        # "disconnected" state where it silently drops output. Toggling DTR
-        # forces TinyUSB to reinitialize its connected state.
-        try:
-            if self._serial_transport is not None:
-                serial_obj = getattr(self._serial_transport, "serial", None)
-                if serial_obj is not None and hasattr(serial_obj, "dtr"):
-                    serial_obj.dtr = False
-                    await asyncio.sleep(0.1)
-                    serial_obj.dtr = True
-        except OSError as e:
-            log.debug("DTR toggle failed on %s (non-fatal): %s", self._port, e)
-
-        # Wait for device CDC to be ready after DTR toggle
-        await asyncio.sleep(INIT_DELAY_S)
 
         # Stop any stale streaming and drain boot messages.
         # The device prints boot messages (FPS, BLE status, etc.) that fill
