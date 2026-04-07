@@ -427,21 +427,28 @@ class FleetManager:
                 )
 
     def _refresh_dedup_exclusions(self) -> None:
-        """Clear dedup exclusions when serial transports are gone or disconnected.
+        """Clear dedup exclusions only for BLE devices whose serial counterpart
+        has been REMOVED from the fleet entirely (not just disconnected).
 
-        Must run BEFORE discovery so BLE can take over for lost serial devices.
-        Clears when: any serial device is disconnected/error, OR no serial
-        devices exist at all (e.g., all unplugged and removed by failure limit).
+        Previously cleared all exclusions when any serial device disconnected,
+        causing a thrashing loop where BLE devices were rediscovered, connected,
+        deduped, and disconnected every discovery cycle.
+
+        Now only clears exclusions when the serial device no longer exists in
+        self._devices at all — meaning it was removed (failure limit exceeded
+        or manually released), not just temporarily disconnected during flash.
         """
         if not self._dedup_excluded:
             return
-        has_connected_serial = any(
-            d.transport.transport_type == "serial" and d.state == DeviceState.CONNECTED
-            for d in self._devices.values()
+        # Only clear exclusions if NO serial devices exist at all.
+        # Individual serial disconnects (e.g., during flash) should NOT
+        # clear exclusions — the serial device will reconnect.
+        has_any_serial = any(
+            d.transport and d.transport.transport_type == "serial" for d in self._devices.values()
         )
-        if not has_connected_serial:
+        if not has_any_serial:
             log.info(
-                "No connected serial devices — clearing %d dedup exclusions",
+                "No serial devices in fleet — clearing %d dedup exclusions",
                 len(self._dedup_excluded),
             )
             self._dedup_excluded.clear()
