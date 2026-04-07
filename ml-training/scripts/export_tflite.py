@@ -944,7 +944,13 @@ def main():
 
     model_type = cfg["model"].get("type", "causal_cnn")
     use_delta = cfg.get("features", {}).get("use_delta", False)
-    n_mels = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+    if use_delta:
+        n_mels = cfg["audio"]["n_mels"] * 2
+    elif use_band_flux:
+        n_mels = cfg["audio"]["n_mels"] + 3
+    else:
+        n_mels = cfg["audio"]["n_mels"]
 
     if model_type == "frame_fc_enhanced":
         # --- Enhanced FC model ---

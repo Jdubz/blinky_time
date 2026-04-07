@@ -510,7 +510,13 @@ def main():
 
     # Determine expected feature count from config (for slicing data with extra channels)
     use_delta = cfg.get("features", {}).get("use_delta", False)
-    expected_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+    if use_delta:
+        expected_features = cfg["audio"]["n_mels"] * 2
+    elif use_band_flux:
+        expected_features = cfg["audio"]["n_mels"] + 3
+    else:
+        expected_features = cfg["audio"]["n_mels"]
 
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
@@ -607,7 +613,13 @@ def main():
         from models.onset_conv1d import build_onset_conv1d
         # With delta features, input has 2× n_mels channels (mel + delta_mel)
         use_delta = cfg.get("features", {}).get("use_delta", False)
-        input_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+        use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+        if use_delta:
+            input_features = cfg["audio"]["n_mels"] * 2
+        elif use_band_flux:
+            input_features = cfg["audio"]["n_mels"] + 3
+        else:
+            input_features = cfg["audio"]["n_mels"]
         model = build_onset_conv1d(
             n_mels=input_features,
             channels=cfg["model"]["channels"],
