@@ -158,9 +158,8 @@ void setup() {
 
   // Display version information (always show on boot)
   Serial.println(F("\n=== BLINKY TIME STARTUP ==="));
-  Serial.println(F(BLINKY_FULL_VERSION));
-  Serial.print(F("[INFO] Build: ")); Serial.print(F(BLINKY_BUILD_DATE));
-  Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
+  Serial.print(F("Blinky Time ")); Serial.println(F(FIRMWARE_VERSION));
+  Serial.print(F("[INFO] Built: ")); Serial.println(F(FIRMWARE_BUILD_DATE));
 
   // Debug: detailed boot info
   if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {

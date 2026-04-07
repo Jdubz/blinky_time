@@ -1,0 +1,56 @@
+# Conv1D W16 v17 — band-flux features replacing full delta
+#
+# Same recipe as v15 (madmom MSE distillation). Single change:
+# 26 delta channels replaced by 3 band-grouped HWR mel flux channels.
+#
+# Hypothesis: 3 band flux channels (bass/mid/high mel differences)
+# capture the critical transient signal from 26 per-band deltas at
+# 1/9th the channel cost. Estimated inference ~9.3ms (vs 11.7ms v15).
+#
+# Architecture: Conv1D(29->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# ~9.9K params, <15 KB INT8
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: false
+  use_band_flux: true
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+distillation:
+  alpha: 0.3
+  temperature: 2.0
+
+data:
+  processed_dir: "data/processed_v17"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v17.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

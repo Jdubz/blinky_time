@@ -1,5 +1,7 @@
 import argparse
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from urllib.parse import urlparse
 
 import uvicorn
@@ -26,11 +28,28 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
-        format="%(asctime)s %(levelname)-5s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+    log_level = getattr(logging, args.log_level.upper())
+    log_fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-5s %(name)s: %(message)s", datefmt="%H:%M:%S"
     )
+
+    # Console handler (for tmux / interactive use)
+    console = logging.StreamHandler()
+    console.setFormatter(log_fmt)
+
+    # File handler with rotation (persists across restarts)
+    # 5 MB per file x 3 backups = 20 MB max. Append mode preserves logs on restart.
+    log_dir = Path("/var/log/blinky-server")
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        log_dir = Path("/tmp")
+    file_handler = RotatingFileHandler(
+        log_dir / "blinky-server.log", maxBytes=5_000_000, backupCount=3
+    )
+    file_handler.setFormatter(log_fmt)
+
+    logging.basicConfig(level=log_level, handlers=[console, file_handler])
 
     # Parse WiFi device specs (supports IPv6 bracket notation via urlparse)
     wifi_hosts = []

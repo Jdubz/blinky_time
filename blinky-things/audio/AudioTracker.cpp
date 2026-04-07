@@ -248,9 +248,7 @@ void AudioTracker::resetAnalysisState() {
     bassWriteIdx_ = 0; bassCount_ = 0;
     nnWriteIdx_ = 0; nnCount_ = 0;
     memset(plpPattern_, 0, sizeof(plpPattern_));
-    memset(pulseBuf_, 0, sizeof(pulseBuf_));
-    pulseHead_ = 0;
-    olaPeakEma_ = 1.0f;
+    patternPosition_ = 0.0f;
     odfBaseline_ = 0.0f;
     odfPeakHold_ = 0.0f;
     plpConfidence_ = 0.0f;
@@ -462,7 +460,7 @@ void AudioTracker::runAcf() {
         float totalWeight = 0.0f;
         int epochs = 0;
         for (int offset = cCount - cPeriod; offset >= 0; offset -= cPeriod) {
-            float weight = expf(-0.3f * epochs);  // ~3-epoch half-life
+            float weight = expf(-plpDecayRate * epochs);  // ~3-epoch half-life
             for (int j = 0; j < cPeriod; j++) {
                 fold[j] += cBuf[offset + j] * weight;
             }
@@ -526,38 +524,14 @@ void AudioTracker::runAcf() {
 
     acfPeakStrength_ = bestStrength;
 
-    // Clear pulse buffer on significant period change (>10% shift)
+    // Reset pattern position on significant period change (>10% shift)
     if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
-        memset(pulseBuf_, 0, sizeof(pulseBuf_));
-        pulseHead_ = 0;
-        olaPeakEma_ = 1.0f;
-        // Hard-reset free-running phase to match detected accent (OLA buffer is
-        // empty so output is 100% cosine fallback — must align immediately)
-        plpPhase_ = 1.0f - bestPhase;
-        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
+        patternPosition_ = bestPhase;  // Start at accent position
     }
 
     plpBestPeriod_ = bestPeriod;
     plpBestSource_ = static_cast<uint8_t>(bestSource);
     plpAccentPhase_ = bestPhase;
-
-    // Correct free-running phase toward detected accent phase.
-    // Target: plpPhase_ = 1 - accentPhase (so cosine fallback peaks when
-    // the OLA kernel peak arrives, i.e. accentPhase * period frames from now).
-    // Correction rate scales with confidence: reliable estimates get faster
-    // correction, noisy estimates get ignored. At ~100ms ACF period and
-    // rate 0.25, convergence takes ~400ms (4 updates) at full confidence.
-    {
-        float target = 1.0f - bestPhase;
-        if (target >= 1.0f) target -= 1.0f;
-        float error = target - plpPhase_;
-        if (error > 0.5f) error -= 1.0f;
-        if (error < -0.5f) error += 1.0f;
-        float rate = 0.25f * clampf(plpConfidence_, 0.0f, 1.0f);
-        plpPhase_ += error * rate;
-        if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-        if (plpPhase_ >= 1.0f) plpPhase_ -= 1.0f;
-    }
 
     // Periodicity strength from ACF peak (already normalized 0-1)
     float newStrength = clampf(bestStrength, 0.0f, 1.0f);
@@ -625,7 +599,7 @@ void AudioTracker::updatePlpAnalysis() {
     float totalWeight = 0.0f;
     int epochs = 0;
     for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
-        float weight = expf(-0.3f * epochs);
+        float weight = expf(-plpDecayRate * epochs);
         for (int j = 0; j < patLen; j++) {
             float val = sourceBuf[offset + j];
             foldSum[j] += val * weight;
@@ -637,7 +611,7 @@ void AudioTracker::updatePlpAnalysis() {
     if (epochs < 2) return;
 
     // Compute per-bin mean, variance, and reliability-weighted pattern
-    static constexpr float VARIANCE_SENSITIVITY = 10.0f;  // Higher = more aggressive suppression
+    float varSens = plpVarianceSens;  // Higher = more aggressive variance suppression
     float minVal = 1e30f, maxVal = -1e30f;
     float patternRaw[MAX_PATTERN_LEN];
     for (int j = 0; j < patLen; j++) {
@@ -648,7 +622,7 @@ void AudioTracker::updatePlpAnalysis() {
 
         // Reliability: consistent bins (low variance) get full weight,
         // variable bins (high variance) get suppressed
-        float reliability = 1.0f / (1.0f + variance * VARIANCE_SENSITIVITY);
+        float reliability = 1.0f / (1.0f + variance * varSens);
         patternRaw[j] = mean * reliability;
 
         if (patternRaw[j] < minVal) minVal = patternRaw[j];
@@ -666,36 +640,7 @@ void AudioTracker::updatePlpAnalysis() {
         for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
     }
 
-    // --- 3. Canonical PLP: add Hann-windowed cosine kernel to pulse buffer ---
-    // Each ACF update contributes one kernel. The buffer rolls forward 1 position
-    // per frame in updatePlpPhase(). Overlap-add of many kernels produces peaks
-    // where the ACF says periodicity is — anti-correlation is impossible because
-    // cosine peaks are always positively correlated with the dominant periodic
-    // component. (Grosche & Mueller 2011, Meier et al. 2024)
-    //
-    // Kernel: k(t) = hann(t) * cos(2*pi*(t * omega - phase))
-    //   omega = 1/period (cycles per frame)
-    //   phase = epoch-fold accent position (0-1 within period)
-    //   Window length = 2 * period (covers 2 full beat cycles)
-    {
-        float omega = 1.0f / static_cast<float>(patLen);  // cycles per frame
-        int halfWin = patLen;  // 1 period each side = 2-period window
-        if (halfWin > PULSE_BUF_LEN / 2 - 1) halfWin = PULSE_BUF_LEN / 2 - 1;
-        int winLen = halfWin * 2 + 1;
-
-        // Kernel is centered at pulseHead_ (current frame in ring buffer).
-        // Negative indices address past samples, positive address future predictions.
-        // The Hann window tapers both ends smoothly.
-        for (int i = -halfWin; i <= halfWin; i++) {
-            float w = 0.5f + 0.5f * cosf(TWO_PI_F * static_cast<float>(i) / static_cast<float>(winLen - 1));
-            float kernel = w * cosf(TWO_PI_F * (static_cast<float>(i) * omega - plpAccentPhase_));
-            int idx = (pulseHead_ + i) % PULSE_BUF_LEN;
-            if (idx < 0) idx += PULSE_BUF_LEN;
-            pulseBuf_[idx] += kernel;
-        }
-    }
-
-    // --- 4. PLP confidence from ACF strength + steep signal gate ---
+    // --- 3. PLP confidence from ACF strength + steep signal gate ---
     float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
@@ -704,43 +649,40 @@ void AudioTracker::updatePlpAnalysis() {
 }
 
 void AudioTracker::updatePlpPhase() {
-    // --- Advance pulse ring buffer by 1 frame (Meier 2024 real-time PLP) ---
-    // Read current value, then zero and advance head. Ring buffer avoids
-    // the O(N) memmove (~3KB/frame at 62.5Hz) of a linear shift.
-    // Old kernel contributions naturally fall off as head wraps around.
+    // --- Direct pattern interpolation (replaces cosine OLA) ---
+    // Read the epoch-fold pattern at the current cycle position. Phase is
+    // derived from position and accent, not corrected toward a target.
+    // Preserves actual rhythmic shape (kick-hat-snare-hat) instead of
+    // reducing to a sinusoid. No OLA buffer, no cosine fallback.
 
-    // --- Read pulse from cosine OLA buffer at head (current frame) ---
-    // Half-wave rectify: only positive lobes become pulse peaks (Grosche & Mueller 2011).
-    float rawPulse = fmaxf(pulseBuf_[pulseHead_], 0.0f);
-
-    // Zero the slot we just read and advance head
-    pulseBuf_[pulseHead_] = 0.0f;
-    pulseHead_ = (pulseHead_ + 1) % PULSE_BUF_LEN;
-
-    // Normalize with slow-tracking peak EMA to keep output in [0, 1].
-    // EMA avoids hard peak-hold artifacts. Floor prevents division issues during silence.
-    static constexpr float PEAK_EMA_ALPHA = 0.01f;   // ~100-frame (~1.5s) time constant
-    static constexpr float PEAK_FLOOR = 0.1f;
-    olaPeakEma_ += PEAK_EMA_ALPHA * (rawPulse - olaPeakEma_);
-    if (olaPeakEma_ < PEAK_FLOOR) olaPeakEma_ = PEAK_FLOOR;
-    float normalizedPulse = clampf(rawPulse / olaPeakEma_, 0.0f, 1.0f);
-
-    // Blend OLA pulse with cosine fallback when confidence is low.
-    // During silence, confidence→0 and the output degrades to a smooth cosine.
-    float cosinePulse = 0.5f + 0.5f * cosf(plpPhase_ * TWO_PI_F);
-    float blend = clampf(plpConfidence_, 0.0f, 1.0f);
-    plpPulseValue_ = cosinePulse * (1.0f - blend) + normalizedPulse * blend;
-
-    // --- Free-running phase advance (for beat counting + cosine fallback) ---
+    // Advance position within pattern cycle
     int period = (plpBestPeriod_ > 0) ? plpBestPeriod_ : 33;
-    float phaseIncrement = 1.0f / static_cast<float>(period);
-    plpPhase_ += phaseIncrement;
-    if (plpPhase_ >= 1.0f) {
-        plpPhase_ -= 1.0f;
+    float posIncrement = 1.0f / static_cast<float>(period);
+    patternPosition_ += posIncrement;
+    if (patternPosition_ >= 1.0f) {
+        patternPosition_ -= 1.0f;
         beatCount_++;
     }
 
-    // --- Beat stability tracking ---
+    // Read pattern at current position (linear interpolation)
+    int patLen = plpPatternLen_;
+    if (patLen > 1) {
+        float idx = patternPosition_ * static_cast<float>(patLen);
+        int i0 = static_cast<int>(idx) % patLen;
+        float frac = idx - floorf(idx);
+        int i1 = (i0 + 1) % patLen;
+        plpPulseValue_ = clampf(
+            plpPattern_[i0] * (1.0f - frac) + plpPattern_[i1] * frac, 0.0f, 1.0f);
+    } else {
+        plpPulseValue_ = 0.5f;
+    }
+
+    // Phase for generators: 0 = accent (epoch-fold peak position).
+    // Derived from pattern position offset by accent phase — no oscillator.
+    plpPhase_ = patternPosition_ - plpAccentPhase_;
+    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
+
+    // Beat stability: pattern amplitude at accent vs running EMA
     if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
         float peakAmp = plpPulseValue_;
         static constexpr float STABILITY_ALPHA = 0.1f;

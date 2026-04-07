@@ -268,3 +268,36 @@ def append_delta_features(mel: np.ndarray) -> np.ndarray:
     delta = np.zeros_like(mel)
     delta[1:] = mel[1:] - mel[:-1]
     return np.concatenate([mel, delta], axis=-1)
+
+
+def append_band_flux_features(mel: np.ndarray) -> np.ndarray:
+    """Append 3 band-grouped HWR mel flux channels.
+
+    Compact alternative to 26 per-band delta channels. Computes
+    half-wave-rectified (positive-only) mel differences within 3 frequency
+    bands matching firmware's bass/mid/high grouping:
+      - Bass: mel bands 0-5   (roughly 60-375 Hz, kicks)
+      - Mid:  mel bands 6-13  (roughly 400-2000 Hz, vocals/pads)
+      - High: mel bands 14-25 (roughly 2-8 kHz, snares/hi-hats)
+
+    Each band's flux is normalized by the number of mel bands in that group.
+
+    Input shape: (n_frames, 26)
+    Output shape: (n_frames, 29)
+    """
+    n_frames = mel.shape[0]
+    flux = np.zeros((n_frames, 3), dtype=np.float32)
+
+    # Band boundaries (mel band indices)
+    BASS = slice(0, 6)    # 6 bands
+    MID = slice(6, 14)    # 8 bands
+    HIGH = slice(14, 26)  # 12 bands
+
+    for t in range(1, n_frames):
+        diff = mel[t] - mel[t - 1]
+        pos_diff = np.maximum(diff, 0.0)  # HWR: only positive changes (onsets)
+        flux[t, 0] = pos_diff[BASS].sum() / 6.0
+        flux[t, 1] = pos_diff[MID].sum() / 8.0
+        flux[t, 2] = pos_diff[HIGH].sum() / 12.0
+
+    return np.concatenate([mel, flux], axis=-1)

@@ -284,7 +284,7 @@ def score_device_run(
                 elif dist > best_dist:
                     search_start = max(0, si - 2)
                     break
-            if best_state and best_state["plp_pulse"] is not None and best_dist < 150:
+            if best_state and best_state["plp_pulse"] is not None and best_dist < 75:
                 gt_onset_plp_values.append(best_state["plp_pulse"])
 
         if gt_onset_plp_values:
@@ -374,6 +374,7 @@ def score_device_run(
         ),
         plp=PlpMetrics(
             at_transient=_js_round(plp_at_transient),
+            at_transient_norm=_js_round(plp_at_transient / plp_mean, 2) if plp_mean > 0.01 else 0.0,
             gt_onsets_matched=len(gt_onset_plp_values),
             gt_onsets_total=len(ref_onsets),
             auto_corr=_js_round(plp_auto_corr),
@@ -435,6 +436,7 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
         },
         "plp": {
             "atTransient": score.plp.at_transient,
+            "atTransientNorm": score.plp.at_transient_norm,
             "gtOnsetsMatched": score.plp.gt_onsets_matched,
             "gtOnsetsTotal": score.plp.gt_onsets_total,
             "autoCorr": score.plp.auto_corr,

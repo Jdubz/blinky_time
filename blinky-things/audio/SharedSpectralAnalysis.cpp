@@ -205,7 +205,14 @@ void SharedSpectralAnalysis::process() {
     if (hasPrevFrame_) {
         float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
         for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {  // skip DC
-            float diff = magnitudes_[i] - prevMagnitudes_[i];
+            // SuperFlux (Bock & Widmer 2013): 3-wide frequency max filter on
+            // previous frame absorbs slow harmonic shifts (vibrato, chord
+            // changes) into the reference. Only sharp broadband transients
+            // (kicks, snares) produce positive flux.
+            float ref = prevMagnitudes_[i];
+            if (i > 1) ref = fmaxf(ref, prevMagnitudes_[i - 1]);
+            if (i < SpectralConstants::NUM_BINS - 1) ref = fmaxf(ref, prevMagnitudes_[i + 1]);
+            float diff = magnitudes_[i] - ref;
             if (diff > 0.0f) {
                 if (i <= SpectralConstants::BASS_MAX_BIN)
                     bassFlux += diff;

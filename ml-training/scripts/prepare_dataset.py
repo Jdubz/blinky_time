@@ -86,6 +86,7 @@ def _file_rng(seed: int, track_stem: str) -> np.random.Generator:
 
 from scripts.audio import (
     append_delta_features,
+    append_band_flux_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
@@ -880,18 +881,21 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
                teacher_target: np.ndarray | None = None,
-               use_delta: bool = False) -> tuple:
+               use_delta: bool = False,
+               use_band_flux: bool = False) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks.
 
     If use_delta=True, appends first-order mel differences as additional
     channels: mel[t] - mel[t-1]. Output shape becomes (N, chunk_frames, 2*n_mels).
-    Delta features explicitly provide spectral flux — the #1 traditional onset
-    detection signal (Rong Gong et al. 2018, Schluter & Bock 2014).
+    If use_band_flux=True, appends 3 band-grouped HWR flux channels.
+    Output shape becomes (N, chunk_frames, n_mels+3).
     """
     n_frames = mel.shape[0]
 
     if use_delta:
         mel = append_delta_features(mel)
+    elif use_band_flux:
+        mel = append_band_flux_features(mel)
     has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
@@ -947,6 +951,8 @@ def main():
                              "Resampled to firmware frame rate for MSE distillation. Implies --teacher.")
     parser.add_argument("--delta", action="store_true",
                         help="Append first-order mel differences as additional input channels (26→52 features)")
+    parser.add_argument("--band-flux", action="store_true", dest="band_flux",
+                        help="Append 3 band-grouped HWR mel flux channels (26→29 features)")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
     parser.add_argument("--no-cache", action="store_true",
@@ -1112,10 +1118,15 @@ def main():
     teacher_soft_dir = Path(args.teacher_soft_dir) if args.teacher_soft_dir else None
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
     use_delta = getattr(args, 'delta', False) or cfg.get("features", {}).get("use_delta", False)
+    use_band_flux = getattr(args, 'band_flux', False) or cfg.get("features", {}).get("use_band_flux", False)
+    if use_delta and use_band_flux:
+        print("WARNING: Both delta and band_flux enabled. Using delta (takes precedence).")
+        use_band_flux = False
     teacher_src = "madmom soft" if teacher_soft_dir else "consensus Gaussian" if generate_teacher else None
+    feat_str = " + Delta features" if use_delta else " + Band flux (3ch)" if use_band_flux else ""
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}"
           f"{f' + Teacher labels ({teacher_src})' if generate_teacher else ''}"
-          f"{' + Delta features' if use_delta else ''}")
+          f"{feat_str}")
     if stems_dir:
         # Count how many tracks have stems available
         stems_found = sum(
@@ -1159,6 +1170,7 @@ def main():
                         r["mel"], r["target"], chunk_frames, chunk_stride,
                         teacher_target=r.get("teacher"),
                         use_delta=use_delta,
+                        use_band_flux=use_band_flux,
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)

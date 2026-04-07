@@ -1,0 +1,55 @@
+# Conv1D W16 v16 — delta feature removal validation
+#
+# Based on v15 (madmom MSE distillation). Same architecture and training
+# recipe, ONLY change: use_delta: false (26 mel channels, not 52).
+#
+# Goal: Validate that delta features are redundant for Conv1D onset
+# detection. Published onset detectors (madmom, Beat This!, Schluter 2014)
+# all use raw mel, never delta. Conv1D naturally learns temporal
+# differences via k=5 kernels. If KW onset F1 is within 0.02 of v15,
+# delta features can be dropped permanently — saving 4.9ms/frame
+# (11.7ms → 6.8ms inference on nRF52840).
+#
+# Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# ~5K params (half of v15's 10K due to narrower layer 1), <10 KB INT8
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: false
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+distillation:
+  alpha: 0.3
+  temperature: 2.0
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v16.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

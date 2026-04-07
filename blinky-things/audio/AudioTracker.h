@@ -75,6 +75,7 @@ public:
     uint16_t getBeatCount() const { return beatCount_; }
     float getPlpPhase() const { return plpPhase_; }
     float getPlpConfidence() const { return plpConfidence_; }
+    float getPlpAccentPhase() const { return plpAccentPhase_; }
     float getPlpPulseValue() const { return plpPulseValue_; }
     int getPlpPatternLen() const { return plpPatternLen_; }
     float getAcfPeakStrength() const { return acfPeakStrength_; }
@@ -111,8 +112,10 @@ public:
 
     // PLP (Predominant Local Pulse)
     float plpConfAlpha = 0.25f;        // Confidence EMA smoothing rate (was 0.15)
-    float plpNovGain = 1.5f;           // Pattern contrast/novelty scaling
+    float plpNovGain = 1.0f;           // Pattern contrast: power-law exponent (>1 sharpens peaks, 1.0=linear)
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
+    float plpVarianceSens = 0.0f;      // Epoch-fold variance suppression (0=disabled, sweep showed best autoCorr)
+    float plpDecayRate = 0.3f;         // Epoch-fold recency decay (half-life ~2.3 epochs at 0.3)
 
     // NN profiling
     bool nnProfile = false;
@@ -187,7 +190,8 @@ private:
 
     float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period)
     int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
-    float plpPhase_ = 0.0f;                     // 0→1 phase within pattern cycle
+    float patternPosition_ = 0.0f;              // 0→1 position within pattern cycle (advances each frame)
+    float plpPhase_ = 0.0f;                     // 0→1 phase for generators (0 = accent, derived from position)
     float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
@@ -198,16 +202,6 @@ private:
     float beatStability_ = 0.0f;              // Current PLP peak / peak EMA (0=disrupted, 1=locked)
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
-
-    // === Canonical PLP: cosine OLA pulse buffer (Grosche & Mueller 2011, Meier 2024) ===
-    // Ring buffer with head index. Each ACF update adds a Hann-windowed cosine kernel
-    // at detected period+phase. Head advances 1 position per frame (no memmove).
-    // Pulse read from head position. Anti-correlation impossible: cosine kernel
-    // peaks where DFT says periodicity is.
-    static constexpr int PULSE_BUF_LEN = 792;   // 3× MAX_PATTERN_LEN for cosine OLA accumulation
-    float pulseBuf_[PULSE_BUF_LEN] = {0};
-    int pulseHead_ = 0;                          // Ring buffer head (current frame position)
-    float olaPeakEma_ = 1.0f;                   // Running peak EMA for normalization
 
     // === Pulse detection ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline

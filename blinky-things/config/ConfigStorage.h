@@ -121,7 +121,9 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 89;  // v89: pulseNNGate — NN activation gate for pulse detection
+    // v89: pulseNNGate. v91: PLP OLA removed (direct pattern interpolation).
+    // v92: plpVarianceSens. v93: plpDecayRate.
+    static const uint8_t SETTINGS_VERSION = 93;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -291,6 +293,8 @@ public:
         float plpConfAlpha;
         float plpNovGain;
         float plpSignalFloor;       // v81
+        float plpVarianceSens;      // v92: epoch-fold variance suppression
+        float plpDecayRate;         // v93: epoch-fold recency decay
 
         // Spectral flux contrast
         float odfContrast;
@@ -302,6 +306,7 @@ public:
         float pulseNNGate;
 
         // (Percival ACF + comb filter bank removed v80)
+        // (phaseCorrectRate removed v91 — PLP refactored to direct pattern interpolation)
 
         // ODF baseline tracking
         float baselineFastDrop;
@@ -357,7 +362,7 @@ public:
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
-    static_assert(sizeof(StoredTrackerParams) == 112,
+    static_assert(sizeof(StoredTrackerParams) == 120,
         "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (112 bytes = 27 floats + 1 uint16 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
