@@ -579,15 +579,22 @@ void AudioTracker::updatePlpAnalysis() {
     plpPatternLen_ = patLen;
 
     // --- 2. Recency-weighted epoch fold for pattern extraction ---
-    // Uses ungated spectral flux (ossLinear_) — NN-independent, same signal
-    // as ACF period detection. This decouples pattern quality from NN model
-    // quality. The NN onset detector still drives visual pulse independently.
+    // Uses ungated spectral flux from ossBuffer_ — NN-independent.
+    // Decouples pattern quality from NN model quality.
     //
-    // Previous design used NN-gated flux to "emphasize kicks/snares", but
-    // this made plpAutoCorr drop 37-72% when NN model changed (v16/v17).
-    // Ungated SuperFlux already suppresses harmonic shifts (Bock 2013).
-    // Canonical PLP (Grosche 2011) uses ungated spectral flux.
-    const float* sourceBuf = ossLinear_;
+    // Previous design used NN-gated flux, making plpAutoCorr drop 37-72%
+    // when NN model changed. Ungated SuperFlux already suppresses harmonic
+    // shifts (Bock 2013). Canonical PLP (Grosche 2011) uses ungated flux.
+    //
+    // NOTE: ossLinear_ is mean-subtracted (for ACF). Epoch-fold needs raw
+    // values for meaningful mean/variance, so we linearize from ossBuffer_
+    // directly without mean subtraction.
+    float epochFoldBuf[OSS_BUFFER_SIZE];
+    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+    for (int i = 0; i < ossCount_; i++) {
+        epochFoldBuf[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
+    }
+    const float* sourceBuf = epochFoldBuf;
     int sourceCount = ossCount_;
 
     if (sourceCount < patLen * 2) return;
