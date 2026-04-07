@@ -484,7 +484,9 @@ def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
     rng = np.random.RandomState(42)
     indices = rng.choice(len(X), size=min(n_samples, len(X)), replace=False)
     for i in indices:
-        chunk = X[i].astype(np.float32)  # (chunk_frames, n_mels)
+        chunk = X[i].astype(np.float32)  # (chunk_frames, features)
+        if chunk.shape[-1] > n_mels:
+            chunk = chunk[..., :n_mels]  # Slice to expected feature count
         start = rng.randint(0, chunk_frames - window_frames + 1)
         window = chunk[start:start + window_frames]  # (W, n_mels)
         yield [window.reshape(1, window_frames, n_mels)]

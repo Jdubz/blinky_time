@@ -52,4 +52,4 @@ distillation:
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v16.h"
   c_array_name: "frame_onset_model_data"
-  max_model_size_kb: 15
+  max_model_size_kb: 25
