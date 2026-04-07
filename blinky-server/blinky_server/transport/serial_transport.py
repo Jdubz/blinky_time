@@ -91,13 +91,15 @@ class SerialTransport(Transport):
         # Wait for device CDC to be ready after DTR toggle
         await asyncio.sleep(INIT_DELAY_S)
 
-        # Stop any stale streaming from a previous session.
-        # Ignore errors — device may not be fully ready yet.
+        # Stop any stale streaming and drain boot messages.
+        # The device prints boot messages (FPS, BLE status, etc.) that fill
+        # the serial buffer before our commands. Drain them by waiting, then
+        # send "stream off" to ensure a clean state for subsequent commands.
         try:
             await self.write_line("stream off")
         except (OSError, serial.SerialException) as e:
             log.debug("Init 'stream off' failed on %s (non-fatal): %s", self._port, e)
-        await asyncio.sleep(DRAIN_DELAY_S)
+        await asyncio.sleep(1.0)  # Drain boot messages
 
         log.info("Serial connected: %s @ %d", self._port, self._baud)
 
