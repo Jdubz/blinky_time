@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import termios
 from collections.abc import Callable
 
 import serial
@@ -59,20 +60,26 @@ class SerialTransport(Transport):
         if self._connected:
             return
 
-        # Toggle DTR with a raw pyserial object BEFORE creating the asyncio
-        # transport. DTR ioctls on the asyncio transport's fd fail with
-        # Broken pipe (the fd is in non-blocking mode for asyncio). Using a
-        # separate Serial object for DTR avoids this. TinyUSB needs DTR
-        # asserted to start transmitting — without it, all output is dropped.
+        # Clear HUPCL on the port so closing doesn't drop DTR.
+        #
+        # Root cause of the "version=null" bug: Linux HUPCL flag (set by
+        # default) causes the kernel to send SET_CONTROL_LINE_STATE(DTR=0)
+        # when a serial port is closed. TinyUSB enters "no host" state and
+        # silently drops all output. On reopen, the DTR reassertion ioctl
+        # fails with EPIPE (the USB device stalls the control transfer).
+        #
+        # Fix: clear HUPCL before anything else. Then DTR stays asserted
+        # across close/reopen cycles, TinyUSB never enters "no host" state.
         try:
             raw = serial.Serial(self._port, self._baud, timeout=0.5)
-            raw.dtr = False
-            await asyncio.sleep(0.1)
-            raw.dtr = True
-            await asyncio.sleep(0.5)
-            raw.close()
+            attrs = termios.tcgetattr(raw.fd)
+            attrs[2] &= ~termios.HUPCL  # cflag: clear hang-up-on-close
+            termios.tcsetattr(raw.fd, termios.TCSANOW, attrs)
+            raw.dtr = True  # Ensure DTR is asserted
+            await asyncio.sleep(0.3)
+            raw.close()  # DTR stays high (HUPCL cleared)
         except (OSError, serial.SerialException) as e:
-            log.debug("DTR toggle failed on %s (non-fatal): %s", self._port, e)
+            log.debug("HUPCL/DTR setup failed on %s (non-fatal): %s", self._port, e)
 
         # Wait for device to finish booting (NN model load, BLE init)
         await asyncio.sleep(INIT_DELAY_S)
@@ -92,15 +99,23 @@ class SerialTransport(Transport):
         self._protocol = protocol  # type: ignore[assignment]
         self._connected = True
 
-        # Stop any stale streaming and drain boot messages.
-        # The device prints boot messages (FPS, BLE status, etc.) that fill
-        # the serial buffer before our commands. Drain them by waiting, then
-        # send "stream off" to ensure a clean state for subsequent commands.
+        # Clear HUPCL on the asyncio transport's fd too, so future
+        # disconnects (server restart, flash) don't drop DTR.
+        try:
+            serial_obj = getattr(self._serial_transport, "serial", None)
+            if serial_obj and hasattr(serial_obj, "fd"):
+                attrs = termios.tcgetattr(serial_obj.fd)
+                attrs[2] &= ~termios.HUPCL
+                termios.tcsetattr(serial_obj.fd, termios.TCSANOW, attrs)
+        except (OSError, termios.error) as e:
+            log.debug("HUPCL clear on asyncio fd failed on %s: %s", self._port, e)
+
+        # Drain boot messages, then stop stale streaming
         try:
             await self.write_line("stream off")
         except (OSError, serial.SerialException) as e:
             log.debug("Init 'stream off' failed on %s (non-fatal): %s", self._port, e)
-        await asyncio.sleep(1.0)  # Drain boot messages
+        await asyncio.sleep(1.0)
 
         log.info("Serial connected: %s @ %d", self._port, self._baud)
 
