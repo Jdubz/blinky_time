@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+import serial
 import serial_asyncio_fast as serial_asyncio
 
 from .base import Transport
@@ -77,18 +78,25 @@ class SerialTransport(Transport):
         # After a previous connection closes, TinyUSB's CDC may be stuck in
         # "disconnected" state where it silently drops output. Toggling DTR
         # forces TinyUSB to reinitialize its connected state.
-        if self._serial_transport is not None:
-            serial_obj = getattr(self._serial_transport, "serial", None)
-            if serial_obj is not None and hasattr(serial_obj, "dtr"):
-                serial_obj.dtr = False
-                await asyncio.sleep(0.1)
-                serial_obj.dtr = True
+        try:
+            if self._serial_transport is not None:
+                serial_obj = getattr(self._serial_transport, "serial", None)
+                if serial_obj is not None and hasattr(serial_obj, "dtr"):
+                    serial_obj.dtr = False
+                    await asyncio.sleep(0.1)
+                    serial_obj.dtr = True
+        except OSError as e:
+            log.debug("DTR toggle failed on %s (non-fatal): %s", self._port, e)
 
-        # Wait for device to be ready
+        # Wait for device CDC to be ready after DTR toggle
         await asyncio.sleep(INIT_DELAY_S)
 
-        # Stop any stale streaming from a previous session
-        await self.write_line("stream off")
+        # Stop any stale streaming from a previous session.
+        # Ignore errors — device may not be fully ready yet.
+        try:
+            await self.write_line("stream off")
+        except (OSError, serial.SerialException) as e:
+            log.debug("Init 'stream off' failed on %s (non-fatal): %s", self._port, e)
         await asyncio.sleep(DRAIN_DELAY_S)
 
         log.info("Serial connected: %s @ %d", self._port, self._baud)
