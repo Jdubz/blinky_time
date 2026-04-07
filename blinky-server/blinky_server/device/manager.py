@@ -481,7 +481,7 @@ class FleetManager:
             # After 10 consecutive failures, give up entirely — the device
             # is likely not a Blinky or is permanently out of range.
             fail_count = self._reconnect_failures.get(device_id, 0)
-            if fail_count >= 10:
+            if fail_count >= 20:
                 log.info(
                     "Giving up on %s after %d failures — removing from fleet",
                     device_id[:12],
@@ -500,6 +500,22 @@ class FleetManager:
                 self._backoff_skip[device_id] = 0
 
             try:
+                # Refresh port path before reconnecting — after firmware flash
+                # or USB re-enumeration, the device may be on a different ttyACM.
+                # Match by USB serial number (stable across reboots/flashes).
+                if disc.transport_type == "serial":
+                    from ..transport.discovery import discover_serial_devices
+
+                    for fresh in discover_serial_devices():
+                        if fresh.device_id == disc.device_id and fresh.address != disc.address:
+                            log.info(
+                                "Port changed for %s: %s -> %s",
+                                device_id[:12],
+                                disc.address,
+                                fresh.address,
+                            )
+                            disc.address = fresh.address
+
                 transport = _create_transport(disc)
                 device.transport = transport
                 device.protocol = DeviceProtocol(transport)

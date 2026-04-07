@@ -34,6 +34,12 @@ class _LineProtocol(asyncio.Protocol):
 
     def connection_lost(self, exc: Exception | None) -> None:
         self.transport = None
+        # Propagate to parent SerialTransport so disconnect is detected
+        # immediately (not just on next write attempt).
+        if self._on_disconnect:
+            self._on_disconnect(exc)
+
+    _on_disconnect: Callable[[Exception | None], None] | None = None
 
 
 class SerialTransport(Transport):
@@ -53,7 +59,9 @@ class SerialTransport(Transport):
             return
 
         def factory() -> _LineProtocol:
-            return _LineProtocol(self._dispatch_line)
+            proto = _LineProtocol(self._dispatch_line)
+            proto._on_disconnect = self._on_connection_lost
+            return proto
 
         transport, protocol = await serial_asyncio.create_serial_connection(
             asyncio.get_event_loop(),
@@ -84,6 +92,13 @@ class SerialTransport(Transport):
         await asyncio.sleep(DRAIN_DELAY_S)
 
         log.info("Serial connected: %s @ %d", self._port, self._baud)
+
+    def _on_connection_lost(self, exc: Exception | None) -> None:
+        """Called by _LineProtocol when the serial connection drops unexpectedly."""
+        if self._connected:
+            self._connected = False
+            log.warning("Serial connection lost on %s: %s", self._port, exc or "clean close")
+            self._fire_disconnect()
 
     async def disconnect(self) -> None:
         if not self._connected:
