@@ -278,12 +278,13 @@ RenderPipeline → LED Output
      - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
-3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v82)**
-   - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~10 params)
-   - **Period path** (NN-independent): spectral flux + bass energy → multi-source ACF (lags 20-80, ~4ms) → beat-level peaks → bar multipliers (2×/3×/4×) → epoch-fold variance scoring selects best pattern period. Parabolic interpolation on ACF peaks for sub-step precision. **The system finds the period that produces the best visual pattern, not the "correct" BPM. Half/double time periods are valid if they capture more rhythmic structure.**
+3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v93)**
+   - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~12 tunable params)
+   - **Period path** (NN-independent): spectral flux (SuperFlux 3-wide max filter, Bock 2013) + bass energy → multi-source ACF (lags 20-80, ~4ms) → beat-level peaks → bar multipliers (2×/3×/4×) → epoch-fold variance scoring selects best pattern period. Parabolic interpolation on ACF peaks for sub-step precision. **The system finds the period that produces the best visual pattern, not the "correct" BPM. Half/double time periods are valid if they capture more rhythmic structure.**
    - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection (visual sparks)
-     - Pulse detection: floor-tracking baseline (fast drop, slow rise)
-   - **PLP path**: Epoch-fold at detected period → repeating energy pattern → direct pattern interpolation at current cycle position. No OLA buffer, no cosine fallback, no phase correction — phase derived from position offset by accent phase. Preserves actual rhythmic shape (kick-hat-snare-hat) instead of reducing to sinusoid. ACF strength × sqrt(variance) scoring with multiplier penalty. Cold-start template seeding (8 patterns, cosine similarity > 0.50). Confidence = ACF peak strength × signal presence (steep mic level gate).
+     - Pulse detection: floor-tracking baseline + NN local-peak gate (100ms recency)
+   - **PLP path** (v91 refactor, NN-independent): Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation at current cycle position. Phase derived from position offset by accent phase. Preserves actual rhythmic shape. plpNovGain=1.0 (linear, no power-law). plpVarianceSens=0 (disabled). Cold-start template seeding (8 patterns). Adaptive NN gate floor based on activation variance.
+   - **Key decoupling**: Pattern quality (plpAutoCorr) is NN-independent — epoch-fold uses ungated flux. NN onset only drives visual pulse. Model changes affect onset detection, not pattern breathing.
    - **Pattern slot cache** (v82): 4-slot LRU cache of 16-bin PLP pattern digests. Every bar (4 beats), current PLP pattern resampled to 16-bin digest and compared via cosine similarity against cached slots. Match > 0.70 triggers instant recall. Enables rapid section switching (verse/chorus/bridge).
    - Energy synthesis: hybrid mic level + bass mel energy + onset peak-hold
 
@@ -299,7 +300,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v91)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: 93)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -543,7 +544,7 @@ check_test_result(job_id: "abc123")
 - **v12/v13 not deployed (April 1 post-mortem):** Apparent regressions were eval pipeline artifacts — `sweep_thresholds()` optimized against beat F1 (wrong metric), picking different operating points. At equal thresholds (t=0.40), all three models are nearly identical (v13 marginally best: KW F1=0.653, Kick=0.721). SpecMix label mixing was wrong for frame-level tasks (global scalar, not per-frame). OWBCE proximity boost was applied to all frames instead of positives only. Wider [48,48,32] architecture proved equivalent to [32,32] — task is data-limited, not capacity-limited. See IMPROVEMENT_PLAN.md for v14 plan.
 
 ### Key Features
-- **Multi-source ACF + PLP architecture** (v91): ACF scans beat-level lags (20-80) on 3 mean-subtracted sources (flux, bass, NN onset). Parabolic interpolation refines peaks. Bar multipliers (2×/3×/4×) generate candidates scored by ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier). **Pattern quality is the objective — period selection optimizes for visual pattern contrast, not BPM accuracy. Half/double time matches are correct if they produce better patterns.** PLP epoch-folds NN-gated flux at detected period → direct pattern interpolation at current cycle position. SuperFlux frequency-axis max filter (Bock 2013) on spectral flux. Pattern slot cache (4-slot LRU of 16-bin PLP digests) for instant section recall. NN onset used for visual pulse only.
+- **Multi-source ACF + PLP architecture** (v93): ACF scans beat-level lags (20-80) on 3 mean-subtracted sources (flux, bass, NN onset). Parabolic interpolation refines peaks. Bar multipliers (2×/3×/4×) generate candidates scored by ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier). **Pattern quality is the objective — period selection optimizes for visual pattern contrast, not BPM accuracy. Half/double time matches are correct if they produce better patterns.** PLP epoch-folds ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation. SuperFlux frequency-axis max filter (Bock 2013) on spectral flux. Adaptive NN gate floor based on activation variance. Pattern slot cache (4-slot LRU of 16-bin PLP digests) for instant section recall. NN onset used for visual pulse only. Pattern quality is NN-independent.
 - **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP pattern extraction.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
@@ -551,5 +552,5 @@ check_test_result(job_id: "abc123")
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **Multi-source ACF period detection** (v83): Replaces Fourier tempogram (75ms → ~4ms). ACF at beat-level lags with parabolic interpolation, bar multipliers (2×/3×/4×) with sqrt penalty, epoch-fold variance scoring. Phase from epoch-fold peak position.
-- **PLP direct pattern interpolation** (v91, refactored April 6): Epoch-fold at ACF-detected period across NN-gated flux → variance-weighted pattern normalized to [0,1]. Output reads pattern at current cycle position via linear interpolation — preserves actual rhythmic shape (kick-hat-snare-hat) instead of sinusoidal OLA. Phase derived from position offset by accent phase (no oscillator, no correction). Cosine OLA and cosine fallback REMOVED (v91). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin digests for instant section recall. Steep signal gate for mic level. plpAutoCorr: +0.30 (all 18 tracks positive).
+- **PLP direct pattern interpolation** (v91-v93): Epoch-fold ungated spectral flux (ossLinear_) at detected period → pattern normalized to [0,1] (plpNovGain=1.0, plpVarianceSens=0). Output reads pattern at current cycle position via linear interpolation — preserves actual rhythmic shape. Phase derived from position offset by accent phase (no oscillator). Cosine OLA removed (v91). Epoch-fold decoupled from NN gating (v93) — uses ungated flux directly, making pattern quality NN-independent. Cold-start template seeding (8 patterns). Pattern slot cache: 4-slot LRU of 16-bin digests. Adaptive NN gate floor based on activation variance.
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

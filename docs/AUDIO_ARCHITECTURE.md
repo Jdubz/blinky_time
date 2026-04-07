@@ -4,9 +4,9 @@
 
 AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.
 
-**Current Version:** AudioTracker with multi-source ACF + PLP architecture + pattern slot cache (v83, March 2026)
+**Current Version:** AudioTracker v93 (April 2026). Multi-source ACF + PLP with direct pattern interpolation.
 **Period Detection:** Multi-source ACF (spectral flux + bass energy + NN onset, lags 20-80, ~4ms) → parabolic interpolation → bar multipliers (2×/3×/4×) → epoch-fold variance scoring with sqrt(multiplier) penalty. **Pattern quality is the objective — the system selects whichever period produces the best visual pattern. Half/double time matches are correct if they capture more rhythmic structure.**
-**Phase/Pattern:** PLP epoch-folds NN-gated flux at detected period. Canonical cosine OLA (Grosche & Mueller 2011, Meier 2024) for plpPulse output. Epoch-fold pattern retained for slot cache digest only.
+**Phase/Pattern:** Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation (v91 refactor, cosine OLA removed). Pattern quality is NN-independent. SuperFlux 3-wide max filter on spectral flux. Adaptive NN gate floor based on activation variance. plpNovGain=1.0, plpVarianceSens=0.
 **Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse and as one of 3 ACF sources. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 **Primary Test Metrics:** plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure). BPM accuracy uses octave-tolerant scoring.
@@ -79,16 +79,15 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |    +--- Pulse: floor-tracking baseline detection (visual sparks)
       |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
       |
-      +--- [PHASE PATH: PLP → Fourier tempogram → phase + pattern]
-           3 sources mean-subtracted: spectral flux, bass energy, NN onset
-           Goertzel DFT at candidate frequencies
-           Epoch-fold quality scoring: top-5 diverse candidates (min 10% separation)
-             scored by DFT magnitude × pattern variance
-           Canonical cosine OLA → plpPulse (Grosche & Mueller 2011, Meier 2024)
-           Recency-weighted epoch fold (~3-epoch half-life) → pattern digest (slot cache only)
-           Confidence = DFT magnitude × signal presence (steep mic level gate)
-           Soft blend: cosine OLA ↔ cosine fallback (continuous, no hard threshold)
+      +--- [PHASE PATH: PLP → direct pattern interpolation (v91+)]
+           Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period
+           SuperFlux 3-wide frequency max filter (Bock 2013)
+           Direct pattern interpolation at current cycle position → plpPulse
+           Phase = patternPosition - accentPhase (data-driven, no oscillator)
+           Adaptive NN gate floor based on activation variance
+           Pattern quality is NN-independent (decoupled v93)
            Cold-start template seeding (8 patterns, cosine similarity > 0.50)
+           Pattern slot cache: 4-slot LRU of 16-bin digests (instant section recall)
            Silence state reset after 5s (clears all analysis buffers)
                 |
 AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
@@ -104,7 +103,7 @@ Generators (HeatFire, Water, Lightning)
 
 3. **Pattern Quality Over BPM Accuracy**: The system is a visualizer, not a BPM detector. Half/double time periods are correct if they capture more rhythmic structure (e.g., a 2-bar kick-snare-kick-snare pattern at half BPM is better than a 1-bar kick pattern at the "true" BPM). Test metrics focus on plpAtTransient, plpAutoCorr, and plpPeakiness — not BPM accuracy.
 
-4. **PLP Phase/Pattern Extraction**: Epoch-fold at ACF-detected period, NN-gated flux for pattern source. Canonical cosine OLA (Grosche & Mueller 2011) for plpPulse output. Soft blend with cosine fallback by confidence. Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall.
+4. **PLP Pattern Extraction (v91+)**: Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period. Direct pattern interpolation at current cycle position (cosine OLA removed v91). Phase derived from position offset by accent phase. Pattern quality is NN-independent (decoupled v93). Cold-start template seeding (8 patterns). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall. Adaptive NN gate floor based on activation variance.
 
 5. **NN Onset → Visual Pulse + ACF Source**: NN onset activation drives visual effects (sparks, flashes) and serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources.
 
