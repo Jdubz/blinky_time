@@ -241,6 +241,8 @@ void SerialConsole::registerTrackerSettings() {
         "Mic level for full PLP confidence", 0.01f, 0.5f, onParamChanged);
     settings_.registerFloat("plpvarsens", &audioCtrl_->plpVarianceSens, "tracker",
         "Epoch-fold variance suppression (higher=more aggressive)", 0.0f, 50.0f, onParamChanged);
+    settings_.registerFloat("plpdecay", &audioCtrl_->plpDecayRate, "tracker",
+        "Epoch-fold recency decay rate (0.3=1.2s half-life at 120bpm)", 0.05f, 1.0f, onParamChanged);
 
     // Rhythm activation
     settings_.registerFloat("activationthreshold", &audioCtrl_->activationThreshold, "tracker",
@@ -1007,6 +1009,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpNovGain = 1.0f;
         audioCtrl_->plpSignalFloor = 0.10f;
         audioCtrl_->plpVarianceSens = 0.0f;
+        audioCtrl_->plpDecayRate = 0.3f;
         // Pulse detection
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
@@ -1497,6 +1500,8 @@ void SerialConsole::streamTick() {
                 out_.print(audioCtrl_->getPlpConfidence(), 3);
                 out_.print(F(",\"aph\":"));
                 out_.print(audioCtrl_->getPlpAccentPhase(), 3);
+                out_.print(F(",\"src\":"));
+                out_.print(audioCtrl_->getPlpBestSource());
                 out_.print(F(",\"sl\":{\"id\":"));
                 out_.print(audioCtrl_->getActiveSlotId());
                 out_.print(F(",\"conf\":["));

@@ -115,6 +115,7 @@ public:
     float plpNovGain = 1.0f;           // Pattern contrast: power-law exponent (>1 sharpens peaks, 1.0=linear)
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
     float plpVarianceSens = 0.0f;      // Epoch-fold variance suppression (0=disabled, sweep showed best autoCorr)
+    float plpDecayRate = 0.3f;         // Epoch-fold recency decay (half-life ~2.3 epochs at 0.3)
 
     // NN profiling
     bool nnProfile = false;

@@ -460,7 +460,7 @@ void AudioTracker::runAcf() {
         float totalWeight = 0.0f;
         int epochs = 0;
         for (int offset = cCount - cPeriod; offset >= 0; offset -= cPeriod) {
-            float weight = expf(-0.3f * epochs);  // ~3-epoch half-life
+            float weight = expf(-plpDecayRate * epochs);  // ~3-epoch half-life
             for (int j = 0; j < cPeriod; j++) {
                 fold[j] += cBuf[offset + j] * weight;
             }
@@ -599,7 +599,7 @@ void AudioTracker::updatePlpAnalysis() {
     float totalWeight = 0.0f;
     int epochs = 0;
     for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
-        float weight = expf(-0.3f * epochs);
+        float weight = expf(-plpDecayRate * epochs);
         for (int j = 0; j < patLen; j++) {
             float val = sourceBuf[offset + j];
             foldSum[j] += val * weight;
