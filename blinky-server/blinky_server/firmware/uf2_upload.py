@@ -175,29 +175,16 @@ async def upload_uf2(
     with contextlib.suppress(Exception):
         await transport.disconnect()
 
-    # === Phase 2: USB-reset to reinitialize TinyUSB CDC ===
+    # === Phase 2: Wait for CDC to settle after disconnect ===
     #
-    # After transport.disconnect(), the CDC is in a "no host" state.
-    # USBDEVFS_RESET reinitializes the USB device, bringing the CDC back
-    # to a clean state. This is the standard Linux mechanism — equivalent
-    # to unplugging and replugging the USB cable.
-    progress("prepare", "USB-resetting device for clean CDC state...", 15)
-    usb_ok = await _usb_reset_device(usb_dev_path)
-    if usb_ok:
-        # Wait for the device to re-enumerate after USB reset.
-        # The serial port path may change (e.g., ttyACM1 → ttyACM4).
-        await asyncio.sleep(3)
-
-        # Re-discover port using the stable /dev/serial/by-id/ path.
-        # Match by the USB serial number we captured before disconnect.
-        if device_usb_sn and by_id_dir.exists():
-            for entry in by_id_dir.iterdir():
-                if device_usb_sn in entry.name:
-                    new_port = str(entry.resolve())
-                    if new_port != serial_port:
-                        log.info("Port changed after USB reset: %s -> %s", serial_port, new_port)
-                    serial_port = new_port
-                    break
+    # After transport.disconnect(), the CDC needs a moment to reset its
+    # internal state. USBDEVFS_RESET was previously used here but it
+    # degrades USB bus stability on VIA Labs hubs — each reset makes
+    # subsequent resets more likely to fail. The uf2_upload.py subprocess
+    # handles bootloader entry via 1200-baud touch, which only needs a
+    # clean serial port (no USB bus-level reset).
+    progress("prepare", "Waiting for CDC to settle...", 15)
+    await asyncio.sleep(2)
 
     # === Phase 3: Run uf2_upload.py (handles bootloader entry + copy) ===
     progress("upload", f"Running uf2_upload.py on {serial_port}...", 20)
