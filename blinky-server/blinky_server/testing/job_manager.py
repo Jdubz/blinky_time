@@ -78,6 +78,7 @@ class JobManager:
             log.warning("Using fallback jobs dir: %s", self._jobs_dir)
 
         self._load_persisted()
+        self._prune_old_files()
 
     def _load_persisted(self) -> None:
         """Load completed job results from disk on startup."""
@@ -101,6 +102,18 @@ class JobManager:
                 log.warning("Failed to load job %s: %s", path.name, e)
         if loaded:
             log.info("Loaded %d persisted job results from %s", loaded, self._jobs_dir)
+
+    def _prune_old_files(self, keep: int = 200) -> None:
+        """Delete oldest persisted job files if more than `keep` exist."""
+        files = sorted(self._jobs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+        if len(files) <= keep:
+            return
+        to_remove = files[: len(files) - keep]
+        for path in to_remove:
+            job_id = path.stem
+            self._jobs.pop(job_id, None)
+            path.unlink(missing_ok=True)
+        log.info("Pruned %d old job files (kept %d)", len(to_remove), keep)
 
     def _persist(self, job: Job) -> None:
         """Write a completed/errored job to disk."""

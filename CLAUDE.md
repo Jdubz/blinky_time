@@ -114,7 +114,7 @@ Firmware uses a simple auto-incrementing build number. **Not tied to git** — g
 - `blinky-things/BUILD_NUMBER` — plain text integer, source of truth
 - `blinky-things/types/Version.h` — generated header, do not edit manually
 - `scripts/build.sh` — increments BUILD_NUMBER, regenerates Version.h, compiles
-- Reported via `json info` as `"version": "b91"` (the `b` prefix distinguishes from old semver)
+- Reported via `json info` as `"version": "b<N>"` (the `b` prefix distinguishes from old semver)
 - SETTINGS_VERSION (config format) is separate and independent
 
 **Always use `scripts/build.sh` to compile.** It auto-increments the build number. Use `--no-bump` to recompile without incrementing (e.g., after a failed upload).

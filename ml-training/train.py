@@ -44,7 +44,7 @@ class MemmapBeatDataset(Dataset):
 
     def __getitem__(self, idx):
         x = torch.from_numpy(self.X[idx].copy()).float()
-        if self._max_features and x.shape[-1] > self._max_features:
+        if self._max_features is not None and x.shape[-1] > self._max_features:
             x = x[..., :self._max_features]
         y = torch.from_numpy(self.Y[idx].copy()).float()
         if y.dim() == 2:
