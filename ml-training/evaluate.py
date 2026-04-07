@@ -625,6 +625,13 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
     X_val = np.load(data_dir / "X_val.npy")
     Y_val = np.load(data_dir / "Y_val.npy")
 
+    # Slice features if data has more channels than model expects
+    # (e.g., data has 52=mel+delta but model wants 26=mel only)
+    use_delta = cfg.get("features", {}).get("use_delta", False)
+    expected_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+    if X_val.shape[-1] > expected_features:
+        X_val = X_val[..., :expected_features]
+
     model, pool_factor = _load_model(model_path, cfg, device)
 
     # Batch predict (chunked to avoid GPU OOM on large val sets)
