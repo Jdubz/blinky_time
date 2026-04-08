@@ -60,6 +60,7 @@ def compute_mel_cache_key(cfg: dict, augment: bool, seed: int,
     """
     cache_fields = {
         "audio": cfg.get("audio", {}),
+        "features": cfg.get("features", {}),  # PCEN changes mel values
         "augmentation": cfg.get("augmentation", {}),
         "augment_enabled": augment,
         "seed": seed,

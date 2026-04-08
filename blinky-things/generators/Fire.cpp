@@ -233,7 +233,18 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
     float dx = fx - x0;  // Fractional offset 0-1
     float dy = fy - y0;
 
-    uint32_t color = particleColor(p->intensity);
+    // Ember pulsing: slow particles pulse sinusoidally instead of fading linearly.
+    // Creates "breathing coals" effect. Phase derived from position (deterministic,
+    // no extra storage). Only applied to dim particles (embers, not bright sparks).
+    uint8_t renderIntensity = p->intensity;
+    if (p->intensity < 120 && p->intensity > 10) {
+        float phase = p->x * 2.3f + p->y * 1.7f;  // Deterministic phase from position
+        float age = (float)(255 - p->intensity) / 255.0f;  // 0=new, 1=dying
+        float pulse = 0.7f + 0.3f * sinf(age * 12.0f + phase);
+        renderIntensity = (uint8_t)(p->intensity * pulse);
+    }
+
+    uint32_t color = particleColor(renderIntensity);
     uint8_t r = (color >> 16) & 0xFF;
     uint8_t g = (color >> 8) & 0xFF;
     uint8_t b = color & 0xFF;

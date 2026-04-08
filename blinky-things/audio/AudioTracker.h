@@ -213,6 +213,11 @@ private:
 
     // === Raw NN activation tracking (before threshold/cooldown) ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
+    float nnActivationMean_ = 0.3f;   // EMA of NN activation (for adaptive gate)
+    float nnActivationVar_ = 0.01f;   // EMA of NN activation variance
+
+    // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
+    float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
     uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
 
     // === Onset density ===

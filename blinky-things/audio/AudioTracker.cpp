@@ -172,10 +172,18 @@ const AudioControl& AudioTracker::update(float dt) {
         }
         bassContrast = clampf(bassContrast, 0.0f, 1.0f);
 
-        // NN-gated bass flux for epoch-fold pattern extraction.
-        // Soft gate emphasizes kicks (NN F1=0.787) and suppresses fills,
-        // biasing the epoch-fold toward the stable rhythmic skeleton.
-        float nnGatedFlux = bassContrast * (0.3f + 0.7f * clampf(odf, 0.0f, 1.0f));
+        // Adaptive NN-gated bass flux. Gate floor adjusts based on how
+        // discriminative the NN output is (tracked via activation variance).
+        // High variance = NN clearly separates onsets → gate is selective (floor 0.1).
+        // Low variance = compressed activations → gate opens (floor 0.6).
+        // Prevents pattern quality collapse when NN model changes.
+        float odfClamped = clampf(odf, 0.0f, 1.0f);
+        nnActivationMean_ += 0.01f * (odfClamped - nnActivationMean_);
+        float dev = odfClamped - nnActivationMean_;
+        nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
+        float nnConf = clampf(nnActivationVar_ * 20.0f, 0.0f, 1.0f);
+        float gateFloor = 0.6f * (1.0f - nnConf) + 0.1f * nnConf;
+        float nnGatedFlux = bassContrast * (gateFloor + (1.0f - gateFloor) * odfClamped);
         addOssSample(bassContrast, nnGatedFlux);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
@@ -255,6 +263,8 @@ void AudioTracker::resetAnalysisState() {
     periodicityStrength_ = 0.0f;
     plpPhase_ = 0.0f;
     beatCount_ = 0;
+    nnActivationMean_ = 0.3f;
+    nnActivationVar_ = 0.01f;
     resetSlots();
 }
 
@@ -570,22 +580,24 @@ void AudioTracker::updatePlpAnalysis() {
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // --- 2. Recency-weighted epoch fold for PATTERN DIGEST (slot cache only) ---
-    // Epoch-fold is NOT used for pulse output (cosine OLA handles that).
-    // The pattern digest captures the actual rhythmic shape for section detection
-    // via the slot cache's cosine similarity matching.
-    // Use NN-gated flux (gatedFluxLinear_) for source 0 to emphasize kicks/snares
-    // in the pattern shape. The ungated ossLinear_ is reserved for ACF
-    // period detection (NN-independent per architecture contract).
-    const float* sourceBuf = gatedFluxLinear_;
-    int sourceCount = ossCount_;
-    if (plpBestSource_ == 1 && bassCount_ >= patLen * 2) {
-        sourceBuf = bassLinear_;
-        sourceCount = bassCount_;
-    } else if (plpBestSource_ == 2 && nnCount_ >= patLen * 2) {
-        sourceBuf = nnLinear_;
-        sourceCount = nnCount_;
+    // --- 2. Recency-weighted epoch fold for pattern extraction ---
+    // Uses ungated spectral flux from ossBuffer_ — NN-independent.
+    // Decouples pattern quality from NN model quality.
+    //
+    // Previous design used NN-gated flux, making plpAutoCorr drop 37-72%
+    // when NN model changed. Ungated SuperFlux already suppresses harmonic
+    // shifts (Bock 2013). Canonical PLP (Grosche 2011) uses ungated flux.
+    //
+    // NOTE: ossLinear_ is mean-subtracted (for ACF). Epoch-fold needs raw
+    // values for meaningful mean/variance, so we linearize from ossBuffer_
+    // directly without mean subtraction.
+    // Linearize ossBuffer_ into epochFoldLinear_ (not mean-subtracted, unlike ossLinear_)
+    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+    for (int i = 0; i < ossCount_; i++) {
+        epochFoldLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
+    const float* sourceBuf = epochFoldLinear_;
+    int sourceCount = ossCount_;
 
     if (sourceCount < patLen * 2) return;
 

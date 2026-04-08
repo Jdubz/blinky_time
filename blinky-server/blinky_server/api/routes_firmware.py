@@ -120,10 +120,20 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
                 break
             finally:
                 device.state = DeviceState.DISCONNECTED
-                fleet.resume_reconnect(device.id)
+                # Don't resume_reconnect here — wait until ALL devices are
+                # flashed and USB has stabilized (see below).
 
             await asyncio.sleep(3)
     finally:
+        # Wait for USB CDC to stabilize after all flashes before reconnecting.
+        # Without this delay, reconnection attempts fail with "Broken pipe"
+        # because the kernel's CDC state is stale from device reboots.
+        log.info("Fleet flash complete. Waiting 10s for USB stabilization...")
+        await asyncio.sleep(10)
+
+        # Resume reconnection for all flashed devices at once
+        for device in devices:
+            fleet.resume_reconnect(device.id)
         fleet.resume_discovery()
 
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")

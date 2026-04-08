@@ -144,6 +144,17 @@ private:
     // Water-specific physics components
     BackgroundModel* background_;
 
+    // Ripple simulation (classic demoscene 2-buffer water algorithm)
+    // Two int16 buffers swapped each frame. 5 integer ops per cell.
+    // Audio events inject impulses, ripples propagate and interfere.
+    static constexpr int MAX_RIPPLE_LEDS = 256;
+    int16_t rippleA_[MAX_RIPPLE_LEDS] = {0};
+    int16_t rippleB_[MAX_RIPPLE_LEDS] = {0};
+    bool rippleFlip_ = false;
+
+    // Bioluminescence: blue-green glow triggered by pulse events
+    uint8_t glowBuffer_[MAX_RIPPLE_LEDS] = {0};
+
     // Static buffer for placement new
     uint8_t backgroundBuffer_[64];
 };

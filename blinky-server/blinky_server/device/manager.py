@@ -427,21 +427,28 @@ class FleetManager:
                 )
 
     def _refresh_dedup_exclusions(self) -> None:
-        """Clear dedup exclusions when serial transports are gone or disconnected.
+        """Clear dedup exclusions only for BLE devices whose serial counterpart
+        has been REMOVED from the fleet entirely (not just disconnected).
 
-        Must run BEFORE discovery so BLE can take over for lost serial devices.
-        Clears when: any serial device is disconnected/error, OR no serial
-        devices exist at all (e.g., all unplugged and removed by failure limit).
+        Previously cleared all exclusions when any serial device disconnected,
+        causing a thrashing loop where BLE devices were rediscovered, connected,
+        deduped, and disconnected every discovery cycle.
+
+        Now only clears exclusions when the serial device no longer exists in
+        self._devices at all — meaning it was removed (failure limit exceeded
+        or manually released), not just temporarily disconnected during flash.
         """
         if not self._dedup_excluded:
             return
-        has_connected_serial = any(
-            d.transport.transport_type == "serial" and d.state == DeviceState.CONNECTED
-            for d in self._devices.values()
+        # Only clear exclusions if NO serial devices exist at all.
+        # Individual serial disconnects (e.g., during flash) should NOT
+        # clear exclusions — the serial device will reconnect.
+        has_any_serial = any(
+            d.transport and d.transport.transport_type == "serial" for d in self._devices.values()
         )
-        if not has_connected_serial:
+        if not has_any_serial:
             log.info(
-                "No connected serial devices — clearing %d dedup exclusions",
+                "No serial devices in fleet — clearing %d dedup exclusions",
                 len(self._dedup_excluded),
             )
             self._dedup_excluded.clear()
@@ -452,9 +459,19 @@ class FleetManager:
         Uses exponential backoff: after each failure, waits longer before
         retrying (10s, 20s, 40s, 80s, 160s, capped at 5 min). Resets on
         successful connect or when device is released/reconnected manually.
-        After 10 consecutive failures, removes the device from the fleet.
+        After 20 consecutive failures, removes the device from the fleet.
         """
         to_remove_after: list[str] = []
+
+        # Cache serial discovery once for all reconnect attempts (avoid per-device USB scan)
+        from ..transport.discovery import discover_serial_devices
+
+        fresh_serial_ports: dict[str, str] = {}  # device_id → address
+        try:
+            for fresh in discover_serial_devices():
+                fresh_serial_ports[fresh.device_id] = fresh.address
+        except Exception:
+            pass  # Discovery failure is non-fatal
 
         for device_id, device in self._devices.items():
             if device.state not in (DeviceState.DISCONNECTED, DeviceState.ERROR):
@@ -481,7 +498,7 @@ class FleetManager:
             # After 10 consecutive failures, give up entirely — the device
             # is likely not a Blinky or is permanently out of range.
             fail_count = self._reconnect_failures.get(device_id, 0)
-            if fail_count >= 10:
+            if fail_count >= 20:
                 log.info(
                     "Giving up on %s after %d failures — removing from fleet",
                     device_id[:12],
@@ -500,6 +517,18 @@ class FleetManager:
                 self._backoff_skip[device_id] = 0
 
             try:
+                # Refresh port path from cached discovery (avoid per-device USB scan)
+                if disc.transport_type == "serial" and disc.device_id in fresh_serial_ports:
+                    new_addr = fresh_serial_ports[disc.device_id]
+                    if new_addr != disc.address:
+                        log.info(
+                            "Port changed for %s: %s -> %s",
+                            device_id[:12],
+                            disc.address,
+                            new_addr,
+                        )
+                        disc.address = new_addr
+
                 transport = _create_transport(disc)
                 device.transport = transport
                 device.protocol = DeviceProtocol(transport)

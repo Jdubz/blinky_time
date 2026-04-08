@@ -1,0 +1,59 @@
+# Conv1D W16 v18 — PCEN mel normalization
+#
+# Same recipe as v15 (madmom MSE distillation, delta features). Single change:
+# PCEN replaces log compression for mel spectrograms. PCEN normalizes each
+# mel band against a slow-tracking background, improving robustness to
+# mic gain and room variation (Lostanlen & Salamon 2019).
+#
+# Hypothesis: PCEN closes the offline-to-on-device gap that caused v16/v17
+# to regress on-device despite matching/exceeding v15 offline. The mic-in-room
+# environment changes mel statistics in ways that static log compression
+# doesn't normalize, but PCEN's adaptive AGC does.
+#
+# Architecture: Conv1D(52->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# Same as v15 (with delta features). ~13.6K params, ~19.9 KB INT8.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: true
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+
+features:
+  use_delta: true
+  use_pcen: true
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true
+  mixup_alpha: 0.4
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+distillation:
+  alpha: 0.3
+  temperature: 2.0
+
+data:
+  processed_dir: "data/processed_v18"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v18.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

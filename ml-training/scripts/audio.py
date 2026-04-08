@@ -161,16 +161,28 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
         )
         magnitudes = torch.from_numpy(mags_np).to(magnitudes.device)
 
-    mel_spec = mel_fb @ magnitudes
-    log_mel = 10.0 * torch.log10(mel_spec + 1e-10)
-    log_mel = (log_mel + 60.0) / 60.0
-    log_mel = log_mel.clamp(0.0, 1.0)
+    mel_spec = mel_fb @ magnitudes  # (n_mels, n_frames)
 
-    return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
+    use_pcen = cfg.get("features", {}).get("use_pcen", False)
+    if use_pcen:
+        # PCEN requires causal frame-by-frame IIR — run on CPU numpy
+        mel_np = mel_spec.T.cpu().numpy()  # (n_frames, n_mels)
+        pcen_cfg = cfg.get("audio", {}).get("pcen", {})
+        return pcen_transform(mel_np,
+                              s=pcen_cfg.get("s", PCEN_S),
+                              delta=pcen_cfg.get("delta", PCEN_DELTA),
+                              eps=pcen_cfg.get("eps", PCEN_EPS),
+                              norm=pcen_cfg.get("norm", PCEN_NORM))
+    else:
+        log_mel = 10.0 * torch.log10(mel_spec + 1e-10)
+        log_mel = (log_mel + 60.0) / 60.0
+        log_mel = log_mel.clamp(0.0, 1.0)
+        return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
 
 
 def firmware_mel_spectrogram_np(audio: np.ndarray,
-                                noise_subtraction: bool = False) -> np.ndarray:
+                                noise_subtraction: bool = False,
+                                use_pcen: bool = False) -> np.ndarray:
     """Compute mel spectrogram matching firmware (CPU-only numpy).
 
     For use in calibration scripts and tools that don't need GPU or config.
@@ -178,6 +190,7 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
     Args:
         audio: mono audio samples at 16 kHz
         noise_subtraction: if True, apply min-statistics noise subtraction
+        use_pcen: if True, use PCEN instead of log compression
 
     Returns: (n_frames, n_mels) numpy array with values in [0, 1].
     """
@@ -200,23 +213,72 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
             all_mags[:, i] = np.abs(np.fft.rfft(windowed))
         all_mags = apply_spectral_noise_subtraction(all_mags)
         mel_spec = mel_fb @ all_mags  # (n_mels, n_frames)
+        if use_pcen:
+            return pcen_transform(mel_spec.T)
         log_mel = 10.0 * np.log10(mel_spec + 1e-10)
         log_mel = (log_mel + 60.0) / 60.0
         return np.clip(log_mel.T, 0.0, 1.0)
 
-    mels = np.zeros((n_frames, N_MELS), dtype=np.float32)
+    # Build mel spectrogram frame by frame
+    n_freqs = N_FFT // 2 + 1
+    all_mags = np.zeros((n_freqs, n_frames), dtype=np.float32)
     for i in range(n_frames):
         frame = audio[i * HOP_LENGTH:(i * HOP_LENGTH) + N_FFT]
         if len(frame) < N_FFT:
             break
         windowed = frame * window
-        spectrum = np.abs(np.fft.rfft(windowed))
-        mel_spec = mel_fb @ spectrum
-        log_mel = 10.0 * np.log10(mel_spec + 1e-10)
-        log_mel = (log_mel + 60.0) / 60.0
-        mels[i] = np.clip(log_mel, 0.0, 1.0)
+        all_mags[:, i] = np.abs(np.fft.rfft(windowed))
 
-    return mels
+    mel_spec = mel_fb @ all_mags  # (n_mels, n_frames)
+    if use_pcen:
+        return pcen_transform(mel_spec.T)
+    log_mel = 10.0 * np.log10(mel_spec + 1e-10)
+    log_mel = (log_mel + 60.0) / 60.0
+    return np.clip(log_mel.T, 0.0, 1.0)
+
+
+# ---- PCEN constants (must match firmware SharedSpectralAnalysis) ----
+PCEN_S = 0.025       # IIR smoother coefficient (~0.64s time constant at 62.5 Hz)
+PCEN_DELTA = 2.0     # Stabilizer bias
+PCEN_EPS = 1e-6      # Numerical floor
+PCEN_NORM = 4.0      # Output normalization divisor
+
+
+def pcen_transform(mel_linear: np.ndarray,
+                   s: float = PCEN_S,
+                   delta: float = PCEN_DELTA,
+                   eps: float = PCEN_EPS,
+                   norm: float = PCEN_NORM) -> np.ndarray:
+    """Per-Channel Energy Normalization (Lostanlen & Salamon 2019).
+
+    Replaces log compression with adaptive gain normalization. Processes
+    frames causally (matching firmware order). More robust to mic gain
+    and room variation than static log compression.
+
+    With alpha=1.0 and r=0.5, the formula simplifies to:
+      M[f,t] = s * E + (1-s) * M[f,t-1]   (IIR smoother)
+      P[f,t] = sqrt(E/(eps+M) + delta) - sqrt(delta)
+
+    Args:
+        mel_linear: (n_frames, n_mels) raw mel energies (linear, NOT log-compressed)
+
+    Returns: (n_frames, n_mels) PCEN-normalized values clipped to [0, 1].
+    """
+    n_frames, n_mels = mel_linear.shape
+    out = np.zeros_like(mel_linear)
+    sqrt_delta = np.sqrt(delta)
+
+    # Initialize IIR state from first frame (avoids startup transient)
+    M = mel_linear[0].copy()
+
+    for t in range(n_frames):
+        E = mel_linear[t]
+        M = s * E + (1.0 - s) * M
+        agc = E / (eps + M)
+        out[t] = np.sqrt(agc + delta) - sqrt_delta
+
+    # Normalize to [0, 1]
+    return np.clip(out / norm, 0.0, 1.0)
 
 
 def load_config(config_path: str) -> dict:

@@ -52,12 +52,116 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
     float organicSpeed = 0.012f + 0.008f * audio.energy;
     float musicSpeed = 0.03f + 0.02f * audio.energy;
     float timeSpeed = organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
-    noiseTime_ += timeSpeed;
+
+    // Phase-driven wave speed breathing: water flows faster on-beat
+    float phaseBreathing = 0.5f + 0.5f * audio.phaseToPulse();
+    float blendedBreathing = 1.0f * (1.0f - audio.rhythmStrength) + phaseBreathing * audio.rhythmStrength;
+    noiseTime_ += timeSpeed * blendedBreathing;
 
     // Render noise background first (tropical sea underlayer)
     if (background_) {
         background_->setIntensity(params_.backgroundIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
+    }
+
+    // --- Depth gradient (matrix only): darken lower rows for depth perception ---
+    if (PhysicsContext::isPrimaryAxisVertical(layout_) && height_ > 2) {
+        for (int y = 0; y < height_; y++) {
+            // Surface (y=0) is brightest, bottom is darkest
+            float depthFade = 1.0f - 0.6f * ((float)y / (float)(height_ - 1));
+            for (int x = 0; x < width_; x++) {
+                RGB px = matrix.getPixel(x, y);
+                matrix.setPixel(x, y,
+                    (uint8_t)(px.r * depthFade),
+                    (uint8_t)(px.g * depthFade),
+                    (uint8_t)(px.b * depthFade));
+            }
+        }
+    }
+
+    // --- Ripple simulation (2-buffer demoscene algorithm) ---
+    int rippleSize = min((int)numLeds_, (int)MAX_RIPPLE_LEDS);
+    if (rippleSize > 2) {
+        int16_t* curr = rippleFlip_ ? rippleA_ : rippleB_;
+        int16_t* prev = rippleFlip_ ? rippleB_ : rippleA_;
+
+        // Propagate ripples: new[i] = avg(neighbors) - current[i], with damping
+        for (int i = 1; i < rippleSize - 1; i++) {
+            int16_t avg = (prev[i - 1] + prev[i + 1]) >> 1;
+            curr[i] = avg - curr[i];
+            curr[i] -= curr[i] >> 5;  // ~3% damping per frame
+        }
+        rippleFlip_ = !rippleFlip_;
+
+        // Inject ripple impulse on pulse (kick/snare → splash creates ripple)
+        if (audio.pulse > 0.3f) {
+            int pos = random(1, rippleSize - 1);
+            curr[pos] = (int16_t)(audio.pulse * 500);
+        }
+        // Stronger impulse on beat
+        if (beatHappened() && audio.rhythmStrength > 0.3f) {
+            // Edge sweep: inject along one edge
+            for (int i = 0; i < min(3, rippleSize); i++) {
+                curr[i] = (int16_t)(audio.energy * 800);
+            }
+        }
+
+        // Composite ripples as additive blue-cyan brightness modulation
+        for (int i = 0; i < rippleSize; i++) {
+            int16_t r = curr[i];
+            if (r > 0) {
+                uint8_t brightness = (uint8_t)min(80, (int)(r >> 2));
+                int x = i % width_;
+                int y = i / width_;
+                if (x < width_ && y < height_) {
+                    RGB px = matrix.getPixel(x, y);
+                    matrix.setPixel(x, y,
+                        px.r,
+                        min(255, px.g + brightness),
+                        min(255, px.b + (brightness >> 1)));
+                }
+            }
+        }
+    }
+
+    // --- Bioluminescence: blue-green glow on pulse events ---
+    {
+        int glowSize = min((int)numLeds_, (int)MAX_RIPPLE_LEDS);
+
+        // Decay existing glow (~5% per frame)
+        for (int i = 0; i < glowSize; i++) {
+            if (glowBuffer_[i] > 0) {
+                glowBuffer_[i] = (uint8_t)(glowBuffer_[i] * 0.95f);
+                if (glowBuffer_[i] < 2) glowBuffer_[i] = 0;
+            }
+        }
+
+        // Spawn glow on pulse
+        if (audio.pulse > 0.4f) {
+            int pos = random(glowSize);
+            uint8_t intensity = (uint8_t)(audio.pulse * audio.energy * 200);
+            glowBuffer_[pos] = max(glowBuffer_[pos], intensity);
+            // Spread to neighbors
+            if (pos > 0) glowBuffer_[pos - 1] = max(glowBuffer_[pos - 1], (uint8_t)(intensity >> 1));
+            if (pos < glowSize - 1) glowBuffer_[pos + 1] = max(glowBuffer_[pos + 1], (uint8_t)(intensity >> 1));
+        }
+
+        // Render glow as additive blue-green
+        for (int i = 0; i < glowSize; i++) {
+            if (glowBuffer_[i] > 5) {
+                int x = i % width_;
+                int y = i / width_;
+                if (x < width_ && y < height_) {
+                    uint8_t g = glowBuffer_[i];
+                    uint8_t b = (uint8_t)(g * 0.6f);
+                    RGB px = matrix.getPixel(x, y);
+                    matrix.setPixel(x, y,
+                        px.r,
+                        min(255, px.g + g),
+                        min(255, px.b + b));
+                }
+            }
+        }
     }
 
     // Run particle system (spawns, updates, renders particles)
@@ -67,6 +171,10 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
 void Water::reset() {
     ParticleGenerator::reset();
     noiseTime_ = 0.0f;
+    memset(rippleA_, 0, sizeof(rippleA_));
+    memset(rippleB_, 0, sizeof(rippleB_));
+    memset(glowBuffer_, 0, sizeof(glowBuffer_));
+    rippleFlip_ = false;
 }
 
 void Water::spawnParticles(float dt) {
