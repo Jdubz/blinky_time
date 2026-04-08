@@ -203,25 +203,31 @@ async def test_dedup_exclusion_set() -> None:
         await d.disconnect()
 
 
-async def test_dedup_exclusion_clears_when_all_serial_disconnected() -> None:
-    """Exclusions should clear when no serial device is connected."""
+async def test_dedup_exclusion_persists_when_serial_disconnected() -> None:
+    """Exclusions should persist even when serial devices disconnect.
+
+    The old behavior cleared exclusions on serial disconnect, causing a
+    BLE thrashing loop (connect → dedup → disconnect → rediscover).
+    Exclusions now only clear when serial devices are REMOVED from the
+    fleet entirely (failure limit exceeded or manual release).
+    """
     fleet = await _make_fleet_with_sn()
     fleet._dedup_excluded.add("BLE_ADDR_001")
     fleet._dedup_excluded.add("BLE_ADDR_002")
 
-    # Disconnect ONE serial device — exclusions should persist (other still connected)
+    # Disconnect ONE serial device — exclusions should persist
     serial_dev1 = fleet.get_device("SERIAL_001")
     assert serial_dev1 is not None
     await serial_dev1.disconnect()
     fleet._refresh_dedup_exclusions()
     assert len(fleet._dedup_excluded) == 2  # Still excluded
 
-    # Disconnect ALL serial devices — exclusions should now clear
+    # Disconnect ALL serial devices — exclusions STILL persist (devices in fleet)
     serial_dev2 = fleet.get_device("SERIAL_002")
     assert serial_dev2 is not None
     await serial_dev2.disconnect()
     fleet._refresh_dedup_exclusions()
-    assert len(fleet._dedup_excluded) == 0
+    assert len(fleet._dedup_excluded) == 2  # NOT cleared — devices still in fleet
 
     # Cleanup
     for d in fleet.get_all_devices():
@@ -295,12 +301,12 @@ async def test_reconnect_clears_blackout() -> None:
 
 
 async def test_failure_limit_removes_device() -> None:
-    """Devices with 10+ consecutive failures should be removed from the fleet."""
+    """Devices with 20+ consecutive failures should be removed from the fleet."""
     from blinky_server.transport.discovery import DiscoveredDevice
 
     fleet = await _make_fleet_with_sn()
 
-    # Add a device in error state with 10 failures
+    # Add a device in error state with 20 failures (limit raised from 10 to 20)
     bad_transport = MockTransport(transport_type="ble")
     bad_device = Device(
         device_id="BAD_BLE_001",
@@ -310,7 +316,7 @@ async def test_failure_limit_removes_device() -> None:
     )
     bad_device.state = DeviceState.ERROR
     fleet._devices[bad_device.id] = bad_device
-    fleet._reconnect_failures["BAD_BLE_001"] = 10
+    fleet._reconnect_failures["BAD_BLE_001"] = 20
     # Need discovery info for the reconnect path to check failure count
     fleet._device_discovery["BAD_BLE_001"] = DiscoveredDevice(
         device_id="BAD_BLE_001",
