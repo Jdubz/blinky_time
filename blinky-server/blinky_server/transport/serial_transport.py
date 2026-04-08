@@ -1,10 +1,20 @@
+"""Thread-based serial transport for nRF52840 TinyUSB CDC devices.
+
+Uses a blocking reader thread instead of asyncio's select/epoll-based reader.
+This works around a platform issue where select() on Linux cdc-acm fds
+doesn't report readable even when data is available (confirmed on Raspberry
+Pi ARM + Python 3.13 + serial_asyncio_fast 0.16). Blocking serial.read()
+works reliably; the thread dispatches lines to the asyncio event loop via
+call_soon_threadsafe.
+"""
+
 import asyncio
 import logging
 import termios
+import threading
 from collections.abc import Callable
 
 import serial
-import serial_asyncio_fast as serial_asyncio
 
 from .base import Transport
 
@@ -12,47 +22,19 @@ log = logging.getLogger(__name__)
 
 BAUD_RATE = 115200
 INIT_DELAY_S = 2.0  # nRF52840 boot: SafeBootWatchdog + BLE + NN load takes 1-3s
-DRAIN_DELAY_S = 0.2
-
-
-class _LineProtocol(asyncio.Protocol):
-    """asyncio Protocol that splits incoming bytes into lines."""
-
-    def __init__(self, line_callback: Callable[[str], None]) -> None:
-        self._callback = line_callback
-        self._buf = b""
-        self.transport: asyncio.Transport | None = None
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        self.transport = transport  # type: ignore[assignment]
-
-    def data_received(self, data: bytes) -> None:
-        self._buf += data
-        while b"\n" in self._buf:
-            line, self._buf = self._buf.split(b"\n", 1)
-            text = line.decode("utf-8", errors="replace").strip()
-            if text:
-                self._callback(text)
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        self.transport = None
-        # Propagate to parent SerialTransport so disconnect is detected
-        # immediately (not just on next write attempt).
-        if self._on_disconnect:
-            self._on_disconnect(exc)
-
-    _on_disconnect: Callable[[Exception | None], None] | None = None
 
 
 class SerialTransport(Transport):
-    """Serial port transport using pyserial-asyncio."""
+    """Serial port transport with thread-based reader."""
 
     def __init__(self, port: str, baud: int = BAUD_RATE) -> None:
         super().__init__()
         self._port = port
         self._baud = baud
-        self._protocol: _LineProtocol | None = None
-        self._serial_transport: asyncio.Transport | None = None
+        self._serial: serial.Serial | None = None
+        self._reader_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._line_callback: Callable[[str], None] | None = None
         self._connected = False
 
@@ -60,55 +42,44 @@ class SerialTransport(Transport):
         if self._connected:
             return
 
-        # Clear HUPCL on the port so closing doesn't drop DTR.
-        #
-        # Root cause of the "version=null" bug: Linux HUPCL flag (set by
-        # default) causes the kernel to send SET_CONTROL_LINE_STATE(DTR=0)
-        # when a serial port is closed. TinyUSB enters "no host" state and
-        # silently drops all output. On reopen, the DTR reassertion ioctl
-        # fails with EPIPE (the USB device stalls the control transfer).
-        #
-        # Fix: clear HUPCL before anything else. Then DTR stays asserted
-        # across close/reopen cycles, TinyUSB never enters "no host" state.
+        # Clear HUPCL so closing doesn't drop DTR. TinyUSB needs DTR
+        # asserted to transmit — without it, all output is silently dropped.
         try:
             raw = serial.Serial(self._port, self._baud, timeout=0.5)
             attrs = termios.tcgetattr(raw.fd)
-            attrs[2] &= ~termios.HUPCL  # cflag: clear hang-up-on-close
+            attrs[2] &= ~termios.HUPCL
             termios.tcsetattr(raw.fd, termios.TCSANOW, attrs)
-            raw.dtr = True  # Ensure DTR is asserted
+            raw.dtr = True
             await asyncio.sleep(0.3)
             raw.close()  # DTR stays high (HUPCL cleared)
         except (OSError, serial.SerialException) as e:
             log.debug("HUPCL/DTR setup failed on %s (non-fatal): %s", self._port, e)
 
-        # Wait for device to finish booting (NN model load, BLE init)
+        # Wait for device to finish booting
         await asyncio.sleep(INIT_DELAY_S)
 
-        def factory() -> _LineProtocol:
-            proto = _LineProtocol(self._dispatch_line)
-            proto._on_disconnect = self._on_connection_lost
-            return proto
+        # Open serial port for read/write
+        self._serial = serial.Serial(self._port, self._baud, timeout=0.1)
 
-        transport, protocol = await serial_asyncio.create_serial_connection(
-            asyncio.get_event_loop(),
-            factory,
-            self._port,
-            baudrate=self._baud,
-        )
-        self._serial_transport = transport
-        self._protocol = protocol  # type: ignore[assignment]
-        self._connected = True
-
-        # Clear HUPCL on the asyncio transport's fd too, so future
-        # disconnects (server restart, flash) don't drop DTR.
+        # Clear HUPCL on the persistent fd too
         try:
-            serial_obj = getattr(self._serial_transport, "serial", None)
-            if serial_obj and hasattr(serial_obj, "fd"):
-                attrs = termios.tcgetattr(serial_obj.fd)
-                attrs[2] &= ~termios.HUPCL
-                termios.tcsetattr(serial_obj.fd, termios.TCSANOW, attrs)
+            attrs = termios.tcgetattr(self._serial.fd)
+            attrs[2] &= ~termios.HUPCL
+            termios.tcsetattr(self._serial.fd, termios.TCSANOW, attrs)
         except (OSError, termios.error) as e:
-            log.debug("HUPCL clear on asyncio fd failed on %s: %s", self._port, e)
+            log.debug("HUPCL clear failed on %s: %s", self._port, e)
+
+        self._loop = asyncio.get_running_loop()
+        self._connected = True
+        self._stop_event.clear()
+
+        # Start reader thread (blocking reads dispatched to asyncio loop)
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop,
+            name=f"serial-reader-{self._port}",
+            daemon=True,
+        )
+        self._reader_thread.start()
 
         # Drain boot messages, then stop stale streaming
         try:
@@ -119,12 +90,31 @@ class SerialTransport(Transport):
 
         log.info("Serial connected: %s @ %d", self._port, self._baud)
 
-    def _on_connection_lost(self, exc: Exception | None) -> None:
-        """Called by _LineProtocol when the serial connection drops unexpectedly."""
-        if self._connected:
-            self._connected = False
-            log.warning("Serial connection lost on %s: %s", self._port, exc or "clean close")
-            self._fire_disconnect()
+    def _reader_loop(self) -> None:
+        """Background thread: blocking read from serial, dispatch lines to asyncio."""
+        buf = b""
+        ser = self._serial
+        if ser is None:
+            return
+        while not self._stop_event.is_set():
+            try:
+                chunk = ser.read(ser.in_waiting or 1)
+                if not chunk:
+                    continue
+                buf += chunk
+                while b"\n" in buf:
+                    line_bytes, buf = buf.split(b"\n", 1)
+                    text = line_bytes.decode("utf-8", errors="replace").strip()
+                    if text and self._loop:
+                        self._loop.call_soon_threadsafe(self._dispatch_line, text)
+            except (serial.SerialException, OSError) as e:
+                if self._stop_event.is_set():
+                    break
+                log.warning("Serial read error on %s: %s", self._port, e)
+                if self._connected and self._loop:
+                    self._connected = False
+                    self._loop.call_soon_threadsafe(self._fire_disconnect)
+                break
 
     async def disconnect(self) -> None:
         if not self._connected:
@@ -134,36 +124,36 @@ class SerialTransport(Transport):
             await asyncio.sleep(0.1)
         except Exception:
             pass
-        if self._serial_transport:
-            self._serial_transport.close()
-        self._serial_transport = None
-        self._protocol = None
         self._connected = False
+        self._stop_event.set()
+        if self._serial:
+            self._serial.close()  # Unblocks blocking read() in the thread
+        if self._reader_thread:
+            self._reader_thread.join(timeout=2.0)
+            if self._reader_thread.is_alive():
+                log.warning("Reader thread did not exit for %s", self._port)
+            self._reader_thread = None
+        self._serial = None
         log.info("Serial disconnected: %s", self._port)
 
     async def write_line(self, line: str) -> None:
-        if not self._serial_transport:
+        if not self._serial or not self._serial.is_open:
             raise ConnectionError(f"Not connected to {self._port}")
-        self._serial_transport.write((line + "\n").encode("utf-8"))
+        self._serial.write((line + "\n").encode("utf-8"))
 
     async def trigger_bootloader(self) -> None:
-        """Enter UF2 bootloader via 1200-baud touch.
-
-        This is the most reliable bootloader entry method — it triggers
-        the TinyUSB CDC callback directly at interrupt level, avoiding
-        main loop timing issues. The firmware's Uf2BootloaderOverride
-        handles GPREGRET + direct jump to bootloader.
-        """
-        # Close existing async connection first
-        if self._serial_transport:
-            self._serial_transport.close()
-        self._serial_transport = None
-        self._protocol = None
+        """Enter UF2 bootloader via 1200-baud touch."""
+        # Stop reader thread and close connection
         self._connected = False
+        self._stop_event.set()
+        if self._serial:
+            self._serial.close()
+        if self._reader_thread:
+            self._reader_thread.join(timeout=2.0)
+            self._reader_thread = None
+        self._serial = None
 
-        # Open at 1200 baud with DTR toggle (standard Arduino bootloader protocol)
-        import serial
-
+        # 1200-baud touch (standard Arduino bootloader protocol)
         try:
             with serial.Serial(self._port, 1200, dsrdtr=False) as s:
                 s.dtr = True

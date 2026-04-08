@@ -50,3 +50,4 @@ venv311/
 # OS
 .DS_Store
 Thumbs.db
+data/processed*
