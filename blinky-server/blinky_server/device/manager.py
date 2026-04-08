@@ -459,9 +459,19 @@ class FleetManager:
         Uses exponential backoff: after each failure, waits longer before
         retrying (10s, 20s, 40s, 80s, 160s, capped at 5 min). Resets on
         successful connect or when device is released/reconnected manually.
-        After 10 consecutive failures, removes the device from the fleet.
+        After 20 consecutive failures, removes the device from the fleet.
         """
         to_remove_after: list[str] = []
+
+        # Cache serial discovery once for all reconnect attempts (avoid per-device USB scan)
+        from ..transport.discovery import discover_serial_devices
+
+        fresh_serial_ports: dict[str, str] = {}  # device_id → address
+        try:
+            for fresh in discover_serial_devices():
+                fresh_serial_ports[fresh.device_id] = fresh.address
+        except Exception:
+            pass  # Discovery failure is non-fatal
 
         for device_id, device in self._devices.items():
             if device.state not in (DeviceState.DISCONNECTED, DeviceState.ERROR):
@@ -507,21 +517,17 @@ class FleetManager:
                 self._backoff_skip[device_id] = 0
 
             try:
-                # Refresh port path before reconnecting — after firmware flash
-                # or USB re-enumeration, the device may be on a different ttyACM.
-                # Match by USB serial number (stable across reboots/flashes).
-                if disc.transport_type == "serial":
-                    from ..transport.discovery import discover_serial_devices
-
-                    for fresh in discover_serial_devices():
-                        if fresh.device_id == disc.device_id and fresh.address != disc.address:
-                            log.info(
-                                "Port changed for %s: %s -> %s",
-                                device_id[:12],
-                                disc.address,
-                                fresh.address,
-                            )
-                            disc.address = fresh.address
+                # Refresh port path from cached discovery (avoid per-device USB scan)
+                if disc.transport_type == "serial" and disc.device_id in fresh_serial_ports:
+                    new_addr = fresh_serial_ports[disc.device_id]
+                    if new_addr != disc.address:
+                        log.info(
+                            "Port changed for %s: %s -> %s",
+                            device_id[:12],
+                            disc.address,
+                            new_addr,
+                        )
+                        disc.address = new_addr
 
                 transport = _create_transport(disc)
                 device.transport = transport

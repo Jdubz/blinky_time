@@ -1,13 +1,13 @@
 #!/bin/bash
-set -e
-cd /home/jdubz/Development/blinky_time/ml-training
+set -eo pipefail
+cd "$(dirname "$0")"
 source venv/bin/activate
 
 echo "=== V17 DATA PREPARATION ==="
 PYTHONUNBUFFERED=1 python scripts/prepare_dataset.py \
   --config configs/conv1d_w16_onset_v17.yaml \
   --augment --band-flux \
-  --teacher-soft-dir /mnt/storage/blinky-ml-data/labels/onset_teacher_soft \
+  --teacher-soft-dir "${TEACHER_SOFT_DIR:-/mnt/storage/blinky-ml-data/labels/onset_teacher_soft}" \
   --output-dir data/processed_v17
 
 echo "=== V17 TRAINING ==="

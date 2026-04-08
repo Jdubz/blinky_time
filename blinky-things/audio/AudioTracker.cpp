@@ -263,6 +263,8 @@ void AudioTracker::resetAnalysisState() {
     periodicityStrength_ = 0.0f;
     plpPhase_ = 0.0f;
     beatCount_ = 0;
+    nnActivationMean_ = 0.3f;
+    nnActivationVar_ = 0.01f;
     resetSlots();
 }
 
@@ -589,12 +591,12 @@ void AudioTracker::updatePlpAnalysis() {
     // NOTE: ossLinear_ is mean-subtracted (for ACF). Epoch-fold needs raw
     // values for meaningful mean/variance, so we linearize from ossBuffer_
     // directly without mean subtraction.
-    float epochFoldBuf[OSS_BUFFER_SIZE];
+    // Linearize ossBuffer_ into epochFoldLinear_ (not mean-subtracted, unlike ossLinear_)
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
-        epochFoldBuf[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
+        epochFoldLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
-    const float* sourceBuf = epochFoldBuf;
+    const float* sourceBuf = epochFoldLinear_;
     int sourceCount = ossCount_;
 
     if (sourceCount < patLen * 2) return;

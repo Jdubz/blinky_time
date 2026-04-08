@@ -52,7 +52,7 @@ class SerialTransport(Transport):
             raw.dtr = True
             await asyncio.sleep(0.3)
             raw.close()  # DTR stays high (HUPCL cleared)
-        except (OSError, serial.SerialException) as e:
+        except (OSError, serial.SerialException, termios.error) as e:
             log.debug("HUPCL/DTR setup failed on %s (non-fatal): %s", self._port, e)
 
         # Wait for device to finish booting
@@ -139,7 +139,8 @@ class SerialTransport(Transport):
     async def write_line(self, line: str) -> None:
         if not self._serial or not self._serial.is_open:
             raise ConnectionError(f"Not connected to {self._port}")
-        self._serial.write((line + "\n").encode("utf-8"))
+        data = (line + "\n").encode("utf-8")
+        await asyncio.get_running_loop().run_in_executor(None, self._serial.write, data)
 
     async def trigger_bootloader(self) -> None:
         """Enter UF2 bootloader via 1200-baud touch."""
