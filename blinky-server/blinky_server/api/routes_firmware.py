@@ -87,6 +87,16 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
 
     results = {}
     fleet.pause_discovery()  # Prevent BleakScanner conflict during fleet DFU
+
+    # Hold reconnect on ALL serial devices for the entire fleet flash.
+    # UF2 bootloader entry causes USB bus resets that disrupt sibling
+    # devices on the same hub — prevent reconnect attempts during instability.
+    all_serial_ids = [
+        d.id for d in fleet.get_all_devices() if d.transport.transport_type == "serial"
+    ]
+    for sid in all_serial_ids:
+        fleet.hold_reconnect(sid, 600)
+
     try:
         for device in devices:
             log.info(
@@ -131,9 +141,10 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         log.info("Fleet flash complete. Waiting 10s for USB stabilization...")
         await asyncio.sleep(10)
 
-        # Resume reconnection for all flashed devices at once
-        for device in devices:
-            fleet.resume_reconnect(device.id)
+        # Resume reconnection for all serial devices (not just flashed ones —
+        # siblings were held too to survive USB bus resets)
+        for sid in all_serial_ids:
+            fleet.resume_reconnect(sid)
         fleet.resume_discovery()
 
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")

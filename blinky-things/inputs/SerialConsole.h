@@ -137,13 +137,16 @@ public:
     Print* secondary() const { return b_; }
 
     size_t write(uint8_t c) override {
-        size_t n = a_->write(c);
+        // Write BLE (secondary) FIRST — it's non-blocking (ring buffer).
+        // Serial (primary) can block if CDC is stalled, which would
+        // prevent BLE output from ever being sent.
         if (b_) b_->write(c);
+        size_t n = a_->write(c);
         return n;
     }
     size_t write(const uint8_t* data, size_t size) override {
-        size_t n = a_->write(data, size);
         if (b_) b_->write(data, size);
+        size_t n = a_->write(data, size);
         return n;
     }
 private:

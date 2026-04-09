@@ -70,12 +70,23 @@ class Device:
         self.protocol.on_raw_line(self._on_raw_line)
 
     async def connect(self) -> None:
-        """Connect to the device and retrieve its info."""
+        """Connect to the device and retrieve its info.
+
+        Retries get_info once if the first attempt returns no version —
+        nRF52840 boot takes 5-6s (1s serial init + 3s LED test + BLE init)
+        which can exceed the initial command window.
+        """
         self.state = DeviceState.CONNECTING
         try:
             await self.transport.connect()
             self.transport.on_disconnect(self._on_transport_disconnect)
             info = await self.protocol.get_info()
+            if not info.get("version"):
+                # Device may still be booting (LED test, BLE init).
+                # Wait and retry once before giving up.
+                log.debug("No version from %s, retrying after 4s...", self.id[:12])
+                await asyncio.sleep(4)
+                info = await self.protocol.get_info()
             self.apply_info(info)
             self.last_seen = _time.monotonic()
             self.state = DeviceState.CONNECTED

@@ -1,14 +1,30 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 2, 2026*
+*Last Updated: April 8, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v88 (SETTINGS_VERSION 88). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) replaces Fourier tempogram (75ms) for period selection across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring selects period. Soft blend (no hard threshold — continuous PLP/cosine blend by confidence). Cold-start template seeding (8 patterns, cosine similarity > 0.50). Pattern slot cache: 4-slot LRU of 16-bin PLP pattern digests for instant section recall (verse/chorus transitions). Beat stability gated learning. Steep signal gate for mic level. ACF convergence fix (v88): plpConfAlpha 0.15→0.25, slotSaveMinConf 0.50→0.25, warmup 160→120 frames. ~20 tunable params persisted to flash. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 3 nRF52840 on blinkyhost (v88), 1 nRF52840 needs SWD recovery (2A798EF8).
+**Firmware:** b106 (SETTINGS_VERSION 93). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all b106, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v11-final deployed on 4/5 blinkyhost devices (2 ESP32-S3, 2 nRF52840). Trained on de-duplicated onset labels. Kick recall 0.743, Snare recall 0.727, HiHat recall 0.701. 13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
+> **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
+
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v15 (madmom distillation) deployed on all 3 blinkyhost devices. Offline onset F1=0.745, on-device onset F1=0.616 (17% gap — PCEN normalization in v18 targets this). 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes. NN output used for visual pulse only — NOT for BPM estimation.
+
+**Training experiments (April 7-8):**
+- v15 (deployed): madmom MSE distillation, 52ch (mel+delta). Offline onset F1=0.745, KW F1=0.730.
+- v16: no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. On-device not tested.
+- v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **+3.7% onset F1 over v15 offline.** On-device validation in progress.
+- v18: PCEN mel normalization (52ch). Dataprep complete, training pending. Hypothesis: PCEN closes offline-to-on-device gap.
+
+**Fleet status (April 8):**
+- 062CBD12 — Hat Display, b106, serial, test chip ✅
+- 659C8DD3 — Long Tube, b106, serial, installed device ✅
+- 2A798EF8 — Hat Display, b106, serial, test chip ✅
+- ABFBC412 — removed (broken reset button, hardware fault)
+
+**Serial reliability (April 8):** Root cause identified and fixed — stock TinyUSB CDC sets TX FIFO overwritable on DTR drop, silently killing all serial output. Patch in `patches/tinyusb-cdc-no-overwritable-fifo.patch`, enforced by `build.sh` compile guard. Server hardened: get_info retry, sibling hold during flash, serial retry limit (3 fails → stop), DELETE endpoint for stale devices. See commit `9712664`.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids. **Soft onset teacher labels** being generated from madmom CNN OnsetDetector (6750 tracks, continuous activations at 100Hz) for v15 knowledge distillation training.
 
@@ -145,20 +161,13 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **Conclusion: the v11 training recipe is the ceiling for the current training data.** OWBCE, SpecMix, wider architectures, and SWA all fail to improve over plain asymmetric focal loss with standard mixup. The bottleneck is **label quality** — current labels are derived from beat trackers, not onset detectors. Beat-derived labels miss off-beat onsets, hallucinate onsets on empty strong beats, and smooth timing to a grid.
 
-**v15 plan: Knowledge distillation from madmom CNN onset detector (IN PROGRESS)**
+**v15 knowledge distillation: DEPLOYED.** Madmom MSE distillation with delta features. Offline onset F1=0.745, on-device onset F1=0.616. The 17% offline-to-on-device gap is the primary bottleneck.
 
-Soft onset teacher labels are being generated from madmom `CNNOnsetProcessor` (6750 tracks at 100Hz continuous activation). This bypasses the dedup problem — the model learns the activation SHAPE (rise/attack/decay) from soft probabilities rather than binary 0/1 labels.
+**v16 (no delta): trained, not deployed.** Identical to v15 but without delta features (26ch instead of 52ch). Offline onset F1=0.782 — HIGHER than v15 despite fewer features. KW F1=0.727 (slightly lower). Inference ~25% faster (6.8ms vs ~11.7ms estimated with deltas).
 
-Key insight: madmom's CNN onset detector outputs ~8 onsets/sec on EDM at threshold 0.3 (too aggressive for hard labels). But the continuous activations have the right shape — sharp peaks on kicks (0.93-1.00), near-zero between hits, median 0.005. Using these as soft teacher targets via MSE loss trains sharper, more discriminative activations.
+**v17 (band-flux): trained, on-device validation pending.** Replaces 26 delta channels with 3 band-grouped HWR mel flux channels (bass/mid/high). Offline onset F1=0.782 (+3.7% over v15), KW F1=0.746 (+2.2%), kick recall +7%. Model size 16.3 KB INT8. On-device A/B test in progress.
 
-Label dedup is critical: duplicate labels within 70ms teach the model to re-trigger on the same onset. Soft distillation avoids this entirely (no peak-picking during training). For any hard label generation, strict 70ms dedup keeps only the strongest peak per window.
-
-Pipeline: `ml-training/scripts/generate_onset_teacher_labels.py` → soft labels at `/mnt/storage/blinky-ml-data/labels/onset_teacher_soft/`
-
-Training will require:
-- Add distillation loss mode to `train.py` (MSE against teacher activations)
-- Resample teacher labels from 100Hz to 62.5Hz (firmware frame rate)
-- v15 config: same [32,32] Conv1D, MSE distillation loss, standard augmentation
+**v18 (PCEN): dataprep complete, training pending.** PCEN replaces log compression for mel spectrograms. Hypothesis: PCEN's adaptive per-band AGC normalizes mic-in-room gain variation that static log compression doesn't handle, closing the offline-to-on-device gap. Same [32,32] architecture with delta features.
 
 **NN inference performance (April 2 measurement):**
 

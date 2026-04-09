@@ -80,17 +80,26 @@ All device configuration files must follow this schema:
 
 ## Uploading a Device Config
 
-### Via Serial Console
-```
-device upload {"deviceId":"hat_v1","deviceName":"Festival Hat v1","ledWidth":89,"ledHeight":1,...}
-```
+**All device management goes through blinky-server** (`http://blinkyhost.local:8420`).
+Do not interact with serial ports directly.
 
-Or paste the entire JSON:
-```
-device upload <paste entire JSON here>
-```
+### Via blinky-server API (recommended)
 
-Then reboot the device to apply the configuration.
+```bash
+# 1. Build the command payload with jq (handles JSON escaping correctly)
+jq -n --arg cmd "device upload $(jq -c . devices/registry/hat_v1.json)" \
+  '{command: $cmd}' | \
+  curl -X POST http://blinkyhost.local:8420/api/devices/{device_id}/command \
+    -H 'Content-Type: application/json' -d @-
+
+# 2. Reboot to apply
+curl -X POST http://blinkyhost.local:8420/api/devices/{device_id}/command \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "reboot"}'
+
+# 3. Verify after reconnect (~10s)
+curl http://blinkyhost.local:8420/api/devices/{device_id}
+```
 
 ### Via Web Console
 1. Open the web console at http://localhost:3000 (or device IP)

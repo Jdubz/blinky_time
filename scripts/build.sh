@@ -44,6 +44,36 @@ if ! command -v "$ARDUINO_CLI" >/dev/null 2>&1; then
     exit 1
 fi
 
+# --- Verify TinyUSB CDC patch ---
+# Critical: stock TinyUSB sets TX FIFO overwritable when DTR drops, which
+# silently kills all serial output. The patch keeps FIFO non-overwritable.
+# Without this patch, devices become unresponsive after any DTR transition
+# (host serial port close, USB bus reset, server reconnection).
+if ! $ESP32; then
+    # Find CDC source across any installed core version (not hardcoded to 1.1.12)
+    CDC_FILE=$(find "$HOME/.arduino15/packages/Seeeduino/hardware/nrf52" \
+        -path "*/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c" \
+        -print -quit 2>/dev/null)
+    if [ -n "$CDC_FILE" ]; then
+        # Assert the PATCHED line exists (fail-closed: if formatting changes, we catch it)
+        if ! grep -Eq 'tu_fifo_set_overwritable\(&p_cdc->tx_ff,[[:space:]]*false\)' "$CDC_FILE"; then
+            echo "ERROR: TinyUSB CDC patch not applied!" >&2
+            echo "Stock TinyUSB drops all serial output when DTR is deasserted." >&2
+            echo "Apply: patches/tinyusb-cdc-no-overwritable-fifo.patch" >&2
+            echo "  File: $CDC_FILE" >&2
+            echo "  Change: tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr)" >&2
+            echo "      To: tu_fifo_set_overwritable(&p_cdc->tx_ff, false)" >&2
+            exit 1
+        fi
+    else
+        # Warn-only when file not found: allows compilation in CI environments
+        # without the Arduino toolchain installed. On a dev machine with the
+        # Seeeduino core, the file WILL be found and the patch WILL be enforced.
+        echo "WARNING: TinyUSB CDC source not found — cannot verify patch." >&2
+        echo "  Expected in ~/.arduino15/packages/Seeeduino/hardware/nrf52/*/libraries/" >&2
+    fi
+fi
+
 # --- Read build number ---
 BUILD_FILE="blinky-things/BUILD_NUMBER"
 BUILD=$(cat "$BUILD_FILE" | tr -d '[:space:]')
