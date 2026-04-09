@@ -51,6 +51,7 @@ public:
     void generate(PixelMatrix& matrix, const AudioControl& audio) override;
     void reset() override;
     const char* getName() const override { return "PlasmaGlobe"; }
+    // Reuses LIGHTNING enum slot — PlasmaGlobe replaced Lightning as the third generator
     GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
 
     void setParams(const PlasmaGlobeParams& p) { params_ = p; }

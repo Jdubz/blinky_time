@@ -49,17 +49,20 @@ void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
     if (dt <= 0.0f || dt > 0.5f) dt = 0.016f;
     lastUpdateMs_ = now;
 
-    // --- Time advancement ---
+    // --- Time advancement (dt-based for frame-rate independence) ---
     float speedMod = 0.7f + 0.3f * audio.energy;
-    noiseTime_ += params_.driftSpeed * speedMod;
+    noiseTime_ += params_.driftSpeed * speedMod * dt;
 
-    // --- Beat pulse envelope ---
+    // --- Beat pulse envelope (dt-based decay) ---
     if (audio.pulse > 0.4f && audio.pulse > pulseEnvelope_) {
         pulseEnvelope_ = min(1.0f, audio.pulse);
         pulseRadiusEnv_ = min(1.0f, audio.pulse);
     }
-    pulseEnvelope_ *= params_.pulseDecay;
-    pulseRadiusEnv_ *= params_.pulseDecay * 0.95f; // Radius decays slightly faster
+    // Scale decay to ~60fps reference: decay^(dt/0.016) keeps timing consistent
+    float decayScale = dt * 62.5f;  // normalize to ~60 Hz frame rate
+    float decay = powf(params_.pulseDecay, decayScale);
+    pulseEnvelope_ *= decay;
+    pulseRadiusEnv_ *= powf(params_.pulseDecay * 0.95f, decayScale);
 
     // --- Update orb positions via noise field ---
     float diagonal = sqrtf((float)(width_ * width_ + height_ * height_));
@@ -95,49 +98,69 @@ void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
     float pulseRadius = baseRadius * (1.0f + params_.pulseExpand * pulseRadiusEnv_);
     float invRadiusSq = 1.0f / (pulseRadius * pulseRadius + 0.001f);
 
+    // Pre-compute per-orb breathing (avoid repeated sinf in inner loop)
+    float orbBreathVal[PLASMA_MAX_ORBS];
+    for (int i = 0; i < numOrbs_; i++) {
+        orbBreathVal[i] = breathe * (0.8f + 0.2f * sinf(noiseTime_ * 4.0f + orbPhaseOffset_[i]))
+                        * params_.orbBrightness;
+    }
+
+    // Pre-compute pulse flash params (avoid branching per pixel)
+    float cx = width_ * 0.5f;
+    float cy = height_ * 0.5f;
+    float maxDistSq = cx * cx + cy * cy + 0.001f;
+    float invMaxDistSq = 1.0f / maxDistSq;
+    bool hasPulse = pulseEnvelope_ > 0.01f;
+    float pulseScale = pulseEnvelope_ * params_.pulseBrightness;
+
+    // Cutoff distance squared: beyond this, Gaussian contribution < 0.01
+    // exp(-3 * distSq * invRadiusSq) < 0.01 → distSq > ln(100)/3 / invRadiusSq
+    float cutoffDistSq = 1.54f / invRadiusSq;
+
     for (int y = 0; y < height_; y++) {
         for (int x = 0; x < width_; x++) {
             float intensity = 0.0f;
 
-            // Accumulate orb contributions (Gaussian-like falloff)
+            // Accumulate orb contributions — skip orbs beyond cutoff distance
             for (int i = 0; i < numOrbs_; i++) {
                 float dx = (float)x - orbX_[i];
                 float dy = (float)y - orbY_[i];
                 float distSq = dx * dx + dy * dy;
 
-                // Gaussian: exp(-distSq / (2 * sigma^2)), approximated
-                float contrib = expf(-distSq * invRadiusSq * 3.0f);
+                if (distSq > cutoffDistSq) continue;
 
-                // Per-orb phase variation for visual interest
-                float orbBreath = breathe * (0.8f + 0.2f * sinf(noiseTime_ * 4.0f + orbPhaseOffset_[i]));
-                intensity += contrib * params_.orbBrightness * orbBreath;
+                // Quadratic approximation of Gaussian: max(0, 1 - distSq*k)^2
+                // Much cheaper than expf, visually similar for tight orbs
+                float t = 1.0f - distSq * invRadiusSq * 1.5f;
+                if (t <= 0.0f) continue;
+                intensity += t * t * orbBreathVal[i];
             }
 
             // Add pulse flash (radial from center, brief)
-            if (pulseEnvelope_ > 0.01f) {
-                float cx = width_ * 0.5f;
-                float cy = height_ * 0.5f;
+            if (hasPulse) {
                 float dx = (float)x - cx;
                 float dy = (float)y - cy;
                 float distSq = dx * dx + dy * dy;
-                float maxDistSq = cx * cx + cy * cy;
-                float radialFade = 1.0f - (distSq / (maxDistSq + 0.001f));
+                float radialFade = 1.0f - distSq * invMaxDistSq;
                 if (radialFade > 0.0f) {
-                    intensity += pulseEnvelope_ * params_.pulseBrightness * radialFade * radialFade;
+                    intensity += pulseScale * radialFade * radialFade;
                 }
             }
 
-            // Very dim ambient (near-invisible noise shimmer)
-            float ambient = SimplexNoise::noise3D_01(
-                (float)x * 0.4f, (float)y * 0.4f, noiseTime_ * 2.0f) * params_.backgroundDim;
-            intensity += ambient;
+            // Skip ambient noise for pixels already above threshold (saves noise3D call)
+            if (intensity < 0.15f) {
+                // Very dim ambient (near-invisible noise shimmer)
+                float ambient = SimplexNoise::noise3D_01(
+                    (float)x * 0.4f, (float)y * 0.4f, noiseTime_ * 2.0f) * params_.backgroundDim;
+                intensity += ambient;
+            }
 
             // Clamp and apply threshold — pixels below threshold stay OFF
-            intensity = min(1.0f, intensity);
             if (intensity < 0.15f) {
                 matrix.setPixel(x, y, 0, 0, 0);
                 continue;
             }
+            intensity = min(1.0f, intensity);
 
             uint8_t r, g, b;
             purplePalette(intensity, r, g, b);
@@ -147,15 +170,10 @@ void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
 }
 
 void PlasmaGlobe::purplePalette(float t, uint8_t& r, uint8_t& g, uint8_t& b) const {
-    // 4-stop purple/violet gradient
-    // 0.0 = off, 0.15 = deep violet, 0.5 = purple, 0.8 = lavender, 1.0 = white-violet
-    if (t < 0.15f) {
-        float s = t / 0.15f;
-        r = (uint8_t)(s * 30);
-        g = 0;
-        b = (uint8_t)(s * 60);
-    } else if (t < 0.5f) {
-        float s = (t - 0.15f) / 0.35f;
+    // 3-stop purple/violet gradient (t >= 0.15 guaranteed by caller threshold)
+    // 0.15 = deep violet, 0.5 = purple, 0.8 = lavender, 1.0 = white-violet
+    if (t < 0.5f) {
+        float s = (t - 0.15f) / 0.35f;  // 0.0 at t=0.15, 1.0 at t=0.5
         r = (uint8_t)(30 + s * 80);
         g = (uint8_t)(s * 15);
         b = (uint8_t)(60 + s * 100);

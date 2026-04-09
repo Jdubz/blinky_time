@@ -378,15 +378,15 @@ public:
      * Load/save all persisted generator, mic, and tracker parameters.
      * AudioTracker params persisted v74 (StoredTrackerParams).
      */
-    void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, PlasmaGlobeParams& lightningParams,
+    void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, PlasmaGlobeParams& plasmaParams,
                           AdaptiveMic& mic, AudioTracker* tracker = nullptr);
-    void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& lightningParams,
+    void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                           const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
     void factoryReset();
 
     // Auto-save support
     void markDirty() { dirty_ = true; }
-    void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& lightningParams,
+    void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                      const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
 
 private:

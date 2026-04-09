@@ -39,12 +39,16 @@ echo ""
 echo -e "${BOLD}Git Repository:${NC}"
 cd "$REPO_ROOT"
 PACK_KB=$(git count-objects -v 2>/dev/null | awk '/size-pack:/ {print $2}')
-PACK_MB=$((PACK_KB / 1024))
-GIT_TOTAL=$(du -sh .git 2>/dev/null | awk '{print $1}')
-if [ "$PACK_MB" -gt 500 ]; then
-    echo -e "  ${RED}.git: $GIT_TOTAL (pack: ${PACK_MB} MB) — run 'git gc --prune=now'${NC}"
+if [[ "$PACK_KB" =~ ^[0-9]+$ ]]; then
+    PACK_MB=$((PACK_KB / 1024))
+    GIT_TOTAL=$(du -sh .git 2>/dev/null | awk '{print $1}')
+    if [ "$PACK_MB" -gt 500 ]; then
+        echo -e "  ${RED}.git: $GIT_TOTAL (pack: ${PACK_MB} MB) — run 'git gc --prune=now'${NC}"
+    else
+        echo -e "  ${GREEN}.git: $GIT_TOTAL (pack: ${PACK_MB} MB)${NC}"
+    fi
 else
-    echo -e "  ${GREEN}.git: $GIT_TOTAL (pack: ${PACK_MB} MB)${NC}"
+    echo -e "  ${YELLOW}Git metadata unavailable; skipping pack size audit${NC}"
 fi
 echo ""
 

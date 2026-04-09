@@ -528,6 +528,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     waterParams.maxParticles = data_.water.maxParticles;
 
     // === PLASMA GLOBE PARAMETERS ===
+    validateFloat(data_.plasma.backgroundDim, 0.0f, 0.1f, F("p_bgdim"));
+    validateFloat(data_.plasma.orbBrightness, 0.0f, 1.0f, F("p_orbbright"));
+    validateFloat(data_.plasma.orbRadius, 0.05f, 0.5f, F("p_orbradius"));
+    validateFloat(data_.plasma.driftSpeed, 0.001f, 0.1f, F("p_driftspeed"));
+    validateFloat(data_.plasma.pulseDecay, 0.8f, 0.99f, F("p_pulsedecay"));
+    validateFloat(data_.plasma.pulseBrightness, 0.0f, 1.0f, F("p_pulsebright"));
+    validateFloat(data_.plasma.pulseExpand, 0.0f, 1.0f, F("p_pulseexpand"));
+
     plasmaParams.backgroundDim = data_.plasma.backgroundDim;
     plasmaParams.orbBrightness = data_.plasma.orbBrightness;
     plasmaParams.orbRadius = data_.plasma.orbRadius;

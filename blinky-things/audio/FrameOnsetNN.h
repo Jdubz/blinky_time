@@ -44,6 +44,8 @@ public:
     // PCEN normalization mode: set before begin() to use PCEN instead of
     // log-compressed mel bands. Requires linear mel input from
     // SharedSpectralAnalysis::getLinearMelBands().
+    // v18 infrastructure — not yet activated. Will be wired in AudioTracker
+    // once v18 PCEN model is trained and validated on-device.
     void setPcenEnabled(bool enabled) { pcenEnabled_ = enabled; }
 
     /**
@@ -85,6 +87,8 @@ public:
         }
         // Detect input features per frame from model shape.
         // Supported: 26 (mel only), 29 (mel + 3 band-flux), 52 (mel + delta).
+        // Exactly one of useDelta_/useBandFlux_ is true, or both false.
+        // Mutually exclusive by model shape — no model uses both.
         int featuresPerFrame = input_->dims->data[input_->dims->size - 1];
         if (featuresPerFrame == INPUT_MEL_BANDS) {
             useDelta_ = false;
@@ -134,8 +138,8 @@ public:
      * Feed one frame of mel bands, run inference, return onset activation [0,1].
      *
      * When PCEN is enabled, also pass linearMelBands (pre-log linear energy).
-     * The log-compressed melBands are still used for delta computation (matching
-     * training pipeline behavior where delta is computed on log-compressed mels).
+     * PCEN output replaces log-compressed mels for all downstream features
+     * (delta, band-flux), matching training pipeline behavior.
      */
     float infer(const float* melBands, const float* linearMelBands = nullptr) {
         if (!ready_) return 0.0f;
@@ -378,12 +382,12 @@ private:
     static constexpr float PCEN_S = 0.025f;    // IIR coefficient (~0.64s at 62.5 Hz)
     static constexpr float PCEN_DELTA = 2.0f;  // Stabilizer bias
     static constexpr float PCEN_EPS = 1e-6f;   // Numerical floor
-    static constexpr float PCEN_NORM = 4.0f;   // Output normalization divisor
+    static constexpr float PCEN_NORM = 4.0f;   // Output normalization divisor (must match training pipeline)
 
-    /** Apply PCEN normalization to linear mel energy.
-     *  P[t] = (E / (eps + M))^0.5 + delta)^0.5 - delta^0.5
+    /** Apply PCEN normalization to linear mel energy (Lostanlen & Salamon 2019).
      *  Simplified with alpha=1.0, r=0.5:
-     *    P[t] = sqrt(E/(eps+M) + delta) - sqrt(delta) */
+     *    P[t] = sqrt(E/(eps+M) + delta) - sqrt(delta)
+     *  Output divided by PCEN_NORM to rescale into [0,1] range. */
     void applyPcen(const float* linearMel, float* out) {
         const float sqrtDelta = sqrtf(PCEN_DELTA);
         if (!pcenInitialized_) {

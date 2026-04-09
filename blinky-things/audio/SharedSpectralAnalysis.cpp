@@ -424,8 +424,8 @@ void SharedSpectralAnalysis::computeRawMelBands() {
     computeMelBandsFrom(preWhitenMagnitudes_, rawMelBands_);
 
     // Also store linear mel energy (before log compression) for PCEN.
-    // Recompute the filterbank sum without log — cheaper than adding a
-    // second pass, and computeMelBandsFrom is already ~0.1ms.
+    // Second filterbank pass without log — ~0.1ms overhead at 26 bands.
+    // Weights are constant (from MEL_BANDS[]) so this is just arithmetic.
     for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
         const MelBandDef& def = MEL_BANDS[band];
         float sum = 0.0f;

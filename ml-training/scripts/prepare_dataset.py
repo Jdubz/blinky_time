@@ -1012,7 +1012,6 @@ def main():
     # --- Disk space pre-check ---
     # Processed datasets are 80-130 GB. Fail fast instead of dying mid-run.
     MIN_FREE_GB = 50  # Minimum free space to even start
-    ESTIMATED_GB_PER_1K_TRACKS = 20  # Rough estimate with augmentation
     disk_stat = shutil.disk_usage(output_dir)
     free_gb = disk_stat.free / (1024 ** 3)
     if free_gb < MIN_FREE_GB:
@@ -1032,15 +1031,15 @@ def main():
         if d.is_dir() and d.name.startswith("processed_") and d.name != output_name
     )
     if old_processed:
-        old_total = sum(
-            sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        old_processed_sizes = [
+            (d, sum(f.stat().st_size for f in d.rglob("*") if f.is_file()))
             for d in old_processed
-        )
+        ]
+        old_total = sum(s for _, s in old_processed_sizes)
         old_total_gb = old_total / (1024 ** 3)
         print(f"\nFound {len(old_processed)} old processed dir(s) "
               f"({old_total_gb:.1f} GB total):")
-        for d in old_processed:
-            d_size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        for d, d_size in old_processed_sizes:
             print(f"  {d.name}: {d_size / (1024**3):.1f} GB")
         if sys.stdin.isatty():
             resp = input("Delete old processed dirs to free space? [y/N] ").strip().lower()
@@ -1070,16 +1069,17 @@ def main():
             if d.is_dir() and d.name != current_cache_key
         ]
         if stale_caches:
-            stale_total = sum(
-                sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            stale_cache_sizes = {
+                d: sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
                 for d in stale_caches
-            )
+            }
+            stale_total = sum(stale_cache_sizes.values())
             stale_gb = stale_total / (1024 ** 3)
             if stale_gb > 1.0:
                 print(f"\nFound {len(stale_caches)} stale mel cache dir(s) "
                       f"({stale_gb:.1f} GB, config hash mismatch):")
                 for d in stale_caches:
-                    d_size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                    d_size = stale_cache_sizes[d]
                     print(f"  {d.name}: {d_size / (1024**3):.1f} GB")
                 if sys.stdin.isatty():
                     resp = input("Delete stale mel caches? [y/N] ").strip().lower()
