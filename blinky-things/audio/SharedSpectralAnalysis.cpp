@@ -83,6 +83,8 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , prevMagnitudes_{}
     , melBands_{}
     , rawMelBands_{}
+    , linearMelBands_{}
+    , linearMelInvWeightSum_{}
     , melRunningMax_{}
     , binRunningMax_{}
     , smoothedGainDb_(0.0f)
@@ -98,6 +100,24 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
 }
 
 void SharedSpectralAnalysis::begin() {
+    // Precompute inverse weight sums for linear mel band computation (PCEN).
+    // Weights are constant (triangular filterbank from MEL_BANDS[]).
+    for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
+        const MelBandDef& def = MEL_BANDS[band];
+        float weightSum = 0.0f;
+        for (int bin = def.startBin; bin <= def.endBin && bin < SpectralConstants::NUM_BINS; bin++) {
+            float weight;
+            if (bin <= def.centerBin) {
+                weight = (def.centerBin > def.startBin)
+                    ? (float)(bin - def.startBin) / (def.centerBin - def.startBin) : 1.0f;
+            } else {
+                weight = (def.endBin > def.centerBin)
+                    ? 1.0f - (float)(bin - def.centerBin) / (def.endBin - def.centerBin) : 1.0f;
+            }
+            weightSum += weight;
+        }
+        linearMelInvWeightSum_[band] = (weightSum > 0) ? 1.0f / weightSum : 0.0f;
+    }
     reset();
 }
 
@@ -421,6 +441,25 @@ void SharedSpectralAnalysis::computeRawMelBands() {
     // Compute mel bands from raw (pre-compressor) magnitudes.
     // Uses preWhitenMagnitudes_ saved before applyCompressor().
     computeMelBandsFrom(preWhitenMagnitudes_, rawMelBands_);
+
+    // Also store linear mel energy (before log compression) for PCEN.
+    // Uses precomputed invWeightSum_ to avoid per-frame weight sum + division.
+    for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
+        const MelBandDef& def = MEL_BANDS[band];
+        float sum = 0.0f;
+        for (int bin = def.startBin; bin <= def.endBin && bin < SpectralConstants::NUM_BINS; bin++) {
+            float weight;
+            if (bin <= def.centerBin) {
+                weight = (def.centerBin > def.startBin)
+                    ? (float)(bin - def.startBin) / (def.centerBin - def.startBin) : 1.0f;
+            } else {
+                weight = (def.endBin > def.centerBin)
+                    ? 1.0f - (float)(bin - def.centerBin) / (def.endBin - def.centerBin) : 1.0f;
+            }
+            sum += preWhitenMagnitudes_[bin] * weight;
+        }
+        linearMelBands_[band] = sum * linearMelInvWeightSum_[band];
+    }
 }
 
 void SharedSpectralAnalysis::whitenMelBands() {

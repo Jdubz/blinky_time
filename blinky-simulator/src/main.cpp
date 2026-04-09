@@ -44,7 +44,7 @@
 #include "../../blinky-things/generators/Generator.h"
 #include "../../blinky-things/generators/Fire.h"
 #include "../../blinky-things/generators/Water.h"
-#include "../../blinky-things/generators/Lightning.h"
+#include "../../blinky-things/generators/PlasmaGlobe.h"
 #include "../../blinky-things/generators/Audio.h"
 // HeatFire removed — Fire handles all fire effects now
 #include "../../blinky-things/effects/Effect.h"
@@ -286,7 +286,7 @@ int main(int argc, char* argv[]) {
     GeneratorType genType = GeneratorType::FIRE;
     if (config.generator == "water") {
         genType = GeneratorType::WATER;
-    } else if (config.generator == "lightning") {
+    } else if (config.generator == "lightning" || config.generator == "plasma") {
         genType = GeneratorType::LIGHTNING;
     } else if (config.generator == "audio") {
         genType = GeneratorType::AUDIO;
@@ -318,9 +318,9 @@ int main(int argc, char* argv[]) {
     } else if (genType == GeneratorType::WATER && pipeline.getWaterGenerator()) {
         applyParams(pipeline.getWaterGenerator()->getParamsMutable(), paramOverrides);
         allParams = getParamMap(pipeline.getWaterGenerator()->getParams());
-    } else if (genType == GeneratorType::LIGHTNING && pipeline.getLightningGenerator()) {
-        applyParams(pipeline.getLightningGenerator()->getParamsMutable(), paramOverrides);
-        allParams = getParamMap(pipeline.getLightningGenerator()->getParams());
+    } else if (genType == GeneratorType::LIGHTNING && pipeline.getPlasmaGlobeGenerator()) {
+        applyParams(pipeline.getPlasmaGlobeGenerator()->getParamsMutable(), paramOverrides);
+        allParams = getParamMap(pipeline.getPlasmaGlobeGenerator()->getParams());
     } else if (genType == GeneratorType::AUDIO && pipeline.getAudioVisGenerator()) {
         applyParams(pipeline.getAudioVisGenerator()->getParamsMutable(), paramOverrides);
         allParams = getParamMap(pipeline.getAudioVisGenerator()->getParams());
@@ -365,9 +365,9 @@ int main(int argc, char* argv[]) {
     LEDRenderConfig highResConfig;
     highResConfig.ledWidth = deviceConfig.matrix.width;
     highResConfig.ledHeight = deviceConfig.matrix.height;
-    highResConfig.ledSize = 8;
-    highResConfig.ledSpacing = 2;
-    highResConfig.padding = 4;
+    highResConfig.ledSize = 4;
+    highResConfig.ledSpacing = 1;
+    highResConfig.padding = 2;
     highResConfig.drawGlow = false;
     highResConfig.style = layoutStyle;
 

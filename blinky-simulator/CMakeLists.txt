@@ -26,7 +26,7 @@ set(BLINKY_SOURCES
     ../blinky-things/math/SimplexNoise.cpp
     ../blinky-things/generators/Fire.cpp
     ../blinky-things/generators/Water.cpp
-    ../blinky-things/generators/Lightning.cpp
+    ../blinky-things/generators/PlasmaGlobe.cpp
     ../blinky-things/generators/Audio.cpp
     ../blinky-things/effects/HueRotationEffect.cpp
     ../blinky-things/render/EffectRenderer.cpp

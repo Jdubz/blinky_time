@@ -3,7 +3,7 @@
 #include "../generators/Generator.h"
 #include "../generators/Fire.h"
 #include "../generators/Water.h"
-#include "../generators/Lightning.h"
+#include "../generators/PlasmaGlobe.h"
 #include "../generators/Audio.h"
 #include "../effects/Effect.h"
 #include "../effects/NoOpEffect.h"
@@ -70,7 +70,7 @@ public:
     // Type-safe parameter access for each generator
     FireParams* getFireParams();
     WaterParams* getWaterParams();
-    LightningParams* getLightningParams();
+    PlasmaGlobeParams* getPlasmaGlobeParams();
     AudioParams* getAudioVisParams();
 
     // No apply*Params() needed — get*Params() returns mutable pointers,
@@ -82,7 +82,7 @@ public:
     // Direct generator access (for advanced use)
     Fire* getFireGenerator() { return fire_; }
     Water* getWaterGenerator() { return water_; }
-    Lightning* getLightningGenerator() { return lightning_; }
+    PlasmaGlobe* getPlasmaGlobeGenerator() { return plasmaGlobe_; }
     Audio* getAudioVisGenerator() { return audioVis_; }
 
     // Utility
@@ -101,7 +101,7 @@ private:
     // Generators (all owned, one active)
     Fire* fire_;
     Water* water_;
-    Lightning* lightning_;
+    PlasmaGlobe* plasmaGlobe_;
     Audio* audioVis_;
     Generator* currentGenerator_;
     GeneratorType generatorType_;

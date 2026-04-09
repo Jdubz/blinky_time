@@ -66,14 +66,14 @@ static float effectRotationSpeed_ = 0.0f;
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
     : pipeline_(pipeline), fireGenerator_(nullptr),
       waterGenerator_(nullptr),
-      lightningGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      plasmaGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
       battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
     // Get generator pointers from pipeline
     if (pipeline_) {
         fireGenerator_ = pipeline_->getFireGenerator();
         waterGenerator_ = pipeline_->getWaterGenerator();
-        lightningGenerator_ = pipeline_->getLightningGenerator();
+        plasmaGenerator_ = pipeline_->getPlasmaGlobeGenerator();
         audioVisGenerator_ = pipeline_->getAudioVisGenerator();
         hueEffect_ = pipeline_->getHueRotationEffect();
     }
@@ -129,8 +129,8 @@ void SerialConsole::registerSettings() {
     }
 
     // Register Lightning generator settings (use mutable ref so changes apply directly)
-    if (lightningGenerator_) {
-        registerLightningSettings(&lightningGenerator_->getParamsMutable());
+    if (plasmaGenerator_) {
+        registerPlasmaSettings(&plasmaGenerator_->getParamsMutable());
     }
 
     // Register Audio visualization generator settings
@@ -703,11 +703,11 @@ bool SerialConsole::handleModeCommand(const char* cmd) {
 // === CONFIGURATION COMMANDS ===
 bool SerialConsole::handleConfigCommand(const char* cmd) {
     if (strcmp(cmd, "save") == 0) {
-        if (configStorage_ && fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+        if (configStorage_ && fireGenerator_ && waterGenerator_ && plasmaGenerator_ && mic_) {
             configStorage_->saveConfiguration(
                 fireGenerator_->getParams(),
                 waterGenerator_->getParams(),
-                lightningGenerator_->getParams(),
+                plasmaGenerator_->getParams(),
                 *mic_,
                 audioCtrl_
             );
@@ -719,11 +719,11 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "load") == 0) {
-        if (configStorage_ && fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+        if (configStorage_ && fireGenerator_ && waterGenerator_ && plasmaGenerator_ && mic_) {
             configStorage_->loadConfiguration(
                 fireGenerator_->getParamsMutable(),
                 waterGenerator_->getParamsMutable(),
-                lightningGenerator_->getParamsMutable(),
+                plasmaGenerator_->getParamsMutable(),
                 *mic_,
                 audioCtrl_
             );
@@ -949,12 +949,12 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     // Trigger flash write by saving full configuration
     // Note: mic_ should always be available (audio initialized even in safe mode)
     // but generators may be null in safe mode
-    if (fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+    if (fireGenerator_ && waterGenerator_ && plasmaGenerator_ && mic_) {
         // Normal mode: save with actual generator params
         configStorage_->saveConfiguration(
             fireGenerator_->getParams(),
             waterGenerator_->getParams(),
-            lightningGenerator_->getParams(),
+            plasmaGenerator_->getParams(),
             *mic_,
             audioCtrl_
         );
@@ -963,11 +963,11 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
         // Save with default generator params (only device config matters)
         FireParams defaultFire;
         WaterParams defaultWater;
-        LightningParams defaultLightning;
+        PlasmaGlobeParams defaultPlasma;
         configStorage_->saveConfiguration(
             defaultFire,
             defaultWater,
-            defaultLightning,
+            defaultPlasma,
             *mic_
         );
     } else {
@@ -1091,7 +1091,7 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
         } else if (strcmp(name, "water") == 0) {
             type = GeneratorType::WATER;
             found = true;
-        } else if (strcmp(name, "lightning") == 0) {
+        } else if (strcmp(name, "lightning") == 0 || strcmp(name, "plasma") == 0) {
             type = GeneratorType::LIGHTNING;
             found = true;
         } else if (strcmp(name, "audio") == 0) {
@@ -1229,48 +1229,24 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
 }
 
 // === LIGHTNING SETTINGS (Particle-based) ===
-// Prefixed with "l_" to avoid name collisions with fire settings.
-// Pool auto-sized in begin(): capacity = maxParticles * numLeds.
-void SerialConsole::registerLightningSettings(LightningParams* lp) {
-    if (!lp) return;
+// Plasma globe settings — prefixed with "p_"
+void SerialConsole::registerPlasmaSettings(PlasmaGlobeParams* pp) {
+    if (!pp) return;
 
-    // Spawn behavior
-    settings_.registerFloat("l_spawnchance", &lp->baseSpawnChance, "lightning",
-        "Baseline bolt spawn probability", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("l_audioboost", &lp->audioSpawnBoost, "lightning",
-        "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
-
-    // Bolt appearance
-    settings_.registerUint8("l_faderate", &lp->fadeRate, "lightning",
-        "Intensity decay per frame", 0, 255, onParamChanged);
-
-    // Branching behavior
-    settings_.registerUint8("l_branchchance", &lp->branchChance, "lightning",
-        "Branch probability (%)", 0, 100, onParamChanged);
-    settings_.registerUint8("l_branchcount", &lp->branchCount, "lightning",
-        "Branches per trigger", 1, 4, onParamChanged);
-    settings_.registerFloat("l_branchspread", &lp->branchAngleSpread, "lightning",
-        "Branch angle spread (radians)", 0.0f, 3.14159f, onParamChanged);
-    settings_.registerUint8("l_branchintloss", &lp->branchIntensityLoss, "lightning",
-        "Branch intensity reduction (%)", 0, 100, onParamChanged);
-
-    // Lifecycle
-    settings_.registerFloat("l_maxparts", &lp->maxParticles, "lightning",
-        "Max particles (× numLeds, clamped to pool)", 0.1f, 1.0f, onParamChanged);
-    settings_.registerUint8("l_lifespan", &lp->defaultLifespan, "lightning",
-        "Default particle lifespan (frames)", 10, 60, onParamChanged);
-    settings_.registerUint8("l_intmin", &lp->intensityMin, "lightning",
-        "Minimum spawn intensity", 0, 255, onParamChanged);
-    settings_.registerUint8("l_intmax", &lp->intensityMax, "lightning",
-        "Maximum spawn intensity", 0, 255, onParamChanged);
-
-    // Audio reactivity
-    settings_.registerFloat("l_transmin", &lp->organicTransientMin, "lightning",
-        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
-
-    // Background
-    settings_.registerFloat("l_bgintensity", &lp->backgroundIntensity, "lightning",
-        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("p_bgdim", &pp->backgroundDim, "plasma",
+        "Ambient background brightness", 0.0f, 0.1f, onParamChanged);
+    settings_.registerFloat("p_orbbright", &pp->orbBrightness, "plasma",
+        "Peak orb brightness", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("p_orbradius", &pp->orbRadius, "plasma",
+        "Orb radius (fraction of diagonal)", 0.05f, 0.5f, onParamChanged);
+    settings_.registerFloat("p_driftspeed", &pp->driftSpeed, "plasma",
+        "Noise-driven drift speed", 0.001f, 0.1f, onParamChanged);
+    settings_.registerFloat("p_pulsedecay", &pp->pulseDecay, "plasma",
+        "Beat pulse decay rate", 0.8f, 0.99f, onParamChanged);
+    settings_.registerFloat("p_pulsebright", &pp->pulseBrightness, "plasma",
+        "Extra brightness on pulse", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("p_pulseexpand", &pp->pulseExpand, "plasma",
+        "Radius expansion on pulse", 0.0f, 1.0f, onParamChanged);
 }
 
 // === AUDIO VISUALIZATION GENERATOR SETTINGS ===

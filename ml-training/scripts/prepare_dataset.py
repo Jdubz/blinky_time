@@ -1008,6 +1008,89 @@ def main():
     print(f"Using device: {device}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Disk space pre-check ---
+    # Processed datasets are 80-130 GB. Fail fast instead of dying mid-run.
+    MIN_FREE_GB = 50  # Minimum free space to even start
+    disk_stat = shutil.disk_usage(output_dir)
+    free_gb = disk_stat.free / (1024 ** 3)
+    if free_gb < MIN_FREE_GB:
+        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir}. "
+              f"Need at least {MIN_FREE_GB} GB to start dataprep.\n"
+              f"  Tip: delete old processed_v* dirs or stale mel_cache entries.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # --- Clean up old processed dirs ---
+    # Each version creates a new processed_v{N} dir but old ones were never
+    # auto-cleaned, causing 100+ GB of dead data to accumulate.
+    output_parent = output_dir.parent
+    output_name = output_dir.name
+    old_processed = sorted(
+        d for d in output_parent.iterdir()
+        if d.is_dir() and d.name.startswith("processed_") and d.name != output_name
+    )
+    if old_processed:
+        old_processed_sizes = [
+            (d, sum(f.stat().st_size for f in d.rglob("*") if f.is_file()))
+            for d in old_processed
+        ]
+        old_total = sum(s for _, s in old_processed_sizes)
+        old_total_gb = old_total / (1024 ** 3)
+        print(f"\nFound {len(old_processed)} old processed dir(s) "
+              f"({old_total_gb:.1f} GB total):")
+        for d, d_size in old_processed_sizes:
+            print(f"  {d.name}: {d_size / (1024**3):.1f} GB")
+        if sys.stdin.isatty():
+            resp = input("Delete old processed dirs to free space? [y/N] ").strip().lower()
+            if resp == "y":
+                for d in old_processed:
+                    shutil.rmtree(d)
+                    print(f"  Deleted {d.name}")
+                # Re-check free space
+                free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
+                print(f"  Free space now: {free_gb:.1f} GB")
+        else:
+            print("  (Non-interactive — skipping auto-delete. "
+                  "Run interactively or delete manually.)")
+
+    # --- Prune stale mel cache entries ---
+    mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
+    if mel_cache_base.exists():
+        current_cache_key = compute_mel_cache_key(
+            cfg, args.augment, seed,
+            mic_profile_path=getattr(args, 'mic_profile', None),
+            rir_dir=str(rir_dir) if rir_dir else None,
+            stems_dir=str(stems_dir) if stems_dir else None,
+            stem_variants=stem_variant_list,
+        )
+        stale_caches = [
+            d for d in mel_cache_base.iterdir()
+            if d.is_dir() and d.name != current_cache_key
+        ]
+        if stale_caches:
+            stale_cache_sizes = {
+                d: sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                for d in stale_caches
+            }
+            stale_total = sum(stale_cache_sizes.values())
+            stale_gb = stale_total / (1024 ** 3)
+            if stale_gb > 1.0:
+                print(f"\nFound {len(stale_caches)} stale mel cache dir(s) "
+                      f"({stale_gb:.1f} GB, config hash mismatch):")
+                for d in stale_caches:
+                    d_size = stale_cache_sizes[d]
+                    print(f"  {d.name}: {d_size / (1024**3):.1f} GB")
+                if sys.stdin.isatty():
+                    resp = input("Delete stale mel caches? [y/N] ").strip().lower()
+                    if resp == "y":
+                        for d in stale_caches:
+                            shutil.rmtree(d)
+                            print(f"  Deleted {d.name}")
+                else:
+                    print("  (Non-interactive — skipping. Delete manually or "
+                          "run with --clear-cache.)")
+
     rng = np.random.default_rng(seed)
 
     # Load mic calibration profile if provided

@@ -163,20 +163,15 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.water.splashParticles = 0.75f; // × crossDim → particles per splash
     data_.water.splashIntensity = 120;
 
-    // Lightning defaults (particle-based)
-    data_.lightning.baseSpawnChance = 0.15f;
-    data_.lightning.audioSpawnBoost = 0.5f;
-    data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
-    data_.lightning.organicTransientMin = 0.3f;
-    data_.lightning.backgroundIntensity = 0.15f;
-    data_.lightning.maxParticles = 0.67f;  // Fraction of numLeds (clamped to pool 40)
-    data_.lightning.defaultLifespan = 20;
-    data_.lightning.intensityMin = 180;
-    data_.lightning.intensityMax = 255;
-    data_.lightning.fadeRate = 160;
-    data_.lightning.branchChance = 30;
-    data_.lightning.branchCount = 2;
-    data_.lightning.branchIntensityLoss = 40;
+    // Plasma globe defaults (continuous field, replaces lightning)
+    PlasmaGlobeParams plasmaDefaults;
+    data_.plasma.backgroundDim = plasmaDefaults.backgroundDim;
+    data_.plasma.orbBrightness = plasmaDefaults.orbBrightness;
+    data_.plasma.orbRadius = plasmaDefaults.orbRadius;
+    data_.plasma.driftSpeed = plasmaDefaults.driftSpeed;
+    data_.plasma.pulseDecay = plasmaDefaults.pulseDecay;
+    data_.plasma.pulseBrightness = plasmaDefaults.pulseBrightness;
+    data_.plasma.pulseExpand = plasmaDefaults.pulseExpand;
 
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization (v72: AGC removed, gain fixed at platform default)
@@ -312,7 +307,7 @@ bool ConfigStorage::loadFromFlash() {
         // Settings version matches and file is the right size - preserve all settings
         memcpy(&data_.fire, &temp.fire, sizeof(StoredFireParams));
         memcpy(&data_.water, &temp.water, sizeof(StoredWaterParams));
-        memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
+        memcpy(&data_.plasma, &temp.plasma, sizeof(StoredPlasmaParams));
         memcpy(&data_.mic, &temp.mic, sizeof(StoredMicParams));
         // (StoredMusicParams memcpy removed v76 — struct deleted)
         memcpy(&data_.tracker, &temp.tracker, sizeof(StoredTrackerParams));
@@ -424,7 +419,7 @@ void ConfigStorage::end() {
 #endif
 }
 
-void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
+void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, PlasmaGlobeParams& plasmaParams,
                                       AdaptiveMic& mic, AudioTracker* tracker) {
     // Validation helpers — clamp individual bad params to nearest bound.
     // Preserves all other settings instead of wiping everything.
@@ -532,25 +527,22 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     waterParams.splashIntensity = data_.water.splashIntensity;
     waterParams.maxParticles = data_.water.maxParticles;
 
-    // === LIGHTNING PARAMETERS ===
-    // Spawn behavior
-    lightningParams.baseSpawnChance = data_.lightning.baseSpawnChance;
-    lightningParams.audioSpawnBoost = data_.lightning.audioSpawnBoost;
-    // Branching
-    lightningParams.branchAngleSpread = data_.lightning.branchAngleSpread;
-    // Audio reactivity
-    lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
-    // Background
-    lightningParams.backgroundIntensity = data_.lightning.backgroundIntensity;
-    // Lifecycle
-    lightningParams.defaultLifespan = data_.lightning.defaultLifespan;
-    lightningParams.intensityMin = data_.lightning.intensityMin;
-    lightningParams.intensityMax = data_.lightning.intensityMax;
-    lightningParams.fadeRate = data_.lightning.fadeRate;
-    lightningParams.branchChance = data_.lightning.branchChance;
-    lightningParams.branchCount = data_.lightning.branchCount;
-    lightningParams.branchIntensityLoss = data_.lightning.branchIntensityLoss;
-    lightningParams.maxParticles = data_.lightning.maxParticles;
+    // === PLASMA GLOBE PARAMETERS ===
+    validateFloat(data_.plasma.backgroundDim, 0.0f, 0.1f, F("p_bgdim"));
+    validateFloat(data_.plasma.orbBrightness, 0.0f, 1.0f, F("p_orbbright"));
+    validateFloat(data_.plasma.orbRadius, 0.05f, 0.5f, F("p_orbradius"));
+    validateFloat(data_.plasma.driftSpeed, 0.001f, 0.1f, F("p_driftspeed"));
+    validateFloat(data_.plasma.pulseDecay, 0.8f, 0.99f, F("p_pulsedecay"));
+    validateFloat(data_.plasma.pulseBrightness, 0.0f, 1.0f, F("p_pulsebright"));
+    validateFloat(data_.plasma.pulseExpand, 0.0f, 1.0f, F("p_pulseexpand"));
+
+    plasmaParams.backgroundDim = data_.plasma.backgroundDim;
+    plasmaParams.orbBrightness = data_.plasma.orbBrightness;
+    plasmaParams.orbRadius = data_.plasma.orbRadius;
+    plasmaParams.driftSpeed = data_.plasma.driftSpeed;
+    plasmaParams.pulseDecay = data_.plasma.pulseDecay;
+    plasmaParams.pulseBrightness = data_.plasma.pulseBrightness;
+    plasmaParams.pulseExpand = data_.plasma.pulseExpand;
 
     // Window/Range normalization parameters (v72: AGC removed, only these remain)
     mic.peakTau = data_.mic.peakTau;
@@ -638,7 +630,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     #undef VALIDATE_INT
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                                       const AdaptiveMic& mic, AudioTracker* tracker) {
     data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
     data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
@@ -686,25 +678,14 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.water.splashIntensity = waterParams.splashIntensity;
     data_.water.maxParticles = waterParams.maxParticles;
 
-    // === LIGHTNING PARAMETERS ===
-    // Spawn behavior
-    data_.lightning.baseSpawnChance = lightningParams.baseSpawnChance;
-    data_.lightning.audioSpawnBoost = lightningParams.audioSpawnBoost;
-    // Branching
-    data_.lightning.branchAngleSpread = lightningParams.branchAngleSpread;
-    // Audio reactivity
-    data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
-    // Background
-    data_.lightning.backgroundIntensity = lightningParams.backgroundIntensity;
-    // Lifecycle
-    data_.lightning.defaultLifespan = lightningParams.defaultLifespan;
-    data_.lightning.intensityMin = lightningParams.intensityMin;
-    data_.lightning.intensityMax = lightningParams.intensityMax;
-    data_.lightning.fadeRate = lightningParams.fadeRate;
-    data_.lightning.branchChance = lightningParams.branchChance;
-    data_.lightning.branchCount = lightningParams.branchCount;
-    data_.lightning.branchIntensityLoss = lightningParams.branchIntensityLoss;
-    data_.lightning.maxParticles = lightningParams.maxParticles;
+    // === PLASMA GLOBE PARAMETERS ===
+    data_.plasma.backgroundDim = plasmaParams.backgroundDim;
+    data_.plasma.orbBrightness = plasmaParams.orbBrightness;
+    data_.plasma.orbRadius = plasmaParams.orbRadius;
+    data_.plasma.driftSpeed = plasmaParams.driftSpeed;
+    data_.plasma.pulseDecay = plasmaParams.pulseDecay;
+    data_.plasma.pulseBrightness = plasmaParams.pulseBrightness;
+    data_.plasma.pulseExpand = plasmaParams.pulseExpand;
 
     // Window/Range normalization (v72: AGC removed)
     data_.mic.peakTau = mic.peakTau;
@@ -751,10 +732,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                                 const AdaptiveMic& mic, AudioTracker* tracker) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, waterParams, lightningParams, mic, tracker);
+        saveConfiguration(fireParams, waterParams, plasmaParams, mic, tracker);
     }
 }
 

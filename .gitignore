@@ -6,10 +6,23 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+**/venv/
 
 # ML training artifacts (large, regenerated)
 ml-training/data/processed/
 ml-training/data/mel_cache/
+ml-training/outputs/*/checkpoints/
+
+# Compiled binaries (prevent accidental venv/library commits)
+*.so
+*.dylib
+*.dll
+*.whl
+*.tar.gz
+*.zip
+*.onnx
+*.pt
+*.pth
 
 # Node
 node_modules/
@@ -24,4 +37,3 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
-blinky-server/venv/

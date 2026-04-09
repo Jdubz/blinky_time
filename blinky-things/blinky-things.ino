@@ -316,13 +316,13 @@ void setup() {
       // Load parameters directly into generators' internal storage
       Fire* fireGen = pipeline->getFireGenerator();
       Water* waterGen = pipeline->getWaterGenerator();
-      Lightning* lightningGen = pipeline->getLightningGenerator();
+      PlasmaGlobe* plasmaGen = pipeline->getPlasmaGlobeGenerator();
 
-      if (fireGen && waterGen && lightningGen) {
+      if (fireGen && waterGen && plasmaGen) {
         configStorage.loadConfiguration(
           fireGen->getParamsMutable(),
           waterGen->getParamsMutable(),
-          lightningGen->getParamsMutable(),
+          plasmaGen->getParamsMutable(),
           audioController->getMicForTuning(),
           audioController
         );
@@ -554,13 +554,13 @@ void loop() {
     if (audioController && pipeline) {
       Fire* fireGen = pipeline->getFireGenerator();
       Water* waterGen = pipeline->getWaterGenerator();
-      Lightning* lightningGen = pipeline->getLightningGenerator();
+      PlasmaGlobe* plasmaGen = pipeline->getPlasmaGlobeGenerator();
 
-      if (fireGen && waterGen && lightningGen) {
+      if (fireGen && waterGen && plasmaGen) {
         configStorage.saveIfDirty(
           fireGen->getParams(),
           waterGen->getParams(),
-          lightningGen->getParams(),
+          plasmaGen->getParams(),
           audioController->getMicForTuning(),
           audioController
         );

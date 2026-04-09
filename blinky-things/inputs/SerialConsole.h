@@ -5,7 +5,7 @@
 #include "../audio/FakeAudio.h"
 #include "../generators/Fire.h"
 #include "../generators/Water.h"
-#include "../generators/Lightning.h"
+#include "../generators/PlasmaGlobe.h"
 #include "../generators/Audio.h"
 #include "../config/SettingsRegistry.h"
 
@@ -19,7 +19,7 @@ class WifiManager;
 class WifiCommandServer;
 class Fire;
 class Water;
-class Lightning;
+class PlasmaGlobe;
 class Audio;
 class AdaptiveMic;
 class BatteryMonitor;
@@ -254,7 +254,7 @@ private:
 
     // Settings registration for other generators
     void registerWaterSettings(WaterParams* wp);
-    void registerLightningSettings(LightningParams* lp);
+    void registerPlasmaSettings(PlasmaGlobeParams* pp);
     void registerAudioVisSettings(AudioParams* ap);
     void registerEffectSettings();
     void syncEffectSettings();  // Apply effect settings to actual effect
@@ -263,7 +263,7 @@ private:
     RenderPipeline* pipeline_;
     Fire* fireGenerator_;
     Water* waterGenerator_;
-    Lightning* lightningGenerator_;
+    PlasmaGlobe* plasmaGenerator_;
     Audio* audioVisGenerator_;
     HueRotationEffect* hueEffect_;
     AdaptiveMic* mic_;

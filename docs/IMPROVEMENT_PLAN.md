@@ -1,27 +1,27 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 8, 2026*
+*Last Updated: April 9, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** b106 (SETTINGS_VERSION 93). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all b106, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery.
+**Firmware:** b107 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b107 changes:** PlasmaGlobe replaces Lightning generator (continuous field, not particle-based). FrameOnsetNN gains PCEN normalization + 3-channel band-flux input support. SETTINGS_VERSION 93→94.
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v15 (madmom distillation) deployed on all 3 blinkyhost devices. Offline onset F1=0.745, on-device onset F1=0.616 (17% gap — PCEN normalization in v18 targets this). 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes. NN output used for visual pulse only — NOT for BPM estimation.
 
-**Training experiments (April 7-8):**
-- v15 (deployed): madmom MSE distillation, 52ch (mel+delta). Offline onset F1=0.745, KW F1=0.730.
-- v16: no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. On-device not tested.
-- v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **+3.7% onset F1 over v15 offline.** On-device validation in progress.
-- v18: PCEN mel normalization (52ch). Dataprep complete, training pending. Hypothesis: PCEN closes offline-to-on-device gap.
+**Training experiments (April 7-9):**
+- v15 (deployed on 2A798EF8, 659C8DD3): madmom MSE distillation, 52ch (mel+delta). Offline onset F1=0.745, KW F1=0.730. On-device onset F1=0.473.
+- v16 (deployed on 062CBD12 as b107): no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. **On-device onset F1=0.471 — identical to v15.** Delta features provide zero on-device benefit despite 5ms/frame extra inference cost. Confirms offline-to-on-device gap is NOT from feature type.
+- v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **+3.7% onset F1 over v15 offline.** Firmware band-flux support committed (b107) — FrameOnsetNN auto-detects 29ch, computes HWR flux internally. Ready for on-device test.
+- v18: PCEN mel normalization (52ch). **Dataprep re-running** — previous failures (April 8-9) were caused by **disk full** (`OSError: Not enough free space to write 5.5 GB`), not OOM. Root cause: 242 GB of dead data (old processed dirs + stale mel caches + bloated .git pack) left only 128 GB free. Cleaned up April 9 (369 GB free). PCEN firmware support committed (b107). Disk space pre-checks added to prepare_dataset.py to prevent recurrence. Hypothesis: PCEN closes offline-to-on-device gap.
 
-**Fleet status (April 8):**
-- 062CBD12 — Hat Display, b106, serial, test chip ✅
-- 659C8DD3 — Long Tube, b106, serial, installed device ✅
-- 2A798EF8 — Hat Display, b106, serial, test chip ✅
+**Fleet status (April 9):**
+- 062CBD12 — Hat Display, b107 (v16 model), serial, test chip ✅
+- 659C8DD3 — Long Tube, b106 (v15 model), serial, installed device ✅ (pending b107 flash)
+- 2A798EF8 — Hat Display, b106 (v15 model), serial, test chip ✅ (pending b107 flash)
 - ABFBC412 — removed (broken reset button, hardware fault)
 
 **Serial reliability (April 8):** Root cause identified and fixed — stock TinyUSB CDC sets TX FIFO overwritable on DTR drop, silently killing all serial output. Patch in `patches/tinyusb-cdc-no-overwritable-fifo.patch`, enforced by `build.sh` compile guard. Server hardened: get_info retry, sibling hold during flash, serial retry limit (3 fails → stop), DELETE endpoint for stale devices. See commit `9712664`.
@@ -165,9 +165,11 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v16 (no delta): trained, not deployed.** Identical to v15 but without delta features (26ch instead of 52ch). Offline onset F1=0.782 — HIGHER than v15 despite fewer features. KW F1=0.727 (slightly lower). Inference ~25% faster (6.8ms vs ~11.7ms estimated with deltas).
 
-**v17 (band-flux): trained, on-device validation pending.** Replaces 26 delta channels with 3 band-grouped HWR mel flux channels (bass/mid/high). Offline onset F1=0.782 (+3.7% over v15), KW F1=0.746 (+2.2%), kick recall +7%. Model size 16.3 KB INT8. On-device A/B test in progress.
+**v16 on-device A/B (April 9): delta features provide NO on-device benefit.** v16 (26ch, no delta) onset F1=0.471 vs v15 (52ch, mel+delta) onset F1=0.473 — within noise. Identical plpAtTransient (0.177 vs 0.191), plpAutoCorr (0.160 vs 0.165), onsetRate (2.514 vs 2.531). This proves the offline-to-on-device gap is NOT caused by feature representation — PCEN normalization hypothesis (v18) remains the primary candidate. v16 runs at ~6.8ms vs v15's ~11.7ms, freeing 5ms/frame.
 
-**v18 (PCEN): dataprep complete, training pending.** PCEN replaces log compression for mel spectrograms. Hypothesis: PCEN's adaptive per-band AGC normalizes mic-in-room gain variation that static log compression doesn't handle, closing the offline-to-on-device gap. Same [32,32] architecture with delta features.
+**v17 (band-flux): trained, firmware committed (b107).** Replaces 26 delta channels with 3 band-grouped HWR mel flux channels (bass/mid/high). Offline onset F1=0.782 (+3.7% over v15), KW F1=0.746 (+2.2%), kick recall +7%. Model size 16.3 KB INT8. FrameOnsetNN auto-detects 29ch models, computes 3-channel HWR flux (bass 0-5, mid 6-13, high 14-25) internally. +224 bytes flash, same RAM. Ready for on-device A/B test.
+
+**v18 (PCEN): UNBLOCKED — dataprep re-running.** Previous failures (April 8-9) were **disk full** (`OSError: Not enough free space to write 5.5 GB`), not OOM. Root cause: 242 GB of dead data (processed_v17 88 GB, incomplete processed_v18 115 GB, stale mel cache 39 GB) plus 37 GB bloated .git pack. Cleaned April 9 — 369 GB free. Disk space pre-checks added to prepare_dataset.py. PCEN firmware support committed (b107). Hypothesis: PCEN closes offline-to-on-device gap.
 
 **NN inference performance (April 2 measurement):**
 

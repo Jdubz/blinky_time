@@ -2,7 +2,7 @@
 #include <new>
 
 RenderPipeline::RenderPipeline()
-    : fire_(nullptr), water_(nullptr), lightning_(nullptr), audioVis_(nullptr),
+    : fire_(nullptr), water_(nullptr), plasmaGlobe_(nullptr), audioVis_(nullptr),
       currentGenerator_(nullptr), generatorType_(GeneratorType::FIRE),
       noOp_(nullptr), hueRotation_(nullptr),
       currentEffect_(nullptr), effectType_(EffectType::NONE),
@@ -16,7 +16,7 @@ RenderPipeline::~RenderPipeline() {
     delete hueRotation_;
     delete noOp_;
     delete audioVis_;
-    delete lightning_;
+    delete plasmaGlobe_;
     delete water_;
     delete fire_;
 }
@@ -42,8 +42,8 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
         return false;
     }
 
-    lightning_ = new(std::nothrow) Lightning();
-    if (!lightning_ || !lightning_->begin(config)) {
+    plasmaGlobe_ = new(std::nothrow) PlasmaGlobe();
+    if (!plasmaGlobe_ || !plasmaGlobe_->begin(config)) {
         return false;
     }
 
@@ -105,7 +105,7 @@ bool RenderPipeline::setGenerator(GeneratorType type) {
             newGen = water_;
             break;
         case GeneratorType::LIGHTNING:
-            newGen = lightning_;
+            newGen = plasmaGlobe_;
             break;
         case GeneratorType::AUDIO:
             newGen = audioVis_;
@@ -172,8 +172,8 @@ WaterParams* RenderPipeline::getWaterParams() {
     return water_ ? &water_->getParamsMutable() : nullptr;
 }
 
-LightningParams* RenderPipeline::getLightningParams() {
-    return lightning_ ? &lightning_->getParamsMutable() : nullptr;
+PlasmaGlobeParams* RenderPipeline::getPlasmaGlobeParams() {
+    return plasmaGlobe_ ? &plasmaGlobe_->getParamsMutable() : nullptr;
 }
 
 AudioParams* RenderPipeline::getAudioVisParams() {
@@ -188,7 +188,7 @@ const char* RenderPipeline::getGeneratorNameByIndex(int index) {
     switch (index) {
         case 0: return "fire";
         case 1: return "water";
-        case 2: return "lightning";
+        case 2: return "plasma";
         case 3: return "audio";
         default: return nullptr;
     }
