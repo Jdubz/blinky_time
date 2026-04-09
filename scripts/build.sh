@@ -49,16 +49,25 @@ fi
 # silently kills all serial output. The patch keeps FIFO non-overwritable.
 # Without this patch, devices become unresponsive after any DTR transition
 # (host serial port close, USB bus reset, server reconnection).
-CDC_FILE="$HOME/.arduino15/packages/Seeeduino/hardware/nrf52/1.1.12/libraries/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c"
-if [ -f "$CDC_FILE" ] && ! $ESP32; then
-    if grep -q 'tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr)' "$CDC_FILE"; then
-        echo "ERROR: TinyUSB CDC patch not applied!" >&2
-        echo "Stock TinyUSB drops all serial output when DTR is deasserted." >&2
-        echo "Apply: patches/tinyusb-cdc-no-overwritable-fifo.patch" >&2
-        echo "  File: $CDC_FILE" >&2
-        echo "  Change: tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr)" >&2
-        echo "      To: tu_fifo_set_overwritable(&p_cdc->tx_ff, false)" >&2
-        exit 1
+if ! $ESP32; then
+    # Find CDC source across any installed core version (not hardcoded to 1.1.12)
+    CDC_FILE=$(find "$HOME/.arduino15/packages/Seeeduino/hardware/nrf52" \
+        -path "*/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c" \
+        -print -quit 2>/dev/null)
+    if [ -n "$CDC_FILE" ]; then
+        # Assert the PATCHED line exists (fail-closed: if formatting changes, we catch it)
+        if ! grep -Eq 'tu_fifo_set_overwritable\(&p_cdc->tx_ff,[[:space:]]*false\)' "$CDC_FILE"; then
+            echo "ERROR: TinyUSB CDC patch not applied!" >&2
+            echo "Stock TinyUSB drops all serial output when DTR is deasserted." >&2
+            echo "Apply: patches/tinyusb-cdc-no-overwritable-fifo.patch" >&2
+            echo "  File: $CDC_FILE" >&2
+            echo "  Change: tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr)" >&2
+            echo "      To: tu_fifo_set_overwritable(&p_cdc->tx_ff, false)" >&2
+            exit 1
+        fi
+    else
+        echo "WARNING: TinyUSB CDC source not found — cannot verify patch." >&2
+        echo "  Expected in ~/.arduino15/packages/Seeeduino/hardware/nrf52/*/libraries/" >&2
     fi
 fi
 

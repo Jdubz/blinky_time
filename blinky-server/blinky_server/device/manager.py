@@ -173,12 +173,16 @@ class FleetManager:
     async def remove_device(self, device_id: str) -> None:
         """Permanently remove a device from the fleet.
 
-        Disconnects the device, removes it from all tracking structures,
-        and adds any BLE address to the dedup exclusion set to prevent
-        immediate rediscovery. The device will be re-added if it
-        reappears on USB (serial devices are always re-discovered).
+        Disconnects the device, removes it from all tracking structures
+        (including DFU state and locks), and adds any BLE address to
+        the dedup exclusion set to prevent immediate rediscovery. The
+        device will be re-added if it reappears on USB (serial devices
+        are always re-discovered).
+
+        Safe to call while the background loop is running — mutations
+        happen atomically (no await between dict read and delete).
         """
-        device = self._devices.get(device_id)
+        device = self._devices.pop(device_id, None)
         if device:
             with contextlib.suppress(Exception):
                 await device.disconnect()
@@ -186,11 +190,12 @@ class FleetManager:
             # are re-discovered by USB serial number regardless)
             if device.transport.transport_type == "ble":
                 self._dedup_excluded.add(device_id)
-            del self._devices[device_id]
         self._device_discovery.pop(device_id, None)
         self._reconnect_failures.pop(device_id, None)
         self._reconnect_blackout.pop(device_id, None)
         self._backoff_skip.pop(device_id, None)
+        self._dfu_recovery_state.pop(device_id, None)
+        self._dfu_locks.pop(device_id, None)
         log.info("Removed device %s from fleet", device_id[:12])
 
     async def reconnect_device(self, device_id: str) -> bool:
@@ -496,7 +501,9 @@ class FleetManager:
         except Exception:
             pass  # Discovery failure is non-fatal
 
-        for device_id, device in self._devices.items():
+        # Snapshot to avoid RuntimeError if remove_device() mutates dict
+        # concurrently (e.g., from API endpoint during an await point).
+        for device_id, device in list(self._devices.items()):
             if device.state not in (DeviceState.DISCONNECTED, DeviceState.ERROR):
                 continue
 
@@ -516,25 +523,9 @@ class FleetManager:
             if disc.transport_type == "ble_dfu":
                 continue
 
-            # Exponential backoff for repeated failures (BLE devices that
-            # consistently fail waste 20s per attempt on timeout).
-            # After 10 consecutive failures, give up entirely — the device
-            # is likely not a Blinky or is permanently out of range.
+            # Exponential backoff for repeated failures.
+            # After 20 consecutive failures, remove from fleet entirely.
             fail_count = self._reconnect_failures.get(device_id, 0)
-
-            # Serial devices with 3+ consecutive failures: stop retrying.
-            # Repeated serial open/close on a device with broken CDC makes
-            # things worse (DTR toggling, USB re-enumeration storms). The
-            # device may still be reachable via BLE — let BLE discovery
-            # find it instead of hammering the broken serial connection.
-            if disc.transport_type == "serial" and fail_count >= 3:
-                if fail_count == 3:
-                    log.warning(
-                        "Serial device %s failed 3 times — stopping serial retries. "
-                        "Device may be reachable via BLE.",
-                        device_id[:12],
-                    )
-                continue
             if fail_count >= 20:
                 log.info(
                     "Giving up on %s after %d failures — removing from fleet",
@@ -543,6 +534,22 @@ class FleetManager:
                 )
                 to_remove_after.append(device_id)
                 continue
+            # Serial devices with 3+ consecutive failures: stop reconnect
+            # attempts. Repeated serial open/close on a device with broken
+            # CDC makes things worse (DTR toggling, USB re-enumeration
+            # storms). The device may still be reachable via BLE. Increment
+            # fail_count each cycle so the device still reaches the 20-failure
+            # removal threshold and doesn't stay as a zombie indefinitely.
+            if disc.transport_type == "serial" and fail_count >= 3:
+                if fail_count == 3:
+                    log.warning(
+                        "Serial device %s failed 3 times — stopping serial retries. "
+                        "Device may be reachable via BLE.",
+                        device_id[:12],
+                    )
+                self._reconnect_failures[device_id] = fail_count + 1
+                continue
+
             if fail_count > 0:
                 # Backoff: skip N-1 discovery cycles (10s each) per failure,
                 # doubling each time, capped at 30 cycles (5 min)
