@@ -179,8 +179,10 @@ class FleetManager:
         device will be re-added if it reappears on USB (serial devices
         are always re-discovered).
 
-        Safe to call while the background loop is running — mutations
-        happen atomically (no await between dict read and delete).
+        Safe to call while the background loop is running — the
+        _devices.pop() is atomic (no await between read and delete).
+        Subsequent cleanup pops are on secondary dicts and tolerate
+        the device already being absent.
         """
         device = self._devices.pop(device_id, None)
         if device:

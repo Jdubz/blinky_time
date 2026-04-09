@@ -66,6 +66,9 @@ if ! $ESP32; then
             exit 1
         fi
     else
+        # Warn-only when file not found: allows compilation in CI environments
+        # without the Arduino toolchain installed. On a dev machine with the
+        # Seeeduino core, the file WILL be found and the patch WILL be enforced.
         echo "WARNING: TinyUSB CDC source not found — cannot verify patch." >&2
         echo "  Expected in ~/.arduino15/packages/Seeeduino/hardware/nrf52/*/libraries/" >&2
     fi

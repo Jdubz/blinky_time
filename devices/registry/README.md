@@ -86,20 +86,18 @@ Do not interact with serial ports directly.
 ### Via blinky-server API (recommended)
 
 ```bash
-# 1. Read the config JSON
-CONFIG=$(cat devices/registry/hat_v1.json | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin),separators=(',',':')))")
+# 1. Build the command payload with jq (handles JSON escaping correctly)
+jq -n --arg cmd "device upload $(jq -c . devices/registry/hat_v1.json)" \
+  '{command: $cmd}' | \
+  curl -X POST http://blinkyhost.local:8420/api/devices/{device_id}/command \
+    -H 'Content-Type: application/json' -d @-
 
-# 2. Upload via server command endpoint
-curl -X POST http://blinkyhost.local:8420/api/devices/{device_id}/command \
-  -H 'Content-Type: application/json' \
-  -d "{\"command\": \"device upload $CONFIG\"}"
-
-# 3. Reboot to apply
+# 2. Reboot to apply
 curl -X POST http://blinkyhost.local:8420/api/devices/{device_id}/command \
   -H 'Content-Type: application/json' \
   -d '{"command": "reboot"}'
 
-# 4. Verify after reconnect (~10s)
+# 3. Verify after reconnect (~10s)
 curl http://blinkyhost.local:8420/api/devices/{device_id}
 ```
 

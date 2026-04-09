@@ -144,6 +144,14 @@ namespace SafeBootWatchdog {
      * Always uses BLE DFU so the fleet server can recover the device
      * wirelessly — even if USB is dead. UF2 (USB) recovery is still
      * available via physical double-tap reset as a manual fallback.
+     *
+     * Known limitation: if a device crash-loops AND BLE is unavailable
+     * (out of range, interference, fleet server down), there is no
+     * automatic recovery path. Installed devices with inaccessible
+     * reset buttons would require physical access or SWD in this case.
+     * A hybrid approach (track failed DFU boot cycles in RAM, fall
+     * back to UF2 after N failures) could address this if it becomes
+     * a problem in practice.
      */
     inline void enterRecoveryBootloader() {
         enterBleDfuBootloader();

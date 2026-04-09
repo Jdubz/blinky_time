@@ -250,18 +250,20 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     if dfu_lock.locked():
         raise HTTPException(409, f"DFU already in progress for device {device_id}")
 
-    # UF2 flash causes a USB bus reset that disrupts ALL serial devices on
-    # the same hub. Hold reconnect on sibling serial devices so the manager
-    # doesn't try to reconnect them while the bus is unstable.
-    is_serial_flash = device.transport.transport_type == "serial"
-    sibling_ids: list[str] = []
-    if is_serial_flash:
-        for dev in fleet.get_all_devices():
-            if dev.id != device.id and dev.transport.transport_type == "serial":
-                fleet.hold_reconnect(dev.id, hold_time)
-                sibling_ids.append(dev.id)
-
     async with dfu_lock:
+        # UF2 flash causes a USB bus reset that disrupts ALL serial devices on
+        # the same hub. Hold reconnect on sibling serial devices so the manager
+        # doesn't try to reconnect them while the bus is unstable.
+        # Sibling holds are inside the lock context so they're always cleaned
+        # up by the finally block, even on unexpected exceptions.
+        is_serial_flash = device.transport.transport_type == "serial"
+        sibling_ids: list[str] = []
+        if is_serial_flash:
+            for dev in fleet.get_all_devices():
+                if dev.id != device.id and dev.transport.transport_type == "serial":
+                    fleet.hold_reconnect(dev.id, hold_time)
+                    sibling_ids.append(dev.id)
+
         fleet.hold_reconnect(device_id, hold_time)
         fleet.pause_discovery()
         try:

@@ -37,17 +37,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Track active shard temp dirs for crash cleanup. If the process is killed
-# or hits OOM, these would otherwise be orphaned forever in /tmp (each
-# 30-130 GB). By placing them in output_dir and registering an atexit
-# handler, they're cleaned up on normal exit and easy to find on crash.
+# Track active shard temp dirs for crash cleanup. Shard dirs are created
+# in output_dir (not /tmp) so they're easy to find if orphaned. The atexit
+# handler cleans them up on normal exit and Python exceptions. Note: atexit
+# does NOT run on SIGKILL (OOM killer) — orphaned dirs must be found and
+# deleted manually in that case. Placing them in output_dir (not /tmp)
+# makes this straightforward: `find /mnt/storage -name 'blinky_*' -type d`.
 _active_shard_dirs: list[Path] = []
 
 
 def _cleanup_shard_dirs() -> None:
     for d in _active_shard_dirs:
         if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
+            try:
+                shutil.rmtree(d)
+            except Exception as e:
+                print(f"WARNING: Failed to clean up shard dir {d}: {e}", file=sys.stderr)
 
 
 atexit.register(_cleanup_shard_dirs)
