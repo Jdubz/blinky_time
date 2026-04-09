@@ -1396,8 +1396,8 @@ def main():
     if abs(train_pos - val_pos) > train_pos * 0.5:
         issues.append(f"Train/val positive ratio mismatch: {train_pos:.4f} vs {val_pos:.4f}")
 
-    # 2. Mel range check (should be [0, 1] from log compression mapping)
-    mel_sample = X_train[train_idx[:1000]]
+    # 2. Mel range check (only first n_mels columns — delta/band-flux can be negative)
+    mel_sample = X_train[train_idx[:1000], :, :n_mels]  # Only mel bands, not delta/flux
     mel_min, mel_max = mel_sample.min(), mel_sample.max()
     mel_mean = mel_sample.mean()
     print(f"  Mel range: [{mel_min:.3f}, {mel_max:.3f}], mean={mel_mean:.3f}")
