@@ -282,6 +282,7 @@ private:
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
     float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
     float linearMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Linear mel energy (pre-log) for PCEN
+    float linearMelInvWeightSum_[SpectralConstants::NUM_MEL_BANDS]; // Precomputed 1/weightSum per band
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
     // Applied to mel bands (not raw magnitudes) because:

@@ -99,7 +99,7 @@ void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
     float invRadiusSq = 1.0f / (pulseRadius * pulseRadius + 0.001f);
 
     // Pre-compute per-orb breathing (avoid repeated sinf in inner loop)
-    float orbBreathVal[PLASMA_MAX_ORBS];
+    float orbBreathVal[PlasmaGlobe::MAX_ORBS];
     for (int i = 0; i < numOrbs_; i++) {
         orbBreathVal[i] = breathe * (0.8f + 0.2f * sinf(noiseTime_ * 4.0f + orbPhaseOffset_[i]))
                         * params_.orbBrightness;
@@ -113,9 +113,8 @@ void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
     bool hasPulse = pulseEnvelope_ > 0.01f;
     float pulseScale = pulseEnvelope_ * params_.pulseBrightness;
 
-    // Cutoff distance squared: beyond this, Gaussian contribution < 0.01
-    // exp(-3 * distSq * invRadiusSq) < 0.01 → distSq > ln(100)/3 / invRadiusSq
-    float cutoffDistSq = 1.54f / invRadiusSq;
+    // Cutoff: quadratic kernel 1 - distSq * invRadiusSq * 1.5 hits zero here
+    float cutoffDistSq = 1.0f / (invRadiusSq * 1.5f);
 
     for (int y = 0; y < height_; y++) {
         for (int x = 0; x < width_; x++) {

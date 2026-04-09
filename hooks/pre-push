@@ -58,17 +58,14 @@ fi
 
 # --- Git pack size check ---
 # The .git pack once grew to 37 GB (repo is 0.2 GB on GitHub). This was caused
-# by unreachable objects from reflog accumulating without gc. Run gc if pack
-# exceeds 500 MB.
+# by unreachable objects from reflog accumulating without gc. Warn if pack
+# exceeds 500 MB — don't run gc synchronously (can take minutes and stall push).
 PACK_SIZE_KB=$(git count-objects -v 2>/dev/null | awk '/size-pack:/ {print $2}')
 PACK_LIMIT_KB=512000  # 500 MB
 if [ -n "$PACK_SIZE_KB" ] && [ "$PACK_SIZE_KB" -gt "$PACK_LIMIT_KB" ] 2>/dev/null; then
     PACK_MB=$((PACK_SIZE_KB / 1024))
-    echo -e "${YELLOW}Git pack is ${PACK_MB} MB (limit: $((PACK_LIMIT_KB / 1024)) MB). Running gc...${NC}"
-    git reflog expire --expire=30.days.ago --all
-    git gc --prune=30.days.ago
-    NEW_SIZE_KB=$(git count-objects -v 2>/dev/null | awk '/size-pack:/ {print $2}')
-    echo -e "${GREEN}  Pack: ${PACK_MB} MB -> $((NEW_SIZE_KB / 1024)) MB${NC}"
+    echo -e "${YELLOW}⚠️  Git pack is ${PACK_MB} MB (limit: $((PACK_LIMIT_KB / 1024)) MB)${NC}"
+    echo -e "${YELLOW}   Run: git reflog expire --expire=30.days.ago --all && git gc --prune=30.days.ago${NC}"
 fi
 
 echo -e "${GREEN}✅ All pre-push checks passed${NC}"

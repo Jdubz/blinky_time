@@ -20,8 +20,6 @@
  * - Battery-conscious (fewer lit pixels = less power)
  */
 
-static constexpr int PLASMA_MAX_ORBS = 4;
-
 struct PlasmaGlobeParams {
     float backgroundDim;          // Ambient background brightness (0-1, very low)
     float orbBrightness;          // Peak orb brightness (0-1)
@@ -44,6 +42,7 @@ struct PlasmaGlobeParams {
 
 class PlasmaGlobe : public Generator {
 public:
+    static constexpr int MAX_ORBS = 4;
     PlasmaGlobe();
     ~PlasmaGlobe() override = default;
 
@@ -68,8 +67,8 @@ private:
     float pulseRadiusEnv_;        // Decaying pulse radius expansion
 
     // Orb state — positions driven by noise field
-    float orbX_[PLASMA_MAX_ORBS];
-    float orbY_[PLASMA_MAX_ORBS];
-    float orbPhaseOffset_[PLASMA_MAX_ORBS];  // Per-orb phase for individuality
+    float orbX_[MAX_ORBS];
+    float orbY_[MAX_ORBS];
+    float orbPhaseOffset_[MAX_ORBS];  // Per-orb phase for individuality
     int numOrbs_;
 };

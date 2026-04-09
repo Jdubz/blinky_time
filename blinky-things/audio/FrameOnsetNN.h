@@ -152,7 +152,8 @@ public:
             melInput = pcenMel;
         }
 
-        // Build the feature vector for this frame: mel bands + optional delta or band-flux
+        // Build the feature vector for this frame: mel bands + optional delta or band-flux.
+        // In 26ch mel-only mode, prevMel_ is intentionally not updated (no consumers).
         float frameFeatures[MAX_INPUT_FEATURES];
         memcpy(frameFeatures, melInput, INPUT_MEL_BANDS * sizeof(float));
         if (useDelta_) {
