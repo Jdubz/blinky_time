@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include "../generators/Fire.h"
 #include "../generators/Water.h"
-#include "../generators/Lightning.h"
+#include "../generators/PlasmaGlobe.h"
 #include "../inputs/AdaptiveMic.h"
 
 class AudioTracker;
@@ -122,8 +122,8 @@ public:
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
     // v89: pulseNNGate. v91: PLP OLA removed (direct pattern interpolation).
-    // v92: plpVarianceSens. v93: plpDecayRate.
-    static const uint8_t SETTINGS_VERSION = 93;
+    // v92: plpVarianceSens. v93: plpDecayRate. v94: PlasmaGlobe replaces Lightning.
+    static const uint8_t SETTINGS_VERSION = 94;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -181,25 +181,14 @@ public:
         uint8_t splashIntensity;
     };
 
-    struct StoredLightningParams {
-        // Spawn behavior
-        float baseSpawnChance;
-        float audioSpawnBoost;
-        // Branching
-        float branchAngleSpread;
-        // Audio reactivity
-        float organicTransientMin;
-        // Background
-        float backgroundIntensity;
-        float maxParticles;       // Fraction of numLeds (clamped to pool)
-        // Lifecycle
-        uint8_t defaultLifespan;
-        uint8_t intensityMin;
-        uint8_t intensityMax;
-        uint8_t fadeRate;
-        uint8_t branchChance;
-        uint8_t branchCount;
-        uint8_t branchIntensityLoss;
+    struct StoredPlasmaParams {
+        float backgroundDim;
+        float orbBrightness;
+        float orbRadius;
+        float driftSpeed;
+        float pulseDecay;
+        float pulseBrightness;
+        float pulseExpand;
     };
 
     struct StoredMicParams {
@@ -338,7 +327,7 @@ public:
         StoredDeviceConfig device;      // Device identity, LED layout, pins
         StoredFireParams fire;
         StoredWaterParams water;
-        StoredLightningParams lightning;
+        StoredPlasmaParams plasma;
         StoredMicParams mic;
         // (StoredMusicParams removed v76 — 312 bytes of dead AudioController params)
         StoredTrackerParams tracker;
@@ -357,8 +346,8 @@ public:
         "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (60 bytes = 14 floats + 3 uint8 + padding)");
     static_assert(sizeof(StoredWaterParams) == 64,
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 15 floats + 4 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 32,
-        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 7 uint8 + padding)");
+    static_assert(sizeof(StoredPlasmaParams) == 28,
+        "StoredPlasmaParams size changed! Increment SETTINGS_VERSION and update assertion. (28 bytes = 7 floats)");
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
@@ -389,15 +378,15 @@ public:
      * Load/save all persisted generator, mic, and tracker parameters.
      * AudioTracker params persisted v74 (StoredTrackerParams).
      */
-    void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
+    void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, PlasmaGlobeParams& lightningParams,
                           AdaptiveMic& mic, AudioTracker* tracker = nullptr);
-    void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+    void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& lightningParams,
                           const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
     void factoryReset();
 
     // Auto-save support
     void markDirty() { dirty_ = true; }
-    void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+    void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& lightningParams,
                      const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
 
 private:

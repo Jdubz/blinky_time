@@ -122,7 +122,6 @@ inline void applyParams(FireParams& p, const ParamMap& params) {
     p.sparkVelocityMin = ParamParser::getFloat(params, "sparkVelocityMin", p.sparkVelocityMin);
     p.sparkVelocityMax = ParamParser::getFloat(params, "sparkVelocityMax", p.sparkVelocityMax);
     p.sparkSpread = ParamParser::getFloat(params, "sparkSpread", p.sparkSpread);
-    p.musicSpawnPulse = ParamParser::getFloat(params, "musicSpawnPulse", p.musicSpawnPulse);
     p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
     p.burstSparks = ParamParser::getFloat(params, "burstSparks", p.burstSparks);
     p.thermalForce = ParamParser::getFloat(params, "thermalForce", p.thermalForce);
@@ -144,7 +143,6 @@ inline ParamMap getParamMap(const FireParams& p) {
     m["sparkVelocityMin"] = std::to_string(p.sparkVelocityMin);
     m["sparkVelocityMax"] = std::to_string(p.sparkVelocityMax);
     m["sparkSpread"] = std::to_string(p.sparkSpread);
-    m["musicSpawnPulse"] = std::to_string(p.musicSpawnPulse);
     m["organicTransientMin"] = std::to_string(p.organicTransientMin);
     m["burstSparks"] = std::to_string(p.burstSparks);
     m["thermalForce"] = std::to_string(p.thermalForce);
@@ -176,7 +174,6 @@ inline void applyParams(WaterParams& p, const ParamMap& params) {
     p.splashVelocityMin = ParamParser::getFloat(params, "splashVelocityMin", p.splashVelocityMin);
     p.splashVelocityMax = ParamParser::getFloat(params, "splashVelocityMax", p.splashVelocityMax);
     p.splashIntensity = ParamParser::getInt(params, "splashIntensity", p.splashIntensity);
-    p.musicSpawnPulse = ParamParser::getFloat(params, "musicSpawnPulse", p.musicSpawnPulse);
     p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
 }
 
@@ -199,44 +196,31 @@ inline ParamMap getParamMap(const WaterParams& p) {
     m["splashVelocityMin"] = std::to_string(p.splashVelocityMin);
     m["splashVelocityMax"] = std::to_string(p.splashVelocityMax);
     m["splashIntensity"] = std::to_string(p.splashIntensity);
-    m["musicSpawnPulse"] = std::to_string(p.musicSpawnPulse);
     m["organicTransientMin"] = std::to_string(p.organicTransientMin);
     return m;
 }
 
-// Apply parsed params to LightningParams
-#include "../../blinky-things/generators/Lightning.h"
-inline void applyParams(LightningParams& p, const ParamMap& params) {
-    p.baseSpawnChance = ParamParser::getFloat(params, "baseSpawnChance", p.baseSpawnChance);
-    p.audioSpawnBoost = ParamParser::getFloat(params, "audioSpawnBoost", p.audioSpawnBoost);
-    p.maxParticles = ParamParser::getInt(params, "maxParticles", p.maxParticles);
-    p.defaultLifespan = ParamParser::getInt(params, "defaultLifespan", p.defaultLifespan);
-    p.intensityMin = ParamParser::getInt(params, "intensityMin", p.intensityMin);
-    p.intensityMax = ParamParser::getInt(params, "intensityMax", p.intensityMax);
-    p.fadeRate = ParamParser::getInt(params, "fadeRate", p.fadeRate);
-    p.branchChance = ParamParser::getInt(params, "branchChance", p.branchChance);
-    p.branchCount = ParamParser::getInt(params, "branchCount", p.branchCount);
-    p.branchAngleSpread = ParamParser::getFloat(params, "branchAngleSpread", p.branchAngleSpread);
-    p.branchIntensityLoss = ParamParser::getInt(params, "branchIntensityLoss", p.branchIntensityLoss);
-    p.musicSpawnPulse = ParamParser::getFloat(params, "musicSpawnPulse", p.musicSpawnPulse);
-    p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
+// Apply parsed params to PlasmaGlobeParams
+#include "../../blinky-things/generators/PlasmaGlobe.h"
+inline void applyParams(PlasmaGlobeParams& p, const ParamMap& params) {
+    p.backgroundDim = ParamParser::getFloat(params, "backgroundDim", p.backgroundDim);
+    p.orbBrightness = ParamParser::getFloat(params, "orbBrightness", p.orbBrightness);
+    p.orbRadius = ParamParser::getFloat(params, "orbRadius", p.orbRadius);
+    p.driftSpeed = ParamParser::getFloat(params, "driftSpeed", p.driftSpeed);
+    p.pulseDecay = ParamParser::getFloat(params, "pulseDecay", p.pulseDecay);
+    p.pulseBrightness = ParamParser::getFloat(params, "pulseBrightness", p.pulseBrightness);
+    p.pulseExpand = ParamParser::getFloat(params, "pulseExpand", p.pulseExpand);
 }
 
-inline ParamMap getParamMap(const LightningParams& p) {
+inline ParamMap getParamMap(const PlasmaGlobeParams& p) {
     ParamMap m;
-    m["baseSpawnChance"] = std::to_string(p.baseSpawnChance);
-    m["audioSpawnBoost"] = std::to_string(p.audioSpawnBoost);
-    m["maxParticles"] = std::to_string(p.maxParticles);
-    m["defaultLifespan"] = std::to_string(p.defaultLifespan);
-    m["intensityMin"] = std::to_string(p.intensityMin);
-    m["intensityMax"] = std::to_string(p.intensityMax);
-    m["fadeRate"] = std::to_string(p.fadeRate);
-    m["branchChance"] = std::to_string(p.branchChance);
-    m["branchCount"] = std::to_string(p.branchCount);
-    m["branchAngleSpread"] = std::to_string(p.branchAngleSpread);
-    m["branchIntensityLoss"] = std::to_string(p.branchIntensityLoss);
-    m["musicSpawnPulse"] = std::to_string(p.musicSpawnPulse);
-    m["organicTransientMin"] = std::to_string(p.organicTransientMin);
+    m["backgroundDim"] = std::to_string(p.backgroundDim);
+    m["orbBrightness"] = std::to_string(p.orbBrightness);
+    m["orbRadius"] = std::to_string(p.orbRadius);
+    m["driftSpeed"] = std::to_string(p.driftSpeed);
+    m["pulseDecay"] = std::to_string(p.pulseDecay);
+    m["pulseBrightness"] = std::to_string(p.pulseBrightness);
+    m["pulseExpand"] = std::to_string(p.pulseExpand);
     return m;
 }
 

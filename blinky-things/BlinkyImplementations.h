@@ -31,7 +31,7 @@
 // Generator implementations
 #include "generators/Fire.cpp"
 #include "generators/Water.cpp"
-#include "generators/Lightning.cpp"
+#include "generators/PlasmaGlobe.cpp"
 #include "generators/Audio.cpp"
 
 // Effect implementations
