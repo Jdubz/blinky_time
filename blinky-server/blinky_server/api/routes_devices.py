@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -119,6 +120,22 @@ async def reconnect_device(device_id: str) -> StatusResponse:
     return StatusResponse(status="connected")
 
 
+@router.delete("/devices/{device_id}")
+async def remove_device(device_id: str) -> StatusResponse:
+    """Permanently remove a device from the fleet.
+
+    Use when a device has been physically disconnected and should no
+    longer appear in the device list. The device will be rediscovered
+    automatically if it reappears on USB or BLE.
+    """
+    fleet = get_fleet()
+    device = fleet.get_device(device_id)
+    if not device:
+        raise HTTPException(404, f"Device not found: {device_id}")
+    await fleet.remove_device(device.id)
+    return StatusResponse(status="removed")
+
+
 @router.get("/fleet/status")
 async def fleet_status() -> dict[str, Any]:
     """Fleet health summary — aggregate stats across all devices.
@@ -233,6 +250,17 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     if dfu_lock.locked():
         raise HTTPException(409, f"DFU already in progress for device {device_id}")
 
+    # UF2 flash causes a USB bus reset that disrupts ALL serial devices on
+    # the same hub. Hold reconnect on sibling serial devices so the manager
+    # doesn't try to reconnect them while the bus is unstable.
+    is_serial_flash = device.transport.transport_type == "serial"
+    sibling_ids: list[str] = []
+    if is_serial_flash:
+        for dev in fleet.get_all_devices():
+            if dev.id != device.id and dev.transport.transport_type == "serial":
+                fleet.hold_reconnect(dev.id, hold_time)
+                sibling_ids.append(dev.id)
+
     async with dfu_lock:
         fleet.hold_reconnect(device_id, hold_time)
         fleet.pause_discovery()
@@ -240,8 +268,13 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
             result = await upload_firmware(device, str(firmware))
         finally:
             device.state = DeviceState.DISCONNECTED
+            if is_serial_flash:
+                # Wait for USB bus to stabilize after UF2 bootloader exit
+                await asyncio.sleep(5)
             fleet.resume_discovery()
             fleet.resume_reconnect(device_id)
+            for sid in sibling_ids:
+                fleet.resume_reconnect(sid)
 
     if result["status"] == "ok":
         return FlashResponse(**result)

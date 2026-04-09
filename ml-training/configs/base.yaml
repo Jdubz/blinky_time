@@ -101,10 +101,13 @@ export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"
   c_array_name: "frame_beat_model_data"
 
-# Data paths (bulk data on /mnt/storage, processed data local for fast training)
+# Data paths — all bulk data on /mnt/storage to avoid filling the primary drive.
+# Processed data is large (80-130 GB per version) and regenerable from audio+labels.
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio/combined"
   labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v5"
-  processed_dir: "data/processed"
+  processed_dir: "/mnt/storage/blinky-ml-data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
+  stems_dir: "/mnt/sda/blinky-ml-data/stems"
+  mel_cache_dir: "/mnt/storage/blinky-ml-data/mel_cache"
   test_set: "../blinky-test-player/music/edm"

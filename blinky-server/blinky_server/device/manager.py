@@ -170,6 +170,29 @@ class FleetManager:
         log.info("Released device %s on %s (hold=%ss)", device.id[:12], device.port, hold_seconds)
         return True
 
+    async def remove_device(self, device_id: str) -> None:
+        """Permanently remove a device from the fleet.
+
+        Disconnects the device, removes it from all tracking structures,
+        and adds any BLE address to the dedup exclusion set to prevent
+        immediate rediscovery. The device will be re-added if it
+        reappears on USB (serial devices are always re-discovered).
+        """
+        device = self._devices.get(device_id)
+        if device:
+            with contextlib.suppress(Exception):
+                await device.disconnect()
+            # Exclude BLE address from rediscovery (serial devices
+            # are re-discovered by USB serial number regardless)
+            if device.transport.transport_type == "ble":
+                self._dedup_excluded.add(device_id)
+            del self._devices[device_id]
+        self._device_discovery.pop(device_id, None)
+        self._reconnect_failures.pop(device_id, None)
+        self._reconnect_blackout.pop(device_id, None)
+        self._backoff_skip.pop(device_id, None)
+        log.info("Removed device %s from fleet", device_id[:12])
+
     async def reconnect_device(self, device_id: str) -> bool:
         """Reconnect a previously released device."""
         device = self.get_device(device_id)
@@ -498,6 +521,20 @@ class FleetManager:
             # After 10 consecutive failures, give up entirely — the device
             # is likely not a Blinky or is permanently out of range.
             fail_count = self._reconnect_failures.get(device_id, 0)
+
+            # Serial devices with 3+ consecutive failures: stop retrying.
+            # Repeated serial open/close on a device with broken CDC makes
+            # things worse (DTR toggling, USB re-enumeration storms). The
+            # device may still be reachable via BLE — let BLE discovery
+            # find it instead of hammering the broken serial connection.
+            if disc.transport_type == "serial" and fail_count >= 3:
+                if fail_count == 3:
+                    log.warning(
+                        "Serial device %s failed 3 times — stopping serial retries. "
+                        "Device may be reachable via BLE.",
+                        device_id[:12],
+                    )
+                continue
             if fail_count >= 20:
                 log.info(
                     "Giving up on %s after %d failures — removing from fleet",

@@ -139,17 +139,14 @@ namespace SafeBootWatchdog {
     }
 
     /**
-     * Enter the appropriate recovery bootloader (never returns).
-     * Mode selected at compile time:
-     *   Default: UF2 (0x57) — safe USB recovery
-     *   SAFEBOOT_BLE_DFU_RECOVERY: BLE DFU (0xA8) — wireless recovery
+     * Enter BLE DFU recovery bootloader (never returns).
+     *
+     * Always uses BLE DFU so the fleet server can recover the device
+     * wirelessly — even if USB is dead. UF2 (USB) recovery is still
+     * available via physical double-tap reset as a manual fallback.
      */
     inline void enterRecoveryBootloader() {
-#ifdef SAFEBOOT_BLE_DFU_RECOVERY
         enterBleDfuBootloader();
-#else
-        enterUf2Bootloader();
-#endif
     }
 
     /**

@@ -1,0 +1,19 @@
+--- a/libraries/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c
++++ b/libraries/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c
+@@ -390,8 +390,15 @@
+
+         p_cdc->line_state = (uint8_t) request->wValue;
+
+-        // Disable fifo overwriting if DTR bit is set
+-        tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr);
++        // PATCHED: Never set TX FIFO to overwritable. The default TinyUSB
++        // behavior (overwritable when DTR=0) silently drops all output when
++        // the host closes the serial port. On Linux, subsequent reopens
++        // often fail to reassert DTR (EPIPE on TIOCMBIS in cdc-acm driver),
++        // leaving the device permanently silent until USB power cycle.
++        // Keeping FIFO non-overwritable means data may accumulate if no host
++        // is reading, but TinyUSB's IN endpoint flow control handles this
++        // gracefully (backpressure via NAK on IN tokens).
++        tu_fifo_set_overwritable(&p_cdc->tx_ff, false);
+
+         TU_LOG2("  Set Control Line State: DTR = %d, RTS = %d\r\n", dtr, rts);
