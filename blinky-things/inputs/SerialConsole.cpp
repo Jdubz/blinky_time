@@ -1315,8 +1315,9 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
-    // "onset" = raw ODF (NN onset activation or mic level fallback)
+    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
+    // "onset" = gated pulse strength (nonzero only on rising-edge pulse events)
+    // "nna" = raw NN activation (continuous 0-1, pre-gating)
     // "nn" = 1 if NN loaded, 0 if stub/fallback
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
@@ -1333,12 +1334,12 @@ void SerialConsole::streamTick() {
                 if (i > 0) out_.print(',');
                 out_.print(mel[i], 4);
             }
-            // onset = last pulse strength (NN activation or mic level fallback)
+            // onset = last pulse strength (gated — only nonzero on rising-edge pulse events)
             out_.print(F("],\"onset\":"));
             out_.print(audioCtrl_->getLastOnsetStrength(), 4);
-            // Note (v65): "nn" field is now always present in both NN and non-NN builds.
-            // Previously it was ifdef-guarded; non-NN builds emitted "nn":0 via #else.
-            // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
+            // nna = raw NN activation (pre-gating, continuous 0-1)
+            out_.print(F(",\"nna\":"));
+            out_.print(audioCtrl_->getFrameOnsetNN().getLastOnset(), 4);
             out_.print(F(",\"nn\":"));
             out_.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
             out_.print(F(",\"bpm\":"));
