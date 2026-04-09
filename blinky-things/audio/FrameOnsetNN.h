@@ -37,7 +37,14 @@
 class FrameOnsetNN {
 public:
     static constexpr int INPUT_MEL_BANDS = 26;     // Raw mel bands from SharedSpectralAnalysis
+    static constexpr int BAND_FLUX_CHANNELS = 3;   // Bass/mid/high HWR mel flux
+    static constexpr int INPUT_MEL_PLUS_FLUX = INPUT_MEL_BANDS + BAND_FLUX_CHANNELS;  // 29
     static constexpr int MAX_INPUT_FEATURES = 52;  // Mel + delta (model auto-detects)
+
+    // PCEN normalization mode: set before begin() to use PCEN instead of
+    // log-compressed mel bands. Requires linear mel input from
+    // SharedSpectralAnalysis::getLinearMelBands().
+    void setPcenEnabled(bool enabled) { pcenEnabled_ = enabled; }
 
     /**
      * Initialize TFLite interpreter and allocate tensors.
@@ -76,13 +83,21 @@ public:
         for (int i = 0; i < input_->dims->size; i++) {
             inputSize *= input_->dims->data[i];
         }
-        // Detect input features per frame: 26 (mel only) or 52 (mel + delta).
-        // Model input shape is [1, windowFrames, featuresPerFrame].
+        // Detect input features per frame from model shape.
+        // Supported: 26 (mel only), 29 (mel + 3 band-flux), 52 (mel + delta).
         int featuresPerFrame = input_->dims->data[input_->dims->size - 1];
-        if (featuresPerFrame != INPUT_MEL_BANDS && featuresPerFrame != INPUT_MEL_BANDS * 2) {
+        if (featuresPerFrame == INPUT_MEL_BANDS) {
+            useDelta_ = false;
+            useBandFlux_ = false;
+        } else if (featuresPerFrame == INPUT_MEL_PLUS_FLUX) {
+            useDelta_ = false;
+            useBandFlux_ = true;
+        } else if (featuresPerFrame == INPUT_MEL_BANDS * 2) {
+            useDelta_ = true;
+            useBandFlux_ = false;
+        } else {
             initError_ = 5; return false;
         }
-        useDelta_ = (featuresPerFrame == INPUT_MEL_BANDS * 2);
         inputFeatures_ = featuresPerFrame;
         windowFrames_ = inputSize / featuresPerFrame;
         if (windowFrames_ > MAX_WINDOW_FRAMES) { initError_ = 6; return false; }
@@ -117,19 +132,37 @@ public:
 
     /**
      * Feed one frame of mel bands, run inference, return onset activation [0,1].
+     *
+     * When PCEN is enabled, also pass linearMelBands (pre-log linear energy).
+     * The log-compressed melBands are still used for delta computation (matching
+     * training pipeline behavior where delta is computed on log-compressed mels).
      */
-    float infer(const float* melBands) {
+    float infer(const float* melBands, const float* linearMelBands = nullptr) {
         if (!ready_) return 0.0f;
 
-        // Build the feature vector for this frame: mel bands + optional delta
+        // Apply PCEN if enabled, producing normalized mel values in [0,1]
+        float pcenMel[INPUT_MEL_BANDS];
+        const float* melInput = melBands;  // Default: log-compressed
+        if (pcenEnabled_ && linearMelBands) {
+            applyPcen(linearMelBands, pcenMel);
+            melInput = pcenMel;
+        }
+
+        // Build the feature vector for this frame: mel bands + optional delta or band-flux
         float frameFeatures[MAX_INPUT_FEATURES];
-        memcpy(frameFeatures, melBands, INPUT_MEL_BANDS * sizeof(float));
+        memcpy(frameFeatures, melInput, INPUT_MEL_BANDS * sizeof(float));
         if (useDelta_) {
             // Delta = mel[t] - mel[t-1]. First frame gets zero delta.
             for (int i = 0; i < INPUT_MEL_BANDS; i++) {
-                frameFeatures[INPUT_MEL_BANDS + i] = melBands[i] - prevMel_[i];
+                frameFeatures[INPUT_MEL_BANDS + i] = melInput[i] - prevMel_[i];
             }
-            memcpy(prevMel_, melBands, INPUT_MEL_BANDS * sizeof(float));
+            memcpy(prevMel_, melInput, INPUT_MEL_BANDS * sizeof(float));
+        } else if (useBandFlux_) {
+            // 3-channel HWR band-flux: positive-only mel differences grouped by
+            // frequency band, normalized by band count. Matches training pipeline
+            // (audio.py::append_band_flux_features).
+            computeBandFlux(melInput, &frameFeatures[INPUT_MEL_BANDS]);
+            memcpy(prevMel_, melInput, INPUT_MEL_BANDS * sizeof(float));
         }
 
         // Circular window buffer: write new frame and quantize it incrementally.
@@ -337,11 +370,60 @@ private:
     float windowBuffer_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // 13 KB max (64 * 52 * 4)
     int8_t quantizedWindow_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // Pre-quantized circular buffer
     float prevMel_[INPUT_MEL_BANDS] = {0};      // Previous frame mel bands (for delta computation)
+
+    // PCEN state (Lostanlen & Salamon 2019)
+    bool pcenEnabled_ = false;
+    bool pcenInitialized_ = false;
+    float pcenSmooth_[INPUT_MEL_BANDS] = {0};  // IIR smoother state M[t] per band
+    static constexpr float PCEN_S = 0.025f;    // IIR coefficient (~0.64s at 62.5 Hz)
+    static constexpr float PCEN_DELTA = 2.0f;  // Stabilizer bias
+    static constexpr float PCEN_EPS = 1e-6f;   // Numerical floor
+    static constexpr float PCEN_NORM = 4.0f;   // Output normalization divisor
+
+    /** Apply PCEN normalization to linear mel energy.
+     *  P[t] = (E / (eps + M))^0.5 + delta)^0.5 - delta^0.5
+     *  Simplified with alpha=1.0, r=0.5:
+     *    P[t] = sqrt(E/(eps+M) + delta) - sqrt(delta) */
+    void applyPcen(const float* linearMel, float* out) {
+        const float sqrtDelta = sqrtf(PCEN_DELTA);
+        if (!pcenInitialized_) {
+            memcpy(pcenSmooth_, linearMel, INPUT_MEL_BANDS * sizeof(float));
+            pcenInitialized_ = true;
+        }
+        for (int i = 0; i < INPUT_MEL_BANDS; i++) {
+            float E = linearMel[i];
+            pcenSmooth_[i] = PCEN_S * E + (1.0f - PCEN_S) * pcenSmooth_[i];
+            float agc = E / (PCEN_EPS + pcenSmooth_[i]);
+            float val = sqrtf(agc + PCEN_DELTA) - sqrtDelta;
+            val /= PCEN_NORM;
+            out[i] = (val < 0.0f) ? 0.0f : ((val > 1.0f) ? 1.0f : val);
+        }
+    }
+
+    /** Compute 3-channel HWR band-flux from mel frame difference.
+     *  Bass (0-5): kicks. Mid (6-13): vocals/pads. High (14-25): snares/hi-hats.
+     *  Each band = sum(max(0, mel[t]-mel[t-1])) / band_count. */
+    void computeBandFlux(const float* mel, float* out) {
+        float bass = 0.0f, mid = 0.0f, high = 0.0f;
+        for (int i = 0; i < INPUT_MEL_BANDS; i++) {
+            float d = mel[i] - prevMel_[i];
+            if (d > 0.0f) {
+                if (i < 6)        bass += d;
+                else if (i < 14)  mid += d;
+                else              high += d;
+            }
+        }
+        out[0] = bass / 6.0f;
+        out[1] = mid / 8.0f;
+        out[2] = high / 12.0f;
+    }
+
     int windowFrames_ = 0;
     int windowFilled_ = 0;
     int windowWriteIdx_ = 0;                    // Circular write position in windowBuffer_
-    int inputFeatures_ = INPUT_MEL_BANDS;       // 26 (mel) or 52 (mel+delta), auto-detected from model
-    bool useDelta_ = false;                      // True when model expects 52-dim input
+    int inputFeatures_ = INPUT_MEL_BANDS;       // 26, 29, or 52, auto-detected from model
+    bool useDelta_ = false;                      // True when model expects 52-dim input (mel + delta)
+    bool useBandFlux_ = false;                   // True when model expects 29-dim input (mel + 3 band-flux)
     float quantInvScale_ = 1.0f;                // Cached 1.0/input_scale for quantization
     int32_t quantZeroPoint_ = 0;                // Cached input zero point
 

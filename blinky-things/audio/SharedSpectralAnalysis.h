@@ -202,6 +202,10 @@ public:
      */
     const float* getRawMelBands() const { return rawMelBands_; }
 
+    /** Linear mel energy (before log compression). Used by FrameOnsetNN
+     *  for PCEN normalization — PCEN needs linear input, not log. */
+    const float* getLinearMelBands() const { return linearMelBands_; }
+
     /**
      * Get number of FFT bins
      */
@@ -277,6 +281,7 @@ private:
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
     float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
+    float linearMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Linear mel energy (pre-log) for PCEN
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
     // Applied to mel bands (not raw magnitudes) because:

@@ -119,7 +119,7 @@ const AudioControl& AudioTracker::update(float dt) {
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
         frameOnsetNN_.setProfileEnabled(nnProfile);
-        odf = frameOnsetNN_.infer(spectral_.getRawMelBands());
+        odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
 
