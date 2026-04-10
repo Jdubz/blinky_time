@@ -269,13 +269,12 @@ RenderPipeline → LED Output
 
 2. **Onset Detection (single Conv1D model, deployed)**
    - `FrameOnsetNN.h` - Single-model TFLite NN inference for acoustic onset detection
-     - Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3
-     - Single output channel: onset activation (kicks/snares — cannot distinguish on-beat from off-beat)
-     - v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704)
-     - v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806)
-     - v11-final deployed (4/5 blinkyhost): de-duplicated onset labels, Kick recall 0.743, Snare 0.727, HiHat 0.701
-     - Arena: 3404/32768 bytes
+     - Conv1D W16 (256ms), [24,32] channels, 6.8ms nRF52840
+     - Auto-detects input features from model shape: 26 (mel), 29 (mel+band-flux), 52 (mel+delta)
+     - PCEN normalization support (v18, behind `ONSET_MODEL_USE_PCEN` ifdef)
+     - v16 deployed (b107): 15.8 KB INT8, arena 3772 bytes
      - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
+     - **On-device diagnosis (April 9):** Raw NN activation is strong (~0.457) but produces sustained flat activations. PCEN should sharpen peaks for pulse detection.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
 3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v93)**
@@ -291,7 +290,7 @@ RenderPipeline → LED Output
 4. **Generators (Visual Effects)**
    - `Fire.cpp/h` - HeatFire: hybrid audio-reactive design, dt-based scroll speed, energy drives full flame height
    - `Water.cpp/h` - Wave simulation with ripples
-   - `Lightning.cpp/h` - Branching bolt effects
+   - `PlasmaGlobe.cpp/h` - Continuous-field plasma globe (replaced Lightning in b107). Noise-steered orbs, Gaussian falloff, beat-reactive pulse. Reuses `GeneratorType::LIGHTNING` enum slot.
    - All generators consume `AudioControl` struct
 
 5. **Post-Processing Effects**
@@ -300,7 +299,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: 93)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: 94)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -450,14 +449,14 @@ check_test_result(job_id: "abc123")
 - Arduino IDE only (NO arduino-cli)
 - Device bricking prevention
 
-### Current Status (March 2026)
+### Current Status (April 2026)
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+PLP (multi-source ACF) + pulse baseline tracking + pattern slot cache (v83)
-- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, v11-final deployed on 4/5 blinkyhost devices)
-- ✅ HeatFire/Water/Lightning generators
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, v16 deployed on all 3 blinkyhost devices, b107)
+- ✅ HeatFire/Water/PlasmaGlobe generators (PlasmaGlobe replaced Lightning in b107)
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (blinky-server REST API: validation + param sweep, MCP tools)
 - ✅ Multi-layer safety mechanisms
@@ -465,7 +464,10 @@ check_test_result(job_id: "abc123")
 - ✅ Mic calibration pipeline + gain-aware training augmentation
 - ✅ Fixed hardware gain (AGC removed v72; nRF52840: gain=32)
 - ✅ Simulator working (rebuilds with current firmware code)
-- ✅ Active devices: nRF52840 on blinkyhost + 1 nRF52840 tube local
+- ✅ Active devices: 3 nRF52840 on blinkyhost (all b107) + 1 BLE device
+- ✅ Sim-to-real diagnostics: `replay_device_capture.py`, `mel_distribution_check.py`, `stream nn` with `nna` field
+- ✅ Diverse augmentation: ESC-50 noise (crowd/traffic/weather/hvac/ambient), speaker EQ, distance attenuation
+- ✅ Disk management: space pre-checks, auto-cleanup prompts, `disk-audit.sh`
 
 **Removed (v64-v82):**
 - v64: Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking, template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux (~1500 lines)

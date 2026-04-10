@@ -692,11 +692,135 @@ def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):
         print(f"{thresh:>10.1f} {precision:>10.3f} {recall:>10.3f} {f1:>10.3f}")
 
 
+def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
+                             output_dir: Path, threshold: float = 0.5,
+                             device: torch.device = None):
+    """Evaluate model on captured device mel data (from capture-nn endpoint).
+
+    Loads JSONL captures, feeds the actual mel bands the device saw through
+    the offline model, and compares against ground truth. This measures the
+    sim-to-real gap directly: if the offline model scores well on device mel
+    data, the gap is in firmware inference (quantization/buffer). If it scores
+    poorly, the gap is in the mel domain.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    frame_rate = cfg["audio"]["frame_rate"]
+    model, pool_factor = _load_model(model_path, cfg, device)
+
+    use_delta = cfg.get("features", {}).get("use_delta", False)
+    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+
+    capture_files = sorted(capture_dir.glob("*.jsonl"))
+    if not capture_files:
+        print(f"No .jsonl captures found in {capture_dir}")
+        return
+
+    print(f"\n=== Device Capture Evaluation ({len(capture_files)} captures) ===\n")
+
+    all_results = []
+    for cap_path in capture_files:
+        # Parse JSONL
+        frames = []
+        with open(cap_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    frame = json.loads(line)
+                    if frame.get("type") == "NN":
+                        frames.append(frame)
+        if len(frames) < 32:
+            continue
+
+        mel = np.array([f["mel"] for f in frames], dtype=np.float32)
+        has_nna = "nna" in frames[0]
+        device_act = np.array([f.get("nna", f["onset"]) for f in frames], dtype=np.float32)
+
+        # Append features
+        if use_delta:
+            delta = np.zeros_like(mel)
+            delta[1:] = mel[1:] - mel[:-1]
+            mel_features = np.concatenate([mel, delta], axis=1)
+        elif use_band_flux:
+            n_frames, n_mels = mel.shape
+            flux = np.zeros((n_frames, 3), dtype=np.float32)
+            for t in range(1, n_frames):
+                diff = mel[t] - mel[t - 1]
+                pos = np.maximum(diff, 0.0)
+                flux[t, 0] = pos[:6].sum() / 6.0
+                flux[t, 1] = pos[6:14].sum() / 8.0
+                flux[t, 2] = pos[14:].sum() / 12.0
+            mel_features = np.concatenate([mel, flux], axis=1)
+        else:
+            mel_features = mel
+
+        # Run inference
+        window_frames = cfg["model"]["window_frames"]
+        mel_tensor = torch.from_numpy(mel_features).to(device)
+        n_frames = mel_features.shape[0]
+        activations = np.zeros(n_frames, dtype=np.float32)
+        counts = np.zeros(n_frames, dtype=np.float32)
+        stride = window_frames // 2
+
+        with torch.no_grad():
+            for start in range(0, max(1, n_frames - window_frames + 1), stride):
+                end = start + window_frames
+                if end > n_frames:
+                    chunk = torch.zeros(window_frames, mel_features.shape[1], device=device)
+                    chunk[:n_frames - start] = mel_tensor[start:n_frames]
+                    actual_len = n_frames - start
+                else:
+                    chunk = mel_tensor[start:end]
+                    actual_len = window_frames
+                pred = model(chunk.unsqueeze(0))[0]
+                activations[start:start + actual_len] += pred[:actual_len, 0].cpu().numpy()
+                counts[start:start + actual_len] += 1
+        activations /= np.maximum(counts, 1)
+
+        # Compare
+        corr = np.corrcoef(device_act, activations)[0, 1] if device_act.std() > 0 else 0
+        mae = np.mean(np.abs(device_act - activations))
+
+        result = {
+            "capture": cap_path.name,
+            "frames": n_frames,
+            "mel_mean": float(mel.mean()),
+            "device_act_mean": float(device_act.mean()),
+            "offline_act_mean": float(activations.mean()),
+            "correlation": float(corr),
+            "mae": float(mae),
+            "onset_field": "nna" if has_nna else "onset",
+        }
+        all_results.append(result)
+
+        print(f"  {cap_path.name}:")
+        print(f"    mel_mean={mel.mean():.3f}  device_act={device_act.mean():.3f}  "
+              f"offline_act={activations.mean():.3f}  corr={corr:.3f}  mae={mae:.3f}")
+
+    if all_results:
+        # Save results
+        results_path = output_dir / "device_capture_results.json"
+        with open(results_path, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print(f"\n  Results saved: {results_path}")
+
+        # Summary
+        mean_corr = np.mean([r["correlation"] for r in all_results])
+        mean_mae = np.mean([r["mae"] for r in all_results])
+        print(f"\n  Summary: mean correlation={mean_corr:.3f}, mean MAE={mean_mae:.3f}")
+        if mean_corr < 0.5:
+            print("  WARNING: Low correlation between device and offline activations")
+            print("  → Check quantization, mel normalization, or PCEN mismatch")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate onset activation model")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--model", default="outputs/best_model.pt")
     parser.add_argument("--audio-dir", default=None, help="Evaluate on full tracks")
+    parser.add_argument("--device-captures", default=None,
+                        help="Directory of JSONL device mel captures (from capture-nn endpoint)")
     parser.add_argument("--output-dir", default="outputs/eval")
     parser.add_argument("--threshold", type=float, default=0.5,
                         help="Peak-pick threshold (or 0 to sweep 0.1-0.9)")
@@ -715,7 +839,10 @@ def main():
         device = torch.device(args.device)
     print(f"Using device: {device}")
 
-    if args.audio_dir:
+    if args.device_captures:
+        evaluate_device_captures(args.model, Path(args.device_captures), cfg,
+                                 output_dir, args.threshold, device)
+    elif args.audio_dir:
         if args.sweep_thresholds:
             sweep_thresholds(args.model, Path(args.audio_dir), cfg, output_dir, device)
         else:
