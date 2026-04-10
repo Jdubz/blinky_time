@@ -750,7 +750,8 @@ def export_tflite(model: keras.Model, data_path: Path, output_path: str,
     return tflite_model
 
 
-def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str):
+def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str,
+                       use_pcen: bool = False):
     """Convert TFLite model bytes to a C header file with integrity metadata."""
     import hashlib
     from datetime import datetime, timezone
@@ -780,6 +781,7 @@ def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str)
 
 #define {macro_prefix}_HASH "{model_hash}"
 #define {macro_prefix}_SIZE {len(tflite_bytes)}
+{"#define ONSET_MODEL_USE_PCEN 1" if use_pcen else ""}
 
 alignas(8) static const unsigned char {c_array_name}[] = {{
 {chr(10).join(hex_lines)}
@@ -1242,7 +1244,8 @@ def main():
 
     # Export C header
     Path(header_path).parent.mkdir(parents=True, exist_ok=True)
-    tflite_to_c_header(tflite_bytes, c_array_name, header_path)
+    use_pcen = cfg.get("features", {}).get("use_pcen", False)
+    tflite_to_c_header(tflite_bytes, c_array_name, header_path, use_pcen=use_pcen)
     print(f"C header: {header_path}")
 
     # Also save .tflite next to the header for verification/re-export
