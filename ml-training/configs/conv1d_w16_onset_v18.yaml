@@ -44,7 +44,7 @@ training:
   mixup_alpha: 0.4
   epochs: 60
   patience: 15
-  pos_weight: 20              # v3/v15/v16 use 20. Auto (0) gives ~12.7 for PCEN data — too low, model predicts all-negative.
+  pos_weight: 0               # Auto (~12.7 for PCEN data). pw=20 causes all-positive collapse with PCEN features. Auto reached val_loss=0.4977.
 
 distillation:
   alpha: 0.3

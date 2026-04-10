@@ -386,7 +386,7 @@ check_test_result(job_id: "abc123")
 4. Contrast-sharpened spectral flux → OSS buffer (~5.5s, 360 samples @ ~66 Hz)
 5. ACF every 150ms → raw peak-finding → BPM / period estimate
 6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
-7. Onset activation → pulse detection (visual sparks)
+7. Onset activation → derivative-based NN gate + NN-modulated spectral flux → pulse envelope
 8. [PLP PATH] Multi-source ACF across 3 mean-subtracted sources (flux, bass, NN onset)
 9. ACF peak selects period, epoch-fold peak gives phase alignment → pattern → phase + plpPulse output
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,

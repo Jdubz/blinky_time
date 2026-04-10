@@ -136,6 +136,7 @@ const AudioControl& AudioTracker::update(float dt) {
         if (odf > rawNNActivation_ && odf > pulseNNGate) {
             rawNNPeakMs_ = nowMs;
         }
+        prevNNActivation_ = rawNNActivation_;
         rawNNActivation_ = odf;
     } else if (!nnActive_) {
         // Fallback: use mic level as simple energy ODF
@@ -757,15 +758,18 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
 
     // NN gate: suppress spectral flux pulses that aren't corroborated by the
-    // onset NN. Two conditions must be met:
-    //   1. Activation above threshold (filters noise/silence)
-    //   2. Activation peaked recently — was rising within ~100ms (filters
-    //      sustained high activation from harmonic content, reverb tails)
+    // onset NN. Activation must be above threshold AND show recent activity.
+    // Two activity checks (either satisfies):
+    //   1. Peak recency: activation peaked within ~100ms (sharp NN models)
+    //   2. Rising edge: activation just increased (works with flat activations
+    //      where micro-fluctuations still correlate with real onsets)
     // When NN is not active (fallback mode), gate is always open.
     // Guard against millis() wrap (~49 days) — treat as stale peak
     uint32_t peakAge = (nowMs >= rawNNPeakMs_) ? (nowMs - rawNNPeakMs_) : 200;
+    bool nnRecentPeak = peakAge < 100;
+    bool nnRising = (rawNNActivation_ - prevNNActivation_) > 0.005f;
     bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f ||
-        (rawNNActivation_ > pulseNNGate && peakAge < 100);
+        (rawNNActivation_ > pulseNNGate && (nnRecentPeak || nnRising));
 
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
@@ -973,9 +977,11 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
-    // --- Pulse: onset envelope from spectral flux ---
-    // Auto-normalize flux by its own recent peak, then trigger a decaying
-    // envelope. No hardcoded thresholds — adapts to any mic sensitivity.
+    // --- Pulse: NN-modulated onset envelope from spectral flux ---
+    // Auto-normalize flux by its own recent peak, then modulate by NN
+    // activation to suppress non-onset spectral changes (harmonic shifts,
+    // noise) and emphasize genuine onsets (kicks, snares).
+    // Self-tuning via nnConf: flat NN → no change, sharp NN → strong filtering.
     float flux = spectral_.getSpectralFlux();
     // Track running peak of flux (frame-rate-independent ~10s time constant)
     if (flux > fluxPeak_) fluxPeak_ = flux;
@@ -984,6 +990,16 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
 
     // Normalized flux: 0-1 relative to recent peak
     float normFlux = clampf(flux / fluxPeak_, 0.0f, 1.0f);
+
+    // NN modulation: weight flux by onset activation.
+    // nnConf measures how discriminative the NN is (from activation variance).
+    // High nnConf (sharp peaks): NN strongly gates flux — onsets pass, non-onsets suppressed.
+    // Low nnConf (flat output): minimal modulation — falls back to raw flux behavior.
+    if (nnActive_) {
+        float nnConf = clampf(nnActivationVar_ * 20.0f, 0.0f, 1.0f);
+        float nnMod = clampf(rawNNActivation_, 0.0f, 1.0f);
+        normFlux *= (1.0f - nnConf) + nnConf * nnMod;
+    }
 
     // Trigger envelope: any normalized flux above 0.4 pushes the envelope up
     if (normFlux > 0.4f) {
