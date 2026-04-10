@@ -389,9 +389,101 @@ def _sosfilt_gpu(sos: np.ndarray, x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+def _load_noise_clip(path: Path, sr: int, n_samples: int,
+                     rng: np.random.Generator, device: torch.device) -> torch.Tensor:
+    """Load a noise clip, resample to sr, and tile/trim to n_samples."""
+    noise_np, noise_sr = librosa.load(str(path), sr=sr, mono=True)
+    if len(noise_np) < n_samples:
+        # Tile to fill
+        reps = (n_samples // len(noise_np)) + 1
+        noise_np = np.tile(noise_np, reps)
+    # Random offset for variety
+    max_start = len(noise_np) - n_samples
+    start = rng.integers(0, max(1, max_start))
+    noise_np = noise_np[start:start + n_samples]
+    return torch.from_numpy(noise_np.astype(np.float32)).to(device)
+
+
+def _mix_at_snr(audio: torch.Tensor, noise: torch.Tensor,
+                snr_db: float) -> torch.Tensor:
+    """Mix noise into audio at a target SNR."""
+    signal_power = (audio ** 2).mean() + 1e-10
+    noise_power = (noise ** 2).mean() + 1e-10
+    noise_scale = torch.sqrt(signal_power / (noise_power * 10 ** (snr_db / 10)))
+    return (audio + noise * noise_scale).clamp(-1.0, 1.0)
+
+
+# Speaker EQ profiles: simulate common playback systems.
+# Each profile is a list of (filter_type, freq_hz, Q_or_bandwidth, gain_db).
+# Teaches the model that audio can be spectrally colored without training
+# to any specific speaker. Based on typical measured responses.
+SPEAKER_EQ_PROFILES = {
+    "phone": [
+        ("highpass", 200, 0.7, None),      # No bass below 200 Hz
+        ("peak", 2000, 1.0, 6),            # Presence peak
+        ("lowpass", 10000, 0.7, None),      # HF rolloff
+    ],
+    "bluetooth": [
+        ("highpass", 80, 0.7, None),        # Gentle bass rolloff
+        ("peak", 150, 1.0, 4),             # Bass boost
+        ("lowpass", 12000, 0.7, None),      # Gentle HF rolloff
+    ],
+    "pa_system": [
+        ("peak", 100, 1.0, 3),             # Sub-bass hump
+        ("peak", 3000, 2.0, -2),           # Slight mid scoop
+        ("lowpass", 14000, 0.7, None),      # PA HF limit
+    ],
+    "small_monitor": [
+        ("highpass", 60, 0.7, None),        # Bass limit
+        ("peak", 3000, 2.0, -4),           # Mid scoop
+    ],
+}
+
+
+def _apply_speaker_eq(audio: torch.Tensor, sr: int, profile_name: str) -> torch.Tensor:
+    """Apply a speaker EQ profile using cascaded biquad filters."""
+    from scipy.signal import iirpeak, iirnotch
+    profile = SPEAKER_EQ_PROFILES[profile_name]
+    result = audio
+    for filt in profile:
+        ftype = filt[0]
+        freq = filt[1]
+        Q = filt[2]
+        if ftype in ("highpass", "lowpass"):
+            sos = _design_butter_sos(2, freq, ftype.replace("pass", ""), sr)
+            result = _sosfilt_gpu(sos, result)
+        elif ftype == "peak":
+            gain_db = filt[3]
+            # Use a simple peak/notch as a 2nd-order shelving approximation
+            if gain_db > 0:
+                sos_band = _design_butter_sos(1, [max(20, freq / Q), min(sr / 2 - 1, freq * Q)], "band", sr)
+                band = _sosfilt_gpu(sos_band, audio)
+                gain_lin = 10 ** (gain_db / 20.0) - 1.0
+                result = (result + band * gain_lin).clamp(-1.0, 1.0)
+            else:
+                # Notch: attenuate
+                sos_band = _design_butter_sos(1, [max(20, freq / Q), min(sr / 2 - 1, freq * Q)], "band", sr)
+                band = _sosfilt_gpu(sos_band, result)
+                atten = 1.0 - 10 ** (-gain_db / 20.0)
+                result = (result - band * atten).clamp(-1.0, 1.0)
+    return result
+
+
 def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
-                  rng: np.random.Generator, device: torch.device) -> list[tuple[str, torch.Tensor]]:
-    """Generate augmented versions of audio on GPU."""
+                  rng: np.random.Generator, device: torch.device,
+                  noise_dir: Path | None = None) -> list[tuple[str, torch.Tensor]]:
+    """Generate augmented versions of audio on GPU.
+
+    Augmentation categories:
+    - Gain variation: [-18, -12, -6, +6] dB
+    - Pink noise: SNR [6, 12, 20] dB
+    - Environmental noise: crowd/traffic/weather/hvac/ambient at random SNR
+    - Low-pass filter: 4 kHz cutoff (muffled rooms)
+    - Bass boost: 60-200 Hz resonance
+    - Speaker EQ: phone/bluetooth/PA/monitor profiles
+    - Distance attenuation: HF rolloff for 5-20m listening distances
+    - Room impulse responses: synthetic venue acoustics
+    """
     variants = [("clean", audio)]
 
     for gain_db in [-18, -12, -6, 6]:
@@ -401,11 +493,24 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
 
     for snr_db in [6, 12, 20]:
         noise = _pink_noise_gpu(len(audio), rng, device)
-        signal_power = (audio ** 2).mean() + 1e-10
-        noise_power = (noise ** 2).mean() + 1e-10
-        noise_scale = torch.sqrt(signal_power / (noise_power * 10 ** (snr_db / 10)))
-        noisy = (audio + noise * noise_scale).clamp(-1.0, 1.0)
+        noisy = _mix_at_snr(audio, noise, snr_db)
         variants.append((f"pink-snr{snr_db}dB", noisy))
+
+    # Environmental noise (diverse real-world noise, not just pink)
+    if noise_dir and noise_dir.exists():
+        noise_categories = [d.name for d in noise_dir.iterdir() if d.is_dir()]
+        for category in noise_categories:
+            cat_files = list((noise_dir / category).glob("*.wav")) + \
+                        list((noise_dir / category).glob("*.ogg"))
+            if cat_files:
+                chosen_file = rng.choice(cat_files)
+                snr_db = rng.uniform(3, 15)
+                try:
+                    noise_clip = _load_noise_clip(chosen_file, sr, len(audio), rng, device)
+                    noisy = _mix_at_snr(audio, noise_clip, snr_db)
+                    variants.append((f"noise-{category}-snr{snr_db:.0f}dB", noisy))
+                except Exception:
+                    pass  # Skip corrupt clips silently
 
     # Low-pass filter
     sos_lp = _design_butter_sos(4, 4000, "low", sr)
@@ -417,6 +522,21 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     bass = _sosfilt_gpu(sos_bass, audio)
     boosted = (audio + bass * 1.5).clamp(-1.0, 1.0)
     variants.append(("bass-boost", boosted))
+
+    # Speaker EQ profiles (teach model about colored playback systems)
+    eq_profile = rng.choice(list(SPEAKER_EQ_PROFILES.keys()))
+    try:
+        eq_audio = _apply_speaker_eq(audio, sr, eq_profile)
+        variants.append((f"eq-{eq_profile}", eq_audio))
+    except Exception:
+        pass  # Skip if filter design fails for edge cases
+
+    # Distance attenuation (HF rolloff for far-field listening)
+    distance_m = rng.uniform(5, 20)
+    cutoff = max(2000, 16000 / (1 + 0.3 * distance_m))
+    sos_dist = _design_butter_sos(2, cutoff, "low", sr)
+    dist_audio = _sosfilt_gpu(sos_dist, audio)
+    variants.append((f"dist-{distance_m:.0f}m", dist_audio))
 
     # Room impulse responses
     if rir_dir and rir_dir.exists():
@@ -515,7 +635,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  stem_variants: list[str] | None = None,
                  mel_cache_dir: Path | None = None,
                  generate_teacher: bool = False,
-                 teacher_soft_dir: Path | None = None) -> list[dict]:
+                 teacher_soft_dir: Path | None = None,
+                 noise_dir: Path | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -677,7 +798,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
         # Full augmentation only for original speed; clean only for stretched
         if augment and speed == 1.0:
-            variants = augment_audio(src_audio, sr, rir_dir, rng, device)
+            variants = augment_audio(src_audio, sr, rir_dir, rng, device,
+                                        noise_dir=noise_dir)
         else:
             tag = f"stretch{speed:.2f}" if speed != 1.0 else "clean"
             variants = [(tag, src_audio)]
@@ -954,6 +1076,9 @@ def main():
     parser.add_argument("--labels-dir", default=None, help="Override labels directory from config")
     parser.add_argument("--output-dir", default=None, help="Override output directory from config")
     parser.add_argument("--rir-dir", default=None, help="Directory of room impulse responses (.wav/.npy)")
+    parser.add_argument("--noise-dir", default=None,
+                        help="Directory of environmental noise clips organized by category "
+                             "(e.g., crowd/, traffic/, weather/). Mixed at random SNR 3-15 dB.")
     parser.add_argument("--mic-profile", default=None,
                         help="Mic calibration profile (.npz from calibrate_mic.py). "
                              "Applied to all mel spectrograms to simulate mic response.")
@@ -989,6 +1114,9 @@ def main():
     labels_dir = Path(args.labels_dir or cfg["data"]["labels_dir"])
     output_dir = Path(args.output_dir or cfg["data"]["processed_dir"])
     rir_dir = Path(args.rir_dir) if args.rir_dir else Path(cfg["data"].get("rir_dir", "data/rir"))
+    noise_dir = Path(args.noise_dir) if args.noise_dir else (
+        Path(cfg["data"].get("noise_dir", "")) if cfg["data"].get("noise_dir") else None
+    )
     stems_dir = Path(args.stems_dir) if args.stems_dir else None
     stem_variant_list = None
     if stems_dir:
@@ -1271,7 +1399,8 @@ def main():
                                        stem_variants=stem_variant_list,
                                        mel_cache_dir=mel_cache_dir,
                                        generate_teacher=generate_teacher,
-                                       teacher_soft_dir=teacher_soft_dir)
+                                       teacher_soft_dir=teacher_soft_dir,
+                                       noise_dir=noise_dir)
                 for r in results:
                     mel_chunks, target_chunks, teacher_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,

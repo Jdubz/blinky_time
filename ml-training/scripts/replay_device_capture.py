@@ -53,7 +53,12 @@ def load_capture(jsonl_path: str) -> dict:
         sys.exit(1)
 
     mel = np.array([f["mel"] for f in frames], dtype=np.float32)
-    device_onset = np.array([f["onset"] for f in frames], dtype=np.float32)
+    # Prefer raw NN activation (nna) over gated pulse (onset) when available
+    has_nna = "nna" in frames[0]
+    if has_nna:
+        device_onset = np.array([f["nna"] for f in frames], dtype=np.float32)
+    else:
+        device_onset = np.array([f["onset"] for f in frames], dtype=np.float32)
     timestamps = np.array([f["ts"] for f in frames], dtype=np.float64)
     nn_active = all(f.get("nn", 0) == 1 for f in frames)
 
@@ -71,6 +76,7 @@ def load_capture(jsonl_path: str) -> dict:
         "nn_active": nn_active,
         "actual_fps": actual_fps,
         "n_frames": len(frames),
+        "onset_field": "nna" if has_nna else "onset",
     }
 
 
@@ -166,7 +172,8 @@ def main():
     capture = load_capture(args.capture)
     print(f"  Frames: {capture['n_frames']}, FPS: {capture['actual_fps']:.1f}, "
           f"Duration: {capture['n_frames'] / capture['actual_fps']:.1f}s, "
-          f"NN active: {capture['nn_active']}")
+          f"NN active: {capture['nn_active']}, "
+          f"onset field: {capture['onset_field']}")
 
     # Mel distribution summary
     mel = capture["mel"]
