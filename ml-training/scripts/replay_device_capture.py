@@ -54,8 +54,15 @@ def load_capture(jsonl_path: str) -> dict:
         sys.exit(1)
 
     mel = np.array([f["mel"] for f in frames], dtype=np.float32)
-    # Prefer raw NN activation (nna) over gated pulse (onset) when available
+    # Prefer raw NN activation (nna) over gated pulse (onset) when available.
+    # Post-b107 firmware: onset=gated pulse (mostly zero), nna=raw continuous activation.
+    # Pre-b107 captures: onset=raw continuous activation (old meaning), nna absent.
     has_nna = "nna" in frames[0]
+    if not has_nna:
+        print("  WARNING: No 'nna' field — using 'onset'. If this is a post-b107 capture,",
+              file=sys.stderr)
+        print("  'onset' is the gated pulse (near-zero) and parity metrics will be misleading.",
+              file=sys.stderr)
     if has_nna:
         device_onset = np.array([f["nna"] for f in frames], dtype=np.float32)
     else:

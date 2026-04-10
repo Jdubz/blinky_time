@@ -739,6 +739,9 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
 
         mel = np.array([f["mel"] for f in frames], dtype=np.float32)
         has_nna = "nna" in frames[0]
+        if not has_nna:
+            print(f"    WARNING: No 'nna' field in {cap_path.name} — using gated 'onset'.")
+            print(f"    Post-b107 captures should have 'nna'. Parity metrics may be misleading.")
         device_act = np.array([f.get("nna", f["onset"]) for f in frames], dtype=np.float32)
 
         mel_features = _append_features(mel, use_delta=use_delta, use_band_flux=use_band_flux)
