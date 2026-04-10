@@ -445,27 +445,26 @@ def _apply_speaker_eq(audio: torch.Tensor, sr: int, profile_name: str) -> torch.
     from scipy.signal import iirpeak, iirnotch
     profile = SPEAKER_EQ_PROFILES[profile_name]
     result = audio
+    nyquist = sr / 2 - 1
     for filt in profile:
         ftype = filt[0]
         freq = filt[1]
         Q = filt[2]
         if ftype in ("highpass", "lowpass"):
-            sos = _design_butter_sos(2, freq, ftype.replace("pass", ""), sr)
+            sos = _design_butter_sos(2, min(freq, nyquist), ftype.replace("pass", ""), sr)
             result = _sosfilt_gpu(sos, result)
         elif ftype == "peak":
             gain_db = filt[3]
-            # Use a simple peak/notch as a 2nd-order shelving approximation
-            if gain_db > 0:
-                sos_band = _design_butter_sos(1, [max(20, freq / Q), min(sr / 2 - 1, freq * Q)], "band", sr)
-                band = _sosfilt_gpu(sos_band, audio)
-                gain_lin = 10 ** (gain_db / 20.0) - 1.0
-                result = (result + band * gain_lin).clamp(-1.0, 1.0)
-            else:
-                # Notch: attenuate
-                sos_band = _design_butter_sos(1, [max(20, freq / Q), min(sr / 2 - 1, freq * Q)], "band", sr)
-                band = _sosfilt_gpu(sos_band, result)
-                atten = 1.0 - 10 ** (-gain_db / 20.0)
-                result = (result - band * atten).clamp(-1.0, 1.0)
+            # Bandwidth defined by Q: BW = freq/Q
+            bw = freq / max(Q, 0.5)
+            f_lo = max(20, freq - bw / 2)
+            f_hi = min(nyquist, freq + bw / 2)
+            if f_hi <= f_lo:
+                continue
+            sos_band = _design_butter_sos(1, [f_lo, f_hi], "band", sr)
+            band = _sosfilt_gpu(sos_band, result)
+            gain_lin = 10 ** (gain_db / 20.0) - 1.0
+            result = (result + band * gain_lin).clamp(-1.0, 1.0)
     return result
 
 
