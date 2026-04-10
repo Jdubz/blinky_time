@@ -78,13 +78,8 @@ def compute_stats(mels: np.ndarray) -> dict:
 
 def wasserstein_1d(a: np.ndarray, b: np.ndarray) -> float:
     """1D Wasserstein distance (Earth Mover's Distance) between two samples."""
-    a_sorted = np.sort(a)
-    b_sorted = np.sort(b)
-    # Interpolate to common length for comparison
-    n = min(len(a_sorted), len(b_sorted), 10000)
-    a_interp = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(a_sorted)), a_sorted)
-    b_interp = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(b_sorted)), b_sorted)
-    return np.mean(np.abs(a_interp - b_interp))
+    from scipy.stats import wasserstein_distance
+    return wasserstein_distance(a, b)
 
 
 def main():

@@ -392,14 +392,14 @@ def _sosfilt_gpu(sos: np.ndarray, x: torch.Tensor) -> torch.Tensor:
 def _load_noise_clip(path: Path, sr: int, n_samples: int,
                      rng: np.random.Generator, device: torch.device) -> torch.Tensor:
     """Load a noise clip, resample to sr, and tile/trim to n_samples."""
-    noise_np, noise_sr = librosa.load(str(path), sr=sr, mono=True)
+    noise_np, _ = librosa.load(str(path), sr=sr, mono=True)
     if len(noise_np) < n_samples:
         # Tile to fill
         reps = (n_samples // len(noise_np)) + 1
         noise_np = np.tile(noise_np, reps)
     # Random offset for variety
     max_start = len(noise_np) - n_samples
-    start = rng.integers(0, max(1, max_start))
+    start = 0 if max_start == 0 else rng.integers(0, max_start + 1)
     noise_np = noise_np[start:start + n_samples]
     return torch.from_numpy(noise_np.astype(np.float32)).to(device)
 
@@ -442,7 +442,6 @@ SPEAKER_EQ_PROFILES = {
 
 def _apply_speaker_eq(audio: torch.Tensor, sr: int, profile_name: str) -> torch.Tensor:
     """Apply a speaker EQ profile using cascaded biquad filters."""
-    from scipy.signal import iirpeak, iirnotch
     profile = SPEAKER_EQ_PROFILES[profile_name]
     result = audio
     nyquist = sr / 2 - 1
@@ -508,8 +507,8 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
                     noise_clip = _load_noise_clip(chosen_file, sr, len(audio), rng, device)
                     noisy = _mix_at_snr(audio, noise_clip, snr_db)
                     variants.append((f"noise-{category}-snr{snr_db:.0f}dB", noisy))
-                except Exception:
-                    pass  # Skip corrupt clips silently
+                except (OSError, ValueError, RuntimeError) as e:
+                    tqdm.write(f"  WARNING: noise clip {chosen_file.name}: {e}")
 
     # Low-pass filter
     sos_lp = _design_butter_sos(4, 4000, "low", sr)
@@ -527,8 +526,8 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     try:
         eq_audio = _apply_speaker_eq(audio, sr, eq_profile)
         variants.append((f"eq-{eq_profile}", eq_audio))
-    except Exception:
-        pass  # Skip if filter design fails for edge cases
+    except (ValueError, RuntimeError) as e:
+        tqdm.write(f"  WARNING: speaker EQ '{eq_profile}': {e}")
 
     # Distance attenuation (HF rolloff for far-field listening)
     distance_m = rng.uniform(5, 20)

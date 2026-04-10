@@ -80,28 +80,12 @@ def load_capture(jsonl_path: str) -> dict:
     }
 
 
-def append_features(mel: np.ndarray, cfg: dict) -> np.ndarray:
-    """Append delta or band-flux features to mel data, matching firmware logic."""
+def append_features_from_cfg(mel: np.ndarray, cfg: dict) -> np.ndarray:
+    """Append delta or band-flux features based on config."""
+    from scripts.features import append_features
     use_delta = cfg.get("features", {}).get("use_delta", False)
     use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-
-    if use_delta:
-        # Delta = mel[t] - mel[t-1], first frame gets zero delta
-        delta = np.zeros_like(mel)
-        delta[1:] = mel[1:] - mel[:-1]
-        return np.concatenate([mel, delta], axis=1)
-    elif use_band_flux:
-        # 3-channel HWR band-flux matching firmware computeBandFlux()
-        n_frames, n_mels = mel.shape
-        flux = np.zeros((n_frames, 3), dtype=np.float32)
-        for t in range(1, n_frames):
-            diff = mel[t] - mel[t - 1]
-            pos = np.maximum(diff, 0.0)
-            flux[t, 0] = pos[:6].sum() / 6.0    # bass
-            flux[t, 1] = pos[6:14].sum() / 8.0   # mid
-            flux[t, 2] = pos[14:].sum() / 12.0   # high
-        return np.concatenate([mel, flux], axis=1)
-    return mel
+    return append_features(mel, use_delta=use_delta, use_band_flux=use_band_flux)
 
 
 def run_inference(mel_features: np.ndarray, model, cfg: dict,
@@ -183,14 +167,14 @@ def main():
     print(f"  Per-band mean range: [{mel.mean(axis=0).min():.4f}, {mel.mean(axis=0).max():.4f}]")
 
     # Append features (delta / band-flux)
-    mel_features = append_features(mel, cfg)
+    mel_features = append_features_from_cfg(mel, cfg)
     print(f"  Features per frame: {mel_features.shape[1]} "
           f"({'mel+delta' if mel_features.shape[1] == 52 else 'mel+flux' if mel_features.shape[1] == 29 else 'mel only'})")
 
     # Load model
     print(f"\nLoading model: {args.model}")
-    from evaluate import _load_model
-    model, pool_factor = _load_model(args.model, cfg, device)
+    from evaluate import load_model
+    model, pool_factor = load_model(args.model, cfg, device)
     if pool_factor != 1:
         print(f"  WARNING: pool_factor={pool_factor}, replay may not match firmware")
 

@@ -124,8 +124,11 @@ def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
     return result
 
 
-def _load_model(model_path: str, cfg: dict, device: torch.device):
-    """Load a trained onset activation model (CNN, DS-TCN, or frame FC)."""
+def load_model(model_path: str, cfg: dict, device: torch.device):
+    """Load a trained onset activation model (CNN, DS-TCN, or frame FC).
+
+    Returns: (model, pool_factor) where model is in eval mode.
+    """
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
     # Handle both bare state_dict and full checkpoint
@@ -199,7 +202,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     chunk_frames = cfg["training"]["chunk_frames"]
 
-    model, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = load_model(model_path, cfg, device)
     mel_fb = _build_mel_filterbank(cfg, device)
     window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
@@ -519,7 +522,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     chunk_frames = cfg["training"]["chunk_frames"]
 
-    model, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = load_model(model_path, cfg, device)
     mel_fb = _build_mel_filterbank(cfg, device)
     window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
@@ -643,7 +646,7 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
     if X_val.shape[-1] > expected_features:
         X_val = X_val[..., :expected_features]
 
-    model, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = load_model(model_path, cfg, device)
 
     # Batch predict (chunked to avoid GPU OOM on large val sets)
     batch_size = 4096
@@ -707,7 +710,7 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     frame_rate = cfg["audio"]["frame_rate"]
-    model, pool_factor = _load_model(model_path, cfg, device)
+    model, pool_factor = load_model(model_path, cfg, device)
 
     use_delta = cfg.get("features", {}).get("use_delta", False)
     use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
@@ -738,22 +741,8 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
         device_act = np.array([f.get("nna", f["onset"]) for f in frames], dtype=np.float32)
 
         # Append features
-        if use_delta:
-            delta = np.zeros_like(mel)
-            delta[1:] = mel[1:] - mel[:-1]
-            mel_features = np.concatenate([mel, delta], axis=1)
-        elif use_band_flux:
-            n_frames, n_mels = mel.shape
-            flux = np.zeros((n_frames, 3), dtype=np.float32)
-            for t in range(1, n_frames):
-                diff = mel[t] - mel[t - 1]
-                pos = np.maximum(diff, 0.0)
-                flux[t, 0] = pos[:6].sum() / 6.0
-                flux[t, 1] = pos[6:14].sum() / 8.0
-                flux[t, 2] = pos[14:].sum() / 12.0
-            mel_features = np.concatenate([mel, flux], axis=1)
-        else:
-            mel_features = mel
+        from scripts.features import append_features as _append
+        mel_features = _append(mel, use_delta=use_delta, use_band_flux=use_band_flux)
 
         # Run inference
         window_frames = cfg["model"]["window_frames"]

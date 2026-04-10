@@ -780,8 +780,7 @@ def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str,
 #define {guard_name}
 
 #define {macro_prefix}_HASH "{model_hash}"
-#define {macro_prefix}_SIZE {len(tflite_bytes)}
-{"#define ONSET_MODEL_USE_PCEN 1" if use_pcen else ""}
+#define {macro_prefix}_SIZE {len(tflite_bytes)}{"\\n#define ONSET_MODEL_USE_PCEN 1" if use_pcen else ""}
 
 alignas(8) static const unsigned char {c_array_name}[] = {{
 {chr(10).join(hex_lines)}

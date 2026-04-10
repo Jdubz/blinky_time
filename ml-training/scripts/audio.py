@@ -27,6 +27,7 @@ N_MELS = 26
 FMIN = 60
 FMAX = 8000
 FRAME_RATE = SAMPLE_RATE / HOP_LENGTH  # 62.5 Hz
+LOG_EPSILON = 1e-7   # Matches firmware (1e-7 avoids ARM Cortex-M4 denormals)
 
 
 def build_mel_filterbank_np() -> np.ndarray:
@@ -174,7 +175,8 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                               eps=pcen_cfg.get("eps", PCEN_EPS),
                               norm=pcen_cfg.get("norm", PCEN_NORM))
     else:
-        log_mel = 10.0 * torch.log10(mel_spec + LOG_EPSILON)
+        log_eps = cfg.get("audio", {}).get("log_epsilon", LOG_EPSILON)
+        log_mel = 10.0 * torch.log10(mel_spec + log_eps)
         log_mel = (log_mel + 60.0) / 60.0
         log_mel = log_mel.clamp(0.0, 1.0)
         return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
@@ -236,9 +238,6 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
     log_mel = (log_mel + 60.0) / 60.0
     return np.clip(log_mel.T, 0.0, 1.0)
 
-
-# ---- Log compression constant (must match firmware SharedSpectralAnalysis) ----
-LOG_EPSILON = 1e-7   # Matches firmware (1e-7 avoids ARM Cortex-M4 denormals)
 
 # ---- PCEN constants (must match firmware SharedSpectralAnalysis) ----
 PCEN_S = 0.025       # IIR smoother coefficient (~0.64s time constant at 62.5 Hz)
