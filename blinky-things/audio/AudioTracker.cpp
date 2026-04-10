@@ -53,6 +53,12 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     bool nnOk = frameOnsetNN_.begin();
     nnActive_ = nnOk && frameOnsetNN_.isReady();
 
+#ifdef ONSET_MODEL_USE_PCEN
+    if (nnActive_) {
+        frameOnsetNN_.setPcenEnabled(true);
+    }
+#endif
+
     // Initialize all time-based state to current time to avoid
     // instant triggers on first update (nowMs >> 0 would fire immediately)
     uint32_t now = time_.millis();

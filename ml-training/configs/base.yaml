@@ -15,6 +15,7 @@ audio:
   n_mels: 26                # SharedSpectralAnalysis NUM_MEL_BANDS
   fmin: 60                  # MEL_MIN_FREQ
   fmax: 8000                # MEL_MAX_FREQ
+  log_epsilon: 1e-7         # Must match firmware SharedSpectralAnalysis (ARM denormal safe)
   frame_rate: 62.5          # 16000 / 256
   target_rms_db: -63        # Normalize audio RMS to simulate firmware AGC level
   # Calibrated via tools/rms_mel_sweep.py: -63 dB → mel mean 0.52, matching
@@ -108,5 +109,6 @@ data:
   labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v5"
   processed_dir: "/mnt/storage/blinky-ml-data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
+  noise_dir: "/mnt/storage/blinky-ml-data/noise"
   mel_cache_dir: "/mnt/storage/blinky-ml-data/mel_cache"
   test_set: "../blinky-test-player/music/edm"

@@ -10,13 +10,15 @@
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v15 (madmom distillation) deployed on all 3 blinkyhost devices. Offline onset F1=0.745, on-device onset F1=0.616 (17% gap — PCEN normalization in v18 targets this). 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes. NN output used for visual pulse only — NOT for BPM estimation.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v16 (26ch, no delta) deployed on all 3 blinkyhost devices (b107). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation.
+
+**On-device gap root cause (April 9 diagnosis):** The raw NN activation IS strong on-device (~0.457 from `show nn`). INT8 TFLite on desktop also produces 0.404 on captured device mel data. **The model is NOT broken.** The issue is that the NN produces sustained flat activations (~0.45 throughout music) rather than sharp peaks at onsets. The pulse detector requires rising-edge threshold crossings which don't occur with flat activation. PCEN should fix this: PCEN emphasizes transient energy changes (sudden `E >> M`) and suppresses sustained energy, giving the NN sharper temporal contrast → sharper peaks → detectable rising edges. v18 PCEN training in progress.
 
 **Training experiments (April 7-9):**
 - v15 (deployed on 2A798EF8, 659C8DD3): madmom MSE distillation, 52ch (mel+delta). Offline onset F1=0.745, KW F1=0.730. On-device onset F1=0.473.
 - v16 (deployed on 062CBD12 as b107): no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. **On-device onset F1=0.471 — identical to v15.** Delta features provide zero on-device benefit despite 5ms/frame extra inference cost. Confirms offline-to-on-device gap is NOT from feature type.
-- v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **+3.7% onset F1 over v15 offline.** Firmware band-flux support committed (b107) — FrameOnsetNN auto-detects 29ch, computes HWR flux internally. Ready for on-device test.
-- v18: PCEN mel normalization (52ch). **Dataprep re-running** — previous failures (April 8-9) were caused by **disk full** (`OSError: Not enough free space to write 5.5 GB`), not OOM. Root cause: 242 GB of dead data (old processed dirs + stale mel caches + bloated .git pack) left only 128 GB free. Cleaned up April 9 (369 GB free). PCEN firmware support committed (b107). Disk space pre-checks added to prepare_dataset.py to prevent recurrence. Hypothesis: PCEN closes offline-to-on-device gap.
+- v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **On-device A/B (April 9): onset F1=0.473 — identical to v16 (0.471).** Band-flux provides zero on-device benefit, same as delta features. Confirms gap is NOT from feature representation.
+- v18: PCEN mel normalization (52ch, mel+delta). **Training in progress (April 9).** Dataprep complete (5M train chunks, 880K val chunks). Previous dataprep failures (April 8-9) were disk full, not OOM — cleaned 242 GB, added pre-checks. PCEN firmware support committed (b107, `ONSET_MODEL_USE_PCEN` ifdef wired in AudioTracker). **Hypothesis: PCEN sharpens NN activation peaks** — sustained energy suppressed, transients amplified. The pulse detector's rising-edge gate currently fails because log-compressed mel gives flat NN activations during music.
 
 **Fleet status (April 9):**
 - 062CBD12 — Hat Display, b107 (v16 model), serial, test chip ✅
@@ -167,9 +169,15 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v16 on-device A/B (April 9): delta features provide NO on-device benefit.** v16 (26ch, no delta) onset F1=0.471 vs v15 (52ch, mel+delta) onset F1=0.473 — within noise. Identical plpAtTransient (0.177 vs 0.191), plpAutoCorr (0.160 vs 0.165), onsetRate (2.514 vs 2.531). This proves the offline-to-on-device gap is NOT caused by feature representation — PCEN normalization hypothesis (v18) remains the primary candidate. v16 runs at ~6.8ms vs v15's ~11.7ms, freeing 5ms/frame.
 
-**v17 (band-flux): trained, firmware committed (b107).** Replaces 26 delta channels with 3 band-grouped HWR mel flux channels (bass/mid/high). Offline onset F1=0.782 (+3.7% over v15), KW F1=0.746 (+2.2%), kick recall +7%. Model size 16.3 KB INT8. FrameOnsetNN auto-detects 29ch models, computes 3-channel HWR flux (bass 0-5, mid 6-13, high 14-25) internally. +224 bytes flash, same RAM. Ready for on-device A/B test.
+**v17 (band-flux): on-device A/B complete — NO improvement.** Onset F1=0.473 vs v16 baseline 0.471. PLP slightly better (+0.013 plpAtTransient) but inconsistent per-track. Same pattern as v16 vs v15: feature representation changes produce zero on-device benefit.
 
-**v18 (PCEN): UNBLOCKED — dataprep re-running.** Previous failures (April 8-9) were **disk full** (`OSError: Not enough free space to write 5.5 GB`), not OOM. Root cause: 242 GB of dead data (processed_v17 88 GB, incomplete processed_v18 115 GB, stale mel cache 39 GB) plus 37 GB bloated .git pack. Cleaned April 9 — 369 GB free. Disk space pre-checks added to prepare_dataset.py. PCEN firmware support committed (b107). Hypothesis: PCEN closes offline-to-on-device gap.
+**v18 (PCEN): TRAINING IN PROGRESS.** Dataprep complete (5M train, 880K val chunks). PCEN mel mean=0.473, delta range [-0.98, 0.98]. Training kicked off April 9. PCEN firmware wired behind `ONSET_MODEL_USE_PCEN` ifdef in AudioTracker.cpp. **Revised hypothesis (April 9 diagnosis):** the gap is NOT mel domain shift killing the model — raw NN activation is 0.457 on-device (strong!). The gap is that log-compressed mel gives **flat sustained NN activation** (~0.45 throughout music). PCEN should sharpen peaks because it emphasizes transient energy changes (`E >> M`) and suppresses sustained energy.
+
+**Diagnostic tools deployed (April 9):**
+- `replay_device_capture.py`: feeds captured device mel through offline model, compares activations
+- `mel_distribution_check.py`: per-band Wasserstein distance between training and device mel
+- `stream nn` now includes `nna` field (raw NN activation, pre-gating) alongside `onset` (gated pulse)
+- Log epsilon synced (training 1e-10 → 1e-7 to match firmware)
 
 **NN inference performance (April 2 measurement):**
 

@@ -27,6 +27,7 @@ N_MELS = 26
 FMIN = 60
 FMAX = 8000
 FRAME_RATE = SAMPLE_RATE / HOP_LENGTH  # 62.5 Hz
+LOG_EPSILON = 1e-7   # Matches firmware (1e-7 avoids ARM Cortex-M4 denormals)
 
 
 def build_mel_filterbank_np() -> np.ndarray:
@@ -174,7 +175,8 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                               eps=pcen_cfg.get("eps", PCEN_EPS),
                               norm=pcen_cfg.get("norm", PCEN_NORM))
     else:
-        log_mel = 10.0 * torch.log10(mel_spec + 1e-10)
+        log_eps = cfg.get("audio", {}).get("log_epsilon", LOG_EPSILON)
+        log_mel = 10.0 * torch.log10(mel_spec + log_eps)
         log_mel = (log_mel + 60.0) / 60.0
         log_mel = log_mel.clamp(0.0, 1.0)
         return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
@@ -215,7 +217,7 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
         mel_spec = mel_fb @ all_mags  # (n_mels, n_frames)
         if use_pcen:
             return pcen_transform(mel_spec.T)
-        log_mel = 10.0 * np.log10(mel_spec + 1e-10)
+        log_mel = 10.0 * np.log10(mel_spec + LOG_EPSILON)
         log_mel = (log_mel + 60.0) / 60.0
         return np.clip(log_mel.T, 0.0, 1.0)
 
@@ -232,7 +234,7 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
     mel_spec = mel_fb @ all_mags  # (n_mels, n_frames)
     if use_pcen:
         return pcen_transform(mel_spec.T)
-    log_mel = 10.0 * np.log10(mel_spec + 1e-10)
+    log_mel = 10.0 * np.log10(mel_spec + LOG_EPSILON)
     log_mel = (log_mel + 60.0) / 60.0
     return np.clip(log_mel.T, 0.0, 1.0)
 
