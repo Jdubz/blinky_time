@@ -115,7 +115,7 @@ public:
     float plpNovGain = 1.0f;           // Pattern contrast: power-law exponent (>1 sharpens peaks, 1.0=linear)
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
     float plpVarianceSens = 0.0f;      // Epoch-fold variance suppression (0=disabled, sweep showed best autoCorr)
-    float plpDecayRate = 0.3f;         // Epoch-fold recency decay (half-life ~2.3 epochs at 0.3)
+    float plpDecayRate = 0.2f;         // Epoch-fold recency decay (sweep: 0.2 best plp@T+autoCorr)
 
     // NN profiling
     bool nnProfile = false;
@@ -213,6 +213,7 @@ private:
 
     // === Raw NN activation tracking (before threshold/cooldown) ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
+    float prevNNActivation_ = 0.0f;   // Previous frame NN output (for derivative gate)
     float nnActivationMean_ = 0.3f;   // EMA of NN activation (for adaptive gate)
     float nnActivationVar_ = 0.01f;   // EMA of NN activation variance
 

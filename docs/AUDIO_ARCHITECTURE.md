@@ -92,7 +92,7 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
                 |
 AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
       |
-Generators (HeatFire, Water, Lightning)
+Generators (HeatFire, Water, PlasmaGlobe)
 ```
 
 **Key Design Decisions:**
@@ -132,7 +132,7 @@ Generators (HeatFire, Water, Lightning)
 
 **PLP Update (every 150ms):**
 12. **Mean-subtract sources**: Spectral flux, bass energy, NN onset buffers each mean-subtracted
-13. **Goertzel DFT**: Compute DFT magnitude and phase at candidate frequencies for each source
+13. **ACF period detection**: Multi-source ACF at beat-level lags (20-80), parabolic interpolation on peaks
 14. **Period Selection**: Source x frequency with highest DFT magnitude wins (inherently suppresses sub-harmonics)
 15. **Phase Alignment**: DFT phase gives beat alignment directly (no cross-correlation needed)
 16. **Phase Correction**: Correct phase toward DFT-derived alignment with adaptive rate (EMA variance-driven)
@@ -149,7 +149,7 @@ Generators (HeatFire, Water, Lightning)
 | **v3 (Multi-Hypo)** | Multiple concurrent tempos | Handles ambiguity | Competing corrections cause phase jitter |
 | **v4 (CBSS)** | Cumulative beat strength | Deterministic phase, no jitter | Complex (~2100 lines, ~56 params). Removed in v75. |
 | **v5 (ACF+Comb+PLL)** | ACF tempo + comb validation + PLL phase | Simple (~400 lines, ~10 params), smooth phase | **PLL phase consistency ~0.04 (random)** — onset-gated corrections insufficient |
-| **v6 (ACF+PLP, deployed)** | ACF tempo + PLP Fourier tempogram | DFT magnitude selects period, DFT phase gives alignment, 3 sources | atTransient 0.37-0.48, autoCorr up to +0.93 |
+| **v8 (ACF+PLP, deployed)** | Multi-source ACF + PLP epoch-fold | ACF selects period, epoch-fold extracts pattern, 3 sources | atTransient 0.37-0.48, autoCorr up to +0.93 |
 
 ---
 
@@ -224,7 +224,7 @@ PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources.
 | `pulseSuppressOffBeat` | `pulsesuppress` | 0.6 | 0.0-1.0 | Pulse suppress factor off-beat |
 | `energyBoostOnBeat` | `energyboost` | 0.3 | 0.0-1.0 | Energy boost near predicted beats |
 
-> These parameters use PLP phase for "on-beat" / "off-beat" determination. With PLP Fourier tempogram providing meaningful phase output (atTransient 0.37-0.48), beat-proximity modulation is now functional.
+> These parameters use PLP phase for "on-beat" / "off-beat" determination. With PLP multi-source ACF providing meaningful phase output (atTransient 0.37-0.48), beat-proximity modulation is now functional.
 
 ### Other
 
@@ -241,7 +241,7 @@ PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources.
 
 `FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806).
 
-The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and as one of 3 PLP Fourier tempogram sources). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
+The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and as one of 3 PLP multi-source ACF sources). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
 **Architecture:** Conv1D onset-only model. 13.4 KB INT8 (per-tensor quantization). Single output channel (onset activation). Arena: 3404 bytes of 32768 allocated.
 
@@ -264,11 +264,19 @@ Peaks at broadband transients, zero during sustain. NN-independent.
 
 ### Pulse Detection
 
-Pulse detection (for visual spark effects) is derived from the raw ODF signal (before the information gate, so transient sensitivity is unaffected). Uses floor-tracking baseline detection:
-- **Baseline tracking**: Slow rise (alpha=0.005), fast drop (alpha=0.05) -- peaks don't inflate baseline, but floor drops are caught quickly.
-- **Threshold**: ODF must exceed baseline * 2.0 and mic level must exceed 0.03.
-- **Cooldown**: Tempo-adaptive, shorter at faster tempos (40ms at 200 BPM, 150ms at 60 BPM).
-- **Beat modulation**: When rhythm is active, on-beat pulses are boosted and off-beat pulses are suppressed.
+Two pulse systems serve different purposes:
+
+**`control_.pulse` (generators consume this):** NN-modulated spectral flux envelope.
+- Auto-normalized spectral flux (against running peak, ~7s half-life)
+- **NN modulation** (b108): weighted by NN onset activation, self-tuning via `nnConf` (NN activation variance). When NN is discriminative (sharp peaks): onsets pass, harmonic changes suppressed ~3x. When NN is flat: no modulation (falls back to raw flux behavior).
+- Formula: `normFlux *= (1 - nnConf) + nnConf * nnActivation`
+- Decaying envelope (~165ms half-life), threshold 0.4 on weighted flux
+
+**Discrete onset events (debug/serial, onset density):** Spectral flux rising-edge, NN-gated.
+- **Baseline tracking**: Slow rise (alpha=0.005), fast drop (alpha=0.05)
+- **Threshold**: Spectral flux must exceed baseline × 2.0, mic level must exceed 0.03
+- **NN gate**: activation > 0.3 AND (`peakAge < 100ms` OR `nnRising > 0.005`)
+- **Cooldown**: Tempo-adaptive (40ms at 200 BPM, 150ms at 60 BPM)
 
 ### Energy Synthesis
 
@@ -305,7 +313,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 | FrameOnsetNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
 | OSS Buffer (360 floats) | 1.4 KB | - | ~5.5 seconds @ ~66 Hz, circular. Fed by spectral flux. |
 | ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
-| PLP (Fourier tempogram + epoch-fold) | ~2 KB | ~1ms every 150ms | Goertzel DFT at candidate frequencies, epoch-fold pattern |
+| PLP (ACF + epoch-fold) | ~2 KB | ~4ms every 150ms | Multi-source ACF at beat-level lags, epoch-fold pattern |
 | Pulse + output | negligible | <0.1ms/frame | Simple arithmetic |
 | **Total audio budget** | **~13 KB + 32 KB arena** | **~14ms/frame** | Well under 16.7ms frame budget (60 fps) |
 
@@ -321,7 +329,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 **Core Audio System:**
 - `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP (~10 tunable params)
-- `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP Fourier tempogram, pulse detection, output synthesis)
+- `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP multi-source ACF, pulse detection, output synthesis)
 - `blinky-things/audio/AudioControl.h` - Output struct definition (6 fields)
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
 - `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)

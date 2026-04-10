@@ -413,10 +413,13 @@ def _mix_at_snr(audio: torch.Tensor, noise: torch.Tensor,
     return (audio + noise * noise_scale).clamp(-1.0, 1.0)
 
 
-# Speaker EQ profiles: simulate common playback systems.
+# Speaker EQ profiles: approximate common playback systems.
 # Each profile is a list of (filter_type, freq_hz, Q_or_bandwidth, gain_db).
-# Teaches the model that audio can be spectrally colored without training
-# to any specific speaker. Based on typical measured responses.
+# Peak filters use a Butterworth bandpass + additive gain, NOT a true
+# parametric EQ (no constant-Q shape). This is intentional — the goal is
+# approximate spectral coloring for augmentation diversity, not accurate
+# speaker modeling. The Butterworth approximation is sufficient to teach
+# the model that real audio can be spectrally colored.
 SPEAKER_EQ_PROFILES = {
     "phone": [
         ("highpass", 200, 0.7, None),      # No bass below 200 Hz

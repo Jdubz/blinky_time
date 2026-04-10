@@ -23,7 +23,9 @@ struct AudioControl {
 
     // === PULSE ===
     // Transient/hit intensity (0.0 - 1.0)
-    // Raw NN onset strength with pattern prediction boost
+    // Spectral flux auto-normalized, modulated by NN onset activation.
+    // When NN is discriminative: onsets (kicks/snares) produce strong pulses,
+    // non-onset spectral changes are suppressed. Self-tuning via nnConf.
     // 0.0 = no transient, 1.0 = strong transient
     // Use for: Sparks, flashes, bursts, event triggers
     float pulse = 0.0f;

@@ -61,6 +61,10 @@ def sliding_window_inference(mel_features: np.ndarray, model,
     Uses 50% overlapping chunks with averaging at overlap regions.
     Same logic as firmware's circular buffer inference but batched offline.
 
+    Note: the final partial window is zero-padded when it extends beyond the
+    signal. Frames near the end may have biased activations due to padding
+    context.
+
     Args:
         mel_features: (n_frames, n_features) input features
         model: PyTorch model in eval mode
@@ -77,7 +81,7 @@ def sliding_window_inference(mel_features: np.ndarray, model,
     stride = window_frames // 2
 
     with torch.no_grad():
-        for start in range(0, max(1, n_frames - window_frames + 1), stride):
+        for start in range(0, n_frames, stride):
             end = start + window_frames
             if end > n_frames:
                 chunk = torch.zeros(window_frames, mel_features.shape[1],
