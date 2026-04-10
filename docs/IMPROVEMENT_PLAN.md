@@ -75,12 +75,11 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 - **Adaptive phase correction** removed — phase is implicit in cosine OLA
 - Comb filter bank, Percival harmonic enhancement, Rayleigh prior, template matching, LRU cache all removed in v80
 
-**Current test results (blinky-server validation, April 7-9):**
-- Onset F1 stable at ~0.47-0.48 across v15/v16/v17 on-device (100ms window)
-- Best individual tracks: techno-minimal-emotion F1=0.843, garage-uk-2step F1=0.575
-- PLP working on 51/54 track-device pairs (3 devices, April 7) and 63/72 (2 devices × 2 runs, April 8)
-- **PLP regression in most recent single-device run (April 9):** 16/18 tracks show zero rhythm confidence on 062CBD12. Same device had working PLP 7h earlier in multi-device run. Likely transient device state issue (NN capture sessions between runs may have changed state), not firmware regression. Needs re-validation.
-- Param sweeps (April 6): plpnovgain best at 1.0 (deployed), plpdecay best F1 at 0.1 (deployed at 0.3), slotswitchthresh flat (deployed at 0.7), plpvarsens best at 0.0 (deployed)
+**Current test results (b108 validation, April 9, 3 devices × 18 tracks):**
+- Onset F1=0.483 (stable vs b107 baseline 0.476). Best: techno-minimal-emotion 0.788, garage-uk-2step 0.586.
+- PLP 50/54 working (18/18 tracks). Previous 2/18 regression was transient — confirmed by this run.
+- 4 PLP failures are negative autoCorr (not zero): afrobeat/edm-trap/reggaeton/techno-minimal-01. 3 of 4 on device 2A798EF8 — likely acoustic placement issue. All are syncopated genres where patterns don't self-repeat at a single period.
+- Param sweeps (April 6): plpnovgain=1.0 (deployed), **plpdecay=0.2** (best plp@T=0.348+autoCorr=0.281, updated from 0.3), slotswitchthresh=0.7 (deployed), plpvarsens=0.0 (deployed)
 
 **ACF convergence fix VALIDATED (April 2):**
 v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames) confirmed working. DnB tracks that never activated now score.
@@ -102,12 +101,13 @@ v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160�
 
 ### Priority 2: NN-Modulated Pulse + NN Training
 
-**Status: Firmware NN modulation committed (not yet deployed). v16 deployed on all 3 serial devices. v18 PCEN training in progress (auto pw=12.7).**
+**Status: b108 deployed on all 3 serial devices. NN-modulated pulse + derivative gate validated (no regression). v18 PCEN training in progress (auto pw=12.7, epoch 6).**
 
-**Firmware improvements (April 9, pending deployment):**
+**Firmware improvements (b108, deployed April 9):**
 - **NN-modulated pulse output**: `control_.pulse` now uses NN activation to weight spectral flux. Self-tuning via `nnConf` (activation variance): flat NN (v16) → no behavior change; sharp NN (future PCEN) → strong onset selectivity (kicks/snares boosted, harmonic changes suppressed ~3x). Previously, `control_.pulse` was pure spectral flux with zero NN involvement — generators couldn't distinguish onsets from harmonic shifts.
 - **Derivative-based NN gate**: `updatePulseDetection()` now opens gate on `nnRising = (activation - prevActivation) > 0.005` in addition to `peakAge < 100ms`. Works with flat NN activations where micro-fluctuations correlate with real onsets. Improves discrete onset detection for onset density counting.
 - **These changes are multiplicative with PCEN**: deploying a sharp NN model will automatically activate NN modulation via rising `nnConf`, with no additional firmware changes needed.
+- **b108 validation (3 devices, 18 tracks):** onset F1=0.483 (baseline b107: 0.476), PLP 50/54 working (18/18 tracks). No regression confirmed — `nnConf ≈ 0` with flat v16 model means NN modulation is dormant as designed.
 
 Failed attempts (all regressed from v3):
 - v9 (tempo head + distillation): F1=0.233. Root cause: data prep crash → non-augmented data (209K vs 3M chunks) + tempo head useless (256ms RF can't encode tempo, Bock 2019 applies to beat tracking not onset detection).
