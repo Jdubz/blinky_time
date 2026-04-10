@@ -35,6 +35,7 @@ from scripts.audio import (
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
 )
+from scripts.features import append_features as _append_features
 
 
 def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
@@ -740,9 +741,7 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
         has_nna = "nna" in frames[0]
         device_act = np.array([f.get("nna", f["onset"]) for f in frames], dtype=np.float32)
 
-        # Append features
-        from scripts.features import append_features as _append
-        mel_features = _append(mel, use_delta=use_delta, use_band_flux=use_band_flux)
+        mel_features = _append_features(mel, use_delta=use_delta, use_band_flux=use_band_flux)
 
         # Run inference
         window_frames = cfg["model"]["window_frames"]

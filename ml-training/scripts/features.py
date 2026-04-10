@@ -7,14 +7,8 @@ exactly. Used by both evaluate.py and replay_device_capture.py.
 import numpy as np
 
 
-# Band boundaries matching firmware (FrameOnsetNN.h computeBandFlux)
-BASS_BANDS = slice(0, 6)    # bands 0-5
-MID_BANDS = slice(6, 14)    # bands 6-13
-HIGH_BANDS = slice(14, 26)  # bands 14-25
-
-
 def compute_band_flux(mel: np.ndarray) -> np.ndarray:
-    """Compute 3-channel HWR band-flux from mel frame differences.
+    """Compute 3-channel HWR band-flux from mel frame differences (vectorized).
 
     Matches firmware FrameOnsetNN::computeBandFlux() exactly:
       bass  = sum(max(0, mel[t] - mel[t-1]) for bands 0-5)  / 6
@@ -22,18 +16,17 @@ def compute_band_flux(mel: np.ndarray) -> np.ndarray:
       high  = sum(max(0, mel[t] - mel[t-1]) for bands 14-25) / 12
 
     Args:
-        mel: (n_frames, 26) mel band values
+        mel: (n_frames, n_mels) mel band values (n_mels >= 26)
 
     Returns: (n_frames, 3) band-flux features [bass, mid, high]
     """
-    n_frames = mel.shape[0]
-    flux = np.zeros((n_frames, 3), dtype=np.float32)
-    for t in range(1, n_frames):
-        diff = mel[t] - mel[t - 1]
-        pos = np.maximum(diff, 0.0)
-        flux[t, 0] = pos[BASS_BANDS].sum() / 6.0
-        flux[t, 1] = pos[MID_BANDS].sum() / 8.0
-        flux[t, 2] = pos[HIGH_BANDS].sum() / 12.0
+    diff = np.concatenate([np.zeros((1, mel.shape[1]), dtype=np.float32),
+                           mel[1:] - mel[:-1]])
+    pos = np.maximum(diff, 0.0)
+    flux = np.empty((mel.shape[0], 3), dtype=np.float32)
+    flux[:, 0] = pos[:, 0:6].sum(axis=1) / 6.0
+    flux[:, 1] = pos[:, 6:14].sum(axis=1) / 8.0
+    flux[:, 2] = pos[:, 14:26].sum(axis=1) / 12.0
     return flux
 
 

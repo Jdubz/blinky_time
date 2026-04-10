@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import wasserstein_distance
 
 
 def load_training_mels(npy_path: str, max_samples: int = 100000) -> np.ndarray:
@@ -78,7 +79,6 @@ def compute_stats(mels: np.ndarray) -> dict:
 
 def wasserstein_1d(a: np.ndarray, b: np.ndarray) -> float:
     """1D Wasserstein distance (Earth Mover's Distance) between two samples."""
-    from scipy.stats import wasserstein_distance
     return wasserstein_distance(a, b)
 
 

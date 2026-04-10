@@ -167,9 +167,11 @@ def main():
     print(f"  Per-band mean range: [{mel.mean(axis=0).min():.4f}, {mel.mean(axis=0).max():.4f}]")
 
     # Append features (delta / band-flux)
+    use_delta = cfg.get("features", {}).get("use_delta", False)
+    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
     mel_features = append_features_from_cfg(mel, cfg)
     print(f"  Features per frame: {mel_features.shape[1]} "
-          f"({'mel+delta' if mel_features.shape[1] == 52 else 'mel+flux' if mel_features.shape[1] == 29 else 'mel only'})")
+          f"({'mel+delta' if use_delta else 'mel+flux' if use_band_flux else 'mel only'})")
 
     # Load model
     print(f"\nLoading model: {args.model}")
