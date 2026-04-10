@@ -1112,9 +1112,8 @@ def main():
     labels_dir = Path(args.labels_dir or cfg["data"]["labels_dir"])
     output_dir = Path(args.output_dir or cfg["data"]["processed_dir"])
     rir_dir = Path(args.rir_dir) if args.rir_dir else Path(cfg["data"].get("rir_dir", "data/rir"))
-    noise_dir = Path(args.noise_dir) if args.noise_dir else (
-        Path(cfg["data"].get("noise_dir", "")) if cfg["data"].get("noise_dir") else None
-    )
+    _noise = args.noise_dir or cfg["data"].get("noise_dir")
+    noise_dir = Path(_noise) if _noise else None
     stems_dir = Path(args.stems_dir) if args.stems_dir else None
     stem_variant_list = None
     if stems_dir:

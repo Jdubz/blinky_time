@@ -35,7 +35,7 @@ from scripts.audio import (
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
 )
-from scripts.features import append_features as _append_features
+from scripts.features import append_features as _append_features, sliding_window_inference
 
 
 def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
@@ -742,29 +742,10 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
         device_act = np.array([f.get("nna", f["onset"]) for f in frames], dtype=np.float32)
 
         mel_features = _append_features(mel, use_delta=use_delta, use_band_flux=use_band_flux)
-
-        # Run inference
-        window_frames = cfg["model"]["window_frames"]
-        mel_tensor = torch.from_numpy(mel_features).to(device)
         n_frames = mel_features.shape[0]
-        activations = np.zeros(n_frames, dtype=np.float32)
-        counts = np.zeros(n_frames, dtype=np.float32)
-        stride = window_frames // 2
 
-        with torch.no_grad():
-            for start in range(0, max(1, n_frames - window_frames + 1), stride):
-                end = start + window_frames
-                if end > n_frames:
-                    chunk = torch.zeros(window_frames, mel_features.shape[1], device=device)
-                    chunk[:n_frames - start] = mel_tensor[start:n_frames]
-                    actual_len = n_frames - start
-                else:
-                    chunk = mel_tensor[start:end]
-                    actual_len = window_frames
-                pred = model(chunk.unsqueeze(0))[0]
-                activations[start:start + actual_len] += pred[:actual_len, 0].cpu().numpy()
-                counts[start:start + actual_len] += 1
-        activations /= np.maximum(counts, 1)
+        activations = sliding_window_inference(
+            mel_features, model, cfg["model"]["window_frames"], device)
 
         # Compare
         corr = np.corrcoef(device_act, activations)[0, 1] if device_act.std() > 0 else 0

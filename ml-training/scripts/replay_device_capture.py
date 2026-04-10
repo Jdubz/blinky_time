@@ -34,6 +34,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.audio import load_config
+from evaluate import load_model
 
 
 def load_capture(jsonl_path: str) -> dict:
@@ -91,35 +92,9 @@ def append_features_from_cfg(mel: np.ndarray, cfg: dict) -> np.ndarray:
 def run_inference(mel_features: np.ndarray, model, cfg: dict,
                   device: torch.device) -> np.ndarray:
     """Run offline model inference on captured mel data with sliding window."""
+    from scripts.features import sliding_window_inference
     window_frames = cfg["model"]["window_frames"]
-    n_frames = mel_features.shape[0]
-    mel_tensor = torch.from_numpy(mel_features).to(device)
-
-    # Overlapping chunk inference (same as evaluate.py)
-    activations = np.zeros(n_frames, dtype=np.float32)
-    counts = np.zeros(n_frames, dtype=np.float32)
-    stride = window_frames // 2
-
-    with torch.no_grad():
-        for start in range(0, max(1, n_frames - window_frames + 1), stride):
-            end = start + window_frames
-            if end > n_frames:
-                chunk = torch.zeros(window_frames, mel_features.shape[1],
-                                    device=device)
-                chunk[:n_frames - start] = mel_tensor[start:n_frames]
-                actual_len = n_frames - start
-            else:
-                chunk = mel_tensor[start:end]
-                actual_len = window_frames
-
-            pred = model(chunk.unsqueeze(0))[0]  # (time, channels)
-            pred_np = pred[:actual_len, 0].cpu().numpy()
-
-            activations[start:start + actual_len] += pred_np
-            counts[start:start + actual_len] += 1
-
-    activations /= np.maximum(counts, 1)
-    return activations
+    return sliding_window_inference(mel_features, model, window_frames, device)
 
 
 def peak_pick(activations: np.ndarray, threshold: float,
@@ -175,7 +150,6 @@ def main():
 
     # Load model
     print(f"\nLoading model: {args.model}")
-    from evaluate import load_model
     model, pool_factor = load_model(args.model, cfg, device)
     if pool_factor != 1:
         print(f"  WARNING: pool_factor={pool_factor}, replay may not match firmware")
