@@ -207,7 +207,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.plpNovGain = 1.0f;
     data_.tracker.plpSignalFloor = 0.10f;
     data_.tracker.plpVarianceSens = 0.0f;
-    data_.tracker.plpDecayRate = 0.3f;
+    data_.tracker.plpDecayRate = 0.2f;
     data_.tracker.bassFluxWeight = 0.5f;
     data_.tracker.midFluxWeight = 0.2f;
     data_.tracker.highFluxWeight = 0.3f;

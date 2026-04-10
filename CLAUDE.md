@@ -272,16 +272,17 @@ RenderPipeline → LED Output
      - Conv1D W16 (256ms), [24,32] channels, 6.8ms nRF52840
      - Auto-detects input features from model shape: 26 (mel), 29 (mel+band-flux), 52 (mel+delta)
      - PCEN normalization support (v18, behind `ONSET_MODEL_USE_PCEN` ifdef)
-     - v16 deployed (b107): 15.8 KB INT8, arena 3772 bytes
-     - Used for: visual pulse, energy peak-hold. NOT used for BPM estimation.
-     - **On-device diagnosis (April 9):** Raw NN activation is strong (~0.457) but produces sustained flat activations. PCEN should sharpen peaks for pulse detection.
+     - v16 deployed (b109): 15.8 KB INT8, arena 3772 bytes
+     - Used for: visual pulse (via NN-modulated spectral flux), energy peak-hold. NOT used for BPM estimation.
+     - **On-device diagnosis (April 9):** Raw NN activation is strong (~0.457) but produces sustained flat activations. `control_.pulse` now uses NN-modulated spectral flux (self-tuning via nnConf). PCEN (v18 training) should sharpen peaks → higher nnConf → stronger NN modulation.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
 3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v93)**
    - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~12 tunable params)
    - **Period path** (NN-independent): spectral flux (SuperFlux 3-wide max filter, Bock 2013) + bass energy → multi-source ACF (lags 20-80, ~4ms) → beat-level peaks → bar multipliers (2×/3×/4×) → epoch-fold variance scoring selects best pattern period. Parabolic interpolation on ACF peaks for sub-step precision. **The system finds the period that produces the best visual pattern, not the "correct" BPM. Half/double time periods are valid if they capture more rhythmic structure.**
-   - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection (visual sparks)
-     - Pulse detection: floor-tracking baseline + NN local-peak gate (100ms recency)
+   - **Onset path** (NN-driven): FrameOnsetNN → onset activation → NN-modulated spectral flux → pulse envelope
+     - `control_.pulse`: spectral flux weighted by NN activation, self-tuning via `nnConf` (activation variance). Flat NN → no modulation; sharp NN → onset-selective pulse.
+     - Discrete onset gate: floor-tracking baseline + derivative-based NN gate (`nnRising > 0.005` OR `peakAge < 100ms`)
    - **PLP path** (v91 refactor, NN-independent): Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation at current cycle position. Phase derived from position offset by accent phase. Preserves actual rhythmic shape. plpNovGain=1.0 (linear, no power-law). plpVarianceSens=0 (disabled). Cold-start template seeding (8 patterns). Adaptive NN gate floor based on activation variance.
    - **Key decoupling**: Pattern quality (plpAutoCorr) is NN-independent — epoch-fold uses ungated flux. NN onset only drives visual pulse. Model changes affect onset detection, not pattern breathing.
    - **Pattern slot cache** (v82): 4-slot LRU cache of 16-bin PLP pattern digests. Every bar (4 beats), current PLP pattern resampled to 16-bin digest and compared via cosine similarity against cached slots. Match > 0.70 triggers instant recall. Enables rapid section switching (verse/chorus/bridge).
@@ -455,7 +456,7 @@ check_test_result(job_id: "abc123")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+PLP (multi-source ACF) + pulse baseline tracking + pattern slot cache (v83)
-- ✅ FrameOnsetNN (Conv1D W16 onset-only, v16 deployed on all 3 blinkyhost devices, b107)
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, v16 deployed on all 3 blinkyhost devices, b109)
 - ✅ HeatFire/Water/PlasmaGlobe generators (PlasmaGlobe replaced Lightning in b107)
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (blinky-server REST API: validation + param sweep, MCP tools)
@@ -464,7 +465,7 @@ check_test_result(job_id: "abc123")
 - ✅ Mic calibration pipeline + gain-aware training augmentation
 - ✅ Fixed hardware gain (AGC removed v72; nRF52840: gain=32)
 - ✅ Simulator working (rebuilds with current firmware code)
-- ✅ Active devices: 3 nRF52840 on blinkyhost (all b107) + 1 BLE device
+- ✅ Active devices: 3 nRF52840 on blinkyhost (all b109) + 1 BLE device (b106)
 - ✅ Sim-to-real diagnostics: `replay_device_capture.py`, `mel_distribution_check.py`, `stream nn` with `nna` field
 - ✅ Diverse augmentation: ESC-50 noise (crowd/traffic/weather/hvac/ambient), speaker EQ, distance attenuation
 - ✅ Disk management: space pre-checks, auto-cleanup prompts, `disk-audit.sh`
@@ -532,7 +533,7 @@ check_test_result(job_id: "abc123")
 
 **Reviews and analysis must focus on outstanding actions**, not documenting past work. Git history serves as the permanent record of changes and decisions.
 
-## Current Audio System (March 2026)
+## Current Audio System (April 2026)
 
 ### Detection Architecture
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
@@ -550,7 +551,7 @@ check_test_result(job_id: "abc123")
 - **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP pattern extraction.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
-- **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection
+- **NN-modulated pulse** (b108): `control_.pulse` uses spectral flux weighted by NN activation, self-tuning via `nnConf` (activation variance). Floor-tracking baseline for discrete onset gate. Derivative-based NN gate (`nnRising`) works with flat activations.
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **Multi-source ACF period detection** (v83): Replaces Fourier tempogram (75ms → ~4ms). ACF at beat-level lags with parabolic interpolation, bar multipliers (2×/3×/4×) with sqrt penalty, epoch-fold variance scoring. Phase from epoch-fold peak position.
