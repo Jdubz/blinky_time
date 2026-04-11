@@ -31,7 +31,7 @@ labels:
   kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
   neighbor_weight: 0.25
   label_shift_frames: 1
-  hard_binary_threshold: 0.3   # Only kick/snare centers (hihat already weight=0)
+  hard_binary_threshold: 0.1   # Binarize: kick/snare (1.0) + neighbors (0.25) → 1.0, hihat (0.0) → 0.0
 
 features:
   use_delta: false

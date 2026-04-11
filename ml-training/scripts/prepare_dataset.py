@@ -726,12 +726,18 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     elif labels_type == "kick_weighted" and kick_weighted_dir:
         kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
         if not kw_path.exists():
-            raise FileNotFoundError(
-                f"Kick-weighted labels missing for {audio_path.stem}: {kw_path}\n"
-                f"Run: python scripts/generate_kick_weighted_targets.py"
-            )
+            # Missing label (may be quarantined) — skip track silently
+            return []
         with open(kw_path) as f:
             kw_data = json.load(f)
+        # Quality gate: skip tracks with too few events or explicitly skipped
+        if kw_data.get("skipped"):
+            return []
+        n_ks = kw_data.get("kick_count", 0) + kw_data.get("snare_count", 0)
+        if n_ks < 10:
+            print(f"  WARNING: Skipping {audio_path.stem}: only {n_ks} kick+snare events "
+                  f"(likely failed drum separation)")
+            return []
         beat_times = np.array([o["time"] for o in kw_data["onsets"]])
         beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
     elif labels_type == "consensus_kick_weighted" and kick_weighted_dir:

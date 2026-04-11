@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 10, 2026*
+*Last Updated: April 11, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
@@ -10,7 +10,7 @@
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v16 (26ch, no delta) deployed on all 3 blinkyhost devices (b107). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v19 (26ch, plain BCE, hard binary targets, [-18,+18] dB gain aug) deployed on all 3 blinkyhost devices (b111). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation. v19b sharp targets FAILED (too sparse). v20 drum-stem labels in preparation.
 
 **On-device gap root cause (April 10 diagnosis — mel distribution shift confirmed):** Three contributing factors, with mel shift as the primary cause:
 
@@ -104,7 +104,7 @@ v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160�
 
 ### Priority 2: NN-Modulated Pulse + NN Training
 
-**Status: b111 deployed on all 3 serial devices (v19 model). v19 on-device F1=0.477 (+0.006 vs v16 baseline 0.470). Offline-to-device gap narrowed from 40%→35%. NN-direct peak-picking tested and failed (F1→0.162) — spectral flux gated by NN remains correct for INT8 models. Hamming-smoothed NN activation added to gate. Band-specific flux buffers added (selection disabled pending better metric). v19b (sharp targets) training. v20 (drum-stem kick/snare labels) prepared — Demucs separation running.**
+**Status: b111 deployed on all 3 serial devices (v19 model). v19 on-device F1=0.477 (+0.006 vs v16 baseline 0.470). Offline-to-device gap narrowed from 40%→35%. NN-direct peak-picking tested and failed (F1→0.162) — spectral flux gated by NN remains correct for INT8 models. Hamming-smoothed NN activation added to gate. Band-specific flux buffers added (selection disabled pending better metric). v19b sharp targets FAILED (val_f1=0.166, too sparse). v20 drum-stem kick/snare labels — Demucs complete (6750 tracks), label generation in progress, training pipeline ready.**
 
 **Firmware improvements (b108, deployed April 9):**
 - **NN-modulated pulse output**: `control_.pulse` now uses NN activation to weight spectral flux. Self-tuning via `nnConf` (activation variance): flat NN (v16) → no behavior change; sharp NN (future PCEN) → strong onset selectivity (kicks/snares boosted, harmonic changes suppressed ~3x). Previously, `control_.pulse` was pure spectral flux with zero NN involvement — generators couldn't distinguish onsets from harmonic shifts.
@@ -189,9 +189,9 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v19 (aligned with published recipe): COMPLETE, DEPLOYED (b111, April 10).** 5 recipe fixes (Schlüter/Bock 2014): plain BCE, no mixup, hard binary targets, no freq_pos_encoding, no distillation. Gain augmentation extended to [-18, +18] dB. Early stopped epoch 43. Offline onset F1=0.742 (vs v16 0.782 — slight offline regression), KW F1=0.735 (vs v16 0.727 — slight improvement). **On-device F1=0.477** (+0.006 vs v16 0.470). Offline-to-device gap narrowed from 40%→35%. NN-direct peak-picking tested and catastrophically failed (F1→0.162) — INT8 activation on shifted mel not sharp enough for standalone detection. Spectral flux + NN gate remains the working approach. Key finding from F1 decomposition: system **under-detects** (recall=0.43, misses 57% of reference onsets) but reference includes hi-hats the system correctly ignores. Precision=0.61. Offline kick recall=82%, snare recall=83%.
 
-**v19b (sharp targets): training in progress.** Same as v19 but hard_binary_threshold=0.3 (16ms onset zones instead of 40ms). Uses same processed data. Expected to produce sharper activation peaks.
+**v19b (sharp targets): FAILED (April 11).** Same as v19 but hard_binary_threshold=0.3 (single-frame onset zones instead of 3-frame). Trained all 60 epochs. val_loss=1.251 (barely converged from initial ~1.28, vs v19's 1.085). val_f1=0.166 (vs v19's 0.340). Root cause: threshold 0.3 binarizes away neighbor_weight=0.25 frames, leaving only single-frame positives (16ms at 62.5Hz). Targets are too sparse for the model to learn from. Confirms Schlüter/Bock finding — neighbor weighting is essential for temporal tolerance.
 
-**v20 (drum-stem kick/snare labels): prepared, Demucs separation running.** Addresses the root label quality problem: 27% of consensus onsets are non-percussive (harmonic changes), 38% of kick/snare events are missing (masked by other instruments). Fix: Demucs drum separation → bandpass kick/snare detection on isolated drum stems. Should dramatically improve both precision (remove non-percussive labels) and recall (recover masked kick/snare). Config and pipeline scripts ready.
+**v20 (drum-stem kick/snare labels): training pipeline running (April 11).** Addresses the root label quality problem: 27% of consensus onsets are non-percussive (harmonic changes), 38% of kick/snare events are missing (masked by other instruments). Fix: Demucs drum separation (6750 tracks, 172G stems) → bandpass kick/snare detection on isolated drum stems. **Critical finding during data quality investigation: 735 tracks (10.9%) have silent drum stems where librosa onset detection fires hundreds of times on micro-noise, creating poisonous false positive labels. Quarantined all 735 (moved to `.quarantined/`). Remaining 6015 tracks pass validation (0.2% flagged).** Config fix: `hard_binary_threshold` 0.3→0.1 (0.3 would strip neighbor frames, same v19b failure mode). Pipeline safeguards added: provenance tracking (`.provenance.json`), overwrite protection (`--force` required for different audio source), validation step in `train_pipeline.sh`, quality gating in `prepare_dataset.py` (skip missing/silent labels), atomic writes in label generator.
 
 **Diagnostic tools deployed (April 9) — results (April 10):**
 - `replay_device_capture.py`: FP32 model on device mel produces flat 0.42 activation (same as INT8 on-device). **Quantization is NOT the bottleneck.**

@@ -27,7 +27,9 @@ Output format (per track):
 """
 
 import argparse
+import hashlib
 import json
+from datetime import datetime, timezone
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -37,12 +39,18 @@ from scipy.signal import butter, sosfilt
 
 
 # Frequency bands for onset classification
-KICK_LOW = 30
+# Kick: 40-200 Hz (below 40 Hz is sub-bass rumble / mp3 noise artifacts)
+# Snare: 200-4000 Hz (body + wire rattle)
+# Hihat: 4000-7500 Hz (capped below Nyquist/2 for 16 kHz SR to avoid aliasing)
+KICK_LOW = 40
 KICK_HIGH = 200
 SNARE_LOW = 200
 SNARE_HIGH = 4000
 HIHAT_LOW = 4000
-HIHAT_HIGH = 8000
+HIHAT_HIGH = 7500
+
+# Minimum RMS threshold for drum stem audio (below = silent/failed separation)
+MIN_RMS = 0.005
 
 # Target weights per onset type
 # Kicks and snares are equally important — both are primary visual events.
@@ -115,6 +123,35 @@ def process_track(args):
     except Exception as e:
         return f"FAILED {audio_path.name}: {e}"
 
+    # Validate drum stem has actual content (not silent/failed separation)
+    rms = float(np.sqrt(np.mean(y ** 2)))
+    if rms < MIN_RMS:
+        result = {
+            "onsets": [],
+            "kick_count": 0,
+            "snare_count": 0,
+            "hihat_count": 0,
+            "total": 0,
+            "source": "bandpass_onset_detect",
+            "rms": rms,
+            "skipped": True,
+            "skip_reason": f"silent drum stem (RMS={rms:.6f} < {MIN_RMS})",
+            "bands_hz": {
+                "kick": [KICK_LOW, KICK_HIGH],
+                "snare": [SNARE_LOW, SNARE_HIGH],
+                "hihat": [HIHAT_LOW, HIHAT_HIGH]
+            },
+            "weights": {
+                "kick": KICK_WEIGHT,
+                "snare": SNARE_WEIGHT,
+                "hihat": HIHAT_WEIGHT
+            },
+        }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(result, f, indent=2)
+        return f"SILENT {audio_path.stem}: RMS={rms:.6f}"
+
     kick_times = bandpass_onsets(y, sr, KICK_LOW, KICK_HIGH)
     snare_times = bandpass_onsets(y, sr, SNARE_LOW, SNARE_HIGH)
     hihat_times = bandpass_onsets(y, sr, HIHAT_LOW, HIHAT_HIGH)
@@ -132,6 +169,7 @@ def process_track(args):
         "hihat_count": hihat_count,
         "total": len(merged),
         "source": "bandpass_onset_detect",
+        "rms": rms,
         "weights": {
             "kick": KICK_WEIGHT,
             "snare": SNARE_WEIGHT,
@@ -144,11 +182,37 @@ def process_track(args):
         }
     }
 
+    # Atomic write: temp file + rename prevents corrupt partial writes
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
+    tmp_path = output_path.with_suffix('.tmp')
+    with open(tmp_path, 'w') as f:
         json.dump(result, f, indent=2)
+    tmp_path.rename(output_path)
 
     return None
+
+
+def write_provenance(output_dir: Path, audio_dir: Path, labels_dir: Path, track_count: int):
+    """Write provenance metadata to prevent silent overwrites."""
+    provenance = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "audio_source": str(audio_dir),
+        "labels_source": str(labels_dir),
+        "track_count": track_count,
+        "script": "generate_kick_weighted_targets.py",
+        "bands_hz": {
+            "kick": [KICK_LOW, KICK_HIGH],
+            "snare": [SNARE_LOW, SNARE_HIGH],
+            "hihat": [HIHAT_LOW, HIHAT_HIGH],
+        },
+        "weights": {
+            "kick": KICK_WEIGHT,
+            "snare": SNARE_WEIGHT,
+            "hihat": HIHAT_WEIGHT,
+        },
+    }
+    with open(output_dir / ".provenance.json", "w") as f:
+        json.dump(provenance, f, indent=2)
 
 
 def main():
@@ -164,11 +228,30 @@ def main():
                         help="Consensus labels dir (only process tracks with labels)")
     parser.add_argument("--workers", type=int, default=4,
                         help="Number of parallel workers")
+    parser.add_argument("--force", action="store_true",
+                        help="Overwrite existing labels from a different audio source")
     args = parser.parse_args()
 
     audio_dir = Path(args.audio_dir)
     output_dir = Path(args.output_dir)
     labels_dir = Path(args.labels_dir)
+
+    # Check provenance before overwriting existing labels
+    provenance_path = output_dir / ".provenance.json"
+    if provenance_path.exists() and not args.force:
+        with open(provenance_path) as f:
+            prev = json.load(f)
+        prev_source = prev.get("audio_source", "unknown")
+        if prev_source != str(audio_dir):
+            print(f"ERROR: Existing labels generated from: {prev_source}")
+            print(f"       New audio source:               {audio_dir}")
+            print(f"       Generated at: {prev.get('generated_at', 'unknown')}")
+            print(f"       Tracks: {prev.get('track_count', '?')}")
+            print(f"\nThis would overwrite labels from a different source.")
+            print(f"Use --force to proceed, or use a different --output-dir.")
+            return
+        print(f"Resuming previous run (same audio source: {prev_source})")
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Find audio files (non-recursive — combined/ is a flat namespace)
@@ -249,6 +332,10 @@ def main():
         print(f"  HiHats: {hihats} ({100*hihats/total:.0f}%)")
     else:
         print("  No onsets found in any track")
+
+    # Write provenance metadata
+    write_provenance(output_dir, audio_dir, labels_dir, len(all_files))
+    print(f"\nProvenance written to {output_dir / '.provenance.json'}")
 
 
 if __name__ == "__main__":

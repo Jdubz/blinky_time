@@ -59,6 +59,17 @@ else
     echo "=== Phase 1: Skipped (--skip-labels) ==="
 fi
 
+# Phase 1b: Validate kick_weighted labels (if applicable)
+KW_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('kick_weighted_dir',''))" "$CONFIG" 2>/dev/null)
+LABELS_TYPE=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_type',''))" "$CONFIG" 2>/dev/null)
+if [ -n "$KW_DIR" ] && [ "$LABELS_TYPE" = "kick_weighted" ]; then
+    echo "=== Phase 1b: Validating kick-weighted labels ==="
+    CONSENSUS_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_dir', '/mnt/storage/blinky-ml-data/labels/consensus_v5'))" "$CONFIG" 2>/dev/null)
+    python scripts/validate_kick_weighted.py --label-dir "$KW_DIR" --consensus-dir "$CONSENSUS_DIR" --quiet || {
+        echo "  Label validation found issues (see above). Continuing with training."
+    }
+fi
+
 # Phase 2: Data prep
 if [ "$SKIP_PREP" = false ]; then
     # Check if data exists and warn if it might not match current config
