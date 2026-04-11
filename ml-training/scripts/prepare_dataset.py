@@ -487,7 +487,11 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     """
     variants = [("clean", audio)]
 
-    for gain_db in [-18, -12, -6, 6]:
+    # Gain variation must cover device-realistic levels.
+    # Device mic during music sees +13 dB above training calibration (mel mean
+    # 0.74 vs 0.49). Previous range [-18, +6] never trained on device-like levels.
+    # Extended to [-18, +18] dB based on April 10 mel distribution analysis.
+    for gain_db in [-18, -12, -6, 6, 12, 18]:
         gain = 10 ** (gain_db / 20.0)
         clipped = (audio * gain).clamp(-1.0, 1.0)
         variants.append((f"gain{gain_db:+d}dB", clipped))

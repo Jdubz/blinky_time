@@ -1,0 +1,55 @@
+# Conv1D W16 v19b — Sharp targets variant
+#
+# Same as v19 but with hard_binary_threshold=0.3 instead of 0.1.
+# At 0.3, neighbor_weight=0.25 frames are excluded — only onset centers
+# are positive (1.0 frame = 16ms per onset, not 2.5 frames = 40ms).
+# Produces sharper training signal at the cost of less timing tolerance.
+# pos_weight increases from 4.7 to ~14.4 to compensate for fewer positives.
+#
+# Compare against v19 (threshold=0.1) to determine optimal peak width.
+# If v19 produces flat/wide peaks, v19b's sharper targets should fix it.
+# If v19 already produces sharp peaks, v19b may overtrain on exact timing.
+#
+# Reuses v19 processed data — only the binarization threshold differs
+# (applied at training time in MemmapBeatDataset, not during dataprep).
+#
+# Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+  hard_binary_threshold: 0.3    # Only onset centers (excludes neighbor_weight=0.25 frames)
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v19"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v19b.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

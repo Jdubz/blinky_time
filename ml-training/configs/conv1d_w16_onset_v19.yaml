@@ -1,0 +1,69 @@
+# Conv1D W16 v19 — Aligned with published onset detection recipe
+#
+# Fixes 5 misalignments with proven techniques (Schlüter/Bock 2014, madmom):
+#
+# 1. Plain BCE loss (no focal). Every published onset detector uses BCE.
+#    Asymmetric focal adds complexity without published validation for
+#    onset detection. pos_weight handles class imbalance (standard).
+#
+# 2. No global mixup. Current mixup blends all 128 frames uniformly,
+#    creating impossible frame-level targets. Published onset detectors
+#    don't use mixup. SpecAugment (freq/time masking) is retained —
+#    it's proven in Beat This! and doesn't corrupt label alignment.
+#
+# 3. Hard binary targets. Consensus strengths (0.14-1.0) are binarized
+#    to 0/1 at threshold 0.1 (any system agreement → positive).
+#    Published systems use hard targets with neighbor weighting, not
+#    soft regression targets. Neighbor weight 0.25 matches Schlüter 2014.
+#
+# 4. No freq_pos_encoding. Schlüter 2014 showed onset detection should
+#    be "oblivious to frequency" — onsets are broadband transients.
+#    Positional encoding tells the model to treat bands differently,
+#    contradicting this finding.
+#
+# 5. No knowledge distillation. Clean baseline — hard targets only.
+#    Distillation can be re-added once the baseline is established.
+#
+# Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# Same proven architecture as v16 (deployed). ~9.4K params, ~10 KB INT8.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  early_neighbor_frames: 0
+  early_neighbor_weight: 0.0
+  hard_binary_threshold: 0.1    # Binarize soft consensus targets: > 0.1 → 1.0
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"                   # Plain weighted BCE — matches all published onset detectors
+
+training:
+  mixup: false                  # Disabled: global mixup creates impossible frame-level targets
+  epochs: 60
+  patience: 15
+  pos_weight: 0                 # Auto-calculate from data (correct for hard binary targets)
+
+# No distillation — clean baseline
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v19"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v19.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

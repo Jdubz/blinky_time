@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 9, 2026*
+*Last Updated: April 10, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
@@ -12,21 +12,24 @@
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v16 (26ch, no delta) deployed on all 3 blinkyhost devices (b107). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation.
 
-**On-device gap root cause (April 9 diagnosis — REVISED):** Two separate issues were conflated:
+**On-device gap root cause (April 10 diagnosis — mel distribution shift confirmed):** Three contributing factors, with mel shift as the primary cause:
 
-1. **`control_.pulse` never used the NN.** The pulse signal that generators consume was driven entirely by auto-normalized spectral flux in `synthesizeOutputs()`, with zero NN involvement. The NN only gated discrete onset events for debug/serial output and onset density. **Fixed: `control_.pulse` now uses NN-modulated spectral flux** — self-tuning via `nnConf` (NN activation variance). When NN is discriminative (sharp peaks), flux is strongly gated by NN activation. When NN is flat (current v16), behavior is unchanged.
+1. **Mel distribution shift during music (PRIMARY).** Device mel during music has mean=0.74 vs training calibration mean=0.49 — a +0.25 shift (~13 dB louder). Device ambient/silence mel (~0.47) matches training (~0.49), confirming mic calibration is correct at the noise floor. The shift occurs because the speaker level overwhelms the mic at higher energy than training simulates. Training gain augmentation caps at +6 dB, but device sees +13 dB during music. **Replay confirms: FP32 model on device mel produces the same flat 0.42 activation as INT8 on-device — quantization is NOT the bottleneck.**
 
-2. **The NN gate's `peakAge < 100ms` check fails with flat activations.** With sustained ~0.45 activation, peak timestamps update sporadically, making the gate flickery. **Fixed: added derivative-based gate check** — `nnRising = (activation - prevActivation) > 0.005` fires on micro-fluctuations that correlate with real onsets, even when the overall activation is flat.
+2. **Model produces flat activations even at training calibration.** FP32 model on training-calibrated techno track: mean activation=0.41, std=0.075. Frame-level F1 peaks at 0.157 (threshold=0.5). The offline F1=0.782 is achieved by liberal peak-picking + 50ms mir_eval tolerance — the model over-detects 2-3x (est/ref ≈ 2.7) but many detections fall within tolerance windows.
 
-3. **The "40% offline-to-on-device gap" is partly a measurement artifact.** Offline eval peak-picks raw NN sigmoid (50ms tolerance). On-device eval uses spectral flux rising-edge + NN gate (100ms tolerance). Different detection mechanisms measuring different things. The metrics are not directly comparable.
+3. **Firmware uses simpler gate than offline eval.** Offline: optimal threshold peak-picking with local maxima. On-device: derivative-based NN gate + cooldown. The simpler gate can't extract signal from flat activations. b108 firmware improvements (NN-modulated pulse, derivative gate) mitigate this but can't overcome the mel shift.
 
-**PCEN remains valuable** for sharpening NN peaks (improves nnConf → stronger NN modulation on pulse, better PLP gating, better ACF source quality). v18 PCEN training in progress with auto pos_weight=12.7.
+**Fix: increase gain augmentation from [-18, +6] to [-18, +18] dB** to cover realistic device music levels. Combined with v19 training recipe fixes (plain BCE, hard binary targets, no focal loss, no mixup), this should close the gap.
+
+**PCEN abandoned (April 10).** v18 failed: PCEN features have AUC=0.5061 for onset discrimination (random chance) vs log-mel AUC=0.6574. PCEN's adaptive AGC normalizes away onset/non-onset contrast. No published onset detection system uses PCEN — it's proven for detection-in-noise (birds, keywords), not musical transient detection.
 
 **Training experiments (April 7-9):**
 - v15: madmom MSE distillation, 52ch (mel+delta). Offline onset F1=0.745, KW F1=0.730. On-device onset F1=0.473.
 - v16 (deployed on all 3 serial devices, b107): no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. **On-device onset F1=0.471 — identical to v15.** Delta features provide zero on-device benefit despite 5ms/frame extra inference cost. Confirms offline-to-on-device gap is NOT from feature type.
 - v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **On-device A/B (April 9): onset F1=0.473 — identical to v16 (0.471).** Band-flux provides zero on-device benefit, same as delta features. Confirms gap is NOT from feature representation.
-- v18: PCEN mel normalization (52ch, mel+delta). **Training struggling (April 9).** Dataprep complete (5M train chunks, 880K val chunks). PCEN firmware support committed (b107, `ONSET_MODEL_USE_PCEN` ifdef wired in AudioTracker). **pos_weight=20 causes all-positive collapse** — 2 epochs with zero discrimination (P=0.054=base rate, R=1.0, F1=0.102, val_loss=0.688 and rising). Earlier run with auto pos_weight=12.7 reached val_loss=0.4977 — the model CAN learn from PCEN features, but needs different pos_weight than log-mel models. Restarting with auto pos_weight. **Hypothesis: PCEN sharpens NN activation peaks** — sustained energy suppressed, transients amplified. The pulse detector's rising-edge gate currently fails because log-compressed mel gives flat NN activations during music.
+- v18: PCEN mel normalization (52ch, mel+delta). **FAILED (April 10).** Auto pw=12.7: val_loss plateaued at 0.4976 (barely below random), F1=0.011, recall=0.006 after 36 epochs. pw=20: immediate all-positive collapse. PCEN features have AUC=0.5061 for onset discrimination (random chance). Root cause: PCEN's adaptive AGC normalizes away the transient contrast the model needs. No published onset system uses PCEN for musical onset detection. Also discovered `base.yaml` had `log_epsilon: 1e-7` parsed as string by PyYAML — fixed to `1.0e-7`. Bug only affected v18 dataprep (introduced in PCEN commit c0009054, Apr 7).
+- v19: **Aligned with published recipe (training April 10).** Five fixes from literature review (Schlüter/Bock 2014, madmom): (1) plain BCE loss replacing asymmetric focal, (2) no global mixup (creates impossible frame-level targets), (3) hard binary targets (consensus > 0.1 → 1.0), (4) no freq_pos_encoding (onset detection is frequency-invariant), (5) no distillation (clean baseline). Same Conv1D [32,32] architecture as v16. Log-mel 26ch. Training in progress.
 
 **Fleet status (April 9, verified via blinky-server):**
 - 062CBD12 — Hat Display, b107 (v16 model), serial, test chip ✅
@@ -85,8 +88,8 @@ See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md` for full design.
 v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160→120 frames) confirmed working. DnB tracks that never activated now score.
 
 **Remaining work:**
-- Sharper NN onset activations (PCEN v18 or alternative approach)
-- Re-validate PLP after device power cycle to confirm transient regression
+- Sharper NN onset activations (v20 drum-stem labels should fix the 27% non-percussive label noise)
+- Band-specific epoch-fold: infrastructure deployed (b110+), selection disabled. Variance and autoCorr metrics both regressed 8-10/18 tracks. Needs a more robust selection metric or genre-preset approach.
 - Pattern slot cache tuning (switch/new thresholds, seed blend ratio)
 
 **Key advantages of PLP over PLL:**
@@ -101,7 +104,7 @@ v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160�
 
 ### Priority 2: NN-Modulated Pulse + NN Training
 
-**Status: b108 deployed on all 3 serial devices. NN-modulated pulse + derivative gate validated (no regression). v18 PCEN training in progress (auto pw=12.7, epoch 6).**
+**Status: b111 deployed on all 3 serial devices (v19 model). v19 on-device F1=0.477 (+0.006 vs v16 baseline 0.470). Offline-to-device gap narrowed from 40%→35%. NN-direct peak-picking tested and failed (F1→0.162) — spectral flux gated by NN remains correct for INT8 models. Hamming-smoothed NN activation added to gate. Band-specific flux buffers added (selection disabled pending better metric). v19b (sharp targets) training. v20 (drum-stem kick/snare labels) prepared — Demucs separation running.**
 
 **Firmware improvements (b108, deployed April 9):**
 - **NN-modulated pulse output**: `control_.pulse` now uses NN activation to weight spectral flux. Self-tuning via `nnConf` (activation variance): flat NN (v16) → no behavior change; sharp NN (future PCEN) → strong onset selectivity (kicks/snares boosted, harmonic changes suppressed ~3x). Previously, `control_.pulse` was pure spectral flux with zero NN involvement — generators couldn't distinguish onsets from harmonic shifts.
@@ -182,13 +185,19 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v17 (band-flux): evaluated, NOT deployed.** Onset F1=0.473 on-device vs v16 baseline 0.471. Band-flux provides zero on-device benefit. Same pattern as v16 vs v15: feature representation changes produce zero on-device benefit. The offline-to-on-device gap is NOT from feature representation.
 
-**v18 (PCEN): training struggling — pos_weight sensitivity.** Dataprep complete (5M train, 880K val chunks). PCEN firmware wired behind `ONSET_MODEL_USE_PCEN` ifdef in AudioTracker.cpp. **pos_weight=20 (the value proven for log-mel) causes immediate all-positive collapse** — after 2 fresh epochs: P=0.054 (=base rate), R=1.0, F1=0.102, val_loss=0.688 rising. The model cannot learn to discriminate. **Earlier run with auto pos_weight=12.7 reached val_loss=0.4977** — the model CAN learn from PCEN features but needs lower pos_weight than log-mel. Next step: restart with auto pos_weight. **Revised hypothesis (April 9 diagnosis):** the gap is NOT mel domain shift killing the model — raw NN activation is 0.457 on-device (strong!). The gap is that log-compressed mel gives **flat sustained NN activation** (~0.45 throughout music). PCEN should sharpen peaks because it emphasizes transient energy changes (`E >> M`) and suppresses sustained energy.
+**v18 (PCEN): FAILED (April 10).** Auto pw=12.7: best val_loss=0.4976 at epoch 21, early stopped epoch 36. Recall effectively zero (0.006). pw=20: immediate all-positive collapse. Root cause: PCEN features have AUC=0.5061 for onset discrimination (vs log-mel AUC=0.6574). PCEN's adaptive AGC normalizes away the transient contrast needed for onset detection. No published onset detection system uses PCEN for musical transients — it's proven for detection-in-noise (bird calls, keyword spotting) where signal is sparse against ambient. Also: `log_epsilon: 1e-7` in base.yaml was parsed as string by PyYAML (YAML 1.1 doesn't recognize `1e-7` without decimal), causing mel computation to fail. Fixed to `1.0e-7`. Bug only affected v18+ (introduced in PCEN commit c0009054).
 
-**Diagnostic tools deployed (April 9):**
-- `replay_device_capture.py`: feeds captured device mel through offline model, compares activations
-- `mel_distribution_check.py`: per-band Wasserstein distance between training and device mel
-- `stream nn` now includes `nna` field (raw NN activation, pre-gating) alongside `onset` (gated pulse)
-- Log epsilon synced (training 1e-10 → 1e-7 to match firmware)
+**v19 (aligned with published recipe): COMPLETE, DEPLOYED (b111, April 10).** 5 recipe fixes (Schlüter/Bock 2014): plain BCE, no mixup, hard binary targets, no freq_pos_encoding, no distillation. Gain augmentation extended to [-18, +18] dB. Early stopped epoch 43. Offline onset F1=0.742 (vs v16 0.782 — slight offline regression), KW F1=0.735 (vs v16 0.727 — slight improvement). **On-device F1=0.477** (+0.006 vs v16 0.470). Offline-to-device gap narrowed from 40%→35%. NN-direct peak-picking tested and catastrophically failed (F1→0.162) — INT8 activation on shifted mel not sharp enough for standalone detection. Spectral flux + NN gate remains the working approach. Key finding from F1 decomposition: system **under-detects** (recall=0.43, misses 57% of reference onsets) but reference includes hi-hats the system correctly ignores. Precision=0.61. Offline kick recall=82%, snare recall=83%.
+
+**v19b (sharp targets): training in progress.** Same as v19 but hard_binary_threshold=0.3 (16ms onset zones instead of 40ms). Uses same processed data. Expected to produce sharper activation peaks.
+
+**v20 (drum-stem kick/snare labels): prepared, Demucs separation running.** Addresses the root label quality problem: 27% of consensus onsets are non-percussive (harmonic changes), 38% of kick/snare events are missing (masked by other instruments). Fix: Demucs drum separation → bandpass kick/snare detection on isolated drum stems. Should dramatically improve both precision (remove non-percussive labels) and recall (recover masked kick/snare). Config and pipeline scripts ready.
+
+**Diagnostic tools deployed (April 9) — results (April 10):**
+- `replay_device_capture.py`: FP32 model on device mel produces flat 0.42 activation (same as INT8 on-device). **Quantization is NOT the bottleneck.**
+- `mel_distribution_check.py`: Device music mel mean=0.74 vs training=0.49 (+0.25 shift, ~13 dB). Device ambient=0.47 ≈ training. Shift only during music — speaker overwhelms mic calibration.
+- `stream nn` includes `nna` field (raw NN activation, pre-gating) alongside `onset` (gated pulse)
+- Log epsilon fixed: `1e-7` → `1.0e-7` in base.yaml (PyYAML string parse bug, only affected v18+)
 
 **NN inference performance (April 2 measurement):**
 
@@ -207,13 +216,15 @@ v11 (with delta features, 52 input channels): **11.7ms** on nRF52840 — 70% of 
 
 1. ~~**Onset-specific knowledge distillation**~~ → **v15 DONE** (madmom MSE, deployed as v16 recipe base)
 
+2. **Increase gain augmentation range** (HIGH IMPACT, low effort) — Current [-18, +6] dB caps at +6 dB above calibration, but device music mel shows +13 dB shift (mean 0.74 vs training 0.49). Increasing to [-18, +18] dB covers realistic in-room music levels. This is the single most impactful change for closing the on-device gap — the model has never trained on mel distributions matching what it sees during music.
+
+3. **Multi-resolution FFT input** (+3-5% F1, high effort) — Schlüter & Bock 2014's key innovation: 3 FFT window sizes (23ms, 46ms, 93ms) stacked as 3-channel input. Captures both transient detail (short window) and harmonic structure (long window). Every top CNN onset detector (madmom MIREX #1, Schlüter dissertation) uses this. Single most validated architectural choice in published onset detection. Requires firmware changes: 3 FFTs per frame (~4% → ~12% CPU), 3x mel buffer. Source: Schlüter & Bock (ICASSP 2014).
+
 4. **Quantization-Aware Training (QAT)** (+1-3% F1, high effort) — Simulate INT8 quantization during training so model compensates for quantization noise. Larger benefit for small models where each weight matters. Complex to integrate: our PyTorch → Keras → TFLite pipeline requires QAT in the Keras domain, not PyTorch. Source: NVIDIA QAT benchmarks, DCASE 2024 low-complexity task.
 
 5. **Reduce mel bands 26 → 23** (minor, medium effort) — Mel bands 23-25 are degenerate (identical `{116,127,127}` filterbank). Removes 11.5% wasted NN input bandwidth. Requires firmware `NUM_MEL_BANDS` change + retraining. Firmware change trivial, but breaks model compatibility.
 
 6. **Increase mel bands 26 → 40** (+2-5% F1 estimated, high effort) — All published onset detection systems use 80 mel bands. Our 26 gives 1/3 the frequency resolution, limiting spectral discrimination. Going to 40 would double first conv layer size but fits within 60 KB budget. Requires firmware mel filterbank expansion, NN input shape change, and full reprocessing of training data. High impact for distinguishing spectrally similar events.
-
-7. **Multi-resolution FFT input** (+3-5% F1, high effort) — Schlüter & Bock 2014 used 3 FFT window sizes (23ms, 46ms, 93ms) stacked as 3-channel input. Captures both transient detail (short window) and harmonic structure (long window). Requires additional FFT computation on MCU (~4% → ~12% CPU). Source: Schlüter & Bock (ICASSP 2014).
 
 **Not worth pursuing:**
 - Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
@@ -230,6 +241,10 @@ v11 (with delta features, 52 input channels): **11.7ms** on nRF52840 — 70% of 
 - SpecMix / CutMix: **proven unsound** for frame-level onset detection (v13 post-mortem). Label mixing is wrong for sequence labeling tasks.
 - SWA: **proven unhelpful** at this model scale (v12 post-mortem)
 - OWBCE onset-proximity loss: **proven equivalent to plain asymmetric focal** (v14). Corrected implementation (proximity on positives only) showed no improvement. The bottleneck is label quality, not loss function.
+- PCEN: **proven ineffective** for onset detection (v18). AUC=0.5061 (random chance) vs log-mel AUC=0.6574. Adaptive AGC normalizes away onset/non-onset contrast. No published onset system uses PCEN for musical transients.
+- Asymmetric focal loss: **no published validation** for onset detection. Every proven system (Schlüter/Bock 2014, madmom, Beat This!) uses plain BCE. Focal loss adds hyperparameter complexity without measurable benefit over BCE+pos_weight (v14 finding).
+- Global mixup for frame-level tasks: creates impossible targets by blending all 128 frames uniformly. SpecMix handles frame-level correctly but is also unsound for onset detection (v13). Published onset systems don't use mixup.
+- Frequency positional encoding: contradicts Schlüter 2014 finding that onset detection should be "oblivious to frequency." Onsets are broadband transients; frequency position is irrelevant.
 
 ### Priority 3: Server Consolidation — COMPLETE ✅
 

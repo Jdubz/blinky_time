@@ -30,7 +30,9 @@ for arg in "${@:3}"; do
 done
 
 OUTPUT_DIR="outputs/$RUN_NAME"
-DATA_DIR="data/processed"
+# Read processed_dir from config (falls back to base.yaml default)
+DATA_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('data',{}).get('processed_dir','data/processed'))" "$CONFIG" 2>/dev/null)
+DATA_DIR="${DATA_DIR:-data/processed}"
 
 echo "=== ML Training Pipeline ==="
 echo "Config: $CONFIG"

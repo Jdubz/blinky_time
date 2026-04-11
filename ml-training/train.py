@@ -30,7 +30,8 @@ from scripts.audio import load_config
 class MemmapBeatDataset(Dataset):
     """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
-    def __init__(self, x_path, y_path, y_teacher_path=None, max_features=None):
+    def __init__(self, x_path, y_path, y_teacher_path=None, max_features=None,
+                 hard_binary_threshold: float = 0.0):
         self.X = np.load(x_path, mmap_mode='r')
         self.Y = np.load(y_path, mmap_mode='r')
         self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
@@ -38,6 +39,10 @@ class MemmapBeatDataset(Dataset):
         # Slice features if data has more channels than model expects
         # (e.g., data has 52=mel+delta but model wants 26=mel only)
         self._max_features = max_features
+        # If > 0, binarize soft consensus targets at training time:
+        # values > threshold → 1.0, else → 0.0. Published onset detectors
+        # (Schlüter/Bock 2014, madmom) use hard binary targets, not soft.
+        self._hard_binary_threshold = hard_binary_threshold
 
     def __len__(self):
         return len(self.X)
@@ -47,6 +52,8 @@ class MemmapBeatDataset(Dataset):
         if self._max_features is not None and x.shape[-1] > self._max_features:
             x = x[..., :self._max_features]
         y = torch.from_numpy(self.Y[idx].copy()).float()
+        if self._hard_binary_threshold > 0:
+            y = (y > self._hard_binary_threshold).float()
         if y.dim() == 2:
             # Multi-channel targets (e.g., instrument model: chunk_frames × 3)
             y_out = y
@@ -410,7 +417,7 @@ def main():
     parser.add_argument("--loss", default=None,
                         choices=["bce", "focal", "shift_bce", "confidence_shift_bce",
                                  "asymmetric_focal", "asymmetric_focal_owbce",
-                                 "shift_focal"],
+                                 "shift_focal", "weighted_bce"],
                         help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
@@ -518,12 +525,17 @@ def main():
     else:
         expected_features = cfg["audio"]["n_mels"]
 
+    hard_binary_threshold = cfg.get("labels", {}).get("hard_binary_threshold", 0.0)
+    if hard_binary_threshold > 0:
+        print(f"  Hard binary targets: y > {hard_binary_threshold} → 1.0")
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
-        y_teacher_path=teacher_train_path, max_features=expected_features)
+        y_teacher_path=teacher_train_path, max_features=expected_features,
+        hard_binary_threshold=hard_binary_threshold)
     val_ds = MemmapBeatDataset(
         data_dir / "X_val.npy", data_dir / "Y_val.npy",
-        y_teacher_path=teacher_val_path, max_features=expected_features)
+        y_teacher_path=teacher_val_path, max_features=expected_features,
+        hard_binary_threshold=hard_binary_threshold)
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
@@ -536,6 +548,8 @@ def main():
     rng = np.random.default_rng(cfg["training"].get("seed", 42))
     sample_idx = rng.choice(len(y_all), size=sample_size, replace=False)
     y_sample = y_all[sample_idx]
+    if hard_binary_threshold > 0:
+        y_sample = (y_sample > hard_binary_threshold).astype(np.float32)
 
     # Detect multi-channel targets (e.g., instrument model: N × T × 3)
     num_output_channels = cfg["model"].get("num_output_channels", 0)

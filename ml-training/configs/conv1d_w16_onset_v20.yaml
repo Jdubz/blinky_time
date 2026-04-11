@@ -1,0 +1,55 @@
+# Conv1D W16 v20 — Drum-stem kick/snare labels
+#
+# Major change: training on kick/snare-only labels derived from Demucs
+# drum-separated stems instead of all-onset consensus. This fixes two
+# critical label quality issues:
+#
+# 1. 27% of consensus onsets are non-percussive (harmonic changes, vocal
+#    entries) — removed because they don't exist in the drum stem
+# 2. 38% of kick/snare events are missing from the consensus because
+#    they're masked by other instruments — recovered on isolated drums
+#
+# Uses generate_kick_weighted_targets.py on drum stems (not full mix).
+# Kick/snare get weight 1.0, hi-hats get weight 0.0.
+#
+# Same recipe as v19 (plain BCE, hard binary targets, no focal/mixup/freq_pos).
+# Same gain augmentation [-18, +18] dB.
+#
+# Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.3   # Only kick/snare centers (hihat already weight=0)
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v20"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v20.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

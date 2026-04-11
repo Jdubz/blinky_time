@@ -22,8 +22,12 @@ import { del, get, monitorWs, post, put, resolveDeviceId } from './http-client.j
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Default track directory for validation suites
-const DEFAULT_TRACK_DIR = join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
+// Default track directory for validation suites.
+// When the blinky-server runs on a different machine (e.g., blinkyhost),
+// the track directory must be a path on THAT machine, not the MCP host.
+// Set BLINKY_TRACK_DIR to override (e.g., /home/blinkytime/blinky_time/blinky-test-player/music/edm).
+const DEFAULT_TRACK_DIR = process.env.BLINKY_TRACK_DIR
+  || join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
 
 // JSON response helper
 function ok(data: unknown): { content: Array<{ type: 'text'; text: string }> } {

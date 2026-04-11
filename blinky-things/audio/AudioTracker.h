@@ -165,8 +165,8 @@ private:
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF period detection)
     float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
-    float gatedFluxBuffer_[OSS_BUFFER_SIZE] = {0};  // NN-gated flux (for epoch-fold pattern extraction only)
-    float gatedFluxLinear_[OSS_BUFFER_SIZE] = {0};   // Linearized NN-gated flux (for epoch-fold)
+    float midFluxBuffer_[OSS_BUFFER_SIZE] = {0};    // Mid-frequency flux (bins 7-32, for band-specific epoch-fold)
+    float highFluxBuffer_[OSS_BUFFER_SIZE] = {0};   // High-frequency flux (bins 33-127, for band-specific epoch-fold)
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -203,19 +203,25 @@ private:
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
-    // === Pulse detection ===
-    float odfBaseline_ = 0.0f;        // Floor-tracking baseline
+    // === Pulse detection (NN-direct, Bock 2012) ===
+    // NN activation is the primary onset detection function (ODF).
+    // Spectral flux is used for ACF/PLP tempo only, not for onset pulse.
+    float odfBaseline_ = 0.0f;        // Floor-tracking baseline (on smoothed NN)
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
     float prevOdf_ = 0.0f;             // Previous frame ODF (for rising-edge detection)
 
-    // === Raw NN activation tracking (before threshold/cooldown) ===
+    // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
-    float prevNNActivation_ = 0.0f;   // Previous frame NN output (for derivative gate)
+    float prevNNActivation_ = 0.0f;   // Previous frame NN output
     float nnActivationMean_ = 0.3f;   // EMA of NN activation (for adaptive gate)
     float nnActivationVar_ = 0.01f;   // EMA of NN activation variance
+    // 3-tap Hamming smoothing (Schlüter/Bock 2014): reduces INT8 quantization jitter
+    float nnSmoothed_ = 0.0f;         // Current smoothed NN activation
+    float nnPrev1_ = 0.0f;            // NN activation t-1 (for Hamming)
+    float nnPrev2_ = 0.0f;            // NN activation t-2 (for Hamming)
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
@@ -250,7 +256,7 @@ private:
     AudioControl control_;
 
     // === Internal methods ===
-    void addOssSample(float ungatedFlux, float gatedFlux);
+    void addOssSample(float ungatedFlux, float midFlux, float highFlux);
     void addBassSample(float bassEnergy);
     void resetAnalysisState();
     void runAcf();

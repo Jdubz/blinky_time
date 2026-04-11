@@ -93,6 +93,8 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralCentroid_(0.0f)
     , spectralFlux_(0.0f)
     , bassFlux_(0.0f)
+    , midFlux_(0.0f)
+    , highFlux_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -157,6 +159,8 @@ void SharedSpectralAnalysis::reset() {
     frameRmsDb_ = -200.0f;
     spectralFlux_ = 0.0f;
     bassFlux_ = 0.0f;
+    midFlux_ = 0.0f;
+    highFlux_ = 0.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -246,12 +250,16 @@ void SharedSpectralAnalysis::process() {
         // actual emphasis rather than bin-count dominance (bass=6, mid=26,
         // high=95 bins — without normalization, high band would dominate).
         bassFlux_ = bassFlux / BASS_BIN_COUNT;
+        midFlux_ = midFlux / MID_BIN_COUNT;
+        highFlux_ = highFlux / HIGH_BIN_COUNT;
         spectralFlux_ = bassFluxWeight * bassFlux_
-                       + midFluxWeight * (midFlux / MID_BIN_COUNT)
-                       + highFluxWeight * (highFlux / HIGH_BIN_COUNT);
+                       + midFluxWeight * midFlux_
+                       + highFluxWeight * highFlux_;
     } else {
         spectralFlux_ = 0.0f;
         bassFlux_ = 0.0f;
+        midFlux_ = 0.0f;
+        highFlux_ = 0.0f;
     }
 
     // Save compressed magnitudes for next frame's flux computation.
