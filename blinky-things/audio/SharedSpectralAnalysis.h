@@ -249,6 +249,20 @@ public:
      */
     float getBassFlux() const { return bassFlux_; }
 
+    /**
+     * Get mid-frequency spectral flux (bins 7-32, 437-2000 Hz).
+     * Captures vocal/snare transients. Useful for band-specific PLP
+     * epoch-fold on syncopated genres (reggaeton, afrobeat).
+     */
+    float getMidFlux() const { return midFlux_; }
+
+    /**
+     * Get high-frequency spectral flux (bins 33-127, 2-8 kHz).
+     * Captures hi-hats, cymbals, snare brightness. Useful for band-specific
+     * PLP epoch-fold on trap (hi-hat patterns) and dense percussion.
+     */
+    float getHighFlux() const { return highFlux_; }
+
     // --- Compressor/whitening debug accessors ---
 
     /**
@@ -307,6 +321,8 @@ private:
     float spectralCentroid_;
     float spectralFlux_;
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
+    float midFlux_;            // Mid-frequency spectral flux (bins 7-32, vocals/snare)
+    float highFlux_;           // High-frequency spectral flux (bins 33-127, hi-hats/cymbals)
 
     // State
     bool frameReady_;

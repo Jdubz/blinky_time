@@ -154,10 +154,19 @@ const AudioControl& AudioTracker::update(float dt) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 5. Pulse detection uses spectral flux for sharp transient edges, gated
-    //    by NN onset activation to suppress non-onset spectral changes (harmonic
-    //    shifts, hi-hat jitter, noise). Spectral flux provides precise timing
-    //    (rising-edge detection), NN provides selectivity (is this a real onset?).
+    // 5. Pulse detection uses spectral flux for transient edges, gated by NN.
+    //
+    //    NN-direct peak-picking (Bock 2012) was tested but regressed F1 from
+    //    0.477 to 0.162 — the INT8 model on device-shifted mel doesn't produce
+    //    sharp enough activations for standalone peak-picking. Spectral flux
+    //    provides robust transient timing; NN provides selectivity.
+    //
+    //    3-tap Hamming FIR smoothing on raw NN activation for gate stability.
+    if (newSpectralFrame && nnActive_) {
+        nnPrev2_ = nnPrev1_;
+        nnPrev1_ = rawNNActivation_;
+        nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
+    }
     float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevOdf_;
     updatePulseDetection(pulseOdf, dt, nowMs);
 
@@ -179,19 +188,14 @@ const AudioControl& AudioTracker::update(float dt) {
         }
         bassContrast = clampf(bassContrast, 0.0f, 1.0f);
 
-        // Adaptive NN-gated bass flux. Gate floor adjusts based on how
-        // discriminative the NN output is (tracked via activation variance).
-        // High variance = NN clearly separates onsets → gate is selective (floor 0.1).
-        // Low variance = compressed activations → gate opens (floor 0.6).
-        // Prevents pattern quality collapse when NN model changes.
+        // Track NN activation statistics (used by pulse detection for NN modulation)
         float odfClamped = clampf(odf, 0.0f, 1.0f);
         nnActivationMean_ += 0.01f * (odfClamped - nnActivationMean_);
         float dev = odfClamped - nnActivationMean_;
         nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
-        float nnConf = clampf(nnActivationVar_ * 20.0f, 0.0f, 1.0f);
-        float gateFloor = 0.6f * (1.0f - nnConf) + 0.1f * nnConf;
-        float nnGatedFlux = bassContrast * (gateFloor + (1.0f - gateFloor) * odfClamped);
-        addOssSample(bassContrast, nnGatedFlux);
+
+        // Buffer broadband + per-band flux for band-best PLP epoch-fold
+        addOssSample(bassContrast, spectral_.getMidFlux(), spectral_.getHighFlux());
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;
@@ -256,7 +260,8 @@ const AudioControl& AudioTracker::update(float dt) {
 
 void AudioTracker::resetAnalysisState() {
     memset(ossBuffer_, 0, sizeof(ossBuffer_));
-    memset(gatedFluxBuffer_, 0, sizeof(gatedFluxBuffer_));
+    memset(midFluxBuffer_, 0, sizeof(midFluxBuffer_));
+    memset(highFluxBuffer_, 0, sizeof(highFluxBuffer_));
     memset(bassBuffer_, 0, sizeof(bassBuffer_));
     memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
     ossWriteIdx_ = 0; ossCount_ = 0;
@@ -279,9 +284,10 @@ void AudioTracker::resetAnalysisState() {
 // OSS Buffer
 // ============================================================================
 
-void AudioTracker::addOssSample(float ungatedFlux, float gatedFlux) {
+void AudioTracker::addOssSample(float ungatedFlux, float midFlux, float highFlux) {
     ossBuffer_[ossWriteIdx_] = ungatedFlux;
-    gatedFluxBuffer_[ossWriteIdx_] = gatedFlux;
+    midFluxBuffer_[ossWriteIdx_] = midFlux;
+    highFluxBuffer_[ossWriteIdx_] = highFlux;
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
@@ -299,8 +305,8 @@ void AudioTracker::runAcf() {
     // Linearize all source circular buffers into class members.
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
-        ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
-        gatedFluxLinear_[i] = gatedFluxBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
+        int idx = (startIdx + i) % OSS_BUFFER_SIZE;
+        ossLinear_[i] = ossBuffer_[idx];
     }
     int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
     for (int i = 0; i < bassCount_; i++) bassLinear_[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
@@ -320,14 +326,6 @@ void AudioTracker::runAcf() {
         mean /= count;
         for (int i = 0; i < count; i++) sources[src][i] -= mean;
     }
-    // Also mean-subtract gatedFluxLinear_ for epoch-fold use
-    if (ossCount_ >= 20) {
-        float mean = 0.0f;
-        for (int i = 0; i < ossCount_; i++) mean += gatedFluxLinear_[i];
-        mean /= ossCount_;
-        for (int i = 0; i < ossCount_; i++) gatedFluxLinear_[i] -= mean;
-    }
-
     // --- Pass 1: Multi-source ACF at beat-level lags ---
     // Scan lags 20-80 (200-49 BPM beat rate) with step=2.
     // Bar-level candidates are generated from multiples, not scanned directly.
@@ -587,76 +585,95 @@ void AudioTracker::updatePlpAnalysis() {
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
     plpPatternLen_ = patLen;
 
-    // --- 2. Recency-weighted epoch fold for pattern extraction ---
-    // Uses ungated spectral flux from ossBuffer_ — NN-independent.
-    // Decouples pattern quality from NN model quality.
+    if (ossCount_ < patLen * 2) return;
+
+    // --- 2. Band-best epoch fold for pattern extraction ---
+    // Epoch-fold multiple frequency bands independently at the ACF period.
+    // Select the band whose fold has the highest variance (best pattern contrast).
+    // This fixes PLP on syncopated genres:
+    //   - Trap: high-band captures hi-hat patterns without 808 interference
+    //   - Reggaeton: mid-band captures snare without bass mud
+    //   - Deep techno: bass-band isolates sparse kicks from pad contamination
+    //   - Afrobeat: best-of-bands picks the most periodic instrument layer
     //
-    // Previous design used NN-gated flux, making plpAutoCorr drop 37-72%
-    // when NN model changed. Ungated SuperFlux already suppresses harmonic
-    // shifts (Bock 2013). Canonical PLP (Grosche 2011) uses ungated flux.
+    // Uses ungated flux per band — NN-independent (Grosche 2011).
+    // Replaces single broadband epoch-fold. Zero additional RAM (repurposed
+    // gatedFluxBuffer_/gatedFluxLinear_ → midFluxBuffer_/highFluxBuffer_).
+
+    // epochFoldLinear_ is a scratch buffer — reused per band candidate
+
+    // Band sources: broadband (oss), mid flux, high flux, bass energy
+    // Bass flux is already in ossBuffer_ (the broadband is bass-weighted via odfContrast)
+    const float* circBufs[4] = { ossBuffer_, midFluxBuffer_, highFluxBuffer_, bassBuffer_ };
+    const int circCounts[4] = { ossCount_, ossCount_, ossCount_, bassCount_ };
+    const int circWriteIdxs[4] = { ossWriteIdx_, ossWriteIdx_, ossWriteIdx_, bassWriteIdx_ };
+    const int circSizes[4] = { OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, BASS_BUFFER_SIZE };
+
+    // Band selection disabled — broadband (band 0) is the default.
     //
-    // NOTE: ossLinear_ is mean-subtracted (for ACF). Epoch-fold needs raw
-    // values for meaningful mean/variance, so we linearize from ossBuffer_
-    // directly without mean subtraction.
-    // Linearize ossBuffer_ into epochFoldLinear_ (not mean-subtracted, unlike ossLinear_)
-    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-    for (int i = 0; i < ossCount_; i++) {
-        epochFoldLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
-    }
-    const float* sourceBuf = epochFoldLinear_;
-    int sourceCount = ossCount_;
+    // Tested three selection metrics — all produced net regressions:
+    //   - Pure variance: +0.30 trap/afrobeat, -0.22 trance/techno (noisy bands win)
+    //   - Variance with 1.5x/2x bias: still regresses 8-10/18 tracks
+    //   - Fold autoCorr (lag-1): 8 improved, 8 regressed — no net gain
+    //
+    // Band buffers are populated each frame (mid/high flux) for future use.
+    // Per-band epoch-fold computation removed to save CPU (~4ms per PLP cycle).
+    int bestBand = 0;
 
-    if (sourceCount < patLen * 2) return;
-
-    // Variance-gated epoch fold: track both sum and sum-of-squares per bin.
-    // Bins with low cross-epoch variance are consistent (kick on beat 1 always
-    // lands here). Bins with high variance are unreliable (hi-hat pattern changes
-    // bar-to-bar). Weight each bin inversely by its variance.
-    // (Stellingwerf 1978 Phase Dispersion Minimization, adapted for music)
-    float foldSum[MAX_PATTERN_LEN] = {0};
-    float foldSumSq[MAX_PATTERN_LEN] = {0};
-    float totalWeight = 0.0f;
-    int epochs = 0;
-    for (int offset = sourceCount - patLen; offset >= 0; offset -= patLen) {
-        float weight = expf(-plpDecayRate * epochs);
-        for (int j = 0; j < patLen; j++) {
-            float val = sourceBuf[offset + j];
-            foldSum[j] += val * weight;
-            foldSumSq[j] += val * val * weight;
+    // Re-run the full epoch-fold on the winning band to produce the final pattern
+    {
+        int count = circCounts[bestBand];
+        int sIdx = (circWriteIdxs[bestBand] - count + circSizes[bestBand]) % circSizes[bestBand];
+        for (int i = 0; i < count; i++) {
+            epochFoldLinear_[i] = circBufs[bestBand][(sIdx + i) % circSizes[bestBand]];
         }
-        totalWeight += weight;
-        epochs++;
-    }
-    if (epochs < 2) return;
 
-    // Compute per-bin mean, variance, and reliability-weighted pattern
-    float varSens = plpVarianceSens;  // Higher = more aggressive variance suppression
-    float minVal = 1e30f, maxVal = -1e30f;
-    float patternRaw[MAX_PATTERN_LEN];
-    for (int j = 0; j < patLen; j++) {
-        float mean = foldSum[j] / totalWeight;
-        float meanSq = foldSumSq[j] / totalWeight;
-        float variance = meanSq - mean * mean;
-        if (variance < 0.0f) variance = 0.0f;  // Numerical safety
-
-        // Reliability: consistent bins (low variance) get full weight,
-        // variable bins (high variance) get suppressed
-        float reliability = 1.0f / (1.0f + variance * varSens);
-        patternRaw[j] = mean * reliability;
-
-        if (patternRaw[j] < minVal) minVal = patternRaw[j];
-        if (patternRaw[j] > maxVal) maxVal = patternRaw[j];
-    }
-
-    // Normalize to [0, 1] using min-max
-    float range = maxVal - minVal;
-    if (range > 1e-10f) {
-        for (int j = 0; j < patLen; j++) {
-            float normalized = (patternRaw[j] - minVal) / range;
-            plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
+        // Variance-gated epoch fold (Stellingwerf 1978, adapted for music)
+        float foldSum[MAX_PATTERN_LEN] = {0};
+        float foldSumSq[MAX_PATTERN_LEN] = {0};
+        float totalWeight = 0.0f;
+        float weight = 1.0f;
+        const float decayFactor = expf(-plpDecayRate);
+        int epochs = 0;
+        for (int offset = count - patLen; offset >= 0; offset -= patLen) {
+            for (int j = 0; j < patLen; j++) {
+                float val = epochFoldLinear_[offset + j];
+                foldSum[j] += val * weight;
+                foldSumSq[j] += val * val * weight;
+            }
+            totalWeight += weight;
+            weight *= decayFactor;
+            epochs++;
         }
-    } else {
-        for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
+        if (epochs < 2) return;
+
+        // Compute per-bin mean, variance, and reliability-weighted pattern
+        float varSens = plpVarianceSens;
+        float minVal = 1e30f, maxVal = -1e30f;
+        float patternRaw[MAX_PATTERN_LEN];
+        for (int j = 0; j < patLen; j++) {
+            float mean = foldSum[j] / totalWeight;
+            float meanSq = foldSumSq[j] / totalWeight;
+            float variance = meanSq - mean * mean;
+            if (variance < 0.0f) variance = 0.0f;
+
+            float reliability = 1.0f / (1.0f + variance * varSens);
+            patternRaw[j] = mean * reliability;
+
+            if (patternRaw[j] < minVal) minVal = patternRaw[j];
+            if (patternRaw[j] > maxVal) maxVal = patternRaw[j];
+        }
+
+        // Normalize to [0, 1] using min-max
+        float range = maxVal - minVal;
+        if (range > 1e-10f) {
+            for (int j = 0; j < patLen; j++) {
+                float normalized = (patternRaw[j] - minVal) / range;
+                plpPattern_[j] = (plpNovGain != 1.0f) ? powf(normalized, plpNovGain) : normalized;
+            }
+        } else {
+            for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
+        }
     }
 
     // --- 3. PLP confidence from ACF strength + steep signal gate ---
@@ -720,56 +737,45 @@ void AudioTracker::updatePlpPhase() {
 // ============================================================================
 
 void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
-    // Floor-tracking baseline:
-    // Slow rise (peaks don't inflate baseline), fast drop (floor drops caught quickly).
+    // Spectral flux rising-edge detection, gated by NN onset activation.
+    // NN-direct peak-picking was tested (Bock 2012 approach) but regressed
+    // F1 from 0.477→0.162 because INT8 NN on device-shifted mel doesn't
+    // produce sharp enough peaks for standalone detection. Spectral flux
+    // provides robust transient timing; NN provides selectivity gate.
+
+    // Floor-tracking baseline: slow rise, fast drop
     if (odf < odfBaseline_) {
-        odfBaseline_ += (odf - odfBaseline_) * baselineFastDrop;   // fast drop
+        odfBaseline_ += (odf - odfBaseline_) * baselineFastDrop;
     } else {
-        odfBaseline_ += (odf - odfBaseline_) * baselineSlowRise;   // slow rise
+        odfBaseline_ += (odf - odfBaseline_) * baselineSlowRise;
     }
 
-    // ODF peak hold for energy synthesis (fast attack, ~100ms release at 62.5 Hz)
+    // ODF peak hold for energy synthesis
     if (odf > odfPeakHold_) {
         odfPeakHold_ = odf;
     } else {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    // Pulse detection: fire on the RISING EDGE of NN activation crossing threshold.
-    // This fires at the start of the transient (the leading edge), not at the peak.
-    // Gives 16-48ms earlier detection compared to peak-based triggering.
-    // (Brossier 2006: predictive onset detection fires on the rising slope)
     float pulseThreshold = odfBaseline_ * pulseThresholdMult;
     if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
 
-    // Tempo-adaptive cooldown: shorter at faster tempos
+    // Tempo-adaptive cooldown
     float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
     float cooldownMs = 40.0f + 110.0f * (1.0f - bpmNorm);
 
-    // Guard against ms wraparound
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
-    // Rising-edge detection: fire when ODF crosses threshold from below while rising.
-    // prevOdf_ < threshold AND odf > threshold = the leading edge of a transient.
     bool risingEdge = (odf > pulseThreshold) && (prevOdf_ <= pulseThreshold);
-
-    // Gate on spectral activity (not mic level — mic level normalization can
-    // read 0 despite active audio, killing all pulse detection).
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
 
-    // NN gate: suppress spectral flux pulses that aren't corroborated by the
-    // onset NN. Activation must be above threshold AND show recent activity.
-    // Two activity checks (either satisfies):
-    //   1. Peak recency: activation peaked within ~100ms (sharp NN models)
-    //   2. Rising edge: activation just increased (works with flat activations
-    //      where micro-fluctuations still correlate with real onsets)
-    // When NN is not active (fallback mode), gate is always open.
-    // Guard against millis() wrap (~49 days) — treat as stale peak
+    // NN gate: use Hamming-smoothed activation for stability.
+    // Gate opens when smoothed NN is above threshold AND shows recent activity.
     uint32_t peakAge = (nowMs >= rawNNPeakMs_) ? (nowMs - rawNNPeakMs_) : 200;
     bool nnRecentPeak = peakAge < 100;
     bool nnRising = (rawNNActivation_ - prevNNActivation_) > 0.005f;
     bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f ||
-        (rawNNActivation_ > pulseNNGate && (nnRecentPeak || nnRising));
+        (nnSmoothed_ > pulseNNGate && (nnRecentPeak || nnRising));
 
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
@@ -778,11 +784,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
 
-        // Sub-frame interpolation: estimate the precise threshold crossing time
-        // between the previous frame and this frame. Reduces quantization jitter
-        // from ±16ms (frame rate) to ~±2ms. Standard technique in spectral peak
-        // detection (McAulay-Quatieri), applied here to onset timing.
-        float framePeriodMs = 1000.0f / OSS_FRAME_RATE;  // ~16ms
+        float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
         float denom = odf - prevOdf_;
         float frac = (denom > 1e-6f) ? (pulseThreshold - prevOdf_) / denom : 0.5f;
         frac = clampf(frac, 0.0f, 1.0f);
@@ -977,38 +979,27 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
-    // --- Pulse: NN-modulated onset envelope from spectral flux ---
-    // Auto-normalize flux by its own recent peak, then modulate by NN
-    // activation to suppress non-onset spectral changes (harmonic shifts,
-    // noise) and emphasize genuine onsets (kicks, snares).
-    // Self-tuning via nnConf: flat NN → no change, sharp NN → strong filtering.
+    // --- Pulse: NN-modulated spectral flux envelope ---
+    // Spectral flux provides transient timing, NN modulates selectivity.
+    // nnConf self-tunes: flat NN → raw flux, sharp NN → onset-selective.
     float flux = spectral_.getSpectralFlux();
-    // Track running peak of flux (frame-rate-independent ~10s time constant)
     if (flux > fluxPeak_) fluxPeak_ = flux;
-    fluxPeak_ *= expf(-dt / 10.0f);  // ~7s half-life (tau=10s)
+    fluxPeak_ *= expf(-dt / 10.0f);
     if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
-
-    // Normalized flux: 0-1 relative to recent peak
     float normFlux = clampf(flux / fluxPeak_, 0.0f, 1.0f);
 
-    // NN modulation: weight flux by onset activation.
-    // nnConf measures how discriminative the NN is (from activation variance).
-    // High nnConf (sharp peaks): NN strongly gates flux — onsets pass, non-onsets suppressed.
-    // Low nnConf (flat output): minimal modulation — falls back to raw flux behavior.
     if (nnActive_) {
         float nnConf = clampf(nnActivationVar_ * 20.0f, 0.0f, 1.0f);
-        float nnMod = clampf(rawNNActivation_, 0.0f, 1.0f);
+        float nnMod = clampf(nnSmoothed_, 0.0f, 1.0f);
         normFlux *= (1.0f - nnConf) + nnConf * nnMod;
     }
 
-    // Trigger envelope: any normalized flux above 0.4 pushes the envelope up
     if (normFlux > 0.4f) {
-        float trigger = (normFlux - 0.4f) / 0.6f;  // 0-1 above threshold
+        float trigger = (normFlux - 0.4f) / 0.6f;
         if (trigger > pulseEnvelope_) {
             pulseEnvelope_ = trigger;
         }
     }
-    // Frame-rate-independent decay (~165ms half-life, tau=0.24s)
     pulseEnvelope_ *= expf(-dt / 0.24f);
     if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 

@@ -5,7 +5,9 @@
 | Board | FQBN | Core | Makefile Target |
 |-------|------|------|-----------------|
 | XIAO nRF52840 Sense | `Seeeduino:nrf52:xiaonRF52840Sense` | Seeeduino nRF52 (non-mbed) | `compile`, `uf2-upload` |
-| XIAO ESP32-S3 Sense | `esp32:esp32:XIAO_ESP32S3` | arduino-esp32 | `esp32-compile`, `esp32-uf2-upload` |
+| ~~XIAO ESP32-S3 Sense~~ | ~~`esp32:esp32:XIAO_ESP32S3`~~ | ~~arduino-esp32~~ | ~~`esp32-compile`, `esp32-uf2-upload`~~ |
+
+> **Note:** ESP32-S3 support was cut in March 2026. All active development targets nRF52840 only.
 
 **CRITICAL**: Never use `arduino-cli upload` for the nRF52840 — it will brick the device. Use UF2 upload only. See [SAFETY.md](SAFETY.md).
 

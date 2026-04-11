@@ -487,7 +487,11 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     """
     variants = [("clean", audio)]
 
-    for gain_db in [-18, -12, -6, 6]:
+    # Gain variation must cover device-realistic levels.
+    # Device mic during music sees +13 dB above training calibration (mel mean
+    # 0.74 vs 0.49). Previous range [-18, +6] never trained on device-like levels.
+    # Extended to [-18, +18] dB based on April 10 mel distribution analysis.
+    for gain_db in [-18, -12, -6, 6, 12, 18]:
         gain = 10 ** (gain_db / 20.0)
         clipped = (audio * gain).clamp(-1.0, 1.0)
         variants.append((f"gain{gain_db:+d}dB", clipped))
@@ -722,12 +726,18 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     elif labels_type == "kick_weighted" and kick_weighted_dir:
         kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
         if not kw_path.exists():
-            raise FileNotFoundError(
-                f"Kick-weighted labels missing for {audio_path.stem}: {kw_path}\n"
-                f"Run: python scripts/generate_kick_weighted_targets.py"
-            )
+            # Missing label (may be quarantined) — skip track silently
+            return []
         with open(kw_path) as f:
             kw_data = json.load(f)
+        # Quality gate: skip tracks with too few events or explicitly skipped
+        if kw_data.get("skipped"):
+            return []
+        n_ks = kw_data.get("kick_count", 0) + kw_data.get("snare_count", 0)
+        if n_ks < 10:
+            print(f"  WARNING: Skipping {audio_path.stem}: only {n_ks} kick+snare events "
+                  f"(likely failed drum separation)")
+            return []
         beat_times = np.array([o["time"] for o in kw_data["onsets"]])
         beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
     elif labels_type == "consensus_kick_weighted" and kick_weighted_dir:

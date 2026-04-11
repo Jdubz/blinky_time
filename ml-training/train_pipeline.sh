@@ -30,11 +30,17 @@ for arg in "${@:3}"; do
 done
 
 OUTPUT_DIR="outputs/$RUN_NAME"
-DATA_DIR="data/processed"
+# Read processed_dir from config — fail fast on parse errors
+DATA_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('data',{}).get('processed_dir','data/processed'))" "$CONFIG")
+if [ -z "$DATA_DIR" ]; then
+    echo "WARNING: Could not read data.processed_dir from $CONFIG, using default data/processed"
+    DATA_DIR="data/processed"
+fi
 
 echo "=== ML Training Pipeline ==="
 echo "Config: $CONFIG"
 echo "Output: $OUTPUT_DIR"
+echo "Data:   $DATA_DIR"
 echo ""
 
 # Phase 1: Onset labels
@@ -55,6 +61,17 @@ if [ "$SKIP_LABELS" = false ]; then
     fi
 else
     echo "=== Phase 1: Skipped (--skip-labels) ==="
+fi
+
+# Phase 1b: Validate kick_weighted labels (if applicable)
+KW_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('kick_weighted_dir',''))" "$CONFIG" 2>/dev/null)
+LABELS_TYPE=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_type',''))" "$CONFIG" 2>/dev/null)
+if [ -n "$KW_DIR" ] && [ "$LABELS_TYPE" = "kick_weighted" ]; then
+    echo "=== Phase 1b: Validating kick-weighted labels ==="
+    CONSENSUS_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_dir', '/mnt/storage/blinky-ml-data/labels/consensus_v5'))" "$CONFIG" 2>/dev/null)
+    python scripts/validate_kick_weighted.py --label-dir "$KW_DIR" --consensus-dir "$CONSENSUS_DIR" --quiet || {
+        echo "  Label validation found issues (see above). Continuing with training."
+    }
 fi
 
 # Phase 2: Data prep
