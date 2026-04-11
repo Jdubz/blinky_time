@@ -30,13 +30,17 @@ for arg in "${@:3}"; do
 done
 
 OUTPUT_DIR="outputs/$RUN_NAME"
-# Read processed_dir from config (falls back to base.yaml default)
-DATA_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('data',{}).get('processed_dir','data/processed'))" "$CONFIG" 2>/dev/null)
-DATA_DIR="${DATA_DIR:-data/processed}"
+# Read processed_dir from config — fail fast on parse errors
+DATA_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('data',{}).get('processed_dir','data/processed'))" "$CONFIG")
+if [ -z "$DATA_DIR" ]; then
+    echo "WARNING: Could not read data.processed_dir from $CONFIG, using default data/processed"
+    DATA_DIR="data/processed"
+fi
 
 echo "=== ML Training Pipeline ==="
 echo "Config: $CONFIG"
 echo "Output: $OUTPUT_DIR"
+echo "Data:   $DATA_DIR"
 echo ""
 
 # Phase 1: Onset labels

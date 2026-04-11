@@ -12,9 +12,11 @@
 
 set -e
 
-STEMS_DIR="/mnt/storage/blinky-ml-data/stems/htdemucs"
-DRUMS_DIR="/mnt/storage/blinky-ml-data/audio/drums_only"
-LABELS_DIR="/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+STEMS_DIR="${STEMS_DIR:-/mnt/storage/blinky-ml-data/stems/htdemucs}"
+DRUMS_DIR="${DRUMS_DIR:-/mnt/storage/blinky-ml-data/audio/drums_only}"
+LABELS_DIR="${LABELS_DIR:-/mnt/storage/blinky-ml-data/labels/kick_weighted_drums}"
 
 echo "=== Drum-stem label generation ==="
 
@@ -37,7 +39,7 @@ echo "  $COUNT drum stems linked in $DRUMS_DIR"
 # Step 2: Generate kick-weighted onset labels on drum stems
 echo "Generating kick/snare labels on drum stems..."
 mkdir -p "$LABELS_DIR"
-python scripts/generate_kick_weighted_targets.py \
+python "$SCRIPT_DIR/generate_kick_weighted_targets.py" \
     --audio-dir "$DRUMS_DIR" \
     --output-dir "$LABELS_DIR" \
     --labels-dir /mnt/storage/blinky-ml-data/labels/consensus_v5 \

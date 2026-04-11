@@ -203,9 +203,9 @@ private:
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
-    // === Pulse detection (NN-direct, Bock 2012) ===
-    // NN activation is the primary onset detection function (ODF).
-    // Spectral flux is used for ACF/PLP tempo only, not for onset pulse.
+    // === Pulse detection (spectral-flux timing + NN gate) ===
+    // Spectral flux provides transient timing; NN activation gates onset selectivity.
+    // NN modulation strength adapts via nnConf (activation variance).
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline (on smoothed NN)
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;

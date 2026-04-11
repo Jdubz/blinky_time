@@ -161,10 +161,10 @@ const AudioControl& AudioTracker::update(float dt) {
     //    sharp enough activations for standalone peak-picking. Spectral flux
     //    provides robust transient timing; NN provides selectivity.
     //
-    //    3-tap Hamming smoothing on NN activation for gate stability.
+    //    3-tap Hamming FIR smoothing on raw NN activation for gate stability.
     if (newSpectralFrame && nnActive_) {
         nnPrev2_ = nnPrev1_;
-        nnPrev1_ = nnSmoothed_;
+        nnPrev1_ = rawNNActivation_;
         nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
     }
     float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevOdf_;
@@ -609,75 +609,16 @@ void AudioTracker::updatePlpAnalysis() {
     const int circWriteIdxs[4] = { ossWriteIdx_, ossWriteIdx_, ossWriteIdx_, bassWriteIdx_ };
     const int circSizes[4] = { OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, BASS_BUFFER_SIZE };
 
-    float bandAutoCorr[4] = {0};
-
-    for (int band = 0; band < 4; band++) {
-        int count = circCounts[band];
-        if (count < patLen * 2) continue;
-
-        // Linearize this band's circular buffer into epochFoldLinear_ (scratch)
-        int sIdx = (circWriteIdxs[band] - count + circSizes[band]) % circSizes[band];
-        for (int i = 0; i < count; i++) {
-            epochFoldLinear_[i] = circBufs[band][(sIdx + i) % circSizes[band]];
-        }
-
-        // Recency-weighted epoch fold
-        float foldSum[MAX_PATTERN_LEN] = {0};
-        float totalWeight = 0.0f;
-        int epochs = 0;
-        for (int offset = count - patLen; offset >= 0; offset -= patLen) {
-            float weight = expf(-plpDecayRate * epochs);
-            for (int j = 0; j < patLen; j++) {
-                foldSum[j] += epochFoldLinear_[offset + j] * weight;
-            }
-            totalWeight += weight;
-            epochs++;
-        }
-        if (epochs < 2) continue;
-
-        // Normalize fold
-        float foldMean = 0.0f;
-        for (int j = 0; j < patLen; j++) {
-            foldSum[j] /= totalWeight;
-            foldMean += foldSum[j];
-        }
-        foldMean /= patLen;
-
-        // Autocorrelation of the epoch-fold pattern at lag 1.
-        // Measures smoothness/periodicity: a repeating pattern (kick-hat-snare-hat)
-        // has high autoCorr because adjacent bins predict each other. Random noise
-        // has autoCorr near zero. This directly measures what we care about —
-        // does this band produce a coherent periodic pattern?
-        //
-        // Normalized: r = sum((x[i]-mean)(x[i+1]-mean)) / sum((x[i]-mean)^2)
-        // Range [-1, 1]. Positive = smooth periodic, zero = noise.
-        float num = 0.0f, den = 0.0f;
-        for (int j = 0; j < patLen; j++) {
-            float d = foldSum[j] - foldMean;
-            den += d * d;
-            if (j < patLen - 1) {
-                num += d * (foldSum[j + 1] - foldMean);
-            }
-        }
-        bandAutoCorr[band] = (den > 1e-12f) ? (num / den) : 0.0f;
-    }
-
-    // Band selection: broadband (band 0) is the default.
+    // Band selection disabled — broadband (band 0) is the default.
     //
     // Tested three selection metrics — all produced net regressions:
     //   - Pure variance: +0.30 trap/afrobeat, -0.22 trance/techno (noisy bands win)
     //   - Variance with 1.5x/2x bias: still regresses 8-10/18 tracks
     //   - Fold autoCorr (lag-1): 8 improved, 8 regressed — no net gain
     //
-    // Root cause: per-band epoch-fold quality varies stochastically between
-    // runs on the same track. No single metric reliably identifies the best
-    // band across genres. The "right" band is genre-dependent and the per-band
-    // signals are too noisy at 35s capture durations for robust selection.
-    //
-    // The band buffers + per-band fold computation remain for diagnostics
-    // (stream plp could expose per-band autoCorr) and future genre-preset use.
+    // Band buffers are populated each frame (mid/high flux) for future use.
+    // Per-band epoch-fold computation removed to save CPU (~4ms per PLP cycle).
     int bestBand = 0;
-    (void)bandAutoCorr;
 
     // Re-run the full epoch-fold on the winning band to produce the final pattern
     {
@@ -691,15 +632,17 @@ void AudioTracker::updatePlpAnalysis() {
         float foldSum[MAX_PATTERN_LEN] = {0};
         float foldSumSq[MAX_PATTERN_LEN] = {0};
         float totalWeight = 0.0f;
+        float weight = 1.0f;
+        const float decayFactor = expf(-plpDecayRate);
         int epochs = 0;
         for (int offset = count - patLen; offset >= 0; offset -= patLen) {
-            float weight = expf(-plpDecayRate * epochs);
             for (int j = 0; j < patLen; j++) {
                 float val = epochFoldLinear_[offset + j];
                 foldSum[j] += val * weight;
                 foldSumSq[j] += val * val * weight;
             }
             totalWeight += weight;
+            weight *= decayFactor;
             epochs++;
         }
         if (epochs < 2) return;
