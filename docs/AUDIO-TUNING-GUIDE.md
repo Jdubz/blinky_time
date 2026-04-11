@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** April 9, 2026
-**Firmware Version:** SETTINGS_VERSION 94 (AudioTracker: ACF + PLP with multi-source ACF + pattern slot cache. Conv1D W16 v16 onset model deployed. NN-modulated pulse via nnConf).
+**Last Updated:** April 11, 2026
+**Firmware Version:** SETTINGS_VERSION 94 (AudioTracker: ACF + PLP with multi-source ACF + pattern slot cache. Conv1D W16 v19 onset model deployed (b111). NN-modulated pulse via nnConf).
 
 > **NOTE:** Parameter categories marked ~~strikethrough~~ below were removed in v67-v82 (EnsembleDetector, CBSS, Bayesian fusion, AGC). See `docs/IMPROVEMENT_PLAN.md` for removal history. Current tunable parameters are in the AudioTracker section.
 
@@ -61,7 +61,7 @@ PDM Microphone (16kHz, mono)
 ### Key Design Decisions
 
 1. **Decoupled BPM and onset paths**: BPM estimation uses spectral flux (NN-independent). The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat — syncopated transients would corrupt ACF periodicity. Spectral flux preserves periodic structure.
-2. **NN-modulated pulse** (b108): `control_.pulse` uses spectral flux weighted by NN activation, self-tuning via `nnConf` (activation variance). Sharp NN → onset-selective pulse; flat NN → falls back to raw spectral flux. Conv1D W16 v16 model. Non-NN fallback: mic level.
+2. **NN-modulated pulse** (b108): `control_.pulse` uses spectral flux weighted by NN activation, self-tuning via `nnConf` (activation variance). Sharp NN → onset-selective pulse; flat NN → falls back to raw spectral flux. Conv1D W16 v19 model (b111). Non-NN fallback: mic level.
 3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
 4. **PLP phase/pattern extraction** (v93): Multi-source ACF across 3 mean-subtracted sources selects period. Epoch-fold extracts repeating energy pattern at detected period → direct pattern interpolation for visual output.
 5. **Pattern slot cache** (v82): 4-slot LRU of 16-bin PLP pattern digests. Every bar, current PLP pattern compared via cosine similarity. Match > 0.70 triggers instant recall from cache. Enables rapid verse/chorus switching.

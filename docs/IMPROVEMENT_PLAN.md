@@ -6,11 +6,11 @@
 
 ## Current Status
 
-**Firmware:** b107 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b107 changes:** PlasmaGlobe replaces Lightning generator (continuous field, not particle-based). FrameOnsetNN gains PCEN normalization + 3-channel band-flux input support. SETTINGS_VERSION 93→94.
+**Firmware:** b111 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b111 changes:** v19 model deployed, Hamming-smoothed NN gate, band-specific flux buffers (selection disabled), NN-modulated pulse.
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v19 (26ch, plain BCE, hard binary targets, [-18,+18] dB gain aug) deployed on all 3 blinkyhost devices (b111). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation. v19b sharp targets FAILED (too sparse). v20 drum-stem labels in preparation.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v19 (26ch, plain BCE, hard binary targets, [-18,+18] dB gain aug) deployed on all 3 blinkyhost devices (b111). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation. v19b sharp targets FAILED (too sparse). v20 drum-stem labels: training pipeline running (6015 clean labels, 735 silent drums quarantined).
 
 **On-device gap root cause (April 10 diagnosis — mel distribution shift confirmed):** Three contributing factors, with mel shift as the primary cause:
 
@@ -26,20 +26,20 @@
 
 **Training experiments (April 7-9):**
 - v15: madmom MSE distillation, 52ch (mel+delta). Offline onset F1=0.745, KW F1=0.730. On-device onset F1=0.473.
-- v16 (deployed on all 3 serial devices, b107): no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. **On-device onset F1=0.471 — identical to v15.** Delta features provide zero on-device benefit despite 5ms/frame extra inference cost. Confirms offline-to-on-device gap is NOT from feature type.
+- v16 (previously deployed on all 3 serial devices, b107; superseded by v19 on b111): no delta features (26ch). Offline onset F1=0.782, KW F1=0.727. **On-device onset F1=0.471 — identical to v15.** Delta features provide zero on-device benefit despite 5ms/frame extra inference cost. Confirms offline-to-on-device gap is NOT from feature type.
 - v17: band-flux (29ch, 3 HWR mel flux replacing 26 delta). Offline onset F1=0.782, KW F1=0.746. **On-device A/B (April 9): onset F1=0.473 — identical to v16 (0.471).** Band-flux provides zero on-device benefit, same as delta features. Confirms gap is NOT from feature representation.
 - v18: PCEN mel normalization (52ch, mel+delta). **FAILED (April 10).** Auto pw=12.7: val_loss plateaued at 0.4976 (barely below random), F1=0.011, recall=0.006 after 36 epochs. pw=20: immediate all-positive collapse. PCEN features have AUC=0.5061 for onset discrimination (random chance). Root cause: PCEN's adaptive AGC normalizes away the transient contrast the model needs. No published onset system uses PCEN for musical onset detection. Also discovered `base.yaml` had `log_epsilon: 1e-7` parsed as string by PyYAML — fixed to `1.0e-7`. Bug only affected v18 dataprep (introduced in PCEN commit c0009054, Apr 7).
-- v19: **Aligned with published recipe (training April 10).** Five fixes from literature review (Schlüter/Bock 2014, madmom): (1) plain BCE loss replacing asymmetric focal, (2) no global mixup (creates impossible frame-level targets), (3) hard binary targets (consensus > 0.1 → 1.0), (4) no freq_pos_encoding (onset detection is frequency-invariant), (5) no distillation (clean baseline). Same Conv1D [32,32] architecture as v16. Log-mel 26ch. Training in progress.
+- v19: **Aligned with published recipe, COMPLETE, DEPLOYED (b111, April 10).** Five fixes from literature review (Schlüter/Bock 2014, madmom): (1) plain BCE loss replacing asymmetric focal, (2) no global mixup (creates impossible frame-level targets), (3) hard binary targets (consensus > 0.1 → 1.0), (4) no freq_pos_encoding (onset detection is frequency-invariant), (5) no distillation (clean baseline). Same Conv1D [32,32] architecture as v16. Log-mel 26ch. Gain aug [-18, +18] dB. On-device F1=0.477.
 
-**Fleet status (April 9, verified via blinky-server):**
-- 062CBD12 — Hat Display, b107 (v16 model), serial, test chip ✅
-- 659C8DD3 — Long Tube, b107 (v16 model), serial, installed device ✅
-- 2A798EF8 — Hat Display, b107 (v16 model), serial, test chip ✅
+**Fleet status (April 10, verified via blinky-server):**
+- 062CBD12 — Hat Display, b111 (v19 model), serial, test chip ✅
+- 659C8DD3 — Long Tube, b111 (v19 model), serial, installed device ✅
+- 2A798EF8 — Hat Display, b111 (v19 model), serial, test chip ✅
 - ABFBC412 — Hat Display, b106, BLE-only (RSSI -94 dBm, MTU 20), weak signal
 
 **Serial reliability (April 8):** Root cause identified and fixed — stock TinyUSB CDC sets TX FIFO overwritable on DTR drop, silently killing all serial output. Patch in `patches/tinyusb-cdc-no-overwritable-fifo.patch`, enforced by `build.sh` compile guard. Server hardened: get_info retry, sibling hold during flash, serial retry limit (3 fails → stop), DELETE endpoint for stale devices. See commit `9712664`.
 
-**Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids. **Soft onset teacher labels** being generated from madmom CNN OnsetDetector (6750 tracks, continuous activations at 100Hz) for v15 knowledge distillation training.
+**Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids. **v20 labels:** Demucs HTDemucs drum-stem separation → bandpass kick/snare onset detection on isolated drums. 735 silent stems quarantined (noise-on-silence false positives). 6015 clean labels. Pipeline safeguards: `.provenance.json` tracking, overwrite protection, `validate_kick_weighted.py` quality checks, `prepare_dataset.py` quality gating.
 
 **Eval pipeline fixed (April 2):** `evaluate.py` now uses `mir_eval.onset.f_measure` (MIREX 50ms window) instead of `mir_eval.beat.f_measure` (70ms beat tolerance). Peak-pick min interval reduced from 200ms to 50ms to match firmware onset cooldown. All 4 v14 prerequisites complete. **Note: scores from v14+ are not directly comparable to pre-April-2 benchmarks** (50ms onset window vs 70ms beat window). v11's reported Kick F1=0.688, Snare F1=0.773 etc. used the old metric. v14 KW onset F1=0.659 uses the new metric.
 
@@ -181,7 +181,7 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v15 knowledge distillation: superseded by v16.** Madmom MSE distillation with delta features. Offline onset F1=0.745, KW F1=0.730. On-device onset F1=0.473.
 
-**v16 (no delta): DEPLOYED on all 3 serial devices (b107).** Identical recipe to v15 but without delta features (26ch instead of 52ch). Offline onset F1=0.782. KW F1=0.727. Best val_loss=0.3868 at epoch 8, early stopped epoch 23. Inference 6.8ms (vs ~11.7ms with deltas). On-device onset F1=0.471 — identical to v15 (0.473). Delta features provide zero on-device benefit. **v16 is the current production model.**
+**v16 (no delta): previously deployed (b107, superseded by v19 on b111).** Identical recipe to v15 but without delta features (26ch instead of 52ch). Offline onset F1=0.782. KW F1=0.727. Best val_loss=0.3868 at epoch 8, early stopped epoch 23. Inference 6.8ms (vs ~11.7ms with deltas). On-device onset F1=0.471 — identical to v15 (0.473). Delta features provide zero on-device benefit.
 
 **v17 (band-flux): evaluated, NOT deployed.** Onset F1=0.473 on-device vs v16 baseline 0.471. Band-flux provides zero on-device benefit. Same pattern as v16 vs v15: feature representation changes produce zero on-device benefit. The offline-to-on-device gap is NOT from feature representation.
 

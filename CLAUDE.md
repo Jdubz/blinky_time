@@ -271,8 +271,8 @@ RenderPipeline → LED Output
    - `FrameOnsetNN.h` - Single-model TFLite NN inference for acoustic onset detection
      - Conv1D W16 (256ms), [24,32] channels, 6.8ms nRF52840
      - Auto-detects input features from model shape: 26 (mel), 29 (mel+band-flux), 52 (mel+delta)
-     - PCEN normalization support (v18, behind `ONSET_MODEL_USE_PCEN` ifdef)
-     - v19 deployed (b111): 15.8 KB INT8, arena 3772 bytes. v16 recipe + plain BCE, hard binary targets, +18 dB gain aug.
+     - PCEN normalization support removed (v18 FAILED: AUC=0.5061, abandoned April 10)
+     - v19 deployed (b111): 15.8 KB INT8, arena 3772 bytes. Plain BCE, hard binary targets, [-18,+18] dB gain aug.
      - Used for: visual pulse (via NN-modulated spectral flux), energy peak-hold. NOT used for BPM estimation.
      - **On-device diagnosis (April 10):** Raw NN activation is strong (~0.457) but produces sustained flat activations. `control_.pulse` now uses NN-modulated spectral flux (self-tuning via nnConf). **Root cause: mel distribution shift** — device music mel mean=0.74 vs training=0.49 (+13 dB). Training gain augmentation extended to [-18, +18] dB to cover device levels. PCEN abandoned (AUC=0.5061, no published onset system uses it). v19 training aligns with Schlüter/Bock 2014: plain BCE, hard binary targets, no focal loss, no mixup.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
@@ -499,9 +499,9 @@ check_test_result(job_id: "abc123")
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned / In Progress:**
-- NN training: v19 complete (plain BCE, hard binary targets, +18 dB gain aug). On-device F1=0.477 (+0.006 vs v16). v19b (sharp targets) training. v20 (drum-stem kick/snare labels) prepared — Demucs separation running.
+- NN training: v19 deployed (b111). On-device F1=0.477 (+0.006 vs v16). v19b sharp targets FAILED (val_f1=0.166, too sparse). v20 drum-stem kick/snare labels training in progress (April 11).
 - Gain augmentation: extended to [-18, +18] dB (confirmed April 10: device music mel +13 dB above calibration)
-- Label quality: switching from all-onset consensus to drum-stem kick/snare labels. 27% of consensus labels are non-percussive, 38% of kick/snare events are missing. Demucs separation + bandpass on drum stems fixes both.
+- Label quality: v20 uses Demucs drum-stem separation → bandpass kick/snare detection on isolated drums. 735 silent drums quarantined (noise-on-silence false positives). 6015 clean labels. Pipeline safeguards: provenance tracking, overwrite protection, validation, quality gating.
 - Dynamic device switching (runtime config)
 - CI/CD automation
 

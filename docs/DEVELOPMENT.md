@@ -13,7 +13,9 @@
 2. **UF2 manual drag-and-drop**: double-tap Reset → drag `.uf2` to `XIAO-SENSE` drive
 3. **Arduino IDE**: Sketch → Upload (uses UF2 internally)
 
-### Upload Method (ESP32-S3)
+### Upload Method (ESP32-S3) — DEPRECATED
+
+> **ESP32-S3 support was cut in March 2026.** All active development targets nRF52840 only. Below retained for historical reference.
 
 The ESP32-S3 does not have the nRF52840 bootloader fragility. Both UF2 upload and `arduino-cli upload` work safely.
 
