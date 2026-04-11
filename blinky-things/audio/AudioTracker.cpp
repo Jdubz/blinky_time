@@ -600,10 +600,7 @@ void AudioTracker::updatePlpAnalysis() {
     // Replaces single broadband epoch-fold. Zero additional RAM (repurposed
     // gatedFluxBuffer_/gatedFluxLinear_ → midFluxBuffer_/highFluxBuffer_).
 
-    // Linearize all band buffers from circular to linear (not mean-subtracted)
-    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     // epochFoldLinear_ is a scratch buffer — reused per band candidate
-    // We need to try each source and keep the best pattern
 
     // Band sources: broadband (oss), mid flux, high flux, bass energy
     // Bass flux is already in ossBuffer_ (the broadband is bass-weighted via odfContrast)
