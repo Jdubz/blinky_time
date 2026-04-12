@@ -176,7 +176,7 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                               norm=pcen_cfg.get("norm", PCEN_NORM))
     else:
         log_eps = cfg.get("audio", {}).get("log_epsilon", LOG_EPSILON)
-        db_range = float(cfg.get("audio", {}).get("mel_db_range", 60))
+        db_range = float(cfg.get("audio", {}).get("mel_db_range", 80))
         log_mel = 10.0 * torch.log10(mel_spec + log_eps)
         log_mel = (log_mel + db_range) / db_range
         log_mel = log_mel.clamp(0.0, 1.0)

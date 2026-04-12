@@ -514,9 +514,12 @@ def _load_device_capture_windows(window_frames: int, n_mels: int,
     # Extract random windows
     rng = np.random.RandomState(123)
     n_frames = len(mels)
+    max_start = n_frames - window_frames + 1
+    if max_start <= 0:
+        return []
     windows = []
     for _ in range(max_windows):
-        start = rng.randint(0, n_frames - window_frames)
+        start = rng.randint(0, max_start)
         windows.append(mels[start:start + window_frames])
     return windows
 
@@ -535,11 +538,15 @@ def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
 
     # Load device captures (covers deployment distribution)
     device_windows = _load_device_capture_windows(
-        window_frames, n_mels, mel_db_range, max_windows=50)
+        window_frames, n_mels, mel_db_range, max_windows=min(50, n_samples))
     n_device = len(device_windows)
-    n_training = n_samples - n_device
+    n_training = max(0, n_samples - n_device)
 
     # Training data windows
+    if n_training == 0:
+        for window in device_windows:
+            yield [window.reshape(1, window_frames, n_mels)]
+        return
     indices = rng.choice(len(X), size=min(n_training, len(X)), replace=False)
     for i in indices:
         chunk = X[i].astype(np.float32)
@@ -1280,7 +1287,7 @@ def main():
             # requantization multiplier=0 and producing constant -128 output.
             converter._experimental_disable_per_channel = True
         else:
-            mel_db_range = float(cfg.get("audio", {}).get("mel_db_range", 60))
+            mel_db_range = float(cfg.get("audio", {}).get("mel_db_range", 80))
             converter.representative_dataset = lambda: conv1d_representative_dataset_gen(
                 data_dir, window_frames=window_frames, n_mels=n_mels,
                 mel_db_range=mel_db_range)

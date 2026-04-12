@@ -72,7 +72,12 @@ def apply_quant_noise(model: nn.Module, ratio: float = 0.1):
     Args:
         model: the model to apply quant-noise to
         ratio: fraction of weights to quantize per forward pass (0.1 = 10%)
+
+    Raises:
+        ValueError: if ratio is not in [0, 1]
     """
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError(f"quant_noise ratio must be in [0, 1], got {ratio}")
     # Wrap Conv1d inside Sequential containers (backbone layers)
     for name, module in model.named_modules():
         if isinstance(module, nn.Sequential):
