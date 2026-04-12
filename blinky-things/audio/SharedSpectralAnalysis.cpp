@@ -430,12 +430,14 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
         }
 
         // Log compression: 10 * log10(energy + epsilon)
-        // Map [-60, 0] dB to [0, 1]
-        // Floor at 1e-7 (not 1e-10) to stay above ARM Cortex-M4 denormal range
-        // (~1.2e-38). Values below 1e-7 map to < -70 dB which clamps to 0 anyway.
+        // Map [-80, 0] dB to [0, 1]  (widened from -60 in v21 to prevent bass saturation)
+        // With -60 dB range, bass mel bands saturate at 1.0 during music playback
+        // (~13 dB above training calibration), destroying kick onset contrast.
+        // -80 dB range gives headroom: bass at ~0.73 instead of ~0.97 during music.
+        // MUST match ml-training base.yaml mel_db_range (currently 80).
         const float epsilon = 1e-7f;
         float logEnergy = 10.0f * log10f(bandEnergy + epsilon);
-        logEnergy = (logEnergy + 60.0f) / 60.0f;
+        logEnergy = (logEnergy + 80.0f) / 80.0f;
 
         outputMelBands[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
     }

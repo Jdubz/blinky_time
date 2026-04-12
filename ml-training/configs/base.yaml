@@ -16,6 +16,8 @@ audio:
   fmin: 60                  # MEL_MIN_FREQ
   fmax: 8000                # MEL_MAX_FREQ
   log_epsilon: 1.0e-7       # Must match firmware SharedSpectralAnalysis (ARM denormal safe)
+  mel_db_range: 80          # Log-mel maps [-mel_db_range, 0] dB to [0, 1]. Must match firmware.
+                            # Widened from 60→80 in v21: prevents bass band saturation on device.
   frame_rate: 62.5          # 16000 / 256
   target_rms_db: -63        # Normalize audio RMS to simulate firmware AGC level
   # Calibrated via tools/rms_mel_sweep.py: -63 dB → mel mean 0.52, matching

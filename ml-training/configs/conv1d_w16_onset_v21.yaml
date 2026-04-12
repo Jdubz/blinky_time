@@ -1,0 +1,53 @@
+# Conv1D W16 v21 — Widened mel range (80 dB) + drum-stem kick/snare labels
+#
+# Root cause fix for on-device mel saturation: bass mel bands (0-5) pinned
+# at 1.0 during music playback (+13 dB above training calibration), destroying
+# kick onset contrast. Widening from [-60,0] to [-80,0] dB gives headroom:
+# bass at ~0.73 instead of ~0.97 during device music.
+#
+# v20 showed the model works (offline KW F1=0.892) but on-device F1=0.430
+# due to this saturation. Same drum-stem labels as v20 (6015 clean tracks,
+# 735 silent drums quarantined).
+#
+# mel_db_range=80 is set in base.yaml (shared). This config inherits it.
+# Mel cache will be invalidated (new hash from changed audio config).
+#
+# Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"  # Absolute: data on mounted storage drive
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1   # Binarize: kick/snare (1.0) + neighbors (0.25) → 1.0, hihat (0.0) → 0.0
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  quant_noise: 0.1    # Stochastic INT8 quantization of 10% of weights (Fan et al. 2020)
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v21"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v21.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

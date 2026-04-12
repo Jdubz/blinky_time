@@ -499,9 +499,9 @@ check_test_result(job_id: "abc123")
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned / In Progress:**
-- NN training: v19 deployed (b111). On-device F1=0.477 (+0.006 vs v16). v19b sharp targets FAILED (val_f1=0.166, too sparse). v20 drum-stem kick/snare labels training in progress (April 11).
-- Gain augmentation: extended to [-18, +18] dB (confirmed April 10: device music mel +13 dB above calibration)
-- Label quality: v20 uses Demucs drum-stem separation → bandpass kick/snare detection on isolated drums. 735 silent drums quarantined (noise-on-silence false positives). 6015 clean labels. Pipeline safeguards: provenance tracking, overwrite protection, validation, quality gating.
+- NN training: v19 deployed (b111). v20 drum-stem labels: offline KW F1=0.892 but on-device F1=0.430 (bass mel saturation). v21 training: widened mel range [-60,0]→[-80,0] dB to fix bass saturation. 6 bass bands hit 1.0 ceiling during music, destroying kick contrast.
+- Label quality: v20 drum-stem labels (6015 clean, 735 quarantined) solved — offline +21%. Bottleneck is now mel saturation, not labels.
+- Mel mapping: firmware + training changed from `(log+60)/60` to `(log+80)/80` (base.yaml: `mel_db_range: 80`). Prevents bass band ceiling clip.
 - Dynamic device switching (runtime config)
 - CI/CD automation
 
