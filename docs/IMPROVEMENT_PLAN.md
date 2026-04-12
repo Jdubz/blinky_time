@@ -10,11 +10,19 @@
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v19 (26ch, plain BCE, hard binary targets, [-18,+18] dB gain aug) deployed on all 3 blinkyhost devices (b111). 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes. NN output used for visual pulse only — NOT for BPM estimation. v19b sharp targets FAILED (too sparse). v20 drum-stem labels: training pipeline running (6015 clean labels, 735 silent drums quarantined).
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v19 deployed on b111 (all 3 serial devices). v20 drum-stem labels complete: offline KW F1=0.892 (+21% vs v19) but on-device F1=0.430 (-10% vs v19) due to bass mel saturation. v21 training in progress: widened mel range [-60,0]→[-80,0] dB to fix saturation. 15.8 KB INT8, 6.8ms inference nRF52840. Arena: 3772 bytes.
 
-**On-device gap root cause (April 10 diagnosis — mel distribution shift confirmed):** Three contributing factors, with mel shift as the primary cause:
+**On-device gap root cause (April 11 — bass mel saturation confirmed):** The mel mapping `(logEnergy + 60) / 60` clamps to [0, 1]. During music playback, 6 of 26 bass mel bands (0-5) saturate at 1.0 (p95=1.000), destroying kick onset contrast. This is information loss, not a distribution shift — no normalization can recover clipped values.
 
-1. **Mel distribution shift during music (PRIMARY).** Device mel during music has mean=0.74 vs training calibration mean=0.49 — a +0.25 shift (~13 dB louder). Device ambient/silence mel (~0.47) matches training (~0.49), confirming mic calibration is correct at the noise floor. The shift occurs because the speaker level overwhelms the mic at higher energy than training simulates. Training gain augmentation caps at +6 dB, but device sees +13 dB during music. **Replay confirms: FP32 model on device mel produces the same flat 0.42 activation as INT8 on-device — quantization is NOT the bottleneck.**
+Per-band device capture analysis:
+- **Bands 0-5:** mean 0.83-0.97 during music, p95=1.0 — **completely saturated**
+- **Bands 6-25:** mean 0.67-0.76, shift +0.26 — shifted but not saturated
+- Within-frame spectral shape contrast is preserved (ambient: 0.102, music: 0.101)
+- Shift is band-dependent (bass +0.30, mid +0.26, high +0.28), not uniform
+
+**Fix (v21):** Widen mel range from [-60, 0] to [-80, 0] dB. Bass band 0 maps to ~0.73 instead of ~0.97, well below saturation. INT8 resolution: 3.2 levels/dB (was 4.3) — acceptable trade-off.
+
+**Previous diagnosis (April 10, partially correct):** Identified mel distribution shift (+0.25 mean, +13 dB) as primary cause. Gain augmentation [-18, +18] dB was insufficient. v20 proved label quality is solved (offline +21%) but made the device gap WORSE (36%→52%), confirming the bottleneck is mel saturation, not model capability or label quality.
 
 2. **Model produces flat activations even at training calibration.** FP32 model on training-calibrated techno track: mean activation=0.41, std=0.075. Frame-level F1 peaks at 0.157 (threshold=0.5). The offline F1=0.782 is achieved by liberal peak-picking + 50ms mir_eval tolerance — the model over-detects 2-3x (est/ref ≈ 2.7) but many detections fall within tolerance windows.
 
@@ -191,7 +199,9 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v19b (sharp targets): FAILED (April 11).** Same as v19 but hard_binary_threshold=0.3 (single-frame onset zones instead of 3-frame). Trained all 60 epochs. val_loss=1.251 (barely converged from initial ~1.28, vs v19's 1.085). val_f1=0.166 (vs v19's 0.340). Root cause: threshold 0.3 binarizes away neighbor_weight=0.25 frames, leaving only single-frame positives (16ms at 62.5Hz). Targets are too sparse for the model to learn from. Confirms Schlüter/Bock finding — neighbor weighting is essential for temporal tolerance.
 
-**v20 (drum-stem kick/snare labels): training pipeline running (April 11).** Addresses the root label quality problem: 27% of consensus onsets are non-percussive (harmonic changes), 38% of kick/snare events are missing (masked by other instruments). Fix: Demucs drum separation (6750 tracks, 172G stems) → bandpass kick/snare detection on isolated drum stems. **Critical finding during data quality investigation: 735 tracks (10.9%) have silent drum stems where librosa onset detection fires hundreds of times on micro-noise, creating poisonous false positive labels. Quarantined all 735 (moved to `.quarantined/`). Remaining 6015 tracks pass validation (0.2% flagged).** Config fix: `hard_binary_threshold` 0.3→0.1 (0.3 would strip neighbor frames, same v19b failure mode). Pipeline safeguards added: provenance tracking (`.provenance.json`), overwrite protection (`--force` required for different audio source), validation step in `train_pipeline.sh`, quality gating in `prepare_dataset.py` (skip missing/silent labels), atomic writes in label generator.
+**v20 (drum-stem kick/snare labels): COMPLETE (April 11). Offline excellent, on-device regressed.** Addresses label quality: Demucs drum separation → bandpass kick/snare on isolated drums. 735 silent drum stems quarantined. 6015 clean labels. Offline KW onset F1=**0.892** (+21% vs v19 0.735). Kick recall=0.936, snare recall=0.937. **On-device F1=0.430** (-10% vs v19 0.477). Offline-to-device gap widened from 36%→52%. Root cause: bass mel bands 0-5 saturate at 1.0 during device music (p95=1.000), destroying kick onset contrast. Better labels made the model MORE specialized for clean mel distributions, worsening device performance. Label quality is solved; mel saturation is the bottleneck.
+
+**v21 (widened mel range [-80,0] dB): training in progress (April 11).** Same drum-stem labels as v20. Firmware mel mapping changed from `(log+60)/60` to `(log+80)/80`. Bass band 0 maps to ~0.73 instead of ~0.97 during device music — well below saturation ceiling. INT8 resolution: 3.2 levels/dB (was 4.3). Requires full dataprep reprocessing (mel cache invalidated). Training + training mel computation updated to match firmware.
 
 **Diagnostic tools deployed (April 9) — results (April 10):**
 - `replay_device_capture.py`: FP32 model on device mel produces flat 0.42 activation (same as INT8 on-device). **Quantization is NOT the bottleneck.**
