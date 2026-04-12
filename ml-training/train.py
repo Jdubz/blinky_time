@@ -643,6 +643,12 @@ def main():
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
             num_output_channels=cfg["model"].get("num_output_channels", 0),
         ).to(device)
+        # Quant-Noise: stochastic INT8 quantization during training (Fan et al. 2020)
+        quant_noise_ratio = cfg["training"].get("quant_noise", 0.0)
+        if quant_noise_ratio > 0:
+            from models.onset_conv1d import apply_quant_noise
+            apply_quant_noise(model, ratio=quant_noise_ratio)
+            print(f"Quant-Noise enabled: {quant_noise_ratio*100:.0f}% of weights per forward pass")
     elif model_type == "frame_conv1d_pool":
         from models.onset_conv1d_pool import build_onset_conv1d_pool
         model = build_onset_conv1d_pool(

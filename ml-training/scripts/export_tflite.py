@@ -472,23 +472,85 @@ def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
     tf_layer.set_weights([tf_w, pt_b])
 
 
+def _load_device_capture_windows(window_frames: int, n_mels: int,
+                                  mel_db_range: float = 80.0,
+                                  max_windows: int = 50) -> list[np.ndarray]:
+    """Load device capture mel frames and extract sliding windows.
+
+    Device captures may use a different mel_db_range than training.
+    Transforms from capture range (assumed 60 dB) to training range.
+    Returns list of (window_frames, n_mels) arrays.
+    """
+    import json
+    capture_dir = Path(__file__).parent.parent / "data" / "device_captures"
+    if not capture_dir.exists():
+        return []
+
+    all_mels = []
+    for capture_file in sorted(capture_dir.glob("capture-*.jsonl")):
+        with open(capture_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                frame = json.loads(line)
+                mel = frame.get("mel")
+                if mel and len(mel) >= n_mels:
+                    all_mels.append(mel[:n_mels])
+
+    if len(all_mels) < window_frames:
+        return []
+
+    mels = np.array(all_mels, dtype=np.float32)
+
+    # Transform from capture mel range (60 dB) to training mel range
+    # Old: mel_old = (10*log10(E) + 60) / 60
+    # New: mel_new = (10*log10(E) + db_range) / db_range
+    # => mel_new = mel_old * (60 / db_range) + (db_range - 60) / db_range
+    if mel_db_range != 60.0:
+        mels = mels * (60.0 / mel_db_range) + (mel_db_range - 60.0) / mel_db_range
+        mels = np.clip(mels, 0.0, 1.0)
+
+    # Extract random windows
+    rng = np.random.RandomState(123)
+    n_frames = len(mels)
+    windows = []
+    for _ in range(max_windows):
+        start = rng.randint(0, n_frames - window_frames)
+        windows.append(mels[start:start + window_frames])
+    return windows
+
+
 def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
-                                       n_mels: int = 26, n_samples: int = 200):
+                                       n_mels: int = 26, n_samples: int = 200,
+                                       mel_db_range: float = 80.0):
     """Calibration data generator for Conv1D model INT8 quantization.
 
-    Extracts random windows from training chunks as 3D tensors
-    (1, window_frames, n_mels) — matching the TFLite model's input shape.
+    Mixes training data windows with device capture windows to ensure
+    INT8 quantization ranges cover both training and deployment distributions.
     """
     X = np.load(data_path / "X_train.npy", mmap_mode='r')
     chunk_frames = X.shape[1]
     rng = np.random.RandomState(42)
-    indices = rng.choice(len(X), size=min(n_samples, len(X)), replace=False)
+
+    # Load device captures (covers deployment distribution)
+    device_windows = _load_device_capture_windows(
+        window_frames, n_mels, mel_db_range, max_windows=50)
+    n_device = len(device_windows)
+    n_training = n_samples - n_device
+
+    # Training data windows
+    indices = rng.choice(len(X), size=min(n_training, len(X)), replace=False)
     for i in indices:
-        chunk = X[i].astype(np.float32)  # (chunk_frames, features)
+        chunk = X[i].astype(np.float32)
         if chunk.shape[-1] > n_mels:
-            chunk = chunk[..., :n_mels]  # Slice to expected feature count
+            chunk = chunk[..., :n_mels]
         start = rng.randint(0, chunk_frames - window_frames + 1)
-        window = chunk[start:start + window_frames]  # (W, n_mels)
+        window = chunk[start:start + window_frames]
+        yield [window.reshape(1, window_frames, n_mels)]
+
+    # Device capture windows (ensures quantization ranges cover deployment)
+    for window in device_windows:
         yield [window.reshape(1, window_frames, n_mels)]
 
 
@@ -1218,8 +1280,10 @@ def main():
             # requantization multiplier=0 and producing constant -128 output.
             converter._experimental_disable_per_channel = True
         else:
+            mel_db_range = float(cfg.get("audio", {}).get("mel_db_range", 60))
             converter.representative_dataset = lambda: conv1d_representative_dataset_gen(
-                data_dir, window_frames=window_frames, n_mels=n_mels)
+                data_dir, window_frames=window_frames, n_mels=n_mels,
+                mel_db_range=mel_db_range)
         converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
         converter.inference_input_type = tf.int8
         converter.inference_output_type = tf.int8

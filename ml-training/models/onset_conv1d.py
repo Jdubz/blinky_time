@@ -28,6 +28,48 @@ import torch
 import torch.nn as nn
 
 
+def _quant_noise_forward_hook(module, input, output):
+    """Stochastic quantization noise (Fan et al. 2020).
+
+    During training, randomly quantize a fraction of weights to INT8 and
+    dequantize. Acts like DropConnect for quantization — the model learns
+    weight distributions that survive INT8 rounding. No export changes needed.
+    """
+    if not module.training or not hasattr(module, '_quant_noise_ratio'):
+        return output
+    ratio = module._quant_noise_ratio
+    if ratio <= 0:
+        return output
+    # Apply noise to a random subset of weights
+    for name, param in module.named_parameters():
+        if 'weight' not in name or param.dim() < 2:
+            continue
+        mask = torch.rand_like(param) < ratio
+        if not mask.any():
+            continue
+        with torch.no_grad():
+            # Simulate INT8 quantization: scale to [-128, 127], round, scale back
+            scale = param.abs().max() / 127.0
+            if scale < 1e-10:
+                continue
+            quantized = torch.round(param / scale).clamp(-128, 127) * scale
+            noise = quantized - param
+            param.add_(noise * mask)
+
+
+def apply_quant_noise(model: nn.Module, ratio: float = 0.1):
+    """Enable Quant-Noise on all conv/linear layers in the model.
+
+    Args:
+        model: the model to apply quant-noise to
+        ratio: fraction of weights to quantize per forward pass (0.1 = 10%)
+    """
+    for module in model.modules():
+        if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
+            module._quant_noise_ratio = ratio
+            module.register_forward_hook(_quant_noise_forward_hook)
+
+
 class FrameOnsetConv1D(nn.Module):
     """Causal 1D Conv for onset activation.
 
