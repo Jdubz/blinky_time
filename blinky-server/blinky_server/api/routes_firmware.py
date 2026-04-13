@@ -226,11 +226,12 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
     if len(content) > 5_000_000:
         raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
 
-    # Write to temp file
-    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / firmware.filename
+    # Write to temp file (strip path components to prevent traversal)
+    safe_name = Path(firmware.filename).name
+    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / safe_name
     hex_path.parent.mkdir(parents=True, exist_ok=True)
     hex_path.write_bytes(content)
-    log.info("Fleet upload: received %s (%d bytes)", firmware.filename, len(content))
+    log.info("Fleet upload: received %s (%d bytes)", safe_name, len(content))
 
     # Find all flashable serial devices (.hex files require UF2 over USB;
     # BLE-only devices need a DFU zip, which is a different endpoint).
@@ -252,48 +253,54 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
     # Flash one at a time, wait for full fleet reconnection between each.
     # UF2 bootloader entry causes USB bus resets that disconnect siblings.
     results: dict[str, dict[str, Any]] = {}
+    flashing_ids = {d.id for d in devices}
 
-    for i, device in enumerate(devices):
-        dev_label = f"{device.id[:12]} ({device.device_name or 'unknown'})"
-        log.info("Fleet upload: flashing %s (%d/%d)...", dev_label, i + 1, len(devices))
+    try:
+        for i, device in enumerate(devices):
+            dev_label = f"{device.id[:12]} ({device.device_name or 'unknown'})"
+            log.info("Fleet upload: flashing %s (%d/%d)...", dev_label, i + 1, len(devices))
 
-        # Hold reconnect on all serial devices during this flash
-        all_serial_ids = [
-            d.id for d in fleet.get_all_devices() if d.transport.transport_type == "serial"
-        ]
-        for sid in all_serial_ids:
-            fleet.hold_reconnect(sid, 120)
+            # Hold reconnect on all serial devices during this flash
+            all_serial_ids = [
+                d.id for d in fleet.get_all_devices() if d.transport.transport_type == "serial"
+            ]
+            for sid in all_serial_ids:
+                fleet.hold_reconnect(sid, 120)
 
-        try:
-            result = await upload_firmware(device, str(hex_path))
-            results[device.id[:12]] = result
-        except Exception as e:
-            results[device.id[:12]] = {"status": "error", "message": str(e)}
-        finally:
-            device.state = DeviceState.DISCONNECTED
+            try:
+                result = await upload_firmware(device, str(hex_path))
+                results[device.id[:12]] = result
+            except Exception as e:
+                results[device.id[:12]] = {"status": "error", "message": str(e)}
+            finally:
+                device.state = DeviceState.DISCONNECTED
 
-        if results[device.id[:12]].get("status") != "ok":
-            log.error(
-                "Fleet upload: %s FAILED: %s", dev_label, results[device.id[:12]].get("message")
-            )
-            # Don't stop — continue flashing remaining devices.
-            # A failed flash doesn't brick the device (UF2 is safe).
-
-        # Release reconnects and wait for all devices to come back
-        for sid in all_serial_ids:
-            fleet.resume_reconnect(sid)
-
-        if i < len(devices) - 1:
-            log.info("Fleet upload: waiting for USB stabilization...")
-            await asyncio.sleep(5)
-            # Wait up to 30s for all devices to reconnect
-            for _ in range(6):
-                await asyncio.sleep(5)
-                connected = sum(
-                    1 for d in fleet.get_all_devices() if d.state == DeviceState.CONNECTED
+            if results[device.id[:12]].get("status") != "ok":
+                log.error(
+                    "Fleet upload: %s FAILED: %s",
+                    dev_label,
+                    results[device.id[:12]].get("message"),
                 )
-                if connected >= len(devices):
-                    break
+
+            # Release reconnects and wait for all devices to come back
+            for sid in all_serial_ids:
+                fleet.resume_reconnect(sid)
+
+            if i < len(devices) - 1:
+                log.info("Fleet upload: waiting for USB stabilization...")
+                await asyncio.sleep(5)
+                # Wait up to 30s for flashed devices to reconnect
+                for _ in range(6):
+                    await asyncio.sleep(5)
+                    connected = sum(
+                        1
+                        for d in fleet.get_all_devices()
+                        if d.id in flashing_ids and d.state == DeviceState.CONNECTED
+                    )
+                    if connected >= len(devices):
+                        break
+    finally:
+        hex_path.unlink(missing_ok=True)
 
     # Final wait for all devices to reconnect and report version
     log.info("Fleet upload: waiting for version verification...")
@@ -332,9 +339,6 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
         }
 
     status = "ok" if ok_count == total else "error"
-
-    # Clean up
-    hex_path.unlink(missing_ok=True)
 
     return {
         "status": status,

@@ -167,7 +167,7 @@ const AudioControl& AudioTracker::update(float dt) {
         nnPrev1_ = rawNNActivation_;
         nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
     }
-    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevOdf_;
+    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
     updatePulseDetection(pulseOdf, dt, nowMs);
 
     // 6. Feed DSP components only on new spectral frames.
@@ -771,7 +771,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
-    bool risingEdge = (signal > pulseThreshold) && (prevOdf_ <= pulseThreshold);
+    bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
 
     float pulseStrength = 0.0f;
@@ -781,12 +781,12 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         pulseStrength = clampf(signal, 0.0f, 1.0f);
 
         float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
-        float denom = signal - prevOdf_;
-        float frac = (denom > 1e-6f) ? (pulseThreshold - prevOdf_) / denom : 0.5f;
+        float denom = signal - prevSignal_;
+        float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
         frac = clampf(frac, 0.0f, 1.0f);
         lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
     }
-    prevOdf_ = signal;
+    prevSignal_ = signal;
     lastPulseStrength_ = pulseStrength;
 }
 

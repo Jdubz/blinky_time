@@ -124,7 +124,7 @@ public:
     float odfContrast = 1.25f;
 
     // Pulse detection thresholds
-    float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
+    float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
     float pulseOnsetFloor = 0.005f;    // ODF floor — tuned for spectral flux range (0.001-0.05)
     float pulseNNGate = 0.3f;          // NN activation gate — suppress pulse when NN < this
@@ -211,7 +211,7 @@ private:
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
-    float prevOdf_ = 0.0f;             // Previous frame ODF (for rising-edge detection)
+    float prevSignal_ = 0.0f;          // Previous frame signal (for rising-edge detection)
 
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
