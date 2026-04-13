@@ -132,6 +132,8 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                                    window: "torch.Tensor") -> np.ndarray:
     """Compute mel spectrogram matching firmware (GPU-accelerated torch).
 
+    Chunks long audio to avoid CUDA OOM on tracks >3 minutes.
+
     Args:
         audio: (samples,) tensor on GPU/CPU
         cfg: config dict with audio section
@@ -145,9 +147,21 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
     n_fft = cfg["audio"]["n_fft"]
     hop_length = cfg["audio"]["hop_length"]
 
-    stft = torch.stft(audio, n_fft=n_fft, hop_length=hop_length,
-                      window=window, center=False, return_complex=True)
-    magnitudes = stft.abs()  # (n_freqs, n_frames)
+    # Chunk long audio to avoid GPU OOM. 60s at 16kHz = 960K samples.
+    # STFT of 960K samples needs ~150 MB GPU; safe for 10 GB cards.
+    max_samples = 960_000  # 60s at 16kHz
+    if len(audio) > max_samples:
+        chunks = []
+        for start in range(0, len(audio), max_samples):
+            chunk = audio[start:start + max_samples]
+            stft = torch.stft(chunk, n_fft=n_fft, hop_length=hop_length,
+                              window=window, center=False, return_complex=True)
+            chunks.append(stft.abs())
+        magnitudes = torch.cat(chunks, dim=1)  # concat along time axis
+    else:
+        stft = torch.stft(audio, n_fft=n_fft, hop_length=hop_length,
+                          window=window, center=False, return_complex=True)
+        magnitudes = stft.abs()  # (n_freqs, n_frames)
 
     # Spectral noise subtraction (v56, Martin 2001 min-statistics)
     ns_cfg = cfg.get("audio", {}).get("noise_subtraction", {})
