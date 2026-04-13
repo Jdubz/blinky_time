@@ -273,8 +273,9 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
             device.state = DeviceState.DISCONNECTED
 
         if results[device.id[:12]].get("status") != "ok":
-            log.error("Fleet upload: %s FAILED: %s", dev_label,
-                      results[device.id[:12]].get("message"))
+            log.error(
+                "Fleet upload: %s FAILED: %s", dev_label, results[device.id[:12]].get("message")
+            )
             # Don't stop — continue flashing remaining devices.
             # A failed flash doesn't brick the device (UF2 is safe).
 
@@ -289,8 +290,7 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
             for _ in range(6):
                 await asyncio.sleep(5)
                 connected = sum(
-                    1 for d in fleet.get_all_devices()
-                    if d.state == DeviceState.CONNECTED
+                    1 for d in fleet.get_all_devices() if d.state == DeviceState.CONNECTED
                 )
                 if connected >= len(devices):
                     break

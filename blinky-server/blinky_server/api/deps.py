@@ -23,6 +23,7 @@ def _load_api_key() -> str:
         return open(_API_KEY_FILE).read().strip()
     # Generate and persist
     import secrets
+
     key = secrets.token_urlsafe(32)
     with open(_API_KEY_FILE, "w") as f:
         f.write(key + "\n")
