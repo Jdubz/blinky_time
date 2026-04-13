@@ -5,6 +5,7 @@ description = "Fleet management server for Blinky Time LED art devices"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.32",
     "pyserial>=3.5",
     "pyserial-asyncio-fast>=0.13",

@@ -4,11 +4,11 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..device.device import Device, DeviceState
 from ..firmware import upload_firmware
-from .deps import get_fleet
+from .deps import get_fleet, require_api_key
 from .models import (
     CommandResponse,
     DeviceResponse,
@@ -207,7 +207,7 @@ async def fleet_discover() -> dict[str, Any]:
     }
 
 
-@router.post("/devices/{device_id}/flash")
+@router.post("/devices/{device_id}/flash", dependencies=[Depends(require_api_key)])
 async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     """Upload firmware to a device using the best available method.
 

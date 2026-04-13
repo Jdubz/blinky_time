@@ -25,10 +25,19 @@ class TestSession:
         self._start_time: float = 0.0
         self._transients: list[TransientEvent] = []
         self._music_states: list[MusicState] = []
+        self._clock_offset: float | None = None  # server_epoch_ms - firmware_millis
 
     @property
     def recording(self) -> bool:
         return self._recording
+
+    def set_clock_offset(self, offset_ms: float) -> None:
+        """Set firmware-to-server clock offset from a sync measurement.
+
+        When set, transient timestamps use firmware millis() + offset
+        instead of server time.time(), reducing serial transport jitter.
+        """
+        self._clock_offset = offset_ms
 
     def start_recording(self) -> None:
         """Begin recording. Clears any previous data."""
@@ -64,12 +73,17 @@ class TestSession:
         now_ms = time.time() * 1000
 
         if msg_type == "transient":
-            # Always use system clock — firmware timestampMs is device uptime,
-            # not epoch. All timestamps must share the same time base for
-            # scoring offset calculations and settle filtering.
+            # Prefer firmware timestamps when clock offset is available —
+            # firmware millis() + offset eliminates serial transport jitter
+            # (~2-10ms). Falls back to server system clock otherwise.
+            fw_ts = data.get("timestampMs")
+            if fw_ts is not None and self._clock_offset is not None:
+                ts_ms = fw_ts + self._clock_offset
+            else:
+                ts_ms = now_ms
             self._transients.append(
                 TransientEvent(
-                    timestamp_ms=now_ms,
+                    timestamp_ms=ts_ms,
                     type="onset",
                     strength=data.get("strength", 0.0),
                 )

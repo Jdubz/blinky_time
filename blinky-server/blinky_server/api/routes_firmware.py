@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from ..device.device import DeviceState
-from .deps import get_fleet
+from .deps import get_fleet, require_api_key
 from .models import FlashRequest
 
 log = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ async def compile_dfu_package(platform: str = "nrf52840") -> dict[str, Any]:
     }
 
 
-@router.post("/fleet/flash")
+@router.post("/fleet/flash", dependencies=[Depends(require_api_key)])
 async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
     """Flash firmware to ALL connected nRF52840 devices sequentially.
 
@@ -158,7 +159,7 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
     }
 
 
-@router.post("/fleet/deploy")
+@router.post("/fleet/deploy", dependencies=[Depends(require_api_key)])
 async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
     """One-shot compile + flash all connected devices.
 
@@ -198,4 +199,150 @@ async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
         "hex_path": hex_path,
         "zip_path": zip_path,
         "per_device": flash_result.get("per_device", {}),
+    }
+
+
+@router.post("/fleet/upload", dependencies=[Depends(require_api_key)])
+async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
+    """Upload firmware binary and flash all connected devices.
+
+    Accepts the .hex file as a multipart upload. No scp needed.
+    Flashes each device one at a time, waits for reconnection between
+    each, then verifies all devices report the expected version.
+
+    Returns per-device flash results and version verification.
+    """
+    from pathlib import Path
+
+    from ..firmware import upload_firmware
+
+    # Validate upload
+    if not firmware.filename or not firmware.filename.endswith(".hex"):
+        raise HTTPException(400, "Firmware must be a .hex file")
+
+    content = await firmware.read()
+    if len(content) < 1000:
+        raise HTTPException(400, f"Firmware file too small ({len(content)} bytes)")
+    if len(content) > 5_000_000:
+        raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
+
+    # Write to temp file (strip path components to prevent traversal)
+    safe_name = Path(firmware.filename).name
+    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / safe_name
+    hex_path.parent.mkdir(parents=True, exist_ok=True)
+    hex_path.write_bytes(content)
+    log.info("Fleet upload: received %s (%d bytes)", safe_name, len(content))
+
+    # Find all flashable serial devices (.hex files require UF2 over USB;
+    # BLE-only devices need a DFU zip, which is a different endpoint).
+    fleet = get_fleet()
+    flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
+    devices = [
+        d
+        for d in fleet.get_all_devices()
+        if d.platform == "nrf52840"
+        and d.state in flashable_states
+        and d.transport.transport_type == "serial"
+    ]
+
+    if not devices:
+        raise HTTPException(404, "No flashable nRF52840 devices connected")
+
+    fleet.set_recovery_firmware(str(hex_path))
+
+    # Flash one at a time, wait for full fleet reconnection between each.
+    # UF2 bootloader entry causes USB bus resets that disconnect siblings.
+    results: dict[str, dict[str, Any]] = {}
+    flashing_ids = {d.id for d in devices}
+
+    try:
+        for i, device in enumerate(devices):
+            dev_label = f"{device.id[:12]} ({device.device_name or 'unknown'})"
+            log.info("Fleet upload: flashing %s (%d/%d)...", dev_label, i + 1, len(devices))
+
+            # Hold reconnect on all serial devices during this flash
+            all_serial_ids = [
+                d.id for d in fleet.get_all_devices() if d.transport.transport_type == "serial"
+            ]
+            for sid in all_serial_ids:
+                fleet.hold_reconnect(sid, 120)
+
+            try:
+                result = await upload_firmware(device, str(hex_path))
+                results[device.id[:12]] = result
+            except Exception as e:
+                results[device.id[:12]] = {"status": "error", "message": str(e)}
+            finally:
+                device.state = DeviceState.DISCONNECTED
+
+            if results[device.id[:12]].get("status") != "ok":
+                log.error(
+                    "Fleet upload: %s FAILED: %s",
+                    dev_label,
+                    results[device.id[:12]].get("message"),
+                )
+
+            # Release reconnects and wait for all devices to come back
+            for sid in all_serial_ids:
+                fleet.resume_reconnect(sid)
+
+            if i < len(devices) - 1:
+                log.info("Fleet upload: waiting for USB stabilization...")
+                await asyncio.sleep(5)
+                # Wait up to 30s for flashed devices to reconnect
+                for _ in range(6):
+                    await asyncio.sleep(5)
+                    connected = sum(
+                        1
+                        for d in fleet.get_all_devices()
+                        if d.id in flashing_ids and d.state == DeviceState.CONNECTED
+                    )
+                    if connected >= len(devices):
+                        break
+    finally:
+        hex_path.unlink(missing_ok=True)
+
+    # Final wait for all devices to reconnect and report version
+    log.info("Fleet upload: waiting for version verification...")
+    await asyncio.sleep(10)
+
+    # Re-enumerate to get fresh state
+    verified: dict[str, dict[str, Any]] = {}
+    for _ in range(6):  # 30s max
+        all_done = True
+        for d in fleet.get_all_devices():
+            short_id = d.id[:12]
+            if short_id not in results:
+                continue
+            if d.state == DeviceState.CONNECTED and d.version:
+                verified[short_id] = {
+                    "version": d.version,
+                    "device_name": d.device_name,
+                }
+            else:
+                all_done = False
+        if all_done or len(verified) == len(results):
+            break
+        await asyncio.sleep(5)
+
+    # Build final report
+    ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
+    total = len(devices)
+
+    per_device = {}
+    for short_id, flash_result in results.items():
+        v = verified.get(short_id, {})
+        per_device[short_id] = {
+            "flash": flash_result.get("status", "error"),
+            "version": v.get("version"),
+            "device_name": v.get("device_name"),
+        }
+
+    status = "ok" if ok_count == total else "error"
+
+    return {
+        "status": status,
+        "message": f"{ok_count}/{total} devices flashed",
+        "firmware_size": len(content),
+        "per_device": per_device,
     }

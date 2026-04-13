@@ -28,6 +28,86 @@ import torch
 import torch.nn as nn
 
 
+def _fake_quantize_int8(weight: torch.Tensor) -> torch.Tensor:
+    """Simulate INT8 per-tensor quantization (round-trip through int8 range)."""
+    scale = weight.detach().abs().max() / 127.0
+    if scale < 1e-10:
+        return weight
+    return (torch.round(weight / scale).clamp(-128, 127)) * scale
+
+
+class _QuantNoiseConv1d(nn.Module):
+    """Wrapper that applies stochastic quantization noise to Conv1d weights.
+
+    During training, a random fraction of weights are replaced with their
+    INT8-quantized values. Gradients flow through via straight-through
+    estimator (torch.where is differentiable). At eval, behaves identically
+    to the wrapped Conv1d.
+
+    Fan et al. 2020: "Training with Quantization Noise for Extreme Model Compression"
+    """
+
+    def __init__(self, conv: nn.Conv1d, ratio: float = 0.1):
+        super().__init__()
+        self.conv = conv
+        self.ratio = ratio
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training and self.ratio > 0:
+            w = self.conv.weight
+            mask = (torch.rand_like(w) < self.ratio).float()
+            w_quant = _fake_quantize_int8(w)
+            # STE: use quantized weights for masked subset, original for rest
+            w_noisy = w + (w_quant - w).detach() * mask
+            return nn.functional.conv1d(
+                x, w_noisy, self.conv.bias,
+                stride=self.conv.stride, padding=self.conv.padding,
+                dilation=self.conv.dilation, groups=self.conv.groups)
+        return self.conv(x)
+
+
+def apply_quant_noise(model: nn.Module, ratio: float = 0.1):
+    """Wrap all Conv1d layers with stochastic quantization noise.
+
+    Args:
+        model: the model to apply quant-noise to
+        ratio: fraction of weights to quantize per forward pass (0.1 = 10%)
+
+    Raises:
+        ValueError: if ratio is not in [0, 1]
+    """
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError(f"quant_noise ratio must be in [0, 1], got {ratio}")
+    # Wrap Conv1d inside Sequential containers (backbone layers)
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Sequential):
+            for i, layer in enumerate(module):
+                if isinstance(layer, nn.Conv1d):
+                    module[i] = _QuantNoiseConv1d(layer, ratio)
+    # Wrap standalone Conv1d attributes (e.g., output_conv)
+    for name, attr in list(model.named_children()):
+        if isinstance(attr, nn.Conv1d):
+            setattr(model, name, _QuantNoiseConv1d(attr, ratio))
+
+
+def unwrap_quant_noise_state_dict(state_dict: dict) -> dict:
+    """Strip QuantNoise wrapper prefixes from state dict keys.
+
+    QuantNoise wraps Conv1d in _QuantNoiseConv1d, adding '.conv.' to keys.
+    This restores original key names for export compatibility.
+    """
+    cleaned = {}
+    for key, value in state_dict.items():
+        if key.endswith('.conv.weight'):
+            cleaned_key = key[:-len('.conv.weight')] + '.weight'
+        elif key.endswith('.conv.bias'):
+            cleaned_key = key[:-len('.conv.bias')] + '.bias'
+        else:
+            cleaned_key = key
+        cleaned[cleaned_key] = value
+    return cleaned
+
+
 class FrameOnsetConv1D(nn.Module):
     """Causal 1D Conv for onset activation.
 

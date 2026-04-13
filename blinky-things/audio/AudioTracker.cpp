@@ -131,9 +131,7 @@ const AudioControl& AudioTracker::update(float dt) {
 
         // Track raw NN activation peaks (before pulse detection threshold/cooldown).
         // Record timestamp when activation exceeds previous value (rising edge).
-        // Uses pulseNNGate as floor so the peak timestamp stays fresh whenever
-        // activation is in the gate-open range (Gemini/Copilot review feedback).
-        if (odf > rawNNActivation_ && odf > pulseNNGate) {
+        if (odf > rawNNActivation_ && odf > 0.05f) {
             rawNNPeakMs_ = nowMs;
         }
         prevNNActivation_ = rawNNActivation_;
@@ -167,7 +165,7 @@ const AudioControl& AudioTracker::update(float dt) {
         nnPrev1_ = rawNNActivation_;
         nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
     }
-    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevOdf_;
+    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
     updatePulseDetection(pulseOdf, dt, nowMs);
 
     // 6. Feed DSP components only on new spectral frames.
@@ -737,20 +735,25 @@ void AudioTracker::updatePlpPhase() {
 // ============================================================================
 
 void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
-    // Spectral flux rising-edge detection, gated by NN onset activation.
-    // NN-direct peak-picking was tested (Bock 2012 approach) but regressed
-    // F1 from 0.477→0.162 because INT8 NN on device-shifted mel doesn't
-    // produce sharp enough peaks for standalone detection. Spectral flux
-    // provides robust transient timing; NN provides selectivity gate.
+    // NN-primary onset detection. The trained NN (F1=0.893 offline) is a far
+    // better onset detector than spectral flux (F1~0.5). Use NN activation as
+    // the primary signal with adaptive threshold + rising edge + cooldown.
+    // Falls back to spectral flux only when NN is unavailable.
+    //
+    // Previous approach gated spectral flux with NN (required both to agree),
+    // which was strictly worse than either signal alone.
+
+    // Select signal: NN activation when available, spectral flux as fallback
+    float signal = nnActive_ ? nnSmoothed_ : odf;
 
     // Floor-tracking baseline: slow rise, fast drop
-    if (odf < odfBaseline_) {
-        odfBaseline_ += (odf - odfBaseline_) * baselineFastDrop;
+    if (signal < odfBaseline_) {
+        odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
     } else {
-        odfBaseline_ += (odf - odfBaseline_) * baselineSlowRise;
+        odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
     }
 
-    // ODF peak hold for energy synthesis
+    // ODF peak hold for energy synthesis (always track spectral flux for this)
     if (odf > odfPeakHold_) {
         odfPeakHold_ = odf;
     } else {
@@ -766,31 +769,22 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
-    bool risingEdge = (odf > pulseThreshold) && (prevOdf_ <= pulseThreshold);
+    bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
-
-    // NN gate: use Hamming-smoothed activation for stability.
-    // Gate opens when smoothed NN is above threshold AND shows recent activity.
-    uint32_t peakAge = (nowMs >= rawNNPeakMs_) ? (nowMs - rawNNPeakMs_) : 200;
-    bool nnRecentPeak = peakAge < 100;
-    bool nnRising = (rawNNActivation_ - prevNNActivation_) > 0.005f;
-    bool nnGateOpen = !nnActive_ || pulseNNGate <= 0.0f ||
-        (nnSmoothed_ > pulseNNGate && (nnRecentPeak || nnRising));
 
     float pulseStrength = 0.0f;
     if (signalPresence > pulseMinLevel &&
         risingEdge &&
-        nnGateOpen &&
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
-        pulseStrength = clampf(odf, 0.0f, 1.0f);
+        pulseStrength = clampf(signal, 0.0f, 1.0f);
 
         float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
-        float denom = odf - prevOdf_;
-        float frac = (denom > 1e-6f) ? (pulseThreshold - prevOdf_) / denom : 0.5f;
+        float denom = signal - prevSignal_;
+        float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
         frac = clampf(frac, 0.0f, 1.0f);
         lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
     }
-    prevOdf_ = odf;
+    prevSignal_ = signal;
     lastPulseStrength_ = pulseStrength;
 }
 

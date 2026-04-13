@@ -124,10 +124,10 @@ public:
     float odfContrast = 1.25f;
 
     // Pulse detection thresholds
-    float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
+    float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-    float pulseOnsetFloor = 0.005f;    // ODF floor — tuned for spectral flux range (0.001-0.05)
-    float pulseNNGate = 0.3f;          // NN activation gate — suppress pulse when NN < this
+    float pulseOnsetFloor = 0.005f;    // Minimum threshold floor for pulse detection signal
+    // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
 
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
@@ -203,15 +203,15 @@ private:
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
-    // === Pulse detection (spectral-flux timing + NN gate) ===
-    // Spectral flux provides transient timing; NN activation gates onset selectivity.
-    // NN modulation strength adapts via nnConf (activation variance).
-    float odfBaseline_ = 0.0f;        // Floor-tracking baseline (on smoothed NN)
+    // === Pulse detection (NN-primary, spectral flux fallback) ===
+    // NN activation is the primary onset signal (F1=0.893 offline).
+    // Spectral flux is only used when NN is unavailable (model failed to load).
+    float odfBaseline_ = 0.0f;        // Floor-tracking baseline for active signal
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
-    float prevOdf_ = 0.0f;             // Previous frame ODF (for rising-edge detection)
+    float prevSignal_ = 0.0f;          // Previous frame signal (for rising-edge detection)
 
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)

@@ -68,5 +68,34 @@ if [ -n "$PACK_SIZE_KB" ] && [ "$PACK_SIZE_KB" -gt "$PACK_LIMIT_KB" ] 2>/dev/nul
     echo -e "${YELLOW}   Run: git reflog expire --expire=30.days.ago --all && git gc --prune=30.days.ago${NC}"
 fi
 
+# --- Blinky Server checks (ruff lint, ruff format, mypy) ---
+SERVER_DIR="$REPO_ROOT/blinky-server"
+if [ -d "$SERVER_DIR/venv" ] && [ -f "$SERVER_DIR/venv/bin/python" ]; then
+    SVENV="$SERVER_DIR/venv/bin/python"
+
+    echo "Running blinky-server lint..."
+    if ! "$SVENV" -m ruff check "$SERVER_DIR/blinky_server/" "$SERVER_DIR/tests/" 2>&1; then
+        echo -e "${RED}❌ ruff check failed${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ ruff check passed${NC}"
+
+    echo "Running blinky-server format check..."
+    if ! "$SVENV" -m ruff format --check "$SERVER_DIR/blinky_server/" "$SERVER_DIR/tests/" 2>&1; then
+        echo -e "${RED}❌ ruff format failed (run: cd blinky-server && ./venv/bin/python -m ruff format blinky_server/ tests/)${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ ruff format passed${NC}"
+
+    echo "Running blinky-server type check..."
+    if ! (cd "$SERVER_DIR" && "$SVENV" -m mypy blinky_server/) 2>&1; then
+        echo -e "${RED}❌ mypy failed${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ mypy passed${NC}"
+else
+    echo -e "${YELLOW}⚠️  blinky-server venv not found, skipping server checks${NC}"
+fi
+
 echo -e "${GREEN}✅ All pre-push checks passed${NC}"
 exit 0

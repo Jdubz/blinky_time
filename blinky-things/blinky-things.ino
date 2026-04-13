@@ -30,6 +30,7 @@
 #include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper (Adafruit)
 #include "hal/hardware/Nrf52PwmLedStrip.h"  // Async PWM driver (nRF52840)
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
+#include "devices/TestChipConfig.h"           // Fallback config for unconfigured chips
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
 #include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
 #include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
@@ -169,9 +170,16 @@ void setup() {
     Serial.println(SafeMode::CRASH_THRESHOLD);
   }
 
-  // Initialize configuration storage and load device config from flash
+  // Initialize configuration storage and load device config from flash.
+  // Falls back to TEST_CHIP_CONFIG if no config stored — avoids safe mode
+  // on bare chips so audio analysis and serial commands still work.
   configStorage.begin();
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
+  if (!validDeviceConfig) {
+    config = TEST_CHIP_CONFIG;
+    validDeviceConfig = true;
+    Serial.println(F("[INFO] No stored config — using Test Chip defaults"));
+  }
 
   // Reinitialize serial if configured baud rate differs from default
   if (validDeviceConfig && config.serial.baudRate != 115200) {

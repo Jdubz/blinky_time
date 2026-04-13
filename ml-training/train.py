@@ -599,6 +599,7 @@ def main():
                             num_workers=num_workers, pin_memory=True, persistent_workers=True)
 
     # Build model
+    _quant_noise_active = False
     model_type = cfg["model"].get("type", "causal_cnn")
     num_tempo_bins = cfg["model"].get("num_tempo_bins", 0)
     if model_type == "frame_fc":
@@ -643,6 +644,15 @@ def main():
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
             num_output_channels=cfg["model"].get("num_output_channels", 0),
         ).to(device)
+        # Quant-Noise: stochastic INT8 quantization during training (Fan et al. 2020)
+        quant_noise_ratio = cfg["training"].get("quant_noise", 0.0)
+        if quant_noise_ratio > 0:
+            from models.onset_conv1d import apply_quant_noise
+            apply_quant_noise(model, ratio=quant_noise_ratio)
+            print(f"Quant-Noise enabled: {quant_noise_ratio*100:.0f}% of weights per forward pass")
+            _quant_noise_active = True
+        else:
+            _quant_noise_active = False
     elif model_type == "frame_conv1d_pool":
         from models.onset_conv1d_pool import build_onset_conv1d_pool
         model = build_onset_conv1d_pool(
@@ -1034,7 +1044,11 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            torch.save(model.state_dict(), output_dir / "best_model.pt")
+            sd = model.state_dict()
+            if _quant_noise_active:
+                from models.onset_conv1d import unwrap_quant_noise_state_dict
+                sd = unwrap_quant_noise_state_dict(sd)
+            torch.save(sd, output_dir / "best_model.pt")
             print(f"  Saved best model (val_loss={val_loss:.4f})")
         else:
             patience_counter += 1
@@ -1053,8 +1067,28 @@ def main():
             "log_rows": log_rows,
         }, output_dir / "training_checkpoint.pt")
 
-    # Restore best weights
-    model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
+    # Restore best weights (best_model.pt has unwrapped keys for export;
+    # re-wrap if quant-noise is active so keys match the current model)
+    best_sd = torch.load(output_dir / "best_model.pt", weights_only=True)
+    if _quant_noise_active:
+        expected_keys = set(model.state_dict().keys())
+        rewrapped = {}
+        for key, value in best_sd.items():
+            if key in expected_keys:
+                rewrapped[key] = value
+            else:
+                # Try inserting .conv. before the final .weight/.bias
+                for suffix in (".weight", ".bias"):
+                    if key.endswith(suffix):
+                        stem = key[:-len(suffix)]
+                        candidate = f"{stem}.conv{suffix}"
+                        if candidate in expected_keys:
+                            rewrapped[candidate] = value
+                            break
+                else:
+                    rewrapped[key] = value
+        best_sd = rewrapped
+    model.load_state_dict(best_sd)
 
     # Stochastic Weight Averaging: retrain from best weights with constant LR,
     # average weights across epochs. Finds flatter optima that generalize better.
@@ -1086,11 +1120,15 @@ def main():
         model.load_state_dict(swa_model.module.state_dict())
         print("  SWA weights applied")
 
-    # Save final model
-    torch.save(model.state_dict(), output_dir / "final_model.pt")
+    # Save final model (unwrap quant-noise wrappers for export compatibility)
+    final_sd = model.state_dict()
+    if _quant_noise_active:
+        from models.onset_conv1d import unwrap_quant_noise_state_dict
+        final_sd = unwrap_quant_noise_state_dict(final_sd)
+    torch.save(final_sd, output_dir / "final_model.pt")
     # Save full model info for export
     torch.save({
-        "state_dict": model.state_dict(),
+        "state_dict": final_sd,
         "config": cfg,
         "loss": loss_type,
         "focal_gamma": args.focal_gamma if loss_type == "focal" else None,
