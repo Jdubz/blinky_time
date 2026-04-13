@@ -543,6 +543,30 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     dist_audio = _sosfilt_gpu(sos_dist, audio)
     variants.append((f"dist-{distance_m:.0f}m", dist_audio))
 
+    # Speaker harmonic distortion (polynomial nonlinearity)
+    # Speakers driven by kicks produce 1-8% THD, creating harmonics the model
+    # hasn't seen in clean training audio. Even-order (H2) is asymmetric,
+    # odd-order (H3) is symmetric — both affect transient shape.
+    thd = rng.uniform(0.01, 0.08)
+    a2 = thd * 0.7  # H2 (even-order)
+    a3 = thd * 0.3  # H3 (odd-order)
+    distorted = (audio + a2 * audio**2 + a3 * audio**3).clamp(-1.0, 1.0)
+    variants.append((f"spkr-thd{thd*100:.0f}pct", distorted))
+
+    # Comb filter from early reflections (1-10ms delay = 0.3-3.4m reflector)
+    # Creates notches in 100-1000 Hz that affect kick perception.
+    delay_samples = rng.integers(16, 160)  # 1-10ms at 16kHz
+    comb_gain = rng.uniform(-0.4, 0.4)
+    combed = (audio + comb_gain * torch.roll(audio, int(delay_samples))).clamp(-1.0, 1.0)
+    variants.append((f"comb-{delay_samples}smp", combed))
+
+    # MEMS mic soft clipping (polynomial saturation at high SPL)
+    # MEMS diaphragm nonlinearity is smooth and asymmetric, unlike digital clipping.
+    clip_a3 = rng.uniform(0.05, 0.20)
+    clip_a5 = rng.uniform(0.01, 0.05)
+    soft_clipped = (audio - clip_a3 * audio**3 + clip_a5 * audio**5).clamp(-1.0, 1.0)
+    variants.append(("mems-softclip", soft_clipped))
+
     # Room impulse responses
     if rir_dir and rir_dir.exists():
         rir_files = list(rir_dir.glob("*.wav")) + list(rir_dir.glob("*.npy"))
