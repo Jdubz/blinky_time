@@ -491,6 +491,8 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
         }
 
+        out_.print(F(",\"millis\":"));
+        out_.print(millis());
         out_.println(F("}"));
         return true;
     }

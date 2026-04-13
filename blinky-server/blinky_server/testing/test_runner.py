@@ -8,7 +8,9 @@ Two test types:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from .audio_lock import acquire_audio_lock, release_audio_lock
@@ -27,6 +29,34 @@ log = logging.getLogger(__name__)
 
 INTER_RUN_GAP_S = 5
 SETTLE_MS = 12000  # ACF convergence time — skip early readings
+
+
+async def _sync_clock(device: "Device") -> float | None:
+    """Measure clock offset between server and firmware.
+
+    Sends `json info` (which includes `millis` field) and measures
+    round-trip time. Returns offset_ms = server_epoch_ms - firmware_millis,
+    or None if sync fails.
+    """
+    try:
+        t_send = time.time() * 1000
+        resp = await device.protocol.send_command("json info")
+        t_recv = time.time() * 1000
+
+        info = json.loads(resp)
+        fw_millis = info.get("millis")
+        if fw_millis is None:
+            return None
+
+        # Estimate firmware time at midpoint of round-trip
+        rtt = t_recv - t_send
+        server_midpoint = t_send + rtt / 2
+        offset = server_midpoint - fw_millis
+        log.debug("Clock sync %s: offset=%.0fms rtt=%.0fms", device.id[:12], offset, rtt)
+        return offset
+    except Exception as e:
+        log.debug("Clock sync failed for %s: %s", device.id[:12], e)
+        return None
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
@@ -73,6 +103,10 @@ async def _record_and_play(
     sessions: dict[str, TestSession] = {}
     for device in devices:
         session = device.start_test_session()
+        # Sync clocks before recording starts (while streaming is active)
+        offset = await _sync_clock(device)
+        if offset is not None:
+            session.set_clock_offset(offset)
         session.start_recording()
         sessions[device.id] = session
 

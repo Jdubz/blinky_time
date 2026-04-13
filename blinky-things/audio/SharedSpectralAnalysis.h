@@ -36,6 +36,10 @@ namespace SpectralConstants {
     constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (below fundamental bass)
     constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (Nyquist limit at 16kHz)
 
+    // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
+    // MUST match ml-training base.yaml mel_db_range.
+    constexpr float MEL_DB_RANGE = 60.0f;
+
     // Frequency bin ranges for different detectors
     constexpr int BASS_MIN_BIN = 1;    // 62.5 Hz
     constexpr int BASS_MAX_BIN = 6;    // 375 Hz

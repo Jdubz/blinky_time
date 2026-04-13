@@ -1067,8 +1067,28 @@ def main():
             "log_rows": log_rows,
         }, output_dir / "training_checkpoint.pt")
 
-    # Restore best weights
-    model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
+    # Restore best weights (best_model.pt has unwrapped keys for export;
+    # re-wrap if quant-noise is active so keys match the current model)
+    best_sd = torch.load(output_dir / "best_model.pt", weights_only=True)
+    if _quant_noise_active:
+        expected_keys = set(model.state_dict().keys())
+        rewrapped = {}
+        for key, value in best_sd.items():
+            if key in expected_keys:
+                rewrapped[key] = value
+            else:
+                # Try inserting .conv. before the final .weight/.bias
+                for suffix in (".weight", ".bias"):
+                    if key.endswith(suffix):
+                        stem = key[:-len(suffix)]
+                        candidate = f"{stem}.conv{suffix}"
+                        if candidate in expected_keys:
+                            rewrapped[candidate] = value
+                            break
+                else:
+                    rewrapped[key] = value
+        best_sd = rewrapped
+    model.load_state_dict(best_sd)
 
     # Stochastic Weight Averaging: retrain from best weights with constant LR,
     # average weights across epochs. Finds flatter optima that generalize better.

@@ -473,7 +473,7 @@ def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
 
 
 def _load_device_capture_windows(window_frames: int, n_mels: int,
-                                  mel_db_range: float = 80.0,
+                                  mel_db_range: float = 60.0,
                                   max_windows: int = 50) -> list[np.ndarray]:
     """Load device capture mel frames and extract sliding windows.
 
@@ -1287,7 +1287,7 @@ def main():
             # requantization multiplier=0 and producing constant -128 output.
             converter._experimental_disable_per_channel = True
         else:
-            mel_db_range = float(cfg.get("audio", {}).get("mel_db_range", 80))
+            mel_db_range = float(cfg.get("audio", {}).get("mel_db_range", 60))
             converter.representative_dataset = lambda: conv1d_representative_dataset_gen(
                 data_dir, window_frames=window_frames, n_mels=n_mels,
                 mel_db_range=mel_db_range)

@@ -98,7 +98,12 @@ def unwrap_quant_noise_state_dict(state_dict: dict) -> dict:
     """
     cleaned = {}
     for key, value in state_dict.items():
-        cleaned_key = key.replace('.conv.weight', '.weight').replace('.conv.bias', '.bias')
+        if key.endswith('.conv.weight'):
+            cleaned_key = key[:-len('.conv.weight')] + '.weight'
+        elif key.endswith('.conv.bias'):
+            cleaned_key = key[:-len('.conv.bias')] + '.bias'
+        else:
+            cleaned_key = key
         cleaned[cleaned_key] = value
     return cleaned
 
