@@ -31,7 +31,7 @@ INTER_RUN_GAP_S = 5
 SETTLE_MS = 12000  # ACF convergence time — skip early readings
 
 
-async def _sync_clock(device: "Device") -> float | None:
+async def _sync_clock(device: Device) -> float | None:
     """Measure clock offset between server and firmware.
 
     Sends `json info` (which includes `millis` field) and measures
@@ -60,7 +60,13 @@ async def _sync_clock(device: "Device") -> float | None:
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
-    """Send setup commands to a device before testing."""
+    """Reset device to defaults, then apply any test-specific commands.
+
+    Always resets to factory defaults first — stale settings from prior
+    experiments persist in flash and silently corrupt test results.
+    """
+    await device.protocol.send_command("defaults")
+    await asyncio.sleep(0.1)
     if commands:
         for cmd in commands:
             await device.protocol.send_command(cmd)

@@ -25,50 +25,39 @@ static constexpr float MID_BIN_COUNT = static_cast<float>(
 static constexpr float HIGH_BIN_COUNT = static_cast<float>(
     SpectralConstants::NUM_BINS - SpectralConstants::HIGH_MIN_BIN);           // 95
 
-// Pre-computed mel filterbank bin boundaries
-// Generated for 26 mel bands from 60-8000 Hz at 16kHz/256-point FFT
-// Each band is a triangular filter spanning [start, center, end] bins
+// Mel filterbank bin boundaries: 26 bands, 60-8000 Hz, 16 kHz / FFT-256.
+// Computed from HTK mel scale: mel = 2595 * log10(1 + hz/700).
+// MUST match librosa.filters.mel(sr=16000, n_fft=256, n_mels=26,
+//   fmin=60, fmax=8000, htk=True, norm=None).
+// Previous values were manually constructed and did not match — every band
+// had a systematic offset averaging 4.2 INT8 levels vs the training pipeline.
 static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
-    // Band 0-5: Low bass (60-200 Hz)
-    { 1,  1,  2},  // 0: 62.5 Hz center
-    { 1,  2,  3},  // 1: 125 Hz center
-    { 2,  3,  4},  // 2: 187.5 Hz center
-    { 3,  4,  5},  // 3: 250 Hz center
-    { 4,  5,  6},  // 4: 312.5 Hz center
-    { 5,  6,  8},  // 5: 375 Hz center
-
-    // Band 6-11: Mid-bass to low-mid (400-800 Hz)
-    { 6,  8, 10},  // 6: 500 Hz center
-    { 8, 10, 12},  // 7: 625 Hz center
-    {10, 12, 14},  // 8: 750 Hz center
-    {12, 14, 17},  // 9: 875 Hz center
-    {14, 17, 20},  // 10: 1062 Hz center
-    {17, 20, 24},  // 11: 1250 Hz center
-
-    // Band 12-17: Mid frequencies (1.5-3 kHz)
-    {20, 24, 28},  // 12: 1500 Hz center
-    {24, 28, 33},  // 13: 1750 Hz center
-    {28, 33, 39},  // 14: 2062 Hz center
-    {33, 39, 46},  // 15: 2437 Hz center
-    {39, 46, 54},  // 16: 2875 Hz center
-    {46, 54, 63},  // 17: 3375 Hz center
-
-    // Band 18-21: High-mid frequencies (3.9-6.2 kHz)
-    {54, 63, 74},  // 18: 3937 Hz center
-    {63, 74, 86},  // 19: 4625 Hz center
-    {74, 86, 100}, // 20: 5375 Hz center
-    {86, 100, 116},// 21: 6250 Hz center
-
-    // Band 22-25: High frequencies (7-8 kHz)
-    // NOTE: Bands 23-25 are identical (same start/center/end bins). FFT-256 at
-    // 16 kHz only has 128 bins, so the mel scale runs out of distinct bins above
-    // ~7 kHz. These 3 degenerate bands produce identical values every frame,
-    // wasting ~12% of NN input bandwidth. Consider reducing to 23 bands if
-    // retraining from scratch. Not worth changing mid-training cycle.
-    {100, 116, 127},// 22: 7250 Hz center
-    {116, 127, 127},// 23: 8000 Hz center (at Nyquist)
-    {116, 127, 127},// 24: degenerate (identical to band 23)
-    {116, 127, 127} // 25: degenerate (identical to band 23)
+    {  1,   2,   3},  // 0: 132 Hz center
+    {  2,   3,   5},  // 1: 210 Hz center
+    {  3,   5,   6},  // 2: 296 Hz center
+    {  5,   6,   8},  // 3: 391 Hz center
+    {  6,   8,  10},  // 4: 494 Hz center
+    {  8,  10,  12},  // 5: 606 Hz center
+    { 10,  12,  14},  // 6: 730 Hz center
+    { 12,  14,  16},  // 7: 865 Hz center
+    { 14,  16,  19},  // 8: 1013 Hz center
+    { 16,  19,  22},  // 9: 1175 Hz center
+    { 19,  22,  25},  // 10: 1352 Hz center
+    { 22,  25,  28},  // 11: 1546 Hz center
+    { 25,  28,  32},  // 12: 1758 Hz center
+    { 28,  32,  36},  // 13: 1990 Hz center
+    { 32,  36,  40},  // 14: 2244 Hz center
+    { 36,  40,  45},  // 15: 2523 Hz center
+    { 40,  45,  51},  // 16: 2827 Hz center
+    { 45,  51,  56},  // 17: 3160 Hz center
+    { 51,  56,  63},  // 18: 3525 Hz center
+    { 56,  63,  70},  // 19: 3924 Hz center
+    { 63,  70,  77},  // 20: 4361 Hz center
+    { 70,  77,  86},  // 21: 4839 Hz center
+    { 77,  86,  95},  // 22: 5363 Hz center
+    { 86,  95, 105},  // 23: 5936 Hz center
+    { 95, 105, 116},  // 24: 6563 Hz center
+    {105, 116, 127},  // 25: 7249 Hz center
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
