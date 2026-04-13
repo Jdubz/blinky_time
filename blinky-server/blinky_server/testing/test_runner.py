@@ -44,7 +44,7 @@ async def _sync_clock(device: Device) -> float | None:
         t_recv = time.time() * 1000
 
         info = json.loads(resp)
-        fw_millis = info.get("millis")
+        fw_millis: float | None = info.get("millis")
         if fw_millis is None:
             return None
 
