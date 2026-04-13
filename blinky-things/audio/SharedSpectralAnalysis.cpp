@@ -418,9 +418,7 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
             continue;
         }
 
-        // Log compression: 10 * log10(energy + epsilon)
-        // Map [-80, 0] dB to [0, 1]  (widened from -60 in v21 to prevent bass saturation)
-        // With -60 dB range, bass mel bands saturate at 1.0 during music playback
+        // Log compression: map [-MEL_DB_RANGE, 0] dB to [0, 1]
         const float epsilon = 1e-7f;  // Above ARM Cortex-M4 denormal range
         float logEnergy = 10.0f * log10f(bandEnergy + epsilon);
         logEnergy = (logEnergy + SpectralConstants::MEL_DB_RANGE)

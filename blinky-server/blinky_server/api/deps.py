@@ -52,4 +52,4 @@ def get_fleet() -> FleetManager:
 async def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> None:
     """FastAPI dependency that validates the X-API-Key header."""
     if not hmac.compare_digest(x_api_key, _get_api_key()):
-        raise HTTPException(403, "Invalid API key")
+        raise HTTPException(401, "Invalid API key")

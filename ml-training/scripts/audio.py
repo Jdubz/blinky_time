@@ -176,7 +176,7 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                               norm=pcen_cfg.get("norm", PCEN_NORM))
     else:
         log_eps = cfg.get("audio", {}).get("log_epsilon", LOG_EPSILON)
-        db_range = float(cfg.get("audio", {}).get("mel_db_range", 80))
+        db_range = float(cfg.get("audio", {}).get("mel_db_range", 60))
         log_mel = 10.0 * torch.log10(mel_spec + log_eps)
         log_mel = (log_mel + db_range) / db_range
         log_mel = log_mel.clamp(0.0, 1.0)
@@ -186,7 +186,7 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
 def firmware_mel_spectrogram_np(audio: np.ndarray,
                                 noise_subtraction: bool = False,
                                 use_pcen: bool = False,
-                                mel_db_range: float = 80.0) -> np.ndarray:
+                                mel_db_range: float = 60.0) -> np.ndarray:
     """Compute mel spectrogram matching firmware (CPU-only numpy).
 
     For use in calibration scripts and tools that don't need GPU or config.
@@ -195,7 +195,7 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
         audio: mono audio samples at 16 kHz
         noise_subtraction: if True, apply min-statistics noise subtraction
         use_pcen: if True, use PCEN instead of log compression
-        mel_db_range: log-mel dB range (must match firmware, default 80)
+        mel_db_range: log-mel dB range (must match firmware MEL_DB_RANGE, default 60)
 
     Returns: (n_frames, n_mels) numpy array with values in [0, 1].
     """

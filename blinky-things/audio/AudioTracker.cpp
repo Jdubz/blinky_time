@@ -131,9 +131,7 @@ const AudioControl& AudioTracker::update(float dt) {
 
         // Track raw NN activation peaks (before pulse detection threshold/cooldown).
         // Record timestamp when activation exceeds previous value (rising edge).
-        // Uses pulseNNGate as floor so the peak timestamp stays fresh whenever
-        // activation is in the gate-open range (Gemini/Copilot review feedback).
-        if (odf > rawNNActivation_ && odf > pulseNNGate) {
+        if (odf > rawNNActivation_ && odf > 0.05f) {
             rawNNPeakMs_ = nowMs;
         }
         prevNNActivation_ = rawNNActivation_;

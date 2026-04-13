@@ -600,7 +600,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->odfContrast = data_.tracker.odfContrast;
         tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
         tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
-        tracker->pulseNNGate = data_.tracker.pulseNNGate;
+        // pulseNNGate removed — NN is now primary signal, not gate. Field kept for binary compat.
         tracker->baselineFastDrop = data_.tracker.baselineFastDrop;
         tracker->baselineSlowRise = data_.tracker.baselineSlowRise;
         tracker->odfPeakHoldDecay = data_.tracker.odfPeakHoldDecay;
@@ -702,7 +702,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.odfContrast = tracker->odfContrast;
         data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
         data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
-        data_.tracker.pulseNNGate = tracker->pulseNNGate;
+        // pulseNNGate: field kept for binary compat, no longer written from tracker
         data_.tracker.baselineFastDrop = tracker->baselineFastDrop;
         data_.tracker.baselineSlowRise = tracker->baselineSlowRise;
         data_.tracker.odfPeakHoldDecay = tracker->odfPeakHoldDecay;

@@ -271,8 +271,7 @@ void SerialConsole::registerTrackerSettings() {
     // Pulse detection tuning
     settings_.registerFloat("pulseonsetfloor", &audioCtrl_->pulseOnsetFloor, "tracker",
         "ODF floor for pulse detection scaling", 0.0f, 0.5f, onParamChanged);
-    settings_.registerFloat("pulsenngate", &audioCtrl_->pulseNNGate, "tracker",
-        "NN activation gate for pulse detection (0=disabled)", 0.0f, 1.0f, onParamChanged);
+    // pulseNNGate removed — NN is now the primary signal, not a gate
 
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
@@ -1016,7 +1015,6 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
         audioCtrl_->pulseOnsetFloor = 0.1f;
-        audioCtrl_->pulseNNGate = 0.3f;
         audioCtrl_->baselineFastDrop = 0.05f;
         audioCtrl_->baselineSlowRise = 0.005f;
         audioCtrl_->odfPeakHoldDecay = 0.85f;
