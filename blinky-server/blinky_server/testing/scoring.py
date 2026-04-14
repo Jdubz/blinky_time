@@ -48,7 +48,7 @@ class _DetectionDict(TypedDict):
     strength: float
 
 
-class _MusicStateDict(TypedDict):
+class _MusicStateDict(TypedDict, total=False):
     timestamp_ms: float
     active: bool
     phase: float
@@ -57,6 +57,8 @@ class _MusicStateDict(TypedDict):
     plp_pulse: float | None
     plp_period: int | None
     bpm_internal: float
+    reliability: float | None
+    nn_agreement: float | None
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +345,64 @@ def score_device_run(
             if best_ac > -2.0:
                 plp_auto_corr = best_ac
 
+    # PLP reliability and NN agreement from debug stream (if available)
+    plp_reliability = 0.0
+    plp_nn_agreement = 0.0
+    rel_values: list[float] = [
+        float(v) for s in active_states if (v := s.get("reliability")) is not None
+    ]
+    nna_values: list[float] = [
+        float(v) for s in active_states if (v := s.get("nn_agreement")) is not None
+    ]
+    if rel_values:
+        plp_reliability = sum(rel_values) / len(rel_values)
+    if nna_values:
+        plp_nn_agreement = sum(nna_values) / len(nna_values)
+
+    # GT pattern correlation: fold GT onsets at detected period, compare to device PLP.
+    # This measures whether consistent events (kick on 1) land in the same bin.
+    gt_pattern_corr = 0.0
+    if period_lag > 0 and ref_onsets and plp_values and audio_duration_sec > 0:
+        import math
+
+        period_sec = period_lag / stream_rate if stream_rate > 0 else 0
+        if period_sec > 0.1:
+            # Build GT pattern: fold onset times into bins within one period
+            n_bins = max(8, min(32, period_lag))  # match stream-rate resolution
+            gt_pattern = [0.0] * n_bins
+            for onset_sec in ref_onsets:
+                phase = (onset_sec % period_sec) / period_sec
+                bin_idx = int(phase * n_bins) % n_bins
+                gt_pattern[bin_idx] += 1.0
+            # Normalize GT pattern
+            gt_max = max(gt_pattern) if gt_pattern else 1.0
+            if gt_max > 0:
+                gt_pattern = [v / gt_max for v in gt_pattern]
+
+            # Build device pattern: fold PLP pulse values at same period
+            dev_pattern = [0.0] * n_bins
+            dev_counts = [0] * n_bins
+            for i, pv in enumerate(plp_values):
+                t_sec = i / stream_rate if stream_rate > 0 else 0
+                phase = (t_sec % period_sec) / period_sec
+                bin_idx = int(phase * n_bins) % n_bins
+                dev_pattern[bin_idx] += pv
+                dev_counts[bin_idx] += 1
+            for b in range(n_bins):
+                if dev_counts[b] > 0:
+                    dev_pattern[b] /= dev_counts[b]
+            # Normalize device pattern
+            dev_max = max(dev_pattern) if dev_pattern else 1.0
+            if dev_max > 0:
+                dev_pattern = [v / dev_max for v in dev_pattern]
+
+            # Cosine similarity
+            dot = sum(a * b for a, b in zip(gt_pattern, dev_pattern, strict=True))
+            mag_a = math.sqrt(sum(a * a for a in gt_pattern))
+            mag_b = math.sqrt(sum(b * b for b in dev_pattern))
+            if mag_a > 0 and mag_b > 0:
+                gt_pattern_corr = dot / (mag_a * mag_b)
+
     # Diagnostics: onset-to-GT offsets
     onset_offsets: list[int] = []
     for det in detections:
@@ -380,6 +440,9 @@ def score_device_run(
             auto_corr=_js_round(plp_auto_corr),
             peakiness=_js_round(plp_peakiness, 2),
             mean=_js_round(plp_mean),
+            reliability=_js_round(plp_reliability),
+            nn_agreement=_js_round(plp_nn_agreement),
+            gt_pattern_corr=_js_round(gt_pattern_corr),
         ),
         avg_confidence=_js_round(avg_conf, 2),
         activation_ms=activation_ms,
@@ -442,6 +505,9 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             "autoCorr": score.plp.auto_corr,
             "peakiness": score.plp.peakiness,
             "mean": score.plp.mean,
+            "reliability": score.plp.reliability,
+            "nnAgreement": score.plp.nn_agreement,
+            "gtPatternCorr": score.plp.gt_pattern_corr,
         },
         "rhythm": {
             "avgConfidence": score.avg_confidence,

@@ -103,5 +103,7 @@ class TestSession:
                     plp_pulse=m.get("pp", None),  # PLP pulse value
                     plp_period=m.get("per", None),  # ACF period in frames (for autocorr lag)
                     bpm_internal=m.get("bpm", 0.0),  # informational only, never scored
+                    reliability=m.get("rel", None),  # per-bin epoch consistency (debug)
+                    nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )
             )

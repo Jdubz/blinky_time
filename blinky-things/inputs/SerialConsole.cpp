@@ -1479,6 +1479,10 @@ void SerialConsole::streamTick() {
                 out_.print(audioCtrl_->getPlpAccentPhase(), 3);
                 out_.print(F(",\"src\":"));
                 out_.print(audioCtrl_->getPlpBestSource());
+                out_.print(F(",\"nna\":"));
+                out_.print(audioCtrl_->getPlpNNAgreement(), 3);
+                out_.print(F(",\"rel\":"));
+                out_.print(audioCtrl_->getPlpReliability(), 3);
                 out_.print(F(",\"sl\":{\"id\":"));
                 out_.print(audioCtrl_->getActiveSlotId());
                 out_.print(F(",\"conf\":["));

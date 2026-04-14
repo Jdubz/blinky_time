@@ -614,7 +614,13 @@ void AudioTracker::updatePlpAnalysis() {
     // Per-band epoch-fold computation removed to save CPU (~4ms per PLP cycle).
     int bestBand = 0;
 
-    // Re-run the full epoch-fold on the winning band to produce the final pattern
+    // Re-run the full epoch-fold on the winning band to produce the final pattern.
+    // Improvements over basic mean fold:
+    //   1. NN-confidence-weighted epochs (high NN activation = more trustworthy)
+    //   2. Per-bin reliability from coefficient of variation (consistent events
+    //      like kick-on-1 preserved, random events smoothed toward mean)
+    //   3. Winsorized mean: drop most extreme epoch per bin before averaging
+    //   4. Cross-correlation with NN fold for pattern validation
     {
         int count = circCounts[bestBand];
         int sIdx = (circWriteIdxs[bestBand] - count + circSizes[bestBand]) % circSizes[bestBand];
@@ -622,41 +628,112 @@ void AudioTracker::updatePlpAnalysis() {
             epochFoldLinear_[i] = circBufs[bestBand][(sIdx + i) % circSizes[bestBand]];
         }
 
-        // Variance-gated epoch fold (Stellingwerf 1978, adapted for music)
-        float foldSum[MAX_PATTERN_LEN] = {0};
+        // Count epochs for Winsorized mean
+        int numEpochs = 0;
+        for (int offset = count - patLen; offset >= 0; offset -= patLen) numEpochs++;
+        if (numEpochs < 2) return;
+
+        // Epoch fold with NN-confidence weighting + collect per-epoch values for Winsorizing
         float foldSumSq[MAX_PATTERN_LEN] = {0};
         float totalWeight = 0.0f;
-        float weight = 1.0f;
         const float decayFactor = expf(-plpDecayRate);
-        int epochs = 0;
-        for (int offset = count - patLen; offset >= 0; offset -= patLen) {
-            for (int j = 0; j < patLen; j++) {
-                float val = epochFoldLinear_[offset + j];
-                foldSum[j] += val * weight;
-                foldSumSq[j] += val * val * weight;
-            }
-            totalWeight += weight;
-            weight *= decayFactor;
-            epochs++;
-        }
-        if (epochs < 2) return;
 
-        // Compute per-bin mean, variance, and reliability-weighted pattern
-        float varSens = plpVarianceSens;
-        float minVal = 1e30f, maxVal = -1e30f;
+        // Stack buffer for Winsorized mean: store per-epoch values per bin
+        // Process one bin at a time to limit stack usage (6 floats + 6 floats weights)
+        static constexpr int MAX_EPOCHS = 12;
+        float epochVals[MAX_EPOCHS];
+        float epochWeights[MAX_EPOCHS];
+        int actualEpochs = (numEpochs < MAX_EPOCHS) ? numEpochs : MAX_EPOCHS;
+
+        // First pass: compute weights (recency × NN confidence)
+        {
+            float w = 1.0f;
+            int ep = 0;
+            for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
+                // NN confidence for this epoch: mean NN activation
+                float nnMean = 0.0f;
+                if (nnCount_ >= count) {
+                    for (int j = 0; j < patLen; j++) {
+                        nnMean += nnLinear_[offset + j];
+                    }
+                    nnMean /= patLen;
+                }
+                epochWeights[ep] = w * (0.5f + clampf(nnMean, 0.0f, 0.5f));
+                w *= decayFactor;
+                ep++;
+            }
+        }
+
+        // Second pass: Winsorized weighted fold per bin
         float patternRaw[MAX_PATTERN_LEN];
+        float foldMean = 0.0f;
+
         for (int j = 0; j < patLen; j++) {
-            float mean = foldSum[j] / totalWeight;
-            float meanSq = foldSumSq[j] / totalWeight;
+            // Collect this bin's value across all epochs
+            int ep = 0;
+            for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
+                epochVals[ep] = epochFoldLinear_[offset + j];
+                ep++;
+            }
+
+            // Winsorize: find min/max indices and exclude them from weighted sum
+            // (only when we have enough epochs to afford dropping 2)
+            float wSum = 0.0f, wTotal = 0.0f;
+            float wSumSq = 0.0f;
+            if (actualEpochs >= 4) {
+                int minIdx = 0, maxIdx = 0;
+                for (int e = 1; e < actualEpochs; e++) {
+                    if (epochVals[e] < epochVals[minIdx]) minIdx = e;
+                    if (epochVals[e] > epochVals[maxIdx]) maxIdx = e;
+                }
+                for (int e = 0; e < actualEpochs; e++) {
+                    if (e == minIdx || e == maxIdx) continue;
+                    wSum += epochVals[e] * epochWeights[e];
+                    wSumSq += epochVals[e] * epochVals[e] * epochWeights[e];
+                    wTotal += epochWeights[e];
+                }
+            } else {
+                for (int e = 0; e < actualEpochs; e++) {
+                    wSum += epochVals[e] * epochWeights[e];
+                    wSumSq += epochVals[e] * epochVals[e] * epochWeights[e];
+                    wTotal += epochWeights[e];
+                }
+            }
+
+            float mean = (wTotal > 0) ? wSum / wTotal : 0.0f;
+
+            foldSumSq[j] = wSumSq;
+            totalWeight = wTotal;
+            patternRaw[j] = mean;
+            foldMean += mean;
+        }
+        foldMean /= patLen;
+
+        // Per-bin reliability: coefficient of variation.
+        // Low CV = consistent event (kick on 1) → keep raw value.
+        // High CV = random event (ghost note) → blend toward fold mean.
+        float minVal = 1e30f, maxVal = -1e30f;
+        float reliabilitySum = 0.0f;
+        float reliabilityWeightSum = 0.0f;
+        for (int j = 0; j < patLen; j++) {
+            float mean = patternRaw[j];
+            float meanSq = (totalWeight > 0) ? foldSumSq[j] / totalWeight : 0.0f;
             float variance = meanSq - mean * mean;
             if (variance < 0.0f) variance = 0.0f;
 
-            float reliability = 1.0f / (1.0f + variance * varSens);
-            patternRaw[j] = mean * reliability;
+            float cv = (mean > 0.01f) ? sqrtf(variance) / mean : 1.0f;
+            float reliability = 1.0f / (1.0f + cv * cv);
+            patternRaw[j] = mean * reliability + foldMean * (1.0f - reliability);
+
+            // Amplitude-weighted reliability: bins with strong signal matter more
+            reliabilitySum += reliability * mean;
+            reliabilityWeightSum += mean;
 
             if (patternRaw[j] < minVal) minVal = patternRaw[j];
             if (patternRaw[j] > maxVal) maxVal = patternRaw[j];
         }
+        plpMeanReliability_ = (reliabilityWeightSum > 0.01f)
+            ? reliabilitySum / reliabilityWeightSum : 0.0f;
 
         // Normalize to [0, 1] using min-max
         float range = maxVal - minVal;
@@ -668,13 +745,35 @@ void AudioTracker::updatePlpAnalysis() {
         } else {
             for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
         }
+
+        // Cross-correlation with NN fold for pattern validation.
+        // High agreement = pattern reflects real onsets. Low = noise-driven.
+        if (nnCount_ >= patLen * 2) {
+            float nnFold[MAX_PATTERN_LEN] = {0};
+            float nnWeight = 0.0f;
+            float w = 1.0f;
+            for (int offset = nnCount_ - patLen; offset >= 0; offset -= patLen) {
+                for (int j = 0; j < patLen; j++) {
+                    nnFold[j] += nnLinear_[offset + j] * w;
+                }
+                nnWeight += w;
+                w *= decayFactor;
+                if (w < 0.01f) break;
+            }
+            if (nnWeight > 0) {
+                for (int j = 0; j < patLen; j++) nnFold[j] /= nnWeight;
+            }
+            float agreement = cosineSimilarity(plpPattern_, nnFold, patLen);
+            // Modulate confidence: low agreement reduces trust in the pattern
+            plpNNAgreement_ = plpNNAgreement_ * 0.7f + clampf(agreement, 0.0f, 1.0f) * 0.3f;
+        }
     }
 
     // --- 3. PLP confidence from ACF strength + steep signal gate ---
     float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
-    float targetConf = acfConf * signalPresence;
+    float targetConf = acfConf * signalPresence * (0.5f + 0.5f * plpNNAgreement_);
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
 

@@ -49,6 +49,8 @@ class MusicState:
     plp_pulse: float | None = None
     plp_period: int | None = None  # ACF period in frames (~66Hz) — used for autocorr lag
     bpm_internal: float = 0.0  # Informational only, never scored
+    reliability: float | None = None  # Per-bin epoch consistency (debug stream only)
+    nn_agreement: float | None = None  # Flux/NN fold agreement (debug stream only)
 
 
 @dataclass
@@ -90,6 +92,9 @@ class PlpMetrics:
     auto_corr: float  # autocorrelation at detected period lag (1.0 = periodic)
     peakiness: float  # peak/mean ratio (1.0 = flat, >2 = strong)
     mean: float  # avg PLP value
+    reliability: float = 0.0  # mean per-bin epoch consistency (0=random, 1=identical every cycle)
+    nn_agreement: float = 0.0  # cosine similarity between flux fold and NN fold (0-1)
+    gt_pattern_corr: float = 0.0  # correlation between device pattern and GT-folded pattern
 
 
 @dataclass
