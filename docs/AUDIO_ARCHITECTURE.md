@@ -6,8 +6,8 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 
 **Current Version:** AudioTracker v93 (April 2026). Multi-source ACF + PLP with direct pattern interpolation.
 **Period Detection:** Multi-source ACF (spectral flux + bass energy + NN onset, lags 20-80, ~4ms) → parabolic interpolation → bar multipliers (2×/3×/4×) → epoch-fold variance scoring with sqrt(multiplier) penalty. **Pattern quality is the objective — the system selects whichever period produces the best visual pattern. Half/double time matches are correct if they capture more rhythmic structure.**
-**Phase/Pattern:** Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation (v91 refactor, cosine OLA removed). Pattern quality is NN-independent. SuperFlux 3-wide max filter on spectral flux. plpNovGain=1.0, plpVarianceSens=0.
-**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. **NN is the PRIMARY pulse signal** (b117+): `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) directly. Spectral flux is fallback only when NN unavailable. Also serves as one of 3 ACF sources. v22 deployed (b117): KW F1=0.896, on-device F1=0.62. Non-NN fallback: mic level.
+**Phase/Pattern:** Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation (v91 refactor, cosine OLA removed). **Robust epoch-fold (b119+):** NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Pattern quality is NN-independent. SuperFlux 3-wide max filter on spectral flux. plpNovGain=1.0, plpVarianceSens=0. Reliability metrics: plpMeanReliability_, plpNNAgreement_ exposed in debug stream.
+**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. **NN is the PRIMARY pulse signal** (b117+): `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) directly as the continuous visual pulse envelope. Spectral flux is fallback only when NN unavailable. Also serves as one of 3 ACF sources. v23 deployed (b118): KW F1=0.873, on-device F1=0.625. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 **Primary Test Metrics:** plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure). BPM accuracy uses octave-tolerant scoring.
 
@@ -70,7 +70,7 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |              EMA smoothing -> BPM estimate
       |
       +--- [ONSET PATH: NN → visual pulse (PRIMARY)]
-      |    FrameOnsetNN (Conv1D W16, onset-only, v22 deployed)
+      |    FrameOnsetNN (Conv1D W16, onset-only, v23 deployed)
       |         Input: sliding window of rawMelBands_ (16 frames x 26 bands)
       |         Output: single onset activation (0-1, kicks/snares)
       |         |
@@ -80,14 +80,17 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |    +--- Pulse: floor-tracking baseline detection (visual sparks)
       |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
       |
-      +--- [PHASE PATH: PLP → direct pattern interpolation (v91+)]
+      +--- [PHASE PATH: PLP → direct pattern interpolation (v91+, robust b119+)]
            Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period
            SuperFlux 3-wide frequency max filter (Bock 2013)
+           Robust epoch-fold (b119+): NN-confidence-weighted epochs, per-bin
+             reliability (CV-based), Winsorized mean, NN cross-correlation validation
            Direct pattern interpolation at current cycle position → plpPulse
            Phase = patternPosition - accentPhase (data-driven, no oscillator)
            Pattern quality is NN-independent (decoupled v93)
            Cold-start template seeding (8 patterns, cosine similarity > 0.50)
            Pattern slot cache: 4-slot LRU of 16-bin digests (instant section recall)
+           Reliability metrics: plpMeanReliability_, plpNNAgreement_ in debug stream
            Silence state reset after 5s (clears all analysis buffers)
                 |
 AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
@@ -103,9 +106,9 @@ Generators (HeatFire, Water, PlasmaGlobe)
 
 3. **Pattern Quality Over BPM Accuracy**: The system is a visualizer, not a BPM detector. Half/double time periods are correct if they capture more rhythmic structure (e.g., a 2-bar kick-snare-kick-snare pattern at half BPM is better than a 1-bar kick pattern at the "true" BPM). Test metrics focus on plpAtTransient, plpAutoCorr, and plpPeakiness — not BPM accuracy.
 
-4. **PLP Pattern Extraction (v91+)**: Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period. Direct pattern interpolation at current cycle position (cosine OLA removed v91). Phase derived from position offset by accent phase. Pattern quality is NN-independent (decoupled v93). Cold-start template seeding (8 patterns). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall.
+4. **PLP Pattern Extraction (v91+, robust b119+)**: Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period. Direct pattern interpolation at current cycle position (cosine OLA removed v91). Phase derived from position offset by accent phase. Pattern quality is NN-independent (decoupled v93). **Robust epoch-fold (b119+):** NN-confidence-weighted epochs (higher-confidence epochs contribute more), per-bin reliability scoring (CV-based, suppresses noisy bins), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Reliability metrics plpMeanReliability_ and plpNNAgreement_ exposed in debug stream. gtPatternCorr metric shows extraction accuracy of 0.84-0.97 on test tracks. Cold-start template seeding (8 patterns). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall.
 
-5. **NN Onset → Primary Pulse Signal + ACF Source**: NN smoothed activation (nnSmoothed_) is the PRIMARY pulse signal driving visual effects (sparks, flashes). Spectral flux is fallback only when NN is unavailable. NN also serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources. pulseNNGate parameter removed (b117) — NN gate concept eliminated.
+5. **NN Onset → Primary Continuous Pulse Signal + ACF Source**: NN smoothed activation (nnSmoothed_) is the PRIMARY continuous visual pulse envelope driving visual effects (sparks, flashes). control_.pulse uses nnSmoothed_ directly (b119+, not spectral flux x NN modulation). Spectral flux is fallback only when NN is unavailable. NN also serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources. pulseNNGate parameter removed (b117) — NN gate concept eliminated.
 
 ---
 
@@ -133,12 +136,12 @@ Generators (HeatFire, Water, PlasmaGlobe)
 **PLP Update (every 150ms):**
 12. **Mean-subtract sources**: Spectral flux, bass energy, NN onset buffers each mean-subtracted
 13. **ACF period detection**: Multi-source ACF at beat-level lags (20-80), parabolic interpolation on peaks
-14. **Period Selection**: Source x frequency with highest DFT magnitude wins (inherently suppresses sub-harmonics)
-15. **Phase Alignment**: DFT phase gives beat alignment directly (no cross-correlation needed)
-16. **Phase Correction**: Correct phase toward DFT-derived alignment with adaptive rate (EMA variance-driven)
-17. **Epoch-fold Pattern**: Fold winning source at selected period for visual pattern shape
-18. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
-19. **Confidence**: DFT magnitude x signal presence (steep mic level gate)
+14. **Period Selection**: Best ACF peak across 3 sources, bar multipliers (2x/3x/4x) with sqrt penalty
+15. **Epoch-fold Pattern**: Fold ungated spectral flux (ossLinear_) at selected period
+16. **Robust epoch-fold (b119+)**: NN-confidence-weighted epochs (higher-confidence epochs contribute more), per-bin reliability (CV-based, suppresses noisy bins), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation
+17. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
+18. **Confidence**: ACF peak strength x signal presence (steep mic level gate)
+19. **Phase**: Derived from pattern position offset by accent phase (no oscillator)
 
 ### Evolution: Why ACF+Comb, and Why PLL Failed
 
@@ -205,9 +208,9 @@ float output = organic * (1.0f - blend) + synced * blend;
 | `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 
-### Phase Tracking (PLP — Fourier Tempogram)
+### Phase Tracking (PLP — Multi-Source ACF + Robust Epoch-Fold)
 
-PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources. DFT magnitude selects period, DFT phase gives alignment. Adaptive phase correction (EMA variance: fast during convergence, slow when locked). Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Beat stability gated learning provides fill/breakdown immunity. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests — cached PLP patterns recalled instantly when a previously-heard section returns (cosine similarity > 0.70). `plpActivation` parameter exists in settings but is vestigial (soft blend uses raw confidence). `plpSignalFloor` controls the steep mic-level gate (0→1 transition near noise floor).
+PLP uses multi-source ACF at beat-level lags (20-80) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). ACF peak selects period, epoch-fold extracts pattern. **Robust epoch-fold (b119+):** NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Reliability metrics: plpMeanReliability_, plpNNAgreement_ exposed in debug stream. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Beat stability gated learning provides fill/breakdown immunity. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests — cached PLP patterns recalled instantly when a previously-heard section returns (cosine similarity > 0.70). `plpActivation` parameter exists in settings but is vestigial (soft blend uses raw confidence). `plpSignalFloor` controls the steep mic-level gate (0→1 transition near noise floor).
 
 ### Rhythm Activation
 
@@ -239,7 +242,7 @@ PLP uses Goertzel DFT at candidate frequencies across 3 mean-subtracted sources.
 
 ### Current: Single Conv1D Onset Model
 
-`FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v22 deployed (b117): KW F1=0.896, on-device F1=0.62. Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong since day one, avg 4.2 INT8 level error). `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h.
+`FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v23 deployed (b118): KW F1=0.873, on-device F1=0.625. Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong since day one, avg 4.2 INT8 level error). `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h. Mel pipeline verified identical between training and firmware (MAE=0.0017, 0.44 INT8 levels).
 
 The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and as one of 3 PLP multi-source ACF sources). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
@@ -251,7 +254,7 @@ The model processes a sliding window of raw mel frames (16 frames x 26 bands = 2
 
 ### Onset Information Gate
 
-The NN onset activation passes through an information gate before use in PLP source input. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false pattern detection. This improves phase stability during silence and ambient passages. Note: the gate applies to the PLP ACF source path only — pulse detection uses NN smoothed activation directly (b117+).
+The NN onset activation passes through an information gate before use in PLP source input. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false pattern detection. This improves phase stability during silence and ambient passages. Note: the gate applies to the PLP ACF source path only — pulse detection uses NN smoothed activation directly as the continuous visual pulse envelope (b117+).
 
 ### Spectral Flux (BPM Signal)
 
@@ -266,8 +269,8 @@ Peaks at broadband transients, zero during sustain. NN-independent.
 
 Two pulse systems serve different purposes:
 
-**`control_.pulse` (generators consume this):** NN smoothed activation as primary signal (b117+).
-- **NN is the primary signal**: `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) directly. Spectral flux is fallback only when NN is unavailable.
+**`control_.pulse` (generators consume this):** NN smoothed activation as primary continuous visual pulse envelope (b119+).
+- **NN is the primary signal**: `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) directly as the continuous pulse envelope. Spectral flux is fallback only when NN is unavailable.
 - Floor-tracking baseline for thresholding
 - Decaying envelope (~165ms half-life)
 - pulseNNGate parameter removed — NN gate concept eliminated. On-device onset F1 improved from 0.472 to 0.62 with this change.
