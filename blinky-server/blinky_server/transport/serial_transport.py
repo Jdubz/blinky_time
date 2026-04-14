@@ -98,7 +98,10 @@ class SerialTransport(Transport):
             return
         while not self._stop_event.is_set():
             try:
-                chunk = ser.read(ser.in_waiting or 1)
+                waiting = ser.in_waiting
+                if waiting is None:
+                    break  # Port disconnected
+                chunk = ser.read(waiting or 1)
                 if not chunk:
                     continue
                 buf += chunk
