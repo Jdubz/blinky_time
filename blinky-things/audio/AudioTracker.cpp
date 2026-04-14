@@ -118,8 +118,8 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // 4. NN inference → onset activation for pulse detection.
     //    Only run NN when a new spectral frame is ready. Between frames,
-    //    use last activation. Note: NN output is NOT used for BPM estimation
-    //    (spectral flux handles that) — it drives visual pulse only.
+    //    use last activation. NN drives discrete onset events (primary).
+    //    Spectral flux still drives tempo/PLP/pattern estimation.
     float odf = 0.0f;
     uint32_t currentFrameCount = spectral_.getFrameCount();
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
@@ -152,21 +152,17 @@ const AudioControl& AudioTracker::update(float dt) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 5. Pulse detection uses spectral flux for transient edges, gated by NN.
-    //
-    //    NN-direct peak-picking (Bock 2012) was tested but regressed F1 from
-    //    0.477 to 0.162 — the INT8 model on device-shifted mel doesn't produce
-    //    sharp enough activations for standalone peak-picking. Spectral flux
-    //    provides robust transient timing; NN provides selectivity.
-    //
-    //    3-tap Hamming FIR smoothing on raw NN activation for gate stability.
+    // 5. Discrete onset detection: NN-primary (b114+).
+    //    NN smoothed activation is the primary signal for onset events.
+    //    Spectral flux is only used as fallback when NN is unavailable.
+    //    3-tap Hamming FIR smoothing reduces INT8 quantization jitter.
     if (newSpectralFrame && nnActive_) {
         nnPrev2_ = nnPrev1_;
         nnPrev1_ = rawNNActivation_;
         nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
     }
-    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
-    updatePulseDetection(pulseOdf, dt, nowMs);
+    float fallbackOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
+    updatePulseDetection(fallbackOdf, dt, nowMs);
 
     // 6. Feed DSP components only on new spectral frames.
     if (newSpectralFrame) {
@@ -973,8 +969,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
-    // --- Pulse: NN-modulated spectral flux envelope ---
-    // Spectral flux provides transient timing, NN modulates selectivity.
+    // --- Continuous pulse envelope (visual generators) ---
+    // Uses spectral flux × NN modulation for smooth visual response.
+    // Separate from discrete onset events (which use NN-primary).
     // nnConf self-tunes: flat NN → raw flux, sharp NN → onset-selective.
     float flux = spectral_.getSpectralFlux();
     if (flux > fluxPeak_) fluxPeak_ = flux;
