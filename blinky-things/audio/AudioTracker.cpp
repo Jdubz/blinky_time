@@ -970,23 +970,22 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
     // --- Continuous pulse envelope (visual generators) ---
-    // Uses spectral flux × NN modulation for smooth visual response.
-    // Separate from discrete onset events (which use NN-primary).
-    // nnConf self-tunes: flat NN → raw flux, sharp NN → onset-selective.
-    float flux = spectral_.getSpectralFlux();
-    if (flux > fluxPeak_) fluxPeak_ = flux;
-    fluxPeak_ *= expf(-dt / 10.0f);
-    if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
-    float normFlux = clampf(flux / fluxPeak_, 0.0f, 1.0f);
-
+    // NN-primary: same signal as discrete onset events. NN activation is
+    // a better onset detector than spectral flux (F1 0.893 vs ~0.5).
+    // Falls back to spectral flux when NN is unavailable.
+    float pulseSignal;
     if (nnActive_) {
-        float nnConf = clampf(nnActivationVar_ * 20.0f, 0.0f, 1.0f);
-        float nnMod = clampf(nnSmoothed_, 0.0f, 1.0f);
-        normFlux *= (1.0f - nnConf) + nnConf * nnMod;
+        pulseSignal = clampf(nnSmoothed_, 0.0f, 1.0f);
+    } else {
+        float flux = spectral_.getSpectralFlux();
+        if (flux > fluxPeak_) fluxPeak_ = flux;
+        fluxPeak_ *= expf(-dt / 10.0f);
+        if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
+        pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
     }
 
-    if (normFlux > 0.4f) {
-        float trigger = (normFlux - 0.4f) / 0.6f;
+    if (pulseSignal > 0.4f) {
+        float trigger = (pulseSignal - 0.4f) / 0.6f;
         if (trigger > pulseEnvelope_) {
             pulseEnvelope_ = trigger;
         }
