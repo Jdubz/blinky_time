@@ -66,7 +66,8 @@ class MemmapBeatDataset(Dataset):
         return x, y_out, self._empty_teacher
 
 
-def freq_mixstyle(x: torch.Tensor, p: float = 0.5, alpha: float = 0.6) -> torch.Tensor:
+def freq_mixstyle(x: torch.Tensor, p: float = 0.5,
+                  beta_dist: torch.distributions.Beta | None = None) -> torch.Tensor:
     """Freq-MixStyle: mix per-band mel statistics across samples (DCASE 2024).
 
     Normalizes each sample's per-band mean/std, then re-applies a weighted
@@ -77,10 +78,10 @@ def freq_mixstyle(x: torch.Tensor, p: float = 0.5, alpha: float = 0.6) -> torch.
     Args:
         x: (batch, time, n_mels) mel spectrogram tensor
         p: probability of applying to each sample
-        alpha: Beta distribution parameter for mixing coefficient
+        beta_dist: pre-created Beta distribution for mixing coefficient
     """
-    if not torch.is_grad_enabled():
-        return x  # skip during eval
+    if not torch.is_grad_enabled() or beta_dist is None:
+        return x  # skip during eval or if not configured
 
     batch_size = x.shape[0]
     if batch_size < 2:
@@ -100,7 +101,7 @@ def freq_mixstyle(x: torch.Tensor, p: float = 0.5, alpha: float = 0.6) -> torch.
 
     # Mix with random partner's statistics
     perm = torch.randperm(batch_size, device=x.device)
-    lam = torch.distributions.Beta(alpha, alpha).sample((batch_size, 1)).to(x.device)
+    lam = beta_dist.sample((batch_size, 1)).to(x.device)
     mu_mix = lam * mu + (1 - lam) * mu[perm]
     sigma_mix = lam * sigma + (1 - lam) * sigma[perm]
 
@@ -875,6 +876,7 @@ def main():
     use_freq_mixstyle = fms_cfg.get("enabled", False)
     fms_p = fms_cfg.get("p", 0.5)
     fms_alpha = fms_cfg.get("alpha", 0.6)
+    fms_beta_dist = torch.distributions.Beta(fms_alpha, fms_alpha) if use_freq_mixstyle else None
     if use_freq_mixstyle:
         print(f"Freq-MixStyle: p={fms_p}, Beta({fms_alpha}, {fms_alpha})")
 
@@ -947,7 +949,7 @@ def main():
 
             # Freq-MixStyle: mix per-band statistics for domain invariance
             if use_freq_mixstyle:
-                X_batch = freq_mixstyle(X_batch, p=fms_p, alpha=fms_alpha)
+                X_batch = freq_mixstyle(X_batch, p=fms_p, beta_dist=fms_beta_dist)
 
             # Online augmentation: SpecMix (CutMix) or standard mixup
             if use_specmix and np.random.random() < 0.5:

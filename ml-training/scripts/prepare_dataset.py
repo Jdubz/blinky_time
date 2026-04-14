@@ -548,17 +548,19 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     # hasn't seen in clean training audio. Even-order (H2) is asymmetric,
     # odd-order (H3) is symmetric — both affect transient shape.
     thd = rng.uniform(0.01, 0.08)
-    a2 = thd * 0.7  # H2 (even-order)
-    a3 = thd * 0.3  # H3 (odd-order)
-    distorted = (audio + a2 * audio**2 + a3 * audio**3).clamp(-1.0, 1.0)
+    even_coeff = thd * 0.7  # H2 (even-order, asymmetric)
+    odd_coeff = thd * 0.3   # H3 (odd-order, symmetric)
+    distorted = (audio + even_coeff * audio**2 + odd_coeff * audio**3).clamp(-1.0, 1.0)
     variants.append((f"spkr-thd{thd*100:.0f}pct", distorted))
 
     # Comb filter from early reflections (1-10ms delay = 0.3-3.4m reflector)
     # Creates notches in 100-1000 Hz that affect kick perception.
-    delay_samples = rng.integers(16, 160)  # 1-10ms at 16kHz
+    # Uses causal zero-padded delay (not circular roll).
+    delay = int(rng.integers(16, 160))  # 1-10ms at 16kHz
     comb_gain = rng.uniform(-0.4, 0.4)
-    combed = (audio + comb_gain * torch.roll(audio, int(delay_samples))).clamp(-1.0, 1.0)
-    variants.append((f"comb-{delay_samples}smp", combed))
+    delayed = torch.cat([torch.zeros(delay, device=audio.device), audio[:-delay]])
+    combed = (audio + comb_gain * delayed).clamp(-1.0, 1.0)
+    variants.append((f"comb-{delay}smp", combed))
 
     # MEMS mic soft clipping (polynomial saturation at high SPL)
     # MEMS diaphragm nonlinearity is smooth and asymmetric, unlike digital clipping.
