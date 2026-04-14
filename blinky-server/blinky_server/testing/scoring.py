@@ -203,6 +203,8 @@ def score_device_run(
             plp_pulse=s.plp_pulse,
             plp_period=s.plp_period,
             bpm_internal=s.bpm_internal,
+            reliability=s.reliability,
+            nn_agreement=s.nn_agreement,
         )
         for s in test_data.music_states
         if s.timestamp_ms - audio_epoch_ms >= 0

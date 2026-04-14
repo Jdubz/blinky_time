@@ -74,16 +74,20 @@ async def _configure_device(device: Device, commands: list[str] | None = None) -
 
 
 async def _start_streaming(devices: list[Device]) -> None:
-    """Start fast+debug streaming and enable transient debug channel.
+    """Start debug streaming (includes fast rate) and enable transient channel.
 
-    - fast: ~100 Hz stream rate (vs ~20 Hz normal)
-    - debug: adds PLP reliability, NN agreement, confidence fields
+    - debug: ~20 Hz with PLP reliability, NN agreement, confidence fields
+    - fast: bumped to ~100 Hz after debug is set
     - debug transient on: enables TRANSIENT event emission for onset scoring
+
+    Order matters: stream debug first (sets streamDebug_), then stream fast
+    (sets streamFast_ without clearing streamDebug_). Protocol tracks
+    _streaming_mode as "fast" so subsequent pause/resume stays in fast mode.
     """
     for device in devices:
-        await device.protocol.start_stream("fast")
+        await device.protocol.start_stream("debug")
         await asyncio.sleep(0.1)
-        await device.protocol.send_command("stream debug")
+        await device.protocol.start_stream("fast")
         await asyncio.sleep(0.1)
         await device.protocol.send_command("debug transient on")
         await asyncio.sleep(0.1)

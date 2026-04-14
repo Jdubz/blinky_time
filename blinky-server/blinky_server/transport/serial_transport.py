@@ -110,7 +110,7 @@ class SerialTransport(Transport):
                     text = line_bytes.decode("utf-8", errors="replace").strip()
                     if text and self._loop:
                         self._loop.call_soon_threadsafe(self._dispatch_line, text)
-            except (serial.SerialException, OSError) as e:
+            except (serial.SerialException, OSError, TypeError) as e:
                 if self._stop_event.is_set():
                     break
                 log.warning("Serial read error on %s: %s", self._port, e)
