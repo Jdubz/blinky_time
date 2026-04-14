@@ -66,6 +66,56 @@ class MemmapBeatDataset(Dataset):
         return x, y_out, self._empty_teacher
 
 
+def freq_mixstyle(x: torch.Tensor, p: float = 0.5,
+                  beta_dist: torch.distributions.Beta | None = None,
+                  training: bool = True) -> torch.Tensor:
+    """Freq-MixStyle: mix per-band mel statistics across samples (DCASE 2024).
+
+    Normalizes each sample's per-band mean/std, then re-applies a weighted
+    mix of statistics from another random sample. Forces the model to be
+    invariant to per-band gain/offset differences — exactly the sim-to-real
+    distribution shift between training and device deployment.
+
+    Args:
+        x: (batch, time, n_mels) mel spectrogram tensor
+        p: probability of applying to each sample
+        beta_dist: pre-created Beta distribution for mixing coefficient
+        training: whether model is in training mode (skip during eval)
+    """
+    if not training or beta_dist is None:
+        return x
+
+    batch_size = x.shape[0]
+    if batch_size < 2:
+        return x
+
+    # Which samples to augment
+    mask = torch.rand(batch_size, device=x.device) < p
+    if not mask.any():
+        return x
+
+    # Per-band statistics: (batch, n_mels)
+    mu = x.mean(dim=1)   # mean over time
+    sigma = x.std(dim=1) + 1e-6
+
+    # Normalize
+    x_norm = (x - mu.unsqueeze(1)) / sigma.unsqueeze(1)
+
+    # Mix with random partner's statistics
+    perm = torch.randperm(batch_size, device=x.device)
+    lam = beta_dist.sample((batch_size, 1)).to(x.device)
+    mu_mix = lam * mu + (1 - lam) * mu[perm]
+    sigma_mix = lam * sigma + (1 - lam) * sigma[perm]
+
+    # Re-apply mixed statistics
+    x_mixed = x_norm * sigma_mix.unsqueeze(1) + mu_mix.unsqueeze(1)
+
+    # Only apply to selected samples
+    result = x.clone()
+    result[mask] = x_mixed[mask]
+    return result
+
+
 def spec_augment(x: torch.Tensor, num_freq_masks: int = 2,
                   max_freq_width: int = 4, num_time_masks: int = 1,
                   max_time_width: int = 8) -> torch.Tensor:
@@ -822,6 +872,16 @@ def main():
         print(f"SpecAugment: {sa_num_freq} freq masks (max {sa_max_freq} bands), "
               f"{sa_num_time} time masks (max {sa_max_time} frames)")
 
+    # Freq-MixStyle: mix per-band statistics across samples (DCASE 2024)
+    # Forces model invariance to per-band gain/offset distribution shift.
+    fms_cfg = cfg.get("augmentation", {}).get("freq_mixstyle", {})
+    use_freq_mixstyle = fms_cfg.get("enabled", False)
+    fms_p = fms_cfg.get("p", 0.5)
+    fms_alpha = fms_cfg.get("alpha", 0.6)
+    fms_beta_dist = torch.distributions.Beta(fms_alpha, fms_alpha) if use_freq_mixstyle else None
+    if use_freq_mixstyle:
+        print(f"Freq-MixStyle: p={fms_p}, Beta({fms_alpha}, {fms_alpha})")
+
     # Online mixup / SpecMix config
     use_specmix = cfg.get("training", {}).get("specmix", False)
     specmix_alpha = cfg.get("training", {}).get("specmix_alpha", 0.4)
@@ -888,6 +948,11 @@ def main():
             if use_spec_augment:
                 X_batch = spec_augment(X_batch, sa_num_freq, sa_max_freq,
                                        sa_num_time, sa_max_time)
+
+            # Freq-MixStyle: mix per-band statistics for domain invariance
+            if use_freq_mixstyle:
+                X_batch = freq_mixstyle(X_batch, p=fms_p, beta_dist=fms_beta_dist,
+                                        training=model.training)
 
             # Online augmentation: SpecMix (CutMix) or standard mixup
             if use_specmix and np.random.random() < 0.5:

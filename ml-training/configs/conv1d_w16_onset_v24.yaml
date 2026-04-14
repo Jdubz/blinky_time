@@ -1,0 +1,56 @@
+# Conv1D W16 v24 — Full sim-to-real augmentation pipeline
+#
+# Builds on v23 (corrected mel filterbank + mic profile) and adds:
+# - Freq-MixStyle: online per-band statistics mixing for domain invariance
+# - Speaker harmonic distortion augmentation (new in prepare_dataset.py)
+# - Comb filter augmentation for early reflections (new)
+# - MEMS soft clipping augmentation (new)
+#
+# These augmentations simulate the full acoustic chain:
+#   clean audio → speaker THD → room reflections → MEMS mic → PDM decimation → mel
+#
+# Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# NOTE: first layer widened from 24 (v22) to 32 channels — more params but within INT8 size budget
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v24"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v24.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

@@ -86,6 +86,13 @@ augmentation:
     max_freq_width: 4       # Max mel bands masked per mask (of 26 total)
     num_time_masks: 1       # Number of random time masks per sample
     max_time_width: 8       # Max frames masked per mask
+  # Freq-MixStyle (DCASE 2024): mix per-band mel statistics across samples.
+  # Forces model invariance to per-band gain/offset distribution shift —
+  # the primary sim-to-real gap between training and device deployment.
+  freq_mixstyle:
+    enabled: false          # Enable in model configs that need device robustness
+    p: 0.5                  # Probability of applying per sample
+    alpha: 0.6              # Beta distribution parameter for mixing coefficient
 
 # Loss function defaults
 loss:

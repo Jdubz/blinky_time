@@ -104,7 +104,12 @@ if [ "$SKIP_PREP" = false ]; then
         USE_DELTA=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print('--delta' if c.get('features',{}).get('use_delta',False) else '')" "$CONFIG" 2>/dev/null)
         # Note: prepare_dataset.py may report "VALIDATION FAILED" for mel range
         # when delta features are enabled (deltas can be negative). This is expected.
-        TQDM_DISABLE=1 python scripts/prepare_dataset.py --config "$CONFIG" --output-dir "$DATA_DIR" --augment $USE_DELTA || {
+        # Apply mic profile if available (transforms clean mel → mic-captured equivalent)
+        MIC_PROFILE=""
+        if [ -f "data/calibration/mic_profile.npz" ]; then
+            MIC_PROFILE="--mic-profile data/calibration/mic_profile.npz"
+        fi
+        TQDM_DISABLE=1 python scripts/prepare_dataset.py --config "$CONFIG" --output-dir "$DATA_DIR" --augment $USE_DELTA $MIC_PROFILE || {
             # Check if data was actually written despite validation warning
             if [ -f "$DATA_DIR/X_train.npy" ]; then
                 echo "  (Data prep completed with warnings — continuing)"
