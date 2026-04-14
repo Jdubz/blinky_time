@@ -10,6 +10,7 @@
 # - Same drum-stem labels, same architecture, same loss.
 #
 # Architecture: Conv1D(26->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+# NOTE: first layer widened from 24 (v22) to 32 channels — more params but within INT8 size budget
 
 model:
   type: "frame_conv1d"

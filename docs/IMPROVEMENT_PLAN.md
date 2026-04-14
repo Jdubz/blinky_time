@@ -14,7 +14,7 @@
 
 **Key findings (April 12-13):**
 - **Mel filterbank mismatch discovered and fixed:** All 26 mel bin edges in firmware were wrong since day one. Corrected to match librosa HTK exactly — avg 4.2 INT8 level error. `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h.
-- **NN-primary vs NN-gate:** Changing `updatePulseDetection()` to use NN smoothed activation (nnSmoothed_) as the primary signal (instead of using NN as a gate on spectral flux) improved on-device F1 from 0.472 to 0.62. pulseNNGate parameter removed. The NN output IS the onset signal; spectral flux is fallback only when NN unavailable.
+- **NN-primary vs NN-gate:** Changing `updatePulseDetection()` to use NN smoothed activation as the primary signal improved on-device F1 from 0.472 to 0.62. This was a firmware-only change (same v22 model, same mel features) — the entire gain came from using NN output directly instead of gating spectral flux. Mel filterbank correction (same session) did not contribute to the F1 gain (validated: b117 corrected filterbank=0.612 vs b115 old filterbank=0.620). pulseNNGate parameter removed.
 - **mel_db_range=80 experiment (v21) was solving wrong problem:** Bass mel saturation analysis showed kick detection was already the strongest instrument category. Widening to [-80,0] dB reduced INT8 resolution without meaningful kick improvement. Reverted to mel_db_range=60.
 - **v22 model:** mel_db_range=60 (same as firmware), no quant-noise, drum-stem labels. KW F1=0.896.
 
