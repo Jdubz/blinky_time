@@ -300,6 +300,7 @@ def score_device_run(
         # Must convert firmware frames to stream-rate samples for the lag index.
         # Falls back to BPM-derived lag if period not available (older firmware).
         FIRMWARE_ANALYSIS_HZ = 62.5  # 16 kHz sample rate / 256-sample FFT hop
+        period_lag = 0
         period_values = [
             s["plp_period"]
             for s in active_states
