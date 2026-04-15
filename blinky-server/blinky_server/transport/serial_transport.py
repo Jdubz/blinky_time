@@ -37,6 +37,7 @@ class SerialTransport(Transport):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._line_callback: Callable[[str], None] | None = None
         self._connected = False
+        self._ever_received = False
 
     async def connect(self) -> None:
         if self._connected:
@@ -105,7 +106,10 @@ class SerialTransport(Transport):
                 chunk = ser.read(waiting or 1)
                 if not chunk:
                     empty_reads += 1
-                    if empty_reads > 10:
+                    # Allow many empty reads during initial connection (device needs
+                    # ~1-2s to start serial output). Only treat as disconnect after
+                    # sustained empty reads AND we previously received data.
+                    if empty_reads > 100 and self._ever_received:
                         log.warning(
                             "Serial %s: %d consecutive empty reads, treating as disconnect",
                             self._port,
@@ -114,6 +118,7 @@ class SerialTransport(Transport):
                         break
                     continue
                 empty_reads = 0
+                self._ever_received = True
                 buf += chunk
                 while b"\n" in buf:
                     line_bytes, buf = buf.split(b"\n", 1)
