@@ -106,15 +106,23 @@ class FleetManager:
         return list(self._devices.values())
 
     async def start(self) -> None:
-        """Discover devices and connect to all of them."""
+        """Discover serial devices (fast) and start background loop.
+
+        Serial devices connect synchronously during startup (~5s for 4 devices).
+        BLE discovery and connections happen asynchronously in the background
+        loop — the API is ready before BLE connects, eliminating the 60-90s
+        startup block that previously made the server unresponsive.
+        """
         self._running = True
-        if self._enable_ble:
-            await cleanup_stale_ble_connections()
-            await asyncio.sleep(2)  # Let devices re-advertise after disconnect
+        # Connect serial devices first (fast, no scanning needed)
+        saved_ble = self._enable_ble
+        self._enable_ble = False
         await self._discover_and_connect()
+        self._enable_ble = saved_ble
+        serial_count = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
+        log.info("Fleet manager started: %d serial devices connected", serial_count)
+        # BLE cleanup + discovery happens in background — don't block API startup
         self._discovery_task = asyncio.create_task(self._background_loop())
-        connected = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
-        log.info("Fleet manager started: %d devices connected", connected)
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
@@ -606,6 +614,28 @@ class FleetManager:
                     await dev.disconnect()
                 log.info("Removed unreachable device %s from fleet", did[:12])
 
+    def _check_serial_threads(self) -> None:
+        """Detect dead serial reader threads.
+
+        If a serial reader thread exited without firing the disconnect callback
+        (e.g., uncaught exception, or thread killed by OS), the device appears
+        connected but is actually dead. Force disconnect so reconnect can pick it up.
+        """
+        for device in self._devices.values():
+            if device.state != DeviceState.CONNECTED:
+                continue
+            if not isinstance(device.transport, SerialTransport):
+                continue
+            thread = device.transport._reader_thread
+            if thread is not None and not thread.is_alive():
+                log.warning(
+                    "Serial reader thread dead for %s (%s) — forcing disconnect",
+                    device.id[:12],
+                    device.port,
+                )
+                device.state = DeviceState.DISCONNECTED
+                device.transport._connected = False
+
     async def _check_liveness(self) -> None:
         """Ping devices that haven't communicated recently.
 
@@ -782,6 +812,13 @@ class FleetManager:
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, liveness checks, and DFU recovery."""
         cycle = 0
+        # BLE cleanup on first iteration (moved from start() to avoid blocking API)
+        if self._enable_ble:
+            try:
+                await cleanup_stale_ble_connections()
+                await asyncio.sleep(2)
+            except Exception as e:
+                log.warning("BLE cleanup failed (non-fatal): %s", e)
         while self._running:
             try:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
@@ -790,6 +827,9 @@ class FleetManager:
                     continue  # Skip discovery while BLE DFU or other ops in progress
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
+                # Detect dead serial reader threads (thread exited but device still
+                # appears connected). This catches silent thread deaths.
+                self._check_serial_threads()
                 # Liveness check every 3rd cycle (~30s) for all transports
                 if cycle % 3 == 0:
                     await self._check_liveness()

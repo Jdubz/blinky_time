@@ -1,9 +1,11 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import serial.tools.list_ports
+import serial.tools.list_ports_common
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +38,24 @@ class DiscoveredDevice:
         return self.device_id
 
 
+def _resolve_by_id_path(info: serial.tools.list_ports_common.ListPortInfo) -> str:
+    """Resolve a serial port to its /dev/serial/by-id/ symlink if available.
+
+    By-id paths are stable across USB re-enumeration (they embed the serial
+    number). Falls back to the raw /dev/ttyACM* path if no symlink exists.
+    """
+    if info.serial_number:
+        by_id_dir = Path("/dev/serial/by-id")
+        if by_id_dir.is_dir():
+            for symlink in by_id_dir.iterdir():
+                try:
+                    if symlink.resolve() == Path(info.device).resolve():
+                        return str(symlink)
+                except OSError:
+                    continue
+    return str(info.device)
+
+
 def discover_serial_devices() -> list[DiscoveredDevice]:
     """Scan serial ports for known blinky devices by VID/PID."""
     devices = []
@@ -46,17 +66,18 @@ def discover_serial_devices() -> list[DiscoveredDevice]:
         if platform is None:
             continue
         device_id = info.serial_number or info.device
+        stable_path = _resolve_by_id_path(info)
         devices.append(
             DiscoveredDevice(
                 device_id=device_id,
                 platform=platform,
                 transport_type="serial",
-                address=info.device,
+                address=stable_path,
                 description=info.description or "",
                 extra={"vid": info.vid, "pid": info.pid},
             )
         )
-        log.info("Discovered serial %s on %s (SN: %s)", platform, info.device, device_id[:12])
+        log.info("Discovered serial %s on %s (SN: %s)", platform, stable_path, device_id[:12])
     return devices
 
 
