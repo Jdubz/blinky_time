@@ -626,7 +626,13 @@ class FleetManager:
                 # Full disconnect: closes port, cleans up transport state,
                 # sets device state to DISCONNECTED so reconnect picks it up.
                 task = asyncio.create_task(device.disconnect())
-                task.add_done_callback(lambda t: t.result() if not t.cancelled() else None)
+                task.add_done_callback(
+                    lambda t: (
+                        log.warning("disconnect error: %s", t.exception())
+                        if not t.cancelled() and t.exception()
+                        else None
+                    )
+                )
 
     async def _check_liveness(self) -> None:
         """Ping devices that haven't communicated recently.
