@@ -635,7 +635,6 @@ void AudioTracker::updatePlpAnalysis() {
 
         // Epoch fold with NN-confidence weighting + collect per-epoch values for Winsorizing
         float foldSumSq[MAX_PATTERN_LEN] = {0};
-        float totalWeight = 0.0f;
         const float decayFactor = expf(-plpDecayRate);
 
         // Stack buffer for Winsorized mean: store per-epoch values per bin
@@ -701,10 +700,12 @@ void AudioTracker::updatePlpAnalysis() {
             }
 
             float mean = (wTotal > 0) ? wSum / wTotal : 0.0f;
+            float meanSq = (wTotal > 0) ? wSumSq / wTotal : 0.0f;
+            float variance = meanSq - mean * mean;
+            if (variance < 0.0f) variance = 0.0f;
 
-            foldSumSq[j] = wSumSq;
-            totalWeight = wTotal;
             patternRaw[j] = mean;
+            foldSumSq[j] = variance;  // Reuse array to store per-bin variance
             foldMean += mean;
         }
         foldMean /= patLen;
@@ -717,15 +718,12 @@ void AudioTracker::updatePlpAnalysis() {
         float reliabilityWeightSum = 0.0f;
         for (int j = 0; j < patLen; j++) {
             float mean = patternRaw[j];
-            float meanSq = (totalWeight > 0) ? foldSumSq[j] / totalWeight : 0.0f;
-            float variance = meanSq - mean * mean;
-            if (variance < 0.0f) variance = 0.0f;
+            float variance = foldSumSq[j];  // Per-bin variance from first pass
 
             float cv = (mean > 0.01f) ? sqrtf(variance) / mean : 1.0f;
             float reliability = 1.0f / (1.0f + cv * cv);
             patternRaw[j] = mean * reliability + foldMean * (1.0f - reliability);
 
-            // Amplitude-weighted reliability: bins with strong signal matter more
             reliabilitySum += reliability * mean;
             reliabilityWeightSum += mean;
 

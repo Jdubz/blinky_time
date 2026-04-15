@@ -39,6 +39,12 @@ class SerialTransport(Transport):
         self._connected = False
         self._ever_received = False
 
+    def is_reader_alive(self) -> bool:
+        """Check if the reader thread is alive (or not yet started)."""
+        if self._reader_thread is None:
+            return True  # No thread = not started yet
+        return self._reader_thread.is_alive()
+
     async def connect(self) -> None:
         if self._connected:
             return
@@ -125,10 +131,10 @@ class SerialTransport(Transport):
                     text = line_bytes.decode("utf-8", errors="replace").strip()
                     if text and self._loop:
                         self._loop.call_soon_threadsafe(self._dispatch_line, text)
-            except Exception as e:
-                # Catch ALL exceptions — a reader thread crash kills the server.
-                # Serial errors (SerialException, OSError, TypeError, ValueError)
-                # all indicate the port is gone. Log and disconnect gracefully.
+            except (serial.SerialException, OSError, TypeError, ValueError) as e:
+                # Serial port errors during USB disconnect manifest as various
+                # exception types: SerialException (normal), OSError (fd gone),
+                # TypeError (None fd), ValueError (closed port).
                 if self._stop_event.is_set():
                     break
                 log.warning("Serial read error on %s: %s", self._port, e)

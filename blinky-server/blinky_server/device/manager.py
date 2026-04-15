@@ -617,15 +617,13 @@ class FleetManager:
                 continue
             if not isinstance(device.transport, SerialTransport):
                 continue
-            thread = device.transport._reader_thread
-            if thread is not None and not thread.is_alive():
+            if not device.transport.is_reader_alive():
                 log.warning(
                     "Serial reader thread dead for %s (%s) — forcing disconnect",
                     device.id[:12],
                     device.port,
                 )
                 device.state = DeviceState.DISCONNECTED
-                device.transport._connected = False
 
     async def _check_liveness(self) -> None:
         """Ping devices that haven't communicated recently.

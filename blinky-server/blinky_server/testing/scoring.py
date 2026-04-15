@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import defaultdict
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from .types import (
     DeviceRunScore,
@@ -48,7 +48,7 @@ class _DetectionDict(TypedDict):
     strength: float
 
 
-class _MusicStateDict(TypedDict, total=False):
+class _MusicStateDict(TypedDict):
     timestamp_ms: float
     active: bool
     phase: float
@@ -57,8 +57,8 @@ class _MusicStateDict(TypedDict, total=False):
     plp_pulse: float | None
     plp_period: int | None
     bpm_internal: float
-    reliability: float | None
-    nn_agreement: float | None
+    reliability: NotRequired[float | None]
+    nn_agreement: NotRequired[float | None]
 
 
 # ---------------------------------------------------------------------------
@@ -368,8 +368,6 @@ def score_device_run(
     # This measures whether consistent events (kick on 1) land in the same bin.
     gt_pattern_corr = 0.0
     if period_lag > 0 and ref_onsets and plp_values and audio_duration_sec > 0:
-        import math
-
         period_sec = period_lag / stream_rate if stream_rate > 0 else 0
         if period_sec > 0.1:
             # Build GT pattern: fold onset times into bins within one period
