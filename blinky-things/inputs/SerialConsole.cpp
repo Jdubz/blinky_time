@@ -1506,9 +1506,8 @@ void SerialConsole::streamTick() {
         }
 
         // LED brightness telemetry
-        // NOTE: Particle-based generators don't track total heat/brightness
-        // in the same way, so these stats are not available
-        // TODO: Add particle pool statistics (active count, etc.)
+        // Particle-based generators (Fire, PlasmaGlobe) don't expose pool
+        // statistics — each manages its own particle array internally.
 
         out_.println(F("}"));
     }

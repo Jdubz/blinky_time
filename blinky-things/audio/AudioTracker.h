@@ -167,8 +167,9 @@ private:
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF period detection)
     float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
-    float midFluxBuffer_[OSS_BUFFER_SIZE] = {0};    // Mid-frequency flux (bins 7-32, for band-specific epoch-fold)
-    float highFluxBuffer_[OSS_BUFFER_SIZE] = {0};   // High-frequency flux (bins 33-127, for band-specific epoch-fold)
+    // midFluxBuffer_ / highFluxBuffer_ removed — band selection tested in v82,
+    // regressed on 8-10/18 tracks. Broadband (ossBuffer_) is the sole PLP source.
+    // Saves 6336 bytes RAM (2 × 792 floats).
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -262,7 +263,7 @@ private:
     AudioControl control_;
 
     // === Internal methods ===
-    void addOssSample(float ungatedFlux, float midFlux, float highFlux);
+    void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
     void resetAnalysisState();
     void runAcf();

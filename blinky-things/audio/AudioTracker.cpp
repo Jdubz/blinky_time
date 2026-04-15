@@ -189,7 +189,7 @@ const AudioControl& AudioTracker::update(float dt) {
         nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
 
         // Buffer broadband + per-band flux for band-best PLP epoch-fold
-        addOssSample(bassContrast, spectral_.getMidFlux(), spectral_.getHighFlux());
+        addOssSample(bassContrast);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;
@@ -254,8 +254,6 @@ const AudioControl& AudioTracker::update(float dt) {
 
 void AudioTracker::resetAnalysisState() {
     memset(ossBuffer_, 0, sizeof(ossBuffer_));
-    memset(midFluxBuffer_, 0, sizeof(midFluxBuffer_));
-    memset(highFluxBuffer_, 0, sizeof(highFluxBuffer_));
     memset(bassBuffer_, 0, sizeof(bassBuffer_));
     memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
     ossWriteIdx_ = 0; ossCount_ = 0;
@@ -278,10 +276,8 @@ void AudioTracker::resetAnalysisState() {
 // OSS Buffer
 // ============================================================================
 
-void AudioTracker::addOssSample(float ungatedFlux, float midFlux, float highFlux) {
+void AudioTracker::addOssSample(float ungatedFlux) {
     ossBuffer_[ossWriteIdx_] = ungatedFlux;
-    midFluxBuffer_[ossWriteIdx_] = midFlux;
-    highFluxBuffer_[ossWriteIdx_] = highFlux;
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
@@ -581,40 +577,11 @@ void AudioTracker::updatePlpAnalysis() {
 
     if (ossCount_ < patLen * 2) return;
 
-    // --- 2. Band-best epoch fold for pattern extraction ---
-    // Epoch-fold multiple frequency bands independently at the ACF period.
-    // Select the band whose fold has the highest variance (best pattern contrast).
-    // This fixes PLP on syncopated genres:
-    //   - Trap: high-band captures hi-hat patterns without 808 interference
-    //   - Reggaeton: mid-band captures snare without bass mud
-    //   - Deep techno: bass-band isolates sparse kicks from pad contamination
-    //   - Afrobeat: best-of-bands picks the most periodic instrument layer
+    // --- 2. Epoch fold for pattern extraction ---
+    // Epoch-fold broadband spectral flux (bass-contrast weighted) at the ACF period.
+    // Band selection was tested (mid/high flux) but regressed on 8-10/18 tracks;
+    // broadband is the sole PLP source. Uses ungated flux — NN-independent (Grosche 2011).
     //
-    // Uses ungated flux per band — NN-independent (Grosche 2011).
-    // Replaces single broadband epoch-fold. Zero additional RAM (repurposed
-    // gatedFluxBuffer_/gatedFluxLinear_ → midFluxBuffer_/highFluxBuffer_).
-
-    // epochFoldLinear_ is a scratch buffer — reused per band candidate
-
-    // Band sources: broadband (oss), mid flux, high flux, bass energy
-    // Bass flux is already in ossBuffer_ (the broadband is bass-weighted via odfContrast)
-    const float* circBufs[4] = { ossBuffer_, midFluxBuffer_, highFluxBuffer_, bassBuffer_ };
-    const int circCounts[4] = { ossCount_, ossCount_, ossCount_, bassCount_ };
-    const int circWriteIdxs[4] = { ossWriteIdx_, ossWriteIdx_, ossWriteIdx_, bassWriteIdx_ };
-    const int circSizes[4] = { OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, BASS_BUFFER_SIZE };
-
-    // Band selection disabled — broadband (band 0) is the default.
-    //
-    // Tested three selection metrics — all produced net regressions:
-    //   - Pure variance: +0.30 trap/afrobeat, -0.22 trance/techno (noisy bands win)
-    //   - Variance with 1.5x/2x bias: still regresses 8-10/18 tracks
-    //   - Fold autoCorr (lag-1): 8 improved, 8 regressed — no net gain
-    //
-    // Band buffers are populated each frame (mid/high flux) for future use.
-    // Per-band epoch-fold computation removed to save CPU (~4ms per PLP cycle).
-    int bestBand = 0;
-
-    // Re-run the full epoch-fold on the winning band to produce the final pattern.
     // Improvements over basic mean fold:
     //   1. NN-confidence-weighted epochs (high NN activation = more trustworthy)
     //   2. Per-bin reliability from coefficient of variation (consistent events
@@ -622,10 +589,10 @@ void AudioTracker::updatePlpAnalysis() {
     //   3. Winsorized mean: drop most extreme epoch per bin before averaging
     //   4. Cross-correlation with NN fold for pattern validation
     {
-        int count = circCounts[bestBand];
-        int sIdx = (circWriteIdxs[bestBand] - count + circSizes[bestBand]) % circSizes[bestBand];
+        int count = ossCount_;
+        int sIdx = (ossWriteIdx_ - count + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
         for (int i = 0; i < count; i++) {
-            epochFoldLinear_[i] = circBufs[bestBand][(sIdx + i) % circSizes[bestBand]];
+            epochFoldLinear_[i] = ossBuffer_[(sIdx + i) % OSS_BUFFER_SIZE];
         }
 
         // Count epochs for Winsorized mean
