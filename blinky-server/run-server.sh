@@ -26,7 +26,7 @@ while true; do
 
     # Run server, append to log (preserves crash traces from previous runs)
     echo "--- server start $(date '+%Y-%m-%d %H:%M:%S') ---" >> "$LOG"
-    $VENV -m blinky_server >> "$LOG" 2>&1 || true
+    $VENV -m blinky_server >> "$LOG" 2>&1
     EXIT_CODE=$?
     UPTIME=$(( $(date +%s) - START ))
 

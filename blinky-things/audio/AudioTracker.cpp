@@ -634,7 +634,7 @@ void AudioTracker::updatePlpAnalysis() {
         if (numEpochs < 2) return;
 
         // Epoch fold with NN-confidence weighting + collect per-epoch values for Winsorizing
-        float foldSumSq[MAX_PATTERN_LEN] = {0};
+        float perBinVariance[MAX_PATTERN_LEN] = {0};
         const float decayFactor = expf(-plpDecayRate);
 
         // Stack buffer for Winsorized mean: store per-epoch values per bin
@@ -680,6 +680,9 @@ void AudioTracker::updatePlpAnalysis() {
             float wSum = 0.0f, wTotal = 0.0f;
             float wSumSq = 0.0f;
             if (actualEpochs >= 4) {
+                // Note: when all values are equal, minIdx==maxIdx==0 and only
+                // one epoch is skipped instead of two. Harmless: flat signal
+                // means zero variance regardless of epoch count.
                 int minIdx = 0, maxIdx = 0;
                 for (int e = 1; e < actualEpochs; e++) {
                     if (epochVals[e] < epochVals[minIdx]) minIdx = e;
@@ -705,7 +708,7 @@ void AudioTracker::updatePlpAnalysis() {
             if (variance < 0.0f) variance = 0.0f;
 
             patternRaw[j] = mean;
-            foldSumSq[j] = variance;  // Reuse array to store per-bin variance
+            perBinVariance[j] = variance;
             foldMean += mean;
         }
         foldMean /= patLen;
@@ -718,7 +721,7 @@ void AudioTracker::updatePlpAnalysis() {
         float reliabilityWeightSum = 0.0f;
         for (int j = 0; j < patLen; j++) {
             float mean = patternRaw[j];
-            float variance = foldSumSq[j];  // Per-bin variance from first pass
+            float variance = perBinVariance[j];
 
             float cv = (mean > 0.01f) ? sqrtf(variance) / mean : 1.0f;
             float reliability = 1.0f / (1.0f + cv * cv);

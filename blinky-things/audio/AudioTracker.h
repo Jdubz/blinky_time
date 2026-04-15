@@ -196,6 +196,7 @@ private:
     float plpPhase_ = 0.0f;                     // 0→1 phase for generators (0 = accent, derived from position)
     float plpConfidence_ = 0.0f;                // Pattern confidence (ACF × signal × NN agreement)
     float plpNNAgreement_ = 0.5f;               // Cross-correlation between flux fold and NN fold (0-1)
+                                                // Starts at 0.5 (neutral) so PLP confidence isn't penalized during warmup
     float plpMeanReliability_ = 0.0f;           // Mean per-bin reliability (low CV = consistent events)
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
