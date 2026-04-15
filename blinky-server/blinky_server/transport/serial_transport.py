@@ -96,28 +96,43 @@ class SerialTransport(Transport):
         ser = self._serial
         if ser is None:
             return
+        empty_reads = 0
         while not self._stop_event.is_set():
             try:
                 waiting = ser.in_waiting
                 if waiting is None:
-                    break  # Port disconnected
+                    break  # Port fd gone
                 chunk = ser.read(waiting or 1)
                 if not chunk:
+                    empty_reads += 1
+                    if empty_reads > 10:
+                        log.warning(
+                            "Serial %s: %d consecutive empty reads, treating as disconnect",
+                            self._port,
+                            empty_reads,
+                        )
+                        break
                     continue
+                empty_reads = 0
                 buf += chunk
                 while b"\n" in buf:
                     line_bytes, buf = buf.split(b"\n", 1)
                     text = line_bytes.decode("utf-8", errors="replace").strip()
                     if text and self._loop:
                         self._loop.call_soon_threadsafe(self._dispatch_line, text)
-            except (serial.SerialException, OSError, TypeError) as e:
+            except Exception as e:
+                # Catch ALL exceptions — a reader thread crash kills the server.
+                # Serial errors (SerialException, OSError, TypeError, ValueError)
+                # all indicate the port is gone. Log and disconnect gracefully.
                 if self._stop_event.is_set():
                     break
                 log.warning("Serial read error on %s: %s", self._port, e)
-                if self._connected and self._loop:
-                    self._connected = False
-                    self._loop.call_soon_threadsafe(self._fire_disconnect)
                 break
+
+        # Reader loop exited — fire disconnect if still connected
+        if self._connected and self._loop:
+            self._connected = False
+            self._loop.call_soon_threadsafe(self._fire_disconnect)
 
     async def disconnect(self) -> None:
         if not self._connected:
