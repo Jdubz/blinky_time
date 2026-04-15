@@ -1319,6 +1319,15 @@ void SerialConsole::syncEffectSettings() {
 void SerialConsole::streamTick() {
     if (!streamEnabled_ && !streamNN_) return;
 
+    // Skip all formatting if no client is connected. The TeeStream would
+    // silently discard the output, but float-to-string formatting and JSON
+    // construction cost 10-50ms/frame — pure waste in production.
+    bool hasClient = Serial;  // USB CDC: true when host has port open
+#ifdef BLINKY_PLATFORM_NRF52840
+    if (bleNus_) hasClient = hasClient || bleNus_->isConnected();
+#endif
+    if (!hasClient) return;
+
     uint32_t now = millis();
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
