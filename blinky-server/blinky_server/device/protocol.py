@@ -85,10 +85,12 @@ class DeviceProtocol:
         async with self._command_lock:
             was_streaming = self._streaming
 
-            # Pause streaming for non-stream commands
-            if was_streaming and not is_stream_enable and not is_stream_disable:
-                await self._raw_send("stream off")
-                await asyncio.sleep(0.1)
+            # Pause streaming before ANY command (including stream-enable).
+            # Send "stream off" and wait for the device's "OK" acknowledgment.
+            # Without this, queued stream lines contaminate command responses
+            # and cause garbled data / missed commands.
+            if was_streaming:
+                await self._send_and_collect("stream off", timeout=2.0)
                 self._streaming = False
 
             # Send the actual command and collect response
