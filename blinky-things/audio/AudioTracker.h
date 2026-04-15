@@ -215,7 +215,8 @@ private:
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
-    float prevSignal_ = 0.0f;          // Previous frame signal (for rising-edge detection)
+    float prevSignal_ = 0.0f;          // Previous frame signal (for detection)
+    float prevNnDiff_ = 0.0f;          // Previous HWR first-diff (for local-max peak-picking)
 
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)

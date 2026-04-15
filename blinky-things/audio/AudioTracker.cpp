@@ -828,56 +828,74 @@ void AudioTracker::updatePlpPhase() {
 // ============================================================================
 
 void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
-    // NN-primary onset detection. The trained NN (F1=0.893 offline) is a far
-    // better onset detector than spectral flux (F1~0.5). Use NN activation as
-    // the primary signal with adaptive threshold + rising edge + cooldown.
-    // Falls back to spectral flux only when NN is unavailable.
+    // Dual-mode onset detection:
     //
-    // Previous approach gated spectral flux with NN (required both to agree),
-    // which was strictly worse than either signal alone.
+    // NN path: local-maxima peak-picking on half-wave rectified first-difference.
+    //   The NN produces flat activations (mean~0.6, std~0.035) with tiny bumps at
+    //   onsets. First-differencing removes the DC baseline and amplifies rate of
+    //   change. Local-maxima detection (same as offline eval) extracts peaks from
+    //   the resulting signal. This matches the offline eval's peak-picking approach
+    //   that achieves F1=0.85 vs the old threshold-crossing at F1=0.62.
+    //
+    // Spectral flux fallback: adaptive threshold + rising edge (unchanged).
 
-    // Select signal: NN activation when available, spectral flux as fallback
-    float signal = nnActive_ ? nnSmoothed_ : odf;
-
-    // Floor-tracking baseline: slow rise, fast drop
-    if (signal < odfBaseline_) {
-        odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
-    } else {
-        odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
-    }
-
-    // ODF peak hold for energy synthesis (always track spectral flux for this)
+    // ODF peak hold for energy synthesis (always track spectral flux)
     if (odf > odfPeakHold_) {
         odfPeakHold_ = odf;
     } else {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    float pulseThreshold = odfBaseline_ * pulseThresholdMult;
-    if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
-
     // Tempo-adaptive cooldown
     float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
     float cooldownMs = 40.0f + 110.0f * (1.0f - bpmNorm);
-
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
-    bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
-
     float pulseStrength = 0.0f;
-    if (signalPresence > pulseMinLevel &&
-        risingEdge &&
-        (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
-        pulseStrength = clampf(signal, 0.0f, 1.0f);
+    bool cooldownOk = (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs);
 
-        float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
-        float denom = signal - prevSignal_;
-        float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
-        frac = clampf(frac, 0.0f, 1.0f);
-        lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
+    if (nnActive_) {
+        // NN path: first-difference local-maxima peak-picking.
+        // HWR first-diff removes the flat baseline; local-max finds peaks.
+        float nnDiff = max(0.0f, nnSmoothed_ - prevSignal_);
+
+        // Local maximum: prevDiff was rising, now falling (peak was at prevSignal_)
+        bool isLocalMax = (prevNnDiff_ > nnDiff) && (prevNnDiff_ > pulseOnsetFloor);
+
+        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
+            pulseStrength = clampf(prevNnDiff_ * 10.0f, 0.0f, 1.0f);  // Scale up small diffs
+            lastPulseMs_ = nowMs - 16;  // Peak was 1 frame ago
+        }
+
+        prevNnDiff_ = nnDiff;
+        prevSignal_ = nnSmoothed_;
+    } else {
+        // Spectral flux fallback: adaptive threshold + rising edge
+        float signal = odf;
+
+        if (signal < odfBaseline_) {
+            odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
+        } else {
+            odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
+        }
+
+        float pulseThreshold = odfBaseline_ * pulseThresholdMult;
+        if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
+
+        bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
+
+        if (signalPresence > pulseMinLevel && risingEdge && cooldownOk) {
+            pulseStrength = clampf(signal, 0.0f, 1.0f);
+            float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
+            float denom = signal - prevSignal_;
+            float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
+            frac = clampf(frac, 0.0f, 1.0f);
+            lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
+        }
+        prevSignal_ = signal;
     }
-    prevSignal_ = signal;
+
     lastPulseStrength_ = pulseStrength;
 }
 
