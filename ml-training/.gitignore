@@ -51,3 +51,5 @@ venv311/
 .DS_Store
 Thumbs.db
 data/processed*
+data/device_captures/*.jsonl
+data/device_captures/b*/

@@ -97,6 +97,20 @@ if [[ "$STATUS" != "ok" ]]; then
     fail "Flash failed: ${MESSAGE}" 2
 fi
 
+# ─── Step 3: Reset all devices to defaults ────────────────────────────
+# Settings persist in flash across firmware updates. Stale values from
+# experiments silently corrupt test results. Always reset after deploy.
+
+echo ""
+echo "=== Resetting all devices to defaults ==="
+RESET_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+    -H 'Content-Type: application/json' \
+    -d '{"command": "defaults"}' 2>/dev/null || echo '{}')
+curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+    -H 'Content-Type: application/json' \
+    -d '{"command": "save"}' > /dev/null 2>&1
+echo "  Done"
+
 echo ""
 echo "============================================================"
 echo "  DEPLOY SUCCESSFUL: b${BUILD}"
