@@ -267,6 +267,8 @@ def score_device_run(
     plp_peakiness = 0.0
     gt_onset_plp_values: list[float] = []
     plp_mean = 0.0
+    period_lag = 0
+    stream_rate = 0.0
 
     if plp_values:
         plp_mean = sum(plp_values) / len(plp_values)
