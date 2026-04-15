@@ -106,23 +106,14 @@ class FleetManager:
         return list(self._devices.values())
 
     async def start(self) -> None:
-        """Discover serial devices (fast) and start background loop.
+        """Start background loop for device discovery and management.
 
-        Serial devices connect synchronously during startup (~5s for 4 devices).
-        BLE discovery and connections happen asynchronously in the background
-        loop — the API is ready before BLE connects, eliminating the 60-90s
-        startup block that previously made the server unresponsive.
+        All device connections (serial + BLE) happen in the background loop.
+        The API is available immediately — devices connect asynchronously.
         """
         self._running = True
-        # Connect serial devices first (fast, no scanning needed)
-        saved_ble = self._enable_ble
-        self._enable_ble = False
-        await self._discover_and_connect()
-        self._enable_ble = saved_ble
-        serial_count = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
-        log.info("Fleet manager started: %d serial devices connected", serial_count)
-        # BLE cleanup + discovery happens in background — don't block API startup
         self._discovery_task = asyncio.create_task(self._background_loop())
+        log.info("Fleet manager started (devices connecting in background)")
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
