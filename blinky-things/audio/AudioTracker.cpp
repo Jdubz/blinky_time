@@ -118,8 +118,8 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // 4. NN inference → onset activation for pulse detection.
     //    Only run NN when a new spectral frame is ready. Between frames,
-    //    use last activation. Note: NN output is NOT used for BPM estimation
-    //    (spectral flux handles that) — it drives visual pulse only.
+    //    use last activation. NN drives discrete onset events (primary).
+    //    Spectral flux still drives tempo/PLP/pattern estimation.
     float odf = 0.0f;
     uint32_t currentFrameCount = spectral_.getFrameCount();
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
@@ -152,21 +152,17 @@ const AudioControl& AudioTracker::update(float dt) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 5. Pulse detection uses spectral flux for transient edges, gated by NN.
-    //
-    //    NN-direct peak-picking (Bock 2012) was tested but regressed F1 from
-    //    0.477 to 0.162 — the INT8 model on device-shifted mel doesn't produce
-    //    sharp enough activations for standalone peak-picking. Spectral flux
-    //    provides robust transient timing; NN provides selectivity.
-    //
-    //    3-tap Hamming FIR smoothing on raw NN activation for gate stability.
+    // 5. Discrete onset detection: NN-primary (b114+).
+    //    NN smoothed activation is the primary signal for onset events.
+    //    Spectral flux is only used as fallback when NN is unavailable.
+    //    3-tap Hamming FIR smoothing reduces INT8 quantization jitter.
     if (newSpectralFrame && nnActive_) {
         nnPrev2_ = nnPrev1_;
         nnPrev1_ = rawNNActivation_;
         nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
     }
-    float pulseOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
-    updatePulseDetection(pulseOdf, dt, nowMs);
+    float fallbackOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
+    updatePulseDetection(fallbackOdf, dt, nowMs);
 
     // 6. Feed DSP components only on new spectral frames.
     if (newSpectralFrame) {
@@ -618,7 +614,13 @@ void AudioTracker::updatePlpAnalysis() {
     // Per-band epoch-fold computation removed to save CPU (~4ms per PLP cycle).
     int bestBand = 0;
 
-    // Re-run the full epoch-fold on the winning band to produce the final pattern
+    // Re-run the full epoch-fold on the winning band to produce the final pattern.
+    // Improvements over basic mean fold:
+    //   1. NN-confidence-weighted epochs (high NN activation = more trustworthy)
+    //   2. Per-bin reliability from coefficient of variation (consistent events
+    //      like kick-on-1 preserved, random events smoothed toward mean)
+    //   3. Winsorized mean: drop most extreme epoch per bin before averaging
+    //   4. Cross-correlation with NN fold for pattern validation
     {
         int count = circCounts[bestBand];
         int sIdx = (circWriteIdxs[bestBand] - count + circSizes[bestBand]) % circSizes[bestBand];
@@ -626,41 +628,113 @@ void AudioTracker::updatePlpAnalysis() {
             epochFoldLinear_[i] = circBufs[bestBand][(sIdx + i) % circSizes[bestBand]];
         }
 
-        // Variance-gated epoch fold (Stellingwerf 1978, adapted for music)
-        float foldSum[MAX_PATTERN_LEN] = {0};
-        float foldSumSq[MAX_PATTERN_LEN] = {0};
-        float totalWeight = 0.0f;
-        float weight = 1.0f;
-        const float decayFactor = expf(-plpDecayRate);
-        int epochs = 0;
-        for (int offset = count - patLen; offset >= 0; offset -= patLen) {
-            for (int j = 0; j < patLen; j++) {
-                float val = epochFoldLinear_[offset + j];
-                foldSum[j] += val * weight;
-                foldSumSq[j] += val * val * weight;
-            }
-            totalWeight += weight;
-            weight *= decayFactor;
-            epochs++;
-        }
-        if (epochs < 2) return;
+        // Count epochs for Winsorized mean
+        int numEpochs = 0;
+        for (int offset = count - patLen; offset >= 0; offset -= patLen) numEpochs++;
+        if (numEpochs < 2) return;
 
-        // Compute per-bin mean, variance, and reliability-weighted pattern
-        float varSens = plpVarianceSens;
-        float minVal = 1e30f, maxVal = -1e30f;
+        // Epoch fold with NN-confidence weighting + collect per-epoch values for Winsorizing
+        float perBinVariance[MAX_PATTERN_LEN] = {0};
+        const float decayFactor = expf(-plpDecayRate);
+
+        // Stack buffer for Winsorized mean: store per-epoch values per bin
+        // Process one bin at a time to limit stack usage (6 floats + 6 floats weights)
+        static constexpr int MAX_EPOCHS = 12;
+        float epochVals[MAX_EPOCHS];
+        float epochWeights[MAX_EPOCHS];
+        int actualEpochs = (numEpochs < MAX_EPOCHS) ? numEpochs : MAX_EPOCHS;
+
+        // First pass: compute weights (recency × NN confidence)
+        {
+            float w = 1.0f;
+            int ep = 0;
+            for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
+                // NN confidence for this epoch: mean NN activation
+                float nnMean = 0.0f;
+                if (nnCount_ >= count) {
+                    for (int j = 0; j < patLen; j++) {
+                        nnMean += nnLinear_[offset + j];
+                    }
+                    nnMean /= patLen;
+                }
+                epochWeights[ep] = w * (0.5f + clampf(nnMean, 0.0f, 0.5f));
+                w *= decayFactor;
+                ep++;
+            }
+        }
+
+        // Second pass: Winsorized weighted fold per bin
         float patternRaw[MAX_PATTERN_LEN];
+        float foldMean = 0.0f;
+
         for (int j = 0; j < patLen; j++) {
-            float mean = foldSum[j] / totalWeight;
-            float meanSq = foldSumSq[j] / totalWeight;
+            // Collect this bin's value across all epochs
+            int ep = 0;
+            for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
+                epochVals[ep] = epochFoldLinear_[offset + j];
+                ep++;
+            }
+
+            // Winsorize: find min/max indices and exclude them from weighted sum
+            // (only when we have enough epochs to afford dropping 2)
+            float wSum = 0.0f, wTotal = 0.0f;
+            float wSumSq = 0.0f;
+            if (actualEpochs >= 4) {
+                // Note: when all values are equal, minIdx==maxIdx==0 and only
+                // one epoch is skipped instead of two. Harmless: flat signal
+                // means zero variance regardless of epoch count.
+                int minIdx = 0, maxIdx = 0;
+                for (int e = 1; e < actualEpochs; e++) {
+                    if (epochVals[e] < epochVals[minIdx]) minIdx = e;
+                    if (epochVals[e] > epochVals[maxIdx]) maxIdx = e;
+                }
+                for (int e = 0; e < actualEpochs; e++) {
+                    if (e == minIdx || e == maxIdx) continue;
+                    wSum += epochVals[e] * epochWeights[e];
+                    wSumSq += epochVals[e] * epochVals[e] * epochWeights[e];
+                    wTotal += epochWeights[e];
+                }
+            } else {
+                for (int e = 0; e < actualEpochs; e++) {
+                    wSum += epochVals[e] * epochWeights[e];
+                    wSumSq += epochVals[e] * epochVals[e] * epochWeights[e];
+                    wTotal += epochWeights[e];
+                }
+            }
+
+            float mean = (wTotal > 0) ? wSum / wTotal : 0.0f;
+            float meanSq = (wTotal > 0) ? wSumSq / wTotal : 0.0f;
             float variance = meanSq - mean * mean;
             if (variance < 0.0f) variance = 0.0f;
 
-            float reliability = 1.0f / (1.0f + variance * varSens);
-            patternRaw[j] = mean * reliability;
+            patternRaw[j] = mean;
+            perBinVariance[j] = variance;
+            foldMean += mean;
+        }
+        foldMean /= patLen;
+
+        // Per-bin reliability: coefficient of variation.
+        // Low CV = consistent event (kick on 1) → keep raw value.
+        // High CV = random event (ghost note) → blend toward fold mean.
+        float minVal = 1e30f, maxVal = -1e30f;
+        float reliabilitySum = 0.0f;
+        float reliabilityWeightSum = 0.0f;
+        for (int j = 0; j < patLen; j++) {
+            float mean = patternRaw[j];
+            float variance = perBinVariance[j];
+
+            float cv = (mean > 0.01f) ? sqrtf(variance) / mean : 1.0f;
+            float reliability = 1.0f / (1.0f + cv * cv);
+            patternRaw[j] = mean * reliability + foldMean * (1.0f - reliability);
+
+            reliabilitySum += reliability * mean;
+            reliabilityWeightSum += mean;
 
             if (patternRaw[j] < minVal) minVal = patternRaw[j];
             if (patternRaw[j] > maxVal) maxVal = patternRaw[j];
         }
+        plpMeanReliability_ = (reliabilityWeightSum > 0.01f)
+            ? reliabilitySum / reliabilityWeightSum : 0.0f;
 
         // Normalize to [0, 1] using min-max
         float range = maxVal - minVal;
@@ -672,13 +746,35 @@ void AudioTracker::updatePlpAnalysis() {
         } else {
             for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
         }
+
+        // Cross-correlation with NN fold for pattern validation.
+        // High agreement = pattern reflects real onsets. Low = noise-driven.
+        if (nnCount_ >= patLen * 2) {
+            float nnFold[MAX_PATTERN_LEN] = {0};
+            float nnWeight = 0.0f;
+            float w = 1.0f;
+            for (int offset = nnCount_ - patLen; offset >= 0; offset -= patLen) {
+                for (int j = 0; j < patLen; j++) {
+                    nnFold[j] += nnLinear_[offset + j] * w;
+                }
+                nnWeight += w;
+                w *= decayFactor;
+                if (w < 0.01f) break;
+            }
+            if (nnWeight > 0) {
+                for (int j = 0; j < patLen; j++) nnFold[j] /= nnWeight;
+            }
+            float agreement = cosineSimilarity(plpPattern_, nnFold, patLen);
+            // Modulate confidence: low agreement reduces trust in the pattern
+            plpNNAgreement_ = plpNNAgreement_ * 0.7f + clampf(agreement, 0.0f, 1.0f) * 0.3f;
+        }
     }
 
     // --- 3. PLP confidence from ACF strength + steep signal gate ---
     float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
     float micLevel = mic_.getLevel();
     float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
-    float targetConf = acfConf * signalPresence;
+    float targetConf = acfConf * signalPresence * (0.5f + 0.5f * plpNNAgreement_);
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
 
@@ -735,56 +831,74 @@ void AudioTracker::updatePlpPhase() {
 // ============================================================================
 
 void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
-    // NN-primary onset detection. The trained NN (F1=0.893 offline) is a far
-    // better onset detector than spectral flux (F1~0.5). Use NN activation as
-    // the primary signal with adaptive threshold + rising edge + cooldown.
-    // Falls back to spectral flux only when NN is unavailable.
+    // Dual-mode onset detection:
     //
-    // Previous approach gated spectral flux with NN (required both to agree),
-    // which was strictly worse than either signal alone.
+    // NN path: local-maxima peak-picking on half-wave rectified first-difference.
+    //   The NN produces flat activations (mean~0.6, std~0.035) with tiny bumps at
+    //   onsets. First-differencing removes the DC baseline and amplifies rate of
+    //   change. Local-maxima detection (same as offline eval) extracts peaks from
+    //   the resulting signal. This matches the offline eval's peak-picking approach
+    //   that achieves F1=0.85 vs the old threshold-crossing at F1=0.62.
+    //
+    // Spectral flux fallback: adaptive threshold + rising edge (unchanged).
 
-    // Select signal: NN activation when available, spectral flux as fallback
-    float signal = nnActive_ ? nnSmoothed_ : odf;
-
-    // Floor-tracking baseline: slow rise, fast drop
-    if (signal < odfBaseline_) {
-        odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
-    } else {
-        odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
-    }
-
-    // ODF peak hold for energy synthesis (always track spectral flux for this)
+    // ODF peak hold for energy synthesis (always track spectral flux)
     if (odf > odfPeakHold_) {
         odfPeakHold_ = odf;
     } else {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    float pulseThreshold = odfBaseline_ * pulseThresholdMult;
-    if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
-
     // Tempo-adaptive cooldown
     float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
     float cooldownMs = 40.0f + 110.0f * (1.0f - bpmNorm);
-
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
-    bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
-
     float pulseStrength = 0.0f;
-    if (signalPresence > pulseMinLevel &&
-        risingEdge &&
-        (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
-        pulseStrength = clampf(signal, 0.0f, 1.0f);
+    bool cooldownOk = (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs);
 
-        float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
-        float denom = signal - prevSignal_;
-        float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
-        frac = clampf(frac, 0.0f, 1.0f);
-        lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
+    if (nnActive_) {
+        // NN path: first-difference local-maxima peak-picking.
+        // HWR first-diff removes the flat baseline; local-max finds peaks.
+        float nnDiff = max(0.0f, nnSmoothed_ - prevSignal_);
+
+        // Local maximum: prevDiff was rising, now falling (peak was at prevSignal_)
+        bool isLocalMax = (prevNnDiff_ > nnDiff) && (prevNnDiff_ > pulseOnsetFloor);
+
+        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
+            pulseStrength = clampf(prevNnDiff_ * 10.0f, 0.0f, 1.0f);  // Scale up small diffs
+            lastPulseMs_ = nowMs - 16;  // Peak was 1 frame ago
+        }
+
+        prevNnDiff_ = nnDiff;
+        prevSignal_ = nnSmoothed_;
+    } else {
+        // Spectral flux fallback: adaptive threshold + rising edge
+        float signal = odf;
+
+        if (signal < odfBaseline_) {
+            odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
+        } else {
+            odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
+        }
+
+        float pulseThreshold = odfBaseline_ * pulseThresholdMult;
+        if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
+
+        bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
+
+        if (signalPresence > pulseMinLevel && risingEdge && cooldownOk) {
+            pulseStrength = clampf(signal, 0.0f, 1.0f);
+            float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
+            float denom = signal - prevSignal_;
+            float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
+            frac = clampf(frac, 0.0f, 1.0f);
+            lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
+        }
+        prevSignal_ = signal;
     }
-    prevSignal_ = signal;
+
     lastPulseStrength_ = pulseStrength;
 }
 
@@ -973,23 +1087,23 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
-    // --- Pulse: NN-modulated spectral flux envelope ---
-    // Spectral flux provides transient timing, NN modulates selectivity.
-    // nnConf self-tunes: flat NN → raw flux, sharp NN → onset-selective.
-    float flux = spectral_.getSpectralFlux();
-    if (flux > fluxPeak_) fluxPeak_ = flux;
-    fluxPeak_ *= expf(-dt / 10.0f);
-    if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
-    float normFlux = clampf(flux / fluxPeak_, 0.0f, 1.0f);
-
+    // --- Continuous pulse envelope (visual generators) ---
+    // NN-primary: same signal as discrete onset events. NN activation is
+    // a better onset detector than spectral flux (F1 0.893 vs ~0.5).
+    // Falls back to spectral flux when NN is unavailable.
+    float pulseSignal;
     if (nnActive_) {
-        float nnConf = clampf(nnActivationVar_ * 20.0f, 0.0f, 1.0f);
-        float nnMod = clampf(nnSmoothed_, 0.0f, 1.0f);
-        normFlux *= (1.0f - nnConf) + nnConf * nnMod;
+        pulseSignal = clampf(nnSmoothed_, 0.0f, 1.0f);
+    } else {
+        float flux = spectral_.getSpectralFlux();
+        if (flux > fluxPeak_) fluxPeak_ = flux;
+        fluxPeak_ *= expf(-dt / 10.0f);
+        if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
+        pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
     }
 
-    if (normFlux > 0.4f) {
-        float trigger = (normFlux - 0.4f) / 0.6f;
+    if (pulseSignal > 0.4f) {
+        float trigger = (pulseSignal - 0.4f) / 0.6f;
         if (trigger > pulseEnvelope_) {
             pulseEnvelope_ = trigger;
         }

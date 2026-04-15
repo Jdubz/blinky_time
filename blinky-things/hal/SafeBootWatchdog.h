@@ -103,9 +103,10 @@ namespace SafeBootWatchdog {
         // RAM-based entry (primary — reliable through USB hubs)
         volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
         if (magic == 0x57) {
-            *bootloader_ram = 0xBEEF0057;  // UF2 mode
+            *bootloader_ram = 0x5A1AD5;    // DFU_DBL_RESET_MAGIC — RAM path (stock + custom bootloader)
+            NRF_POWER->GPREGRET = 0x57;    // GPREGRET path — stock bootloader fallback, survives hub power-cycle
         } else if (magic == 0xA8) {
-            *bootloader_ram = 0xBEEF00A8;  // BLE DFU mode
+            *bootloader_ram = 0xBEEF00A8;  // BLE DFU mode (custom bootloader only)
         }
 
         // Clear boot counter

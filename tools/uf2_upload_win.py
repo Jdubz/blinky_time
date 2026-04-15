@@ -22,7 +22,7 @@ from pathlib import Path
 import serial
 
 DRIVE_LABEL = "XIAO-SENSE"
-BOOTLOADER_TIMEOUT = 15  # seconds to wait for drive to appear
+BOOTLOADER_TIMEOUT = 30  # seconds to wait for drive to appear
 
 
 def find_uf2_drive(label=DRIVE_LABEL, timeout=BOOTLOADER_TIMEOUT):
@@ -108,8 +108,17 @@ def main():
     drive = find_uf2_drive(DRIVE_LABEL)
     if not drive:
         print(f"\nERROR: {DRIVE_LABEL} drive did not appear after {BOOTLOADER_TIMEOUT}s")
-        print(f"  Try double-tapping the reset button to manually enter bootloader,")
-        print(f"  then re-run with --already-in-bootloader")
+        print()
+        print("  On Windows, the software bootloader trigger (serial command / 1200-baud")
+        print("  touch) is unreliable: the Windows USB host power-cycles the port after")
+        print("  NVIC_SystemReset(), clearing the RAM magic before the bootloader reads it.")
+        print()
+        print("  RELIABLE METHOD — double-tap the reset button on the device:")
+        print("    1. Press reset once  (device reboots, bootloader starts, writes magic)")
+        print("    2. Press reset again within ~0.5s")
+        print("    3. XIAO-SENSE drive appears")
+        print("    4. Re-run:  python tools/uf2_upload_win.py --already-in-bootloader \\")
+        print(f"                    --build-dir {args.build_dir or '<build-dir>'}")
         sys.exit(1)
 
     print(f"  Drive detected: {drive}\\")

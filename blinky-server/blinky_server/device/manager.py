@@ -106,15 +106,14 @@ class FleetManager:
         return list(self._devices.values())
 
     async def start(self) -> None:
-        """Discover devices and connect to all of them."""
+        """Start background loop for device discovery and management.
+
+        All device connections (serial + BLE) happen in the background loop.
+        The API is available immediately — devices connect asynchronously.
+        """
         self._running = True
-        if self._enable_ble:
-            await cleanup_stale_ble_connections()
-            await asyncio.sleep(2)  # Let devices re-advertise after disconnect
-        await self._discover_and_connect()
         self._discovery_task = asyncio.create_task(self._background_loop())
-        connected = sum(1 for d in self._devices.values() if d.state == DeviceState.CONNECTED)
-        log.info("Fleet manager started: %d devices connected", connected)
+        log.info("Fleet manager started (devices connecting in background)")
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
@@ -606,6 +605,35 @@ class FleetManager:
                     await dev.disconnect()
                 log.info("Removed unreachable device %s from fleet", did[:12])
 
+    def _check_serial_threads(self) -> None:
+        """Detect dead serial reader threads.
+
+        If a serial reader thread exited without firing the disconnect callback
+        (e.g., uncaught exception, or thread killed by OS), the device appears
+        connected but is actually dead. Force disconnect so reconnect can pick it up.
+        """
+        for device in self._devices.values():
+            if device.state != DeviceState.CONNECTED:
+                continue
+            if not isinstance(device.transport, SerialTransport):
+                continue
+            if not device.transport.is_reader_alive():
+                log.warning(
+                    "Serial reader thread dead for %s (%s) — forcing disconnect",
+                    device.id[:12],
+                    device.port,
+                )
+                # Full disconnect: closes port, cleans up transport state,
+                # sets device state to DISCONNECTED so reconnect picks it up.
+                task = asyncio.create_task(device.disconnect())
+                task.add_done_callback(
+                    lambda t: (
+                        log.warning("disconnect error: %s", t.exception())
+                        if not t.cancelled() and t.exception()
+                        else None
+                    )
+                )
+
     async def _check_liveness(self) -> None:
         """Ping devices that haven't communicated recently.
 
@@ -782,6 +810,13 @@ class FleetManager:
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, liveness checks, and DFU recovery."""
         cycle = 0
+        # BLE cleanup on first iteration (moved from start() to avoid blocking API)
+        if self._enable_ble:
+            try:
+                await cleanup_stale_ble_connections()
+                await asyncio.sleep(2)
+            except Exception as e:
+                log.warning("BLE cleanup failed (non-fatal): %s", e)
         while self._running:
             try:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
@@ -790,6 +825,9 @@ class FleetManager:
                     continue  # Skip discovery while BLE DFU or other ops in progress
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
+                # Detect dead serial reader threads (thread exited but device still
+                # appears connected). This catches silent thread deaths.
+                self._check_serial_threads()
                 # Liveness check every 3rd cycle (~30s) for all transports
                 if cycle % 3 == 0:
                     await self._check_liveness()

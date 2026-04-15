@@ -44,6 +44,24 @@ if ! command -v "$ARDUINO_CLI" >/dev/null 2>&1; then
     exit 1
 fi
 
+# --- Locate python (python3 on Linux/macOS, python on Windows) ---
+PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo "python3")}"
+
+# --- Locate Arduino15 packages directory (Linux: ~/.arduino15, Windows: %LOCALAPPDATA%/Arduino15) ---
+if [[ -d "$HOME/.arduino15/packages" ]]; then
+    ARDUINO15_PACKAGES="$HOME/.arduino15/packages"
+elif [[ -n "${LOCALAPPDATA:-}" ]]; then
+    # Windows (Git Bash / Cygwin): convert Windows path to Unix path
+    if command -v cygpath >/dev/null 2>&1; then
+        ARDUINO15_PACKAGES="$(cygpath -u "$LOCALAPPDATA")/Arduino15/packages"
+    else
+        # WSL or other: replace backslashes
+        ARDUINO15_PACKAGES="${LOCALAPPDATA//\\//}/Arduino15/packages"
+    fi
+else
+    ARDUINO15_PACKAGES=""
+fi
+
 # --- Verify TinyUSB CDC patch ---
 # Critical: stock TinyUSB sets TX FIFO overwritable when DTR drops, which
 # silently kills all serial output. The patch keeps FIFO non-overwritable.
@@ -51,9 +69,12 @@ fi
 # (host serial port close, USB bus reset, server reconnection).
 if ! $ESP32; then
     # Find CDC source across any installed core version (not hardcoded to 1.1.12)
-    CDC_FILE=$(find "$HOME/.arduino15/packages/Seeeduino/hardware/nrf52" \
-        -path "*/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c" \
-        -print -quit 2>/dev/null)
+    CDC_FILE=""
+    if [[ -d "$ARDUINO15_PACKAGES/Seeeduino/hardware/nrf52" ]]; then
+        CDC_FILE=$(find "$ARDUINO15_PACKAGES/Seeeduino/hardware/nrf52" \
+            -path "*/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c" \
+            -print -quit 2>/dev/null || true)
+    fi
     if [ -n "$CDC_FILE" ]; then
         # Assert the PATCHED line exists (fail-closed: if formatting changes, we catch it)
         if ! grep -Eq 'tu_fifo_set_overwritable\(&p_cdc->tx_ff,[[:space:]]*false\)' "$CDC_FILE"; then
@@ -70,7 +91,7 @@ if ! $ESP32; then
         # without the Arduino toolchain installed. On a dev machine with the
         # Seeeduino core, the file WILL be found and the patch WILL be enforced.
         echo "WARNING: TinyUSB CDC source not found — cannot verify patch." >&2
-        echo "  Expected in ~/.arduino15/packages/Seeeduino/hardware/nrf52/*/libraries/" >&2
+        echo "  Expected in: $ARDUINO15_PACKAGES/Seeeduino/hardware/nrf52/*/libraries/" >&2
     fi
 fi
 
@@ -131,5 +152,16 @@ echo "=== Build $BUILD complete ==="
 # --- Upload via UF2 (nRF52840 only) ---
 if $UPLOAD && ! $ESP32; then
     echo "=== Uploading to $UPLOAD_PORT via UF2 ==="
-    python3 tools/uf2_upload.py "$UPLOAD_PORT" --firmware "$OUTPUT_DIR/blinky-things.ino.hex"
+    # Windows: uf2_upload.py uses Linux-specific drive detection (lsblk, udisksctl).
+    # Use uf2_upload_win.py instead — it detects the XIAO-SENSE drive via Win32_Volume.
+    # NOTE: On Windows the software bootloader trigger (serial command / 1200-baud touch)
+    # is unreliable because the Windows USB host power-cycles the port after
+    # NVIC_SystemReset(), clearing the RAM magic before the bootloader can read it.
+    # Double-tap the reset button on the device before running with --upload, then
+    # re-run with --upload to copy the UF2 to the already-mounted XIAO-SENSE drive.
+    if [[ -n "${LOCALAPPDATA:-}" ]]; then
+        "$PYTHON" tools/uf2_upload_win.py "$UPLOAD_PORT" --build-dir "$OUTPUT_DIR"
+    else
+        "$PYTHON" tools/uf2_upload.py "$UPLOAD_PORT" --build-dir "$OUTPUT_DIR"
+    fi
 fi

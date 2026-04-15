@@ -694,6 +694,16 @@ def main():
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
             num_output_channels=cfg["model"].get("num_output_channels", 0),
         ).to(device)
+        # Initialize output bias to log-prior (RetinaNet, Lin et al. 2017).
+        # With ~7% positive class, sigmoid(-2.6) = 0.07 — the model starts at a
+        # low baseline and learns to spike UP at onsets. Without this, the zero
+        # bias starts at sigmoid(0) = 0.5, leading to flat ~0.6 activations where
+        # the model compromises between pos_weight pushing up and neg loss pushing down.
+        if hasattr(model, 'output_conv') and pos_ratio_mean > 0:
+            init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
+            with torch.no_grad():
+                model.output_conv.bias.fill_(init_bias)
+            print(f"  Output bias init: {init_bias:.3f} (sigmoid={1/(1+math.exp(-init_bias)):.4f})")
         # Quant-Noise: stochastic INT8 quantization during training (Fan et al. 2020)
         quant_noise_ratio = cfg["training"].get("quant_noise", 0.0)
         if quant_noise_ratio > 0:

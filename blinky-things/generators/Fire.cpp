@@ -110,10 +110,11 @@ void Fire::spawnParticles(float dt) {
         // Per-particle random vigor adds organic variation (±20%)
         float vigor = 0.8f + random(400) * 0.001f;  // 0.8-1.2
 
-        // Velocity: energy drives 30-100% of full speed. Vigor adds variation.
+        // Velocity: energy scales 50-100% of full speed. Vigor adds variation.
+        // Floor raised from 0.3→0.5 so ambient sparks rise far enough to form tongues.
         float baseSpeed = scaledVelMin() +
                          random(100) * (scaledVelMax() - scaledVelMin()) / 100.0f;
-        float velMult = (0.3f + 0.7f * e) * vigor;
+        float velMult = (0.5f + 0.5f * e) * vigor;
         baseSpeed *= velMult;
 
         float vx, vy;
@@ -127,13 +128,18 @@ void Fire::spawnParticles(float dt) {
             vy += spreadAmount * 0.3f;
         }
 
-        // Intensity: energy-driven base + vigor variation
+        // Intensity: full range regardless of energy — energy controls COUNT and
+        // VELOCITY, not brightness. Sparks must spawn orange-to-yellow so the
+        // fade reveals the fire color ramp (yellow → orange → red → dark red → gone).
+        // Scaling by energy here double-penalizes with the render brightness and
+        // causes sparks to appear dark red in ambient (no yellow tongues).
         int lo = min((int)params_.intensityMin, (int)params_.intensityMax);
         int hi = max((int)params_.intensityMin, (int)params_.intensityMax) + 1;
-        uint8_t intensity = (uint8_t)min(255.0f, random(lo, hi) * (0.3f + 0.7f * e) * vigor);
+        uint8_t intensity = (uint8_t)min(255.0f, random(lo, hi) * vigor);
 
         // Lifespan: energy-driven. Low energy = short embers, high = tall flames.
-        float lifeMult = 0.4f + 0.8f * e;  // 0.4x at ambient, 1.2x at max
+        // Floor raised from 0.4→0.6 so ambient sparks live long enough to rise.
+        float lifeMult = 0.6f + 0.6f * e;  // 0.6x at ambient, 1.2x at max
         uint8_t lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * lifeMult * vigor);
 
         // Store vigor in mass field (used by updateParticle for sustained buoyancy)
@@ -249,10 +255,14 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
     uint8_t g = (color >> 8) & 0xFF;
     uint8_t b = color & 0xFF;
 
-    // Energy modulation at render time: whole flame breathes with audio.
-    // Organic: energy + pulse. Music: energy + plpPulse breathing.
-    float organicBright = 0.4f + 0.6f * audio_.energy + 0.4f * audio_.pulse;
-    float musicBright = 0.3f + 0.4f * audio_.energy + 0.5f * audio_.plpPulse;
+    // Render brightness: sets the ambient floor and audio response.
+    // Organic (ambient/conversation): high floor so fire always glows without music.
+    //   Pulse adds a flash on transients (speech, claps). Energy gently raises level.
+    // Music mode: PLP pulse drives breathing at beat tempo.
+    // Floor raised from 0.4→0.65 — intensity is no longer energy-scaled at spawn,
+    // so render brightness is the sole global dimmer and needs a higher floor.
+    float organicBright = 0.65f + 0.25f * audio_.energy + 0.3f * audio_.pulse;
+    float musicBright   = 0.50f + 0.25f * audio_.energy + 0.5f * audio_.plpPulse;
     float brightnessScale = organicBright * (1.0f - audio_.rhythmStrength) +
                            musicBright * audio_.rhythmStrength;
     if (brightnessScale > 1.0f) brightnessScale = 1.0f;

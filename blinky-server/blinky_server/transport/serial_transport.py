@@ -37,6 +37,13 @@ class SerialTransport(Transport):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._line_callback: Callable[[str], None] | None = None
         self._connected = False
+        self._ever_received = False
+
+    def is_reader_alive(self) -> bool:
+        """Check if the reader thread is alive (or not yet started)."""
+        if self._reader_thread is None:
+            return True  # No thread = not started yet
+        return self._reader_thread.is_alive()
 
     async def connect(self) -> None:
         if self._connected:
@@ -96,25 +103,47 @@ class SerialTransport(Transport):
         ser = self._serial
         if ser is None:
             return
+        empty_reads = 0
         while not self._stop_event.is_set():
             try:
-                chunk = ser.read(ser.in_waiting or 1)
+                waiting = ser.in_waiting
+                if waiting is None:
+                    break  # Port fd gone
+                chunk = ser.read(waiting or 1)
                 if not chunk:
+                    empty_reads += 1
+                    # Allow many empty reads during initial connection (device needs
+                    # ~1-2s to start serial output). Only treat as disconnect after
+                    # sustained empty reads AND we previously received data.
+                    if empty_reads > 100 and self._ever_received:
+                        log.warning(
+                            "Serial %s: %d consecutive empty reads, treating as disconnect",
+                            self._port,
+                            empty_reads,
+                        )
+                        break
                     continue
+                empty_reads = 0
+                self._ever_received = True
                 buf += chunk
                 while b"\n" in buf:
                     line_bytes, buf = buf.split(b"\n", 1)
                     text = line_bytes.decode("utf-8", errors="replace").strip()
                     if text and self._loop:
                         self._loop.call_soon_threadsafe(self._dispatch_line, text)
-            except (serial.SerialException, OSError) as e:
+            except (serial.SerialException, OSError, TypeError, ValueError) as e:
+                # Serial port errors during USB disconnect manifest as various
+                # exception types: SerialException (normal), OSError (fd gone),
+                # TypeError (None fd), ValueError (closed port).
                 if self._stop_event.is_set():
                     break
                 log.warning("Serial read error on %s: %s", self._port, e)
-                if self._connected and self._loop:
-                    self._connected = False
-                    self._loop.call_soon_threadsafe(self._fire_disconnect)
                 break
+
+        # Reader loop exited — fire disconnect if still connected
+        if self._connected and self._loop:
+            self._connected = False
+            self._loop.call_soon_threadsafe(self._fire_disconnect)
 
     async def disconnect(self) -> None:
         if not self._connected:

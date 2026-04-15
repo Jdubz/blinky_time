@@ -80,6 +80,8 @@ public:
     int getPlpPatternLen() const { return plpPatternLen_; }
     float getAcfPeakStrength() const { return acfPeakStrength_; }
     int getPlpBestSource() const { return plpBestSource_; }
+    float getPlpNNAgreement() const { return plpNNAgreement_; }
+    float getPlpReliability() const { return plpMeanReliability_; }
     float getBeatStability() const { return beatStability_; }
     float getOnsetDensity() const { return onsetDensity_; }
     float getBpmMin() const { return bpmMin; }
@@ -192,7 +194,10 @@ private:
     int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
     float patternPosition_ = 0.0f;              // 0→1 position within pattern cycle (advances each frame)
     float plpPhase_ = 0.0f;                     // 0→1 phase for generators (0 = accent, derived from position)
-    float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
+    float plpConfidence_ = 0.0f;                // Pattern confidence (ACF × signal × NN agreement)
+    float plpNNAgreement_ = 0.5f;               // Cross-correlation between flux fold and NN fold (0-1)
+                                                // Starts at 0.5 (neutral) so PLP confidence isn't penalized during warmup
+    float plpMeanReliability_ = 0.0f;           // Mean per-bin reliability (low CV = consistent events)
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
     float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     float acfPeakStrength_ = 0.0f;                   // Normalized ACF peak of winning period (0-1)
@@ -211,7 +216,8 @@ private:
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
-    float prevSignal_ = 0.0f;          // Previous frame signal (for rising-edge detection)
+    float prevSignal_ = 0.0f;          // Previous frame signal (for detection)
+    float prevNnDiff_ = 0.0f;          // Previous HWR first-diff (for local-max peak-picking)
 
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)

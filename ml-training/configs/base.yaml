@@ -22,10 +22,11 @@ audio:
                             # isn't the bottleneck. Reverted: 60 dB gives better INT8 resolution
                             # (4.3 vs 3.2 levels/dB) and gain aug [-18,+18] covers device levels.
   frame_rate: 62.5          # 16000 / 256
-  target_rms_db: -63        # Normalize audio RMS to simulate firmware AGC level
-  # Calibrated via tools/rms_mel_sweep.py: -63 dB → mel mean 0.52, matching
-  # firmware AGC output. Previous -35 dB gave mel mean 0.75, causing weak
-  # NN activations on device (max ~0.26 at 120 BPM).
+  target_rms_db: -72        # Normalize audio RMS to match device mel during music playback.
+  # Recalibrated April 14: device mel mean during music = 0.775, training at
+  # -63 dB produced mel mean = 0.924 (9 dB too loud). At -72 dB, clean training
+  # mel matches device level. Gain augmentation [-18, +18] covers the full range.
+  # Previous -63 dB meant the model saw device-realistic levels only ~10% of the time.
   # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
   # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
   # prepare_dataset.py uses this to cap gain-aware noise augmentation.

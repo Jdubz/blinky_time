@@ -1,22 +1,27 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 13, 2026*
+*Last Updated: April 14, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** b117 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b117 changes:** v22 model deployed, NN is PRIMARY onset detector (not a gate on spectral flux — nnSmoothed_ is the signal, spectral flux is fallback only), pulseNNGate parameter removed, mel filterbank corrected to match librosa HTK exactly (26/26 bands wrong since day one, avg 4.2 INT8 level error), MEL_DB_RANGE extracted as constexpr, prevOdf_ renamed to prevSignal_, TestChipConfig.h added for unconfigured bare chips, millis field in json info for clock sync.
+**Firmware:** b120 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b117 changes:** v22 model deployed, NN is PRIMARY onset detector (not a gate on spectral flux — nnSmoothed_ is the signal, spectral flux is fallback only), pulseNNGate parameter removed, mel filterbank corrected to match librosa HTK exactly (26/26 bands wrong since day one, avg 4.2 INT8 level error), MEL_DB_RANGE extracted as constexpr, prevOdf_ renamed to prevSignal_, TestChipConfig.h added for unconfigured bare chips, millis field in json info for clock sync. **b118 changes:** v23 model deployed (corrected mel filterbank + mic profile augmentation, KW F1=0.873, on-device F1=0.625). **b119-b120 changes:** NN-primary continuous visual pulse envelope (control_.pulse uses nnSmoothed_ directly). Robust PLP epoch-fold: NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. PLP reliability metrics exposed in debug stream: plpMeanReliability_, plpNNAgreement_.
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v22 deployed on b117 (all 3 serial devices). KW F1=0.896 (offline). On-device F1=0.62 (+32% vs v19's 0.472). 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v23 deployed on b118 (all 3 serial devices). KW F1=0.873 (offline). On-device F1=0.625 (slight improvement from v22's 0.620). 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes. v24 training in progress (recalibrated target_rms_db=-72 + Freq-MixStyle + speaker THD + comb filter + MEMS soft clip augmentations).
 
-**Key findings (April 12-13):**
+**Key findings (April 12-14):**
 - **Mel filterbank mismatch discovered and fixed:** All 26 mel bin edges in firmware were wrong since day one. Corrected to match librosa HTK exactly — avg 4.2 INT8 level error. `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h.
 - **NN-primary vs NN-gate:** Changing `updatePulseDetection()` to use NN smoothed activation as the primary signal improved on-device F1 from 0.472 to 0.62. This was a firmware-only change (same v22 model, same mel features) — the entire gain came from using NN output directly instead of gating spectral flux. Mel filterbank correction (same session) did not contribute to the F1 gain (validated: b117 corrected filterbank=0.612 vs b115 old filterbank=0.620). pulseNNGate parameter removed.
 - **mel_db_range=80 experiment (v21) was solving wrong problem:** Bass mel saturation analysis showed kick detection was already the strongest instrument category. Widening to [-80,0] dB reduced INT8 resolution without meaningful kick improvement. Reverted to mel_db_range=60.
 - **v22 model:** mel_db_range=60 (same as firmware), no quant-noise, drum-stem labels. KW F1=0.896.
+- **Mel pipeline verified identical (April 14):** Training and firmware mel pipelines (steps 2-8) match within MAE=0.0017 (0.44 INT8 levels — effectively perfect). AdaptiveMic window/range normalization does NOT affect NN input (raw PDM samples go directly to SharedSpectralAnalysis). The entire sim-to-real gap comes from step 1: what audio reaches the mic (speaker → air → room → mic vs clean digital).
+- **target_rms_db recalibrated from -63 to -72 (April 14):** Device mel during music = 0.775 mean vs training 0.924 — 9 dB too loud. Training was centered 9 dB above device reality, model saw device-realistic levels only ~10% of the time. Corrected for v24.
+- **v23 model:** Corrected mel filterbank + mic profile augmentation. KW F1=0.873, on-device F1=0.625 (slight improvement from v22's 0.620). Deployed on b118.
+- **New augmentations for v24 (prepare_dataset.py):** Speaker harmonic distortion (1-8% THD polynomial nonlinearity), comb filter from early reflections (causal zero-padded delay, 1-10ms), MEMS mic soft clipping (polynomial saturation at high SPL), Freq-MixStyle (online per-band mel statistics mixing during training, DCASE 2024).
+- **PLP pattern extraction verified accurate:** gtPatternCorr metric (cosine similarity between device pattern and GT-folded onsets) shows 0.84-0.97 on test tracks.
 
 **Previous on-device gap diagnosis (April 10-11, partially correct):** Identified mel distribution shift (+0.25 mean, +13 dB) and bass mel saturation (6/26 bands at p95=1.0). v20 proved label quality is solved (offline +21%) but on-device F1=0.430. The real fix was NN-primary pulse detection (not mel range changes).
 
@@ -33,10 +38,10 @@
 - v18: PCEN mel normalization (52ch, mel+delta). **FAILED (April 10).** Auto pw=12.7: val_loss plateaued at 0.4976 (barely below random), F1=0.011, recall=0.006 after 36 epochs. pw=20: immediate all-positive collapse. PCEN features have AUC=0.5061 for onset discrimination (random chance). Root cause: PCEN's adaptive AGC normalizes away the transient contrast the model needs. No published onset system uses PCEN for musical onset detection. Also discovered `base.yaml` had `log_epsilon: 1e-7` parsed as string by PyYAML — fixed to `1.0e-7`. Bug only affected v18 dataprep (introduced in PCEN commit c0009054, Apr 7).
 - v19: **Aligned with published recipe, COMPLETE, DEPLOYED (b111, April 10).** Five fixes from literature review (Schlüter/Bock 2014, madmom): (1) plain BCE loss replacing asymmetric focal, (2) no global mixup (creates impossible frame-level targets), (3) hard binary targets (consensus > 0.1 → 1.0), (4) no freq_pos_encoding (onset detection is frequency-invariant), (5) no distillation (clean baseline). Same Conv1D [32,32] architecture as v16. Log-mel 26ch. Gain aug [-18, +18] dB. On-device F1=0.477.
 
-**Fleet status (April 12, verified via blinky-server):**
-- 062CBD12 — Hat Display, b117 (v22 model), serial, test chip ✅
-- 659C8DD3 — Long Tube, b117 (v22 model), serial, installed device ✅
-- 2A798EF8 — Hat Display, b117 (v22 model), serial, test chip ✅
+**Fleet status (April 14, verified via blinky-server):**
+- 062CBD12 — Hat Display, b120 (v23 model), serial, test chip ✅
+- 659C8DD3 — Long Tube, b120 (v23 model), serial, installed device ✅
+- 2A798EF8 — Hat Display, b120 (v23 model), serial, test chip ✅
 - ABFBC412 — Hat Display, b106, BLE-only (RSSI -94 dBm, MTU 20), weak signal
 
 **Serial reliability (April 8):** Root cause identified and fixed — stock TinyUSB CDC sets TX FIFO overwritable on DTR drop, silently killing all serial output. Patch in `patches/tinyusb-cdc-no-overwritable-fifo.patch`, enforced by `build.sh` compile guard. Server hardened: get_info retry, sibling hold during flash, serial retry limit (3 fails → stop), DELETE endpoint for stale devices. See commit `9712664`.
@@ -106,11 +111,13 @@ v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160�
 
 ### Priority 2: NN-Modulated Pulse + NN Training
 
-**Status: b117 deployed on all 3 serial devices (v22 model). On-device F1=0.62 (+32% vs v19). Key breakthrough: making NN the PRIMARY pulse signal (not a gate on spectral flux) accounted for most of the improvement. pulseNNGate parameter removed. Mel filterbank corrected (26/26 bands wrong since day one). mel_db_range reverted to 60 (v21's 80 was solving wrong problem).**
+**Status: b120 deployed on all 3 serial devices (v23 model, KW F1=0.873, on-device F1=0.625). v24 training in progress (recalibrated target_rms_db=-72 + Freq-MixStyle + speaker THD + comb filter + MEMS soft clip). Key breakthrough (b117): making NN the PRIMARY pulse signal (not a gate on spectral flux) accounted for most of the improvement. Mel pipeline verified identical (MAE=0.0017) — remaining gap is entirely acoustic (speaker → air → room → mic). Robust PLP epoch-fold deployed (b119+).**
 
-**Firmware improvements (b108→b117):**
+**Firmware improvements (b108→b120):**
 - **b108 (April 9):** NN-modulated pulse output (spectral flux weighted by NN activation, self-tuning via nnConf). Derivative-based NN gate. onset F1=0.483.
 - **b117 (April 12):** NN is now the PRIMARY onset detector. `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) as the signal — spectral flux is fallback only when NN unavailable. pulseNNGate parameter removed. On-device onset F1 improved from 0.472 to 0.62. Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong, avg 4.2 INT8 level error). MEL_DB_RANGE extracted as constexpr. prevOdf_ renamed to prevSignal_. TestChipConfig.h added for unconfigured bare chips. millis field added to json info for clock sync.
+- **b118 (April 13):** v23 model deployed (corrected mel filterbank + mic profile augmentation, KW F1=0.873, on-device F1=0.625).
+- **b119-b120 (April 14):** NN-primary continuous visual pulse envelope (control_.pulse uses nnSmoothed_ directly, not spectral flux x NN modulation). Robust PLP epoch-fold: NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. PLP reliability metrics exposed in debug stream: plpMeanReliability_, plpNNAgreement_. Serial transport crash fix (TypeError from None fd during USB disconnect). Debug streaming enabled during validation for PLP diagnostic fields.
 
 Failed attempts (all regressed from v3):
 - v9 (tempo head + distillation): F1=0.233. Root cause: data prep crash → non-augmented data (209K vs 3M chunks) + tempo head useless (256ms RF can't encode tempo, Bock 2019 applies to beat tracking not onset detection).
@@ -195,7 +202,11 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v21 (widened mel range [-80,0] dB): REVERTED (April 12).** Same drum-stem labels as v20. Widened mel range to [-80,0] dB to fix bass saturation. However, mel_db_range=80 was solving the wrong problem — kick detection was already the strongest category. INT8 resolution reduction (3.2 vs 4.3 levels/dB) was a net negative. mel_db_range reverted to 60 in both firmware and base.yaml.
 
-**v22 (mel_db_range=60, no quant-noise): DEPLOYED (b117, April 12).** Same drum-stem labels as v20. mel_db_range=60 (matching firmware). No quant-noise regularization. KW F1=0.896. **On-device F1=0.62** (+32% vs v19, primarily from NN-primary pulse detection change in firmware). Mel filterbank corrected to match librosa HTK exactly — avg 4.2 INT8 level error fixed.
+**v22 (mel_db_range=60, no quant-noise): superseded by v23 (April 12).** Same drum-stem labels as v20. mel_db_range=60 (matching firmware). No quant-noise regularization. KW F1=0.896. **On-device F1=0.62** (+32% vs v19, primarily from NN-primary pulse detection change in firmware). Mel filterbank corrected to match librosa HTK exactly — avg 4.2 INT8 level error fixed.
+
+**v23 (corrected mel filterbank + mic profile augmentation): DEPLOYED (b118, April 13).** KW F1=0.873. **On-device F1=0.625** (slight improvement from v22's 0.620).
+
+**v24 (recalibrated target_rms_db + new augmentations): IN PROGRESS (April 14).** target_rms_db recalibrated from -63 to -72 (device mel during music = 0.775 mean vs training 0.924 — 9 dB too loud, model saw device-realistic levels only ~10% of the time). New augmentations in prepare_dataset.py: speaker harmonic distortion (1-8% THD polynomial nonlinearity), comb filter from early reflections (causal zero-padded delay, 1-10ms), MEMS mic soft clipping (polynomial saturation at high SPL), Freq-MixStyle (online per-band mel statistics mixing during training, DCASE 2024).
 
 **Diagnostic tools deployed (April 9) — results (April 10):**
 - `replay_device_capture.py`: FP32 model on device mel produces flat 0.42 activation (same as INT8 on-device). **Quantization is NOT the bottleneck.**
@@ -270,12 +281,15 @@ All 14 CJS test scripts, 6 standalone Python/shell tools, and the blinky-test-pl
 - `POST /api/test/capture-nn/{id}` — capture NN diagnostic stream (mel bands + onset)
 - `GET /api/test/jobs/{id}` — poll async job results
 
-**Infrastructure improvements (April 12-13):**
+**Infrastructure improvements (April 12-14):**
 - `scripts/deploy.sh`: single-command compile → upload → flash → verify pipeline
 - `POST /api/fleet/upload`: binary firmware upload endpoint with API key auth (no scp needed)
 - API key auth on all flash endpoints (auto-generated `~/.blinky-api-key`)
 - Clock sync in `test_runner.py` for firmware timestamps (`millis` field in `json info`)
 - Pre-push hook: `ruff check`, `ruff format`, `mypy` for blinky-server
+- PLP metrics tooling: gtPatternCorr (cosine similarity between device pattern and GT-folded onsets), reliability, nnAgreement in scoring
+- Debug streaming enabled during validation for PLP diagnostic fields
+- Serial transport crash fix (TypeError from None fd during USB disconnect)
 
 ### Architecture History (Collapsed — see git log for details)
 
@@ -469,7 +483,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. ~~**Flat NN activation shape — RESOLVED (b117).**~~ On-device onset F1 was stable at ~0.47 across v15-v19. Root cause was NOT the activation shape itself but the pulse detection approach: using NN as a gate on spectral flux instead of using NN directly. Making NN the primary pulse signal (nnSmoothed_) improved on-device F1 from 0.472 to 0.62. Additionally, mel filterbank was corrected (26/26 bands wrong since day one). PCEN was abandoned (AUC=0.5061, v18).
+1. ~~**Flat NN activation shape — RESOLVED (b117).**~~ On-device onset F1 was stable at ~0.47 across v15-v19. Root cause was NOT the activation shape itself but the pulse detection approach: using NN as a gate on spectral flux instead of using NN directly. Making NN the primary pulse signal (nnSmoothed_) improved on-device F1 from 0.472 to 0.62. Additionally, mel filterbank was corrected (26/26 bands wrong since day one). PCEN was abandoned (AUC=0.5061, v18). **Mel pipeline verified identical** (MAE=0.0017) — remaining gap is entirely acoustic (speaker → air → room → mic vs clean digital). target_rms_db recalibrated from -63 to -72 for v24.
 
 2. **PLP pattern consistency — OPEN.** 7/18 tracks show negative autoCorr in syncopated genres (breakbeat, garage, amapiano). Slot cache partially addresses via multi-pattern switching. Recent validation (April 9, 3 devices) shows PLP working on 51/54 track-device pairs, but a single-device retest 7h later showed PLP dead on 16/18 tracks (likely transient device state, not regression — same device had PLP working in the prior run). Needs re-validation after device power cycle.
 
@@ -492,7 +506,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Novel-1D | 2022 | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+PLP (mic-in-room, nRF52840) | Offline KW F1=0.896 (v22). On-device onset F1=0.62. PLP deployed v81. NN-primary b117. |
+| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+PLP (mic-in-room, nRF52840) | Offline KW F1=0.873 (v23). On-device onset F1=0.625. PLP deployed v81. NN-primary b117. Robust PLP b119. |
 
 **Note:** SOTA table previously listed Beat F1 (onset-vs-metrical-grid alignment). This metric is not comparable to our onset F1. SOTA systems are evaluated on line-in audio with standardized beat annotations; our system detects acoustic onsets through a microphone in a room.
 
@@ -503,7 +517,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
 | ~~Flat NN activation on-device~~ | ~~Log-mel gives sustained ~0.45 activation~~ | ~~RESOLVED~~ | Fixed by NN-primary pulse detection (b117) + mel filterbank correction. On-device F1: 0.472→0.62. |
-| Offline-to-on-device gap | On-device onset F1=0.62 vs offline 0.90 (31% drop) | **Medium** — reduced but still present | NN-primary and mel filterbank fixes closed most of the gap. Remaining gap likely from mic-in-room acoustics. |
+| Offline-to-on-device gap | On-device onset F1=0.625 vs offline 0.87 (28% drop) | **Medium** — reduced but still present | Mel pipeline verified identical (MAE=0.0017). Remaining gap is entirely acoustic (speaker → air → room → mic). target_rms_db recalibrated -63→-72 for v24. |
 | Run-to-run variance | Initial phase lock depends on exact audio timing | Requires 3+ runs for reliable eval | Silence state reset (5s) helps; inherent variability |
 | Syncopated self-consistency | Breakbeat/garage/amapiano patterns don't repeat at single period | 7/18 tracks have negative autoCorr | Slot cache partially addresses. May be inherent to genre. |
 | DnB half-time detection | librosa and firmware both detect ~117 vs ~170 | **None** — acceptable for visuals | -- |
