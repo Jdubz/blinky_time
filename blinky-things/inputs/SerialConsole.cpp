@@ -776,12 +776,20 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         out_.println(F(" bootloader..."));
         // No Serial.flush() — reset immediately. Diagnostic output is best-effort.
         {
-            // RAM-based bootloader entry: write magic to 0x20007F7C (same address
-            // as bootloader's double-reset detection). RAM survives system reset,
-            // unlike GPREGRET which can be cleared by USB hub port power-cycling.
-            // Custom bootloader checks this BEFORE GPREGRET for reliable entry.
+            // Dual-path bootloader entry for maximum reliability:
+            // RAM (0x20007F7C): survives system reset but may be cleared by USB hub
+            //   power-cycling on Windows (VIA Labs 2109:2813 documented issue).
+            //   UF2: DFU_DBL_RESET_MAGIC (0x5A1AD5) — stock + custom bootloader.
+            //   BLE DFU: 0xBEEF00A8 — custom bootloader only.
+            // GPREGRET: retention register, survives brief hub power-cycle.
+            //   0x57 = DFU_MAGIC_UF2_RESET — stock Adafruit bootloader UF2 entry.
             volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
-            *bootloader_ram = bleMode ? 0xBEEF00A8 : 0xBEEF0057;
+            if (bleMode) {
+                *bootloader_ram = 0xBEEF00A8;
+            } else {
+                *bootloader_ram = 0x5A1AD5;
+                NRF_POWER->GPREGRET = 0x57;  // Fallback if RAM cleared by hub power-cycle
+            }
             __DSB(); __ISB();
             NVIC_SystemReset();
         }
