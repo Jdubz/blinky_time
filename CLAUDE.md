@@ -282,9 +282,11 @@ RenderPipeline → LED Output
      - Conv1D W16 (256ms), [24,32] channels, 6.8ms nRF52840
      - Auto-detects input features from model shape: 26 (mel), 29 (mel+band-flux), 52 (mel+delta)
      - PCEN normalization support removed (v18 FAILED: AUC=0.5061, abandoned April 10)
-     - v23 deployed (b118): corrected mel filterbank + mic profile augmentation, KW F1=0.873. On-device F1=0.625.
-     - v24 training in progress: recalibrated target_rms_db=-72 (device mel mean 0.775 vs training 0.924 — 9 dB too loud) + Freq-MixStyle + speaker THD + comb filter + MEMS soft clip augmentations.
-     - **NN is the PRIMARY onset detector** (b117+): `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) as the signal. Spectral flux is fallback only when NN is unavailable. pulseNNGate parameter removed.
+     - v25 deployed (b127): bias init per RetinaNet (output bias = log(pos_ratio/(1-pos_ratio))), KW F1=0.842. On-device activations are dynamic (mean=0.432, std=0.250, dynRange=0.734) — the acoustic chain (speaker→room→mic) creates contrast that clean audio lacks.
+     - v26 training in progress: asymmetric focal loss (gamma_neg=4.0, gamma_pos=0.0) to downweight easy negatives (silence) and focus on hard negatives (chord changes).
+     - **On-device activations are NOT flat** (April 16 finding): Offline FP32 on clean audio shows flat activations (mean=0.567, std=0.051, dynRange=0.125), but on-device INT8 on real audio is dynamic (mean=0.432, std=0.250, dynRange=0.734). The earlier "flat activation" diagnosis was based on offline analysis and was wrong for on-device. The acoustic chain creates contrast the clean audio lacks.
+     - **Pulse detection (b127):** Local-maxima peak-picking on NN activation (prevSignal > prev AND prevSignal > next AND > floor). Bass-band energy gate (50% threshold increase when bass ratio low) for FP suppression. PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30 (sweep-optimized).
+     - **0.62 F1 plateau is from the MODEL** (precision=0.50), not the detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals). Detection algorithm evolution: b123 first-diff (over-detected 14.3/s, F1=0.601) → b126 local-maxima (sweep showed 0.3 optimal) → b127 +bass gate+PLP bias (F1=0.628).
      - **Mel filterbank correction (b117):** All 26 mel bin edges were wrong since day one. Corrected to match librosa HTK exactly — avg 4.2 INT8 level error fixed. `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h.
      - **Mel pipeline verified (April 14):** Training and firmware mel pipelines (steps 2-8) are effectively identical (MAE=0.0017, 0.44 INT8 levels). The entire sim-to-real gap comes from step 1: what audio reaches the mic (speaker → air → room → mic vs clean digital). AdaptiveMic window/range normalization does NOT affect NN input.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
@@ -292,9 +294,10 @@ RenderPipeline → LED Output
 3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v93)**
    - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~12 tunable params)
    - **Period path** (NN-independent): spectral flux (SuperFlux 3-wide max filter, Bock 2013) + bass energy → multi-source ACF (lags 20-80, ~4ms) → beat-level peaks → bar multipliers (2×/3×/4×) → epoch-fold variance scoring selects best pattern period. Parabolic interpolation on ACF peaks for sub-step precision. **The system finds the period that produces the best visual pattern, not the "correct" BPM. Half/double time periods are valid if they capture more rhythmic structure.**
-   - **Onset path** (NN-driven): FrameOnsetNN → onset activation (primary signal). Spectral flux is fallback only when NN unavailable.
-     - `control_.pulse`: NN smoothed activation (nnSmoothed_) is the primary pulse signal. Floor-tracking baseline for discrete onset detection.
-     - Discrete onset events: floor-tracking baseline + rising-edge detection
+   - **Onset path** (NN-driven): FrameOnsetNN → onset activation → local-maxima peak-picking (b127).
+     - `control_.pulse`: Local-maxima peak-picking on NN activation (prevSignal > prev AND prevSignal > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30 (sweep-optimized).
+     - On-device activations are dynamic (mean=0.432, std=0.250, dynRange=0.734) — the acoustic chain creates contrast that clean audio lacks. The earlier "flat activation" diagnosis was wrong for on-device.
+     - 0.62 F1 plateau is from the MODEL (precision=0.50), not the detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals).
    - **PLP path** (v91 refactor, robust epoch-fold b119+): NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Phase derived from position offset by accent phase. Preserves actual rhythmic shape. plpNovGain=1.0 (linear, no power-law). plpVarianceSens=0 (disabled). Cold-start template seeding (8 patterns). Debug: plpMeanReliability_, plpNNAgreement_ exposed in stream.
    - **Key decoupling**: Pattern quality (plpAutoCorr) is NN-independent — epoch-fold uses ungated flux. NN onset only drives visual pulse. Model changes affect onset detection, not pattern breathing.
    - **Pattern slot cache** (v82): 4-slot LRU cache of 16-bin PLP pattern digests. Every bar (4 beats), current PLP pattern resampled to 16-bin digest and compared via cosine similarity against cached slots. Match > 0.70 triggers instant recall. Enables rapid section switching (verse/chorus/bridge).
@@ -400,7 +403,7 @@ check_test_result(job_id: "abc123")
 4. Contrast-sharpened spectral flux → OSS buffer (~5.5s, 360 samples @ ~66 Hz)
 5. ACF every 150ms → raw peak-finding → BPM / period estimate
 6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
-7. Onset activation → NN smoothed signal as primary pulse (spectral flux fallback only)
+7. Onset activation → local-maxima peak-picking + bass gate + PLP bias → pulse
 8. [PLP PATH] Multi-source ACF across 3 mean-subtracted sources (flux, bass, NN onset)
 9. ACF peak selects period, epoch-fold peak gives phase alignment → pattern → phase + plpPulse output
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
@@ -469,7 +472,7 @@ check_test_result(job_id: "abc123")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+PLP (multi-source ACF) + pulse baseline tracking + pattern slot cache (v83)
-- ✅ FrameOnsetNN (Conv1D W16 onset-only, v23 deployed on all 3 blinkyhost devices, b118)
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, v25 deployed on all 4 blinkyhost devices, b127)
 - ✅ HeatFire/Water/PlasmaGlobe generators (PlasmaGlobe replaced Lightning in b107)
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (blinky-server REST API: validation + param sweep, MCP tools)
@@ -478,7 +481,7 @@ check_test_result(job_id: "abc123")
 - ✅ Mic calibration pipeline + gain-aware training augmentation
 - ✅ Fixed hardware gain (AGC removed v72; nRF52840: gain=32)
 - ✅ Simulator working (rebuilds with current firmware code)
-- ✅ Active devices: 3 nRF52840 on blinkyhost (all b120, v23 model) + 1 BLE device (b106)
+- ✅ Active devices: 4 nRF52840 on blinkyhost (all b127, v25 model). Bucket totem can't be flashed via software (GPREGRET race, reset button inaccessible).
 - ✅ Sim-to-real diagnostics: `replay_device_capture.py`, `mel_distribution_check.py`, `stream nn` with `nna` field
 - ✅ Diverse augmentation: ESC-50 noise (crowd/traffic/weather/hvac/ambient), speaker EQ, distance attenuation, speaker THD, comb filter reflections, MEMS soft clip, Freq-MixStyle
 - ✅ Disk management: space pre-checks, auto-cleanup prompts, `disk-audit.sh`
@@ -492,6 +495,9 @@ check_test_result(job_id: "abc123")
 - ✅ Robust PLP epoch-fold (b119+): NN-confidence-weighted epochs, per-bin CV reliability, Winsorized mean, cross-correlation validation
 - ✅ PLP metrics tooling: gtPatternCorr, reliability, nnAgreement in scoring; debug streaming during validation
 - ✅ Serial transport crash fix (TypeError from None fd during USB disconnect)
+- ✅ Stream pause race condition fixed (wait for acknowledgment, not arbitrary sleep)
+- ✅ Production optimization: stream formatting gated on client presence
+- ✅ Dead band flux buffers removed (6.3 KB heap saved)
 
 **Removed (v64-v82):**
 - v64: Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking, template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux (~1500 lines)
@@ -522,9 +528,10 @@ check_test_result(job_id: "abc123")
 - See `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for full details
 
 **Planned / In Progress:**
-- NN training: v23 deployed (b118, KW F1=0.873, on-device F1=0.625). v24 training in progress with recalibrated target_rms_db=-72 (device mel during music = 0.775 mean vs training 0.924 — 9 dB too loud, model saw device-realistic levels only ~10% of the time) + Freq-MixStyle (DCASE 2024) + speaker THD + comb filter + MEMS soft clip augmentations. Mel pipeline verified identical (MAE=0.0017) — remaining sim-to-real gap is entirely step 1 (speaker → air → room → mic vs clean digital).
-- Label quality: v20 drum-stem labels (6015 clean, 735 quarantined) solved — offline +21%.
-- Firmware (b119-b120): NN-primary continuous pulse envelope (control_.pulse uses nnSmoothed_ directly). Robust PLP epoch-fold with NN-confidence-weighted epochs, per-bin CV reliability, Winsorized mean, cross-correlation validation. PLP reliability metrics in debug stream.
+- NN training: v25 deployed (b127, KW F1=0.842). v26 in progress: asymmetric focal loss (gamma_neg=4.0, gamma_pos=0.0) to downweight easy negatives (silence) and focus on hard negatives (chord changes). Previously tested in v12 with noisy labels + wrong mel — clean labels are a new baseline.
+- On-device F1 plateau at 0.62 is from model precision (0.50), not detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals).
+- Architecture experiments completed: exp-wide [48,48,32] W16 KW F1=0.861 (+1.0%) but 19.5ms inference (over budget); exp-w32 [32,32] W32 KW F1=0.850 (no improvement from longer context).
+- Firmware (b123-b127): Local-maxima peak-picking on NN activation. Bass-band energy gate + PLP pattern bias for FP suppression. Dead band flux buffers removed (6.3 KB heap saved). Stream pause race condition fixed.
 - Dynamic device switching (runtime config)
 - CI/CD automation
 
@@ -562,20 +569,20 @@ check_test_result(job_id: "abc123")
 ### Detection Architecture
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
-**Current (v83+, deployed b120):** Multi-source ACF + PLP architecture with pattern slot cache. ACF scans beat-level lags (20-80) on 3 sources (flux, bass, NN onset), parabolic interpolation refines peaks. Bar-level candidates via 2×/3×/4× multipliers with sqrt(multiplier) penalty. Epoch-fold variance scoring selects the period with the best pattern contrast — **the correct period is whichever produces the best visual pattern, regardless of musical BPM. Half/double time matches are valid.** Pattern slot cache (4-slot LRU of 16-bin PLP pattern digests) enables instant section recall. **NN is the PRIMARY onset detector** (b117+): `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) as the signal; spectral flux is fallback only when NN unavailable. pulseNNGate parameter removed. **Robust PLP epoch-fold** (b119+): NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. plpMeanReliability_ and plpNNAgreement_ exposed in debug stream. Performance: ACF ~4ms (vs 75ms old Fourier tempogram). Primary test metrics: plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure), gtPatternCorr (cosine similarity between device pattern and GT-folded onsets, 0.84-0.97 on test tracks).
-- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v23 deployed (b118): KW F1=0.873, on-device F1=0.625. Arena: 3404/32768 bytes.
+**Current (v83+, deployed b127):** Multi-source ACF + PLP architecture with pattern slot cache. ACF scans beat-level lags (20-80) on 3 sources (flux, bass, NN onset), parabolic interpolation refines peaks. Bar-level candidates via 2×/3×/4× multipliers with sqrt(multiplier) penalty. Epoch-fold variance scoring selects the period with the best pattern contrast — **the correct period is whichever produces the best visual pattern, regardless of musical BPM. Half/double time matches are valid.** Pattern slot cache (4-slot LRU of 16-bin PLP pattern digests) enables instant section recall. **Pulse detection (b127):** Local-maxima peak-picking on NN activation (prevSignal > prev AND prevSignal > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30. **On-device activations are NOT flat** — the acoustic chain (speaker→room→mic) creates contrast clean audio lacks (on-device dynRange=0.734 vs offline 0.125). F1 plateau at 0.62 is from model precision (0.50), not detection algorithm. **Robust PLP epoch-fold** (b119+): NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. plpMeanReliability_ and plpNNAgreement_ exposed in debug stream. Performance: ACF ~4ms (vs 75ms old Fourier tempogram). Primary test metrics: plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure), gtPatternCorr (cosine similarity between device pattern and GT-folded onsets, 0.84-0.97 on test tracks).
+- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v25 deployed (b127): KW F1=0.842. On-device F1=0.628. Arena: 3404/32768 bytes.
 - **Mel filterbank corrected (b117):** All 26 mel bin edges were wrong since day one — corrected to match librosa HTK exactly (avg 4.2 INT8 level error). `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h. mel_db_range reverted to 60 (v21's 80 was solving the wrong problem).
 - **Mel pipeline verified identical (April 14):** Training and firmware mel pipelines (steps 2-8) match within MAE=0.0017 (0.44 INT8 levels). The entire sim-to-real gap is step 1: what audio reaches the mic. AdaptiveMic window/range normalization does NOT affect NN input (raw PDM samples go directly to SharedSpectralAnalysis).
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, pattern-quality-driven period detection, PLP phase/pattern extraction. No downbeat tracking. **Pattern accuracy is the primary metric — BPM accuracy is irrelevant; octave-matched periods (half/double time) are correct if they produce better visual patterns.** Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
-- Training data: v20 drum-stem labels (6015 clean, 735 quarantined). target_rms_db recalibrated from -63 to -72 for v24 (device mel 0.775 vs training 0.924 during music).
+- Training data: v20 drum-stem labels (6015 clean, 735 quarantined). target_rms_db recalibrated from -63 to -72 (device mel 0.775 vs training 0.924 during music).
 
 ### Key Features
 - **Multi-source ACF + PLP architecture** (v93): ACF scans beat-level lags (20-80) on 3 mean-subtracted sources (flux, bass, NN onset). Parabolic interpolation refines peaks. Bar multipliers (2×/3×/4×) generate candidates scored by ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier). **Pattern quality is the objective — period selection optimizes for visual pattern contrast, not BPM accuracy. Half/double time matches are correct if they produce better patterns.** PLP epoch-folds ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation. SuperFlux frequency-axis max filter (Bock 2013) on spectral flux. Pattern slot cache (4-slot LRU of 16-bin PLP digests) for instant section recall. NN onset is the primary pulse signal; pattern quality (via PLP) is NN-independent.
-- **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement). v23 deployed (b118, KW F1=0.873, on-device F1=0.625).
+- **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement). v25 deployed (b127, KW F1=0.842, on-device F1=0.628).
 - **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent signal for ACF period estimation and PLP pattern extraction. Fallback pulse signal when NN unavailable.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
-- **NN-primary pulse** (b117+): `control_.pulse` uses NN smoothed activation (nnSmoothed_) directly as the continuous visual pulse envelope. Spectral flux is fallback only when NN is unavailable. pulseNNGate parameter removed — NN gate concept eliminated. On-device onset F1 improved from 0.472 to 0.62.
+- **Local-maxima peak-picking pulse** (b127): `control_.pulse` uses local-maxima peak-picking on NN activation (prevSignal > prev AND prevSignal > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30. On-device F1=0.628. F1 plateau is from model precision (0.50), not detection algorithm.
 - **Energy synthesis**: Hybrid mic level + bass mel energy + onset peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **Multi-source ACF period detection** (v83): Replaces Fourier tempogram (75ms → ~4ms). ACF at beat-level lags with parabolic interpolation, bar multipliers (2×/3×/4×) with sqrt penalty, epoch-fold variance scoring. Phase from epoch-fold peak position.
