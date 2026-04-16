@@ -253,7 +253,6 @@ public:
      */
     float getBassFlux() const { return bassFlux_; }
 
-    /**
     // getMidFlux() / getHighFlux() removed — band-specific PLP was tested and
     // regressed. Broadband flux (getSpectralFlux) is the sole PLP source.
 

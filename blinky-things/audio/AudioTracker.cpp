@@ -263,6 +263,8 @@ void AudioTracker::resetAnalysisState() {
     patternPosition_ = 0.0f;
     odfBaseline_ = 0.0f;
     odfPeakHold_ = 0.0f;
+    prevSignal_ = 0.0f;
+    prevPrevSignal_ = 0.0f;
     plpConfidence_ = 0.0f;
     periodicityStrength_ = 0.0f;
     plpPhase_ = 0.0f;
@@ -848,6 +850,8 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         // Low bass ratio (broadband event) → threshold increases by up to 50%.
         float bassFlux = spectral_.getBassFlux();
         float broadbandFlux = spectral_.getSpectralFlux();
+        // In near-silence (broadbandFlux < 0.001), default to neutral ratio
+        // so the gate doesn't suppress onsets at the start of music.
         float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
         float bassGate = 1.0f + 0.5f * clampf(1.0f - bassRatio * 3.0f, 0.0f, 1.0f);
 
@@ -874,7 +878,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
         if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
             pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
-            lastPulseMs_ = nowMs - 16;  // Peak was 1 frame ago
+            lastPulseMs_ = nowMs - static_cast<uint32_t>(1000.0f / OSS_FRAME_RATE);  // Peak was 1 frame ago
         }
 
         prevPrevSignal_ = prevSignal_;

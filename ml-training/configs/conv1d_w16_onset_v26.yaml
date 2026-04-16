@@ -39,7 +39,9 @@ training:
   mixup: false
   epochs: 60
   patience: 15
-  pos_weight: 0
+  pos_weight: 0  # Auto-calculated. With focal loss, pos_weight handles class imbalance
+                  # alongside gamma_neg — both are needed (pos_weight scales the loss,
+                  # gamma_neg modulates the gradient based on prediction confidence).
 
 augmentation:
   freq_mixstyle:
