@@ -826,20 +826,25 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     bool cooldownOk = (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs);
 
     if (nnActive_) {
-        // NN path: first-difference local-maxima peak-picking.
-        // HWR first-diff removes the flat baseline; local-max finds peaks.
-        float nnDiff = max(0.0f, nnSmoothed_ - prevSignal_);
+        // NN path: local-maxima peak-picking above threshold.
+        // On-device activations have strong dynamic range (std=0.25, range 0-1)
+        // due to the acoustic chain. Peak-picking at a fixed threshold matches
+        // the offline evaluation approach (which achieves F1=0.85).
+        // The threshold is set via pulseOnsetFloor (default 0.1, tunable).
+        float nn = nnSmoothed_;
 
-        // Local maximum: prevDiff was rising, now falling (peak was at prevSignal_)
-        bool isLocalMax = (prevNnDiff_ > nnDiff) && (prevNnDiff_ > pulseOnsetFloor);
+        // Local maximum: prev frame was higher than both neighbors AND above floor
+        bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
+                          (prevSignal_ > nn) &&
+                          (prevSignal_ > pulseOnsetFloor);
 
         if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
-            pulseStrength = clampf(prevNnDiff_ * 10.0f, 0.0f, 1.0f);  // Scale up small diffs
+            pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
             lastPulseMs_ = nowMs - 16;  // Peak was 1 frame ago
         }
 
-        prevNnDiff_ = nnDiff;
-        prevSignal_ = nnSmoothed_;
+        prevPrevSignal_ = prevSignal_;
+        prevSignal_ = nn;
     } else {
         // Spectral flux fallback: adaptive threshold + rising edge
         float signal = odf;
