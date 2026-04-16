@@ -1,0 +1,56 @@
+# Conv1D W16 v26 — Asymmetric focal loss for false positive reduction
+#
+# v25 analysis: recall=0.91 but precision=0.50. Model fires on chord changes,
+# synth stabs, and vocal plosives that produce broadband mel shifts.
+# Plain BCE treats easy negatives (silence) and hard negatives (non-drum
+# transients) identically. Focal loss with high gamma_neg downweights
+# easy negatives and focuses gradient on the hard cases.
+#
+# gamma_neg=4.0: at p_t=0.9, loss is reduced 10000x (vs 100x at gamma=2).
+# gamma_pos=0.0: full gradient for ALL positive frames (every onset matters).
+# Combined with bias init to start from low baseline.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v24"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v26.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

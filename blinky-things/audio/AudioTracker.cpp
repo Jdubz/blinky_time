@@ -826,17 +826,51 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     bool cooldownOk = (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs);
 
     if (nnActive_) {
-        // NN path: local-maxima peak-picking above threshold.
-        // On-device activations have strong dynamic range (std=0.25, range 0-1)
-        // due to the acoustic chain. Peak-picking at a fixed threshold matches
-        // the offline evaluation approach (which achieves F1=0.85).
-        // The threshold is set via pulseOnsetFloor (default 0.1, tunable).
+        // NN path: local-maxima peak-picking with false positive suppression.
+        //
+        // The NN fires on any broadband spectral change (chords, synths, vocals),
+        // not just percussive onsets. Two soft filters reduce false positives:
+        //
+        // 1. Bass-band energy gate: kicks/snares produce strong bass flux;
+        //    chord changes and synth stabs produce flat/mid-heavy flux.
+        //    Scale the effective threshold by inverse bass ratio.
+        //
+        // 2. PLP pattern bias: when a reliable rhythm pattern is locked,
+        //    raise the threshold slightly at positions where the pattern
+        //    predicts no onset. This is a SOFT bias (30% threshold increase),
+        //    not a hard gate — section changes and new patterns still trigger.
+        //    Only active when pattern confidence is high.
+
         float nn = nnSmoothed_;
+
+        // Bass-band energy gate: require bass presence for easy detections.
+        // High bass ratio → threshold stays at floor.
+        // Low bass ratio (broadband event) → threshold increases by up to 50%.
+        float bassFlux = spectral_.getBassFlux();
+        float broadbandFlux = spectral_.getSpectralFlux();
+        float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
+        float bassGate = 1.0f + 0.5f * clampf(1.0f - bassRatio * 3.0f, 0.0f, 1.0f);
+
+        // PLP pattern bias: soft threshold increase at off-beat positions.
+        // plpPulseValue_ is high (0.7-1.0) at expected onset positions,
+        // low (0.0-0.3) between beats. When confident, raise threshold at
+        // low-pattern positions. When uncertain, no bias.
+        float patternBias = 1.0f;
+        if (plpConfidence_ > 0.3f) {
+            float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
+            // At pattern minimum (0.0): bias = 1.3 (30% harder to trigger)
+            // At pattern maximum (1.0): bias = 1.0 (no change)
+            // Scaled by confidence so uncertain patterns don't suppress
+            float suppressAmount = 0.3f * plpConfidence_ * (1.0f - patternVal);
+            patternBias = 1.0f + suppressAmount;
+        }
+
+        float effectiveFloor = pulseOnsetFloor * bassGate * patternBias;
 
         // Local maximum: prev frame was higher than both neighbors AND above floor
         bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
                           (prevSignal_ > nn) &&
-                          (prevSignal_ > pulseOnsetFloor);
+                          (prevSignal_ > effectiveFloor);
 
         if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
             pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);

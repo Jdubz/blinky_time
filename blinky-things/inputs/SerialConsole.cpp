@@ -1022,7 +1022,7 @@ void SerialConsole::restoreDefaults() {
         // Pulse detection
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
-        audioCtrl_->pulseOnsetFloor = 0.5f;
+        audioCtrl_->pulseOnsetFloor = 0.3f;
         audioCtrl_->baselineFastDrop = 0.05f;
         audioCtrl_->baselineSlowRise = 0.005f;
         audioCtrl_->odfPeakHoldDecay = 0.85f;

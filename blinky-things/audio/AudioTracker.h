@@ -128,7 +128,7 @@ public:
     // Pulse detection thresholds
     float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-    float pulseOnsetFloor = 0.50f;     // NN activation threshold for peak-picking (on-device optimal ~0.5-0.7)
+    float pulseOnsetFloor = 0.30f;     // NN activation threshold for peak-picking (sweep optimal 0.3-0.4)
     // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
 
     // ODF baseline tracking rates
