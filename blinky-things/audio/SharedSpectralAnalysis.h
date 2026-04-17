@@ -32,7 +32,7 @@ namespace SpectralConstants {
     constexpr float BIN_FREQ_HZ = SAMPLE_RATE / FFT_SIZE;  // 62.5 Hz per bin
 
     // Mel filterbank configuration
-    constexpr int NUM_MEL_BANDS = 26;       // Standard for speech/music analysis
+    constexpr int NUM_MEL_BANDS = 40;       // 40 bands: 3x bass resolution vs 26 (kick vs bass note discrimination)
     constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (below fundamental bass)
     constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (Nyquist limit at 16kHz)
 

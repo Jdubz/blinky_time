@@ -25,39 +25,53 @@ static constexpr float MID_BIN_COUNT = static_cast<float>(
 static constexpr float HIGH_BIN_COUNT = static_cast<float>(
     SpectralConstants::NUM_BINS - SpectralConstants::HIGH_MIN_BIN);           // 95
 
-// Mel filterbank bin boundaries: 26 bands, 60-8000 Hz, 16 kHz / FFT-256.
+// Mel filterbank bin boundaries: 40 bands, 60-8000 Hz, 16 kHz / FFT-256.
 // Computed from HTK mel scale: mel = 2595 * log10(1 + hz/700).
-// MUST match librosa.filters.mel(sr=16000, n_fft=256, n_mels=26,
+// MUST match librosa.filters.mel(sr=16000, n_fft=256, n_mels=40,
 //   fmin=60, fmax=8000, htk=True, norm=None).
-// Previous values were manually constructed and did not match — every band
-// had a systematic offset averaging 4.2 INT8 levels vs the training pipeline.
+// 40 bands gives 3x bass resolution vs 26 bands — critical for
+// distinguishing kick drums from bass guitar notes in the 40-200 Hz range.
 static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
-    {  1,   2,   3},  // 0: 132 Hz center
-    {  2,   3,   5},  // 1: 210 Hz center
-    {  3,   5,   6},  // 2: 296 Hz center
-    {  5,   6,   8},  // 3: 391 Hz center
-    {  6,   8,  10},  // 4: 494 Hz center
-    {  8,  10,  12},  // 5: 606 Hz center
-    { 10,  12,  14},  // 6: 730 Hz center
-    { 12,  14,  16},  // 7: 865 Hz center
-    { 14,  16,  19},  // 8: 1013 Hz center
-    { 16,  19,  22},  // 9: 1175 Hz center
-    { 19,  22,  25},  // 10: 1352 Hz center
-    { 22,  25,  28},  // 11: 1546 Hz center
-    { 25,  28,  32},  // 12: 1758 Hz center
-    { 28,  32,  36},  // 13: 1990 Hz center
-    { 32,  36,  40},  // 14: 2244 Hz center
-    { 36,  40,  45},  // 15: 2523 Hz center
-    { 40,  45,  51},  // 16: 2827 Hz center
-    { 45,  51,  56},  // 17: 3160 Hz center
-    { 51,  56,  63},  // 18: 3525 Hz center
-    { 56,  63,  70},  // 19: 3924 Hz center
-    { 63,  70,  77},  // 20: 4361 Hz center
-    { 70,  77,  86},  // 21: 4839 Hz center
-    { 77,  86,  95},  // 22: 5363 Hz center
-    { 86,  95, 105},  // 23: 5936 Hz center
-    { 95, 105, 116},  // 24: 6563 Hz center
-    {105, 116, 127},  // 25: 7249 Hz center
+    {  1,   2,   2},  // 0: 107 Hz center
+    {  2,   2,   3},  // 1: 156 Hz center
+    {  2,   3,   4},  // 2: 208 Hz center
+    {  3,   4,   5},  // 3: 264 Hz center
+    {  4,   5,   6},  // 4: 323 Hz center
+    {  5,   6,   7},  // 5: 386 Hz center
+    {  6,   7,   8},  // 6: 452 Hz center
+    {  7,   8,  10},  // 7: 523 Hz center
+    {  8,  10,  11},  // 8: 598 Hz center
+    { 10,  11,  12},  // 9: 677 Hz center
+    { 11,  12,  14},  // 10: 762 Hz center
+    { 12,  14,  15},  // 11: 851 Hz center
+    { 14,  15,  17},  // 12: 946 Hz center
+    { 15,  17,  18},  // 13: 1047 Hz center
+    { 17,  18,  20},  // 14: 1154 Hz center
+    { 18,  20,  22},  // 15: 1268 Hz center
+    { 20,  22,  24},  // 16: 1388 Hz center
+    { 22,  24,  26},  // 17: 1516 Hz center
+    { 24,  26,  29},  // 18: 1652 Hz center
+    { 26,  29,  31},  // 19: 1796 Hz center
+    { 29,  31,  34},  // 20: 1949 Hz center
+    { 31,  34,  37},  // 21: 2111 Hz center
+    { 34,  37,  39},  // 22: 2283 Hz center
+    { 37,  39,  43},  // 23: 2466 Hz center
+    { 39,  43,  46},  // 24: 2660 Hz center
+    { 43,  46,  49},  // 25: 2866 Hz center
+    { 46,  49,  53},  // 26: 3085 Hz center
+    { 49,  53,  57},  // 27: 3316 Hz center
+    { 53,  57,  61},  // 28: 3562 Hz center
+    { 57,  61,  66},  // 29: 3824 Hz center
+    { 61,  66,  70},  // 30: 4101 Hz center
+    { 66,  70,  75},  // 31: 4395 Hz center
+    { 70,  75,  81},  // 32: 4707 Hz center
+    { 75,  81,  86},  // 33: 5038 Hz center
+    { 81,  86,  92},  // 34: 5390 Hz center
+    { 86,  92,  99},  // 35: 5763 Hz center
+    { 92,  99, 105},  // 36: 6159 Hz center
+    { 99, 105, 112},  // 37: 6579 Hz center
+    {105, 112, 120},  // 38: 7025 Hz center
+    {112, 120, 127},  // 39: 7498 Hz center
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
