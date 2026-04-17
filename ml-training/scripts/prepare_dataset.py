@@ -109,6 +109,7 @@ def _file_rng(seed: int, track_stem: str) -> np.random.Generator:
 from scripts.audio import (
     append_delta_features,
     append_band_flux_features,
+    append_hybrid_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
@@ -1077,13 +1078,15 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
                teacher_target: np.ndarray | None = None,
                use_delta: bool = False,
-               use_band_flux: bool = False) -> tuple:
+               use_band_flux: bool = False,
+               use_hybrid: bool = False,
+               audio_np: np.ndarray | None = None) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks.
 
     If use_delta=True, appends first-order mel differences as additional
     channels: mel[t] - mel[t-1]. Output shape becomes (N, chunk_frames, 2*n_mels).
     If use_band_flux=True, appends 3 band-grouped HWR flux channels.
-    Output shape becomes (N, chunk_frames, n_mels+3).
+    If use_hybrid=True, appends spectral flatness + flux (2 channels).
     """
     n_frames = mel.shape[0]
 
@@ -1091,6 +1094,8 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
         mel = append_delta_features(mel)
     elif use_band_flux:
         mel = append_band_flux_features(mel)
+    elif use_hybrid:
+        mel = append_hybrid_features(mel, audio=audio_np)
     has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
@@ -1403,11 +1408,15 @@ def main():
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
     use_delta = getattr(args, 'delta', False) or cfg.get("features", {}).get("use_delta", False)
     use_band_flux = getattr(args, 'band_flux', False) or cfg.get("features", {}).get("use_band_flux", False)
-    if use_delta and use_band_flux:
-        print("WARNING: Both delta and band_flux enabled. Using delta (takes precedence).")
-        use_band_flux = False
+    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
+    if sum([use_delta, use_band_flux, use_hybrid]) > 1:
+        print("WARNING: Multiple feature modes enabled. Using first enabled.")
+        if use_delta: use_band_flux = use_hybrid = False
+        elif use_hybrid: use_band_flux = False
     teacher_src = "madmom soft" if teacher_soft_dir else "consensus Gaussian" if generate_teacher else None
-    feat_str = " + Delta features" if use_delta else " + Band flux (3ch)" if use_band_flux else ""
+    feat_str = (" + Delta features" if use_delta
+                else " + Band flux (3ch)" if use_band_flux
+                else " + Hybrid (flatness+flux)" if use_hybrid else "")
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}"
           f"{f' + Teacher labels ({teacher_src})' if generate_teacher else ''}"
           f"{feat_str}")
@@ -1457,6 +1466,8 @@ def main():
                         teacher_target=r.get("teacher"),
                         use_delta=use_delta,
                         use_band_flux=use_band_flux,
+                        use_hybrid=use_hybrid,
+                        audio_np=r.get("audio_np"),
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)

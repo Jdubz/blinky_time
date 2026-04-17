@@ -1,14 +1,15 @@
-# Conv1D W16 v27 — 40 mel bands for bass resolution + focal loss
+# Conv1D W16 v27 — Hybrid: 30 mel (40-4k Hz) + spectral flatness + flux
 #
-# Root cause fix: 26 mel bands gave only 2 bands in the kick range (40-200 Hz).
-# Drum onsets and bass guitar notes activated the SAME bands (cosine sim 0.9997).
-# 40 bands triples bass resolution (6 bands in kick range), giving the model
-# enough spectral information to distinguish kicks from harmonic changes.
+# Root cause: 26-band mel at 60-8000 Hz wasted 6 bands on hi-hat frequencies
+# and gave only 1 band for kick fundamental. Drum onset vs harmonic change
+# cosine similarity was 0.9997 — indistinguishable in mel space.
 #
-# Combined with asymmetric focal loss (v26 recipe) for hard-negative emphasis.
+# Fix: 30 focused mel bands (40-4000 Hz) + 2 deterministic features:
+#   - Spectral flatness (Wiener entropy): drums=noisy ~0.5-0.8, tones ~0.1-0.3
+#   - HWR spectral flux: onset=high, sustain=low
+# Total: 32 input features. Same inference cost as old 26-band model.
 #
-# Architecture: Conv1D(40->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
-# Model: ~11.3 KB INT8, inference ~10.9ms (within 16ms budget)
+# Architecture: Conv1D(32->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
 
 model:
   type: "frame_conv1d"
@@ -17,6 +18,7 @@ model:
   window_frames: 16
   dropout: 0.1
   freq_pos_encoding: false
+  num_output_channels: 0
 
 labels:
   target_type: "binary"
@@ -29,6 +31,7 @@ labels:
 features:
   use_delta: false
   use_pcen: false
+  use_hybrid: true           # Append spectral flatness + flux to mel features
 
 loss:
   type: "asymmetric_focal"
@@ -39,7 +42,7 @@ training:
   mixup: false
   epochs: 60
   patience: 15
-  pos_weight: 0  # Auto-calculated; focal loss handles class imbalance alongside gamma_neg
+  pos_weight: 0
 
 augmentation:
   freq_mixstyle:

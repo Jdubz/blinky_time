@@ -32,9 +32,10 @@ namespace SpectralConstants {
     constexpr float BIN_FREQ_HZ = SAMPLE_RATE / FFT_SIZE;  // 62.5 Hz per bin
 
     // Mel filterbank configuration
-    constexpr int NUM_MEL_BANDS = 40;       // 40 bands: 3x bass resolution vs 26 (kick vs bass note discrimination)
-    constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (below fundamental bass)
-    constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (Nyquist limit at 16kHz)
+    constexpr int NUM_MEL_BANDS = 30;       // 30 bands focused on kick+snare (40-4000 Hz)
+    constexpr float MEL_MIN_FREQ = 40.0f;   // Hz (covers kick fundamental)
+    constexpr float MEL_MAX_FREQ = 4000.0f; // Hz (snare wire cutoff; hi-hat excluded)
+    // NN input: 30 mel + 2 deterministic features (spectral flatness + flux) = 32 total
 
     // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
     // MUST match ml-training base.yaml mel_db_range.
@@ -253,8 +254,13 @@ public:
      */
     float getBassFlux() const { return bassFlux_; }
 
-    // getMidFlux() / getHighFlux() removed — band-specific PLP was tested and
-    // regressed. Broadband flux (getSpectralFlux) is the sole PLP source.
+    /**
+     * Get spectral flatness (Wiener entropy) of current frame.
+     * Range 0-1: 0 = pure tone, 1 = white noise.
+     * Drums are noise-like (~0.5-0.8), pitched instruments are tonal (~0.1-0.3).
+     * Used as a deterministic feature alongside mel bands in NN input.
+     */
+    float getSpectralFlatness() const { return spectralFlatness_; }
 
     // --- Compressor/whitening debug accessors ---
 
@@ -313,6 +319,7 @@ private:
     float totalEnergy_;
     float spectralCentroid_;
     float spectralFlux_;
+    float spectralFlatness_;          // Wiener entropy: 0=tone, 1=noise (drum discriminator)
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
     float midFlux_;            // Mid-frequency spectral flux (bins 7-32, vocals/snare)
     float highFlux_;           // High-frequency spectral flux (bins 33-127, hi-hats/cymbals)

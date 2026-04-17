@@ -125,7 +125,8 @@ const AudioControl& AudioTracker::update(float dt) {
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
         frameOnsetNN_.setProfileEnabled(nnProfile);
-        odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands());
+        odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
+                                  spectral_.getSpectralFlatness(), spectral_.getSpectralFlux());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
 
@@ -195,8 +196,8 @@ const AudioControl& AudioTracker::update(float dt) {
         cachedBassEnergy_ = 0.0f;
         const float* mel = spectral_.getMelBands();
         if (mel) {
-            for (int i = 0; i <= 8; i++) cachedBassEnergy_ += mel[i];
-            cachedBassEnergy_ /= 9.0f;
+            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];  // Bands 0-5: 40-360 Hz
+            cachedBassEnergy_ /= 6.0f;
         }
         addBassSample(cachedBassEnergy_);
 

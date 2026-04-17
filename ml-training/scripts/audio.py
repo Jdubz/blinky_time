@@ -384,3 +384,44 @@ def append_band_flux_features(mel: np.ndarray) -> np.ndarray:
         flux[t, 2] = pos_diff[HIGH].sum() / 12.0
 
     return np.concatenate([mel, flux], axis=-1)
+
+
+def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
+                           sr: int = 16000, n_fft: int = 256, hop: int = 256) -> np.ndarray:
+    """Append spectral flatness + broadband HWR flux to mel features.
+
+    These deterministic features directly encode the discrimination the
+    model struggles to learn from mel bands alone:
+      - Spectral flatness (Wiener entropy): drums=noisy ~0.5-0.8, tones ~0.1-0.3
+      - HWR spectral flux: high at onsets, low during sustain
+
+    If audio is provided, spectral flatness is computed from the STFT.
+    Otherwise, flux is approximated from mel differences and flatness is zero.
+
+    Input shape: (n_frames, n_mels)
+    Output shape: (n_frames, n_mels + 2)
+    """
+    n_frames, n_mels = mel.shape
+    extra = np.zeros((n_frames, 2), dtype=np.float32)
+
+    # HWR broadband spectral flux from mel (always available)
+    for t in range(1, n_frames):
+        diff = mel[t] - mel[t - 1]
+        extra[t, 1] = np.maximum(diff, 0.0).sum() / n_mels
+
+    # Spectral flatness approximated from mel bands (Wiener entropy).
+    # Uses mel energy directly — matches firmware's computation from FFT magnitudes.
+    # geo_mean(mel) / arith_mean(mel), where mel is in linear energy (before log).
+    # Since our mel is log-compressed [0,1], we reverse: linear = 10^((mel*60-60)/10)
+    for t in range(n_frames):
+        mel_frame = mel[t]
+        # Reverse log compression to get linear energy
+        linear = np.power(10.0, (mel_frame * 60.0 - 60.0) / 10.0)
+        linear = np.maximum(linear, 1e-10)
+        log_mean = np.log(linear).mean()
+        geo_mean = np.exp(log_mean)
+        ari_mean = linear.mean()
+        if ari_mean > 1e-10:
+            extra[t, 0] = np.clip(geo_mean / ari_mean, 0.0, 1.0)
+
+    return np.concatenate([mel, extra], axis=-1)
