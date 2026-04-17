@@ -196,7 +196,7 @@ const AudioControl& AudioTracker::update(float dt) {
         cachedBassEnergy_ = 0.0f;
         const float* mel = spectral_.getMelBands();
         if (mel) {
-            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];  // Bands 0-5: 40-360 Hz
+            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];  // Bands 0-5 (bass region)
             cachedBassEnergy_ /= 6.0f;
         }
         addBassSample(cachedBassEnergy_);

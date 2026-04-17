@@ -940,8 +940,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 "target": targets,
                 "aug": aug_name,
                 "source": audio_path.stem,
-                "audio_np": audio_np,  # Needed by append_hybrid_features for STFT-based flatness
             }
+            # Only keep raw waveform when hybrid features need STFT-based flatness.
+            # Storing audio_np for all tracks wastes memory during batched processing.
+            if cfg.get("features", {}).get("use_hybrid", False):
+                result["audio_np"] = audio_np
 
             # Teacher targets for knowledge distillation
             if generate_teacher:
@@ -1081,7 +1084,8 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
                use_delta: bool = False,
                use_band_flux: bool = False,
                use_hybrid: bool = False,
-               audio_np: np.ndarray | None = None) -> tuple:
+               audio_np: np.ndarray | None = None,
+               mel_db_range: float = 60.0) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks.
 
     If use_delta=True, appends first-order mel differences as additional
@@ -1096,7 +1100,7 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
     elif use_band_flux:
         mel = append_band_flux_features(mel)
     elif use_hybrid:
-        mel = append_hybrid_features(mel, audio=audio_np)
+        mel = append_hybrid_features(mel, audio=audio_np, mel_db_range=mel_db_range)
     has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
@@ -1469,6 +1473,7 @@ def main():
                         use_band_flux=use_band_flux,
                         use_hybrid=use_hybrid,
                         audio_np=r.get("audio_np"),
+                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)

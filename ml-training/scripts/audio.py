@@ -398,7 +398,8 @@ def append_band_flux_features(mel: np.ndarray) -> np.ndarray:
 
 
 def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
-                           sr: int = 16000, n_fft: int = 256, hop: int = 256) -> np.ndarray:
+                           sr: int = 16000, n_fft: int = 256, hop: int = 256,
+                           mel_db_range: float = 60.0) -> np.ndarray:
     """Append spectral flatness + broadband HWR flux to mel features.
 
     These deterministic features directly encode the discrimination the
@@ -424,7 +425,8 @@ def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
     if audio is not None and len(audio) >= n_fft:
         # STFT-based spectral flatness — matches firmware SharedSpectralAnalysis.
         # Firmware computes Wiener entropy from FFT magnitude bins 1..NUM_BINS-1
-        # (skipping DC). We replicate that here using numpy STFT.
+        # (skipping DC). Firmware applies a Hamming window before FFT
+        # (applyHammingWindow() in process()), so we use the same window here.
         window = np.hamming(n_fft).astype(np.float32)
         for t in range(n_frames):
             start = t * hop
@@ -446,7 +448,8 @@ def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
         # when audio waveform is unavailable (e.g., cached mel-only data).
         for t in range(n_frames):
             mel_frame = mel[t]
-            linear = np.power(10.0, (mel_frame * 60.0 - 60.0) / 10.0)
+            # Reverse log compression: mel is in [0,1] mapped from [-mel_db_range, 0] dB
+            linear = np.power(10.0, (mel_frame * mel_db_range - mel_db_range) / 10.0)
             linear = np.maximum(linear, 1e-10)
             log_mean = np.log(linear).mean()
             geo_mean = np.exp(log_mean)
