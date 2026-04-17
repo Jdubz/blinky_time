@@ -11,6 +11,7 @@ __pycache__/
 # ML training artifacts (large, regenerated)
 ml-training/data/processed/
 ml-training/data/mel_cache/
+ml-training/data/archive/
 ml-training/outputs/*/checkpoints/
 
 # Compiled binaries (prevent accidental venv/library commits)
