@@ -90,7 +90,7 @@ class DeviceProtocol:
             # Without this, queued stream lines contaminate command responses
             # and cause garbled data / missed commands.
             if was_streaming:
-                await self._send_and_collect("stream off", timeout=2.0)
+                await self._send_and_collect("stream off", timeout=self._cmd_timeout)
                 self._streaming = False
 
             # Send the actual command and collect response

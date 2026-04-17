@@ -32,10 +32,13 @@ namespace SpectralConstants {
     constexpr float BIN_FREQ_HZ = SAMPLE_RATE / FFT_SIZE;  // 62.5 Hz per bin
 
     // Mel filterbank configuration
-    constexpr int NUM_MEL_BANDS = 30;       // 30 bands focused on kick+snare (40-4000 Hz)
-    constexpr float MEL_MIN_FREQ = 40.0f;   // Hz (covers kick fundamental)
-    constexpr float MEL_MAX_FREQ = 4000.0f; // Hz (snare wire cutoff; hi-hat excluded)
-    // NN input: 30 mel + 2 deterministic features (spectral flatness + flux) = 32 total
+    // Mel band count: set to match the deployed NN model's expected input.
+    // v25/v26 models expect 26 bands at 60-8000 Hz.
+    // v27+ models expect 30 bands at 40-4000 Hz (hybrid: mel + flatness + flux).
+    // MUST match the trained model — mismatched dimensions silently feed wrong frequencies.
+    constexpr int NUM_MEL_BANDS = 26;       // Match deployed model (change to 30 when v27 deploys)
+    constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (change to 40 when v27 deploys)
+    constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (change to 4000 when v27 deploys)
 
     // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
     // MUST match ml-training base.yaml mel_db_range.
@@ -321,8 +324,6 @@ private:
     float spectralFlux_;
     float spectralFlatness_;          // Wiener entropy: 0=tone, 1=noise (drum discriminator)
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
-    float midFlux_;            // Mid-frequency spectral flux (bins 7-32, vocals/snare)
-    float highFlux_;           // High-frequency spectral flux (bins 33-127, hi-hats/cymbals)
 
     // State
     bool frameReady_;

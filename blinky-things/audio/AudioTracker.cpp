@@ -189,7 +189,7 @@ const AudioControl& AudioTracker::update(float dt) {
         float dev = odfClamped - nnActivationMean_;
         nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
 
-        // Buffer broadband + per-band flux for band-best PLP epoch-fold
+        // Buffer bass-contrast OSS sample for PLP epoch-fold
         addOssSample(bassContrast);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)

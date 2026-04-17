@@ -28,6 +28,11 @@ labels:
   label_shift_frames: 1
   hard_binary_threshold: 0.1
 
+audio:
+  n_mels: 30                # 30 focused mel bands (overrides base 26)
+  fmin: 40                  # Covers kick fundamental (overrides base 60)
+  fmax: 4000                # Snare wire cutoff; hi-hat excluded (overrides base 8000)
+
 features:
   use_delta: false
   use_pcen: false

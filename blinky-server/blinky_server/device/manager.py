@@ -633,8 +633,8 @@ class FleetManager:
 
                 def _on_disconnect_done(t: asyncio.Task[None]) -> None:
                     self._background_tasks.discard(t)
-                    if not t.cancelled() and t.exception():
-                        log.warning("disconnect error: %s", t.exception())
+                    if not t.cancelled() and (exc := t.exception()):
+                        log.warning("disconnect error: %s", exc)
 
                 task.add_done_callback(_on_disconnect_done)
 

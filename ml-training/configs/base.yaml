@@ -12,11 +12,9 @@ audio:
   sample_rate: 16000        # PDM mic rate
   n_fft: 256                # FFT-256
   hop_length: 256           # No overlap (hop = FFT size)
-  n_mels: 30                # SharedSpectralAnalysis NUM_MEL_BANDS (30 focused on 40-4000 Hz)
-  fmin: 40                  # MEL_MIN_FREQ (covers kick fundamental)
-  fmax: 4000                # MEL_MAX_FREQ (snare wire cutoff; hi-hat excluded)
-  fmin: 60                  # MEL_MIN_FREQ
-  fmax: 8000                # MEL_MAX_FREQ
+  n_mels: 26                # SharedSpectralAnalysis NUM_MEL_BANDS (deployed v25/v26 model)
+  fmin: 60                  # MEL_MIN_FREQ (SharedSpectralAnalysis)
+  fmax: 8000                # MEL_MAX_FREQ (SharedSpectralAnalysis)
   log_epsilon: 1.0e-7       # Must match firmware SharedSpectralAnalysis (ARM denormal safe)
   mel_db_range: 60          # Log-mel maps [-mel_db_range, 0] dB to [0, 1]. Must match firmware.
                             # v21 tried 80 to fix bass saturation, but on-device analysis showed

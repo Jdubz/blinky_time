@@ -36,7 +36,7 @@
 
 class FrameOnsetNN {
 public:
-    static constexpr int INPUT_MEL_BANDS = 30;  // MUST match SpectralConstants::NUM_MEL_BANDS
+    static constexpr int INPUT_MEL_BANDS = 26;  // MUST match SpectralConstants::NUM_MEL_BANDS
     static constexpr int BAND_FLUX_CHANNELS = 3;   // Bass/mid/high HWR mel flux
     static constexpr int INPUT_MEL_PLUS_FLUX = INPUT_MEL_BANDS + BAND_FLUX_CHANNELS;
     static constexpr int INPUT_HYBRID = INPUT_MEL_BANDS + 2;  // Mel + spectral flatness + flux
