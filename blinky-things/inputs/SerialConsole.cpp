@@ -270,7 +270,7 @@ void SerialConsole::registerTrackerSettings() {
 
     // Pulse detection tuning
     settings_.registerFloat("pulseonsetfloor", &audioCtrl_->pulseOnsetFloor, "tracker",
-        "ODF floor for pulse detection scaling", 0.0f, 0.5f, onParamChanged);
+        "NN activation threshold for peak-picking", 0.0f, 1.0f, onParamChanged);
     // pulseNNGate removed — NN is now the primary signal, not a gate
 
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
@@ -1022,7 +1022,7 @@ void SerialConsole::restoreDefaults() {
         // Pulse detection
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
-        audioCtrl_->pulseOnsetFloor = 0.1f;
+        audioCtrl_->pulseOnsetFloor = 0.3f;
         audioCtrl_->baselineFastDrop = 0.05f;
         audioCtrl_->baselineSlowRise = 0.005f;
         audioCtrl_->odfPeakHoldDecay = 0.85f;
@@ -1319,6 +1319,15 @@ void SerialConsole::syncEffectSettings() {
 void SerialConsole::streamTick() {
     if (!streamEnabled_ && !streamNN_) return;
 
+    // Skip all formatting if no client is connected. The TeeStream would
+    // silently discard the output, but float-to-string formatting and JSON
+    // construction cost 10-50ms/frame — pure waste in production.
+    bool hasClient = Serial;  // USB CDC: true when host has port open
+#ifdef BLINKY_PLATFORM_NRF52840
+    if (bleNus_) hasClient = hasClient || bleNus_->isConnected();
+#endif
+    if (!hasClient) return;
+
     uint32_t now = millis();
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
@@ -1506,9 +1515,8 @@ void SerialConsole::streamTick() {
         }
 
         // LED brightness telemetry
-        // NOTE: Particle-based generators don't track total heat/brightness
-        // in the same way, so these stats are not available
-        // TODO: Add particle pool statistics (active count, etc.)
+        // Particle-based generators (Fire, PlasmaGlobe) don't expose pool
+        // statistics — each manages its own particle array internally.
 
         out_.println(F("}"));
     }

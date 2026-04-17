@@ -1,0 +1,64 @@
+# Conv1D W16 v27 — Hybrid: 30 mel (40-4k Hz) + spectral flatness + flux
+#
+# Root cause: 26-band mel at 60-8000 Hz wasted 6 bands on hi-hat frequencies
+# and gave only 1 band for kick fundamental. Drum onset vs harmonic change
+# cosine similarity was 0.9997 — indistinguishable in mel space.
+#
+# Fix: 30 focused mel bands (40-4000 Hz) + 2 deterministic features:
+#   - Spectral flatness (Wiener entropy): drums=noisy ~0.5-0.8, tones ~0.1-0.3
+#   - HWR spectral flux: onset=high, sustain=low
+# Total: 32 input features. Same inference cost as old 26-band model.
+#
+# Architecture: Conv1D(32->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1)
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0    # 0 = auto (defaults to 1 in export: out_channels = max(1, N))
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30                # 30 focused mel bands (overrides base 26)
+  fmin: 40                  # Covers kick fundamental (overrides base 60)
+  fmax: 4000                # Snare wire cutoff; hi-hat excluded (overrides base 8000)
+
+features:
+  use_delta: false
+  use_pcen: false
+  use_hybrid: true           # Append spectral flatness + flux to mel features
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v27"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v27.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

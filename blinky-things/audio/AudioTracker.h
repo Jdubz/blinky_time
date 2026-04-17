@@ -128,7 +128,7 @@ public:
     // Pulse detection thresholds
     float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-    float pulseOnsetFloor = 0.005f;    // Minimum threshold floor for pulse detection signal
+    float pulseOnsetFloor = 0.30f;     // NN activation threshold for peak-picking (sweep optimal 0.3-0.4)
     // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
 
     // ODF baseline tracking rates
@@ -167,8 +167,9 @@ private:
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF period detection)
     float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
-    float midFluxBuffer_[OSS_BUFFER_SIZE] = {0};    // Mid-frequency flux (bins 7-32, for band-specific epoch-fold)
-    float highFluxBuffer_[OSS_BUFFER_SIZE] = {0};   // High-frequency flux (bins 33-127, for band-specific epoch-fold)
+    // midFluxBuffer_ / highFluxBuffer_ removed — band selection tested in v82,
+    // regressed on 8-10/18 tracks. Broadband (ossBuffer_) is the sole PLP source.
+    // Saves 6336 bytes RAM (2 × 792 floats).
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -216,8 +217,8 @@ private:
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
-    float prevSignal_ = 0.0f;          // Previous frame signal (for detection)
-    float prevNnDiff_ = 0.0f;          // Previous HWR first-diff (for local-max peak-picking)
+    float prevSignal_ = 0.0f;          // Previous frame signal (t-1)
+    float prevPrevSignal_ = 0.0f;      // Frame t-2 (for local-max: t-1 > t-2 AND t-1 > t)
 
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
@@ -262,7 +263,7 @@ private:
     AudioControl control_;
 
     // === Internal methods ===
-    void addOssSample(float ungatedFlux, float midFlux, float highFlux);
+    void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
     void resetAnalysisState();
     void runAcf();

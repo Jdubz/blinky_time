@@ -1,31 +1,33 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 14, 2026*
+*Last Updated: April 16, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** b120 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 3 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b117 changes:** v22 model deployed, NN is PRIMARY onset detector (not a gate on spectral flux — nnSmoothed_ is the signal, spectral flux is fallback only), pulseNNGate parameter removed, mel filterbank corrected to match librosa HTK exactly (26/26 bands wrong since day one, avg 4.2 INT8 level error), MEL_DB_RANGE extracted as constexpr, prevOdf_ renamed to prevSignal_, TestChipConfig.h added for unconfigured bare chips, millis field in json info for clock sync. **b118 changes:** v23 model deployed (corrected mel filterbank + mic profile augmentation, KW F1=0.873, on-device F1=0.625). **b119-b120 changes:** NN-primary continuous visual pulse envelope (control_.pulse uses nnSmoothed_ directly). Robust PLP epoch-fold: NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. PLP reliability metrics exposed in debug stream: plpMeanReliability_, plpNNAgreement_.
+**Firmware:** b127 (SETTINGS_VERSION 94). AudioTracker with ACF+PLP architecture + pattern slot cache. Multi-source ACF (~4ms) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Epoch-fold variance scoring. Cold-start template seeding. Pattern slot cache: 4-slot LRU. ~20 tunable params. AGC removed (v72) — fixed hardware gain (nRF52840: 32). 4 nRF52840 on blinkyhost, all managed via blinky-server. SafeBootWatchdog auto-enters BLE DFU on crash (b106+). TeeStream writes BLE before Serial (b106+). Custom bootloader (RAM magic) deployed on all devices — no physical reset button required for recovery. **b117 changes:** v22 model deployed, NN is PRIMARY onset detector, pulseNNGate parameter removed, mel filterbank corrected to match librosa HTK exactly (26/26 bands wrong since day one, avg 4.2 INT8 level error), MEL_DB_RANGE extracted as constexpr, prevOdf_ renamed to prevSignal_, TestChipConfig.h added for unconfigured bare chips, millis field in json info for clock sync. **b118 changes:** v23 model deployed (corrected mel filterbank + mic profile augmentation, KW F1=0.873, on-device F1=0.625). **b119-b120 changes:** NN-primary continuous visual pulse envelope. Robust PLP epoch-fold: NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean, cross-correlation with NN fold for pattern validation. PLP reliability metrics in debug stream. **b123-b127 changes:** Local-maxima peak-picking on NN activation (replaced first-diff). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30 (sweep-optimized). v25 model deployed (bias init per RetinaNet). Dead band flux buffers removed (6.3 KB heap saved). Stream pause race condition fixed (wait for acknowledgment). Production optimization: stream formatting gated on client presence. Bucket totem (b120) can't be flashed via software (GPREGRET race, reset button inaccessible).
 
 > **ESP32-S3 support has been cut** (March 2026). All active development targets nRF52840 only.
 
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v23 deployed on b118 (all 3 serial devices). KW F1=0.873 (offline). On-device F1=0.625 (slight improvement from v22's 0.620). 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes. v24 training in progress (recalibrated target_rms_db=-72 + Freq-MixStyle + speaker THD + comb filter + MEMS soft clip augmentations).
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model. v25 deployed on b127 (all 4 blinkyhost devices). KW F1=0.842 (offline). On-device F1=0.628. 13.4 KB INT8, 6.8ms inference nRF52840. Arena: 3404 bytes. v26 training in progress (asymmetric focal loss: gamma_neg=4.0, gamma_pos=0.0 — downweights easy negatives, focuses on hard negatives like chord changes).
 
-**Key findings (April 12-14):**
+**Key findings (April 12-16):**
+- **On-device activations are NOT flat (April 16):** Offline FP32 on clean audio: mean=0.567, std=0.051, dynRange=0.125 (flat). On-device INT8 on real audio: mean=0.432, std=0.250, dynRange=0.734 (dynamic). The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The earlier "flat activation" diagnosis was based on offline analysis and was WRONG for on-device. This invalidated the first-diff approach (which over-detected at 14.3/s).
+- **Detection algorithm evolution (b123-b127):** b123 first-diff peak-picking over-detected (14.3/s vs 3.5/s GT, net F1=0.601). b126 local-maxima peak-picking (sweep showed 0.3 optimal threshold). b127 +bass-band gate+PLP pattern bias (minimal effect, F1=0.628). The 0.62 plateau is from the MODEL (precision=0.50), not the detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals).
+- **v25 training — bias init:** Output bias initialized to log(pos_ratio/(1-pos_ratio)) per RetinaNet. Dynamic range doubled offline (0.061→0.125) but still flat offline. On-device activations were already dynamic regardless — bias init was solving wrong problem. KW F1=0.842 (slightly below v24's 0.851).
+- **v26 training in progress:** Asymmetric focal loss (gamma_neg=4.0, gamma_pos=0.0). Downweights easy negatives (silence) 10000x, focuses on hard negatives (chord changes). Previously tested in v12 with noisy labels + wrong mel — clean labels are a new baseline.
+- **Architecture experiments completed:** exp-wide [48,48,32] W16: KW F1=0.861 (+1.0%), inference 19.5ms (over budget). exp-w32 [32,32] W32: KW F1=0.850 (no improvement from longer context). Wider model can't run real-time; longer context doesn't help.
 - **Mel filterbank mismatch discovered and fixed:** All 26 mel bin edges in firmware were wrong since day one. Corrected to match librosa HTK exactly — avg 4.2 INT8 level error. `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h.
-- **NN-primary vs NN-gate:** Changing `updatePulseDetection()` to use NN smoothed activation as the primary signal improved on-device F1 from 0.472 to 0.62. This was a firmware-only change (same v22 model, same mel features) — the entire gain came from using NN output directly instead of gating spectral flux. Mel filterbank correction (same session) did not contribute to the F1 gain (validated: b117 corrected filterbank=0.612 vs b115 old filterbank=0.620). pulseNNGate parameter removed.
-- **mel_db_range=80 experiment (v21) was solving wrong problem:** Bass mel saturation analysis showed kick detection was already the strongest instrument category. Widening to [-80,0] dB reduced INT8 resolution without meaningful kick improvement. Reverted to mel_db_range=60.
-- **v22 model:** mel_db_range=60 (same as firmware), no quant-noise, drum-stem labels. KW F1=0.896.
-- **Mel pipeline verified identical (April 14):** Training and firmware mel pipelines (steps 2-8) match within MAE=0.0017 (0.44 INT8 levels — effectively perfect). AdaptiveMic window/range normalization does NOT affect NN input (raw PDM samples go directly to SharedSpectralAnalysis). The entire sim-to-real gap comes from step 1: what audio reaches the mic (speaker → air → room → mic vs clean digital).
-- **target_rms_db recalibrated from -63 to -72 (April 14):** Device mel during music = 0.775 mean vs training 0.924 — 9 dB too loud. Training was centered 9 dB above device reality, model saw device-realistic levels only ~10% of the time. Corrected for v24.
-- **v23 model:** Corrected mel filterbank + mic profile augmentation. KW F1=0.873, on-device F1=0.625 (slight improvement from v22's 0.620). Deployed on b118.
-- **New augmentations for v24 (prepare_dataset.py):** Speaker harmonic distortion (1-8% THD polynomial nonlinearity), comb filter from early reflections (causal zero-padded delay, 1-10ms), MEMS mic soft clipping (polynomial saturation at high SPL), Freq-MixStyle (online per-band mel statistics mixing during training, DCASE 2024).
-- **PLP pattern extraction verified accurate:** gtPatternCorr metric (cosine similarity between device pattern and GT-folded onsets) shows 0.84-0.97 on test tracks.
+- **NN-primary vs NN-gate:** Changing `updatePulseDetection()` to use NN smoothed activation as the primary signal improved on-device F1 from 0.472 to 0.62. This was a firmware-only change — the entire gain came from using NN output directly instead of gating spectral flux. pulseNNGate parameter removed.
+- **mel_db_range=80 experiment (v21) was solving wrong problem:** Widening to [-80,0] dB reduced INT8 resolution without meaningful kick improvement. Reverted to mel_db_range=60.
+- **Mel pipeline verified identical (April 14):** Training and firmware mel pipelines (steps 2-8) match within MAE=0.0017 (0.44 INT8 levels). The entire sim-to-real gap is step 1: what audio reaches the mic.
+- **PLP pattern extraction verified accurate:** gtPatternCorr metric shows 0.84-0.97 on test tracks.
+- **Device management:** Stream pause race condition fixed (wait for acknowledgment, not arbitrary sleep). Bucket totem (b120) can't be flashed via software (GPREGRET race, reset button inaccessible). All 4 blinkyhost devices on b127, all reporting consistently.
 
 **Previous on-device gap diagnosis (April 10-11, partially correct):** Identified mel distribution shift (+0.25 mean, +13 dB) and bass mel saturation (6/26 bands at p95=1.0). v20 proved label quality is solved (offline +21%) but on-device F1=0.430. The real fix was NN-primary pulse detection (not mel range changes).
 
-2. **Model produces flat activations even at training calibration.** FP32 model on training-calibrated techno track: mean activation=0.41, std=0.075. Frame-level F1 peaks at 0.157 (threshold=0.5). The offline F1=0.782 is achieved by liberal peak-picking + 50ms mir_eval tolerance — the model over-detects 2-3x (est/ref ≈ 2.7) but many detections fall within tolerance windows.
+2. ~~**Model produces flat activations even at training calibration — CORRECTED (April 16).**~~ FP32 model on clean audio does show flat activations (mean=0.567, std=0.051), but on-device INT8 on real audio is dynamic (mean=0.432, std=0.250, dynRange=0.734). The acoustic chain creates the contrast. The offline flatness diagnosis was wrong for on-device.
 
 3. ~~**Firmware uses simpler gate than offline eval — RESOLVED (b117).**~~ The real fix was making NN the PRIMARY pulse signal instead of using it as a gate on spectral flux. On-device F1 jumped from 0.472 to 0.62. Gain augmentation [-18, +18] dB (v19+) and mel filterbank correction also contributed.
 
@@ -38,10 +40,11 @@
 - v18: PCEN mel normalization (52ch, mel+delta). **FAILED (April 10).** Auto pw=12.7: val_loss plateaued at 0.4976 (barely below random), F1=0.011, recall=0.006 after 36 epochs. pw=20: immediate all-positive collapse. PCEN features have AUC=0.5061 for onset discrimination (random chance). Root cause: PCEN's adaptive AGC normalizes away the transient contrast the model needs. No published onset system uses PCEN for musical onset detection. Also discovered `base.yaml` had `log_epsilon: 1e-7` parsed as string by PyYAML — fixed to `1.0e-7`. Bug only affected v18 dataprep (introduced in PCEN commit c0009054, Apr 7).
 - v19: **Aligned with published recipe, COMPLETE, DEPLOYED (b111, April 10).** Five fixes from literature review (Schlüter/Bock 2014, madmom): (1) plain BCE loss replacing asymmetric focal, (2) no global mixup (creates impossible frame-level targets), (3) hard binary targets (consensus > 0.1 → 1.0), (4) no freq_pos_encoding (onset detection is frequency-invariant), (5) no distillation (clean baseline). Same Conv1D [32,32] architecture as v16. Log-mel 26ch. Gain aug [-18, +18] dB. On-device F1=0.477.
 
-**Fleet status (April 14, verified via blinky-server):**
-- 062CBD12 — Hat Display, b120 (v23 model), serial, test chip ✅
-- 659C8DD3 — Long Tube, b120 (v23 model), serial, installed device ✅
-- 2A798EF8 — Hat Display, b120 (v23 model), serial, test chip ✅
+**Fleet status (April 16, verified via blinky-server):**
+- 062CBD12 — Hat Display, b127 (v25 model), serial, test chip ✅
+- 659C8DD3 — Long Tube, b127 (v25 model), serial, installed device ✅
+- 2A798EF8 — Hat Display, b127 (v25 model), serial, test chip ✅
+- Bucket Totem — b127, can't be flashed via software (GPREGRET race, reset button inaccessible)
 - ABFBC412 — Hat Display, b106, BLE-only (RSSI -94 dBm, MTU 20), weak signal
 
 **Serial reliability (April 8):** Root cause identified and fixed — stock TinyUSB CDC sets TX FIFO overwritable on DTR drop, silently killing all serial output. Patch in `patches/tinyusb-cdc-no-overwritable-fifo.patch`, enforced by `build.sh` compile guard. Server hardened: get_info retry, sibling hold during flash, serial retry limit (3 fails → stop), DELETE endpoint for stale devices. See commit `9712664`.
@@ -111,13 +114,14 @@ v88 fix (`slotSaveMinConf` 0.50→0.25, `plpConfAlpha` 0.15→0.25, warmup 160�
 
 ### Priority 2: NN-Modulated Pulse + NN Training
 
-**Status: b120 deployed on all 3 serial devices (v23 model, KW F1=0.873, on-device F1=0.625). v24 training in progress (recalibrated target_rms_db=-72 + Freq-MixStyle + speaker THD + comb filter + MEMS soft clip). Key breakthrough (b117): making NN the PRIMARY pulse signal (not a gate on spectral flux) accounted for most of the improvement. Mel pipeline verified identical (MAE=0.0017) — remaining gap is entirely acoustic (speaker → air → room → mic). Robust PLP epoch-fold deployed (b119+).**
+**Status: b127 deployed on all 4 blinkyhost devices (v25 model, KW F1=0.842, on-device F1=0.628). v26 training in progress (asymmetric focal loss: gamma_neg=4.0, gamma_pos=0.0). Key finding (April 16): on-device activations are NOT flat — acoustic chain creates contrast (dynRange=0.734 vs offline 0.125). F1 plateau at 0.62 is from model precision (0.50), not detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals). Local-maxima peak-picking + bass gate + PLP bias deployed (b127).**
 
 **Firmware improvements (b108→b120):**
 - **b108 (April 9):** NN-modulated pulse output (spectral flux weighted by NN activation, self-tuning via nnConf). Derivative-based NN gate. onset F1=0.483.
 - **b117 (April 12):** NN is now the PRIMARY onset detector. `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) as the signal — spectral flux is fallback only when NN unavailable. pulseNNGate parameter removed. On-device onset F1 improved from 0.472 to 0.62. Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong, avg 4.2 INT8 level error). MEL_DB_RANGE extracted as constexpr. prevOdf_ renamed to prevSignal_. TestChipConfig.h added for unconfigured bare chips. millis field added to json info for clock sync.
 - **b118 (April 13):** v23 model deployed (corrected mel filterbank + mic profile augmentation, KW F1=0.873, on-device F1=0.625).
-- **b119-b120 (April 14):** NN-primary continuous visual pulse envelope (control_.pulse uses nnSmoothed_ directly, not spectral flux x NN modulation). Robust PLP epoch-fold: NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. PLP reliability metrics exposed in debug stream: plpMeanReliability_, plpNNAgreement_. Serial transport crash fix (TypeError from None fd during USB disconnect). Debug streaming enabled during validation for PLP diagnostic fields.
+- **b119-b120 (April 14):** NN-primary continuous visual pulse envelope. Robust PLP epoch-fold: NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean, cross-correlation with NN fold for pattern validation. PLP reliability metrics in debug stream. Serial transport crash fix.
+- **b123-b127 (April 15-16):** Local-maxima peak-picking on NN activation (replaced first-diff, which over-detected at 14.3/s vs 3.5/s GT). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30 (sweep-optimized). v25 model deployed (bias init per RetinaNet). Dead band flux buffers removed (6.3 KB heap saved). Stream pause race condition fixed (wait for acknowledgment, not arbitrary sleep). Production optimization: stream formatting gated on client presence. Detection algorithm evolution: b123 first-diff F1=0.601 → b126 local-maxima → b127 +bass gate+PLP bias F1=0.628. Minimal FP suppression effect confirms 0.62 plateau is from model precision (0.50), not detection algorithm.
 
 Failed attempts (all regressed from v3):
 - v9 (tempo head + distillation): F1=0.233. Root cause: data prep crash → non-augmented data (209K vs 3M chunks) + tempo head useless (256ms RF can't encode tempo, Bock 2019 applies to beat tracking not onset detection).
@@ -206,10 +210,18 @@ Offline evaluation with fixed pipeline (mir_eval.onset, 50ms MIREX window, 18 ED
 
 **v23 (corrected mel filterbank + mic profile augmentation): DEPLOYED (b118, April 13).** KW F1=0.873. **On-device F1=0.625** (slight improvement from v22's 0.620).
 
-**v24 (recalibrated target_rms_db + new augmentations): IN PROGRESS (April 14).** target_rms_db recalibrated from -63 to -72 (device mel during music = 0.775 mean vs training 0.924 — 9 dB too loud, model saw device-realistic levels only ~10% of the time). New augmentations in prepare_dataset.py: speaker harmonic distortion (1-8% THD polynomial nonlinearity), comb filter from early reflections (causal zero-padded delay, 1-10ms), MEMS mic soft clipping (polynomial saturation at high SPL), Freq-MixStyle (online per-band mel statistics mixing during training, DCASE 2024).
+**v24 (recalibrated target_rms_db + new augmentations): COMPLETE (April 14).** target_rms_db recalibrated from -63 to -72 (device mel during music = 0.775 mean vs training 0.924 — 9 dB too loud). New augmentations: speaker THD, comb filter, MEMS soft clip, Freq-MixStyle. KW F1=0.851.
 
-**Diagnostic tools deployed (April 9) — results (April 10):**
-- `replay_device_capture.py`: FP32 model on device mel produces flat 0.42 activation (same as INT8 on-device). **Quantization is NOT the bottleneck.**
+**v25 (bias init per RetinaNet): DEPLOYED (b127, April 15).** Output bias initialized to log(pos_ratio/(1-pos_ratio)). Dynamic range doubled offline (0.061→0.125) but still flat offline. On-device activations were already dynamic regardless (dynRange=0.734) — bias init was solving wrong problem. KW F1=0.842 (slightly below v24's 0.851).
+
+**v26 (asymmetric focal loss): IN PROGRESS (April 16).** gamma_neg=4.0, gamma_pos=0.0. Downweights easy negatives (silence) 10000x, focuses on hard negatives (chord changes). Previously tested in v12 with noisy labels + wrong mel — clean labels are a new baseline.
+
+**Architecture experiments completed (April 15-16):**
+- exp-wide [48,48,32] W16: KW F1=0.861 (+1.0%), inference 19.5ms (over 16.7ms budget). Wider model can't run real-time.
+- exp-w32 [32,32] W32: KW F1=0.850 (no improvement from longer context). 512ms context doesn't help over 256ms.
+
+**Diagnostic tools deployed (April 9) — results updated (April 16):**
+- `replay_device_capture.py`: FP32 model on clean audio: mean=0.567, std=0.051, dynRange=0.125 (flat). **But on-device INT8 on real audio: mean=0.432, std=0.250, dynRange=0.734 (dynamic).** The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The "flat activation" diagnosis from offline analysis was WRONG for on-device.
 - `mel_distribution_check.py`: Device music mel mean=0.74 vs training=0.49 (+0.25 shift, ~13 dB). Device ambient=0.47 ≈ training. Shift only during music — speaker overwhelms mic calibration.
 - `stream nn` includes `nna` field (raw NN activation, pre-gating) alongside `onset` (gated pulse)
 - Log epsilon fixed: `1e-7` → `1.0e-7` in base.yaml (PyYAML string parse bug, only affected v18+)
@@ -244,8 +256,8 @@ v11 (with delta features, 52 input channels): **11.7ms** on nRF52840 — 70% of 
 **Not worth pursuing:**
 - Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
 - Curriculum learning: inconsistent evidence, moderate effort
-- Wider architecture ([48,48,32]): **proven equivalent to [32,32]** at 3x size (v12/v13 post-mortem)
-- Wider windows (W32/W64): 150ms RF is optimal for onset detection (Schlüter 2014). Our 176ms is ample.
+- Wider architecture ([48,48,32]): **proven equivalent to [32,32]** at 3x size (v12/v13 post-mortem). exp-wide W16 confirmed: KW F1=0.861 (+1.0%) but 19.5ms inference (over budget).
+- Wider windows (W32/W64): 150ms RF is optimal for onset detection (Schlüter 2014). Our 176ms is ample. exp-w32 confirmed: KW F1=0.850, no improvement from 512ms context.
 - Transformer/Conformer: 1.4M+ params, far too large for Cortex-M4F
 - Bidirectional models: can't run in real-time. Only ~2-5% F1 gain for onset detection (Bock 2012)
 - Half-rate NN inference (every other frame): **NEVER** — alternating high/low frame latency causes visible jerking in LED animations. Every frame must have consistent timing.

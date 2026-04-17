@@ -469,15 +469,17 @@ void loop() {
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 
-  // FPS counter with min/max frame time tracking
+  // FPS counter — only tracks when log output is enabled (saves 3 comparisons/frame in production)
   static uint32_t fpsFrameCount = 0;
   static uint32_t fpsWindowStart = 0;
   static uint32_t fpsMinFrameMs = UINT32_MAX;
   static uint32_t fpsMaxFrameMs = 0;
-  uint32_t frameMs = (lastMs == 0) ? 0 : (now - lastMs);
-  fpsFrameCount++;
-  if (frameMs > 0 && frameMs < fpsMinFrameMs) fpsMinFrameMs = frameMs;
-  if (frameMs > fpsMaxFrameMs) fpsMaxFrameMs = frameMs;
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+    uint32_t frameMs = (lastMs == 0) ? 0 : (now - lastMs);
+    fpsFrameCount++;
+    if (frameMs > 0 && frameMs < fpsMinFrameMs) fpsMinFrameMs = frameMs;
+    if (frameMs > fpsMaxFrameMs) fpsMaxFrameMs = frameMs;
+  }
   if (now - fpsWindowStart >= 5000) {
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
       uint32_t elapsed = now - fpsWindowStart;

@@ -29,6 +29,8 @@
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
+#include "SharedSpectralAnalysis.h"  // SpectralConstants::NUM_MEL_BANDS
+
 // Only ONE model header can be active per build. To deploy a versioned model:
 //   cp blinky-things/audio/frame_onset_model_data_v3.h blinky-things/audio/frame_onset_model_data.h
 // The export_tflite.py script writes directly to this path by default.
@@ -36,10 +38,11 @@
 
 class FrameOnsetNN {
 public:
-    static constexpr int INPUT_MEL_BANDS = 26;     // Raw mel bands from SharedSpectralAnalysis
+    static constexpr int INPUT_MEL_BANDS = SpectralConstants::NUM_MEL_BANDS;
     static constexpr int BAND_FLUX_CHANNELS = 3;   // Bass/mid/high HWR mel flux
-    static constexpr int INPUT_MEL_PLUS_FLUX = INPUT_MEL_BANDS + BAND_FLUX_CHANNELS;  // 29
-    static constexpr int MAX_INPUT_FEATURES = 52;  // Mel + delta (model auto-detects)
+    static constexpr int INPUT_MEL_PLUS_FLUX = INPUT_MEL_BANDS + BAND_FLUX_CHANNELS;
+    static constexpr int INPUT_HYBRID = INPUT_MEL_BANDS + 2;  // Mel + spectral flatness + flux
+    static constexpr int MAX_INPUT_FEATURES = 64;  // Max supported (model auto-detects)
 
     // PCEN normalization mode: set before begin() to use PCEN instead of
     // log-compressed mel bands. Requires linear mel input from
@@ -86,19 +89,26 @@ public:
             inputSize *= input_->dims->data[i];
         }
         // Detect input features per frame from model shape.
-        // Supported: 26 (mel only), 29 (mel + 3 band-flux), 52 (mel + delta).
-        // Exactly one of useDelta_/useBandFlux_ is true, or both false.
-        // Mutually exclusive by model shape — no model uses both.
+        // Auto-detect input mode from model shape.
+        // Supported: N_MEL (mel only), N_MEL+2 (hybrid: mel + flatness + flux),
+        // N_MEL+3 (mel + band-flux), N_MEL*2 (mel + delta).
         int featuresPerFrame = input_->dims->data[input_->dims->size - 1];
         if (featuresPerFrame == INPUT_MEL_BANDS) {
             useDelta_ = false;
             useBandFlux_ = false;
+            useHybrid_ = false;
+        } else if (featuresPerFrame == INPUT_HYBRID) {
+            useDelta_ = false;
+            useBandFlux_ = false;
+            useHybrid_ = true;
         } else if (featuresPerFrame == INPUT_MEL_PLUS_FLUX) {
             useDelta_ = false;
             useBandFlux_ = true;
+            useHybrid_ = false;
         } else if (featuresPerFrame == INPUT_MEL_BANDS * 2) {
             useDelta_ = true;
             useBandFlux_ = false;
+            useHybrid_ = false;
         } else {
             initError_ = 5; return false;
         }
@@ -141,7 +151,8 @@ public:
      * PCEN output replaces log-compressed mels for all downstream features
      * (delta, band-flux), matching training pipeline behavior.
      */
-    float infer(const float* melBands, const float* linearMelBands = nullptr) {
+    float infer(const float* melBands, const float* linearMelBands = nullptr,
+                float spectralFlatness = 0.0f, float spectralFlux = 0.0f) {
         if (!ready_) return 0.0f;
 
         // Apply PCEN if enabled, producing normalized mel values in [0,1]
@@ -163,11 +174,15 @@ public:
             }
             memcpy(prevMel_, melInput, INPUT_MEL_BANDS * sizeof(float));
         } else if (useBandFlux_) {
-            // 3-channel HWR band-flux: positive-only mel differences grouped by
-            // frequency band, normalized by band count. Matches training pipeline
-            // (audio.py::append_band_flux_features).
             computeBandFlux(melInput, &frameFeatures[INPUT_MEL_BANDS]);
             memcpy(prevMel_, melInput, INPUT_MEL_BANDS * sizeof(float));
+        } else if (useHybrid_) {
+            // Hybrid: 30 mel + spectral flatness + spectral flux.
+            // Deterministic features that directly encode drum-vs-harmonic and
+            // onset-vs-sustain discrimination — information the model can't
+            // extract from mel bands alone at this resolution.
+            frameFeatures[INPUT_MEL_BANDS] = spectralFlatness;
+            frameFeatures[INPUT_MEL_BANDS + 1] = spectralFlux;
         }
 
         // Circular window buffer: write new frame and quantize it incrementally.
@@ -427,8 +442,9 @@ private:
     int windowFilled_ = 0;
     int windowWriteIdx_ = 0;                    // Circular write position in windowBuffer_
     int inputFeatures_ = INPUT_MEL_BANDS;       // 26, 29, or 52, auto-detected from model
-    bool useDelta_ = false;                      // True when model expects 52-dim input (mel + delta)
-    bool useBandFlux_ = false;                   // True when model expects 29-dim input (mel + 3 band-flux)
+    bool useDelta_ = false;                      // True when model expects N*2-dim input (mel + delta)
+    bool useBandFlux_ = false;                   // True when model expects N+3-dim input (mel + 3 band-flux)
+    bool useHybrid_ = false;                     // True when model expects N+2-dim input (mel + flatness + flux)
     float quantInvScale_ = 1.0f;                // Cached 1.0/input_scale for quantization
     int32_t quantZeroPoint_ = 0;                // Cached input zero point
 

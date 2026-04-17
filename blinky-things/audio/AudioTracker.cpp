@@ -125,7 +125,8 @@ const AudioControl& AudioTracker::update(float dt) {
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
         frameOnsetNN_.setProfileEnabled(nnProfile);
-        odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands());
+        odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
+                                  spectral_.getSpectralFlatness(), spectral_.getSpectralFlux());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
 
@@ -188,14 +189,16 @@ const AudioControl& AudioTracker::update(float dt) {
         float dev = odfClamped - nnActivationMean_;
         nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
 
-        // Buffer broadband + per-band flux for band-best PLP epoch-fold
-        addOssSample(bassContrast, spectral_.getMidFlux(), spectral_.getHighFlux());
+        // Buffer bass-contrast OSS sample for PLP epoch-fold
+        addOssSample(bassContrast);
 
         // Cache bass energy (used by PLP dual-source AND energy synthesis)
         cachedBassEnergy_ = 0.0f;
         const float* mel = spectral_.getMelBands();
         if (mel) {
-            for (int i = 1; i <= 6; i++) cachedBassEnergy_ += mel[i];
+            // Mel bands 0-5 cover the bass region (lowest 6 bands of the filterbank).
+            // These are mel band indices, not FFT bin indices (SpectralConstants::BASS_MIN_BIN).
+            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];
             cachedBassEnergy_ /= 6.0f;
         }
         addBassSample(cachedBassEnergy_);
@@ -254,8 +257,6 @@ const AudioControl& AudioTracker::update(float dt) {
 
 void AudioTracker::resetAnalysisState() {
     memset(ossBuffer_, 0, sizeof(ossBuffer_));
-    memset(midFluxBuffer_, 0, sizeof(midFluxBuffer_));
-    memset(highFluxBuffer_, 0, sizeof(highFluxBuffer_));
     memset(bassBuffer_, 0, sizeof(bassBuffer_));
     memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
     ossWriteIdx_ = 0; ossCount_ = 0;
@@ -265,6 +266,8 @@ void AudioTracker::resetAnalysisState() {
     patternPosition_ = 0.0f;
     odfBaseline_ = 0.0f;
     odfPeakHold_ = 0.0f;
+    prevSignal_ = 0.0f;
+    prevPrevSignal_ = 0.0f;
     plpConfidence_ = 0.0f;
     periodicityStrength_ = 0.0f;
     plpPhase_ = 0.0f;
@@ -278,10 +281,8 @@ void AudioTracker::resetAnalysisState() {
 // OSS Buffer
 // ============================================================================
 
-void AudioTracker::addOssSample(float ungatedFlux, float midFlux, float highFlux) {
+void AudioTracker::addOssSample(float ungatedFlux) {
     ossBuffer_[ossWriteIdx_] = ungatedFlux;
-    midFluxBuffer_[ossWriteIdx_] = midFlux;
-    highFluxBuffer_[ossWriteIdx_] = highFlux;
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
@@ -581,40 +582,11 @@ void AudioTracker::updatePlpAnalysis() {
 
     if (ossCount_ < patLen * 2) return;
 
-    // --- 2. Band-best epoch fold for pattern extraction ---
-    // Epoch-fold multiple frequency bands independently at the ACF period.
-    // Select the band whose fold has the highest variance (best pattern contrast).
-    // This fixes PLP on syncopated genres:
-    //   - Trap: high-band captures hi-hat patterns without 808 interference
-    //   - Reggaeton: mid-band captures snare without bass mud
-    //   - Deep techno: bass-band isolates sparse kicks from pad contamination
-    //   - Afrobeat: best-of-bands picks the most periodic instrument layer
+    // --- 2. Epoch fold for pattern extraction ---
+    // Epoch-fold broadband spectral flux (bass-contrast weighted) at the ACF period.
+    // Band selection was tested (mid/high flux) but regressed on 8-10/18 tracks;
+    // broadband is the sole PLP source. Uses ungated flux — NN-independent (Grosche 2011).
     //
-    // Uses ungated flux per band — NN-independent (Grosche 2011).
-    // Replaces single broadband epoch-fold. Zero additional RAM (repurposed
-    // gatedFluxBuffer_/gatedFluxLinear_ → midFluxBuffer_/highFluxBuffer_).
-
-    // epochFoldLinear_ is a scratch buffer — reused per band candidate
-
-    // Band sources: broadband (oss), mid flux, high flux, bass energy
-    // Bass flux is already in ossBuffer_ (the broadband is bass-weighted via odfContrast)
-    const float* circBufs[4] = { ossBuffer_, midFluxBuffer_, highFluxBuffer_, bassBuffer_ };
-    const int circCounts[4] = { ossCount_, ossCount_, ossCount_, bassCount_ };
-    const int circWriteIdxs[4] = { ossWriteIdx_, ossWriteIdx_, ossWriteIdx_, bassWriteIdx_ };
-    const int circSizes[4] = { OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, OSS_BUFFER_SIZE, BASS_BUFFER_SIZE };
-
-    // Band selection disabled — broadband (band 0) is the default.
-    //
-    // Tested three selection metrics — all produced net regressions:
-    //   - Pure variance: +0.30 trap/afrobeat, -0.22 trance/techno (noisy bands win)
-    //   - Variance with 1.5x/2x bias: still regresses 8-10/18 tracks
-    //   - Fold autoCorr (lag-1): 8 improved, 8 regressed — no net gain
-    //
-    // Band buffers are populated each frame (mid/high flux) for future use.
-    // Per-band epoch-fold computation removed to save CPU (~4ms per PLP cycle).
-    int bestBand = 0;
-
-    // Re-run the full epoch-fold on the winning band to produce the final pattern.
     // Improvements over basic mean fold:
     //   1. NN-confidence-weighted epochs (high NN activation = more trustworthy)
     //   2. Per-bin reliability from coefficient of variation (consistent events
@@ -622,10 +594,10 @@ void AudioTracker::updatePlpAnalysis() {
     //   3. Winsorized mean: drop most extreme epoch per bin before averaging
     //   4. Cross-correlation with NN fold for pattern validation
     {
-        int count = circCounts[bestBand];
-        int sIdx = (circWriteIdxs[bestBand] - count + circSizes[bestBand]) % circSizes[bestBand];
+        int count = ossCount_;
+        int sIdx = (ossWriteIdx_ - count + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
         for (int i = 0; i < count; i++) {
-            epochFoldLinear_[i] = circBufs[bestBand][(sIdx + i) % circSizes[bestBand]];
+            epochFoldLinear_[i] = ossBuffer_[(sIdx + i) % OSS_BUFFER_SIZE];
         }
 
         // Count epochs for Winsorized mean
@@ -859,20 +831,68 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     bool cooldownOk = (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs);
 
     if (nnActive_) {
-        // NN path: first-difference local-maxima peak-picking.
-        // HWR first-diff removes the flat baseline; local-max finds peaks.
-        float nnDiff = max(0.0f, nnSmoothed_ - prevSignal_);
+        // NN path: local-maxima peak-picking with false positive suppression.
+        //
+        // The NN fires on any broadband spectral change (chords, synths, vocals),
+        // not just percussive onsets. Two soft filters reduce false positives:
+        //
+        // 1. Bass-band energy gate: kicks/snares produce strong bass flux;
+        //    chord changes and synth stabs produce flat/mid-heavy flux.
+        //    Scale the effective threshold by inverse bass ratio.
+        //
+        // 2. PLP pattern bias: when a reliable rhythm pattern is locked,
+        //    raise the threshold slightly at positions where the pattern
+        //    predicts no onset. This is a SOFT bias (30% threshold increase),
+        //    not a hard gate — section changes and new patterns still trigger.
+        //    Only active when pattern confidence is high.
 
-        // Local maximum: prevDiff was rising, now falling (peak was at prevSignal_)
-        bool isLocalMax = (prevNnDiff_ > nnDiff) && (prevNnDiff_ > pulseOnsetFloor);
+        float nn = nnSmoothed_;
 
-        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
-            pulseStrength = clampf(prevNnDiff_ * 10.0f, 0.0f, 1.0f);  // Scale up small diffs
-            lastPulseMs_ = nowMs - 16;  // Peak was 1 frame ago
+        // Bass-band energy gate: require bass presence for easy detections.
+        // High bass ratio → threshold stays at floor.
+        // Low bass ratio (broadband event) → threshold increases by up to bassGateMaxBoost.
+        // bassGateMinRatio: below this bass fraction, gate is fully engaged (1/3 = 33%)
+        // Post-sweep hardcoded (b127): marginal F1 improvement. Not exposed as tunable
+        // parameters — these are structural heuristics, not sensitivity knobs.
+        static constexpr float bassGateMaxBoost = 0.5f;  // Max 50% threshold increase
+        static constexpr float bassGateMinRatio = 1.0f / 3.0f;  // Full gate when bass < 33% of broadband
+        float bassFlux = spectral_.getBassFlux();
+        float broadbandFlux = spectral_.getSpectralFlux();
+        // In near-silence (broadbandFlux < 0.001), default to neutral ratio
+        // so the gate doesn't suppress onsets at the start of music.
+        float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
+        float bassGate = 1.0f + bassGateMaxBoost * clampf(1.0f - bassRatio / bassGateMinRatio, 0.0f, 1.0f);
+
+        // PLP pattern bias: soft threshold increase at off-beat positions.
+        // plpPulseValue_ is high (0.7-1.0) at expected onset positions,
+        // low (0.0-0.3) between beats. When confident, raise threshold at
+        // low-pattern positions. When uncertain, no bias.
+        static constexpr float plpBiasMaxSuppression = 0.3f;  // Max 30% threshold increase at off-beat
+        static constexpr float plpBiasMinConfidence = 0.3f;    // Only bias when pattern confidence > 30%
+        float patternBias = 1.0f;
+        if (plpConfidence_ > plpBiasMinConfidence) {
+            float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
+            // At pattern minimum (0.0): bias = 1.3 (30% harder to trigger)
+            // At pattern maximum (1.0): bias = 1.0 (no change)
+            // Scaled by confidence so uncertain patterns don't suppress
+            float suppressAmount = plpBiasMaxSuppression * plpConfidence_ * (1.0f - patternVal);
+            patternBias = 1.0f + suppressAmount;
         }
 
-        prevNnDiff_ = nnDiff;
-        prevSignal_ = nnSmoothed_;
+        float effectiveFloor = pulseOnsetFloor * bassGate * patternBias;
+
+        // Local maximum: prev frame was higher than both neighbors AND above floor
+        bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
+                          (prevSignal_ > nn) &&
+                          (prevSignal_ > effectiveFloor);
+
+        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
+            pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
+            lastPulseMs_ = nowMs - static_cast<uint32_t>(1000.0f / OSS_FRAME_RATE);  // Peak was 1 frame ago
+        }
+
+        prevPrevSignal_ = prevSignal_;
+        prevSignal_ = nn;
     } else {
         // Spectral flux fallback: adaptive threshold + rising edge
         float signal = odf;

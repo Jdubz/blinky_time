@@ -103,12 +103,18 @@ fi
 
 echo ""
 echo "=== Resetting all devices to defaults ==="
-RESET_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+if ! curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+    -H "X-API-Key: ${API_KEY}" \
     -H 'Content-Type: application/json' \
-    -d '{"command": "defaults"}' 2>/dev/null || echo '{}')
-curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+    -d '{"command": "defaults"}' > /dev/null 2>&1; then
+    echo "  [WARNING] defaults reset may have failed — devices could have stale settings" >&2
+fi
+if ! curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+    -H "X-API-Key: ${API_KEY}" \
     -H 'Content-Type: application/json' \
-    -d '{"command": "save"}' > /dev/null 2>&1
+    -d '{"command": "save"}' > /dev/null 2>&1; then
+    echo "  [WARNING] save may have failed" >&2
+fi
 echo "  Done"
 
 echo ""

@@ -35,7 +35,7 @@ struct MotionConfig {
 };
 
 // Motion state - simplified orientation data for fire effects
-// TODO: Migrate fire effect to use IMUData instead
+// Fire uses MotionState (tiltAngle, tiltRate) directly; IMUData is for future generators.
 struct MotionState {
   // Basic orientation (still used by fire effect)
   Vec3  up {0,1,0};           // unit vector (world up in torch space)

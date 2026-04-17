@@ -7,7 +7,7 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 **Current Version:** AudioTracker v93 (April 2026). Multi-source ACF + PLP with direct pattern interpolation.
 **Period Detection:** Multi-source ACF (spectral flux + bass energy + NN onset, lags 20-80, ~4ms) → parabolic interpolation → bar multipliers (2×/3×/4×) → epoch-fold variance scoring with sqrt(multiplier) penalty. **Pattern quality is the objective — the system selects whichever period produces the best visual pattern. Half/double time matches are correct if they capture more rhythmic structure.**
 **Phase/Pattern:** Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation (v91 refactor, cosine OLA removed). **Robust epoch-fold (b119+):** NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Pattern quality is NN-independent. SuperFlux 3-wide max filter on spectral flux. plpNovGain=1.0, plpVarianceSens=0. Reliability metrics: plpMeanReliability_, plpNNAgreement_ exposed in debug stream.
-**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. **NN is the PRIMARY pulse signal** (b117+): `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) directly as the continuous visual pulse envelope. Spectral flux is fallback only when NN unavailable. Also serves as one of 3 ACF sources. v23 deployed (b118): KW F1=0.873, on-device F1=0.625. Non-NN fallback: mic level.
+**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. **Local-maxima peak-picking** (b127): `updatePulseDetection()` uses local-maxima peak-picking on NN activation (prevSignal > prev AND prevSignal > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30 (sweep-optimized). Also serves as one of 3 ACF sources. v25 deployed (b127): KW F1=0.842, on-device F1=0.628. **On-device activations are NOT flat** — acoustic chain (speaker→room→mic) creates contrast clean audio lacks (dynRange=0.734 vs offline 0.125). F1 plateau at 0.62 is from model precision (0.50), not detection algorithm. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 **Primary Test Metrics:** plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure). BPM accuracy uses octave-tolerant scoring.
 
@@ -69,15 +69,15 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |              Peak-finding → period estimate
       |              EMA smoothing -> BPM estimate
       |
-      +--- [ONSET PATH: NN → visual pulse (PRIMARY)]
-      |    FrameOnsetNN (Conv1D W16, onset-only, v23 deployed)
+      +--- [ONSET PATH: NN → local-maxima peak-picking (b127)]
+      |    FrameOnsetNN (Conv1D W16, onset-only, v25 deployed)
       |         Input: sliding window of rawMelBands_ (16 frames x 26 bands)
       |         Output: single onset activation (0-1, kicks/snares)
       |         |
-      |    NN smoothed activation (nnSmoothed_) — PRIMARY pulse signal
-      |    Spectral flux fallback only when NN unavailable
+      |    Local-maxima peak-picking (prevSignal > prev AND > next AND > floor)
+      |    + Bass-band energy gate + PLP pattern bias
       |         |
-      |    +--- Pulse: floor-tracking baseline detection (visual sparks)
+      |    +--- Pulse: local-maxima detection with FP suppression (visual sparks)
       |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
       |
       +--- [PHASE PATH: PLP → direct pattern interpolation (v91+, robust b119+)]
@@ -108,7 +108,7 @@ Generators (HeatFire, Water, PlasmaGlobe)
 
 4. **PLP Pattern Extraction (v91+, robust b119+)**: Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period. Direct pattern interpolation at current cycle position (cosine OLA removed v91). Phase derived from position offset by accent phase. Pattern quality is NN-independent (decoupled v93). **Robust epoch-fold (b119+):** NN-confidence-weighted epochs (higher-confidence epochs contribute more), per-bin reliability scoring (CV-based, suppresses noisy bins), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Reliability metrics plpMeanReliability_ and plpNNAgreement_ exposed in debug stream. gtPatternCorr metric shows extraction accuracy of 0.84-0.97 on test tracks. Cold-start template seeding (8 patterns). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall.
 
-5. **NN Onset → Primary Continuous Pulse Signal + ACF Source**: NN smoothed activation (nnSmoothed_) is the PRIMARY continuous visual pulse envelope driving visual effects (sparks, flashes). control_.pulse uses nnSmoothed_ directly (b119+, not spectral flux x NN modulation). Spectral flux is fallback only when NN is unavailable. NN also serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources. pulseNNGate parameter removed (b117) — NN gate concept eliminated.
+5. **NN Onset → Local-Maxima Peak-Picking + ACF Source**: NN activation is peak-picked via local-maxima detection (b127). Bass-band energy gate and PLP pattern bias suppress false positives from non-percussive spectral changes. NN also serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources. On-device activations are dynamic (dynRange=0.734) despite being flat offline (dynRange=0.125) — the acoustic chain creates contrast. F1 plateau at 0.62 is from model precision (0.50), not detection algorithm.
 
 ---
 
@@ -120,7 +120,7 @@ Generators (HeatFire, Water, PlasmaGlobe)
 
 **Every frame (~62.5 Hz, on new spectral frame):**
 1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (primary pulse signal + PLP source)
-2. **Pulse Detection**: NN smoothed activation as primary signal, floor-tracking baseline, fire pulse when signal exceeds baseline * 2.0. Spectral flux fallback only when NN unavailable.
+2. **Pulse Detection**: Local-maxima peak-picking on NN activation (prevSignal > prev AND > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence).
 3. **Onset Gate** (PLP path only): Suppress onset below `odfGateThreshold` (prevent noise-driven false patterns)
 4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
 5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
@@ -242,7 +242,7 @@ PLP uses multi-source ACF at beat-level lags (20-80) across 3 mean-subtracted so
 
 ### Current: Single Conv1D Onset Model
 
-`FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v23 deployed (b118): KW F1=0.873, on-device F1=0.625. Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong since day one, avg 4.2 INT8 level error). `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h. Mel pipeline verified identical between training and firmware (MAE=0.0017, 0.44 INT8 levels).
+`FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v25 deployed (b127): KW F1=0.842, on-device F1=0.628. **On-device activations are NOT flat** — offline FP32 on clean audio: mean=0.567, std=0.051, dynRange=0.125 (flat); on-device INT8 on real audio: mean=0.432, std=0.250, dynRange=0.734 (dynamic). The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The earlier "flat activation" diagnosis was based on offline analysis and was wrong for on-device. F1 plateau at 0.62 is from model precision (0.50) — model fires on broadband spectral changes (chords, synths, vocals). Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong since day one, avg 4.2 INT8 level error). `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h. Mel pipeline verified identical between training and firmware (MAE=0.0017, 0.44 INT8 levels).
 
 The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and as one of 3 PLP multi-source ACF sources). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
@@ -254,7 +254,7 @@ The model processes a sliding window of raw mel frames (16 frames x 26 bands = 2
 
 ### Onset Information Gate
 
-The NN onset activation passes through an information gate before use in PLP source input. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false pattern detection. This improves phase stability during silence and ambient passages. Note: the gate applies to the PLP ACF source path only — pulse detection uses NN smoothed activation directly as the continuous visual pulse envelope (b117+).
+The NN onset activation passes through an information gate before use in PLP source input. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false pattern detection. This improves phase stability during silence and ambient passages. Note: the gate applies to the PLP ACF source path only — pulse detection uses local-maxima peak-picking on NN activation with bass-band energy gate and PLP pattern bias (b127+).
 
 ### Spectral Flux (BPM Signal)
 
@@ -267,17 +267,15 @@ Peaks at broadband transients, zero during sustain. NN-independent.
 
 ### Pulse Detection
 
-Two pulse systems serve different purposes:
-
-**`control_.pulse` (generators consume this):** NN smoothed activation as primary continuous visual pulse envelope (b119+).
-- **NN is the primary signal**: `updatePulseDetection()` uses NN smoothed activation (nnSmoothed_) directly as the continuous pulse envelope. Spectral flux is fallback only when NN is unavailable.
-- Floor-tracking baseline for thresholding
+**`control_.pulse` (generators consume this):** Local-maxima peak-picking on NN activation (b127).
+- **Local-maxima detection**: `updatePulseDetection()` fires when prevSignal > prev AND prevSignal > next AND prevSignal > pulseOnsetFloor (0.30, sweep-optimized).
+- **Bass-band energy gate**: 50% threshold increase when bass ratio is low — suppresses false positives from non-percussive spectral changes (chord changes, synths, vocals).
+- **PLP pattern bias**: 30% threshold increase at off-beat positions (scaled by PLP confidence) — leverages rhythmic context to suppress off-beat false positives.
 - Decaying envelope (~165ms half-life)
-- pulseNNGate parameter removed — NN gate concept eliminated. On-device onset F1 improved from 0.472 to 0.62 with this change.
+- **On-device activations are NOT flat**: Offline FP32 on clean audio shows flat activations (mean=0.567, std=0.051, dynRange=0.125), but on-device INT8 on real audio is dynamic (mean=0.432, std=0.250, dynRange=0.734). The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The earlier "flat activation" diagnosis was based on offline analysis and was wrong for on-device.
+- **F1 plateau at 0.628**: The bottleneck is model precision (0.50), not the detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals). Detection algorithm evolution: b123 first-diff peak-picking over-detected (14.3/s vs 3.5/s GT, F1=0.601) → b126 local-maxima (sweep showed 0.3 optimal threshold) → b127 +bass gate+PLP bias (F1=0.628, minimal effect — confirming model is the bottleneck).
 
-**Discrete onset events (debug/serial, onset density):** Rising-edge detection on primary signal.
-- **Baseline tracking**: Slow rise (alpha=0.005), fast drop (alpha=0.05)
-- **Threshold**: Signal must exceed baseline × 2.0, mic level must exceed 0.03
+**Discrete onset events (debug/serial, onset density):** Same local-maxima detection.
 - **Cooldown**: Tempo-adaptive (40ms at 200 BPM, 150ms at 60 BPM)
 
 ### Energy Synthesis

@@ -58,6 +58,9 @@ class FleetManager:
     ) -> None:
         self._devices: dict[str, Device] = {}  # keyed by device_id
         self._discovery_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[None]] = (
+            set()
+        )  # prevent GC of fire-and-forget tasks
         self._running = False
         self._enable_ble = enable_ble
         self._enable_serial = enable_serial
@@ -626,13 +629,14 @@ class FleetManager:
                 # Full disconnect: closes port, cleans up transport state,
                 # sets device state to DISCONNECTED so reconnect picks it up.
                 task = asyncio.create_task(device.disconnect())
-                task.add_done_callback(
-                    lambda t: (
-                        log.warning("disconnect error: %s", t.exception())
-                        if not t.cancelled() and t.exception()
-                        else None
-                    )
-                )
+                self._background_tasks.add(task)
+
+                def _on_disconnect_done(t: asyncio.Task[None]) -> None:
+                    self._background_tasks.discard(t)
+                    if not t.cancelled() and (exc := t.exception()):
+                        log.warning("disconnect error: %s", exc)
+
+                task.add_done_callback(_on_disconnect_done)
 
     async def _check_liveness(self) -> None:
         """Ping devices that haven't communicated recently.

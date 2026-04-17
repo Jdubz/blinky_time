@@ -32,13 +32,25 @@ namespace SpectralConstants {
     constexpr float BIN_FREQ_HZ = SAMPLE_RATE / FFT_SIZE;  // 62.5 Hz per bin
 
     // Mel filterbank configuration
-    constexpr int NUM_MEL_BANDS = 26;       // Standard for speech/music analysis
-    constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (below fundamental bass)
-    constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (Nyquist limit at 16kHz)
+    // Mel band count: set to match the deployed NN model's expected input.
+    // v25/v26 models expect 26 bands at 60-8000 Hz.
+    // v27+ models expect 30 bands at 40-4000 Hz (hybrid: mel + flatness + flux).
+    // MUST match the trained model — mismatched dimensions silently feed wrong frequencies.
+    constexpr int NUM_MEL_BANDS = 26;       // Match deployed model (change to 30 when v27 deploys)
+    constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (change to 40 when v27 deploys)
+    constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (change to 4000 when v27 deploys)
 
     // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
     // MUST match ml-training base.yaml mel_db_range.
     constexpr float MEL_DB_RANGE = 60.0f;
+
+    // Validate mel config triplet — all three must change together for v27.
+    // Catches mismatched constants at compile time (silent frequency misalignment otherwise).
+    static_assert(
+        (NUM_MEL_BANDS == 26 && MEL_MIN_FREQ == 60.0f && MEL_MAX_FREQ == 8000.0f) ||
+        (NUM_MEL_BANDS == 30 && MEL_MIN_FREQ == 40.0f && MEL_MAX_FREQ == 4000.0f),
+        "Mel config mismatch: NUM_MEL_BANDS/MEL_MIN_FREQ/MEL_MAX_FREQ must be a valid triplet"
+    );
 
     // Frequency bin ranges for different detectors
     constexpr int BASS_MIN_BIN = 1;    // 62.5 Hz
@@ -254,18 +266,12 @@ public:
     float getBassFlux() const { return bassFlux_; }
 
     /**
-     * Get mid-frequency spectral flux (bins 7-32, 437-2000 Hz).
-     * Captures vocal/snare transients. Useful for band-specific PLP
-     * epoch-fold on syncopated genres (reggaeton, afrobeat).
+     * Get spectral flatness (Wiener entropy) of current frame.
+     * Range 0-1: 0 = pure tone, 1 = white noise.
+     * Drums are noise-like (~0.5-0.8), pitched instruments are tonal (~0.1-0.3).
+     * Used as a deterministic feature alongside mel bands in NN input.
      */
-    float getMidFlux() const { return midFlux_; }
-
-    /**
-     * Get high-frequency spectral flux (bins 33-127, 2-8 kHz).
-     * Captures hi-hats, cymbals, snare brightness. Useful for band-specific
-     * PLP epoch-fold on trap (hi-hat patterns) and dense percussion.
-     */
-    float getHighFlux() const { return highFlux_; }
+    float getSpectralFlatness() const { return spectralFlatness_; }
 
     // --- Compressor/whitening debug accessors ---
 
@@ -324,9 +330,8 @@ private:
     float totalEnergy_;
     float spectralCentroid_;
     float spectralFlux_;
+    float spectralFlatness_;          // Wiener entropy: 0=tone, 1=noise (drum discriminator)
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
-    float midFlux_;            // Mid-frequency spectral flux (bins 7-32, vocals/snare)
-    float highFlux_;           // High-frequency spectral flux (bins 33-127, hi-hats/cymbals)
 
     // State
     bool frameReady_;

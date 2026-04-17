@@ -81,9 +81,8 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , totalEnergy_(0.0f)
     , spectralCentroid_(0.0f)
     , spectralFlux_(0.0f)
+    , spectralFlatness_(0.0f)
     , bassFlux_(0.0f)
-    , midFlux_(0.0f)
-    , highFlux_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -148,8 +147,6 @@ void SharedSpectralAnalysis::reset() {
     frameRmsDb_ = -200.0f;
     spectralFlux_ = 0.0f;
     bassFlux_ = 0.0f;
-    midFlux_ = 0.0f;
-    highFlux_ = 0.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -239,16 +236,14 @@ void SharedSpectralAnalysis::process() {
         // actual emphasis rather than bin-count dominance (bass=6, mid=26,
         // high=95 bins — without normalization, high band would dominate).
         bassFlux_ = bassFlux / BASS_BIN_COUNT;
-        midFlux_ = midFlux / MID_BIN_COUNT;
-        highFlux_ = highFlux / HIGH_BIN_COUNT;
+        float normMidFlux = midFlux / MID_BIN_COUNT;
+        float normHighFlux = highFlux / HIGH_BIN_COUNT;
         spectralFlux_ = bassFluxWeight * bassFlux_
-                       + midFluxWeight * midFlux_
-                       + highFluxWeight * highFlux_;
+                       + midFluxWeight * normMidFlux
+                       + highFluxWeight * normHighFlux;
     } else {
         spectralFlux_ = 0.0f;
         bassFlux_ = 0.0f;
-        midFlux_ = 0.0f;
-        highFlux_ = 0.0f;
     }
 
     // Save compressed magnitudes for next frame's flux computation.
@@ -591,6 +586,33 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
         spectralCentroid_ = centroidBin * SpectralConstants::BIN_FREQ_HZ;
     } else {
         spectralCentroid_ = 0.0f;
+    }
+
+    // Spectral flatness (Wiener entropy): geometric_mean / arithmetic_mean.
+    // Range 0-1: 0 = pure tone (energy in one bin), 1 = white noise (equal energy).
+    // Drums are noise-like (broadband transient), pitched instruments are tonal.
+    // Used as a deterministic NN input feature for drum-vs-harmonic discrimination.
+    // Both means use the same set of bins (mag > 1e-10, skipping DC) for consistency.
+    // Uses logf/expf instead of log10f/powf — same result (log base cancels in
+    // geo/ari ratio) but ~2-3× faster on Cortex-M4F (no hardware power instruction).
+    float logSum = 0.0f;
+    float flatMagSum = 0.0f;
+    int validBins = 0;
+    for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+        float mag = magnitudes_[i];
+        if (mag > 1e-10f) {
+            logSum += logf(mag);
+            flatMagSum += mag;
+            validBins++;
+        }
+    }
+    if (validBins > 0 && flatMagSum > 1e-10f) {
+        float geoMean = expf(logSum / validBins);
+        float ariMean = flatMagSum / validBins;
+        float flat = geoMean / ariMean;
+        spectralFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
+    } else {
+        spectralFlatness_ = 0.0f;
     }
 }
 
