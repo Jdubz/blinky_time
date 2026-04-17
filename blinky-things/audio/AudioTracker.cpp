@@ -196,7 +196,9 @@ const AudioControl& AudioTracker::update(float dt) {
         cachedBassEnergy_ = 0.0f;
         const float* mel = spectral_.getMelBands();
         if (mel) {
-            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];  // Bands 0-5 (bass region)
+            // Mel bands 0-5 cover the bass region (lowest 6 bands of the filterbank).
+            // These are mel band indices, not FFT bin indices (SpectralConstants::BASS_MIN_BIN).
+            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];
             cachedBassEnergy_ /= 6.0f;
         }
         addBassSample(cachedBassEnergy_);
@@ -850,6 +852,8 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         // High bass ratio → threshold stays at floor.
         // Low bass ratio (broadband event) → threshold increases by up to bassGateMaxBoost.
         // bassGateMinRatio: below this bass fraction, gate is fully engaged (1/3 = 33%)
+        // Post-sweep hardcoded (b127): marginal F1 improvement. Not exposed as tunable
+        // parameters — these are structural heuristics, not sensitivity knobs.
         static constexpr float bassGateMaxBoost = 0.5f;  // Max 50% threshold increase
         static constexpr float bassGateMinRatio = 1.0f / 3.0f;  // Full gate when bass < 33% of broadband
         float bassFlux = spectral_.getBassFlux();

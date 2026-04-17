@@ -446,6 +446,10 @@ def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
         # Fallback: approximate flatness from mel bands (Wiener entropy on mel energy).
         # Less accurate than STFT (different frequency resolution/range) but works
         # when audio waveform is unavailable (e.g., cached mel-only data).
+        # WARNING: mel-based flatness diverges from STFT-based values because mel
+        # bands have different resolution (26-30 bands vs 128 FFT bins) and frequency
+        # range. This fallback should NOT be used for v27+ hybrid training — pass
+        # audio_np to get STFT-based values matching firmware.
         for t in range(n_frames):
             mel_frame = mel[t]
             # Reverse log compression: mel is in [0,1] mapped from [-mel_db_range, 0] dB

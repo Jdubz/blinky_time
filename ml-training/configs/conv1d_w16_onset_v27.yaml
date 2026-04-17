@@ -18,7 +18,7 @@ model:
   window_frames: 16
   dropout: 0.1
   freq_pos_encoding: false
-  num_output_channels: 0
+  num_output_channels: 0    # 0 = auto (defaults to 1 in export: out_channels = max(1, N))
 
 labels:
   target_type: "binary"
