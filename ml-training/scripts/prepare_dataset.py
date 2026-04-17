@@ -619,7 +619,14 @@ def _apply_mic_profile(mel: np.ndarray, mic_profile: dict,
 
     Uses the provided rng for reproducible noise generation.
     """
+    n_mel = mel.shape[1]
     band_gain = mic_profile["band_gain"]
+    # Interpolate mic profile if band count changed (e.g., 26→40 mel bands)
+    if len(band_gain) != n_mel:
+        from scipy.interpolate import interp1d
+        x_old = np.linspace(0, 1, len(band_gain))
+        x_new = np.linspace(0, 1, n_mel)
+        band_gain = interp1d(x_old, band_gain, kind='linear')(x_new).astype(np.float32)
 
     # Select noise floor: gain-aware (random gain per example) or static
     if "noise_floor_by_gain" in mic_profile:
@@ -643,6 +650,13 @@ def _apply_mic_profile(mel: np.ndarray, mic_profile: dict,
         noise_floor = nf_by_gain[g_idx]
     else:
         noise_floor = mic_profile["noise_floor"]
+
+    # Interpolate noise floor if band count changed
+    if len(noise_floor) != n_mel:
+        from scipy.interpolate import interp1d
+        x_old = np.linspace(0, 1, len(noise_floor))
+        x_new = np.linspace(0, 1, n_mel)
+        noise_floor = interp1d(x_old, noise_floor, kind='linear')(x_new).astype(np.float32)
 
     mel_mic = mel * band_gain[np.newaxis, :]
     if noise_floor.max() > 0:
