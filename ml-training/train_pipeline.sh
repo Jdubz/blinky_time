@@ -30,6 +30,8 @@ for arg in "${@:3}"; do
 done
 
 OUTPUT_DIR="outputs/$RUN_NAME"
+mkdir -p "$OUTPUT_DIR"  # Create early so tee can write the log from the start
+
 # Read processed_dir from config — fail fast on parse errors
 DATA_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('data',{}).get('processed_dir','data/processed'))" "$CONFIG")
 if [ -z "$DATA_DIR" ]; then
