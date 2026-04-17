@@ -848,25 +848,30 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
         // Bass-band energy gate: require bass presence for easy detections.
         // High bass ratio → threshold stays at floor.
-        // Low bass ratio (broadband event) → threshold increases by up to 50%.
+        // Low bass ratio (broadband event) → threshold increases by up to bassGateMaxBoost.
+        // bassGateMinRatio: below this bass fraction, gate is fully engaged (1/3 = 33%)
+        static constexpr float bassGateMaxBoost = 0.5f;  // Max 50% threshold increase
+        static constexpr float bassGateMinRatio = 1.0f / 3.0f;  // Full gate when bass < 33% of broadband
         float bassFlux = spectral_.getBassFlux();
         float broadbandFlux = spectral_.getSpectralFlux();
         // In near-silence (broadbandFlux < 0.001), default to neutral ratio
         // so the gate doesn't suppress onsets at the start of music.
         float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
-        float bassGate = 1.0f + 0.5f * clampf(1.0f - bassRatio * 3.0f, 0.0f, 1.0f);
+        float bassGate = 1.0f + bassGateMaxBoost * clampf(1.0f - bassRatio / bassGateMinRatio, 0.0f, 1.0f);
 
         // PLP pattern bias: soft threshold increase at off-beat positions.
         // plpPulseValue_ is high (0.7-1.0) at expected onset positions,
         // low (0.0-0.3) between beats. When confident, raise threshold at
         // low-pattern positions. When uncertain, no bias.
+        static constexpr float plpBiasMaxSuppression = 0.3f;  // Max 30% threshold increase at off-beat
+        static constexpr float plpBiasMinConfidence = 0.3f;    // Only bias when pattern confidence > 30%
         float patternBias = 1.0f;
-        if (plpConfidence_ > 0.3f) {
+        if (plpConfidence_ > plpBiasMinConfidence) {
             float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
             // At pattern minimum (0.0): bias = 1.3 (30% harder to trigger)
             // At pattern maximum (1.0): bias = 1.0 (no change)
             // Scaled by confidence so uncertain patterns don't suppress
-            float suppressAmount = 0.3f * plpConfidence_ * (1.0f - patternVal);
+            float suppressAmount = plpBiasMaxSuppression * plpConfidence_ * (1.0f - patternVal);
             patternBias = 1.0f + suppressAmount;
         }
 

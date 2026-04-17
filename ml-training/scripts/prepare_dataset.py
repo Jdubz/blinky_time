@@ -940,6 +940,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 "target": targets,
                 "aug": aug_name,
                 "source": audio_path.stem,
+                "audio_np": audio_np,  # Needed by append_hybrid_features for STFT-based flatness
             }
 
             # Teacher targets for knowledge distillation

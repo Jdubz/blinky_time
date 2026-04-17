@@ -591,18 +591,21 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
     // Range 0-1: 0 = pure tone (energy in one bin), 1 = white noise (equal energy).
     // Drums are noise-like (broadband transient), pitched instruments are tonal.
     // Used as a deterministic NN input feature for drum-vs-harmonic discrimination.
+    // Both means use the same set of bins (mag > 1e-10, skipping DC) for consistency.
     float logSum = 0.0f;
+    float flatMagSum = 0.0f;
     int validBins = 0;
     for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
         float mag = magnitudes_[i];
         if (mag > 1e-10f) {
             logSum += log10f(mag);
+            flatMagSum += mag;
             validBins++;
         }
     }
-    if (validBins > 0 && magSum > 1e-10f) {
+    if (validBins > 0 && flatMagSum > 1e-10f) {
         float geoMean = powf(10.0f, logSum / validBins);
-        float ariMean = magSum / validBins;
+        float ariMean = flatMagSum / validBins;
         float flat = geoMean / ariMean;
         spectralFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
     } else {

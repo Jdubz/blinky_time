@@ -147,19 +147,30 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
     n_fft = cfg["audio"]["n_fft"]
     hop_length = cfg["audio"]["hop_length"]
 
+    # Guard: audio must be at least n_fft samples for STFT.
+    # Short/corrupt files (some LOFI mp3s decode to < 256 samples) would crash torch.stft.
+    if len(audio) < n_fft:
+        raise ValueError(
+            f"Audio too short for STFT: {len(audio)} samples < n_fft={n_fft}"
+        )
+
     # Chunk long audio to avoid GPU OOM. 60s at 16kHz = 960K samples.
     # STFT of 960K samples needs ~150 MB GPU; safe for 10 GB cards.
     # Note: chunk boundaries lose n_fft samples of context (16ms at 16kHz).
     # Acceptable for training data; not suitable for frame-exact evaluation.
+    # Each chunk's magnitudes are moved to CPU immediately to avoid accumulating
+    # GPU memory — torch.cat on GPU with many chunks caused OOM on long tracks.
     max_samples = 960_000  # 60s at 16kHz
     if len(audio) > max_samples:
         chunks = []
         for start in range(0, len(audio), max_samples):
             chunk = audio[start:start + max_samples]
+            if len(chunk) < n_fft:
+                break  # Last chunk too short for STFT, discard
             stft = torch.stft(chunk, n_fft=n_fft, hop_length=hop_length,
                               window=window, center=False, return_complex=True)
-            chunks.append(stft.abs())
-        magnitudes = torch.cat(chunks, dim=1)  # concat along time axis
+            chunks.append(stft.abs().cpu())
+        magnitudes = torch.cat(chunks, dim=1).to(audio.device)
     else:
         stft = torch.stft(audio, n_fft=n_fft, hop_length=hop_length,
                           window=window, center=False, return_complex=True)
@@ -395,8 +406,9 @@ def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
       - Spectral flatness (Wiener entropy): drums=noisy ~0.5-0.8, tones ~0.1-0.3
       - HWR spectral flux: high at onsets, low during sustain
 
-    If audio is provided, spectral flatness is computed from the STFT.
-    Otherwise, flux is approximated from mel differences and flatness is zero.
+    When audio waveform is provided, spectral flatness is computed from the STFT
+    magnitude spectrum (bins 1 to n_fft/2-1), matching firmware's computeDerivedFeatures()
+    which operates on FFT magnitudes. Without audio, falls back to mel-based approximation.
 
     Input shape: (n_frames, n_mels)
     Output shape: (n_frames, n_mels + 2)
@@ -409,19 +421,37 @@ def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
         diff = mel[t] - mel[t - 1]
         extra[t, 1] = np.maximum(diff, 0.0).sum() / n_mels
 
-    # Spectral flatness approximated from mel bands (Wiener entropy).
-    # Uses mel energy directly — matches firmware's computation from FFT magnitudes.
-    # geo_mean(mel) / arith_mean(mel), where mel is in linear energy (before log).
-    # Since our mel is log-compressed [0,1], we reverse: linear = 10^((mel*60-60)/10)
-    for t in range(n_frames):
-        mel_frame = mel[t]
-        # Reverse log compression to get linear energy
-        linear = np.power(10.0, (mel_frame * 60.0 - 60.0) / 10.0)
-        linear = np.maximum(linear, 1e-10)
-        log_mean = np.log(linear).mean()
-        geo_mean = np.exp(log_mean)
-        ari_mean = linear.mean()
-        if ari_mean > 1e-10:
-            extra[t, 0] = np.clip(geo_mean / ari_mean, 0.0, 1.0)
+    if audio is not None and len(audio) >= n_fft:
+        # STFT-based spectral flatness — matches firmware SharedSpectralAnalysis.
+        # Firmware computes Wiener entropy from FFT magnitude bins 1..NUM_BINS-1
+        # (skipping DC). We replicate that here using numpy STFT.
+        window = np.hamming(n_fft).astype(np.float32)
+        for t in range(n_frames):
+            start = t * hop
+            end = start + n_fft
+            if end > len(audio):
+                break
+            frame = audio[start:end] * window
+            spectrum = np.fft.rfft(frame)
+            mags = np.abs(spectrum[1:])  # Skip DC, matches firmware i=1..NUM_BINS-1
+            mags = np.maximum(mags, 1e-10)
+            log_sum = np.log(mags).mean()
+            geo_mean = np.exp(log_sum)
+            ari_mean = mags.mean()
+            if ari_mean > 1e-10:
+                extra[t, 0] = np.clip(geo_mean / ari_mean, 0.0, 1.0)
+    else:
+        # Fallback: approximate flatness from mel bands (Wiener entropy on mel energy).
+        # Less accurate than STFT (different frequency resolution/range) but works
+        # when audio waveform is unavailable (e.g., cached mel-only data).
+        for t in range(n_frames):
+            mel_frame = mel[t]
+            linear = np.power(10.0, (mel_frame * 60.0 - 60.0) / 10.0)
+            linear = np.maximum(linear, 1e-10)
+            log_mean = np.log(linear).mean()
+            geo_mean = np.exp(log_mean)
+            ari_mean = linear.mean()
+            if ari_mean > 1e-10:
+                extra[t, 0] = np.clip(geo_mean / ari_mean, 0.0, 1.0)
 
     return np.concatenate([mel, extra], axis=-1)

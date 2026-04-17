@@ -44,6 +44,14 @@ namespace SpectralConstants {
     // MUST match ml-training base.yaml mel_db_range.
     constexpr float MEL_DB_RANGE = 60.0f;
 
+    // Validate mel config triplet — all three must change together for v27.
+    // Catches mismatched constants at compile time (silent frequency misalignment otherwise).
+    static_assert(
+        (NUM_MEL_BANDS == 26 && MEL_MIN_FREQ == 60.0f && MEL_MAX_FREQ == 8000.0f) ||
+        (NUM_MEL_BANDS == 30 && MEL_MIN_FREQ == 40.0f && MEL_MAX_FREQ == 4000.0f),
+        "Mel config mismatch: NUM_MEL_BANDS/MEL_MIN_FREQ/MEL_MAX_FREQ must be a valid triplet"
+    );
+
     // Frequency bin ranges for different detectors
     constexpr int BASS_MIN_BIN = 1;    // 62.5 Hz
     constexpr int BASS_MAX_BIN = 6;    // 375 Hz
