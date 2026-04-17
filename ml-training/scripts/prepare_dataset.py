@@ -62,6 +62,24 @@ atexit.register(_cleanup_shard_dirs)
 # during the C extension calls, making it ideal for thread-based prefetching.
 PREFETCH_AHEAD = 8
 
+
+def _load_audio_quiet(path: str, sr: int) -> tuple:
+    """Load audio with stderr suppressed (hides mpg123 C-library warnings).
+
+    Some MP3 files have corrupt frames that trigger mpg123 'dequantization failed'
+    warnings on stderr. librosa handles these gracefully (skips bad frames), but
+    the C-level warnings can't be caught in Python — suppress via fd redirect.
+    """
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stderr = os.dup(2)
+    os.dup2(devnull, 2)
+    try:
+        return librosa.load(path, sr=sr, mono=True)
+    finally:
+        os.dup2(old_stderr, 2)
+        os.close(devnull)
+        os.close(old_stderr)
+
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -717,11 +735,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     target_type = cfg["labels"].get("target_type", "gaussian")
 
-    # Load audio with librosa (or use pre-loaded from prefetch thread pool)
+    # Load audio (or use pre-loaded from prefetch thread pool)
     if preloaded_audio is not None:
         audio_np = preloaded_audio
     else:
-        audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
+        audio_np, _ = _load_audio_quiet(str(audio_path), sr)
 
     # Normalize RMS to simulate firmware AGC level.
     # Mastered audio (~-8 dB RMS) produces mel values crushed to [0.95, 1.0].
@@ -1477,7 +1495,7 @@ def main():
         sr = cfg["audio"]["sample_rate"]
         for j in range(min(PREFETCH_AHEAD, len(split_pairs))):
             path = split_pairs[j][0]
-            audio_futures[j] = prefetch_pool.submit(librosa.load, str(path), sr=sr, mono=True)
+            audio_futures[j] = prefetch_pool.submit(_load_audio_quiet, str(path), sr)
 
         # --- Chunk thread pool: parallelize chunk_data (pure numpy, GIL-free) ---
         chunk_pool = ThreadPoolExecutor(max_workers=n_chunk_workers)

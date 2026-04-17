@@ -154,13 +154,14 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
             f"Audio too short for STFT: {len(audio)} samples < n_fft={n_fft}"
         )
 
-    # Chunk long audio to avoid GPU OOM. 60s at 16kHz = 960K samples.
-    # STFT of 960K samples needs ~150 MB GPU; safe for 10 GB cards.
+    # Chunk long audio to avoid GPU OOM. 30s at 16kHz = 480K samples.
+    # STFT of 480K samples needs ~75 MB GPU; safe even when augmentation
+    # variants consume most of the 10 GB GPU memory.
     # Note: chunk boundaries lose n_fft samples of context (16ms at 16kHz).
     # Acceptable for training data; not suitable for frame-exact evaluation.
     # Each chunk's magnitudes are moved to CPU immediately to avoid accumulating
     # GPU memory — torch.cat on GPU with many chunks caused OOM on long tracks.
-    max_samples = 960_000  # 60s at 16kHz
+    max_samples = 480_000  # 30s at 16kHz
     if len(audio) > max_samples:
         chunks = []
         for start in range(0, len(audio), max_samples):
