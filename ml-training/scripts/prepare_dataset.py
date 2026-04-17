@@ -57,6 +57,14 @@ def _cleanup_shard_dirs() -> None:
 
 atexit.register(_cleanup_shard_dirs)
 
+# Number of audio files to prefetch ahead of the main processing loop.
+# librosa.load (MP3 decode + resample) takes 50-200ms per file and releases the GIL
+# during the C extension calls, making it ideal for thread-based prefetching.
+PREFETCH_AHEAD = 8
+
+import os
+from concurrent.futures import Future, ThreadPoolExecutor
+
 import librosa
 import numpy as np
 import torch
@@ -682,7 +690,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  mel_cache_dir: Path | None = None,
                  generate_teacher: bool = False,
                  teacher_soft_dir: Path | None = None,
-                 noise_dir: Path | None = None) -> list[dict]:
+                 noise_dir: Path | None = None,
+                 preloaded_audio: np.ndarray | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -708,8 +717,11 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     target_type = cfg["labels"].get("target_type", "gaussian")
 
-    # Load audio with librosa for resampling consistency
-    audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
+    # Load audio with librosa (or use pre-loaded from prefetch thread pool)
+    if preloaded_audio is not None:
+        audio_np = preloaded_audio
+    else:
+        audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
 
     # Normalize RMS to simulate firmware AGC level.
     # Mastered audio (~-8 dB RMS) produces mel values crushed to [0.95, 1.0].
@@ -1442,6 +1454,12 @@ def main():
     n_mels = cfg["audio"]["n_mels"]
     SHARD_BATCH = 500  # files per shard (limits RAM to ~3 GB)
 
+    # Thread pool for audio prefetching and parallel chunking.
+    # librosa.load and numpy operations release the GIL, so threads give
+    # real parallelism for these CPU-bound operations.
+    n_chunk_workers = max(1, min(16, os.cpu_count() - 2)) if os.cpu_count() else 4
+    mel_db = cfg["audio"].get("mel_db_range", 60.0)
+
     for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
         shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_", dir=str(output_dir)))
         _active_shard_dirs.append(shard_dir)
@@ -1451,8 +1469,48 @@ def main():
         total_variants = 0
         errors = 0
 
+        # --- Audio prefetch: load upcoming files in background threads ---
+        # librosa.load decodes MP3 + resamples (50-200ms, releases GIL).
+        # Prefetching overlaps this I/O with GPU mel/augmentation work.
+        prefetch_pool = ThreadPoolExecutor(max_workers=PREFETCH_AHEAD)
+        audio_futures: dict[int, Future] = {}
+        sr = cfg["audio"]["sample_rate"]
+        for j in range(min(PREFETCH_AHEAD, len(split_pairs))):
+            path = split_pairs[j][0]
+            audio_futures[j] = prefetch_pool.submit(librosa.load, str(path), sr=sr, mono=True)
+
+        # --- Chunk thread pool: parallelize chunk_data (pure numpy, GIL-free) ---
+        chunk_pool = ThreadPoolExecutor(max_workers=n_chunk_workers)
+        chunk_futures: list[Future] = []
+
         for i, (audio_path, label_path) in enumerate(tqdm(split_pairs, desc=split_name)):
             try:
+                # Collect completed chunk futures from previous iterations
+                for cf in chunk_futures:
+                    mc, tc, thc = cf.result()
+                    batch_X.append(mc)
+                    batch_Y.append(tc)
+                    if generate_teacher and thc is not None:
+                        batch_T.append(thc)
+                    total_variants += 1
+                chunk_futures.clear()
+
+                # Get prefetched audio (or load synchronously if prefetch missed)
+                preloaded = None
+                if i in audio_futures:
+                    try:
+                        audio_data, _ = audio_futures.pop(i).result()
+                        preloaded = audio_data
+                    except Exception:
+                        pass  # Fall back to loading inside process_file
+
+                # Submit prefetch for upcoming file
+                next_idx = i + PREFETCH_AHEAD
+                if next_idx < len(split_pairs):
+                    path = split_pairs[next_idx][0]
+                    audio_futures[next_idx] = prefetch_pool.submit(
+                        librosa.load, str(path), sr=sr, mono=True)
+
                 # Per-file deterministic RNG for reproducible augmentation
                 # (enables mel caching across runs regardless of processing order)
                 file_rng = _file_rng(seed, audio_path.stem)
@@ -1464,28 +1522,34 @@ def main():
                                        mel_cache_dir=mel_cache_dir,
                                        generate_teacher=generate_teacher,
                                        teacher_soft_dir=teacher_soft_dir,
-                                       noise_dir=noise_dir)
+                                       noise_dir=noise_dir,
+                                       preloaded_audio=preloaded)
+
+                # Submit chunking to thread pool (pure numpy, releases GIL).
+                # Runs in parallel with next iteration's process_file (GPU work).
                 for r in results:
-                    mel_chunks, target_chunks, teacher_chunks = chunk_data(
-                        r["mel"], r["target"], chunk_frames, chunk_stride,
+                    cf = chunk_pool.submit(
+                        chunk_data, r["mel"], r["target"], chunk_frames, chunk_stride,
                         teacher_target=r.get("teacher"),
-                        use_delta=use_delta,
-                        use_band_flux=use_band_flux,
-                        use_hybrid=use_hybrid,
-                        audio_np=r.get("audio_np"),
-                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
-                    )
-                    batch_X.append(mel_chunks)
-                    batch_Y.append(target_chunks)
-                    if generate_teacher and teacher_chunks is not None:
-                        batch_T.append(teacher_chunks)
-                    total_variants += 1
+                        use_delta=use_delta, use_band_flux=use_band_flux,
+                        use_hybrid=use_hybrid, audio_np=r.get("audio_np"),
+                        mel_db_range=mel_db)
+                    chunk_futures.append(cf)
             except Exception as e:
                 tqdm.write(f"  ERROR: {audio_path.name}: {e}")
                 errors += 1
 
             # Flush batch to disk periodically to limit RAM usage
             if (i + 1) % SHARD_BATCH == 0 or i == len(split_pairs) - 1:
+                # Drain remaining chunk futures before flush
+                for cf in chunk_futures:
+                    mc, tc, thc = cf.result()
+                    batch_X.append(mc)
+                    batch_Y.append(tc)
+                    if generate_teacher and thc is not None:
+                        batch_T.append(thc)
+                    total_variants += 1
+                chunk_futures.clear()
                 if batch_X:
                     X_s = np.concatenate(batch_X)
                     Y_s = np.concatenate(batch_Y)
@@ -1501,6 +1565,10 @@ def main():
                 batch_X, batch_Y, batch_T = [], [], []
                 gc.collect()
                 torch.cuda.empty_cache()
+
+        # Shut down thread pools for this split
+        prefetch_pool.shutdown(wait=False)
+        chunk_pool.shutdown(wait=False)
 
         # Merge shards into final .npy using memmap (never holds full dataset in RAM)
         total = sum(shard_counts)
