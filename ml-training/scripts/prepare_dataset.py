@@ -48,12 +48,28 @@ _active_shard_dirs: list[Path] = []
 
 
 def _cleanup_shard_dirs() -> None:
+    """Clean up shard temp dirs on exit — but NOT if a resumption manifest exists.
+
+    If a manifest (.prep_progress_*.json) is present in the parent directory,
+    the shards are needed for resume-from-crash. Only clean shards that have
+    no corresponding manifest (i.e., the split completed successfully and the
+    manifest was already deleted).
+    """
     for d in _active_shard_dirs:
         if d.exists():
+            # Check for resumption manifest — if present, keep shards for resume
+            parent = d.parent
+            split_name = d.name.split("_")[1] if "_" in d.name else ""
+            manifest = parent / f".prep_progress_{split_name}.json"
+            if manifest.exists():
+                print(f"NOTE: Keeping shard dir {d.name} for resumption "
+                      f"(manifest exists)", file=sys.stderr)
+                continue
             try:
                 shutil.rmtree(d)
             except Exception as e:
-                print(f"WARNING: Failed to clean up shard dir {d}: {e}", file=sys.stderr)
+                print(f"WARNING: Failed to clean up shard dir {d}: {e}",
+                      file=sys.stderr)
 
 
 atexit.register(_cleanup_shard_dirs)
@@ -1655,7 +1671,13 @@ def main():
                       f"disk {free_gb:.0f}G free", flush=True)
                 last_progress = now
 
-            # --- Periodic disk check (every 100 files) ---
+            # --- Periodic maintenance (every 50 files) ---
+            if (i + 1) % 50 == 0:
+                # Defragment GPU — without this, CUDA context accumulates
+                # unreturnable fragments over hundreds of tracks until even
+                # 20 MB allocations fail despite 10 GB total GPU memory.
+                gc.collect()
+                torch.cuda.empty_cache()
             if (i + 1) % 100 == 0:
                 _check_disk_space(output_dir, 10.0,
                                   f"continuing data prep ({i+1}/{len(split_pairs)})")
