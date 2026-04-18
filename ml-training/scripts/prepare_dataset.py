@@ -1014,16 +1014,22 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                                             early_neighbor_frames=early_neighbor_frames,
                                             early_neighbor_weight=early_neighbor_weight)
 
+            # Compute hybrid features (flatness + SuperFlux flux) inline if enabled.
+            # Previously stored audio_np in the result dict and computed during chunk_data,
+            # but that held 7.7 MB per track × 500 files = 3.8 GB in the chunk thread pool
+            # and caused CUDA OOM from memory pressure. Computing here and discarding
+            # audio_np immediately keeps memory bounded.
+            if cfg.get("features", {}).get("use_hybrid", False):
+                mel = append_hybrid_features(
+                    mel, audio=audio_np,
+                    mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+
             result = {
                 "mel": mel,
                 "target": targets,
                 "aug": aug_name,
                 "source": audio_path.stem,
             }
-            # Only keep raw waveform when hybrid features need STFT-based flatness.
-            # Storing audio_np for all tracks wastes memory during batched processing.
-            if cfg.get("features", {}).get("use_hybrid", False):
-                result["audio_np"] = audio_np
 
             # Teacher targets for knowledge distillation
             if generate_teacher:
@@ -1138,6 +1144,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                                                 label_shift_frames=label_shift_frames,
                                                 early_neighbor_frames=early_neighbor_frames,
                                                 early_neighbor_weight=early_neighbor_weight)
+                    if cfg.get("features", {}).get("use_hybrid", False):
+                        mel = append_hybrid_features(
+                            mel, audio=stem_np,
+                            mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
                     stem_result = {
                         "mel": mel,
                         "target": targets,
@@ -1161,16 +1171,13 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
                teacher_target: np.ndarray | None = None,
                use_delta: bool = False,
-               use_band_flux: bool = False,
-               use_hybrid: bool = False,
-               audio_np: np.ndarray | None = None,
-               mel_db_range: float = 60.0) -> tuple:
+               use_band_flux: bool = False) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks.
 
     If use_delta=True, appends first-order mel differences as additional
     channels: mel[t] - mel[t-1]. Output shape becomes (N, chunk_frames, 2*n_mels).
     If use_band_flux=True, appends 3 band-grouped HWR flux channels.
-    If use_hybrid=True, appends spectral flatness + flux (2 channels).
+    Hybrid features (flatness + flux) are pre-computed in process_file, not here.
     """
     n_frames = mel.shape[0]
 
@@ -1178,8 +1185,6 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
         mel = append_delta_features(mel)
     elif use_band_flux:
         mel = append_band_flux_features(mel)
-    elif use_hybrid:
-        mel = append_hybrid_features(mel, audio=audio_np, mel_db_range=mel_db_range)
     has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
@@ -1642,14 +1647,13 @@ def main():
                     slow_files.append((audio_path.name, file_elapsed))
                     print(f"  SLOW: {audio_path.name} took {file_elapsed:.1f}s", flush=True)
 
-                # Submit chunking to thread pool (pure numpy, releases GIL)
+                # Submit chunking to thread pool (pure numpy, releases GIL).
+                # Hybrid features are already in mel (computed in process_file).
                 for r in results:
                     cf = chunk_pool.submit(
                         chunk_data, r["mel"], r["target"], chunk_frames, chunk_stride,
                         teacher_target=r.get("teacher"),
-                        use_delta=use_delta, use_band_flux=use_band_flux,
-                        use_hybrid=use_hybrid, audio_np=r.get("audio_np"),
-                        mel_db_range=mel_db)
+                        use_delta=use_delta, use_band_flux=use_band_flux)
                     chunk_futures.append(cf)
 
                 completed_stems.append(audio_path.stem)
