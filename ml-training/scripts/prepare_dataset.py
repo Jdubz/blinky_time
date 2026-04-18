@@ -783,6 +783,25 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     target_type = cfg["labels"].get("target_type", "gaussian")
 
+    # --- Fast label pre-check: skip tracks with missing/invalid labels BEFORE
+    # loading audio on GPU. Prevents wasting GPU time on tracks that will be
+    # discarded after the expensive augmentation step. ---
+    labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
+    kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
+    if labels_type == "kick_weighted" and kick_weighted_dir:
+        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
+        if not kw_path.exists():
+            return []
+        with open(kw_path) as f:
+            kw_data = json.load(f)
+        if kw_data.get("skipped"):
+            return []
+        n_ks = kw_data.get("kick_count", 0) + kw_data.get("snare_count", 0)
+        if n_ks < 10:
+            print(f"  WARNING: Skipping {audio_path.stem}: only {n_ks} kick+snare events "
+                  f"(likely failed drum separation)", flush=True)
+            return []
+
     # Load audio (or use pre-loaded from prefetch thread pool)
     if preloaded_audio is not None:
         audio_np = preloaded_audio
@@ -790,10 +809,6 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         audio_np, _ = _load_audio_quiet(str(audio_path), sr)
 
     # Normalize RMS to simulate firmware AGC level.
-    # Mastered audio (~-8 dB RMS) produces mel values crushed to [0.95, 1.0].
-    # Firmware mic+AGC operates at much lower levels where [-60, 0] dB mapping
-    # uses the full [0, 1] range. Target -63 dB RMS gives mel mean ~0.52,
-    # matching firmware AGC output (calibrated via tools/rms_mel_sweep.py).
     target_rms_db = cfg["audio"].get("target_rms_db", -63)
     rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
     target_rms = 10 ** (target_rms_db / 20)
@@ -802,8 +817,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     audio_gpu = torch.from_numpy(audio_np).to(device)
 
     # Load labels — onset consensus, kick-weighted, or consensus beat labels.
-    labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
-    kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
+    # Note: kick_weighted pre-check already done above; kw_data is still in scope.
     onset_consensus_dir = cfg.get("labels", {}).get("onset_consensus_dir", "")
     neighbor_weight = cfg.get("labels", {}).get("neighbor_weight", 0.0)
     label_shift_frames = cfg.get("labels", {}).get("label_shift_frames", 0)
@@ -843,20 +857,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         beat_types = [o["type"] for o in kw_data["onsets"]]
         beat_strengths = None  # not used for instrument targets
     elif labels_type == "kick_weighted" and kick_weighted_dir:
-        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
-        if not kw_path.exists():
-            # Missing label (may be quarantined) — skip track silently
-            return []
-        with open(kw_path) as f:
-            kw_data = json.load(f)
-        # Quality gate: skip tracks with too few events or explicitly skipped
-        if kw_data.get("skipped"):
-            return []
-        n_ks = kw_data.get("kick_count", 0) + kw_data.get("snare_count", 0)
-        if n_ks < 10:
-            print(f"  WARNING: Skipping {audio_path.stem}: only {n_ks} kick+snare events "
-                  f"(likely failed drum separation)")
-            return []
+        # kw_data already loaded and validated in fast pre-check above
         beat_times = np.array([o["time"] for o in kw_data["onsets"]])
         beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
     elif labels_type == "consensus_kick_weighted" and kick_weighted_dir:
