@@ -1019,10 +1019,13 @@ def main():
     model_type = cfg["model"].get("type", "causal_cnn")
     use_delta = cfg.get("features", {}).get("use_delta", False)
     use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
     if use_delta:
         n_mels = cfg["audio"]["n_mels"] * 2
     elif use_band_flux:
         n_mels = cfg["audio"]["n_mels"] + 3
+    elif use_hybrid:
+        n_mels = cfg["audio"]["n_mels"] + 2
     else:
         n_mels = cfg["audio"]["n_mels"]
 

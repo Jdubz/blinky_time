@@ -568,10 +568,13 @@ def main():
     # Determine expected feature count from config (for slicing data with extra channels)
     use_delta = cfg.get("features", {}).get("use_delta", False)
     use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
     if use_delta:
         expected_features = cfg["audio"]["n_mels"] * 2
     elif use_band_flux:
         expected_features = cfg["audio"]["n_mels"] + 3
+    elif use_hybrid:
+        expected_features = cfg["audio"]["n_mels"] + 2  # mel + flatness + flux
     else:
         expected_features = cfg["audio"]["n_mels"]
 
@@ -676,13 +679,16 @@ def main():
         ).to(device)
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
-        # With delta features, input has 2× n_mels channels (mel + delta_mel)
+        # With delta/hybrid features, input has extra channels beyond n_mels
         use_delta = cfg.get("features", {}).get("use_delta", False)
         use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+        use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
         if use_delta:
             input_features = cfg["audio"]["n_mels"] * 2
         elif use_band_flux:
             input_features = cfg["audio"]["n_mels"] + 3
+        elif use_hybrid:
+            input_features = cfg["audio"]["n_mels"] + 2
         else:
             input_features = cfg["audio"]["n_mels"]
         model = build_onset_conv1d(

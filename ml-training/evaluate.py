@@ -31,6 +31,7 @@ from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
     append_band_flux_features,
     append_delta_features,
+    append_hybrid_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
@@ -151,10 +152,13 @@ def load_model(model_path: str, cfg: dict, device: torch.device):
         from models.onset_conv1d import build_onset_conv1d
         use_delta = cfg.get("features", {}).get("use_delta", False)
         use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+        use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
         if use_delta:
             input_features = cfg["audio"]["n_mels"] * 2
         elif use_band_flux:
             input_features = cfg["audio"]["n_mels"] + 3
+        elif use_hybrid:
+            input_features = cfg["audio"]["n_mels"] + 2
         else:
             input_features = cfg["audio"]["n_mels"]
         model = build_onset_conv1d(
@@ -232,6 +236,9 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             mel = append_delta_features(mel)
         elif cfg.get("features", {}).get("use_band_flux", False):
             mel = append_band_flux_features(mel)
+        elif cfg.get("features", {}).get("use_hybrid", False):
+            mel = append_hybrid_features(mel, audio=audio_np,
+                                         mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -563,6 +570,9 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
             mel = append_delta_features(mel)
         elif cfg.get("features", {}).get("use_band_flux", False):
             mel = append_band_flux_features(mel)
+        elif cfg.get("features", {}).get("use_hybrid", False):
+            mel = append_hybrid_features(mel, audio=audio_np,
+                                         mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
 
         n_frames = mel.shape[0]
         n_out_ch = model.out_channels
@@ -641,9 +651,17 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
     Y_val = np.load(data_dir / "Y_val.npy")
 
     # Slice features if data has more channels than model expects
-    # (e.g., data has 52=mel+delta but model wants 26=mel only)
     use_delta = cfg.get("features", {}).get("use_delta", False)
-    expected_features = cfg["audio"]["n_mels"] * (2 if use_delta else 1)
+    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
+    if use_delta:
+        expected_features = cfg["audio"]["n_mels"] * 2
+    elif use_band_flux:
+        expected_features = cfg["audio"]["n_mels"] + 3
+    elif use_hybrid:
+        expected_features = cfg["audio"]["n_mels"] + 2
+    else:
+        expected_features = cfg["audio"]["n_mels"]
     if X_val.shape[-1] > expected_features:
         X_val = X_val[..., :expected_features]
 
@@ -715,6 +733,7 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
 
     use_delta = cfg.get("features", {}).get("use_delta", False)
     use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
+    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
 
     capture_files = sorted(capture_dir.glob("*.jsonl"))
     if not capture_files:
@@ -746,7 +765,8 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
                   f"falling back to gated 'onset'.")
         device_act = np.array([f.get("nna", f["onset"]) for f in frames], dtype=np.float32)
 
-        mel_features = _append_features(mel, use_delta=use_delta, use_band_flux=use_band_flux)
+        mel_features = _append_features(mel, use_delta=use_delta, use_band_flux=use_band_flux,
+                                        use_hybrid=use_hybrid)
         n_frames = mel_features.shape[0]
 
         activations = sliding_window_inference(
