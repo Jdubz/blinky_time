@@ -373,12 +373,11 @@ def make_instrument_targets(beat_times: np.ndarray, beat_types: list[str],
 
 def _pink_noise_gpu(n: int, rng: np.random.Generator,
                     device: torch.device) -> torch.Tensor:
-    """Generate pink (1/f) noise, with CPU path for long signals to avoid GPU OOM."""
+    """Generate pink (1/f) noise on GPU, with CPU fallback for OOM."""
     white = torch.from_numpy(rng.standard_normal(n).astype(np.float32))
-    use_cpu = n > 960_000  # >60s: GPU FFT intermediates risk OOM
     try:
-        if use_cpu:
-            raise RuntimeError("CPU path for long signal")
+        if n > 960_000:
+            torch.cuda.empty_cache()  # Defragment before large FFT
         white_dev = white.to(device)
         fft = torch.fft.rfft(white_dev)
         freqs = torch.fft.rfftfreq(n, device=device)
@@ -618,14 +617,11 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
                     rir = rir.to(device)
 
                 rir = rir / (rir.abs().max() + 1e-10)
-                # FFT convolution — use CPU for long tracks to avoid GPU OOM.
-                # GPU FFT of 4M+ samples creates large intermediate buffers that
-                # exhaust memory when combined with augmentation variants.
+                # GPU FFT convolution (CPU fallback for OOM)
                 n_conv = len(audio) + len(rir) - 1
-                use_cpu = len(audio) > 960_000  # >60s: do on CPU proactively
                 try:
-                    if use_cpu:
-                        raise RuntimeError("CPU path for long track")
+                    if len(audio) > 960_000:
+                        torch.cuda.empty_cache()  # Defragment before large FFT
                     convolved = torch.fft.irfft(
                         torch.fft.rfft(audio, n=n_conv) * torch.fft.rfft(rir, n=n_conv),
                         n=n_conv

@@ -18,6 +18,11 @@
 
 set -e
 
+# Allow PyTorch CUDA allocator to use non-contiguous segments for large tensors.
+# Without this, fragmentation after hundreds of tracks leaves no contiguous block
+# for FFT intermediates on long tracks, causing unrecoverable OOM.
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
 CONFIG="${1:?Usage: $0 <config.yaml> <run-name> [--skip-labels] [--skip-prep]}"
 RUN_NAME="${2:?Usage: $0 <config.yaml> <run-name> [--skip-labels] [--skip-prep]}"
 SKIP_LABELS=false
