@@ -35,6 +35,7 @@ import math
 import shutil
 import sys
 import tempfile
+import time as _time
 from pathlib import Path
 
 # Track active shard temp dirs for crash cleanup. Shard dirs are created
@@ -56,6 +57,34 @@ def _cleanup_shard_dirs() -> None:
 
 
 atexit.register(_cleanup_shard_dirs)
+
+
+def _atomic_json_save(obj: object, path: Path) -> None:
+    """Save JSON atomically via write-to-tmp-then-rename."""
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+def _check_disk_space(path: Path, required_gb: float, context: str) -> None:
+    """Abort with clear message if disk space is insufficient."""
+    free_gb = shutil.disk_usage(path).free / (1024 ** 3)
+    if free_gb < required_gb:
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"FATAL: Insufficient disk space for {context}.", file=sys.stderr)
+        print(f"  Free:     {free_gb:.1f} GB", file=sys.stderr)
+        print(f"  Required: {required_gb:.1f} GB", file=sys.stderr)
+        print(f"  Path:     {path}", file=sys.stderr)
+        print(f"  Tip: delete old processed_v* dirs or stale mel_cache entries.",
+              file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _disk_free_gb(path: Path) -> float:
+    """Get free disk space in GB for the volume containing path."""
+    return shutil.disk_usage(path).free / (1024 ** 3)
+
 
 # Number of audio files to prefetch ahead of the main processing loop.
 # librosa.load (MP3 decode + resample) takes 50-200ms per file and releases the GIL
@@ -1434,13 +1463,27 @@ def main():
             print(f"Filtered {dropped} tracks below quality {min_quality} "
                   f"({len(pairs)} remaining)")
 
-    # File-level train/val split (prevents data leakage between splits)
-    pairs_shuffled = list(pairs)
-    rng.shuffle(pairs_shuffled)
-    val_split = cfg["training"]["val_split"]
-    n_val_files = max(1, int(len(pairs_shuffled) * val_split))
-    val_pairs = pairs_shuffled[:n_val_files]
-    train_pairs = pairs_shuffled[n_val_files:]
+    # File-level train/val split (prevents data leakage between splits).
+    # Save split assignment so resumed runs use the same split.
+    splits_path = output_dir / ".prep_splits.json"
+    if splits_path.exists():
+        split_data = json.loads(splits_path.read_text())
+        train_stems = set(split_data["train"])
+        val_stems = set(split_data["val"])
+        train_pairs = [(a, l) for a, l in pairs if a.stem in train_stems]
+        val_pairs = [(a, l) for a, l in pairs if a.stem in val_stems]
+        print(f"Loaded saved split: {len(train_pairs)} train, {len(val_pairs)} val")
+    else:
+        pairs_shuffled = list(pairs)
+        rng.shuffle(pairs_shuffled)
+        val_split = cfg["training"]["val_split"]
+        n_val_files = max(1, int(len(pairs_shuffled) * val_split))
+        val_pairs = pairs_shuffled[:n_val_files]
+        train_pairs = pairs_shuffled[n_val_files:]
+        _atomic_json_save({
+            "train": [a.stem for a, _ in train_pairs],
+            "val": [a.stem for a, _ in val_pairs],
+        }, splits_path)
 
     teacher_soft_dir = Path(args.teacher_soft_dir) if args.teacher_soft_dir else None
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
@@ -1481,6 +1524,8 @@ def main():
     n_chunk_workers = max(1, min(16, os.cpu_count() - 2)) if os.cpu_count() else 4
     mel_db = cfg["audio"].get("mel_db_range", 60.0)
 
+    SLOW_THRESHOLD = 30  # seconds — log files that take longer than this
+
     for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
         shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_", dir=str(output_dir)))
         _active_shard_dirs.append(shard_dir)
@@ -1488,11 +1533,35 @@ def main():
         shard_counts = []
         batch_X, batch_Y, batch_T = [], [], []
         total_variants = 0
-        errors = 0
+        error_list: list[tuple[str, str, str]] = []  # (filename, error_type, message)
+        slow_files: list[tuple[str, float]] = []      # (filename, elapsed_seconds)
+        completed_stems: list[str] = []                # for resumption manifest
+
+        # --- Resumption: load progress from previous crashed run ---
+        manifest_path = output_dir / f".prep_progress_{split_name}.json"
+        skip_stems: set[str] = set()
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                skip_stems = set(manifest.get("completed_stems", []))
+                shard_idx = manifest.get("shard_idx", 0)
+                shard_counts = manifest.get("shard_counts", [])
+                completed_stems = list(skip_stems)
+                print(f"  Resuming {split_name}: {len(skip_stems)} files done, "
+                      f"shard_idx={shard_idx}", flush=True)
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"  WARNING: Corrupt manifest {manifest_path}, starting fresh: {e}",
+                      flush=True)
+                skip_stems = set()
+
+        # Filter out already-completed files
+        if skip_stems:
+            orig_len = len(split_pairs)
+            split_pairs = [(a, l) for a, l in split_pairs if a.stem not in skip_stems]
+            print(f"  Skipping {orig_len - len(split_pairs)} completed files, "
+                  f"{len(split_pairs)} remaining", flush=True)
 
         # --- Audio prefetch: load upcoming files in background threads ---
-        # librosa.load decodes MP3 + resamples (50-200ms, releases GIL).
-        # Prefetching overlaps this I/O with GPU mel/augmentation work.
         prefetch_pool = ThreadPoolExecutor(max_workers=PREFETCH_AHEAD)
         audio_futures: dict[int, Future] = {}
         sr = cfg["audio"]["sample_rate"]
@@ -1504,11 +1573,16 @@ def main():
         chunk_pool = ThreadPoolExecutor(max_workers=n_chunk_workers)
         chunk_futures: list[Future] = []
 
-        for i, (audio_path, label_path) in enumerate(tqdm(split_pairs, desc=split_name)):
+        # --- Progress tracking ---
+        split_start = _time.time()
+        last_progress = split_start
+        PROGRESS_INTERVAL = 30  # seconds between progress lines
+
+        for i, (audio_path, label_path) in enumerate(split_pairs):
             try:
                 # Collect completed chunk futures from previous iterations
                 for cf in chunk_futures:
-                    mc, tc, thc = cf.result()
+                    mc, tc, thc = cf.result(timeout=60)
                     batch_X.append(mc)
                     batch_Y.append(tc)
                     if generate_teacher and thc is not None:
@@ -1520,7 +1594,7 @@ def main():
                 preloaded = None
                 if i in audio_futures:
                     try:
-                        audio_data, _ = audio_futures.pop(i).result()
+                        audio_data, _ = audio_futures.pop(i).result(timeout=120)
                         preloaded = audio_data
                     except Exception:
                         pass  # Fall back to loading inside process_file
@@ -1530,11 +1604,11 @@ def main():
                 if next_idx < len(split_pairs):
                     path = split_pairs[next_idx][0]
                     audio_futures[next_idx] = prefetch_pool.submit(
-                        librosa.load, str(path), sr=sr, mono=True)
+                        _load_audio_quiet, str(path), sr)
 
                 # Per-file deterministic RNG for reproducible augmentation
-                # (enables mel caching across runs regardless of processing order)
                 file_rng = _file_rng(seed, audio_path.stem)
+                file_start = _time.time()
                 results = process_file(audio_path, label_path, cfg, args.augment,
                                        rir_dir, file_rng, device, mel_fb, window,
                                        mic_profile=mic_profile,
@@ -1545,9 +1619,13 @@ def main():
                                        teacher_soft_dir=teacher_soft_dir,
                                        noise_dir=noise_dir,
                                        preloaded_audio=preloaded)
+                file_elapsed = _time.time() - file_start
 
-                # Submit chunking to thread pool (pure numpy, releases GIL).
-                # Runs in parallel with next iteration's process_file (GPU work).
+                if file_elapsed > SLOW_THRESHOLD:
+                    slow_files.append((audio_path.name, file_elapsed))
+                    print(f"  SLOW: {audio_path.name} took {file_elapsed:.1f}s", flush=True)
+
+                # Submit chunking to thread pool (pure numpy, releases GIL)
                 for r in results:
                     cf = chunk_pool.submit(
                         chunk_data, r["mel"], r["target"], chunk_frames, chunk_stride,
@@ -1556,19 +1634,37 @@ def main():
                         use_hybrid=use_hybrid, audio_np=r.get("audio_np"),
                         mel_db_range=mel_db)
                     chunk_futures.append(cf)
+
+                completed_stems.append(audio_path.stem)
             except Exception as e:
-                tqdm.write(f"  ERROR: {audio_path.name}: {e}")
-                errors += 1
-                # Free leaked GPU memory from failed CUDA operations (OOM leaves
-                # fragments that prevent all subsequent tracks from processing).
+                error_list.append((audio_path.name, type(e).__name__, str(e)[:200]))
+                print(f"  ERROR: {audio_path.name}: {type(e).__name__}: {e}", flush=True)
                 gc.collect()
                 torch.cuda.empty_cache()
+
+            # --- Periodic progress logging (every PROGRESS_INTERVAL seconds) ---
+            now = _time.time()
+            if now - last_progress >= PROGRESS_INTERVAL or i == len(split_pairs) - 1:
+                elapsed = now - split_start
+                rate = (i + 1) / elapsed if elapsed > 0 else 0
+                remaining = (len(split_pairs) - i - 1) / rate if rate > 0 else 0
+                free_gb = _disk_free_gb(output_dir)
+                print(f"  [{split_name}] {i+1}/{len(split_pairs)} files | "
+                      f"{len(error_list)} errors | {elapsed:.0f}s elapsed | "
+                      f"ETA {remaining:.0f}s | {rate:.1f} files/s | "
+                      f"disk {free_gb:.0f}G free", flush=True)
+                last_progress = now
+
+            # --- Periodic disk check (every 100 files) ---
+            if (i + 1) % 100 == 0:
+                _check_disk_space(output_dir, 10.0,
+                                  f"continuing data prep ({i+1}/{len(split_pairs)})")
 
             # Flush batch to disk periodically to limit RAM usage
             if (i + 1) % SHARD_BATCH == 0 or i == len(split_pairs) - 1:
                 # Drain remaining chunk futures before flush
                 for cf in chunk_futures:
-                    mc, tc, thc = cf.result()
+                    mc, tc, thc = cf.result(timeout=60)
                     batch_X.append(mc)
                     batch_Y.append(tc)
                     if generate_teacher and thc is not None:
@@ -1576,6 +1672,12 @@ def main():
                     total_variants += 1
                 chunk_futures.clear()
                 if batch_X:
+                    # Check disk before writing shard
+                    shard_bytes = sum(x.nbytes for x in batch_X) + sum(y.nbytes for y in batch_Y)
+                    shard_gb = shard_bytes / (1024 ** 3) * 1.2  # 20% margin
+                    _check_disk_space(output_dir, shard_gb,
+                                      f"shard flush {shard_idx} ({shard_gb:.1f} GB)")
+
                     X_s = np.concatenate(batch_X)
                     Y_s = np.concatenate(batch_Y)
                     np.save(shard_dir / f"X_{shard_idx}.npy", X_s)
@@ -1587,6 +1689,14 @@ def main():
                     shard_counts.append(len(X_s))
                     del X_s, Y_s
                     shard_idx += 1
+
+                    # Save resumption manifest (atomic write)
+                    _atomic_json_save({
+                        "completed_stems": completed_stems,
+                        "shard_idx": shard_idx,
+                        "shard_counts": shard_counts,
+                    }, manifest_path)
+
                 batch_X, batch_Y, batch_T = [], [], []
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -1595,6 +1705,28 @@ def main():
         prefetch_pool.shutdown(wait=False)
         chunk_pool.shutdown(wait=False)
 
+        # --- Error and slow file summary ---
+        if error_list:
+            from collections import Counter
+            print(f"\n  --- Error Summary ({split_name}) ---", flush=True)
+            type_counts = Counter(etype for _, etype, _ in error_list)
+            for etype, count in type_counts.most_common():
+                print(f"    {etype}: {count}")
+                for fname, et, msg in error_list:
+                    if et == etype:
+                        print(f"      {fname}: {msg[:100]}")
+            print(f"  --- {len(error_list)} total errors ---", flush=True)
+
+        if slow_files:
+            print(f"\n  --- Slow Files ({split_name}, >{SLOW_THRESHOLD}s) ---", flush=True)
+            for fname, elapsed in sorted(slow_files, key=lambda x: -x[1]):
+                print(f"    {elapsed:.1f}s  {fname}")
+
+        # Check disk before merge
+        merge_est_gb = sum(shard_counts) * chunk_frames * expected_features * 4 / (1024**3)
+        _check_disk_space(output_dir, merge_est_gb * 1.2,
+                          f"merge ({merge_est_gb:.1f} GB final array)")
+
         # Merge shards into final .npy using memmap (never holds full dataset in RAM)
         total = sum(shard_counts)
         if total == 0:
@@ -1602,16 +1734,15 @@ def main():
             shutil.rmtree(shard_dir)
             continue
 
-        # Detect X feature dimension from first shard (26 for mel, 52 with delta features)
+        # Detect X feature dimension from first shard
         x_first = np.load(shard_dir / "X_0.npy", mmap_mode='r')
-        x_features = x_first.shape[2]  # n_mels or n_mels*2 with deltas
+        x_features = x_first.shape[2]
         del x_first
         X_out = np.lib.format.open_memmap(
             str(output_dir / f"X_{split_name}.npy"), mode='w+',
             dtype=np.float32, shape=(total, chunk_frames, x_features))
-        # Detect Y shape from first shard: 1D (chunk_frames,) or 2D (chunk_frames, channels)
         y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
-        y_shape = (total,) + y_first.shape[1:]  # (total, chunk_frames) or (total, chunk_frames, 3)
+        y_shape = (total,) + y_first.shape[1:]
         del y_first
         Y_out = np.lib.format.open_memmap(
             str(output_dir / f"Y_{split_name}.npy"), mode='w+',
@@ -1638,9 +1769,6 @@ def main():
                 (shard_dir / f"T_{s}.npy").unlink()
             offset += n
             del X_s, Y_s
-            # Delete shard files immediately after merging to free disk.
-            # Without this, shards (144 GB) + final (130 GB) coexist during
-            # merge and can exceed available storage.
             (shard_dir / f"X_{s}.npy").unlink()
             (shard_dir / f"Y_{s}.npy").unlink()
 
@@ -1657,7 +1785,12 @@ def main():
 
         shutil.rmtree(shard_dir)
         _active_shard_dirs.remove(shard_dir)
-        print(f"\n  {split_name}: {total} chunks from {total_variants} variants ({errors} errors)")
+        # Clean up resumption manifest (split completed successfully)
+        manifest_path.unlink(missing_ok=True)
+
+        split_elapsed = _time.time() - split_start
+        print(f"\n  {split_name}: {total} chunks from {total_variants} variants "
+              f"({len(error_list)} errors) in {split_elapsed:.0f}s", flush=True)
 
     # Print summary
     X_train = np.load(output_dir / "X_train.npy", mmap_mode='r')

@@ -27,6 +27,17 @@ from models.onset_cnn import build_onset_cnn
 from scripts.audio import load_config
 
 
+def _atomic_torch_save(obj: object, path: Path) -> None:
+    """Save torch checkpoint atomically via write-to-tmp-then-rename.
+
+    If the process is killed or disk fills during write, the original
+    file is untouched. os.replace is atomic on POSIX.
+    """
+    tmp = path.with_suffix(".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
 class MemmapBeatDataset(Dataset):
     """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
@@ -1129,7 +1140,7 @@ def main():
             if _quant_noise_active:
                 from models.onset_conv1d import unwrap_quant_noise_state_dict
                 sd = unwrap_quant_noise_state_dict(sd)
-            torch.save(sd, output_dir / "best_model.pt")
+            _atomic_torch_save(sd, output_dir / "best_model.pt")
             print(f"  Saved best model (val_loss={val_loss:.4f})")
         else:
             patience_counter += 1
@@ -1138,7 +1149,7 @@ def main():
                 break
 
         # Save resumable checkpoint every epoch
-        torch.save({
+        _atomic_torch_save({
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
@@ -1206,9 +1217,9 @@ def main():
     if _quant_noise_active:
         from models.onset_conv1d import unwrap_quant_noise_state_dict
         final_sd = unwrap_quant_noise_state_dict(final_sd)
-    torch.save(final_sd, output_dir / "final_model.pt")
+    _atomic_torch_save(final_sd, output_dir / "final_model.pt")
     # Save full model info for export
-    torch.save({
+    _atomic_torch_save({
         "state_dict": final_sd,
         "config": cfg,
         "loss": loss_type,
