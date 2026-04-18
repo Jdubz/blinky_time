@@ -1556,6 +1556,10 @@ def main():
             except Exception as e:
                 tqdm.write(f"  ERROR: {audio_path.name}: {e}")
                 errors += 1
+                # Free leaked GPU memory from failed CUDA operations (OOM leaves
+                # fragments that prevent all subsequent tracks from processing).
+                gc.collect()
+                torch.cuda.empty_cache()
 
             # Flush batch to disk periodically to limit RAM usage
             if (i + 1) % SHARD_BATCH == 0 or i == len(split_pairs) - 1:
