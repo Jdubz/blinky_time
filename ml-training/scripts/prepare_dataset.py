@@ -1635,8 +1635,14 @@ def main():
                 T_s = np.load(shard_dir / f"T_{s}.npy")
                 T_out[offset:offset + n] = T_s
                 del T_s
+                (shard_dir / f"T_{s}.npy").unlink()
             offset += n
             del X_s, Y_s
+            # Delete shard files immediately after merging to free disk.
+            # Without this, shards (144 GB) + final (130 GB) coexist during
+            # merge and can exceed available storage.
+            (shard_dir / f"X_{s}.npy").unlink()
+            (shard_dir / f"Y_{s}.npy").unlink()
 
         X_out.flush()
         Y_out.flush()
