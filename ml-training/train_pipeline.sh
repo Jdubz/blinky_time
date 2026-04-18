@@ -61,16 +61,19 @@ fi
 GPU_INFO=$(python3 -c "
 import torch
 name = torch.cuda.get_device_name(0)
-mem = torch.cuda.get_device_properties(0).total_mem / 1024**3
-free = (torch.cuda.get_device_properties(0).total_mem - torch.cuda.memory_allocated(0)) / 1024**3
+mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+free = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1024**3
 print(f'{name} ({mem:.1f} GB total, {free:.1f} GB free)')
 " 2>/dev/null)
 echo "  GPU: $GPU_INFO"
 
-# 2. Config validation
+# 2. Config validation + disk budget (uses load_config to merge base.yaml)
 python3 -c "
-import sys, yaml
-c = yaml.safe_load(open(sys.argv[1]))
+import sys, os, shutil
+sys.path.insert(0, '.')
+from scripts.audio import load_config
+c = load_config(sys.argv[1])
+# Validate required fields
 required = [('audio','sample_rate'), ('audio','n_fft'), ('audio','n_mels'),
             ('training','epochs'), ('training','batch_size'), ('training','chunk_frames')]
 missing = [f'{s}.{k}' for s, k in required if k not in c.get(s, {})]
@@ -78,14 +81,9 @@ if missing:
     print(f'FATAL: Config missing required fields: {missing}', file=sys.stderr)
     sys.exit(1)
 print(f'  Config: OK ({len(c)} sections)')
-" "$CONFIG" || exit 1
 
-# 3. Disk budget estimation
-python3 -c "
-import sys, yaml, shutil, os
-c = yaml.safe_load(open(sys.argv[1]))
+# Disk budget estimation
 data_dir = c.get('data', {}).get('processed_dir', 'data/processed')
-# Estimate dataset size from config
 n_mels = c['audio']['n_mels']
 use_delta = c.get('features', {}).get('use_delta', False)
 use_band_flux = c.get('features', {}).get('use_band_flux', False)
@@ -96,21 +94,20 @@ elif use_hybrid: n_features = n_mels + 2
 else: n_features = n_mels
 chunk_frames = c['training']['chunk_frames']
 chunk_stride = c['training']['chunk_stride']
-# Count audio files
 audio_dir = c.get('data', {}).get('audio_dir', 'data/audio')
 if os.path.isdir(audio_dir):
     n_files = sum(1 for f in os.listdir(audio_dir) if f.endswith(('.mp3', '.wav', '.flac', '.ogg')))
 else:
-    n_files = 6750  # fallback estimate
-avg_variants = 20  # clean + augmentation
-avg_track_sec = 180
-frame_rate = c['audio'].get('frame_rate', 62.5)
-chunks_per_variant = (avg_track_sec * frame_rate) / chunk_stride
-bytes_per_chunk = chunk_frames * n_features * 4  # float32
-estimated_gb = n_files * avg_variants * chunks_per_variant * bytes_per_chunk / 1e9
+    n_files = 6750
+# Calibrated from actual v25-v27 runs: ~1000 chunks per file with augmentation,
+# each chunk = chunk_frames × n_features × 4 bytes. This accounts for overlapping
+# windows (chunk_stride < chunk_frames) and augmentation variant count.
+chunks_per_file = 1000  # empirical average across 6750 tracks with augmentation
+bytes_per_chunk = chunk_frames * n_features * 4
+# Train (85%) + val (15%), both splits
+estimated_gb = n_files * chunks_per_file * bytes_per_chunk / 1e9
 mel_cache_gb = n_files * 0.01  # ~10 MB per track
 total_budget = (estimated_gb + mel_cache_gb) * 1.2  # 20% safety margin
-# Check free space on data volume
 parent = data_dir
 while not os.path.exists(parent) and parent != '/':
     parent = os.path.dirname(parent)
