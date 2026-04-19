@@ -154,7 +154,7 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
 | M11 | ✅ | Add routing (React Router). Move current single-device tabs to `/device/:id` route. DeviceList auto-navigates to single device. | `blinky-console/src/App.tsx`, `src/routes/`, `src/hooks/useDevices.ts` |
-| M12 | ⏳ | `/devices` list view aggregating all Sources by SN. Device cards show transport selector (WebSerial / BLE / via server). Switching transport preserves route state. | `blinky-console/src/routes/DevicesList.tsx`, `src/components/DeviceCard/` |
+| M12 | ✅ | Device-registry binding: DeviceDetail looks up Device by route param, binds its protocol to serialService. SerialService proxies events across protocol swaps. | `serial.ts`, `DeviceDetail.tsx` |
 | M13 | ⏳ | Real-time device list updates: either poll `GET /api/devices` from `BlinkyServerSource`, or add a `device_connected`/`device_disconnected` event stream to `blinky-server` and subscribe. Decision during implementation. | both repos, TBD |
 
 ### Phase 5 — Fleet operations — ⏳ not started

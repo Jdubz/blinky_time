@@ -4,11 +4,15 @@
  * construct DeviceProtocol instances directly (one per device) via a
  * Source (M7+); this singleton is retained so existing components and
  * the useSerial hook keep working unchanged.
+ *
+ * Event listeners survive protocol swaps: the service maintains its own
+ * listener list and re-subscribes them when bindProtocol is called.
  */
 
 import { logger } from '../lib/logger';
 import { WebSerialTransport } from './transport';
 import { DeviceProtocol, SerialEventCallback } from './protocol';
+import type { SerialEvent } from './protocol';
 
 // Re-export the protocol-layer types so the historical
 // `from '../services/serial'` import path keeps resolving.
@@ -27,9 +31,44 @@ export type {
  */
 class SerialService {
   private protocol: DeviceProtocol;
+  private listeners: SerialEventCallback[] = [];
+  /** The handler we attach to the protocol — forwards all events to our listeners. */
+  private protocolHandler: (event: SerialEvent) => void;
 
   constructor() {
     this.protocol = new DeviceProtocol(new WebSerialTransport());
+    this.protocolHandler = (event: SerialEvent) => {
+      for (const cb of this.listeners) {
+        try { cb(event); } catch { /* listener errors are their problem */ }
+      }
+    };
+    this.protocol.addEventListener(this.protocolHandler);
+  }
+
+  /**
+   * Bind an external DeviceProtocol (e.g., from the DeviceRegistry).
+   * Listeners are migrated automatically — callers don't need to re-subscribe.
+   *
+   * If the current protocol is connected, it is disconnected first.
+   */
+  async bindProtocol(protocol: DeviceProtocol): Promise<void> {
+    if (this.protocol === protocol) return; // no-op
+
+    // Tear down old protocol
+    this.protocol.removeEventListener(this.protocolHandler);
+    if (this.protocol.isConnected()) {
+      await this.protocol.disconnect();
+    }
+
+    // Bind new protocol
+    this.protocol = protocol;
+    this.protocol.addEventListener(this.protocolHandler);
+    logger.info('SerialService: protocol rebound');
+  }
+
+  /** The currently-bound protocol instance. */
+  get currentProtocol(): DeviceProtocol {
+    return this.protocol;
   }
 
   isSupported(): boolean {
@@ -41,11 +80,11 @@ class SerialService {
   }
 
   addEventListener(callback: SerialEventCallback): void {
-    this.protocol.addEventListener(callback);
+    this.listeners.push(callback);
   }
 
   removeEventListener(callback: SerialEventCallback): void {
-    this.protocol.removeEventListener(callback);
+    this.listeners = this.listeners.filter(cb => cb !== callback);
   }
 
   async connect(baudRate: number = 115200): Promise<boolean> {

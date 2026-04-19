@@ -1,17 +1,18 @@
 /**
- * DeviceDetail — single-device view (pre-multi-device architecture).
+ * DeviceDetail — single-device view bound to a specific device from the registry.
  *
- * Route param deviceId is currently ignored — uses the legacy useSerial
- * singleton which manages a single global connection. The URL is decorative;
- * whichever device useSerial is connected to is shown regardless of route.
- *
- * M12 will refactor to use the registry's Device directly and respect
- * the route parameter.
+ * Reads deviceId from the route param, looks up the Device in the registry,
+ * and binds its protocol to the legacy serialService so useSerial works.
+ * When the route changes to a different device, the protocol is rebound.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSerial } from '../hooks/useSerial';
+import { deviceRegistry } from '../services/sources';
+import { serialService } from '../services/serial';
+import { DeviceProtocol } from '../services/protocol';
+import { logger } from '../lib/logger';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { ConnectionBar } from '../components/ConnectionBar';
 import { SettingsPanel } from '../components/SettingsPanel';
@@ -24,10 +25,30 @@ import { GeneratorSelector } from '../components/GeneratorSelector';
 import { EffectSelector } from '../components/EffectSelector';
 
 export function DeviceDetail() {
-  // TODO(M12): Use deviceId to select the correct device from the registry
-  // instead of the legacy serialService singleton.
-  useParams<{ deviceId: string }>();
+  const { deviceId } = useParams<{ deviceId: string }>();
   const navigate = useNavigate();
+
+  // Bind the registry device's protocol to serialService so useSerial works.
+  // When deviceId changes (user navigates between devices), rebind.
+  useEffect(() => {
+    if (!deviceId) return;
+    const device = deviceRegistry.get(deviceId);
+    if (!device) {
+      logger.warn('DeviceDetail: device not found in registry', { deviceId });
+      return;
+    }
+
+    // If the device already has a protocol (e.g., from WebSerialSource.pickAndConnect),
+    // bind it. Otherwise create one from the first available transport.
+    if (device.protocol) {
+      serialService.bindProtocol(device.protocol);
+    } else if (device.transports.length > 0) {
+      const transport = device.transports[0].transport;
+      const protocol = new DeviceProtocol(transport);
+      device.protocol = protocol;
+      serialService.bindProtocol(protocol);
+    }
+  }, [deviceId]);
 
   // For now, useSerial still manages the single active device.
   // Phase 4 M12 will refactor this to use the registry's Device directly.
