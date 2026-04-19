@@ -601,6 +601,15 @@ def main():
         y_teacher_path=teacher_val_path, max_features=expected_features,
         hard_binary_threshold=hard_binary_threshold)
 
+    # Validate data feature dimensions match expected
+    actual_features = train_ds.X.shape[-1]
+    if actual_features < expected_features:
+        print(f"FATAL: Data has {actual_features} features but model expects {expected_features}."
+              f" Re-run data prep with matching config.", file=sys.stderr)
+        sys.exit(1)
+    elif actual_features > expected_features:
+        print(f"  NOTE: Data has {actual_features} features, using first {expected_features}")
+
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
     # Auto-calculate pos_weight from actual data positive ratio.

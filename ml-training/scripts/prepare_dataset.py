@@ -985,8 +985,12 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 if mic_profile is not None:
                     mel = _apply_mic_profile(mel, mic_profile, rng)
                 if cached_path:
-                    cached_path.parent.mkdir(parents=True, exist_ok=True)
-                    np.save(cached_path, mel)
+                    try:
+                        cached_path.parent.mkdir(parents=True, exist_ok=True)
+                        np.save(cached_path, mel)
+                    except OSError:
+                        # Disk full or mkdir fail — delete partial file, skip caching
+                        cached_path.unlink(missing_ok=True)
 
             n_frames = mel.shape[0]
             if labels_type == "instrument":
@@ -1728,12 +1732,23 @@ def main():
 
                     X_s = np.concatenate(batch_X)
                     Y_s = np.concatenate(batch_Y)
-                    np.save(shard_dir / f"X_{shard_idx}.npy", X_s)
-                    np.save(shard_dir / f"Y_{shard_idx}.npy", Y_s)
-                    if batch_T:
-                        T_s = np.concatenate(batch_T)
-                        np.save(shard_dir / f"T_{shard_idx}.npy", T_s)
-                        del T_s
+                    x_path = shard_dir / f"X_{shard_idx}.npy"
+                    y_path = shard_dir / f"Y_{shard_idx}.npy"
+                    try:
+                        np.save(x_path, X_s)
+                        np.save(y_path, Y_s)
+                        if batch_T:
+                            T_s = np.concatenate(batch_T)
+                            np.save(shard_dir / f"T_{shard_idx}.npy", T_s)
+                            del T_s
+                    except OSError as e:
+                        # Disk full mid-write: delete partial files to avoid
+                        # corrupt shards that crash on resume.
+                        for p in [x_path, y_path, shard_dir / f"T_{shard_idx}.npy"]:
+                            p.unlink(missing_ok=True)
+                        print(f"\nFATAL: Shard write failed (disk full?): {e}",
+                              file=sys.stderr, flush=True)
+                        sys.exit(1)
                     shard_counts.append(len(X_s))
                     del X_s, Y_s
                     shard_idx += 1
@@ -1750,9 +1765,10 @@ def main():
                 gc.collect()
                 torch.cuda.empty_cache()
 
-        # Shut down thread pools for this split
-        prefetch_pool.shutdown(wait=False)
-        chunk_pool.shutdown(wait=False)
+        # Shut down thread pools for this split (wait=True to avoid zombie threads
+        # accessing freed memory or GPU handles after the main thread exits)
+        prefetch_pool.shutdown(wait=True)
+        chunk_pool.shutdown(wait=True)
 
         # --- Error and slow file summary ---
         if error_list:
@@ -1850,6 +1866,9 @@ def main():
               f"({len(error_list)} errors) in {split_elapsed:.0f}s", flush=True)
 
     # Print summary
+    if not (output_dir / "X_train.npy").exists():
+        print("\nFATAL: X_train.npy was not created (all tracks failed?)", file=sys.stderr)
+        sys.exit(1)
     X_train = np.load(output_dir / "X_train.npy", mmap_mode='r')
     Y_train = np.load(output_dir / "Y_train.npy", mmap_mode='r')
     X_val = np.load(output_dir / "X_val.npy", mmap_mode='r')
