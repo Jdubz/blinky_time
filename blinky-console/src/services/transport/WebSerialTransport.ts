@@ -191,10 +191,11 @@ export class WebSerialTransport implements Transport {
         const code = classifyError(error);
         const message = error instanceof Error ? error.message : 'Read error';
         this.emit({ type: 'error', error: new TransportError(message, code) });
-        if (code === TransportErrorCode.DEVICE_LOST || code === TransportErrorCode.DISCONNECTED) {
-          // Proactively tear down — the port is gone.
-          this.disconnect().catch(() => {});
-        }
+        // Read loop has exited unexpectedly. Whatever the underlying cause,
+        // we can no longer pull bytes from this port — leaving the port
+        // open without a reader is a zombie state. Tear down so the
+        // caller sees a `disconnected` event and can react accordingly.
+        this.disconnect().catch(() => {});
       }
     }
   }
