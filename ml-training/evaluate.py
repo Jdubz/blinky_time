@@ -647,8 +647,8 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     data_dir = Path(cfg["data"]["processed_dir"])
-    X_val = np.load(data_dir / "X_val.npy")
-    Y_val = np.load(data_dir / "Y_val.npy")
+    X_val = np.load(data_dir / "X_val.npy", mmap_mode='r')
+    Y_val = np.load(data_dir / "Y_val.npy", mmap_mode='r')
 
     # Slice features if data has more channels than model expects
     use_delta = cfg.get("features", {}).get("use_delta", False)

@@ -32,10 +32,12 @@ import gc
 import hashlib
 import json
 import math
+import os
 import shutil
 import sys
 import tempfile
 import time as _time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 # Track active shard temp dirs for crash cleanup. Shard dirs are created
@@ -44,31 +46,26 @@ from pathlib import Path
 # does NOT run on SIGKILL (OOM killer) — orphaned dirs must be found and
 # deleted manually in that case. Placing them in output_dir (not /tmp)
 # makes this straightforward: `find /mnt/storage -name 'blinky_*' -type d`.
-_active_shard_dirs: list[Path] = []
+_active_shard_dirs: list[tuple[Path, Path]] = []  # (shard_dir, manifest_path)
 
 
 def _cleanup_shard_dirs() -> None:
     """Clean up shard temp dirs on exit — but NOT if a resumption manifest exists.
 
-    If a manifest (.prep_progress_*.json) is present in the parent directory,
-    the shards are needed for resume-from-crash. Only clean shards that have
-    no corresponding manifest (i.e., the split completed successfully and the
-    manifest was already deleted).
+    If the manifest (.prep_progress_*.json) is present, the shards are needed
+    for resume-from-crash. Only clean shards whose manifest has already been
+    deleted (i.e., the split completed successfully).
     """
-    for d in _active_shard_dirs:
-        if d.exists():
-            # Check for resumption manifest — if present, keep shards for resume
-            parent = d.parent
-            split_name = d.name.split("_")[1] if "_" in d.name else ""
-            manifest = parent / f".prep_progress_{split_name}.json"
-            if manifest.exists():
-                print(f"NOTE: Keeping shard dir {d.name} for resumption "
+    for shard_dir, manifest_path in _active_shard_dirs:
+        if shard_dir.exists():
+            if manifest_path.exists():
+                print(f"NOTE: Keeping shard dir {shard_dir.name} for resumption "
                       f"(manifest exists)", file=sys.stderr)
                 continue
             try:
-                shutil.rmtree(d)
+                shutil.rmtree(shard_dir)
             except Exception as e:
-                print(f"WARNING: Failed to clean up shard dir {d}: {e}",
+                print(f"WARNING: Failed to clean up shard dir {shard_dir}: {e}",
                       file=sys.stderr)
 
 
@@ -117,9 +114,6 @@ def _load_audio_quiet(path: str, sr: int) -> tuple:
     when called from the prefetch thread pool.
     """
     return librosa.load(path, sr=sr, mono=True)
-
-import os
-from concurrent.futures import Future, ThreadPoolExecutor
 
 import librosa
 import numpy as np
@@ -1541,13 +1535,11 @@ def main():
     # librosa.load and numpy operations release the GIL, so threads give
     # real parallelism for these CPU-bound operations.
     n_chunk_workers = max(1, min(16, os.cpu_count() - 2)) if os.cpu_count() else 4
-    mel_db = cfg["audio"].get("mel_db_range", 60.0)
 
     SLOW_THRESHOLD = 30  # seconds — log files that take longer than this
 
     for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
-        shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_", dir=str(output_dir)))
-        _active_shard_dirs.append(shard_dir)
+        shard_dir = None
         shard_idx = 0
         shard_counts = []
         batch_X, batch_Y, batch_T = [], [], []
@@ -1566,12 +1558,30 @@ def main():
                 shard_idx = manifest.get("shard_idx", 0)
                 shard_counts = manifest.get("shard_counts", [])
                 completed_stems = list(skip_stems)
-                print(f"  Resuming {split_name}: {len(skip_stems)} files done, "
-                      f"shard_idx={shard_idx}", flush=True)
+                # Reuse shard_dir from previous run if it still exists
+                saved_shard_dir = manifest.get("shard_dir")
+                if saved_shard_dir and Path(saved_shard_dir).exists():
+                    shard_dir = Path(saved_shard_dir)
+                    print(f"  Resuming {split_name}: {len(skip_stems)} files done, "
+                          f"shard_idx={shard_idx}, reusing {shard_dir.name}",
+                          flush=True)
+                else:
+                    # Shard dir was cleaned up — start fresh for this split
+                    shard_idx = 0
+                    shard_counts = []
+                    skip_stems = set()
+                    completed_stems = []
+                    print(f"  Resuming {split_name}: shard dir gone, "
+                          f"restarting from scratch", flush=True)
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"  WARNING: Corrupt manifest {manifest_path}, starting fresh: {e}",
                       flush=True)
                 skip_stems = set()
+
+        if shard_dir is None:
+            shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_",
+                                              dir=str(output_dir)))
+        _active_shard_dirs.append((shard_dir, manifest_path))
 
         # Filter out already-completed files
         if skip_stems:
@@ -1601,12 +1611,16 @@ def main():
             try:
                 # Collect completed chunk futures from previous iterations
                 for cf in chunk_futures:
-                    mc, tc, thc = cf.result(timeout=60)
-                    batch_X.append(mc)
-                    batch_Y.append(tc)
-                    if generate_teacher and thc is not None:
-                        batch_T.append(thc)
-                    total_variants += 1
+                    try:
+                        mc, tc, thc = cf.result(timeout=60)
+                        batch_X.append(mc)
+                        batch_Y.append(tc)
+                        if generate_teacher and thc is not None:
+                            batch_T.append(thc)
+                        total_variants += 1
+                    except Exception as e:
+                        print(f"  WARNING: chunk_data failed: {type(e).__name__}: {e}",
+                              flush=True)
                 chunk_futures.clear()
 
                 # Get prefetched audio (or load synchronously if prefetch missed)
@@ -1615,8 +1629,10 @@ def main():
                     try:
                         audio_data, _ = audio_futures.pop(i).result(timeout=120)
                         preloaded = audio_data
-                    except Exception:
-                        pass  # Fall back to loading inside process_file
+                    except Exception as e:
+                        print(f"  WARNING: prefetch failed for {audio_path.name}: "
+                              f"{type(e).__name__}: {e}", flush=True)
+                        # Fall back to loading inside process_file
 
                 # Submit prefetch for upcoming file
                 next_idx = i + PREFETCH_AHEAD
@@ -1690,12 +1706,16 @@ def main():
             if (i + 1) % SHARD_BATCH == 0 or i == len(split_pairs) - 1:
                 # Drain remaining chunk futures before flush
                 for cf in chunk_futures:
-                    mc, tc, thc = cf.result(timeout=60)
-                    batch_X.append(mc)
-                    batch_Y.append(tc)
-                    if generate_teacher and thc is not None:
-                        batch_T.append(thc)
-                    total_variants += 1
+                    try:
+                        mc, tc, thc = cf.result(timeout=60)
+                        batch_X.append(mc)
+                        batch_Y.append(tc)
+                        if generate_teacher and thc is not None:
+                            batch_T.append(thc)
+                        total_variants += 1
+                    except Exception as e:
+                        print(f"  WARNING: chunk_data failed: {type(e).__name__}: {e}",
+                              flush=True)
                 chunk_futures.clear()
                 if batch_X:
                     # Check disk before writing shard
@@ -1721,6 +1741,7 @@ def main():
                         "completed_stems": completed_stems,
                         "shard_idx": shard_idx,
                         "shard_counts": shard_counts,
+                        "shard_dir": str(shard_dir),
                     }, manifest_path)
 
                 batch_X, batch_Y, batch_T = [], [], []
@@ -1749,6 +1770,14 @@ def main():
                 print(f"    {elapsed:.1f}s  {fname}")
 
         # Check disk before merge
+        if use_delta:
+            expected_features = n_mels * 2
+        elif use_band_flux:
+            expected_features = n_mels + 3
+        elif use_hybrid:
+            expected_features = n_mels + 2
+        else:
+            expected_features = n_mels
         merge_est_gb = sum(shard_counts) * chunk_frames * expected_features * 4 / (1024**3)
         _check_disk_space(output_dir, merge_est_gb * 1.2,
                           f"merge ({merge_est_gb:.1f} GB final array)")
@@ -1810,7 +1839,7 @@ def main():
             del T_out
 
         shutil.rmtree(shard_dir)
-        _active_shard_dirs.remove(shard_dir)
+        _active_shard_dirs.remove((shard_dir, manifest_path))
         # Clean up resumption manifest (split completed successfully)
         manifest_path.unlink(missing_ok=True)
 

@@ -62,7 +62,8 @@ GPU_INFO=$(python3 -c "
 import torch
 name = torch.cuda.get_device_name(0)
 mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
-free = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1024**3
+free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+free = free_bytes / 1024**3
 print(f'{name} ({mem:.1f} GB total, {free:.1f} GB free)')
 " 2>/dev/null)
 echo "  GPU: $GPU_INFO"
@@ -75,7 +76,8 @@ from scripts.audio import load_config
 c = load_config(sys.argv[1])
 # Validate required fields
 required = [('audio','sample_rate'), ('audio','n_fft'), ('audio','n_mels'),
-            ('training','epochs'), ('training','batch_size'), ('training','chunk_frames')]
+            ('training','epochs'), ('training','batch_size'), ('training','chunk_frames'),
+            ('training','chunk_stride')]
 missing = [f'{s}.{k}' for s, k in required if k not in c.get(s, {})]
 if missing:
     print(f'FATAL: Config missing required fields: {missing}', file=sys.stderr)

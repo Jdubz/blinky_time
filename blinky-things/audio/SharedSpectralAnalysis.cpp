@@ -388,6 +388,9 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
         float weightSum = 0.0f;
 
         // Rising edge: start to center
+        // Note: band 0 has startBin==centerBin (degenerate). The guard
+        // (centerBin > startBin) falls through to weight=1.0f, giving the
+        // single center bin full weight. No division by zero.
         for (int bin = def.startBin; bin <= def.centerBin && bin < SpectralConstants::NUM_BINS; bin++) {
             float weight = (def.centerBin > def.startBin)
                 ? (float)(bin - def.startBin) / (def.centerBin - def.startBin)
