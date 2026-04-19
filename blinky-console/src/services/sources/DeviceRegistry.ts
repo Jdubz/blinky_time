@@ -32,10 +32,14 @@ export class DeviceRegistry {
   /**
    * Register a device, or merge into an existing entry with the same id.
    *
-   * If the id already exists, the incoming device's transport bindings are
-   * appended (skipping duplicates) and its protocol is bound to the
-   * existing entry only if the existing entry has none. Display name is
-   * updated only if the existing entry hasn't been given one (length 0).
+   * Merge rules when the id already exists:
+   *  - Transport bindings are appended (duplicates by reference are skipped).
+   *  - The incoming `displayName` overwrites if non-empty (last non-empty
+   *    wins). An empty incoming name leaves the existing one in place.
+   *  - The incoming `protocol` is bound when the existing entry has none
+   *    OR the existing protocol is no longer connected. An active existing
+   *    protocol is preserved — callers should disconnect it explicitly
+   *    before upserting a replacement.
    *
    * Returns the canonical {@link Device} entry — callers should always use
    * the returned reference, never the one they passed in.
@@ -44,10 +48,11 @@ export class DeviceRegistry {
     const existing = this.devices.get(device.id);
     if (existing) {
       device.transports.forEach(b => existing.addTransport(b));
-      if (!existing.displayName && device.displayName) {
+      if (device.displayName) {
         existing.displayName = device.displayName;
       }
-      if (!existing.protocol && device.protocol) {
+      const existingDead = !existing.protocol || !existing.protocol.isConnected();
+      if (existingDead && device.protocol) {
         existing.protocol = device.protocol;
       }
       this.notify();

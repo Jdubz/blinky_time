@@ -51,6 +51,15 @@ class SerialService {
   async connect(baudRate: number = 115200): Promise<boolean> {
     logger.info('Attempting serial connection', { baudRate });
 
+    // Idempotency: tear down any prior connection before opening a new one.
+    // Without this, calling connect() while already connected would leak
+    // the old port handle when the WebSerial port picker grabs a new one
+    // (and would also trip setTransport's connection guard below).
+    if (this.protocol.isConnected()) {
+      logger.warn('connect() called while already connected — disconnecting first');
+      await this.protocol.disconnect();
+    }
+
     // Swap in a fresh WebSerialTransport if a different baud rate was
     // requested. Listener subscriptions on the protocol are preserved.
     const t = this.protocol.currentTransport;

@@ -77,7 +77,7 @@ describe('DeviceRegistry', () => {
     expect(registry.list()).toHaveLength(1);
   });
 
-  it('binds protocol to existing entry only when existing has none', () => {
+  it('binds protocol to existing entry when existing has none', () => {
     const existing = new Device('SN-AAA', 'Bucket', [fakeBinding('webserial')], null);
     registry.upsert(existing);
 
@@ -88,7 +88,7 @@ describe('DeviceRegistry', () => {
     expect(existing.protocol).toBe(newProtocol);
   });
 
-  it('does not replace an existing protocol on merge', () => {
+  it('preserves an actively-connected protocol on merge', () => {
     const originalProtocol = fakeProtocol(true);
     const existing = new Device('SN-AAA', 'Bucket', [fakeBinding('webserial')], originalProtocol);
     registry.upsert(existing);
@@ -97,6 +97,20 @@ describe('DeviceRegistry', () => {
     registry.upsert(update);
 
     expect(existing.protocol).toBe(originalProtocol);
+  });
+
+  it('replaces a dead protocol on merge', () => {
+    // A reconnect produces a fresh DeviceProtocol; the registry shouldn't
+    // hold onto the prior dead one and silently drop the live one.
+    const deadProtocol = fakeProtocol(false);
+    const existing = new Device('SN-AAA', 'Bucket', [fakeBinding('webserial')], deadProtocol);
+    registry.upsert(existing);
+
+    const liveProtocol = fakeProtocol(true);
+    const update = new Device('SN-AAA', 'Bucket', [fakeBinding('blinky-server')], liveProtocol);
+    registry.upsert(update);
+
+    expect(existing.protocol).toBe(liveProtocol);
   });
 
   it('does not duplicate identical transport bindings', () => {
@@ -115,6 +129,18 @@ describe('DeviceRegistry', () => {
     registry.upsert(original);
 
     const update = new Device('SN-AAA', '', [fakeBinding('blinky-server')]);
+    registry.upsert(update);
+
+    expect(original.displayName).toBe('Bucket Totem');
+  });
+
+  it('overwrites the displayName when subsequent upsert has a non-empty value', () => {
+    // A device first registered as "Unconfigured Device" (placeholder)
+    // should pick up its real name on a later upsert.
+    const original = new Device('SN-AAA', 'Unconfigured Device', [fakeBinding()]);
+    registry.upsert(original);
+
+    const update = new Device('SN-AAA', 'Bucket Totem', [fakeBinding('blinky-server')]);
     registry.upsert(update);
 
     expect(original.displayName).toBe('Bucket Totem');

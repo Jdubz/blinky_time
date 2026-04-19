@@ -53,8 +53,13 @@ export class WebSerialSource implements Source {
   }
 
   /** Stable-enough id for one local-WebSerial connection when the firmware
-   *  doesn't expose `sn`. Cross-source dedup will fail for these devices. */
+   *  doesn't expose `sn`. Cross-source dedup will fail for these devices,
+   *  and a single device that's reconnected appears as a fresh entry each
+   *  time. The monotonic counter prevents same-millisecond collisions. */
   private synthesiseLocalId(): string {
-    return `webserial:local:${Date.now()}`;
+    WebSerialSource.synthCounter += 1;
+    return `webserial:local:${Date.now()}:${WebSerialSource.synthCounter}`;
   }
+
+  private static synthCounter = 0;
 }

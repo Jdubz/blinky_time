@@ -106,10 +106,17 @@ export class DeviceProtocol {
   }
 
   /**
-   * Swap the underlying transport. Caller must ensure the protocol is
-   * disconnected first; this method does not tear down an active connection.
+   * Swap the underlying transport. The protocol must be disconnected
+   * first — replacing a live transport would leak its connection handle.
+   * Throws SerialError(NOT_CONNECTED-shaped) if currently connected.
    */
   setTransport(transport: Transport): void {
+    if (this.transport.isConnected()) {
+      throw new SerialError(
+        'Cannot replace transport while connected — disconnect first',
+        SerialErrorCode.PORT_IN_USE
+      );
+    }
     this.transport.removeEventListener(this.handleTransportEvent);
     this.transport = transport;
     this.transport.addEventListener(this.handleTransportEvent);
