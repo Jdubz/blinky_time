@@ -12,7 +12,6 @@ from httpx import ASGITransport, AsyncClient
 from blinky_server.api.app import _is_reserved, create_app
 from blinky_server.api.deps import set_fleet
 
-
 # --- _is_reserved unit tests -------------------------------------------------
 
 
@@ -56,9 +55,7 @@ def test_is_reserved_empty_path() -> None:
 
 
 @pytest_asyncio.fixture
-async def spa_client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[AsyncClient]:
+async def spa_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     """An app wired to a temp static dir with a known layout."""
     (tmp_path / "index.html").write_text("<html>INDEX</html>")
     (tmp_path / "favicon.svg").write_text("SVG")
