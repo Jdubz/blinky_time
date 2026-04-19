@@ -206,8 +206,12 @@ export class WebSerialTransport implements Transport {
     // AND we previously received data, the stream was closed externally
     // (browser closed the port). Treat as a disconnect to avoid zombie state.
     // Don't trigger on empty streams (e.g., test mocks that immediately return done).
-    if (this.isReading && this.hasReceivedData) {
-      this.disconnect().catch(() => {});
+    if (this.isReading) {
+      if (this.hasReceivedData) {
+        this.disconnect().catch(() => {});
+      } else {
+        logger.warn('WebSerial stream closed before any data received — not triggering disconnect');
+      }
     }
   }
 }

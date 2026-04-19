@@ -1457,11 +1457,16 @@ body {
 }
 
 .device-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
   padding: 1rem 1.25rem;
   background: var(--bg-card);
   border-radius: var(--border-radius);
   cursor: pointer;
   border: 2px solid var(--border-color);
+  color: inherit;
   transition:
     border-color 0.15s,
     box-shadow 0.15s;

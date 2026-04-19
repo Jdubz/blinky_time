@@ -52,7 +52,7 @@ class SerialService {
    * resets its state (device info, settings, streaming) before the new
    * protocol starts emitting.
    */
-  async bindProtocol(protocol: DeviceProtocol): Promise<void> {
+  bindProtocol(protocol: DeviceProtocol): void {
     if (this.protocol === protocol) return; // no-op
 
     const wasConnected = this.protocol.isConnected();

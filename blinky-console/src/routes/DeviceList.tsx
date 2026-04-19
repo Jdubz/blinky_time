@@ -18,12 +18,9 @@ function DeviceCard({ device }: { device: Device }) {
   const transportLabels = device.transports.map(t => t.source.kind).join(', ');
 
   return (
-    <div
+    <button
       className={`device-card ${isConnected ? 'device-card--connected' : ''}`}
       onClick={() => navigate(`/device/${device.id}`)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && navigate(`/device/${device.id}`)}
     >
       <div className="device-card__name">{device.displayName}</div>
       <div className="device-card__meta">
@@ -35,7 +32,7 @@ function DeviceCard({ device }: { device: Device }) {
         {isConnected ? 'Connected' : 'Available'}
       </div>
       <div className="device-card__transport">{transportLabels}</div>
-    </div>
+    </button>
   );
 }
 

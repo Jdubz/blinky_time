@@ -56,7 +56,7 @@ export function DeviceDetail() {
       // to this device's protocol after navigation.
       serialService.unbind();
     };
-  }, [deviceId]);
+  }, [deviceId, navigate]);
 
   // For now, useSerial still manages the single active device.
   // Phase 4 M12 will refactor this to use the registry's Device directly.
