@@ -34,6 +34,8 @@ const FIRMWARE_SAMPLES = {
       leds: 128,
       configured: true as const,
     },
+    sn: '659C8DD3ADF84A33',
+    ble: 'AA:BB:CC:DD:EE:FF',
   },
 
   // Response from `json info` when device is not configured (safe mode)
@@ -43,6 +45,7 @@ const FIRMWARE_SAMPLES = {
       configured: false as const,
       safeMode: true as const,
     },
+    sn: '06ACEB165A468CB7',
   },
 
   // Response from `json settings` command (subset for testing)
@@ -214,6 +217,27 @@ describe('DeviceInfoSchema', () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+
+  it('parses sn and ble when present', () => {
+    const result = DeviceInfoSchema.safeParse(FIRMWARE_SAMPLES.deviceInfo);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.sn).toBe('659C8DD3ADF84A33');
+      expect(result.data.ble).toBe('AA:BB:CC:DD:EE:FF');
+    }
+  });
+
+  it('accepts info without sn or ble (older firmware)', () => {
+    const result = DeviceInfoSchema.safeParse({
+      version: 'v1.0',
+      device: FIRMWARE_SAMPLES.deviceInfo.device,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.sn).toBeUndefined();
+      expect(result.data.ble).toBeUndefined();
+    }
   });
 });
 
