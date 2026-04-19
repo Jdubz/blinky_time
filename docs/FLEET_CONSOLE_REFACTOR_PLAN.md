@@ -6,7 +6,7 @@ Refactor `blinky-console` from a single-device WebSerial UI into a fleet managem
 
 **Phase 1 — Plumbing.** ✅ Complete.
 **Phase 2 — Transport abstraction.** ✅ Complete.
-**Phase 3 — Server-backed transport.** ⏳ Not started.
+**Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) pending.
 **Phase 4 — Multi-device UI.** ⏳ Not started.
 **Phase 5 — Fleet operations.** ⏳ Not started.
 **Phase 6 — Web Bluetooth.** ⏳ Deferred.
@@ -145,8 +145,8 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M8 | ⏳ | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
-| M9 | ⏳ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/fleet/status`. | `blinky-console/src/services/sources/` |
+| M8 | ✅ | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
+| M9 | ✅ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/devices`. | `blinky-console/src/services/sources/` |
 | M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) | `blinky-console/src/components/Settings/` |
 
 ### Phase 4 — Multi-device UI — ⏳ not started

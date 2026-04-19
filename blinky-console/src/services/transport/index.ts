@@ -6,3 +6,4 @@ export type {
   TransportEventType,
 } from './types';
 export { WebSerialTransport } from './WebSerialTransport';
+export { ServerWebSocketTransport } from './ServerWebSocketTransport';
