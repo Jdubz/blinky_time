@@ -7,7 +7,7 @@ Refactor `blinky-console` from a single-device WebSerial UI into a fleet managem
 **Phase 1 — Plumbing.** ✅ Complete.
 **Phase 2 — Transport abstraction.** ✅ Complete.
 **Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) pending.
-**Phase 4 — Multi-device UI.** ⏳ M11 complete, M12-M13 pending.
+**Phase 4 — Multi-device UI.** ✅ Complete (M11-M13).
 **Phase 5 — Fleet operations.** ⏳ Not started.
 **Phase 6 — Web Bluetooth.** ⏳ Deferred.
 
@@ -155,7 +155,7 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 |---|--------|-----------|---------|
 | M11 | ✅ | Add routing (React Router). Move current single-device tabs to `/device/:id` route. DeviceList auto-navigates to single device. | `blinky-console/src/App.tsx`, `src/routes/`, `src/hooks/useDevices.ts` |
 | M12 | ✅ | Device-registry binding: DeviceDetail looks up Device by route param, binds its protocol to serialService. SerialService proxies events across protocol swaps. | `serial.ts`, `DeviceDetail.tsx` |
-| M13 | ⏳ | Real-time device list updates: either poll `GET /api/devices` from `BlinkyServerSource`, or add a `device_connected`/`device_disconnected` event stream to `blinky-server` and subscribe. Decision during implementation. | both repos, TBD |
+| M13 | ✅ | Real-time device list updates via polling. BlinkyServerSource polls every 10s, registry notifies subscribers, useDevices re-renders DeviceList. WebSocket push deferred. | Already implemented in M9 |
 
 ### Phase 5 — Fleet operations — ⏳ not started
 
