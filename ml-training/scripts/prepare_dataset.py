@@ -109,21 +109,14 @@ PREFETCH_AHEAD = 8
 
 
 def _load_audio_quiet(path: str, sr: int) -> tuple:
-    """Load audio with stderr suppressed (hides mpg123 C-library warnings).
+    """Load audio file via librosa.
 
-    Some MP3 files have corrupt frames that trigger mpg123 'dequantization failed'
-    warnings on stderr. librosa handles these gracefully (skips bad frames), but
-    the C-level warnings can't be caught in Python — suppress via fd redirect.
+    Note: some MP3 files emit mpg123 'dequantization failed' warnings to stderr.
+    These are harmless (librosa skips bad frames). We do NOT suppress stderr here
+    because the fd redirect (os.dup2) is not thread-safe and caused SIGBUS crashes
+    when called from the prefetch thread pool.
     """
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    old_stderr = os.dup(2)
-    os.dup2(devnull, 2)
-    try:
-        return librosa.load(path, sr=sr, mono=True)
-    finally:
-        os.dup2(old_stderr, 2)
-        os.close(devnull)
-        os.close(old_stderr)
+    return librosa.load(path, sr=sr, mono=True)
 
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
