@@ -1057,6 +1057,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     conditioned_mel = apply_spectral_conditioning(mel)
                     if cond_cached:
                         np.save(cond_cached, conditioned_mel)
+                if cfg.get("features", {}).get("use_hybrid", False):
+                    conditioned_mel = append_hybrid_features(
+                        conditioned_mel, audio=audio_np,
+                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
                 cond_result = {
                     "mel": conditioned_mel,
                     "target": targets,
