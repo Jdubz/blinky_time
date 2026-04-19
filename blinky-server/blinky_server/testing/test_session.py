@@ -97,12 +97,9 @@ class TestSession:
                 MusicState(
                     timestamp_ms=now_ms,
                     active=bool(m.get("a", 0)),
-                    phase=m.get("ph", 0.0),
                     confidence=m.get("str", 0.0),  # rhythm strength as confidence
-                    oss=m.get("nn", None),  # raw NN activation
                     plp_pulse=m.get("pp", None),  # PLP pulse value
                     plp_period=m.get("per", None),  # ACF period in frames (for autocorr lag)
-                    bpm_internal=m.get("bpm", 0.0),  # informational only, never scored
                     reliability=m.get("rel", None),  # per-bin epoch consistency (debug)
                     nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )

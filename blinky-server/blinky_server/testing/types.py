@@ -43,12 +43,9 @@ class TransientEvent:
 class MusicState:
     timestamp_ms: float
     active: bool
-    phase: float
     confidence: float
-    oss: float | None = None
     plp_pulse: float | None = None
     plp_period: int | None = None  # ACF period in frames (~66Hz) — used for autocorr lag
-    bpm_internal: float = 0.0  # Informational only, never scored
     reliability: float | None = None  # Per-bin epoch consistency (debug stream only)
     nn_agreement: float | None = None  # Flux/NN fold agreement (debug stream only)
 
@@ -114,5 +111,3 @@ class DeviceRunScore:
     avg_confidence: float
     activation_ms: float | None
     diagnostics: Diagnostics
-    adjusted_detections: list[dict[str, Any]]
-    adjusted_music_states: list[dict[str, Any]]
