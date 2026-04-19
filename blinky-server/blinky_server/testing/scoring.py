@@ -51,12 +51,9 @@ class _DetectionDict(TypedDict):
 class _MusicStateDict(TypedDict):
     timestamp_ms: float
     active: bool
-    phase: float
     confidence: float
-    oss: float | None
     plp_pulse: float | None
     plp_period: int | None
-    bpm_internal: float
     reliability: NotRequired[float | None]
     nn_agreement: NotRequired[float | None]
 
@@ -197,12 +194,9 @@ def score_device_run(
         _MusicStateDict(
             timestamp_ms=s.timestamp_ms - audio_epoch_ms,
             active=s.active,
-            phase=s.phase,
             confidence=s.confidence,
-            oss=s.oss,
             plp_pulse=s.plp_pulse,
             plp_period=s.plp_period,
-            bpm_internal=s.bpm_internal,
             reliability=s.reliability,
             nn_agreement=s.nn_agreement,
         )
@@ -300,7 +294,6 @@ def score_device_run(
         # plp_period is in firmware analysis frames (~62.5 Hz = 16kHz / 256-sample hop).
         # plp_values are sampled at the stream rate (~20 Hz normal, ~100 Hz fast).
         # Must convert firmware frames to stream-rate samples for the lag index.
-        # Falls back to BPM-derived lag if period not available (older firmware).
         FIRMWARE_ANALYSIS_HZ = 62.5  # 16 kHz sample rate / 256-sample FFT hop
         period_values = [
             s["plp_period"]
@@ -315,15 +308,6 @@ def score_device_run(
             median_period = statistics.median(period_values)
             # Convert from firmware frames to stream-rate samples
             period_lag = _js_round_int(median_period * stream_rate / FIRMWARE_ANALYSIS_HZ)
-        else:
-            # Fallback: derive from BPM (less accurate, octave-error prone)
-            bpm_values = [s["bpm_internal"] for s in active_states if s["bpm_internal"] > 0]
-            avg_bpm: float = sum(bpm_values) / len(bpm_values) if bpm_values else 0.0
-            if avg_bpm > 0 and len(plp_values) > 10:
-                stream_rate = len(plp_values) / (audio_duration_sec or 1)
-                period_lag = _js_round_int(stream_rate * 60 / avg_bpm)
-            else:
-                period_lag = 0
 
         if 0 < period_lag < len(plp_values) / 2:
             # Search a window of lags around the detected period (±10%) and
@@ -453,11 +437,6 @@ def score_device_run(
             onset_offset_stats=onset_offset_stats,
             onset_offsets=onset_offsets,
         ),
-        adjusted_detections=[dict(d) for d in detections],
-        adjusted_music_states=[
-            {k: v for k, v in s.items() if k not in ("bpm_internal", "plp_period")}
-            for s in music_states
-        ],
     )
 
 

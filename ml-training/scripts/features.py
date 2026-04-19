@@ -33,13 +33,19 @@ def compute_band_flux(mel: np.ndarray) -> np.ndarray:
 
 
 def append_features(mel: np.ndarray, use_delta: bool = False,
-                    use_band_flux: bool = False) -> np.ndarray:
-    """Append delta or band-flux features to mel data, matching firmware logic.
+                    use_band_flux: bool = False,
+                    use_hybrid: bool = False,
+                    audio: np.ndarray | None = None,
+                    mel_db_range: float = 60.0) -> np.ndarray:
+    """Append delta, band-flux, or hybrid features to mel data.
 
     Args:
-        mel: (n_frames, 26) mel band values
-        use_delta: append first-order difference (26 → 52 features)
-        use_band_flux: append 3-channel HWR flux (26 → 29 features)
+        mel: (n_frames, n_mels) mel band values
+        use_delta: append first-order difference (n_mels → 2*n_mels features)
+        use_band_flux: append 3-channel HWR flux (n_mels → n_mels+3 features)
+        use_hybrid: append spectral flatness + flux (n_mels → n_mels+2 features)
+        audio: raw audio waveform (for STFT-based flatness in hybrid mode)
+        mel_db_range: dB range for mel log compression reversal (fallback path)
 
     Returns: (n_frames, features) array
     """
@@ -50,6 +56,9 @@ def append_features(mel: np.ndarray, use_delta: bool = False,
     elif use_band_flux:
         flux = compute_band_flux(mel)
         return np.concatenate([mel, flux], axis=1)
+    elif use_hybrid:
+        from scripts.audio import append_hybrid_features
+        return append_hybrid_features(mel, audio=audio, mel_db_range=mel_db_range)
     return mel
 
 

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run generate-icons && tsc && vite build",
+    "build:firebase": "npm run generate-icons && tsc && vite build --outDir dist",
     "generate-icons": "node scripts/generate-icons.js",
     "preview": "vite preview",
     "lint": "eslint .",

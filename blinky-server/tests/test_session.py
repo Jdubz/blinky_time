@@ -52,12 +52,9 @@ def test_ingest_audio_music_state() -> None:
     assert len(result.music_states) == 1
     ms = result.music_states[0]
     assert ms.active is True
-    assert ms.phase == 0.25
     assert ms.plp_pulse == 0.8
     assert ms.confidence == 0.7
-    assert ms.oss == 0.5
     assert ms.plp_period == 33
-    assert ms.bpm_internal == 120.0
     assert ms.timestamp_ms > 0
 
 
@@ -135,7 +132,7 @@ def test_device_routes_to_test_session() -> None:
     assert len(result.transients) == 1
     assert result.transients[0].strength == 0.9
     assert len(result.music_states) == 1
-    assert result.music_states[0].phase == 0.5
+    assert result.music_states[0].plp_pulse == 0.6
 
 
 def test_device_stop_test_session() -> None:

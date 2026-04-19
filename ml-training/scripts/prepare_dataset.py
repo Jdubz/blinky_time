@@ -32,9 +32,12 @@ import gc
 import hashlib
 import json
 import math
+import os
 import shutil
 import sys
 import tempfile
+import time as _time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 # Track active shard temp dirs for crash cleanup. Shard dirs are created
@@ -43,19 +46,74 @@ from pathlib import Path
 # does NOT run on SIGKILL (OOM killer) — orphaned dirs must be found and
 # deleted manually in that case. Placing them in output_dir (not /tmp)
 # makes this straightforward: `find /mnt/storage -name 'blinky_*' -type d`.
-_active_shard_dirs: list[Path] = []
+_active_shard_dirs: list[tuple[Path, Path]] = []  # (shard_dir, manifest_path)
 
 
 def _cleanup_shard_dirs() -> None:
-    for d in _active_shard_dirs:
-        if d.exists():
+    """Clean up shard temp dirs on exit — but NOT if a resumption manifest exists.
+
+    If the manifest (.prep_progress_*.json) is present, the shards are needed
+    for resume-from-crash. Only clean shards whose manifest has already been
+    deleted (i.e., the split completed successfully).
+    """
+    for shard_dir, manifest_path in _active_shard_dirs:
+        if shard_dir.exists():
+            if manifest_path.exists():
+                print(f"NOTE: Keeping shard dir {shard_dir.name} for resumption "
+                      f"(manifest exists)", file=sys.stderr)
+                continue
             try:
-                shutil.rmtree(d)
+                shutil.rmtree(shard_dir)
             except Exception as e:
-                print(f"WARNING: Failed to clean up shard dir {d}: {e}", file=sys.stderr)
+                print(f"WARNING: Failed to clean up shard dir {shard_dir}: {e}",
+                      file=sys.stderr)
 
 
 atexit.register(_cleanup_shard_dirs)
+
+
+def _atomic_json_save(obj: object, path: Path) -> None:
+    """Save JSON atomically via write-to-tmp-then-rename."""
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+def _check_disk_space(path: Path, required_gb: float, context: str) -> None:
+    """Abort with clear message if disk space is insufficient."""
+    free_gb = shutil.disk_usage(path).free / (1024 ** 3)
+    if free_gb < required_gb:
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"FATAL: Insufficient disk space for {context}.", file=sys.stderr)
+        print(f"  Free:     {free_gb:.1f} GB", file=sys.stderr)
+        print(f"  Required: {required_gb:.1f} GB", file=sys.stderr)
+        print(f"  Path:     {path}", file=sys.stderr)
+        print(f"  Tip: delete old processed_v* dirs or stale mel_cache entries.",
+              file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _disk_free_gb(path: Path) -> float:
+    """Get free disk space in GB for the volume containing path."""
+    return shutil.disk_usage(path).free / (1024 ** 3)
+
+
+# Number of audio files to prefetch ahead of the main processing loop.
+# librosa.load (MP3 decode + resample) takes 50-200ms per file and releases the GIL
+# during the C extension calls, making it ideal for thread-based prefetching.
+PREFETCH_AHEAD = 8
+
+
+def _load_audio_quiet(path: str, sr: int) -> tuple:
+    """Load audio file via librosa.
+
+    Note: some MP3 files emit mpg123 'dequantization failed' warnings to stderr.
+    These are harmless (librosa skips bad frames). We do NOT suppress stderr here
+    because the fd redirect (os.dup2) is not thread-safe and caused SIGBUS crashes
+    when called from the prefetch thread pool.
+    """
+    return librosa.load(path, sr=sr, mono=True)
 
 import librosa
 import numpy as np
@@ -111,6 +169,7 @@ from scripts.audio import (
     append_band_flux_features,
     append_hybrid_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
+    compute_input_features,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
 )
@@ -347,9 +406,11 @@ def make_instrument_targets(beat_times: np.ndarray, beat_types: list[str],
 
 def _pink_noise_gpu(n: int, rng: np.random.Generator,
                     device: torch.device) -> torch.Tensor:
-    """Generate pink (1/f) noise on GPU, with CPU fallback for large sizes."""
+    """Generate pink (1/f) noise on GPU, with CPU fallback for OOM."""
     white = torch.from_numpy(rng.standard_normal(n).astype(np.float32))
     try:
+        if n > 960_000:
+            torch.cuda.empty_cache()  # Defragment before large FFT
         white_dev = white.to(device)
         fft = torch.fft.rfft(white_dev)
         freqs = torch.fft.rfftfreq(n, device=device)
@@ -357,7 +418,6 @@ def _pink_noise_gpu(n: int, rng: np.random.Generator,
         fft *= 1.0 / torch.sqrt(freqs)
         pink = torch.fft.irfft(fft, n=n)
     except RuntimeError:
-        # cuFFT can fail on large sizes; fall back to CPU
         fft = torch.fft.rfft(white)
         freqs = torch.fft.rfftfreq(n)
         freqs[0] = 1
@@ -590,9 +650,11 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
                     rir = rir.to(device)
 
                 rir = rir / (rir.abs().max() + 1e-10)
-                # GPU convolution via FFT (CPU fallback for large sizes)
+                # GPU FFT convolution (CPU fallback for OOM)
                 n_conv = len(audio) + len(rir) - 1
                 try:
+                    if len(audio) > 960_000:
+                        torch.cuda.empty_cache()  # Defragment before large FFT
                     convolved = torch.fft.irfft(
                         torch.fft.rfft(audio, n=n_conv) * torch.fft.rfft(rir, n=n_conv),
                         n=n_conv
@@ -682,7 +744,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  mel_cache_dir: Path | None = None,
                  generate_teacher: bool = False,
                  teacher_soft_dir: Path | None = None,
-                 noise_dir: Path | None = None) -> list[dict]:
+                 noise_dir: Path | None = None,
+                 preloaded_audio: np.ndarray | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -708,14 +771,32 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     target_type = cfg["labels"].get("target_type", "gaussian")
 
-    # Load audio with librosa for resampling consistency
-    audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
+    # --- Fast label pre-check: skip tracks with missing/invalid labels BEFORE
+    # loading audio on GPU. Prevents wasting GPU time on tracks that will be
+    # discarded after the expensive augmentation step. ---
+    labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
+    kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
+    if labels_type == "kick_weighted" and kick_weighted_dir:
+        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
+        if not kw_path.exists():
+            return []
+        with open(kw_path) as f:
+            kw_data = json.load(f)
+        if kw_data.get("skipped"):
+            return []
+        n_ks = kw_data.get("kick_count", 0) + kw_data.get("snare_count", 0)
+        if n_ks < 10:
+            print(f"  WARNING: Skipping {audio_path.stem}: only {n_ks} kick+snare events "
+                  f"(likely failed drum separation)", flush=True)
+            return []
+
+    # Load audio (or use pre-loaded from prefetch thread pool)
+    if preloaded_audio is not None:
+        audio_np = preloaded_audio
+    else:
+        audio_np, _ = _load_audio_quiet(str(audio_path), sr)
 
     # Normalize RMS to simulate firmware AGC level.
-    # Mastered audio (~-8 dB RMS) produces mel values crushed to [0.95, 1.0].
-    # Firmware mic+AGC operates at much lower levels where [-60, 0] dB mapping
-    # uses the full [0, 1] range. Target -63 dB RMS gives mel mean ~0.52,
-    # matching firmware AGC output (calibrated via tools/rms_mel_sweep.py).
     target_rms_db = cfg["audio"].get("target_rms_db", -63)
     rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
     target_rms = 10 ** (target_rms_db / 20)
@@ -724,8 +805,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     audio_gpu = torch.from_numpy(audio_np).to(device)
 
     # Load labels — onset consensus, kick-weighted, or consensus beat labels.
-    labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
-    kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
+    # Note: kick_weighted pre-check already done above; kw_data is still in scope.
     onset_consensus_dir = cfg.get("labels", {}).get("onset_consensus_dir", "")
     neighbor_weight = cfg.get("labels", {}).get("neighbor_weight", 0.0)
     label_shift_frames = cfg.get("labels", {}).get("label_shift_frames", 0)
@@ -765,20 +845,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         beat_types = [o["type"] for o in kw_data["onsets"]]
         beat_strengths = None  # not used for instrument targets
     elif labels_type == "kick_weighted" and kick_weighted_dir:
-        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
-        if not kw_path.exists():
-            # Missing label (may be quarantined) — skip track silently
-            return []
-        with open(kw_path) as f:
-            kw_data = json.load(f)
-        # Quality gate: skip tracks with too few events or explicitly skipped
-        if kw_data.get("skipped"):
-            return []
-        n_ks = kw_data.get("kick_count", 0) + kw_data.get("snare_count", 0)
-        if n_ks < 10:
-            print(f"  WARNING: Skipping {audio_path.stem}: only {n_ks} kick+snare events "
-                  f"(likely failed drum separation)")
-            return []
+        # kw_data already loaded and validated in fast pre-check above
         beat_times = np.array([o["time"] for o in kw_data["onsets"]])
         beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
     elif labels_type == "consensus_kick_weighted" and kick_weighted_dir:
@@ -919,8 +986,12 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 if mic_profile is not None:
                     mel = _apply_mic_profile(mel, mic_profile, rng)
                 if cached_path:
-                    cached_path.parent.mkdir(parents=True, exist_ok=True)
-                    np.save(cached_path, mel)
+                    try:
+                        cached_path.parent.mkdir(parents=True, exist_ok=True)
+                        np.save(cached_path, mel)
+                    except OSError:
+                        # Disk full or mkdir fail — delete partial file, skip caching
+                        cached_path.unlink(missing_ok=True)
 
             n_frames = mel.shape[0]
             if labels_type == "instrument":
@@ -935,16 +1006,28 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                                             early_neighbor_frames=early_neighbor_frames,
                                             early_neighbor_weight=early_neighbor_weight)
 
+            # Save raw mel (before hybrid features) for spectral conditioning variant.
+            # Spectral conditioning operates on mel bands, not hybrid features.
+            # NOTE: This is an alias (not a copy). This is safe because
+            # append_hybrid_features() returns a NEW array via np.concatenate,
+            # so `mel` gets rebound while `mel_raw` still points at the original.
+            # apply_spectral_conditioning() also copies internally. If a future
+            # refactor adds in-place modification of `mel` before this point,
+            # change to mel_raw = mel.copy().
+            mel_raw = mel
+
+            # Compute hybrid features (flatness + SuperFlux flux) inline if enabled.
+            if cfg.get("features", {}).get("use_hybrid", False):
+                mel = append_hybrid_features(
+                    mel_raw, audio=audio_np,
+                    mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+
             result = {
                 "mel": mel,
                 "target": targets,
                 "aug": aug_name,
                 "source": audio_path.stem,
             }
-            # Only keep raw waveform when hybrid features need STFT-based flatness.
-            # Storing audio_np for all tracks wastes memory during batched processing.
-            if cfg.get("features", {}).get("use_hybrid", False):
-                result["audio_np"] = audio_np
 
             # Teacher targets for knowledge distillation
             if generate_teacher:
@@ -976,9 +1059,15 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 if cond_cached and cond_cached.exists():
                     conditioned_mel = np.load(cond_cached)
                 else:
-                    conditioned_mel = apply_spectral_conditioning(mel)
+                    # Use mel_raw (30-dim) — spectral conditioning operates on
+                    # mel bands, not hybrid features. Hybrid appended after.
+                    conditioned_mel = apply_spectral_conditioning(mel_raw)
                     if cond_cached:
                         np.save(cond_cached, conditioned_mel)
+                if cfg.get("features", {}).get("use_hybrid", False):
+                    conditioned_mel = append_hybrid_features(
+                        conditioned_mel, audio=audio_np,
+                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
                 cond_result = {
                     "mel": conditioned_mel,
                     "target": targets,
@@ -1059,6 +1148,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                                                 label_shift_frames=label_shift_frames,
                                                 early_neighbor_frames=early_neighbor_frames,
                                                 early_neighbor_weight=early_neighbor_weight)
+                    if cfg.get("features", {}).get("use_hybrid", False):
+                        mel = append_hybrid_features(
+                            mel, audio=stem_np,
+                            mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
                     stem_result = {
                         "mel": mel,
                         "target": targets,
@@ -1082,16 +1175,13 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
                chunk_frames: int, chunk_stride: int,
                teacher_target: np.ndarray | None = None,
                use_delta: bool = False,
-               use_band_flux: bool = False,
-               use_hybrid: bool = False,
-               audio_np: np.ndarray | None = None,
-               mel_db_range: float = 60.0) -> tuple:
+               use_band_flux: bool = False) -> tuple:
     """Split mel/target arrays into overlapping fixed-length chunks.
 
     If use_delta=True, appends first-order mel differences as additional
     channels: mel[t] - mel[t-1]. Output shape becomes (N, chunk_frames, 2*n_mels).
     If use_band_flux=True, appends 3 band-grouped HWR flux channels.
-    If use_hybrid=True, appends spectral flatness + flux (2 channels).
+    Hybrid features (flatness + flux) are pre-computed in process_file, not here.
     """
     n_frames = mel.shape[0]
 
@@ -1099,8 +1189,6 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
         mel = append_delta_features(mel)
     elif use_band_flux:
         mel = append_band_flux_features(mel)
-    elif use_hybrid:
-        mel = append_hybrid_features(mel, audio=audio_np, mel_db_range=mel_db_range)
     has_teacher = teacher_target is not None
 
     if n_frames < chunk_frames:
@@ -1401,13 +1489,27 @@ def main():
             print(f"Filtered {dropped} tracks below quality {min_quality} "
                   f"({len(pairs)} remaining)")
 
-    # File-level train/val split (prevents data leakage between splits)
-    pairs_shuffled = list(pairs)
-    rng.shuffle(pairs_shuffled)
-    val_split = cfg["training"]["val_split"]
-    n_val_files = max(1, int(len(pairs_shuffled) * val_split))
-    val_pairs = pairs_shuffled[:n_val_files]
-    train_pairs = pairs_shuffled[n_val_files:]
+    # File-level train/val split (prevents data leakage between splits).
+    # Save split assignment so resumed runs use the same split.
+    splits_path = output_dir / ".prep_splits.json"
+    if splits_path.exists():
+        split_data = json.loads(splits_path.read_text())
+        train_stems = set(split_data["train"])
+        val_stems = set(split_data["val"])
+        train_pairs = [(a, l) for a, l in pairs if a.stem in train_stems]
+        val_pairs = [(a, l) for a, l in pairs if a.stem in val_stems]
+        print(f"Loaded saved split: {len(train_pairs)} train, {len(val_pairs)} val")
+    else:
+        pairs_shuffled = list(pairs)
+        rng.shuffle(pairs_shuffled)
+        val_split = cfg["training"]["val_split"]
+        n_val_files = max(1, int(len(pairs_shuffled) * val_split))
+        val_pairs = pairs_shuffled[:n_val_files]
+        train_pairs = pairs_shuffled[n_val_files:]
+        _atomic_json_save({
+            "train": [a.stem for a, _ in train_pairs],
+            "val": [a.stem for a, _ in val_pairs],
+        }, splits_path)
 
     teacher_soft_dir = Path(args.teacher_soft_dir) if args.teacher_soft_dir else None
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
@@ -1442,20 +1544,125 @@ def main():
     n_mels = cfg["audio"]["n_mels"]
     SHARD_BATCH = 500  # files per shard (limits RAM to ~3 GB)
 
+    # Thread pool for audio prefetching and parallel chunking.
+    # librosa.load and numpy operations release the GIL, so threads give
+    # real parallelism for these CPU-bound operations.
+    n_chunk_workers = max(1, min(16, os.cpu_count() - 2)) if os.cpu_count() else 4
+
+    SLOW_THRESHOLD = 30  # seconds — log files that take longer than this
+
     for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
-        shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_", dir=str(output_dir)))
-        _active_shard_dirs.append(shard_dir)
+        shard_dir = None
         shard_idx = 0
         shard_counts = []
         batch_X, batch_Y, batch_T = [], [], []
         total_variants = 0
-        errors = 0
+        error_list: list[tuple[str, str, str]] = []  # (filename, error_type, message)
+        slow_files: list[tuple[str, float]] = []      # (filename, elapsed_seconds)
+        completed_stems: list[str] = []                # for resumption manifest
 
-        for i, (audio_path, label_path) in enumerate(tqdm(split_pairs, desc=split_name)):
+        # --- Resumption: load progress from previous crashed run ---
+        manifest_path = output_dir / f".prep_progress_{split_name}.json"
+        skip_stems: set[str] = set()
+        if manifest_path.exists():
             try:
+                manifest = json.loads(manifest_path.read_text())
+                skip_stems = set(manifest.get("completed_stems", []))
+                shard_idx = manifest.get("shard_idx", 0)
+                shard_counts = manifest.get("shard_counts", [])
+                completed_stems = list(skip_stems)
+                # Reuse shard_dir from previous run if it still exists
+                saved_shard_dir = manifest.get("shard_dir")
+                if saved_shard_dir and Path(saved_shard_dir).exists():
+                    shard_dir = Path(saved_shard_dir)
+                    print(f"  Resuming {split_name}: {len(skip_stems)} files done, "
+                          f"shard_idx={shard_idx}, reusing {shard_dir.name}",
+                          flush=True)
+                else:
+                    # Shard dir was cleaned up — start fresh for this split
+                    shard_idx = 0
+                    shard_counts = []
+                    skip_stems = set()
+                    completed_stems = []
+                    print(f"  Resuming {split_name}: shard dir gone, "
+                          f"restarting from scratch", flush=True)
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"  WARNING: Corrupt manifest {manifest_path}, starting fresh: {e}",
+                      flush=True)
+                skip_stems = set()
+
+        if shard_dir is None:
+            shard_dir = Path(tempfile.mkdtemp(prefix=f"blinky_{split_name}_",
+                                              dir=str(output_dir)))
+        _active_shard_dirs.append((shard_dir, manifest_path))
+
+        # Filter out already-completed files
+        if skip_stems:
+            orig_len = len(split_pairs)
+            split_pairs = [(a, l) for a, l in split_pairs if a.stem not in skip_stems]
+            print(f"  Skipping {orig_len - len(split_pairs)} completed files, "
+                  f"{len(split_pairs)} remaining", flush=True)
+
+        # --- Audio prefetch: load upcoming files in background threads ---
+        prefetch_pool = ThreadPoolExecutor(max_workers=PREFETCH_AHEAD)
+        audio_futures: dict[int, Future] = {}
+        sr = cfg["audio"]["sample_rate"]
+        for j in range(min(PREFETCH_AHEAD, len(split_pairs))):
+            path = split_pairs[j][0]
+            audio_futures[j] = prefetch_pool.submit(_load_audio_quiet, str(path), sr)
+
+        # --- Chunk thread pool: parallelize chunk_data (pure numpy, GIL-free) ---
+        chunk_pool = ThreadPoolExecutor(max_workers=n_chunk_workers)
+        chunk_futures: list[Future] = []
+
+        # --- Progress tracking ---
+        split_start = _time.time()
+        last_progress = split_start
+        PROGRESS_INTERVAL = 30  # seconds between progress lines
+
+        for i, (audio_path, label_path) in enumerate(split_pairs):
+            try:
+                # Collect completed chunk futures from previous iterations
+                for cf in chunk_futures:
+                    try:
+                        mc, tc, thc = cf.result(timeout=60)
+                        batch_X.append(mc)
+                        batch_Y.append(tc)
+                        if generate_teacher and thc is not None:
+                            batch_T.append(thc)
+                        total_variants += 1
+                    except Exception as e:
+                        print(f"  WARNING: chunk_data failed: {type(e).__name__}: {e}",
+                              flush=True)
+                chunk_futures.clear()
+
+                # Get prefetched audio (or load synchronously if prefetch missed)
+                preloaded = None
+                if i in audio_futures:
+                    future = audio_futures.pop(i)
+                    try:
+                        audio_data, _ = future.result(timeout=120)
+                        preloaded = audio_data
+                    except TimeoutError:
+                        future.cancel()  # Attempt to stop the background thread
+                        print(f"  WARNING: prefetch timed out for {audio_path.name} "
+                              f"(120s), cancelled", flush=True)
+                        # Fall back to loading inside process_file
+                    except Exception as e:
+                        print(f"  WARNING: prefetch failed for {audio_path.name}: "
+                              f"{type(e).__name__}: {e}", flush=True)
+                        # Fall back to loading inside process_file
+
+                # Submit prefetch for upcoming file
+                next_idx = i + PREFETCH_AHEAD
+                if next_idx < len(split_pairs):
+                    path = split_pairs[next_idx][0]
+                    audio_futures[next_idx] = prefetch_pool.submit(
+                        _load_audio_quiet, str(path), sr)
+
                 # Per-file deterministic RNG for reproducible augmentation
-                # (enables mel caching across runs regardless of processing order)
                 file_rng = _file_rng(seed, audio_path.stem)
+                file_start = _time.time()
                 results = process_file(audio_path, label_path, cfg, args.augment,
                                        rir_dir, file_rng, device, mel_fb, window,
                                        mic_profile=mic_profile,
@@ -1464,43 +1671,140 @@ def main():
                                        mel_cache_dir=mel_cache_dir,
                                        generate_teacher=generate_teacher,
                                        teacher_soft_dir=teacher_soft_dir,
-                                       noise_dir=noise_dir)
+                                       noise_dir=noise_dir,
+                                       preloaded_audio=preloaded)
+                file_elapsed = _time.time() - file_start
+
+                if file_elapsed > SLOW_THRESHOLD:
+                    slow_files.append((audio_path.name, file_elapsed))
+                    print(f"  SLOW: {audio_path.name} took {file_elapsed:.1f}s", flush=True)
+
+                # Submit chunking to thread pool (pure numpy, releases GIL).
+                # Hybrid features are already in mel (computed in process_file).
                 for r in results:
-                    mel_chunks, target_chunks, teacher_chunks = chunk_data(
-                        r["mel"], r["target"], chunk_frames, chunk_stride,
+                    cf = chunk_pool.submit(
+                        chunk_data, r["mel"], r["target"], chunk_frames, chunk_stride,
                         teacher_target=r.get("teacher"),
-                        use_delta=use_delta,
-                        use_band_flux=use_band_flux,
-                        use_hybrid=use_hybrid,
-                        audio_np=r.get("audio_np"),
-                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
-                    )
-                    batch_X.append(mel_chunks)
-                    batch_Y.append(target_chunks)
-                    if generate_teacher and teacher_chunks is not None:
-                        batch_T.append(teacher_chunks)
-                    total_variants += 1
+                        use_delta=use_delta, use_band_flux=use_band_flux)
+                    chunk_futures.append(cf)
+
+                completed_stems.append(audio_path.stem)
             except Exception as e:
-                tqdm.write(f"  ERROR: {audio_path.name}: {e}")
-                errors += 1
+                error_list.append((audio_path.name, type(e).__name__, str(e)[:200]))
+                print(f"  ERROR: {audio_path.name}: {type(e).__name__}: {e}", flush=True)
+                gc.collect()
+                torch.cuda.empty_cache()
+
+            # --- Periodic progress logging (every PROGRESS_INTERVAL seconds) ---
+            now = _time.time()
+            if now - last_progress >= PROGRESS_INTERVAL or i == len(split_pairs) - 1:
+                elapsed = now - split_start
+                rate = (i + 1) / elapsed if elapsed > 0 else 0
+                remaining = (len(split_pairs) - i - 1) / rate if rate > 0 else 0
+                free_gb = _disk_free_gb(output_dir)
+                print(f"  [{split_name}] {i+1}/{len(split_pairs)} files | "
+                      f"{len(error_list)} errors | {elapsed:.0f}s elapsed | "
+                      f"ETA {remaining:.0f}s | {rate:.1f} files/s | "
+                      f"disk {free_gb:.0f}G free", flush=True)
+                last_progress = now
+
+            # --- Periodic maintenance (every 50 files) ---
+            if (i + 1) % 50 == 0:
+                gc.collect()
+                torch.cuda.empty_cache()
+                # cuFFT plan cache: each unique FFT size (track length) creates a
+                # permanent GPU-resident plan (~2-8 MB each). With thousands of
+                # varying-length tracks, these accumulate to GB of non-PyTorch GPU
+                # memory that empty_cache() can't reclaim. Clear periodically.
+                torch.backends.cuda.cufft_plan_cache.clear()
+            if (i + 1) % 100 == 0:
+                _check_disk_space(output_dir, 10.0,
+                                  f"continuing data prep ({i+1}/{len(split_pairs)})")
 
             # Flush batch to disk periodically to limit RAM usage
             if (i + 1) % SHARD_BATCH == 0 or i == len(split_pairs) - 1:
+                # Drain remaining chunk futures before flush
+                for cf in chunk_futures:
+                    try:
+                        mc, tc, thc = cf.result(timeout=60)
+                        batch_X.append(mc)
+                        batch_Y.append(tc)
+                        if generate_teacher and thc is not None:
+                            batch_T.append(thc)
+                        total_variants += 1
+                    except Exception as e:
+                        print(f"  WARNING: chunk_data failed: {type(e).__name__}: {e}",
+                              flush=True)
+                chunk_futures.clear()
                 if batch_X:
+                    # Check disk before writing shard
+                    shard_bytes = sum(x.nbytes for x in batch_X) + sum(y.nbytes for y in batch_Y)
+                    shard_gb = shard_bytes / (1024 ** 3) * 1.2  # 20% margin
+                    _check_disk_space(output_dir, shard_gb,
+                                      f"shard flush {shard_idx} ({shard_gb:.1f} GB)")
+
                     X_s = np.concatenate(batch_X)
                     Y_s = np.concatenate(batch_Y)
-                    np.save(shard_dir / f"X_{shard_idx}.npy", X_s)
-                    np.save(shard_dir / f"Y_{shard_idx}.npy", Y_s)
-                    if batch_T:
-                        T_s = np.concatenate(batch_T)
-                        np.save(shard_dir / f"T_{shard_idx}.npy", T_s)
-                        del T_s
+                    x_path = shard_dir / f"X_{shard_idx}.npy"
+                    y_path = shard_dir / f"Y_{shard_idx}.npy"
+                    try:
+                        np.save(x_path, X_s)
+                        np.save(y_path, Y_s)
+                        if batch_T:
+                            T_s = np.concatenate(batch_T)
+                            np.save(shard_dir / f"T_{shard_idx}.npy", T_s)
+                            del T_s
+                    except OSError as e:
+                        # Disk full mid-write: delete partial files to avoid
+                        # corrupt shards that crash on resume.
+                        for p in [x_path, y_path, shard_dir / f"T_{shard_idx}.npy"]:
+                            p.unlink(missing_ok=True)
+                        print(f"\nFATAL: Shard write failed (disk full?): {e}",
+                              file=sys.stderr, flush=True)
+                        sys.exit(1)
                     shard_counts.append(len(X_s))
                     del X_s, Y_s
                     shard_idx += 1
+
+                    # Save resumption manifest (atomic write)
+                    _atomic_json_save({
+                        "completed_stems": completed_stems,
+                        "shard_idx": shard_idx,
+                        "shard_counts": shard_counts,
+                        "shard_dir": str(shard_dir),
+                    }, manifest_path)
+
                 batch_X, batch_Y, batch_T = [], [], []
                 gc.collect()
                 torch.cuda.empty_cache()
+
+        # Shut down thread pools for this split (wait=True to avoid zombie threads
+        # accessing freed memory or GPU handles after the main thread exits)
+        prefetch_pool.shutdown(wait=True)
+        chunk_pool.shutdown(wait=True)
+
+        # --- Error and slow file summary ---
+        if error_list:
+            from collections import Counter
+            print(f"\n  --- Error Summary ({split_name}) ---", flush=True)
+            type_counts = Counter(etype for _, etype, _ in error_list)
+            for etype, count in type_counts.most_common():
+                print(f"    {etype}: {count}")
+                for fname, et, msg in error_list:
+                    if et == etype:
+                        print(f"      {fname}: {msg[:100]}")
+            print(f"  --- {len(error_list)} total errors ---", flush=True)
+
+        if slow_files:
+            print(f"\n  --- Slow Files ({split_name}, >{SLOW_THRESHOLD}s) ---", flush=True)
+            for fname, elapsed in sorted(slow_files, key=lambda x: -x[1]):
+                print(f"    {elapsed:.1f}s  {fname}")
+
+        # Check disk before merge
+        expected_features = compute_input_features(cfg)
+        merge_est_gb = sum(shard_counts) * chunk_frames * expected_features * 4 / (1024**3)
+        _check_disk_space(output_dir, merge_est_gb * 1.2,
+                          f"merge ({merge_est_gb:.1f} GB final array)")
 
         # Merge shards into final .npy using memmap (never holds full dataset in RAM)
         total = sum(shard_counts)
@@ -1509,28 +1813,45 @@ def main():
             shutil.rmtree(shard_dir)
             continue
 
-        # Detect X feature dimension from first shard (26 for mel, 52 with delta features)
+        # Detect X feature dimension from first shard
         x_first = np.load(shard_dir / "X_0.npy", mmap_mode='r')
-        x_features = x_first.shape[2]  # n_mels or n_mels*2 with deltas
+        x_features = x_first.shape[2]
         del x_first
-        X_out = np.lib.format.open_memmap(
-            str(output_dir / f"X_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=(total, chunk_frames, x_features))
-        # Detect Y shape from first shard: 1D (chunk_frames,) or 2D (chunk_frames, channels)
-        y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
-        y_shape = (total,) + y_first.shape[1:]  # (total, chunk_frames) or (total, chunk_frames, 3)
-        del y_first
-        Y_out = np.lib.format.open_memmap(
-            str(output_dir / f"Y_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=y_shape)
 
-        has_teacher = (shard_dir / "T_0.npy").exists()
-        T_out = None
-        if has_teacher:
-            T_out = np.lib.format.open_memmap(
-                str(output_dir / f"Y_teacher_{split_name}.npy"), mode='w+',
-                dtype=np.float32, shape=(total, chunk_frames))
+        # Pre-allocate memmap output files. If disk is full, open_memmap
+        # can leave a partial/corrupt file. Clean up on failure.
+        memmap_paths = []
+        try:
+            x_path = output_dir / f"X_{split_name}.npy"
+            memmap_paths.append(x_path)
+            X_out = np.lib.format.open_memmap(
+                str(x_path), mode='w+',
+                dtype=np.float32, shape=(total, chunk_frames, x_features))
+            y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
+            y_shape = (total,) + y_first.shape[1:]
+            del y_first
+            y_path = output_dir / f"Y_{split_name}.npy"
+            memmap_paths.append(y_path)
+            Y_out = np.lib.format.open_memmap(
+                str(y_path), mode='w+',
+                dtype=np.float32, shape=y_shape)
 
+            has_teacher = (shard_dir / "T_0.npy").exists()
+            T_out = None
+            if has_teacher:
+                t_path = output_dir / f"Y_teacher_{split_name}.npy"
+                memmap_paths.append(t_path)
+                T_out = np.lib.format.open_memmap(
+                    str(t_path), mode='w+',
+                    dtype=np.float32, shape=(total, chunk_frames))
+        except Exception as e:
+            print(f"  FATAL: Failed to allocate memmap output (disk full?): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            for p in memmap_paths:
+                p.unlink(missing_ok=True)
+            sys.exit(1)
+
+        # Copy shards into memmap (don't delete yet — verify output first)
         offset = 0
         for s in range(shard_idx):
             X_s = np.load(shard_dir / f"X_{s}.npy")
@@ -1552,15 +1873,43 @@ def main():
             pos_ratio = (T_out > 0.1).mean()
             print(f"  Teacher labels: {T_out.shape}, pos_ratio={pos_ratio:.3f}")
 
+        # Verify merged output file sizes before deleting shards.
+        # If disk corruption caused a silent write failure, shard data is
+        # still available for re-merge.
+        x_path = output_dir / f"X_{split_name}.npy"
+        y_path = output_dir / f"Y_{split_name}.npy"
+        expected_x_bytes = total * chunk_frames * x_features * 4  # float32
+        expected_y_bytes = total * np.prod(y_shape[1:]) * 4
+        x_actual = x_path.stat().st_size
+        y_actual = y_path.stat().st_size
+        # npy header is typically 128-256 bytes; allow generous margin
+        if x_actual < expected_x_bytes or y_actual < expected_y_bytes:
+            print(f"  FATAL: Merged output size mismatch! "
+                  f"X: {x_actual} bytes (expected >= {expected_x_bytes}), "
+                  f"Y: {y_actual} bytes (expected >= {expected_y_bytes}). "
+                  f"Shard directory preserved: {shard_dir}", flush=True)
+            del X_out, Y_out
+            if T_out is not None:
+                del T_out
+            sys.exit(1)
+
         del X_out, Y_out
         if T_out is not None:
             del T_out
 
         shutil.rmtree(shard_dir)
-        _active_shard_dirs.remove(shard_dir)
-        print(f"\n  {split_name}: {total} chunks from {total_variants} variants ({errors} errors)")
+        _active_shard_dirs.remove((shard_dir, manifest_path))
+        # Clean up resumption manifest (split completed successfully)
+        manifest_path.unlink(missing_ok=True)
+
+        split_elapsed = _time.time() - split_start
+        print(f"\n  {split_name}: {total} chunks from {total_variants} variants "
+              f"({len(error_list)} errors) in {split_elapsed:.0f}s", flush=True)
 
     # Print summary
+    if not (output_dir / "X_train.npy").exists():
+        print("\nFATAL: X_train.npy was not created (all tracks failed?)", file=sys.stderr)
+        sys.exit(1)
     X_train = np.load(output_dir / "X_train.npy", mmap_mode='r')
     Y_train = np.load(output_dir / "Y_train.npy", mmap_mode='r')
     X_val = np.load(output_dir / "X_val.npy", mmap_mode='r')

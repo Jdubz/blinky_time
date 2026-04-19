@@ -33,12 +33,14 @@ namespace SpectralConstants {
 
     // Mel filterbank configuration
     // Mel band count: set to match the deployed NN model's expected input.
-    // v25/v26 models expect 26 bands at 60-8000 Hz.
-    // v27+ models expect 30 bands at 40-4000 Hz (hybrid: mel + flatness + flux).
+    // v27 deployed (b129): 30 mel bands only. FrameOnsetNN auto-detects from model
+    // shape — currently runs in mel-only mode (useHybrid_=false). When v27-hybrid
+    // model deploys (32 features = 30 mel + flatness + flux), auto-detect will
+    // switch to hybrid mode automatically. No firmware change needed.
     // MUST match the trained model — mismatched dimensions silently feed wrong frequencies.
-    constexpr int NUM_MEL_BANDS = 26;       // Match deployed model (change to 30 when v27 deploys)
-    constexpr float MEL_MIN_FREQ = 60.0f;   // Hz (change to 40 when v27 deploys)
-    constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (change to 4000 when v27 deploys)
+    constexpr int NUM_MEL_BANDS = 30;       // v27: 30 focused mel bands (40-4000 Hz)
+    constexpr float MEL_MIN_FREQ = 40.0f;   // Hz (covers kick fundamental)
+    constexpr float MEL_MAX_FREQ = 4000.0f; // Hz (snare wire cutoff; hi-hat excluded)
 
     // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
     // MUST match ml-training base.yaml mel_db_range.

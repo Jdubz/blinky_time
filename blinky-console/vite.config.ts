@@ -50,12 +50,12 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Precache essential shell assets including index.html for offline PWA
-        globPatterns: ['index.html', '**/*.{ico,woff2}'],
+        // Precache essential shell assets including index.html for offline PWA.
+        // Includes PNG icons (PWA icons, favicons) so first offline load doesn't 404.
+        globPatterns: ['index.html', '**/*.{ico,png,woff2}'],
         // Navigation fallback for SPA
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
-        // Runtime caching strategies
         runtimeCaching: [
           {
             // Hashed app assets - CacheFirst since new deploys get new URLs
@@ -72,40 +72,8 @@ export default defineConfig({
               },
             },
           },
-          {
-            // Cache Google Fonts stylesheets
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
-          {
-            // Cache Google Fonts webfonts
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'gstatic-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
         ],
-        // Clean up old caches
         cleanupOutdatedCaches: true,
-        // Immediately activate new service worker
         skipWaiting: true,
         clientsClaim: true,
       },
@@ -115,7 +83,23 @@ export default defineConfig({
       },
     }),
   ],
+  // Build output goes into blinky-server/web/ so a single server process
+  // serves both the API (port 8420) and the SPA. See docs/DEVELOPMENT.md
+  // for the dev workflow.
+  build: {
+    outDir: '../blinky-server/web',
+    emptyOutDir: true,
+  },
   server: {
     port: 3000,
+    // Proxy API + WebSocket traffic to a local blinky-server during dev.
+    // Keeps the console at :3000 (with HMR + WebSerial) while routing
+    // server-backed requests through to :8420. Skip the proxies if you
+    // run the console without a local blinky-server — WebSerial paths
+    // still work.
+    proxy: {
+      '/api': 'http://localhost:8420',
+      '/ws': { target: 'ws://localhost:8420', ws: true },
+    },
   },
 });

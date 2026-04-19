@@ -33,11 +33,25 @@ const UnconfiguredDeviceSchema = z.object({
 const DeviceConfigSchema = z.union([ConfiguredDeviceSchema, UnconfiguredDeviceSchema]);
 
 /**
- * Device information from `json info` command (v28+ format)
+ * Device information from `json info` command (v28+ format).
+ *
+ * `sn` is the firmware-reported hardware serial number (FICR DEVICEID on
+ * nRF52840). It matches the `hardware_sn` field on the server side and is
+ * the canonical cross-transport identity — use it to deduplicate the same
+ * physical device reached via WebSerial, Web Bluetooth, and/or a
+ * blinky-server WebSocket proxy. Note: `device.id` is the *device-type*
+ * (e.g. `bucket_v1`), not a per-unit identifier.
+ *
+ * `ble` is the BLE MAC address, only emitted on BLE-capable builds.
+ *
+ * Both are optional for compatibility with older firmware that predates
+ * cross-transport identity.
  */
 export const DeviceInfoSchema = z.object({
   version: z.string().min(1, 'Version is required'),
   device: DeviceConfigSchema,
+  sn: z.string().optional(),
+  ble: z.string().optional(),
 });
 
 export type DeviceInfo = z.infer<typeof DeviceInfoSchema>;

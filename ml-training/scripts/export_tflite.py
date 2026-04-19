@@ -27,7 +27,7 @@ import tf_keras as keras
 from tf_keras import layers
 import torch
 
-from scripts.audio import load_config
+from scripts.audio import compute_input_features, load_config
 
 
 def build_tf_onset_cnn(n_mels: int, channels: int, kernel_size: int,
@@ -1017,14 +1017,7 @@ def main():
         pt_state = checkpoint
 
     model_type = cfg["model"].get("type", "causal_cnn")
-    use_delta = cfg.get("features", {}).get("use_delta", False)
-    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-    if use_delta:
-        n_mels = cfg["audio"]["n_mels"] * 2
-    elif use_band_flux:
-        n_mels = cfg["audio"]["n_mels"] + 3
-    else:
-        n_mels = cfg["audio"]["n_mels"]
+    n_mels = compute_input_features(cfg)
 
     if model_type == "frame_fc_enhanced":
         # --- Enhanced FC model ---

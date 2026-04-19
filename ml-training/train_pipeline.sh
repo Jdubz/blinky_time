@@ -18,6 +18,11 @@
 
 set -e
 
+# Allow PyTorch CUDA allocator to use non-contiguous segments for large tensors.
+# Without this, fragmentation after hundreds of tracks leaves no contiguous block
+# for FFT intermediates on long tracks, causing unrecoverable OOM.
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
 CONFIG="${1:?Usage: $0 <config.yaml> <run-name> [--skip-labels] [--skip-prep]}"
 RUN_NAME="${2:?Usage: $0 <config.yaml> <run-name> [--skip-labels] [--skip-prep]}"
 SKIP_LABELS=false
@@ -30,6 +35,8 @@ for arg in "${@:3}"; do
 done
 
 OUTPUT_DIR="outputs/$RUN_NAME"
+mkdir -p "$OUTPUT_DIR"  # Create early so tee can write the log from the start
+
 # Read processed_dir from config — fail fast on parse errors
 DATA_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('data',{}).get('processed_dir','data/processed'))" "$CONFIG")
 if [ -z "$DATA_DIR" ]; then
@@ -41,6 +48,82 @@ echo "=== ML Training Pipeline ==="
 echo "Config: $CONFIG"
 echo "Output: $OUTPUT_DIR"
 echo "Data:   $DATA_DIR"
+echo ""
+
+# === Pre-flight checks ===
+echo "--- Pre-flight checks ---"
+
+# 1. GPU availability
+if ! python3 -c "import torch; assert torch.cuda.is_available(), 'No CUDA GPU'" 2>/dev/null; then
+    echo "FATAL: No CUDA GPU available. Training requires a GPU."
+    exit 1
+fi
+GPU_INFO=$(python3 -c "
+import torch
+name = torch.cuda.get_device_name(0)
+mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+free = free_bytes / 1024**3
+print(f'{name} ({mem:.1f} GB total, {free:.1f} GB free)')
+" 2>/dev/null)
+echo "  GPU: $GPU_INFO"
+
+# 2. Config validation + disk budget (uses load_config to merge base.yaml)
+python3 -c "
+import sys, os, shutil
+sys.path.insert(0, '.')
+from scripts.audio import load_config
+c = load_config(sys.argv[1])
+# Validate required fields
+required = [('audio','sample_rate'), ('audio','n_fft'), ('audio','n_mels'),
+            ('training','epochs'), ('training','batch_size'), ('training','chunk_frames'),
+            ('training','chunk_stride')]
+missing = [f'{s}.{k}' for s, k in required if k not in c.get(s, {})]
+if missing:
+    print(f'FATAL: Config missing required fields: {missing}', file=sys.stderr)
+    sys.exit(1)
+print(f'  Config: OK ({len(c)} sections)')
+
+# Disk budget estimation
+data_dir = c.get('data', {}).get('processed_dir', 'data/processed')
+n_mels = c['audio']['n_mels']
+use_delta = c.get('features', {}).get('use_delta', False)
+use_band_flux = c.get('features', {}).get('use_band_flux', False)
+use_hybrid = c.get('features', {}).get('use_hybrid', False)
+if use_delta: n_features = n_mels * 2
+elif use_band_flux: n_features = n_mels + 3
+elif use_hybrid: n_features = n_mels + 2
+else: n_features = n_mels
+chunk_frames = c['training']['chunk_frames']
+chunk_stride = c['training']['chunk_stride']
+audio_dir = c.get('data', {}).get('audio_dir', 'data/audio')
+if os.path.isdir(audio_dir):
+    n_files = sum(1 for f in os.listdir(audio_dir) if f.endswith(('.mp3', '.wav', '.flac', '.ogg')))
+else:
+    n_files = 6750
+# Calibrated from actual v25-v27 runs: ~1000 chunks per file with augmentation,
+# each chunk = chunk_frames × n_features × 4 bytes. This accounts for overlapping
+# windows (chunk_stride < chunk_frames) and augmentation variant count.
+chunks_per_file = 1000  # empirical average across 6750 tracks with augmentation
+bytes_per_chunk = chunk_frames * n_features * 4
+# Train (85%) + val (15%), both splits
+estimated_gb = n_files * chunks_per_file * bytes_per_chunk / 1e9
+mel_cache_gb = n_files * 0.01  # ~10 MB per track
+total_budget = (estimated_gb + mel_cache_gb) * 1.2  # 20% safety margin
+parent = data_dir
+while not os.path.exists(parent) and parent != '/':
+    parent = os.path.dirname(parent)
+free_gb = shutil.disk_usage(parent).free / (1024**3) if os.path.exists(parent) else 0
+print(f'  Disk budget: {total_budget:.0f} GB needed ({estimated_gb:.0f} data + {mel_cache_gb:.0f} cache + 20% margin)')
+print(f'  Disk free:   {free_gb:.0f} GB on {parent}')
+if free_gb < total_budget:
+    print(f'  FATAL: Need {total_budget:.0f} GB but only {free_gb:.0f} GB free.', file=sys.stderr)
+    print(f'  Tip: delete old processed_v* dirs or stale mel_cache entries.', file=sys.stderr)
+    sys.exit(1)
+print(f'  Headroom:    {free_gb - total_budget:.0f} GB')
+" "$CONFIG" || exit 1
+
+echo "--- Pre-flight OK ---"
 echo ""
 
 # Phase 1: Onset labels

@@ -24,7 +24,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
-from scripts.audio import load_config
+from scripts.audio import compute_input_features, load_config
+
+
+def _atomic_torch_save(obj: object, path: Path) -> None:
+    """Save torch checkpoint atomically via write-to-tmp-then-rename.
+
+    If the process is killed or disk fills during write, the original
+    file is untouched. os.replace is atomic on POSIX.
+    """
+    tmp = path.with_suffix(".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
 
 
 class MemmapBeatDataset(Dataset):
@@ -566,14 +577,7 @@ def main():
             print(f"WARNING: Teacher labels not found at {teacher_path}, training without distillation")
 
     # Determine expected feature count from config (for slicing data with extra channels)
-    use_delta = cfg.get("features", {}).get("use_delta", False)
-    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-    if use_delta:
-        expected_features = cfg["audio"]["n_mels"] * 2
-    elif use_band_flux:
-        expected_features = cfg["audio"]["n_mels"] + 3
-    else:
-        expected_features = cfg["audio"]["n_mels"]
+    expected_features = compute_input_features(cfg)
 
     hard_binary_threshold = cfg.get("labels", {}).get("hard_binary_threshold", 0.0)
     if hard_binary_threshold > 0:
@@ -586,6 +590,15 @@ def main():
         data_dir / "X_val.npy", data_dir / "Y_val.npy",
         y_teacher_path=teacher_val_path, max_features=expected_features,
         hard_binary_threshold=hard_binary_threshold)
+
+    # Validate data feature dimensions match expected
+    actual_features = train_ds.X.shape[-1]
+    if actual_features < expected_features:
+        print(f"FATAL: Data has {actual_features} features but model expects {expected_features}."
+              f" Re-run data prep with matching config.", file=sys.stderr)
+        sys.exit(1)
+    elif actual_features > expected_features:
+        print(f"  NOTE: Data has {actual_features} features, using first {expected_features}")
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
@@ -676,15 +689,8 @@ def main():
         ).to(device)
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
-        # With delta features, input has 2× n_mels channels (mel + delta_mel)
-        use_delta = cfg.get("features", {}).get("use_delta", False)
-        use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-        if use_delta:
-            input_features = cfg["audio"]["n_mels"] * 2
-        elif use_band_flux:
-            input_features = cfg["audio"]["n_mels"] + 3
-        else:
-            input_features = cfg["audio"]["n_mels"]
+        # With delta/hybrid features, input has extra channels beyond n_mels
+        input_features = compute_input_features(cfg)
         model = build_onset_conv1d(
             n_mels=input_features,
             channels=cfg["model"]["channels"],
@@ -1096,6 +1102,13 @@ def main():
                 val_fn += (~pred_pos & ref_pos).sum().item()
 
         val_loss /= len(val_ds)
+
+        # Abort immediately if model has diverged (NaN/Inf loss)
+        if not math.isfinite(val_loss):
+            print(f"\nFATAL: val_loss is {val_loss} at epoch {epoch+1}. "
+                  f"Model has diverged — aborting training.", file=sys.stderr)
+            sys.exit(1)
+
         val_acc = val_correct / val_total
         val_precision = val_tp / max(val_tp + val_fp, 1)
         val_recall = val_tp / max(val_tp + val_fn, 1)
@@ -1123,7 +1136,7 @@ def main():
             if _quant_noise_active:
                 from models.onset_conv1d import unwrap_quant_noise_state_dict
                 sd = unwrap_quant_noise_state_dict(sd)
-            torch.save(sd, output_dir / "best_model.pt")
+            _atomic_torch_save(sd, output_dir / "best_model.pt")
             print(f"  Saved best model (val_loss={val_loss:.4f})")
         else:
             patience_counter += 1
@@ -1132,7 +1145,7 @@ def main():
                 break
 
         # Save resumable checkpoint every epoch
-        torch.save({
+        _atomic_torch_save({
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
@@ -1200,9 +1213,9 @@ def main():
     if _quant_noise_active:
         from models.onset_conv1d import unwrap_quant_noise_state_dict
         final_sd = unwrap_quant_noise_state_dict(final_sd)
-    torch.save(final_sd, output_dir / "final_model.pt")
+    _atomic_torch_save(final_sd, output_dir / "final_model.pt")
     # Save full model info for export
-    torch.save({
+    _atomic_torch_save({
         "state_dict": final_sd,
         "config": cfg,
         "loss": loss_type,

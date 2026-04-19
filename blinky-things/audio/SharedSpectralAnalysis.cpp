@@ -25,39 +25,42 @@ static constexpr float MID_BIN_COUNT = static_cast<float>(
 static constexpr float HIGH_BIN_COUNT = static_cast<float>(
     SpectralConstants::NUM_BINS - SpectralConstants::HIGH_MIN_BIN);           // 95
 
-// Mel filterbank bin boundaries: 26 bands, 60-8000 Hz, 16 kHz / FFT-256.
-// Computed from HTK mel scale: mel = 2595 * log10(1 + hz/700).
-// MUST match librosa.filters.mel(sr=16000, n_fft=256, n_mels=26,
-//   fmin=60, fmax=8000, htk=True, norm=None).
-// Previous values were manually constructed and did not match — every band
-// had a systematic offset averaging 4.2 INT8 levels vs the training pipeline.
+// Mel filterbank bin boundaries: 30 bands, 40-4000 Hz, 16 kHz / FFT-256.
+// Focused on kick (40-200 Hz, 3 bands) + snare (200-4000 Hz, 27 bands).
+// Hi-hat frequencies (4-8 kHz) excluded — saves bandwidth for onset-relevant bands.
+// MUST match librosa.filters.mel(sr=16000, n_fft=256, n_mels=30,
+//   fmin=40, fmax=4000, htk=True, norm=None).
 static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
-    {  1,   2,   3},  // 0: 132 Hz center
-    {  2,   3,   5},  // 1: 210 Hz center
-    {  3,   5,   6},  // 2: 296 Hz center
-    {  5,   6,   8},  // 3: 391 Hz center
-    {  6,   8,  10},  // 4: 494 Hz center
-    {  8,  10,  12},  // 5: 606 Hz center
-    { 10,  12,  14},  // 6: 730 Hz center
-    { 12,  14,  16},  // 7: 865 Hz center
-    { 14,  16,  19},  // 8: 1013 Hz center
-    { 16,  19,  22},  // 9: 1175 Hz center
-    { 19,  22,  25},  // 10: 1352 Hz center
-    { 22,  25,  28},  // 11: 1546 Hz center
-    { 25,  28,  32},  // 12: 1758 Hz center
-    { 28,  32,  36},  // 13: 1990 Hz center
-    { 32,  36,  40},  // 14: 2244 Hz center
-    { 36,  40,  45},  // 15: 2523 Hz center
-    { 40,  45,  51},  // 16: 2827 Hz center
-    { 45,  51,  56},  // 17: 3160 Hz center
-    { 51,  56,  63},  // 18: 3525 Hz center
-    { 56,  63,  70},  // 19: 3924 Hz center
-    { 63,  70,  77},  // 20: 4361 Hz center
-    { 70,  77,  86},  // 21: 4839 Hz center
-    { 77,  86,  95},  // 22: 5363 Hz center
-    { 86,  95, 105},  // 23: 5936 Hz center
-    { 95, 105, 116},  // 24: 6563 Hz center
-    {105, 116, 127},  // 25: 7249 Hz center
+    {  1,   1,   2},  // 0: 85 Hz center
+    {  1,   2,   3},  // 1: 134 Hz center
+    {  2,   3,   4},  // 2: 185 Hz center
+    {  3,   4,   5},  // 3: 239 Hz center
+    {  4,   5,   6},  // 4: 297 Hz center
+    {  5,   6,   7},  // 5: 358 Hz center
+    {  6,   7,   8},  // 6: 423 Hz center
+    {  7,   8,   9},  // 7: 492 Hz center
+    {  8,   9,  10},  // 8: 566 Hz center
+    {  9,  10,  12},  // 9: 643 Hz center
+    { 10,  12,  13},  // 10: 726 Hz center
+    { 12,  13,  15},  // 11: 814 Hz center
+    { 13,  15,  16},  // 12: 907 Hz center
+    { 15,  16,  18},  // 13: 1005 Hz center
+    { 16,  18,  20},  // 14: 1110 Hz center
+    { 18,  20,  21},  // 15: 1221 Hz center
+    { 20,  21,  23},  // 16: 1339 Hz center
+    { 21,  23,  26},  // 17: 1465 Hz center
+    { 23,  26,  28},  // 18: 1598 Hz center
+    { 26,  28,  30},  // 19: 1739 Hz center
+    { 28,  30,  33},  // 20: 1889 Hz center
+    { 30,  33,  35},  // 21: 2048 Hz center
+    { 33,  35,  38},  // 22: 2217 Hz center
+    { 35,  38,  41},  // 23: 2396 Hz center
+    { 38,  41,  45},  // 24: 2586 Hz center
+    { 41,  45,  48},  // 25: 2788 Hz center
+    { 45,  48,  52},  // 26: 3003 Hz center
+    { 48,  52,  56},  // 27: 3230 Hz center
+    { 52,  56,  60},  // 28: 3472 Hz center
+    { 56,  60,  64},  // 29: 3728 Hz center
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
@@ -385,6 +388,9 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
         float weightSum = 0.0f;
 
         // Rising edge: start to center
+        // Note: band 0 has startBin==centerBin (degenerate). The guard
+        // (centerBin > startBin) falls through to weight=1.0f, giving the
+        // single center bin full weight. No division by zero.
         for (int bin = def.startBin; bin <= def.centerBin && bin < SpectralConstants::NUM_BINS; bin++) {
             float weight = (def.centerBin > def.startBin)
                 ? (float)(bin - def.startBin) / (def.centerBin - def.startBin)
