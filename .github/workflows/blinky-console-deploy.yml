@@ -38,7 +38,7 @@ jobs:
         run: npm run test:ci
 
       - name: Build
-        run: npm run build
+        run: npm run generate-icons && tsc && npx vite build --outDir dist
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
@@ -67,7 +67,7 @@ jobs:
         run: rm -f package-lock.json && npm install
 
       - name: Build
-        run: npm run build
+        run: npm run generate-icons && tsc && npx vite build --outDir dist
 
       - name: Deploy Preview to Firebase
         uses: FirebaseExtended/action-hosting-deploy@v0
