@@ -1001,14 +1001,14 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                                             early_neighbor_frames=early_neighbor_frames,
                                             early_neighbor_weight=early_neighbor_weight)
 
+            # Save raw mel (before hybrid features) for spectral conditioning variant.
+            # Spectral conditioning operates on mel bands, not hybrid features.
+            mel_raw = mel
+
             # Compute hybrid features (flatness + SuperFlux flux) inline if enabled.
-            # Previously stored audio_np in the result dict and computed during chunk_data,
-            # but that held 7.7 MB per track × 500 files = 3.8 GB in the chunk thread pool
-            # and caused CUDA OOM from memory pressure. Computing here and discarding
-            # audio_np immediately keeps memory bounded.
             if cfg.get("features", {}).get("use_hybrid", False):
                 mel = append_hybrid_features(
-                    mel, audio=audio_np,
+                    mel_raw, audio=audio_np,
                     mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
 
             result = {
@@ -1048,7 +1048,9 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                 if cond_cached and cond_cached.exists():
                     conditioned_mel = np.load(cond_cached)
                 else:
-                    conditioned_mel = apply_spectral_conditioning(mel)
+                    # Use mel_raw (30-dim) — spectral conditioning operates on
+                    # mel bands, not hybrid features. Hybrid appended after.
+                    conditioned_mel = apply_spectral_conditioning(mel_raw)
                     if cond_cached:
                         np.save(cond_cached, conditioned_mel)
                 if cfg.get("features", {}).get("use_hybrid", False):
