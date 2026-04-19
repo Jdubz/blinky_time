@@ -2,6 +2,17 @@
 
 Refactor `blinky-console` from a single-device WebSerial UI into a fleet management app. Host it from `blinky-server` for on-site installation use, keep it working from Firebase for remote/dev use, and add multiple connection types without duplicating transport logic.
 
+## Status
+
+**Phase 1 — Plumbing.** ✅ Complete.
+**Phase 2 — Transport abstraction.** ✅ Complete.
+**Phase 3 — Server-backed transport.** ⏳ Not started.
+**Phase 4 — Multi-device UI.** ⏳ Not started.
+**Phase 5 — Fleet operations.** ⏳ Not started.
+**Phase 6 — Web Bluetooth.** ⏳ Deferred.
+
+See the per-milestone status column in the [Milestones](#milestones) tables below for commit hashes.
+
 ## Context
 
 **Today.** `blinky-console` is a single-device PWA. All device I/O goes through `src/services/serial.ts` (WebSerial-only). Zero HTTP/WebSocket client. No routing, no device list, no multi-device state.
@@ -95,64 +106,69 @@ Vite additions in `blinky-console`:
 
 **Cache-Control.** FastAPI's `StaticFiles` doesn't set sensible defaults. `index.html` should be `no-store` / `must-revalidate`; hashed `/assets/*.{hash}.{js,css}` should be long-lived. Thin middleware or reverse proxy, TBD.
 
-## Pre-refactor fixes
+## Pre-refactor fixes — ✅ shipped in Phase 1
 
-Verified in preflight (see "Verified" section below):
+The four items listed here when the plan was written have all shipped (M1, M2 above). Kept as a reference for the reasoning behind them:
 
-- **Add `sn` and optional `ble` to `DeviceInfoSchema`** at `blinky-console/src/schemas/device.ts`. Firmware already emits them (`blinky-things/inputs/SerialConsole.cpp:436`); console schema drops them.
-- **Note:** `device.id` in the current schema is the *device-type* (`hat_v1`, `tube_v2`, …), **not** a per-unit identifier. Dedup key is `sn`.
-- **Remove dead Google Fonts cache rules** at `blinky-console/vite.config.ts:76-104`. Nothing loads those fonts.
-- **Widen PWA precache glob** to include PNG assets (currently `['index.html', '**/*.{ico,woff2}']` misses PWA icons — first offline load 404s).
+- **Add `sn` and optional `ble` to `DeviceInfoSchema`** at `blinky-console/src/schemas/device.ts`. Firmware already emits them (`blinky-things/inputs/SerialConsole.cpp:436`); the console was dropping them. Shipped in M1.
+- **Note (still relevant):** `device.id` in the schema is the *device-type* (`hat_v1`, `tube_v2`, …), **not** a per-unit identifier. The dedup key is `sn`. M7's `DeviceRegistry` keys by `sn`.
+- **Remove dead Google Fonts cache rules** at `blinky-console/vite.config.ts:76-104`. Shipped in M2.
+- **Widen PWA precache glob** to include PNG assets. Shipped in M2.
 
 ## Milestones
 
 PR-sized, roughly ordered. Each milestone should leave the app in a shippable state.
 
-### Phase 1 — Plumbing (independent, low risk)
+### Phase 1 — Plumbing (independent, low risk) — ✅ shipped
 
-| # | Milestone | Touches |
-|---|-----------|---------|
-| M1 | Add `sn` / `ble` fields to `DeviceInfoSchema` and surface through `useSerial` | `blinky-console/src/schemas/device.ts`, `src/hooks/useSerial.ts` |
-| M2 | Remove dead font cache rules; widen PWA precache glob to include PNGs | `blinky-console/vite.config.ts` |
-| M3 | Serve static files from `blinky-server` + SPA fallback catch-all + configurable `STATIC_DIR` env | `blinky-server/blinky_server/app.py` |
-| M4 | Vite dev proxy for `/api` and `/ws`; document dev workflow | `blinky-console/vite.config.ts`, README |
+| # | Status | Milestone | Commit |
+|---|--------|-----------|--------|
+| M1 | ✅ | Add `sn` / `ble` fields to `DeviceInfoSchema` and surface through `useSerial` | `355860b` |
+| M2 | ✅ | Remove dead font cache rules; widen PWA precache glob to include PNGs | `e23259d` |
+| M3 | ✅ | Serve static files from `blinky-server` + SPA fallback catch-all + configurable `BLINKY_STATIC_DIR` env | `71beca5` |
+| M4 | ✅ | Vite dev proxy for `/api` and `/ws`; build into `blinky-server/web/`; dev workflow documented | `dfd8155` |
+| — | ✅ | Phase 1 review fixes (SPA reserved-prefix correctness, schema tolerance) | `547879c` |
 
-### Phase 2 — Transport abstraction (the core internal refactor)
+### Phase 2 — Transport abstraction (the core internal refactor) — ✅ shipped
 
-| # | Milestone | Touches |
-|---|-----------|---------|
-| M5 | Introduce `Transport` interface; refactor existing `serialService` to implement it. No UI behavior change. | `blinky-console/src/services/transport/`, `src/services/serial.ts` |
-| M6 | Factor `DeviceProtocol` (JSON parsing, command/response, streaming) out of `serialService`; sits on top of any `Transport`. No UI behavior change. | `blinky-console/src/services/protocol/` |
-| M7 | Introduce `Source` interface + `WebSerialSource`. Device registry singleton. UI still shows single device at this point. | `blinky-console/src/services/sources/`, `src/state/` |
+| # | Status | Milestone | Commit |
+|---|--------|-----------|--------|
+| M5 | ✅ | `Transport` interface + `WebSerialTransport` in `services/transport/`. `SerialService` delegates byte I/O to the transport. | `cf7a0ac` |
+| M6 | ✅ | `DeviceProtocol` extracted into `services/protocol/` — JSON parsing, command/response, stream dispatch, high-level RPCs. `serial.ts` becomes a thin legacy facade. | `417b5da` |
+| M7 | ✅ | `Source` interface, `Device` class, `DeviceRegistry` singleton, `WebSerialSource` in `services/sources/`. UI still single-device (registry not yet consumed). | `2782037` |
+| — | ✅ | Phase 2 review fixes (lifecycle guards: setTransport connection check, disconnect-first on reconnect, dead-protocol replacement on upsert, last-non-empty displayName, synth-id counter) | `540c9fc` |
+| — | ✅ | Zombie-state fix: WebSerialTransport auto-disconnects on any read-loop failure, not only `DEVICE_LOST` / `DISCONNECTED` | `783a6e5` |
 
-### Phase 3 — Server-backed transport
+Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 115 server tests pass; the legacy `serialService` singleton continues to work unmodified.
 
-| # | Milestone | Touches |
-|---|-----------|---------|
-| M8 | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
-| M9 | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/fleet/status`. | `blinky-console/src/services/sources/` |
-| M10 | Server URL management UI (localStorage-backed list of additional servers, add/remove) | `blinky-console/src/components/Settings/` |
+### Phase 3 — Server-backed transport — ⏳ not started
 
-### Phase 4 — Multi-device UI
+| # | Status | Milestone | Touches |
+|---|--------|-----------|---------|
+| M8 | ⏳ | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
+| M9 | ⏳ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/fleet/status`. | `blinky-console/src/services/sources/` |
+| M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) | `blinky-console/src/components/Settings/` |
 
-| # | Milestone | Touches |
-|---|-----------|---------|
-| M11 | Add routing (React Router). Move current single-device tabs to `/devices/:sn` route. No list view yet — opening the app auto-navigates to the only device, preserving today's UX when only one is available. | `blinky-console/src/App.tsx`, new `routes/` |
-| M12 | `/devices` list view aggregating all Sources by SN. Device cards show transport selector (WebSerial / BLE / via server). Switching transport preserves route state. | `blinky-console/src/routes/DevicesList.tsx`, `src/components/DeviceCard/` |
-| M13 | Real-time device list updates: either poll `GET /api/devices` from `BlinkyServerSource`, or add a `device_connected`/`device_disconnected` event stream to `blinky-server` and subscribe. Decision during implementation. | both repos, TBD |
+### Phase 4 — Multi-device UI — ⏳ not started
 
-### Phase 5 — Fleet operations
+| # | Status | Milestone | Touches |
+|---|--------|-----------|---------|
+| M11 | ⏳ | Add routing (React Router). Move current single-device tabs to `/devices/:sn` route. No list view yet — opening the app auto-navigates to the only device, preserving today's UX when only one is available. | `blinky-console/src/App.tsx`, new `routes/` |
+| M12 | ⏳ | `/devices` list view aggregating all Sources by SN. Device cards show transport selector (WebSerial / BLE / via server). Switching transport preserves route state. | `blinky-console/src/routes/DevicesList.tsx`, `src/components/DeviceCard/` |
+| M13 | ⏳ | Real-time device list updates: either poll `GET /api/devices` from `BlinkyServerSource`, or add a `device_connected`/`device_disconnected` event stream to `blinky-server` and subscribe. Decision during implementation. | both repos, TBD |
 
-| # | Milestone | Touches |
-|---|-----------|---------|
-| M14 | Fleet-level command UI (apply generator/effect/settings to all or to selection) via existing `/api/fleet/*` endpoints | `blinky-console/src/routes/Fleet.tsx` |
-| M15 | Flash/deploy UI gated behind an auth mechanism (TBD — see open questions). Hidden entirely when the current server doesn't accept the client's credentials. | `blinky-console/src/routes/Firmware.tsx`, `blinky-server` auth |
+### Phase 5 — Fleet operations — ⏳ not started
 
-### Phase 6 — Web Bluetooth (deferred)
+| # | Status | Milestone | Touches |
+|---|--------|-----------|---------|
+| M14 | ⏳ | Fleet-level command UI (apply generator/effect/settings to all or to selection) via existing `/api/fleet/*` endpoints | `blinky-console/src/routes/Fleet.tsx` |
+| M15 | ⏳ | Flash/deploy UI gated behind an auth mechanism (TBD — see open questions). Hidden entirely when the current server doesn't accept the client's credentials. | `blinky-console/src/routes/Firmware.tsx`, `blinky-server` auth |
 
-| # | Milestone | Touches |
-|---|-----------|---------|
-| M16 | `WebBluetoothTransport` + `WebBluetoothSource`. Requires coordination with firmware BLE NUS characteristic layout. | `blinky-console/src/services/transport/`, `src/services/sources/` |
+### Phase 6 — Web Bluetooth — ⏳ deferred
+
+| # | Status | Milestone | Touches |
+|---|--------|-----------|---------|
+| M16 | ⏳ | `WebBluetoothTransport` + `WebBluetoothSource`. Requires coordination with firmware BLE NUS characteristic layout. | `blinky-console/src/services/transport/`, `src/services/sources/` |
 
 ## Out of scope (for this refactor)
 

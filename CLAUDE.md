@@ -342,23 +342,71 @@ RenderPipeline → LED Output
 
 **Stack: React 18 + TypeScript + Vite + WebSerial**
 
+**Components:**
 ```
-React Components
-├── ConnectionBar (device status, battery)
-├── SettingsPanel (50+ parameters)
-├── AudioVisualizer (Chart.js real-time display)
-├── GeneratorSelector (Fire/Water/Lightning)
-├── EffectSelector (HueRotation/NoOp)
-├── SerialConsoleModal (raw command interface)
-└── TabView (multi-panel layout)
+ConnectionBar (device status, battery)
+SettingsPanel (50+ parameters)
+AudioVisualizer (Chart.js real-time display)
+GeneratorSelector (Fire/Water/PlasmaGlobe)
+EffectSelector (HueRotation/NoOp)
+SerialConsoleModal (raw command interface)
+TabView (multi-panel layout)
 ```
+
+**Services — three-layer architecture (`src/services/`):**
+```
+Source (device discovery / aggregation)
+  ├── WebSerialSource         ── pickAndConnect() via user gesture
+  ├── BlinkyServerSource      (planned) ── list via /api/devices
+  └── WebBluetoothSource      (planned) ── BLE port picker
+      │
+      └── DeviceRegistry (singleton)
+           Keyed by hardware sn (firmware FICR DEVICEID).
+           Dedups the same physical device across multiple sources.
+             │
+             └── Device { id, displayName, transports[], protocol }
+                   One per physical device; protocol may be null.
+                        │
+                        ▼
+              ┌──────────────────────────────┐
+              │ DeviceProtocol               │ ← protocol/
+              │   JSON parse, command/       │
+              │   response, typed stream     │
+              │   events, high-level RPCs    │
+              └────────────┬─────────────────┘
+                           ▼
+              ┌──────────────────────────────┐
+              │ Transport                    │ ← transport/
+              │   Byte-level I/O, line frame │
+              │                              │
+              │   WebSerialTransport         │ ← shipped
+              │   ServerWebSocketTransport   │ (planned)
+              │   WebBluetoothTransport      │ (planned)
+              └──────────────────────────────┘
+```
+
+The legacy `serialService` singleton in `src/services/serial.ts` is a
+thin compatibility facade over `DeviceProtocol(WebSerialTransport)` —
+consumed by `useSerial.ts` and components. Single-device UI today; the
+registry-backed multi-device flow comes online with M11+.
+
+Cross-transport identity: `sn` (FICR DEVICEID) emitted by firmware over
+`json info` is the canonical dedup key. `DeviceInfoSchema` accepts both
+`sn` and `ble` (BLE MAC) as optional fields.
 
 **Features:**
 - WebSerial API for direct USB serial connection
 - Real-time audio visualization (energy, pulse, transients)
 - Hierarchical settings organization
-- PWA (offline capable, installable)
+- PWA (offline-capable, installable; precaches shell for offline use
+  when served from `blinky-server` at event installations)
 - Responsive design (desktop/mobile)
+- **Built into `blinky-server/web/`** — `npm run build` emits there so a
+  single server process (port 8420) serves both the API and the SPA.
+  Dev mode proxies `/api` and `/ws` to a local `blinky-server`.
+
+See `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` for the refactor roadmap
+(Phase 1 and Phase 2 shipped; Phase 3+ planned).
 
 ### Testing Infrastructure
 
