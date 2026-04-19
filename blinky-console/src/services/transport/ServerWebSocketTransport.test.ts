@@ -63,13 +63,16 @@ function collectEvents(transport: ServerWebSocketTransport): TransportEvent[] {
 
 beforeEach(() => {
   mockWsInstance = null;
-  vi.stubGlobal('WebSocket', class extends MockWebSocket {
-    constructor(url: string) {
-      super(url);
-      // eslint-disable-next-line @typescript-eslint/no-this-alias
-      mockWsInstance = this;
+  vi.stubGlobal(
+    'WebSocket',
+    class extends MockWebSocket {
+      constructor(url: string) {
+        super(url);
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        mockWsInstance = this;
+      }
     }
-  });
+  );
 });
 
 afterEach(() => {
@@ -108,27 +111,34 @@ describe('ServerWebSocketTransport', () => {
     });
 
     it('throws on connection failure', async () => {
-      vi.stubGlobal('WebSocket', class {
-        static CONNECTING = 0;
-        static OPEN = 1;
-        static CLOSING = 2;
-        static CLOSED = 3;
-        readyState = 0;
-        url: string;
-        onopen: (() => void) | null = null;
-        onclose: ((e: unknown) => void) | null = null;
-        onerror: (() => void) | null = null;
-        onmessage: ((e: unknown) => void) | null = null;
-        sent: string[] = [];
-        constructor(url: string) {
-          this.url = url;
-          mockWsInstance = this as unknown as MockWebSocket;
-          // Fire error WITHOUT opening — simulates connection refused
-          setTimeout(() => this.onerror?.(), 0);
+      vi.stubGlobal(
+        'WebSocket',
+        class {
+          static CONNECTING = 0;
+          static OPEN = 1;
+          static CLOSING = 2;
+          static CLOSED = 3;
+          readyState = 0;
+          url: string;
+          onopen: (() => void) | null = null;
+          onclose: ((e: unknown) => void) | null = null;
+          onerror: (() => void) | null = null;
+          onmessage: ((e: unknown) => void) | null = null;
+          sent: string[] = [];
+          constructor(url: string) {
+            this.url = url;
+            mockWsInstance = this as unknown as MockWebSocket;
+            // Fire error WITHOUT opening — simulates connection refused
+            setTimeout(() => this.onerror?.(), 0);
+          }
+          send(d: string) {
+            this.sent.push(d);
+          }
+          close() {
+            this.readyState = 3;
+          }
         }
-        send(d: string) { this.sent.push(d); }
-        close() { this.readyState = 3; }
-      });
+      );
 
       const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
       await expect(transport.connect()).rejects.toThrow('WebSocket connection failed');

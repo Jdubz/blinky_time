@@ -22,7 +22,7 @@ export function useDevices() {
     const unsubscribe = deviceRegistry.subscribe(setDevices);
 
     // Auto-detect same-origin blinky-server on first mount
-    detectSameOriginServer(deviceRegistry).then((source) => {
+    detectSameOriginServer(deviceRegistry).then(source => {
       serverSourceRef.current = source;
     });
 
@@ -35,5 +35,7 @@ export function useDevices() {
   return {
     devices,
     registry: deviceRegistry,
+    /** URL of the active blinky-server, or null if no server source is active. */
+    serverUrl: serverSourceRef.current ? window.location.origin : null,
   };
 }

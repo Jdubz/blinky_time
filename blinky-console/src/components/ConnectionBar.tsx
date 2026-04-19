@@ -71,7 +71,12 @@ export function ConnectionBar({
       <div className="connection-bar">
         <div className="connection-left">
           {onBackToList && (
-            <button className="btn btn-back" onClick={onBackToList} title="Back to devices">
+            <button
+              className="btn btn-back"
+              onClick={onBackToList}
+              title="Back to devices"
+              aria-label="Back to devices"
+            >
               &larr;
             </button>
           )}

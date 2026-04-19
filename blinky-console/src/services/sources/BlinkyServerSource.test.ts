@@ -55,10 +55,11 @@ describe('BlinkyServerSource', () => {
     it('skips disconnected devices', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ state: 'connected' }),
-          makeServerDevice({ id: 'DEAD', hardware_sn: 'DEAD', state: 'disconnected' }),
-        ]),
+        json: () =>
+          Promise.resolve([
+            makeServerDevice({ state: 'connected' }),
+            makeServerDevice({ id: 'DEAD', hardware_sn: 'DEAD', state: 'disconnected' }),
+          ]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
@@ -71,9 +72,10 @@ describe('BlinkyServerSource', () => {
     it('uses hardware_sn as device ID for cross-source dedup', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ id: 'server-internal-id', hardware_sn: 'HW_SN_123' }),
-        ]),
+        json: () =>
+          Promise.resolve([
+            makeServerDevice({ id: 'server-internal-id', hardware_sn: 'HW_SN_123' }),
+          ]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
@@ -85,9 +87,7 @@ describe('BlinkyServerSource', () => {
     it('falls back to server id when hardware_sn is null', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ id: 'FALLBACK', hardware_sn: null }),
-        ]),
+        json: () => Promise.resolve([makeServerDevice({ id: 'FALLBACK', hardware_sn: null })]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
@@ -131,11 +131,12 @@ describe('BlinkyServerSource', () => {
     it('registers multiple devices', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ id: 'A', hardware_sn: 'A', device_name: 'Device A' }),
-          makeServerDevice({ id: 'B', hardware_sn: 'B', device_name: 'Device B' }),
-          makeServerDevice({ id: 'C', hardware_sn: 'C', device_name: 'Device C' }),
-        ]),
+        json: () =>
+          Promise.resolve([
+            makeServerDevice({ id: 'A', hardware_sn: 'A', device_name: 'Device A' }),
+            makeServerDevice({ id: 'B', hardware_sn: 'B', device_name: 'Device B' }),
+            makeServerDevice({ id: 'C', hardware_sn: 'C', device_name: 'Device C' }),
+          ]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
@@ -199,9 +200,7 @@ describe('BlinkyServerSource', () => {
       // Now server discovers the same device
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ hardware_sn: 'ABCD1234' }),
-        ]),
+        json: () => Promise.resolve([makeServerDevice({ hardware_sn: 'ABCD1234' })]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
@@ -244,9 +243,8 @@ describe('BlinkyServerSource', () => {
     it('handles null device_name with fallback', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ device_name: null, device_type: 'tube_light' }),
-        ]),
+        json: () =>
+          Promise.resolve([makeServerDevice({ device_name: null, device_type: 'tube_light' })]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
@@ -257,9 +255,7 @@ describe('BlinkyServerSource', () => {
     it('handles null device_name and null device_type', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([
-          makeServerDevice({ device_name: null, device_type: null }),
-        ]),
+        json: () => Promise.resolve([makeServerDevice({ device_name: null, device_type: null })]),
       });
 
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);

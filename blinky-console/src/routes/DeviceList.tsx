@@ -15,7 +15,7 @@ import type { Device } from '../services/sources';
 function DeviceCard({ device }: { device: Device }) {
   const navigate = useNavigate();
   const isConnected = device.isConnected();
-  const transportLabels = device.transports.map((t) => t.source.kind).join(', ');
+  const transportLabels = device.transports.map(t => t.source.kind).join(', ');
 
   return (
     <div
@@ -23,7 +23,7 @@ function DeviceCard({ device }: { device: Device }) {
       onClick={() => navigate(`/device/${device.id}`)}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && navigate(`/device/${device.id}`)}
+      onKeyDown={e => e.key === 'Enter' && navigate(`/device/${device.id}`)}
     >
       <div className="device-card__name">{device.displayName}</div>
       <div className="device-card__meta">
@@ -47,7 +47,9 @@ export function DeviceList() {
   // Auto-navigate to the only device on first mount (preserves pre-routing
   // single-device UX). The ref prevents an infinite redirect loop when
   // the user presses back from DeviceDetail → DeviceList → auto-nav → DeviceDetail.
+  // Reset the flag when device count grows above 1 so the user sees the list.
   useEffect(() => {
+    if (devices.length > 1) autoNavigated.current = false;
     if (devices.length === 1 && !autoNavigated.current) {
       autoNavigated.current = true;
       navigate(`/device/${devices[0].id}`, { replace: true });
@@ -84,7 +86,7 @@ export function DeviceList() {
         </div>
       ) : (
         <div className="device-list__grid">
-          {devices.map((device) => (
+          {devices.map(device => (
             <DeviceCard key={device.id} device={device} />
           ))}
         </div>

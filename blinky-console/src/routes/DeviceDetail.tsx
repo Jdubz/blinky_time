@@ -34,7 +34,8 @@ export function DeviceDetail() {
     if (!deviceId) return;
     const device = deviceRegistry.get(deviceId);
     if (!device) {
-      logger.warn('DeviceDetail: device not found in registry', { deviceId });
+      logger.warn('DeviceDetail: device not found in registry, redirecting', { deviceId });
+      navigate('/', { replace: true });
       return;
     }
 
@@ -188,8 +189,7 @@ export function DeviceDetail() {
                         ...(currentGenerator === 'audio'
                           ? { audiovis: settingsByCategory.audiovis || [] }
                           : {
-                              [currentGenerator]:
-                                settingsByCategory[currentGenerator] || [],
+                              [currentGenerator]: settingsByCategory[currentGenerator] || [],
                             }),
                         ...(currentGenerator === 'fire' && {
                           firemusic: settingsByCategory.firemusic || [],

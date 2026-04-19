@@ -1462,7 +1462,9 @@ body {
   border-radius: var(--border-radius);
   cursor: pointer;
   border: 2px solid var(--border-color);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .device-card:hover,

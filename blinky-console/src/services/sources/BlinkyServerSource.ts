@@ -30,7 +30,7 @@ export class BlinkyServerSource implements Source {
   constructor(
     private readonly serverUrl: string,
     private readonly registry: DeviceRegistry,
-    private readonly pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+    private readonly pollIntervalMs = DEFAULT_POLL_INTERVAL_MS
   ) {
     try {
       this.displayName = new URL(serverUrl).host;
@@ -46,7 +46,7 @@ export class BlinkyServerSource implements Source {
   /** Start polling for devices. Performs an initial fetch immediately.
    *  Idempotent — calling while already started is a no-op. */
   async start(): Promise<void> {
-    if (this.pollTimer !== null) return;  // Already running
+    if (this.pollTimer !== null) return; // Already running
     this.stopped = false;
     logger.info('BlinkyServerSource: starting', { serverUrl: this.serverUrl });
     await this.poll();
@@ -55,7 +55,9 @@ export class BlinkyServerSource implements Source {
         this.pollInFlight = true;
         this.poll()
           .catch(() => {})
-          .finally(() => { this.pollInFlight = false; });
+          .finally(() => {
+            this.pollInFlight = false;
+          });
       }
     }, this.pollIntervalMs);
   }
@@ -72,7 +74,7 @@ export class BlinkyServerSource implements Source {
 
   /** Fetch device list from server and update registry. */
   async poll(): Promise<void> {
-    if (this.stopped) return;  // Guard against in-flight polls after stop()
+    if (this.stopped) return; // Guard against in-flight polls after stop()
     try {
       const resp = await fetch(`${this.serverUrl}/api/devices`, {
         signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
@@ -149,7 +151,7 @@ export class BlinkyServerSource implements Source {
  * succeeds because the proxy forwards /api/devices to the server.
  */
 export async function detectSameOriginServer(
-  registry: DeviceRegistry,
+  registry: DeviceRegistry
 ): Promise<BlinkyServerSource | null> {
   try {
     const resp = await fetch('/api/devices', {

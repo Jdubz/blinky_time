@@ -17,11 +17,20 @@ interface FirmwareStatus {
   current_version: string | null;
   firmware_path: string | null;
   firmware_available: boolean;
-  devices: Array<{ id: string; device_name: string | null; version: string | null; up_to_date: boolean }>;
+  devices: Array<{
+    id: string;
+    device_name: string | null;
+    version: string | null;
+    up_to_date: boolean;
+  }>;
   out_of_date_count: number;
 }
 
-async function fleetCommand(serverUrl: string, endpoint: string, body?: object): Promise<Record<string, string>> {
+async function fleetCommand(
+  serverUrl: string,
+  endpoint: string,
+  body?: object
+): Promise<Record<string, string>> {
   const resp = await fetch(`${serverUrl}${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -33,15 +42,12 @@ async function fleetCommand(serverUrl: string, endpoint: string, body?: object):
 }
 
 export function Fleet() {
-  const { devices } = useDevices();
+  const { devices, serverUrl } = useDevices();
   const navigate = useNavigate();
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const connectedCount = devices.filter(d => d.isConnected()).length;
-  const serverUrl = devices.length > 0
-    ? window.location.origin
-    : null;
 
   // Firmware status
   const [firmware, setFirmware] = useState<FirmwareStatus | null>(null);
@@ -51,12 +57,18 @@ export function Fleet() {
   const fetchFirmwareStatus = useCallback(async () => {
     if (!serverUrl) return;
     try {
-      const resp = await fetch(`${serverUrl}/api/fleet/firmware`, { signal: AbortSignal.timeout(5000) });
+      const resp = await fetch(`${serverUrl}/api/fleet/firmware`, {
+        signal: AbortSignal.timeout(5000),
+      });
       if (resp.ok) setFirmware(await resp.json());
-    } catch { /* server unreachable */ }
+    } catch {
+      /* server unreachable */
+    }
   }, [serverUrl]);
 
-  useEffect(() => { fetchFirmwareStatus(); }, [fetchFirmwareStatus]);
+  useEffect(() => {
+    fetchFirmwareStatus();
+  }, [fetchFirmwareStatus]);
 
   // Poll flash job progress
   useEffect(() => {
@@ -75,9 +87,11 @@ export function Fleet() {
         if (job.status === 'complete' || job.status === 'error') {
           setFlashJobId(null);
           setFlashProgress(null);
-          setStatus(job.status === 'complete'
-            ? `Flash complete: ${job.result?.message || 'done'}`
-            : `Flash failed: ${job.error || 'unknown'}`);
+          setStatus(
+            job.status === 'complete'
+              ? `Flash complete: ${job.result?.message || 'done'}`
+              : `Flash failed: ${job.error || 'unknown'}`
+          );
           fetchFirmwareStatus();
         }
       } catch {
@@ -108,26 +122,34 @@ export function Fleet() {
     }
   }, [serverUrl, firmware]);
 
-  const runFleetCommand = useCallback(async (label: string, endpoint: string, body?: object) => {
-    if (!serverUrl) return;
-    setLoading(true);
-    setStatus(`Sending: ${label}...`);
-    try {
-      const results = await fleetCommand(serverUrl, endpoint, body);
-      const count = Object.keys(results).length;
-      setStatus(`${label}: ${count} device(s) responded`);
-      logger.info('Fleet command', { label, results });
-    } catch (e) {
-      setStatus(`${label}: failed — ${e instanceof Error ? e.message : 'unknown error'}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [serverUrl]);
+  const runFleetCommand = useCallback(
+    async (label: string, endpoint: string, body?: object) => {
+      if (!serverUrl) return;
+      setLoading(true);
+      setStatus(`Sending: ${label}...`);
+      try {
+        const results = await fleetCommand(serverUrl, endpoint, body);
+        const count = Object.keys(results).length;
+        setStatus(`${label}: ${count} device(s) responded`);
+        logger.info('Fleet command', { label, results });
+      } catch (e) {
+        setStatus(`${label}: failed — ${e instanceof Error ? e.message : 'unknown error'}`);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [serverUrl]
+  );
 
   return (
     <div className="fleet-page">
       <header className="fleet-page__header">
-        <button className="btn btn-back" onClick={() => navigate('/')} title="Back to devices">
+        <button
+          className="btn btn-back"
+          onClick={() => navigate('/')}
+          title="Back to devices"
+          aria-label="Back to devices"
+        >
           &larr;
         </button>
         <h1>Fleet Operations</h1>
@@ -146,7 +168,9 @@ export function Fleet() {
               <div className="firmware-status__current">Loading firmware status...</div>
             ) : !firmware.current_version ? (
               <div className="firmware-status">
-                <div className="firmware-status__current">No firmware uploaded yet. Use deploy.sh to upload and flash.</div>
+                <div className="firmware-status__current">
+                  No firmware uploaded yet. Use deploy.sh to upload and flash.
+                </div>
               </div>
             ) : (
               <div className="firmware-status">
@@ -163,16 +187,26 @@ export function Fleet() {
                 )}
                 <div className="firmware-status__devices">
                   {firmware.devices.map(d => (
-                    <span key={d.id} className={`firmware-device-badge ${d.up_to_date ? '' : 'firmware-device-badge--outdated'}`}>
+                    <span
+                      key={d.id}
+                      className={`firmware-device-badge ${d.up_to_date ? '' : 'firmware-device-badge--outdated'}`}
+                    >
                       {d.device_name || d.id.slice(0, 8)}: {d.version || '?'}
                     </span>
                   ))}
                 </div>
-                {firmware.firmware_available && firmware.firmware_path && firmware.out_of_date_count > 0 && !flashJobId && (
-                  <button className="btn btn-primary" disabled={loading} onClick={handleFlashOutOfDate}>
-                    Flash Out-of-Date Devices
-                  </button>
-                )}
+                {firmware.firmware_available &&
+                  firmware.firmware_path &&
+                  firmware.out_of_date_count > 0 &&
+                  !flashJobId && (
+                    <button
+                      className="btn btn-primary"
+                      disabled={loading}
+                      onClick={handleFlashOutOfDate}
+                    >
+                      Flash Out-of-Date Devices
+                    </button>
+                  )}
                 {flashJobId && (
                   <div className="firmware-status__progress">
                     Flashing: {flashProgress || 'starting...'}
@@ -190,7 +224,9 @@ export function Fleet() {
                   key={gen}
                   className="btn"
                   disabled={loading}
-                  onClick={() => runFleetCommand(`Set generator: ${gen}`, `/api/fleet/generator/${gen}`)}
+                  onClick={() =>
+                    runFleetCommand(`Set generator: ${gen}`, `/api/fleet/generator/${gen}`)
+                  }
                 >
                   {gen}
                 </button>
@@ -234,7 +270,10 @@ export function Fleet() {
               <button
                 className="btn btn-danger"
                 disabled={loading}
-                onClick={() => runFleetCommand('Reset defaults', '/api/fleet/defaults')}
+                onClick={() => {
+                  if (!confirm('Reset ALL devices to factory defaults?')) return;
+                  runFleetCommand('Reset defaults', '/api/fleet/defaults');
+                }}
               >
                 Reset All to Defaults
               </button>
@@ -243,21 +282,28 @@ export function Fleet() {
 
           <section className="fleet-section">
             <h2>Custom Command</h2>
-            <FleetCommandInput onSend={(cmd) => runFleetCommand(`Command: ${cmd}`, '/api/fleet/command', { command: cmd })} disabled={loading} />
+            <FleetCommandInput
+              onSend={cmd =>
+                runFleetCommand(`Command: ${cmd}`, '/api/fleet/command', { command: cmd })
+              }
+              disabled={loading}
+            />
           </section>
 
-          {status && (
-            <div className="fleet-status">
-              {status}
-            </div>
-          )}
+          {status && <div className="fleet-status">{status}</div>}
         </div>
       )}
     </div>
   );
 }
 
-function FleetCommandInput({ onSend, disabled }: { onSend: (cmd: string) => void; disabled: boolean }) {
+function FleetCommandInput({
+  onSend,
+  disabled,
+}: {
+  onSend: (cmd: string) => void;
+  disabled: boolean;
+}) {
   const [command, setCommand] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {

@@ -34,7 +34,11 @@ class SerialService {
     this.protocol = new DeviceProtocol(new WebSerialTransport());
     this.protocolHandler = (event: SerialEvent) => {
       for (const cb of this.listeners) {
-        try { cb(event); } catch { /* listener errors are their problem */ }
+        try {
+          cb(event);
+        } catch (e) {
+          logger.warn('Serial event listener threw', { error: e });
+        }
       }
     };
     this.protocol.addEventListener(this.protocolHandler);
@@ -77,10 +81,18 @@ class SerialService {
   /**
    * Unbind the current protocol and reset to a fresh default.
    * Called when DeviceDetail unmounts to avoid keeping a stale binding.
+   * Disconnects the current protocol and emits a synthetic disconnected event.
    */
   unbind(): void {
     if (!this.boundToRegistryDevice) return;
+    const wasConnected = this.protocol.isConnected();
+    if (wasConnected) {
+      this.protocolHandler({ type: 'disconnected' });
+    }
     this.protocol.removeEventListener(this.protocolHandler);
+    if (wasConnected) {
+      this.protocol.disconnect().catch(() => {});
+    }
     this.protocol = new DeviceProtocol(new WebSerialTransport());
     this.protocol.addEventListener(this.protocolHandler);
     this.boundToRegistryDevice = false;
@@ -144,17 +156,39 @@ class SerialService {
     return this.protocol.sendAndReceiveJsonWithError<T>(command, timeoutMs);
   }
 
-  getDeviceInfo() { return this.protocol.getDeviceInfo(); }
-  getSettings() { return this.protocol.getSettings(); }
-  getSettingsByCategory(category: string) { return this.protocol.getSettingsByCategory(category); }
-  setSetting(name: string, value: number | boolean) { return this.protocol.setSetting(name, value); }
-  setStreamEnabled(enabled: boolean) { return this.protocol.setStreamEnabled(enabled); }
-  saveSettings() { return this.protocol.saveSettings(); }
-  loadSettings() { return this.protocol.loadSettings(); }
-  resetDefaults() { return this.protocol.resetDefaults(); }
-  requestBatteryStatus() { return this.protocol.requestBatteryStatus(); }
-  setGenerator(name: Parameters<DeviceProtocol['setGenerator']>[0]) { return this.protocol.setGenerator(name); }
-  setEffect(name: Parameters<DeviceProtocol['setEffect']>[0]) { return this.protocol.setEffect(name); }
+  getDeviceInfo() {
+    return this.protocol.getDeviceInfo();
+  }
+  getSettings() {
+    return this.protocol.getSettings();
+  }
+  getSettingsByCategory(category: string) {
+    return this.protocol.getSettingsByCategory(category);
+  }
+  setSetting(name: string, value: number | boolean) {
+    return this.protocol.setSetting(name, value);
+  }
+  setStreamEnabled(enabled: boolean) {
+    return this.protocol.setStreamEnabled(enabled);
+  }
+  saveSettings() {
+    return this.protocol.saveSettings();
+  }
+  loadSettings() {
+    return this.protocol.loadSettings();
+  }
+  resetDefaults() {
+    return this.protocol.resetDefaults();
+  }
+  requestBatteryStatus() {
+    return this.protocol.requestBatteryStatus();
+  }
+  setGenerator(name: Parameters<DeviceProtocol['setGenerator']>[0]) {
+    return this.protocol.setGenerator(name);
+  }
+  setEffect(name: Parameters<DeviceProtocol['setEffect']>[0]) {
+    return this.protocol.setEffect(name);
+  }
 
   getConnectionState(): { connected: boolean; readable: boolean; writable: boolean } {
     const connected = this.protocol.isConnected();

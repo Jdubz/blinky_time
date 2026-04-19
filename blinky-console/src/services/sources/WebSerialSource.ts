@@ -48,7 +48,7 @@ export class WebSerialSource implements Source {
       // old firmware that doesn't emit `sn` in `json info`, or on getDeviceInfo timeout.
       logger.warn(
         'WebSerialSource: device did not report sn — using synthesised id. ' +
-        'Device is fully functional but cross-source dedup will not work.',
+          'Device is fully functional but cross-source dedup will not work.',
         { id }
       );
     }

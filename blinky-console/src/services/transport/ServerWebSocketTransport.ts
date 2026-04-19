@@ -29,11 +29,11 @@ interface ServerMessage {
 export class ServerWebSocketTransport implements Transport {
   private ws: WebSocket | null = null;
   private listeners: TransportEventCallback[] = [];
-  private connecting = false;  // Prevents concurrent connect() calls
+  private connecting = false; // Prevents concurrent connect() calls
 
   constructor(
     public readonly serverUrl: string,
-    public readonly deviceId: string,
+    public readonly deviceId: string
   ) {}
 
   isSupported(): boolean {
@@ -49,12 +49,12 @@ export class ServerWebSocketTransport implements Transport {
     if (this.connecting) {
       throw new TransportError(
         'Connection already in progress',
-        TransportErrorCode.CONNECTION_FAILED,
+        TransportErrorCode.CONNECTION_FAILED
       );
     }
 
-    const wsUrl = this.serverUrl.replace(/^http/, 'ws')
-      + `/ws/${encodeURIComponent(this.deviceId)}`;
+    const base = this.serverUrl.replace(/^http/, 'ws').replace(/\/+$/, '');
+    const wsUrl = `${base}/ws/${encodeURIComponent(this.deviceId)}`;
     logger.info('Connecting to server WebSocket', { url: wsUrl });
 
     this.connecting = true;
@@ -75,10 +75,18 @@ export class ServerWebSocketTransport implements Transport {
           if (settled) return;
           settled = true;
           this.ws = ws;
-          // Keep onclose and onmessage for the active connection
+          // Keep handlers for the active connection
           ws.onopen = null;
-          ws.onerror = null;
-          ws.onclose = (event) => {
+          ws.onerror = () => {
+            // Runtime WebSocket error after successful connection
+            if (this.ws === ws) {
+              this.emit({
+                type: 'error',
+                error: new TransportError('WebSocket error', TransportErrorCode.IO_ERROR),
+              });
+            }
+          };
+          ws.onclose = event => {
             // Server-initiated close after successful connection
             if (this.ws === ws) {
               logger.info('Server WebSocket closed', { code: event.code, reason: event.reason });
@@ -86,7 +94,7 @@ export class ServerWebSocketTransport implements Transport {
               this.emit({ type: 'disconnected' });
             }
           };
-          ws.onmessage = (event) => {
+          ws.onmessage = event => {
             // Only handle messages if this is still the active connection
             if (this.ws === ws) {
               this.handleMessage(event.data);
@@ -101,21 +109,25 @@ export class ServerWebSocketTransport implements Transport {
           if (!settled) {
             settled = true;
             cleanup();
-            reject(new TransportError(
-              `WebSocket connection failed: ${wsUrl}`,
-              TransportErrorCode.CONNECTION_FAILED,
-            ));
+            reject(
+              new TransportError(
+                `WebSocket connection failed: ${wsUrl}`,
+                TransportErrorCode.CONNECTION_FAILED
+              )
+            );
           }
         };
 
-        ws.onclose = (event) => {
+        ws.onclose = event => {
           if (!settled) {
             settled = true;
             cleanup();
-            reject(new TransportError(
-              `WebSocket closed during connect: code ${event.code}`,
-              TransportErrorCode.CONNECTION_FAILED,
-            ));
+            reject(
+              new TransportError(
+                `WebSocket closed during connect: code ${event.code}`,
+                TransportErrorCode.CONNECTION_FAILED
+              )
+            );
           }
         };
       });
@@ -145,7 +157,7 @@ export class ServerWebSocketTransport implements Transport {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new TransportError(
         'Cannot send: not connected to server',
-        TransportErrorCode.NOT_CONNECTED,
+        TransportErrorCode.NOT_CONNECTED
       );
     }
 
@@ -154,11 +166,13 @@ export class ServerWebSocketTransport implements Transport {
     const streamMatch = text.match(/^stream\s+(\S+)/);
     if (streamMatch) {
       const mode = streamMatch[1];
-      this.ws.send(JSON.stringify({
-        type: 'stream_control',
-        enabled: mode !== 'off',
-        mode,
-      }));
+      this.ws.send(
+        JSON.stringify({
+          type: 'stream_control',
+          enabled: mode !== 'off',
+          mode,
+        })
+      );
       return;
     }
 
