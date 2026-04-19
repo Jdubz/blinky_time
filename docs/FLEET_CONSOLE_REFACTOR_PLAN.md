@@ -195,6 +195,21 @@ Preflight checks completed 2026-04-19:
 - No CDN / runtime-internet dependencies in the current `blinky-console` build (all npm deps bundled, no external URLs in `src/`, fonts are system stack in `src/styles.css:39`, `index.html` references only local assets).
 - `blinky-server` does not currently serve static files — `StaticFiles` mount is a clean addition.
 
+## Phase 2 post-review fixes (April 2026)
+
+- **Zombie state on `done: true`:** `startReading()` now calls `disconnect()` if the read loop exits cleanly with `isReading` still set (stream closed externally without error).
+- **Schema validation failure:** `getDeviceInfo()` returns `null` instead of raw unvalidated data when Zod schema fails. Prevents type-unsafe access to missing fields.
+- **No-SN path clarified:** `WebSerialSource.pickAndConnect()` comment documents that the synthesised-ID path is degraded-but-functional (device works, dedup doesn't).
+- **Build targets documented:** `build` → `../blinky-server/web/` (local server), `build:firebase` → `dist/` (Firebase deploy). CI uses `build:firebase`.
+
+### Known issues for Phase 3+
+
+- `disconnect()` emits `disconnected` unconditionally (even if never connected). By-design per types.ts contract but can cause spurious UI transitions. Consumers must tolerate.
+- `handleLine` has 6 near-identical try/catch dispatch blocks. A dispatch table helper would cut ~80 lines. Follow-up cleanup.
+- `sendJsonResult` wrapper is unnecessary indirection — inline at 4 call sites.
+- `validateCommand` silently mutates invalid commands instead of rejecting. Consider throwing `COMMAND_INVALID` on pattern failure.
+- `getConnectionState()` collapses readable/writable into connected. No current consumer uses them independently. Deprecate or remove the method.
+
 ## Non-requirements
 
 To prevent scope drift, this refactor explicitly does **not**:

@@ -40,6 +40,7 @@ export class WebSerialTransport implements Transport {
   private listeners: TransportEventCallback[] = [];
   private buffer = '';
   private isReading = false;
+  private hasReceivedData = false;
 
   constructor(public readonly baudRate: number = 115200) {}
 
@@ -103,6 +104,7 @@ export class WebSerialTransport implements Transport {
   async disconnect(): Promise<void> {
     const wasConnected = this.isConnected();
     this.isReading = false;
+    this.hasReceivedData = false;
 
     if (this.reader) {
       try {
@@ -169,6 +171,7 @@ export class WebSerialTransport implements Transport {
         const { value, done } = await this.reader.read();
         if (done) break;
 
+        this.hasReceivedData = true;
         this.buffer += decoder.decode(value);
 
         if (this.buffer.length > MAX_BUFFER_SIZE) {
@@ -196,7 +199,15 @@ export class WebSerialTransport implements Transport {
         // open without a reader is a zombie state. Tear down so the
         // caller sees a `disconnected` event and can react accordingly.
         this.disconnect().catch(() => {});
+        return;
       }
+    }
+    // If the loop exited cleanly (done: true) while isReading is still set
+    // AND we previously received data, the stream was closed externally
+    // (browser closed the port). Treat as a disconnect to avoid zombie state.
+    // Don't trigger on empty streams (e.g., test mocks that immediately return done).
+    if (this.isReading && this.hasReceivedData) {
+      this.disconnect().catch(() => {});
     }
   }
 }
