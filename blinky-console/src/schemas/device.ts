@@ -50,8 +50,8 @@ const DeviceConfigSchema = z.union([ConfiguredDeviceSchema, UnconfiguredDeviceSc
 export const DeviceInfoSchema = z.object({
   version: z.string().min(1, 'Version is required'),
   device: DeviceConfigSchema,
-  sn: z.string().min(1).optional(),
-  ble: z.string().min(1).optional(),
+  sn: z.string().optional(),
+  ble: z.string().optional(),
 });
 
 export type DeviceInfo = z.infer<typeof DeviceInfoSchema>;

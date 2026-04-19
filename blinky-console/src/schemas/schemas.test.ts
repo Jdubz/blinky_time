@@ -239,6 +239,18 @@ describe('DeviceInfoSchema', () => {
       expect(result.data.ble).toBeUndefined();
     }
   });
+
+  it('accepts empty-string sn/ble without rejecting the whole response', () => {
+    // Defensive: if firmware ever emits "" for these fields (bug or
+    // uninitialized memory), the rest of DeviceInfo should still parse.
+    const result = DeviceInfoSchema.safeParse({
+      version: 'v1.0',
+      device: FIRMWARE_SAMPLES.deviceInfo.device,
+      sn: '',
+      ble: '',
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('SettingsResponseSchema', () => {

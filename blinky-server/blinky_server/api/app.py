@@ -90,9 +90,25 @@ def create_app(
 def _resolve_static_dir() -> Path:
     """Path to the built blinky-console assets. Configurable via BLINKY_STATIC_DIR."""
     if env := os.environ.get("BLINKY_STATIC_DIR"):
-        return Path(env)
+        # Resolve so a relative BLINKY_STATIC_DIR doesn't depend on CWD.
+        return Path(env).resolve()
     # Default: blinky-server/web/ (Vite's build.outDir target, set in M4)
     return Path(__file__).resolve().parent.parent.parent / "web"
+
+
+# Top-level paths whose namespaces must not be shadowed by the SPA fallback:
+# `/api/*` and the WebSocket `/ws/*`. The FastAPI docs routes (/docs,
+# /openapi.json, /redoc) aren't listed here — they're registered on the
+# app before this catch-all, so a real request hits them first; a typo
+# like `/documents` should reach the SPA, not 404.
+_RESERVED_NAMES = frozenset({"api", "ws"})
+
+
+def _is_reserved(path: str) -> bool:
+    """True if `path` is exactly a reserved name or lives inside one."""
+    if path in _RESERVED_NAMES:
+        return True
+    return any(path.startswith(name + "/") for name in _RESERVED_NAMES)
 
 
 def _mount_frontend(app: FastAPI) -> None:
@@ -100,7 +116,7 @@ def _mount_frontend(app: FastAPI) -> None:
 
     Adds a catch-all GET that serves real files from the static dir when they
     exist, and falls back to index.html for any other path — the standard SPA
-    deep-link pattern. Reserved API / WebSocket / docs paths are left alone
+    deep-link pattern. Reserved API and WebSocket namespaces are left alone
     so genuine 404s there still surface as 404s instead of an HTML page.
     """
     static_dir = _resolve_static_dir()
@@ -118,11 +134,10 @@ def _mount_frontend(app: FastAPI) -> None:
 
     log.info("Serving blinky-console SPA from %s", static_dir)
     static_root = static_dir.resolve()
-    reserved_prefixes = ("api/", "ws/", "docs", "openapi.json", "redoc")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str) -> FileResponse:
-        if any(full_path.startswith(p) for p in reserved_prefixes):
+        if _is_reserved(full_path):
             raise HTTPException(status_code=404)
         # Real file in the static dir → serve it; guard against path traversal.
         try:
