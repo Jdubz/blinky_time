@@ -1,6 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { DeviceList } from './routes/DeviceList';
 import { DeviceDetail } from './routes/DeviceDetail';
+import { Fleet } from './routes/Fleet';
 import './styles.css';
 
 /**
@@ -20,6 +21,7 @@ function App() {
       <Routes>
         <Route path="/" element={<DeviceList />} />
         <Route path="/device/:deviceId" element={<DeviceDetail />} />
+        <Route path="/fleet" element={<Fleet />} />
       </Routes>
     </HashRouter>
   );

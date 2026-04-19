@@ -8,7 +8,7 @@ Refactor `blinky-console` from a single-device WebSerial UI into a fleet managem
 **Phase 2 — Transport abstraction.** ✅ Complete.
 **Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) pending.
 **Phase 4 — Multi-device UI.** ✅ Complete (M11-M13).
-**Phase 5 — Fleet operations.** ⏳ Not started.
+**Phase 5 — Fleet operations.** ✅ M14 complete. M15 (flash/deploy UI) pending.
 **Phase 6 — Web Bluetooth.** ⏳ Deferred.
 
 See the per-milestone status column in the [Milestones](#milestones) tables below for commit hashes.
@@ -161,7 +161,7 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M14 | ⏳ | Fleet-level command UI (apply generator/effect/settings to all or to selection) via existing `/api/fleet/*` endpoints | `blinky-console/src/routes/Fleet.tsx` |
+| M14 | ✅ | Fleet-level command UI: generator, effect, settings (save/load/defaults), custom command. Accessible from DeviceList header. | `blinky-console/src/routes/Fleet.tsx` |
 | M15 | ⏳ | Flash/deploy UI gated behind an auth mechanism (TBD — see open questions). Hidden entirely when the current server doesn't accept the client's credentials. | `blinky-console/src/routes/Firmware.tsx`, `blinky-server` auth |
 
 ### Phase 6 — Web Bluetooth — ⏳ deferred

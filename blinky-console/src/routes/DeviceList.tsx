@@ -64,9 +64,14 @@ export function DeviceList() {
     <div className="device-list">
       <header className="device-list__header">
         <h1>Blinky Devices</h1>
-        <button className="btn btn-primary" onClick={handleAddWebSerial}>
-          Connect USB
-        </button>
+        <div className="device-list__actions">
+          <button className="btn" onClick={() => navigate('/fleet')}>
+            Fleet
+          </button>
+          <button className="btn btn-primary" onClick={handleAddWebSerial}>
+            Connect USB
+          </button>
+        </div>
       </header>
 
       {devices.length === 0 ? (
