@@ -7,7 +7,7 @@ Refactor `blinky-console` from a single-device WebSerial UI into a fleet managem
 **Phase 1 — Plumbing.** ✅ Complete.
 **Phase 2 — Transport abstraction.** ✅ Complete.
 **Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) pending.
-**Phase 4 — Multi-device UI.** ⏳ Not started.
+**Phase 4 — Multi-device UI.** ⏳ M11 complete, M12-M13 pending.
 **Phase 5 — Fleet operations.** ⏳ Not started.
 **Phase 6 — Web Bluetooth.** ⏳ Deferred.
 
@@ -147,13 +147,13 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 |---|--------|-----------|---------|
 | M8 | ✅ | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
 | M9 | ✅ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/devices`. | `blinky-console/src/services/sources/` |
-| M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) | `blinky-console/src/components/Settings/` |
+| M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) — deferred, same-origin auto-detection covers primary use case | `blinky-console/src/components/Settings/` |
 
 ### Phase 4 — Multi-device UI — ⏳ not started
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M11 | ⏳ | Add routing (React Router). Move current single-device tabs to `/devices/:sn` route. No list view yet — opening the app auto-navigates to the only device, preserving today's UX when only one is available. | `blinky-console/src/App.tsx`, new `routes/` |
+| M11 | ✅ | Add routing (React Router). Move current single-device tabs to `/device/:id` route. DeviceList auto-navigates to single device. | `blinky-console/src/App.tsx`, `src/routes/`, `src/hooks/useDevices.ts` |
 | M12 | ⏳ | `/devices` list view aggregating all Sources by SN. Device cards show transport selector (WebSerial / BLE / via server). Switching transport preserves route state. | `blinky-console/src/routes/DevicesList.tsx`, `src/components/DeviceCard/` |
 | M13 | ⏳ | Real-time device list updates: either poll `GET /api/devices` from `BlinkyServerSource`, or add a `device_connected`/`device_disconnected` event stream to `blinky-server` and subscribe. Decision during implementation. | both repos, TBD |
 

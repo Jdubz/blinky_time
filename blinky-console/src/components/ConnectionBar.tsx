@@ -14,6 +14,7 @@ interface ConnectionBarProps {
   onDisconnect: () => void;
   onOpenConsole: () => void;
   onRequestBatteryStatus: () => void;
+  onBackToList?: () => void;
 }
 
 export function ConnectionBar({
@@ -27,6 +28,7 @@ export function ConnectionBar({
   onDisconnect,
   onOpenConsole,
   onRequestBatteryStatus,
+  onBackToList,
 }: ConnectionBarProps) {
   const [isBatteryModalOpen, setIsBatteryModalOpen] = useState(false);
   const getStatusColor = () => {
@@ -68,6 +70,11 @@ export function ConnectionBar({
     <>
       <div className="connection-bar">
         <div className="connection-left">
+          {onBackToList && (
+            <button className="btn btn-back" onClick={onBackToList} title="Back to devices">
+              &larr;
+            </button>
+          )}
           <span className="app-title">Blinky Console</span>
           {deviceInfo && (
             <span className="device-info">

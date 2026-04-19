@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerWebSocketTransport } from './ServerWebSocketTransport';
 import type { TransportEvent } from './types';
-import { TransportErrorCode } from './types';
 
 // --- Mock WebSocket ---
 
