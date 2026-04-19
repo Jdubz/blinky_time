@@ -1675,11 +1675,13 @@ def main():
 
             # --- Periodic maintenance (every 50 files) ---
             if (i + 1) % 50 == 0:
-                # Defragment GPU — without this, CUDA context accumulates
-                # unreturnable fragments over hundreds of tracks until even
-                # 20 MB allocations fail despite 10 GB total GPU memory.
                 gc.collect()
                 torch.cuda.empty_cache()
+                # cuFFT plan cache: each unique FFT size (track length) creates a
+                # permanent GPU-resident plan (~2-8 MB each). With thousands of
+                # varying-length tracks, these accumulate to GB of non-PyTorch GPU
+                # memory that empty_cache() can't reclaim. Clear periodically.
+                torch.backends.cuda.cufft_plan_cache.clear()
             if (i + 1) % 100 == 0:
                 _check_disk_space(output_dir, 10.0,
                                   f"continuing data prep ({i+1}/{len(split_pairs)})")
