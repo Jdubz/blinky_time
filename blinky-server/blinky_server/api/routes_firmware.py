@@ -26,13 +26,45 @@ from .models import FlashRequest
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+# Persistent firmware metadata — survives server restarts (not reboots).
+_FIRMWARE_META_PATH = Path("/tmp/blinky-firmware-current.json")
+
+
+def _save_firmware_meta(meta: dict[str, Any]) -> None:
+    """Persist current firmware metadata to disk."""
+    import json
+
+    try:
+        _FIRMWARE_META_PATH.write_text(json.dumps(meta))
+    except OSError:
+        log.warning("Failed to persist firmware metadata to %s", _FIRMWARE_META_PATH)
+
+
+def _load_firmware_meta() -> dict[str, Any] | None:
+    """Load persisted firmware metadata, or None if not available."""
+    import json
+
+    try:
+        if _FIRMWARE_META_PATH.is_file():
+            return json.loads(_FIRMWARE_META_PATH.read_text())  # type: ignore[no-any-return]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
 
 # ── Upload (instant) ─────────────────────────────────────────────────
 
 
 @router.post("/fleet/upload", dependencies=[Depends(require_api_key)])
-async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
+async def fleet_upload(
+    firmware: UploadFile,
+    version: str | None = None,
+) -> dict[str, Any]:
     """Upload a firmware .hex file to the server. Does NOT flash.
+
+    Accepts an optional `version` form field (e.g., "b130") to record
+    the build number. If omitted, firmware is stored without version
+    tracking (flash still works, but version comparison is unavailable).
 
     Returns the stored firmware path for use with POST /api/fleet/flash.
     """
@@ -50,13 +82,69 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
     hex_path.parent.mkdir(parents=True, exist_ok=True)
     hex_path.write_bytes(content)
 
-    log.info("Fleet upload: stored %s (%d bytes) at %s", safe_name, len(content), hex_path)
+    log.info("Fleet upload: stored %s (%d bytes, version=%s)", safe_name, len(content), version)
+
+    # Persist firmware metadata for version tracking
+    import datetime
+
+    meta = {
+        "version": version,
+        "firmware_path": str(hex_path),
+        "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "size_bytes": len(content),
+    }
+    _save_firmware_meta(meta)
 
     return {
         "status": "ok",
         "firmware_path": str(hex_path),
         "firmware_size": len(content),
+        "version": version,
         "message": f"Firmware stored ({len(content)} bytes). Use POST /api/fleet/flash to deploy.",
+    }
+
+
+# ── Firmware status ──────────────────────────────────────────────────
+
+
+@router.get("/fleet/firmware")
+async def fleet_firmware_status() -> dict[str, Any]:
+    """Get current firmware version and per-device update status.
+
+    Returns the uploaded firmware version (if known) and each connected
+    device's version with an `up_to_date` flag.
+    """
+    meta = _load_firmware_meta()
+    current_version = meta.get("version") if meta else None
+    firmware_available = meta is not None and Path(meta.get("firmware_path", "")).is_file()
+
+    fleet = get_fleet()
+    devices = []
+    out_of_date = 0
+    for d in fleet.get_all_devices():
+        if d.state != DeviceState.CONNECTED:
+            continue
+        is_current = (
+            current_version is not None and d.version is not None and d.version == current_version
+        )
+        if not is_current and current_version:
+            out_of_date += 1
+        devices.append(
+            {
+                "id": d.id,
+                "device_name": d.device_name,
+                "version": d.version,
+                "up_to_date": is_current,
+            }
+        )
+
+    return {
+        "current_version": current_version,
+        "firmware_path": meta.get("firmware_path") if meta else None,
+        "firmware_available": firmware_available,
+        "uploaded_at": meta.get("uploaded_at") if meta else None,
+        "devices": devices,
+        "out_of_date_count": out_of_date,
     }
 
 

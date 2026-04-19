@@ -5,13 +5,21 @@
  * Only available when a BlinkyServerSource is active (same-origin or manual).
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDevices } from '../hooks/useDevices';
 import { logger } from '../lib/logger';
 
 const GENERATORS = ['fire', 'water', 'lightning', 'audio'] as const;
 const EFFECTS = ['none', 'hue'] as const;
+
+interface FirmwareStatus {
+  current_version: string | null;
+  firmware_path: string | null;
+  firmware_available: boolean;
+  devices: Array<{ id: string; device_name: string | null; version: string | null; up_to_date: boolean }>;
+  out_of_date_count: number;
+}
 
 async function fleetCommand(serverUrl: string, endpoint: string, body?: object): Promise<Record<string, string>> {
   const resp = await fetch(`${serverUrl}${endpoint}`, {
@@ -31,10 +39,67 @@ export function Fleet() {
   const [loading, setLoading] = useState(false);
 
   const connectedCount = devices.filter(d => d.isConnected()).length;
-  // Determine server URL from the first server-sourced transport
   const serverUrl = devices.length > 0
-    ? window.location.origin  // Same-origin assumption for now
+    ? window.location.origin
     : null;
+
+  // Firmware status
+  const [firmware, setFirmware] = useState<FirmwareStatus | null>(null);
+  const [flashJobId, setFlashJobId] = useState<string | null>(null);
+  const [flashProgress, setFlashProgress] = useState<string | null>(null);
+
+  const fetchFirmwareStatus = useCallback(async () => {
+    if (!serverUrl) return;
+    try {
+      const resp = await fetch(`${serverUrl}/api/fleet/firmware`, { signal: AbortSignal.timeout(5000) });
+      if (resp.ok) setFirmware(await resp.json());
+    } catch { /* server unreachable */ }
+  }, [serverUrl]);
+
+  useEffect(() => { fetchFirmwareStatus(); }, [fetchFirmwareStatus]);
+
+  // Poll flash job progress
+  useEffect(() => {
+    if (!flashJobId || !serverUrl) return;
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch(`${serverUrl}/api/fleet/jobs/${flashJobId}`);
+        if (!resp.ok) return;
+        const job = await resp.json();
+        setFlashProgress(job.progressMessage || `${job.progress}%`);
+        if (job.status === 'complete' || job.status === 'error') {
+          setFlashJobId(null);
+          setFlashProgress(null);
+          setStatus(job.status === 'complete'
+            ? `Flash complete: ${job.result?.message || 'done'}`
+            : `Flash failed: ${job.error || 'unknown'}`);
+          fetchFirmwareStatus(); // Refresh versions
+        }
+      } catch { /* poll failure is non-fatal */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [flashJobId, serverUrl, fetchFirmwareStatus]);
+
+  const handleFlashOutOfDate = useCallback(async () => {
+    if (!serverUrl || !firmware?.firmware_path) return;
+    setLoading(true);
+    setStatus('Submitting flash job...');
+    try {
+      const resp = await fetch(`${serverUrl}/api/fleet/flash`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firmware_path: firmware.firmware_path }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json();
+      setFlashJobId(result.job_id);
+      setStatus(`Flash submitted: ${result.message}`);
+    } catch (e) {
+      setStatus(`Flash failed: ${e instanceof Error ? e.message : 'unknown'}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [serverUrl, firmware]);
 
   const runFleetCommand = useCallback(async (label: string, endpoint: string, body?: object) => {
     if (!serverUrl) return;
@@ -68,6 +133,42 @@ export function Fleet() {
         </div>
       ) : (
         <div className="fleet-page__sections">
+          {firmware && (
+            <section className="fleet-section fleet-section--firmware">
+              <h2>Firmware</h2>
+              <div className="firmware-status">
+                <div className="firmware-status__version">
+                  Server: <strong>{firmware.current_version || 'unknown'}</strong>
+                </div>
+                {firmware.out_of_date_count > 0 && (
+                  <div className="firmware-status__outdated">
+                    {firmware.out_of_date_count} device(s) need update
+                  </div>
+                )}
+                {firmware.out_of_date_count === 0 && firmware.current_version && (
+                  <div className="firmware-status__current">All devices up to date</div>
+                )}
+                <div className="firmware-status__devices">
+                  {firmware.devices.map(d => (
+                    <span key={d.id} className={`firmware-device-badge ${d.up_to_date ? '' : 'firmware-device-badge--outdated'}`}>
+                      {d.device_name || d.id.slice(0, 8)}: {d.version || '?'}
+                    </span>
+                  ))}
+                </div>
+                {firmware.firmware_available && firmware.out_of_date_count > 0 && !flashJobId && (
+                  <button className="btn btn-primary" disabled={loading} onClick={handleFlashOutOfDate}>
+                    Flash Out-of-Date Devices
+                  </button>
+                )}
+                {flashJobId && (
+                  <div className="firmware-status__progress">
+                    Flashing: {flashProgress || 'starting...'}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           <section className="fleet-section">
             <h2>Generator</h2>
             <div className="fleet-section__buttons">

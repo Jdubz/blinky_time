@@ -1626,3 +1626,69 @@ body {
   display: flex;
   gap: 0.5rem;
 }
+
+/* ===== Firmware Status (Fleet page) ===== */
+.firmware-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.firmware-status__version {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.firmware-status__outdated {
+  color: var(--accent-warning);
+  font-weight: 600;
+}
+
+.firmware-status__current {
+  color: var(--accent-success);
+}
+
+.firmware-status__devices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.firmware-status__progress {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: var(--border-radius);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.firmware-device-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  background: var(--bg-secondary);
+  color: var(--accent-success);
+  border: 1px solid var(--accent-success);
+}
+
+.firmware-device-badge--outdated {
+  color: var(--accent-warning);
+  border-color: var(--accent-warning);
+}
+
+.device-card__meta {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.device-card__version {
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  color: var(--accent-primary);
+}

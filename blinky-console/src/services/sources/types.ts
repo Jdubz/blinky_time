@@ -63,6 +63,8 @@ export interface TransportBinding {
  */
 export class Device {
   readonly transports: TransportBinding[];
+  /** Firmware version reported by the device (e.g., "b130"). Set by sources. */
+  public version: string | null = null;
 
   constructor(
     readonly id: string,

@@ -26,7 +26,10 @@ function DeviceCard({ device }: { device: Device }) {
       onKeyDown={(e) => e.key === 'Enter' && navigate(`/device/${device.id}`)}
     >
       <div className="device-card__name">{device.displayName}</div>
-      <div className="device-card__id">{device.id.slice(0, 12)}</div>
+      <div className="device-card__meta">
+        <span className="device-card__id">{device.id.slice(0, 12)}</span>
+        {device.version && <span className="device-card__version">{device.version}</span>}
+      </div>
       <div className="device-card__status">
         <span className={`status-dot ${isConnected ? 'status-dot--on' : ''}`} />
         {isConnected ? 'Connected' : 'Available'}

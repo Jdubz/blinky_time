@@ -73,6 +73,7 @@ echo "=== Uploading firmware to blinkyhost ==="
 UPLOAD_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/upload" \
     -H "X-API-Key: ${API_KEY}" \
     -F "firmware=@${HEX};filename=blinky-things.ino.hex" \
+    -F "version=b${BUILD}" \
     --max-time 30 \
     2>/dev/null) || fail "Upload failed (server unreachable or rejected)" 2
 

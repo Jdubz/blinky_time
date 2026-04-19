@@ -101,7 +101,8 @@ export class BlinkyServerSource implements Source {
         const existing = this.registry.get(id);
 
         if (existing) {
-          // Update display name if server has a better one
+          // Update version and display name from server
+          if (d.version) existing.version = d.version;
           if (displayName !== 'Unknown' && existing.displayName !== displayName) {
             existing.displayName = displayName;
           }
@@ -109,6 +110,7 @@ export class BlinkyServerSource implements Source {
           // New device — create transport binding and register
           const transport = new ServerWebSocketTransport(this.serverUrl, d.id);
           const device = new Device(id, displayName, [{ source: this, transport }]);
+          device.version = d.version;
           this.registry.upsert(device);
           logger.debug('BlinkyServerSource: discovered device', {
             id,
