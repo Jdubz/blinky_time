@@ -3,10 +3,12 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from ..device.manager import FleetManager
 from .deps import set_fleet
@@ -77,4 +79,57 @@ def create_app(
     app.include_router(testing_router, prefix="/api")
     app.include_router(ws_router)
 
+    # Mount the built blinky-console as a SPA (after API routers so they
+    # take precedence). Skipped silently if the static dir isn't present,
+    # so the server runs fine in dev without a console build.
+    _mount_frontend(app)
+
     return app
+
+
+def _resolve_static_dir() -> Path:
+    """Path to the built blinky-console assets. Configurable via BLINKY_STATIC_DIR."""
+    if env := os.environ.get("BLINKY_STATIC_DIR"):
+        return Path(env)
+    # Default: blinky-server/web/ (Vite's build.outDir target, set in M4)
+    return Path(__file__).resolve().parent.parent.parent / "web"
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Serve the blinky-console SPA from the resolved static dir, if present.
+
+    Adds a catch-all GET that serves real files from the static dir when they
+    exist, and falls back to index.html for any other path — the standard SPA
+    deep-link pattern. Reserved API / WebSocket / docs paths are left alone
+    so genuine 404s there still surface as 404s instead of an HTML page.
+    """
+    static_dir = _resolve_static_dir()
+    if not static_dir.is_dir():
+        log.info("Frontend static dir %s not present — SPA mount skipped", static_dir)
+        return
+
+    index_html = static_dir / "index.html"
+    if not index_html.is_file():
+        log.warning(
+            "Frontend static dir %s exists but has no index.html — SPA mount skipped",
+            static_dir,
+        )
+        return
+
+    log.info("Serving blinky-console SPA from %s", static_dir)
+    static_root = static_dir.resolve()
+    reserved_prefixes = ("api/", "ws/", "docs", "openapi.json", "redoc")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        if any(full_path.startswith(p) for p in reserved_prefixes):
+            raise HTTPException(status_code=404)
+        # Real file in the static dir → serve it; guard against path traversal.
+        try:
+            target = (static_dir / full_path).resolve()
+            target.relative_to(static_root)
+            if target.is_file():
+                return FileResponse(target)
+        except ValueError:
+            pass
+        return FileResponse(index_html)
