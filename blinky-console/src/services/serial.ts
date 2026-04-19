@@ -18,6 +18,13 @@ import {
   EffectType,
 } from '../types';
 import { logger } from '../lib/logger';
+import {
+  Transport,
+  TransportError,
+  TransportErrorCode,
+  TransportEvent,
+  WebSerialTransport,
+} from './transport';
 
 // Custom error classes for better error handling
 export class SerialError extends Error {
@@ -44,60 +51,36 @@ export enum SerialErrorCode {
   DEVICE_LOST = 'DEVICE_LOST',
 }
 
-// Map native error types to our error codes
-function classifyError(error: unknown): SerialErrorCode {
-  if (error instanceof DOMException) {
-    switch (error.name) {
-      case 'NotFoundError':
-        return SerialErrorCode.NOT_CONNECTED;
-      case 'SecurityError':
-        return SerialErrorCode.PERMISSION_DENIED;
-      case 'InvalidStateError':
-        return SerialErrorCode.PORT_IN_USE;
-      case 'NetworkError':
-        return SerialErrorCode.DEVICE_LOST;
-      case 'AbortError':
-        return SerialErrorCode.DISCONNECTED;
-    }
+// Map a transport-level error code onto the narrower serial-protocol code
+// set that public consumers observe via SerialError.code.
+function transportCodeToSerialCode(code: TransportErrorCode): SerialErrorCode {
+  switch (code) {
+    case TransportErrorCode.NOT_SUPPORTED:
+      return SerialErrorCode.NOT_SUPPORTED;
+    case TransportErrorCode.NOT_CONNECTED:
+      return SerialErrorCode.NOT_CONNECTED;
+    case TransportErrorCode.CONNECTION_FAILED:
+      return SerialErrorCode.CONNECTION_FAILED;
+    case TransportErrorCode.DISCONNECTED:
+      return SerialErrorCode.DISCONNECTED;
+    case TransportErrorCode.PERMISSION_DENIED:
+      return SerialErrorCode.PERMISSION_DENIED;
+    case TransportErrorCode.DEVICE_LOST:
+      return SerialErrorCode.DEVICE_LOST;
+    case TransportErrorCode.PORT_IN_USE:
+      return SerialErrorCode.PORT_IN_USE;
+    case TransportErrorCode.IO_ERROR:
+      return SerialErrorCode.CONNECTION_FAILED;
   }
-  return SerialErrorCode.CONNECTION_FAILED;
 }
 
-// WebSerial type declarations
-declare global {
-  interface Navigator {
-    serial: Serial;
+function toSerialError(error: unknown): SerialError {
+  if (error instanceof SerialError) return error;
+  if (error instanceof TransportError) {
+    return new SerialError(error.message, transportCodeToSerialCode(error.code));
   }
-  interface Serial {
-    requestPort(options?: SerialPortRequestOptions): Promise<SerialPort>;
-    getPorts(): Promise<SerialPort[]>;
-  }
-  interface SerialPortRequestOptions {
-    filters?: SerialPortFilter[];
-  }
-  interface SerialPortFilter {
-    usbVendorId?: number;
-    usbProductId?: number;
-  }
-  interface SerialPort {
-    open(options: SerialOptions): Promise<void>;
-    close(): Promise<void>;
-    readable: ReadableStream<Uint8Array> | null;
-    writable: WritableStream<Uint8Array> | null;
-    getInfo(): SerialPortInfo;
-  }
-  interface SerialOptions {
-    baudRate: number;
-    dataBits?: number;
-    stopBits?: number;
-    parity?: 'none' | 'even' | 'odd';
-    bufferSize?: number;
-    flowControl?: 'none' | 'hardware';
-  }
-  interface SerialPortInfo {
-    usbVendorId?: number;
-    usbProductId?: number;
-  }
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  return new SerialError(message, SerialErrorCode.CONNECTION_FAILED);
 }
 
 export type SerialEventType =
@@ -134,7 +117,6 @@ export interface SerialEvent {
 export type SerialEventCallback = (event: SerialEvent) => void;
 
 // Constants for safety limits
-const MAX_BUFFER_SIZE = 16384; // Max buffer size before truncation (16KB for large JSON responses)
 const MAX_COMMAND_LENGTH = 128; // Max command length to send
 const ALLOWED_COMMAND_PATTERN = /^[a-zA-Z0-9_\-.\s]+$/; // Alphanumeric + basic chars
 
@@ -159,142 +141,76 @@ function isValidCategory(category: string): category is SettingsCategory {
   return VALID_CATEGORIES.includes(category as SettingsCategory);
 }
 
+/**
+ * SerialService — the protocol layer atop a byte {@link Transport}.
+ *
+ * Responsibilities (what the firmware and console speak about):
+ *  - Command validation and send
+ *  - Per-line JSON dispatch: typed stream events (audio / battery / transient
+ *    / rhythm / status) plus generic `data` events for everything else
+ *  - `sendAndReceiveJson` request/response with timeout
+ *
+ * Byte-level concerns (WebSerial port lifecycle, line framing, error
+ * classification) live in {@link WebSerialTransport}. In later milestones
+ * additional transports (Web Bluetooth, server-proxied WebSocket) will
+ * satisfy the same {@link Transport} contract and this layer will
+ * continue to work unmodified.
+ */
 class SerialService {
-  private port: SerialPort | null = null;
-  private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  private transport: Transport;
   private listeners: SerialEventCallback[] = [];
-  private buffer: string = '';
-  private isReading: boolean = false;
 
-  // Check if WebSerial is supported
-  isSupported(): boolean {
-    return 'serial' in navigator;
+  constructor(transport?: Transport) {
+    this.transport = transport ?? new WebSerialTransport();
+    this.transport.addEventListener(this.handleTransportEvent);
   }
 
-  // Add event listener
+  isSupported(): boolean {
+    return this.transport.isSupported();
+  }
+
+  isConnected(): boolean {
+    return this.transport.isConnected();
+  }
+
   addEventListener(callback: SerialEventCallback): void {
     this.listeners.push(callback);
   }
 
-  // Remove event listener
   removeEventListener(callback: SerialEventCallback): void {
     this.listeners = this.listeners.filter(l => l !== callback);
   }
 
-  // Emit event to all listeners
   private emit(event: SerialEvent): void {
     this.listeners.forEach(callback => callback(event));
   }
 
-  // Request and connect to a serial port
   async connect(baudRate: number = 115200): Promise<boolean> {
     logger.info('Attempting serial connection', { baudRate });
 
-    if (!this.isSupported()) {
-      const error = new SerialError(
-        'WebSerial API not supported in this browser',
-        SerialErrorCode.NOT_SUPPORTED
-      );
-      logger.error('WebSerial not supported');
-      this.emit({ type: 'error', error });
-      return false;
+    // If a different baud rate was requested, swap in a fresh transport.
+    // Only WebSerialTransport carries a baudRate; other transport types
+    // simply ignore this path.
+    if (this.transport instanceof WebSerialTransport && this.transport.baudRate !== baudRate) {
+      this.transport.removeEventListener(this.handleTransportEvent);
+      this.transport = new WebSerialTransport(baudRate);
+      this.transport.addEventListener(this.handleTransportEvent);
     }
 
     try {
-      // Request port from user
-      logger.debug('Requesting serial port from user');
-      this.port = await navigator.serial.requestPort();
-
-      // Open with specified baud rate
-      logger.debug('Opening port', { baudRate });
-      await this.port.open({ baudRate });
-
-      // Set up reader and writer
-      if (this.port.readable) {
-        this.reader = this.port.readable.getReader();
-        this.startReading();
-      } else {
-        throw new SerialError('Port is not readable', SerialErrorCode.CONNECTION_FAILED);
-      }
-
-      if (this.port.writable) {
-        this.writer = this.port.writable.getWriter();
-      } else {
-        throw new SerialError('Port is not writable', SerialErrorCode.CONNECTION_FAILED);
-      }
-
-      logger.info('Serial connection established');
-      this.emit({ type: 'connected' });
+      await this.transport.connect();
+      // `connected` event already emitted by the transport and relayed.
       return true;
     } catch (error) {
-      // Clean up partial connection state
       logger.error('Connection failed', { error });
-      await this.disconnect().catch(() => {});
-
-      // Classify and emit the error
-      if (error instanceof SerialError) {
-        this.emit({ type: 'error', error });
-      } else {
-        const code = classifyError(error);
-        const message = error instanceof Error ? error.message : 'Connection failed';
-        const serialError = new SerialError(message, code);
-        this.emit({ type: 'error', error: serialError });
-      }
+      this.emit({ type: 'error', error: toSerialError(error) });
       return false;
     }
   }
 
-  // Disconnect from serial port
   async disconnect(): Promise<void> {
     logger.info('Disconnecting from serial port');
-    this.isReading = false;
-
-    // Release reader
-    if (this.reader) {
-      try {
-        await this.reader.cancel();
-      } catch (e) {
-        logger.warn('Error canceling reader', { error: e });
-      }
-      try {
-        this.reader.releaseLock();
-      } catch (e) {
-        logger.warn('Error releasing reader lock', { error: e });
-      }
-      this.reader = null;
-    }
-
-    // Release writer
-    if (this.writer) {
-      try {
-        this.writer.releaseLock();
-      } catch (e) {
-        logger.warn('Error releasing writer lock', { error: e });
-      }
-      this.writer = null;
-    }
-
-    // Close port
-    if (this.port) {
-      try {
-        await this.port.close();
-      } catch (e) {
-        logger.warn('Error closing port', { error: e });
-      }
-      this.port = null;
-    }
-
-    // Clear buffers
-    this.buffer = '';
-
-    logger.info('Serial port disconnected');
-    this.emit({ type: 'disconnected' });
-  }
-
-  // Check if connected
-  isConnected(): boolean {
-    return this.port !== null && this.writer !== null;
+    await this.transport.disconnect();
   }
 
   // Validate command before sending
@@ -313,7 +229,7 @@ class SerialService {
 
   // Send a command (with validation)
   async send(command: string): Promise<void> {
-    if (!this.writer) {
+    if (!this.isConnected()) {
       throw new SerialError('Cannot send: not connected to device', SerialErrorCode.NOT_CONNECTED);
     }
 
@@ -328,14 +244,10 @@ class SerialService {
 
     try {
       logger.debug('Sending command', { command: sanitized });
-      const encoder = new TextEncoder();
-      const data = encoder.encode(sanitized + '\n');
-      await this.writer.write(data);
+      await this.transport.send(sanitized);
     } catch (error) {
-      const code = classifyError(error);
-      const message = error instanceof Error ? error.message : 'Failed to send command';
-      logger.error('Command send failed', { command: sanitized, error: message });
-      throw new SerialError(message, code);
+      logger.error('Command send failed', { command: sanitized, error });
+      throw toSerialError(error);
     }
   }
 
@@ -385,8 +297,9 @@ class SerialService {
 
       const handler = (event: SerialEvent) => {
         if (event.type === 'data' && event.data) {
-          // Each 'data' event is already a single line from startReading()
-          // Check this line directly instead of buffering (which loses line boundaries)
+          // Each 'data' event is already a single line from the transport
+          // layer. Check this line directly (no buffering — line boundaries
+          // are preserved by the transport).
           const trimmed = event.data.trim();
 
           // Check if this line is a complete JSON object
@@ -575,177 +488,157 @@ class SerialService {
     await this.send(`effect ${name}`);
   }
 
-  // Start reading from serial port
-  private async startReading(): Promise<void> {
-    if (!this.reader) return;
-
-    this.isReading = true;
-    const decoder = new TextDecoder();
-
-    try {
-      while (this.isReading) {
-        const { value, done } = await this.reader.read();
-        if (done) break;
-
-        const text = decoder.decode(value);
-        this.buffer += text;
-
-        // Prevent unbounded buffer growth - truncate if too large
-        if (this.buffer.length > MAX_BUFFER_SIZE) {
-          // Keep only the last portion that might contain complete data
-          this.buffer = this.buffer.substring(this.buffer.length - MAX_BUFFER_SIZE / 2);
+  /** Relay transport events into the public SerialEvent stream. */
+  private handleTransportEvent = (event: TransportEvent): void => {
+    switch (event.type) {
+      case 'connected':
+        logger.info('Serial connection established');
+        this.emit({ type: 'connected' });
+        break;
+      case 'disconnected':
+        logger.info('Serial port disconnected');
+        this.emit({ type: 'disconnected' });
+        break;
+      case 'error':
+        if (event.error) {
+          this.emit({ type: 'error', error: toSerialError(event.error) });
         }
+        break;
+      case 'line':
+        if (event.line) this.handleLine(event.line);
+        break;
+    }
+  };
 
-        // Process complete lines
-        const lines = this.buffer.split('\n');
-        this.buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          // Check if it's an audio streaming message
-          if (trimmed.startsWith('{"a":')) {
-            try {
-              const parsed = JSON.parse(trimmed);
-              const validation = AudioMessageSchema.safeParse(parsed);
-              if (validation.success) {
-                this.emit({ type: 'audio', audio: validation.data });
-              } else {
-                // Emit anyway for graceful degradation, but log warning
-                logger.debug('Audio message validation warning', {
-                  errors: validation.error.issues,
-                });
-                this.emit({ type: 'audio', audio: parsed as AudioMessage });
-              }
-              continue;
-            } catch {
-              // Not valid audio JSON
-            }
-          }
-
-          // Check if it's a battery streaming message
-          if (trimmed.startsWith('{"b":')) {
-            try {
-              const parsed = JSON.parse(trimmed);
-              const validation = BatteryMessageSchema.safeParse(parsed);
-              if (validation.success) {
-                this.emit({ type: 'battery', battery: validation.data });
-              } else {
-                logger.debug('Battery message validation warning', {
-                  errors: validation.error.issues,
-                });
-                this.emit({ type: 'battery', battery: parsed as BatteryMessage });
-              }
-              continue;
-            } catch {
-              // Not valid battery JSON
-            }
-          }
-
-          // Check if it's a battery status message
-          if (trimmed.startsWith('{"battery":')) {
-            try {
-              const parsed = JSON.parse(trimmed);
-              const validation = BatteryStatusResponseSchema.safeParse(parsed);
-              if (validation.success) {
-                this.emit({ type: 'batteryStatus', batteryStatus: validation.data.battery });
-              } else {
-                logger.debug('Battery status validation warning', {
-                  errors: validation.error.issues,
-                });
-                this.emit({ type: 'batteryStatus', batteryStatus: parsed.battery });
-              }
-              continue;
-            } catch {
-              // Not valid battery status JSON
-            }
-          }
-
-          // Check if it's a transient detection message
-          if (trimmed.startsWith('{"type":"TRANSIENT"')) {
-            try {
-              const parsed = JSON.parse(trimmed);
-              const validation = TransientMessageSchema.safeParse(parsed);
-              if (validation.success) {
-                this.emit({ type: 'transient', transient: validation.data });
-              } else {
-                logger.debug('Transient message validation warning', {
-                  errors: validation.error.issues,
-                });
-                this.emit({ type: 'transient', transient: parsed as TransientMessage });
-              }
-              continue;
-            } catch {
-              // Not valid transient JSON
-            }
-          }
-
-          // Check if it's a rhythm analyzer message
-          if (trimmed.startsWith('{"type":"RHYTHM"')) {
-            try {
-              const parsed = JSON.parse(trimmed);
-              const validation = RhythmMessageSchema.safeParse(parsed);
-              if (validation.success) {
-                this.emit({ type: 'rhythm', rhythm: validation.data });
-              } else {
-                logger.debug('Rhythm message validation warning', {
-                  errors: validation.error.issues,
-                });
-                this.emit({ type: 'rhythm', rhythm: parsed as RhythmMessage });
-              }
-              continue;
-            } catch {
-              // Not valid rhythm JSON
-            }
-          }
-
-          // Check if it's a status message
-          if (trimmed.startsWith('{"type":"STATUS"')) {
-            try {
-              const parsed = JSON.parse(trimmed);
-              const validation = StatusMessageSchema.safeParse(parsed);
-              if (validation.success) {
-                this.emit({ type: 'status', status: validation.data });
-                continue;
-              } else {
-                logger.debug('Status message validation warning', {
-                  errors: validation.error.issues,
-                });
-              }
-              const statusMsg = parsed as StatusMessage;
-              this.emit({ type: 'status', status: statusMsg });
-              continue;
-            } catch {
-              // Not valid status JSON
-            }
-          }
-
-          // Regular data
-          this.emit({ type: 'data', data: trimmed });
+  /**
+   * Dispatch a single decoded line from the transport.
+   *
+   * Known stream message shapes are parsed and emitted as typed events;
+   * everything else — command responses, diagnostic strings — goes out as
+   * a generic `data` event for `sendAndReceiveJson` and the raw console.
+   */
+  private handleLine(line: string): void {
+    // Audio streaming
+    if (line.startsWith('{"a":')) {
+      try {
+        const parsed = JSON.parse(line);
+        const validation = AudioMessageSchema.safeParse(parsed);
+        if (validation.success) {
+          this.emit({ type: 'audio', audio: validation.data });
+        } else {
+          logger.debug('Audio message validation warning', { errors: validation.error.issues });
+          this.emit({ type: 'audio', audio: parsed as AudioMessage });
         }
-      }
-    } catch (error) {
-      if (this.isReading) {
-        const code = classifyError(error);
-        const message = error instanceof Error ? error.message : 'Read error';
-        const serialError = new SerialError(message, code);
-        this.emit({ type: 'error', error: serialError });
-
-        // If device was lost, trigger disconnection
-        if (code === SerialErrorCode.DEVICE_LOST || code === SerialErrorCode.DISCONNECTED) {
-          this.disconnect().catch(() => {});
-        }
+        return;
+      } catch {
+        // Not valid audio JSON
       }
     }
+
+    // Battery streaming
+    if (line.startsWith('{"b":')) {
+      try {
+        const parsed = JSON.parse(line);
+        const validation = BatteryMessageSchema.safeParse(parsed);
+        if (validation.success) {
+          this.emit({ type: 'battery', battery: validation.data });
+        } else {
+          logger.debug('Battery message validation warning', { errors: validation.error.issues });
+          this.emit({ type: 'battery', battery: parsed as BatteryMessage });
+        }
+        return;
+      } catch {
+        // Not valid battery JSON
+      }
+    }
+
+    // Battery status response
+    if (line.startsWith('{"battery":')) {
+      try {
+        const parsed = JSON.parse(line);
+        const validation = BatteryStatusResponseSchema.safeParse(parsed);
+        if (validation.success) {
+          this.emit({ type: 'batteryStatus', batteryStatus: validation.data.battery });
+        } else {
+          logger.debug('Battery status validation warning', {
+            errors: validation.error.issues,
+          });
+          this.emit({ type: 'batteryStatus', batteryStatus: parsed.battery });
+        }
+        return;
+      } catch {
+        // Not valid battery status JSON
+      }
+    }
+
+    // Transient detection
+    if (line.startsWith('{"type":"TRANSIENT"')) {
+      try {
+        const parsed = JSON.parse(line);
+        const validation = TransientMessageSchema.safeParse(parsed);
+        if (validation.success) {
+          this.emit({ type: 'transient', transient: validation.data });
+        } else {
+          logger.debug('Transient message validation warning', {
+            errors: validation.error.issues,
+          });
+          this.emit({ type: 'transient', transient: parsed as TransientMessage });
+        }
+        return;
+      } catch {
+        // Not valid transient JSON
+      }
+    }
+
+    // Rhythm analyzer
+    if (line.startsWith('{"type":"RHYTHM"')) {
+      try {
+        const parsed = JSON.parse(line);
+        const validation = RhythmMessageSchema.safeParse(parsed);
+        if (validation.success) {
+          this.emit({ type: 'rhythm', rhythm: validation.data });
+        } else {
+          logger.debug('Rhythm message validation warning', {
+            errors: validation.error.issues,
+          });
+          this.emit({ type: 'rhythm', rhythm: parsed as RhythmMessage });
+        }
+        return;
+      } catch {
+        // Not valid rhythm JSON
+      }
+    }
+
+    // Status message
+    if (line.startsWith('{"type":"STATUS"')) {
+      try {
+        const parsed = JSON.parse(line);
+        const validation = StatusMessageSchema.safeParse(parsed);
+        if (validation.success) {
+          this.emit({ type: 'status', status: validation.data });
+        } else {
+          logger.debug('Status message validation warning', {
+            errors: validation.error.issues,
+          });
+          this.emit({ type: 'status', status: parsed as StatusMessage });
+        }
+        return;
+      } catch {
+        // Not valid status JSON
+      }
+    }
+
+    // Regular data — command responses, debug output, raw console lines.
+    this.emit({ type: 'data', data: line });
   }
 
-  // Get last error if any - useful for debugging
+  // Debug snapshot of connection state
   getConnectionState(): { connected: boolean; readable: boolean; writable: boolean } {
+    const connected = this.transport.isConnected();
     return {
-      connected: this.port !== null,
-      readable: this.reader !== null,
-      writable: this.writer !== null,
+      connected,
+      readable: connected,
+      writable: connected,
     };
   }
 }
