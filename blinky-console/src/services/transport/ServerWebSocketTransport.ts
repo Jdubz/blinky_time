@@ -29,6 +29,7 @@ interface ServerMessage {
 export class ServerWebSocketTransport implements Transport {
   private ws: WebSocket | null = null;
   private listeners: TransportEventCallback[] = [];
+  private connecting = false;  // Prevents concurrent connect() calls
 
   constructor(
     public readonly serverUrl: string,
@@ -45,51 +46,82 @@ export class ServerWebSocketTransport implements Transport {
 
   async connect(): Promise<void> {
     if (this.isConnected()) return;
+    if (this.connecting) {
+      throw new TransportError(
+        'Connection already in progress',
+        TransportErrorCode.CONNECTION_FAILED,
+      );
+    }
 
-    const wsUrl = this.serverUrl.replace(/^http/, 'ws') + `/ws/${this.deviceId}`;
+    const wsUrl = this.serverUrl.replace(/^http/, 'ws')
+      + `/ws/${encodeURIComponent(this.deviceId)}`;
     logger.info('Connecting to server WebSocket', { url: wsUrl });
 
-    return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(wsUrl);
-      let settled = false;
+    this.connecting = true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
+        let settled = false;
 
-      ws.onopen = () => {
-        if (settled) return;
-        settled = true;
-        this.ws = ws;
-        logger.info('Server WebSocket connected', { deviceId: this.deviceId });
-        this.emit({ type: 'connected' });
-        resolve();
-      };
+        const cleanup = () => {
+          // Prevent orphaned handlers on failed connections
+          ws.onopen = null;
+          ws.onerror = null;
+          ws.onclose = null;
+          ws.onmessage = null;
+        };
 
-      ws.onerror = () => {
-        if (!settled) {
+        ws.onopen = () => {
+          if (settled) return;
           settled = true;
-          reject(new TransportError(
-            `WebSocket connection failed: ${wsUrl}`,
-            TransportErrorCode.CONNECTION_FAILED,
-          ));
-        }
-      };
+          this.ws = ws;
+          // Keep onclose and onmessage for the active connection
+          ws.onopen = null;
+          ws.onerror = null;
+          ws.onclose = (event) => {
+            // Server-initiated close after successful connection
+            if (this.ws === ws) {
+              logger.info('Server WebSocket closed', { code: event.code, reason: event.reason });
+              this.ws = null;
+              this.emit({ type: 'disconnected' });
+            }
+          };
+          ws.onmessage = (event) => {
+            // Only handle messages if this is still the active connection
+            if (this.ws === ws) {
+              this.handleMessage(event.data);
+            }
+          };
+          logger.info('Server WebSocket connected', { deviceId: this.deviceId });
+          this.emit({ type: 'connected' });
+          resolve();
+        };
 
-      ws.onclose = (event) => {
-        // Prevent the onclose from firing a disconnect during a failed connect
-        // (the reject above handles that case).
-        if (!settled) {
-          settled = true;
-          reject(new TransportError(
-            `WebSocket closed during connect: code ${event.code}`,
-            TransportErrorCode.CONNECTION_FAILED,
-          ));
-          return;
-        }
-        logger.info('Server WebSocket closed', { code: event.code, reason: event.reason });
-        this.ws = null;
-        this.emit({ type: 'disconnected' });
-      };
+        ws.onerror = () => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(new TransportError(
+              `WebSocket connection failed: ${wsUrl}`,
+              TransportErrorCode.CONNECTION_FAILED,
+            ));
+          }
+        };
 
-      ws.onmessage = (event) => this.handleMessage(event.data);
-    });
+        ws.onclose = (event) => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(new TransportError(
+              `WebSocket closed during connect: code ${event.code}`,
+              TransportErrorCode.CONNECTION_FAILED,
+            ));
+          }
+        };
+      });
+    } finally {
+      this.connecting = false;
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -97,7 +129,8 @@ export class ServerWebSocketTransport implements Transport {
     this.ws = null;
 
     if (ws) {
-      // Remove handlers to prevent double-fire of disconnected
+      // Null handlers BEFORE close() to prevent the onclose handler from
+      // firing a second disconnected event (close() is async).
       ws.onclose = null;
       ws.onmessage = null;
       ws.onerror = null;
@@ -183,5 +216,8 @@ export class ServerWebSocketTransport implements Transport {
         this.emit({ type: 'line', line });
       }
     }
+    // Messages with neither response nor data are silently dropped.
+    // This is intentional — the server may send internal control messages
+    // that aren't relevant to the transport layer.
   }
 }

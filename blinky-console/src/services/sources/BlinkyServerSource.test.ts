@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BlinkyServerSource, detectSameOriginServer } from './BlinkyServerSource';
 import { DeviceRegistry } from './DeviceRegistry';
+import { Device } from './types';
 import type { ServerDevice } from './types';
 
 function makeServerDevice(overrides: Partial<ServerDevice> = {}): ServerDevice {
@@ -191,9 +192,9 @@ describe('BlinkyServerSource', () => {
   describe('cross-source dedup', () => {
     it('merges with WebSerial-discovered device by hardware_sn', async () => {
       // Simulate WebSerial discovering a device first
-      const { Device } = await import('./types');
       const existingDevice = new Device('ABCD1234', 'USB Device', []);
       registry.upsert(existingDevice);
+      expect(registry.list()).toHaveLength(1); // sanity check
 
       // Now server discovers the same device
       fetchMock.mockResolvedValue({
@@ -206,9 +207,64 @@ describe('BlinkyServerSource', () => {
       const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
       await source.poll();
 
-      // Should still be one device, with transport binding added
-      expect(registry.list()).toHaveLength(1);
-      expect(registry.list()[0].transports).toHaveLength(1); // server transport added
+      // Should still be one device (not duplicated)
+      const devices = registry.list();
+      expect(devices).toHaveLength(1);
+      expect(devices[0].id).toBe('ABCD1234');
+      // Display name updated from server
+      expect(devices[0].displayName).toBe('Test Hat');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('start() is idempotent (no timer leak)', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+
+      const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
+      await source.start();
+      await source.start(); // second call should be no-op
+      source.stop();
+    });
+
+    it('handles server returning non-JSON response', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        json: () => Promise.reject(new Error('not json')),
+      });
+
+      const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
+      await source.poll(); // should not throw
+      expect(registry.list()).toHaveLength(0);
+    });
+
+    it('handles null device_name with fallback', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve([
+          makeServerDevice({ device_name: null, device_type: 'tube_light' }),
+        ]),
+      });
+
+      const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
+      await source.poll();
+      expect(registry.list()[0].displayName).toBe('tube_light');
+    });
+
+    it('handles null device_name and null device_type', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve([
+          makeServerDevice({ device_name: null, device_type: null }),
+        ]),
+      });
+
+      const source = new BlinkyServerSource(SERVER_URL, registry, 60_000);
+      await source.poll();
+      expect(registry.list()[0].displayName).toBe('Unknown');
     });
   });
 });

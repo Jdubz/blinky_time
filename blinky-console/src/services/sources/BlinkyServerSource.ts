@@ -23,6 +23,7 @@ export class BlinkyServerSource implements Source {
   readonly kind: SourceKind = 'blinky-server';
   readonly displayName: string;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
   private knownDeviceIds = new Set<string>();
 
   constructor(
@@ -41,12 +42,19 @@ export class BlinkyServerSource implements Source {
     return true; // HTTP + WebSocket available everywhere
   }
 
-  /** Start polling for devices. Performs an initial fetch immediately. */
+  /** Start polling for devices. Performs an initial fetch immediately.
+   *  Idempotent — calling while already started is a no-op. */
   async start(): Promise<void> {
+    if (this.pollTimer !== null) return;  // Already running
     logger.info('BlinkyServerSource: starting', { serverUrl: this.serverUrl });
     await this.poll();
     this.pollTimer = setInterval(() => {
-      this.poll().catch(() => {}); // errors handled inside poll
+      if (!this.pollInFlight) {
+        this.pollInFlight = true;
+        this.poll()
+          .catch(() => {})
+          .finally(() => { this.pollInFlight = false; });
+      }
     }, this.pollIntervalMs);
   }
 
@@ -59,13 +67,21 @@ export class BlinkyServerSource implements Source {
     logger.info('BlinkyServerSource: stopped');
   }
 
-  /** Fetch device list from server and register new devices. */
+  /** Fetch device list from server and update registry. */
   async poll(): Promise<void> {
     try {
       const resp = await fetch(`${this.serverUrl}/api/devices`, {
         signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
       });
       if (!resp.ok) return;
+
+      // Check content-type if present — reject HTML error pages but accept
+      // missing header (some proxies strip it).
+      const contentType = resp.headers?.get?.('content-type');
+      if (contentType && !contentType.includes('json')) {
+        logger.warn('BlinkyServerSource: non-JSON response', { contentType });
+        return;
+      }
 
       const devices: ServerDevice[] = await resp.json();
       const currentIds = new Set<string>();
@@ -77,23 +93,30 @@ export class BlinkyServerSource implements Source {
         const id = d.hardware_sn || d.id;
         currentIds.add(id);
 
-        if (!this.knownDeviceIds.has(id)) {
+        const displayName = d.device_name || d.device_type || 'Unknown';
+        const existing = this.registry.get(id);
+
+        if (existing) {
+          // Update display name if server has a better one
+          if (displayName !== 'Unknown' && existing.displayName !== displayName) {
+            existing.displayName = displayName;
+          }
+        } else if (!this.knownDeviceIds.has(id)) {
+          // New device — create transport binding and register
           const transport = new ServerWebSocketTransport(this.serverUrl, d.id);
-          const displayName = d.device_name || d.device_type || 'Unknown';
           const device = new Device(id, displayName, [{ source: this, transport }]);
           this.registry.upsert(device);
           logger.debug('BlinkyServerSource: discovered device', {
             id,
             name: displayName,
-            transport: d.transport,
+            serverTransport: d.transport,
           });
         }
       }
 
-      // Track which devices we know about (for future: detect removals)
       this.knownDeviceIds = currentIds;
     } catch {
-      // Server unreachable — silently skip this poll cycle.
+      // Server unreachable or non-JSON response — silently skip.
       // This is expected when running from Firebase (no local server).
     }
   }
@@ -106,6 +129,9 @@ export class BlinkyServerSource implements Source {
  * (same-origin), the probe succeeds and devices are auto-discovered.
  * If served from Firebase or localhost:3000 (Vite dev), the probe fails
  * fast (1s timeout) and the app runs in WebSerial-only mode.
+ *
+ * Note: with Vite dev proxy (localhost:3000 → localhost:8420), the probe
+ * succeeds because the proxy forwards /api/devices to the server.
  */
 export async function detectSameOriginServer(
   registry: DeviceRegistry,
@@ -114,14 +140,17 @@ export async function detectSameOriginServer(
     const resp = await fetch('/api/devices', {
       signal: AbortSignal.timeout(1_000),
     });
-    if (resp.ok) {
-      const source = new BlinkyServerSource(window.location.origin, registry);
-      await source.start();
-      logger.info('Same-origin blinky-server detected', {
-        origin: window.location.origin,
-      });
-      return source;
-    }
+    if (!resp.ok) return null;
+
+    const contentType = resp.headers?.get?.('content-type');
+    if (contentType && !contentType.includes('json')) return null;
+
+    const source = new BlinkyServerSource(window.location.origin, registry);
+    await source.start();
+    logger.info('Same-origin blinky-server detected', {
+      origin: window.location.origin,
+    });
+    return source;
   } catch {
     // Not served from blinky-server — WebSerial-only mode
   }

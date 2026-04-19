@@ -304,4 +304,52 @@ describe('ServerWebSocketTransport', () => {
       expect(transport.isSupported()).toBe(true);
     });
   });
+
+  describe('edge cases', () => {
+    it('throws if connect() called while connecting', async () => {
+      const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
+      const p1 = transport.connect();
+      await expect(transport.connect()).rejects.toThrow('already in progress');
+      await p1;
+    });
+
+    it('connect() is no-op when already connected', async () => {
+      const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
+      const events = collectEvents(transport);
+      await transport.connect();
+      events.length = 0;
+      await transport.connect(); // no-op
+      expect(events).toHaveLength(0); // no second connected event
+    });
+
+    it('disconnect() before connect emits disconnected without error', async () => {
+      const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
+      const events = collectEvents(transport);
+      await transport.disconnect();
+      expect(events).toContainEqual({ type: 'disconnected' });
+    });
+
+    it('send() after disconnect throws', async () => {
+      const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
+      await transport.connect();
+      await transport.disconnect();
+      await expect(transport.send('hello')).rejects.toThrow('not connected');
+    });
+
+    it('silently drops messages with neither data nor response', async () => {
+      const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
+      const events = collectEvents(transport);
+      await transport.connect();
+      events.length = 0;
+
+      mockWsInstance!.simulateMessage({ type: 'internal', device_id: DEVICE_ID });
+      expect(events).toHaveLength(0);
+    });
+
+    it('URL-encodes device ID with special characters', async () => {
+      const transport = new ServerWebSocketTransport(SERVER_URL, 'device with spaces');
+      await transport.connect();
+      expect(mockWsInstance?.url).toBe('ws://blinkyhost.local:8420/ws/device%20with%20spaces');
+    });
+  });
 });
