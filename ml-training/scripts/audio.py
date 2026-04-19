@@ -351,6 +351,22 @@ def _deep_merge(base: dict, overrides: dict) -> None:
             base[key] = value
 
 
+def compute_input_features(cfg: dict) -> int:
+    """Compute total input feature count from config (mel + optional extras).
+
+    Single source of truth for the feature-count calculation used in
+    train.py, evaluate.py, export_tflite.py, and prepare_dataset.py.
+    """
+    n_mels = cfg["audio"]["n_mels"]
+    if cfg.get("features", {}).get("use_delta", False):
+        return n_mels * 2
+    elif cfg.get("features", {}).get("use_band_flux", False):
+        return n_mels + 3
+    elif cfg.get("features", {}).get("use_hybrid", False):
+        return n_mels + 2
+    return n_mels
+
+
 def append_delta_features(mel: np.ndarray) -> np.ndarray:
     """Append first-order mel differences as additional input channels.
 
@@ -420,6 +436,12 @@ def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
     Output shape: (n_frames, n_mels + 2)
     """
     n_frames, n_mels = mel.shape
+    # Guard against double-append: raw mel should be ≤30 bands (v27 max).
+    # If n_mels > 30, it likely already has hybrid/delta/flux features appended.
+    assert n_mels <= 30, (
+        f"append_hybrid_features: got {n_mels} features, expected raw mel bands (≤30). "
+        f"Input may have been double-appended."
+    )
     extra = np.zeros((n_frames, 2), dtype=np.float32)
 
     if audio is not None and len(audio) >= n_fft:

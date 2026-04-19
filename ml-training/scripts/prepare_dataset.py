@@ -169,6 +169,7 @@ from scripts.audio import (
     append_band_flux_features,
     append_hybrid_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
+    compute_input_features,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
 )
@@ -1007,6 +1008,12 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
             # Save raw mel (before hybrid features) for spectral conditioning variant.
             # Spectral conditioning operates on mel bands, not hybrid features.
+            # NOTE: This is an alias (not a copy). This is safe because
+            # append_hybrid_features() returns a NEW array via np.concatenate,
+            # so `mel` gets rebound while `mel_raw` still points at the original.
+            # apply_spectral_conditioning() also copies internally. If a future
+            # refactor adds in-place modification of `mel` before this point,
+            # change to mel_raw = mel.copy().
             mel_raw = mel
 
             # Compute hybrid features (flatness + SuperFlux flux) inline if enabled.
@@ -1632,9 +1639,15 @@ def main():
                 # Get prefetched audio (or load synchronously if prefetch missed)
                 preloaded = None
                 if i in audio_futures:
+                    future = audio_futures.pop(i)
                     try:
-                        audio_data, _ = audio_futures.pop(i).result(timeout=120)
+                        audio_data, _ = future.result(timeout=120)
                         preloaded = audio_data
+                    except TimeoutError:
+                        future.cancel()  # Attempt to stop the background thread
+                        print(f"  WARNING: prefetch timed out for {audio_path.name} "
+                              f"(120s), cancelled", flush=True)
+                        # Fall back to loading inside process_file
                     except Exception as e:
                         print(f"  WARNING: prefetch failed for {audio_path.name}: "
                               f"{type(e).__name__}: {e}", flush=True)
@@ -1788,14 +1801,7 @@ def main():
                 print(f"    {elapsed:.1f}s  {fname}")
 
         # Check disk before merge
-        if use_delta:
-            expected_features = n_mels * 2
-        elif use_band_flux:
-            expected_features = n_mels + 3
-        elif use_hybrid:
-            expected_features = n_mels + 2
-        else:
-            expected_features = n_mels
+        expected_features = compute_input_features(cfg)
         merge_est_gb = sum(shard_counts) * chunk_frames * expected_features * 4 / (1024**3)
         _check_disk_space(output_dir, merge_est_gb * 1.2,
                           f"merge ({merge_est_gb:.1f} GB final array)")
@@ -1811,23 +1817,41 @@ def main():
         x_first = np.load(shard_dir / "X_0.npy", mmap_mode='r')
         x_features = x_first.shape[2]
         del x_first
-        X_out = np.lib.format.open_memmap(
-            str(output_dir / f"X_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=(total, chunk_frames, x_features))
-        y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
-        y_shape = (total,) + y_first.shape[1:]
-        del y_first
-        Y_out = np.lib.format.open_memmap(
-            str(output_dir / f"Y_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=y_shape)
 
-        has_teacher = (shard_dir / "T_0.npy").exists()
-        T_out = None
-        if has_teacher:
-            T_out = np.lib.format.open_memmap(
-                str(output_dir / f"Y_teacher_{split_name}.npy"), mode='w+',
-                dtype=np.float32, shape=(total, chunk_frames))
+        # Pre-allocate memmap output files. If disk is full, open_memmap
+        # can leave a partial/corrupt file. Clean up on failure.
+        memmap_paths = []
+        try:
+            x_path = output_dir / f"X_{split_name}.npy"
+            memmap_paths.append(x_path)
+            X_out = np.lib.format.open_memmap(
+                str(x_path), mode='w+',
+                dtype=np.float32, shape=(total, chunk_frames, x_features))
+            y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
+            y_shape = (total,) + y_first.shape[1:]
+            del y_first
+            y_path = output_dir / f"Y_{split_name}.npy"
+            memmap_paths.append(y_path)
+            Y_out = np.lib.format.open_memmap(
+                str(y_path), mode='w+',
+                dtype=np.float32, shape=y_shape)
 
+            has_teacher = (shard_dir / "T_0.npy").exists()
+            T_out = None
+            if has_teacher:
+                t_path = output_dir / f"Y_teacher_{split_name}.npy"
+                memmap_paths.append(t_path)
+                T_out = np.lib.format.open_memmap(
+                    str(t_path), mode='w+',
+                    dtype=np.float32, shape=(total, chunk_frames))
+        except Exception as e:
+            print(f"  FATAL: Failed to allocate memmap output (disk full?): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            for p in memmap_paths:
+                p.unlink(missing_ok=True)
+            sys.exit(1)
+
+        # Copy shards into memmap (don't delete yet — verify output first)
         offset = 0
         for s in range(shard_idx):
             X_s = np.load(shard_dir / f"X_{s}.npy")
@@ -1839,11 +1863,8 @@ def main():
                 T_s = np.load(shard_dir / f"T_{s}.npy")
                 T_out[offset:offset + n] = T_s
                 del T_s
-                (shard_dir / f"T_{s}.npy").unlink()
             offset += n
             del X_s, Y_s
-            (shard_dir / f"X_{s}.npy").unlink()
-            (shard_dir / f"Y_{s}.npy").unlink()
 
         X_out.flush()
         Y_out.flush()
@@ -1851,6 +1872,26 @@ def main():
             T_out.flush()
             pos_ratio = (T_out > 0.1).mean()
             print(f"  Teacher labels: {T_out.shape}, pos_ratio={pos_ratio:.3f}")
+
+        # Verify merged output file sizes before deleting shards.
+        # If disk corruption caused a silent write failure, shard data is
+        # still available for re-merge.
+        x_path = output_dir / f"X_{split_name}.npy"
+        y_path = output_dir / f"Y_{split_name}.npy"
+        expected_x_bytes = total * chunk_frames * x_features * 4  # float32
+        expected_y_bytes = total * np.prod(y_shape[1:]) * 4
+        x_actual = x_path.stat().st_size
+        y_actual = y_path.stat().st_size
+        # npy header is typically 128-256 bytes; allow generous margin
+        if x_actual < expected_x_bytes or y_actual < expected_y_bytes:
+            print(f"  FATAL: Merged output size mismatch! "
+                  f"X: {x_actual} bytes (expected >= {expected_x_bytes}), "
+                  f"Y: {y_actual} bytes (expected >= {expected_y_bytes}). "
+                  f"Shard directory preserved: {shard_dir}", flush=True)
+            del X_out, Y_out
+            if T_out is not None:
+                del T_out
+            sys.exit(1)
 
         del X_out, Y_out
         if T_out is not None:

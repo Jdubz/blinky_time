@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
-from scripts.audio import load_config
+from scripts.audio import compute_input_features, load_config
 
 
 def _atomic_torch_save(obj: object, path: Path) -> None:
@@ -577,17 +577,7 @@ def main():
             print(f"WARNING: Teacher labels not found at {teacher_path}, training without distillation")
 
     # Determine expected feature count from config (for slicing data with extra channels)
-    use_delta = cfg.get("features", {}).get("use_delta", False)
-    use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
-    if use_delta:
-        expected_features = cfg["audio"]["n_mels"] * 2
-    elif use_band_flux:
-        expected_features = cfg["audio"]["n_mels"] + 3
-    elif use_hybrid:
-        expected_features = cfg["audio"]["n_mels"] + 2  # mel + flatness + flux
-    else:
-        expected_features = cfg["audio"]["n_mels"]
+    expected_features = compute_input_features(cfg)
 
     hard_binary_threshold = cfg.get("labels", {}).get("hard_binary_threshold", 0.0)
     if hard_binary_threshold > 0:
@@ -700,17 +690,7 @@ def main():
     elif model_type == "frame_conv1d":
         from models.onset_conv1d import build_onset_conv1d
         # With delta/hybrid features, input has extra channels beyond n_mels
-        use_delta = cfg.get("features", {}).get("use_delta", False)
-        use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-        use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
-        if use_delta:
-            input_features = cfg["audio"]["n_mels"] * 2
-        elif use_band_flux:
-            input_features = cfg["audio"]["n_mels"] + 3
-        elif use_hybrid:
-            input_features = cfg["audio"]["n_mels"] + 2
-        else:
-            input_features = cfg["audio"]["n_mels"]
+        input_features = compute_input_features(cfg)
         model = build_onset_conv1d(
             n_mels=input_features,
             channels=cfg["model"]["channels"],
@@ -1122,6 +1102,13 @@ def main():
                 val_fn += (~pred_pos & ref_pos).sum().item()
 
         val_loss /= len(val_ds)
+
+        # Abort immediately if model has diverged (NaN/Inf loss)
+        if not math.isfinite(val_loss):
+            print(f"\nFATAL: val_loss is {val_loss} at epoch {epoch+1}. "
+                  f"Model has diverged — aborting training.", file=sys.stderr)
+            sys.exit(1)
+
         val_acc = val_correct / val_total
         val_precision = val_tp / max(val_tp + val_fp, 1)
         val_recall = val_tp / max(val_tp + val_fn, 1)
