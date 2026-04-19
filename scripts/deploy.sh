@@ -65,39 +65,87 @@ fi
 HEX_SIZE=$(stat -c%s "$HEX" 2>/dev/null || stat -f%z "$HEX")
 echo "  Firmware: b${BUILD} (${HEX_SIZE} bytes)"
 
-# ─── Step 2: Upload and flash ────────────────────────────────────────
+# ─── Step 2: Upload firmware ─────────────────────────────────────────
 
 echo ""
-echo "=== Uploading to blinkyhost and flashing all devices ==="
+echo "=== Uploading firmware to blinkyhost ==="
 
-RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/upload" \
+UPLOAD_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/upload" \
     -H "X-API-Key: ${API_KEY}" \
     -F "firmware=@${HEX};filename=blinky-things.ino.hex" \
-    --max-time 600 \
+    --max-time 30 \
     2>/dev/null) || fail "Upload failed (server unreachable or rejected)" 2
 
-# Parse result
-STATUS=$(echo "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','error'))" 2>/dev/null)
-MESSAGE=$(echo "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('message','?'))" 2>/dev/null)
+FW_PATH=$(echo "$UPLOAD_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('firmware_path',''))" 2>/dev/null)
+echo "  Uploaded: ${FW_PATH}"
+
+if [[ -z "$FW_PATH" ]]; then
+    fail "Upload returned no firmware_path" 2
+fi
+
+# ─── Step 3: Flash all devices ───────────────────────────────────────
 
 echo ""
-echo "$RESULT" | python3 -c "
+echo "=== Flashing all devices ==="
+
+FLASH_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/flash" \
+    -H "X-API-Key: ${API_KEY}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"firmware_path\": \"${FW_PATH}\"}" \
+    --max-time 10 \
+    2>/dev/null) || fail "Flash request failed" 2
+
+JOB_ID=$(echo "$FLASH_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null)
+DEVICE_COUNT=$(echo "$FLASH_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('devices',0))" 2>/dev/null)
+echo "  Job: ${JOB_ID} (${DEVICE_COUNT} devices)"
+
+if [[ -z "$JOB_ID" ]]; then
+    fail "Flash returned no job_id" 2
+fi
+
+# ─── Step 4: Poll for flash completion ───────────────────────────────
+
+echo ""
+echo "=== Waiting for flash to complete ==="
+
+for i in $(seq 1 60); do  # 60 × 5s = 5 min max
+    sleep 5
+    JOB_STATUS=$(curl -sf "${BLINKY_SERVER}/api/fleet/jobs/${JOB_ID}" 2>/dev/null)
+    STATUS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
+    PROGRESS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('progressMessage',''))" 2>/dev/null)
+
+    echo "  [${i}] ${STATUS}: ${PROGRESS}"
+
+    if [[ "$STATUS" == "complete" ]]; then
+        echo ""
+        echo "$JOB_STATUS" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-print(f'  Result: {d.get(\"message\", \"?\")}')
-for dev_id, info in d.get('per_device', {}).items():
+r = d.get('result', {})
+print(f'  Result: {r.get(\"message\", \"?\")}')
+for dev_id, info in r.get('per_device', {}).items():
     flash = info.get('flash', '?')
     ver = info.get('version') or '?'
     name = info.get('device_name') or '?'
     ok = '✓' if flash == 'ok' else '✗'
     print(f'    {dev_id}  {name:20s}  flash={flash} {ok}  version={ver}')
 "
+        FLASH_STATUS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('result',{}).get('status','error'))" 2>/dev/null)
+        if [[ "$FLASH_STATUS" != "ok" ]]; then
+            fail "Flash completed with errors" 2
+        fi
+        break
+    elif [[ "$STATUS" == "error" ]]; then
+        ERROR=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('error','unknown'))" 2>/dev/null)
+        fail "Flash failed: ${ERROR}" 2
+    fi
+done
 
-if [[ "$STATUS" != "ok" ]]; then
-    fail "Flash failed: ${MESSAGE}" 2
+if [[ "$STATUS" != "complete" ]]; then
+    fail "Flash timed out (5 min). Check server logs." 2
 fi
 
-# ─── Step 3: Reset all devices to defaults ────────────────────────────
+# ─── Step 5: Reset all devices to defaults ────────────────────────────
 # Settings persist in flash across firmware updates. Stale values from
 # experiments silently corrupt test results. Always reset after deploy.
 
