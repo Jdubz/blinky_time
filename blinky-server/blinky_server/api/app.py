@@ -118,6 +118,12 @@ def _mount_frontend(app: FastAPI) -> None:
     exist, and falls back to index.html for any other path — the standard SPA
     deep-link pattern. Reserved API and WebSocket namespaces are left alone
     so genuine 404s there still surface as 404s instead of an HTML page.
+
+    The static dir (blinky-server/web/) is gitignored and must be built:
+        cd blinky-console && npm run build
+    This outputs to ../blinky-server/web/ (vite.config.ts outDir).
+    If the dir is absent, the SPA mount is silently skipped and the server
+    runs API-only — this is the normal state on a fresh clone.
     """
     static_dir = _resolve_static_dir()
     if not static_dir.is_dir():
