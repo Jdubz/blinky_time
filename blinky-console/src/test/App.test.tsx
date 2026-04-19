@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import App from '../App';
+import { MemoryRouter } from 'react-router-dom';
+import { DeviceDetail } from '../routes/DeviceDetail';
 import type { UseSerialReturn } from '../hooks/useSerial';
 
 // Mock the useSerial hook with proper typing
@@ -54,7 +55,7 @@ vi.mock('../hooks/useSerial', () => ({
   useSerial: () => mockUseSerial,
 }));
 
-describe('App', () => {
+describe('DeviceDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset mock state
@@ -68,12 +69,20 @@ describe('App', () => {
   });
 
   it('renders the main application', () => {
-    render(<App />);
+    render(
+      <MemoryRouter>
+        <DeviceDetail />
+      </MemoryRouter>
+    );
     expect(screen.getByText('Blinky Console')).toBeInTheDocument();
   });
 
   it('renders all main sections', () => {
-    render(<App />);
+    render(
+      <MemoryRouter>
+        <DeviceDetail />
+      </MemoryRouter>
+    );
 
     // Connection bar
     expect(screen.getByText('Blinky Console')).toBeInTheDocument();
@@ -92,12 +101,20 @@ describe('App', () => {
 
   describe('connection flow', () => {
     it('shows connect button when disconnected', () => {
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
       expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
     });
 
     it('calls connect when connect button is clicked', () => {
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
@@ -106,14 +123,22 @@ describe('App', () => {
 
     it('shows disconnect button when connected', () => {
       mockUseSerial.connectionState = 'connected';
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     });
 
     it('calls disconnect when disconnect button is clicked', () => {
       mockUseSerial.connectionState = 'connected';
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
 
@@ -128,7 +153,11 @@ describe('App', () => {
         test: [{ name: 'test', value: 1, type: 'uint8' as const, cat: 'test', min: 0, max: 255 }],
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       // Stream button should be disabled
       const streamButton = screen.getByRole('button', { name: 'Start Stream' });
@@ -141,7 +170,11 @@ describe('App', () => {
 
     it('enables controls when connected', () => {
       mockUseSerial.connectionState = 'connected';
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       // Stream button should be enabled
       const streamButton = screen.getByRole('button', { name: 'Start Stream' });
@@ -152,7 +185,11 @@ describe('App', () => {
   describe('WebSerial not supported', () => {
     it('shows warning when WebSerial is not supported', () => {
       mockUseSerial.isSupported = false;
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       expect(screen.getByText(/WebSerial not supported/)).toBeInTheDocument();
     });
@@ -173,7 +210,11 @@ describe('App', () => {
         },
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       expect(screen.getByText(/Blinky Time v2.0.0/)).toBeInTheDocument();
       expect(screen.getByText(/256 LEDs/)).toBeInTheDocument();
@@ -190,7 +231,11 @@ describe('App', () => {
         ],
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       // Audio settings are in the Inputs tab (default)
       const checkbox = screen.getByRole('checkbox');
@@ -209,7 +254,11 @@ describe('App', () => {
         test: [{ name: 'test', value: 1, type: 'uint8' as const, cat: 'test', min: 0, max: 255 }],
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -222,7 +271,11 @@ describe('App', () => {
         test: [{ name: 'test', value: 1, type: 'uint8' as const, cat: 'test', min: 0, max: 255 }],
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Load' }));
 
@@ -235,7 +288,11 @@ describe('App', () => {
         test: [{ name: 'test', value: 1, type: 'uint8' as const, cat: 'test', min: 0, max: 255 }],
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 
@@ -246,7 +303,11 @@ describe('App', () => {
   describe('audio streaming', () => {
     it('calls toggleStreaming when stream button is clicked', () => {
       mockUseSerial.connectionState = 'connected';
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Start Stream' }));
 
@@ -267,7 +328,11 @@ describe('App', () => {
         z: 0.15,
       };
 
-      render(<App />);
+      render(
+        <MemoryRouter>
+          <DeviceDetail />
+        </MemoryRouter>
+      );
 
       // Audio values displayed in header (percussion removed - shown via indicators instead)
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();

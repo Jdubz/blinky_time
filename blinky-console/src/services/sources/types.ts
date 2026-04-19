@@ -20,6 +20,21 @@ import type { Transport } from '../transport';
 
 export type SourceKind = 'webserial' | 'webbluetooth' | 'blinky-server';
 
+/** Device as reported by blinky-server's GET /api/devices response. */
+export interface ServerDevice {
+  id: string;
+  port: string;
+  platform: string;
+  transport: string;
+  state: string;
+  version: string | null;
+  device_type: string | null;
+  device_name: string | null;
+  configured: boolean;
+  hardware_sn: string | null;
+  ble_address: string | null;
+}
+
 export interface Source {
   readonly kind: SourceKind;
   readonly displayName: string;
@@ -48,6 +63,8 @@ export interface TransportBinding {
  */
 export class Device {
   readonly transports: TransportBinding[];
+  /** Firmware version reported by the device (e.g., "b130"). Set by sources. */
+  public version: string | null = null;
 
   constructor(
     readonly id: string,

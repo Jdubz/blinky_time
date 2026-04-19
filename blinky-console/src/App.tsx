@@ -1,202 +1,29 @@
-import { useState } from 'react';
-import { useSerial } from './hooks/useSerial';
-import { useNetworkStatus } from './hooks/useNetworkStatus';
-import { ConnectionBar } from './components/ConnectionBar';
-import { SettingsPanel } from './components/SettingsPanel';
-import { AudioVisualizer } from './components/AudioVisualizer';
-import { TabView } from './components/TabView';
-import { OfflineBanner } from './components/OfflineBanner';
-import { SerialConsoleModal } from './components/SerialConsoleModal';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { GeneratorSelector } from './components/GeneratorSelector';
-import { EffectSelector } from './components/EffectSelector';
+import { HashRouter, Routes, Route } from 'react-router-dom';
+import { DeviceList } from './routes/DeviceList';
+import { DeviceDetail } from './routes/DeviceDetail';
+import { Fleet } from './routes/Fleet';
 import './styles.css';
 
+/**
+ * Root component — routes between device list and device detail views.
+ *
+ * Uses HashRouter (not BrowserRouter) so deep links work both when served
+ * from blinky-server (which has SPA fallback) and from Firebase Hosting
+ * (which uses firebase.json rewrites). Hash routing avoids needing any
+ * server-side configuration.
+ *
+ * When only one device is discovered, DeviceList auto-navigates to it,
+ * preserving the pre-routing single-device UX.
+ */
 function App() {
-  const {
-    connectionState,
-    isSupported,
-    errorMessage,
-    deviceInfo,
-    settingsByCategory,
-    currentGenerator,
-    currentEffect,
-    availableGenerators,
-    availableEffects,
-    isStreaming,
-    audioData,
-    batteryData,
-    batteryStatusData,
-    musicModeData,
-    onTransientEvent,
-    consoleLines,
-    sendCommand,
-    connect,
-    disconnect,
-    setSetting,
-    toggleStreaming,
-    saveSettings,
-    loadSettings,
-    resetDefaults,
-    refreshSettings,
-    requestBatteryStatus,
-    setGenerator,
-    setEffect,
-  } = useSerial();
-
-  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
-  const isOnline = useNetworkStatus();
-  const isDisabled = connectionState !== 'connected';
-
-  const settingsPanelProps = {
-    onSettingChange: setSetting,
-    onSave: saveSettings,
-    onLoad: loadSettings,
-    onReset: resetDefaults,
-    onRefresh: refreshSettings,
-    disabled: isDisabled,
-  };
-
   return (
-    <div className="app">
-      <OfflineBanner isOnline={isOnline} />
-      <ConnectionBar
-        connectionState={connectionState}
-        deviceInfo={deviceInfo}
-        batteryData={batteryData}
-        batteryStatusData={batteryStatusData}
-        isSupported={isSupported}
-        errorMessage={errorMessage}
-        onConnect={connect}
-        onDisconnect={disconnect}
-        onOpenConsole={() => setIsConsoleOpen(true)}
-        onRequestBatteryStatus={requestBatteryStatus}
-      />
-
-      <main className="main-content">
-        <TabView
-          tabs={[
-            {
-              id: 'inputs',
-              label: 'Inputs',
-              content: (
-                <div className="tab-panel">
-                  <div className="tab-panel-visualizer">
-                    <ErrorBoundary
-                      fallback={
-                        <div className="audio-visualizer-error">
-                          <div className="error-boundary-content">
-                            <div className="error-boundary-icon">⚠️</div>
-                            <h3>Audio Visualizer Error</h3>
-                            <p>
-                              The audio visualizer encountered an error. Try restarting the stream.
-                            </p>
-                            <button
-                              className="btn btn-primary"
-                              onClick={() => window.location.reload()}
-                            >
-                              Reload Page
-                            </button>
-                          </div>
-                        </div>
-                      }
-                    >
-                      <AudioVisualizer
-                        audioData={audioData}
-                        musicModeData={musicModeData}
-                        isStreaming={isStreaming}
-                        onToggleStreaming={toggleStreaming}
-                        disabled={isDisabled}
-                        onTransientEvent={onTransientEvent}
-                        connectionState={connectionState}
-                      />
-                    </ErrorBoundary>
-                  </div>
-                  <div className="tab-panel-settings">
-                    <SettingsPanel
-                      {...settingsPanelProps}
-                      settingsByCategory={{
-                        audio: settingsByCategory.audio || [],
-                        agc: settingsByCategory.agc || [],
-                        freq: settingsByCategory.freq || [],
-                      }}
-                    />
-                  </div>
-                </div>
-              ),
-            },
-            {
-              id: 'generators',
-              label: 'Generators',
-              content: (
-                <div className="tab-panel">
-                  <div className="tab-panel-settings-full">
-                    <GeneratorSelector
-                      currentGenerator={currentGenerator}
-                      availableGenerators={availableGenerators}
-                      onGeneratorChange={setGenerator}
-                      disabled={isDisabled}
-                    />
-                    <SettingsPanel
-                      {...settingsPanelProps}
-                      settingsByCategory={{
-                        // Audio generator settings are in the 'audiovis' category
-                        ...(currentGenerator === 'audio'
-                          ? { audiovis: settingsByCategory.audiovis || [] }
-                          : { [currentGenerator]: settingsByCategory[currentGenerator] || [] }),
-                        // Include related categories for fire generator
-                        ...(currentGenerator === 'fire' && {
-                          firemusic: settingsByCategory.firemusic || [],
-                          fireorganic: settingsByCategory.fireorganic || [],
-                        }),
-                      }}
-                    />
-                  </div>
-                </div>
-              ),
-            },
-            {
-              id: 'effects',
-              label: 'Effects',
-              content: (
-                <div className="tab-panel">
-                  <div className="tab-panel-settings-full">
-                    <EffectSelector
-                      currentEffect={currentEffect}
-                      availableEffects={availableEffects}
-                      onEffectChange={setEffect}
-                      disabled={isDisabled}
-                    />
-                    {currentEffect === 'none' ? (
-                      <div className="effect-info">
-                        <p className="effect-description">
-                          No effect applied - using original generator colors.
-                        </p>
-                      </div>
-                    ) : (
-                      <SettingsPanel
-                        {...settingsPanelProps}
-                        settingsByCategory={{
-                          effect: settingsByCategory.effect || [],
-                        }}
-                      />
-                    )}
-                  </div>
-                </div>
-              ),
-            },
-          ]}
-        />
-      </main>
-
-      <SerialConsoleModal
-        isOpen={isConsoleOpen}
-        onClose={() => setIsConsoleOpen(false)}
-        onSendCommand={sendCommand}
-        consoleLines={consoleLines}
-        disabled={isDisabled}
-      />
-    </div>
+    <HashRouter>
+      <Routes>
+        <Route path="/" element={<DeviceList />} />
+        <Route path="/device/:deviceId" element={<DeviceDetail />} />
+        <Route path="/fleet" element={<Fleet />} />
+      </Routes>
+    </HashRouter>
   );
 }
 

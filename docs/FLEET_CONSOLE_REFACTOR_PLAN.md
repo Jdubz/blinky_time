@@ -6,9 +6,9 @@ Refactor `blinky-console` from a single-device WebSerial UI into a fleet managem
 
 **Phase 1 — Plumbing.** ✅ Complete.
 **Phase 2 — Transport abstraction.** ✅ Complete.
-**Phase 3 — Server-backed transport.** ⏳ Not started.
-**Phase 4 — Multi-device UI.** ⏳ Not started.
-**Phase 5 — Fleet operations.** ⏳ Not started.
+**Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) pending.
+**Phase 4 — Multi-device UI.** ✅ Complete (M11-M13).
+**Phase 5 — Fleet operations.** ✅ M14 complete. M15 (flash/deploy UI) pending.
 **Phase 6 — Web Bluetooth.** ⏳ Deferred.
 
 See the per-milestone status column in the [Milestones](#milestones) tables below for commit hashes.
@@ -145,23 +145,23 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M8 | ⏳ | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
-| M9 | ⏳ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/fleet/status`. | `blinky-console/src/services/sources/` |
-| M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) | `blinky-console/src/components/Settings/` |
+| M8 | ✅ | `ServerWebSocketTransport` — wraps `/ws/{device_id}`, unwraps the `{type, device_id, data}` envelope. | `blinky-console/src/services/transport/` |
+| M9 | ✅ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/devices`. | `blinky-console/src/services/sources/` |
+| M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) — deferred, same-origin auto-detection covers primary use case | `blinky-console/src/components/Settings/` |
 
 ### Phase 4 — Multi-device UI — ⏳ not started
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M11 | ⏳ | Add routing (React Router). Move current single-device tabs to `/devices/:sn` route. No list view yet — opening the app auto-navigates to the only device, preserving today's UX when only one is available. | `blinky-console/src/App.tsx`, new `routes/` |
-| M12 | ⏳ | `/devices` list view aggregating all Sources by SN. Device cards show transport selector (WebSerial / BLE / via server). Switching transport preserves route state. | `blinky-console/src/routes/DevicesList.tsx`, `src/components/DeviceCard/` |
-| M13 | ⏳ | Real-time device list updates: either poll `GET /api/devices` from `BlinkyServerSource`, or add a `device_connected`/`device_disconnected` event stream to `blinky-server` and subscribe. Decision during implementation. | both repos, TBD |
+| M11 | ✅ | Add routing (React Router). Move current single-device tabs to `/device/:id` route. DeviceList auto-navigates to single device. | `blinky-console/src/App.tsx`, `src/routes/`, `src/hooks/useDevices.ts` |
+| M12 | ✅ | Device-registry binding: DeviceDetail looks up Device by route param, binds its protocol to serialService. SerialService proxies events across protocol swaps. | `serial.ts`, `DeviceDetail.tsx` |
+| M13 | ✅ | Real-time device list updates via polling. BlinkyServerSource polls every 10s, registry notifies subscribers, useDevices re-renders DeviceList. WebSocket push deferred. | Already implemented in M9 |
 
 ### Phase 5 — Fleet operations — ⏳ not started
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M14 | ⏳ | Fleet-level command UI (apply generator/effect/settings to all or to selection) via existing `/api/fleet/*` endpoints | `blinky-console/src/routes/Fleet.tsx` |
+| M14 | ✅ | Fleet-level command UI: generator, effect, settings (save/load/defaults), custom command. Accessible from DeviceList header. | `blinky-console/src/routes/Fleet.tsx` |
 | M15 | ⏳ | Flash/deploy UI gated behind an auth mechanism (TBD — see open questions). Hidden entirely when the current server doesn't accept the client's credentials. | `blinky-console/src/routes/Firmware.tsx`, `blinky-server` auth |
 
 ### Phase 6 — Web Bluetooth — ⏳ deferred
@@ -194,6 +194,21 @@ Preflight checks completed 2026-04-19:
 - `blinky-server`'s device model and wire protocol already align with the console's schemas (settings shape is identical; `DeviceResponse` is a superset of the console's `DeviceInfo`). Envelope wrapping on `/ws/{device_id}` is the only transformation `ServerWebSocketTransport` needs to handle.
 - No CDN / runtime-internet dependencies in the current `blinky-console` build (all npm deps bundled, no external URLs in `src/`, fonts are system stack in `src/styles.css:39`, `index.html` references only local assets).
 - `blinky-server` does not currently serve static files — `StaticFiles` mount is a clean addition.
+
+## Phase 2 post-review fixes (April 2026)
+
+- **Zombie state on `done: true`:** `startReading()` now calls `disconnect()` if the read loop exits cleanly with `isReading` still set (stream closed externally without error).
+- **Schema validation failure:** `getDeviceInfo()` returns `null` instead of raw unvalidated data when Zod schema fails. Prevents type-unsafe access to missing fields.
+- **No-SN path clarified:** `WebSerialSource.pickAndConnect()` comment documents that the synthesised-ID path is degraded-but-functional (device works, dedup doesn't).
+- **Build targets documented:** `build` → `../blinky-server/web/` (local server), `build:firebase` → `dist/` (Firebase deploy). CI uses `build:firebase`.
+
+### Known issues for Phase 3+
+
+- `disconnect()` emits `disconnected` unconditionally (even if never connected). By-design per types.ts contract but can cause spurious UI transitions. Consumers must tolerate.
+- `handleLine` has 6 near-identical try/catch dispatch blocks. A dispatch table helper would cut ~80 lines. Follow-up cleanup.
+- `sendJsonResult` wrapper is unnecessary indirection — inline at 4 call sites.
+- `validateCommand` silently mutates invalid commands instead of rejecting. Consider throwing `COMMAND_INVALID` on pattern failure.
+- `getConnectionState()` collapses readable/writable into connected. No current consumer uses them independently. Deprecate or remove the method.
 
 ## Non-requirements
 

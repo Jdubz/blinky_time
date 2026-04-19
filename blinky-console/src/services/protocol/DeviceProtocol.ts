@@ -303,12 +303,14 @@ export class DeviceProtocol {
 
     const validation = DeviceInfoSchema.safeParse(result.data);
     if (!validation.success) {
-      logger.warn('Device info validation failed', {
-        errors: validation.error.issues,
-        data: result.data,
-      });
-      // Graceful degradation — return the raw data.
-      return result.data;
+      logger.warn(
+        'Device info validation failed — returning null (raw data may be missing required fields)',
+        {
+          errors: validation.error.issues,
+          data: result.data,
+        }
+      );
+      return null;
     }
 
     logger.debug('Device info received', { device: validation.data.device });

@@ -42,8 +42,13 @@ export class WebSerialSource implements Source {
     const displayName = info && info.device.configured ? info.device.name : 'Unconfigured Device';
 
     if (!info?.sn) {
+      // Degraded-but-functional path: device works normally (settings, streaming,
+      // etc.) but can't be matched to the same device discovered via server or BLE.
+      // Reconnecting creates a new registry entry each time. This happens with
+      // old firmware that doesn't emit `sn` in `json info`, or on getDeviceInfo timeout.
       logger.warn(
-        'WebSerialSource: device did not report sn — using synthesised id (cross-source dedup will not work for this device)',
+        'WebSerialSource: device did not report sn — using synthesised id. ' +
+          'Device is fully functional but cross-source dedup will not work.',
         { id }
       );
     }

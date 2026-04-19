@@ -1,4 +1,10 @@
-"""Firmware compilation and fleet-wide flash routes.
+"""Firmware upload, flash, and fleet management routes.
+
+Upload and flash are separate operations:
+  POST /api/fleet/upload  — accept .hex file, store it, return path (instant)
+  POST /api/fleet/flash   — flash stored firmware to devices (background job)
+  GET  /api/fleet/jobs/{id} — poll flash job progress
+  GET  /api/fleet/jobs      — list all flash jobs
 
 Device-specific flash is in routes_devices.py (POST /devices/{id}/flash).
 """
@@ -8,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -17,53 +24,146 @@ from .deps import get_fleet, require_api_key
 from .models import FlashRequest
 
 log = logging.getLogger(__name__)
+router = APIRouter()
 
-router = APIRouter(tags=["firmware"])
-
-
-@router.post("/firmware/compile")
-async def compile_firmware(platform: str = "nrf52840") -> dict[str, Any]:
-    """Compile firmware for a platform. Returns path to hex file."""
-    from ..firmware.compile import compile_firmware as _compile
-
-    result = await asyncio.to_thread(_compile, platform)
-    if result["status"] != "ok":
-        raise HTTPException(500, result["message"])
-    return result
+# Persistent firmware metadata — survives server restarts (not reboots).
+_FIRMWARE_META_PATH = Path("/tmp/blinky-firmware-current.json")
 
 
-@router.post("/firmware/compile-dfu")
-async def compile_dfu_package(platform: str = "nrf52840") -> dict[str, Any]:
-    """Compile firmware and generate DFU zip package."""
-    from ..firmware.compile import compile_firmware as _compile
-    from ..firmware.compile import generate_dfu_package
+def _save_firmware_meta(meta: dict[str, Any]) -> None:
+    """Persist current firmware metadata to disk."""
+    import json
 
-    compile_result = await asyncio.to_thread(_compile, platform)
-    if compile_result["status"] != "ok":
-        raise HTTPException(500, compile_result["message"])
+    try:
+        _FIRMWARE_META_PATH.write_text(json.dumps(meta))
+    except OSError:
+        log.warning("Failed to persist firmware metadata to %s", _FIRMWARE_META_PATH)
 
-    dfu_result = await asyncio.to_thread(generate_dfu_package, compile_result["hex_path"])
-    if dfu_result["status"] != "ok":
-        raise HTTPException(500, dfu_result["message"])
+
+def _load_firmware_meta() -> dict[str, Any] | None:
+    """Load persisted firmware metadata, or None if not available."""
+    import json
+
+    try:
+        if _FIRMWARE_META_PATH.is_file():
+            return json.loads(_FIRMWARE_META_PATH.read_text())  # type: ignore[no-any-return]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+# ── Upload (instant) ─────────────────────────────────────────────────
+
+
+@router.post("/fleet/upload", dependencies=[Depends(require_api_key)])
+async def fleet_upload(
+    firmware: UploadFile,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """Upload a firmware .hex file to the server. Does NOT flash.
+
+    Accepts an optional `version` form field (e.g., "b130") to record
+    the build number. If omitted, firmware is stored without version
+    tracking (flash still works, but version comparison is unavailable).
+
+    Returns the stored firmware path for use with POST /api/fleet/flash.
+    """
+    import re
+
+    if not firmware.filename or not firmware.filename.endswith(".hex"):
+        raise HTTPException(400, "Firmware must be a .hex file")
+    if version is not None and not re.match(r"^b\d+$", version):
+        raise HTTPException(400, f"Invalid version format '{version}' (expected: b<number>)")
+
+    content = await firmware.read()
+    if len(content) < 1000:
+        raise HTTPException(400, f"Firmware file too small ({len(content)} bytes)")
+    if len(content) > 5_000_000:
+        raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
+
+    # Use a stable filename (not user-controlled) to avoid path issues.
+    # Overwriting is intentional — only the latest upload matters.
+    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / "firmware.hex"
+    hex_path.parent.mkdir(parents=True, exist_ok=True)
+    hex_path.write_bytes(content)
+
+    log.info("Fleet upload: stored firmware.hex (%d bytes, version=%s)", len(content), version)
+
+    # Persist firmware metadata for version tracking
+    import datetime
+
+    meta = {
+        "version": version,
+        "firmware_path": str(hex_path),
+        "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "size_bytes": len(content),
+    }
+    _save_firmware_meta(meta)
 
     return {
         "status": "ok",
-        "hex_path": compile_result["hex_path"],
-        "zip_path": dfu_result["zip_path"],
-        "message": "Compiled and packaged",
+        "firmware_path": str(hex_path),
+        "firmware_size": len(content),
+        "version": version,
+        "message": f"Firmware stored ({len(content)} bytes). Use POST /api/fleet/flash to deploy.",
     }
+
+
+# ── Firmware status ──────────────────────────────────────────────────
+
+
+@router.get("/fleet/firmware")
+async def fleet_firmware_status() -> dict[str, Any]:
+    """Get current firmware version and per-device update status.
+
+    Returns the uploaded firmware version (if known) and each connected
+    device's version with an `up_to_date` flag.
+    """
+    meta = _load_firmware_meta()
+    current_version = meta.get("version") if meta else None
+    firmware_available = meta is not None and Path(meta.get("firmware_path", "")).is_file()
+
+    fleet = get_fleet()
+    devices = []
+    out_of_date = 0
+    for d in fleet.get_all_devices():
+        if d.state != DeviceState.CONNECTED:
+            continue
+        is_current = (
+            current_version is not None and d.version is not None and d.version == current_version
+        )
+        if not is_current and current_version:
+            out_of_date += 1
+        devices.append(
+            {
+                "id": d.id,
+                "device_name": d.device_name,
+                "version": d.version,
+                "up_to_date": is_current,
+            }
+        )
+
+    return {
+        "current_version": current_version,
+        "firmware_path": meta.get("firmware_path") if meta else None,
+        "firmware_available": firmware_available,
+        "uploaded_at": meta.get("uploaded_at") if meta else None,
+        "devices": devices,
+        "out_of_date_count": out_of_date,
+    }
+
+
+# ── Flash (background job) ───────────────────────────────────────────
 
 
 @router.post("/fleet/flash", dependencies=[Depends(require_api_key)])
 async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
-    """Flash firmware to ALL connected nRF52840 devices sequentially.
+    """Flash firmware to all connected nRF52840 devices.
 
-    Flashes each device one at a time to avoid USB contention.
-    Returns per-device results.
+    Returns immediately with a job_id. Poll GET /api/fleet/jobs/{job_id}
+    for progress. Each device is flashed sequentially (UF2 bootloader
+    entry causes USB bus resets that disconnect siblings).
     """
-    from pathlib import Path
-
-    # Validate firmware path — restrict to allowed directories
     firmware = Path(body.firmware_path).resolve()
     allowed_dirs = [Path("/tmp"), Path.home()]
     if not any(firmware.is_relative_to(d) for d in allowed_dirs):
@@ -72,26 +172,83 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
     fleet = get_fleet()
-    # Include CONNECTED devices and DFU_RECOVERY devices (stuck in bootloader)
     flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
     devices = [
         d
         for d in fleet.get_all_devices()
         if d.platform == "nrf52840" and d.state in flashable_states
     ]
-
     if not devices:
         raise HTTPException(404, "No flashable nRF52840 devices")
 
-    # Set recovery firmware early so auto-recovery works if server crashes mid-DFU
     fleet.set_recovery_firmware(str(firmware))
+    device_ids = [d.id for d in devices]
 
-    results = {}
-    fleet.pause_discovery()  # Prevent BleakScanner conflict during fleet DFU
+    jm = _get_flash_job_manager()
 
-    # Hold reconnect on ALL serial devices for the entire fleet flash.
-    # UF2 bootloader entry causes USB bus resets that disrupt sibling
-    # devices on the same hub — prevent reconnect attempts during instability.
+    async def _run(job: Any) -> dict[str, Any]:
+        return await _flash_fleet_background(fleet, device_ids, firmware, job)
+
+    job = jm.submit("fleet-flash", _run)
+
+    return {
+        "job_id": job.id,
+        "status": "submitted",
+        "devices": len(devices),
+        "message": f"Flashing {len(devices)} device(s) in background",
+    }
+
+
+# ── Job status ────────────────────────────────────────────────────────
+
+
+@router.get("/fleet/jobs/{job_id}")
+async def get_flash_job(job_id: str) -> dict[str, Any]:
+    """Get the status of a fleet flash job."""
+    jm = _get_flash_job_manager()
+    job = jm.get(job_id)
+    if not job:
+        raise HTTPException(404, f"Job {job_id} not found")
+    return dict(job.to_dict())
+
+
+@router.get("/fleet/jobs")
+async def list_flash_jobs() -> list[dict[str, Any]]:
+    """List all fleet flash jobs."""
+    jm = _get_flash_job_manager()
+    return [dict(j.to_dict()) for j in jm.list_recent()]
+
+
+# ── Flash job manager singleton ───────────────────────────────────────
+
+_flash_jm: Any = None
+
+
+def _get_flash_job_manager() -> Any:
+    global _flash_jm
+    if _flash_jm is None:
+        from ..testing.job_manager import JobManager
+
+        _flash_jm = JobManager(jobs_dir=Path("/tmp/blinky-flash-jobs"))
+    return _flash_jm
+
+
+# ── Background flash implementation ──────────────────────────────────
+
+
+async def _flash_fleet_background(
+    fleet: Any,
+    device_ids: list[str],
+    firmware: Path,
+    job: Any,
+) -> dict[str, Any]:
+    """Flash all devices sequentially. Runs as a background job with progress."""
+    from ..firmware import upload_firmware
+
+    results: dict[str, dict[str, Any]] = {}
+    total = len(device_ids)
+
+    fleet.pause_discovery()
     all_serial_ids = [
         d.id for d in fleet.get_all_devices() if d.transport.transport_type == "serial"
     ]
@@ -99,236 +256,64 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         fleet.hold_reconnect(sid, 600)
 
     try:
-        for device in devices:
-            log.info(
-                "Fleet flash: flashing %s (%s, state=%s)...",
-                device.id[:12],
-                device.port,
-                device.state.value,
-            )
+        for i, dev_id in enumerate(device_ids):
+            device = fleet.get_device(dev_id)
+            if not device:
+                results[dev_id[:12]] = {"status": "error", "message": "Device not found"}
+                continue
 
-            hold_secs = 360 if device.state == DeviceState.DFU_RECOVERY else 120
-            fleet.hold_reconnect(device.id, hold_secs)
+            dev_label = f"{device.id[:12]} ({device.device_name or 'unknown'})"
+            job.progress = int((i / total) * 90)
+            job.progress_message = f"Flashing {dev_label} ({i + 1}/{total})"
+            log.info("Fleet flash: %s", job.progress_message)
+
+            fleet.hold_reconnect(device.id, 120)
 
             try:
-                # Use central dispatch — no fallback, no duplicated logic
-                from ..firmware import upload_firmware
-
                 result = await upload_firmware(device, str(firmware))
                 results[device.id[:12]] = result
-
-                # STOP ON FIRST FAILURE — do not flash remaining devices
                 if result.get("status") != "ok":
                     log.error(
-                        "Fleet flash STOPPED: %s failed (%s). Remaining devices not flashed.",
-                        device.id[:12],
-                        result.get("message", "unknown"),
+                        "Fleet flash STOPPED: %s failed (%s)", dev_label, result.get("message")
                     )
                     break
             except Exception as e:
                 results[device.id[:12]] = {"status": "error", "message": str(e)}
-                log.error("Fleet flash STOPPED: %s exception: %s", device.id[:12], e)
+                log.error("Fleet flash STOPPED: %s exception: %s", dev_label, e)
                 break
             finally:
                 device.state = DeviceState.DISCONNECTED
-                # Don't resume_reconnect here — wait until ALL devices are
-                # flashed and USB has stabilized (see below).
 
             await asyncio.sleep(3)
     finally:
-        # Wait for USB CDC to stabilize after all flashes before reconnecting.
-        # Without this delay, reconnection attempts fail with "Broken pipe"
-        # because the kernel's CDC state is stale from device reboots.
-        log.info("Fleet flash complete. Waiting 10s for USB stabilization...")
+        job.progress_message = "Waiting for USB stabilization"
+        log.info("Fleet flash: waiting 10s for USB stabilization...")
         await asyncio.sleep(10)
-
-        # Resume reconnection for all serial devices (not just flashed ones —
-        # siblings were held too to survive USB bus resets)
         for sid in all_serial_ids:
             fleet.resume_reconnect(sid)
         fleet.resume_discovery()
 
-    ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
-    total_attempted = len(results)
-    total_devices = len(devices)
-    return {
-        "status": "ok" if ok_count == total_devices else "error",
-        "message": f"{ok_count}/{total_devices} devices updated"
-        + (f" (stopped after {total_attempted})" if total_attempted < total_devices else ""),
-        "per_device": results,
-    }
-
-
-@router.post("/fleet/deploy", dependencies=[Depends(require_api_key)])
-async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
-    """One-shot compile + flash all connected devices.
-
-    Compiles firmware, generates DFU zip, then flashes every connected
-    nRF52840 device sequentially. Returns compilation info + per-device
-    results. This is the primary fleet management endpoint.
-    """
-    from ..firmware.compile import compile_firmware as _compile
-    from ..firmware.compile import generate_dfu_package
-
-    # 1. Compile firmware
-    log.info("Fleet deploy: compiling %s firmware...", platform)
-    compile_result = await asyncio.to_thread(_compile, platform)
-    if compile_result["status"] != "ok":
-        raise HTTPException(500, f"Compilation failed: {compile_result['message']}")
-    hex_path = compile_result["hex_path"]
-
-    # 2. Generate DFU zip
-    log.info("Fleet deploy: generating DFU package...")
-    dfu_result = await asyncio.to_thread(generate_dfu_package, hex_path)
-    if dfu_result["status"] != "ok":
-        raise HTTPException(500, f"DFU package failed: {dfu_result['message']}")
-    zip_path = dfu_result["zip_path"]
-
-    # 3. Flash all connected devices
-    from .models import FlashRequest
-
-    body = FlashRequest(firmware_path=zip_path)
-    try:
-        flash_result = await fleet_flash(body)
-    except HTTPException as e:
-        raise HTTPException(e.status_code, f"Fleet flash failed: {e.detail}") from e
-
-    return {
-        "status": flash_result["status"],
-        "message": flash_result["message"],
-        "hex_path": hex_path,
-        "zip_path": zip_path,
-        "per_device": flash_result.get("per_device", {}),
-    }
-
-
-@router.post("/fleet/upload", dependencies=[Depends(require_api_key)])
-async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
-    """Upload firmware binary and flash all connected devices.
-
-    Accepts the .hex file as a multipart upload. No scp needed.
-    Flashes each device one at a time, waits for reconnection between
-    each, then verifies all devices report the expected version.
-
-    Returns per-device flash results and version verification.
-    """
-    from pathlib import Path
-
-    from ..firmware import upload_firmware
-
-    # Validate upload
-    if not firmware.filename or not firmware.filename.endswith(".hex"):
-        raise HTTPException(400, "Firmware must be a .hex file")
-
-    content = await firmware.read()
-    if len(content) < 1000:
-        raise HTTPException(400, f"Firmware file too small ({len(content)} bytes)")
-    if len(content) > 5_000_000:
-        raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
-
-    # Write to temp file (strip path components to prevent traversal)
-    safe_name = Path(firmware.filename).name
-    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / safe_name
-    hex_path.parent.mkdir(parents=True, exist_ok=True)
-    hex_path.write_bytes(content)
-    log.info("Fleet upload: received %s (%d bytes)", safe_name, len(content))
-
-    # Find all flashable serial devices (.hex files require UF2 over USB;
-    # BLE-only devices need a DFU zip, which is a different endpoint).
-    fleet = get_fleet()
-    flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
-    devices = [
-        d
-        for d in fleet.get_all_devices()
-        if d.platform == "nrf52840"
-        and d.state in flashable_states
-        and d.transport.transport_type == "serial"
-    ]
-
-    if not devices:
-        raise HTTPException(404, "No flashable nRF52840 devices connected")
-
-    fleet.set_recovery_firmware(str(hex_path))
-
-    # Flash one at a time, wait for full fleet reconnection between each.
-    # UF2 bootloader entry causes USB bus resets that disconnect siblings.
-    results: dict[str, dict[str, Any]] = {}
-    flashing_ids = {d.id for d in devices}
-
-    try:
-        for i, device in enumerate(devices):
-            dev_label = f"{device.id[:12]} ({device.device_name or 'unknown'})"
-            log.info("Fleet upload: flashing %s (%d/%d)...", dev_label, i + 1, len(devices))
-
-            # Hold reconnect on all serial devices during this flash
-            all_serial_ids = [
-                d.id for d in fleet.get_all_devices() if d.transport.transport_type == "serial"
-            ]
-            for sid in all_serial_ids:
-                fleet.hold_reconnect(sid, 120)
-
-            try:
-                result = await upload_firmware(device, str(hex_path))
-                results[device.id[:12]] = result
-            except Exception as e:
-                results[device.id[:12]] = {"status": "error", "message": str(e)}
-            finally:
-                device.state = DeviceState.DISCONNECTED
-
-            if results[device.id[:12]].get("status") != "ok":
-                log.error(
-                    "Fleet upload: %s FAILED: %s",
-                    dev_label,
-                    results[device.id[:12]].get("message"),
-                )
-
-            # Release reconnects and wait for all devices to come back
-            for sid in all_serial_ids:
-                fleet.resume_reconnect(sid)
-
-            if i < len(devices) - 1:
-                log.info("Fleet upload: waiting for USB stabilization...")
-                await asyncio.sleep(5)
-                # Wait up to 30s for flashed devices to reconnect
-                for _ in range(6):
-                    await asyncio.sleep(5)
-                    connected = sum(
-                        1
-                        for d in fleet.get_all_devices()
-                        if d.id in flashing_ids and d.state == DeviceState.CONNECTED
-                    )
-                    if connected >= len(devices):
-                        break
-    finally:
-        hex_path.unlink(missing_ok=True)
-
-    # Final wait for all devices to reconnect and report version
-    log.info("Fleet upload: waiting for version verification...")
+    # Verify firmware versions
+    job.progress = 90
+    job.progress_message = "Verifying firmware versions"
     await asyncio.sleep(10)
 
-    # Re-enumerate to get fresh state
     verified: dict[str, dict[str, Any]] = {}
-    for _ in range(6):  # 30s max
+    for _ in range(6):
         all_done = True
         for d in fleet.get_all_devices():
             short_id = d.id[:12]
             if short_id not in results:
                 continue
             if d.state == DeviceState.CONNECTED and d.version:
-                verified[short_id] = {
-                    "version": d.version,
-                    "device_name": d.device_name,
-                }
+                verified[short_id] = {"version": d.version, "device_name": d.device_name}
             else:
                 all_done = False
         if all_done or len(verified) == len(results):
             break
         await asyncio.sleep(5)
 
-    # Build final report
     ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
-    total = len(devices)
-
     per_device = {}
     for short_id, flash_result in results.items():
         v = verified.get(short_id, {})
@@ -338,11 +323,46 @@ async def fleet_upload(firmware: UploadFile) -> dict[str, Any]:
             "device_name": v.get("device_name"),
         }
 
-    status = "ok" if ok_count == total else "error"
+    job.progress = 100
+    return {
+        "status": "ok" if ok_count == total else "error",
+        "message": f"{ok_count}/{total} devices flashed",
+        "per_device": per_device,
+    }
+
+
+# ── Compile + flash (convenience) ────────────────────────────────────
+
+
+@router.post("/fleet/deploy", dependencies=[Depends(require_api_key)])
+async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
+    """Compile firmware and flash all connected devices.
+
+    Synchronous compile, then submits flash as background job.
+    Returns compilation info + job_id for flash progress polling.
+    """
+    from ..firmware.compile import compile_firmware as _compile
+    from ..firmware.compile import generate_dfu_package
+
+    log.info("Fleet deploy: compiling %s firmware...", platform)
+    compile_result = await asyncio.to_thread(_compile, platform)
+    if compile_result["status"] != "ok":
+        raise HTTPException(500, f"Compilation failed: {compile_result['message']}")
+    hex_path = compile_result["hex_path"]
+
+    log.info("Fleet deploy: generating DFU package...")
+    dfu_result = await asyncio.to_thread(generate_dfu_package, hex_path)
+    if dfu_result["status"] != "ok":
+        raise HTTPException(500, f"DFU package failed: {dfu_result['message']}")
+
+    # Submit flash as background job
+    body = FlashRequest(firmware_path=hex_path)
+    flash_response = await fleet_flash(body)
 
     return {
-        "status": status,
-        "message": f"{ok_count}/{total} devices flashed",
-        "firmware_size": len(content),
-        "per_device": per_device,
+        "status": "submitted",
+        "hex_path": hex_path,
+        "zip_path": dfu_result["zip_path"],
+        "job_id": flash_response.get("job_id"),
+        "devices": flash_response.get("devices"),
     }
