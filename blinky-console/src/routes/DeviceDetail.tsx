@@ -29,7 +29,7 @@ export function DeviceDetail() {
   const navigate = useNavigate();
 
   // Bind the registry device's protocol to serialService so useSerial works.
-  // When deviceId changes (user navigates between devices), rebind.
+  // When deviceId changes, rebind. On unmount, unbind to prevent stale refs.
   useEffect(() => {
     if (!deviceId) return;
     const device = deviceRegistry.get(deviceId);
@@ -38,16 +38,23 @@ export function DeviceDetail() {
       return;
     }
 
-    // If the device already has a protocol (e.g., from WebSerialSource.pickAndConnect),
-    // bind it. Otherwise create one from the first available transport.
+    // Ensure the device has a protocol. If not (e.g., discovered by
+    // BlinkyServerSource polling but never connected), create one from
+    // the first available transport. This is a one-time initialization;
+    // subsequent navigations to the same device reuse the existing protocol.
+    if (!device.protocol && device.transports.length > 0) {
+      device.protocol = new DeviceProtocol(device.transports[0].transport);
+    }
+
     if (device.protocol) {
       serialService.bindProtocol(device.protocol);
-    } else if (device.transports.length > 0) {
-      const transport = device.transports[0].transport;
-      const protocol = new DeviceProtocol(transport);
-      device.protocol = protocol;
-      serialService.bindProtocol(protocol);
     }
+
+    return () => {
+      // Unbind on unmount so serialService doesn't keep a stale reference
+      // to this device's protocol after navigation.
+      serialService.unbind();
+    };
   }, [deviceId]);
 
   // For now, useSerial still manages the single active device.
