@@ -147,4 +147,6 @@ def _mount_frontend(app: FastAPI) -> None:
                 return FileResponse(target)
         except ValueError:
             pass
-        return FileResponse(index_html)
+        # no-cache ensures browsers fetch a fresh shell after UI deploys.
+        # Static assets (JS/CSS with content hashes) are cached normally.
+        return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
