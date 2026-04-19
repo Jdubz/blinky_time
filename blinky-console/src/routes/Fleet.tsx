@@ -64,7 +64,12 @@ export function Fleet() {
     const interval = setInterval(async () => {
       try {
         const resp = await fetch(`${serverUrl}/api/fleet/jobs/${flashJobId}`);
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          setStatus(`Flash polling failed: HTTP ${resp.status}`);
+          setFlashJobId(null);
+          setFlashProgress(null);
+          return;
+        }
         const job = await resp.json();
         setFlashProgress(job.progressMessage || `${job.progress}%`);
         if (job.status === 'complete' || job.status === 'error') {
@@ -73,9 +78,11 @@ export function Fleet() {
           setStatus(job.status === 'complete'
             ? `Flash complete: ${job.result?.message || 'done'}`
             : `Flash failed: ${job.error || 'unknown'}`);
-          fetchFirmwareStatus(); // Refresh versions
+          fetchFirmwareStatus();
         }
-      } catch { /* poll failure is non-fatal */ }
+      } catch {
+        // Transient poll failure — keep trying
+      }
     }, 3000);
     return () => clearInterval(interval);
   }, [flashJobId, serverUrl, fetchFirmwareStatus]);
@@ -133,19 +140,25 @@ export function Fleet() {
         </div>
       ) : (
         <div className="fleet-page__sections">
-          {firmware && (
-            <section className="fleet-section fleet-section--firmware">
-              <h2>Firmware</h2>
+          <section className="fleet-section fleet-section--firmware">
+            <h2>Firmware</h2>
+            {!firmware ? (
+              <div className="firmware-status__current">Loading firmware status...</div>
+            ) : !firmware.current_version ? (
+              <div className="firmware-status">
+                <div className="firmware-status__current">No firmware uploaded yet. Use deploy.sh to upload and flash.</div>
+              </div>
+            ) : (
               <div className="firmware-status">
                 <div className="firmware-status__version">
-                  Server: <strong>{firmware.current_version || 'unknown'}</strong>
+                  Server: <strong>{firmware.current_version}</strong>
                 </div>
                 {firmware.out_of_date_count > 0 && (
                   <div className="firmware-status__outdated">
                     {firmware.out_of_date_count} device(s) need update
                   </div>
                 )}
-                {firmware.out_of_date_count === 0 && firmware.current_version && (
+                {firmware.out_of_date_count === 0 && (
                   <div className="firmware-status__current">All devices up to date</div>
                 )}
                 <div className="firmware-status__devices">
@@ -155,7 +168,7 @@ export function Fleet() {
                     </span>
                   ))}
                 </div>
-                {firmware.firmware_available && firmware.out_of_date_count > 0 && !flashJobId && (
+                {firmware.firmware_available && firmware.firmware_path && firmware.out_of_date_count > 0 && !flashJobId && (
                   <button className="btn btn-primary" disabled={loading} onClick={handleFlashOutOfDate}>
                     Flash Out-of-Date Devices
                   </button>
@@ -166,8 +179,8 @@ export function Fleet() {
                   </div>
                 )}
               </div>
-            </section>
-          )}
+            )}
+          </section>
 
           <section className="fleet-section">
             <h2>Generator</h2>

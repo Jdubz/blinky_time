@@ -68,8 +68,12 @@ async def fleet_upload(
 
     Returns the stored firmware path for use with POST /api/fleet/flash.
     """
+    import re
+
     if not firmware.filename or not firmware.filename.endswith(".hex"):
         raise HTTPException(400, "Firmware must be a .hex file")
+    if version is not None and not re.match(r"^b\d+$", version):
+        raise HTTPException(400, f"Invalid version format '{version}' (expected: b<number>)")
 
     content = await firmware.read()
     if len(content) < 1000:
@@ -77,12 +81,13 @@ async def fleet_upload(
     if len(content) > 5_000_000:
         raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
 
-    safe_name = Path(firmware.filename).name
-    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / safe_name
+    # Use a stable filename (not user-controlled) to avoid path issues.
+    # Overwriting is intentional — only the latest upload matters.
+    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / "firmware.hex"
     hex_path.parent.mkdir(parents=True, exist_ok=True)
     hex_path.write_bytes(content)
 
-    log.info("Fleet upload: stored %s (%d bytes, version=%s)", safe_name, len(content), version)
+    log.info("Fleet upload: stored firmware.hex (%d bytes, version=%s)", len(content), version)
 
     # Persist firmware metadata for version tracking
     import datetime
@@ -211,7 +216,7 @@ async def get_flash_job(job_id: str) -> dict[str, Any]:
 async def list_flash_jobs() -> list[dict[str, Any]]:
     """List all fleet flash jobs."""
     jm = _get_flash_job_manager()
-    return [j.to_dict() for j in jm.list_jobs()]
+    return [dict(j.to_dict()) for j in jm.list_recent()]
 
 
 # ── Flash job manager singleton ───────────────────────────────────────

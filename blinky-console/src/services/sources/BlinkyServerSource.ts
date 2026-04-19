@@ -101,10 +101,19 @@ export class BlinkyServerSource implements Source {
         const existing = this.registry.get(id);
 
         if (existing) {
-          // Update version and display name from server
-          if (d.version) existing.version = d.version;
+          // Update version and display name from server.
+          // Mutations trigger re-render via upsert → registry.notify().
+          let changed = false;
+          if (d.version && existing.version !== d.version) {
+            existing.version = d.version;
+            changed = true;
+          }
           if (displayName !== 'Unknown' && existing.displayName !== displayName) {
             existing.displayName = displayName;
+            changed = true;
+          }
+          if (changed) {
+            this.registry.upsert(existing); // triggers notify for subscribers
           }
         } else if (!this.knownDeviceIds.has(id)) {
           // New device — create transport binding and register
