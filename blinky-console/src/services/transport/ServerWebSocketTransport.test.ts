@@ -66,6 +66,7 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', class extends MockWebSocket {
     constructor(url: string) {
       super(url);
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
       mockWsInstance = this;
     }
   });
