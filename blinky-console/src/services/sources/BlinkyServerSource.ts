@@ -24,6 +24,7 @@ export class BlinkyServerSource implements Source {
   readonly displayName: string;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private pollInFlight = false;
+  private stopped = false;
   private knownDeviceIds = new Set<string>();
 
   constructor(
@@ -46,6 +47,7 @@ export class BlinkyServerSource implements Source {
    *  Idempotent — calling while already started is a no-op. */
   async start(): Promise<void> {
     if (this.pollTimer !== null) return;  // Already running
+    this.stopped = false;
     logger.info('BlinkyServerSource: starting', { serverUrl: this.serverUrl });
     await this.poll();
     this.pollTimer = setInterval(() => {
@@ -60,6 +62,7 @@ export class BlinkyServerSource implements Source {
 
   /** Stop polling. Does not disconnect devices or remove them from registry. */
   stop(): void {
+    this.stopped = true;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -69,6 +72,7 @@ export class BlinkyServerSource implements Source {
 
   /** Fetch device list from server and update registry. */
   async poll(): Promise<void> {
+    if (this.stopped) return;  // Guard against in-flight polls after stop()
     try {
       const resp = await fetch(`${this.serverUrl}/api/devices`, {
         signal: AbortSignal.timeout(POLL_TIMEOUT_MS),

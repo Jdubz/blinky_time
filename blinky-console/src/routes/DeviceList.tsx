@@ -6,7 +6,7 @@
  * devices, shows cards with connection status and transport info.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDevices } from '../hooks/useDevices';
 import { WebSerialSource, deviceRegistry } from '../services/sources';
@@ -39,10 +39,14 @@ function DeviceCard({ device }: { device: Device }) {
 export function DeviceList() {
   const { devices } = useDevices();
   const navigate = useNavigate();
+  const autoNavigated = useRef(false);
 
-  // Auto-navigate to the only device (preserves pre-routing single-device UX)
+  // Auto-navigate to the only device on first mount (preserves pre-routing
+  // single-device UX). The ref prevents an infinite redirect loop when
+  // the user presses back from DeviceDetail → DeviceList → auto-nav → DeviceDetail.
   useEffect(() => {
-    if (devices.length === 1) {
+    if (devices.length === 1 && !autoNavigated.current) {
+      autoNavigated.current = true;
       navigate(`/device/${devices[0].id}`, { replace: true });
     }
   }, [devices, navigate]);

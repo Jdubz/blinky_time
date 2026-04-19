@@ -1,9 +1,12 @@
 /**
- * DeviceDetail — single-device view, the equivalent of the old App.tsx.
+ * DeviceDetail — single-device view (pre-multi-device architecture).
  *
- * Reads device ID from the route param, finds it in the registry, and
- * connects if not already connected. Renders the same ConnectionBar +
- * TabView UI as before.
+ * Route param deviceId is currently ignored — uses the legacy useSerial
+ * singleton which manages a single global connection. The URL is decorative;
+ * whichever device useSerial is connected to is shown regardless of route.
+ *
+ * M12 will refactor to use the registry's Device directly and respect
+ * the route parameter.
  */
 
 import { useState } from 'react';
@@ -21,11 +24,10 @@ import { GeneratorSelector } from '../components/GeneratorSelector';
 import { EffectSelector } from '../components/EffectSelector';
 
 export function DeviceDetail() {
-  const { deviceId: _deviceId } = useParams<{ deviceId: string }>();
+  // TODO(M12): Use deviceId to select the correct device from the registry
+  // instead of the legacy serialService singleton.
+  useParams<{ deviceId: string }>();
   const navigate = useNavigate();
-  // TODO (M12): Use _deviceId to select the correct device from the registry
-  // instead of the legacy serialService singleton. For now, useSerial still
-  // manages the single active device.
 
   // For now, useSerial still manages the single active device.
   // Phase 4 M12 will refactor this to use the registry's Device directly.
