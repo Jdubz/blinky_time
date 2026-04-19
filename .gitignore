@@ -29,6 +29,9 @@ ml-training/outputs/*/checkpoints/
 node_modules/
 dist/
 
+# blinky-console build output (Vite emits here for blinky-server to serve)
+blinky-server/web/
+
 # IDE
 .vscode/
 .idea/

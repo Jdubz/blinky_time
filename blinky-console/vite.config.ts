@@ -83,7 +83,23 @@ export default defineConfig({
       },
     }),
   ],
+  // Build output goes into blinky-server/web/ so a single server process
+  // serves both the API (port 8420) and the SPA. See docs/DEVELOPMENT.md
+  // for the dev workflow.
+  build: {
+    outDir: '../blinky-server/web',
+    emptyOutDir: true,
+  },
   server: {
     port: 3000,
+    // Proxy API + WebSocket traffic to a local blinky-server during dev.
+    // Keeps the console at :3000 (with HMR + WebSerial) while routing
+    // server-backed requests through to :8420. Skip the proxies if you
+    // run the console without a local blinky-server — WebSerial paths
+    // still work.
+    proxy: {
+      '/api': 'http://localhost:8420',
+      '/ws': { target: 'ws://localhost:8420', ws: true },
+    },
   },
 });
