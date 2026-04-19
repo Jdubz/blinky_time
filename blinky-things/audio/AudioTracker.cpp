@@ -125,8 +125,10 @@ const AudioControl& AudioTracker::update(float dt) {
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
         frameOnsetNN_.setProfileEnabled(nnProfile);
+        // Pass raw (pre-compressor) flux for NN hybrid input to match training.
+        // The compressed getSpectralFlux() is still used for ACF tempo estimation.
         odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
-                                  spectral_.getSpectralFlatness(), spectral_.getSpectralFlux());
+                                  spectral_.getSpectralFlatness(), spectral_.getRawSpectralFlux());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
 

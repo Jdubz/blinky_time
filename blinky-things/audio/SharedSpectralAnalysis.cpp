@@ -73,6 +73,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , preWhitenMagnitudes_{}
     , phases_{}
     , prevMagnitudes_{}
+    , prevRawMagnitudes_{}
     , melBands_{}
     , rawMelBands_{}
     , linearMelBands_{}
@@ -86,6 +87,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralFlux_(0.0f)
     , spectralFlatness_(0.0f)
     , bassFlux_(0.0f)
+    , rawSpectralFlux_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -133,6 +135,7 @@ void SharedSpectralAnalysis::reset() {
         preWhitenMagnitudes_[i] = 0.0f;
         phases_[i] = 0.0f;
         prevMagnitudes_[i] = 0.0f;
+        prevRawMagnitudes_[i] = 0.0f;
     }
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         melBands_[i] = 0.0f;
@@ -150,6 +153,7 @@ void SharedSpectralAnalysis::reset() {
     frameRmsDb_ = -200.0f;
     spectralFlux_ = 0.0f;
     bassFlux_ = 0.0f;
+    rawSpectralFlux_ = 0.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -197,6 +201,36 @@ void SharedSpectralAnalysis::process() {
     // Compute raw mel bands from pre-compressor magnitudes (for NN inference + calibration).
     // Must happen BEFORE applyCompressor() modifies magnitudes_ in-place.
     computeRawMelBands();
+
+    // Compute raw SuperFlux spectral flux from pre-compressor magnitudes.
+    // This matches the training pipeline's STFT-based flux (no compressor gain).
+    // Used exclusively for NN hybrid input — ACF tempo uses compressed flux below.
+    if (hasPrevFrame_) {
+        float rawBassFlux = 0.0f, rawMidFlux = 0.0f, rawHighFlux = 0.0f;
+        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+            float ref = prevRawMagnitudes_[i];
+            if (i > 1) ref = fmaxf(ref, prevRawMagnitudes_[i - 1]);
+            if (i < SpectralConstants::NUM_BINS - 1) ref = fmaxf(ref, prevRawMagnitudes_[i + 1]);
+            float diff = preWhitenMagnitudes_[i] - ref;
+            if (diff > 0.0f) {
+                if (i <= SpectralConstants::BASS_MAX_BIN)
+                    rawBassFlux += diff;
+                else if (i <= SpectralConstants::MID_MAX_BIN)
+                    rawMidFlux += diff;
+                else
+                    rawHighFlux += diff;
+            }
+        }
+        rawSpectralFlux_ = bassFluxWeight * (rawBassFlux / BASS_BIN_COUNT)
+                         + midFluxWeight * (rawMidFlux / MID_BIN_COUNT)
+                         + highFluxWeight * (rawHighFlux / HIGH_BIN_COUNT);
+    } else {
+        rawSpectralFlux_ = 0.0f;
+    }
+    // Save pre-compressor magnitudes for next frame's raw flux computation
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        prevRawMagnitudes_[i] = preWhitenMagnitudes_[i];
+    }
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
