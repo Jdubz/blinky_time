@@ -293,6 +293,10 @@ public:
             out.print(ARENA_SIZE);
             out.print(F(" window="));
             out.print(windowFrames_);
+            out.print(F(" features="));
+            out.print(inputFeatures_);
+            out.print(F(" mode="));
+            out.print(useHybrid_ ? F("hybrid") : (useDelta_ ? F("delta") : (useBandFlux_ ? F("flux") : F("mel"))));
             out.print(F(" outputs="));
             out.print(outputChannels_);
             out.print(F(" infer="));

@@ -271,9 +271,23 @@ public:
      * Get spectral flatness (Wiener entropy) of current frame.
      * Range 0-1: 0 = pure tone, 1 = white noise.
      * Drums are noise-like (~0.5-0.8), pitched instruments are tonal (~0.1-0.3).
-     * Used as a deterministic feature alongside mel bands in NN input.
+     * Computed from compressed magnitudes. Scale-invariant, so value matches
+     * training regardless of compressor gain.
      */
     float getSpectralFlatness() const { return spectralFlatness_; }
+
+    /**
+     * Get raw SuperFlux spectral flux from PRE-COMPRESSOR magnitudes.
+     * Matches the training pipeline's STFT-based flux computation exactly.
+     * Used exclusively for NN hybrid input — NOT for ACF tempo estimation
+     * (which uses the compressed getSpectralFlux() for absolute contrast).
+     *
+     * The regular getSpectralFlux() operates on compressed magnitudes where
+     * per-frame gain changes corrupt magnitude differences. This raw version
+     * uses the same pre-compressor magnitudes as the mel bands (getRawMelBands),
+     * ensuring all NN features are in the same domain.
+     */
+    float getRawSpectralFlux() const { return rawSpectralFlux_; }
 
     // --- Compressor/whitening debug accessors ---
 
@@ -305,6 +319,7 @@ private:
     float preWhitenMagnitudes_[SpectralConstants::NUM_BINS]; // Raw FFT magnitudes, no compression or whitening (for BandFlux)
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
+    float prevRawMagnitudes_[SpectralConstants::NUM_BINS]; // Previous frame pre-compressor mags (for raw flux)
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
     float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
     float linearMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Linear mel energy (pre-log) for PCEN
@@ -334,6 +349,7 @@ private:
     float spectralFlux_;
     float spectralFlatness_;          // Wiener entropy: 0=tone, 1=noise (drum discriminator)
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
+    float rawSpectralFlux_;    // SuperFlux from pre-compressor mags (for NN hybrid input)
 
     // State
     bool frameReady_;

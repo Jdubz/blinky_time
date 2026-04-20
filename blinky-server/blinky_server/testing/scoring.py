@@ -10,6 +10,7 @@ Only two things are scored:
 
 from __future__ import annotations
 
+import logging
 import math
 import statistics
 from collections import defaultdict
@@ -19,11 +20,14 @@ from .types import (
     DeviceRunScore,
     Diagnostics,
     GroundTruth,
+    HybridMetrics,
     OffsetStats,
     OnsetTracking,
     PlpMetrics,
     TestData,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _js_round(x: float, decimals: int = 3) -> float:
@@ -403,6 +407,55 @@ def score_device_run(
 
     onset_offset_stats = _compute_offset_stats(onset_offsets)
 
+    # Hybrid feature metrics: compare flatness/flux at onset vs non-onset
+    hybrid: HybridMetrics | None = None
+    nn_frames = test_data.nn_frames
+    if ref_onsets and not nn_frames:
+        # Firmware didn't emit flat/rflux (needs b132+ with hybrid streaming and
+        # streamDebug enabled). Hybrid metrics will be absent from the score.
+        log.warning(
+            "No NN frames captured — hybrid metrics unavailable. "
+            "Check that firmware emits 'flat'/'rflux' in debug stream."
+        )
+    if nn_frames and ref_onsets:
+        # Build time-indexed arrays from NN frames
+        nn_ts = [f.timestamp_ms - audio_epoch_ms for f in nn_frames]
+        nn_flat = [f.flatness for f in nn_frames]
+        nn_flux = [f.flux for f in nn_frames]
+
+        # Classify each NN frame as onset or non-onset (within ±50ms of GT)
+        onset_flat: list[float] = []
+        onset_flux: list[float] = []
+        non_flat: list[float] = []
+        non_flux: list[float] = []
+
+        for i, ts_ms in enumerate(nn_ts):
+            if ts_ms < 0:
+                continue
+            t_sec = (ts_ms - latency_correction_ms) / 1000
+            near_onset = any(abs(t_sec - ref) < 0.050 for ref in ref_onsets)
+            if near_onset:
+                onset_flat.append(nn_flat[i])
+                onset_flux.append(nn_flux[i])
+            else:
+                non_flat.append(nn_flat[i])
+                non_flux.append(nn_flux[i])
+
+        if onset_flat and non_flat:
+            of_mean = sum(onset_flat) / len(onset_flat)
+            nf_mean = sum(non_flat) / len(non_flat)
+            ox_mean = sum(onset_flux) / len(onset_flux)
+            nx_mean = sum(non_flux) / len(non_flux)
+            hybrid = HybridMetrics(
+                flatness_at_onset=_js_round(of_mean, 4),
+                flatness_at_non=_js_round(nf_mean, 4),
+                flatness_gap=_js_round(of_mean - nf_mean, 4),
+                flux_at_onset=_js_round(ox_mean, 4),
+                flux_at_non=_js_round(nx_mean, 4),
+                flux_gap=_js_round(ox_mean - nx_mean, 4),
+                nn_frames=len(nn_frames),
+            )
+
     return DeviceRunScore(
         audio_latency_ms=audio_latency_ms,
         audio_duration_sec=audio_duration_sec,
@@ -437,6 +490,7 @@ def score_device_run(
             onset_offset_stats=onset_offset_stats,
             onset_offsets=onset_offsets,
         ),
+        hybrid=hybrid,
     )
 
 
@@ -511,6 +565,19 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             if score.audio_latency_ms is not None
             else None,
         },
+        "hybrid": (
+            {
+                "flatnessAtOnset": score.hybrid.flatness_at_onset,
+                "flatnessAtNon": score.hybrid.flatness_at_non,
+                "flatnessGap": score.hybrid.flatness_gap,
+                "fluxAtOnset": score.hybrid.flux_at_onset,
+                "fluxAtNon": score.hybrid.flux_at_non,
+                "fluxGap": score.hybrid.flux_gap,
+                "nnFrames": score.hybrid.nn_frames,
+            }
+            if score.hybrid
+            else None
+        ),
     }
 
 

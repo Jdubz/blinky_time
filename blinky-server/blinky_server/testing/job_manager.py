@@ -46,6 +46,11 @@ class Job:
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
 
+    # Partial results accumulated during the run. Written to disk after
+    # each track so nothing is lost on crash/restart.
+    partial_results: list[dict[str, Any]] = field(default_factory=list)
+    _jobs_dir: Path | None = field(default=None, repr=False)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -59,6 +64,36 @@ class Job:
             "completed_at": self.completed_at,
             "age_s": round(time.time() - self.created_at, 1),
         }
+
+    def append_result(self, entry: dict[str, Any]) -> None:
+        """Append a partial result and persist to disk immediately.
+
+        Called by the test runner after each track/step completes. The
+        progress file is a sibling of the final result file with a
+        .progress.json suffix. On crash, the next server restart can
+        recover partial results from this file.
+        """
+        self.partial_results.append(entry)
+        if self._jobs_dir is None:
+            return
+        try:
+            path = self._jobs_dir / f"{self.id}.progress.json"
+            data = {
+                "id": self.id,
+                "kind": self.kind,
+                "status": self.status.value,
+                "progress": self.progress,
+                "progressMessage": self.progress_message,
+                "created_at": self.created_at,
+                "partial_results": self.partial_results,
+                "updated_at": time.time(),
+            }
+            # Atomic write: tmp → rename
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, separators=(",", ":")))
+            tmp.rename(path)
+        except Exception as e:
+            log.warning("Failed to persist progress for job %s: %s", self.id, e)
 
 
 class JobManager:
@@ -81,9 +116,16 @@ class JobManager:
         self._prune_old_files()
 
     def _load_persisted(self) -> None:
-        """Load completed job results from disk on startup."""
+        """Load completed and interrupted job results from disk on startup.
+
+        Loads both final results (*.json) and progress files (*.progress.json).
+        Progress files represent interrupted jobs — their partial results are
+        preserved as the job result with status "partial".
+        """
         loaded = 0
         for path in sorted(self._jobs_dir.glob("*.json")):
+            if path.name.endswith(".progress.json") or path.name.endswith(".tmp"):
+                continue
             try:
                 data = json.loads(path.read_text())
                 job = Job(
@@ -100,8 +142,41 @@ class JobManager:
                 loaded += 1
             except Exception as e:
                 log.warning("Failed to load job %s: %s", path.name, e)
-        if loaded:
-            log.info("Loaded %d persisted job results from %s", loaded, self._jobs_dir)
+
+        # Load interrupted jobs from progress files (no final result file)
+        recovered = 0
+        for path in sorted(self._jobs_dir.glob("*.progress.json")):
+            job_id = path.name.replace(".progress.json", "")
+            if job_id in self._jobs:
+                # Final result exists, progress file is stale — clean up
+                path.unlink(missing_ok=True)
+                continue
+            try:
+                data = json.loads(path.read_text())
+                partial = data.get("partial_results", [])
+                job = Job(
+                    id=data["id"],
+                    kind=data.get("kind", "unknown"),
+                    status=JobStatus.ERROR,
+                    progress=data.get("progress", 0),
+                    progress_message="interrupted (recovered partial results)",
+                    result={"status": "partial", "partial_results": partial},
+                    error="Job interrupted (server restart)",
+                    created_at=data.get("created_at", path.stat().st_mtime),
+                    completed_at=data.get("updated_at"),
+                )
+                self._jobs[job.id] = job
+                recovered += 1
+            except Exception as e:
+                log.warning("Failed to load progress file %s: %s", path.name, e)
+
+        if loaded or recovered:
+            log.info(
+                "Loaded %d completed + %d recovered jobs from %s",
+                loaded,
+                recovered,
+                self._jobs_dir,
+            )
 
     def _prune_old_files(self, keep: int = 200) -> None:
         """Delete oldest persisted job files if more than `keep` exist."""
@@ -138,7 +213,7 @@ class JobManager:
         Returns:
             The created Job (status=PENDING, will transition to RUNNING).
         """
-        job = Job(id=uuid.uuid4().hex[:12], kind=kind)
+        job = Job(id=uuid.uuid4().hex[:12], kind=kind, _jobs_dir=self._jobs_dir)
         self._jobs[job.id] = job
 
         async def _run() -> None:
@@ -149,11 +224,17 @@ class JobManager:
             except Exception as e:
                 job.status = JobStatus.ERROR
                 job.error = str(e)
+                # Preserve partial results on failure
+                if job.partial_results:
+                    job.result = {"status": "partial", "partial_results": job.partial_results}
                 log.exception("Job %s (%s) failed", job.id, kind)
             finally:
                 job.completed_at = time.time()
                 job.progress = 100
                 self._persist(job)
+                # Clean up progress file now that final result is written
+                progress_path = self._jobs_dir / f"{job.id}.progress.json"
+                progress_path.unlink(missing_ok=True)
 
         task = asyncio.create_task(_run())
         self._tasks[job.id] = task

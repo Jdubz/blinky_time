@@ -28,6 +28,32 @@ If the bootloader was corrupted:
 2. Requires Seeed XIAO expansion board OR direct soldering to SWD pads
 3. Recovery process: https://www.pavelp.cz/posts/eng-xiao-nrf52840-bootloader-recovery/
 
+### Unresponsive Device Runbook
+
+Installed nRF52840 devices are physically enclosed — reset buttons are **not** accessible. If a device stops responding to serial commands, follow this ordered runbook before escalating to physical access:
+
+1. **Power-cycle the USB port via hub control:**
+   ```bash
+   uhubctl -a cycle -p <port>
+   ```
+   Covers the common "USB stack wedged" case. `uhubctl` requires the sudoers rule configured in `UPLOAD_RELIABILITY_PLAN.md`.
+
+2. **Re-flash via blinky-server** (forces a known-good firmware state):
+   ```bash
+   curl -X POST http://blinkyhost.local:8420/api/devices/{id}/flash \
+     -H "X-API-Key: $(cat ~/.blinky-api-key)" \
+     -H 'Content-Type: application/json' \
+     -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
+   ```
+
+3. **If the serial port disappeared entirely:** wait 10 seconds and check `ls /dev/ttyACM*`. USB re-enumeration after DFU or crash recovery is not instantaneous.
+
+4. **Last resort:** physically access the device and double-tap reset to enter the bootloader. Requires disassembly for enclosed units — always exhaust steps 1–3 first.
+
+> **Test chips (unenclosed bare chips attached to blinkyhost):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible, so there's no emergency disassembly path in the worst case.
+
+> **Post-BLE-DFU quirk:** After a BLE DFU flash, USB serial does not re-enumerate without a physical power cycle (uhubctl on Pi is insufficient). BLE reconnection works fine. See `BLUETOOTH_IMPLEMENTATION_PLAN.md`.
+
 ---
 
 ## 📋 Pre-Upload Checklist
