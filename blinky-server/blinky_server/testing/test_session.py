@@ -6,10 +6,13 @@ that can be scored against ground truth after the test completes.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
-from .types import MusicState, TestData, TransientEvent
+from .types import MusicState, NNFrame, TestData, TransientEvent
+
+log = logging.getLogger(__name__)
 
 
 class TestSession:
@@ -25,6 +28,7 @@ class TestSession:
         self._start_time: float = 0.0
         self._transients: list[TransientEvent] = []
         self._music_states: list[MusicState] = []
+        self._nn_frames: list[NNFrame] = []
         self._clock_offset: float | None = None  # server_epoch_ms - firmware_millis
 
     @property
@@ -45,6 +49,7 @@ class TestSession:
         self._start_time = time.time() * 1000  # epoch ms
         self._transients.clear()
         self._music_states.clear()
+        self._nn_frames.clear()
 
     def stop_recording(self) -> TestData:
         """Stop recording and return a frozen snapshot."""
@@ -55,6 +60,7 @@ class TestSession:
             start_time=self._start_time,
             transients=list(self._transients),
             music_states=list(self._music_states),
+            nn_frames=list(self._nn_frames),
         )
 
     def ingest(self, msg_type: str, data: dict[str, Any]) -> None:
@@ -104,3 +110,15 @@ class TestSession:
                     nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )
             )
+            # Hybrid features in debug stream: flat + rflux in "m" sub-object
+            if not self._nn_frames and ("flat" in m or "rflux" in m):
+                log.info("First NN frame captured: flat=%s rflux=%s", m.get("flat"), m.get("rflux"))
+            if "flat" in m or "rflux" in m:
+                self._nn_frames.append(
+                    NNFrame(
+                        timestamp_ms=now_ms,
+                        nna=m.get("nn", 0.0),  # raw NN activation
+                        flatness=m.get("flat", 0.0),
+                        flux=m.get("rflux", 0.0),
+                    )
+                )

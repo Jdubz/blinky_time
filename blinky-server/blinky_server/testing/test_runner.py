@@ -146,6 +146,7 @@ def _apply_settle_filter(test_data: TestData, settle_ms: float) -> TestData:
         start_time=test_data.start_time,
         transients=[t for t in test_data.transients if t.timestamp_ms >= cutoff],
         music_states=[s for s in test_data.music_states if s.timestamp_ms >= cutoff],
+        nn_frames=[f for f in test_data.nn_frames if f.timestamp_ms >= cutoff],
     )
 
 

@@ -1494,6 +1494,11 @@ void SerialConsole::streamTick() {
 
             // Debug mode: add diagnostics
             if (streamDebug_) {
+                const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
+                out_.print(F(",\"flat\":"));
+                out_.print(spectral.getSpectralFlatness(), 4);
+                out_.print(F(",\"rflux\":"));
+                out_.print(spectral.getRawSpectralFlux(), 4);
                 out_.print(F(",\"conf\":"));
                 out_.print(audioCtrl_->getPeriodicityStrength(), 3);
                 out_.print(F(",\"plpc\":"));
