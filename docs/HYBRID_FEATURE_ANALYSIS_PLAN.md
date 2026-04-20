@@ -68,6 +68,116 @@ On-device validation runs cost ≈ 15–30 min each; Python evaluations on the s
 3. On-device confirmation of the surviving 2–3 features using the *existing* b134 validation captures (no new device runs needed).
 4. (e) ablation training only if ≥ 1 feature survives 1–3.
 
+## Parity gap analysis — 2026-04-20
+
+Before running any offline test whose result is used to pick features for retraining, the harness has to produce numbers that match on-device execution. An offline-to-on-device divergence silently corrupts gate (b), (c), (e), and every ranking built from them. The current parity harness (commit `7e0ceaa1`) closed one gap — the shape-feature math — but many more remain. The list below enumerates every known divergence between my offline pipeline and on-device execution, prioritised by blast radius. The fix plan after it builds a "harness v2" that eliminates each one.
+
+### Known gaps
+
+#### P0 — corrupts investigation results directly
+
+**Gap 1 — FFT is Python, not firmware.** Offline pipeline runs `np.fft.rfft`; device runs `arm_rfft_fast_f32`. Same inputs, different Radix (2 vs 4), different accumulation order — float32 results differ by 1e-5 to 1e-4 per bin. Feature values computed from these mags inherit the drift. Harms every feature-accuracy claim made from the harness, and hides any future FFT-related firmware change.
+
+**Gap 2 — Raw flux and other state-dependent features not covered.** `SharedSpectralAnalysis::rawSpectralFlux_` reads `prevRawMagnitudes_`; the harness injects one frame at a time with no history, so `computeShapeFeaturesRaw` is the only thing testable today. Raw flux, compressed spectral flux, PLP state — all untestable.
+
+**Gap 3 — Mel bands not in harness output.** Gate (c) (mel-redundancy check) needs per-frame mel bands alongside features. Firmware's `computeRawMelBands` is callable; I just haven't added it to the dump path.
+
+**Gap 4 — The flatness the NN actually consumes is unverified.** Three different flatnesses exist, on different magnitude domains:
+
+- `computeShapeFeaturesRaw` computes a "raw" flatness on pre-compressor `preWhitenMagnitudes_`. This is what my parity harness tests.
+- `computeDerivedFeatures` computes `spectralFlatness_` on post-compressor (and possibly post-whitening) `magnitudes_`. This is what `SerialConsole` streams as `"flat"` in the `m` sub-object via `spectral.getSpectralFlatness()`.
+- The Python training pipeline's `append_hybrid_features` computes flatness on raw STFT magnitudes (no compression, no whitening).
+
+**The three are numerically different.** The NN was trained on the third; the device streams the second; the parity harness validates the first. Which one actually reaches the NN on-device? Unknown without auditing the `FrameOnsetNN` input path. Until that audit runs, *the harness is silently passing a feature path that may not match what the model consumes.* This is the worst failure of the bunch.
+
+#### P1 — matters for final accuracy, not for ranking
+
+**Gap 5 — TFLite runtime vs TFLite Micro.** The harness (once NN-capable) would load `.tflite` via desktop `tflite-runtime`; device uses `tflite-micro`. They *should* match for INT8 ops, but unverified for our specific Conv1D W16 model. If activations diverge, ablation F1 won't predict device F1.
+
+**Gap 6 — Training-pipeline features use Python code, not firmware code.** Even after my off-by-one fix in `features.py`, the *training* pipeline (`scripts/audio.py` `append_hybrid_features`) uses Python implementations that were never run through a parity test. If those drift from the C++ implementations, the model sees one feature distribution at train time and a different one at inference time. Effect size unknown.
+
+**Gap 7 — Hamming window variant not verified.** Firmware's `applyHammingWindow` — is it periodic (`0.54 - 0.46·cos(2πn/N)`), symmetric (`0.54 - 0.46·cos(2πn/(N-1))`), CMSIS's variant, or a stored table? `np.hamming` is a specific choice. Haven't confirmed equivalence. Small numerical divergence possible.
+
+**Gap 8 — AdaptiveMic / audio scaling chain is skipped offline.** Device: PDM → hardware gain (32) → `AdaptiveMic` window/range normalisation → float samples. Offline: `librosa.load` → `target_rms_db` scale. Different input distributions reach `process()`. For scale-invariant features (flatness, crest, ratios) this doesn't matter. For scale-dependent ones (hfc, raw_flux raw magnitudes, and the NN's mel inputs after log compression) it does.
+
+#### P2 — methodology gaps
+
+**Gap 9 — Offline "NN fires" ≠ on-device "NN fires".** Device fires via `AudioTracker::updatePulseDetection` — local maxima past `pulseOnsetFloor`, gated by bass-ratio, softened by PLP pattern bias, rate-limited by cooldown. The offline "firing" criterion I'd write in Python would be a simple threshold. Different populations → different TP/FP splits. Relative feature rankings might still be valid, absolute numbers aren't.
+
+**Gap 10 — Clean WAV vs mic-captured audio.** Running the offline harness on WAV tests the computation chain but skips the acoustic chain (speaker → room → mic → ADC). `replay_device_capture.py` infrastructure already exists to replay recorded mic audio through the offline pipeline. The true "as-accurate-as-possible without a device" test uses those captures, not clean WAVs.
+
+**Gap 11 — Per-device mic variance averaged away.** Offline tests one configuration; on-device measurements show 8-12 / 18 tracks of cross-device sign agreement. Any feature ranking from one offline config may not transfer. Mitigated by replay (gap 10) using captures from each physical device.
+
+#### P3 — acknowledged but not worth fixing
+
+- PDM mic simulation: unneeded when real device captures exist.
+- Absolute bit-for-bit CMSIS-DSP on desktop: float precision is sufficient, full bit-parity is over-engineering.
+
+### Harness v2 architecture — the fix
+
+"The most-parity-accurate offline harness" is the one where the only code that isn't firmware C++ is the WAV reader, the stat aggregation, and the TFLite runtime (which is the same library as TFLite Micro at the op level). Everything else: firmware.
+
+Binary architecture:
+
+```
+                 ┌────────────────────────────────────────────┐
+                 │                parity_harness               │
+                 │                                            │
+  WAV/capture ──►│ wav_reader.cpp                             │
+                 │     │                                       │
+                 │     ▼                                       │
+                 │ normalize (match AdaptiveMic chain) ◄── target_rms_db
+                 │     │                                       │
+                 │     ▼                                       │
+                 │ SharedSpectralAnalysis::process() full      │
+                 │     ├── applyHammingWindow  (firmware)     │
+                 │     ├── computeFFT          (vendored CMSIS-DSP on desktop)
+                 │     ├── computeMagnitudesAndPhases (firmware)
+                 │     ├── computeRawMelBands  (firmware)     │
+                 │     ├── computeShapeFeaturesRaw (firmware) │
+                 │     ├── raw_flux            (firmware, with prev-state maintained)
+                 │     ├── applyCompressor     (firmware)     │
+                 │     ├── computeDerivedFeatures (firmware)  │
+                 │     └── spectral_flux        (firmware)    │
+                 │     ▼                                       │
+                 │ FrameOnsetNN assemble input vector         │
+                 │   (exact path audit — gap 4)               │
+                 │     │                                       │
+                 │     ▼                                       │
+                 │ tflite-runtime inference on .tflite        │
+                 │     │                                       │
+                 │     ▼                                       │
+                 │ AudioTracker::updatePulseDetection         │
+                 │   (firmware peak-picking + gates)          │
+                 │     │                                       │
+                 │     ▼                                       │
+                 └───► per-frame CSV: audio-sample-start,      │
+                       mags, mels, all features, nn_activation,│
+                       fire?, gate_states                      │
+                                                              │
+                  Python driver: stats only (R², |d|, F1)      │
+                                                              │
+```
+
+All firmware logic runs in-process via compiled firmware sources. The only "Python reference" that remains is stat aggregation.
+
+### Incremental fix order
+
+Each step gets its own commit. Ordered by cost/benefit ratio:
+
+| # | step | fixes gap(s) | rough cost |
+|---|------|--------------|-----------|
+| 1 | Audit which flatness the NN consumes; fix firmware if wrong | 4 | half day |
+| 2 | Extend harness to output mel + raw_flux with state + compressed flatness + spectral_flux | 2, 3 | half day |
+| 3 | Add WAV input + vendored CMSIS-DSP FFT to harness | 1, 7 | 1-2 days |
+| 4 | Port `AudioTracker::updatePulseDetection` into harness | 9 | 1 day |
+| 5 | Integrate tflite-runtime, verify vs tflite-micro on a sample track | 5 | half day |
+| 6 | Replay-capture mode: feed device-captured audio instead of WAV | 10, 11 | half day |
+| 7 | Audit `scripts/audio.py` feature code against firmware for all 6 features | 6 | 1 day |
+| 8 | Match AdaptiveMic chain in harness (or document it as intentionally skipped) | 8 | half day |
+
+Every commit from this point forward must keep the parity test green (`tests/parity/run_parity_test`) and extend its coverage to any new feature / path it claims to test. A future Claude that sees green "parity OK" output must be able to trust it across the full pipeline, not just the one function the current harness covers.
+
 ## Design decisions
 
 ### D1: Selective feature computation + streaming (not ring buffer)
