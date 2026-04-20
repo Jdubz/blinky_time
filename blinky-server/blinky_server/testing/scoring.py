@@ -443,7 +443,10 @@ def score_device_run(
             # Nearest ref is either at idx or idx-1
             near_onset = False
             for j in (idx - 1, idx):
-                if 0 <= j < len(ref_onsets) and abs(t_sec - ref_onsets[j]) < HYBRID_ONSET_WINDOW_SEC:
+                if (
+                    0 <= j < len(ref_onsets)
+                    and abs(t_sec - ref_onsets[j]) < HYBRID_ONSET_WINDOW_SEC
+                ):
                     near_onset = True
                     break
             if near_onset:
