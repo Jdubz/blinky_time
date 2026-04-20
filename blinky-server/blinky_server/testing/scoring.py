@@ -483,6 +483,7 @@ def score_device_run(
                 signal_gaps.append(
                     SignalGapStats(
                         signal=name,
+                        mode="frame",
                         onset_mean=_js_round(o_mean, 4),
                         onset_std=_js_round(o_std, 4),
                         non_mean=_js_round(n_mean, 4),
@@ -493,6 +494,64 @@ def score_device_run(
                         n_non=non_count,
                     )
                 )
+
+        # --- Per-onset peak mode ---
+        # For each GT onset, keep ONE sample per signal: the max value within
+        # ±HYBRID_ONSET_WINDOW_SEC. Non-onset pool stays frame-level (reuses
+        # non_sum / non_sqsum from above). Matches offline Phase 1 exactly.
+        if non_count > 1 and len(ref_onsets):
+            # Organize frames by timestamp for binary-search window extraction.
+            frame_t: list[float] = []
+            frame_vals: list[dict[str, float]] = []
+            for f in signal_frames:
+                ts_ms = f.timestamp_ms - audio_epoch_ms
+                if ts_ms < 0:
+                    continue
+                frame_t.append((ts_ms - latency_correction_ms) / 1000)
+                frame_vals.append(f.values)
+            peak_sum: dict[str, float] = {n: 0.0 for n in signal_names}
+            peak_sqsum: dict[str, float] = {n: 0.0 for n in signal_names}
+            peaks_collected = 0
+            for gt_t in ref_onsets:
+                lo = bisect.bisect_left(frame_t, gt_t - HYBRID_ONSET_WINDOW_SEC)
+                hi = bisect.bisect_right(frame_t, gt_t + HYBRID_ONSET_WINDOW_SEC)
+                if lo >= hi:
+                    continue
+                peaks_collected += 1
+                for name in signal_names:
+                    peak = max(frame_vals[j].get(name, 0.0) for j in range(lo, hi))
+                    peak_sum[name] += peak
+                    peak_sqsum[name] += peak * peak
+            if peaks_collected > 1:
+                for name in signal_names:
+                    p_mean = peak_sum[name] / peaks_collected
+                    p_var = max(
+                        0.0,
+                        (peak_sqsum[name] - peaks_collected * p_mean * p_mean)
+                        / (peaks_collected - 1),
+                    )
+                    # Non-onset stats already computed above
+                    n_mean = non_sum[name] / non_count
+                    n_var = max(
+                        0.0,
+                        (non_sqsum[name] - non_count * n_mean * n_mean) / (non_count - 1),
+                    )
+                    pooled = math.sqrt((p_var + n_var) / 2.0)
+                    d = 0.0 if pooled < 1e-12 else (p_mean - n_mean) / pooled
+                    signal_gaps.append(
+                        SignalGapStats(
+                            signal=name,
+                            mode="peak",
+                            onset_mean=_js_round(p_mean, 4),
+                            onset_std=_js_round(math.sqrt(p_var), 4),
+                            non_mean=_js_round(n_mean, 4),
+                            non_std=_js_round(math.sqrt(n_var), 4),
+                            gap=_js_round(p_mean - n_mean, 4),
+                            cohens_d=_js_round(d, 3),
+                            n_onset=peaks_collected,
+                            n_non=non_count,
+                        )
+                    )
 
     return DeviceRunScore(
         audio_latency_ms=audio_latency_ms,
@@ -609,6 +668,7 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             "gaps": [
                 {
                     "signal": g.signal,
+                    "mode": g.mode,
                     "onsetMean": g.onset_mean,
                     "onsetStd": g.onset_std,
                     "nonMean": g.non_mean,

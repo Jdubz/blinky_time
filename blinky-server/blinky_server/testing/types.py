@@ -117,13 +117,21 @@ class PlpMetrics:
 class SignalGapStats:
     """Per-signal onset-vs-non-onset statistics. One of these per streamed signal.
 
-    The raw gap is comparable across signals only if normalized by variance —
-    see `cohens_d` (pooled-std effect size). A gap of 0.01 can be strongly
-    discriminative if std is tiny; a gap of 100 can be meaningless if std is
-    in the thousands. See docs/HYBRID_FEATURE_ANALYSIS_PLAN.md Phase 1.
+    Two `mode`s:
+      - "frame": every captured frame is classified onset (within
+        ±HYBRID_ONSET_WINDOW_SEC of any GT onset) or non-onset. Same method
+        b132-b133 used. Dilutes sharp-attack signals because the onset
+        window spans multiple frames around the peak.
+      - "peak":  one sample per GT onset — max feature value within
+        ±HYBRID_ONSET_WINDOW_SEC around each onset. Non-onset pool is still
+        frame-level. Matches the offline Phase 1 methodology in
+        run_catalog.py. Should give higher |d| for sharp-attack features.
+
+    See docs/HYBRID_FEATURE_ANALYSIS_PLAN.md Phase 1.
     """
 
     signal: str
+    mode: str  # "frame" or "peak"
     onset_mean: float
     onset_std: float
     non_mean: float

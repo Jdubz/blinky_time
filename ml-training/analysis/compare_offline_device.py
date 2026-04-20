@@ -34,39 +34,42 @@ def main() -> int:
     # but keep the map explicit for future divergence).
     offline_by_name = {r["feature"]: r for r in offline["cross_corpus"]}
 
-    # Collect per-device-per-track cohens_d for each signal from the job.
+    # Collect per-device-per-track cohens_d for each (signal, mode) from the job.
     results = job.get("result", {}).get("results", [])
-    per_signal: dict[str, list[float]] = {}
-    n_tracks = len(results)
+    per_key: dict[tuple[str, str], list[float]] = {}
     for row in results:
-        for dev_id, score in row.get("scores", {}).items():
+        for _, score in row.get("scores", {}).items():
             for g in score.get("signals", {}).get("gaps", []):
-                per_signal.setdefault(g["signal"], []).append(g["cohensD"])
+                key = (g["signal"], g.get("mode", "frame"))
+                per_key.setdefault(key, []).append(g["cohensD"])
 
-    print(f"{'signal':10s} {'offline d':>10s} {'dev d μ':>10s} {'dev d σ':>10s} {'n':>5s}  verdict")
-    print("-" * 70)
-    for name in sorted(offline_by_name, key=lambda n: -abs(offline_by_name[n]["cohens_d"])):
-        off_d = offline_by_name[name]["cohens_d"]
-        samples = per_signal.get(name, [])
-        if len(samples) < 2:
-            print(f"{name:10s} {off_d:>+10.3f}  (no on-device data for signal)")
-            continue
-        mean_d = statistics.mean(samples)
-        std_d = statistics.stdev(samples)
-        # Verdict: sign match + magnitude comparison
-        same_sign = (off_d > 0) == (mean_d > 0)
-        ratio = abs(mean_d) / abs(off_d) if abs(off_d) > 1e-6 else 0.0
-        if not same_sign:
-            v = "sign FLIP"
-        elif ratio < 0.3:
-            v = f"survived weakly ({ratio:.0%})"
-        elif ratio < 0.7:
-            v = f"moderate survival ({ratio:.0%})"
-        else:
-            v = f"preserved ({ratio:.0%})"
-        print(
-            f"{name:10s} {off_d:>+10.3f} {mean_d:>+10.3f} {std_d:>10.3f} {len(samples):>5d}  {v}"
-        )
+    modes_present = sorted({mode for _, mode in per_key})
+    for mode in modes_present:
+        print(f"\n=== mode: {mode} ===")
+        print(f"{'signal':10s} {'offline d':>10s} {'dev d μ':>10s} {'dev |d| μ':>10s} {'dev d σ':>10s} {'n':>5s}  verdict")
+        print("-" * 78)
+        for name in sorted(offline_by_name, key=lambda n: -abs(offline_by_name[n]["cohens_d"])):
+            off_d = offline_by_name[name]["cohens_d"]
+            samples = per_key.get((name, mode), [])
+            if len(samples) < 2:
+                continue
+            mean_d = statistics.mean(samples)
+            std_d = statistics.stdev(samples)
+            mean_abs = statistics.mean(abs(s) for s in samples)
+            same_sign = (off_d > 0) == (mean_d > 0)
+            ratio = abs(mean_d) / abs(off_d) if abs(off_d) > 1e-6 else 0.0
+            if not same_sign:
+                v = "sign FLIP"
+            elif ratio < 0.3:
+                v = f"weak ({ratio:.0%})"
+            elif ratio < 0.7:
+                v = f"moderate ({ratio:.0%})"
+            else:
+                v = f"preserved ({ratio:.0%})"
+            print(
+                f"{name:10s} {off_d:>+10.3f} {mean_d:>+10.3f} {mean_abs:>10.3f} "
+                f"{std_d:>10.3f} {len(samples):>5d}  {v}"
+            )
     return 0
 
 
