@@ -38,6 +38,7 @@ from analysis.features import (  # noqa: E402
     SR,
     crest_factor,
     high_frequency_content,
+    raw_superflux,
     spectral_centroid,
     spectral_flatness,
     spectral_rolloff,
@@ -109,9 +110,9 @@ def write_mags_bin(audio: np.ndarray, out_path: Path) -> tuple[int, int]:
 def python_features_from_firmware_layout(mags_firmware: np.ndarray) -> dict[str, np.ndarray]:
     """Run feature functions on firmware-layout magnitudes (128 bins, DC=0).
 
-    features.py expects DC-skipped input of size 127 here. Slice off DC and
-    pass bins 1..127 — the Python feature math then matches firmware exactly
-    (same bin indexing in loops, same bin range).
+    features.py expects DC-skipped input of size 127. Slice off DC and pass
+    bins 1..127 — Python feature math matches firmware exactly (same bin
+    indexing in loops, same bin range).
     """
     sliced = mags_firmware[:, 1:]  # (n_frames, 127) — firmware bins 1..127
     return {
@@ -120,6 +121,9 @@ def python_features_from_firmware_layout(mags_firmware: np.ndarray) -> dict[str,
         "rolloff": spectral_rolloff(sliced).astype(np.float64),
         "hfc": high_frequency_content(sliced).astype(np.float64),
         "flatness": spectral_flatness(sliced).astype(np.float64),
+        # raw_superflux needs prev-frame state internally (leading frame = 0),
+        # which the function handles by returning n_frames values with out[0]=0.
+        "raw_flux": raw_superflux(sliced).astype(np.float64),
     }
 
 
@@ -136,17 +140,15 @@ def run_harness(harness: Path, bin_path: Path, csv_path: Path) -> None:
 
 
 def load_harness_csv(csv_path: Path) -> dict[str, np.ndarray]:
-    cols: dict[str, list[float]] = {
-        "centroid": [],
-        "crest": [],
-        "rolloff": [],
-        "hfc": [],
-        "flatness": [],
-    }
+    # Features covered by the parity comparison. Mel bands (mel0..melN-1)
+    # are also written by the harness but are verified by a separate mel
+    # parity tool (`ml-training/scripts/validate_features.py`), not here.
+    compared = ["centroid", "crest", "rolloff", "hfc", "flatness", "raw_flux"]
+    cols: dict[str, list[float]] = {k: [] for k in compared}
     with csv_path.open() as f:
         reader = csv.DictReader(f)
         for row in reader:
-            for k in cols:
+            for k in compared:
                 cols[k].append(float(row[k]))
     return {k: np.asarray(v, dtype=np.float64) for k, v in cols.items()}
 

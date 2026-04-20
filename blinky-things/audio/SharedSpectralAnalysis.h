@@ -353,6 +353,23 @@ public:
      *  process(). */
     void runShapeFeaturesForTest() { computeShapeFeaturesRaw(); }
 
+    /** Run the full pre-compressor analysis chain on the currently-held
+     *  preWhitenMagnitudes_. In order:
+     *    1. computeRawMelBands     — mel output in rawMelBands_/linearMelBands_
+     *    2. computeRawSpectralFluxAndSavePrev — raw flux + advance prev
+     *    3. computeShapeFeaturesRaw — centroid/crest/rolloff/hfc/flatness
+     *
+     *  Also advances the internal `hasPrevFrame_` flag after the first call
+     *  so the next call's raw-flux computation has a valid previous frame.
+     *  Caller injects one frame at a time in temporal order — this gives
+     *  the parity harness full pre-compressor feature parity. */
+    void runRawFeaturesForTest() {
+        computeRawMelBands();
+        computeRawSpectralFluxAndSavePrev();
+        computeShapeFeaturesRaw();
+        hasPrevFrame_ = true;
+    }
+
     // --- Compressor/whitening debug accessors ---
 
     /**
@@ -439,7 +456,8 @@ private:
     void computeRawMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();
-    void computeShapeFeaturesRaw();  // Phase 2a: centroid/crest/rolloff/HFC on preWhitenMagnitudes_
+    void computeShapeFeaturesRaw();  // Phase 2a: centroid/crest/rolloff/HFC/flatness on preWhitenMagnitudes_
+    void computeRawSpectralFluxAndSavePrev();  // SuperFlux + advance prevRawMagnitudes_
     void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {

@@ -1,21 +1,22 @@
-// Native parity harness for SharedSpectralAnalysis shape features.
+// Native parity harness for SharedSpectralAnalysis features (pre-compressor).
 //
 // Reads a binary file of pre-computed magnitude frames (produced by the
-// Python wrapper: `ml-training/analysis/run_parity_test.py`), injects each
-// frame into the firmware's `preWhitenMagnitudes_` buffer, runs
-// `computeShapeFeaturesRaw()`, and writes per-frame feature values to CSV.
+// Python wrapper `ml-training/analysis/run_parity_test.py`), feeds each
+// frame into the firmware's `preWhitenMagnitudes_` buffer via
+// `setPreWhitenMagnitudesForTest`, runs the full pre-compressor chain
+// (`runRawFeaturesForTest`), and writes per-frame feature values to CSV.
 //
-// Binary input format (little-endian, host-byte-order float32):
+// Binary input (little-endian, host-byte-order float32):
 //   int32   NUM_BINS
 //   int32   N_FRAMES
 //   float32 mags[N_FRAMES * NUM_BINS]
 //
-// The int32 header lets us catch mismatched NUM_BINS at parse time instead
-// of producing silently wrong output. Magnitudes are in column-major order
-// per frame: frame 0 bins 0..N-1, frame 1 bins 0..N-1, etc.
+// Output CSV columns:
+//   frame,centroid,crest,rolloff,hfc,flatness,raw_flux,mel0,mel1,...,mel<M-1>
 //
-// CSV output: one header row + one row per frame with
-//   frame,centroid,crest,rolloff,hfc
+// Frames are fed in temporal order so raw_flux (which needs prev-frame
+// magnitudes) has correct state. Mel count is read from the firmware
+// constants at runtime.
 
 #include "audio/SharedSpectralAnalysis.h"
 
@@ -64,8 +65,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Load the full magnitude buffer into memory. For the corpus-sized runs
-    // (≈100k frames × 128 bins × 4 B = ~50 MB) this is comfortably fine.
     std::vector<float> mags(static_cast<size_t>(n_frames) * num_bins);
     in.read(reinterpret_cast<char*>(mags.data()),
             static_cast<std::streamsize>(mags.size() * sizeof(float)));
@@ -75,29 +74,40 @@ int main(int argc, char** argv) {
     }
 
     SharedSpectralAnalysis spectral;
+    // `begin()` sets up internal tables (mel weights etc). Required before
+    // computeRawMelBands works.
+    spectral.begin();
+
+    const int num_mel = SpectralConstants::NUM_MEL_BANDS;
 
     std::ofstream out(csv_path);
     if (!out) {
         std::fprintf(stderr, "parity_harness: cannot open %s for write\n", csv_path);
         return 1;
     }
-    out << "frame,centroid,crest,rolloff,hfc,flatness\n";
-    // Use 9 decimals so float32 is round-tripped exactly — anything less
-    // would silently limit parity resolution.
+    out << "frame,centroid,crest,rolloff,hfc,flatness,raw_flux";
+    for (int i = 0; i < num_mel; i++) out << ",mel" << i;
+    out << '\n';
+    // Use 9 decimals so float32 round-trips exactly.
     out.precision(9);
 
     for (int32_t f = 0; f < n_frames; f++) {
         const float* frame_mags = mags.data() + static_cast<size_t>(f) * num_bins;
         spectral.setPreWhitenMagnitudesForTest(frame_mags);
-        spectral.runShapeFeaturesForTest();
+        spectral.runRawFeaturesForTest();
         out << f << ','
             << spectral.getRawCentroid() << ','
             << spectral.getRawCrest() << ','
             << spectral.getRawRolloff() << ','
             << spectral.getRawHFC() << ','
-            << spectral.getRawFlatness() << '\n';
+            << spectral.getRawFlatness() << ','
+            << spectral.getRawSpectralFlux();
+        const float* mel = spectral.getRawMelBands();
+        for (int i = 0; i < num_mel; i++) out << ',' << mel[i];
+        out << '\n';
     }
 
-    std::fprintf(stderr, "parity_harness: wrote %d frames to %s\n", n_frames, csv_path);
+    std::fprintf(stderr, "parity_harness: wrote %d frames (%d mel bands) to %s\n",
+        n_frames, num_mel, csv_path);
     return 0;
 }

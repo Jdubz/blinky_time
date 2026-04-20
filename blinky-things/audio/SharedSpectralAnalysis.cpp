@@ -212,40 +212,10 @@ void SharedSpectralAnalysis::process() {
     // Must happen BEFORE applyCompressor() modifies magnitudes_ in-place.
     computeRawMelBands();
 
-    // Compute raw SuperFlux spectral flux from pre-compressor magnitudes.
-    // This matches the training pipeline's STFT-based flux (no compressor gain).
-    // Used exclusively for NN hybrid input — ACF tempo uses compressed flux below.
-    //
-    // NOTE: keep this loop structurally in sync with the compressed flux loop
-    // below (same 3-wide max filter, same bass/mid/high split, same weighting).
-    // If you change one, update the other or the NN input will drift from what
-    // ACF uses for tempo analysis.
-    if (hasPrevFrame_) {
-        float rawBassFlux = 0.0f, rawMidFlux = 0.0f, rawHighFlux = 0.0f;
-        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
-            float ref = prevRawMagnitudes_[i];
-            if (i > 1) ref = fmaxf(ref, prevRawMagnitudes_[i - 1]);
-            if (i < SpectralConstants::NUM_BINS - 1) ref = fmaxf(ref, prevRawMagnitudes_[i + 1]);
-            float diff = preWhitenMagnitudes_[i] - ref;
-            if (diff > 0.0f) {
-                if (i <= SpectralConstants::BASS_MAX_BIN)
-                    rawBassFlux += diff;
-                else if (i <= SpectralConstants::MID_MAX_BIN)
-                    rawMidFlux += diff;
-                else
-                    rawHighFlux += diff;
-            }
-        }
-        rawSpectralFlux_ = bassFluxWeight * (rawBassFlux / BASS_BIN_COUNT)
-                         + midFluxWeight * (rawMidFlux / MID_BIN_COUNT)
-                         + highFluxWeight * (rawHighFlux / HIGH_BIN_COUNT);
-    } else {
-        rawSpectralFlux_ = 0.0f;
-    }
-    // Save pre-compressor magnitudes for next frame's raw flux computation
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        prevRawMagnitudes_[i] = preWhitenMagnitudes_[i];
-    }
+    // Compute raw SuperFlux + save previous-frame buffer. Extracted into a
+    // helper so tests/parity/ can invoke it on injected magnitudes without
+    // re-running the full process() pipeline.
+    computeRawSpectralFluxAndSavePrev();
 
     // Phase 2a shape features (centroid, crest, rolloff, HFC) on pre-compressor
     // magnitudes. Must run BEFORE applyCompressor() so values match the Python
@@ -678,6 +648,49 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
     } else {
         spectralFlatness_ = 0.0f;
     }
+}
+
+void SharedSpectralAnalysis::computeRawSpectralFluxAndSavePrev() {
+    // SuperFlux (Bock & Widmer 2013) on pre-compressor magnitudes.
+    // Matches `ml-training/analysis/features.py raw_superflux` bit-for-bit.
+    //
+    // NOTE: keep this loop structurally in sync with the compressed flux loop
+    // in process() (same 3-wide max filter, same bass/mid/high split, same
+    // weighting). If you change one, update the other or the NN input will
+    // drift from what ACF uses for tempo analysis.
+    //
+    // Writes `rawSpectralFlux_` and then advances `prevRawMagnitudes_` so
+    // the next frame has the reference it needs. The parity harness calls
+    // this directly; process() calls it after preWhitenMagnitudes_ is set.
+    if (hasPrevFrame_) {
+        float rawBassFlux = 0.0f, rawMidFlux = 0.0f, rawHighFlux = 0.0f;
+        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+            float ref = prevRawMagnitudes_[i];
+            if (i > 1) ref = fmaxf(ref, prevRawMagnitudes_[i - 1]);
+            if (i < SpectralConstants::NUM_BINS - 1) ref = fmaxf(ref, prevRawMagnitudes_[i + 1]);
+            float diff = preWhitenMagnitudes_[i] - ref;
+            if (diff > 0.0f) {
+                if (i <= SpectralConstants::BASS_MAX_BIN)
+                    rawBassFlux += diff;
+                else if (i <= SpectralConstants::MID_MAX_BIN)
+                    rawMidFlux += diff;
+                else
+                    rawHighFlux += diff;
+            }
+        }
+        rawSpectralFlux_ = bassFluxWeight * (rawBassFlux / BASS_BIN_COUNT)
+                         + midFluxWeight * (rawMidFlux / MID_BIN_COUNT)
+                         + highFluxWeight * (rawHighFlux / HIGH_BIN_COUNT);
+    } else {
+        rawSpectralFlux_ = 0.0f;
+    }
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        prevRawMagnitudes_[i] = preWhitenMagnitudes_[i];
+    }
+    // NOTE: hasPrevFrame_ is NOT updated here. process() sets it at the end
+    // of the full frame so the compressed-flux loop (which runs later in
+    // process()) still sees the correct "this is the first frame" state.
+    // The parity harness's test hook manages hasPrevFrame_ explicitly.
 }
 
 void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
