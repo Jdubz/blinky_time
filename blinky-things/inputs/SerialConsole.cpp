@@ -1501,6 +1501,15 @@ void SerialConsole::streamTick() {
                 out_.print(spectral.getSpectralFlatness(), 4);
                 out_.print(F(",\"rflux\":"));
                 out_.print(spectral.getRawSpectralFlux(), 4);
+                // Phase 2a shape features (pre-compressor mags, match Python ref).
+                out_.print(F(",\"cent\":"));
+                out_.print(spectral.getRawCentroid(), 2);
+                out_.print(F(",\"crest\":"));
+                out_.print(spectral.getRawCrest(), 3);
+                out_.print(F(",\"roll\":"));
+                out_.print(spectral.getRawRolloff(), 1);
+                out_.print(F(",\"hfc\":"));
+                out_.print(spectral.getRawHFC(), 4);
                 out_.print(F(",\"conf\":"));
                 out_.print(audioCtrl_->getPeriodicityStrength(), 3);
                 out_.print(F(",\"plpc\":"));

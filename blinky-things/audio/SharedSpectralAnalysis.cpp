@@ -88,6 +88,10 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralFlatness_(0.0f)
     , bassFlux_(0.0f)
     , rawSpectralFlux_(0.0f)
+    , rawCentroid_(0.0f)
+    , rawCrest_(0.0f)
+    , rawRolloff_(0.0f)
+    , rawHFC_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -236,6 +240,11 @@ void SharedSpectralAnalysis::process() {
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         prevRawMagnitudes_[i] = preWhitenMagnitudes_[i];
     }
+
+    // Phase 2a shape features (centroid, crest, rolloff, HFC) on pre-compressor
+    // magnitudes. Must run BEFORE applyCompressor() so values match the Python
+    // reference (ml-training/analysis/features.py), which computes on raw STFT.
+    computeShapeFeaturesRaw();
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
@@ -658,6 +667,70 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
         spectralFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
     } else {
         spectralFlatness_ = 0.0f;
+    }
+}
+
+void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
+    // Phase 2a: four "shape" features computed from preWhitenMagnitudes_ to
+    // match the Python reference in ml-training/analysis/features.py. Uses
+    // bin indices 1..NUM_BINS-1 (DC skipped), same framing as Python.
+    //
+    // Centroid   = Σ(k · |X[k]|) / Σ|X[k]|              — bin-index weighted
+    // Crest      = max|X[k]| / sqrt(Σ|X[k]|² / N)       — peak / RMS
+    // HFC        = Σ(k · |X[k]|²)                       — Masri 1996
+    // Rolloff85  = smallest k where Σ|X[0..k]|² ≥ 0.85 · total_energy
+    //
+    // All four scan the same 127 bins once (skipping DC), so total cost is a
+    // single pass with simple accumulators — well under the 0.5 ms target.
+    constexpr int FIRST = 1;  // skip DC
+    constexpr int LAST = SpectralConstants::NUM_BINS;
+    constexpr int N = LAST - FIRST;  // 127 for NUM_BINS=128
+
+    float weightedSum = 0.0f;   // Σ k · |X|
+    float magSum = 0.0f;        // Σ |X|
+    float energySum = 0.0f;     // Σ |X|²
+    float hfcSum = 0.0f;        // Σ k · |X|²
+    float peakMag = 0.0f;       // max |X|
+    for (int i = FIRST; i < LAST; i++) {
+        float mag = preWhitenMagnitudes_[i];
+        float e = mag * mag;
+        weightedSum += i * mag;
+        magSum += mag;
+        energySum += e;
+        hfcSum += i * e;
+        if (mag > peakMag) peakMag = mag;
+    }
+
+    rawCentroid_ = (magSum > 1e-10f && safeIsFinite(weightedSum))
+        ? (weightedSum / magSum)
+        : 0.0f;
+
+    if (energySum > 1e-10f && safeIsFinite(energySum)) {
+        float rms = sqrtf(energySum / static_cast<float>(N));
+        rawCrest_ = (rms > 1e-10f) ? (peakMag / rms) : 0.0f;
+    } else {
+        rawCrest_ = 0.0f;
+    }
+
+    rawHFC_ = safeIsFinite(hfcSum) ? hfcSum : 0.0f;
+
+    // Rolloff: first bin where cumulative |X|² ≥ 0.85 * total energy.
+    // Second pass — cheap since we know energySum; avoids a temp cumulative buffer.
+    if (energySum > 1e-10f) {
+        float threshold = 0.85f * energySum;
+        float cum = 0.0f;
+        int rolloffBin = 0;
+        for (int i = FIRST; i < LAST; i++) {
+            float e = preWhitenMagnitudes_[i] * preWhitenMagnitudes_[i];
+            cum += e;
+            if (cum >= threshold) {
+                rolloffBin = i - FIRST;  // Python indexing: 0..N-1 excluding DC
+                break;
+            }
+        }
+        rawRolloff_ = static_cast<float>(rolloffBin);
+    } else {
+        rawRolloff_ = 0.0f;
     }
 }
 
