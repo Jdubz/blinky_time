@@ -273,6 +273,12 @@ void SerialConsole::registerTrackerSettings() {
         "NN activation threshold for peak-picking", 0.0f, 1.0f, onParamChanged);
     // pulseNNGate removed — NN is now the primary signal, not a gate
 
+    // Crest-factor gate (Phase 2a / Phase 4 Path A).
+    // Suppresses NN pulses when per-frame crest factor is below this value.
+    // 0 = disabled. See AudioTracker.h and docs/HYBRID_FEATURE_ANALYSIS_PLAN.md.
+    settings_.registerFloat("crestgatemin", &audioCtrl_->crestGateMin, "tracker",
+        "Crest-factor gate minimum (0=disabled)", 0.0f, 20.0f, onParamChanged);
+
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
     // ODF baseline tracking

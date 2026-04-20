@@ -131,6 +131,14 @@ public:
     float pulseOnsetFloor = 0.30f;     // NN activation threshold for peak-picking (sweep optimal 0.3-0.4)
     // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
 
+    // Phase 2a crest-factor gate (Phase 4 Path A experiment).
+    // Suppresses NN-triggered pulses when the current-frame crest factor
+    // (peak/RMS of raw magnitudes) is below this threshold — tonal impulses
+    // have lower crest than drum hits on-device per Phase 3 measurement
+    // (|d|=0.74 between drum-peak and non-onset frames). Default 0 = disabled.
+    // Sweep range 0..10 against the validation corpus to tune.
+    float crestGateMin = 0.0f;
+
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
     float baselineSlowRise = 0.005f;   // Slow rise rate for floor tracking

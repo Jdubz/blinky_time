@@ -888,7 +888,14 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
                           (prevSignal_ > nn) &&
                           (prevSignal_ > effectiveFloor);
 
-        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
+        // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
+        // tonal impulses have lower crest on-device (Phase 3 |d|=0.74). When
+        // crestGateMin > 0, suppress pulses whose current-frame crest is below
+        // that value. Set to 0 to disable (production default).
+        bool crestOk = (crestGateMin <= 0.0f) ||
+                       (spectral_.getRawCrest() >= crestGateMin);
+
+        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk) {
             pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
             lastPulseMs_ = nowMs - static_cast<uint32_t>(1000.0f / OSS_FRAME_RATE);  // Peak was 1 frame ago
         }
