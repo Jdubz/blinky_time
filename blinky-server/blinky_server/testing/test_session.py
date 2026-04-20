@@ -110,14 +110,23 @@ class TestSession:
                     nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )
             )
-            # Hybrid features in debug stream: flat + rflux in "m" sub-object
-            if not self._nn_frames and ("flat" in m or "rflux" in m):
-                log.info("First NN frame captured: flat=%s rflux=%s", m.get("flat"), m.get("rflux"))
-            if "flat" in m or "rflux" in m:
+            # Hybrid features in debug stream: flat + rflux in "m" sub-object.
+            # Require BOTH fields — a partial frame (only one present) would
+            # bias the missing metric toward 0 and corrupt the gap comparison.
+            if "flat" in m and "rflux" in m:
+                if not self._nn_frames:
+                    log.info(
+                        "First NN frame captured: flat=%s rflux=%s",
+                        m.get("flat"),
+                        m.get("rflux"),
+                    )
                 self._nn_frames.append(
                     NNFrame(
                         timestamp_ms=now_ms,
-                        nna=m.get("nn", 0.0),  # raw NN activation
+                        # m["nn"] in the music stream is the raw NN activation,
+                        # not the 0/1 loaded flag (that lives in the separate
+                        # NN-diagnostic stream). See NNFrame docstring.
+                        activation=m.get("nn", 0.0),
                         flatness=m.get("flat", 0.0),
                         flux=m.get("rflux", 0.0),
                     )

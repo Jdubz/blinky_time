@@ -88,8 +88,10 @@ class Job:
                 "partial_results": self.partial_results,
                 "updated_at": time.time(),
             }
-            # Atomic write: tmp → rename
-            tmp = path.with_suffix(".tmp")
+            # Atomic write: tmp → rename. Keep the `.json` extension on the
+            # tmp file so orphaned temps (process killed mid-write) are
+            # covered by _prune_old_files()'s *.json pattern.
+            tmp = path.with_name(f"{path.stem}.tmp{path.suffix}")
             tmp.write_text(json.dumps(data, separators=(",", ":")))
             tmp.rename(path)
         except Exception as e:
@@ -124,7 +126,9 @@ class JobManager:
         """
         loaded = 0
         for path in sorted(self._jobs_dir.glob("*.json")):
-            if path.name.endswith(".progress.json") or path.name.endswith(".tmp"):
+            # Skip progress files (loaded separately below) and any orphaned
+            # atomic-write temps from a prior crashed rename.
+            if path.name.endswith((".progress.json", ".tmp.json")):
                 continue
             try:
                 data = json.loads(path.read_text())
@@ -143,10 +147,12 @@ class JobManager:
             except Exception as e:
                 log.warning("Failed to load job %s: %s", path.name, e)
 
-        # Load interrupted jobs from progress files (no final result file)
+        # Load interrupted jobs from progress files (no final result file).
+        # After loading, persist each as a proper final .json and delete the
+        # progress file — otherwise every restart re-recovers the same jobs.
         recovered = 0
         for path in sorted(self._jobs_dir.glob("*.progress.json")):
-            job_id = path.name.replace(".progress.json", "")
+            job_id = path.name.removesuffix(".progress.json")
             if job_id in self._jobs:
                 # Final result exists, progress file is stale — clean up
                 path.unlink(missing_ok=True)
@@ -164,8 +170,11 @@ class JobManager:
                     error="Job interrupted (server restart)",
                     created_at=data.get("created_at", path.stat().st_mtime),
                     completed_at=data.get("updated_at"),
+                    partial_results=partial,
                 )
                 self._jobs[job.id] = job
+                self._persist(job)
+                path.unlink(missing_ok=True)
                 recovered += 1
             except Exception as e:
                 log.warning("Failed to load progress file %s: %s", path.name, e)
@@ -232,9 +241,13 @@ class JobManager:
                 job.completed_at = time.time()
                 job.progress = 100
                 self._persist(job)
-                # Clean up progress file now that final result is written
-                progress_path = self._jobs_dir / f"{job.id}.progress.json"
-                progress_path.unlink(missing_ok=True)
+                # Clean up progress file now that final result is written.
+                # Guard defensively: self._jobs_dir falls back to JOBS_DIR in
+                # __init__ so this should always be set, but exceptions here
+                # would mask the original error path.
+                if self._jobs_dir is not None:
+                    progress_path = self._jobs_dir / f"{job.id}.progress.json"
+                    progress_path.unlink(missing_ok=True)
 
         task = asyncio.create_task(_run())
         self._tasks[job.id] = task

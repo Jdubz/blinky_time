@@ -10,6 +10,7 @@ Only two things are scored:
 
 from __future__ import annotations
 
+import bisect
 import logging
 import math
 import statistics
@@ -411,35 +412,41 @@ def score_device_run(
     hybrid: HybridMetrics | None = None
     nn_frames = test_data.nn_frames
     if ref_onsets and not nn_frames:
-        # Firmware didn't emit flat/rflux (needs b132+ with hybrid streaming and
-        # streamDebug enabled). Hybrid metrics will be absent from the score.
-        log.warning(
+        # Firmware didn't emit flat/rflux in the debug stream. Hybrid metrics
+        # will be absent from the score. Logged at debug to avoid noise when
+        # running against firmware builds that predate hybrid streaming.
+        log.debug(
             "No NN frames captured — hybrid metrics unavailable. "
             "Check that firmware emits 'flat'/'rflux' in debug stream."
         )
     if nn_frames and ref_onsets:
-        # Build time-indexed arrays from NN frames
-        nn_ts = [f.timestamp_ms - audio_epoch_ms for f in nn_frames]
-        nn_flat = [f.flatness for f in nn_frames]
-        nn_flux = [f.flux for f in nn_frames]
-
-        # Classify each NN frame as onset or non-onset (within ±50ms of GT)
+        # Classify each NN frame as onset (within ±50 ms of a GT onset) or
+        # non-onset. ref_onsets is time-ordered, so we can use bisect to find
+        # the nearest GT onset in O(log m) per frame instead of O(m).
+        sorted_refs = sorted(ref_onsets)  # guard against caller ordering
         onset_flat: list[float] = []
         onset_flux: list[float] = []
         non_flat: list[float] = []
         non_flux: list[float] = []
 
-        for i, ts_ms in enumerate(nn_ts):
+        for f in nn_frames:
+            ts_ms = f.timestamp_ms - audio_epoch_ms
             if ts_ms < 0:
                 continue
             t_sec = (ts_ms - latency_correction_ms) / 1000
-            near_onset = any(abs(t_sec - ref) < 0.050 for ref in ref_onsets)
+            idx = bisect.bisect_left(sorted_refs, t_sec)
+            # Nearest ref is either at idx or idx-1
+            near_onset = False
+            for j in (idx - 1, idx):
+                if 0 <= j < len(sorted_refs) and abs(t_sec - sorted_refs[j]) < 0.050:
+                    near_onset = True
+                    break
             if near_onset:
-                onset_flat.append(nn_flat[i])
-                onset_flux.append(nn_flux[i])
+                onset_flat.append(f.flatness)
+                onset_flux.append(f.flux)
             else:
-                non_flat.append(nn_flat[i])
-                non_flux.append(nn_flux[i])
+                non_flat.append(f.flatness)
+                non_flux.append(f.flux)
 
         if onset_flat and non_flat:
             of_mean = sum(onset_flat) / len(onset_flat)
