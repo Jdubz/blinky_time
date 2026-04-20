@@ -1,52 +1,57 @@
 # Hybrid Feature Analysis Plan
 
-**Status:** Planned (Apr 2026)
+**Status:** In progress (Apr 2026)
 **Owner:** Audio/ML
 **Supersedes:** ad-hoc `flat`/`rflux` streaming (b132)
 
 ## Goal
 
-The v27-hybrid NN onset detector plateaus at on-device F1 ≈ 0.63 with precision ≈ 0.50. The model fires reliably on kicks/snares but also on tonal impulses (chords, synth stabs, vocals). We need to identify **deterministic signals** that can:
+Evaluate a catalog of **deterministic audio features** (spectral shape, transient, phase) against three questions:
 
-1. Discriminate true-positive (percussion) onsets from false-positive (tonal) impulses.
-2. Behave consistently offline (clean audio) and on-device (speaker → room → mic → INT8), so the signal is not a sim-to-real artifact.
-3. Survive cross-device variation (mic unit-to-unit differences, placement).
+1. **Does the signal exist?** Does the feature actually separate GT onset frames from non-onset frames on clean audio?
+2. **Does the signal survive?** Does the offline value match the on-device value on the same track (speaker → room → mic → INT8)?
+3. **Is the implementation correct?** Does the firmware computation match its Python reference bit-for-bit?
 
-Qualifying signals feed two parallel downstream paths:
-- **Deterministic FP gates** on-device (like the existing bass-gate) — cheapest and fastest to iterate.
-- **New NN input features** — retrain with the winners to raise the F1 ceiling.
+A feature passes only if all three answer yes. Passing features feed two downstream paths:
+
+- **Deterministic FP gates** on-device — cheap, fast to iterate, extends the existing bass-gate pattern.
+- **New NN input channels** — retrain with the winners to raise the F1 ceiling.
+
+Features that discriminate offline but drift on-device are either dropped or flagged as "close the gap first" work (e.g., a normalization or calibration missing from the firmware path).
 
 ## Design decisions
 
 ### D1: Selective feature computation + streaming (not ring buffer)
 
-An earlier version of this plan proposed a fixed ring buffer of all candidate features, dumped to the server post-run. **Rejected** because it requires always-computing every candidate, poisoning the test baseline with CPU cost that isn't present in deployment.
-
-Instead, each candidate feature has an independent runtime flag that gates **both computation and streaming**:
+Every candidate feature has an independent runtime flag that gates **both computation and streaming**:
 
 ```
 stream signal flatness on    # compute AND stream
-stream signal centroid off   # compute skipped, field absent from m object
+stream signal centroid off   # compute skipped, field absent from the stream
 ```
 
-- **Deployed firmware cost:** zero (all flags default off, branch-predicted out)
-- **Test-time cost:** proportional to what's enabled
-- **Bandwidth:** only enabled features consume stream bytes; irrelevant when selective
+- **Deployed firmware cost:** zero (all flags default off, branch-predicted out).
+- **Test-time cost:** proportional to what's enabled.
+- **Bandwidth:** only enabled features consume stream bytes.
 
-### D2: FP label source — both GT tracks and synthetic tonals
+Rejected alternative: fixed ring buffer of all candidates dumped post-run. That requires always-computing every feature during tests, which changes the detection CPU budget relative to deployment and poisons the baseline we're measuring against.
 
-- **GT tracks (`.beats.json`):** FP = NN fires without a matching GT onset within ±50 ms. Covers the real-world distribution of FPs in music. Limitation: GT labels are kick/snare-weighted; hi-hats and other non-labeled percussive events can appear as phantom FPs.
-- **Synthetic tonal tracks:** pure piano chords, held synth pads, sustained vocals — any NN firing is an FP by construction. Clean labels but limited ecological validity.
+### D2: Labels come from ground truth, not the NN
 
-Using both surfaces different failure modes: GT tracks show which signals discriminate in-context; synthetics isolate the tonal-impulse response without drum masking.
+The NN's own opinion is explicitly **not** a label source. We want to know whether a feature separates real onsets from real non-onsets, independent of any model. Labeling runs off `onsets_consensus.json` / `.beats.json` only:
 
-### D3: Same analysis pipeline offline and on-device
+- **Onset frame:** within ±50 ms of any GT onset.
+- **Non-onset frame:** everything else.
 
-To compute the sim-to-real gap per signal, the **Python offline analysis** and the **firmware computation** must match bit-for-bit at the feature level (within INT8 quantization error). Reuse the existing mel-pipeline parity validation (MAE = 0.0017 INT8 levels, see `docs/AUDIO_ARCHITECTURE.md`). Each candidate feature needs a parity test before Phase 3 conclusions are trustworthy.
+No "true positive" vs "false positive" language in Phase 1 — that framing bakes in NN bias and answers a different question ("which features explain the NN's mistakes"). That question is interesting but downstream: if a feature passes Phase 1–3, *then* we can ask whether adding it to the NN reduces FPs (Phase 4 Path B).
+
+### D3: Firmware-to-Python parity is a first-class acceptance criterion
+
+Every signal the firmware computes must match its Python reference within a documented MAE. The existing mel-pipeline parity (MAE = 0.44 INT8 levels, see `AUDIO_ARCHITECTURE.md`) is the template. Without parity, any offline-vs-device discrepancy is ambiguous: it could be acoustic-chain drift OR an implementation bug. Parity tests rule out the implementation side before we invest in on-device analysis.
 
 ## Candidate signal catalog
 
-Ten candidates grouped by family. Each has offline Python reference + firmware implementation + parity test as acceptance criteria.
+Ten candidates grouped by family.
 
 | Signal | Family | Rationale | Cost estimate (nRF52840 frame) |
 |--------|--------|-----------|---------------------------------|
@@ -61,67 +66,59 @@ Ten candidates grouped by family. Each has offline Python reference + firmware i
 | Spectral centroid | Shape | Where the spectral "mass" is; drums shift centroid per hit | ~0.2 ms |
 | Spectral rolloff (85th percentile) | Shape | Bandwidth proxy; tonal impulses are narrow-band | ~0.3 ms |
 
-Total if all enabled: ~3.5 ms/frame. At 62.5 Hz that's 22% CPU — unacceptable for deployment but fine when testing a subset.
+Total if all enabled: ~3.5 ms/frame. At 62.5 Hz that's 22 % CPU — unacceptable for deployment but fine when measuring a subset during tests.
 
 ## Phase plan
 
-### Phase 1 — Offline catalog (Python-only)
+### Phase 1 — Does the signal exist? (Python, no NN)
 
-**Input:** EDM track library with `.beats.json` ground truth + curated synthetic tonal clips.
-**Compute:** all 10 candidate features per frame on every track.
-**Label each frame** as TP / FP / TN / FN using:
-- TP: GT onset within ±50 ms AND NN activation above threshold.
-- FP: NN activation above threshold, no GT onset within ±50 ms.
-- TN: neither.
-- FN: GT onset, no NN firing.
+**Input:** GT corpus (EDM tracks + consensus onsets) and, optionally, synthetic tonal clips (pure chords, synth pads, vocals).
+**Compute:** all 10 candidate features per frame.
+**Label:** onset (within ±50 ms of any GT onset) or non-onset.
+**Report per feature:** mean / std / distribution per class, Cohen's d (onset vs non-onset), ROC-AUC as a standalone classifier, KS statistic.
+**Aggregate across corpus:** per-track-weighted mean of |d|, AUC, KS; rank by |d|.
+**Keep:** top 6 for Phase 2. Drop anything with |d| < 0.1 or inconsistent signed d across tracks.
 
-NN activations come from the existing offline evaluator (runs the trained model on clean audio).
+**Deliverable:** ranked shortlist appended to this doc. Code in `ml-training/analysis/`.
 
-**Per-signal outputs:**
-- Distribution (histogram) for each class.
-- Cohen's d effect size between TP and FP.
-- ROC/AUC of the signal alone as a TP-vs-FP classifier.
-- Rank signals by effect size; keep top 6 for Phase 2.
+### Phase 2 — Make it measurable on-device
 
-**Deliverable:** `ml-training/analysis/hybrid_feature_catalog.ipynb` + ranked shortlist committed to this doc as an addendum.
+Three chunks of work, in this order:
 
-### Phase 2 — Selective streaming infrastructure
+**2a. Firmware-to-Python parity tests.** For each shortlisted signal: a Python reference matching the firmware implementation line-by-line, a short audio fixture, and an assertion on MAE (target ≤ 0.005 in normalized units, ≈ INT8 granularity). Reuse the pattern from `ml-training/verify_mel_pipeline.py`. A feature fails this stage if the firmware version disagrees with its Python reference — that's an implementation bug, not an acoustic-chain issue, and it must be fixed before any on-device measurement.
 
-Firmware and server changes needed so Phase 3 can capture on-device data for arbitrary subsets of the shortlist.
+**2b. Selective streaming infrastructure.**
 
-**Firmware:**
-- Add a `SignalRegistry` with one entry per candidate (name, compute_fn, flag).
-- Extend `SerialConsole` with `stream signal <name> on|off` commands.
-- In the stream tick, iterate the registry and emit only enabled signals with a shared JSON schema (`"signals":{"flat":0.34, "hfc":0.81, ...}`).
-- Compute functions gated by flag — zero cost when disabled.
+- Firmware: `SignalRegistry` with one entry per candidate (name, compute_fn, flag). `SerialConsole` gets `stream signal <name> on|off`. Stream tick iterates the registry and emits `"signals":{"flat":0.34, "hfc":0.81, ...}` with only enabled signals. Compute gated by flag — zero cost when disabled.
+- Server: `test_session.py` ingests arbitrary signal fields under `signals` into a generic `SignalFrame` list (replacing the hardcoded `NNFrame`). `scoring.py` generalizes `HybridMetrics` so every streamed signal gets its own onset-vs-non-onset stats. `test_runner.py` accepts `signals: [str]` in validate/sweep requests and issues `stream signal X on` before the run.
 
-**Server (`blinky-server`):**
-- `test_session.py`: ingest arbitrary signal fields under `signals` into a generic `SignalFrame` list (replaces the hardcoded `NNFrame`).
-- `scoring.py`: parameterize `HybridMetrics` to compute TP/FP/TN gaps for every signal present in the capture.
-- `test_runner.py`: accept a `signals: [str]` parameter in validate/sweep requests; issue `stream signal X on` per test.
+**2c. Acceptance check.** A validate request with `signals=["flatness","hfc"]` produces a capture with both fields populated; `signals=[]` produces a capture with no signal fields (confirms zero-cost baseline when no investigation is active).
 
-**Acceptance:** a validate request with `signals=["flatness","hfc"]` produces a capture with both fields, and a request with `signals=[]` produces a capture with none (confirming zero-cost baseline).
+### Phase 3 — Does the signal survive the acoustic chain?
 
-### Phase 3 — Sim-to-real gap measurement
+Play the same GT tracks through two paths:
 
-**Procedure** for each of the top 6 signals from Phase 1:
-1. Enable the signal via `stream signal X on` on all 4 devices.
-2. Play the same GT tracks offline (Phase 1) and on-device (validation harness).
-3. Align frames by timestamp (within 1 hop = 16 ms).
-4. Compute:
-   - **Pearson correlation** between offline and on-device values (environmental robustness).
-   - **KS statistic** on the two distributions (distribution-level similarity).
-   - **Cross-device std** across the 4 devices (mic invariance).
-   - **On-device TP-vs-FP Cohen's d** (discriminative power in real conditions).
+- **Offline:** Python (Phase 1 code).
+- **On-device:** validation harness with the signal flags enabled on all 4 devices.
 
-**Deployability score** per signal:
+Align frames by timestamp (within 1 hop = 16 ms). Per signal, compute:
+
+- **Pearson correlation** between offline and on-device values on matched frames — primary "does the signal survive?" metric.
+- **KS statistic** on the two distributions — catches distribution-level drift that correlation misses.
+- **On-device Cohen's d** (onset vs non-onset, same labels as Phase 1) — does the offline discrimination carry over?
+- **Cross-device std** across the 4 devices — are the devices seeing the same signal?
+
+**Deployability score:**
+
 ```
-score = |cohen_d_ondevice| × corr_offline_ondevice × (1 / (cross_device_std_normalized + ε))
+score = |d_ondevice| × corr_offline_device × (1 / max(ε, cross_device_std_normalized))
 ```
 
-with `ε = 0.01` to prevent a perfectly consistent signal from scoring infinitely. Equivalent formulation: `score = |d| × r / max(ε, cross_device_std_normalized)`. High score = discriminative AND robust AND consistent. Bottom third of the shortlist gets dropped.
+with `ε = 0.01` to prevent a perfectly consistent signal from scoring infinitely. High score = real signal, survives the chain, consistent across devices.
 
-**Deliverable:** a decision matrix appended to this doc listing per-signal offline_d, on-device_d, offline↔device correlation, cross-device std, final score.
+**Diagnostic for low correlation:** if a feature has good offline |d| but poor offline-vs-device correlation, investigate before dropping. Typical suspects are (a) a firmware normalization path the offline code doesn't replicate, (b) noise-subtraction that kills the signal differently on device, (c) INT8 quantization clipping the dynamic range. Fixing any of these closes the on-device gap for this feature and often for others too. Log findings under "gap-closing candidates" in the Phase 3 writeup.
+
+**Deliverable:** decision matrix appended to this doc listing per-signal offline |d|, on-device |d|, offline↔device correlation, cross-device std, final score, and any gap-closing notes.
 
 ### Phase 4 — Act on the shortlist
 
@@ -129,74 +126,75 @@ Two paths run in parallel; whichever lands first wins.
 
 **Path A: deterministic FP gates.** For each top-ranked signal, add a threshold-based gate in the onset detection code (extending the current bass-gate pattern). Sweep thresholds via `run_param_sweep`. Cheap to try, cheap to revert.
 
-**Path B: retrain NN with new features.** Add the top 2-3 signals as additional NN input channels (bumps 32 → 34-35). Retrain v28, evaluate, deploy if F1 improves by ≥0.03.
+**Path B: retrain NN with new features.** Add the top 2–3 signals as additional NN input channels (bumps 32 → 34–35). Retrain v28, evaluate, deploy if F1 improves by ≥ 0.03.
 
-Expected outcome: one new deterministic gate (cheap) + one new NN input feature (expensive but higher ceiling). Neither is guaranteed.
+Expected outcome: one new deterministic gate (cheap) + one new NN input feature (expensive but higher ceiling). Neither is guaranteed — a shortlist that all fails Phase 3 means the acoustic chain is eating every signal and we need to work on that chain instead.
 
-**Phase 4 exit gate — strip losing candidates from firmware.** Before any Phase 4 work merges to master, every candidate feature that did **not** make the shortlist must be deleted from the firmware (computation + flag + stream field), not just flag-defaulted-off. Run `grep -r 'SignalRegistry' blinky-things/` to confirm only the shipped signals remain. Investigation-only code that lingers in deployment firmware is how flash budget leaks accumulate — see the `v21`–`v26` cleanup in b132 for an example we had to do retroactively.
+**Phase 4 exit gate — strip losing candidates from firmware.** Before any Phase 4 work merges, every candidate feature that did **not** make the shortlist must be deleted from the firmware (computation + flag + stream field), not just flag-defaulted-off. Run `grep -r 'SignalRegistry' blinky-things/` to confirm only the shipped signals remain. Investigation-only code that lingers in deployment firmware is how flash budget leaks — see the `v21`–`v26` cleanup in b132 for a recent cautionary tale.
 
 ## Open questions / risks
 
-1. **Parity cost.** Each firmware feature needs a Python reference and a parity test. For 6 signals that's ~6 days of careful work. Can we batch parity validation by sharing a test harness? Yes — reuse `ml-training/verify_mel_pipeline.py` as a template.
+1. **Parity cost.** Each firmware feature needs a Python reference and a parity test. For 6 signals that's ~6 days of careful work. Reuse `ml-training/verify_mel_pipeline.py` as a template to keep per-signal cost to ~1 day.
 
-2. **Phase history RAM cost.** Complex SD and WPD both need per-bin phase memory (128 floats × 2 = 1 KB RAM each). Acceptable on nRF52840 (256 KB total, 3.4 KB arena + 16 KB globals currently), but only if we share the buffer across signals that need it.
+2. **Phase history RAM.** Complex SD and WPD both need per-bin phase memory (128 floats × 2 = 1 KB RAM each). Acceptable on nRF52840 (256 KB total, ~20 KB globals + arena currently), but only if the buffer is shared across signals that need it.
 
-3. **FP label noise.** GT tracks only label kicks and snares. An NN firing on a hi-hat counts as an FP under the current labeling, but it's actually a real (just unlabeled) onset. Mitigations: (a) use drum-stem-labeled tracks only for FP analysis, (b) include synthetic tonals as the "cleanest" FP corpus, (c) manually spot-check the highest-confidence FPs to estimate label noise.
+3. **Label noise from unlabeled onsets.** GT labels are kick/snare-weighted. An NN or feature firing on a hi-hat counts as "non-onset" under current labels but is actually a real onset. Mitigations: (a) use drum-stem-labeled consensus onsets (already in use — `onsets_consensus.json`), (b) include synthetic tonals as a clean "all firings are wrong" corpus, (c) spot-check the strongest apparent disagreements manually.
 
-4. **Investigation ≠ deployment.** The test-time firmware has feature flags and computation paths that the deployed firmware shouldn't carry (wasted flash). When Phase 4 picks winners, strip unused candidates from the code, not just flag them off.
+4. **Investigation ≠ deployment.** The test-time firmware has feature flags and compute paths that deployed firmware shouldn't carry. When Phase 4 picks winners, strip unused candidates — see Phase 4 exit gate above.
 
-5. **Scope creep.** The catalog could grow indefinitely (50+ onset detection features in the literature). Start with the 10 listed; only expand if Phase 3 scores are disappointingly low across the board.
+5. **Scope creep.** The catalog could grow indefinitely (50+ onset-detection features in the literature). Start with the 10 listed; only expand if Phase 3 scores are disappointingly low across the entire shortlist.
 
 ## References
 
 - `docs/AUDIO_ARCHITECTURE.md` — current v27-hybrid architecture and the 32-input feature set.
 - `docs/ML_IMPROVEMENT_PLAN.md` — NN training roadmap.
 - `blinky-server/blinky_server/testing/scoring.py` `HybridMetrics` — prototype scoring shipped in b132 for `flat`/`rflux`. Generalize in Phase 2.
+- `ml-training/verify_mel_pipeline.py` — parity template for Phase 2a.
 - Bello et al., *A Tutorial on Onset Detection in Music Signals*, IEEE TSAP 2005 — most of the candidate catalog derives from Section III.
 
 ---
 
-## Phase 1 results (offline catalog) — 2026-04-20
+## Phase 1 results — 2026-04-20
 
 **Corpus:** 18 EDM tracks (`blinky-test-player/music/edm/`), 143,289 frames at 62.5 Hz, `onsets_consensus.json` as ground truth.
-**Model:** `outputs/v27-hybrid-real/best_model.pt` (32-feature hybrid — the real one, not the silently-dropped-features sibling).
-**Code:** `ml-training/analysis/features.py` + `ml-training/analysis/run_catalog.py`. Regenerate with
-`./venv/bin/python -m analysis.run_catalog --config configs/conv1d_w16_onset_v27.yaml --model outputs/v27-hybrid-real/best_model.pt --corpus ../blinky-test-player/music/edm --out outputs/feature_catalog`.
+**Labeling:** frame is "onset" if within ±50 ms of any GT onset, "non-onset" otherwise. No NN involved.
+**Code:** `ml-training/analysis/features.py` + `ml-training/analysis/run_catalog.py`.
+Regenerate with `./venv/bin/python -m analysis.run_catalog --corpus ../blinky-test-player/music/edm --out outputs/feature_catalog`.
 
-**Corpus-weighted ranking** (|d| = mean |Cohen's d| between TP and FP frames, weighted by per-track TP+FP count; positive signed d means the feature is larger on TP than FP):
+**Corpus-weighted ranking** (|d| is mean per-track-weighted |Cohen's d| between onset and non-onset frames; signed d sign convention: positive = feature is larger on onset frames; `pos tracks` = fraction of tracks with d > 0, i.e. how often the sign is correct):
 
-| rank | feature | \|d\| | d (signed) | AUC | KS |
-|-----:|---------|----:|-----------:|----:|----:|
-| 1 | complex_sd | 0.218 | +0.201 | 0.550 | 0.094 |
-| 2 | hfc | 0.209 | +0.200 | 0.557 | 0.107 |
-| 3 | raw_flux | 0.154 | +0.149 | 0.553 | 0.091 |
-| 4 | flatness | 0.141 | +0.102 | 0.530 | 0.081 |
-| 5 | centroid | 0.133 | +0.081 | 0.526 | 0.084 |
-| 6 | wpd | 0.100 | +0.093 | 0.527 | 0.058 |
-| 7 | kick_ratio | 0.096 | −0.002 | 0.484 | 0.069 |
-| 8 | rolloff | 0.093 | +0.063 | 0.530 | 0.079 |
-| 9 | renyi | 0.088 | −0.027 | 0.520 | 0.067 |
-| 10 | crest | 0.072 | −0.045 | 0.482 | 0.061 |
+| rank | feature | \|d\| | d (signed) | pos tracks | AUC | KS |
+|-----:|---------|-----:|-----------:|-----------:|----:|----:|
+| 1 | complex_sd | 0.217 | +0.201 | 17/18 | 0.549 | 0.092 |
+| 2 | hfc | 0.210 | +0.201 | 16/18 | 0.556 | 0.107 |
+| 3 | raw_flux | 0.155 | +0.152 | 17/18 | 0.554 | 0.091 |
+| 4 | flatness | 0.142 | +0.106 | 13/18 | 0.531 | 0.082 |
+| 5 | centroid | 0.130 | +0.086 | 12/18 | 0.528 | 0.084 |
+| 6 | wpd | 0.103 | +0.095 | 16/18 | 0.528 | 0.060 |
+| 7 | rolloff | 0.101 | +0.040 | 10/18 | 0.524 | 0.076 |
+| 8 | kick_ratio | 0.095 | −0.012 | 10/18 | 0.481 | 0.071 |
+| 9 | crest | 0.076 | −0.049 | 5/18 | 0.480 | 0.063 |
+| 10 | renyi | 0.069 | +0.005 | 10/18 | 0.523 | 0.069 |
 
 **Findings.**
 
-1. **All effect sizes are weak on clean audio.** The strongest, `complex_sd`, sits at |d| = 0.22, well below the Cohen-1988 "moderate" threshold of 0.5. This is consistent with `AUDIO_ARCHITECTURE.md:275` — on clean audio the NN activation is near-flat (mean 0.60, std 0.16), and it fires on 95–99.8 % of frames across the corpus. There is no TN room to exploit offline; Phase 1 is ceiling-limited by the same sim-to-real artefact we're trying to measure.
+1. **All effect sizes are weak offline** (|d| < 0.5 everywhere, top signal at 0.22). This is the expected offline baseline: the features *do* separate onsets from non-onsets on clean audio, but only modestly. The interesting question is whether on-device measurement preserves or erodes this separation, which is what Phase 3 answers.
 
-2. **Four features are positive discriminators on all 18 tracks** (except one outlier on flatness and one on complex_sd): `complex_sd`, `hfc`, `raw_flux`, `flatness`. The signed d means TP frames have *higher* values than FP frames — consistent with percussion being broadband-transient-phase-chaotic and tonals being narrowband-sustained-phase-stable.
+2. **Four features are reliably positive discriminators across the corpus:** `complex_sd` (17/18 tracks), `raw_flux` (17/18), `hfc` (16/18), `wpd` (16/18). These have both non-trivial |d| and a consistent sign — the signal exists and points the same way on nearly every track.
 
-3. **Three candidates can be dropped now:** `kick_ratio`, `renyi`, `crest` have near-zero or negative signed d across the corpus — they do not monotonically separate TP from FP on this data.
+3. **Three candidates show inconsistent sign and low |d|:** `kick_ratio` (10/18), `crest` (5/18), `renyi` (10/18). Their means wobble around zero across tracks. Drop these from Phase 2 — they don't pass the "does the signal exist?" bar.
 
-4. **The Phase 3 gap is the point.** The same features measured on-device will see the acoustic chain's contrast (per CLAUDE.md the acoustic chain is what makes on-device activations dynamic). Offline d ≈ 0.2 is the baseline; any feature that jumps to d > 0.5 on-device is a strong deployability candidate.
+4. **`flatness` and `centroid` are weaker** than the top four but still positive on a majority of tracks. Keep for Phase 2 as secondary candidates; on-device behavior may differ.
 
-**Phase 2 shortlist** (6 features carried into on-device measurement):
+**Phase 2 shortlist** (6 features):
 
-1. `complex_sd` — phase-aware, currently absent from NN input. **Primary candidate** for both deterministic gate and new NN feature.
-2. `hfc` — broadband HF content, currently absent from NN input. **Primary candidate.**
-3. `raw_flux` — already in NN input; serves as on-device reference to calibrate Phase 3 effect-size scaling.
-4. `flatness` — already in NN input; same rationale.
-5. `wpd` — weak (|d|=0.10) but only phase-based candidate alongside complex_sd; keep for cross-check in Phase 3.
-6. `centroid` — cheapest compute (~0.2 ms), marginal offline signal (|d|=0.13). Include because on-device cost/benefit is better than wpd.
+1. `complex_sd` — phase-aware transient, not currently in NN input. **Primary.**
+2. `hfc` — broadband HF content, not currently in NN input. **Primary.**
+3. `raw_flux` — already in NN input; parity reference and baseline for Phase 3 scaling.
+4. `flatness` — already in NN input; parity reference and baseline.
+5. `wpd` — weaker |d| but 16/18 sign-consistent; only other phase-based candidate.
+6. `centroid` — cheapest compute (~0.2 ms), weak but consistent-ish (12/18); include for cost/benefit breadth.
 
-**Dropped:** `kick_ratio`, `renyi`, `crest`, `rolloff`.
+**Dropped:** `kick_ratio`, `rolloff`, `crest`, `renyi`.
 
-**Phase 2 implication.** The SignalRegistry infrastructure work (selective streaming, `stream signal X on|off`) targets these 6. Full 10-feature firmware scaffolding is unnecessary.
+**Phase 2 implication.** Firmware-parity tests and `SignalRegistry` scaffolding target these 6. `raw_flux` and `flatness` already have firmware implementations in `SharedSpectralAnalysis` — parity tests there become first deliverables. The other four need Python reference + firmware implementation + parity in Phase 2a before any on-device measurement in Phase 3.
