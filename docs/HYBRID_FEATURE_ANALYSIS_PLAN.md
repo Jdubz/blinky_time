@@ -401,3 +401,39 @@ Unified direction: all six features are positive-sign discriminators on real mus
 **Phase 2d "sign stability" test is retrospectively invalidated** for features whose synthetic-offline sign disagreed with real-music behavior. The on-device real-music measurement is the source of truth; offline Phase 1 is still useful for ranking magnitude and catching implementation bugs, but not for direction.
 
 **Phase 2a parity harness still wanted** to rule out any residual C++ / Python implementation drift. With \|d\| in the 0.5-0.7 range, a 10-20 % implementation error could still matter for gate-threshold selection in Phase 4.
+
+### Phase 4 Path A — crest-gate sweep (NULL result) — 2026-04-20
+
+b135 adds a single-threshold `crestGateMin` parameter that suppresses NN-triggered pulses when the current-frame crest factor is below the threshold. Sweep on one device (ABFBC4) across 6 EDM tracks at values [0, 2, 4, 5, 6, 7]:
+
+| crestGateMin | F1 | precision | recall | detections | notes |
+|-------------:|---:|----------:|-------:|-----------:|-------|
+| 0 (disabled) | **0.573** | 0.551 | 0.610 | 110.7 | baseline |
+| 2 | 0.556 | 0.528 | 0.599 | 114.0 | noise — gate barely fires |
+| 4 | 0.547 | 0.519 | 0.592 | 114.5 | same |
+| 5 | 0.529 | 0.528 | 0.563 | 108.7 | F1 drops |
+| 6 | 0.530 | 0.546 | 0.539 | 102.2 | F1 still below baseline |
+| 7 | 0.475 | 0.541 | 0.450 | 86.5 | heavy suppression, F1 tanks |
+
+**At every threshold, F1 is below baseline.** Precision barely improves (best case +0 %), recall drops hard (up to −26 %). At value=7 the gate kills 27 % of TPs while only killing 16 % of FPs — it's *anti-selective*.
+
+### Why — methodological gap in Phase 1 / Phase 3
+
+Phase 1 and Phase 3 measured crest |d| ≈ 0.7 between:
+- **onset pool**: frames within ±50 ms of a GT onset (regardless of NN behavior), and
+- **non-onset pool**: frames ≥ 100 ms from any GT onset.
+
+A deterministic gate fires at the moment the NN triggers — which is a subset of frames, heavily concentrated near real onsets AND at broadband spectral events the NN mistakes for onsets. Within that subset, the interesting discrimination is **TP (NN fires, near GT) vs FP (NN fires, far from GT)**, not GT-near vs GT-far.
+
+Those are different questions. The NN fires on broadband spectral events — drums have sharp magnitude peaks (high crest), but so do synth stabs, vocal consonants, and chord changes. When the NN picks a moment to fire, crest is already high whether that's a TP or an FP. No gating threshold separates them because both populations cluster at the high end of crest.
+
+### Corrected next step — TP-vs-FP targeted measurement
+
+Before trying any more gate thresholds, measure per-feature |d| between two GT-labeled sub-populations: *frames where the NN fires and it's a TP* vs *frames where the NN fires and it's an FP*. This is the actual signal a gate needs.
+
+Possible outcomes:
+
+- Some other feature shows strong TP-vs-FP |d| → worth a gate sweep for that feature.
+- No feature shows strong TP-vs-FP |d| → the NN is making its errors on genuinely ambiguous events, and no deterministic shape feature can save it. Path A is dead; move to Path B (retrain with new input features) or upstream content classification.
+
+The Phase 1 |d| ranking was correct about which features exist as signals, but measured the wrong class boundary for FP-reduction purposes. Keep it as a feature-existence ranking, not as a gate-readiness ranking.
