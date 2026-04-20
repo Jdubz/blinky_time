@@ -1,3 +1,0 @@
-/home/jdubz/Development/blinky_time/tests/parity/build/CMakeFiles/parity_harness.dir
-/home/jdubz/Development/blinky_time/tests/parity/build/CMakeFiles/edit_cache.dir
-/home/jdubz/Development/blinky_time/tests/parity/build/CMakeFiles/rebuild_cache.dir
