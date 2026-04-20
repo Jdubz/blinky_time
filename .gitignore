@@ -16,6 +16,7 @@ ml-training/outputs/*/checkpoints/
 
 # Synthetic corpora (deterministic, regenerate via analysis/generate_tonal_corpus.py)
 blinky-test-player/music/synthetic_tonals/
+blinky-test-player/music/synthetic_tonals_*/
 
 # Compiled binaries (prevent accidental venv/library commits)
 *.so

@@ -34,9 +34,20 @@ log = logging.getLogger("tonal_corpus")
 SR = 16000
 DURATION = 30.0  # seconds per track
 
+# Variant parameters.
+# "clean"    — silence between impulses, sharp attacks (worst-case for activity-sum features).
+# "embedded" — continuous tonal bed underneath, slower attacks (closer to real music).
+VARIANTS = {
+    "clean": {"bed_amp": 0.0, "attack_mult": 1.0},
+    "embedded": {"bed_amp": 0.15, "attack_mult": 4.0},
+}
+# Module-level state read by the generators. main() sets it from --variant.
+_VARIANT: dict[str, float] = dict(VARIANTS["clean"])
+
 
 def _adsr(n: int, attack_ms: float, decay_ms: float, sustain: float, release_ms: float) -> np.ndarray:
-    """Simple ADSR envelope of total length n samples."""
+    """ADSR envelope. Attack length is scaled by the current variant's attack_mult."""
+    attack_ms = attack_ms * float(_VARIANT.get("attack_mult", 1.0))
     a = max(1, int(attack_ms * SR / 1000))
     d = max(1, int(decay_ms * SR / 1000))
     r = max(1, int(release_ms * SR / 1000))
@@ -48,6 +59,30 @@ def _adsr(n: int, attack_ms: float, decay_ms: float, sustain: float, release_ms:
         np.linspace(sustain, 0.0, r, dtype=np.float32),
     ])
     return env[:n]
+
+
+def _make_bed(seed: int = 42) -> np.ndarray:
+    """Continuous tonal bed — two slowly-modulated voices, deterministic.
+
+    Amplitude scaled by the current variant's bed_amp. Returns silence if bed
+    is disabled (clean variant).
+    """
+    amp = float(_VARIANT.get("bed_amp", 0.0))
+    total = int(DURATION * SR)
+    if amp <= 0.0:
+        return np.zeros(total, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    t = np.arange(total, dtype=np.float32) / SR
+    # Two drifting sustained voices plus very low-level pink-ish noise to
+    # simulate a real "song is happening" ambient spectrum, then amplitude-
+    # modulate slowly to avoid a static spectrum that would feel synthetic.
+    f1 = 180.0 + 4.0 * np.sin(2 * np.pi * 0.07 * t)
+    f2 = 270.0 + 3.0 * np.sin(2 * np.pi * 0.11 * t + 1.3)
+    bed = 0.45 * np.sin(2 * np.pi * np.cumsum(f1) / SR)
+    bed = bed + 0.35 * np.sin(2 * np.pi * np.cumsum(f2) / SR)
+    noise = rng.standard_normal(total).astype(np.float32) * 0.05
+    bed = (bed.astype(np.float32) + noise) * (0.8 + 0.2 * np.sin(2 * np.pi * 0.15 * t))
+    return (bed * amp).astype(np.float32)
 
 
 def _place_impulses(
@@ -244,15 +279,20 @@ GENERATORS = {
 }
 
 
-def write_track(name: str, audio: np.ndarray, onsets: np.ndarray, out_dir: Path) -> None:
-    """Write audio + GT sidecar. Normalizes peak to 0.9 to avoid clipping."""
-    peak = float(np.abs(audio).max())
+def write_track(name: str, audio: np.ndarray, onsets: np.ndarray, out_dir: Path, variant: str) -> None:
+    """Mix in the variant's tonal bed, normalize, write audio + GT sidecar."""
+    bed = _make_bed()
+    # Bed must match audio length. _make_bed returns full-duration; audio may
+    # be slightly shorter due to tail truncation in generators.
+    n = min(len(audio), len(bed))
+    mixed = audio[:n] + bed[:n]
+    peak = float(np.abs(mixed).max())
     if peak > 0:
-        audio = audio * (0.9 / peak)
+        mixed = mixed * (0.9 / peak)
     out_dir.mkdir(parents=True, exist_ok=True)
     wav_path = out_dir / f"{name}.wav"
     gt_path = out_dir / f"{name}.onsets_consensus.json"
-    sf.write(str(wav_path), audio.astype(np.float32), SR, subtype="FLOAT")
+    sf.write(str(wav_path), mixed.astype(np.float32), SR, subtype="FLOAT")
     gt_path.write_text(
         json.dumps(
             {
@@ -261,7 +301,7 @@ def write_track(name: str, audio: np.ndarray, onsets: np.ndarray, out_dir: Path)
                 "systems_succeeded": 1,
                 "total_systems": 1,
                 "tolerance_ms": 50,
-                "source": "synthetic (analysis/generate_tonal_corpus.py)",
+                "source": f"synthetic (analysis/generate_tonal_corpus.py, variant={variant})",
             },
             indent=2,
         )
@@ -272,6 +312,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="Output directory for .wav + .json")
     parser.add_argument(
+        "--variant",
+        type=str,
+        default="clean",
+        choices=sorted(VARIANTS),
+        help="Tonal context variant (default clean).",
+    )
+    parser.add_argument(
         "--tracks",
         type=str,
         default=None,
@@ -280,6 +327,10 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _VARIANT.clear()
+    _VARIANT.update(VARIANTS[args.variant])
+    log.info("Variant %s: %s", args.variant, _VARIANT)
+
     names = list(GENERATORS)
     if args.tracks:
         wanted = set(args.tracks.split(","))
@@ -287,8 +338,8 @@ def main() -> int:
     for name in names:
         log.info("Generating %s", name)
         audio, onsets = GENERATORS[name]()
-        write_track(name, audio, onsets, args.out)
-    log.info("Wrote %d tracks to %s", len(names), args.out)
+        write_track(name, audio, onsets, args.out, args.variant)
+    log.info("Wrote %d tracks (variant=%s) to %s", len(names), args.variant, args.out)
     return 0
 
 

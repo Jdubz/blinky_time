@@ -167,50 +167,101 @@ Regenerate with
 ./venv/bin/python -m analysis.run_catalog --perc-corpus ../blinky-test-player/music/edm --tonal-corpus ../blinky-test-player/music/synthetic_tonals --out outputs/feature_catalog
 ```
 
-### Primary metric: percussion-peak vs tonal-impulse-peak (cross-corpus)
+### Primary metric: |d| between percussion and tonal-impulse peaks
 
-Positive signed d ⇒ the feature is *larger* on percussion peaks than on tonal-impulse peaks (the direction we want for FP reduction). AUC < 0.5 ⇒ the ordering is reversed — tonal impulses score HIGHER than drums on this feature, so it fails as a discriminator even if it's a strong onset detector.
+|d| and the AUC distance from 0.5 measure **how separable the two classes are**. Sign is metadata — "higher on tonals" is exactly as discriminative as "higher on drums", you just flip the comparison direction. For an NN input, the model learns direction automatically; for a deterministic gate, you invert the threshold. Sign only disqualifies a feature if it's **unstable across different tonal contexts** (a threshold tuned on one corpus breaks on another). That's what Phase 2d below tests.
 
-| rank | feature | d (perc − tonal) | AUC | perc_mean | tonal_mean | verdict |
-|-----:|---------|----------------:|----:|---------:|---------:|---------|
-| 1 | renyi | −2.05 | 0.132 | 2.10 | 16.27 | reversed, skip |
-| 2 | centroid | **+1.37** | **0.831** | 37.12 | 19.66 | **strong discriminator** |
-| 3 | flatness | **+1.23** | **0.813** | 0.490 | 0.260 | **strong discriminator** (already in NN) |
-| 4 | raw_flux | −1.15 | 0.184 | 0.143 | 0.385 | reversed, skip (and currently in NN) |
-| 5 | kick_ratio | **+1.13** | **0.810** | 0.887 | 0.547 | **strong discriminator** |
-| 6 | hfc | −1.13 | 0.143 | 64.7 | 313.4 | reversed, skip |
-| 7 | crest | **+1.00** | **0.765** | 9.03 | 7.43 | **moderate discriminator** |
-| 8 | complex_sd | −0.89 | 0.248 | 13.4 | 22.6 | reversed, skip |
-| 9 | rolloff | +0.80 | 0.625 | 36.98 | 16.96 | weak discriminator |
-| 10 | wpd | −0.29 | 0.430 | 1.58 | 1.67 | near-tie, skip |
+| rank | feature | \|d\| | AUC distance from 0.5 | sign (perc − tonal) | perc_mean | tonal_mean |
+|-----:|---------|-----:|-----:|:----:|---------:|---------:|
+| 1 | renyi | 2.05 | 0.368 | − | 2.10 | 16.27 |
+| 2 | centroid | 1.37 | 0.331 | + | 37.12 | 19.66 |
+| 3 | flatness | 1.23 | 0.313 | + | 0.490 | 0.260 |
+| 4 | raw_flux | 1.15 | 0.316 | − | 0.143 | 0.385 |
+| 5 | kick_ratio | 1.13 | 0.310 | + | 0.887 | 0.547 |
+| 6 | hfc | 1.13 | 0.357 | − | 64.7 | 313.4 |
+| 7 | crest | 1.00 | 0.265 | + | 9.03 | 7.43 |
+| 8 | complex_sd | 0.89 | 0.252 | − | 13.4 | 22.6 |
+| 9 | rolloff | 0.80 | 0.125 | + | 36.98 | 16.96 |
+| 10 | wpd | 0.29 | 0.070 | − | 1.58 | 1.67 |
 
-**Within-corpus sanity checks** (per-onset peak vs non-onset frame) confirm every feature fires at real onsets — percussion-corpus |d| ranges 0.59–1.21 with AUC 0.71–0.86 across the full catalog. The sanity check is not the discriminator.
+Nine features have |d| ≥ 0.8 and AUC distance ≥ 0.13. All nine are usable for discrimination; they differ in *how* they can be used and *how stable* their direction is.
+
+**Within-corpus sanity checks** (per-onset peak vs non-onset frame) confirm every feature fires at real onsets — percussion-corpus |d| ranges 0.59–1.21 with AUC 0.71–0.86 across the full catalog. That's a sanity check that the feature implementation is doing something, not a discrimination score.
 
 ### Findings
 
-1. **The real drum-vs-tonal discriminators are shape metrics**, not transient detectors. `centroid`, `flatness`, `kick_ratio`, `crest` all have positive cross-corpus d > 1.0 and AUC > 0.75. They describe *what the spectrum looks like* at an attack, and drums genuinely look different from tonal impulses in that respect.
+1. **Nine features with useful |d|, in two groups by sign.** Positive-sign (`centroid`, `flatness`, `kick_ratio`, `crest`, `rolloff`): drums score higher than tonals. Negative-sign (`renyi`, `raw_flux`, `hfc`, `complex_sd`): tonals score higher than drums on this corpus. All measure something real.
 
-2. **Four "best onset detectors" are reversed cross-corpus.** `raw_flux`, `hfc`, `complex_sd`, `renyi` all score higher on tonal impulses than on drums on this corpus — they detect *any* sharp attack, percussion or not. They cannot distinguish drums from tonal impulses by themselves.
+2. **The sign split has a mechanical explanation.** The negative-sign features all measure *total spectral activity* — flux sums energy changes, HFC sums bin-weighted energy, complex-SD sums residuals, Rényi on power distribution. The synthetic corpus has silence between impulses and sharp digital attacks with rich harmonic stacks, so a tonal impulse produces an enormous total-energy jump from zero. Real music has continuous baseline energy and softer attacks, so the relative jump is smaller. The positive-sign features (centroid, flatness, kick_ratio, crest) are spectral *shape* metrics — normalized ratios that describe what the spectrum looks like at the peak, independent of total energy. Shape signs are likely more stable across corpora; activity signs probably aren't.
 
-3. **`raw_flux` being reversed is the most consequential result.** It's already an NN input feature (deployed at b132). If the NN had been relying on raw_flux alone to reject tonals, this data says it couldn't. The model presumably uses mel+flatness+flux jointly, and flatness does discriminate — but adding raw_flux as an input may actually *teach* the NN that any broadband attack is drum-like, which fits the observed precision plateau at 0.50.
+3. **`raw_flux` is both an NN input AND context-dependent.** Already shipping (b132). The NN can and presumably does learn some useful direction from it, but if the sign direction differs between "synthetic silence-interrupted tonals" and "real continuous music with tonal stabs", a raw_flux-driven decision boundary inside the model is fragile. Worth checking by ablation (Phase 2d) whether raw_flux actually helps model F1 or whether it's neutral/hurtful — especially since it's one of just two non-mel input channels.
 
-4. **Synthetic corpus caveat — likely an upper bound on difficulty.** The generated tonal tracks have near-instant attacks and silence between impulses; real tonal content sits inside continuous music with slower attacks and ongoing background energy. A feature that fails against this synthetic corpus will likely still fail against real FP-inducing events; a feature that passes should be considered a lower bound on real-world performance until Phase 3 confirms.
+### Phase 2 shortlists by use case
 
-### Revised Phase 2 shortlist (4 features, priorities re-scored)
+**NN input candidates (Path B) — all 9.** The model learns direction. All nine features with |d| ≥ 0.8 are on the table; the 4 not yet in the NN (centroid, kick_ratio, crest, plus any of the reversed-sign candidates that survive Phase 2d) are the concrete additions.
 
-| # | feature | cross-corpus d | AUC | currently in NN? | firmware cost |
-|--:|---------|-------------:|----:|:----------------:|--------------:|
-| 1 | centroid | +1.37 | 0.83 | no | ~0.2 ms |
-| 2 | flatness | +1.23 | 0.81 | yes | shipping |
-| 3 | kick_ratio | +1.13 | 0.81 | partially (bass-gate) | ~0.1 ms |
-| 4 | crest | +1.00 | 0.77 | no | ~0.3 ms |
+**Deterministic gate candidates (Path A) — 4 sign-stable ones.** Until Phase 2d proves otherwise, only the shape-metric features get a gate: `centroid`, `flatness`, `kick_ratio`, `crest`. All are low-cost (~0.1–0.3 ms) and need no phase history. A gate with an unstable direction across corpora is a bug waiting to happen.
 
-**Dropped from previous shortlist:** `raw_flux` (reversed), `hfc` (reversed), `complex_sd` (reversed), `wpd` (near-zero), plus `rolloff` and `renyi` from the original dropped set.
+**Firmware parity tests (Phase 2a) priority order:**
+  1. `flatness` — already shipping, parity-test first to confirm the firmware implementation matches the Python reference (fast, high-confidence win).
+  2. `kick_ratio` — cheap and directly generalizes the existing bass-gate.
+  3. `centroid` — cheap, unlocked new NN input channel.
+  4. `crest` — cheap, transient-character signal missing from current NN inputs.
+  5–9. Reversed-sign features — only after Phase 2d confirms sign stability.
 
-**Phase 2 implications.**
+### Phase 2d — Sign stability test
 
-- **Firmware parity tests** (2a) now target `centroid`, `kick_ratio`, `crest` as *new* implementations + Python references (3 days instead of 6). `flatness` already shipped, parity-test it too to confirm the existing implementation matches the Python reference we just validated.
-- **`raw_flux` as NN input is suspect.** Worth running the NN with `raw_flux` ablated (feed zero into that input channel) on a validation set to see if F1 holds or improves. If removing it doesn't hurt, that's one less ms of compute and one fewer FP-inducing input. Add this as a parallel Phase 2d task.
-- **`kick_ratio` generalizes the existing bass-gate.** The on-device bass-gate is currently a binary threshold on bass-band ratio used only to gate pulse detection. Using `kick_ratio` as an NN input, or as a continuous gate, may recover some of the precision the bass-gate alone misses.
+Purpose: confirm that the sign of each feature's cross-corpus d is stable when the tonal corpus changes. A feature whose sign flips between different tonal contexts cannot be used as a single-threshold gate — the threshold direction is context-dependent, which breaks under any deployment that doesn't match the tuning corpus.
 
-**Open question.** Every feature reversed here has one thing in common: it's summed across the spectrum. The discriminators (centroid, flatness, kick_ratio, crest) are all *shape* metrics (ratios or normalized statistics). Is there a principled reason why absolute magnitudes will always get fooled by sharp-attack tonal content? If so, future feature exploration should stay in the shape-metric family.
+Concrete test:
+1. Regenerate the tonal corpus with a second variant: `generate_tonal_corpus.py --variant embedded` — adds a continuous tonal bed under every impulse and multiplies attack times by 4×, simulating tonal content inside continuous music rather than silence-interrupted stabs.
+2. Run `run_catalog.py` against each variant separately.
+3. For each feature, record sign and |d| on both corpora. **Stable** = signs agree; **unstable** = signs differ.
+
+### Phase 2d results — 2026-04-20
+
+| feature | d (clean) | d (embedded) | AUC (clean) | AUC (embedded) | verdict |
+|---------|----------:|------------:|------------:|--------------:|---------|
+| centroid | +1.37 | +0.81 | 0.831 | 0.714 | **stable +** |
+| flatness | +1.23 | +0.53 | 0.813 | 0.672 | **stable +** |
+| crest | +1.00 | +0.66 | 0.765 | 0.709 | **stable +** |
+| rolloff | +0.80 | +0.99 | 0.625 | 0.679 | **stable +** |
+| hfc | −1.13 | −1.01 | 0.143 | 0.189 | **stable −** |
+| raw_flux | −1.15 | −0.53 | 0.184 | 0.298 | **stable −** |
+| complex_sd | −0.89 | −0.50 | 0.248 | 0.346 | **stable −** |
+| kick_ratio | +1.13 | −0.66 | 0.810 | 0.333 | **UNSTABLE** (+ → −) |
+| renyi | −2.05 | +0.32 | 0.132 | 0.587 | **UNSTABLE** (− → +) |
+| wpd | −0.29 | +0.29 | 0.430 | 0.601 | weak (|d|<0.3 both) |
+
+**Two genuine surprises.**
+
+1. **`kick_ratio` is sign-unstable.** On silence-separated synthetic tonals, drums have a higher bass/total ratio than tonals (kicks dominate the spectrum). But when the tonal corpus has a low-frequency bed (my embedded variant uses 180 Hz + 270 Hz sustained voices), the bass/total ratio is permanently high regardless of what impulses fire — so the sign flips. This invalidates the "generalized bass-gate" hypothesis: the on-device bass gate works well against silence backgrounds but would fail against bass-heavy musical context. A kick_ratio gate tuned on one corpus would fire the wrong way on the other.
+
+2. **`rolloff` is the cheapest sign-stable discriminator that wasn't on any prior shortlist.** Clean |d|=0.80 was modest; embedded |d|=0.99 actually *improved*. Rolloff cost is ~0.3 ms, same family as the other shape metrics. Promote it to the gate shortlist.
+
+**Unexpected stability.** The three "reversed" features (`raw_flux`, `hfc`, `complex_sd`) all kept their sign when the context changed — tonal impulses consistently produced a larger total spectral activity change than drum hits on both corpora. Magnitude |d| dropped in the embedded variant (context-energy reduces the relative delta) but the direction held. That makes the reversed sign a robust signal, not a synthetic-corpus artifact.
+
+**Three feature groups for Phase 2:**
+
+| Group | Features | Use |
+|-------|----------|-----|
+| **Stable +** (drum > tonal) | centroid, flatness, crest, rolloff | Deterministic gates (all directions intuitive). NN inputs. |
+| **Stable −** (tonal > drum) | raw_flux, hfc, complex_sd | NN inputs. Gates with inverted threshold (fire if LOW). |
+| **Unstable** | kick_ratio, renyi | NN-only. Do NOT use as single-threshold gates. |
+
+**Dropped for low |d| on both corpora:** `wpd` (|d| 0.29 / 0.29, mixed sign).
+
+### Revised Phase 2 shortlist
+
+**Phase 2a firmware parity tests (priority order):**
+1. `flatness` — already shipping, validate existing implementation against Python reference.
+2. `centroid` — cheap (~0.2 ms), no phase history, new NN input candidate.
+3. `crest` — cheap (~0.3 ms), new NN input candidate.
+4. `rolloff` — cheap (~0.3 ms), surprise winner from Phase 2d.
+5. `hfc` — cheap (~0.2 ms), stable − so usable as inverted gate. NN input candidate once sign direction is confirmed in training.
+
+Seven parity tests total (the four stable-+ plus raw_flux, hfc, complex_sd). Three implementations already exist in firmware (flatness, raw_flux, plus the bass-energy math used by kick_ratio and the existing gate). Four new implementations: centroid, crest, rolloff, hfc, complex_sd.
+
+**Phase 2b selective streaming** then covers these seven. `kick_ratio` and `renyi` get flagged as NN-only and are excluded from gate-infrastructure work.
+
+**Phase 2d ablation of raw_flux in the NN** remains a parallel task. The feature is stable-negative (useful to the model if it learns the inverted direction), but we don't yet know whether the current v27-hybrid model is learning that or is just noise-fitting on it.
