@@ -73,8 +73,13 @@ def spectral_flatness(mags: np.ndarray) -> np.ndarray:
 
 
 def spectral_centroid(mags: np.ndarray) -> np.ndarray:
-    """Centre-of-mass bin index. Drums shift centroid per hit; steady tones do not."""
-    k = np.arange(mags.shape[1], dtype=np.float32)
+    """Centre-of-mass bin index. Drums shift centroid per hit; steady tones do not.
+
+    Uses firmware bin indices (mags[:, 0] corresponds to firmware bin 1, so
+    k starts at 1) — this matches `SharedSpectralAnalysis::computeShapeFeaturesRaw`
+    exactly and keeps the parity harness bit-perfect.
+    """
+    k = np.arange(1, mags.shape[1] + 1, dtype=np.float32)
     num = (mags * k).sum(axis=1)
     den = np.maximum(mags.sum(axis=1), _EPS)
     return (num / den).astype(np.float32)
@@ -92,10 +97,19 @@ def spectral_rolloff(mags: np.ndarray, percentile: float = 0.85) -> np.ndarray:
 
 
 def crest_factor(mags: np.ndarray) -> np.ndarray:
-    """Peak-to-RMS ratio. High for transients, low for sustained tones."""
+    """Peak-to-RMS ratio. High for transients, low for sustained tones.
+
+    Near-silence frames (where total energy is below 1e-10) return 0.0 to
+    match `SharedSpectralAnalysis::computeShapeFeaturesRaw`'s early-zero
+    branch and keep the parity harness bit-perfect.
+    """
     peak = mags.max(axis=1)
-    rms = np.sqrt((mags**2).mean(axis=1))
-    return (peak / np.maximum(rms, _EPS)).astype(np.float32)
+    energy = (mags**2).sum(axis=1)
+    rms = np.sqrt(energy / float(mags.shape[1]))
+    out = np.zeros_like(peak)
+    valid = (energy > 1e-10) & np.isfinite(energy) & (rms > 1e-10)
+    out[valid] = peak[valid] / rms[valid]
+    return out.astype(np.float32)
 
 
 def renyi_entropy_alpha2(mags: np.ndarray) -> np.ndarray:
@@ -123,8 +137,11 @@ def high_frequency_content(mags: np.ndarray) -> np.ndarray:
 
     HFC = Σ k · |X[k]|². Percussion (especially snares) has broadband
     high-frequency content; tonal impulses concentrate at low bins.
+
+    Uses firmware bin indices (k = 1..N, not 0..N-1) — matches
+    `SharedSpectralAnalysis::computeShapeFeaturesRaw` exactly.
     """
-    k = np.arange(mags.shape[1], dtype=np.float32)
+    k = np.arange(1, mags.shape[1] + 1, dtype=np.float32)
     return ((mags**2) * k).sum(axis=1).astype(np.float32)
 
 

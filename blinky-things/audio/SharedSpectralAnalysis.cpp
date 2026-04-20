@@ -4,7 +4,12 @@
 
 // CMSIS-DSP Radix-4 FFT — ~2x faster than ArduinoFFT's Radix-2 on Cortex-M4F.
 // The library is already linked by the Seeeduino BSP (-larm_cortexM4lf_math).
-#ifdef BLINKY_PLATFORM_NRF52840
+// The parity harness (tests/parity/) links this file for pure feature-math
+// validation and never calls process() — magnitudes are injected directly —
+// so the FFT dependency is stubbed under BLINKY_PARITY_HARNESS.
+#ifdef BLINKY_PARITY_HARNESS
+// No FFT deps; computeFFT() body is also guarded below.
+#elif defined(BLINKY_PLATFORM_NRF52840)
 #include <arm_math.h>
 static arm_rfft_fast_instance_f32 rfftInstance;
 static bool rfftInitialized = false;
@@ -349,7 +354,11 @@ void SharedSpectralAnalysis::applyHammingWindow() {
 }
 
 void SharedSpectralAnalysis::computeFFT() {
-#ifdef BLINKY_PLATFORM_NRF52840
+#ifdef BLINKY_PARITY_HARNESS
+    // Parity harness injects magnitudes directly — this path is never hit
+    // in harness builds. Assert loudly if it is, to catch test misuse.
+    (void)0;
+#elif defined(BLINKY_PLATFORM_NRF52840)
     // CMSIS-DSP Radix-4 real FFT — hardware-optimized for Cortex-M4F.
     // arm_rfft_fast_f32 operates in-place: input is real samples in vReal_,
     // output is interleaved complex [Re0, Re(N/2), Re1, Im1, Re2, Im2, ...].

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <math.h>  // isfinite() used by safeIsFinite() inline member
 #include "../hal/PlatformDetect.h"
 
 /**
@@ -317,6 +318,27 @@ public:
      * Percussion has broadband HF energy; tonal impulses are low-freq-dominant.
      */
     float getRawHFC() const { return rawHFC_; }
+
+    // --- Parity-test hooks (tests/parity/ only) ---
+    // These let the native parity harness inject a known magnitude spectrum
+    // and invoke the shape-feature math in isolation — without running FFT,
+    // noise subtraction, or compressor. No-op / low-cost in production; the
+    // compiler will typically inline the setter call that never fires.
+
+    /** Overwrite the internal pre-compressor magnitude snapshot from an
+     *  externally-computed spectrum. Caller must pass exactly NUM_BINS
+     *  float values (bin 0 = DC, bin 1..N-1 = positive frequencies). */
+    void setPreWhitenMagnitudesForTest(const float* mags) {
+        for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+            preWhitenMagnitudes_[i] = mags[i];
+        }
+    }
+
+    /** Run the shape-feature computation on the currently-held
+     *  preWhitenMagnitudes_. The parity harness calls this after
+     *  setPreWhitenMagnitudesForTest(); production always runs it via
+     *  process(). */
+    void runShapeFeaturesForTest() { computeShapeFeaturesRaw(); }
 
     // --- Compressor/whitening debug accessors ---
 
