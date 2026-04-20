@@ -165,18 +165,43 @@ All firmware logic runs in-process via compiled firmware sources. The only "Pyth
 
 Each step gets its own commit. Ordered by cost/benefit ratio:
 
-| # | step | fixes gap(s) | rough cost |
-|---|------|--------------|-----------|
-| 1 | Audit which flatness the NN consumes; fix firmware if wrong | 4 | half day |
-| 2 | Extend harness to output mel + raw_flux with state + compressed flatness + spectral_flux | 2, 3 | half day |
-| 3 | Add WAV input + vendored CMSIS-DSP FFT to harness | 1, 7 | 1-2 days |
-| 4 | Port `AudioTracker::updatePulseDetection` into harness | 9 | 1 day |
-| 5 | Integrate tflite-runtime, verify vs tflite-micro on a sample track | 5 | half day |
-| 6 | Replay-capture mode: feed device-captured audio instead of WAV | 10, 11 | half day |
-| 7 | Audit `scripts/audio.py` feature code against firmware for all 6 features | 6 | 1 day |
-| 8 | Match AdaptiveMic chain in harness (or document it as intentionally skipped) | 8 | half day |
+| # | step | fixes gap(s) | rough cost | status |
+|---|------|--------------|-----------|--------|
+| 1 | Audit which flatness the NN consumes; fix firmware if wrong | 4 | half day | **✅ closed (b136)** |
+| 2 | Extend harness to output mel + raw_flux with state + all features | 2, 3 | half day | **✅ closed (b137)** |
+| 3 | Audit `scripts/audio.py` feature code against firmware | 6 | 1 day | **✅ closed (2026-04-20)** |
+| 4 | Hamming window variant check | 7 | 10 min | **✅ closed by inspection** |
+| 5 | AdaptiveMic chain (match or document as intentional skip) | 8 | half day | **⚠ documented, intentionally skipped — see below** |
+| 6 | Port `AudioTracker::updatePulseDetection` into harness | 9 | 1 day | pending |
+| 7 | Integrate tflite-runtime, verify vs tflite-micro | 5 | half day | pending |
+| 8 | Replay-capture mode: feed device-captured raw audio | 10, 11 | 1-2 days (needs firmware raw-PCM capture) | deferred — infra doesn't exist yet |
+| 9 | Vendor CMSIS-DSP FFT into harness | 1 | 1-2 days | deferred — current parity holds at 1e-6 without it |
 
 Every commit from this point forward must keep the parity test green (`tests/parity/run_parity_test`) and extend its coverage to any new feature / path it claims to test. A future Claude that sees green "parity OK" output must be able to trust it across the full pipeline, not just the one function the current harness covers.
+
+### Gap closure log
+
+**Gap 4 (flatness routing) — closed b136.** `computeShapeFeaturesRaw` now computes `rawFlatness_` on pre-compressor magnitudes (Wiener entropy with 1e-10 floor per bin, over all 127 non-DC bins — matches Python training code bit-for-bit). `AudioTracker::update` now passes `getRawFlatness()` into `FrameOnsetNN::infer` instead of the compressed `getSpectralFlatness()`. Debug stream gains a new `rflat` field; NN-diagnostic stream's `flat` field now reports the raw flatness the NN actually consumes. The deployed v27-hybrid model was trained on raw-mag flatness but ran on compressed-mag flatness — this was gap 4 in operational form. Any F1 number measured on pre-b136 firmware is contaminated.
+
+**Gaps 2, 3 (state-dependent features + mel in harness output) — closed b137.** Extracted the SuperFlux loop from `process()` into `SharedSpectralAnalysis::computeRawSpectralFluxAndSavePrev()`; added `runRawFeaturesForTest()` public hook that runs the full pre-compressor chain (mel bands → raw flux with prev-state → shape features) on injected magnitudes. Harness dumps all 6 shape features + raw_flux + 30 mel bands per frame. Raw-flux parity: MAE 2e-10 (essentially bit-perfect).
+
+**Gap 6 (training-feature parity) — closed 2026-04-20.** Code-inspection + empirical audit confirms training pipeline feature math matches firmware:
+
+- Flatness: `scripts/audio.py append_hybrid_features` → Wiener entropy on `np.maximum(mags, 1e-10)` over 127 bins = b136 firmware's `rawFlatness_`. Same bit-for-bit.
+- Raw flux: training uses bin slices `[0:6]`, `[6:32]`, `[32:]` with weights 0.5 / 0.2 / 0.3 and BASS_COUNT=6, MID_COUNT=26, HIGH_COUNT=95; firmware uses identical constants (BASS_MAX_BIN=6, MID_MAX_BIN=32; bassFluxWeight/midFluxWeight/highFluxWeight defaults 0.5/0.2/0.3). Match.
+- Mel bands: already verified MAE=0.0017 / 0.44 INT8 levels (AUDIO_ARCHITECTURE.md).
+- Parity harness across 3 tracks (breakbeat-drive, techno-minimal-01, edm-trap-electro) shows all 6 features pass at float-rounding precision.
+
+**Gap 7 (Hamming window) — closed by inspection.** Firmware `initHammingWindow()` computes `0.54 − 0.46·cos(2π·i / (N−1))` for i=0..N−1. `np.hamming(N)` uses the same symmetric formula. The two match within `cosf` vs `np.cos` float precision (negligible).
+
+**Gap 8 (AdaptiveMic chain) — documented as intentional skip.** On-device: PDM mic → hardware gain 32 → AdaptiveMic window/range normalisation → float samples fed to `SharedSpectralAnalysis::process()`. Offline harness / training pipeline: `librosa.load` → `target_rms_db` RMS scale → float samples. These produce different absolute scales but the same *spectral shape* on the same audio source. Every shape feature in the shortlist (centroid, flatness, crest, rolloff, kick_ratio) is scale-invariant; raw_flux and hfc are scale-dependent but we care about discrimination (Cohen's d), which is also scale-invariant. Porting AdaptiveMic to Python would be ~1 day of work and wouldn't change any discrimination metric. Flagged here for awareness; not a blocker.
+
+### Gaps remaining
+
+- **Gap 5 (tflite-runtime vs tflite-micro)** — pending. Matters for any offline NN inference we use to classify TP vs FP. Half day.
+- **Gap 9 (peak-picking semantics)** — pending. Matters for TP vs FP classification. 1 day.
+- **Gap 10 (device audio capture)** — deferred. Requires new firmware raw-PCM capture stream to exist.
+- **Gap 1 (CMSIS-DSP FFT)** — deferred. Float-precision FFT drift is below feature precision; no immediate correctness issue.
 
 ## Design decisions
 
