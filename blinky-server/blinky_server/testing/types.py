@@ -39,6 +39,23 @@ class TransientEvent:
 
 
 @dataclass
+class NNFrame:
+    """Single NN stream frame with hybrid features.
+
+    Named fields use the server's vocabulary. The wire format is confusing:
+    in the main music stream's "m" sub-object, key "nn" carries the raw NN
+    activation; in the separate NN-diagnostic stream (type="NN") key "nn"
+    is a 0/1 loaded flag and "nna" is the activation. We ingest from the
+    music stream, so test_session reads m["nn"] into `activation`.
+    """
+
+    timestamp_ms: float
+    activation: float  # Raw NN onset activation [0,1] (from music stream m["nn"])
+    flatness: float  # Spectral flatness (Wiener entropy) [0,1]
+    flux: float  # Raw SuperFlux spectral flux
+
+
+@dataclass
 class MusicState:
     timestamp_ms: float
     active: bool
@@ -57,6 +74,7 @@ class TestData:
     start_time: float  # ms (epoch)
     transients: list[TransientEvent] = field(default_factory=list)
     music_states: list[MusicState] = field(default_factory=list)
+    nn_frames: list[NNFrame] = field(default_factory=list)
 
 
 @dataclass
@@ -94,6 +112,19 @@ class PlpMetrics:
 
 
 @dataclass
+class HybridMetrics:
+    """On-device hybrid feature quality at onset vs non-onset positions."""
+
+    flatness_at_onset: float  # Mean flatness at GT onset frames
+    flatness_at_non: float  # Mean flatness at non-onset frames
+    flatness_gap: float  # onset - non (positive = onsets are more noise-like)
+    flux_at_onset: float  # Mean raw flux at GT onset frames
+    flux_at_non: float  # Mean raw flux at non-onset frames
+    flux_gap: float  # onset - non (positive = flux peaks at onsets, expected for SuperFlux)
+    nn_frames: int  # Total NN frames captured
+
+
+@dataclass
 class Diagnostics:
     onset_rate: float
     onset_offset_stats: OffsetStats | None
@@ -110,3 +141,4 @@ class DeviceRunScore:
     avg_confidence: float
     activation_ms: float | None
     diagnostics: Diagnostics
+    hybrid: HybridMetrics | None = None

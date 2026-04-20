@@ -1332,7 +1332,7 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
+    // Format: {"type":"NN","ts":<ms>,"mel":[30 floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
     // "onset" = gated pulse strength (nonzero only on rising-edge pulse events)
     // "nna" = raw NN activation (continuous 0-1, pre-gating)
     // "nn" = 1 if NN loaded, 0 if stub/fallback
@@ -1369,6 +1369,14 @@ void SerialConsole::streamTick() {
             out_.print(mic_->getLevel(), 3);
             out_.print(F(",\"gain\":"));
             out_.print(mic_->getHwGain());
+            // Hybrid features: spectral flatness + raw flux (pre-compressor)
+            // These match the training pipeline's feature computation.
+            // Precision (4 dp) matches the music stream's rflux so offline
+            // tooling can pool data from both streams without scaling.
+            out_.print(F(",\"flat\":"));
+            out_.print(spectral.getSpectralFlatness(), 4);
+            out_.print(F(",\"rflux\":"));
+            out_.print(spectral.getRawSpectralFlux(), 4);
             out_.println(F("}"));
         }
     }
@@ -1488,6 +1496,11 @@ void SerialConsole::streamTick() {
 
             // Debug mode: add diagnostics
             if (streamDebug_) {
+                const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
+                out_.print(F(",\"flat\":"));
+                out_.print(spectral.getSpectralFlatness(), 4);
+                out_.print(F(",\"rflux\":"));
+                out_.print(spectral.getRawSpectralFlux(), 4);
                 out_.print(F(",\"conf\":"));
                 out_.print(audioCtrl_->getPeriodicityStrength(), 3);
                 out_.print(F(",\"plpc\":"));

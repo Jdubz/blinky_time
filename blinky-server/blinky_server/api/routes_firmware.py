@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
 from .deps import get_fleet, require_api_key
@@ -58,7 +58,7 @@ def _load_firmware_meta() -> dict[str, Any] | None:
 @router.post("/fleet/upload", dependencies=[Depends(require_api_key)])
 async def fleet_upload(
     firmware: UploadFile,
-    version: str | None = None,
+    version: str | None = Form(None),
 ) -> dict[str, Any]:
     """Upload a firmware .hex file to the server. Does NOT flash.
 

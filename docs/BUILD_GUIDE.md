@@ -54,6 +54,31 @@ arduino-cli lib install "Seeed Arduino LSM6DS3"
 
 ---
 
+## Firmware Versioning
+
+Firmware uses a simple auto-incrementing build number. **Not tied to git** — git is for collaboration, not deployment. "Production" is whatever is on the device.
+
+- `blinky-things/BUILD_NUMBER` — plain text integer, source of truth
+- `blinky-things/types/Version.h` — generated header, do not edit manually
+- `scripts/build.sh` — increments BUILD_NUMBER, regenerates Version.h, compiles
+- Reported via `json info` as `"version": "b<N>"` (the `b` prefix distinguishes from old semver)
+- `SETTINGS_VERSION` (config format, see `ConfigStorage.h`) is separate and independent from the build number
+
+**Always use `scripts/build.sh` to compile for deployment.** It auto-increments the build number. Use `--no-bump` to recompile without incrementing (e.g., after a failed upload).
+
+```bash
+./scripts/build.sh                          # nRF52840 compile only
+./scripts/build.sh --upload /dev/ttyACM0    # compile + UF2 upload
+./scripts/build.sh --esp32                  # ESP32-S3 compile (deprecated)
+./scripts/build.sh --no-bump                # recompile without incrementing
+```
+
+For the full deploy pipeline (compile → fleet upload → flash → verify), use `./scripts/deploy.sh`.
+
+Direct `arduino-cli compile` and `make compile` skip the version bump — fine for local iteration, **avoid for deployment** since the device will report a stale build number.
+
+---
+
 ## Building
 
 ### nRF52840 (Hat / Tube Light / Bucket Totem)

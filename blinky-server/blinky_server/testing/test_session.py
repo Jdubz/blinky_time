@@ -6,10 +6,13 @@ that can be scored against ground truth after the test completes.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
-from .types import MusicState, TestData, TransientEvent
+from .types import MusicState, NNFrame, TestData, TransientEvent
+
+log = logging.getLogger(__name__)
 
 
 class TestSession:
@@ -25,6 +28,7 @@ class TestSession:
         self._start_time: float = 0.0
         self._transients: list[TransientEvent] = []
         self._music_states: list[MusicState] = []
+        self._nn_frames: list[NNFrame] = []
         self._clock_offset: float | None = None  # server_epoch_ms - firmware_millis
 
     @property
@@ -45,6 +49,7 @@ class TestSession:
         self._start_time = time.time() * 1000  # epoch ms
         self._transients.clear()
         self._music_states.clear()
+        self._nn_frames.clear()
 
     def stop_recording(self) -> TestData:
         """Stop recording and return a frozen snapshot."""
@@ -55,6 +60,7 @@ class TestSession:
             start_time=self._start_time,
             transients=list(self._transients),
             music_states=list(self._music_states),
+            nn_frames=list(self._nn_frames),
         )
 
     def ingest(self, msg_type: str, data: dict[str, Any]) -> None:
@@ -104,3 +110,26 @@ class TestSession:
                     nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )
             )
+            # Hybrid features in debug stream: flat + rflux in "m" sub-object.
+            # Require BOTH fields — a partial frame (only one present) would
+            # bias the missing metric toward 0 and corrupt the gap comparison.
+            if "flat" in m and "rflux" in m:
+                flat_val = m["flat"]
+                rflux_val = m["rflux"]
+                if not self._nn_frames:
+                    log.info(
+                        "First NN frame captured: flat=%s rflux=%s",
+                        flat_val,
+                        rflux_val,
+                    )
+                self._nn_frames.append(
+                    NNFrame(
+                        timestamp_ms=now_ms,
+                        # m["nn"] in the music stream is the raw NN activation,
+                        # not the 0/1 loaded flag (that lives in the separate
+                        # NN-diagnostic stream). See NNFrame docstring.
+                        activation=m.get("nn", 0.0),
+                        flatness=flat_val,
+                        flux=rflux_val,
+                    )
+                )

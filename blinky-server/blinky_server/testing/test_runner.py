@@ -146,6 +146,7 @@ def _apply_settle_filter(test_data: TestData, settle_ms: float) -> TestData:
         start_time=test_data.start_time,
         transients=[t for t in test_data.transients if t.timestamp_ms >= cutoff],
         music_states=[s for s in test_data.music_states if s.timestamp_ms >= cutoff],
+        nn_frames=[f for f in test_data.nn_frames if f.timestamp_ms >= cutoff],
     )
 
 
@@ -255,13 +256,14 @@ async def run_validation(
                         score = score_device_run(test_data, playback.audio_start_time_ms, gt)
                         run_scores[device.id[:12]] = format_score_summary(score)
 
-                    all_results.append(
-                        {
-                            "track": track_name,
-                            "run": run_idx + 1,
-                            "scores": run_scores,
-                        }
-                    )
+                    track_result = {
+                        "track": track_name,
+                        "run": run_idx + 1,
+                        "scores": run_scores,
+                    }
+                    all_results.append(track_result)
+                    if job:
+                        job.append_result(track_result)
 
                     if run_idx < num_runs - 1:
                         await asyncio.sleep(INTER_RUN_GAP_S)
@@ -395,14 +397,16 @@ async def run_param_sweep(
                                 continue
                             test_data = _apply_settle_filter(test_data, settle_ms)
                             score = score_device_run(test_data, playback.audio_start_time_ms, gt)
-                            per_value_results[value].append(
-                                {
-                                    "track": track_name,
-                                    "run": run_idx + 1,
-                                    "device": device.id[:12],
-                                    "score": format_score_summary(score),
-                                }
-                            )
+                            entry = {
+                                "track": track_name,
+                                "run": run_idx + 1,
+                                "device": device.id[:12],
+                                "value": value,
+                                "score": format_score_summary(score),
+                            }
+                            per_value_results[value].append(entry)
+                            if job:
+                                job.append_result(entry)
 
                         if run_idx < num_runs - 1:
                             await asyncio.sleep(INTER_RUN_GAP_S)
@@ -561,15 +565,16 @@ async def run_threshold_tune(
                     target_metric,
                 )
                 coarse_scores.append((value, avg))
-                history.append(
-                    {
-                        "step": step,
-                        "phase": "coarse",
-                        "value": value,
-                        "metric": target_metric,
-                        "score": round(avg, 4),
-                    }
-                )
+                entry = {
+                    "step": step,
+                    "phase": "coarse",
+                    "value": value,
+                    "metric": target_metric,
+                    "score": round(avg, 4),
+                }
+                history.append(entry)
+                if job:
+                    job.append_result(entry)
 
                 log.info(
                     "Tune coarse %d/%d: %s=%.4f -> %s=%.4f",
@@ -617,15 +622,16 @@ async def run_threshold_tune(
                     settle_ms,
                     target_metric,
                 )
-                history.append(
-                    {
-                        "step": step,
-                        "phase": "refine",
-                        "value": value,
-                        "metric": target_metric,
-                        "score": round(avg, 4),
-                    }
-                )
+                entry = {
+                    "step": step,
+                    "phase": "refine",
+                    "value": value,
+                    "metric": target_metric,
+                    "score": round(avg, 4),
+                }
+                history.append(entry)
+                if job:
+                    job.append_result(entry)
 
                 log.info(
                     "Tune refine %d/%d: %s=%.4f -> %s=%.4f",
