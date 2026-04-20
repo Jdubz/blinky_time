@@ -16,8 +16,6 @@ import statistics
 from collections import defaultdict
 from typing import Any, NotRequired, TypedDict
 
-log = logging.getLogger(__name__)
-
 from .types import (
     DeviceRunScore,
     Diagnostics,
@@ -28,6 +26,8 @@ from .types import (
     PlpMetrics,
     TestData,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _js_round(x: float, decimals: int = 3) -> float:
