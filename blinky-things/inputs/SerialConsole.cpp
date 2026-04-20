@@ -1471,7 +1471,9 @@ void SerialConsole::streamTick() {
             int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > audioCtrl_->activationThreshold) ? 1 : 0;
             lastStreamPhase = currentPhase;
 
-            out_.print(F(",\"m\":{\"a\":"));
+            out_.print(F(",\"m\":{\"ts\":"));
+            out_.print(millis());  // firmware millis at frame emission — server uses + clock_offset for signal_frame alignment
+            out_.print(F(",\"a\":"));
             out_.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
             out_.print(F(",\"bpm\":"));
             out_.print(audioCtrl_->getCurrentBpm(), 1);

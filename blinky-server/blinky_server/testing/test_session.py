@@ -115,9 +115,16 @@ class TestSession:
             m = data.get("m")
             if m is None:
                 return
+            # Prefer firmware ts (b134+) for the same coordinate-system reason
+            # as signal_frames below.
+            fw_ts = m.get("ts")
+            if fw_ts is not None and self._clock_offset is not None:
+                music_ts_ms = fw_ts + self._clock_offset
+            else:
+                music_ts_ms = now_ms
             self._music_states.append(
                 MusicState(
-                    timestamp_ms=now_ms,
+                    timestamp_ms=music_ts_ms,
                     active=bool(m.get("a", 0)),
                     confidence=m.get("str", 0.0),  # rhythm strength as confidence
                     plp_pulse=m.get("pp", None),  # PLP pulse value
@@ -134,14 +141,26 @@ class TestSession:
             # flat+rflux+cent+crest+roll+hfc together (or none of them).
             if all(wire_key in m for wire_key, _ in SIGNAL_KEYS):
                 values = {name: float(m[wire_key]) for wire_key, name in SIGNAL_KEYS}
+                # Prefer firmware-emitted `ts` (b134+). Converting firmware
+                # millis via clock_offset puts signal_frames in the same
+                # coordinate system as transients, which is what scoring's
+                # audio_latency_ms correction was calibrated against. Without
+                # this, USB receive jitter (~2-10 ms) blurs onset/non-onset
+                # classification and can swap sign on the per-run Cohen's d.
+                fw_ts = m.get("ts")
+                if fw_ts is not None and self._clock_offset is not None:
+                    ts_ms = fw_ts + self._clock_offset
+                else:
+                    ts_ms = now_ms
                 if not self._signal_frames:
                     log.info(
-                        "First signal frame captured: %s",
+                        "First signal frame captured: ts=%s %s",
+                        "fw" if fw_ts is not None else "wall",
                         ", ".join(f"{k}={v:.3f}" for k, v in values.items()),
                     )
                 self._signal_frames.append(
                     SignalFrame(
-                        timestamp_ms=now_ms,
+                        timestamp_ms=ts_ms,
                         # m["nn"] in the music stream is the raw NN activation,
                         # not the 0/1 loaded flag (that lives in the separate
                         # NN-diagnostic stream).
