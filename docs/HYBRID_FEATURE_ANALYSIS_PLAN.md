@@ -48,6 +48,26 @@ e. **Marginal F1 gain against mel-only baseline** — ablation training: v28-mel
 
 No feature enters the production NN input vector without passing all five. The mel-only baseline must exist and be trained with the same recipe as any hybrid candidate; without it, "feature helped" is unverifiable.
 
+### Sequencing — offline first, on-device for confirmation only
+
+On-device validation runs cost ≈ 15–30 min each; Python evaluations on the same audio cost seconds. The five gates map cleanly onto an offline-first pipeline, with on-device runs reserved for *confirming* candidates that already survived the cheaper tests:
+
+| gate | offline feasible? | on-device required? |
+|------|:-----------------:|:-------------------:|
+| (a) exists on-device | — | already done (Phase 3) |
+| (b) TP-vs-FP \|d\| | **yes** — run v27 offline on held-out GS corpus, split firings by GT | only to confirm top candidates |
+| (c) R² vs mel | yes — pure math on any audio | no |
+| (d) pairwise \|r\| | yes — pure math on any audio | no |
+| (e) ablation F1 | yes — training is always offline | held-out eval only |
+
+**The contamination rule still applies.** For any step that invokes the NN (b, e), the audio must come from the 25-track `edm_holdout` corpus, not the 18 tracks v27 trained / validated on. The offline-feature-definition steps (c, d) don't touch the NN, so any EDM audio works.
+
+**Sequence to execute:**
+1. (c) + (d) on any single EDM track — cheapest, kills redundant features first.
+2. (b) offline on held-out GS corpus — decides whether Path B is even worth attempting.
+3. On-device confirmation of the surviving 2–3 features using the *existing* b134 validation captures (no new device runs needed).
+4. (e) ablation training only if ≥ 1 feature survives 1–3.
+
 ## Design decisions
 
 ### D1: Selective feature computation + streaming (not ring buffer)
