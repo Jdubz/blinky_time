@@ -205,6 +205,11 @@ void SharedSpectralAnalysis::process() {
     // Compute raw SuperFlux spectral flux from pre-compressor magnitudes.
     // This matches the training pipeline's STFT-based flux (no compressor gain).
     // Used exclusively for NN hybrid input — ACF tempo uses compressed flux below.
+    //
+    // NOTE: keep this loop structurally in sync with the compressed flux loop
+    // below (same 3-wide max filter, same bass/mid/high split, same weighting).
+    // If you change one, update the other or the NN input will drift from what
+    // ACF uses for tempo analysis.
     if (hasPrevFrame_) {
         float rawBassFlux = 0.0f, rawMidFlux = 0.0f, rawHighFlux = 0.0f;
         for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
