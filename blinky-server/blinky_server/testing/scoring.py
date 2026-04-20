@@ -105,6 +105,11 @@ ONSET_TOLERANCE_SEC = 0.10
 MIN_ONSET_STRENGTH = 0.6
 ONSET_DEDUP_SEC = 0.070
 
+# Half-width of the window used to classify an NN frame as "near a GT onset"
+# when computing HybridMetrics (flatness/flux gap). Tight enough to isolate
+# the transient attack, loose enough to absorb device clock jitter.
+HYBRID_ONSET_WINDOW_SEC = 0.050
+
 
 def estimate_audio_latency(
     detections: list[dict[str, Any]],
@@ -420,10 +425,10 @@ def score_device_run(
             "Check that firmware emits 'flat'/'rflux' in debug stream."
         )
     if nn_frames and ref_onsets:
-        # Classify each NN frame as onset (within ±50 ms of a GT onset) or
-        # non-onset. ref_onsets is time-ordered, so we can use bisect to find
-        # the nearest GT onset in O(log m) per frame instead of O(m).
-        sorted_refs = sorted(ref_onsets)  # guard against caller ordering
+        # Classify each NN frame as onset (within ±HYBRID_ONSET_WINDOW_SEC of
+        # a GT onset) or non-onset. ref_onsets is time-ordered by construction
+        # (dedup branch sorts explicitly at line 234; hits branch loads beat
+        # files that are pre-sorted). bisect relies on that invariant.
         onset_flat: list[float] = []
         onset_flux: list[float] = []
         non_flat: list[float] = []
@@ -434,11 +439,11 @@ def score_device_run(
             if ts_ms < 0:
                 continue
             t_sec = (ts_ms - latency_correction_ms) / 1000
-            idx = bisect.bisect_left(sorted_refs, t_sec)
+            idx = bisect.bisect_left(ref_onsets, t_sec)
             # Nearest ref is either at idx or idx-1
             near_onset = False
             for j in (idx - 1, idx):
-                if 0 <= j < len(sorted_refs) and abs(t_sec - sorted_refs[j]) < 0.050:
+                if 0 <= j < len(ref_onsets) and abs(t_sec - ref_onsets[j]) < HYBRID_ONSET_WINDOW_SEC:
                     near_onset = True
                     break
             if near_onset:

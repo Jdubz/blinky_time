@@ -114,11 +114,13 @@ class TestSession:
             # Require BOTH fields — a partial frame (only one present) would
             # bias the missing metric toward 0 and corrupt the gap comparison.
             if "flat" in m and "rflux" in m:
+                flat_val = m["flat"]
+                rflux_val = m["rflux"]
                 if not self._nn_frames:
                     log.info(
                         "First NN frame captured: flat=%s rflux=%s",
-                        m.get("flat"),
-                        m.get("rflux"),
+                        flat_val,
+                        rflux_val,
                     )
                 self._nn_frames.append(
                     NNFrame(
@@ -127,7 +129,7 @@ class TestSession:
                         # not the 0/1 loaded flag (that lives in the separate
                         # NN-diagnostic stream). See NNFrame docstring.
                         activation=m.get("nn", 0.0),
-                        flatness=m.get("flat", 0.0),
-                        flux=m.get("rflux", 0.0),
+                        flatness=flat_val,
+                        flux=rflux_val,
                     )
                 )

@@ -116,10 +116,10 @@ Firmware and server changes needed so Phase 3 can capture on-device data for arb
 
 **Deployability score** per signal:
 ```
-score = |cohen_d_ondevice| × corr_offline_ondevice × (1 / cross_device_std_normalized)
+score = |cohen_d_ondevice| × corr_offline_ondevice × (1 / (cross_device_std_normalized + ε))
 ```
 
-High score = discriminative AND robust AND consistent. Bottom third of the shortlist gets dropped.
+with `ε = 0.01` to prevent a perfectly consistent signal from scoring infinitely. Equivalent formulation: `score = |d| × r / max(ε, cross_device_std_normalized)`. High score = discriminative AND robust AND consistent. Bottom third of the shortlist gets dropped.
 
 **Deliverable:** a decision matrix appended to this doc listing per-signal offline_d, on-device_d, offline↔device correlation, cross-device std, final score.
 
@@ -132,6 +132,8 @@ Two paths run in parallel; whichever lands first wins.
 **Path B: retrain NN with new features.** Add the top 2-3 signals as additional NN input channels (bumps 32 → 34-35). Retrain v28, evaluate, deploy if F1 improves by ≥0.03.
 
 Expected outcome: one new deterministic gate (cheap) + one new NN input feature (expensive but higher ceiling). Neither is guaranteed.
+
+**Phase 4 exit gate — strip losing candidates from firmware.** Before any Phase 4 work merges to master, every candidate feature that did **not** make the shortlist must be deleted from the firmware (computation + flag + stream field), not just flag-defaulted-off. Run `grep -r 'SignalRegistry' blinky-things/` to confirm only the shipped signals remain. Investigation-only code that lingers in deployment firmware is how flash budget leaks accumulate — see the `v21`–`v26` cleanup in b132 for an example we had to do retroactively.
 
 ## Open questions / risks
 

@@ -1371,10 +1371,12 @@ void SerialConsole::streamTick() {
             out_.print(mic_->getHwGain());
             // Hybrid features: spectral flatness + raw flux (pre-compressor)
             // These match the training pipeline's feature computation.
+            // Precision (4 dp) matches the music stream's rflux so offline
+            // tooling can pool data from both streams without scaling.
             out_.print(F(",\"flat\":"));
             out_.print(spectral.getSpectralFlatness(), 4);
             out_.print(F(",\"rflux\":"));
-            out_.print(spectral.getRawSpectralFlux(), 6);
+            out_.print(spectral.getRawSpectralFlux(), 4);
             out_.println(F("}"));
         }
     }

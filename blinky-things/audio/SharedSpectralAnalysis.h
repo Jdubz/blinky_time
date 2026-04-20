@@ -316,7 +316,7 @@ private:
 
     // Output buffers
     float magnitudes_[SpectralConstants::NUM_BINS];      // Compressed + whitened magnitudes (all detectors see this state)
-    float preWhitenMagnitudes_[SpectralConstants::NUM_BINS]; // Raw FFT magnitudes, no compression or whitening (for BandFlux)
+    float preWhitenMagnitudes_[SpectralConstants::NUM_BINS]; // Post-FFT, post-noise-subtraction, PRE-compressor AND pre-whitening. Snapshot taken in process() before applyCompressor() runs. Used by raw flux + raw mel bands for the NN hybrid input (must match training pipeline's STFT magnitudes).
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float prevRawMagnitudes_[SpectralConstants::NUM_BINS]; // Previous frame pre-compressor mags (for raw flux)
