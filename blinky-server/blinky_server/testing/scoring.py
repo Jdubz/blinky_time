@@ -425,12 +425,14 @@ def score_device_run(
         )
     if signal_frames and ref_onsets:
         # Classify each frame as onset (within ±HYBRID_ONSET_WINDOW_SEC of any
-        # GT onset) or non-onset, then accumulate per-signal sums. ref_onsets
-        # is time-ordered by construction (dedup branch sorts explicitly;
-        # hits branch loads pre-sorted beat files), so bisect is safe.
+        # GT onset) or non-onset, then accumulate per-signal sums + sums of
+        # squares so we can compute std and Cohen's d in one pass. ref_onsets
+        # is time-ordered by construction, so bisect is safe.
         signal_names = list(signal_frames[0].values.keys())
-        onset_sums: dict[str, float] = {n: 0.0 for n in signal_names}
-        non_sums: dict[str, float] = {n: 0.0 for n in signal_names}
+        onset_sum: dict[str, float] = {n: 0.0 for n in signal_names}
+        onset_sqsum: dict[str, float] = {n: 0.0 for n in signal_names}
+        non_sum: dict[str, float] = {n: 0.0 for n in signal_names}
+        non_sqsum: dict[str, float] = {n: 0.0 for n in signal_names}
         onset_count = 0
         non_count = 0
 
@@ -451,22 +453,42 @@ def score_device_run(
             if near_onset:
                 onset_count += 1
                 for name in signal_names:
-                    onset_sums[name] += f.values.get(name, 0.0)
+                    v = f.values.get(name, 0.0)
+                    onset_sum[name] += v
+                    onset_sqsum[name] += v * v
             else:
                 non_count += 1
                 for name in signal_names:
-                    non_sums[name] += f.values.get(name, 0.0)
+                    v = f.values.get(name, 0.0)
+                    non_sum[name] += v
+                    non_sqsum[name] += v * v
 
-        if onset_count > 0 and non_count > 0:
+        if onset_count > 1 and non_count > 1:
             for name in signal_names:
-                o_mean = onset_sums[name] / onset_count
-                n_mean = non_sums[name] / non_count
+                o_mean = onset_sum[name] / onset_count
+                n_mean = non_sum[name] / non_count
+                # Population variance → sample variance via Bessel's correction
+                o_var = max(
+                    0.0,
+                    (onset_sqsum[name] - onset_count * o_mean * o_mean) / (onset_count - 1),
+                )
+                n_var = max(
+                    0.0,
+                    (non_sqsum[name] - non_count * n_mean * n_mean) / (non_count - 1),
+                )
+                o_std = math.sqrt(o_var)
+                n_std = math.sqrt(n_var)
+                pooled = math.sqrt((o_var + n_var) / 2.0)
+                d = 0.0 if pooled < 1e-12 else (o_mean - n_mean) / pooled
                 signal_gaps.append(
                     SignalGapStats(
                         signal=name,
                         onset_mean=_js_round(o_mean, 4),
+                        onset_std=_js_round(o_std, 4),
                         non_mean=_js_round(n_mean, 4),
+                        non_std=_js_round(n_std, 4),
                         gap=_js_round(o_mean - n_mean, 4),
+                        cohens_d=_js_round(d, 3),
                         n_onset=onset_count,
                         n_non=non_count,
                     )
@@ -588,8 +610,11 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
                 {
                     "signal": g.signal,
                     "onsetMean": g.onset_mean,
+                    "onsetStd": g.onset_std,
                     "nonMean": g.non_mean,
+                    "nonStd": g.non_std,
                     "gap": g.gap,
+                    "cohensD": g.cohens_d,
                     "nOnset": g.n_onset,
                     "nNon": g.n_non,
                 }

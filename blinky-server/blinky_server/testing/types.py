@@ -115,17 +115,23 @@ class PlpMetrics:
 
 @dataclass
 class SignalGapStats:
-    """Per-signal onset-vs-non-onset gap. One of these per streamed signal.
+    """Per-signal onset-vs-non-onset statistics. One of these per streamed signal.
 
-    See docs/HYBRID_FEATURE_ANALYSIS_PLAN.md Phase 1 for the methodology.
+    The raw gap is comparable across signals only if normalized by variance —
+    see `cohens_d` (pooled-std effect size). A gap of 0.01 can be strongly
+    discriminative if std is tiny; a gap of 100 can be meaningless if std is
+    in the thousands. See docs/HYBRID_FEATURE_ANALYSIS_PLAN.md Phase 1.
     """
 
-    signal: str  # Signal name (matches the stream key, e.g. "flat", "cent")
-    onset_mean: float  # Mean value at frames within ±HYBRID_ONSET_WINDOW_SEC of a GT onset
-    non_mean: float  # Mean value at frames ≥ HYBRID_ONSET_WINDOW_SEC from any GT onset
-    gap: float  # onset_mean - non_mean (sign documented per feature in the plan)
-    n_onset: int  # Count of onset frames contributing to onset_mean
-    n_non: int  # Count of non-onset frames contributing to non_mean
+    signal: str
+    onset_mean: float
+    onset_std: float
+    non_mean: float
+    non_std: float
+    gap: float  # onset_mean - non_mean (raw difference)
+    cohens_d: float  # gap / sqrt((onset_var + non_var) / 2) — pooled effect size
+    n_onset: int
+    n_non: int
 
 
 @dataclass
