@@ -6,20 +6,47 @@
 
 ## Goal
 
-Evaluate a catalog of **deterministic audio features** (spectral shape, transient, phase) against three questions:
+**Choose a small set of deterministic features that genuinely help the NN discriminate true drum onsets from false ones on-device.**
 
-1. **Does the signal exist?** Does the feature actually separate GT onset frames from non-onset frames on clean audio?
-2. **Does the signal survive?** Does the offline value match the on-device value on the same track (speaker → room → mic → INT8)?
-3. **Is the implementation correct?** Does the firmware computation match its Python reference bit-for-bit?
+Read that sentence twice. It has three load-bearing words:
 
-A feature passes only if all three answer yes. Passing features feed two downstream paths:
+- **"small set"** — not "all features that show a signal". Each NN input channel has to earn its slot against a mel-only baseline. Stacking more inputs on a thin baseline muddies the model, it doesn't help it.
+- **"help the NN discriminate"** — the NN is the consumer. The measurement that matters is *does the model's F1 improve with this feature as an input* (versus, say, *does this feature separate onset frames from non-onset frames*, which is a different question).
+- **"on-device"** — on-device is the ground truth. Offline |d| and parity checks rule out bugs, but only device measurements decide which features survive the acoustic chain.
 
-- **Deterministic FP gates** on-device — cheap, fast to iterate, extends the existing bass-gate pattern.
-- **New NN input channels** — retrain with the winners to raise the F1 ceiling.
+**Scope: EDM only.** The fleet's target deployment is EDM-driven installations (techno, trance, breakbeat, dnb, dubstep, garage, amapiano, reggaeton, etc. — everything already in the corpus). This investigation does not need to generalize to rock, jazz, classical, or sparse percussion.
 
-Features that discriminate offline but drift on-device are either dropped or flagged as "close the gap first" work (e.g., a normalization or calibration missing from the firmware path).
+## Working principles — read before adding any feature
 
-**Scope: EDM only.** The fleet's target deployment is EDM-driven installations (techno, trance, breakbeat, dnb, dubstep, garage, amapiano, reggaeton, etc. — everything already in the corpus). This investigation does not need to generalize to rock, jazz, classical, or sparse percussion. Feature rankings and sign-stability results are taken as authoritative for EDM without further cross-genre validation.
+These codify mistakes made on this investigation so far and the corrected approach. The plan drifts if they're ignored.
+
+### Mistakes to avoid
+
+1. **Don't drift into deterministic gates.** A gate is a post-NN threshold filter that suppresses firings. It's a different engineering approach from "NN input feature" and has different requirements. The goal is NN inputs; building a gate experiment (crestGateMin sweep in b135) was a digression. Any future "gate" proposal has to be a deliberate detour with explicit justification, not an accidental drift.
+
+2. **Don't use the wrong discrimination metric.** "Onset-vs-non-onset peak |d|" (Phase 1 / Phase 3) measures whether a feature fires at drum times. That's *feature existence*, not NN-input readiness. For NN-input readiness you want **TP-vs-FP |d|**: among frames where the NN fires, does the feature separate correct firings from wrong ones? A feature with strong onset-vs-non-onset |d| can have near-zero TP-vs-FP |d| — both drums AND broadband false triggers produce a peak.
+
+3. **Don't stack without ablation.** v27-hybrid added flatness + raw_flux without a mel-only baseline, so we don't actually know either helped. Repeating that mistake (add four more shape features without the same check) is off the table. Every feature that earns a permanent NN input slot must beat a mel-only baseline under identical training recipe.
+
+4. **Don't ignore redundancy with mel.** Five of the six shape features (centroid, crest, rolloff, hfc, flatness) are functions of the same magnitude spectrum the 30 mel bands already represent. If a feature can be reconstructed from mel bands with R² > 0.95, the NN can learn it for free — adding it as an input duplicates info and wastes a channel. Only raw_flux is temporal (frame-to-frame), so it's the one feature that carries genuinely new information relative to mel.
+
+5. **Don't confuse "feature exists" with "feature helps the NN."** Phase 1 ranking = "signals that exist on-device". That's a necessary but not sufficient condition for being an NN input. The full bar is higher.
+
+### Five gates a feature must pass before it earns an NN input slot
+
+Ordered cheapest first:
+
+a. **Exists on-device** — per-onset-peak |d| ≥ 0.4 on real EDM. (All 6 current candidates pass.)
+
+b. **Discriminates TP from FP at NN-firing moments** — |d| ≥ 0.3 between frames where NN fires AND within ±50 ms of GT vs frames where NN fires AND ≥ 100 ms from any GT. *(Not yet measured. Next step.)*
+
+c. **Non-redundant with mel bands** — fit a linear regressor predicting the feature from the 30 mel bands; R² < 0.95 required. Features the NN can trivially recompute from mel earn no slot.
+
+d. **Non-redundant within the kept set** — pairwise |r| < 0.9 between surviving candidates. Drop the more expensive of any correlated pair.
+
+e. **Marginal F1 gain against mel-only baseline** — ablation training: v28-mel-only vs v28-mel+feature. Require ≥ 0.03 F1 improvement on held-out EDM corpus.
+
+No feature enters the production NN input vector without passing all five. The mel-only baseline must exist and be trained with the same recipe as any hybrid candidate; without it, "feature helped" is unverifiable.
 
 ## Design decisions
 
