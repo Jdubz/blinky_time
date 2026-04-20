@@ -153,3 +153,50 @@ Expected outcome: one new deterministic gate (cheap) + one new NN input feature 
 - `docs/ML_IMPROVEMENT_PLAN.md` — NN training roadmap.
 - `blinky-server/blinky_server/testing/scoring.py` `HybridMetrics` — prototype scoring shipped in b132 for `flat`/`rflux`. Generalize in Phase 2.
 - Bello et al., *A Tutorial on Onset Detection in Music Signals*, IEEE TSAP 2005 — most of the candidate catalog derives from Section III.
+
+---
+
+## Phase 1 results (offline catalog) — 2026-04-20
+
+**Corpus:** 18 EDM tracks (`blinky-test-player/music/edm/`), 143,289 frames at 62.5 Hz, `onsets_consensus.json` as ground truth.
+**Model:** `outputs/v27-hybrid-real/best_model.pt` (32-feature hybrid — the real one, not the silently-dropped-features sibling).
+**Code:** `ml-training/analysis/features.py` + `ml-training/analysis/run_catalog.py`. Regenerate with
+`./venv/bin/python -m analysis.run_catalog --config configs/conv1d_w16_onset_v27.yaml --model outputs/v27-hybrid-real/best_model.pt --corpus ../blinky-test-player/music/edm --out outputs/feature_catalog`.
+
+**Corpus-weighted ranking** (|d| = mean |Cohen's d| between TP and FP frames, weighted by per-track TP+FP count; positive signed d means the feature is larger on TP than FP):
+
+| rank | feature | \|d\| | d (signed) | AUC | KS |
+|-----:|---------|----:|-----------:|----:|----:|
+| 1 | complex_sd | 0.218 | +0.201 | 0.550 | 0.094 |
+| 2 | hfc | 0.209 | +0.200 | 0.557 | 0.107 |
+| 3 | raw_flux | 0.154 | +0.149 | 0.553 | 0.091 |
+| 4 | flatness | 0.141 | +0.102 | 0.530 | 0.081 |
+| 5 | centroid | 0.133 | +0.081 | 0.526 | 0.084 |
+| 6 | wpd | 0.100 | +0.093 | 0.527 | 0.058 |
+| 7 | kick_ratio | 0.096 | −0.002 | 0.484 | 0.069 |
+| 8 | rolloff | 0.093 | +0.063 | 0.530 | 0.079 |
+| 9 | renyi | 0.088 | −0.027 | 0.520 | 0.067 |
+| 10 | crest | 0.072 | −0.045 | 0.482 | 0.061 |
+
+**Findings.**
+
+1. **All effect sizes are weak on clean audio.** The strongest, `complex_sd`, sits at |d| = 0.22, well below the Cohen-1988 "moderate" threshold of 0.5. This is consistent with `AUDIO_ARCHITECTURE.md:275` — on clean audio the NN activation is near-flat (mean 0.60, std 0.16), and it fires on 95–99.8 % of frames across the corpus. There is no TN room to exploit offline; Phase 1 is ceiling-limited by the same sim-to-real artefact we're trying to measure.
+
+2. **Four features are positive discriminators on all 18 tracks** (except one outlier on flatness and one on complex_sd): `complex_sd`, `hfc`, `raw_flux`, `flatness`. The signed d means TP frames have *higher* values than FP frames — consistent with percussion being broadband-transient-phase-chaotic and tonals being narrowband-sustained-phase-stable.
+
+3. **Three candidates can be dropped now:** `kick_ratio`, `renyi`, `crest` have near-zero or negative signed d across the corpus — they do not monotonically separate TP from FP on this data.
+
+4. **The Phase 3 gap is the point.** The same features measured on-device will see the acoustic chain's contrast (per CLAUDE.md the acoustic chain is what makes on-device activations dynamic). Offline d ≈ 0.2 is the baseline; any feature that jumps to d > 0.5 on-device is a strong deployability candidate.
+
+**Phase 2 shortlist** (6 features carried into on-device measurement):
+
+1. `complex_sd` — phase-aware, currently absent from NN input. **Primary candidate** for both deterministic gate and new NN feature.
+2. `hfc` — broadband HF content, currently absent from NN input. **Primary candidate.**
+3. `raw_flux` — already in NN input; serves as on-device reference to calibrate Phase 3 effect-size scaling.
+4. `flatness` — already in NN input; same rationale.
+5. `wpd` — weak (|d|=0.10) but only phase-based candidate alongside complex_sd; keep for cross-check in Phase 3.
+6. `centroid` — cheapest compute (~0.2 ms), marginal offline signal (|d|=0.13). Include because on-device cost/benefit is better than wpd.
+
+**Dropped:** `kick_ratio`, `renyi`, `crest`, `rolloff`.
+
+**Phase 2 implication.** The SignalRegistry infrastructure work (selective streaming, `stream signal X on|off`) targets these 6. Full 10-feature firmware scaffolding is unnecessary.
