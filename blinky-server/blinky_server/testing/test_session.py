@@ -10,9 +10,25 @@ import logging
 import time
 from typing import Any
 
-from .types import MusicState, NNFrame, TestData, TransientEvent
+from .types import MusicState, SignalFrame, TestData, TransientEvent
 
 log = logging.getLogger(__name__)
+
+# Keys the firmware emits inside the music-stream "m" sub-object that we treat
+# as signal values for HybridMetrics-style onset/non-onset analysis. Every key
+# listed here must also have a matching Python reference implementation in
+# ml-training/analysis/features.py so parity tests can run.
+#
+# Format: (wire_key, server_signal_name). They usually match; kept as a tuple
+# so we can rename one side without touching the other.
+SIGNAL_KEYS: list[tuple[str, str]] = [
+    ("flat", "flatness"),
+    ("rflux", "raw_flux"),
+    ("cent", "centroid"),
+    ("crest", "crest"),
+    ("roll", "rolloff"),
+    ("hfc", "hfc"),
+]
 
 
 class TestSession:
@@ -28,7 +44,7 @@ class TestSession:
         self._start_time: float = 0.0
         self._transients: list[TransientEvent] = []
         self._music_states: list[MusicState] = []
-        self._nn_frames: list[NNFrame] = []
+        self._signal_frames: list[SignalFrame] = []
         self._clock_offset: float | None = None  # server_epoch_ms - firmware_millis
 
     @property
@@ -49,7 +65,7 @@ class TestSession:
         self._start_time = time.time() * 1000  # epoch ms
         self._transients.clear()
         self._music_states.clear()
-        self._nn_frames.clear()
+        self._signal_frames.clear()
 
     def stop_recording(self) -> TestData:
         """Stop recording and return a frozen snapshot."""
@@ -60,7 +76,7 @@ class TestSession:
             start_time=self._start_time,
             transients=list(self._transients),
             music_states=list(self._music_states),
-            nn_frames=list(self._nn_frames),
+            signal_frames=list(self._signal_frames),
         )
 
     def ingest(self, msg_type: str, data: dict[str, Any]) -> None:
@@ -110,26 +126,26 @@ class TestSession:
                     nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )
             )
-            # Hybrid features in debug stream: flat + rflux in "m" sub-object.
-            # Require BOTH fields — a partial frame (only one present) would
-            # bias the missing metric toward 0 and corrupt the gap comparison.
-            if "flat" in m and "rflux" in m:
-                flat_val = m["flat"]
-                rflux_val = m["rflux"]
-                if not self._nn_frames:
+            # Phase 2a: generic signal capture. A frame counts as "streaming
+            # signals" if ALL configured keys are present — partial frames
+            # (only some fields) would bias missing signals' means toward 0
+            # and corrupt per-signal gap comparisons. `flat` is the canonical
+            # marker since the firmware's debug block always emits all of
+            # flat+rflux+cent+crest+roll+hfc together (or none of them).
+            if all(wire_key in m for wire_key, _ in SIGNAL_KEYS):
+                values = {name: float(m[wire_key]) for wire_key, name in SIGNAL_KEYS}
+                if not self._signal_frames:
                     log.info(
-                        "First NN frame captured: flat=%s rflux=%s",
-                        flat_val,
-                        rflux_val,
+                        "First signal frame captured: %s",
+                        ", ".join(f"{k}={v:.3f}" for k, v in values.items()),
                     )
-                self._nn_frames.append(
-                    NNFrame(
+                self._signal_frames.append(
+                    SignalFrame(
                         timestamp_ms=now_ms,
                         # m["nn"] in the music stream is the raw NN activation,
                         # not the 0/1 loaded flag (that lives in the separate
-                        # NN-diagnostic stream). See NNFrame docstring.
-                        activation=m.get("nn", 0.0),
-                        flatness=flat_val,
-                        flux=rflux_val,
+                        # NN-diagnostic stream).
+                        activation=float(m.get("nn", 0.0)),
+                        values=values,
                     )
                 )

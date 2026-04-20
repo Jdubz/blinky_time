@@ -21,10 +21,10 @@ from .types import (
     DeviceRunScore,
     Diagnostics,
     GroundTruth,
-    HybridMetrics,
     OffsetStats,
     OnsetTracking,
     PlpMetrics,
+    SignalGapStats,
     TestData,
 )
 
@@ -413,34 +413,33 @@ def score_device_run(
 
     onset_offset_stats = _compute_offset_stats(onset_offsets)
 
-    # Hybrid feature metrics: compare flatness/flux at onset vs non-onset
-    hybrid: HybridMetrics | None = None
-    nn_frames = test_data.nn_frames
-    if ref_onsets and not nn_frames:
-        # Firmware didn't emit flat/rflux in the debug stream. Hybrid metrics
-        # will be absent from the score. Logged at debug to avoid noise when
-        # running against firmware builds that predate hybrid streaming.
+    # Per-signal gap metrics: compare every streamed signal's value at GT-onset
+    # frames against its value at non-onset frames. Runs over whatever signals
+    # the firmware streamed — no hardcoded field list here.
+    signal_gaps: list[SignalGapStats] = []
+    signal_frames = test_data.signal_frames
+    if ref_onsets and not signal_frames:
         log.debug(
-            "No NN frames captured — hybrid metrics unavailable. "
-            "Check that firmware emits 'flat'/'rflux' in debug stream."
+            "No signal frames captured — per-signal gaps unavailable. "
+            "Check that firmware emits the debug block (flat/rflux/cent/crest/roll/hfc)."
         )
-    if nn_frames and ref_onsets:
-        # Classify each NN frame as onset (within ±HYBRID_ONSET_WINDOW_SEC of
-        # a GT onset) or non-onset. ref_onsets is time-ordered by construction
-        # (dedup branch sorts explicitly at line 234; hits branch loads beat
-        # files that are pre-sorted). bisect relies on that invariant.
-        onset_flat: list[float] = []
-        onset_flux: list[float] = []
-        non_flat: list[float] = []
-        non_flux: list[float] = []
+    if signal_frames and ref_onsets:
+        # Classify each frame as onset (within ±HYBRID_ONSET_WINDOW_SEC of any
+        # GT onset) or non-onset, then accumulate per-signal sums. ref_onsets
+        # is time-ordered by construction (dedup branch sorts explicitly;
+        # hits branch loads pre-sorted beat files), so bisect is safe.
+        signal_names = list(signal_frames[0].values.keys())
+        onset_sums: dict[str, float] = {n: 0.0 for n in signal_names}
+        non_sums: dict[str, float] = {n: 0.0 for n in signal_names}
+        onset_count = 0
+        non_count = 0
 
-        for f in nn_frames:
+        for f in signal_frames:
             ts_ms = f.timestamp_ms - audio_epoch_ms
             if ts_ms < 0:
                 continue
             t_sec = (ts_ms - latency_correction_ms) / 1000
             idx = bisect.bisect_left(ref_onsets, t_sec)
-            # Nearest ref is either at idx or idx-1
             near_onset = False
             for j in (idx - 1, idx):
                 if (
@@ -450,26 +449,28 @@ def score_device_run(
                     near_onset = True
                     break
             if near_onset:
-                onset_flat.append(f.flatness)
-                onset_flux.append(f.flux)
+                onset_count += 1
+                for name in signal_names:
+                    onset_sums[name] += f.values.get(name, 0.0)
             else:
-                non_flat.append(f.flatness)
-                non_flux.append(f.flux)
+                non_count += 1
+                for name in signal_names:
+                    non_sums[name] += f.values.get(name, 0.0)
 
-        if onset_flat and non_flat:
-            of_mean = sum(onset_flat) / len(onset_flat)
-            nf_mean = sum(non_flat) / len(non_flat)
-            ox_mean = sum(onset_flux) / len(onset_flux)
-            nx_mean = sum(non_flux) / len(non_flux)
-            hybrid = HybridMetrics(
-                flatness_at_onset=_js_round(of_mean, 4),
-                flatness_at_non=_js_round(nf_mean, 4),
-                flatness_gap=_js_round(of_mean - nf_mean, 4),
-                flux_at_onset=_js_round(ox_mean, 4),
-                flux_at_non=_js_round(nx_mean, 4),
-                flux_gap=_js_round(ox_mean - nx_mean, 4),
-                nn_frames=len(nn_frames),
-            )
+        if onset_count > 0 and non_count > 0:
+            for name in signal_names:
+                o_mean = onset_sums[name] / onset_count
+                n_mean = non_sums[name] / non_count
+                signal_gaps.append(
+                    SignalGapStats(
+                        signal=name,
+                        onset_mean=_js_round(o_mean, 4),
+                        non_mean=_js_round(n_mean, 4),
+                        gap=_js_round(o_mean - n_mean, 4),
+                        n_onset=onset_count,
+                        n_non=non_count,
+                    )
+                )
 
     return DeviceRunScore(
         audio_latency_ms=audio_latency_ms,
@@ -505,7 +506,8 @@ def score_device_run(
             onset_offset_stats=onset_offset_stats,
             onset_offsets=onset_offsets,
         ),
-        hybrid=hybrid,
+        signals=signal_gaps,
+        signal_frames_captured=len(signal_frames),
     )
 
 
@@ -580,19 +582,20 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             if score.audio_latency_ms is not None
             else None,
         },
-        "hybrid": (
-            {
-                "flatnessAtOnset": score.hybrid.flatness_at_onset,
-                "flatnessAtNon": score.hybrid.flatness_at_non,
-                "flatnessGap": score.hybrid.flatness_gap,
-                "fluxAtOnset": score.hybrid.flux_at_onset,
-                "fluxAtNon": score.hybrid.flux_at_non,
-                "fluxGap": score.hybrid.flux_gap,
-                "nnFrames": score.hybrid.nn_frames,
-            }
-            if score.hybrid
-            else None
-        ),
+        "signals": {
+            "frames": score.signal_frames_captured,
+            "gaps": [
+                {
+                    "signal": g.signal,
+                    "onsetMean": g.onset_mean,
+                    "nonMean": g.non_mean,
+                    "gap": g.gap,
+                    "nOnset": g.n_onset,
+                    "nNon": g.n_non,
+                }
+                for g in score.signals
+            ],
+        },
     }
 
 

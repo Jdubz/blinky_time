@@ -39,20 +39,22 @@ class TransientEvent:
 
 
 @dataclass
-class NNFrame:
-    """Single NN stream frame with hybrid features.
+class SignalFrame:
+    """A single captured frame of per-feature signal values.
 
-    Named fields use the server's vocabulary. The wire format is confusing:
-    in the main music stream's "m" sub-object, key "nn" carries the raw NN
-    activation; in the separate NN-diagnostic stream (type="NN") key "nn"
-    is a 0/1 loaded flag and "nna" is the activation. We ingest from the
-    music stream, so test_session reads m["nn"] into `activation`.
+    `values` is a dict of signal_name → float. The keys used by the
+    current firmware are documented in test_session.py's `SIGNAL_KEYS`
+    mapping. A generic dict lets the catalog grow without server-type
+    churn — adding a new firmware signal requires only a key addition
+    in test_session.py and a corresponding feature in Python reference.
+
+    `activation` is the NN's raw onset activation, kept as a dedicated
+    field because it's used by non-signal metrics (e.g. activation_ms).
     """
 
     timestamp_ms: float
-    activation: float  # Raw NN onset activation [0,1] (from music stream m["nn"])
-    flatness: float  # Spectral flatness (Wiener entropy) [0,1]
-    flux: float  # Raw SuperFlux spectral flux
+    activation: float
+    values: dict[str, float]
 
 
 @dataclass
@@ -74,7 +76,7 @@ class TestData:
     start_time: float  # ms (epoch)
     transients: list[TransientEvent] = field(default_factory=list)
     music_states: list[MusicState] = field(default_factory=list)
-    nn_frames: list[NNFrame] = field(default_factory=list)
+    signal_frames: list[SignalFrame] = field(default_factory=list)
 
 
 @dataclass
@@ -112,16 +114,18 @@ class PlpMetrics:
 
 
 @dataclass
-class HybridMetrics:
-    """On-device hybrid feature quality at onset vs non-onset positions."""
+class SignalGapStats:
+    """Per-signal onset-vs-non-onset gap. One of these per streamed signal.
 
-    flatness_at_onset: float  # Mean flatness at GT onset frames
-    flatness_at_non: float  # Mean flatness at non-onset frames
-    flatness_gap: float  # onset - non (positive = onsets are more noise-like)
-    flux_at_onset: float  # Mean raw flux at GT onset frames
-    flux_at_non: float  # Mean raw flux at non-onset frames
-    flux_gap: float  # onset - non (positive = flux peaks at onsets, expected for SuperFlux)
-    nn_frames: int  # Total NN frames captured
+    See docs/HYBRID_FEATURE_ANALYSIS_PLAN.md Phase 1 for the methodology.
+    """
+
+    signal: str  # Signal name (matches the stream key, e.g. "flat", "cent")
+    onset_mean: float  # Mean value at frames within ±HYBRID_ONSET_WINDOW_SEC of a GT onset
+    non_mean: float  # Mean value at frames ≥ HYBRID_ONSET_WINDOW_SEC from any GT onset
+    gap: float  # onset_mean - non_mean (sign documented per feature in the plan)
+    n_onset: int  # Count of onset frames contributing to onset_mean
+    n_non: int  # Count of non-onset frames contributing to non_mean
 
 
 @dataclass
@@ -141,4 +145,5 @@ class DeviceRunScore:
     avg_confidence: float
     activation_ms: float | None
     diagnostics: Diagnostics
-    hybrid: HybridMetrics | None = None
+    signals: list[SignalGapStats] = field(default_factory=list)
+    signal_frames_captured: int = 0
