@@ -14,6 +14,9 @@ ml-training/data/mel_cache/
 ml-training/data/archive/
 ml-training/outputs/*/checkpoints/
 
+# Synthetic corpora (deterministic, regenerate via analysis/generate_tonal_corpus.py)
+blinky-test-player/music/synthetic_tonals/
+
 # Compiled binaries (prevent accidental venv/library commits)
 *.so
 *.dylib

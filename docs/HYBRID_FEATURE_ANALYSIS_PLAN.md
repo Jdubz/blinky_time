@@ -156,45 +156,61 @@ Expected outcome: one new deterministic gate (cheap) + one new NN input feature 
 
 ## Phase 1 results — 2026-04-20
 
-**Corpus:** 18 EDM tracks (`blinky-test-player/music/edm/`), 143,289 frames at 62.5 Hz, `onsets_consensus.json` as ground truth.
-**Labeling:** frame is "onset" if within ±50 ms of any GT onset, "non-onset" otherwise. No NN involved.
-**Code:** `ml-training/analysis/features.py` + `ml-training/analysis/run_catalog.py`.
-Regenerate with `./venv/bin/python -m analysis.run_catalog --corpus ../blinky-test-player/music/edm --out outputs/feature_catalog`.
+**Percussion corpus:** 18 EDM tracks, 9,763 GT onsets total.
+**Tonal corpus:** 9 synthetic tracks (`generate_tonal_corpus.py`), 720 impulses — sine/saw/FM stabs, detuned leads, harmonic stacks, bass note attacks, vocal-formant bursts, pad+stab mix. Pure tonal content only, known impulse times.
+**Labeling:** per-onset peak — one sample per GT onset = max feature value within ±50 ms. Non-onset frames = at least 100 ms from every GT onset. No NN.
+**Code:** `ml-training/analysis/features.py` + `generate_tonal_corpus.py` + `run_catalog.py`.
+Regenerate with
 
-**Corpus-weighted ranking** (|d| is mean per-track-weighted |Cohen's d| between onset and non-onset frames; signed d sign convention: positive = feature is larger on onset frames; `pos tracks` = fraction of tracks with d > 0, i.e. how often the sign is correct):
+```
+./venv/bin/python -m analysis.generate_tonal_corpus --out ../blinky-test-player/music/synthetic_tonals
+./venv/bin/python -m analysis.run_catalog --perc-corpus ../blinky-test-player/music/edm --tonal-corpus ../blinky-test-player/music/synthetic_tonals --out outputs/feature_catalog
+```
 
-| rank | feature | \|d\| | d (signed) | pos tracks | AUC | KS |
-|-----:|---------|-----:|-----------:|-----------:|----:|----:|
-| 1 | complex_sd | 0.217 | +0.201 | 17/18 | 0.549 | 0.092 |
-| 2 | hfc | 0.210 | +0.201 | 16/18 | 0.556 | 0.107 |
-| 3 | raw_flux | 0.155 | +0.152 | 17/18 | 0.554 | 0.091 |
-| 4 | flatness | 0.142 | +0.106 | 13/18 | 0.531 | 0.082 |
-| 5 | centroid | 0.130 | +0.086 | 12/18 | 0.528 | 0.084 |
-| 6 | wpd | 0.103 | +0.095 | 16/18 | 0.528 | 0.060 |
-| 7 | rolloff | 0.101 | +0.040 | 10/18 | 0.524 | 0.076 |
-| 8 | kick_ratio | 0.095 | −0.012 | 10/18 | 0.481 | 0.071 |
-| 9 | crest | 0.076 | −0.049 | 5/18 | 0.480 | 0.063 |
-| 10 | renyi | 0.069 | +0.005 | 10/18 | 0.523 | 0.069 |
+### Primary metric: percussion-peak vs tonal-impulse-peak (cross-corpus)
 
-**Findings.**
+Positive signed d ⇒ the feature is *larger* on percussion peaks than on tonal-impulse peaks (the direction we want for FP reduction). AUC < 0.5 ⇒ the ordering is reversed — tonal impulses score HIGHER than drums on this feature, so it fails as a discriminator even if it's a strong onset detector.
 
-1. **All effect sizes are weak offline** (|d| < 0.5 everywhere, top signal at 0.22). This is the expected offline baseline: the features *do* separate onsets from non-onsets on clean audio, but only modestly. The interesting question is whether on-device measurement preserves or erodes this separation, which is what Phase 3 answers.
+| rank | feature | d (perc − tonal) | AUC | perc_mean | tonal_mean | verdict |
+|-----:|---------|----------------:|----:|---------:|---------:|---------|
+| 1 | renyi | −2.05 | 0.132 | 2.10 | 16.27 | reversed, skip |
+| 2 | centroid | **+1.37** | **0.831** | 37.12 | 19.66 | **strong discriminator** |
+| 3 | flatness | **+1.23** | **0.813** | 0.490 | 0.260 | **strong discriminator** (already in NN) |
+| 4 | raw_flux | −1.15 | 0.184 | 0.143 | 0.385 | reversed, skip (and currently in NN) |
+| 5 | kick_ratio | **+1.13** | **0.810** | 0.887 | 0.547 | **strong discriminator** |
+| 6 | hfc | −1.13 | 0.143 | 64.7 | 313.4 | reversed, skip |
+| 7 | crest | **+1.00** | **0.765** | 9.03 | 7.43 | **moderate discriminator** |
+| 8 | complex_sd | −0.89 | 0.248 | 13.4 | 22.6 | reversed, skip |
+| 9 | rolloff | +0.80 | 0.625 | 36.98 | 16.96 | weak discriminator |
+| 10 | wpd | −0.29 | 0.430 | 1.58 | 1.67 | near-tie, skip |
 
-2. **Four features are reliably positive discriminators across the corpus:** `complex_sd` (17/18 tracks), `raw_flux` (17/18), `hfc` (16/18), `wpd` (16/18). These have both non-trivial |d| and a consistent sign — the signal exists and points the same way on nearly every track.
+**Within-corpus sanity checks** (per-onset peak vs non-onset frame) confirm every feature fires at real onsets — percussion-corpus |d| ranges 0.59–1.21 with AUC 0.71–0.86 across the full catalog. The sanity check is not the discriminator.
 
-3. **Three candidates show inconsistent sign and low |d|:** `kick_ratio` (10/18), `crest` (5/18), `renyi` (10/18). Their means wobble around zero across tracks. Drop these from Phase 2 — they don't pass the "does the signal exist?" bar.
+### Findings
 
-4. **`flatness` and `centroid` are weaker** than the top four but still positive on a majority of tracks. Keep for Phase 2 as secondary candidates; on-device behavior may differ.
+1. **The real drum-vs-tonal discriminators are shape metrics**, not transient detectors. `centroid`, `flatness`, `kick_ratio`, `crest` all have positive cross-corpus d > 1.0 and AUC > 0.75. They describe *what the spectrum looks like* at an attack, and drums genuinely look different from tonal impulses in that respect.
 
-**Phase 2 shortlist** (6 features):
+2. **Four "best onset detectors" are reversed cross-corpus.** `raw_flux`, `hfc`, `complex_sd`, `renyi` all score higher on tonal impulses than on drums on this corpus — they detect *any* sharp attack, percussion or not. They cannot distinguish drums from tonal impulses by themselves.
 
-1. `complex_sd` — phase-aware transient, not currently in NN input. **Primary.**
-2. `hfc` — broadband HF content, not currently in NN input. **Primary.**
-3. `raw_flux` — already in NN input; parity reference and baseline for Phase 3 scaling.
-4. `flatness` — already in NN input; parity reference and baseline.
-5. `wpd` — weaker |d| but 16/18 sign-consistent; only other phase-based candidate.
-6. `centroid` — cheapest compute (~0.2 ms), weak but consistent-ish (12/18); include for cost/benefit breadth.
+3. **`raw_flux` being reversed is the most consequential result.** It's already an NN input feature (deployed at b132). If the NN had been relying on raw_flux alone to reject tonals, this data says it couldn't. The model presumably uses mel+flatness+flux jointly, and flatness does discriminate — but adding raw_flux as an input may actually *teach* the NN that any broadband attack is drum-like, which fits the observed precision plateau at 0.50.
 
-**Dropped:** `kick_ratio`, `rolloff`, `crest`, `renyi`.
+4. **Synthetic corpus caveat — likely an upper bound on difficulty.** The generated tonal tracks have near-instant attacks and silence between impulses; real tonal content sits inside continuous music with slower attacks and ongoing background energy. A feature that fails against this synthetic corpus will likely still fail against real FP-inducing events; a feature that passes should be considered a lower bound on real-world performance until Phase 3 confirms.
 
-**Phase 2 implication.** Firmware-parity tests and `SignalRegistry` scaffolding target these 6. `raw_flux` and `flatness` already have firmware implementations in `SharedSpectralAnalysis` — parity tests there become first deliverables. The other four need Python reference + firmware implementation + parity in Phase 2a before any on-device measurement in Phase 3.
+### Revised Phase 2 shortlist (4 features, priorities re-scored)
+
+| # | feature | cross-corpus d | AUC | currently in NN? | firmware cost |
+|--:|---------|-------------:|----:|:----------------:|--------------:|
+| 1 | centroid | +1.37 | 0.83 | no | ~0.2 ms |
+| 2 | flatness | +1.23 | 0.81 | yes | shipping |
+| 3 | kick_ratio | +1.13 | 0.81 | partially (bass-gate) | ~0.1 ms |
+| 4 | crest | +1.00 | 0.77 | no | ~0.3 ms |
+
+**Dropped from previous shortlist:** `raw_flux` (reversed), `hfc` (reversed), `complex_sd` (reversed), `wpd` (near-zero), plus `rolloff` and `renyi` from the original dropped set.
+
+**Phase 2 implications.**
+
+- **Firmware parity tests** (2a) now target `centroid`, `kick_ratio`, `crest` as *new* implementations + Python references (3 days instead of 6). `flatness` already shipped, parity-test it too to confirm the existing implementation matches the Python reference we just validated.
+- **`raw_flux` as NN input is suspect.** Worth running the NN with `raw_flux` ablated (feed zero into that input channel) on a validation set to see if F1 holds or improves. If removing it doesn't hurt, that's one less ms of compute and one fewer FP-inducing input. Add this as a parallel Phase 2d task.
+- **`kick_ratio` generalizes the existing bass-gate.** The on-device bass-gate is currently a binary threshold on bass-band ratio used only to gate pulse detection. Using `kick_ratio` as an NN input, or as a continuous gate, may recover some of the precision the bass-gate alone misses.
+
+**Open question.** Every feature reversed here has one thing in common: it's summed across the spectrum. The discriminators (centroid, flatness, kick_ratio, crest) are all *shape* metrics (ratios or normalized statistics). Is there a principled reason why absolute magnitudes will always get fooled by sharp-attack tonal content? If so, future feature exploration should stay in the shape-metric family.
