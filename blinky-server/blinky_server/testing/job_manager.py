@@ -173,7 +173,9 @@ class JobManager:
         if loaded or recovered:
             log.info(
                 "Loaded %d completed + %d recovered jobs from %s",
-                loaded, recovered, self._jobs_dir,
+                loaded,
+                recovered,
+                self._jobs_dir,
             )
 
     def _prune_old_files(self, keep: int = 200) -> None:
