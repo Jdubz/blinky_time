@@ -1375,12 +1375,15 @@ void SerialConsole::streamTick() {
             out_.print(mic_->getLevel(), 3);
             out_.print(F(",\"gain\":"));
             out_.print(mic_->getHwGain());
-            // Hybrid features: spectral flatness + raw flux (pre-compressor)
-            // These match the training pipeline's feature computation.
-            // Precision (4 dp) matches the music stream's rflux so offline
-            // tooling can pool data from both streams without scaling.
+            // Hybrid features — the exact values fed into the NN this frame.
+            // b136+: "flat" here is the RAW (pre-compressor) flatness the NN
+            // actually consumes, which matches the Python training pipeline.
+            // Pre-b136 captures stream `getSpectralFlatness()` (compressed)
+            // here instead — that was a train-inference mismatch (gap 4).
+            // Offline replay of old captures via replay_device_capture.py
+            // must read the firmware build stamp before trusting these values.
             out_.print(F(",\"flat\":"));
-            out_.print(spectral.getSpectralFlatness(), 4);
+            out_.print(spectral.getRawFlatness(), 4);
             out_.print(F(",\"rflux\":"));
             out_.print(spectral.getRawSpectralFlux(), 4);
             out_.println(F("}"));
@@ -1505,8 +1508,15 @@ void SerialConsole::streamTick() {
             // Debug mode: add diagnostics
             if (streamDebug_) {
                 const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
+                // `flat` = compressed-mag flatness (legacy / historical streaming).
+                // `rflat` = raw-mag flatness (pre-compressor) — this is what the
+                // NN actually consumes and what the Python training pipeline
+                // produces. Gap 4 fix in b136. Keep `flat` around so older
+                // Phase 1-3 analysis captures can still be re-read.
                 out_.print(F(",\"flat\":"));
                 out_.print(spectral.getSpectralFlatness(), 4);
+                out_.print(F(",\"rflat\":"));
+                out_.print(spectral.getRawFlatness(), 4);
                 out_.print(F(",\"rflux\":"));
                 out_.print(spectral.getRawSpectralFlux(), 4);
                 // Phase 2a shape features (pre-compressor mags, match Python ref).

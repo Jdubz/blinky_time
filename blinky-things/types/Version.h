@@ -4,6 +4,6 @@
 // Build number is auto-incremented on each compile.
 // See blinky-things/BUILD_NUMBER for the current value.
 
-#define FIRMWARE_BUILD 135
-#define FIRMWARE_VERSION "b135"
+#define FIRMWARE_BUILD 136
+#define FIRMWARE_VERSION "b136"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__

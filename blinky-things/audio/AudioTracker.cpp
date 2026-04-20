@@ -125,10 +125,15 @@ const AudioControl& AudioTracker::update(float dt) {
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
         frameOnsetNN_.setProfileEnabled(nnProfile);
-        // Pass raw (pre-compressor) flux for NN hybrid input to match training.
-        // The compressed getSpectralFlux() is still used for ACF tempo estimation.
+        // Pass raw (pre-compressor) flatness + flux for NN hybrid input —
+        // matches the Python training pipeline's `append_hybrid_features`
+        // exactly. The *compressed* getSpectralFlatness() used to be passed
+        // here (pre-b136); that was a train-inference mismatch documented
+        // as gap 4 in docs/HYBRID_FEATURE_ANALYSIS_PLAN.md. Compressed
+        // spectralFlatness_ / spectralFlux_ are still used for the
+        // debug-stream "flat"/"sflx" fields and for ACF tempo.
         odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
-                                  spectral_.getSpectralFlatness(), spectral_.getRawSpectralFlux());
+                                  spectral_.getRawFlatness(), spectral_.getRawSpectralFlux());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
 

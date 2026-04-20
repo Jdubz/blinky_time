@@ -36,10 +36,11 @@ from analysis.features import (  # noqa: E402
     HOP,
     N_FFT,
     SR,
+    crest_factor,
     high_frequency_content,
     spectral_centroid,
+    spectral_flatness,
     spectral_rolloff,
-    crest_factor,
 )
 
 log = logging.getLogger("parity")
@@ -118,6 +119,7 @@ def python_features_from_firmware_layout(mags_firmware: np.ndarray) -> dict[str,
         "crest": crest_factor(sliced).astype(np.float64),
         "rolloff": spectral_rolloff(sliced).astype(np.float64),
         "hfc": high_frequency_content(sliced).astype(np.float64),
+        "flatness": spectral_flatness(sliced).astype(np.float64),
     }
 
 
@@ -134,7 +136,13 @@ def run_harness(harness: Path, bin_path: Path, csv_path: Path) -> None:
 
 
 def load_harness_csv(csv_path: Path) -> dict[str, np.ndarray]:
-    cols: dict[str, list[float]] = {"centroid": [], "crest": [], "rolloff": [], "hfc": []}
+    cols: dict[str, list[float]] = {
+        "centroid": [],
+        "crest": [],
+        "rolloff": [],
+        "hfc": [],
+        "flatness": [],
+    }
     with csv_path.open() as f:
         reader = csv.DictReader(f)
         for row in reader:

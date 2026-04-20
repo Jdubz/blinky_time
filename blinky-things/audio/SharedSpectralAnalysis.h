@@ -319,6 +319,19 @@ public:
      */
     float getRawHFC() const { return rawHFC_; }
 
+    /**
+     * Raw flatness (Wiener entropy on pre-compressor magnitudes).
+     * Range [0, 1]: 0 = pure tone, 1 = white noise.
+     *
+     * THIS is what the NN consumes — AudioTracker routes this value into
+     * FrameOnsetNN::infer. The separate `spectralFlatness_` (compressed-mag
+     * version, via `getSpectralFlatness`) is kept for stream continuity but
+     * is NOT used by the NN; it was the result of an historical oversight
+     * where the model trained on raw-mag flatness while firmware streamed
+     * compressed-mag flatness. Aligned in b136 (gap 4 in the plan).
+     */
+    float getRawFlatness() const { return rawFlatness_; }
+
     // --- Parity-test hooks (tests/parity/ only) ---
     // These let the native parity harness inject a known magnitude spectrum
     // and invoke the shape-feature math in isolation — without running FFT,
@@ -407,6 +420,7 @@ private:
     float rawCrest_;            // max / RMS on raw magnitudes (transient-peakiness)
     float rawRolloff_;          // Bin index below which 85% of energy lies
     float rawHFC_;              // Masri 1996: sum of bin-weighted energy (k · |X|²)
+    float rawFlatness_;         // Wiener entropy on raw mags (matches Python training code)
 
     // State
     bool frameReady_;

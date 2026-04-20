@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "parity_harness: cannot open %s for write\n", csv_path);
         return 1;
     }
-    out << "frame,centroid,crest,rolloff,hfc\n";
+    out << "frame,centroid,crest,rolloff,hfc,flatness\n";
     // Use 9 decimals so float32 is round-tripped exactly — anything less
     // would silently limit parity resolution.
     out.precision(9);
@@ -94,7 +94,8 @@ int main(int argc, char** argv) {
             << spectral.getRawCentroid() << ','
             << spectral.getRawCrest() << ','
             << spectral.getRawRolloff() << ','
-            << spectral.getRawHFC() << '\n';
+            << spectral.getRawHFC() << ','
+            << spectral.getRawFlatness() << '\n';
     }
 
     std::fprintf(stderr, "parity_harness: wrote %d frames to %s\n", n_frames, csv_path);

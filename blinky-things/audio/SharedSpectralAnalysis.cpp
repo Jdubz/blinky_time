@@ -97,6 +97,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , rawCrest_(0.0f)
     , rawRolloff_(0.0f)
     , rawHFC_(0.0f)
+    , rawFlatness_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -680,26 +681,38 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
 }
 
 void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
-    // Phase 2a: four "shape" features computed from preWhitenMagnitudes_ to
-    // match the Python reference in ml-training/analysis/features.py. Uses
-    // bin indices 1..NUM_BINS-1 (DC skipped), same framing as Python.
+    // Five "shape" features computed from preWhitenMagnitudes_ to match the
+    // Python reference in ml-training/analysis/features.py. Uses bin indices
+    // 1..NUM_BINS-1 (DC skipped), same framing as Python.
     //
-    // Centroid   = Σ(k · |X[k]|) / Σ|X[k]|              — bin-index weighted
-    // Crest      = max|X[k]| / sqrt(Σ|X[k]|² / N)       — peak / RMS
-    // HFC        = Σ(k · |X[k]|²)                       — Masri 1996
-    // Rolloff85  = smallest k where Σ|X[0..k]|² ≥ 0.85 · total_energy
+    // Centroid    = Σ(k · |X[k]|) / Σ|X[k]|              — bin-index weighted
+    // Crest       = max|X[k]| / sqrt(Σ|X[k]|² / N)       — peak / RMS
+    // HFC         = Σ(k · |X[k]|²)                       — Masri 1996
+    // Rolloff85   = smallest k where Σ|X[0..k]|² ≥ 0.85 · total_energy
+    // RawFlatness = geo-mean / arith-mean of |X| over valid bins (Wiener entropy)
     //
-    // All four scan the same 127 bins once (skipping DC), so total cost is a
-    // single pass with simple accumulators — well under the 0.5 ms target.
+    // All features scan the same 127 bins once (skipping DC) with simple
+    // accumulators — well under the 0.5 ms target.
+    //
+    // Flatness is computed HERE (on raw/pre-compressor mags) to match the
+    // Python training pipeline's `append_hybrid_features`, which uses raw
+    // STFT magnitudes. The separate `spectralFlatness_` computed in
+    // `computeDerivedFeatures` on post-compressor magnitudes is retained for
+    // backwards compatibility with the serial debug stream's "flat" field
+    // but is NOT what the NN consumes — AudioTracker routes getRawFlatness()
+    // into FrameOnsetNN::infer. See the train-inference alignment audit in
+    // docs/HYBRID_FEATURE_ANALYSIS_PLAN.md (gap 4).
     constexpr int FIRST = 1;  // skip DC
     constexpr int LAST = SpectralConstants::NUM_BINS;
     constexpr int N = LAST - FIRST;  // 127 for NUM_BINS=128
 
-    float weightedSum = 0.0f;   // Σ k · |X|
-    float magSum = 0.0f;        // Σ |X|
-    float energySum = 0.0f;     // Σ |X|²
-    float hfcSum = 0.0f;        // Σ k · |X|²
-    float peakMag = 0.0f;       // max |X|
+    float weightedSum = 0.0f;    // Σ k · |X|
+    float magSum = 0.0f;         // Σ |X|            (for centroid — unfloored)
+    float energySum = 0.0f;      // Σ |X|²
+    float hfcSum = 0.0f;         // Σ k · |X|²
+    float peakMag = 0.0f;        // max |X|
+    float logMagFloorSum = 0.0f; // Σ log(max(|X|, 1e-10))   for flatness geo-mean
+    float magFloorSum = 0.0f;    // Σ max(|X|, 1e-10)         for flatness arith-mean
     for (int i = FIRST; i < LAST; i++) {
         float mag = preWhitenMagnitudes_[i];
         float e = mag * mag;
@@ -708,6 +721,13 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
         energySum += e;
         hfcSum += i * e;
         if (mag > peakMag) peakMag = mag;
+        // Flatness accumulators use FLOORED magnitudes (1e-10 minimum) to
+        // match the Python training pipeline's `np.maximum(mags, 1e-10)`
+        // before Wiener-entropy — every bin contributes, quiet bins are
+        // clamped rather than skipped.
+        float magFloor = mag < 1e-10f ? 1e-10f : mag;
+        logMagFloorSum += logf(magFloor);
+        magFloorSum += magFloor;
     }
 
     rawCentroid_ = (magSum > 1e-10f && safeIsFinite(weightedSum))
@@ -722,6 +742,20 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     }
 
     rawHFC_ = safeIsFinite(hfcSum) ? hfcSum : 0.0f;
+
+    // Raw flatness — Wiener entropy on floored mags over ALL bins. Matches
+    // the Python training pipeline's `append_hybrid_features` bit-for-bit
+    // (within float rounding): np.maximum(mags, 1e-10) → geo_mean / arith_mean.
+    // The deployed NN was trained on THIS flatness, not the compressed one
+    // in computeDerivedFeatures.
+    if (magFloorSum > 1e-10f) {
+        float geoMean = expf(logMagFloorSum / static_cast<float>(N));
+        float ariMean = magFloorSum / static_cast<float>(N);
+        float flat = (ariMean > 1e-10f) ? geoMean / ariMean : 0.0f;
+        rawFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
+    } else {
+        rawFlatness_ = 0.0f;
+    }
 
     // Rolloff: first bin where cumulative |X|² ≥ 0.85 * total energy.
     // Second pass — cheap since we know energySum; avoids a temp cumulative buffer.
