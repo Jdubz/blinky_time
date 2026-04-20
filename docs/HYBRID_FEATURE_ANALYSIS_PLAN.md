@@ -265,3 +265,39 @@ Seven parity tests total (the four stable-+ plus raw_flux, hfc, complex_sd). Thr
 **Phase 2b selective streaming** then covers these seven. `kick_ratio` and `renyi` get flagged as NN-only and are excluded from gate-infrastructure work.
 
 **Phase 2d ablation of raw_flux in the NN** remains a parallel task. The feature is stable-negative (useful to the model if it learns the inverted direction), but we don't yet know whether the current v27-hybrid model is learning that or is just noise-fitting on it.
+
+### Held-out stability check — 2026-04-20
+
+Concern: we'd iterated methodology on the same 18-track corpus three times (per-onset peak vs frame-mean, GT-only vs NN-oracle labels, clean vs embedded tonal variants). Each round could be tightening results to this specific corpus rather than finding generalizable discriminators.
+
+Test: random 13/5 split (seed=42) of the percussion corpus, recompute cross-corpus d against both tonal variants for each half independently. Sign and magnitude should be stable across splits if the ranking isn't corpus-overfit.
+
+Result — every feature's sign verdict is identical across full / kept-13 / held-out-5, and |d| values agree within ~0.15 on every feature. `renyi`, `kick_ratio`, and `wpd` remain classified UNSTABLE (sign flips between variants) on every split; the other seven remain STABLE. **The shortlist is not an overfit artifact** — at least not overfit to which of the 18 EDM tracks it saw.
+
+(It may still be overfit to *EDM as a genre*. Cross-genre stability is a separate test — generate or curate non-EDM percussion tracks with GT onsets and rerun before deploying gates.)
+
+### Training-set contamination — 2026-04-20 — **ACTION REQUIRED**
+
+While setting up the held-out check, discovered: the 18 EDM tracks in `blinky-test-player/music/edm/` are byte-identical with files inside the v27-hybrid training corpus at `/mnt/storage/blinky-ml-data/audio/combined/`, with the same filenames.
+
+Per `/mnt/storage/blinky-ml-data/processed_v27/.prep_splits.json`:
+
+- **14 of 18** are in **train**: afrobeat-feelgood-groove, amapiano-vibez, breakbeat-background, breakbeat-drive, dnb-energetic-breakbeat, edm-trap-electro, garage-uk-2step, techno-deep-ambience, techno-dub-groove, techno-machine-drum, techno-minimal-01, techno-minimal-emotion, trance-goa-mantra, trance-party
+- **4 of 18** are in **val** (used for model selection): dnb-liquid-jungle, dubstep-edm-halftime, reggaeton-fuego-lento, trance-infected-vibes
+- **0** are in a held-out test split. The v27 pipeline split `train` + `val` and ran no blind-test evaluation.
+
+**What this affects.**
+
+- **Phase 1 feature ranking (this document):** unaffected. No NN is involved in feature computation or labeling, so training exposure does not contaminate the onset-vs-tonal Cohen's d.
+- **On-device F1 = 0.63 reported for v27-hybrid (`AUDIO_ARCHITECTURE.md`):** *optimistic*. The reported number was measured (directly or indirectly) on tracks the model trained on or was selected against. Expect lower F1 on truly unseen music.
+- **Phase 2d raw_flux ablation:** would be contaminated if run on these 18 tracks. Needs a held-out corpus (see below).
+- **Any future Path B retrain evaluation:** must use an explicit held-out test split, or the F1 improvement threshold loses meaning.
+
+**Action items.**
+
+1. **Carve a true test split for future NN evaluations.** Either re-run `prepare_dataset.py` with an explicit `test` bucket, or designate a subset of existing unlabeled content and generate GT onsets for it. The v27 training should probably be considered "train + val only — no blind test"; any F1 number quoted from it is an upper bound.
+2. **Before any Phase 2d NN ablation**, obtain a held-out validation set. Candidates: the `labels/consensus_v5` tracks not in `processed_v27/.prep_splits.json`, or FMA tracks from `labels/fma/` that never entered training.
+3. **Update `AUDIO_ARCHITECTURE.md` and `IMPROVEMENT_PLAN.md`** to reflect that v27-hybrid F1 numbers are on train+val, not a blind test. Current numbers should not be compared against published benchmarks that use held-out test sets.
+4. **Phase 3 feature-level offline-vs-device comparison is still valid** on these 18 tracks — features are computed from audio directly, not through the model — so on-device feature capture work doesn't need to wait.
+
+This investigation's feature rankings stand. The NN evaluation methodology around them does not.

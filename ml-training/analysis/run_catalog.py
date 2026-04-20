@@ -430,6 +430,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--tracks", type=str, default=None,
                         help="Comma-separated stem filter applied to BOTH corpora")
+    parser.add_argument("--perc-tracks", type=str, default=None,
+                        help="Override --tracks for the percussion corpus only")
+    parser.add_argument("--tonal-tracks", type=str, default=None,
+                        help="Override --tracks for the tonal corpus only")
     parser.add_argument("--window-sec", type=float, default=ONSET_WINDOW_SEC)
     parser.add_argument("--guard-sec", type=float, default=NON_ONSET_GUARD_SEC)
     parser.add_argument("--target-rms-db", type=float, default=-35.0)
@@ -441,14 +445,16 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     args.out.mkdir(parents=True, exist_ok=True)
-    track_filter = set(args.tracks.split(",")) if args.tracks else None
+    default_filter = set(args.tracks.split(",")) if args.tracks else None
+    perc_filter = set(args.perc_tracks.split(",")) if args.perc_tracks else default_filter
+    tonal_filter = set(args.tonal_tracks.split(",")) if args.tonal_tracks else default_filter
 
     perc_reports = run_corpus(
         args.perc_corpus,
         window_sec=args.window_sec,
         guard_sec=args.guard_sec,
         target_rms_db=args.target_rms_db,
-        track_filter=track_filter,
+        track_filter=perc_filter,
         out_per_track=args.out / "per_track_perc",
         label="perc",
     )
@@ -459,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
             window_sec=args.window_sec,
             guard_sec=args.guard_sec,
             target_rms_db=args.target_rms_db,
-            track_filter=track_filter,
+            track_filter=tonal_filter,
             out_per_track=args.out / "per_track_tonal",
             label="tonal",
         )
