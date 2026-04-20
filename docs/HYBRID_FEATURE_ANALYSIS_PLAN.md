@@ -326,3 +326,38 @@ Re-ran Phase 1 cross-corpus Cohen's d against both tonal variants on this truly-
 **One borderline:** `complex_sd` weakens substantially on held-out + embedded (d = −0.115, nearly zero). It's still sign-stable — just barely. Keep it as an NN input candidate but demote it from the deterministic-gate shortlist until the sign magnitude is confirmed against a larger held-out corpus. Cheap to re-test once we expand the held-out pool.
 
 **Phase 2a parity-test priority is unchanged.** `flatness`, `centroid`, `crest`, `rolloff` as stable-+ gates; `hfc`, `raw_flux` as stable-− NN inputs and inverted-threshold gate candidates; `complex_sd` NN-only pending larger held-out corpus; `kick_ratio`, `renyi` NN-only (unstable); `wpd` dropped.
+
+### Phase 3 first measurement — 2026-04-20
+
+b133 deployed to all 4 serial devices with centroid/crest/rolloff/hfc added to the debug stream. Full 18-track validation run against `blinky-test-player/music/edm/` produced 71 per-device-per-track observations (18 tracks × 4 devices, one run per combination). The server's new per-signal `SignalGapStats` computes a Cohen's d for each.
+
+**On-device vs offline Cohen's d (mean across devices and tracks):**
+
+| signal | offline d | on-device d (μ ± σ) | on-device \|d\| μ | signs agree across devices |
+|--------|----------:|--------------------:|----------------:|---------------------------:|
+| centroid | +1.367 | +0.012 ± 0.237 | 0.161 | 3 / 18 tracks |
+| flatness | +1.233 | +0.008 ± 0.230 | 0.159 | 3 / 18 tracks |
+| raw_flux | −1.147 | −0.038 ± 0.154 | 0.124 | 3 / 18 tracks |
+| hfc | −1.128 | −0.027 ± 0.214 | 0.156 | 5 / 18 tracks |
+| crest | +1.000 | −0.003 ± 0.159 | 0.125 | 7 / 18 tracks |
+| rolloff | +0.795 | +0.007 ± 0.259 | 0.139 | 6 / 18 tracks |
+
+**Two severe problems.**
+
+1. **|d| is 8-10× smaller on-device.** Offline all six signals had |d| > 0.8; on-device |d| mean is 0.12-0.16. The acoustic chain (speaker → room → 4 different mics → INT8 front-end) is eating most of the discrimination.
+2. **Cross-device sign disagreement.** Only 17-39% of tracks have all 4 devices agreeing on even the sign of d. On the remaining 11-15 tracks, individual devices report +d while others report −d on the same signal on the same track. This is not acoustic-chain attenuation — this is the feature responding to different things on different devices.
+
+**Hypotheses, in order of likelihood.**
+
+- **a) Firmware frames vs GT alignment is noisy.** Signal frames are timestamped with server wall-clock (`time.time()`), not firmware `millis()`. Transients use firmware timestamps via `clock_offset`. These live in the same coordinate after conversion but signal frames carry USB jitter (~2–10 ms). The existing `audio_latency_ms` estimate comes from *transients*, which are firmware-timestamped. Applying a transient-derived offset to server-timestamped frames is the wrong coordinate system. With a 50 ms onset window, even 10 ms of systematic misalignment puts a noticeable fraction of frames on the wrong side of the classification. **Cheap fix**: add a `ts` field to the music stream in firmware and use firmware millis for signal frames too.
+- **b) Frame-average vs per-onset peak.** Offline analysis used per-onset peak (single sample = max in ±50 ms around each GT onset). On-device scoring uses frame-average over every frame in the onset window. For transient-sharp features (centroid, hfc, rolloff) the peak is 1-2 frames; the ±50 ms window includes many non-peak frames that dilute the onset mean toward the non-onset mean. **Cheap fix**: mirror offline methodology on-device — per-GT-onset-peak.
+- **c) Unverified firmware implementations.** Without a parity test (Phase 2a harness still pending), we can't rule out that the new C++ shape features disagree with their Python reference beyond acoustic-chain effects. The existing `flatness` uses compressed magnitudes in firmware while my Python reference uses raw STFT — already a known mismatch. The new ones are on pre-compressor magnitudes and should match, but "should" isn't "verified".
+- **d) Real acoustic-chain degradation.** Even if (a)-(c) are all addressed, some portion of the gap is likely genuine — MEMS mics attenuate highs, the room adds reflections, INT8 quantization on widely-varying levels clips dynamic range. Some features might just not survive.
+
+**Next priority:**
+
+1. **Fix frame timestamp coordinate system** (hypothesis a). Add firmware `millis()` to the music stream, thread through `test_session.py`, retest. Cheapest first.
+2. **Implement per-onset peak on-device** (hypothesis b). Mirrors offline Phase 1 methodology exactly. Should show whether features are merely diluted or actually lost.
+3. **Standalone parity harness** (hypothesis c). Still worth building — rules out implementation-vs-reference bugs and becomes permanent CI regression protection.
+
+Only after all three are in place can we confidently say (d) is the residual. Until then, Phase 4 gate / retrain decisions have no reliable signal.
