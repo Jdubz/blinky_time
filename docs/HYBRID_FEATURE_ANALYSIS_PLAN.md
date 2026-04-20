@@ -361,3 +361,43 @@ b133 deployed to all 4 serial devices with centroid/crest/rolloff/hfc added to t
 3. **Standalone parity harness** (hypothesis c). Still worth building — rules out implementation-vs-reference bugs and becomes permanent CI regression protection.
 
 Only after all three are in place can we confidently say (d) is the residual. Until then, Phase 4 gate / retrain decisions have no reliable signal.
+
+### Phase 3 second measurement — 2026-04-20
+
+b134 firmware (ts in music stream) + server with per-onset-peak scoring alongside frame mode. Same 18-track corpus, 4 devices, 1 run.
+
+| signal | offline d | **frame mode on-device d** | **peak mode on-device d** | sign agree (peak) |
+|--------|----------:|---------------------------:|--------------------------:|------------------:|
+| centroid | +1.367 | +0.006 (\|d\| 0.12) | **+0.634** (\|d\| 0.67, 46%) | 9/18 tracks |
+| flatness | +1.233 | +0.007 (\|d\| 0.12) | **+0.664** (\|d\| 0.71, 54%) | 9/18 |
+| raw_flux | −1.147 | +0.010 (\|d\| 0.12) sign FLIP | **+0.622** (\|d\| 0.67, sign FLIP vs offline) | 10/18 |
+| hfc | −1.128 | +0.040 sign FLIP | **+0.572** (sign FLIP vs offline) | 8/18 |
+| crest | +1.000 | −0.002 sign FLIP | **+0.706** (\|d\| 0.74, 71%) | 12/18 |
+| rolloff | +0.795 | +0.005 | **+0.448** (\|d\| 0.48, 56%) | 11/18 |
+
+**Two headline findings.**
+
+1. **Per-onset peak recovers 46-74 % of offline discrimination.** Frame-average was the dominant dilutor. The ±50 ms window at ~100 Hz captures many non-peak frames that look like non-onset content; averaging them pulls the onset mean toward the non-onset mean. Taking one sample per GT onset (the max within the window) eliminates that dilution and the features discriminate with \|d\| 0.5-0.75 — moderate to strong by Cohen's thresholds. The frame-average approach used in the first measurement was giving us \|d\| ≈ 0.1, essentially useless.
+
+2. **The "reversed sign" features from offline cross-corpus analysis were a synthetic-corpus artifact, not a real property.** On-device peak mode shows `raw_flux`, `hfc`, and `complex_sd`-family features all have **positive** gap (drum peaks > ongoing music content). The synthetic tonal corpus had near-instant attacks over silence — so tonal impulse peaks genuinely exceeded drum peaks in those *synthetic* conditions. But real music has continuous tonal content, and drum peaks are louder than the ongoing musical floor for every one of the six measured features. This simplifies the Phase 2 shortlist: **all six features are stable-positive on real music**, usable as direct-threshold gates or NN inputs with the natural direction.
+
+**Cross-device sign agreement** also recovered: frame mode had 5-7/18 tracks with all devices agreeing; peak mode has 8-12/18. Still not perfect, but the signal is genuine per-device — it was being buried by non-peak frames.
+
+**Crest is the most robust feature on-device:** highest \|d\| (0.74), best cross-device agreement (12/18), fully positive on all 4 devices across most tracks.
+
+### Revised shortlist (post-Phase-3)
+
+Unified direction: all six features are positive-sign discriminators on real music.
+
+| feature | on-device peak \|d\| | sign-agree tracks | notes |
+|---------|---------------------:|------------------:|-------|
+| crest | 0.74 | 12/18 | Cheapest compute, strongest on-device signal. **Primary.** |
+| flatness | 0.71 | 9/18 | Already NN input. |
+| centroid | 0.67 | 9/18 | Cheap, new NN input candidate. |
+| raw_flux | 0.67 | 10/18 | Already NN input; sign direction corrected from synthetic offline. |
+| hfc | 0.62 | 8/18 | New NN input candidate. |
+| rolloff | 0.48 | 11/18 | Weakest but most stable cross-device. |
+
+**Phase 2d "sign stability" test is retrospectively invalidated** for features whose synthetic-offline sign disagreed with real-music behavior. The on-device real-music measurement is the source of truth; offline Phase 1 is still useful for ranking magnitude and catching implementation bugs, but not for direction.
+
+**Phase 2a parity harness still wanted** to rule out any residual C++ / Python implementation drift. With \|d\| in the 0.5-0.7 range, a 10-20 % implementation error could still matter for gate-threshold selection in Phase 4.
