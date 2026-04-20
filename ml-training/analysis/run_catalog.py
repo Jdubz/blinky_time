@@ -65,14 +65,25 @@ NON_ONSET_GUARD_SEC = 0.100
 # --------------------------------------------------------------------- data loading
 
 
+def _sidecar(audio_path: Path, suffix: str) -> Path:
+    """Return sibling file with the audio extension replaced by `suffix`.
+
+    Uses name-based string manipulation instead of Path.with_suffix(), which
+    mis-handles filenames like `1234669.LOFI.mp3` (treats `.LOFI` as the
+    suffix). The audio extension is always the last component after the
+    final dot, so stripping audio_path.suffix is safe.
+    """
+    base = audio_path.name[: -len(audio_path.suffix)] if audio_path.suffix else audio_path.name
+    return audio_path.parent / f"{base}{suffix}"
+
+
 def load_consensus_onsets(audio_path: Path) -> list[float]:
     """Load sorted GT onset times (seconds) from *.onsets_consensus.json.
 
     Falls back to *.beats.json if consensus is absent.
     """
-    stem = audio_path.with_suffix("")
-    consensus = stem.with_suffix(".onsets_consensus.json")
-    beats = stem.with_suffix(".beats.json")
+    consensus = _sidecar(audio_path, ".onsets_consensus.json")
+    beats = _sidecar(audio_path, ".beats.json")
     if consensus.exists():
         data = json.loads(consensus.read_text())
         onsets = [float(o["time"]) for o in data.get("onsets", [])]
@@ -93,10 +104,9 @@ def discover_tracks(corpus_dir: Path) -> list[Path]:
     tracks: list[Path] = []
     for pattern in ("*.mp3", "*.wav"):
         for audio in sorted(corpus_dir.glob(pattern)):
-            stem = audio.with_suffix("")
             if (
-                stem.with_suffix(".onsets_consensus.json").exists()
-                or stem.with_suffix(".beats.json").exists()
+                _sidecar(audio, ".onsets_consensus.json").exists()
+                or _sidecar(audio, ".beats.json").exists()
             ):
                 tracks.append(audio)
     return tracks

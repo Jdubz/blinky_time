@@ -18,6 +18,9 @@ ml-training/outputs/*/checkpoints/
 blinky-test-player/music/synthetic_tonals/
 blinky-test-player/music/synthetic_tonals_*/
 
+# Held-out EDM corpus (symlinks into /mnt/storage, regenerate via setup_holdout_corpus.py)
+blinky-test-player/music/edm_holdout/
+
 # Compiled binaries (prevent accidental venv/library commits)
 *.so
 *.dylib

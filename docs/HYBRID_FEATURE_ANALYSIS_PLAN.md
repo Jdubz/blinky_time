@@ -19,6 +19,8 @@ A feature passes only if all three answer yes. Passing features feed two downstr
 
 Features that discriminate offline but drift on-device are either dropped or flagged as "close the gap first" work (e.g., a normalization or calibration missing from the firmware path).
 
+**Scope: EDM only.** The fleet's target deployment is EDM-driven installations (techno, trance, breakbeat, dnb, dubstep, garage, amapiano, reggaeton, etc. — everything already in the corpus). This investigation does not need to generalize to rock, jazz, classical, or sparse percussion. Feature rankings and sign-stability results are taken as authoritative for EDM without further cross-genre validation.
+
 ## Design decisions
 
 ### D1: Selective feature computation + streaming (not ring buffer)
@@ -272,9 +274,7 @@ Concern: we'd iterated methodology on the same 18-track corpus three times (per-
 
 Test: random 13/5 split (seed=42) of the percussion corpus, recompute cross-corpus d against both tonal variants for each half independently. Sign and magnitude should be stable across splits if the ranking isn't corpus-overfit.
 
-Result — every feature's sign verdict is identical across full / kept-13 / held-out-5, and |d| values agree within ~0.15 on every feature. `renyi`, `kick_ratio`, and `wpd` remain classified UNSTABLE (sign flips between variants) on every split; the other seven remain STABLE. **The shortlist is not an overfit artifact** — at least not overfit to which of the 18 EDM tracks it saw.
-
-(It may still be overfit to *EDM as a genre*. Cross-genre stability is a separate test — generate or curate non-EDM percussion tracks with GT onsets and rerun before deploying gates.)
+Result — every feature's sign verdict is identical across full / kept-13 / held-out-5, and |d| values agree within ~0.15 on every feature. `renyi`, `kick_ratio`, and `wpd` remain classified UNSTABLE (sign flips between variants) on every split; the other seven remain STABLE. **The shortlist is not an overfit artifact** of which 18 EDM tracks we picked. EDM-only is the target scope (see Goal), so this is sufficient stability evidence to proceed.
 
 ### Training-set contamination — 2026-04-20 — **ACTION REQUIRED**
 
@@ -295,9 +295,34 @@ Per `/mnt/storage/blinky-ml-data/processed_v27/.prep_splits.json`:
 
 **Action items.**
 
-1. **Carve a true test split for future NN evaluations.** Either re-run `prepare_dataset.py` with an explicit `test` bucket, or designate a subset of existing unlabeled content and generate GT onsets for it. The v27 training should probably be considered "train + val only — no blind test"; any F1 number quoted from it is an upper bound.
-2. **Before any Phase 2d NN ablation**, obtain a held-out validation set. Candidates: the `labels/consensus_v5` tracks not in `processed_v27/.prep_splits.json`, or FMA tracks from `labels/fma/` that never entered training.
+1. **Carve a true test split for future NN evaluations (EDM only).** Source EDM tracks that were not in `processed_v27/.prep_splits.json` and generate `onsets_consensus.json` GT for them. Re-split with an explicit `test` bucket in the next data-prep run. The v27 training should be considered "train + val only — no blind test"; any F1 number from it is an upper bound.
+2. **Before any Phase 2d NN ablation**, obtain a held-out EDM set. Candidates inside `/mnt/storage/blinky-ml-data/`: `labels/edm-test/` (already has `.beats.json` GT — verify none are in v27 splits), `labels/fma/` EDM-tagged tracks (filter out any already in train/val).
 3. **Update `AUDIO_ARCHITECTURE.md` and `IMPROVEMENT_PLAN.md`** to reflect that v27-hybrid F1 numbers are on train+val, not a blind test. Current numbers should not be compared against published benchmarks that use held-out test sets.
 4. **Phase 3 feature-level offline-vs-device comparison is still valid** on these 18 tracks — features are computed from audio directly, not through the model — so on-device feature capture work doesn't need to wait.
 
 This investigation's feature rankings stand. The NN evaluation methodology around them does not.
+
+### Held-out EDM validation — 2026-04-20
+
+Located 25 GiantSteps tracks inside the local ML-data storage that are **not** in `processed_v27/.prep_splits.json` (neither train nor val). Each has `.beats.json` GT already generated. Materialized as symlinks under `blinky-test-player/music/edm_holdout/` via `analysis/setup_holdout_corpus.py`.
+
+Re-ran Phase 1 cross-corpus Cohen's d against both tonal variants on this truly-unseen corpus:
+
+| feature | seen d_clean | seen d_emb | **holdout d_clean** | **holdout d_emb** | verdict |
+|---------|-----:|-----:|-----:|-----:|---------|
+| renyi | −2.05 | +0.32 | −2.02 | +0.60 | UNSTABLE (confirmed) |
+| centroid | +1.37 | +0.81 | **+1.62** | **+1.07** | STABLE + (stronger on holdout) |
+| flatness | +1.23 | +0.53 | **+1.43** | **+0.81** | STABLE + (stronger on holdout) |
+| raw_flux | −1.15 | −0.53 | −1.16 | −0.50 | STABLE − |
+| kick_ratio | +1.13 | −0.66 | +0.87 | −0.89 | UNSTABLE (confirmed) |
+| hfc | −1.13 | −1.01 | −1.02 | −0.86 | STABLE − |
+| crest | +1.00 | +0.66 | +0.77 | +0.38 | STABLE + (weaker on holdout) |
+| complex_sd | −0.89 | −0.50 | −0.56 | **−0.12** | STABLE − but near-zero on holdout+embedded |
+| rolloff | +0.80 | +0.99 | **+1.13** | **+1.34** | STABLE + (stronger on holdout) |
+| wpd | −0.29 | +0.29 | −0.01 | +0.64 | UNSTABLE (confirmed) |
+
+**Every STABLE/UNSTABLE classification holds** on the held-out corpus. `centroid`, `flatness`, and `rolloff` are *stronger* on unseen data than on the seen corpus — the Phase 1 shortlist isn't an artifact of models or tracks the training pipeline saw.
+
+**One borderline:** `complex_sd` weakens substantially on held-out + embedded (d = −0.115, nearly zero). It's still sign-stable — just barely. Keep it as an NN input candidate but demote it from the deterministic-gate shortlist until the sign magnitude is confirmed against a larger held-out corpus. Cheap to re-test once we expand the held-out pool.
+
+**Phase 2a parity-test priority is unchanged.** `flatness`, `centroid`, `crest`, `rolloff` as stable-+ gates; `hfc`, `raw_flux` as stable-− NN inputs and inverted-threshold gate candidates; `complex_sd` NN-only pending larger held-out corpus; `kick_ratio`, `renyi` NN-only (unstable); `wpd` dropped.
