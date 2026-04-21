@@ -1,5 +1,7 @@
 # ML Training Improvement Plan
 
+> **F1-evaluation caveat (2026-04-20).** Every F1 number in this document was measured on the 18 tracks in `blinky-test-player/music/edm/`. All 18 are inside the v27-hybrid training corpus (14 train, 4 val, 0 held out). Current F1 numbers are upper bounds — realistic eval requires a held-out EDM test split. See `docs/HYBRID_FEATURE_ANALYSIS_PLAN.md` "Training-set contamination" for action items.
+
 ## Background
 
 Baseline model (W32 frame-level FC, 55K params, plain BCE loss) achieves:

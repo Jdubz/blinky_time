@@ -274,6 +274,7 @@ Peaks at broadband transients, zero during sustain. NN-independent.
 - Decaying envelope (~165ms half-life)
 - **On-device activations are NOT flat**: Offline FP32 on clean audio shows flat activations (mean=0.567, std=0.051, dynRange=0.125), but on-device INT8 on real audio is dynamic (mean=0.432, std=0.250, dynRange=0.734). The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The earlier "flat activation" diagnosis was based on offline analysis and was wrong for on-device.
 - **F1 plateau at 0.628**: The bottleneck is model precision (0.50), not the detection algorithm. Model fires on broadband spectral changes (chords, synths, vocals). Detection algorithm evolution: b123 first-diff peak-picking over-detected (14.3/s vs 3.5/s GT, F1=0.601) → b126 local-maxima (sweep showed 0.3 optimal threshold) → b127 +bass gate+PLP bias (F1=0.628, minimal effect — confirming model is the bottleneck).
+- **Caveat on these F1 numbers (2026-04-20):** All 18 tracks in `blinky-test-player/music/edm/` used to measure the F1=0.628 plateau are *inside* the v27-hybrid training corpus — 14 in train, 4 in val, 0 held out. The quoted F1 is an **upper bound**, not a realistic number. See `docs/HYBRID_FEATURE_ANALYSIS_PLAN.md` ("Training-set contamination") for the action items to carve a true held-out EDM test split before any future retrain claim.
 
 **Discrete onset events (debug/serial, onset density):** Same local-maxima detection.
 - **Cooldown**: Tempo-adaptive (40ms at 200 BPM, 150ms at 60 BPM)

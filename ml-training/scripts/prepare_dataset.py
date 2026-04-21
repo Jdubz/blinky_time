@@ -172,6 +172,7 @@ from scripts.audio import (
     compute_input_features,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
+    resolve_hybrid_features,
 )
 
 
@@ -1016,11 +1017,17 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             # change to mel_raw = mel.copy().
             mel_raw = mel
 
-            # Compute hybrid features (flatness + SuperFlux flux) inline if enabled.
-            if cfg.get("features", {}).get("use_hybrid", False):
+            # Compute hybrid features inline if enabled. The list of hybrid
+            # feature names is resolved via `resolve_hybrid_features` — works
+            # for both the legacy `use_hybrid: true` (→ [flatness, raw_flux])
+            # and the new `hybrid_features: [flatness, raw_flux, crest, hfc]`
+            # config forms.
+            hybrid_names = resolve_hybrid_features(cfg)
+            if hybrid_names:
                 mel = append_hybrid_features(
                     mel_raw, audio=audio_np,
-                    mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+                    mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
+                    features=hybrid_names)
 
             result = {
                 "mel": mel,
@@ -1064,10 +1071,12 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     conditioned_mel = apply_spectral_conditioning(mel_raw)
                     if cond_cached:
                         np.save(cond_cached, conditioned_mel)
-                if cfg.get("features", {}).get("use_hybrid", False):
+                hybrid_names_cond = resolve_hybrid_features(cfg)
+                if hybrid_names_cond:
                     conditioned_mel = append_hybrid_features(
                         conditioned_mel, audio=audio_np,
-                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+                        mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
+                        features=hybrid_names_cond)
                 cond_result = {
                     "mel": conditioned_mel,
                     "target": targets,
@@ -1148,10 +1157,12 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                                                 label_shift_frames=label_shift_frames,
                                                 early_neighbor_frames=early_neighbor_frames,
                                                 early_neighbor_weight=early_neighbor_weight)
-                    if cfg.get("features", {}).get("use_hybrid", False):
+                    hybrid_names_stem = resolve_hybrid_features(cfg)
+                    if hybrid_names_stem:
                         mel = append_hybrid_features(
                             mel, audio=stem_np,
-                            mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+                            mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
+                            features=hybrid_names_stem)
                     stem_result = {
                         "mel": mel,
                         "target": targets,
@@ -1515,15 +1526,19 @@ def main():
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
     use_delta = getattr(args, 'delta', False) or cfg.get("features", {}).get("use_delta", False)
     use_band_flux = getattr(args, 'band_flux', False) or cfg.get("features", {}).get("use_band_flux", False)
-    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
+    hybrid_names = resolve_hybrid_features(cfg)
+    use_hybrid = bool(hybrid_names)
     if sum([use_delta, use_band_flux, use_hybrid]) > 1:
         print("WARNING: Multiple feature modes enabled. Using first enabled.")
-        if use_delta: use_band_flux = use_hybrid = False
-        elif use_hybrid: use_band_flux = False
+        if use_delta:
+            use_band_flux = use_hybrid = False
+            hybrid_names = []
+        elif use_hybrid:
+            use_band_flux = False
     teacher_src = "madmom soft" if teacher_soft_dir else "consensus Gaussian" if generate_teacher else None
     feat_str = (" + Delta features" if use_delta
                 else " + Band flux (3ch)" if use_band_flux
-                else " + Hybrid (flatness+flux)" if use_hybrid else "")
+                else f" + Hybrid ({'+'.join(hybrid_names)})" if use_hybrid else "")
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}"
           f"{f' + Teacher labels ({teacher_src})' if generate_teacher else ''}"
           f"{feat_str}")

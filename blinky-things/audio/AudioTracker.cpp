@@ -125,10 +125,15 @@ const AudioControl& AudioTracker::update(float dt) {
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
         frameOnsetNN_.setProfileEnabled(nnProfile);
-        // Pass raw (pre-compressor) flux for NN hybrid input to match training.
-        // The compressed getSpectralFlux() is still used for ACF tempo estimation.
+        // Pass raw (pre-compressor) flatness + flux for NN hybrid input —
+        // matches the Python training pipeline's `append_hybrid_features`
+        // exactly. The *compressed* getSpectralFlatness() used to be passed
+        // here (pre-b136); that was a train-inference mismatch documented
+        // as gap 4 in docs/HYBRID_FEATURE_ANALYSIS_PLAN.md. Compressed
+        // spectralFlatness_ / spectralFlux_ are still used for the
+        // debug-stream "flat"/"sflx" fields and for ACF tempo.
         odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
-                                  spectral_.getSpectralFlatness(), spectral_.getRawSpectralFlux());
+                                  spectral_.getRawFlatness(), spectral_.getRawSpectralFlux());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
 
@@ -888,7 +893,14 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
                           (prevSignal_ > nn) &&
                           (prevSignal_ > effectiveFloor);
 
-        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk) {
+        // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
+        // tonal impulses have lower crest on-device (Phase 3 |d|=0.74). When
+        // crestGateMin > 0, suppress pulses whose current-frame crest is below
+        // that value. Set to 0 to disable (production default).
+        bool crestOk = (crestGateMin <= 0.0f) ||
+                       (spectral_.getRawCrest() >= crestGateMin);
+
+        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk) {
             pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
             lastPulseMs_ = nowMs - static_cast<uint32_t>(1000.0f / OSS_FRAME_RATE);  // Peak was 1 frame ago
         }

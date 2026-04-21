@@ -1,0 +1,66 @@
+# Conv1D W16 v28 variant — mel + crest (single-feature ablation)
+#
+# Ablation to answer: does adding JUST the strongest-gate-(a) feature
+# (crest |d|=0.96 on b137 held-out peak-mode) help vs the mel-only
+# baseline? Keeps every other knob identical — same recipe, same data,
+# same seed — so any F1 delta is attributable to the crest channel.
+#
+# Input: 30 mel + crest = 31 channels.
+# Architecture: Conv1D(31->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1).
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+  hybrid_features: [crest]
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  # Shared processed_v28 dir holds the full 34-col [mel, flatness, raw_flux,
+  # crest, hfc] feature set. `stored_hybrid_features` below tells the dataset
+  # loader the storage order so it can pick the requested column (crest lives
+  # at index 30+2 = 32) without re-running prep.
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+  stored_hybrid_features: [flatness, raw_flux, crest, hfc]
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v28_mel_crest.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

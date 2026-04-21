@@ -36,6 +36,7 @@ from scripts.audio import (
     compute_input_features,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
+    resolve_hybrid_features,
 )
 from scripts.features import append_features as _append_features, sliding_window_inference
 
@@ -227,9 +228,14 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             mel = append_delta_features(mel)
         elif cfg.get("features", {}).get("use_band_flux", False):
             mel = append_band_flux_features(mel)
-        elif cfg.get("features", {}).get("use_hybrid", False):
-            mel = append_hybrid_features(mel, audio=audio_np,
-                                         mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+        else:
+            hybrid_names = resolve_hybrid_features(cfg)
+            if hybrid_names:
+                mel = append_hybrid_features(
+                    mel, audio=audio_np,
+                    mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
+                    features=hybrid_names,
+                )
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -561,9 +567,14 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
             mel = append_delta_features(mel)
         elif cfg.get("features", {}).get("use_band_flux", False):
             mel = append_band_flux_features(mel)
-        elif cfg.get("features", {}).get("use_hybrid", False):
-            mel = append_hybrid_features(mel, audio=audio_np,
-                                         mel_db_range=cfg["audio"].get("mel_db_range", 60.0))
+        else:
+            hybrid_names = resolve_hybrid_features(cfg)
+            if hybrid_names:
+                mel = append_hybrid_features(
+                    mel, audio=audio_np,
+                    mel_db_range=cfg["audio"].get("mel_db_range", 60.0),
+                    features=hybrid_names,
+                )
 
         n_frames = mel.shape[0]
         n_out_ch = model.out_channels
@@ -714,7 +725,12 @@ def evaluate_device_captures(model_path: str, capture_dir: Path, cfg: dict,
 
     use_delta = cfg.get("features", {}).get("use_delta", False)
     use_band_flux = cfg.get("features", {}).get("use_band_flux", False)
-    use_hybrid = cfg.get("features", {}).get("use_hybrid", False)
+    # Device captures contain mel bands only (not raw audio), so the capture
+    # replay path zero-fills hybrid columns with a warning — see
+    # append_hybrid_features. For honest replay, reconstruct features from
+    # the source track's WAV via the evaluate() path above.
+    hybrid_names = resolve_hybrid_features(cfg)
+    use_hybrid = bool(hybrid_names)
 
     capture_files = sorted(capture_dir.glob("*.jsonl"))
     if not capture_files:

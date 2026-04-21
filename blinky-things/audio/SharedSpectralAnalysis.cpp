@@ -4,7 +4,12 @@
 
 // CMSIS-DSP Radix-4 FFT — ~2x faster than ArduinoFFT's Radix-2 on Cortex-M4F.
 // The library is already linked by the Seeeduino BSP (-larm_cortexM4lf_math).
-#ifdef BLINKY_PLATFORM_NRF52840
+// The parity harness (tests/parity/) links this file for pure feature-math
+// validation and never calls process() — magnitudes are injected directly —
+// so the FFT dependency is stubbed under BLINKY_PARITY_HARNESS.
+#ifdef BLINKY_PARITY_HARNESS
+// No FFT deps; computeFFT() body is also guarded below.
+#elif defined(BLINKY_PLATFORM_NRF52840)
 #include <arm_math.h>
 static arm_rfft_fast_instance_f32 rfftInstance;
 static bool rfftInitialized = false;
@@ -88,6 +93,11 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralFlatness_(0.0f)
     , bassFlux_(0.0f)
     , rawSpectralFlux_(0.0f)
+    , rawCentroid_(0.0f)
+    , rawCrest_(0.0f)
+    , rawRolloff_(0.0f)
+    , rawHFC_(0.0f)
+    , rawFlatness_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -202,40 +212,15 @@ void SharedSpectralAnalysis::process() {
     // Must happen BEFORE applyCompressor() modifies magnitudes_ in-place.
     computeRawMelBands();
 
-    // Compute raw SuperFlux spectral flux from pre-compressor magnitudes.
-    // This matches the training pipeline's STFT-based flux (no compressor gain).
-    // Used exclusively for NN hybrid input — ACF tempo uses compressed flux below.
-    //
-    // NOTE: keep this loop structurally in sync with the compressed flux loop
-    // below (same 3-wide max filter, same bass/mid/high split, same weighting).
-    // If you change one, update the other or the NN input will drift from what
-    // ACF uses for tempo analysis.
-    if (hasPrevFrame_) {
-        float rawBassFlux = 0.0f, rawMidFlux = 0.0f, rawHighFlux = 0.0f;
-        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
-            float ref = prevRawMagnitudes_[i];
-            if (i > 1) ref = fmaxf(ref, prevRawMagnitudes_[i - 1]);
-            if (i < SpectralConstants::NUM_BINS - 1) ref = fmaxf(ref, prevRawMagnitudes_[i + 1]);
-            float diff = preWhitenMagnitudes_[i] - ref;
-            if (diff > 0.0f) {
-                if (i <= SpectralConstants::BASS_MAX_BIN)
-                    rawBassFlux += diff;
-                else if (i <= SpectralConstants::MID_MAX_BIN)
-                    rawMidFlux += diff;
-                else
-                    rawHighFlux += diff;
-            }
-        }
-        rawSpectralFlux_ = bassFluxWeight * (rawBassFlux / BASS_BIN_COUNT)
-                         + midFluxWeight * (rawMidFlux / MID_BIN_COUNT)
-                         + highFluxWeight * (rawHighFlux / HIGH_BIN_COUNT);
-    } else {
-        rawSpectralFlux_ = 0.0f;
-    }
-    // Save pre-compressor magnitudes for next frame's raw flux computation
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        prevRawMagnitudes_[i] = preWhitenMagnitudes_[i];
-    }
+    // Compute raw SuperFlux + save previous-frame buffer. Extracted into a
+    // helper so tests/parity/ can invoke it on injected magnitudes without
+    // re-running the full process() pipeline.
+    computeRawSpectralFluxAndSavePrev();
+
+    // Phase 2a shape features (centroid, crest, rolloff, HFC) on pre-compressor
+    // magnitudes. Must run BEFORE applyCompressor() so values match the Python
+    // reference (ml-training/analysis/features.py), which computes on raw STFT.
+    computeShapeFeaturesRaw();
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
@@ -340,7 +325,11 @@ void SharedSpectralAnalysis::applyHammingWindow() {
 }
 
 void SharedSpectralAnalysis::computeFFT() {
-#ifdef BLINKY_PLATFORM_NRF52840
+#ifdef BLINKY_PARITY_HARNESS
+    // Parity harness injects magnitudes directly — this path is never hit
+    // in harness builds. Assert loudly if it is, to catch test misuse.
+    (void)0;
+#elif defined(BLINKY_PLATFORM_NRF52840)
     // CMSIS-DSP Radix-4 real FFT — hardware-optimized for Cortex-M4F.
     // arm_rfft_fast_f32 operates in-place: input is real samples in vReal_,
     // output is interleaved complex [Re0, Re(N/2), Re1, Im1, Re2, Im2, ...].
@@ -658,6 +647,151 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
         spectralFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
     } else {
         spectralFlatness_ = 0.0f;
+    }
+}
+
+void SharedSpectralAnalysis::computeRawSpectralFluxAndSavePrev() {
+    // SuperFlux (Bock & Widmer 2013) on pre-compressor magnitudes.
+    // Matches `ml-training/analysis/features.py raw_superflux` bit-for-bit.
+    //
+    // NOTE: keep this loop structurally in sync with the compressed flux loop
+    // in process() (same 3-wide max filter, same bass/mid/high split, same
+    // weighting). If you change one, update the other or the NN input will
+    // drift from what ACF uses for tempo analysis.
+    //
+    // Writes `rawSpectralFlux_` and then advances `prevRawMagnitudes_` so
+    // the next frame has the reference it needs. The parity harness calls
+    // this directly; process() calls it after preWhitenMagnitudes_ is set.
+    if (hasPrevFrame_) {
+        float rawBassFlux = 0.0f, rawMidFlux = 0.0f, rawHighFlux = 0.0f;
+        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+            float ref = prevRawMagnitudes_[i];
+            if (i > 1) ref = fmaxf(ref, prevRawMagnitudes_[i - 1]);
+            if (i < SpectralConstants::NUM_BINS - 1) ref = fmaxf(ref, prevRawMagnitudes_[i + 1]);
+            float diff = preWhitenMagnitudes_[i] - ref;
+            if (diff > 0.0f) {
+                if (i <= SpectralConstants::BASS_MAX_BIN)
+                    rawBassFlux += diff;
+                else if (i <= SpectralConstants::MID_MAX_BIN)
+                    rawMidFlux += diff;
+                else
+                    rawHighFlux += diff;
+            }
+        }
+        rawSpectralFlux_ = bassFluxWeight * (rawBassFlux / BASS_BIN_COUNT)
+                         + midFluxWeight * (rawMidFlux / MID_BIN_COUNT)
+                         + highFluxWeight * (rawHighFlux / HIGH_BIN_COUNT);
+    } else {
+        rawSpectralFlux_ = 0.0f;
+    }
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        prevRawMagnitudes_[i] = preWhitenMagnitudes_[i];
+    }
+    // NOTE: hasPrevFrame_ is NOT updated here. process() sets it at the end
+    // of the full frame so the compressed-flux loop (which runs later in
+    // process()) still sees the correct "this is the first frame" state.
+    // The parity harness's test hook manages hasPrevFrame_ explicitly.
+}
+
+void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
+    // Five "shape" features computed from preWhitenMagnitudes_ to match the
+    // Python reference in ml-training/analysis/features.py. Uses bin indices
+    // 1..NUM_BINS-1 (DC skipped), same framing as Python.
+    //
+    // Centroid    = Σ(k · |X[k]|) / Σ|X[k]|              — bin-index weighted
+    // Crest       = max|X[k]| / sqrt(Σ|X[k]|² / N)       — peak / RMS
+    // HFC         = Σ(k · |X[k]|²)                       — Masri 1996
+    // Rolloff85   = smallest k where Σ|X[0..k]|² ≥ 0.85 · total_energy
+    // RawFlatness = geo-mean / arith-mean of |X| over valid bins (Wiener entropy)
+    //
+    // All features scan the same 127 bins once (skipping DC) with simple
+    // accumulators — well under the 0.5 ms target.
+    //
+    // Flatness is computed HERE (on raw/pre-compressor mags) to match the
+    // Python training pipeline's `append_hybrid_features`, which uses raw
+    // STFT magnitudes. The separate `spectralFlatness_` computed in
+    // `computeDerivedFeatures` on post-compressor magnitudes is retained for
+    // backwards compatibility with the serial debug stream's "flat" field
+    // but is NOT what the NN consumes — AudioTracker routes getRawFlatness()
+    // into FrameOnsetNN::infer. See the train-inference alignment audit in
+    // docs/HYBRID_FEATURE_ANALYSIS_PLAN.md (gap 4).
+    constexpr int FIRST = 1;  // skip DC
+    constexpr int LAST = SpectralConstants::NUM_BINS;
+    constexpr int N = LAST - FIRST;  // 127 for NUM_BINS=128
+
+    // Cache per-bin energy (|X|²) from the first loop so rolloff below does not
+    // recompute mag*mag. 127 floats = 508 bytes on stack — well within the
+    // nRF52840's ~32 KB stack budget.
+    float binEnergy[N];
+
+    float weightedSum = 0.0f;    // Σ k · |X|
+    float magSum = 0.0f;         // Σ |X|            (for centroid — unfloored)
+    float energySum = 0.0f;      // Σ |X|²
+    float hfcSum = 0.0f;         // Σ k · |X|²
+    float peakMag = 0.0f;        // max |X|
+    float logMagFloorSum = 0.0f; // Σ log(max(|X|, 1e-10))   for flatness geo-mean
+    float magFloorSum = 0.0f;    // Σ max(|X|, 1e-10)         for flatness arith-mean
+    for (int i = FIRST; i < LAST; i++) {
+        float mag = preWhitenMagnitudes_[i];
+        float e = mag * mag;
+        binEnergy[i - FIRST] = e;
+        weightedSum += i * mag;
+        magSum += mag;
+        energySum += e;
+        hfcSum += i * e;
+        if (mag > peakMag) peakMag = mag;
+        // Flatness accumulators use FLOORED magnitudes (1e-10 minimum) to
+        // match the Python training pipeline's `np.maximum(mags, 1e-10)`
+        // before Wiener-entropy — every bin contributes, quiet bins are
+        // clamped rather than skipped.
+        float magFloor = mag < 1e-10f ? 1e-10f : mag;
+        logMagFloorSum += logf(magFloor);
+        magFloorSum += magFloor;
+    }
+
+    rawCentroid_ = (magSum > 1e-10f && safeIsFinite(weightedSum))
+        ? (weightedSum / magSum)
+        : 0.0f;
+
+    if (energySum > 1e-10f && safeIsFinite(energySum)) {
+        float rms = sqrtf(energySum / static_cast<float>(N));
+        rawCrest_ = (rms > 1e-10f) ? (peakMag / rms) : 0.0f;
+    } else {
+        rawCrest_ = 0.0f;
+    }
+
+    rawHFC_ = safeIsFinite(hfcSum) ? hfcSum : 0.0f;
+
+    // Raw flatness — Wiener entropy on floored mags over ALL bins. Matches
+    // the Python training pipeline's `append_hybrid_features` bit-for-bit
+    // (within float rounding): np.maximum(mags, 1e-10) → geo_mean / arith_mean.
+    // The deployed NN was trained on THIS flatness, not the compressed one
+    // in computeDerivedFeatures.
+    if (magFloorSum > 1e-10f) {
+        float geoMean = expf(logMagFloorSum / static_cast<float>(N));
+        float ariMean = magFloorSum / static_cast<float>(N);
+        float flat = (ariMean > 1e-10f) ? geoMean / ariMean : 0.0f;
+        rawFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
+    } else {
+        rawFlatness_ = 0.0f;
+    }
+
+    // Rolloff: first bin where cumulative |X|² ≥ 0.85 * total energy.
+    // Reuses the energies cached in binEnergy[] from the first loop.
+    if (energySum > 1e-10f) {
+        float threshold = 0.85f * energySum;
+        float cum = 0.0f;
+        int rolloffBin = 0;
+        for (int j = 0; j < N; j++) {
+            cum += binEnergy[j];
+            if (cum >= threshold) {
+                rolloffBin = j;  // Python indexing: 0..N-1 excluding DC
+                break;
+            }
+        }
+        rawRolloff_ = static_cast<float>(rolloffBin);
+    } else {
+        rawRolloff_ = 0.0f;
     }
 }
 

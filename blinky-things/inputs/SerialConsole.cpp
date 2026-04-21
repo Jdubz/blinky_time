@@ -273,6 +273,12 @@ void SerialConsole::registerTrackerSettings() {
         "NN activation threshold for peak-picking", 0.0f, 1.0f, onParamChanged);
     // pulseNNGate removed — NN is now the primary signal, not a gate
 
+    // Crest-factor gate (Phase 2a / Phase 4 Path A).
+    // Suppresses NN pulses when per-frame crest factor is below this value.
+    // 0 = disabled. See AudioTracker.h and docs/HYBRID_FEATURE_ANALYSIS_PLAN.md.
+    settings_.registerFloat("crestgatemin", &audioCtrl_->crestGateMin, "tracker",
+        "Crest-factor gate minimum (0=disabled)", 0.0f, 20.0f, onParamChanged);
+
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
     // ODF baseline tracking
@@ -1369,12 +1375,15 @@ void SerialConsole::streamTick() {
             out_.print(mic_->getLevel(), 3);
             out_.print(F(",\"gain\":"));
             out_.print(mic_->getHwGain());
-            // Hybrid features: spectral flatness + raw flux (pre-compressor)
-            // These match the training pipeline's feature computation.
-            // Precision (4 dp) matches the music stream's rflux so offline
-            // tooling can pool data from both streams without scaling.
+            // Hybrid features — the exact values fed into the NN this frame.
+            // b136+: "flat" here is the RAW (pre-compressor) flatness the NN
+            // actually consumes, which matches the Python training pipeline.
+            // Pre-b136 captures stream `getSpectralFlatness()` (compressed)
+            // here instead — that was a train-inference mismatch (gap 4).
+            // Offline replay of old captures via replay_device_capture.py
+            // must read the firmware build stamp before trusting these values.
             out_.print(F(",\"flat\":"));
-            out_.print(spectral.getSpectralFlatness(), 4);
+            out_.print(spectral.getRawFlatness(), 4);
             out_.print(F(",\"rflux\":"));
             out_.print(spectral.getRawSpectralFlux(), 4);
             out_.println(F("}"));
@@ -1471,7 +1480,9 @@ void SerialConsole::streamTick() {
             int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > audioCtrl_->activationThreshold) ? 1 : 0;
             lastStreamPhase = currentPhase;
 
-            out_.print(F(",\"m\":{\"a\":"));
+            out_.print(F(",\"m\":{\"ts\":"));
+            out_.print(millis());  // firmware millis at frame emission — server uses + clock_offset for signal_frame alignment
+            out_.print(F(",\"a\":"));
             out_.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
             out_.print(F(",\"bpm\":"));
             out_.print(audioCtrl_->getCurrentBpm(), 1);
@@ -1497,10 +1508,26 @@ void SerialConsole::streamTick() {
             // Debug mode: add diagnostics
             if (streamDebug_) {
                 const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
+                // `flat` = compressed-mag flatness (legacy / historical streaming).
+                // `rflat` = raw-mag flatness (pre-compressor) — this is what the
+                // NN actually consumes and what the Python training pipeline
+                // produces. Gap 4 fix in b136. Keep `flat` around so older
+                // Phase 1-3 analysis captures can still be re-read.
                 out_.print(F(",\"flat\":"));
                 out_.print(spectral.getSpectralFlatness(), 4);
+                out_.print(F(",\"rflat\":"));
+                out_.print(spectral.getRawFlatness(), 4);
                 out_.print(F(",\"rflux\":"));
                 out_.print(spectral.getRawSpectralFlux(), 4);
+                // Phase 2a shape features (pre-compressor mags, match Python ref).
+                out_.print(F(",\"cent\":"));
+                out_.print(spectral.getRawCentroid(), 2);
+                out_.print(F(",\"crest\":"));
+                out_.print(spectral.getRawCrest(), 3);
+                out_.print(F(",\"roll\":"));
+                out_.print(spectral.getRawRolloff(), 1);
+                out_.print(F(",\"hfc\":"));
+                out_.print(spectral.getRawHFC(), 4);
                 out_.print(F(",\"conf\":"));
                 out_.print(audioCtrl_->getPeriodicityStrength(), 3);
                 out_.print(F(",\"plpc\":"));

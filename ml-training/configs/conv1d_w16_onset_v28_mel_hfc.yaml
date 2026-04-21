@@ -1,0 +1,61 @@
+# Conv1D W16 v28 variant — mel + hfc (single-feature ablation)
+#
+# Ablation to answer: does adding JUST hfc (second-most-novel, gate c
+# R² vs mel = 0.24) help? hfc = Σ k · |X[k]|² (Masri 1996) — broadband
+# high-frequency content, the feature that most distinguishes snares
+# from low-tonal events.
+#
+# Input: 30 mel + hfc = 31 channels.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+  hybrid_features: [hfc]
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+  stored_hybrid_features: [flatness, raw_flux, crest, hfc]
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v28_mel_hfc.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

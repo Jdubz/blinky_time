@@ -169,3 +169,63 @@ def test_duration_tracks_wall_time() -> None:
     result = session.stop_recording()
     assert result.duration >= 40  # at least 40ms (allow for scheduling)
     assert result.duration < 500  # but not unreasonably long
+
+
+def _full_music_frame(**overrides: float) -> dict[str, float]:
+    """Return a complete "m" block with every SIGNAL_KEYS wire-key present."""
+    from blinky_server.testing.test_session import SIGNAL_KEYS
+
+    base = {k: 0.1 for k in SIGNAL_KEYS}
+    base.update({"a": 1, "bpm": 120.0, "ph": 0.25, "pp": 0.5, "str": 0.6, "nn": 0.2, "per": 33})
+    base.update(overrides)
+    return base
+
+
+def test_signal_frame_captured_when_all_keys_present() -> None:
+    """All SIGNAL_KEYS wire fields present → one signal_frame with server names."""
+    session = TestSession()
+    session.start_recording()
+    m = _full_music_frame(flat=0.42, rflux=0.11, cent=20.0, crest=5.0, roll=30.0, hfc=7.5)
+    session.ingest("audio", {"a": {"l": 0.5}, "m": m})
+    result = session.stop_recording()
+    assert len(result.signal_frames) == 1
+    frame = result.signal_frames[0]
+    # Wire-key → server-name translation (see SIGNAL_KEYS dict).
+    assert frame.values["flatness"] == 0.42
+    assert frame.values["raw_flux"] == 0.11
+    assert frame.values["centroid"] == 20.0
+    assert frame.values["crest"] == 5.0
+    assert frame.values["rolloff"] == 30.0
+    assert frame.values["hfc"] == 7.5
+    # Activation comes from the separate "nn" field in the stream, not values.
+    assert frame.activation == 0.2
+
+
+def test_signal_frame_dropped_when_key_missing() -> None:
+    """Partial "m" block (missing one SIGNAL_KEYS wire-key) → no signal_frame.
+
+    Dropping rather than filling with 0 prevents missing-signal means from
+    being pulled toward zero, which would corrupt onset/non-onset Cohen's d.
+    """
+    session = TestSession()
+    session.start_recording()
+    m = _full_music_frame()
+    del m["crest"]  # partial frame
+    session.ingest("audio", {"a": {"l": 0.5}, "m": m})
+    result = session.stop_recording()
+    assert len(result.signal_frames) == 0
+    # Music state itself should still be recorded (signal_frame is additive).
+    assert len(result.music_states) == 1
+
+
+def test_signal_frame_uses_firmware_ts_when_offset_set() -> None:
+    """Clock offset converts firmware ts → server epoch ms for signal frames."""
+    session = TestSession()
+    session.set_clock_offset(1_700_000_000_000.0)  # arbitrary server-side epoch base
+    session.start_recording()
+    m = _full_music_frame(ts=5000.0)  # firmware uptime 5s
+    session.ingest("audio", {"a": {"l": 0.5}, "m": m})
+    result = session.stop_recording()
+    assert len(result.signal_frames) == 1
+    # fw_ts + offset = 5000 + 1.7e12
+    assert result.signal_frames[0].timestamp_ms == 1_700_000_005_000.0

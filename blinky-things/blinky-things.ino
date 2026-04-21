@@ -380,7 +380,31 @@ void setup() {
 #ifdef BLINKY_PLATFORM_NRF52840
   // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
   Bluefruit.begin(1, 0);
-  Bluefruit.setName("Blinky");
+
+  // Per-device BLE name — "Blinky-<deviceId>-<snSuffix2>" when the chip has a
+  // stored device config, or "Blinky-<snSuffix4>" for unconfigured chips.
+  // snSuffix comes from FICR DEVICEID[0] lower bits (hardware-unique, same
+  // source the fleet server uses for the canonical device ID). This gives
+  // every device a distinct name in phone scan lists and fleet-console
+  // discovery output, and the deviceId segment conveys which hardware
+  // variant (hat_v1 / necklace_v2 / etc.) is running.
+  {
+    char bleName[32];
+    const auto& storedDev = configStorage.getDeviceConfig();
+    uint32_t sn = NRF_FICR->DEVICEID[0];
+    if (configStorage.isDeviceConfigValid()
+        && storedDev.deviceId[0] != '\0'
+        && strcmp(storedDev.deviceId, "none") != 0) {
+      snprintf(bleName, sizeof(bleName), "Blinky-%.16s-%02lX",
+               storedDev.deviceId, (unsigned long)(sn & 0xFF));
+    } else {
+      snprintf(bleName, sizeof(bleName), "Blinky-%04lX",
+               (unsigned long)(sn & 0xFFFF));
+    }
+    Bluefruit.setName(bleName);
+    Serial.print(F("BLE name: "));
+    Serial.println(bleName);
+  }
   Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
 
   // BLE DFU service — allows wireless firmware updates from fleet server

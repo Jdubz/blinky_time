@@ -123,7 +123,7 @@ public:
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
     // v89: pulseNNGate. v91: PLP OLA removed (direct pattern interpolation).
     // v92: plpVarianceSens. v93: plpDecayRate. v94: PlasmaGlobe replaces Lightning.
-    static const uint8_t SETTINGS_VERSION = 94;
+    static const uint8_t SETTINGS_VERSION = 95;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -293,6 +293,12 @@ public:
         float pulseMinLevel;
         float pulseOnsetFloor;
         float pulseNNGate;
+        // v95: crest-factor gate threshold (Phase 2a). Default 0 is intentional —
+        // the production config leaves the gate disabled because the b137
+        // sweep showed no F1 improvement on held-out data. Set >0 manually to
+        // suppress pulses whose current-frame raw crest is below the
+        // threshold; range validated to [0, 20] in ConfigStorage.cpp.
+        float crestGateMin;
 
         // (Percival ACF + comb filter bank removed v80)
         // (phaseCorrectRate removed v91 — PLP refactored to direct pattern interpolation)
@@ -351,8 +357,8 @@ public:
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
-    static_assert(sizeof(StoredTrackerParams) == 120,
-        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (112 bytes = 27 floats + 1 uint16 + padding)");
+    static_assert(sizeof(StoredTrackerParams) == 124,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (124 bytes = 28 floats + 1 uint16 + padding — v95 adds crestGateMin)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

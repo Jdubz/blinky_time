@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <math.h>  // isfinite() used by safeIsFinite() inline member
 #include "../hal/PlatformDetect.h"
 
 /**
@@ -289,6 +290,86 @@ public:
      */
     float getRawSpectralFlux() const { return rawSpectralFlux_; }
 
+    // --- Phase 2a shape features (pre-compressor, pre-whitening) ---
+    // All computed from preWhitenMagnitudes_ in computeShapeFeaturesRaw(),
+    // matching the Python reference in ml-training/analysis/features.py.
+
+    /**
+     * Spectral centroid — centre-of-mass bin index on raw magnitudes.
+     * Drums (broadband) shift centroid higher per hit; tonal impulses
+     * stay concentrated at the fundamental. Range [0, NUM_BINS-1).
+     */
+    float getRawCentroid() const { return rawCentroid_; }
+
+    /**
+     * Crest factor — peak / RMS on raw magnitudes.
+     * Transients have high crest; sustained tones are low crest.
+     */
+    float getRawCrest() const { return rawCrest_; }
+
+    /**
+     * Spectral rolloff — bin index below which 85% of energy lies.
+     * Narrow-band tonal impulses have low rolloff; drums have high.
+     */
+    float getRawRolloff() const { return rawRolloff_; }
+
+    /**
+     * High-frequency content (Masri 1996): sum of k · |X[k]|² across bins.
+     * Percussion has broadband HF energy; tonal impulses are low-freq-dominant.
+     */
+    float getRawHFC() const { return rawHFC_; }
+
+    /**
+     * Raw flatness (Wiener entropy on pre-compressor magnitudes).
+     * Range [0, 1]: 0 = pure tone, 1 = white noise.
+     *
+     * THIS is what the NN consumes — AudioTracker routes this value into
+     * FrameOnsetNN::infer. The separate `spectralFlatness_` (compressed-mag
+     * version, via `getSpectralFlatness`) is kept for stream continuity but
+     * is NOT used by the NN; it was the result of an historical oversight
+     * where the model trained on raw-mag flatness while firmware streamed
+     * compressed-mag flatness. Aligned in b136 (gap 4 in the plan).
+     */
+    float getRawFlatness() const { return rawFlatness_; }
+
+    // --- Parity-test hooks (tests/parity/ only) ---
+    // These let the native parity harness inject a known magnitude spectrum
+    // and invoke the shape-feature math in isolation — without running FFT,
+    // noise subtraction, or compressor. No-op / low-cost in production; the
+    // compiler will typically inline the setter call that never fires.
+
+    /** Overwrite the internal pre-compressor magnitude snapshot from an
+     *  externally-computed spectrum. Caller must pass exactly NUM_BINS
+     *  float values (bin 0 = DC, bin 1..N-1 = positive frequencies). */
+    void setPreWhitenMagnitudesForTest(const float* mags) {
+        for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+            preWhitenMagnitudes_[i] = mags[i];
+        }
+    }
+
+    /** Run the shape-feature computation on the currently-held
+     *  preWhitenMagnitudes_. The parity harness calls this after
+     *  setPreWhitenMagnitudesForTest(); production always runs it via
+     *  process(). */
+    void runShapeFeaturesForTest() { computeShapeFeaturesRaw(); }
+
+    /** Run the full pre-compressor analysis chain on the currently-held
+     *  preWhitenMagnitudes_. In order:
+     *    1. computeRawMelBands     — mel output in rawMelBands_/linearMelBands_
+     *    2. computeRawSpectralFluxAndSavePrev — raw flux + advance prev
+     *    3. computeShapeFeaturesRaw — centroid/crest/rolloff/hfc/flatness
+     *
+     *  Also advances the internal `hasPrevFrame_` flag after the first call
+     *  so the next call's raw-flux computation has a valid previous frame.
+     *  Caller injects one frame at a time in temporal order — this gives
+     *  the parity harness full pre-compressor feature parity. */
+    void runRawFeaturesForTest() {
+        computeRawMelBands();
+        computeRawSpectralFluxAndSavePrev();
+        computeShapeFeaturesRaw();
+        hasPrevFrame_ = true;
+    }
+
     // --- Compressor/whitening debug accessors ---
 
     /**
@@ -350,6 +431,13 @@ private:
     float spectralFlatness_;          // Wiener entropy: 0=tone, 1=noise (drum discriminator)
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
     float rawSpectralFlux_;    // SuperFlux from pre-compressor mags (for NN hybrid input)
+    // Phase 2a shape features — computed from preWhitenMagnitudes_ (pre-compressor)
+    // to match ml-training/analysis/features.py reference implementations.
+    float rawCentroid_;         // Centre-of-mass bin index on raw magnitudes
+    float rawCrest_;            // max / RMS on raw magnitudes (transient-peakiness)
+    float rawRolloff_;          // Bin index below which 85% of energy lies
+    float rawHFC_;              // Masri 1996: sum of bin-weighted energy (k · |X|²)
+    float rawFlatness_;         // Wiener entropy on raw mags (matches Python training code)
 
     // State
     bool frameReady_;
@@ -368,6 +456,8 @@ private:
     void computeRawMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();
+    void computeShapeFeaturesRaw();  // Phase 2a: centroid/crest/rolloff/HFC/flatness on preWhitenMagnitudes_
+    void computeRawSpectralFluxAndSavePrev();  // SuperFlux + advance prevRawMagnitudes_
     void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {

@@ -1,0 +1,66 @@
+# Conv1D W16 v28 variant — replicates v27-hybrid feature set (flatness + raw_flux)
+#
+# This is the v27-hybrid equivalent trained under v28 recipe conditions:
+# same data prep, same augmentation, same loss. Exists so the v28-4-hybrid
+# run's F1 gain has a direct comparison on identical training recipe,
+# isolating "the new features helped" from "the recipe changed."
+#
+# Input: 30 mel + flatness + raw_flux = 32 channels.
+# Architecture: Conv1D(32->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1).
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+  # New explicit list form (replaces legacy use_hybrid: true boolean).
+  # Order here doesn't matter — append_hybrid_features imposes the
+  # canonical HYBRID_FEATURE_NAMES order.
+  hybrid_features: [flatness, raw_flux]
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  # Shared with v28_mel_only and v28_4hybrid — see comment in v28_mel_only.yaml.
+  # MemmapBeatDataset slices the 34-col stored features to the first 32 here.
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v28_current.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

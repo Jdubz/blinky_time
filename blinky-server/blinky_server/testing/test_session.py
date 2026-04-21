@@ -10,9 +10,27 @@ import logging
 import time
 from typing import Any
 
-from .types import MusicState, NNFrame, TestData, TransientEvent
+from .types import MusicState, SignalFrame, TestData, TransientEvent
 
 log = logging.getLogger(__name__)
+
+# Keys the firmware emits inside the music-stream "m" sub-object that we treat
+# as signal values for HybridMetrics-style onset/non-onset analysis. Every key
+# listed here must also have a matching Python reference implementation in
+# ml-training/analysis/features.py so parity tests can run.
+#
+# Map: wire_key → server_signal_name. Usually the same; kept as a dict so one
+# side can be renamed without touching the other. Iteration order in Python
+# 3.7+ preserves insertion order, which keeps signal ordering stable in
+# downstream reports.
+SIGNAL_KEYS: dict[str, str] = {
+    "flat": "flatness",
+    "rflux": "raw_flux",
+    "cent": "centroid",
+    "crest": "crest",
+    "roll": "rolloff",
+    "hfc": "hfc",
+}
 
 
 class TestSession:
@@ -28,7 +46,7 @@ class TestSession:
         self._start_time: float = 0.0
         self._transients: list[TransientEvent] = []
         self._music_states: list[MusicState] = []
-        self._nn_frames: list[NNFrame] = []
+        self._signal_frames: list[SignalFrame] = []
         self._clock_offset: float | None = None  # server_epoch_ms - firmware_millis
 
     @property
@@ -49,7 +67,7 @@ class TestSession:
         self._start_time = time.time() * 1000  # epoch ms
         self._transients.clear()
         self._music_states.clear()
-        self._nn_frames.clear()
+        self._signal_frames.clear()
 
     def stop_recording(self) -> TestData:
         """Stop recording and return a frozen snapshot."""
@@ -60,7 +78,7 @@ class TestSession:
             start_time=self._start_time,
             transients=list(self._transients),
             music_states=list(self._music_states),
-            nn_frames=list(self._nn_frames),
+            signal_frames=list(self._signal_frames),
         )
 
     def ingest(self, msg_type: str, data: dict[str, Any]) -> None:
@@ -99,9 +117,16 @@ class TestSession:
             m = data.get("m")
             if m is None:
                 return
+            # Prefer firmware ts (b134+) for the same coordinate-system reason
+            # as signal_frames below.
+            fw_ts = m.get("ts")
+            if fw_ts is not None and self._clock_offset is not None:
+                music_ts_ms = fw_ts + self._clock_offset
+            else:
+                music_ts_ms = now_ms
             self._music_states.append(
                 MusicState(
-                    timestamp_ms=now_ms,
+                    timestamp_ms=music_ts_ms,
                     active=bool(m.get("a", 0)),
                     confidence=m.get("str", 0.0),  # rhythm strength as confidence
                     plp_pulse=m.get("pp", None),  # PLP pulse value
@@ -110,26 +135,38 @@ class TestSession:
                     nn_agreement=m.get("nna", None),  # flux/NN fold agreement (debug)
                 )
             )
-            # Hybrid features in debug stream: flat + rflux in "m" sub-object.
-            # Require BOTH fields — a partial frame (only one present) would
-            # bias the missing metric toward 0 and corrupt the gap comparison.
-            if "flat" in m and "rflux" in m:
-                flat_val = m["flat"]
-                rflux_val = m["rflux"]
-                if not self._nn_frames:
+            # Phase 2a: generic signal capture. A frame counts as "streaming
+            # signals" if ALL configured keys are present — partial frames
+            # (only some fields) would bias missing signals' means toward 0
+            # and corrupt per-signal gap comparisons. `flat` is the canonical
+            # marker since the firmware's debug block always emits all of
+            # flat+rflux+cent+crest+roll+hfc together (or none of them).
+            if all(wire_key in m for wire_key in SIGNAL_KEYS):
+                values = {name: float(m[wire_key]) for wire_key, name in SIGNAL_KEYS.items()}
+                # Prefer firmware-emitted `ts` (b134+). Converting firmware
+                # millis via clock_offset puts signal_frames in the same
+                # coordinate system as transients, which is what scoring's
+                # audio_latency_ms correction was calibrated against. Without
+                # this, USB receive jitter (~2-10 ms) blurs onset/non-onset
+                # classification and can swap sign on the per-run Cohen's d.
+                fw_ts = m.get("ts")
+                if fw_ts is not None and self._clock_offset is not None:
+                    ts_ms = fw_ts + self._clock_offset
+                else:
+                    ts_ms = now_ms
+                if not self._signal_frames:
                     log.info(
-                        "First NN frame captured: flat=%s rflux=%s",
-                        flat_val,
-                        rflux_val,
+                        "First signal frame captured: ts=%s %s",
+                        "fw" if fw_ts is not None else "wall",
+                        ", ".join(f"{k}={v:.3f}" for k, v in values.items()),
                     )
-                self._nn_frames.append(
-                    NNFrame(
-                        timestamp_ms=now_ms,
+                self._signal_frames.append(
+                    SignalFrame(
+                        timestamp_ms=ts_ms,
                         # m["nn"] in the music stream is the raw NN activation,
                         # not the 0/1 loaded flag (that lives in the separate
-                        # NN-diagnostic stream). See NNFrame docstring.
-                        activation=m.get("nn", 0.0),
-                        flatness=flat_val,
-                        flux=rflux_val,
+                        # NN-diagnostic stream).
+                        activation=float(m.get("nn", 0.0)),
+                        values=values,
                     )
                 )
