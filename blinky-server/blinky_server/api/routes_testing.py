@@ -45,6 +45,11 @@ class ValidateRequest(BaseModel):
     num_runs: int = Field(1, ge=1, le=10)
     commands: list[str] | None = None
     per_device_commands: dict[str, list[str]] | None = None
+    # When true, the per-device score JSON also carries the raw capture
+    # (signal_frames + transients) needed for gate (b) TP-vs-FP analysis.
+    # Adds ~20-50 KB per device per track to the result payload -- don't
+    # enable for routine validation runs. See ml-training/analysis/run_gate_b.py.
+    persist_raw: bool = False
 
 
 class ParamSweepRequest(BaseModel):
@@ -116,6 +121,7 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
             num_runs=body.num_runs,
             commands=body.commands,
             per_device_commands=body.per_device_commands,
+            persist_raw=body.persist_raw,
             job=job,
         )
 

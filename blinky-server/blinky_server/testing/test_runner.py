@@ -150,6 +150,40 @@ def _apply_settle_filter(test_data: TestData, settle_ms: float) -> TestData:
     )
 
 
+def _serialize_raw_capture(test_data: TestData, audio_start_time_ms: float) -> dict[str, Any]:
+    """Serialize the raw signal_frames + transients for gate-(b) analysis.
+
+    Timestamps are normalized to seconds from audio start so downstream
+    tooling doesn't have to re-apply the audio_epoch_ms subtraction.
+    `values` is a flat dict of signal_name → float for each frame.
+
+    Only called when the caller opted into `persist_raw` — this can be
+    ~0.5-2 MB per device per 35 s clip, so we don't serialize it by default.
+    """
+    frames_out = []
+    for f in test_data.signal_frames:
+        t_sec = (f.timestamp_ms - audio_start_time_ms) / 1000.0
+        if t_sec < 0:
+            continue
+        frames_out.append(
+            {
+                "t": round(t_sec, 4),
+                "nn": round(f.activation, 4),
+                "v": {k: round(v, 4) for k, v in f.values.items()},
+            }
+        )
+    transients_out = []
+    for t in test_data.transients:
+        t_sec = (t.timestamp_ms - audio_start_time_ms) / 1000.0
+        if t_sec < 0:
+            continue
+        transients_out.append({"t": round(t_sec, 4), "strength": round(t.strength, 3)})
+    return {
+        "signal_frames": frames_out,
+        "transients": transients_out,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -167,6 +201,7 @@ async def run_validation(
     settle_ms: float = 0,
     commands: list[str] | None = None,
     per_device_commands: dict[str, list[str]] | None = None,
+    persist_raw: bool = False,
     job: Job | None = None,
 ) -> dict[str, Any]:
     """Run validation suite: play tracks, score each device.
@@ -182,6 +217,10 @@ async def run_validation(
         settle_ms: Skip data from first N ms of recording (ACF convergence)
         commands: Setup commands sent to all devices
         per_device_commands: Per-device setup commands
+        persist_raw: If True, include raw signal_frames + transients per
+            device in the result payload. Required for gate-(b) TP-vs-FP
+            analysis. Adds ~20-50 KB per (track x device x run). Default
+            False to keep normal validation runs compact.
         job: Job for progress updates (optional)
 
     Returns:
@@ -247,6 +286,7 @@ async def run_validation(
                         continue
 
                     run_scores: dict[str, Any] = {}
+                    run_raw: dict[str, Any] = {}
                     for device in devices:
                         test_data = recordings.get(device.id)
                         if not test_data:
@@ -255,12 +295,18 @@ async def run_validation(
                             test_data = _apply_settle_filter(test_data, settle_ms)
                         score = score_device_run(test_data, playback.audio_start_time_ms, gt)
                         run_scores[device.id[:12]] = format_score_summary(score)
+                        if persist_raw:
+                            run_raw[device.id[:12]] = _serialize_raw_capture(
+                                test_data, playback.audio_start_time_ms
+                            )
 
-                    track_result = {
+                    track_result: dict[str, Any] = {
                         "track": track_name,
                         "run": run_idx + 1,
                         "scores": run_scores,
                     }
+                    if persist_raw:
+                        track_result["raw_capture"] = run_raw
                     all_results.append(track_result)
                     if job:
                         job.append_result(track_result)
