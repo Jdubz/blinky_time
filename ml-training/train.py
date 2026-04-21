@@ -12,6 +12,7 @@ import argparse
 import csv
 import math
 import os
+import random
 import time
 
 import sys
@@ -25,6 +26,29 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
 from scripts.audio import compute_input_features, load_config
+
+
+def _set_seeds(seed: int) -> torch.Generator:
+    """Seed every RNG the training loop touches and return a seeded generator.
+
+    Covers:
+      - Python `random` (shuffles in random.choice, sampler fallbacks)
+      - NumPy (pos_weight sampling, augmentation betas in offline prep)
+      - Torch CPU + all CUDA devices (weight init, dropout, torch.rand in aug)
+      - A dedicated `torch.Generator` returned to the caller for passing to
+        DataLoader(..., generator=...) so shuffle order is reproducible.
+
+    Does NOT enable torch.use_deterministic_algorithms — the latter forces
+    slower cuDNN paths and crashes on some conv ops. Full bit determinism
+    is not the goal; run-to-run comparability of loss curves is.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+    return gen
 
 
 def _atomic_torch_save(obj: object, path: Path) -> None:
@@ -522,6 +546,13 @@ def main():
 
     cfg = load_config(args.config)
 
+    # Seed every RNG this script touches so loss curves are comparable across
+    # baselines. The seeded generator below is also threaded into the training
+    # DataLoader so the shuffle order is deterministic, not just the weights.
+    seed = int(cfg.get("training", {}).get("seed", 42))
+    dataloader_generator = _set_seeds(seed)
+    print(f"Seeded random / numpy / torch with seed={seed}")
+
     # Validate labels_type vs num_output_channels consistency.
     # instrument labels produce 3-channel targets; the model must match.
     labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
@@ -651,13 +682,18 @@ def main():
 
     if subsample < 1.0:
         subset_size = max(1, int(len(train_ds) * subsample))
-        train_sampler = RandomSampler(train_ds, num_samples=subset_size, replacement=False)
+        train_sampler = RandomSampler(
+            train_ds, num_samples=subset_size, replacement=False,
+            generator=dataloader_generator,
+        )
         train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler,
-                                  num_workers=num_workers, pin_memory=True, persistent_workers=True)
+                                  num_workers=num_workers, pin_memory=True, persistent_workers=True,
+                                  generator=dataloader_generator)
         print(f"Subsampling: {subset_size:,} of {len(train_ds):,} per epoch ({subsample:.0%})")
     else:
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                                  num_workers=num_workers, pin_memory=True, persistent_workers=True)
+                                  num_workers=num_workers, pin_memory=True, persistent_workers=True,
+                                  generator=dataloader_generator)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=True, persistent_workers=True)
 
