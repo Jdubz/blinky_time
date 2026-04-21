@@ -584,6 +584,37 @@ Unified direction: all six features are positive-sign discriminators on real mus
 
 **Phase 2a parity harness still wanted** to rule out any residual C++ / Python implementation drift. With \|d\| in the 0.5-0.7 range, a 10-20 % implementation error could still matter for gate-threshold selection in Phase 4.
 
+### Post-gap-4 measurement on b137 — 2026-04-20 (the honest numbers)
+
+After the flatness-routing fix (b136) and the native parity-harness
+expansion (b137), re-ran validation twice — once on the 18-track
+in-corpus set, once on the 25-track held-out GS set (edm_holdout).
+The held-out numbers are the authoritative measurement; the in-corpus
+ones are shown for comparison to earlier rounds only.
+
+**Peak-mode per-signal |d| — 3 rounds side by side:**
+
+| signal | b134 in-corpus \|d\| | b137 in-corpus \|d\| | **b137 held-out \|d\|** | sign+ on held-out |
+|--------|:-:|:-:|:-:|:-:|
+| crest | 0.735 | 0.931 | **0.964** | 100/100 |
+| flatness | 0.708 | 0.857 | **0.887** | 100/100 |
+| raw_flux | 0.671 | 0.779 | **0.843** | 98/100 |
+| centroid | 0.668 | 0.826 | **0.767** | 100/100 |
+| hfc | 0.615 | 0.679 | **0.673** | 95/100 |
+| rolloff | 0.476 | 0.535 | **0.622** | 99/100 |
+
+**Three things changed at once between b134 and b137 held-out**, so the +0.10 to +0.23 |d| gains can't be cleanly attributed to just the gap-4 fix. All three moved in the same direction so it doesn't matter for decisions:
+
+1. Flatness routing fixed (gap 4 — the big one).
+2. Feature bin-indexing off-by-one in Python reference corrected (doesn't affect on-device numbers but affects Python↔firmware comparisons).
+3. Tested on held-out content instead of training-contaminated.
+
+**Cross-device sign agreement is now near-perfect.** The b134 numbers showed only 5-12/18 tracks where all 4 devices agreed on sign — that was the "features don't work reliably fleet-wide" problem. Held-out b137 shows 95-100% sign agreement across all 100 observations. The fleet-wide consistency was not a feature problem; it was a flatness-routing contamination problem.
+
+**On-device onset F1 = 0.398 on held-out**, vs 0.628 that CLAUDE.md was reporting. That earlier number was measured on the 18 training-contaminated tracks and is an upper bound. Every subsequent F1 claim must use the held-out corpus.
+
+**Net finding:** with the harness-v2 parity gaps closed, all six shortlist features produce strong, sign-stable on-device discrimination at the peak moment. The question is no longer "do the features carry signal?" (they do) — it's "which combinations help the NN?" — gates (b), (c), (d), (e) below.
+
 ### Phase 4 Path A — crest-gate sweep (NULL result) — 2026-04-20
 
 b135 adds a single-threshold `crestGateMin` parameter that suppresses NN-triggered pulses when the current-frame crest factor is below the threshold. Sweep on one device (ABFBC4) across 6 EDM tracks at values [0, 2, 4, 5, 6, 7]:
