@@ -69,7 +69,11 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28_4hybrid"
+  # THIS config is the one to run prepare_dataset.py against — it writes
+  # the full 30 mel + 4 hybrid = 34 column feature set. v28-current and
+  # v28-mel-only reuse the same processed_dir; their compute_input_features
+  # (32 / 30) tells MemmapBeatDataset to slice accordingly.
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v28_4hybrid.h"

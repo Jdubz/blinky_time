@@ -56,7 +56,9 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28_current"
+  # Shared with v28_mel_only and v28_4hybrid — see comment in v28_mel_only.yaml.
+  # MemmapBeatDataset slices the 34-col stored features to the first 32 here.
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v28_current.h"
