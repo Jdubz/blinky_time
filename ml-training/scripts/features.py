@@ -57,8 +57,14 @@ def append_features(mel: np.ndarray, use_delta: bool = False,
         flux = compute_band_flux(mel)
         return np.concatenate([mel, flux], axis=1)
     elif use_hybrid:
+        # Legacy API: use_hybrid=True maps to the v27-era [flatness, raw_flux]
+        # pair. New callers should use append_hybrid_features directly with
+        # an explicit features= list (v28 adds crest + hfc).
         from scripts.audio import append_hybrid_features
-        return append_hybrid_features(mel, audio=audio, mel_db_range=mel_db_range)
+        return append_hybrid_features(
+            mel, audio=audio, mel_db_range=mel_db_range,
+            features=["flatness", "raw_flux"],
+        )
     return mel
 
 

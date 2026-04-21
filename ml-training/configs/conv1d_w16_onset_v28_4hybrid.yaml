@@ -1,0 +1,77 @@
+# Conv1D W16 v28 — 4 hybrid features (flatness + raw_flux + crest + hfc)
+#
+# Target model for the Phase 4 Path B ablation. Adds crest + hfc on top
+# of v27-hybrid's existing flatness + raw_flux. Selection rationale from
+# docs/HYBRID_FEATURE_ANALYSIS_PLAN.md "Gate (b)/(c)/(d) run" section:
+#
+#   Gate (b) peak-mode |d| on b137 held-out:
+#     crest=0.96, flatness=0.89, raw_flux=0.84, hfc=0.67 — all moderate/strong.
+#
+#   Gate (c) R² regressing feature from mel bands:
+#     raw_flux=0.19, hfc=0.24 — truly independent info.
+#     crest=0.73 (learnable from mel but adds directional info).
+#     flatness=0.85 (mostly mel-learnable but strong |d|).
+#
+#   Gate (d) pairwise |r|:
+#     flatness ↔ centroid  +0.978  (drop centroid — redundant).
+#     rolloff strongly correlated with 3 others (drop rolloff too).
+#     Kept 4 span the span of independent directions in feature space.
+#
+# Input: 30 mel + flatness + raw_flux + crest + hfc = 34 channels.
+# Architecture: Conv1D(34->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1).
+#
+# Earns its slot only if held-out F1 beats v28-current by ≥ 0.03 (the
+# gate-e threshold). If it does, this becomes v28 deployed; if not, we
+# ship v28-current.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+  hybrid_features: [flatness, raw_flux, crest, hfc]
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28_4hybrid"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v28_4hybrid.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

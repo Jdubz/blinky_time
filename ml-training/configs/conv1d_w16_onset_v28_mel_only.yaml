@@ -1,0 +1,66 @@
+# Conv1D W16 v28 variant — mel-only baseline (no hybrid features)
+#
+# Ablation control for the v28 series. v27-hybrid was deployed without a
+# mel-only baseline ever being trained on the same recipe, so we don't
+# know how much flatness+flux actually helped. This config retrains the
+# v27 architecture with ZERO hybrid inputs so the v28-current and
+# v28-4-hybrid F1 numbers have something to compare against. Absolute
+# numbers aren't the goal — the deltas are.
+#
+# Input: 30 mel bands (40-4000 Hz), 0 hybrid features.  Total: 30 channels.
+# Architecture: Conv1D(30->32, k=5) -> Conv1D(32->32, k=5) -> Conv1D(32->1, k=1).
+#
+# Must produce its own processed_dir — dataset prep bakes features into
+# .npy files, so mel-only data is a different bundle than mel+hybrid.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+  # Omit use_hybrid / hybrid_features entirely — resolves to empty list.
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28_mel_only"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v28_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

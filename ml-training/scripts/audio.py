@@ -351,6 +351,39 @@ def _deep_merge(base: dict, overrides: dict) -> None:
             base[key] = value
 
 
+HYBRID_FEATURE_NAMES = ("flatness", "raw_flux", "crest", "hfc")
+"""Ordered list of hybrid feature names supported by `append_hybrid_features`.
+
+Column order in the output tensor is deterministic: [mel..., flatness,
+raw_flux, crest, hfc]. A config's `features.hybrid_features` list must be
+a subset of this tuple. Older configs that use the boolean `use_hybrid`
+flag map to `["flatness", "raw_flux"]` automatically for backwards compat.
+"""
+
+
+def resolve_hybrid_features(cfg: dict) -> list[str]:
+    """Return the list of hybrid feature names enabled by this config.
+
+    Prefers new `features.hybrid_features: [...]` list; falls back to the
+    legacy `features.use_hybrid: bool` flag. Returns [] if neither set.
+    Guarantees the result is ordered per HYBRID_FEATURE_NAMES and contains
+    only recognised names.
+    """
+    features = cfg.get("features", {})
+    explicit = features.get("hybrid_features")
+    if explicit is not None:
+        unknown = set(explicit) - set(HYBRID_FEATURE_NAMES)
+        if unknown:
+            raise ValueError(
+                f"Unknown hybrid feature(s): {unknown}. "
+                f"Supported: {HYBRID_FEATURE_NAMES}"
+            )
+        return [n for n in HYBRID_FEATURE_NAMES if n in explicit]
+    if features.get("use_hybrid", False):
+        return ["flatness", "raw_flux"]
+    return []
+
+
 def compute_input_features(cfg: dict) -> int:
     """Compute total input feature count from config (mel + optional extras).
 
@@ -362,8 +395,9 @@ def compute_input_features(cfg: dict) -> int:
         return n_mels * 2
     elif cfg.get("features", {}).get("use_band_flux", False):
         return n_mels + 3
-    elif cfg.get("features", {}).get("use_hybrid", False):
-        return n_mels + 2
+    hybrids = resolve_hybrid_features(cfg)
+    if hybrids:
+        return n_mels + len(hybrids)
     return n_mels
 
 
@@ -414,106 +448,145 @@ def append_band_flux_features(mel: np.ndarray) -> np.ndarray:
     return np.concatenate([mel, flux], axis=-1)
 
 
-def append_hybrid_features(mel: np.ndarray, audio: np.ndarray | None = None,
-                           sr: int = 16000, n_fft: int = 256, hop: int = 256,
-                           mel_db_range: float = 60.0) -> np.ndarray:
-    """Append spectral flatness + SuperFlux spectral flux to mel features.
+def append_hybrid_features(
+    mel: np.ndarray,
+    audio: np.ndarray | None = None,
+    sr: int = 16000,
+    n_fft: int = 256,
+    hop: int = 256,
+    mel_db_range: float = 60.0,
+    features: list[str] | None = None,
+) -> np.ndarray:
+    """Append deterministic shape features to mel bands.
 
-    These deterministic features directly encode the discrimination the
-    model struggles to learn from mel bands alone:
-      - Spectral flatness (Wiener entropy): drums=noisy ~0.5-0.8, tones ~0.1-0.3
-      - SuperFlux spectral flux: high at broadband transients, zero during sustain
+    Supported feature names (HYBRID_FEATURE_NAMES, fixed order in output):
 
-    When audio waveform is provided, both features are computed from the STFT
-    magnitude spectrum, matching firmware's SharedSpectralAnalysis exactly:
-      - Flatness: Wiener entropy from bins 1..NUM_BINS-1 (computeDerivedFeatures)
-      - Flux: SuperFlux with 3-wide frequency max filter + band weighting (process)
+      - `flatness`  — Wiener entropy on raw STFT magnitudes (tonal↔noise).
+      - `raw_flux`  — SuperFlux (Bock & Widmer 2013) with 3-wide frequency
+                      max filter and bass/mid/high band weights.
+      - `crest`     — peak / RMS of the magnitude spectrum (transient-peakiness).
+      - `hfc`       — Masri 1996 high-frequency content: Σ k · |X[k]|².
 
-    Without audio, falls back to mel-based approximations (less accurate).
-    All STFT operations are vectorized (batch FFT, no Python per-frame loops).
+    All four are bit-parity-tested against firmware's
+    `SharedSpectralAnalysis::computeShapeFeaturesRaw` and
+    `computeRawSpectralFluxAndSavePrev` (see `tests/parity/`). This
+    function is the single source of truth for training-time feature
+    computation — DO NOT reimplement these elsewhere.
+
+    Default (for backwards compatibility with pre-v28 callers) is
+    `['flatness', 'raw_flux']`, matching v27-hybrid.
 
     Input shape: (n_frames, n_mels)
-    Output shape: (n_frames, n_mels + 2)
+    Output shape: (n_frames, n_mels + len(features))
+
+    Raises ValueError if `audio` is None (previous mel-fallback path
+    was never accurate and has been removed for v28+).
     """
+    if features is None:
+        features = ["flatness", "raw_flux"]
+    unknown = set(features) - set(HYBRID_FEATURE_NAMES)
+    if unknown:
+        raise ValueError(
+            f"append_hybrid_features: unknown feature(s) {unknown}. "
+            f"Supported: {HYBRID_FEATURE_NAMES}"
+        )
+    # Enforce output order matching HYBRID_FEATURE_NAMES so training and
+    # inference always slice the same columns in the same order.
+    ordered = [n for n in HYBRID_FEATURE_NAMES if n in features]
+    n_features = len(ordered)
+
     n_frames, n_mels = mel.shape
     # Guard against double-append: raw mel should be ≤30 bands (v27 max).
-    # If n_mels > 30, it likely already has hybrid/delta/flux features appended.
     assert n_mels <= 30, (
-        f"append_hybrid_features: got {n_mels} features, expected raw mel bands (≤30). "
+        f"append_hybrid_features: got {n_mels} mel features, expected ≤30. "
         f"Input may have been double-appended."
     )
-    extra = np.zeros((n_frames, 2), dtype=np.float32)
+    if audio is None or len(audio) < n_fft:
+        # No audio available (e.g. replaying device mel captures). Zero-fill
+        # the hybrid columns so downstream tensor shapes still match. Caller
+        # must know the resulting values don't correspond to device behavior
+        # — this path only makes sense for "run the model with zeroed hybrid
+        # inputs" ablation experiments, not for parity replay.
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "append_hybrid_features: no audio provided — zero-filling %d "
+            "hybrid columns. This WILL NOT match device behavior; prefer "
+            "reloading the source audio for honest feature values.",
+            n_features,
+        )
+        extra = np.zeros((n_frames, n_features), dtype=np.float32)
+        return np.concatenate([mel, extra], axis=-1)
 
-    if audio is not None and len(audio) >= n_fft:
-        # --- STFT-based features matching firmware SharedSpectralAnalysis ---
-        # Firmware applies Hamming window → FFT → magnitudes, then computes
-        # both flatness (computeDerivedFeatures) and flux (SuperFlux) from the
-        # same magnitude spectrum. We replicate this with batch FFT.
-        n_valid = min(n_frames, (len(audio) - n_fft) // hop + 1)
-        if n_valid > 0:
-            # Batch STFT: reshape audio into (n_valid, n_fft), apply window, FFT
-            starts = np.arange(n_valid) * hop
-            indices = starts[:, np.newaxis] + np.arange(n_fft)
-            frames = audio[indices] * np.hamming(n_fft).astype(np.float32)
-            spectra = np.fft.rfft(frames, axis=1)        # (n_valid, n_fft/2+1)
-            mags = np.abs(spectra[:, 1:])                 # Skip DC → (n_valid, 127)
-            mags = np.maximum(mags, 1e-10)
+    # --- Batch STFT matching firmware SharedSpectralAnalysis exactly ---
+    # Hamming window (symmetric, 2π/(N−1) denominator) → numpy rfft →
+    # magnitudes → skip DC → floor at 1e-10 for flatness compatibility.
+    # See tests/parity/ for bit-level verification.
+    n_valid = min(n_frames, (len(audio) - n_fft) // hop + 1)
+    extra = np.zeros((n_frames, n_features), dtype=np.float32)
+    if n_valid <= 0:
+        return np.concatenate([mel, extra], axis=-1)
 
-            # Feature 0: Spectral flatness (Wiener entropy)
-            # Matches firmware computeDerivedFeatures(): exp(mean(log(mags))) / mean(mags)
-            log_mean = np.log(mags).mean(axis=1)
-            geo_mean = np.exp(log_mean)
-            ari_mean = mags.mean(axis=1)
-            flatness = np.where(ari_mean > 1e-10, geo_mean / ari_mean, 0.0)
-            extra[:n_valid, 0] = np.clip(flatness, 0.0, 1.0)
+    starts = np.arange(n_valid) * hop
+    indices = starts[:, np.newaxis] + np.arange(n_fft)
+    frames = audio[indices] * np.hamming(n_fft).astype(np.float32)
+    spectra = np.fft.rfft(frames, axis=1)  # (n_valid, n_fft/2+1)
+    # Firmware's preWhitenMagnitudes_ stores NUM_BINS = FFT_SIZE/2 = 128 bins
+    # (DC + 127 positive freqs, Nyquist dropped). The feature math skips DC.
+    # So for parity we use spectra[:, 1:128] → 127 bins, same as firmware's
+    # i=1..127 loop. My analysis/features.py + tests/parity/ verify bit match.
+    mags_unfloored = np.abs(spectra[:, 1:128])  # (n_valid, 127)
 
-            # Feature 1: SuperFlux spectral flux (Bock & Widmer 2013)
-            # Matches firmware process() exactly:
-            #   1. 3-wide frequency max filter on previous frame's magnitudes
-            #   2. HWR difference: max(0, mag[t] - maxfiltered_prev[t])
-            #   3. Band-weighted sum: bass(1-6)*0.5 + mid(7-32)*0.2 + high(33-127)*0.3
-            #   4. Each band normalized by bin count
-            #
-            # Firmware bin ranges (0-indexed after DC skip, so bin 0 here = firmware bin 1):
-            #   Bass: firmware bins 1-6  → mags[:, 0:6]
-            #   Mid:  firmware bins 7-32 → mags[:, 6:32]
-            #   High: firmware bins 33-127 → mags[:, 32:]
-            n_bins = mags.shape[1]  # 127
-            BASS_COUNT = 6.0
-            MID_COUNT = 26.0
-            HIGH_COUNT = float(n_bins - 32)  # 95
+    # Flatness needs floored mags (matches firmware 1e-10 per-bin floor).
+    # Crest / centroid / hfc / raw_flux use unfloored mags — near-zero values
+    # get clipped by the early-zero branches inside those computations.
+    mags = np.maximum(mags_unfloored, 1e-10)
 
-            # Vectorized 3-wide max filter on previous frames: (n_valid-1, n_bins)
-            prev = mags[:-1]  # frames 0..n_valid-2
-            ref = prev.copy()
-            ref[:, 1:] = np.maximum(ref[:, 1:], prev[:, :-1])   # left neighbor
-            ref[:, :-1] = np.maximum(ref[:, :-1], prev[:, 1:])  # right neighbor
+    # --- Feature slot helpers ---
+    def slot(name: str) -> int:
+        return ordered.index(name)
 
-            # HWR difference: current - maxfiltered_prev, clipped to >= 0
-            diff = np.maximum(mags[1:] - ref, 0.0)  # (n_valid-1, n_bins)
-
-            # Band-weighted sum (firmware weights: bass=0.5, mid=0.2, high=0.3)
-            bass_flux = diff[:, 0:6].sum(axis=1) / BASS_COUNT
-            mid_flux = diff[:, 6:32].sum(axis=1) / MID_COUNT
-            high_flux = diff[:, 32:].sum(axis=1) / HIGH_COUNT
-            flux = 0.5 * bass_flux + 0.2 * mid_flux + 0.3 * high_flux
-            extra[1:n_valid, 1] = flux
-    else:
-        # Fallback: approximate both features from mel bands.
-        # WARNING: mel-based features diverge from STFT-based values. This fallback
-        # should NOT be used for v27+ hybrid training — pass audio_np instead.
-
-        # Flatness: Wiener entropy on mel energy (reverse log compression)
-        linear = np.power(10.0, (mel * mel_db_range - mel_db_range) / 10.0)
-        linear = np.maximum(linear, 1e-10)
-        log_mean = np.log(linear).mean(axis=1)
+    # --- flatness ---
+    if "flatness" in ordered:
+        log_mean = np.log(mags).mean(axis=1)
         geo_mean = np.exp(log_mean)
-        ari_mean = linear.mean(axis=1)
+        ari_mean = mags.mean(axis=1)
         flatness = np.where(ari_mean > 1e-10, geo_mean / ari_mean, 0.0)
-        extra[:, 0] = np.clip(flatness, 0.0, 1.0)
+        extra[:n_valid, slot("flatness")] = np.clip(flatness, 0.0, 1.0)
 
-        # Flux: simple HWR mel diff (no SuperFlux max filter, no band weighting)
-        diff = np.maximum(mel[1:] - mel[:-1], 0.0)
-        extra[1:, 1] = diff.sum(axis=1) / n_mels
+    # --- raw_flux (SuperFlux on UNFLOORED mags — matches firmware) ---
+    if "raw_flux" in ordered:
+        src = mags_unfloored
+        n_bins = src.shape[1]  # 127
+        BASS_COUNT = 6.0
+        MID_COUNT = 26.0
+        HIGH_COUNT = float(n_bins - 32)  # 95
+        prev = src[:-1]
+        ref = prev.copy()
+        ref[:, 1:] = np.maximum(ref[:, 1:], prev[:, :-1])
+        ref[:, :-1] = np.maximum(ref[:, :-1], prev[:, 1:])
+        diff = np.maximum(src[1:] - ref, 0.0)
+        bass_flux = diff[:, 0:6].sum(axis=1) / BASS_COUNT
+        mid_flux = diff[:, 6:32].sum(axis=1) / MID_COUNT
+        high_flux = diff[:, 32:].sum(axis=1) / HIGH_COUNT
+        flux = 0.5 * bass_flux + 0.2 * mid_flux + 0.3 * high_flux
+        extra[1:n_valid, slot("raw_flux")] = flux
+
+    # --- crest — peak / RMS, with firmware's silence-guard ---
+    if "crest" in ordered:
+        src = mags_unfloored
+        peak = src.max(axis=1)
+        energy = (src**2).sum(axis=1)
+        rms = np.sqrt(energy / float(src.shape[1]))
+        mask = (energy > 1e-10) & np.isfinite(energy) & (rms > 1e-10)
+        crest = np.zeros_like(peak)
+        crest[mask] = peak[mask] / rms[mask]
+        extra[:n_valid, slot("crest")] = crest
+
+    # --- hfc — Σ k · |X|² using firmware bin indices (1..127) ---
+    if "hfc" in ordered:
+        src = mags_unfloored
+        k = np.arange(1, src.shape[1] + 1, dtype=np.float32)
+        hfc = ((src**2) * k).sum(axis=1)
+        extra[:n_valid, slot("hfc")] = hfc
 
     return np.concatenate([mel, extra], axis=-1)
