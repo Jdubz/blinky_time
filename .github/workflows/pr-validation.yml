@@ -228,6 +228,30 @@ jobs:
     - name: Run tests
       run: venv/bin/python -m pytest tests/ -v
 
+  feature-parity:
+    name: Feature Parity (Python ↔ firmware)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install numpy for unit tests
+      run: pip install 'numpy>=1.26,<3' scipy pyyaml
+
+    - name: Run Python shape-feature unit tests
+      # Regression guard for bin-indexing (centroid/HFC k=1..N) and the
+      # resolve_hybrid_features config parser. Runs offline — no audio
+      # files or harness build required. The firmware-parity side is
+      # verified locally via ml-training/analysis/run_parity_test.py.
+      working-directory: ml-training
+      run: python -m analysis.test_shape_features
+
   blinky-console-tests:
     name: Blinky Console Tests
     runs-on: ubuntu-latest

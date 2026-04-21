@@ -541,20 +541,20 @@ def append_hybrid_features(
     # get clipped by the early-zero branches inside those computations.
     mags = np.maximum(mags_unfloored, 1e-10)
 
-    # --- Feature slot helpers ---
-    def slot(name: str) -> int:
-        return ordered.index(name)
+    # Precompute name → output column index (O(1) lookup per feature instead
+    # of O(n) list.index per branch).
+    slot = {name: i for i, name in enumerate(ordered)}
 
     # --- flatness ---
-    if "flatness" in ordered:
+    if "flatness" in slot:
         log_mean = np.log(mags).mean(axis=1)
         geo_mean = np.exp(log_mean)
         ari_mean = mags.mean(axis=1)
         flatness = np.where(ari_mean > 1e-10, geo_mean / ari_mean, 0.0)
-        extra[:n_valid, slot("flatness")] = np.clip(flatness, 0.0, 1.0)
+        extra[:n_valid, slot["flatness"]] = np.clip(flatness, 0.0, 1.0)
 
     # --- raw_flux (SuperFlux on UNFLOORED mags — matches firmware) ---
-    if "raw_flux" in ordered:
+    if "raw_flux" in slot:
         src = mags_unfloored
         n_bins = src.shape[1]  # 127
         BASS_COUNT = 6.0
@@ -569,10 +569,10 @@ def append_hybrid_features(
         mid_flux = diff[:, 6:32].sum(axis=1) / MID_COUNT
         high_flux = diff[:, 32:].sum(axis=1) / HIGH_COUNT
         flux = 0.5 * bass_flux + 0.2 * mid_flux + 0.3 * high_flux
-        extra[1:n_valid, slot("raw_flux")] = flux
+        extra[1:n_valid, slot["raw_flux"]] = flux
 
     # --- crest — peak / RMS, with firmware's silence-guard ---
-    if "crest" in ordered:
+    if "crest" in slot:
         src = mags_unfloored
         peak = src.max(axis=1)
         energy = (src**2).sum(axis=1)
@@ -580,13 +580,13 @@ def append_hybrid_features(
         mask = (energy > 1e-10) & np.isfinite(energy) & (rms > 1e-10)
         crest = np.zeros_like(peak)
         crest[mask] = peak[mask] / rms[mask]
-        extra[:n_valid, slot("crest")] = crest
+        extra[:n_valid, slot["crest"]] = crest
 
     # --- hfc — Σ k · |X|² using firmware bin indices (1..127) ---
-    if "hfc" in ordered:
+    if "hfc" in slot:
         src = mags_unfloored
         k = np.arange(1, src.shape[1] + 1, dtype=np.float32)
         hfc = ((src**2) * k).sum(axis=1)
-        extra[:n_valid, slot("hfc")] = hfc
+        extra[:n_valid, slot["hfc"]] = hfc
 
     return np.concatenate([mel, extra], axis=-1)

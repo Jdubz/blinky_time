@@ -663,6 +663,11 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
             if score.audio_latency_ms is not None
             else None,
         },
+        # "signals.gaps" is a list of per-signal-per-mode gap records. Two
+        # modes coexist: "frame" (every near-onset frame vs every far frame,
+        # pre-b138 behaviour) and "peak" (one peak-sample per GT onset vs
+        # far frames, added in b138 — better for sharp-attack features).
+        # External parsers should filter on `mode` before aggregating.
         "signals": {
             "frames": score.signal_frames_captured,
             "gaps": [
