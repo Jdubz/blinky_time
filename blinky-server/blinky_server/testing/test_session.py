@@ -19,16 +19,18 @@ log = logging.getLogger(__name__)
 # listed here must also have a matching Python reference implementation in
 # ml-training/analysis/features.py so parity tests can run.
 #
-# Format: (wire_key, server_signal_name). They usually match; kept as a tuple
-# so we can rename one side without touching the other.
-SIGNAL_KEYS: list[tuple[str, str]] = [
-    ("flat", "flatness"),
-    ("rflux", "raw_flux"),
-    ("cent", "centroid"),
-    ("crest", "crest"),
-    ("roll", "rolloff"),
-    ("hfc", "hfc"),
-]
+# Map: wire_key → server_signal_name. Usually the same; kept as a dict so one
+# side can be renamed without touching the other. Iteration order in Python
+# 3.7+ preserves insertion order, which keeps signal ordering stable in
+# downstream reports.
+SIGNAL_KEYS: dict[str, str] = {
+    "flat": "flatness",
+    "rflux": "raw_flux",
+    "cent": "centroid",
+    "crest": "crest",
+    "roll": "rolloff",
+    "hfc": "hfc",
+}
 
 
 class TestSession:
@@ -139,8 +141,8 @@ class TestSession:
             # and corrupt per-signal gap comparisons. `flat` is the canonical
             # marker since the firmware's debug block always emits all of
             # flat+rflux+cent+crest+roll+hfc together (or none of them).
-            if all(wire_key in m for wire_key, _ in SIGNAL_KEYS):
-                values = {name: float(m[wire_key]) for wire_key, name in SIGNAL_KEYS}
+            if all(wire_key in m for wire_key in SIGNAL_KEYS):
+                values = {name: float(m[wire_key]) for wire_key, name in SIGNAL_KEYS.items()}
                 # Prefer firmware-emitted `ts` (b134+). Converting firmware
                 # millis via clock_offset puts signal_frames in the same
                 # coordinate system as transients, which is what scoring's

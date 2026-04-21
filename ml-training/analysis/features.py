@@ -34,26 +34,35 @@ HIGH_COUNT = 95.0  # 127 - 32
 _EPS = 1e-10
 
 
+# Firmware `SharedSpectralAnalysis` uses NUM_BINS = FFT_SIZE / 2 = 128 internal
+# bins (DC at 0, positive frequencies at 1..127) and discards the Nyquist bin
+# (rfft index 128). Feature loops iterate i=1..127, giving 127 active bins.
+# We match that exactly: drop DC (index 0) and Nyquist (index 128), keep 127.
+NUM_BINS = N_FFT // 2 - 1  # 127
+
+
 def compute_stft(audio: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Compute per-frame magnitude + phase spectra.
 
-    Returns (mags, phases), each shape (n_frames, N_FFT//2) — DC bin already
-    dropped, so column index 0 corresponds to firmware bin 1.
+    Returns (mags, phases), each shape (n_frames, NUM_BINS) — DC and Nyquist
+    dropped, so column index 0 corresponds to firmware bin 1 and column 126 to
+    firmware bin 127. This matches `SharedSpectralAnalysis` exactly.
     """
     if audio.ndim != 1:
         raise ValueError(f"audio must be 1D, got shape {audio.shape}")
     n_frames = max(0, (len(audio) - N_FFT) // HOP + 1)
     if n_frames == 0:
         return (
-            np.zeros((0, N_FFT // 2), dtype=np.float32),
-            np.zeros((0, N_FFT // 2), dtype=np.float32),
+            np.zeros((0, NUM_BINS), dtype=np.float32),
+            np.zeros((0, NUM_BINS), dtype=np.float32),
         )
     starts = np.arange(n_frames) * HOP
     idx = starts[:, None] + np.arange(N_FFT)
     frames = audio[idx] * np.hamming(N_FFT).astype(np.float32)
     spectra = np.fft.rfft(frames, axis=1)
-    mags = np.abs(spectra[:, 1:]).astype(np.float32)
-    phases = np.angle(spectra[:, 1:]).astype(np.float32)
+    # Slice [1:N_FFT//2] → bins 1..127, dropping DC and Nyquist to match firmware.
+    mags = np.abs(spectra[:, 1 : N_FFT // 2]).astype(np.float32)
+    phases = np.angle(spectra[:, 1 : N_FFT // 2]).astype(np.float32)
     return mags, phases
 
 

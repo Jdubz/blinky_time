@@ -142,7 +142,13 @@ def per_onset_peaks(
     gt_onsets: list[float],
     window_sec: float,
 ) -> np.ndarray:
-    """For each GT onset, extract the max feature value within ±window."""
+    """For each GT onset, extract the max feature value within ±window.
+
+    Returns np.nan for onsets whose window falls outside the frame grid (e.g.
+    onsets before/after the first/last frame). Downstream stats helpers filter
+    non-finite values — using np.nan keeps the onset's peak out of the mean
+    rather than pulling it toward zero.
+    """
     peaks = np.empty(len(gt_onsets), dtype=np.float32)
     if not len(gt_onsets):
         return np.zeros(0, dtype=np.float32)
@@ -150,7 +156,7 @@ def per_onset_peaks(
     ends = np.searchsorted(frame_secs, np.array(gt_onsets) + window_sec, side="right")
     for i, (s, e) in enumerate(zip(starts, ends)):
         if s >= e:
-            peaks[i] = 0.0
+            peaks[i] = np.nan
         else:
             peaks[i] = float(feature_values[s:e].max())
     return peaks
@@ -175,6 +181,8 @@ def cohens_d(a: np.ndarray, b: np.ndarray) -> float:
 
 def auc_binary(pos: np.ndarray, neg: np.ndarray) -> float:
     """ROC-AUC. 0.5 = no separation, 1.0 = perfect pos-above-neg."""
+    pos = pos[np.isfinite(pos)]
+    neg = neg[np.isfinite(neg)]
     if len(pos) < 2 or len(neg) < 2:
         return 0.5
     x = np.concatenate([pos, neg])
@@ -189,6 +197,8 @@ def auc_binary(pos: np.ndarray, neg: np.ndarray) -> float:
 
 def ks_stat(a: np.ndarray, b: np.ndarray) -> float:
     """KS statistic: 0 = identical distributions, 1 = disjoint."""
+    a = a[np.isfinite(a)]
+    b = b[np.isfinite(b)]
     if len(a) < 5 or len(b) < 5:
         return 0.0
     return float(stats.ks_2samp(a, b).statistic)
@@ -226,12 +236,17 @@ def score_track(
     per_feature: dict[str, dict[str, Any]] = {}
     for name, values in features.items():
         peaks = onset_peaks[name]
+        # Drop nan peaks (onsets whose window fell outside the frame grid) before
+        # computing summary stats so they don't pull the mean toward nan.
+        finite_peaks = peaks[np.isfinite(peaks)] if peaks.size else peaks
         non = values[non_mask]
         per_feature[name] = {
             "onset_peaks": peaks.tolist(),
             "non_onset_values": non.tolist() if non.size < 8000 else non[::4].tolist(),
-            "onset_peak_mean": float(peaks.mean()) if peaks.size else 0.0,
-            "onset_peak_std": float(peaks.std(ddof=1)) if peaks.size > 1 else 0.0,
+            "onset_peak_mean": float(finite_peaks.mean()) if finite_peaks.size else 0.0,
+            "onset_peak_std": (
+                float(finite_peaks.std(ddof=1)) if finite_peaks.size > 1 else 0.0
+            ),
             "non_mean": float(non.mean()) if non.size else 0.0,
             "non_std": float(non.std(ddof=1)) if non.size > 1 else 0.0,
             "cohens_d_peak_vs_non": cohens_d(peaks, non),
@@ -301,18 +316,27 @@ def cross_corpus_ranking(
     for name in sorted(perc_peaks.keys() & tonal_peaks.keys()):
         perc = perc_peaks[name]
         tonal = tonal_peaks[name]
+        # Strip nan peaks — `per_onset_peaks` uses np.nan for onsets whose window
+        # falls outside the frame grid; leaving them in the pool skews means
+        # and stddevs.
+        perc_finite = perc[np.isfinite(perc)] if perc.size else perc
+        tonal_finite = tonal[np.isfinite(tonal)] if tonal.size else tonal
         ranked.append(
             {
                 "feature": name,
                 "cohens_d": cohens_d(perc, tonal),
                 "auc": auc_binary(perc, tonal),
                 "ks": ks_stat(perc, tonal),
-                "perc_mean": float(perc.mean()) if perc.size else 0.0,
-                "perc_std": float(perc.std(ddof=1)) if perc.size > 1 else 0.0,
-                "tonal_mean": float(tonal.mean()) if tonal.size else 0.0,
-                "tonal_std": float(tonal.std(ddof=1)) if tonal.size > 1 else 0.0,
-                "perc_n": int(perc.size),
-                "tonal_n": int(tonal.size),
+                "perc_mean": float(perc_finite.mean()) if perc_finite.size else 0.0,
+                "perc_std": (
+                    float(perc_finite.std(ddof=1)) if perc_finite.size > 1 else 0.0
+                ),
+                "tonal_mean": float(tonal_finite.mean()) if tonal_finite.size else 0.0,
+                "tonal_std": (
+                    float(tonal_finite.std(ddof=1)) if tonal_finite.size > 1 else 0.0
+                ),
+                "perc_n": int(perc_finite.size),
+                "tonal_n": int(tonal_finite.size),
             }
         )
     ranked.sort(key=lambda r: abs(r["cohens_d"]), reverse=True)

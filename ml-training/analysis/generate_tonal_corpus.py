@@ -34,20 +34,30 @@ log = logging.getLogger("tonal_corpus")
 SR = 16000
 DURATION = 30.0  # seconds per track
 
-# Variant parameters.
+# Variant parameters — immutable tuples.
 # "clean"    — silence between impulses, sharp attacks (worst-case for activity-sum features).
 # "embedded" — continuous tonal bed underneath, slower attacks (closer to real music).
-VARIANTS = {
+#
+# Each dict is threaded as an explicit parameter to the generators; we avoid
+# module-level state so that two callers (e.g. a test harness running both
+# variants concurrently, or unit tests exercising one without side-effecting
+# the other) cannot corrupt each other.
+VARIANTS: dict[str, dict[str, float]] = {
     "clean": {"bed_amp": 0.0, "attack_mult": 1.0},
     "embedded": {"bed_amp": 0.15, "attack_mult": 4.0},
 }
-# Module-level state read by the generators. main() sets it from --variant.
-_VARIANT: dict[str, float] = dict(VARIANTS["clean"])
 
 
-def _adsr(n: int, attack_ms: float, decay_ms: float, sustain: float, release_ms: float) -> np.ndarray:
-    """ADSR envelope. Attack length is scaled by the current variant's attack_mult."""
-    attack_ms = attack_ms * float(_VARIANT.get("attack_mult", 1.0))
+def _adsr(
+    n: int,
+    attack_ms: float,
+    decay_ms: float,
+    sustain: float,
+    release_ms: float,
+    variant: dict[str, float],
+) -> np.ndarray:
+    """ADSR envelope. Attack length is scaled by variant["attack_mult"]."""
+    attack_ms = attack_ms * float(variant.get("attack_mult", 1.0))
     a = max(1, int(attack_ms * SR / 1000))
     d = max(1, int(decay_ms * SR / 1000))
     r = max(1, int(release_ms * SR / 1000))
@@ -61,13 +71,13 @@ def _adsr(n: int, attack_ms: float, decay_ms: float, sustain: float, release_ms:
     return env[:n]
 
 
-def _make_bed(seed: int = 42) -> np.ndarray:
+def _make_bed(variant: dict[str, float], seed: int = 42) -> np.ndarray:
     """Continuous tonal bed — two slowly-modulated voices, deterministic.
 
-    Amplitude scaled by the current variant's bed_amp. Returns silence if bed
-    is disabled (clean variant).
+    Amplitude scaled by variant["bed_amp"]. Returns silence if bed is disabled
+    (clean variant).
     """
-    amp = float(_VARIANT.get("bed_amp", 0.0))
+    amp = float(variant.get("bed_amp", 0.0))
     total = int(DURATION * SR)
     if amp <= 0.0:
         return np.zeros(total, dtype=np.float32)
@@ -100,12 +110,17 @@ def _place_impulses(
     return np.sort(np.clip(base + jitter_s, 0.0, duration - 0.1))
 
 
-def sine_impulses(onsets: np.ndarray, freq_hz: float = 440.0, length_ms: float = 120.0) -> np.ndarray:
+def sine_impulses(
+    onsets: np.ndarray,
+    variant: dict[str, float],
+    freq_hz: float = 440.0,
+    length_ms: float = 120.0,
+) -> np.ndarray:
     """Pure sine tone impulses — cleanest possible tonal attack."""
     total = int(DURATION * SR)
     out = np.zeros(total, dtype=np.float32)
     n = int(length_ms * SR / 1000)
-    env = _adsr(n, attack_ms=5, decay_ms=20, sustain=0.4, release_ms=80)
+    env = _adsr(n, attack_ms=5, decay_ms=20, sustain=0.4, release_ms=80, variant=variant)
     t = np.arange(n, dtype=np.float32) / SR
     tone = np.sin(2 * np.pi * freq_hz * t).astype(np.float32) * env
     for t_sec in onsets:
@@ -115,7 +130,9 @@ def sine_impulses(onsets: np.ndarray, freq_hz: float = 440.0, length_ms: float =
     return out
 
 
-def saw_chord_stabs(onsets: np.ndarray, root_hz: float = 220.0) -> np.ndarray:
+def saw_chord_stabs(
+    onsets: np.ndarray, variant: dict[str, float], root_hz: float = 220.0
+) -> np.ndarray:
     """Detuned sawtooth chord stabs — trance/house EDM synth character."""
     total = int(DURATION * SR)
     out = np.zeros(total, dtype=np.float32)
@@ -123,7 +140,7 @@ def saw_chord_stabs(onsets: np.ndarray, root_hz: float = 220.0) -> np.ndarray:
     ratios = [1.0, 5 / 4, 3 / 2, 2.0]
     detunes = [1.0, 1.007, 0.993, 1.003]
     n = int(0.25 * SR)
-    env = _adsr(n, attack_ms=8, decay_ms=120, sustain=0.3, release_ms=100)
+    env = _adsr(n, attack_ms=8, decay_ms=120, sustain=0.3, release_ms=100, variant=variant)
     t = np.arange(n, dtype=np.float32) / SR
     stab = np.zeros(n, dtype=np.float32)
     for ratio in ratios:
@@ -132,7 +149,11 @@ def saw_chord_stabs(onsets: np.ndarray, root_hz: float = 220.0) -> np.ndarray:
             # Band-limited saw via harmonic sum (first 6 partials)
             for k in range(1, 7):
                 stab += np.sin(2 * np.pi * f * k * t).astype(np.float32) / k
-    stab = (stab / stab.max()) * env * 0.6
+    peak = float(np.abs(stab).max())
+    if peak > 0.0:
+        stab = (stab / peak) * env * 0.6
+    else:
+        stab = stab * env * 0.0
     for t_sec in onsets:
         start = int(t_sec * SR)
         end = min(total, start + n)
@@ -140,12 +161,14 @@ def saw_chord_stabs(onsets: np.ndarray, root_hz: float = 220.0) -> np.ndarray:
     return out
 
 
-def detuned_lead(onsets: np.ndarray, freq_hz: float = 330.0) -> np.ndarray:
+def detuned_lead(
+    onsets: np.ndarray, variant: dict[str, float], freq_hz: float = 330.0
+) -> np.ndarray:
     """Aggressive monophonic synth lead — dubstep/riddim style."""
     total = int(DURATION * SR)
     out = np.zeros(total, dtype=np.float32)
     n = int(0.18 * SR)
-    env = _adsr(n, attack_ms=3, decay_ms=40, sustain=0.5, release_ms=50)
+    env = _adsr(n, attack_ms=3, decay_ms=40, sustain=0.5, release_ms=50, variant=variant)
     t = np.arange(n, dtype=np.float32) / SR
     v1 = np.sign(np.sin(2 * np.pi * freq_hz * t))  # square
     v2 = np.sign(np.sin(2 * np.pi * freq_hz * 1.01 * t))  # detuned sq
@@ -158,8 +181,13 @@ def detuned_lead(onsets: np.ndarray, freq_hz: float = 330.0) -> np.ndarray:
     return out
 
 
-def harmonic_stack(onsets: np.ndarray, root_hz: float = 261.6) -> np.ndarray:
+def harmonic_stack(
+    onsets: np.ndarray, variant: dict[str, float], root_hz: float = 261.6
+) -> np.ndarray:
     """Piano-like exponentially-decaying harmonic stack."""
+    # variant is unused here (no ADSR / bed), but we accept it uniformly so
+    # the generator dispatch table below can treat every function identically.
+    del variant
     total = int(DURATION * SR)
     out = np.zeros(total, dtype=np.float32)
     n = int(0.6 * SR)
@@ -168,7 +196,9 @@ def harmonic_stack(onsets: np.ndarray, root_hz: float = 261.6) -> np.ndarray:
     voice = np.zeros(n, dtype=np.float32)
     for k, amp in enumerate([1.0, 0.5, 0.35, 0.2, 0.15, 0.1, 0.08, 0.06], start=1):
         voice += amp * np.sin(2 * np.pi * root_hz * k * t).astype(np.float32)
-    voice = (voice / np.abs(voice).max()) * decay * 0.5
+    peak = float(np.abs(voice).max())
+    if peak > 0.0:
+        voice = (voice / peak) * decay * 0.5
     for t_sec in onsets:
         start = int(t_sec * SR)
         end = min(total, start + n)
@@ -176,12 +206,14 @@ def harmonic_stack(onsets: np.ndarray, root_hz: float = 261.6) -> np.ndarray:
     return out
 
 
-def bass_note_attacks(onsets: np.ndarray, freq_hz: float = 55.0) -> np.ndarray:
+def bass_note_attacks(
+    onsets: np.ndarray, variant: dict[str, float], freq_hz: float = 55.0
+) -> np.ndarray:
     """Deep sub-bass stabs — low-frequency tonal impulses."""
     total = int(DURATION * SR)
     out = np.zeros(total, dtype=np.float32)
     n = int(0.35 * SR)
-    env = _adsr(n, attack_ms=15, decay_ms=80, sustain=0.5, release_ms=200)
+    env = _adsr(n, attack_ms=15, decay_ms=80, sustain=0.5, release_ms=200, variant=variant)
     t = np.arange(n, dtype=np.float32) / SR
     # Sine with a bit of second harmonic
     voice = (np.sin(2 * np.pi * freq_hz * t) + 0.3 * np.sin(2 * np.pi * freq_hz * 2 * t)).astype(
@@ -195,7 +227,9 @@ def bass_note_attacks(onsets: np.ndarray, freq_hz: float = 55.0) -> np.ndarray:
     return out
 
 
-def vocal_formants(onsets: np.ndarray, seed: int = 1) -> np.ndarray:
+def vocal_formants(
+    onsets: np.ndarray, variant: dict[str, float], seed: int = 1
+) -> np.ndarray:
     """Bandpass-filtered noise bursts — approximate vocal consonants.
 
     These are technically broadband but have tonal resonance, which is
@@ -207,7 +241,7 @@ def vocal_formants(onsets: np.ndarray, seed: int = 1) -> np.ndarray:
     total = int(DURATION * SR)
     out = np.zeros(total, dtype=np.float32)
     n = int(0.15 * SR)
-    env = _adsr(n, attack_ms=4, decay_ms=30, sustain=0.3, release_ms=80)
+    env = _adsr(n, attack_ms=4, decay_ms=30, sustain=0.3, release_ms=80, variant=variant)
     # Vocal formants approx (vowel "ah")
     sos = butter(4, [500, 2500], btype="bandpass", fs=SR, output="sos")
     for t_sec in onsets:
@@ -219,7 +253,9 @@ def vocal_formants(onsets: np.ndarray, seed: int = 1) -> np.ndarray:
     return out
 
 
-def sustained_pad_with_stabs(onsets: np.ndarray, stab_hz: float = 440.0) -> np.ndarray:
+def sustained_pad_with_stabs(
+    onsets: np.ndarray, variant: dict[str, float], stab_hz: float = 440.0
+) -> np.ndarray:
     """Chord pad held throughout, with synth stabs on top at onset times.
 
     Hardest case: the "non-onset" frames here still have tonal content.
@@ -235,53 +271,62 @@ def sustained_pad_with_stabs(onsets: np.ndarray, stab_hz: float = 440.0) -> np.n
     ).astype(np.float32) * 0.3
     # Slow amplitude modulation to avoid static spectrum
     pad *= 0.7 + 0.3 * np.sin(2 * np.pi * 0.2 * t_full)
-    stabs = saw_chord_stabs(onsets, root_hz=stab_hz)
+    stabs = saw_chord_stabs(onsets, variant=variant, root_hz=stab_hz)
     return (pad + stabs).astype(np.float32)
 
 
-GENERATORS = {
-    "sine_impulses_2hz": lambda: (
-        sine_impulses(_place_impulses(DURATION, 2.0, seed=1)),
+# Each generator takes (variant) and returns (audio, onset_times). Variant is
+# threaded through all audio synthesis — no module-level mutable state.
+GENERATORS: dict[str, "callable"] = {  # type: ignore[valid-type]
+    "sine_impulses_2hz": lambda v: (
+        sine_impulses(_place_impulses(DURATION, 2.0, seed=1), variant=v),
         _place_impulses(DURATION, 2.0, seed=1),
     ),
-    "sine_impulses_4hz": lambda: (
-        sine_impulses(_place_impulses(DURATION, 4.0, seed=2), freq_hz=660.0),
+    "sine_impulses_4hz": lambda v: (
+        sine_impulses(_place_impulses(DURATION, 4.0, seed=2), variant=v, freq_hz=660.0),
         _place_impulses(DURATION, 4.0, seed=2),
     ),
-    "saw_chord_stabs_2hz": lambda: (
-        saw_chord_stabs(_place_impulses(DURATION, 2.0, seed=3)),
+    "saw_chord_stabs_2hz": lambda v: (
+        saw_chord_stabs(_place_impulses(DURATION, 2.0, seed=3), variant=v),
         _place_impulses(DURATION, 2.0, seed=3),
     ),
-    "saw_chord_stabs_4hz": lambda: (
-        saw_chord_stabs(_place_impulses(DURATION, 4.0, seed=4), root_hz=165.0),
+    "saw_chord_stabs_4hz": lambda v: (
+        saw_chord_stabs(_place_impulses(DURATION, 4.0, seed=4), variant=v, root_hz=165.0),
         _place_impulses(DURATION, 4.0, seed=4),
     ),
-    "detuned_lead_3hz": lambda: (
-        detuned_lead(_place_impulses(DURATION, 3.0, seed=5)),
+    "detuned_lead_3hz": lambda v: (
+        detuned_lead(_place_impulses(DURATION, 3.0, seed=5), variant=v),
         _place_impulses(DURATION, 3.0, seed=5),
     ),
-    "harmonic_stack_2hz": lambda: (
-        harmonic_stack(_place_impulses(DURATION, 2.0, seed=6)),
+    "harmonic_stack_2hz": lambda v: (
+        harmonic_stack(_place_impulses(DURATION, 2.0, seed=6), variant=v),
         _place_impulses(DURATION, 2.0, seed=6),
     ),
-    "bass_note_attacks_2hz": lambda: (
-        bass_note_attacks(_place_impulses(DURATION, 2.0, seed=7)),
+    "bass_note_attacks_2hz": lambda v: (
+        bass_note_attacks(_place_impulses(DURATION, 2.0, seed=7), variant=v),
         _place_impulses(DURATION, 2.0, seed=7),
     ),
-    "vocal_formants_3hz": lambda: (
-        vocal_formants(_place_impulses(DURATION, 3.0, seed=8)),
+    "vocal_formants_3hz": lambda v: (
+        vocal_formants(_place_impulses(DURATION, 3.0, seed=8), variant=v),
         _place_impulses(DURATION, 3.0, seed=8),
     ),
-    "pad_with_stabs_2hz": lambda: (
-        sustained_pad_with_stabs(_place_impulses(DURATION, 2.0, seed=9)),
+    "pad_with_stabs_2hz": lambda v: (
+        sustained_pad_with_stabs(_place_impulses(DURATION, 2.0, seed=9), variant=v),
         _place_impulses(DURATION, 2.0, seed=9),
     ),
 }
 
 
-def write_track(name: str, audio: np.ndarray, onsets: np.ndarray, out_dir: Path, variant: str) -> None:
+def write_track(
+    name: str,
+    audio: np.ndarray,
+    onsets: np.ndarray,
+    out_dir: Path,
+    variant_name: str,
+    variant_params: dict[str, float],
+) -> None:
     """Mix in the variant's tonal bed, normalize, write audio + GT sidecar."""
-    bed = _make_bed()
+    bed = _make_bed(variant_params)
     # Bed must match audio length. _make_bed returns full-duration; audio may
     # be slightly shorter due to tail truncation in generators.
     n = min(len(audio), len(bed))
@@ -301,7 +346,7 @@ def write_track(name: str, audio: np.ndarray, onsets: np.ndarray, out_dir: Path,
                 "systems_succeeded": 1,
                 "total_systems": 1,
                 "tolerance_ms": 50,
-                "source": f"synthetic (analysis/generate_tonal_corpus.py, variant={variant})",
+                "source": f"synthetic (analysis/generate_tonal_corpus.py, variant={variant_name})",
             },
             indent=2,
         )
@@ -327,9 +372,8 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    _VARIANT.clear()
-    _VARIANT.update(VARIANTS[args.variant])
-    log.info("Variant %s: %s", args.variant, _VARIANT)
+    variant_params = VARIANTS[args.variant]
+    log.info("Variant %s: %s", args.variant, variant_params)
 
     names = list(GENERATORS)
     if args.tracks:
@@ -337,8 +381,8 @@ def main() -> int:
         names = [n for n in names if n in wanted]
     for name in names:
         log.info("Generating %s", name)
-        audio, onsets = GENERATORS[name]()
-        write_track(name, audio, onsets, args.out, args.variant)
+        audio, onsets = GENERATORS[name](variant_params)
+        write_track(name, audio, onsets, args.out, args.variant, variant_params)
     log.info("Wrote %d tracks (variant=%s) to %s", len(names), args.variant, args.out)
     return 0
 

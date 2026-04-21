@@ -172,7 +172,10 @@ def compare(
         diff = h - p
         mae = float(np.mean(np.abs(diff)))
         max_err = float(np.max(np.abs(diff)))
-        value_range = float(np.max(p) - np.min(p)) if np.ptp(p) > 0 else 1.0
+        # np.ptp was removed as an array method in numpy 2.0 and is being
+        # deprecated as a free function; use explicit max-min for stability.
+        p_range = float(np.max(p) - np.min(p))
+        value_range = p_range if p_range > 0 else 1.0
         rel_mae = mae / max(value_range, 1e-9)
         report[name] = {
             "mae": mae,

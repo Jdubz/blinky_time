@@ -428,6 +428,10 @@ def score_device_run(
         # GT onset) or non-onset, then accumulate per-signal sums + sums of
         # squares so we can compute std and Cohen's d in one pass. ref_onsets
         # is time-ordered by construction, so bisect is safe.
+        #
+        # Build frame_t / frame_vals in this same pass (instead of a second
+        # loop over signal_frames in the peak-mode block below) — same output,
+        # one fewer iteration over the full frame buffer per test run.
         signal_names = list(signal_frames[0].values.keys())
         onset_sum: dict[str, float] = {n: 0.0 for n in signal_names}
         onset_sqsum: dict[str, float] = {n: 0.0 for n in signal_names}
@@ -435,12 +439,16 @@ def score_device_run(
         non_sqsum: dict[str, float] = {n: 0.0 for n in signal_names}
         onset_count = 0
         non_count = 0
+        frame_t: list[float] = []
+        frame_vals: list[dict[str, float]] = []
 
         for f in signal_frames:
             ts_ms = f.timestamp_ms - audio_epoch_ms
             if ts_ms < 0:
                 continue
             t_sec = (ts_ms - latency_correction_ms) / 1000
+            frame_t.append(t_sec)
+            frame_vals.append(f.values)
             idx = bisect.bisect_left(ref_onsets, t_sec)
             near_onset = False
             for j in (idx - 1, idx):
@@ -499,16 +507,8 @@ def score_device_run(
         # For each GT onset, keep ONE sample per signal: the max value within
         # ±HYBRID_ONSET_WINDOW_SEC. Non-onset pool stays frame-level (reuses
         # non_sum / non_sqsum from above). Matches offline Phase 1 exactly.
+        # frame_t / frame_vals were populated during the frame-mode loop above.
         if non_count > 1 and len(ref_onsets):
-            # Organize frames by timestamp for binary-search window extraction.
-            frame_t: list[float] = []
-            frame_vals: list[dict[str, float]] = []
-            for f in signal_frames:
-                ts_ms = f.timestamp_ms - audio_epoch_ms
-                if ts_ms < 0:
-                    continue
-                frame_t.append((ts_ms - latency_correction_ms) / 1000)
-                frame_vals.append(f.values)
             peak_sum: dict[str, float] = {n: 0.0 for n in signal_names}
             peak_sqsum: dict[str, float] = {n: 0.0 for n in signal_names}
             peaks_collected = 0

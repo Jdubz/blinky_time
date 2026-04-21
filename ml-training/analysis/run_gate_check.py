@@ -102,7 +102,13 @@ def tp_fp_from_summary(job_data: dict) -> dict[str, dict[str, list[float]]]:
 
 
 def _pooled_cohens_d(mean_a, std_a, mean_b, std_b):
-    pooled = math.sqrt((std_a**2 + std_b**2) / 2.0) if (std_a or std_b) else 0.0
+    # Use explicit variance threshold rather than float truthiness (`std_a or
+    # std_b` treats tiny non-zero stds as truthy and 0.0 as falsy, which is
+    # not the same as "pooled variance is nonzero enough to divide by").
+    var_sum = std_a * std_a + std_b * std_b
+    if var_sum < 1e-24:
+        return 0.0
+    pooled = math.sqrt(var_sum / 2.0)
     if pooled < 1e-12:
         return 0.0
     return (mean_a - mean_b) / pooled

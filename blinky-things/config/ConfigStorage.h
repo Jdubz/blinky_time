@@ -293,7 +293,12 @@ public:
         float pulseMinLevel;
         float pulseOnsetFloor;
         float pulseNNGate;
-        float crestGateMin;    // v95: crest-factor gate threshold (Phase 2a). 0 = disabled.
+        // v95: crest-factor gate threshold (Phase 2a). Default 0 is intentional —
+        // the production config leaves the gate disabled because the b137
+        // sweep showed no F1 improvement on held-out data. Set >0 manually to
+        // suppress pulses whose current-frame raw crest is below the
+        // threshold; range validated to [0, 20] in ConfigStorage.cpp.
+        float crestGateMin;
 
         // (Percival ACF + comb filter bank removed v80)
         // (phaseCorrectRate removed v91 — PLP refactored to direct pattern interpolation)

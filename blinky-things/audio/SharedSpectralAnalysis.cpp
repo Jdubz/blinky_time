@@ -719,6 +719,11 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     constexpr int LAST = SpectralConstants::NUM_BINS;
     constexpr int N = LAST - FIRST;  // 127 for NUM_BINS=128
 
+    // Cache per-bin energy (|X|²) from the first loop so rolloff below does not
+    // recompute mag*mag. 127 floats = 508 bytes on stack — well within the
+    // nRF52840's ~32 KB stack budget.
+    float binEnergy[N];
+
     float weightedSum = 0.0f;    // Σ k · |X|
     float magSum = 0.0f;         // Σ |X|            (for centroid — unfloored)
     float energySum = 0.0f;      // Σ |X|²
@@ -729,6 +734,7 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     for (int i = FIRST; i < LAST; i++) {
         float mag = preWhitenMagnitudes_[i];
         float e = mag * mag;
+        binEnergy[i - FIRST] = e;
         weightedSum += i * mag;
         magSum += mag;
         energySum += e;
@@ -771,16 +777,15 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     }
 
     // Rolloff: first bin where cumulative |X|² ≥ 0.85 * total energy.
-    // Second pass — cheap since we know energySum; avoids a temp cumulative buffer.
+    // Reuses the energies cached in binEnergy[] from the first loop.
     if (energySum > 1e-10f) {
         float threshold = 0.85f * energySum;
         float cum = 0.0f;
         int rolloffBin = 0;
-        for (int i = FIRST; i < LAST; i++) {
-            float e = preWhitenMagnitudes_[i] * preWhitenMagnitudes_[i];
-            cum += e;
+        for (int j = 0; j < N; j++) {
+            cum += binEnergy[j];
             if (cum >= threshold) {
-                rolloffBin = i - FIRST;  // Python indexing: 0..N-1 excluding DC
+                rolloffBin = j;  // Python indexing: 0..N-1 excluding DC
                 break;
             }
         }
