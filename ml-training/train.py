@@ -25,7 +25,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
-from scripts.audio import compute_input_features, load_config
+from scripts.audio import (
+    compute_feature_indices,
+    compute_input_features,
+    load_config,
+    resolve_hybrid_features,
+)
 
 
 def _set_seeds(seed: int) -> torch.Generator:
@@ -66,13 +71,20 @@ class MemmapBeatDataset(Dataset):
     """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
     def __init__(self, x_path, y_path, y_teacher_path=None, max_features=None,
-                 hard_binary_threshold: float = 0.0):
+                 hard_binary_threshold: float = 0.0,
+                 feature_indices: list[int] | None = None):
         self.X = np.load(x_path, mmap_mode='r')
         self.Y = np.load(y_path, mmap_mode='r')
         self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
         self._empty_teacher = torch.empty(0)  # Shared placeholder (avoid per-sample alloc)
-        # Slice features if data has more channels than model expects
-        # (e.g., data has 52=mel+delta but model wants 26=mel only)
+        # Column-selection policy (precedence, strictest first):
+        #   1. feature_indices: explicit list of column indices to keep — used
+        #      by single-feature ablations (mel + one hybrid), where the first-N
+        #      slice can't pick a non-contiguous subset like [0..29, 32].
+        #   2. max_features: first-N slice — legacy path for mel-only or stacked
+        #      hybrid variants where the config's feature set is a prefix of
+        #      the stored columns.
+        self._feature_indices = feature_indices
         self._max_features = max_features
         # If > 0, binarize soft consensus targets at training time:
         # values > threshold → 1.0, else → 0.0. Published onset detectors
@@ -84,7 +96,9 @@ class MemmapBeatDataset(Dataset):
 
     def __getitem__(self, idx):
         x = torch.from_numpy(self.X[idx].copy()).float()
-        if self._max_features is not None and x.shape[-1] > self._max_features:
+        if self._feature_indices is not None:
+            x = x[..., self._feature_indices]
+        elif self._max_features is not None and x.shape[-1] > self._max_features:
             x = x[..., :self._max_features]
         y = torch.from_numpy(self.Y[idx].copy()).float()
         if self._hard_binary_threshold > 0:
@@ -610,16 +624,37 @@ def main():
     # Determine expected feature count from config (for slicing data with extra channels)
     expected_features = compute_input_features(cfg)
 
+    # Decide whether to use non-contiguous column selection (single-feature
+    # ablations) or the legacy first-N slice. When the config's hybrid set is
+    # a strict prefix of the stored set [flatness, raw_flux, crest, hfc], the
+    # legacy path works. Otherwise (e.g. config wants just 'crest'), we need
+    # explicit indices.
+    stored_hybrid_features = cfg.get("data", {}).get("stored_hybrid_features")
+    wanted_hybrids = resolve_hybrid_features(cfg)
+    use_indices = False
+    feature_indices: list[int] | None = None
+    if wanted_hybrids and stored_hybrid_features:
+        # Not a prefix of storage → need index-based selection.
+        if wanted_hybrids != stored_hybrid_features[: len(wanted_hybrids)]:
+            use_indices = True
+            feature_indices = compute_feature_indices(cfg, stored_hybrid_features)
+            print(f"  Feature indices: {feature_indices} "
+                  f"(mel + {wanted_hybrids} from storage {stored_hybrid_features})")
+
     hard_binary_threshold = cfg.get("labels", {}).get("hard_binary_threshold", 0.0)
     if hard_binary_threshold > 0:
         print(f"  Hard binary targets: y > {hard_binary_threshold} → 1.0")
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
-        y_teacher_path=teacher_train_path, max_features=expected_features,
+        y_teacher_path=teacher_train_path,
+        max_features=None if use_indices else expected_features,
+        feature_indices=feature_indices,
         hard_binary_threshold=hard_binary_threshold)
     val_ds = MemmapBeatDataset(
         data_dir / "X_val.npy", data_dir / "Y_val.npy",
-        y_teacher_path=teacher_val_path, max_features=expected_features,
+        y_teacher_path=teacher_val_path,
+        max_features=None if use_indices else expected_features,
+        feature_indices=feature_indices,
         hard_binary_threshold=hard_binary_threshold)
 
     # Validate data feature dimensions match expected
@@ -628,7 +663,7 @@ def main():
         print(f"FATAL: Data has {actual_features} features but model expects {expected_features}."
               f" Re-run data prep with matching config.", file=sys.stderr)
         sys.exit(1)
-    elif actual_features > expected_features:
+    elif actual_features > expected_features and not use_indices:
         print(f"  NOTE: Data has {actual_features} features, using first {expected_features}")
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")

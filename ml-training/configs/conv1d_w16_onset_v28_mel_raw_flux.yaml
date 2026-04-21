@@ -1,0 +1,63 @@
+# Conv1D W16 v28 variant — mel + raw_flux (single-feature ablation)
+#
+# Ablation to answer: does adding JUST the most-novel feature (raw_flux
+# R² vs mel = 0.19 — information mel can't predict) help vs mel-only?
+# raw_flux is the only temporal-derivative signal in the candidate set;
+# it carries attack-onset info that static-frame mel cannot encode.
+#
+# Input: 30 mel + raw_flux = 31 channels.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+  hybrid_features: [raw_flux]
+
+loss:
+  type: "asymmetric_focal"
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  # raw_flux is at storage column n_mels+1 = 31 (second hybrid slot). Dataset
+  # loader picks it via compute_feature_indices.
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+  stored_hybrid_features: [flatness, raw_flux, crest, hfc]
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v28_mel_raw_flux.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

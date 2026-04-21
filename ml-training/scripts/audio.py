@@ -401,6 +401,52 @@ def compute_input_features(cfg: dict) -> int:
     return n_mels
 
 
+def compute_feature_indices(cfg: dict, stored_hybrid_features: list[str] | None = None) -> list[int]:
+    """Return the column indices to read from stored X_{train,val}.npy.
+
+    Supports single-feature ablations where the stored dataset was prepared
+    with the full hybrid set (e.g. ['flatness', 'raw_flux', 'crest', 'hfc'])
+    but a training run only wants a subset (e.g. just 'crest'). Previous
+    slicing was `x[..., :N]` — first-N only — which couldn't pick a
+    non-contiguous subset like mel + crest.
+
+    Storage convention (see append_hybrid_features): columns are
+      [mel_0, ..., mel_{n_mels-1}, <stored_hybrid_features in order>]
+
+    If `stored_hybrid_features` is None we assume storage used the full
+    HYBRID_FEATURE_NAMES order (what v28 prep writes).
+
+    Returns a list of column indices into the stored matrix. Always includes
+    every mel band; adds one column per config-enabled hybrid feature.
+
+    Raises ValueError if a config-requested feature wasn't in storage.
+    """
+    n_mels = cfg["audio"]["n_mels"]
+    indices = list(range(n_mels))
+
+    features_cfg = cfg.get("features", {})
+    if features_cfg.get("use_delta", False) or features_cfg.get("use_band_flux", False):
+        # Delta / band-flux paths don't live in the shared processed_v28
+        # storage — they are computed by prep into a different dataset.
+        # Just return mel indices; caller's max_features check will catch
+        # any mismatch.
+        return indices
+
+    if stored_hybrid_features is None:
+        stored_hybrid_features = list(HYBRID_FEATURE_NAMES)
+
+    wanted = resolve_hybrid_features(cfg)
+    for name in wanted:
+        if name not in stored_hybrid_features:
+            raise ValueError(
+                f"Config requests hybrid feature '{name}' but storage only has "
+                f"{stored_hybrid_features}. Re-run prepare_dataset.py with that "
+                f"feature in hybrid_features, or drop it from the config."
+            )
+        indices.append(n_mels + stored_hybrid_features.index(name))
+    return indices
+
+
 def append_delta_features(mel: np.ndarray) -> np.ndarray:
     """Append first-order mel differences as additional input channels.
 
