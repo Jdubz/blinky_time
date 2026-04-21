@@ -644,3 +644,27 @@ export const batteryMetricsMetadata: Record<string, SettingMetadata> = {
     unit: '%',
   },
 };
+
+/**
+ * Scene-meaningful settings — the short list exposed in the fleet UI.
+ *
+ * Everything else in settingsMetadata is firmware tuning (audio gain, onset
+ * detection thresholds, BPM priors, etc.). The festival UI is for scenes, not
+ * diagnostics — diagnostics still work through /api/fleet/command free-text or
+ * the per-device serial console.
+ *
+ * When selecting a generator, only that generator's scene-visible settings
+ * appear in the panel. Hidden settings stay at firmware defaults.
+ */
+export const SCENE_VISIBLE_SETTINGS: Record<string, readonly string[]> = {
+  fire: ['intensitymax', 'bgintensity', 'windbase'],
+  water: ['w_intmax', 'w_bgintensity', 'w_windbase', 'w_spawnchance'],
+  lightning: ['l_intmax', 'l_branchchance', 'l_faderate'],
+  // Audio/diagnostic generator — no user-facing scene knobs.
+  audio: [],
+};
+
+export function isSceneVisible(generator: string, settingName: string): boolean {
+  const list = SCENE_VISIBLE_SETTINGS[generator];
+  return list ? list.includes(settingName) : false;
+}

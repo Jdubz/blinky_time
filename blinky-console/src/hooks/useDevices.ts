@@ -7,7 +7,7 @@
  * Also initializes same-origin server detection on first mount.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { deviceRegistry } from '../services/sources';
 import { detectSameOriginServer } from '../services/sources/BlinkyServerSource';
 import type { Device } from '../services/sources';
@@ -15,20 +15,23 @@ import type { BlinkyServerSource } from '../services/sources/BlinkyServerSource'
 
 export function useDevices() {
   const [devices, setDevices] = useState<Device[]>(deviceRegistry.list());
-  const serverSourceRef = useRef<BlinkyServerSource | null>(null);
+  // useState (not useRef) so the Fleet route re-renders when detection succeeds.
+  // With useRef the assignment never triggered a render and serverUrl stayed null
+  // even after the server had been detected and was streaming devices.
+  const [serverSource, setServerSource] = useState<BlinkyServerSource | null>(null);
 
   useEffect(() => {
-    // Subscribe to registry changes
     const unsubscribe = deviceRegistry.subscribe(setDevices);
 
-    // Auto-detect same-origin blinky-server on first mount
+    let detected: BlinkyServerSource | null = null;
     detectSameOriginServer(deviceRegistry).then(source => {
-      serverSourceRef.current = source;
+      detected = source;
+      setServerSource(source);
     });
 
     return () => {
       unsubscribe();
-      serverSourceRef.current?.stop();
+      detected?.stop();
     };
   }, []);
 
@@ -36,6 +39,6 @@ export function useDevices() {
     devices,
     registry: deviceRegistry,
     /** URL of the active blinky-server, or null if no server source is active. */
-    serverUrl: serverSourceRef.current ? window.location.origin : null,
+    serverUrl: serverSource ? window.location.origin : null,
   };
 }

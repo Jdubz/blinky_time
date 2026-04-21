@@ -6,6 +6,12 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // Single-installation kiosk stack — we never want the console cached.
+      // `selfDestroying` generates a service worker that unregisters itself
+      // and wipes every cache on the next visit, so any kiosk that installed
+      // an older precaching SW cleans itself up without manual intervention.
+      // Manifest is still emitted for "Add to Home Screen" metadata only.
+      selfDestroying: true,
       registerType: 'autoUpdate',
       includeAssets: [
         'favicon.ico',
@@ -49,40 +55,15 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
-        // Precache essential shell assets including index.html for offline PWA.
-        // Includes PNG icons (PWA icons, favicons) so first offline load doesn't 404.
-        globPatterns: ['index.html', '**/*.{ico,png,woff2}'],
-        // Navigation fallback for SPA
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [
-          {
-            // Hashed app assets - CacheFirst since new deploys get new URLs
-            // Only match same-origin assets in /assets/ with content hashes
-            urlPattern: ({ url }) =>
-              url.origin === self.location.origin &&
-              /\/assets\/.*\.[a-f0-9]+\.(?:js|css)$/i.test(url.pathname),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'app-assets',
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
-              },
-            },
-          },
-        ],
-        cleanupOutdatedCaches: true,
-        skipWaiting: true,
-        clientsClaim: true,
-      },
-      // Dev options for testing
       devOptions: {
-        enabled: false, // Set to true to test PWA in dev mode
+        enabled: false,
       },
     }),
   ],
+  // Served same-origin behind the LemonCart Caddy at /devices/*, which
+  // reverse-proxies to blinky-server. Assets are referenced as /devices/assets/…
+  // so Caddy's handle_path strip resolves them back to blinky-server's root.
+  base: '/devices/',
   // Build output goes into blinky-server/web/ so a single server process
   // serves both the API (port 8420) and the SPA. See docs/DEVELOPMENT.md
   // for the dev workflow.

@@ -6,14 +6,26 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..device.manager import FleetManager
 from .deps import set_fleet
 
 log = logging.getLogger(__name__)
+
+
+class NoStoreMiddleware(BaseHTTPMiddleware):
+    """Single-installation kiosk stack — never cache anything."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
 
 @asynccontextmanager
@@ -65,17 +77,20 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(NoStoreMiddleware)
 
     # Import routers here to avoid circular imports
     from .routes_commands import router as commands_router
     from .routes_devices import router as devices_router
     from .routes_firmware import router as firmware_router
+    from .routes_scenes import router as scenes_router
     from .routes_testing import router as testing_router
     from .ws import router as ws_router
 
     app.include_router(devices_router, prefix="/api")
     app.include_router(commands_router, prefix="/api")
     app.include_router(firmware_router, prefix="/api")
+    app.include_router(scenes_router, prefix="/api")
     app.include_router(testing_router, prefix="/api")
     app.include_router(ws_router)
 
@@ -153,6 +168,5 @@ def _mount_frontend(app: FastAPI) -> None:
                 return FileResponse(target)
         except ValueError:
             pass
-        # no-cache ensures browsers fetch a fresh shell after UI deploys.
-        # Static assets (JS/CSS with content hashes) are cached normally.
-        return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
+        # Cache-Control: no-store is applied globally via NoStoreMiddleware.
+        return FileResponse(index_html)
