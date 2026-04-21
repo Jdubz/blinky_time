@@ -650,3 +650,84 @@ Possible outcomes:
 - No feature shows strong TP-vs-FP |d| → the NN is making its errors on genuinely ambiguous events, and no deterministic shape feature can save it. Path A is dead; move to Path B (retrain with new input features) or upstream content classification.
 
 The Phase 1 |d| ranking was correct about which features exist as signals, but measured the wrong class boundary for FP-reduction purposes. Keep it as a feature-existence ranking, not as a gate-readiness ranking.
+
+### Gate (b) result — b137 held-out, real TP-vs-FP — 2026-04-20
+
+Server validation extended with `persist_raw=true` (`/api/test/validate`
+body flag) so `raw_capture.signal_frames` and `raw_capture.transients`
+survive into the job JSON. Job `67325bff3b8b` ran all 25 GiantSteps LOFI
+held-out tracks across all four serial devices. Analysis script:
+`ml-training/analysis/run_gate_b.py`. Per-transient TP/FP labelling:
+±50 ms to nearest GT onset = TP, else FP. Feature value = nearest
+signal_frame within ±32 ms (= 2 firmware hops).
+
+**Population (pooled across 4 devices, 25 tracks):** 2953 TP, 8991 FP
+transients — consistent with held-out onset F1 = 0.398 (~25 % of NN
+firings match a GT onset).
+
+**Pooled TP-vs-FP |d|:**
+
+| signal | \|d\| | d (signed) | gate b (≥ 0.3) |
+|--------|-----:|-----------:|:--------------:|
+| flatness | 0.098 | +0.098 | ❌ |
+| centroid | 0.079 | +0.079 | ❌ |
+| raw_flux | 0.050 | +0.050 | ❌ |
+| crest    | 0.039 | +0.039 | ❌ |
+| hfc      | 0.016 | +0.016 | ❌ |
+| rolloff  | 0.009 | -0.009 | ❌ |
+
+Per-device |d| tops out at 0.17 (flatness on ABFBC41283E2). Every single
+candidate fails the 0.3 threshold by a large margin. This matches the
+Phase 4 Path A null result for crest gating and generalises it to every
+other candidate.
+
+**What this means for v28:**
+
+1. **Do not ship v28_4hybrid as configured.** Adding
+   `[flatness, raw_flux, crest, hfc]` to the NN input vector does not
+   give the model new information about when it's currently wrong.
+   Gate (e)'s +0.03 F1 threshold would (correctly) fail, and we'd have
+   spent GPU hours learning that.
+2. **v27-hybrid's existing `[flatness, raw_flux]` inputs are not the
+   leverage point either.** Their pooled |d| at firing moments is 0.10
+   and 0.05. Whatever lift they provided to v27 was not via
+   TP-vs-FP discrimination at decision time.
+3. **The NN's FP population is spectrally indistinguishable from its
+   TP population on these six deterministic shape features.** The
+   mistakes happen at moments that look like drum onsets by every
+   cheap magnitude-spectrum statistic we have. Whatever is different
+   between "drum hit" and "drum-like synth stab / vocal consonant
+   / chord change" is either (a) longer-time-scale than a single
+   frame, (b) context-dependent in a way that needs sequence memory,
+   or (c) not present in the magnitude spectrum at all (phase, mic
+   directionality, dynamics over seconds).
+
+**What to try instead:**
+
+- **Temporal context.** Widen the NN's input window (currently 16
+  frames ≈ 256 ms) to 32 or 48 frames. The argument: the difference
+  between a kick and a synth kick-drum stab might be what happens in
+  the preceding ~500 ms. Cheap experiment — only needs a window-size
+  sweep in the existing training pipeline.
+- **Onset-density priors.** A kick drum is rarely isolated — it
+  co-occurs with a snare or hi-hat within ~250 ms. Add a learned
+  feature that captures recent onset density; a false snare fired by
+  a vocal consonant would be isolated in time.
+- **Spectro-temporal learned features.** If a single-frame shape
+  feature can't discriminate, the answer may be to let the model
+  learn its own shape feature from a wider temporal receptive field.
+  A 2-layer Conv1D with kernel=5 and dilation=2 already does this;
+  going to dilation=4 or adding a third layer is the cheapest step.
+- **Stop adding deterministic features.** The Phase 4 Path A / Path B
+  investigation as originally framed is a dead end for *this* failure
+  mode (FP reduction on held-out real music). Further features will
+  fail the same gate (b) check until we identify a fundamentally
+  different discriminator.
+
+**Gate (b) is working as designed.** It killed a proposed experiment
+that would have wasted GPU time and produced no F1 gain. The 2–3
+hours spent building persist_raw + run_gate_b.py paid for themselves
+on the first run.
+
+Data: `ml-training/outputs/validation/holdout_67325bff3b8b_raw.json`,
+analysis: `ml-training/outputs/gate_b/b137_holdout/summary.{md,json}`.
