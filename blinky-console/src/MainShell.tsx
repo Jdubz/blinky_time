@@ -77,6 +77,13 @@ export function MainShell() {
 
   const handleEffectMode = async (mode: EffectMode) => {
     if (!dispatchEnabled) return;
+    // NOTE: this is a multi-command sequence (effect → speed/hue) which can
+    // half-apply if a later step fails — e.g. effect='hue' lands but the
+    // huespeed setting errors. Local UI state is only updated on the success
+    // path so the user sees they're back in the prior mode, but the device
+    // is left with effect='hue' and the old speed/hue. A clean rollback
+    // would require a "last known good" snapshot; for now the user can
+    // re-pick the desired mode to retry the full sequence.
     try {
       if (mode === 'off') {
         await targetSetEffect(target, 'none');

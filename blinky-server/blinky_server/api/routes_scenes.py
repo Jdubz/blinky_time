@@ -4,10 +4,17 @@ Endpoints are under ``/api/scenes`` (prefix added in app.py).
 
 Apply semantics: the scene's command sequence is sent via ``FleetManager.send_to_all``
 so every connected device gets the same configuration. Subset targeting isn't
-wired yet — add ``?device_ids=id1,id2`` when needed.
+wired yet - add ``?device_ids=id1,id2`` when needed.
+
+Security: scene names are used to derive on-disk filenames via ``slugify``
+(lowercased + non-alphanumerics->'-'). We validate the URL-path ``name``
+matches its slug so a crafted path like ``../../etc/passwd`` is rejected at
+the API boundary rather than relying on slugify's implicit normalisation.
 """
 
 from __future__ import annotations
+
+import re
 
 from fastapi import APIRouter, HTTPException
 
@@ -24,6 +31,26 @@ from .deps import get_fleet
 router = APIRouter(tags=["scenes"])
 
 
+# Accept a superset of slug chars (letters, digits, spaces, hyphen, underscore,
+# and a handful of punctuation) at the URL level. The resource identifier on
+# disk is always the slug; we reject anything that would slug-differ to force
+# clients to use consistent names. This also blocks path traversal (``/``,
+# ``..``) and NUL bytes.
+_NAME_RE = re.compile(r"^[\w][\w \-]{0,63}$")
+
+
+def _validate_name_or_404(name: str) -> None:
+    """Reject scene-name path params that don't look like scene names.
+
+    A 404 is preferred over 400 for security-sensitive input so probes can't
+    distinguish "invalid name" from "scene not found" - both return the same
+    shape. Length cap matches ``Scene.name`` (max_length=64) so we never
+    route a name the Pydantic model itself would reject.
+    """
+    if not _NAME_RE.match(name):
+        raise HTTPException(404, f"Scene not found: {name}")
+
+
 @router.get("/scenes")
 def scenes_list() -> list[Scene]:
     return list_scenes()
@@ -31,6 +58,7 @@ def scenes_list() -> list[Scene]:
 
 @router.get("/scenes/{name}")
 def scenes_get(name: str) -> Scene:
+    _validate_name_or_404(name)
     scene = get_scene(name)
     if scene is None:
         raise HTTPException(404, f"Scene not found: {name}")
@@ -39,7 +67,8 @@ def scenes_get(name: str) -> Scene:
 
 @router.put("/scenes/{name}")
 def scenes_put(name: str, body: Scene) -> Scene:
-    # URL name wins over body name — the URL is the resource identifier, and
+    _validate_name_or_404(name)
+    # URL name wins over body name - the URL is the resource identifier, and
     # enforcing consistency avoids accidentally saving under the wrong slug.
     scene = body.model_copy(update={"name": name})
     return save_scene(scene)
@@ -47,6 +76,7 @@ def scenes_put(name: str, body: Scene) -> Scene:
 
 @router.delete("/scenes/{name}")
 def scenes_delete(name: str) -> dict[str, bool]:
+    _validate_name_or_404(name)
     return {"deleted": delete_scene(name)}
 
 
@@ -66,6 +96,7 @@ async def scenes_apply(name: str) -> dict[str, object]:
     as an alias for ``results[-1].responses`` for backward compatibility
     with clients written against the prior single-step response.
     """
+    _validate_name_or_404(name)
     scene = get_scene(name)
     if scene is None:
         raise HTTPException(404, f"Scene not found: {name}")

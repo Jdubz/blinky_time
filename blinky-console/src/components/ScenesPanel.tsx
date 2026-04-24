@@ -99,6 +99,8 @@ export function ScenesPanel({
         method: 'POST',
       });
       onApplied(scene);
+      // No refresh() here: apply only dispatches commands to devices and
+      // doesn't mutate scene storage, so the list is already up to date.
       setError(null);
     } catch (e) {
       setError((e as Error).message);
