@@ -25,50 +25,50 @@ export function DeviceStrip({ devices, selectedId, onSelect, serverReachable }: 
     // <nav> is kept for landmark semantics.
     <nav className="device-strip" aria-label="Target selection">
       <div role="radiogroup" aria-label="Target selection" className="device-strip__group">
-      <button
-        type="button"
-        role="radio"
-        aria-checked={selectedId === null}
-        className={`device-strip__pill device-strip__pill--all ${
-          selectedId === null ? 'active' : ''
-        }`}
-        onClick={() => onSelect(null)}
-        disabled={!serverReachable}
-        title={
-          serverReachable
-            ? 'Apply to every connected device'
-            : 'Fleet mode requires blinky-server (same-origin)'
-        }
-      >
-        <span className="device-strip__label">All</span>
-        <span className="device-strip__count">
-          {connectedCount}/{totalCount}
-        </span>
-      </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={selectedId === null}
+          className={`device-strip__pill device-strip__pill--all ${
+            selectedId === null ? 'active' : ''
+          }`}
+          onClick={() => onSelect(null)}
+          disabled={!serverReachable}
+          title={
+            serverReachable
+              ? 'Apply to every connected device'
+              : 'Fleet mode requires blinky-server (same-origin)'
+          }
+        >
+          <span className="device-strip__label">All</span>
+          <span className="device-strip__count">
+            {connectedCount}/{totalCount}
+          </span>
+        </button>
 
-      {devices.map(d => {
-        const connected = d.isConnected();
-        const isSelected = selectedId === d.id;
-        return (
-          <button
-            key={d.id}
-            type="button"
-            role="radio"
-            aria-checked={isSelected}
-            className={`device-strip__pill ${isSelected ? 'active' : ''} ${
-              connected ? '' : 'device-strip__pill--offline'
-            }`}
-            onClick={() => onSelect(d.id)}
-            title={`${d.displayName} · ${connected ? 'connected' : 'offline'}`}
-          >
-            <span
-              className={`status-dot ${connected ? 'status-dot--on' : ''}`}
-              aria-hidden="true"
-            />
-            <span className="device-strip__label">{d.displayName}</span>
-          </button>
-        );
-      })}
+        {devices.map(d => {
+          const connected = d.isConnected();
+          const isSelected = selectedId === d.id;
+          return (
+            <button
+              key={d.id}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              className={`device-strip__pill ${isSelected ? 'active' : ''} ${
+                connected ? '' : 'device-strip__pill--offline'
+              }`}
+              onClick={() => onSelect(d.id)}
+              title={`${d.displayName} · ${connected ? 'connected' : 'offline'}`}
+            >
+              <span
+                className={`status-dot ${connected ? 'status-dot--on' : ''}`}
+                aria-hidden="true"
+              />
+              <span className="device-strip__label">{d.displayName}</span>
+            </button>
+          );
+        })}
       </div>
     </nav>
   );

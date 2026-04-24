@@ -170,6 +170,8 @@ describe('target dispatch — device mode', () => {
     await fn(deviceTarget(proto));
     // Double-cast via unknown because DeviceProtocol's type has no index
     // signature and tsc rejects the direct Record cast.
-    expect((proto as unknown as Record<string, ReturnType<typeof vi.fn>>)[method]).toHaveBeenCalledOnce();
+    expect(
+      (proto as unknown as Record<string, ReturnType<typeof vi.fn>>)[method]
+    ).toHaveBeenCalledOnce();
   });
 });

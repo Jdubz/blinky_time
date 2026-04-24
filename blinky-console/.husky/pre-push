@@ -24,6 +24,16 @@ while read local_ref local_sha remote_ref remote_sha; do
 
     cd blinky-console
 
+    # Format check first — cheapest, catches the issue firebase CI flagged
+    # on 2026-04-24 that wasn't in the hook before. Run before lint because
+    # lint errors in unformatted code are noisy; format fixes tend to shift
+    # line numbers and make lint output obsolete.
+    echo "🎨 Running format check..."
+    npm run format:check || {
+      echo "❌ Prettier format check failed. Run: cd blinky-console && npm run format"
+      exit 1
+    }
+
     echo "📝 Running lint..."
     npm run lint || exit 1
 

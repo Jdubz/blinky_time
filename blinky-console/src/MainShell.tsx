@@ -59,8 +59,7 @@ export function MainShell() {
     target = { kind: 'fleet' };
   }
 
-  const dispatchEnabled =
-    !deviceUnavailable && (target.kind === 'fleet' ? !!serverUrl : true);
+  const dispatchEnabled = !deviceUnavailable && (target.kind === 'fleet' ? !!serverUrl : true);
 
   // Every handler wraps dispatch in try/catch. Previously, a
   // SerialError(NOT_CONNECTED) or network error would bubble as an unhandled

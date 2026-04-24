@@ -31,7 +31,7 @@ export function useDevices() {
     let mounted = true;
     let detected: BlinkyServerSource | null = null;
     detectSameOriginServer(deviceRegistry).then(source => {
-      if (!source) return;  // detection failed; nothing to clean up
+      if (!source) return; // detection failed; nothing to clean up
       if (!mounted) {
         source.stop();
         return;

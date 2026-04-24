@@ -76,7 +76,18 @@ describe('ScenesPanel — save', () => {
     const fetchSpy = makeFetchQueue([
       { ok: true, json: [] }, // initial list
       { ok: true, json: { name: 'Movie Night' } }, // save
-      { ok: true, json: [{ name: 'Movie Night', generator: 'fire', effect_mode: 'rotate', effect_speed: 0.7, effect_hue: 0.2 }] }, // refresh
+      {
+        ok: true,
+        json: [
+          {
+            name: 'Movie Night',
+            generator: 'fire',
+            effect_mode: 'rotate',
+            effect_speed: 0.7,
+            effect_hue: 0.2,
+          },
+        ],
+      }, // refresh
     ]);
     vi.stubGlobal('fetch', fetchSpy);
     setup({
