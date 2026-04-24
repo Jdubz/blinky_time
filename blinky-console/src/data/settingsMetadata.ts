@@ -659,6 +659,15 @@ export const batteryMetricsMetadata: Record<string, SettingMetadata> = {
 export const SCENE_VISIBLE_SETTINGS: Record<string, readonly string[]> = {
   fire: ['intensitymax', 'bgintensity', 'windbase'],
   water: ['w_intmax', 'w_bgintensity', 'w_windbase', 'w_spawnchance'],
+  // FIXME: firmware registers the "lightning" generator's parameters under
+  // the `p_*` (plasma) prefix — `p_intmax`, `p_branchchance`, `p_faderate` —
+  // because lightning is implemented as a plasma-alias generator. Setting
+  // these via the UI with the `l_*` keys below silently no-ops on the
+  // device. Sliders are out of scope for the current scenes MVP, so the
+  // bad keys don't cause live harm, but the next person who wires per-
+  // generator sliders must switch to the `p_*` keys (and keep the
+  // settingsMetadata entries for both if parity with the definition list
+  // matters). Tracking in docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md.
   lightning: ['l_intmax', 'l_branchchance', 'l_faderate'],
   // Audio/diagnostic generator — no user-facing scene knobs.
   audio: [],

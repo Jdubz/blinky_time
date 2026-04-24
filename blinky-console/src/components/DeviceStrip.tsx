@@ -20,7 +20,11 @@ export function DeviceStrip({ devices, selectedId, onSelect, serverReachable }: 
   const totalCount = devices.length;
 
   return (
+    // Wrapping the radio-labeled buttons in an explicit radiogroup so screen
+    // readers announce them as a group rather than loose nav buttons. The
+    // <nav> is kept for landmark semantics.
     <nav className="device-strip" aria-label="Target selection">
+      <div role="radiogroup" aria-label="Target selection" className="device-strip__group">
       <button
         type="button"
         role="radio"
@@ -65,6 +69,7 @@ export function DeviceStrip({ devices, selectedId, onSelect, serverReachable }: 
           </button>
         );
       })}
+      </div>
     </nav>
   );
 }

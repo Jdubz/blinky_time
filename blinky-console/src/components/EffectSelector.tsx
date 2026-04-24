@@ -53,6 +53,37 @@ export function EffectSelector({
 
   const hueDegrees = Math.round(hue * 360);
 
+  // ARIA radio-group keyboard support. Arrow keys move selection cyclically;
+  // Home/End jump to ends. Committing via arrow keys matches native <input
+  // type="radio"> behaviour, which is what the role=radiogroup pattern
+  // promises screen-reader users.
+  const handleModeKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return;
+    const currentIdx = MODES.findIndex(m => m.id === mode);
+    if (currentIdx < 0) return;
+    let nextIdx: number | null = null;
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIdx = (currentIdx + 1) % MODES.length;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIdx = (currentIdx - 1 + MODES.length) % MODES.length;
+        break;
+      case 'Home':
+        nextIdx = 0;
+        break;
+      case 'End':
+        nextIdx = MODES.length - 1;
+        break;
+    }
+    if (nextIdx !== null) {
+      e.preventDefault();
+      onModeChange(MODES[nextIdx].id);
+    }
+  };
+
   return (
     <div className="effect-selector">
       <div className="selector-header">
@@ -61,20 +92,28 @@ export function EffectSelector({
       </div>
 
       <div className="effect-mode-segmented" role="radiogroup" aria-label="Effect mode">
-        {MODES.map(m => (
-          <button
-            key={m.id}
-            type="button"
-            role="radio"
-            aria-checked={mode === m.id}
-            className={`effect-mode-button ${mode === m.id ? 'active' : ''}`}
-            onClick={() => onModeChange(m.id)}
-            disabled={disabled}
-            title={m.description}
-          >
-            {m.label}
-          </button>
-        ))}
+        {MODES.map(m => {
+          const isSelected = mode === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              // Roving tabindex: only the selected radio is in the tab order.
+              // Arrow keys on the focused button then move focus + selection
+              // within the group, per the ARIA radio group pattern.
+              tabIndex={isSelected ? 0 : -1}
+              className={`effect-mode-button ${isSelected ? 'active' : ''}`}
+              onClick={() => onModeChange(m.id)}
+              onKeyDown={handleModeKeyDown}
+              disabled={disabled}
+              title={m.description}
+            >
+              {m.label}
+            </button>
+          );
+        })}
       </div>
 
       {mode === 'rotate' && (

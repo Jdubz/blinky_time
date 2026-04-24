@@ -54,11 +54,17 @@ def scenes_delete(name: str) -> dict[str, bool]:
 async def scenes_apply(name: str) -> dict[str, object]:
     """Apply a scene to every connected device.
 
-    Returns the per-device responses for the last command in the sequence
-    (callers already know the sequence — they only need to know which devices
-    reacted). Any earlier-command failures show up as 'error:' strings in
-    intermediate responses; apply doesn't abort on partial failure because a
-    half-applied state is worse than retrying.
+    Apply doesn't abort on partial failure because a half-applied state is
+    worse than retrying — but the response includes per-command per-device
+    results so callers can detect a device that rejected an intermediate
+    command (e.g. ``gen fire`` succeeds on device A but fails on device B,
+    then ``effect hue`` succeeds on both; without the full trace a client
+    would only see the successful last step).
+
+    Response shape: ``{scene, commands, results: [{command, responses:
+    {device_id: "ok"|"error: ...", ...}}, ...]}``. ``responses`` is kept
+    as an alias for ``results[-1].responses`` for backward compatibility
+    with clients written against the prior single-step response.
     """
     scene = get_scene(name)
     if scene is None:
@@ -66,7 +72,14 @@ async def scenes_apply(name: str) -> dict[str, object]:
 
     fleet = get_fleet()
     commands = scene_to_commands(scene)
-    final_result: dict[str, str] = {}
+    results: list[dict[str, object]] = []
     for cmd in commands:
-        final_result = await fleet.send_to_all(cmd)
-    return {"scene": scene.name, "commands": commands, "responses": final_result}
+        responses = await fleet.send_to_all(cmd)
+        results.append({"command": cmd, "responses": responses})
+    last_responses = results[-1]["responses"] if results else {}
+    return {
+        "scene": scene.name,
+        "commands": commands,
+        "results": results,
+        "responses": last_responses,  # backward-compat alias for prior callers
+    }

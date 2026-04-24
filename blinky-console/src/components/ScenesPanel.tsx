@@ -141,6 +141,10 @@ export function ScenesPanel({
           placeholder="Name the current look…"
           value={name}
           onChange={e => setName(e.target.value)}
+          // Backend Scene model enforces 1–64 via Pydantic and returns 422.
+          // Cap at the input so the user gets immediate visual feedback
+          // instead of a cryptic error after submit.
+          maxLength={64}
           disabled={disabled || busy !== null}
           onKeyDown={e => {
             if (e.key === 'Enter') void handleSave();

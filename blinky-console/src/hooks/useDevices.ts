@@ -23,13 +23,25 @@ export function useDevices() {
   useEffect(() => {
     const unsubscribe = deviceRegistry.subscribe(setDevices);
 
+    // Guard against the effect cleanup running before detectSameOriginServer
+    // resolves. Without `mounted`, a late-arriving source would:
+    //   1. call setServerSource on an unmounted component (React warning), and
+    //   2. keep polling forever because the cleanup ran when `detected` was
+    //      still null (so the cleanup branch never stopped it).
+    let mounted = true;
     let detected: BlinkyServerSource | null = null;
     detectSameOriginServer(deviceRegistry).then(source => {
+      if (!source) return;  // detection failed; nothing to clean up
+      if (!mounted) {
+        source.stop();
+        return;
+      }
       detected = source;
       setServerSource(source);
     });
 
     return () => {
+      mounted = false;
       unsubscribe();
       detected?.stop();
     };

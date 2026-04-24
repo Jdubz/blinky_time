@@ -1,12 +1,12 @@
 import contextlib
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -18,13 +18,21 @@ log = logging.getLogger(__name__)
 
 
 class NoStoreMiddleware(BaseHTTPMiddleware):
-    """Single-installation kiosk stack — never cache anything."""
+    """Single-installation kiosk stack — never cache anything.
 
-    async def dispatch(self, request: Request, call_next):
+    ``Cache-Control: no-store`` is sufficient for everything this stack
+    talks to. ``Pragma: no-cache`` (HTTP/1.0) and ``Expires: 0`` (pre-RFC-
+    7234) were stripped 2026-04-24 as they were redundant and the kiosks
+    don't talk to HTTP/1.0 proxies.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
         return response
 
 
