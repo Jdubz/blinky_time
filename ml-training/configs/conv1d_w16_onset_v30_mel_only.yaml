@@ -1,0 +1,67 @@
+# Conv1D W16 v30 — mel-only, trained on broader onset_consensus labels
+#
+# v28/v29 showed on-device P capped at ~0.38 regardless of loss function.
+# Thread 1 investigation on 2026-04-23 traced this to training-label
+# contamination: kick_weighted_drums uses librosa.onset_detect on
+# bandpass-filtered demucs drum stems, which bleed substantial tonal
+# content on electronic music (32% of tracks have >0.7x bleed ratio).
+# The model learns to fire on those same tonal signatures at inference,
+# producing FPs on synth stabs and chord changes.
+#
+# v30 trains on `onsets_consensus` — 5-system acoustic onset consensus
+# computed on the full mix (no stem separation, no bleed). The NN now
+# detects "any musical transient" rather than "kick + snare." Firmware-
+# level PLP beat-grid AND-gate (task #69) handles the rhythmic filtering
+# downstream, matching VISUALIZER_GOALS §3.
+#
+# Single change from v29: labels_type.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  pos_weight: 0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v30"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v30_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

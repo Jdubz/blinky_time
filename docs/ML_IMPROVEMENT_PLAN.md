@@ -1,8 +1,316 @@
 # ML Training Improvement Plan
 
-> **F1-evaluation caveat (2026-04-20).** Every F1 number in this document was measured on the 18 tracks in `blinky-test-player/music/edm/`. All 18 are inside the v27-hybrid training corpus (14 train, 4 val, 0 held out). Current F1 numbers are upper bounds — realistic eval requires a held-out EDM test split. See `docs/HYBRID_FEATURE_ANALYSIS_PLAN.md` "Training-set contamination" for action items.
+> **2026-04-24 audit**: v30's on-device failure triggered a deep audit of the entire audio analysis stack. 24 findings across training data prep, training loop, TFLite export, firmware audio path, and validation observability. Detailed in `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md`. Fix plan tracked as tasks #77-#88. Key items that would have caught v30 automatically: activation-distribution logging (training + validation), peak-picked val F1, FP32 output quantization investigation.
 
-## Background
+> **Corpus framing (2026-04-23).** The **primary** evaluation corpus is now `blinky-test-player/music/edm/` (18 tracks, deployment-representative: afrobeat, amapiano, breakbeat, dnb, dubstep, garage, reggaeton, techno, trance). The **secondary** corpus is `blinky-test-player/music/edm_holdout/` (25 GiantSteps LOFI tracks — hard/adversarial content where VISUALIZER_GOALS §5 says organic mode is the correct response).
+>
+> edm/ tracks were byte-identical with training audio through v29. v30 is the first model prepared with both `--exclude-dir ../edm` **and** `--exclude-dir ../edm_holdout`, making both corpora clean held-out sets. A single-valued `--exclude-dir` argparse bug (fixed 2026-04-23) previously silently dropped one of the two exclusions.
+>
+> **Pre-v30 F1 numbers on edm/ are training-contaminated upper bounds.** The v29 "ungated baseline on edm/" recorded in this doc (P=0.55, F1=0.547) is the cleanest pre-fix deployment-representative number we have; interpret with a contamination discount until v30 results replace it.
+
+## 2026-04-22 — focal-loss regression + v29 reset
+
+**Short version.** The last three model generations (v26, v27-hybrid, v28_mel_only) all have ~0.25 val precision / ~0.97 recall. Investigation traced this to a loss-function change at v26. Fix is a revert on a single new config (`v29_mel_only`). No hardware or label-pipeline changes required.
+
+### The regression
+
+Precision across historical runs (val set, frame-level, threshold 0.5):
+
+| Run | Loss | P | R | F1 |
+|-----|------|---|---|----|
+| v21-mel80 | `bce` | **0.47** | 0.67 | **0.55** |
+| v23-micprofile | `bce` | 0.42 | 0.62 | 0.50 |
+| v26-focal | `asymmetric_focal γ-=4` | 0.23 | 0.99 | 0.37 |
+| v27-hybrid | `asymmetric_focal γ-=4` | 0.27 | 0.95 | 0.42 |
+| v28_mel_only | `asymmetric_focal γ-=4` | 0.25 | 0.97 | 0.39 |
+
+v21/v23 used plain weighted BCE. v26 switched to `asymmetric_focal` (Imoto & Mishima 2022) with `gamma_neg=4.0`. Precision halved immediately; recall saturated near 1.0. Every subsequent model inherited the same loss.
+
+### Why it broke
+
+Two cascading configuration issues:
+
+**1. Label inflation** — training log shows `Positive ratio: 0.2102`. Measured directly on `Y_train.npy`:
+
+| Y value | % of frames |
+|---------|------------:|
+| 0.00 (silence) | 78.79% |
+| 0.25 (±1 neighbor of an onset) | 14.06% |
+| 1.00 (onset center) | 7.15% |
+
+With `hard_binary_threshold: 0.1`, the 14.06% of 0.25-valued neighbor frames get promoted to 1.0 → 21% positive rate. True onset centers are only 7.15%. Each onset thus produces a 3-frame-wide positive plateau.
+
+**2. Loss misconfigured for this label density** — `asymmetric_focal` with `gamma_neg=4.0` downweights easy negatives by `(1-p)^4`. Safe at <1% positive rate (what the paper assumed); catastrophic at 21%. The loss surface has almost no gradient telling the model "don't fire here" for the vast majority of non-onset frames. Combined with `pos_weight` auto-set to 3.8× on positives, training drives outputs high everywhere.
+
+Val metric compounds the confusion: P/R is computed frame-by-frame at sigmoid > 0.5, not at peak-picked firings. A 3-wide plateau + a 3-wide label region can look like "lots of TPs and FPs" in the frame count even when on-device peak-picking would collapse them correctly. But gate (b) analysis (HYBRID_FEATURE_ANALYSIS_PLAN.md §"Gate (b) result — b137 held-out") measured **2953 TP / 8991 FP** peak-picked firings on v27 → 24.7% device-level precision, matching the val number. Peak-picking wasn't saving us; the model is genuinely firing 4× too often.
+
+### What is NOT broken
+
+Checked and ruled out during the investigation:
+
+- **Dedup.** Labels still have 0 close pairs <15 ms across 30 random tracks. Median 5.24 onsets/sec is genuine drum density.
+- **Label source.** `generate_kick_weighted_targets.py` runs librosa `onset_detect` on bandpass-filtered drum stems (kick <200 Hz, snare 200-4000 Hz, hihat >4000 Hz). `merge_tol=0.03s` dedupes cross-band firings. Hihats weighted 0 → excluded. Kicks + snares weighted 1.0.
+- **Frame rate math.** 4.88 non-hihat onsets/sec × 1 frame / 62.5 Hz = 7.8% positive, matches the 7.15% measured at `y > 0.5`.
+- **Dataset/feature pipeline** (audit during v28 prep). Mel bands, hybrid-feature storage, augmentation, feature-index selection all verified.
+
+### v29 fix
+
+Single new config `configs/conv1d_w16_onset_v29_mel_only.yaml`, three changes from v28:
+
+| Field | v28 | v29 |
+|-------|-----|-----|
+| `loss.type` | `asymmetric_focal` | `bce` |
+| `labels.neighbor_weight` | 0.25 | 0.0 |
+| `labels.hard_binary_threshold` | 0.1 | 0.5 |
+
+Result: sharp 1-frame labels, ~7% positive rate, auto `pos_weight` ~13×, plain weighted BCE. Matches the v21/v23 recipe that produced P=0.47.
+
+Data reuse: config points at the existing `processed_v28` directory. The `neighbor_weight` and `hard_binary_threshold` settings apply at load time (not at prep time), so no re-prep is needed. ~11 h retrain on the current GPU.
+
+Expected: val P ≈ 0.45, F1 ≈ 0.55, on-device FP rate roughly 1/3 of v27.
+
+### v28_mel_only held-out results (25 tracks × 4 devices, 2026-04-22)
+
+Peak-picked, 100 ms tolerance against `.beats.json` ground truth on `blinky-test-player/music/edm_holdout/`:
+
+| Metric | v27-hybrid (prior) | v28_mel_only | Δ |
+|--------|-------------------:|-------------:|---:|
+| Mean F1 (100 ms tol) | 0.398 | **0.489** | +0.091 |
+| Mean precision | 0.247 | **0.381** | +0.134 |
+| Mean recall | ~0.95 | 0.754 | −0.20 |
+| FP per TP | 3.04 | **1.63** | −1.41 |
+| F1 @ 50 ms | — | 0.337 | — |
+| Mean latency | — | +7 ms (median +9 ms) | — |
+
+**This is the largest F1 jump on held-out we've ever measured — and it came from *removing* the v27 hybrid features (flatness, raw_flux), not from changing the loss or the labels.** v28_mel_only uses the same broken focal loss as v27; the +0.09 F1 / +0.13 P gain is entirely attributable to the mel-only input.
+
+Implication: the v27-hybrid add of `[flatness, raw_flux]` — which went in without a mel-only ablation — was a **regression**, consistent with the gate-c finding that flatness has R² = 0.85 vs mel (the NN was being fed ~85%-redundant information as an extra channel). This validates `HYBRID_FEATURE_ANALYSIS_PLAN.md`'s §"Don't stack without ablation" warning retroactively.
+
+Device variance (4 physically identical XIAO nRF52840 Sense):
+
+| device | P | R |
+|--------|---:|---:|
+| 062CBD12EB69 | 0.37 | **0.90** |
+| 2A798EF8E684 | 0.37 | 0.79 |
+| 659C8DD3ADF8 | 0.39 | 0.69 |
+| ABFBC41283E2 | 0.40 | **0.64** |
+
+Recall spread of 26 pp across identical hardware is mic / enclosure sensitivity, not a training problem. Track as a separate calibration task.
+
+Best → worst track spread: F1 0.69 (3642438.LOFI, four-on-the-floor techno) → F1 0.26 (210560.LOFI, sparse). Sparse-percussion failure mode is not addressed by v29.
+
+Raw artifact: `/tmp/val_v28_mel_only.json` (full job object, blinkyhost job `bc7d2c080561`). No `persist_raw:true` capture this run — re-run with that flag if we want gate-b numbers on v28.
+
+### v29_mel_only held-out results (2026-04-23)
+
+After a false start that stacked loss + label changes in one config (killed at ep14 after F1 plateaued at 0.28), the correct single-variable experiment ran: **only** `loss.type: asymmetric_focal → bce`. All other v28 settings (neighbor_weight=0.25, hard_binary_threshold=0.1) kept identical.
+
+| metric | v27-hybrid | v28_mel_only | **v29_mel_only** |
+|--------|---:|---:|---:|
+| **Val F1** (frame) | 0.416 | 0.391 | **0.542** |
+| **Val P** (frame) | 0.266 | 0.245 | **0.467** |
+| **Held-out F1** (peak-picked) | 0.398 | 0.489 | **0.484** |
+| **Held-out P** (peak-picked) | 0.247 | 0.381 | **0.384** |
+| Held-out R | ~0.95 | 0.754 | 0.727 |
+| FP per TP | 3.04 | 1.63 | 1.61 |
+
+**The loss fix was val-metric cosmetic, not on-device real.** Peak-picking normalizes out the "focal-broad-plateau" vs "BCE-sharp-peak" output-shape difference. Same underlying discrimination → same on-device P. The v26 regression existed in val-set P/R but was invisible in on-device behavior once peak-picking collapsed plateaus.
+
+**The v27→v28 +0.091 F1 gain (removing hybrid features) was the actual lever** and it's locked in from v28 onward.
+
+### Disproven direction: wider input window
+
+Confirmed 2026-04-23 by reviewing past experiments. **Widening `window_frames` does nothing.**
+
+| Experiment | Input window | RF | Val F1 |
+|-----------|-------------|----|-------:|
+| v21-mel80 (baseline) | W16 = 256 ms | 9 frames = 144 ms | 0.552 |
+| exp-w32 | W32 = 512 ms | 9 frames = 144 ms | 0.468 |
+| exp-wide-48-48-32 | W32 = 512 ms | 11 frames = 176 ms | 0.481 |
+| exp-wide-w32 | W32 = 512 ms | 11 frames = 176 ms | 0.481 |
+
+`window_frames` is the input buffer — the *receptive field* (what the model actually uses at the current output frame) is set by `kernel_sizes × layers`. With `kernels=[5,5]`, the output depends on the last 9 input frames regardless of whether the buffer is 16 or 32. The extra frames in W32 input are *ignored by the convolutions*. The deeper 3-layer `[48,48,32]` variant buys only +2 RF frames at 2.4× the parameter count, with no measurable F1 gain.
+
+**Operational reasoning this direction is off the table:**
+
+1. **Onset identification needs transient info from 10-30 ms**, not 500 ms of history. More RF extends into the *past* (tail of the previous event), not the attack we're trying to detect.
+2. **Latency matters.** Each frame of extra RF is another frame of wait-before-firing. For LED-reactive visuals, a 50 ms vs 150 ms latency is visible to the human eye.
+3. **Inference cost.** Deeper models cost CPU cycles per frame. Shortening the window is on the long-term wishlist, not widening.
+
+Dilated Conv1D (configs exist: `deep.yaml`, `ds_tcn.yaml`, `wider_rf.yaml`) **was never actually trained** despite configs being present. Same reasoning applies — dilation extends RF into the past, which is precisely what this task doesn't need.
+
+### What could actually improve on-device precision at 0.38
+
+Gate-b's 2026-04-20 finding: at firing moments, no deterministic shape feature's |d| exceeds 0.10 between TPs and FPs. The NN is firing on events that look spectrally identical to onsets in the current 256 ms window. More RF won't help; dilation won't help; the information isn't there.
+
+Candidate directions (in descending expected impact, none yet tried):
+
+1. **Beat-phase prior as NN input** — firmware already tracks tempo via PLP/CBSS. Feeding "phase within the current beat" as a 1D scalar channel gives the NN a musical prior it cannot extract from raw mel. Rhythmic kicks on the grid score high; isolated FPs score low. One channel, no RF change.
+2. **Time-since-last-firing prior** — scalar input channel "ms since the previous onset we fired on." Rhythmic patterns have regular spacing; FPs are clustered or sparse. Captures isolated-vs-clustered directly.
+3. **Bass-band ratio feature** — mel band 0 (40-100 Hz) vs mel band 15 (400-800 Hz) ratio at the current frame. Kicks concentrate energy in <100 Hz; tonal events don't. Kept intra-frame (no RF impact).
+4. **Device-specific gain calibration** — the 26 pp recall spread across identical devices (062CBD R=0.89, ABFBC4 R=0.64 on v29) is mic/enclosure, not training. Worth a separate track.
+
+Characteristics these all share that the rejected directions don't: they add *discriminative information* at the onset moment rather than more context around it.
+
+### Blocks currently in flight
+
+1. **v28 single-feature ablation queue** (`v28_mel_crest`, `v28_mel_raw_flux`, `v28_mel_hfc`, `v28_mel_flatness`) — **cancelled.** F1 numbers measured against a broken baseline would be uninterpretable. See §"Gate (e) blocked — 2026-04-22" in HYBRID_FEATURE_ANALYSIS_PLAN.md.
+2. **v29_mel_only** — trained, deployed, held-out validated. Becomes the new production baseline, but does not improve on-device performance over v28_mel_only. Kept for code hygiene (correct loss) but not deployed.
+
+## 2026-04-23 — reframing the problem: work with the model, not against it
+
+After v29's on-device F1 came in effectively identical to v28 (loss fix was val-metric-only), a deeper investigation was triggered: *if the model genuinely cannot distinguish percussion from melodic impulses from deterministic shape features, how do we work with that constraint rather than fight it?*
+
+Four parallel research threads ran. Summary, then the plan.
+
+### Thread 1: Is the problem the labels?
+
+Current training-label pipeline:
+```
+full mix → demucs drum stem → bandpass (kick<200 Hz, snare 200-4000 Hz) → librosa onset_detect → label
+```
+
+**Finding: kick_weighted_drums labels are contaminated by demucs stem bleed.**
+
+- **32% of tracks have >0.7× bleed ratio** — substantial >200 Hz energy in the "drum" stem, typical for electronic music with 808s / sub-bass / tonal percussion where bass and kick are intentionally harmonically coupled (HTDemucs can't separate them cleanly on such content).
+- **Kick-band vs snare-band energy correlation is high** on 10% of tracks (>0.6) — when snare spikes, the kick band also spikes. The bandpass filter can't undo that coupling.
+- **2× the label density of consensus labels on the full mix** (152.8 events/track for kick_weighted vs 75.9 for consensus_v5). A clean drum stem + sparse kicks shouldn't produce 2× the onset count of a 7-system mix-level consensus.
+- **Track 000397** spot-check: labeled "kicks" show only **0.50 dB** low-frequency energy spike at the labeled frame — essentially noise-level, meaning the label fires on tonal artifacts that aren't real kicks in the mix.
+- **5.2% of tracks** (353/6,751) marked `skipped: true` for silent drum stems — failed separation, explicitly filtered. But passing the RMS check doesn't mean the separation was *clean*.
+
+**Mechanism that matches gate-b's null result.** The model learns to fire on the acoustic signatures its training labels call "kicks" — which include bleed artifacts that aren't actually percussion. At inference, the model continues firing on those same tonal signatures → FPs. Gate-b measured no shape feature separates TP from FP because at the label level, many "TPs" are mis-labeled tonal events that look spectrally identical to the "FPs." **Our 0.38 on-device precision is label-limited, not architecture-limited.**
+
+### Thread 2: Are better labels already on disk?
+
+Yes, partially.
+
+- `consensus_v5/` (6,993 files, freshest consensus dir): 7-system **metrical beat** consensus, ~2.2 onsets/sec. Sparse. Beat-level, not onset-level. Not what we want.
+- **`onsets_consensus/` (6,993 files): 5-system acoustic onset consensus on full mix, ~3.9 onsets/sec.** This IS what we want. Covers drums + melodic transients on the full mix, no stem separation, so no bleed artifacts.
+- Already used in v11-v19b training runs via `labels_type: "onset_consensus"`. v19-baseline got val P=0.28 F1=0.34 — lower-looking, but **not comparable** to kick_weighted val numbers (different task definition; broader target).
+
+### Thread 3: What about rhythmic filtering in firmware?
+
+Firmware already has everything needed.
+
+- **PLP/CBSS fully implemented** in `AudioTracker.cpp`. `getPlpPhase()`, `getPlpConfidence()`, `getPeriodicityStrength()`, `getPlpNNAgreement()` all available every frame.
+- **Three onset gates already exist** in `updatePulseDetection()`:
+  1. Bass-band energy gate (hi-hat suppression via inverse bass-ratio scaling)
+  2. PLP pattern bias (soft 30% threshold off-beat when `plpConfidence > 0.3`)
+  3. Crest-factor gate (disabled by default)
+- **Gate insertion point is clear at `AudioTracker.cpp:903`** — current fires when `signalPresence > pulseMinLevel AND isLocalMax AND cooldownOk AND crestOk`. A ±50 ms beat-grid AND-condition inserts cleanly here.
+- **ACF warmup takes ~1.6 s** (`ossCount >= 100` at 66 Hz); confidence EMA-smooths with half-life ~200 ms. Need `rhythmStrength > 0.2` guard to avoid suppressing startup and ambient/sparse content.
+- **No re-architecting required.** `plpPhase_` is updated every frame before `updatePulseDetection()` is called; the AND-gate is a pure logical condition.
+
+### Thread 4: Multi-channel instrument model
+
+Almost fully built, never deployed.
+
+- `labels_type: "instrument"` in `prepare_dataset.py` — works; produces `(n_frames, 3)` with channels = [kick, snare, hihat], each binary
+- `train.py` — handles multi-channel targets with per-channel auto `pos_weight` and per-channel loss via broadcasting
+- `FrameOnsetNN.h` — supports 1–4 output channels; extraction method `extractOutput(channel)` works
+- `export_tflite.py` — `num_output_channels` parameter wired end-to-end
+- `evaluate.py` — per-channel F1 scoring implemented
+- `v8.yaml` config exists with `num_output_channels: 3` — but **never trained**, no `outputs/v8/` directory
+- **Missing piece**: `AudioTracker::updatePulseDetection()` only reads channel 0. Adding multi-channel routing (kick→bass pulse, snare→mid flash, hihat→ignore) is 2-3 days of firmware integration.
+- **Total cost to ship**: 1-2 days ML + 2-3 days firmware = 3-5 days. **Depends on clean labels** — contaminated kick/snare labels hurt this path equally.
+
+### The plan, revised 2026-04-23 after gate experiment and corpus-exclusion fix
+
+#### v29 ungated baseline on edm/ (PRIMARY) — 2026-04-23
+
+Measured via `beatgridmin=0.0` branch of the threshold sweep on 18 edm/ tracks:
+
+| corpus | n | P | R | F1 | FP/TP |
+|--------|--:|--:|--:|---:|------:|
+| **edm/ (primary, representative)** | 18 | **0.55** | **0.58** | **0.547** | 0.82 |
+| edm_holdout (secondary, adversarial) | 25 | 0.38 | 0.73 | 0.484 | 1.61 |
+
+This is our real v29 number. edm/ precision is meaningfully higher than the edm_holdout number we'd been using for decisions (Δ = +0.17 P, +0.06 F1). The edm_holdout underestimates deployment performance, which is why VISUALIZER_GOALS §5 explicitly says low F1 on ambient/sparse content is often correct behavior.
+
+**Caveat:** v29 training included the 18 edm/ tracks (same-name, byte-identical audio leaked from prior corpus merge, see 2026-04-20 note in HYBRID_FEATURE_ANALYSIS_PLAN.md). The edm/ number above is training-contaminated. v30 is the first model prepared with a genuine exclude of edm/ and edm_holdout — its numbers will be the first clean primary-corpus measurement.
+
+#### ~~Step 1: firmware PLP AND-gate~~ — tried, empirically dead (2026-04-23)
+
+Built (b141, b142, b143), tunable `beatgridmin` exposed via SerialConsole, full threshold sweep on edm/ via `/api/test/param-sweep`:
+
+| beatgridmin | F1 on edm/ (18 tracks) |
+|------------:|-----------------------:|
+| **0.00 (disabled)** | **0.547** |
+| 0.10 | 0.350 |
+| 0.15 | 0.317 |
+| 0.20 | 0.310 |
+| 0.25 | 0.220 |
+| 0.30 | 0.236 |
+| 0.40 | 0.200 |
+
+**Every non-zero gate value regresses F1.** Diagnostic `plpAtTransient = 0.13-0.15`: the PLP pattern amplitude at the moment the NN fires is typically 13-15% (near pattern *minimum*, not peak). So any threshold ≥ 0.1 rejects most firings, including the true ones.
+
+Root cause: PLP's predicted accent position is not phase-aligned with actual kick onsets. Possible explanations include epoch-fold amplitude-range compression, bar-length ACF period with multiple accent positions per period, and simple timing offset between the subsystems. We don't need to isolate which — the outcome is the same: **the PLP beat grid is not reliable enough to gate NN firings on, at any threshold.**
+
+The hard AND-gate design was also fundamentally wrong for musical-change robustness: verse→chorus transitions have legitimate rhythmic shifts where PLP hasn't re-locked yet, and a hard gate would silence exactly those. Flexibility and adaptability are core system goals; hard thresholds are the opposite of that.
+
+Infrastructure is kept in place (tunable registered, code path present, default `beatGridPatternMin = 0`) so the gate can be re-tested if PLP ever gets a significant accuracy improvement. Do not ship enabled.
+
+#### ~~Step 1b: soft `patternBias` sweep~~ — deprioritised (2026-04-23)
+
+The existing soft `patternBias` (`AudioTracker.cpp:873-887`) uses the same `plpPulseValue_` with a 30% threshold increase at off-beat positions when confident. Given the gate sweep showed PLP and NN firings aren't aligned, raising the soft-bias coefficient would have the same directional bias. Parametric sweep deferred until PLP accuracy is measured.
+
+#### Step 2 (in flight, ~11 h training after prep): v30 on `onsets_consensus` labels
+
+Addresses the Thread 1 label-contamination finding directly. Config `configs/conv1d_w16_onset_v30_mel_only.yaml`:
+- `labels_type: "onset_consensus"` (5-system acoustic consensus on full mix)
+- `onset_consensus_dir: /mnt/storage/blinky-ml-data/labels/onsets_consensus`
+- Same loss (bce), same architecture (Conv1D W16 30 mel) as v29
+- `--exclude-dir ../edm --exclude-dir ../edm_holdout` (fixed argparse to accept both)
+
+**Product reframing**: v30 detects *any musical transient* on the full mix, not just kicks+snares on a bleed-contaminated drum stem. Consistent with VISUALIZER_GOALS §3: rhythmic filtering happens downstream in firmware; the NN's job is robust transient detection. Genre stabs, chord changes, and bass onsets now become TPs by definition, eliminating a large class of "FPs" that were really labelling errors.
+
+Target: edm/ F1 ≥ 0.60, P ≥ 0.55 (first clean held-out number).
+
+#### Step 3 (new priority): PLP-as-training-input (was Step 4)
+
+The gate experiment proved PLP is not usable as a post-filter. But the *concept* — "use rhythmic context to disambiguate TPs from FPs" — is still right. The correct implementation is to feed PLP features (phase + confidence + pulse value) as NN input channels rather than bolt them on as a post-filter. The NN learns per-sample when to trust them. Section changes handle gracefully: when PLP confidence drops, the NN can learn to ignore the PLP channel and fall back to mel-only reasoning. Flexibility and adaptability built in.
+
+Cost: 1-2 weeks. Requires porting the firmware's PLP/ACF math to Python for training-time parity (same gap-4 class of issue we had with flatness/flux). `librosa.beat.plp()` is NOT a drop-in — byte-parity with the firmware matters.
+
+Blocked on v30 result — if v30 alone reaches target on edm/, this may not be needed.
+
+#### Step 4 (contingency, formerly Step 3): v31 on madmom-only full-mix labels
+
+Only if v30 on `onsets_consensus` labels also shows contamination or low ceiling. Single-system madmom CNN onset detector on full mix, no stem separation. Existing `teacher_soft_dir` infrastructure can load madmom activations.
+
+#### Step 5 (contingency): multi-channel instrument model
+
+70% of infrastructure already built (see Thread 4). Missing piece is AudioTracker multi-channel routing (~2-3 days). Pursue only if Steps 2-4 don't reach the precision target on edm/.
+
+### Measurement instrumentation priorities
+
+1. **PLP accuracy measurement** via `persist_raw` — capture `plpPhase_`, `plpPulseValue_`, `plpConfidence_` every frame; correlate with ground-truth beat times. This is the prerequisite diagnostic for Step 3. If PLP has low accuracy vs ground truth, no treatment (gate OR training input) will salvage it.
+2. **Per-corpus per-device tiering** — report edm/ as primary F1, edm_holdout as secondary "does it degrade gracefully on hard content," never aggregate across corpora.
+3. **Gate-b re-run on v30** — re-execute `run_gate_b.py` on v30 firings once validated. If clean labels change the TP/FP populations, some shape feature might now discriminate where none did on v27.
+
+### Directions explicitly rejected
+
+- **Wider input window / deeper Conv1D / dilated conv.** Disproven and/or fundamentally mismatched with the 10-30 ms onset-identification constraint. See §"Disproven direction: wider input window" above.
+- **Hard PLP AND-gate (any form).** Disproven 2026-04-23 via full threshold sweep. See §"Step 1" above.
+- **More shape features as NN inputs.** Gate-b on v27 showed no deterministic shape feature separates TP from FP at firing moments. Re-evaluate only after v30 with clean labels gives a fresh gate-b measurement.
+- **Bigger model / more parameters.** Signal-discrimination bottleneck, not capacity bottleneck.
+
+### Current tasks tracking this plan
+
+- #69 PLP beat-grid AND-gate — done, disproven, infrastructure kept, default disabled
+- #70 Train v30 on onsets_consensus labels — prep re-running with both exclude-dir (argparse bug fixed 2026-04-23), training next
+- #71 Fallback: v31 madmom-only full-mix labels (blocked on 70)
+- #72 Fallback: multi-channel instrument model (blocked on 71)
+- *(new)* PLP-as-training-input — not yet a task; create once v30 result is in
+
+### Tool fixes landed 2026-04-23
+
+- `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
+- `prepare_dataset.py MIN_FREE_GB`: raised 50 → 200 to match actual merge-step footprint (final arrays 100-130 GB each, 1.2× buffer for merge).
+- `prepare_dataset.py --auto-clean-stale`: new flag auto-deletes stale `processed_v*` dirs and non-current mel cache entries in non-interactive mode. Previously interactive prompts silently skipped in tmux via `yes N`, letting 200+ GB of dead data persist and starving the merge step.
+
+## Background (historical — pre-v26, retained for context)
 
 Baseline model (W32 frame-level FC, 55K params, plain BCE loss) achieves:
 - Beat F1: 0.49 mean / 0.54 median on 18 EDM test tracks
@@ -21,9 +329,11 @@ within a bar.
 FC(832→64→32→2), 55K params, 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
 Cal63 mel calibration (-63 dB RMS). Consensus v5 labels (7-system).
 
-## Active Priority: Dual-Model Architecture
+## ~~Active Priority: Dual-Model Architecture~~ (superseded — 2026-04-22)
 
-**Status: TRAINING (March 15, 2026)**
+The dual-model plan below (W8 OnsetNN + W192 RhythmNN, March 15 2026) was not taken forward. Current production architecture is a single Conv1D W16 model (30 mel bands, 32-32 channels, k=5, 16-frame window ≈ 256 ms). See §"2026-04-22 — focal-loss regression + v29 reset" above for current state.
+
+**Status: TRAINING (March 15, 2026) — HISTORICAL**
 
 **Problem:** Single models can't serve both onset detection (needs short window, high precision,
 every frame) and downbeat detection (needs full-bar context, 3+ seconds). W192 FC was attempted

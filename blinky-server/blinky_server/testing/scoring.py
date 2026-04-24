@@ -18,15 +18,95 @@ from collections import defaultdict
 from typing import Any, NotRequired, TypedDict
 
 from .types import (
+    ActivationStats,
     DeviceRunScore,
     Diagnostics,
     GroundTruth,
+    LatencyHistogram,
     OffsetStats,
     OnsetTracking,
     PlpMetrics,
     SignalGapStats,
     TestData,
 )
+
+_LATENCY_BIN_EDGES = [-150, -100, -70, -50, -30, -10, 10, 30, 50, 70, 100, 150]
+
+
+def _compute_latency_histogram(offsets_ms: list[int]) -> LatencyHistogram | None:
+    """Bin per-detection offsets for T1.x observability.
+
+    Distinguishes tight jitter from bimodal outliers that the mean-only
+    report hides.
+    """
+    if len(offsets_ms) < 3:
+        return None
+    edges = _LATENCY_BIN_EDGES
+    labels: list[str] = []
+    for i, e in enumerate(edges):
+        if i == 0:
+            labels.append(f"(-inf,{e})")
+        else:
+            labels.append(f"[{edges[i - 1]},{e})")
+    labels.append(f"[{edges[-1]},+inf)")
+    counts = [0] * (len(edges) + 1)
+    for v in offsets_ms:
+        placed = False
+        for i, e in enumerate(edges):
+            if v < e:
+                counts[i] += 1
+                placed = True
+                break
+        if not placed:
+            counts[-1] += 1
+    s = sorted(offsets_ms)
+    n = len(s)
+    return LatencyHistogram(
+        bins_ms=labels,
+        counts=counts,
+        median=_js_round_int(s[n // 2]),
+        p25=_js_round_int(s[int(n * 0.25)]),
+        p75=_js_round_int(s[int(n * 0.75)]),
+    )
+
+
+def _compute_activation_stats(signal_frames: list[Any]) -> ActivationStats | None:
+    """Summarize raw NN activation distribution across the test run.
+
+    Catches pathologies like v30_mel_only's compressed output (std=0.15,
+    min=0.137) that were previously invisible in validation output — you
+    had to run offline TFLite inference to find them. Populating this here
+    makes the distribution visible in every validation result.
+    """
+    if not signal_frames:
+        return None
+    acts: list[float] = sorted(f.activation for f in signal_frames)
+    n = len(acts)
+    if n == 0:
+        return None
+    mean = sum(acts) / n
+    var = sum((a - mean) ** 2 for a in acts) / n
+    std = math.sqrt(var)
+
+    def _pct(p: float) -> float:
+        # Nearest-rank percentile; sufficient for monitoring.
+        # round() with no ndigits returns int directly — wrapping in int() is
+        # redundant (ruff RUF046).
+        idx = max(0, min(n - 1, round(p / 100.0 * (n - 1))))
+        return float(acts[idx])
+
+    return ActivationStats(
+        min=_js_round(acts[0], 4),
+        max=_js_round(acts[-1], 4),
+        mean=_js_round(mean, 4),
+        std=_js_round(std, 4),
+        p5=_js_round(_pct(5), 4),
+        p50=_js_round(_pct(50), 4),
+        p95=_js_round(_pct(95), 4),
+        p99=_js_round(_pct(99), 4),
+        frames=n,
+    )
+
 
 log = logging.getLogger(__name__)
 
@@ -586,6 +666,8 @@ def score_device_run(
             onset_rate=len(detections) / audio_duration_sec if audio_duration_sec > 0 else 0.0,
             onset_offset_stats=onset_offset_stats,
             onset_offsets=onset_offsets,
+            activation_stats=_compute_activation_stats(signal_frames),
+            latency_histogram=_compute_latency_histogram(onset_offsets),
         ),
         signals=signal_gaps,
         signal_frames_captured=len(signal_frames),
@@ -655,6 +737,38 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
                     "iqr": d.onset_offset_stats.iqr,
                 }
                 if d.onset_offset_stats
+                else None
+            ),
+            # Raw NN activation distribution — flags compressed-output pathologies
+            # (e.g., v30's std=0.15 vs v29's std=0.34) that used to require
+            # offline TFLite inference to detect. Populated from signal_frames.
+            "activationStats": (
+                {
+                    "min": d.activation_stats.min,
+                    "max": d.activation_stats.max,
+                    "mean": d.activation_stats.mean,
+                    "std": d.activation_stats.std,
+                    "p5": d.activation_stats.p5,
+                    "p50": d.activation_stats.p50,
+                    "p95": d.activation_stats.p95,
+                    "p99": d.activation_stats.p99,
+                    "frames": d.activation_stats.frames,
+                }
+                if d.activation_stats
+                else None
+            ),
+            # Per-detection latency distribution (T1.x observability). Separates
+            # tight-jitter from bimodal-outlier failure modes that the mean-only
+            # field in "timing" hides.
+            "latencyHistogram": (
+                {
+                    "bins": d.latency_histogram.bins_ms,
+                    "counts": d.latency_histogram.counts,
+                    "median": d.latency_histogram.median,
+                    "p25": d.latency_histogram.p25,
+                    "p75": d.latency_histogram.p75,
+                }
+                if d.latency_histogram
                 else None
             ),
         },

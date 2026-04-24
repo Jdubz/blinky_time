@@ -1,0 +1,71 @@
+# Conv1D W16 v31 — mel-only, onsets_consensus labels with bimodal binarization
+#
+# v30 on-device investigation (2026-04-24) showed the model's output dynamic
+# range is compressed (std 0.15 vs v29's 0.34; baseline 0.14 never reaches 0;
+# 99th pct 0.86 vs v29's 0.996) because onsets_consensus labels have continuous
+# strengths [0,1] and v30's hard_binary_threshold=0.1 produced inconsistent
+# label shape (strong 5/5 onsets become 3-frame plateaus; weak 1/5 onsets
+# single-frame; sub-0.1 dropped entirely). The model learned a soft
+# regression-like output that the firmware's first-difference peak-picker
+# cannot reliably pick — resulting in R=0.22 at any threshold sweep value.
+#
+# v31 keeps the broader-target onsets_consensus labels but hard-binarizes
+# aggressively so the training signal is bimodal and the learned output
+# returns to v29's sharp-peak geometry:
+#   - hard_binary_threshold: 0.05 (keeps everything above 1/20 consensus,
+#     ~99% of labeled onsets survive, all promoted to uniform 1.0)
+#   - neighbor_weight: 0.25 (matches v29's 3-frame plateau shape)
+#
+# Expected: v31 output distribution similar to v29 (sharp peaks near 1.0,
+# baseline near 0.0), with v30's broader target coverage (any musical
+# transient, not just kicks+snares). On-device F1 target: ≥ 0.50 on edm/.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.05
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  pos_weight: 0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v31"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v31_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

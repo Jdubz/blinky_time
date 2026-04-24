@@ -110,6 +110,10 @@ class TestSession:
                     timestamp_ms=ts_ms,
                     type="onset",
                     strength=data.get("strength", 0.0),
+                    # T1.4/T1.5: optional diagnostics (b145+ firmware only).
+                    # Gracefully None for older firmware.
+                    gate_mask=data.get("gateMask"),
+                    features=data.get("features"),
                 )
             )
         elif msg_type == "audio":

@@ -23,6 +23,65 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# mir_eval is used for val_peak_f1 (audit fix T1.3). Imported lazily in
+# _compute_peak_picked_f1 below so train.py can still start if mir_eval
+# is missing — peak-F1 logging is diagnostic, not required for training.
+try:
+    import mir_eval.onset as _mir_eval_onset
+    _HAVE_MIR_EVAL = True
+except ImportError:
+    _HAVE_MIR_EVAL = False
+
+
+def _peak_pick_1d(activations: np.ndarray, threshold: float,
+                  frame_rate: float, min_interval_s: float = 0.05) -> np.ndarray:
+    """Peak-picker copied from evaluate.py:_peak_pick (keep byte-identical).
+
+    Used by training-time val_peak_f1 so the training metric matches offline
+    evaluate.py. Min-interval 50 ms matches firmware tempo-adaptive cooldown
+    floor (40 ms) and mir_eval's ±50 ms onset tolerance window.
+    """
+    min_frames = int(min_interval_s * frame_rate)
+    peaks = []
+    last_peak = -min_frames
+    for i in range(1, len(activations) - 1):
+        if (activations[i] > threshold and
+                activations[i] >= activations[i - 1] and
+                activations[i] >= activations[i + 1] and
+                i - last_peak >= min_frames):
+            peaks.append(i / frame_rate)
+            last_peak = i
+    return np.array(peaks, dtype=np.float64)
+
+
+def _compute_peak_picked_f1(est_windows: list[np.ndarray],
+                            ref_windows: list[np.ndarray],
+                            frame_rate: float,
+                            threshold: float = 0.3) -> float:
+    """Peak-pick each (est, ref) 1-D pair and aggregate mir_eval F1.
+
+    Each pair is one val chunk's activation vs label window. Peaks are
+    indexed to per-chunk time (0 .. window_frames / frame_rate); we offset
+    each pair's peak times by a large-enough stride so that mir_eval can
+    match within a single concatenated event list without collisions.
+    """
+    if not _HAVE_MIR_EVAL or not est_windows:
+        return 0.0
+    stride = float(len(est_windows[0]) / frame_rate) * 2.0  # big gap between chunks
+    est_all: list[float] = []
+    ref_all: list[float] = []
+    for i, (est, ref) in enumerate(zip(est_windows, ref_windows, strict=True)):
+        offset = i * stride
+        est_peaks = _peak_pick_1d(est, threshold, frame_rate)
+        ref_peaks = _peak_pick_1d(ref, 0.5, frame_rate)  # label peaks
+        est_all.extend((est_peaks + offset).tolist())
+        ref_all.extend((ref_peaks + offset).tolist())
+    if not ref_all:
+        return 0.0
+    f1, _p, _r = _mir_eval_onset.f_measure(
+        np.array(ref_all), np.array(est_all), window=0.05)
+    return float(f1)
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
@@ -1134,6 +1193,29 @@ def main():
         val_fp = 0
         val_fn = 0
 
+        # Activation-distribution accumulators — added 2026-04-24 as part of
+        # audit fix T1.2. v30_mel_only trained to val_f1≈0.31 with no visible
+        # warning sign; offline TFLite inference later revealed compressed
+        # output (std=0.15, min=0.137 vs v29's std=0.34, min≈0). Logging these
+        # every epoch makes collapse detectable at training time instead of
+        # after export+flash+validate.
+        act_min = float("inf")
+        act_max = float("-inf")
+        act_sum = 0.0
+        act_sqsum = 0.0
+        act_count = 0
+        act_percentile_sample: list[float] = []  # populated from first batch only
+
+        # Peak-picked val F1 accumulator (audit T1.3). Holds the first N chunks'
+        # worth of (est, ref) 1-D windows so we can run peak-picking + mir_eval
+        # without keeping the entire 1.3M-chunk val set in memory. 256 chunks
+        # × 128 frames × one channel ≈ 130K samples — plenty statistical power
+        # for a per-epoch firmware-realistic metric.
+        peak_f1_chunks_kept = 0
+        peak_f1_est_windows: list[np.ndarray] = []
+        peak_f1_ref_windows: list[np.ndarray] = []
+        PEAK_F1_MAX_CHUNKS = 256
+
         with torch.no_grad():
             for X_batch, Y_batch, T_batch in val_loader:
                 X_batch = X_batch.to(device, non_blocking=True)
@@ -1172,6 +1254,35 @@ def main():
                 val_fp += (pred_pos & ~ref_pos).sum().item()
                 val_fn += (~pred_pos & ref_pos).sum().item()
 
+                # Activation distribution (first output channel). Accumulate
+                # min/max/sum/sqsum across all batches; save the first batch's
+                # values verbatim for percentile estimation (cheap — one batch
+                # = 4096*128 = ~524K samples, plenty for p5/p50/p95/p99).
+                act_ch = Y_pred[:, :, 0].detach()
+                batch_min = act_ch.min().item()
+                batch_max = act_ch.max().item()
+                if batch_min < act_min:
+                    act_min = batch_min
+                if batch_max > act_max:
+                    act_max = batch_max
+                act_sum += act_ch.sum().item()
+                act_sqsum += (act_ch * act_ch).sum().item()
+                act_count += act_ch.numel()
+                if not act_percentile_sample:
+                    act_percentile_sample = act_ch.flatten().cpu().tolist()
+
+                # Keep a bounded set of (est, ref) per-chunk windows for the
+                # peak-picked val F1 metric (audit T1.3). Grab first chunks
+                # we see until we have PEAK_F1_MAX_CHUNKS.
+                if peak_f1_chunks_kept < PEAK_F1_MAX_CHUNKS:
+                    est_np = act_ch.cpu().numpy()  # (B, T)
+                    ref_np = Y_batch[:, :, 0].detach().cpu().numpy()
+                    take = min(PEAK_F1_MAX_CHUNKS - peak_f1_chunks_kept, est_np.shape[0])
+                    for k in range(take):
+                        peak_f1_est_windows.append(est_np[k])
+                        peak_f1_ref_windows.append(ref_np[k])
+                    peak_f1_chunks_kept += take
+
         val_loss /= len(val_ds)
 
         # Abort immediately if model has diverged (NaN/Inf loss)
@@ -1185,18 +1296,61 @@ def main():
         val_recall = val_tp / max(val_tp + val_fn, 1)
         val_f1 = 2 * val_precision * val_recall / max(val_precision + val_recall, 1e-10)
 
+        # Peak-picked val F1 (audit T1.3). Compares against the same
+        # peak-picking pipeline the firmware uses, making this number a
+        # direct predictor of on-device F1. v30 had val_f1=0.31 (frame)
+        # which would have been ~0.22 peak-picked — visible regression.
+        frame_rate = cfg["audio"].get("frame_rate", 62.5)
+        val_peak_f1 = _compute_peak_picked_f1(
+            peak_f1_est_windows, peak_f1_ref_windows, frame_rate,
+            threshold=0.3)
+
+        # Activation distribution summary (audit T1.2 — catches output-compression
+        # collapse like v30 during training instead of after deployment).
+        if act_count > 0:
+            act_mean = act_sum / act_count
+            act_var = max(act_sqsum / act_count - act_mean * act_mean, 0.0)
+            act_std = math.sqrt(act_var)
+        else:
+            act_mean = act_std = 0.0
+        if act_percentile_sample:
+            s = sorted(act_percentile_sample)
+            def _p(p: float) -> float:
+                idx = max(0, min(len(s) - 1, int(round(p / 100.0 * (len(s) - 1)))))
+                return s[idx]
+            act_p5, act_p50, act_p95, act_p99 = _p(5), _p(50), _p(95), _p(99)
+        else:
+            act_p5 = act_p50 = act_p95 = act_p99 = 0.0
+        # Collapse warning — v30 tripped std=0.145. Below 0.15 is suspicious;
+        # below 0.10 almost certainly means the model learned a constant.
+        collapse_warn = ""
+        if act_std < 0.10:
+            collapse_warn = " ⚠ OUTPUT COLLAPSED"
+        elif act_std < 0.15:
+            collapse_warn = " ⚠ output std low (compression risk)"
+
         epoch_elapsed = time.time() - epoch_start
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1}/{epochs} - loss: {train_loss:.4f} - acc: {train_acc:.4f} "
               f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} "
               f"- P: {val_precision:.3f} R: {val_recall:.3f} F1: {val_f1:.3f} "
-              f"- lr: {current_lr:.2e} - {epoch_elapsed:.0f}s")
+              f"peak_F1: {val_peak_f1:.3f}"
+              f" - lr: {current_lr:.2e} - {epoch_elapsed:.0f}s")
+        print(f"  act: min={act_min:.3f} max={act_max:.3f} "
+              f"mean={act_mean:.3f} std={act_std:.3f} "
+              f"p5/50/95/99={act_p5:.2f}/{act_p50:.2f}/{act_p95:.2f}/{act_p99:.2f}"
+              f"{collapse_warn}")
 
         log_rows.append({
             "epoch": epoch + 1, "loss": train_loss, "binary_accuracy": train_acc,
             "val_loss": val_loss, "val_binary_accuracy": val_acc,
             "val_precision": val_precision, "val_recall": val_recall, "val_f1": val_f1,
+            "val_peak_f1": val_peak_f1,
             "lr": current_lr,
+            "val_act_min": act_min, "val_act_max": act_max,
+            "val_act_mean": act_mean, "val_act_std": act_std,
+            "val_act_p5": act_p5, "val_act_p50": act_p50,
+            "val_act_p95": act_p95, "val_act_p99": act_p99,
         })
 
         # Checkpointing

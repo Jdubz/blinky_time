@@ -1339,6 +1339,65 @@ def main():
     print(f"  Device RAM (heap): ~{total_ram_kb:.0f} KB (context {ctx_ram / 1024:.0f} KB + arena {rec_kb:.0f} KB)")
     print(f"  Device flash: {size_kb:.1f} KB (model weights, read-only)")
 
+    # T2.5 — activation distribution sanity check. Runs the exported TFLite
+    # model on a sample of val-set windows; prints min/max/mean/std of raw
+    # sigmoid output. Catches v30-class compressed-output pathologies AT
+    # EXPORT TIME instead of requiring a flash-and-validate cycle to discover.
+    # Warns if std < 0.15 (v30 tripped 0.145); below 0.10 almost certainly
+    # means the model is near-constant and won't peak-pick usefully.
+    try:
+        X_val = np.load(data_dir / "X_val.npy", mmap_mode='r')
+        rng = np.random.RandomState(42)
+        n_samples = min(500, len(X_val))
+        sample_idx = rng.choice(len(X_val), size=n_samples, replace=False)
+        window_frames_val = inference_frames
+        outs: list[float] = []
+        in_scale, in_zp = input_details[0]['quantization']
+        out_scale, out_zp = output_details[0]['quantization']
+        out_is_int8 = (output_details[0]['dtype'] == np.int8)
+        in_is_int8 = (input_details[0]['dtype'] == np.int8)
+        for i in sample_idx:
+            chunk = X_val[i].astype(np.float32)
+            if chunk.shape[-1] > n_mels:
+                chunk = chunk[..., :n_mels]
+            start = rng.randint(0, chunk.shape[0] - window_frames_val + 1)
+            window = chunk[start:start + window_frames_val].reshape(
+                1, window_frames_val, n_mels)
+            if in_is_int8:
+                xq = np.round(window / in_scale + in_zp).astype(np.int8)
+                interpreter.set_tensor(input_details[0]['index'], xq)
+            else:
+                interpreter.set_tensor(input_details[0]['index'], window)
+            interpreter.invoke()
+            y = interpreter.get_tensor(output_details[0]['index'])
+            y_last = float(y.reshape(-1)[-1])
+            if out_is_int8:
+                y_last = (y_last - out_zp) * out_scale
+            outs.append(y_last)
+        outs_arr = np.array(outs)
+        a_min, a_max = float(outs_arr.min()), float(outs_arr.max())
+        a_mean, a_std = float(outs_arr.mean()), float(outs_arr.std())
+        a_p5 = float(np.percentile(outs_arr, 5))
+        a_p95 = float(np.percentile(outs_arr, 95))
+        print(f"\n  Activation distribution on {n_samples} val windows:")
+        print(f"    min={a_min:.4f}  max={a_max:.4f}  mean={a_mean:.4f}  std={a_std:.4f}")
+        print(f"    p5={a_p5:.4f}  p95={a_p95:.4f}")
+        if a_std < 0.10:
+            print(f"    WARNING: std < 0.10 — output likely collapsed to near-constant. "
+                  f"Peak-picking will not work reliably. See "
+                  f"docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md §T1.2 and v30 case study.",
+                  file=sys.stderr)
+        elif a_std < 0.15:
+            print(f"    WARNING: std < 0.15 (v30 threshold) — consider investigating "
+                  f"before deployment. v29 reference std=0.34, v30 std=0.145.",
+                  file=sys.stderr)
+        elif a_min > 0.05:
+            print(f"    NOTE: minimum output {a_min:.3f} never approaches zero. "
+                  f"Baseline noise may confuse first-difference peak-picker.",
+                  file=sys.stderr)
+    except Exception as e:
+        print(f"  (activation sanity check skipped: {e})", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()
