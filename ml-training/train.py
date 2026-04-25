@@ -1043,7 +1043,21 @@ def main():
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"  {steps_per_epoch} steps/epoch, {epochs * steps_per_epoch} total steps")
     patience = args.patience or cfg["training"].get("patience", 15)
-    print(f"  Patience: {patience} epochs")
+    # T4.4: which validation metric drives best-model checkpoint + early stop.
+    #   "val_loss" (default, legacy)        — minimize; matches pre-2026-04-24 runs.
+    #   "val_peak_f1"                       — maximize; matches firmware peak-picker.
+    #   "val_f1"                            — maximize frame-level F1 (rarely useful).
+    # The audit (B1, B2) flagged val_loss as misaligned with the firmware metric:
+    # pos_weight scaling makes val_loss incomparable across runs, and frame-level
+    # F1 rewards plateaus while peak-picking rewards sharp peaks.
+    es_metric = cfg["training"].get("early_stopping_metric", "val_loss")
+    if es_metric not in ("val_loss", "val_peak_f1", "val_f1"):
+        raise ValueError(
+            f"early_stopping_metric must be val_loss|val_peak_f1|val_f1, got {es_metric!r}"
+        )
+    es_minimize = es_metric == "val_loss"
+    print(f"  Patience: {patience} epochs (metric: {es_metric}, "
+          f"{'minimize' if es_minimize else 'maximize'})")
     print(f"Output channels: {model.out_channels}")
     if use_distill:
         print(f"Distillation: alpha={distill_alpha}, temp={distill_temp}")
@@ -1054,7 +1068,12 @@ def main():
     tempo_max_bpm = tempo_cfg.get("max_bpm", 200)
     tempo_loss_weight = tempo_cfg.get("loss_weight", 0.1)
 
-    best_val_loss = float("inf")
+    # `best_metric` tracks whatever es_metric selects. Stored under
+    # `best_val_loss` in checkpoints for backward compatibility — older
+    # checkpoints store min-val_loss there; for non-loss metrics we
+    # repurpose the field as "best metric value" (higher = better when
+    # `es_minimize` is False). Old checkpoints keep working unchanged.
+    best_metric = float("inf") if es_minimize else float("-inf")
     patience_counter = 0
     log_rows = []
     start_epoch = 0
@@ -1068,10 +1087,10 @@ def main():
         optimizer.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])
         start_epoch = ckpt["epoch"] + 1
-        best_val_loss = ckpt["best_val_loss"]
+        best_metric = ckpt["best_val_loss"]
         patience_counter = ckpt["patience_counter"]
         log_rows = ckpt.get("log_rows", [])
-        print(f"  Resuming at epoch {start_epoch + 1}/{epochs}, best_val_loss={best_val_loss:.4f}")
+        print(f"  Resuming at epoch {start_epoch + 1}/{epochs}, best_{es_metric}={best_metric:.4f}")
 
     num_train_batches = len(train_loader)
     num_val_batches = len(val_loader)
@@ -1354,15 +1373,17 @@ def main():
         })
 
         # Checkpointing
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        current_metric = {"val_loss": val_loss, "val_peak_f1": val_peak_f1, "val_f1": val_f1}[es_metric]
+        improved = current_metric < best_metric if es_minimize else current_metric > best_metric
+        if improved:
+            best_metric = current_metric
             patience_counter = 0
             sd = model.state_dict()
             if _quant_noise_active:
                 from models.onset_conv1d import unwrap_quant_noise_state_dict
                 sd = unwrap_quant_noise_state_dict(sd)
             _atomic_torch_save(sd, output_dir / "best_model.pt")
-            print(f"  Saved best model (val_loss={val_loss:.4f})")
+            print(f"  Saved best model ({es_metric}={current_metric:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= patience:
@@ -1375,7 +1396,7 @@ def main():
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "epoch": epoch,
-            "best_val_loss": best_val_loss,
+            "best_val_loss": best_metric,
             "patience_counter": patience_counter,
             "log_rows": log_rows,
         }, output_dir / "training_checkpoint.pt")
@@ -1457,13 +1478,17 @@ def main():
         writer.writerows(log_rows)
 
     print(f"\nTraining complete. Models saved to {output_dir}/")
-    best_epoch = min(log_rows, key=lambda r: r["val_loss"])
-    print(f"Best epoch: {best_epoch['epoch']}")
+    if es_minimize:
+        best_epoch = min(log_rows, key=lambda r: r[es_metric])
+    else:
+        best_epoch = max(log_rows, key=lambda r: r[es_metric])
+    print(f"Best epoch (by {es_metric}): {best_epoch['epoch']}")
     print(f"  val_loss: {best_epoch['val_loss']:.4f}")
     print(f"  val_binary_accuracy: {best_epoch['val_binary_accuracy']:.4f}")
     print(f"  val_precision: {best_epoch['val_precision']:.4f}")
     print(f"  val_recall: {best_epoch['val_recall']:.4f}")
     print(f"  val_f1: {best_epoch['val_f1']:.4f}")
+    print(f"  val_peak_f1: {best_epoch['val_peak_f1']:.4f}")
 
 
 if __name__ == "__main__":
