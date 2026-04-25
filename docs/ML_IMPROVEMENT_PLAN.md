@@ -352,6 +352,116 @@ The 4-system bucket has *lower* per-strength signal (1.11×) than the 3-system b
 - #72 Fallback: multi-channel instrument model (blocked on 71)
 - *(new)* PLP-as-training-input — not yet a task; create once v30 result is in
 
+## 2026-04-25 — v32 deployed, results, comprehensive synthesis
+
+### v32 on-device validation (b146, edm_holdout, 25 tracks × 3 devices)
+
+```
+device          P     R     F1    F1_50  F1_70  F1_100 F1_150
+2A798EF8E684    0.403 0.273 0.300 0.195  0.237  0.300  0.373
+ABFBC41283E2    0.442 0.203 0.256 0.160  0.195  0.256  0.318
+659C8DD3ADF8    0.421 0.191 0.238 0.135  0.168  0.238  0.312
+OVERALL         0.422 0.223 0.265 0.164  0.200  0.265  0.335
+```
+
+**v32 vs v29 (current best deployed):** v32 has *higher precision* (0.422 vs 0.384 v29) — the `min_systems: 3` label fix did improve label specificity — but *much lower recall* (0.22 vs ~0.65). Model fires sparingly but correctly. Overall F1 0.265 still well below v29's 0.484. Per-device variance (0.19-0.27 R) matches the audit D4 finding.
+
+**Activation distribution stayed compressed:** v32 INT8 export std=0.123 (FP32 [0.014, 0.998] → INT8 [0.184, 0.934]). Per the n=4 monotonic correlation audit established (std≥0.30 → F1≈0.48; 0.12-0.15 → 0.27-0.29; <0.10 → unusable), this matched the prediction. **The min_systems=3 filter narrowed one failure mode but exposed another:** the model now produces clean predictions when it does fire, but doesn't fire often enough.
+
+### Comprehensive synthesis — what 22+ runs (v11-v32) actually tell us
+
+After exhausting the obvious dimensions (loss function, label encoding, label sharpness, label source filter, bias init, micprofile aug, hybrid features, wider/deeper architectures, W16→W32 receptive field), the val_F1 ceiling is structural, not tunable inside the current recipe.
+
+**Frame-level val F1 envelope, by recipe family:**
+
+| Family | val F1 | runs |
+|---|---|---|
+| `kick_weighted` + BCE + 30-mel | **0.55 ± 0.01** | v20 0.561, v21 0.552, v22 0.560, v29 0.543 |
+| `kick_weighted` + focal/aug | 0.47-0.50 | v23, v24, v25 |
+| Wider/deeper/W32 (any labels) | 0.47-0.48 | exp-w32, exp-wide-* |
+| Focal-loss (any labels) | 0.37-0.42 | v26, v27-hybrid, v27-hybrid-real, v28 |
+| `onset_consensus` labels | **0.31-0.34** | v30 0.311, v31 0.336, v32 0.336 |
+
+On-device F1 has been pinned at 0.47-0.49 since v16 across radically different feature/loss configurations. The single biggest on-device F1 jump in project history (0.47→0.62) came from a *firmware* signal-path change (b117 NN-primary pulse), not a model change.
+
+**Activation std vs on-device F1, n=4:**
+
+| Run | INT8 act std | On-device F1 |
+|---|---|---|
+| v29 | 0.34 | 0.484 |
+| v30 | 0.145 | 0.29 |
+| v31 | 0.089 | not deployed |
+| v32 | 0.123 | 0.265 |
+
+Monotonic. T2.5 catches collapse offline before any device cycle is wasted.
+
+### What every published 0.85+ onset detector has that we don't
+
+External comparison (Schlüter & Böck 2014 ICASSP, Böck DAFx 2012, Vogl ISMIR 2017, Foscarin Beat This! 2024):
+
+| | Schlüter '14 | Böck RNN '12 | Beat This! '24 | **Ours (v32)** |
+|---|---|---|---|---|
+| Mel bands | **80** | 20+40+80 stacked | 128 | **30** |
+| Frequency range | 27 Hz–16 kHz | 30 Hz–17 kHz | 30 Hz–10 kHz | **40 Hz–4 kHz** |
+| Frame rate | 100 Hz | 100 Hz | 50 Hz | 62.5 Hz |
+| Receptive field | 150 ms | full-BLSTM | 30 s | 256 ms |
+| Labels | hand-annotated | hand-annotated | multi-annotator | **5-system algorithmic union** |
+| Reported F1 (50ms) | 0.89 | 0.88 | 0.89 (beat) | 0.27-0.48 |
+| Params | ~few×10K | ~30K | 20M (also 2M) | 10K |
+
+**Schlüter '14 reached 0.89 with a FF-CNN of similar parameter count to ours.** So architecture capacity is not the binding constraint at 10K params. The dominant deltas vs published systems are:
+
+1. **fmax 4 kHz vs 10+ kHz.** We drop hi-hat / snare / cymbal energy entirely. These are exactly the signals that disambiguate percussive events in dense full-mix EDM.
+2. **30 mel bands vs 80+.** We under-resolve narrow-band percussive transients.
+3. **5-system algorithmic consensus vs hand labels.** Peer-detector agreement caps consensus-label training around F1 0.5-0.6 regardless of model capacity.
+
+### Things every run shared (= unexamined dimensions)
+
+- Conv1D, kernel [5,5], W16, ~256ms receptive field
+- 30 mel bands, 40-4000 Hz, 62.5 Hz frame rate
+- Single binary onset target (no multi-task)
+- BCE-family loss (no shift-tolerant since v15)
+- Single-channel input (no multi-resolution)
+- INT8 post-training quantization
+- Algorithmic labels (consensus or kick_weighted, never hand-annotated subset)
+
+### Things explicitly disproven (don't retry)
+
+- **Hybrid spectral features as NN inputs** — gate-b on b137 held-out: all 6 features TP-vs-FP |d| ≤ 0.10 pooled, well below 0.30 threshold. Path B dead.
+- **Continuous label strengths cause collapse** (v31 hypothesis) — wrong, hard binarization made things worse.
+- **Single-detector noise averages out across 5 detectors** (v30 implicit) — wrong, 1- and 2-system events are sub-random vs mel-diff.
+- **Wider+deeper architecture moves the ceiling** — exp-wide-* set, no gain.
+- **W16 → W32 receptive field widening** — exp-w32, no gain.
+- **Stacking another loss variant on the same input representation** — nine variants tried, ceiling unchanged.
+
+### Next experiments, ranked by evidence
+
+Each has a falsifiable prediction. Run sequentially; abandon at first negative result that contradicts the prediction.
+
+#### Exp 3 (do first, ~1 hour): measure the algorithmic detector ceiling on edm_holdout
+
+Run madmom CNNOnsetProcessor + RNNOnsetProcessor on the 25 edm_holdout tracks. Score against the same `.beats.json` ground truth, same tolerances (50/70/100/150 ms) as device validation. This tells us *what's achievable on this corpus* before we retrain anything.
+
+- **Outcome A** (madmom F1 ≥ 0.80): there's a 30+pp gap closeable by Exp 1.
+- **Outcome B** (madmom F1 ≈ 0.55-0.60): we're already near the data ceiling; the validation labels themselves are noisy and chasing higher F1 is a moving goalpost. Pivot to label-quality work or accept v29 as the ceiling.
+
+Script: `ml-training/scripts/measure_madmom_ceiling.py` (in venv311 with madmom).
+
+#### Exp 1 (highest-ROI training experiment): mel resolution to Schlüter '14 spec
+
+Single-axis change vs v29: `n_mels: 30 → 80`, `fmax: 4000 → 10000`, keep window/labels/loss identical.
+
+- **Falsifiable prediction:** val_F1 frame > 0.65 within 30 epochs. If still ≤ 0.55, mel resolution alone wasn't the constraint; pivot to Exp 2.
+- **Cost:** ~2 days (re-prep, retrain, device feasibility check).
+- **Risk:** nRF52840 RAM/flash budget. 80 mel × 16 frames context = 1.28KB INT8. Verify fits before launching prep.
+
+#### Exp 2 (only if Exp 1 plateaus): single-source madmom labels
+
+Replace `onsets_consensus` with raw madmom CNNOnsetProcessor outputs.
+
+- **Falsifiable prediction:** val_F1 frame ≥ 0.50. If still ≤ 0.40, the consensus-union wasn't the binding constraint and labels aren't the lever.
+- **Cost:** ~1 day (regenerate labels, retrain).
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
