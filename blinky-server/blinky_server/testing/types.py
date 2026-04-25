@@ -36,6 +36,14 @@ class TransientEvent:
     timestamp_ms: float
     type: str
     strength: float
+    # T1.4/T1.5 — per-firing diagnostics (added 2026-04-24). Bits indicate
+    # which gates were close to suppressing: 0x01 bass_gate boosted,
+    # 0x02 pattern_bias boosted, 0x04 crest near threshold, 0x08 beat-grid
+    # near threshold. Features is a snapshot at firing time (flat, rflux,
+    # cent, crest, roll, hfc, bassR, plpP, plpC). Both None when the
+    # firmware predates b145 (no gateMask/features fields in transient JSON).
+    gate_mask: int | None = None
+    features: dict[str, float] | None = None
 
 
 @dataclass
@@ -143,10 +151,50 @@ class SignalGapStats:
 
 
 @dataclass
+class ActivationStats:
+    """Summary statistics of raw NN activation across a test run.
+
+    Captures the distribution shape so compressed-output pathologies (e.g.,
+    v30_mel_only with std=0.15 and min=0.137 instead of v29's std=0.34 and
+    min≈0) surface in the validation output rather than needing offline
+    TFLite inference to diagnose. Populated from signal_frames[].activation.
+    """
+
+    min: float
+    max: float
+    mean: float
+    std: float
+    p5: float
+    p50: float
+    p95: float
+    p99: float
+    frames: int
+
+
+@dataclass
+class LatencyHistogram:
+    """Distribution of per-detection onset offset (ms) in 20 ms bins.
+
+    Mean latency hides jitter: +5 ms mean could be (all 5 ms tight) or
+    (half -50, half +60). Histogram distinguishes the two modes.
+    Bin edges at ±10, ±30, ±50, ±70, ±100, ±150 ms; anything beyond
+    lumps into the outer bucket.
+    """
+
+    bins_ms: list[str]  # label for each bin, e.g., "[-30,-10)"
+    counts: list[int]
+    median: int
+    p25: int
+    p75: int
+
+
+@dataclass
 class Diagnostics:
     onset_rate: float
     onset_offset_stats: OffsetStats | None
     onset_offsets: list[int]
+    activation_stats: ActivationStats | None = None
+    latency_histogram: LatencyHistogram | None = None
 
 
 @dataclass

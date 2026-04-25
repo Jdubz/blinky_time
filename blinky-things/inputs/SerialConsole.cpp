@@ -279,6 +279,15 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("crestgatemin", &audioCtrl_->crestGateMin, "tracker",
         "Crest-factor gate minimum (0=disabled)", 0.0f, 20.0f, onParamChanged);
 
+    // PLP beat-grid pattern AND-gate (b142+).
+    // Suppresses NN pulses when plpPulseValue_ (epoch-fold pattern amplitude
+    // at current phase) is below this threshold. 0 = disabled. Guarded by
+    // rhythmStrength > beatgridmin_rs so ambient/sparse content is unaffected.
+    settings_.registerFloat("beatgridmin", &audioCtrl_->beatGridPatternMin, "tracker",
+        "PLP pattern-value AND-gate minimum (0=disabled)", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("beatgridmin_rs", &audioCtrl_->beatGridMinRhythmStrength, "tracker",
+        "rhythmStrength guard for beat-grid gate", 0.0f, 1.0f, onParamChanged);
+
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
     // ODF baseline tracking

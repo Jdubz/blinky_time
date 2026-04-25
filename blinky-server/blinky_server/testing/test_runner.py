@@ -172,12 +172,18 @@ def _serialize_raw_capture(test_data: TestData, audio_start_time_ms: float) -> d
                 "v": {k: round(v, 4) for k, v in f.values.items()},
             }
         )
-    transients_out = []
+    transients_out: list[dict[str, Any]] = []
     for t in test_data.transients:
         t_sec = (t.timestamp_ms - audio_start_time_ms) / 1000.0
         if t_sec < 0:
             continue
-        transients_out.append({"t": round(t_sec, 4), "strength": round(t.strength, 3)})
+        entry: dict[str, Any] = {"t": round(t_sec, 4), "strength": round(t.strength, 3)}
+        # T1.4/T1.5 — only emit when firmware provided them (b145+).
+        if t.gate_mask is not None:
+            entry["gateMask"] = t.gate_mask
+        if t.features:
+            entry["features"] = {k: round(v, 4) for k, v in t.features.items()}
+        transients_out.append(entry)
     return {
         "signal_frames": frames_out,
         "transients": transients_out,

@@ -74,6 +74,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/AUDIO-TUNING-GUIDE.md` | Main testing guide, tunable params, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
+| `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |

@@ -20,20 +20,30 @@ while read local_ref local_sha remote_ref remote_sha; do
 
   # Check if any blinky-console files changed in this push
   if git diff --name-only "$range" 2>/dev/null | grep -q "^blinky-console/"; then
-    echo "🔍 blinky-console changes detected, running checks..."
+    echo "[blinky-console] changes detected, running checks..."
 
     cd blinky-console
 
-    echo "📝 Running lint..."
+    # Format check first — cheapest, catches the issue firebase CI flagged
+    # on 2026-04-24 that wasn't in the hook before. Run before lint because
+    # lint errors in unformatted code are noisy; format fixes tend to shift
+    # line numbers and make lint output obsolete.
+    echo "[STYLE] Running format check..."
+    npm run format:check || {
+      echo "[FAIL] Prettier format check failed. Run: cd blinky-console && npm run format"
+      exit 1
+    }
+
+    echo "[LINT] Running lint..."
     npm run lint || exit 1
 
-    echo "🔎 Running type check..."
+    echo "[TYPE] Running type check..."
     npm run typecheck || exit 1
 
-    echo "🔨 Running build..."
+    echo "[BUILD] Running build..."
     npm run build || exit 1
 
-    echo "✅ All blinky-console checks passed!"
+    echo "[OK] All blinky-console checks passed!"
     exit 0
   fi
 done

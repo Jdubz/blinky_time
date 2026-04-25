@@ -900,9 +900,50 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         bool crestOk = (crestGateMin <= 0.0f) ||
                        (spectral_.getRawCrest() >= crestGateMin);
 
-        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk) {
+        // b142 — PLP pattern AND-gate. plpPulseValue_ is the epoch-fold
+        // pattern amplitude at the current phase: high at EVERY position
+        // the pattern predicts an onset (beats 1-4 of a bar-length
+        // pattern, not just phase=0), low between them. Reject firings
+        // where the pattern predicts near-zero pulse.
+        // Guarded by rhythmStrength so it doesn't suppress during PLP
+        // warmup (~1.6 s) or on ambient/sparse content.
+        bool beatGridOk = true;
+        if (beatGridPatternMin > 0.0f &&
+            periodicityStrength_ > beatGridMinRhythmStrength) {
+            beatGridOk = (plpPulseValue_ >= beatGridPatternMin);
+        }
+
+        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk) {
             pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
             lastPulseMs_ = nowMs - static_cast<uint32_t>(1000.0f / OSS_FRAME_RATE);  // Peak was 1 frame ago
+
+            // T1.4/T1.5 — snapshot gate state + spectral features at firing
+            // time so offline analysis can cluster FPs and attribute
+            // suppression. Bits are "which gate would have suppressed":
+            //   bit 0 — bass-gate activated (bassGate > 1.0 → threshold boosted)
+            //   bit 1 — pattern-bias activated (patternBias > 1.0 → off-beat)
+            //   bit 2 — crest-gate marginal (rawCrest within 0.5 of threshold)
+            //   bit 3 — beat-grid gate marginal (pulseValue within 0.1 of threshold)
+            // For a fired pulse, no gate WAS active (all passed), but the
+            // "activated" bits tell us which gates were close to suppressing.
+            lastPulseGateMask_ = 0;
+            if (bassGate > 1.05f) lastPulseGateMask_ |= 0x01;
+            if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
+            if (crestGateMin > 0.0f && spectral_.getRawCrest() < crestGateMin * 1.5f) {
+                lastPulseGateMask_ |= 0x04;
+            }
+            if (beatGridPatternMin > 0.0f && plpPulseValue_ < beatGridPatternMin + 0.1f) {
+                lastPulseGateMask_ |= 0x08;
+            }
+            lastPulseFeatures_.flatness = spectral_.getRawFlatness();
+            lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
+            lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
+            lastPulseFeatures_.crest = spectral_.getRawCrest();
+            lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
+            lastPulseFeatures_.hfc = spectral_.getRawHFC();
+            lastPulseFeatures_.bassRatio = bassRatio;
+            lastPulseFeatures_.plpPulse = plpPulseValue_;
+            lastPulseFeatures_.plpConfidence = plpConfidence_;
         }
 
         prevPrevSignal_ = prevSignal_;

@@ -264,30 +264,53 @@ def _binary_targets(times: np.ndarray, n_frames: int,
     onset, narrow after). sigma_early > sigma_late effect.
     """
     targets = np.zeros(n_frames, dtype=np.float32)
+    dropped = 0
     for i, t in enumerate(times):
         frame_idx = round(t * frame_rate) - label_shift_frames
-        if 0 <= frame_idx < n_frames:
-            val = float(strengths[i]) if strengths is not None else 1.0
-            targets[frame_idx] = max(targets[frame_idx], val)
+        if not (0 <= frame_idx < n_frames):
+            dropped += 1
+            continue
+        val = float(strengths[i]) if strengths is not None else 1.0
+        targets[frame_idx] = max(targets[frame_idx], val)
 
-            # Symmetric neighbor weighting (onset ± 1 frame)
-            if neighbor_weight > 0:
-                nval = val * neighbor_weight
-                if frame_idx > 0:
-                    targets[frame_idx - 1] = max(targets[frame_idx - 1], nval)
-                if frame_idx < n_frames - 1:
-                    targets[frame_idx + 1] = max(targets[frame_idx + 1], nval)
+        # Symmetric neighbor weighting (onset ± 1 frame)
+        if neighbor_weight > 0:
+            nval = val * neighbor_weight
+            if frame_idx > 0:
+                targets[frame_idx - 1] = max(targets[frame_idx - 1], nval)
+            if frame_idx < n_frames - 1:
+                targets[frame_idx + 1] = max(targets[frame_idx + 1], nval)
 
-            # Asymmetric early-side weighting: wider acceptance BEFORE onset.
-            # Decaying weight from onset backward: frame-1 gets full early_weight,
-            # frame-2 gets early_weight * 0.5, etc.
-            if early_neighbor_frames > 0 and early_neighbor_weight > 0:
-                for ef in range(1, early_neighbor_frames + 1):
-                    eidx = frame_idx - ef
-                    if eidx >= 0:
-                        decay = early_neighbor_weight * (1.0 - (ef - 1) / early_neighbor_frames)
-                        targets[eidx] = max(targets[eidx], val * decay)
+        # Asymmetric early-side weighting: wider acceptance BEFORE onset.
+        # Decaying weight from onset backward: frame-1 gets full early_weight,
+        # frame-2 gets early_weight * 0.5, etc.
+        if early_neighbor_frames > 0 and early_neighbor_weight > 0:
+            for ef in range(1, early_neighbor_frames + 1):
+                eidx = frame_idx - ef
+                if eidx >= 0:
+                    decay = early_neighbor_weight * (1.0 - (ef - 1) / early_neighbor_frames)
+                    targets[eidx] = max(targets[eidx], val * decay)
+    # Stash drop count on array for caller to inspect (safer than changing API).
+    # Callers that care can read `targets._dropped_labels` (set attr on a new array
+    # subclass or via a module-level counter — see below).
+    _record_dropped_labels(dropped, len(times))
     return targets
+
+
+_DROPPED_LABEL_STATS = {"tracks_with_drops": 0, "total_dropped": 0, "total_labels": 0}
+
+def _record_dropped_labels(dropped: int, total: int) -> None:
+    """Record out-of-bounds label drops from _binary_targets for end-of-prep summary.
+
+    Time-stretch augmentation (speed != 1.0) shifts beat_times by /speed; if
+    any resulting frame_idx lands past the audio's last frame, the label is
+    silently skipped. Previously this produced no warning; we now accumulate
+    per-track counts and surface them at the prep summary.
+    """
+    if dropped > 0:
+        _DROPPED_LABEL_STATS["tracks_with_drops"] += 1
+        _DROPPED_LABEL_STATS["total_dropped"] += dropped
+    _DROPPED_LABEL_STATS["total_labels"] += total
 
 
 def load_soft_teacher_labels(teacher_soft_dir: Path, track_stem: str,
@@ -1242,9 +1265,14 @@ def main():
     parser.add_argument("--mic-profile", default=None,
                         help="Mic calibration profile (.npz from calibrate_mic.py). "
                              "Applied to all mel spectrograms to simulate mic response.")
-    parser.add_argument("--exclude-dir", default=None,
+    parser.add_argument("--exclude-dir", action="append", default=None,
                         help="Directory of audio files to exclude from training (e.g., test set). "
-                             "Files with matching stems are filtered out to prevent data leakage.")
+                             "Files with matching stems are filtered out to prevent data leakage. "
+                             "Can be passed multiple times to exclude from multiple directories.")
+    parser.add_argument("--auto-clean-stale", action="store_true",
+                        help="In non-interactive mode, auto-delete stale processed_v* dirs and "
+                             "mel_cache entries whose config hash doesn't match. Prevents silent "
+                             "disk exhaustion mid-run.")
     parser.add_argument("--stems-dir", default=None,
                         help="Directory of Demucs-separated stems (from batch_demucs_separate.py). "
                              "Generates additional training variants from stem combinations.")
@@ -1297,14 +1325,21 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Disk space pre-check ---
-    # Processed datasets are 80-130 GB. Fail fast instead of dying mid-run.
-    MIN_FREE_GB = 50  # Minimum free space to even start
+    # Actual merge step requires:
+    #   - final X+Y arrays (~100-130 GB each = ~260 GB for both)
+    #   - shard intermediates kept during merge (~120 GB at end of shard phase)
+    #   - merge temp workspace (≈final_size × 1.2 via os.replace rename)
+    # Total headroom needed: ~420 GB. Prior 200 GB was too lenient; hit merge
+    # failure on 2026-04-23 after 2 hours of prep work. Raised + dynamic.
+    MIN_FREE_GB = 450
     disk_stat = shutil.disk_usage(output_dir)
     free_gb = disk_stat.free / (1024 ** 3)
     if free_gb < MIN_FREE_GB:
         print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir}. "
-              f"Need at least {MIN_FREE_GB} GB to start dataprep.\n"
-              f"  Tip: delete old processed_v* dirs or stale mel_cache entries.",
+              f"Need at least {MIN_FREE_GB} GB to start dataprep "
+              f"(final arrays ~260 GB + shard intermediates ~120 GB + merge ~50 GB).\n"
+              f"  Tip: delete old processed_v* dirs or stale mel_cache entries, "
+              f"or rerun with --auto-clean-stale.",
               file=sys.stderr)
         sys.exit(1)
 
@@ -1328,8 +1363,13 @@ def main():
               f"({old_total_gb:.1f} GB total):")
         for d, d_size in old_processed_sizes:
             print(f"  {d.name}: {d_size / (1024**3):.1f} GB")
-        if sys.stdin.isatty():
-            resp = input("Delete old processed dirs to free space? [y/N] ").strip().lower()
+        auto_clean = getattr(args, "auto_clean_stale", False)
+        if auto_clean or sys.stdin.isatty():
+            if auto_clean:
+                resp = "y"
+                print("  --auto-clean-stale: deleting all old processed dirs.")
+            else:
+                resp = input("Delete old processed dirs to free space? [y/N] ").strip().lower()
             if resp == "y":
                 for d in old_processed:
                     shutil.rmtree(d)
@@ -1339,7 +1379,7 @@ def main():
                 print(f"  Free space now: {free_gb:.1f} GB")
         else:
             print("  (Non-interactive — skipping auto-delete. "
-                  "Run interactively or delete manually.)")
+                  "Run interactively or pass --auto-clean-stale.)")
 
     # --- Prune stale mel cache entries ---
     mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
@@ -1368,15 +1408,20 @@ def main():
                 for d in stale_caches:
                     d_size = stale_cache_sizes[d]
                     print(f"  {d.name}: {d_size / (1024**3):.1f} GB")
-                if sys.stdin.isatty():
-                    resp = input("Delete stale mel caches? [y/N] ").strip().lower()
+                auto_clean = getattr(args, "auto_clean_stale", False)
+                if auto_clean or sys.stdin.isatty():
+                    if auto_clean:
+                        resp = "y"
+                        print("  --auto-clean-stale: deleting all stale mel caches.")
+                    else:
+                        resp = input("Delete stale mel caches? [y/N] ").strip().lower()
                     if resp == "y":
                         for d in stale_caches:
                             shutil.rmtree(d)
                             print(f"  Deleted {d.name}")
                 else:
                     print("  (Non-interactive — skipping. Delete manually or "
-                          "run with --clear-cache.)")
+                          "pass --auto-clean-stale.)")
 
     rng = np.random.default_rng(seed)
 
@@ -1471,18 +1516,30 @@ def main():
               f"  Labels dir: {labels_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Exclude test tracks to prevent data leakage
+    # Exclude test tracks to prevent data leakage.
+    # args.exclude_dir is a list (action='append') so multiple dirs can be passed.
     if args.exclude_dir:
-        exclude_path = Path(args.exclude_dir)
         audio_exts = {".mp3", ".wav", ".flac", ".ogg"}
-        exclude_stems = {f.stem for f in exclude_path.rglob("*")
+        exclude_stems: set[str] = set()
+        for exclude_entry in args.exclude_dir:
+            exclude_path = Path(exclude_entry)
+            if not exclude_path.exists():
+                raise FileNotFoundError(
+                    f"--exclude-dir path does not exist: {exclude_path}\n"
+                    f"  (silent-skip prevention per 2026-04-23 bug — all exclude "
+                    f"dirs must exist or the command is ambiguous)")
+            dir_stems = {f.stem for f in exclude_path.rglob("*")
                          if f.suffix.lower() in audio_exts}
+            exclude_stems.update(dir_stems)
+            print(f"  Exclude list: {exclude_path} → {len(dir_stems)} stems")
         before = len(pairs)
         pairs = [(a, l) for a, l in pairs if a.stem not in exclude_stems]
         excluded = before - len(pairs)
-        if excluded > 0:
-            print(f"Excluded {excluded} test tracks from training data "
-                  f"(from {exclude_path})")
+        print(f"Excluded {excluded} test tracks from training data "
+              f"(from {len(args.exclude_dir)} exclude dir(s))")
+        if excluded == 0 and exclude_stems:
+            print(f"  WARNING: 0 training tracks matched any excluded stem. "
+                  f"Check that --exclude-dir paths point at the intended corpora.")
 
     # Filter by label quality score (v2 consensus labels include quality_score)
     min_quality = cfg.get("training", {}).get("min_quality", 0.0)
@@ -1982,6 +2039,69 @@ def main():
     # 4. Check for NaN/Inf
     if np.any(~np.isfinite(mel_sample)):
         issues.append("NaN or Inf detected in mel spectrograms!")
+
+    # 5. Label strength distribution (audit A6) — catches the
+    # continuous-strength vs binary-label divergence that caused v30's
+    # compressed output. Values 0, 0.25 (neighbor), 1.0 (center) for
+    # kick_weighted; continuous for onsets_consensus.
+    y_nonzero = Y_train[train_idx].ravel()
+    y_nonzero = y_nonzero[y_nonzero > 0]
+    if len(y_nonzero) > 0:
+        strength_bins = [0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.01]
+        hist, _ = np.histogram(y_nonzero, bins=strength_bins)
+        total = hist.sum()
+        print(f"  Label strength histogram (nonzero values, n={total:,}):")
+        for i in range(len(strength_bins) - 1):
+            lo, hi = strength_bins[i], strength_bins[i + 1]
+            pct = 100.0 * hist[i] / max(total, 1)
+            bar = "▇" * int(pct / 2)
+            print(f"    [{lo:4.2f}, {hi:4.2f}):  {hist[i]:>8,} ({pct:5.2f}%) {bar}")
+        # Warn if distribution is too continuous (regression-like) vs bimodal.
+        # A bimodal distribution has most mass at the extremes (≤0.05 or ≥0.9).
+        extremes_pct = 100.0 * (hist[0] + hist[-1]) / max(total, 1)
+        if extremes_pct < 50.0:
+            print(f"    WARNING: only {extremes_pct:.1f}% of nonzero labels are at extremes "
+                  f"(<0.05 or ≥0.9). Continuous-strength distribution may train a "
+                  f"soft-regression model with compressed output. See v30 case study "
+                  f"(docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md).",
+                  file=sys.stderr)
+
+    # 6. Onset density estimate (audit A5) — events per second of audio.
+    # Uses first-channel target "peaks" (value≥0.5 after any max-pooling of
+    # neighbors) as a proxy for onset events. This is approximate but useful
+    # for flagging label-source regressions like kick_weighted's 2x bleed.
+    frame_rate = cfg["audio"].get("frame_rate", 62.5)
+    chunk_duration_sec = Y_train.shape[1] / frame_rate
+    sample_chunks = Y_train[train_idx[:1000]]
+    if sample_chunks.ndim == 3:  # multi-channel
+        peak_vals = sample_chunks[..., 0]
+    else:
+        peak_vals = sample_chunks
+    # Count positive-valued frames per chunk (rough proxy for onsets since
+    # plateaus of adjacent 1s over-count — we divide by expected plateau
+    # width to get events).
+    events_per_chunk = (peak_vals > 0.5).sum(axis=1)  # (n_chunks,)
+    mean_events_per_chunk = events_per_chunk.mean()
+    density = mean_events_per_chunk / chunk_duration_sec
+    print(f"  Onset density estimate: {density:.2f} events/sec "
+          f"(p50={np.percentile(events_per_chunk, 50):.1f}/chunk)")
+    if density > 12.0:
+        print(f"    WARNING: density {density:.1f}/s exceeds 12/s — possible "
+              f"label-source contamination (e.g., demucs stem bleed in "
+              f"kick_weighted). Clean percussion is typically 3-8 events/s.",
+              file=sys.stderr)
+
+    # Report out-of-bounds label drops (e.g., from time-stretch misalignment).
+    s = _DROPPED_LABEL_STATS
+    if s["total_dropped"] > 0:
+        pct = 100.0 * s["total_dropped"] / max(s["total_labels"], 1)
+        msg = (f"  Dropped labels (out-of-bounds frame_idx): "
+               f"{s['total_dropped']}/{s['total_labels']} ({pct:.2f}%) "
+               f"across {s['tracks_with_drops']} tracks")
+        if pct > 0.5:
+            issues.append(msg + " — exceeds 0.5% threshold; check time-stretch audio/label alignment")
+        else:
+            print(msg)
 
     if issues:
         print(f"\n  VALIDATION FAILED — {len(issues)} issue(s):")

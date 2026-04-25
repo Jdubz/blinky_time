@@ -1,0 +1,68 @@
+# Conv1D W16 v29 — mel-only baseline, minimal v28→v21 loss reversion
+#
+# Investigation on 2026-04-22 showed v26+ precision collapse (0.47 → 0.23)
+# traces to a single change: loss.type switched from bce → asymmetric_focal
+# at v26 and was inherited by v27, v28. v21-v25 used plain weighted BCE and
+# reached P=0.47 R=0.67 F1=0.55 val.
+#
+# First v29 attempt (killed at ep14) changed loss AND labels simultaneously
+# (sharp 1-frame labels + bce). Val F1 plateaued at 0.28 — stacking two
+# changes on one config obscured which helped / hurt.
+#
+# This config makes ONE change from v28_mel_only: loss.type bce. Labels,
+# neighbors, threshold all match v21/v28. If val F1 climbs to ~0.55 (v21's
+# proven range), focal loss alone was the regression. If it plateaus,
+# something else (likely the processed_v28 augmentation recipe) is at play
+# and label sharpening / shift-BCE become separate follow-up experiments.
+#
+# Input: 30 mel bands, 0 hybrid features.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  pos_weight: 0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v29_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

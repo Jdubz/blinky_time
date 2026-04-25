@@ -561,11 +561,35 @@ void loop() {
       SerialConsole::isDebugChannelEnabled(DebugChannel::TRANSIENT)) {
     float onsetStrength = audioController->getLastOnsetStrength();
     if (onsetStrength > 0.0f) {
+      // T1.4/T1.5: include gate_mask + spectral feature snapshot at firing
+      // time so offline analysis can classify TPs vs FPs by gate state and
+      // spectral signature without needing persist_raw signal_frame replay.
+      const auto& pf = audioController->getLastPulseFeatures();
       Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
       Serial.print(now);
       Serial.print(F(",\"strength\":"));
       Serial.print(onsetStrength, 2);
-      Serial.println(F("}"));
+      Serial.print(F(",\"gateMask\":"));
+      Serial.print((unsigned int)audioController->getLastPulseGateMask());
+      Serial.print(F(",\"features\":{\"flat\":"));
+      Serial.print(pf.flatness, 3);
+      Serial.print(F(",\"rflux\":"));
+      Serial.print(pf.rawFlux, 3);
+      Serial.print(F(",\"cent\":"));
+      Serial.print(pf.centroid, 3);
+      Serial.print(F(",\"crest\":"));
+      Serial.print(pf.crest, 3);
+      Serial.print(F(",\"roll\":"));
+      Serial.print(pf.rolloff, 3);
+      Serial.print(F(",\"hfc\":"));
+      Serial.print(pf.hfc, 3);
+      Serial.print(F(",\"bassR\":"));
+      Serial.print(pf.bassRatio, 2);
+      Serial.print(F(",\"plpP\":"));
+      Serial.print(pf.plpPulse, 2);
+      Serial.print(F(",\"plpC\":"));
+      Serial.print(pf.plpConfidence, 2);
+      Serial.println(F("}}"));
     }
   }
 

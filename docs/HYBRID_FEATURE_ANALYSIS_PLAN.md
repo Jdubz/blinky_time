@@ -731,3 +731,95 @@ on the first run.
 
 Data: `ml-training/outputs/validation/holdout_67325bff3b8b_raw.json`,
 analysis: `ml-training/outputs/gate_b/b137_holdout/summary.{md,json}`.
+
+### Gate (e) blocked — 2026-04-22
+
+Gate (e) (ablation F1 ≥ +0.03 vs mel-only baseline) assumes a sound baseline. Training the v28_mel_only baseline exposed a loss-function regression that had quietly been present since v26: switching from plain weighted BCE to `asymmetric_focal` with `gamma_neg=4.0` collapsed precision from 0.47 (v21) to 0.23 (v26). v27-hybrid and v28_mel_only both inherited this loss and both score F1 ≈ 0.40 with P ≈ 0.25 — pathological.
+
+Full diagnosis in `docs/ML_IMPROVEMENT_PLAN.md` §"2026-04-22 — focal-loss regression + v29 reset".
+
+**What this means for the ablation queue:**
+
+1. The four v28 single-feature ablation configs (`conv1d_w16_onset_v28_mel_{crest,raw_flux,hfc,flatness}.yaml`) are **not cancelled**, but training them *now* would measure F1 deltas on a broken baseline — uninterpretable. A feature that looks like it helps might just be partially compensating for the loss-function bug; a feature that looks flat might be useful on a corrected baseline.
+2. **v29_mel_only must complete first.** Three config deltas from v28: `loss.type: bce`, `neighbor_weight: 0.0`, `hard_binary_threshold: 0.5`. Same `processed_v28/` dataset (label shaping is applied at load time, not at prep time).
+3. After v29_mel_only proves P ≥ 0.40 in val and on-device eval, re-run the same four ablations as `v29_mel_{crest,raw_flux,hfc,flatness}` with identical three-delta changes. Compare v29-ablation F1 to v29_mel_only F1. That is a valid gate (e) test; prior comparisons are not.
+4. Gate (a), (c), (d) results from the `b137_holdout` analysis remain valid — they don't depend on the NN loss or the training recipe. Only gate (b) and gate (e) need to be re-run against a corrected model.
+
+No held-out-contamination concern added by the v29 retrain: `processed_v28/` was prepared with `--exclude-dir blinky-test-player/music/edm_holdout/`, same as v28 and v27-hybrid. The GiantSteps LOFI corpus stays held-out.
+
+**Near-term plan:**
+
+1. Finish the in-flight v28_mel_only held-out validation on blinkyhost. Record before numbers (F1, P, R, TP/FP distribution) as the last data point for the broken-loss generation.
+2. Launch v29_mel_only in tmux on the training GPU. ~11 h.
+3. Export v29_mel_only to TFLite, flash fleet, run held-out validation with `persist_raw=true`. Record after numbers.
+4. If v29_mel_only clears P ≥ 0.40 on held-out: re-queue the four v29 single-feature ablations. Each reuses `processed_v28/` with `feature_indices` column selection (already implemented in `MemmapBeatDataset`).
+5. Gate (b) re-check on v29 held-out data is cheap — the persist_raw infra + `run_gate_b.py` are already in place. Expect higher TP/FP |d| simply because the TP/FP split should be less noisy when the model actually discriminates.
+
+The corrected baseline may make some feature that previously looked flat (e.g., raw_flux's |d|=0.05 at v27 firing moments) suddenly discriminate, because the NN's FP population changes when its loss function changes. Treat the 2026-04-20 gate (b) results as "true on the broken model"; they are not a proof that no feature can help.
+
+### Corpus framing revision — 2026-04-23
+
+**Primary corpus is `blinky-test-player/music/edm/` (18 tracks, representative).** `edm_holdout/` (25 GiantSteps LOFI tracks) is an adversarial / stress-test secondary — ambient, phrase-shifting, boom-bap content where VISUALIZER_GOALS §5 explicitly permits low F1 ("organic mode is the correct response").
+
+Every F1 number in this document before this note was measured on one or the other without the primary/secondary distinction. In particular, gate (b)'s 2953-TP / 8991-FP population was captured on edm_holdout — which is both the hardest content AND (as of v28) training-contaminated. Future gate (b) re-runs should report edm/ and edm_holdout separately and compare.
+
+**Argparse bug affecting past exclusion claims.** `prepare_dataset.py --exclude-dir` was single-valued until 2026-04-23 (no `action='append'`). Any prior run that passed `--exclude-dir A --exclude-dir B` silently kept only B. The v30 prep (Apr 23) is the first to genuinely exclude BOTH edm/ and edm_holdout from training. Pre-v30 mel-only baselines on edm/ (v28, v29) are training-contaminated.
+
+### v27 hybrids were a regression — held-out measured 2026-04-22
+
+v28_mel_only (mel-only, 30 channels, same recipe + loss as v27) held-out:
+
+| corpus | F1 | P | R | FP/TP |
+|--------|---:|--:|--:|------:|
+| v27-hybrid (`flatness + raw_flux`) on edm_holdout | 0.398 | 0.247 | ~0.95 | 3.04 |
+| v28_mel_only on edm_holdout | **0.489** | **0.381** | 0.754 | **1.63** |
+
+**Removing the two hybrid features added +0.091 F1 and +0.134 precision on held-out real music.** Same loss, same labels, same recipe, same data — only difference is 30 mel channels instead of 30 mel + 2 hybrid.
+
+This retroactively confirms two of the working principles at the top of this document:
+
+- §"Don't stack without ablation." v27's hybrid-feature add went in without a mel-only comparison. The comparison now exists and shows those hybrids were a net loss. Everything inferred from v27's F1 about "which hybrid feature helps" was overfit noise; the hybrids in aggregate *hurt*.
+- §"Don't ignore redundancy with mel." Flatness R² vs mel = 0.85 (gate c). An extra channel carrying 85% redundant information is not "bonus signal," it's noise added to the input — the NN has to learn to partially ignore it. The 0.134 precision loss is quantitatively consistent with that.
+
+**Revised plan for v29 ablations.** When v29 single-feature variants run, the mel-only baseline is the defender, not a floor. A feature must *beat* v29_mel_only's held-out F1 by ≥ 0.03 (gate e) — beating broken v27 is no longer interesting. Features that cleared gate (a) (exists on-device) but fail gate (c) (R² < 0.95 vs mel) should be deprioritised, since the v27 data now shows redundancy hurts rather than just wastes a channel.
+
+**raw_flux remains the one feature worth testing aggressively:** gate (c) R² = 0.19 (lowest — least redundant with mel), temporal-derivative signal the mel bands cannot encode. If any feature survives gate (e) on v29, raw_flux is the strongest prior.
+
+### v29 held-out measured 2026-04-23 — loss fix did not move on-device
+
+Full comparison in `docs/ML_IMPROVEMENT_PLAN.md` §"v29_mel_only held-out results". Summary:
+
+- v29 val P/R: 0.467 / 0.647 (matches v21 baseline exactly)
+- v29 held-out F1 / P: 0.484 / 0.384 — **within noise of v28_mel_only** (0.489 / 0.381)
+
+The v26 focal-loss change was a val-metric artifact — frame-level P/R penalized broad-plateau outputs, but firmware peak-picking collapses plateaus to single firings. On-device P/R is determined by the model's discrimination capacity, not output sharpness. That's why the v27→v28 hybrid-removal gain was real (+0.134 P on-device) while the v28→v29 loss-revert gain was imaginary (Δ < 0.003).
+
+**Gate (e) remains unblocked for ablations**, but the expected ceiling is now clearer: stacking more hybrid features onto a mel-only baseline won't help if those features don't carry new discriminative information. Gate-b already showed none of the six current candidates do. Without a feature that fails gate (c) R² < 0.5 (not 0.95 — truly novel signal) and clears gate (b) TP-vs-FP |d| ≥ 0.3, further ablations are wasted GPU time.
+
+### Disproven direction: wider NN input window
+
+Past experiments confirm widening `window_frames` from 16 → 32 produced no F1 gain (0.468-0.482 at W32 vs 0.552 at v21 W16). See ML_IMPROVEMENT_PLAN.md §"Disproven direction: wider input window" for the reason (window_frames ≠ receptive field) and the operational reasons this direction is off the table (onset detection needs attack info from 10-30 ms, not 500 ms of tail).
+
+Dilated Conv1D (longer RF at same parameter count) was never trained. Given gate-b's finding that TP and FP firings look identical in the current 256 ms window, extending RF into the past is unlikely to recover signal that isn't there. If a future experiment uses it, document the hypothesis it's testing (e.g., "isolated FPs differ from rhythmic TPs in onset density over 1-2 seconds") — not generic "more context is better."
+
+### 2026-04-23 — Gate-b's null result has an upstream cause: contaminated labels
+
+Investigation triggered by v29's held-out F1 being unchanged from v28 (loss fix was val-metric cosmetic only) led to a deeper audit of the label-generation pipeline. Finding: **kick_weighted_drums training labels are contaminated by demucs stem bleed.**
+
+- 32% of tracks have >0.7× bleed ratio (substantial >200 Hz energy in the "drum" stem)
+- Kick-band vs snare-band energy correlation >0.6 on 10% of tracks
+- Label density is 2× the full-mix consensus label density (152.8 events/track vs 75.9) — inconsistent with a clean drum separation
+- Spot-check: labeled "kicks" show as little as 0.50 dB low-frequency energy spike, essentially noise
+
+Full details in `docs/ML_IMPROVEMENT_PLAN.md` §"Thread 1: Is the problem the labels?".
+
+**Implication for gate-b.** The null result (no shape feature separates TP from FP at |d| ≥ 0.3 on v27 firings) measured a population where many "TPs" are mis-labeled tonal-content artifacts — acoustically indistinguishable from the "FPs" because they *are* the same kind of event, just labeled differently. Gate-b is correctly saying "no feature separates these populations"; what it couldn't say is "because the populations aren't actually different."
+
+**This reopens the gate-b measurement as a valid experiment once labels are clean** (see ML_IMPROVEMENT_PLAN Step 2, training v30 on `onsets_consensus`). After v30 ships:
+
+1. Re-run held-out validation with `persist_raw=true` on v30.
+2. Re-run `run_gate_b.py` on the fresh TP/FP population defined by cleaner labels.
+3. If any feature now shows |d| ≥ 0.3: that feature genuinely carries discriminative signal that was masked by v27's label noise. Prime candidate for v30-mel+feature ablation (clean gate-e comparison).
+4. If all features still fail: the original conclusion stands (shape features don't discriminate musically rhythmic-vs-random), and the firmware-level PLP AND-gate is the right answer.
+
+Gate-b doesn't need to be rebuilt — just re-run with corrected inputs.

@@ -26,6 +26,23 @@ struct FrameOnsetNN {
 static constexpr int SLOT_COUNT = 4;
 static constexpr int SLOT_BINS = 16;
 
+// T1.5 — spectral feature snapshot captured at each NN firing moment.
+// Emitted in the transient JSON so offline analysis can cluster TP vs FP
+// firings by spectral signature without needing persist_raw signal_frames
+// replay.
+struct PulseFeatureSnapshot {
+    float flatness;
+    float rawFlux;
+    float centroid;
+    float crest;
+    float rolloff;
+    float hfc;
+    float bassRatio;
+    float plpPulse;
+    float plpConfidence;
+};
+
+
 struct PatternSlot {
     float bins[SLOT_BINS];   // Resampled PLP pattern digest
     float confidence;         // PLP confidence when snapshot taken
@@ -72,6 +89,10 @@ public:
     // === Debug accessors ===
     float getPeriodicityStrength() const { return periodicityStrength_; }
     float getLastPulseStrength() const { return lastPulseStrength_; }
+    // T1.4/T1.5 — per-firing diagnostics, populated only when a pulse fires
+    // (pulseStrength > 0). Values persist until next firing.
+    uint8_t getLastPulseGateMask() const { return lastPulseGateMask_; }
+    const PulseFeatureSnapshot& getLastPulseFeatures() const { return lastPulseFeatures_; }
     uint16_t getBeatCount() const { return beatCount_; }
     float getPlpPhase() const { return plpPhase_; }
     float getPlpConfidence() const { return plpConfidence_; }
@@ -138,6 +159,25 @@ public:
     // (|d|=0.74 between drum-peak and non-onset frames). Default 0 = disabled.
     // Sweep range 0..10 against the validation corpus to tune.
     float crestGateMin = 0.0f;
+
+    // b142 — PLP pattern AND-gate. When beatGridPatternMin > 0 AND
+    // periodicityStrength_ > beatGridMinRhythmStrength, NN-triggered pulses
+    // are suppressed unless plpPulseValue_ at the current phase is at least
+    // beatGridPatternMin. plpPulseValue_ is the epoch-fold pattern amplitude
+    // at the current phase: high at EVERY position the pattern predicts
+    // an onset (beats 1-4, not just phase=0), low between them.
+    //
+    // Previous b141 attempt used phase-distance-from-phase=0 (one accent
+    // per period) and lost 39 pp recall on held-out because plpBestPeriod
+    // is often a bar-length pattern with 2-4 accent positions. The pattern
+    // value correctly accepts all accent positions regardless of period
+    // interpretation.
+    //
+    // The rhythmStrength guard prevents suppression during ACF warmup
+    // (~1.6 s) and on low-periodicity content (ambient, sparse).
+    // 0 = disabled. Sweep 0.3-0.6 against validation corpus.
+    float beatGridPatternMin = 0.4f;
+    float beatGridMinRhythmStrength = 0.2f;
 
     // ODF baseline tracking rates
     float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
@@ -224,6 +264,11 @@ private:
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
+    // T1.4/T1.5 — per-firing diagnostics captured at updatePulseDetection
+    // when a pulse fires. Consumed by the TRANSIENT JSON emitter in
+    // blinky-things.ino for offline FP/TP class clustering.
+    uint8_t lastPulseGateMask_ = 0;
+    PulseFeatureSnapshot lastPulseFeatures_ = {0};
 
     float prevSignal_ = 0.0f;          // Previous frame signal (t-1)
     float prevPrevSignal_ = 0.0f;      // Frame t-2 (for local-max: t-1 > t-2 AND t-1 > t)
