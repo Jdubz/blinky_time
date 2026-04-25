@@ -858,10 +858,22 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         with open(onset_path) as f:
             onset_data = json.load(f)
         min_systems = cfg.get("labels", {}).get("min_systems", 1)
+        raw_onsets = onset_data["onsets"]
         if min_systems > 1:
-            filtered = [o for o in onset_data["onsets"] if o.get("systems", 0) >= min_systems]
+            filtered = [o for o in raw_onsets if o.get("systems", 0) >= min_systems]
+            # Catch the silent-empty-track failure mode: if a label file
+            # uses a different schema (e.g. older format with no `systems`
+            # field), the filter drops everything and produces empty
+            # frame targets, which would otherwise only surface as a
+            # mysterious zero-loss-on-this-track much later. Log per
+            # track and globally so the precheck or tail of the prep
+            # log makes it obvious.
+            if len(filtered) == 0 and len(raw_onsets) > 0:
+                print(f"  WARNING: {audio_path.stem}: min_systems={min_systems} "
+                      f"dropped all {len(raw_onsets)} onsets — track will train "
+                      f"on all-zero targets. Check label file schema.")
         else:
-            filtered = onset_data["onsets"]
+            filtered = raw_onsets
         beat_times = np.array([o["time"] for o in filtered])
         beat_strengths = np.array([o["strength"] for o in filtered])
     elif labels_type == "instrument" and kick_weighted_dir:

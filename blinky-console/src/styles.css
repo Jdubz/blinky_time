@@ -1569,6 +1569,11 @@ body {
   color: var(--text-muted);
 }
 
+.audio-debug-status-error {
+  color: var(--accent-danger, #d33);
+  border-color: color-mix(in srgb, var(--accent-danger, #d33) 60%, transparent);
+}
+
 .audio-debug-placeholder {
   margin: 2rem auto;
   padding: 1.5rem 2rem;

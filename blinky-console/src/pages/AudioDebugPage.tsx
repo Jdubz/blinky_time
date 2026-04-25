@@ -19,25 +19,36 @@ interface AudioDebugPageProps {
 
 export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // `protocolNonce` bumps after we lazily attach a protocol to a device.
+  // Mutating `selectedDevice.protocol` doesn't change object identity, so
+  // without this bump useDeviceAudioStream wouldn't re-render to see the
+  // new protocol. The hook also keys on `device.protocol` internally, but
+  // that re-run only happens if THIS component re-renders first.
+  const [, setProtocolNonce] = useState(0);
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
   // Lazily initialise the protocol on the picked device, mirroring MainShell.
-  // useDeviceAudioStream will then call connect() once the protocol exists.
+  // First-writer-wins: if MainShell or another view already attached a
+  // protocol to this Device object, we leave it alone. This is safe because
+  // Device objects are shared by reference across the whole app.
   useEffect(() => {
     if (!selectedDevice || selectedDevice.protocol || selectedDevice.transports.length === 0) {
       return;
     }
     selectedDevice.protocol = new DeviceProtocol(selectedDevice.transports[0].transport);
+    setProtocolNonce(n => n + 1);
   }, [selectedId, selectedDevice]);
 
   const stream = useDeviceAudioStream(selectedDevice);
 
-  const connectionState = stream.isConnected
-    ? 'connected'
-    : selectedDevice
-      ? 'connecting'
-      : 'disconnected';
+  const connectionState = stream.error
+    ? 'error'
+    : stream.isConnected
+      ? 'connected'
+      : selectedDevice
+        ? 'connecting'
+        : 'disconnected';
 
   return (
     <div className="audio-debug-page">
@@ -63,6 +74,12 @@ export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
           {connectionState}
         </span>
       </div>
+
+      {stream.error && selectedDevice && (
+        <div className="audio-debug-placeholder">
+          {`Connection failed: ${stream.error.message}. Check the device is online and try selecting it again.`}
+        </div>
+      )}
 
       {!selectedDevice && (
         <div className="audio-debug-placeholder">

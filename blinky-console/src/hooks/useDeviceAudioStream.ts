@@ -22,8 +22,32 @@ export interface UseDeviceAudioStreamReturn {
   musicModeData: MusicModeData | null;
   isStreaming: boolean;
   isConnected: boolean;
+  /** Last error from connect() or stream toggle, or null if none. Cleared on
+   *  successful reconnect. Surfaced so callers can render an error state
+   *  instead of leaving the UI stuck in "connecting". */
+  error: Error | null;
   toggleStreaming: () => Promise<void>;
   onTransientEvent: (callback: (msg: TransientMessage) => void) => () => void;
+}
+
+/** Audio sample fields where NaN/Infinity from a malformed firmware frame
+ *  would render the chart with broken paths or stuck axes. The protocol
+ *  layer's zod schema logs a warning on schema-failed messages but still
+ *  emits the parsed object (see DeviceProtocol.handleLine), so we re-check
+ *  here before pushing into render state. */
+function isAudioSampleFinite(s: AudioSample): boolean {
+  return (
+    Number.isFinite(s.l) &&
+    Number.isFinite(s.t) &&
+    Number.isFinite(s.pk) &&
+    Number.isFinite(s.vl) &&
+    Number.isFinite(s.raw) &&
+    Number.isFinite(s.h)
+  );
+}
+
+function isMusicModeFinite(m: MusicModeData): boolean {
+  return Number.isFinite(m.bpm) && Number.isFinite(m.ph) && Number.isFinite(m.str);
 }
 
 export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStreamReturn {
@@ -31,26 +55,35 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
   const [musicModeData, setMusicModeData] = useState<MusicModeData | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
 
   const transientCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
+
+  // Effect keys on `device.protocol` as well as `device` so that lazy protocol
+  // attachment (`device.protocol = new DeviceProtocol(...)` from a parent's
+  // useEffect) re-runs this effect once the protocol exists. Without
+  // `device?.protocol` in the dep list the effect only sees the original
+  // `protocol = null` snapshot and never connects.
+  const protocol = device?.protocol ?? null;
 
   useEffect(() => {
     setAudioData(null);
     setMusicModeData(null);
     setIsStreaming(false);
+    setError(null);
 
-    if (!device || !device.protocol) {
+    if (!device || !protocol) {
       setIsConnected(false);
       return;
     }
 
-    const protocol = device.protocol;
     setIsConnected(protocol.isConnected());
 
     const handler = (event: SerialEvent) => {
       switch (event.type) {
         case 'connected':
           setIsConnected(true);
+          setError(null);
           break;
         case 'disconnected':
           setIsConnected(false);
@@ -60,8 +93,18 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
           break;
         case 'audio':
           if (event.audio) {
-            setAudioData(event.audio.a);
-            if (event.audio.m) setMusicModeData(event.audio.m);
+            if (isAudioSampleFinite(event.audio.a)) {
+              setAudioData(event.audio.a);
+            } else {
+              console.warn('useDeviceAudioStream: dropping non-finite audio sample', event.audio.a);
+            }
+            if (event.audio.m) {
+              if (isMusicModeFinite(event.audio.m)) {
+                setMusicModeData(event.audio.m);
+              } else {
+                console.warn('useDeviceAudioStream: dropping non-finite music data', event.audio.m);
+              }
+            }
           }
           break;
         case 'transient':
@@ -77,25 +120,37 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
     if (!protocol.isConnected()) {
       protocol.connect().catch(err => {
         console.error('useDeviceAudioStream: connect failed', err);
+        setError(err instanceof Error ? err : new Error(String(err)));
       });
     }
 
     return () => {
       protocol.removeEventListener(handler);
       if (protocol.isConnected()) {
-        protocol.setStreamEnabled(false).catch(() => {});
+        protocol.setStreamEnabled(false).catch(err => {
+          // Cleanup-time errors are non-fatal but worth surfacing so a
+          // consistently-failing teardown doesn't go silently un-noticed.
+          console.warn('useDeviceAudioStream: stream teardown failed', err);
+        });
       }
     };
-  }, [device]);
+  }, [device, protocol]);
 
   const toggleStreaming = useCallback(async () => {
     if (!device?.protocol?.isConnected()) return;
     const next = !isStreaming;
-    await device.protocol.setStreamEnabled(next);
-    setIsStreaming(next);
-    if (!next) {
-      setAudioData(null);
-      setMusicModeData(null);
+    try {
+      await device.protocol.setStreamEnabled(next);
+      setIsStreaming(next);
+      setError(null);
+      if (!next) {
+        setAudioData(null);
+        setMusicModeData(null);
+      }
+    } catch (err) {
+      console.error('useDeviceAudioStream: setStreamEnabled failed', err);
+      setError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
     }
   }, [device, isStreaming]);
 
@@ -111,6 +166,7 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
     musicModeData,
     isStreaming,
     isConnected,
+    error,
     toggleStreaming,
     onTransientEvent,
   };
