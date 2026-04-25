@@ -406,6 +406,20 @@ Measured mel-diff signal-to-baseline ratio at each label, ±3-frame window, 20-t
 
 **The 4-system bucket (1.11×) is anomalously weak** — a separate finding worth investigating but not blocking. Possibly the merge algorithm chains harmonic detections across the 70ms tolerance window when 4 systems vote.
 
+**Investigated 2026-04-25 PM** (60-track sample via `ml-training/scripts/analyze_4sys_anomaly.py`):
+
+| sys | count | mel-diff signal | energy_ratio | interpretation |
+|---|---|---|---|---|
+| 1/5 | 922 | 0.54× | 1.20 | events at high-energy steady-state (single-detector confusion) |
+| 2/5 | 1502 | 0.49× | 1.66 | same pattern, more concentrated at sustained loud passages |
+| 3/5 | 3185 | 1.54× | 0.59 | reference: clean onsets at quieter context |
+| 4/5 | 1147 | **1.24×** | 0.56 | anomaly persists at larger n — same context as 3/5/5 but weaker amplitude |
+| 5/5 | 3064 | 1.47× | 0.46 | strict consensus, slightly weaker than 3/5 (selection bias toward universally-agreed events) |
+
+The "4-system events are at high steady-state" hypothesis is *ruled out* (energy_ratio 0.56, comparable to 3- and 5-system at quieter passages). They're genuinely weaker onsets, not misplaced ones. Most plausible reading: 4-system events are the "weak" tier where 4 detectors agree but the 5th (typically essentia HFC, our percussive specialist) doesn't see enough energy to fire — i.e., harmonic / vocal / chord onsets the perceptual detectors mark and the mel-energy-aware detector ignores.
+
+**Actionable for v34** (if v33 plateaus): filter `systems in {3, 5}` instead of `systems >= 3`. Cumulative signal would rise from ~1.41× to ~1.50× at small density cost. Test in a v34 prep config.
+
 ### Root cause restated
 
 v31 (and v30) collapsed because **76% of their positive labels (1- and 2-system consensus events) are sub-perceptual in mel-only features**. The model regresses toward predicting the mean. Sharper labels (binarization) don't help; the underlying labels are wrong about which frames are onsets the model can learn.
@@ -435,4 +449,4 @@ The audit's Tier 1 work caught v31 offline (T2.5 representative-dataset activati
 | v32 config (`conv1d_w16_onset_v32_mel_only.yaml`) | new | ✓ landed |
 | T4.4 — `early_stopping_metric` config | audit Tier 4 | ✓ landed earlier today |
 | Per-strength signal logging in prep validation | new | TODO before v32 launch |
-| Investigate 4-system signal anomaly (1.11×) | new | TODO post-v32 |
+| Investigate 4-system signal anomaly (1.11×) | new | ✓ landed (2026-04-25) — see "Investigated 2026-04-25 PM" subsection above; finding: 4-sys events are weak harmonic onsets, recommend `systems in {3, 5}` filter for v34 |
