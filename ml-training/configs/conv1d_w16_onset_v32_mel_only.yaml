@@ -1,0 +1,92 @@
+# Conv1D W16 v32 — onset_consensus with strict ≥3-system filter
+#
+# v30/v31 collapse root cause (investigation 2026-04-24, see
+# docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md addendum):
+#   The bimodal-labels hypothesis was wrong. Both v30 (continuous strengths)
+#   and v31 (binarized at >0.05) collapsed because the underlying
+#   onset_consensus labels include a flood of 1- and 2-system detections
+#   whose mel-diff signal is *below random* (0.43-0.46×). The model regresses
+#   to mean across this label noise, producing the compressed activation
+#   distribution we see post-export (v31: std=0.089).
+#
+# Per-strength mel-diff signal-to-baseline ratio (20-track sample):
+#   1/5 sys: 0.43×  ← noise (sub-random)
+#   2/5 sys: 0.46×  ← noise
+#   3/5 sys: 1.65×  ← matches v29's kick_weighted (1.45×)
+#   4/5 sys: 1.11×  ← anomaly, possibly bias toward harmonic events
+#   5/5 sys: 1.54×  ← strict but sparse (78 events/min)
+#   ≥3/5 cumul: 1.52× signal, 16.5% positive frame ratio after 3-frame plateau
+#
+# v32 = v31 + min_systems: 3 filter (applied at prep time, not training time).
+# Same label source as v30/v31 (consensus_v5), just stricter inclusion.
+#
+# Expected outcome: v29-quality training signal (val_f1 ≈ 0.50-0.55, sharp
+# bimodal output distribution std > 0.30 post-export) on a broader-than-kick
+# event coverage (all percussive + strongly-confirmed harmonic onsets).
+#
+# Requires: rerun prepare_dataset.py with --output-dir
+# /mnt/storage/blinky-ml-data/processed_v32 (the labels filter happens at
+# prep time, so existing processed_v31 cannot be reused).
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "onset_consensus"
+  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  # Filter to 3+ system agreement at PREP time. 1- and 2-system events have
+  # sub-random mel-diff signal and inject pure label noise. See investigation
+  # in AUDIO_SYSTEM_AUDIT_2026_04_24.md.
+  min_systems: 3
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  # Threshold > 0.10 keeps 3-sys centers (0.6) AND their neighbors (0.15) as
+  # plateaus, matching v29's 3-frame plateau geometry. Lower thresholds would
+  # only keep neighbors of weaker (filtered-out) events; higher thresholds
+  # would lose the plateau and revert to single-frame labels. This is the
+  # symmetrical pair to min_systems: 3.
+  hard_binary_threshold: 0.10
+
+audio:
+  n_mels: 30
+  fmin: 40
+  fmax: 4000
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  pos_weight: 0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  # Audit T4.4: select best-checkpoint by peak-picked val F1, the metric the
+  # firmware actually uses. v30/v31's val_loss-best epoch was not their
+  # peak-F1-best epoch — this gap was invisible until offline export.
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v32"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v32_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 25

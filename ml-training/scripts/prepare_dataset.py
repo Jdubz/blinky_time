@@ -841,6 +841,14 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         # These are acoustic onset positions, not metrical beats — directly
         # matching the onset detection task. Each onset has a strength field
         # encoding the number of agreeing systems (1/5 to 5/5).
+        #
+        # min_systems filters out low-confidence detections at prep time.
+        # Investigation 2026-04-24 (post-v31 collapse) showed that 1- and 2-system
+        # detections have mel-diff signal-to-baseline ratio BELOW 1.0× (i.e., they
+        # mark frames where mel-energy change is *less* than random), while 3+
+        # system events reach 1.65× — matching v29's working kick_weighted labels.
+        # Default 1 (=keep everything) preserves backwards compatibility; v32+
+        # configs should set min_systems: 3 for clean training signal.
         onset_path = Path(onset_consensus_dir) / f"{audio_path.stem}.onsets.json"
         if not onset_path.exists():
             raise FileNotFoundError(
@@ -849,8 +857,13 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             )
         with open(onset_path) as f:
             onset_data = json.load(f)
-        beat_times = np.array([o["time"] for o in onset_data["onsets"]])
-        beat_strengths = np.array([o["strength"] for o in onset_data["onsets"]])
+        min_systems = cfg.get("labels", {}).get("min_systems", 1)
+        if min_systems > 1:
+            filtered = [o for o in onset_data["onsets"] if o.get("systems", 0) >= min_systems]
+        else:
+            filtered = onset_data["onsets"]
+        beat_times = np.array([o["time"] for o in filtered])
+        beat_strengths = np.array([o["strength"] for o in filtered])
     elif labels_type == "instrument" and kick_weighted_dir:
         # Per-instrument onset targets: 3 channels (kick/snare/hihat).
         # Each channel gets an independent binary target from the kick_weighted

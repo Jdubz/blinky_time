@@ -283,6 +283,54 @@ Only if v30 on `onsets_consensus` labels also shows contamination or low ceiling
 
 70% of infrastructure already built (see Thread 4). Missing piece is AudioTracker multi-channel routing (~2-3 days). Pursue only if Steps 2-4 don't reach the precision target on edm/.
 
+## 2026-04-24 evening — v30/v31 collapse investigated; v32 plan
+
+v30 and v31 both produced collapsed activation distributions (std 0.15 and 0.089 respectively, vs v29's 0.34). v31's hypothesis was that v30's continuous label strengths caused the collapse and that hard binarization at training time would restore v29's bimodal output. **It didn't. v31 collapsed worse.**
+
+### Investigation findings (2026-04-24, post-v31 export)
+
+Direct measurement of mel-diff signal-to-baseline ratio at each consensus label, ±3-frame tolerance window, 20-track sample:
+
+| Source | per-strength mel-diff signal |
+|---|---|
+| consensus 1/5 systems | **0.43×** (sub-random) |
+| consensus 2/5 systems | **0.46×** (sub-random) |
+| consensus 3/5 systems | 1.65× |
+| consensus 4/5 systems | 1.11× (anomaly) |
+| consensus 5/5 systems | 1.54× |
+| kick_weighted (v29 source) | 1.45× |
+| reference: top-20% mel-diff | 14.4× |
+
+**Root cause:** the v30/v31 label set was the union of 5 detectors at any agreement level. 76% of labeled positive frames are 1- or 2-system detections whose mel-diff is *below* random — they mark frames where mel-energy change is *less* than at random points in the audio. The model regresses to the mean across this label noise, producing the collapsed activation distribution.
+
+**Why v29 worked:** kick_weighted labels mark percussive events with unambiguous low-frequency energy spikes. Even with documented stem-bleed contamination, the labeled frames coincide with mel-energy events. Signal ratio 1.45× is workable; v29 reached val_F1=0.54 frame-level.
+
+### v32 plan — `min_systems: 3` filter at prep time
+
+Filter consensus labels to ≥3-system agreement at prep time. Rationale:
+
+- **Per-strength signal at ≥3-systems = 1.65×**, beats v29's kick_weighted (1.45×).
+- **Cumulative ≥3-systems = 1.52× signal** with ~16.5% positive frame ratio after 3-frame plateau — sparse enough to be sharp, dense enough for the model to see many examples.
+- **Density 207 events/min** at min_systems=3 vs 282 at min_systems=1 — broader coverage than kick_weighted (~100 events/min) without the contamination of single-detector noise.
+- **Broader event coverage than kick_weighted** — picks up any percussive + strongly-confirmed harmonic onset, not just kicks/snares from a contaminated stem.
+
+The filter is implemented as `cfg.labels.min_systems` in `prepare_dataset.py`. Default 1 preserves backwards-compat. v32 config sets 3.
+
+v32 also opts into T4.4's `early_stopping_metric: val_peak_f1` — v31 confirmed val_loss-best is not on-device-realistic-best.
+
+### Disproven directly by this round
+
+- **"Continuous label strengths cause collapse" (v31 hypothesis)** — wrong. Sharp binarization didn't help and made things worse, because the underlying labels were polluted with sub-perceptual events at any encoding shape.
+- **"Single-system detector noise averages out across 5 detectors" (v30 implicit assumption)** — wrong. The merge algorithm at 70ms tolerance creates a union, not a robust intersection. Without a `min_systems ≥ 3` floor, every detector's idiosyncratic noise gets a vote.
+
+### Anomaly to investigate post-v32
+
+The 4-system bucket has *lower* per-strength signal (1.11×) than the 3-system bucket (1.65×). Two plausible causes — (a) the merge algorithm chains harmonic detections across the 70ms window when a 4th detector hits, and (b) certain detector subsets co-fire on harmonic events that mel features can't see. Worth investigating but not blocking v32.
+
+#### Step 2.5 (in flight): v32 on `onsets_consensus` with `min_systems: 3`
+
+`configs/conv1d_w16_onset_v32_mel_only.yaml`. Requires `prepare_dataset.py` rerun to `processed_v32` (the filter applies at prep, can't reuse processed_v31). Expected outcome: training-time signal returns to v29-quality (val_F1 ≈ 0.50-0.55, post-export activation std > 0.30) with broader event coverage than kick_weighted.
+
 ### Measurement instrumentation priorities
 
 1. **PLP accuracy measurement** via `persist_raw` — capture `plpPhase_`, `plpPulseValue_`, `plpConfidence_` every frame; correlate with ground-truth beat times. This is the prerequisite diagnostic for Step 3. If PLP has low accuracy vs ground truth, no treatment (gate OR training input) will salvage it.
