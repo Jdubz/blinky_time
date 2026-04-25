@@ -155,4 +155,102 @@ describe('AudioVisualizer', () => {
       expect(startButton).toHaveClass('btn-primary');
     });
   });
+
+  describe('music mode telemetry', () => {
+    // PLP-era firmware (b79+) — no conf, no bc.
+    // Each numeric value is distinct so getByText can match unambiguously.
+    const plpMusic = {
+      a: 1 as const,
+      bpm: 124.5,
+      ph: 0.42,
+      str: 0.78,
+      q: 0 as const,
+      e: 0.55,
+      p: 0.81,
+      pp: 0.7,
+      od: 3.2,
+      nn: 0.36,
+      per: 33,
+    };
+
+    it('renders BPM, Phase, Strength when music mode is active', () => {
+      render(
+        <AudioVisualizer
+          {...defaultProps}
+          isStreaming={true}
+          audioData={mockAudioData}
+          musicModeData={plpMusic}
+        />
+      );
+
+      expect(screen.getByText('BPM')).toBeInTheDocument();
+      expect(screen.getByText('124.5')).toBeInTheDocument();
+      expect(screen.getByText('Phase')).toBeInTheDocument();
+      expect(screen.getByText('0.42')).toBeInTheDocument();
+      expect(screen.getByText('Strength')).toBeInTheDocument();
+      expect(screen.getByText('78%')).toBeInTheDocument();
+    });
+
+    it('omits Confidence and Beats rows when firmware does not emit them', () => {
+      render(
+        <AudioVisualizer
+          {...defaultProps}
+          isStreaming={true}
+          audioData={mockAudioData}
+          musicModeData={plpMusic}
+        />
+      );
+
+      // Regression guard: previously rendered "NaN%" / "undefined" against
+      // PLP-era firmware that doesn't emit conf/bc.
+      expect(screen.queryByText('Confidence')).not.toBeInTheDocument();
+      expect(screen.queryByText('Beats')).not.toBeInTheDocument();
+      expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+    });
+
+    it('renders NN row when nn field is present', () => {
+      render(
+        <AudioVisualizer
+          {...defaultProps}
+          isStreaming={true}
+          audioData={mockAudioData}
+          musicModeData={plpMusic}
+        />
+      );
+
+      expect(screen.getByText('NN')).toBeInTheDocument();
+      expect(screen.getByText('0.36')).toBeInTheDocument();
+    });
+
+    it('still renders legacy Confidence and Beats when firmware emits them', () => {
+      render(
+        <AudioVisualizer
+          {...defaultProps}
+          isStreaming={true}
+          audioData={mockAudioData}
+          musicModeData={{ ...plpMusic, conf: 0.85, bc: 12 }}
+        />
+      );
+
+      expect(screen.getByText('Confidence')).toBeInTheDocument();
+      expect(screen.getByText('85%')).toBeInTheDocument();
+      expect(screen.getByText('Beats')).toBeInTheDocument();
+      expect(screen.getByText('12')).toBeInTheDocument();
+    });
+
+    it('hides telemetry when music mode is inactive', () => {
+      render(
+        <AudioVisualizer
+          {...defaultProps}
+          isStreaming={true}
+          audioData={mockAudioData}
+          musicModeData={{ ...plpMusic, a: 0 }}
+        />
+      );
+
+      expect(screen.getByText('Music')).toBeInTheDocument();
+      expect(screen.getByText('Inactive')).toBeInTheDocument();
+      expect(screen.queryByText('BPM')).not.toBeInTheDocument();
+    });
+  });
 });

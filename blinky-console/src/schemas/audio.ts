@@ -23,20 +23,28 @@ export const AudioSampleSchema = z.object({
 export type AudioSample = z.infer<typeof AudioSampleSchema>;
 
 /**
- * Music mode data from streaming `{"m":{...}}` messages
+ * Music mode data from streaming `{"m":{...}}` sub-message.
  *
- * Sent by AudioController with CBSS beat tracking.
+ * Field set tracks SerialConsole.cpp::streamTick() (PLP architecture, b79+).
+ * Only `a`, `bpm`, `ph`, `str`, `q`, `e`, `p` are guaranteed every frame; the
+ * rest are firmware-build-dependent so they're optional here.
  */
 export const MusicModeDataSchema = z.object({
   a: z.union([z.literal(0), z.literal(1)]), // Active flag (rhythm detected)
   bpm: z.number().nonnegative(), // Tempo in BPM (0 when inactive)
   ph: z.number().min(0).max(1), // Phase (0-1, 0=on-beat)
   str: z.number().min(0).max(1), // Rhythm strength (0-1)
-  conf: z.number().min(0).max(1), // CBSS beat tracking confidence (0-1)
-  bc: z.number().int().nonnegative(), // Beat count (tracked beats)
   q: z.union([z.literal(0), z.literal(1)]), // Beat event (phase wrap)
   e: z.number().min(0).max(1), // Energy (0-1)
   p: z.number().min(0).max(1), // Pulse (0-1)
+  // Firmware-emitted, optional — not all builds include them.
+  ts: z.number().nonnegative().optional(), // Firmware millis at frame emission
+  pp: z.number().min(0).max(1).optional(), // PLP extracted pulse value
+  od: z.number().nonnegative().optional(), // Onset density
+  nn: z.number().min(0).max(1).optional(), // Raw NN onset activation
+  per: z.number().int().nonnegative().optional(), // ACF period in analysis frames
+  conf: z.number().min(0).max(1).optional(), // CBSS confidence (legacy field, pre-PLP)
+  bc: z.number().int().nonnegative().optional(), // Beat count (legacy field, pre-PLP)
   cb: z.number().nonnegative().optional(), // Current CBSS value
   oss: z.number().nonnegative().optional(), // Smoothed onset strength
   ttb: z.number().int().optional(), // Frames until next beat

@@ -12,6 +12,7 @@ import { DeviceStrip } from './components/DeviceStrip';
 import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { ScenesPanel, type Scene } from './components/ScenesPanel';
+import { AudioDebugPage } from './pages/AudioDebugPage';
 import { DeviceProtocol } from './services/protocol';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
 import type { GeneratorType } from './types';
@@ -25,6 +26,7 @@ export function MainShell() {
   const [effectMode, setEffectMode] = useState<EffectMode>('off');
   const [hueSpeed, setHueSpeed] = useState(0.5);
   const [hueShift, setHueShift] = useState(0);
+  const [showAudioDebug, setShowAudioDebug] = useState(false);
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
@@ -38,6 +40,10 @@ export function MainShell() {
     selectedDevice.protocol = new DeviceProtocol(selectedDevice.transports[0].transport);
     // `selectedDevice` is derived from `selectedId`; keying on id is correct.
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (showAudioDebug) {
+    return <AudioDebugPage devices={devices} onClose={() => setShowAudioDebug(false)} />;
+  }
 
   // Target for the current selection. Three shapes:
   //   - fleet: "All" selection or no device selected → dispatch via HTTP
@@ -136,6 +142,13 @@ export function MainShell() {
             ? `All · ${devices.filter(d => d.isConnected()).length} connected`
             : (selectedDevice?.displayName ?? 'Device')}
         </span>
+        <button
+          className="btn btn-small shell-debug-btn"
+          onClick={() => setShowAudioDebug(true)}
+          title="Open audio stream debug page"
+        >
+          Audio Debug
+        </button>
       </header>
 
       <DeviceStrip

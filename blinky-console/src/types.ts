@@ -33,8 +33,6 @@ export type {
   ConnectionState,
   GeneratorType,
   EffectType,
-  GeneratorState,
-  EffectState,
 } from './schemas';
 
 // Re-export schemas for runtime validation and type guards
@@ -59,6 +57,4 @@ export {
   ConnectionStateSchema,
   GeneratorTypeSchema,
   EffectTypeSchema,
-  GeneratorStateSchema,
-  EffectStateSchema,
 } from './schemas';
