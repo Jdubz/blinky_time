@@ -1342,19 +1342,14 @@ def main():
     #   - final X+Y arrays (~100-130 GB each = ~260 GB for both)
     #   - shard intermediates kept during merge (~120 GB at end of shard phase)
     #   - merge temp workspace (≈final_size × 1.2 via os.replace rename)
-    # Total headroom needed: ~420 GB. Prior 200 GB was too lenient; hit merge
-    # failure on 2026-04-23 after 2 hours of prep work. Raised + dynamic.
-    MIN_FREE_GB = 450
-    disk_stat = shutil.disk_usage(output_dir)
-    free_gb = disk_stat.free / (1024 ** 3)
-    if free_gb < MIN_FREE_GB:
-        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir}. "
-              f"Need at least {MIN_FREE_GB} GB to start dataprep "
-              f"(final arrays ~260 GB + shard intermediates ~120 GB + merge ~50 GB).\n"
-              f"  Tip: delete old processed_v* dirs or stale mel_cache entries, "
-              f"or rerun with --auto-clean-stale.",
-              file=sys.stderr)
-        sys.exit(1)
+    # Total headroom needed: ~420 GB conservative; ~300 GB empirical.
+    # v30 merge failed at 2026-04-23 with only 200 GB initially free, motivating
+    # the 450 cap. v31 prep then ran cleanly at 334 GB with peak intermediate
+    # usage ~121 GB (final 130 GB array + ~120 GB shards), confirming the real
+    # need is ≤300 GB when an old processed dir gets cleaned. The precheck
+    # below runs AFTER --auto-clean-stale so the post-cleanup free space is
+    # what's compared.
+    MIN_FREE_GB = 300
 
     # --- Clean up old processed dirs ---
     # Each version creates a new processed_v{N} dir but old ones were never
@@ -1393,6 +1388,19 @@ def main():
         else:
             print("  (Non-interactive — skipping auto-delete. "
                   "Run interactively or pass --auto-clean-stale.)")
+
+    # --- Disk free precheck (post-cleanup) ---
+    # Moved after cleanup so --auto-clean-stale's freed space is what's
+    # compared. Otherwise we'd reject runs that would have fit cleanly.
+    free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
+    if free_gb < MIN_FREE_GB:
+        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir} after cleanup. "
+              f"Need at least {MIN_FREE_GB} GB to start dataprep "
+              f"(final arrays ~260 GB + shard intermediates ~120 GB + merge ~50 GB).\n"
+              f"  Tip: delete stale mel_cache entries, drop unused stems, or "
+              f"free space on the volume.",
+              file=sys.stderr)
+        sys.exit(1)
 
     # --- Prune stale mel cache entries ---
     mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
