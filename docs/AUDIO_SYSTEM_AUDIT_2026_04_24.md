@@ -267,6 +267,8 @@ These are the fixes that would have surfaced v30's failure mode at training time
 | **T4.7** | Beat-count correlation stream (D9) | Advanced offline analysis enabler. |
 | **T4.8** | Quantization-noise wrapper coverage (B6) | Low priority — quant_noise is disabled in current configs. |
 | **T4.9** | Noise subtraction validate-or-remove (C8) | Housekeeping. |
+| **T4.10** | Replay mode using captured device audio (was task #34) | Long-deferred harness-v2 infra. Not blocking on-device validation. Deleted from active list 2026-04-25. |
+| **T4.11** | Vendor CMSIS-DSP FFT into harness (was task #37) | Same harness-v2 family as T4.2 / T4.10 — would give offline byte-identical FFT. Deleted from active list 2026-04-25. |
 
 ---
 
