@@ -175,8 +175,19 @@ public:
     //
     // The rhythmStrength guard prevents suppression during ACF warmup
     // (~1.6 s) and on low-periodicity content (ambient, sparse).
-    // 0 = disabled. Sweep 0.3-0.6 against validation corpus.
-    float beatGridPatternMin = 0.4f;
+    // 0 = disabled (default since 2026-04-25).
+    //
+    // 2026-04-25: default flipped 0.4 → 0.0 after persist_raw analysis on
+    // 5 edm_holdout tracks. plpPulseValue at GT-beat frames matched ≥0.4
+    // only 0-35% of the time even when the rhythm period itself was
+    // tracked correctly (gtPatternCorr 0.86-0.99). The gate suppressed
+    // 65-84% of true onsets across the corpus (recall fell from 0.65 to
+    // 0.22 in the validation runs). PLP is a reliable PERIOD tracker but
+    // a poor PER-FRAME gate. See ML_IMPROVEMENT_PLAN 2026-04-25 §"PLP
+    // accuracy". Keep the runtime tunable so the gate can be re-enabled
+    // per-device or for sparse-content profiles where false positives
+    // are more expensive than missed firings.
+    float beatGridPatternMin = 0.0f;
     float beatGridMinRhythmStrength = 0.2f;
 
     // ODF baseline tracking rates

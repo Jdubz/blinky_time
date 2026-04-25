@@ -464,6 +464,29 @@ v32 (deployed)             0.265
 **The new ranked plan**:
 
 - **Exp 4 (DONE 2026-04-25 PM): rolled devices back to v29 — uncovered firmware regression.** v29 b147 baseline with default settings: F1=0.257 (R=0.22), matching v30/v32 deployments. v29 b147 with `set beatgridmin 0`: **F1=0.470 (R=0.64)**, matching historical pre-b142 v29 within run-to-run noise. The PLP beat-grid AND-gate added in b142 (default `beatGridPatternMin=0.4`) suppresses recall by ~65% on rhythmic content. Every deployment since b142 has been gate-bottlenecked, not model-bottlenecked. This invalidates yesterday's "v32 is below the data ceiling because of activation collapse" conclusion: the v32 collapse is real offline (export std=0.123), but the on-device F1=0.265 was further suppressed by ~0.20 of firmware throttle.
+
+### PLP-accuracy diagnosis — gate is principle-broken (2026-04-25 PM)
+
+Followed up the gate finding with a `persist_raw=true` validation on 5 edm_holdout tracks (single device, b148+v32). Per-track aggregates:
+
+| Track | F1 (no gate) | gtOnsetsMatched/Total | atTransientNorm | nnAgreement | gtPatternCorr |
+|---|---|---|---|---|---|
+| 1234669 | 0.55 | 34/97 (35%) | 0.75 | 0.31 | 0.86 |
+| 2734862 | 0.65 | 20/107 (19%) | 0.58 | 0.35 | 0.94 |
+| 3642438 | 0.71 | 24/154 (16%) | 0.81 | 0.51 | 0.99 |
+| 4604737 | 0.61 | 0/95 (0%) | 0.0 | 0.34 | 0.0 |
+| 4611640 | 0.44 | 27/77 (35%) | 1.01 | 0.02 | 0.98 |
+
+**Key observations:**
+
+- **`gtOnsetsMatched/Total` is 0–35%.** The gate at threshold 0.4 would only let through 0–35% of true onsets, exactly matching the recall collapse (R=0.22 with-gate vs 0.65 without).
+- **`atTransientNorm < 1.0` on 4/5 tracks.** PLP value at NN firing times is *below* the track-mean PLP — the signal isn't "high at onsets, low between," it's roughly orthogonal to onsets.
+- **`gtPatternCorr` is 0.86–0.99 on 4/5 tracks.** PLP *does* find the rhythm-period structure, but per-frame alignment is too noisy to predict individual onset times. Pattern-correct, frame-wrong.
+- **`nnAgreement` is 2–51%.** NN and PLP disagree on which frames are onsets. The AND-gate suppresses on disagreement.
+
+**Conclusion.** PLP is a reliable PERIOD tracker but a poor PER-FRAME gate. The b142 design assumed the latter and it fails empirically.
+
+**Decision (#92 done):** flip `beatGridPatternMin` default 0.4 → 0.0 (b149). Runtime tunable preserved so the gate can be re-enabled per device or for sparse-content profiles where false positives are more expensive than missed firings.
 - **Exp 5 (investigation, not training): why does v29 produce std=0.34 while v32 produces 0.12 at the same architecture / mel resolution?** v29 used kick_weighted (drum-only events, ~76/min density). v32 used consensus min_systems≥3 (any-onset, ~207/min density). The label *density* and *event-type breadth* may explain the activation collapse — sparse single-purpose events produce sharp predictions; dense any-onset events smear them. If true, the next training direction is *narrower-target labels* (drum-only, kicks-only, beat-grid-only), not broader.
 - **Exp 6 (data work): generate clean drum-only labels without demucs stem bleed.** v29's kick_weighted labels were contaminated (32% of tracks had >0.7× bleed ratio per `HYBRID_FEATURE_ANALYSIS_PLAN.md`). A clean drum-only target — perhaps from a better separation model, or filtered by a kick-frequency-band energy criterion — could let v29's recipe push past 0.484.
 - **Exp 7 (product-spec change, not training): redefine the validation criterion** to "any salient onset" rather than rhythm-beats. Reannotate `.beats.json` to include hi-hats and harmonic onsets, then madmom RNN immediately becomes the product baseline at its 0.87 recall. This is the "join the published F1 ladder" path — but it's a product decision.
