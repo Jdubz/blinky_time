@@ -268,14 +268,32 @@ describe('useDeviceAudioStream', () => {
     });
   });
 
-  it('stops the stream on unmount', () => {
+  it('stops the stream on unmount only if it was streaming', async () => {
+    const fp = makeProtocol({ connected: true });
+    const device = makeDevice({ protocol: fp.protocol });
+
+    const { result, unmount } = renderHook(() => useDeviceAudioStream(device));
+
+    // Start streaming so the cleanup has work to undo. Without this, the
+    // teardown is a no-op (avoids spurious `set stream 0` commands when no
+    // stream was ever started — see PR 132 review feedback).
+    await act(async () => {
+      await result.current.toggleStreaming();
+    });
+    expect(fp.setStreamEnabled).toHaveBeenLastCalledWith(true);
+
+    unmount();
+    expect(fp.setStreamEnabled).toHaveBeenLastCalledWith(false);
+  });
+
+  it('does NOT call setStreamEnabled on unmount if it was never started', () => {
     const fp = makeProtocol({ connected: true });
     const device = makeDevice({ protocol: fp.protocol });
 
     const { unmount } = renderHook(() => useDeviceAudioStream(device));
     unmount();
 
-    expect(fp.setStreamEnabled).toHaveBeenCalledWith(false);
+    expect(fp.setStreamEnabled).not.toHaveBeenCalled();
   });
 
   it('clears state and resubscribes when device changes', () => {

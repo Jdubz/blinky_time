@@ -33,8 +33,12 @@ from madmom.features.onsets import (
 )
 
 TOLERANCES_S = [0.05, 0.07, 0.10, 0.15]
-DEFAULT_TRACK_DIR = Path(
-    "/home/jdubz/Development/blinky_time/blinky-test-player/music/edm_holdout"
+# Default to the corpus that lives in the repo, resolved relative to this
+# script. Earlier versions hardcoded an absolute developer path which broke
+# the moment the script ran on any other machine. Override by passing an
+# explicit dir as argv[1].
+DEFAULT_TRACK_DIR = (
+    Path(__file__).resolve().parents[2] / "blinky-test-player/music/edm_holdout"
 )
 
 
@@ -50,9 +54,9 @@ def load_ground_truth(beats_json_path: Path) -> np.ndarray:
     return np.asarray(sorted(times), dtype=np.float64)
 
 
-def detect_madmom(audio_path: Path, processor_cls, peak_picker) -> np.ndarray:
-    """Run a madmom onset processor on a single track. Returns onset times."""
-    activation = processor_cls()(str(audio_path))
+def detect_madmom(audio_path: Path, processor, peak_picker) -> np.ndarray:
+    """Run a pre-instantiated madmom onset processor on one track."""
+    activation = processor(str(audio_path))
     onsets = peak_picker(activation)
     return np.asarray(onsets, dtype=np.float64)
 
@@ -83,6 +87,13 @@ def evaluate_track(detected: np.ndarray, reference: np.ndarray) -> dict:
 
 def main() -> int:
     track_dir = DEFAULT_TRACK_DIR if len(sys.argv) < 2 else Path(sys.argv[1])
+    if not track_dir.exists():
+        print(f"ERROR: track dir not found: {track_dir}", file=sys.stderr)
+        print(
+            "Usage: venv311/bin/python scripts/measure_madmom_ceiling.py [track_dir]",
+            file=sys.stderr,
+        )
+        return 1
     audio_files = sorted(
         p
         for p in track_dir.iterdir()
@@ -96,8 +107,12 @@ def main() -> int:
     print(f"Found {len(audio_files)} audio files")
     print(f"Tolerances: {[f'{int(t*1000)}ms' for t in TOLERANCES_S]}\n")
 
-    cnn = CNNOnsetProcessor
-    rnn = RNNOnsetProcessor
+    # Instantiate processors ONCE — each constructor loads DNN weights from
+    # disk, and prior versions of this script accidentally re-instantiated
+    # inside the per-track loop, adding ~5 minutes of redundant model loads
+    # on a 25-track set.
+    cnn = CNNOnsetProcessor()
+    rnn = RNNOnsetProcessor()
     pp = OnsetPeakPickingProcessor(fps=100)
 
     per_track_results = []

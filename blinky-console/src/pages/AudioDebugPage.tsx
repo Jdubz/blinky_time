@@ -38,7 +38,10 @@ export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
     }
     selectedDevice.protocol = new DeviceProtocol(selectedDevice.transports[0].transport);
     setProtocolNonce(n => n + 1);
-  }, [selectedId, selectedDevice]);
+    // selectedDevice is derived from selectedId via devices.find(); keying
+    // on selectedId alone is enough — adding selectedDevice would re-run the
+    // effect on identity changes without triggering meaningful work.
+  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stream = useDeviceAudioStream(selectedDevice);
 

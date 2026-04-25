@@ -1109,7 +1109,9 @@ def main():
                 patience_counter = 0
                 print(f"  Recomputed best_{es_metric}={best_metric:.4f} "
                       f"from {len(log_with_metric)} prior epochs; "
-                      f"patience reset to 0.")
+                      f"patience reset to 0 (metric switch -- training may "
+                      f"run up to {patience} extra epochs vs. resuming "
+                      f"with the original metric).")
             else:
                 # No log rows have the requested metric — start fresh.
                 best_metric = float("inf") if es_minimize else float("-inf")
@@ -1422,14 +1424,17 @@ def main():
         # Save resumable checkpoint every epoch. `best_val_loss` is a
         # legacy field name kept for backward-compat with existing
         # checkpoint readers; it actually stores the configured
-        # `early_stopping_metric` best value (recorded separately so a
-        # future resume can detect a metric switch — see resume block).
+        # `early_stopping_metric` best value. We also write `best_metric`
+        # under its actual metric name (e.g. `best_val_peak_f1`) so external
+        # tools / log inspectors don't have to guess what the legacy field
+        # is currently tracking.
         _atomic_torch_save({
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "epoch": epoch,
             "best_val_loss": best_metric,
+            f"best_{es_metric}": best_metric,
             "early_stopping_metric": es_metric,
             "patience_counter": patience_counter,
             "log_rows": log_rows,

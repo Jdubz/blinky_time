@@ -47,7 +47,22 @@ function isAudioSampleFinite(s: AudioSample): boolean {
 }
 
 function isMusicModeFinite(m: MusicModeData): boolean {
-  return Number.isFinite(m.bpm) && Number.isFinite(m.ph) && Number.isFinite(m.str);
+  // All required numeric fields. The optional PLP fields (pp/od/nn/per/ts)
+  // are also numeric and may feed chart axes, but the schema's `.optional()`
+  // means they may be missing entirely; only validate when present.
+  if (
+    !Number.isFinite(m.bpm) ||
+    !Number.isFinite(m.ph) ||
+    !Number.isFinite(m.str) ||
+    !Number.isFinite(m.e) ||
+    !Number.isFinite(m.p)
+  ) {
+    return false;
+  }
+  for (const v of [m.pp, m.od, m.nn, m.per, m.ts, m.conf, m.cb, m.oss]) {
+    if (v !== undefined && !Number.isFinite(v)) return false;
+  }
+  return true;
 }
 
 export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStreamReturn {
@@ -58,6 +73,10 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
   const [error, setError] = useState<Error | null>(null);
 
   const transientCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
+  // Track the latest streaming state via ref so cleanup can read it without
+  // capturing a stale closure. Only the cleanup path reads this; the render
+  // path reads `isStreaming` state directly.
+  const isStreamingRef = useRef(false);
 
   // Effect keys on `device.protocol` as well as `device` so that lazy protocol
   // attachment (`device.protocol = new DeviceProtocol(...)` from a parent's
@@ -107,11 +126,13 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
             }
           }
           break;
-        case 'transient':
-          if (event.transient) {
-            transientCallbacksRef.current.forEach(cb => cb(event.transient!));
+        case 'transient': {
+          const transient = event.transient;
+          if (transient) {
+            transientCallbacksRef.current.forEach(cb => cb(transient));
           }
           break;
+        }
       }
     };
 
@@ -126,13 +147,16 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
 
     return () => {
       protocol.removeEventListener(handler);
-      if (protocol.isConnected()) {
+      // Only send the stop command if we actually started a stream — sending
+      // it unconditionally produces a spurious wire command for protocols
+      // whose firmware tracks stream state explicitly (and is wasted work
+      // even when it's a no-op).
+      if (protocol.isConnected() && isStreamingRef.current) {
         protocol.setStreamEnabled(false).catch(err => {
-          // Cleanup-time errors are non-fatal but worth surfacing so a
-          // consistently-failing teardown doesn't go silently un-noticed.
           console.warn('useDeviceAudioStream: stream teardown failed', err);
         });
       }
+      isStreamingRef.current = false;
     };
   }, [device, protocol]);
 
@@ -141,6 +165,7 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
     const next = !isStreaming;
     try {
       await device.protocol.setStreamEnabled(next);
+      isStreamingRef.current = next;
       setIsStreaming(next);
       setError(null);
       if (!next) {

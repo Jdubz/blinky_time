@@ -869,9 +869,12 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             # track and globally so the precheck or tail of the prep
             # log makes it obvious.
             if len(filtered) == 0 and len(raw_onsets) > 0:
-                print(f"  WARNING: {audio_path.stem}: min_systems={min_systems} "
-                      f"dropped all {len(raw_onsets)} onsets — track will train "
-                      f"on all-zero targets. Check label file schema.")
+                # Stable single-line marker so a post-prep summary can grep:
+                #   grep -c MIN_SYSTEMS_DROPPED_ALL <prep.log>
+                print(f"MIN_SYSTEMS_DROPPED_ALL {audio_path.stem} "
+                      f"min_systems={min_systems} raw_count={len(raw_onsets)} "
+                      f"-- training will see all-zero targets for this track. "
+                      f"Check label file schema.")
         else:
             filtered = raw_onsets
         beat_times = np.array([o["time"] for o in filtered])
@@ -1408,7 +1411,8 @@ def main():
     if free_gb < MIN_FREE_GB:
         print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir} after cleanup. "
               f"Need at least {MIN_FREE_GB} GB to start dataprep "
-              f"(final arrays ~260 GB + shard intermediates ~120 GB + merge ~50 GB).\n"
+              f"(empirical from v31: ~130 GB final arrays + ~120 GB shard "
+              f"intermediates ≈ 250 GB peak; threshold leaves ~50 GB margin).\n"
               f"  Tip: delete stale mel_cache entries, drop unused stems, or "
               f"free space on the volume.",
               file=sys.stderr)
