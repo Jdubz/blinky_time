@@ -438,14 +438,39 @@ External comparison (Schlüter & Böck 2014 ICASSP, Böck DAFx 2012, Vogl ISMIR 
 
 Each has a falsifiable prediction. Run sequentially; abandon at first negative result that contradicts the prediction.
 
-#### Exp 3 (do first, ~1 hour): measure the algorithmic detector ceiling on edm_holdout
+#### Exp 3 (DONE 2026-04-25): measured the algorithmic detector ceiling — **inverts the synthesis**
 
-Run madmom CNNOnsetProcessor + RNNOnsetProcessor on the 25 edm_holdout tracks. Score against the same `.beats.json` ground truth, same tolerances (50/70/100/150 ms) as device validation. This tells us *what's achievable on this corpus* before we retrain anything.
+Ran madmom CNN + RNN against the same `.beats.json` ground truth, same tolerances as device validation:
 
-- **Outcome A** (madmom F1 ≥ 0.80): there's a 30+pp gap closeable by Exp 1.
-- **Outcome B** (madmom F1 ≈ 0.55-0.60): we're already near the data ceiling; the validation labels themselves are noisy and chasing higher F1 is a moving goalpost. Pivot to label-quality work or accept v29 as the ceiling.
+```
+detector   F1@50ms F1@70ms F1@100ms F1@150ms P@100ms R@100ms
+madmom CNN 0.460   0.475   0.483    0.494    0.337   0.918
+madmom RNN 0.479   0.498   0.509    0.525    0.373   0.873
+                          ───────                  ───────
+v29 (deployed)             0.484                          ← matches CNN
+v32 (deployed)             0.265
+```
 
-Script: `ml-training/scripts/measure_madmom_ceiling.py` (in venv311 with madmom).
+**The ceiling on edm_holdout is F1 ≈ 0.5, set by labels-vs-target mismatch, not by model quality.** madmom's recall is 0.87-0.92 (finds nearly all `.beats.json` events) but precision is 0.34-0.37 (also fires on lots of unlabeled hi-hats / chord changes / vocal onsets). The `.beats.json` ground truth marks rhythm-trigger beats (~150-400/track); madmom fires on every onset (~3× more). This profile (high recall, low precision against rhythm-beats criterion) sets the F1≈0.5 wall.
+
+**Implications, in order of how much they invalidate the prior plan:**
+
+1. **The published 0.85+ F1 numbers are not comparable to ours.** Schlüter '14 reports 0.89 on `onset_db` (hand-annotated, diverse-genre, all onsets). Our validation criterion is a curated rhythm-trigger subset. They evaluate different products. Citing the 0.85 ceiling as a target for *our* product was a category error.
+2. **v29 has been at the data ceiling all along.** All 22+ runs trying to break past F1=0.48 were chasing an unreachable number on this validation set. The structural-ceiling synthesis (mel resolution, fmax) was correct only as an explanation of *general* onset-detection ceilings — but our problem isn't general onset detection.
+3. **v32 is genuinely below the ceiling** at F1=0.265 — but that's the *output-collapse* problem (std=0.12 → peak-picker rarely fires → recall=0.22), not a label-quality or representation problem. v29 reached the ceiling at std=0.34 with the same architecture, same mel resolution.
+4. **Exp 1 (mel resolution + fmax expansion) is dropped** as a next move on this validation set. It might still help if we change the validation criterion to general onsets, but that's a product-spec change, not a model fix.
+5. **Exp 2 (single-source madmom labels) becomes uninteresting** at the same F1 target — madmom itself only hits 0.51 here.
+
+**The new ranked plan**:
+
+- **Exp 4 (next, evidence-backed): roll devices back to v29.** v32's F1=0.265 is strictly worse than v29's 0.484. v29 is at the data ceiling and was working before this 4-run detour. Until there's a specific intervention with a falsifiable prediction, the deployed model should be the best one available.
+- **Exp 5 (investigation, not training): why does v29 produce std=0.34 while v32 produces 0.12 at the same architecture / mel resolution?** v29 used kick_weighted (drum-only events, ~76/min density). v32 used consensus min_systems≥3 (any-onset, ~207/min density). The label *density* and *event-type breadth* may explain the activation collapse — sparse single-purpose events produce sharp predictions; dense any-onset events smear them. If true, the next training direction is *narrower-target labels* (drum-only, kicks-only, beat-grid-only), not broader.
+- **Exp 6 (data work): generate clean drum-only labels without demucs stem bleed.** v29's kick_weighted labels were contaminated (32% of tracks had >0.7× bleed ratio per `HYBRID_FEATURE_ANALYSIS_PLAN.md`). A clean drum-only target — perhaps from a better separation model, or filtered by a kick-frequency-band energy criterion — could let v29's recipe push past 0.484.
+- **Exp 7 (product-spec change, not training): redefine the validation criterion** to "any salient onset" rather than rhythm-beats. Reannotate `.beats.json` to include hi-hats and harmonic onsets, then madmom RNN immediately becomes the product baseline at its 0.87 recall. This is the "join the published F1 ladder" path — but it's a product decision.
+
+**What is still disproven** (carries over from earlier synthesis): hybrid spectral features (gate-b dead), continuous label strengths cause collapse (v31 wrong), wider/deeper architecture, W16→W32 widening, additional loss variants, min_systems threshold tightening. None of those move the on-device F1 on this validation set.
+
+**What to NOT conclude yet:** the input-representation hypothesis (mel resolution / fmax) isn't disproven — it's just not the binding constraint *for this validation criterion*. If the product spec moves toward general onset detection (Exp 7), that hypothesis becomes testable again.
 
 #### Exp 1 (highest-ROI training experiment): mel resolution to Schlüter '14 spec
 
