@@ -34,12 +34,21 @@ namespace SpectralConstants {
 
     // Mel filterbank configuration
     // Mel band count: set to match the deployed NN model's expected input.
-    // v27 deployed (b129): 30 mel bands only. FrameOnsetNN auto-detects from model
-    // shape — currently runs in mel-only mode (useHybrid_=false). When v27-hybrid
-    // model deploys (32 features = 30 mel + flatness + flux), auto-detect will
-    // switch to hybrid mode automatically. No firmware change needed.
-    // MUST match the trained model — mismatched dimensions silently feed wrong frequencies.
-    constexpr int NUM_MEL_BANDS = 30;       // v27: 30 focused mel bands (40-4000 Hz)
+    // FrameOnsetNN auto-detects mel-vs-hybrid from model shape; the band
+    // count itself must match the model exactly — mismatched dimensions
+    // silently feed wrong frequencies. Update all three constants together
+    // and re-add the triplet to the static_assert below.
+    //
+    // Triplet history:
+    //   26 / 60-8000  — pre-v27 baseline (kept for back-compat)
+    //   30 / 40-4000  — v27/v28/v29/v30/v31/v32 (b129-b150)
+    //   50 / 30-8000  — v33 (forced down from 80 then 60 by disk capacity:
+    //                  60 ran out at merge step, 80 at shard write. 50 is
+    //                  1.67× v32 representation and fits with margin)
+    //   60 / 30-8000  — v33 first-pivot (didn't fit, kept here for triplet
+    //                  history)
+    //   80 / 30-8000  — v34+ (full Schluter '14 spec, blocked on bigger disk)
+    constexpr int NUM_MEL_BANDS = 30;       // v32: 30 focused mel bands (40-4000 Hz)
     constexpr float MEL_MIN_FREQ = 40.0f;   // Hz (covers kick fundamental)
     constexpr float MEL_MAX_FREQ = 4000.0f; // Hz (snare wire cutoff; hi-hat excluded)
 
@@ -47,11 +56,14 @@ namespace SpectralConstants {
     // MUST match ml-training base.yaml mel_db_range.
     constexpr float MEL_DB_RANGE = 60.0f;
 
-    // Validate mel config triplet — all three must change together for v27.
+    // Validate mel config triplet — all three must change together.
     // Catches mismatched constants at compile time (silent frequency misalignment otherwise).
     static_assert(
         (NUM_MEL_BANDS == 26 && MEL_MIN_FREQ == 60.0f && MEL_MAX_FREQ == 8000.0f) ||
-        (NUM_MEL_BANDS == 30 && MEL_MIN_FREQ == 40.0f && MEL_MAX_FREQ == 4000.0f),
+        (NUM_MEL_BANDS == 30 && MEL_MIN_FREQ == 40.0f && MEL_MAX_FREQ == 4000.0f) ||
+        (NUM_MEL_BANDS == 50 && MEL_MIN_FREQ == 30.0f && MEL_MAX_FREQ == 8000.0f) ||
+        (NUM_MEL_BANDS == 60 && MEL_MIN_FREQ == 30.0f && MEL_MAX_FREQ == 8000.0f) ||
+        (NUM_MEL_BANDS == 80 && MEL_MIN_FREQ == 30.0f && MEL_MAX_FREQ == 8000.0f),
         "Mel config mismatch: NUM_MEL_BANDS/MEL_MIN_FREQ/MEL_MAX_FREQ must be a valid triplet"
     );
 

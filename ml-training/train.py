@@ -592,6 +592,12 @@ def main():
                         help="Distillation temperature. Default: from config, or 2.0")
     parser.add_argument("--patience", type=int, default=None,
                         help="Early stopping patience (default: from config, or 15)")
+    parser.add_argument("--es-metric", default=None,
+                        choices=["val_loss", "val_peak_f1", "val_f1"],
+                        help="Override training.early_stopping_metric. Useful when "
+                             "resuming a checkpoint with a different metric than the "
+                             "config (the alternative is editing the config and forgetting "
+                             "to revert it). Default: from config.")
     parser.add_argument("--swa", action="store_true",
                         help="Enable Stochastic Weight Averaging over final epochs")
     parser.add_argument("--subsample", type=float, default=None,
@@ -1043,7 +1049,21 @@ def main():
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"  {steps_per_epoch} steps/epoch, {epochs * steps_per_epoch} total steps")
     patience = args.patience or cfg["training"].get("patience", 15)
-    print(f"  Patience: {patience} epochs")
+    # T4.4: which validation metric drives best-model checkpoint + early stop.
+    #   "val_loss" (default, legacy)        — minimize; matches pre-2026-04-24 runs.
+    #   "val_peak_f1"                       — maximize; matches firmware peak-picker.
+    #   "val_f1"                            — maximize frame-level F1 (rarely useful).
+    # The audit (B1, B2) flagged val_loss as misaligned with the firmware metric:
+    # pos_weight scaling makes val_loss incomparable across runs, and frame-level
+    # F1 rewards plateaus while peak-picking rewards sharp peaks.
+    es_metric = args.es_metric or cfg["training"].get("early_stopping_metric", "val_loss")
+    if es_metric not in ("val_loss", "val_peak_f1", "val_f1"):
+        raise ValueError(
+            f"early_stopping_metric must be val_loss|val_peak_f1|val_f1, got {es_metric!r}"
+        )
+    es_minimize = es_metric == "val_loss"
+    print(f"  Patience: {patience} epochs (metric: {es_metric}, "
+          f"{'minimize' if es_minimize else 'maximize'})")
     print(f"Output channels: {model.out_channels}")
     if use_distill:
         print(f"Distillation: alpha={distill_alpha}, temp={distill_temp}")
@@ -1054,7 +1074,12 @@ def main():
     tempo_max_bpm = tempo_cfg.get("max_bpm", 200)
     tempo_loss_weight = tempo_cfg.get("loss_weight", 0.1)
 
-    best_val_loss = float("inf")
+    # `best_metric` tracks whatever es_metric selects. Stored under
+    # `best_val_loss` in checkpoints for backward compatibility — older
+    # checkpoints store min-val_loss there; for non-loss metrics we
+    # repurpose the field as "best metric value" (higher = better when
+    # `es_minimize` is False). Old checkpoints keep working unchanged.
+    best_metric = float("inf") if es_minimize else float("-inf")
     patience_counter = 0
     log_rows = []
     start_epoch = 0
@@ -1068,10 +1093,41 @@ def main():
         optimizer.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])
         start_epoch = ckpt["epoch"] + 1
-        best_val_loss = ckpt["best_val_loss"]
-        patience_counter = ckpt["patience_counter"]
         log_rows = ckpt.get("log_rows", [])
-        print(f"  Resuming at epoch {start_epoch + 1}/{epochs}, best_val_loss={best_val_loss:.4f}")
+        # Backward-compat: pre-T4.4 checkpoints stored val_loss in
+        # `best_val_loss` and don't record `early_stopping_metric`. If the
+        # current config asks for a different metric (e.g. val_peak_f1) we
+        # can't compare apples to apples — recompute best from log_rows
+        # instead, so the new metric starts from a meaningful baseline.
+        ckpt_es_metric = ckpt.get("early_stopping_metric", "val_loss")
+        if ckpt_es_metric != es_metric:
+            print(f"  WARNING: checkpoint was trained with es_metric="
+                  f"{ckpt_es_metric!r} but config now requests {es_metric!r}.")
+            log_with_metric = [r for r in log_rows if es_metric in r]
+            if log_with_metric:
+                if es_minimize:
+                    best_metric = min(r[es_metric] for r in log_with_metric)
+                else:
+                    best_metric = max(r[es_metric] for r in log_with_metric)
+                # Reset patience: we don't know which past epoch was the
+                # peak under the new metric and the patience counter from
+                # the old metric isn't meaningful here.
+                patience_counter = 0
+                print(f"  Recomputed best_{es_metric}={best_metric:.4f} "
+                      f"from {len(log_with_metric)} prior epochs; "
+                      f"patience reset to 0 (metric switch -- training may "
+                      f"run up to {patience} extra epochs vs. resuming "
+                      f"with the original metric).")
+            else:
+                # No log rows have the requested metric — start fresh.
+                best_metric = float("inf") if es_minimize else float("-inf")
+                patience_counter = 0
+                print(f"  No prior {es_metric} values in log_rows — "
+                      f"starting fresh best/patience.")
+        else:
+            best_metric = ckpt["best_val_loss"]
+            patience_counter = ckpt["patience_counter"]
+        print(f"  Resuming at epoch {start_epoch + 1}/{epochs}, best_{es_metric}={best_metric:.4f}")
 
     num_train_batches = len(train_loader)
     num_val_batches = len(val_loader)
@@ -1354,28 +1410,38 @@ def main():
         })
 
         # Checkpointing
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        current_metric = {"val_loss": val_loss, "val_peak_f1": val_peak_f1, "val_f1": val_f1}[es_metric]
+        improved = current_metric < best_metric if es_minimize else current_metric > best_metric
+        if improved:
+            best_metric = current_metric
             patience_counter = 0
             sd = model.state_dict()
             if _quant_noise_active:
                 from models.onset_conv1d import unwrap_quant_noise_state_dict
                 sd = unwrap_quant_noise_state_dict(sd)
             _atomic_torch_save(sd, output_dir / "best_model.pt")
-            print(f"  Saved best model (val_loss={val_loss:.4f})")
+            print(f"  Saved best model ({es_metric}={current_metric:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 print(f"  Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
                 break
 
-        # Save resumable checkpoint every epoch
+        # Save resumable checkpoint every epoch. `best_val_loss` is a
+        # legacy field name kept for backward-compat with existing
+        # checkpoint readers; it actually stores the configured
+        # `early_stopping_metric` best value. We also write `best_metric`
+        # under its actual metric name (e.g. `best_val_peak_f1`) so external
+        # tools / log inspectors don't have to guess what the legacy field
+        # is currently tracking.
         _atomic_torch_save({
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "epoch": epoch,
-            "best_val_loss": best_val_loss,
+            "best_val_loss": best_metric,
+            f"best_{es_metric}": best_metric,
+            "early_stopping_metric": es_metric,
             "patience_counter": patience_counter,
             "log_rows": log_rows,
         }, output_dir / "training_checkpoint.pt")
@@ -1457,13 +1523,31 @@ def main():
         writer.writerows(log_rows)
 
     print(f"\nTraining complete. Models saved to {output_dir}/")
-    best_epoch = min(log_rows, key=lambda r: r["val_loss"])
-    print(f"Best epoch: {best_epoch['epoch']}")
-    print(f"  val_loss: {best_epoch['val_loss']:.4f}")
-    print(f"  val_binary_accuracy: {best_epoch['val_binary_accuracy']:.4f}")
-    print(f"  val_precision: {best_epoch['val_precision']:.4f}")
-    print(f"  val_recall: {best_epoch['val_recall']:.4f}")
-    print(f"  val_f1: {best_epoch['val_f1']:.4f}")
+    # Filter to rows that actually have the metric — pre-T4.4 checkpoints
+    # resumed under a new metric will have a mix of rows where some lack
+    # `val_peak_f1` etc. Falling through with an empty list lets the user
+    # see the message rather than crashing on KeyError.
+    rows_with_metric = [r for r in log_rows if es_metric in r]
+    if not rows_with_metric:
+        print(f"  No epochs logged with {es_metric}; cannot report best epoch.")
+    else:
+        if es_minimize:
+            best_epoch = min(rows_with_metric, key=lambda r: r[es_metric])
+        else:
+            best_epoch = max(rows_with_metric, key=lambda r: r[es_metric])
+        # Mid-run metric switches mean some early epochs may not have the
+        # current metric logged; the "Best epoch" line below refers only to
+        # epochs that recorded `es_metric`. Surface the filter when relevant.
+        if len(rows_with_metric) < len(log_rows):
+            print(f"Best epoch (by {es_metric}, among {len(rows_with_metric)}/"
+                  f"{len(log_rows)} epochs that logged the metric): "
+                  f"{best_epoch['epoch']}")
+        else:
+            print(f"Best epoch (by {es_metric}): {best_epoch['epoch']}")
+        for k in ("val_loss", "val_binary_accuracy", "val_precision",
+                  "val_recall", "val_f1", "val_peak_f1"):
+            if k in best_epoch:
+                print(f"  {k}: {best_epoch[k]:.4f}")
 
 
 if __name__ == "__main__":

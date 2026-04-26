@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** April 11, 2026
-**Firmware Version:** SETTINGS_VERSION 94 (AudioTracker: ACF + PLP with multi-source ACF + pattern slot cache. Conv1D W16 v19 onset model deployed (b111). NN-modulated pulse via nnConf).
+**Last Updated:** April 25, 2026
+**Firmware Version:** b149 / SETTINGS_VERSION 94. AudioTracker: ACF + PLP with multi-source ACF + pattern slot cache. Conv1D W16 **v32** onset model deployed (30 mel, 40-4000 Hz, ~16.5 KB). Local-maxima peak-picking on NN activation (b127+) with bass-band energy gate. **PLP beat-grid AND-gate `beatGridPatternMin` defaulted to 0.0 since b149** (was 0.4 in b142–b148; persist_raw analysis showed it was suppressing 65–84% of true onsets — runtime tunable preserved for opt-in).
 
 > **NOTE:** Parameter categories marked ~~strikethrough~~ below were removed in v67-v82 (EnsembleDetector, CBSS, Bayesian fusion, AGC). See `docs/IMPROVEMENT_PLAN.md` for removal history. Current tunable parameters are in the AudioTracker section.
 
@@ -61,7 +61,7 @@ PDM Microphone (16kHz, mono)
 ### Key Design Decisions
 
 1. **Decoupled BPM and onset paths**: BPM estimation uses spectral flux (NN-independent). The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat — syncopated transients would corrupt ACF periodicity. Spectral flux preserves periodic structure.
-2. **NN-modulated pulse** (b108): `control_.pulse` uses spectral flux weighted by NN activation, self-tuning via `nnConf` (activation variance). Sharp NN → onset-selective pulse; flat NN → falls back to raw spectral flux. Conv1D W16 v19 model (b111). Non-NN fallback: mic level.
+2. **NN-primary pulse** (b117+): `updatePulseDetection()` uses local-maxima peak-picking directly on NN activation. Bass-band energy gate (50% threshold boost when bass ratio low) and PLP pattern bias (30% threshold boost at off-beat positions) shape sensitivity. PLP beat-grid AND-gate disabled by default (b149+). Active model: Conv1D W16 v32 (30 mel, 40-4000 Hz). Non-NN fallback: mic level.
 3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
 4. **PLP phase/pattern extraction** (v93): Multi-source ACF across 3 mean-subtracted sources selects period. Epoch-fold extracts repeating energy pattern at detected period → direct pattern interpolation for visual output.
 5. **Pattern slot cache** (v82): 4-slot LRU of 16-bin PLP pattern digests. Every bar, current PLP pattern compared via cosine similarity. Match > 0.70 triggers instant recall from cache. Enables rapid verse/chorus switching.

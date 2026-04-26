@@ -618,17 +618,35 @@ export function AudioVisualizer({
                 <span className="telemetry-value">{musicModeData.ph.toFixed(2)}</span>
               </div>
               <div className="telemetry-group">
-                <span className="telemetry-label">Confidence</span>
+                <span className="telemetry-label">Strength</span>
                 <span
-                  className={`telemetry-value ${musicModeData.conf > 0.7 ? 'good' : musicModeData.conf > 0.4 ? 'warn' : ''}`}
+                  className={`telemetry-value ${musicModeData.str > 0.7 ? 'good' : musicModeData.str > 0.4 ? 'warn' : ''}`}
                 >
-                  {(musicModeData.conf * 100).toFixed(0)}%
+                  {(musicModeData.str * 100).toFixed(0)}%
                 </span>
               </div>
-              <div className="telemetry-group">
-                <span className="telemetry-label">Beats</span>
-                <span className="telemetry-value">{musicModeData.bc}</span>
-              </div>
+              {musicModeData.conf !== undefined && (
+                <div className="telemetry-group">
+                  <span className="telemetry-label">Confidence</span>
+                  <span
+                    className={`telemetry-value ${musicModeData.conf > 0.7 ? 'good' : musicModeData.conf > 0.4 ? 'warn' : ''}`}
+                  >
+                    {(musicModeData.conf * 100).toFixed(0)}%
+                  </span>
+                </div>
+              )}
+              {musicModeData.bc !== undefined && (
+                <div className="telemetry-group">
+                  <span className="telemetry-label">Beats</span>
+                  <span className="telemetry-value">{musicModeData.bc}</span>
+                </div>
+              )}
+              {musicModeData.nn !== undefined && (
+                <div className="telemetry-group">
+                  <span className="telemetry-label">NN</span>
+                  <span className="telemetry-value">{musicModeData.nn.toFixed(2)}</span>
+                </div>
+              )}
             </>
           )}
         </div>

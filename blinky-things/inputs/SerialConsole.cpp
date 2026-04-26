@@ -1549,6 +1549,15 @@ void SerialConsole::streamTick() {
                 out_.print(audioCtrl_->getPlpNNAgreement(), 3);
                 out_.print(F(",\"rel\":"));
                 out_.print(audioCtrl_->getPlpReliability(), 3);
+                // beatStability: rolling stability of inter-beat intervals.
+                // Audit D10 (T1.4-rollup completion 2026-04-25) — already
+                // computed by AudioTracker, was previously only visible via
+                // interactive SerialConsole. Now streamed alongside the
+                // other PLP diagnostics so validation captures it for
+                // offline analysis (e.g. correlate per-beat confidence
+                // against beatStability).
+                out_.print(F(",\"bs\":"));
+                out_.print(audioCtrl_->getBeatStability(), 3);
                 out_.print(F(",\"sl\":{\"id\":"));
                 out_.print(audioCtrl_->getActiveSlotId());
                 out_.print(F(",\"conf\":["));

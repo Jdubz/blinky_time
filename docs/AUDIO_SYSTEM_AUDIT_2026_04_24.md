@@ -267,6 +267,8 @@ These are the fixes that would have surfaced v30's failure mode at training time
 | **T4.7** | Beat-count correlation stream (D9) | Advanced offline analysis enabler. |
 | **T4.8** | Quantization-noise wrapper coverage (B6) | Low priority — quant_noise is disabled in current configs. |
 | **T4.9** | Noise subtraction validate-or-remove (C8) | Housekeeping. |
+| **T4.10** | Replay mode using captured device audio (was task #34) | Long-deferred harness-v2 infra. Not blocking on-device validation. Deleted from active list 2026-04-25. |
+| **T4.11** | Vendor CMSIS-DSP FFT into harness (was task #37) | Same harness-v2 family as T4.2 / T4.10 — would give offline byte-identical FFT. Deleted from active list 2026-04-25. |
 
 ---
 
@@ -297,6 +299,8 @@ Later weeks:
 - If v30 FP32-output F1 stays ≈ 0.30: quantization wasn't the issue. v31 with bimodal-labels hypothesis remains valid.
 
 **T2.4 result (2026-04-24 11:17):** v30 FP32-output activation distribution is **byte-identical to INT8-output** (max_abs_diff = 0.0039 = 1 LSB, std=0.1454 in both, >0.7 coverage 5.61% in both). Quantization is NOT the cause of v30's compressed output — the weights themselves produce this distribution. Tested on trance-party.mp3 using v30 best_model.pt, built with representative dataset from processed_v31 (identical mel features, labels-only differ). Finding: **v31's bimodal-labels hypothesis is the correct intervention.** Do not abort v31 training.
+
+**v31 result (2026-04-24 21:47): bimodal-labels hypothesis was WRONG.** v31 collapsed harder than v30 — std=0.0888 vs v30's 0.15, output range [0.15, 0.86] never touching 0 or 1. The T2.5 representative-dataset check correctly flagged this offline before any device cycle. See addendum below for root cause.
 
 ---
 
@@ -358,3 +362,91 @@ Firmware bumped to b145. Model interface unchanged — existing TFLite models re
 **Net effect.** Every future training run logs per-epoch activation distribution (min/max/mean/std/percentiles) + peak-picked F1 with automatic collapse warnings. Every future validation run includes per-firing gate mask + spectral snapshot + activation-distribution stats + latency histogram in its JSON output. Prep flags time-stretch misalignment (≥0.5% labels dropped), strength-continuity risk (<50% extremes), and abnormal onset density (>12/s) automatically.
 
 **The entire v30 offline-inference chase would now be unnecessary** — the compressed-activation signature would appear directly in the standard validation output's `diagnostics.activationStats` field.
+
+---
+
+## Addendum: v31 post-mortem and v32 plan (2026-04-24 22:30)
+
+v31 trained for 60 epochs and finished plateaued at val_loss=1.088 / val_F1=0.329 — barely above the trivial baseline. Export + T2.5 check showed activation std=0.089, *worse* than v30's 0.15. The bimodal-labels hypothesis was wrong, and not in a near-miss way: it made the problem worse.
+
+### What actually went wrong
+
+The `hard_binary_threshold: 0.05` in v31 only affected neighbor-weighted secondary frames, not the underlying detector noise. The unique `Y_train` values stored on disk (`[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.4, 0.6, 0.8, 1.0]`) decompose as:
+
+| Strength on disk | Source | systems agreeing |
+|---|---|---|
+| 0.05 | neighbor of 0.20 center | 1 sys |
+| 0.10 | neighbor of 0.40 center | 2 sys |
+| 0.15 | neighbor of 0.60 center | 3 sys |
+| 0.20 (center) | 1-system detection | 1 sys |
+| 0.20 (neighbor) | neighbor of 0.80 center | 4 sys |
+| 0.25 | neighbor of 1.00 center | 5 sys |
+| 0.40 | 2-system center | 2 sys |
+| 0.60 | 3-system center | 3 sys |
+| 0.80 | 4-system center | 4 sys |
+| 1.00 | 5-system center | 5 sys |
+
+`> 0.05` keeps every center plus most neighbors. v31's training set was effectively the union of all five detectors' detections — exactly the same as v30, just thresholded into 0/1 at training time.
+
+### Per-system signal quality (the real problem)
+
+Measured mel-diff signal-to-baseline ratio at each label, ±3-frame window, 20-track sample:
+
+| min systems agreeing | events | per-strength signal | cumulative signal | density |
+|---|---|---|---|---|
+| 1/5 only | 345 | **0.43×** | 1.21× | 28/min |
+| 2/5 only | 585 | **0.46×** | 1.30× | 46/min |
+| 3/5 only | 1082 | **1.65×** | 1.52× | 95/min |
+| 4/5 only | 396 | 1.11× | 1.40× | 35/min |
+| 5/5 only | 833 | 1.54× | 1.54× | 78/min |
+| reference: kick_weighted (v29) | — | 1.45× | — | — |
+| reference: top-20% mel-diff (self-sup) | — | 14.4× | — | — |
+
+**1- and 2-system "consensus" detections have signal *below random* (0.43×, 0.46×).** The label flags frames where mel-energy change is *less* than at random points in the audio. These aren't noisy onsets — they're anti-correlated with actual energy events. Most likely chord changes / harmonic onsets that single non-perceptual detectors agree on but mel features cannot see.
+
+**The 4-system bucket (1.11×) is anomalously weak** — a separate finding worth investigating but not blocking. Possibly the merge algorithm chains harmonic detections across the 70ms tolerance window when 4 systems vote.
+
+**Investigated 2026-04-25 PM** (60-track sample via `ml-training/scripts/analyze_4sys_anomaly.py`):
+
+| sys | count | mel-diff signal | energy_ratio | interpretation |
+|---|---|---|---|---|
+| 1/5 | 922 | 0.54× | 1.20 | events at high-energy steady-state (single-detector confusion) |
+| 2/5 | 1502 | 0.49× | 1.66 | same pattern, more concentrated at sustained loud passages |
+| 3/5 | 3185 | 1.54× | 0.59 | reference: clean onsets at quieter context |
+| 4/5 | 1147 | **1.24×** | 0.56 | anomaly persists at larger n — same context as 3/5/5 but weaker amplitude |
+| 5/5 | 3064 | 1.47× | 0.46 | strict consensus, slightly weaker than 3/5 (selection bias toward universally-agreed events) |
+
+The "4-system events are at high steady-state" hypothesis is *ruled out* (energy_ratio 0.56, comparable to 3- and 5-system at quieter passages). They're genuinely weaker onsets, not misplaced ones. Most plausible reading: 4-system events are the "weak" tier where 4 detectors agree but the 5th (typically essentia HFC, our percussive specialist) doesn't see enough energy to fire — i.e., harmonic / vocal / chord onsets the perceptual detectors mark and the mel-energy-aware detector ignores.
+
+**Actionable for v34** (if v33 plateaus): filter `systems in {3, 5}` instead of `systems >= 3`. Cumulative signal would rise from ~1.41× to ~1.50× at small density cost. Test in a v34 prep config.
+
+### Root cause restated
+
+v31 (and v30) collapsed because **76% of their positive labels (1- and 2-system consensus events) are sub-perceptual in mel-only features**. The model regresses toward predicting the mean. Sharper labels (binarization) don't help; the underlying labels are wrong about which frames are onsets the model can learn.
+
+v29's `kick_weighted` labels worked at 1.45× because kicks/snares have unambiguous low-frequency energy spikes — even with demucs stem-bleed contamination, the labeled frames coincide with mel-energy events.
+
+### v32 plan — `min_systems: 3` filter at prep time
+
+The fix is at prep, not training time. `prepare_dataset.py` now supports a `labels.min_systems` config option that filters consensus detections by their `systems` field before generating frame targets. v32 uses `min_systems: 3`, giving:
+
+- per-strength signal: ≥1.65× (vs v31's effective 1.21×, vs v29's 1.45×)
+- positive frame ratio after 3-frame plateau: ~0.165 (vs v31's 0.20)
+- density: 207 events/min (vs v31's 282 — sparser but cleaner)
+- broader event coverage than kick_weighted (all percussive + strongly-confirmed harmonic onsets, not just kicks/snares)
+
+The v32 config also opts into T4.4's `early_stopping_metric: val_peak_f1`. v31 demonstrated the val_loss-best epoch is not the on-device-realistic-best epoch.
+
+### Lessons reified into Tier 1 instrumentation
+
+The audit's Tier 1 work caught v31 offline (T2.5 representative-dataset activation std warning fired before any device flash). Without it we'd have wasted an export+flash+validate cycle to discover the same thing on hardware. That's the system working correctly. What it didn't catch — and shouldn't be expected to — is *why* the labels failed. That required dropping below the model boundary and measuring label-vs-features correlation directly, which is now part of the v32 prep precheck planning (queue: per-strength signal logging in prep validation output, on next training cycle).
+
+### Implementation status — addendum
+
+| # | Task | Status |
+|---|------|--------|
+| `min_systems` config option in `prepare_dataset.py` | new | ✓ landed (2026-04-24 22:30) |
+| v32 config (`conv1d_w16_onset_v32_mel_only.yaml`) | new | ✓ landed |
+| T4.4 — `early_stopping_metric` config | audit Tier 4 | ✓ landed earlier today |
+| Per-strength signal logging in prep validation | new | TODO before v32 launch |
+| Investigate 4-system signal anomaly (1.11×) | new | ✓ landed (2026-04-25) — see "Investigated 2026-04-25 PM" subsection above; finding: 4-sys events are weak harmonic onsets, recommend `systems in {3, 5}` filter for v34 |

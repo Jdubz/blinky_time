@@ -61,7 +61,13 @@ training:
                             # All data is still seen across every 2 epochs.
   num_workers: 4            # DataLoader workers
   pos_weight: 20              # v3 used 20 (achieved F1=0.787). Auto (0) gives ~35.6 which over-weights positives.
-  patience: 10               # Early stopping: stop after N epochs with no val_loss improvement
+  patience: 10               # Early stopping: stop after N epochs with no improvement
+  # Which validation metric drives best-model checkpoint + early stopping.
+  # val_loss     — minimize; legacy (pre-2026-04-24) and the default for backward compat.
+  # val_peak_f1  — maximize; matches firmware peak-picker, recommended for new runs.
+  # val_f1       — maximize frame-level F1 at threshold=0.5 (rarely useful).
+  # See AUDIO_SYSTEM_AUDIT_2026_04_24.md §B1, §B2, §T4.4.
+  early_stopping_metric: "val_loss"
   min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15
   seed: 42

@@ -841,6 +841,14 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         # These are acoustic onset positions, not metrical beats — directly
         # matching the onset detection task. Each onset has a strength field
         # encoding the number of agreeing systems (1/5 to 5/5).
+        #
+        # min_systems filters out low-confidence detections at prep time.
+        # Investigation 2026-04-24 (post-v31 collapse) showed that 1- and 2-system
+        # detections have mel-diff signal-to-baseline ratio BELOW 1.0× (i.e., they
+        # mark frames where mel-energy change is *less* than random), while 3+
+        # system events reach 1.65× — matching v29's working kick_weighted labels.
+        # Default 1 (=keep everything) preserves backwards compatibility; v32+
+        # configs should set min_systems: 3 for clean training signal.
         onset_path = Path(onset_consensus_dir) / f"{audio_path.stem}.onsets.json"
         if not onset_path.exists():
             raise FileNotFoundError(
@@ -849,8 +857,43 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             )
         with open(onset_path) as f:
             onset_data = json.load(f)
-        beat_times = np.array([o["time"] for o in onset_data["onsets"]])
-        beat_strengths = np.array([o["strength"] for o in onset_data["onsets"]])
+        min_systems = cfg.get("labels", {}).get("min_systems", 1)
+        raw_onsets = onset_data["onsets"]
+        if min_systems > 1:
+            filtered = [o for o in raw_onsets if o.get("systems", 0) >= min_systems]
+            # Catch the silent-empty-track failure mode: if a label file
+            # uses a different schema (e.g. older format with no `systems`
+            # field), the filter drops everything and produces empty
+            # frame targets, which would otherwise only surface as a
+            # mysterious zero-loss-on-this-track much later. Log per
+            # track and globally so the precheck or tail of the prep
+            # log makes it obvious.
+            if len(filtered) == 0 and len(raw_onsets) > 0:
+                # Stable single-line marker so a post-prep summary can grep:
+                #   grep -c MIN_SYSTEMS_DROPPED_ALL <prep.log>
+                # Goes to stderr because all-zero training targets are a
+                # silent contamination class — easy to lose in normal stdout
+                # progress noise, hard to detect post-hoc once mixed in.
+                print(f"MIN_SYSTEMS_DROPPED_ALL {audio_path.stem} "
+                      f"min_systems={min_systems} raw_count={len(raw_onsets)} "
+                      f"-- training will see all-zero targets for this track. "
+                      f"Check label file schema.",
+                      file=sys.stderr)
+            elif len(raw_onsets) > 0:
+                drop_frac = 1.0 - (len(filtered) / len(raw_onsets))
+                # Only log when drop is unusually large (> 70% of onsets cut)
+                # — the typical filter at min_systems=3 cuts ~50%, so 70%+
+                # signals a per-track schema oddity worth investigating.
+                # Also grep-able: `grep MIN_SYSTEMS_HEAVY_FILTER <prep.log>`
+                if drop_frac > 0.70:
+                    print(f"MIN_SYSTEMS_HEAVY_FILTER {audio_path.stem} "
+                          f"{len(raw_onsets)} -> {len(filtered)} onsets "
+                          f"({100*drop_frac:.0f}% dropped at min_systems={min_systems})",
+                          file=sys.stderr)
+        else:
+            filtered = raw_onsets
+        beat_times = np.array([o["time"] for o in filtered])
+        beat_strengths = np.array([o["strength"] for o in filtered])
     elif labels_type == "instrument" and kick_weighted_dir:
         # Per-instrument onset targets: 3 channels (kick/snare/hihat).
         # Each channel gets an independent binary target from the kick_weighted
@@ -1329,19 +1372,38 @@ def main():
     #   - final X+Y arrays (~100-130 GB each = ~260 GB for both)
     #   - shard intermediates kept during merge (~120 GB at end of shard phase)
     #   - merge temp workspace (≈final_size × 1.2 via os.replace rename)
-    # Total headroom needed: ~420 GB. Prior 200 GB was too lenient; hit merge
-    # failure on 2026-04-23 after 2 hours of prep work. Raised + dynamic.
-    MIN_FREE_GB = 450
-    disk_stat = shutil.disk_usage(output_dir)
-    free_gb = disk_stat.free / (1024 ** 3)
-    if free_gb < MIN_FREE_GB:
-        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir}. "
-              f"Need at least {MIN_FREE_GB} GB to start dataprep "
-              f"(final arrays ~260 GB + shard intermediates ~120 GB + merge ~50 GB).\n"
-              f"  Tip: delete old processed_v* dirs or stale mel_cache entries, "
-              f"or rerun with --auto-clean-stale.",
-              file=sys.stderr)
-        sys.exit(1)
+    # The disk precheck below uses a CONFIG-DRIVEN estimate calibrated
+    # against v32 (30 mel × 6732 input files → ~250 GB peak during merge
+    # transition). Linear scaling with n_mels and file count.
+    #
+    # History: v30 merge failed 2026-04-23 with 200 GB free → bumped to
+    # 450 GB hardcoded → lowered to 300 GB once v31 ran cleanly at 334
+    # GB → still over-conservative at 30 mel and catastrophically under-
+    # conservative at 60+ mel (2026-04-25/26 v33 crashes at 60 and 80 mel
+    # both passed the 300 GB precheck and crashed mid-pipeline). The
+    # dynamic formula below catches under-sized volumes at startup.
+    def estimate_peak_disk_gb(n_files: int) -> tuple[float, str]:
+        """Upper-bound peak disk during prep, calibrated against v32.
+        Returns (gb, reasoning) for the error message."""
+        n_mels_cfg = cfg["audio"].get("n_mels", 30)
+        chunk_frames_cfg = cfg["training"].get("chunk_frames", 128)
+        REF_PEAK_GB = 250
+        REF_MELS = 30
+        REF_FILES = 6732
+        REF_CHUNK_FRAMES = 128
+        scale = (
+            (n_mels_cfg / REF_MELS)
+            * (max(1, n_files) / REF_FILES)
+            * (chunk_frames_cfg / REF_CHUNK_FRAMES)
+        )
+        peak = REF_PEAK_GB * scale + 30  # +30 GB scratch for merge buffers
+        reasoning = (
+            f"~{REF_PEAK_GB} GB v32 baseline × n_mels/{REF_MELS}={n_mels_cfg/REF_MELS:.2f} "
+            f"× n_files/{REF_FILES}={max(1, n_files)/REF_FILES:.2f} "
+            f"× chunk_frames/{REF_CHUNK_FRAMES}={chunk_frames_cfg/REF_CHUNK_FRAMES:.2f} "
+            f"+ 30 GB scratch = {peak:.0f} GB"
+        )
+        return peak, reasoning
 
     # --- Clean up old processed dirs ---
     # Each version creates a new processed_v{N} dir but old ones were never
@@ -1422,6 +1484,11 @@ def main():
                 else:
                     print("  (Non-interactive — skipping. Delete manually or "
                           "pass --auto-clean-stale.)")
+
+    # The dynamic disk precheck has been moved AFTER pairs construction
+    # (post-exclude-dirs, post-quality-filter) so we know the actual file
+    # count for the run. See `estimate_peak_disk_gb()` definition above
+    # and the precheck below the val_split block.
 
     rng = np.random.default_rng(seed)
 
@@ -1578,6 +1645,25 @@ def main():
             "train": [a.stem for a, _ in train_pairs],
             "val": [a.stem for a, _ in val_pairs],
         }, splits_path)
+
+    # --- Dynamic disk-space precheck ---
+    # Catches under-sized volumes BEFORE the multi-hour prep+merge cycle
+    # rather than mid-pipeline. v33 80-mel and 60-mel attempts both
+    # passed the prior hardcoded 300 GB threshold and crashed mid-run;
+    # the formula below would have rejected both at startup.
+    n_files_total = len(train_pairs) + len(val_pairs)
+    peak_gb, peak_reasoning = estimate_peak_disk_gb(n_files_total)
+    free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
+    print(f"\nDisk precheck: {free_gb:.1f} GB free, est. peak {peak_gb:.0f} GB needed "
+          f"({n_files_total} files at n_mels={cfg['audio'].get('n_mels', 30)}).")
+    if free_gb < peak_gb:
+        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir.parent}; "
+              f"need ~{peak_gb:.0f} GB peak.\n"
+              f"  Estimate: {peak_reasoning}\n"
+              f"  Tip: reduce n_mels, drop augmentation variants, exclude "
+              f"large stems, or use a bigger volume.",
+              file=sys.stderr)
+        sys.exit(1)
 
     teacher_soft_dir = Path(args.teacher_soft_dir) if args.teacher_soft_dir else None
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
@@ -1875,6 +1961,26 @@ def main():
         # Check disk before merge
         expected_features = compute_input_features(cfg)
         merge_est_gb = sum(shard_counts) * chunk_frames * expected_features * 4 / (1024**3)
+        # Reclaim mel_cache before merge: shards already contain the
+        # augmented mel features baked in, so the cache is dead weight
+        # for the rest of THIS run. Keeping it pinned has crashed merges
+        # at high n_mels (v33 60-mel: 137 GB stale cache + 209 GB shards
+        # + 246 GB merge scratch = 455 GB peak, 3 GB short of the 458 GB
+        # volume). Only delete on the LAST merge iteration so a re-run
+        # of this same config could still benefit from the cache; we
+        # detect "last" by the split being val (val runs after train).
+        # On the train pass we keep the cache to speed val mel reads.
+        if split_name == "val":
+            mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
+            if mel_cache_base.exists():
+                cache_size_gb = sum(
+                    f.stat().st_size for f in mel_cache_base.rglob("*") if f.is_file()
+                ) / (1024**3)
+                if cache_size_gb > 1.0:
+                    print(f"\n  Reclaiming mel_cache ({cache_size_gb:.1f} GB) "
+                          f"before merge — features are baked into shards now.",
+                          flush=True)
+                    shutil.rmtree(mel_cache_base)
         _check_disk_space(output_dir, merge_est_gb * 1.2,
                           f"merge ({merge_est_gb:.1f} GB final array)")
 

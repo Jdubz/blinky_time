@@ -1,0 +1,109 @@
+# Conv1D W16 v33 — mel resolution + fmax expansion to Schluter '14 spec
+#
+# Synthesis 2026-04-25 (post-firmware-gate finding): with the b142+ PLP
+# beat-grid AND-gate disabled, v29 reaches F1=0.470 on edm_holdout — 4 pp
+# below madmom RNN's 0.509. Mel-resolution / fmax expansion is the largest
+# untried representation change vs published 0.85+ onset detectors:
+#
+#   |              | Schluter '14 | Bock RNN '12 | Beat This! '24 | v29 (ours) | v33 (this) |
+#   | Mel bands    | 80           | 20+40+80     | 128            | 30         | 80         |
+#   | fmax (Hz)    | 16000        | 17000        | 10000          | 4000       | 8000       |
+#   | fmin (Hz)    | 27           | 30           | 30             | 40         | 30         |
+#   | Sample rate  | 44.1 kHz     | 44.1 kHz     | 22 kHz         | 16 kHz     | 16 kHz     |
+#
+# Sample-rate constraint: nRF52840 audio is 16 kHz. Hardware Nyquist = 8 kHz.
+# fmax=8000 captures hi-hat / snare / cymbal energy that the 4 kHz cap
+# threw away. Going beyond 8000 is impossible without a hardware change.
+#
+# Hypothesis: the missing 4-8 kHz spectral content + under-resolved
+# narrow-band percussive transients are the dominant gap to madmom's 0.51.
+#
+# Falsifiable predictions:
+#   - val_F1 frame > 0.65 (vs v29 0.55, +0.10)
+#   - on-device F1 (no gate) > 0.55 (vs v29 0.47, +0.08, surpassing madmom)
+#   - INT8 export std > 0.30 (matches v29's 0.34, no collapse)
+#
+# Negative-result triggers:
+#   - val_F1 frame ≤ 0.55: representation expansion didn't help, look elsewhere
+#   - On-device F1 < val_F1 - 0.05: sim-to-real gap dominates, audio chain mods needed
+#   - Export std < 0.20 with broader labels: hit activation collapse, narrow target
+#
+# Firmware budget:
+#   - Sample rate fixed at 16 kHz; FFT 256-bin (0-8 kHz). No firmware changes.
+#   - Mel band buffers: 4×30 → 4×80 floats = +800 bytes SRAM
+#   - NN window buffer: 16×30→16×80 floats = +3.2 KB SRAM
+#   - Model size: ~17 KB → ~25 KB (input layer 4800→12800 weights)
+#   - Tensor arena: 8 KB (current) should still fit; verify post-export
+#   - Inference time: ~6.8ms → ~12-18ms (need to verify within 16ms frame budget)
+#   - If inference >16ms: reduce backbone channels [32,32]→[24,24] in v33b retry
+#
+# Required firmware changes (separate commit before deploy):
+#   - SpectralConstants::NUM_MEL_BANDS 30→80
+#   - MEL_MIN_FREQ 40→30, MEL_MAX_FREQ 4000→8000
+#   - Update static_assert valid-triplet list
+#   - Bump FrameOnsetNN ARENA_SIZE from 8192 if export reports >8 KB
+#   - max_model_size_kb in v33 config bumped 25→30
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  # Same as v29 (proven recipe at the data ceiling). Mel-resolution change
+  # is the single variable here; combining with a label change would obscure
+  # which dimension moved the needle.
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  # Originally planned 80 mel (Schluter '14 spec) but disk is the binding
+  # constraint at 458 GB:
+  #   80 mel: prep crashed at 96% (projection 347 GB final + 137 GB mel_cache)
+  #   60 mel: prep crashed at merge (209 GB shards + 246 GB merge scratch
+  #           = 455 GB peak, 3 GB short of physical disk capacity)
+  #   50 mel: 1.67× v32, peak ~380 GB, fits with margin
+  # Settled on 50 mel after two crashes 2026-04-25/26. Still tests the
+  # "more bands help" hypothesis (1.67×) and extends fmax to Nyquist
+  # (8 kHz) to capture hi-hat/snare content. 80-mel queued as v34+
+  # pending bigger disk.
+  n_mels: 50              # was 30 (60 ran out at merge step, 80 ran out at shard)
+  fmin: 30                # was 40 (capture more bass detail)
+  fmax: 8000              # was 4000 (Nyquist limit at 16 kHz sample rate)
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  pos_weight: 0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v33"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v33_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 27   # was 25 (input layer grows from 30→50 mels: layer 1 weights 30×32×5=4800 → 50×32×5=8000, model size ~17→~20 KB)

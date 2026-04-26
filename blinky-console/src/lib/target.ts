@@ -16,20 +16,19 @@ import type { GeneratorType, EffectType } from '../types';
 
 export type Target = { kind: 'fleet' } | { kind: 'device'; id: string; protocol: DeviceProtocol };
 
-/** Label for the target — "All devices" or the device's display name. */
-export function targetLabel(target: Target, deviceName?: string): string {
-  return target.kind === 'fleet' ? 'All devices' : (deviceName ?? target.id.slice(0, 8));
-}
-
 /**
  * Fleet HTTP client. Always calls same-origin — the console is served
  * from blinky-server (or Caddy-proxied to it), so relative URLs work.
+ *
+ * Body-less by contract. The matching server routes
+ * (`/api/fleet/generator/{name}`, `/api/fleet/effect/{name}`,
+ * `/api/fleet/settings/{save,load,defaults}`) all encode any parameter
+ * in the URL path, so this helper deliberately doesn't take a body.
+ * Settings PUT (which carries a value) goes through `fleetPut` instead.
  */
-async function fleetPost(path: string, body?: unknown): Promise<void> {
+async function fleetPost(path: string): Promise<void> {
   const resp = await fetch(`/api/fleet${path}`, {
     method: 'POST',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(10_000),
   });
   if (!resp.ok) throw new Error(`Fleet command failed: ${resp.status} ${path}`);
@@ -62,27 +61,4 @@ export async function targetSetSetting(
 ): Promise<void> {
   if (target.kind === 'device') return target.protocol.setSetting(name, value);
   return fleetPut(`/settings/${encodeURIComponent(name)}`, { value });
-}
-
-export async function targetSendCommand(target: Target, command: string): Promise<void> {
-  if (target.kind === 'device') {
-    await target.protocol.send(command);
-    return;
-  }
-  return fleetPost('/command', { command });
-}
-
-export async function targetSave(target: Target): Promise<void> {
-  if (target.kind === 'device') return target.protocol.saveSettings();
-  return fleetPost('/settings/save');
-}
-
-export async function targetLoad(target: Target): Promise<void> {
-  if (target.kind === 'device') return target.protocol.loadSettings();
-  return fleetPost('/settings/load');
-}
-
-export async function targetResetDefaults(target: Target): Promise<void> {
-  if (target.kind === 'device') return target.protocol.resetDefaults();
-  return fleetPost('/settings/defaults');
 }

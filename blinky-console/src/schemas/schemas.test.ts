@@ -326,6 +326,55 @@ describe('AudioMessageSchema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // PLP architecture (b79+) drops conf/bc and adds pp/od/nn/per/ts.
+  // Schema must accept the current firmware shape without those legacy fields.
+  it('accepts PLP-era music mode without legacy conf/bc fields', () => {
+    const result = AudioMessageSchema.safeParse({
+      a: FIRMWARE_SAMPLES.audioMessage.a,
+      m: {
+        ts: 12345,
+        a: 1,
+        bpm: 128,
+        ph: 0.5,
+        pp: 0.7,
+        str: 0.82,
+        q: 0,
+        e: 0.5,
+        p: 0.8,
+        od: 3.2,
+        nn: 0.123,
+        per: 33,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.m?.pp).toBe(0.7);
+      expect(result.data.m?.nn).toBeCloseTo(0.123);
+      expect(result.data.m?.per).toBe(33);
+      expect(result.data.m?.conf).toBeUndefined();
+      expect(result.data.m?.bc).toBeUndefined();
+    }
+  });
+
+  it('still accepts legacy CBSS music mode with conf and bc', () => {
+    // Older firmware emitted conf+bc; keep parsing it so old captures replay.
+    const result = AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessageWithMusic);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.m?.conf).toBe(0.9);
+      expect(result.data.m?.bc).toBe(42);
+    }
+  });
+
+  it('rejects music mode missing always-emitted fields', () => {
+    // bpm, ph, str, q, e, p are emitted every frame — not optional.
+    const result = AudioMessageSchema.safeParse({
+      a: FIRMWARE_SAMPLES.audioMessage.a,
+      m: { a: 1 },
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('BatteryMessageSchema', () => {

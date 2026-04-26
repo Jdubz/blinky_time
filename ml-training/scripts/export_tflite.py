@@ -1317,6 +1317,20 @@ def main():
     tflite_copy.write_bytes(tflite_bytes)
     print(f"TFLite copy: {tflite_copy}")
 
+    # Update the canonical (un-versioned) header that the firmware actually
+    # `#include`s. Discovered 2026-04-25: previously only the versioned
+    # header (e.g. frame_onset_model_data_v32_mel_only.h) was written, while
+    # FrameOnsetNN.h `#include`s frame_onset_model_data.h — so the active
+    # firmware was running whatever model was last copied to that name,
+    # which silently drifted from the versioned exports. b146 was deployed
+    # thinking it carried v32 but actually had v30 baked in.
+    active_header = Path(header_path).parent / f"{c_array_name}.h"
+    if active_header.resolve() != Path(header_path).resolve():
+        tflite_to_c_header(
+            tflite_bytes, c_array_name, str(active_header), use_pcen=use_pcen
+        )
+        print(f"Active header: {active_header} (matches {Path(header_path).name})")
+
     # Validate by loading
     interpreter = tf.lite.Interpreter(model_path=tflite_path)
     interpreter.allocate_tensors()

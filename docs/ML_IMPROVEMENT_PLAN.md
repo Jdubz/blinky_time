@@ -283,6 +283,54 @@ Only if v30 on `onsets_consensus` labels also shows contamination or low ceiling
 
 70% of infrastructure already built (see Thread 4). Missing piece is AudioTracker multi-channel routing (~2-3 days). Pursue only if Steps 2-4 don't reach the precision target on edm/.
 
+## 2026-04-24 evening — v30/v31 collapse investigated; v32 plan
+
+v30 and v31 both produced collapsed activation distributions (std 0.15 and 0.089 respectively, vs v29's 0.34). v31's hypothesis was that v30's continuous label strengths caused the collapse and that hard binarization at training time would restore v29's bimodal output. **It didn't. v31 collapsed worse.**
+
+### Investigation findings (2026-04-24, post-v31 export)
+
+Direct measurement of mel-diff signal-to-baseline ratio at each consensus label, ±3-frame tolerance window, 20-track sample:
+
+| Source | per-strength mel-diff signal |
+|---|---|
+| consensus 1/5 systems | **0.43×** (sub-random) |
+| consensus 2/5 systems | **0.46×** (sub-random) |
+| consensus 3/5 systems | 1.65× |
+| consensus 4/5 systems | 1.11× (anomaly) |
+| consensus 5/5 systems | 1.54× |
+| kick_weighted (v29 source) | 1.45× |
+| reference: top-20% mel-diff | 14.4× |
+
+**Root cause:** the v30/v31 label set was the union of 5 detectors at any agreement level. 76% of labeled positive frames are 1- or 2-system detections whose mel-diff is *below* random — they mark frames where mel-energy change is *less* than at random points in the audio. The model regresses to the mean across this label noise, producing the collapsed activation distribution.
+
+**Why v29 worked:** kick_weighted labels mark percussive events with unambiguous low-frequency energy spikes. Even with documented stem-bleed contamination, the labeled frames coincide with mel-energy events. Signal ratio 1.45× is workable; v29 reached val_F1=0.54 frame-level.
+
+### v32 plan — `min_systems: 3` filter at prep time
+
+Filter consensus labels to ≥3-system agreement at prep time. Rationale:
+
+- **Per-strength signal at ≥3-systems = 1.65×**, beats v29's kick_weighted (1.45×).
+- **Cumulative ≥3-systems = 1.52× signal** with ~16.5% positive frame ratio after 3-frame plateau — sparse enough to be sharp, dense enough for the model to see many examples.
+- **Density 207 events/min** at min_systems=3 vs 282 at min_systems=1 — broader coverage than kick_weighted (~100 events/min) without the contamination of single-detector noise.
+- **Broader event coverage than kick_weighted** — picks up any percussive + strongly-confirmed harmonic onset, not just kicks/snares from a contaminated stem.
+
+The filter is implemented as `cfg.labels.min_systems` in `prepare_dataset.py`. Default 1 preserves backwards-compat. v32 config sets 3.
+
+v32 also opts into T4.4's `early_stopping_metric: val_peak_f1` — v31 confirmed val_loss-best is not on-device-realistic-best.
+
+### Disproven directly by this round
+
+- **"Continuous label strengths cause collapse" (v31 hypothesis)** — wrong. Sharp binarization didn't help and made things worse, because the underlying labels were polluted with sub-perceptual events at any encoding shape.
+- **"Single-system detector noise averages out across 5 detectors" (v30 implicit assumption)** — wrong. The merge algorithm at 70ms tolerance creates a union, not a robust intersection. Without a `min_systems ≥ 3` floor, every detector's idiosyncratic noise gets a vote.
+
+### Anomaly to investigate post-v32
+
+The 4-system bucket has *lower* per-strength signal (1.11×) than the 3-system bucket (1.65×). Two plausible causes — (a) the merge algorithm chains harmonic detections across the 70ms window when a 4th detector hits, and (b) certain detector subsets co-fire on harmonic events that mel features can't see. Worth investigating but not blocking v32.
+
+#### Step 2.5 (in flight): v32 on `onsets_consensus` with `min_systems: 3`
+
+`configs/conv1d_w16_onset_v32_mel_only.yaml`. Requires `prepare_dataset.py` rerun to `processed_v32` (the filter applies at prep, can't reuse processed_v31). Expected outcome: training-time signal returns to v29-quality (val_F1 ≈ 0.50-0.55, post-export activation std > 0.30) with broader event coverage than kick_weighted.
+
 ### Measurement instrumentation priorities
 
 1. **PLP accuracy measurement** via `persist_raw` — capture `plpPhase_`, `plpPulseValue_`, `plpConfidence_` every frame; correlate with ground-truth beat times. This is the prerequisite diagnostic for Step 3. If PLP has low accuracy vs ground truth, no treatment (gate OR training input) will salvage it.
@@ -303,6 +351,164 @@ Only if v30 on `onsets_consensus` labels also shows contamination or low ceiling
 - #71 Fallback: v31 madmom-only full-mix labels (blocked on 70)
 - #72 Fallback: multi-channel instrument model (blocked on 71)
 - *(new)* PLP-as-training-input — not yet a task; create once v30 result is in
+
+## 2026-04-25 — v32 deployed, results, comprehensive synthesis
+
+### v32 on-device validation (b146, edm_holdout, 25 tracks × 3 devices)
+
+```
+device          P     R     F1    F1_50  F1_70  F1_100 F1_150
+2A798EF8E684    0.403 0.273 0.300 0.195  0.237  0.300  0.373
+ABFBC41283E2    0.442 0.203 0.256 0.160  0.195  0.256  0.318
+659C8DD3ADF8    0.421 0.191 0.238 0.135  0.168  0.238  0.312
+OVERALL         0.422 0.223 0.265 0.164  0.200  0.265  0.335
+```
+
+**v32 vs v29 (current best deployed):** v32 has *higher precision* (0.422 vs 0.384 v29) — the `min_systems: 3` label fix did improve label specificity — but *much lower recall* (0.22 vs ~0.65). Model fires sparingly but correctly. Overall F1 0.265 still well below v29's 0.484. Per-device variance (0.19-0.27 R) matches the audit D4 finding.
+
+**Activation distribution stayed compressed:** v32 INT8 export std=0.123 (FP32 [0.014, 0.998] → INT8 [0.184, 0.934]). Per the n=4 monotonic correlation audit established (std≥0.30 → F1≈0.48; 0.12-0.15 → 0.27-0.29; <0.10 → unusable), this matched the prediction. **The min_systems=3 filter narrowed one failure mode but exposed another:** the model now produces clean predictions when it does fire, but doesn't fire often enough.
+
+### Comprehensive synthesis — what 22+ runs (v11-v32) actually tell us
+
+After exhausting the obvious dimensions (loss function, label encoding, label sharpness, label source filter, bias init, micprofile aug, hybrid features, wider/deeper architectures, W16→W32 receptive field), the val_F1 ceiling is structural, not tunable inside the current recipe.
+
+**Frame-level val F1 envelope, by recipe family:**
+
+| Family | val F1 | runs |
+|---|---|---|
+| `kick_weighted` + BCE + 30-mel | **0.55 ± 0.01** | v20 0.561, v21 0.552, v22 0.560, v29 0.543 |
+| `kick_weighted` + focal/aug | 0.47-0.50 | v23, v24, v25 |
+| Wider/deeper/W32 (any labels) | 0.47-0.48 | exp-w32, exp-wide-* |
+| Focal-loss (any labels) | 0.37-0.42 | v26, v27-hybrid, v27-hybrid-real, v28 |
+| `onset_consensus` labels | **0.31-0.34** | v30 0.311, v31 0.336, v32 0.336 |
+
+On-device F1 has been pinned at 0.47-0.49 since v16 across radically different feature/loss configurations. The single biggest on-device F1 jump in project history (0.47→0.62) came from a *firmware* signal-path change (b117 NN-primary pulse), not a model change.
+
+**Activation std vs on-device F1, n=4:**
+
+| Run | INT8 act std | On-device F1 |
+|---|---|---|
+| v29 | 0.34 | 0.484 |
+| v30 | 0.145 | 0.29 |
+| v31 | 0.089 | not deployed |
+| v32 | 0.123 | 0.265 |
+
+Monotonic. T2.5 catches collapse offline before any device cycle is wasted.
+
+### What every published 0.85+ onset detector has that we don't
+
+External comparison (Schlüter & Böck 2014 ICASSP, Böck DAFx 2012, Vogl ISMIR 2017, Foscarin Beat This! 2024):
+
+| | Schlüter '14 | Böck RNN '12 | Beat This! '24 | **Ours (v32)** |
+|---|---|---|---|---|
+| Mel bands | **80** | 20+40+80 stacked | 128 | **30** |
+| Frequency range | 27 Hz–16 kHz | 30 Hz–17 kHz | 30 Hz–10 kHz | **40 Hz–4 kHz** |
+| Frame rate | 100 Hz | 100 Hz | 50 Hz | 62.5 Hz |
+| Receptive field | 150 ms | full-BLSTM | 30 s | 256 ms |
+| Labels | hand-annotated | hand-annotated | multi-annotator | **5-system algorithmic union** |
+| Reported F1 (50ms) | 0.89 | 0.88 | 0.89 (beat) | 0.27-0.48 |
+| Params | ~few×10K | ~30K | 20M (also 2M) | 10K |
+
+**Schlüter '14 reached 0.89 with a FF-CNN of similar parameter count to ours.** So architecture capacity is not the binding constraint at 10K params. The dominant deltas vs published systems are:
+
+1. **fmax 4 kHz vs 10+ kHz.** We drop hi-hat / snare / cymbal energy entirely. These are exactly the signals that disambiguate percussive events in dense full-mix EDM.
+2. **30 mel bands vs 80+.** We under-resolve narrow-band percussive transients.
+3. **5-system algorithmic consensus vs hand labels.** Peer-detector agreement caps consensus-label training around F1 0.5-0.6 regardless of model capacity.
+
+### Things every run shared (= unexamined dimensions)
+
+- Conv1D, kernel [5,5], W16, ~256ms receptive field
+- 30 mel bands, 40-4000 Hz, 62.5 Hz frame rate
+- Single binary onset target (no multi-task)
+- BCE-family loss (no shift-tolerant since v15)
+- Single-channel input (no multi-resolution)
+- INT8 post-training quantization
+- Algorithmic labels (consensus or kick_weighted, never hand-annotated subset)
+
+### Things explicitly disproven (don't retry)
+
+- **Hybrid spectral features as NN inputs** — gate-b on b137 held-out: all 6 features TP-vs-FP |d| ≤ 0.10 pooled, well below 0.30 threshold. Path B dead.
+- **Continuous label strengths cause collapse** (v31 hypothesis) — wrong, hard binarization made things worse.
+- **Single-detector noise averages out across 5 detectors** (v30 implicit) — wrong, 1- and 2-system events are sub-random vs mel-diff.
+- **Wider+deeper architecture moves the ceiling** — exp-wide-* set, no gain.
+- **W16 → W32 receptive field widening** — exp-w32, no gain.
+- **Stacking another loss variant on the same input representation** — nine variants tried, ceiling unchanged.
+
+### Next experiments, ranked by evidence
+
+Each has a falsifiable prediction. Run sequentially; abandon at first negative result that contradicts the prediction.
+
+#### Exp 3 (DONE 2026-04-25): measured the algorithmic detector ceiling — **inverts the synthesis**
+
+Ran madmom CNN + RNN against the same `.beats.json` ground truth, same tolerances as device validation:
+
+```
+detector   F1@50ms F1@70ms F1@100ms F1@150ms P@100ms R@100ms
+madmom CNN 0.460   0.475   0.483    0.494    0.337   0.918
+madmom RNN 0.479   0.498   0.509    0.525    0.373   0.873
+                          ───────                  ───────
+v29 (deployed)             0.484                          ← matches CNN
+v32 (deployed)             0.265
+```
+
+**The ceiling on edm_holdout is F1 ≈ 0.5, set by labels-vs-target mismatch, not by model quality.** madmom's recall is 0.87-0.92 (finds nearly all `.beats.json` events) but precision is 0.34-0.37 (also fires on lots of unlabeled hi-hats / chord changes / vocal onsets). The `.beats.json` ground truth marks rhythm-trigger beats (~150-400/track); madmom fires on every onset (~3× more). This profile (high recall, low precision against rhythm-beats criterion) sets the F1≈0.5 wall.
+
+**Implications, in order of how much they invalidate the prior plan:**
+
+1. **The published 0.85+ F1 numbers are not comparable to ours.** Schlüter '14 reports 0.89 on `onset_db` (hand-annotated, diverse-genre, all onsets). Our validation criterion is a curated rhythm-trigger subset. They evaluate different products. Citing the 0.85 ceiling as a target for *our* product was a category error.
+2. **v29 has been at the data ceiling all along.** All 22+ runs trying to break past F1=0.48 were chasing an unreachable number on this validation set. The structural-ceiling synthesis (mel resolution, fmax) was correct only as an explanation of *general* onset-detection ceilings — but our problem isn't general onset detection.
+3. **v32 is genuinely below the ceiling** at F1=0.265 — but that's the *output-collapse* problem (std=0.12 → peak-picker rarely fires → recall=0.22), not a label-quality or representation problem. v29 reached the ceiling at std=0.34 with the same architecture, same mel resolution.
+4. **Exp 1 (mel resolution + fmax expansion) is dropped** as a next move on this validation set. It might still help if we change the validation criterion to general onsets, but that's a product-spec change, not a model fix.
+5. **Exp 2 (single-source madmom labels) becomes uninteresting** at the same F1 target — madmom itself only hits 0.51 here.
+
+**The new ranked plan**:
+
+- **Exp 4 (DONE 2026-04-25 PM): rolled devices back to v29 — uncovered firmware regression.** v29 b147 baseline with default settings: F1=0.257 (R=0.22), matching v30/v32 deployments. v29 b147 with `set beatgridmin 0`: **F1=0.470 (R=0.64)**, matching historical pre-b142 v29 within run-to-run noise. The PLP beat-grid AND-gate added in b142 (default `beatGridPatternMin=0.4`) suppresses recall by ~65% on rhythmic content. Every deployment since b142 has been gate-bottlenecked, not model-bottlenecked. This invalidates yesterday's "v32 is below the data ceiling because of activation collapse" conclusion: the v32 collapse is real offline (export std=0.123), but the on-device F1=0.265 was further suppressed by ~0.20 of firmware throttle.
+
+### PLP-accuracy diagnosis — gate is principle-broken (2026-04-25 PM)
+
+Followed up the gate finding with a `persist_raw=true` validation on 5 edm_holdout tracks (single device, b148+v32). Per-track aggregates:
+
+| Track | F1 (no gate) | gtOnsetsMatched/Total | atTransientNorm | nnAgreement | gtPatternCorr |
+|---|---|---|---|---|---|
+| 1234669 | 0.55 | 34/97 (35%) | 0.75 | 0.31 | 0.86 |
+| 2734862 | 0.65 | 20/107 (19%) | 0.58 | 0.35 | 0.94 |
+| 3642438 | 0.71 | 24/154 (16%) | 0.81 | 0.51 | 0.99 |
+| 4604737 | 0.61 | 0/95 (0%) | 0.0 | 0.34 | 0.0 |
+| 4611640 | 0.44 | 27/77 (35%) | 1.01 | 0.02 | 0.98 |
+
+**Key observations:**
+
+- **`gtOnsetsMatched/Total` is 0–35%.** The gate at threshold 0.4 would only let through 0–35% of true onsets, exactly matching the recall collapse (R=0.22 with-gate vs 0.65 without).
+- **`atTransientNorm < 1.0` on 4/5 tracks.** PLP value at NN firing times is *below* the track-mean PLP — the signal isn't "high at onsets, low between," it's roughly orthogonal to onsets.
+- **`gtPatternCorr` is 0.86–0.99 on 4/5 tracks.** PLP *does* find the rhythm-period structure, but per-frame alignment is too noisy to predict individual onset times. Pattern-correct, frame-wrong.
+- **`nnAgreement` is 2–51%.** NN and PLP disagree on which frames are onsets. The AND-gate suppresses on disagreement.
+
+**Conclusion.** PLP is a reliable PERIOD tracker but a poor PER-FRAME gate. The b142 design assumed the latter and it fails empirically.
+
+**Decision (#92 done):** flip `beatGridPatternMin` default 0.4 → 0.0 (b149). Runtime tunable preserved so the gate can be re-enabled per device or for sparse-content profiles where false positives are more expensive than missed firings.
+- **Exp 5 (investigation, not training): why does v29 produce std=0.34 while v32 produces 0.12 at the same architecture / mel resolution?** v29 used kick_weighted (drum-only events, ~76/min density). v32 used consensus min_systems≥3 (any-onset, ~207/min density). The label *density* and *event-type breadth* may explain the activation collapse — sparse single-purpose events produce sharp predictions; dense any-onset events smear them. If true, the next training direction is *narrower-target labels* (drum-only, kicks-only, beat-grid-only), not broader.
+- **Exp 6 (data work): generate clean drum-only labels without demucs stem bleed.** v29's kick_weighted labels were contaminated (32% of tracks had >0.7× bleed ratio per `HYBRID_FEATURE_ANALYSIS_PLAN.md`). A clean drum-only target — perhaps from a better separation model, or filtered by a kick-frequency-band energy criterion — could let v29's recipe push past 0.484.
+- **Exp 7 (product-spec change, not training): redefine the validation criterion** to "any salient onset" rather than rhythm-beats. Reannotate `.beats.json` to include hi-hats and harmonic onsets, then madmom RNN immediately becomes the product baseline at its 0.87 recall. This is the "join the published F1 ladder" path — but it's a product decision.
+
+**What is still disproven** (carries over from earlier synthesis): hybrid spectral features (gate-b dead), continuous label strengths cause collapse (v31 wrong), wider/deeper architecture, W16→W32 widening, additional loss variants, min_systems threshold tightening. None of those move the on-device F1 on this validation set.
+
+**What to NOT conclude yet:** the input-representation hypothesis (mel resolution / fmax) isn't disproven — it's just not the binding constraint *for this validation criterion*. If the product spec moves toward general onset detection (Exp 7), that hypothesis becomes testable again.
+
+#### Exp 1 (highest-ROI training experiment): mel resolution to Schlüter '14 spec
+
+Single-axis change vs v29: `n_mels: 30 → 80`, `fmax: 4000 → 10000`, keep window/labels/loss identical.
+
+- **Falsifiable prediction:** val_F1 frame > 0.65 within 30 epochs. If still ≤ 0.55, mel resolution alone wasn't the constraint; pivot to Exp 2.
+- **Cost:** ~2 days (re-prep, retrain, device feasibility check).
+- **Risk:** nRF52840 RAM/flash budget. 80 mel × 16 frames context = 1.28KB INT8. Verify fits before launching prep.
+
+#### Exp 2 (only if Exp 1 plateaus): single-source madmom labels
+
+Replace `onsets_consensus` with raw madmom CNNOnsetProcessor outputs.
+
+- **Falsifiable prediction:** val_F1 frame ≥ 0.50. If still ≤ 0.40, the consensus-union wasn't the binding constraint and labels aren't the lever.
+- **Cost:** ~1 day (regenerate labels, retrain).
 
 ### Tool fixes landed 2026-04-23
 
