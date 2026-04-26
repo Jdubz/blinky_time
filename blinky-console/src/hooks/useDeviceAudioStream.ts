@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Device } from '../services/sources';
-import type { SerialEvent } from '../services/protocol';
+import type { DeviceProtocol, SerialEvent } from '../services/protocol';
 import type { AudioSample, MusicModeData, TransientMessage } from '../types';
 
 export interface UseDeviceAudioStreamReturn {
@@ -65,7 +65,18 @@ function isMusicModeFinite(m: MusicModeData): boolean {
   return true;
 }
 
-export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStreamReturn {
+export function useDeviceAudioStream(
+  device: Device | null,
+  /**
+   * Optional explicit protocol. When passed, the hook subscribes to this
+   * exact instance instead of reading `device.protocol`. Useful for
+   * components that track the protocol in React state (and thus trigger
+   * re-renders on attachment) — see AudioDebugPage. When omitted, falls
+   * back to `device?.protocol ?? null` for callers that rely on the
+   * shared-mutation pattern (MainShell).
+   */
+  protocolOverride?: DeviceProtocol | null
+): UseDeviceAudioStreamReturn {
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [musicModeData, setMusicModeData] = useState<MusicModeData | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -78,12 +89,12 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
   // path reads `isStreaming` state directly.
   const isStreamingRef = useRef(false);
 
-  // Effect keys on `device.protocol` as well as `device` so that lazy protocol
-  // attachment (`device.protocol = new DeviceProtocol(...)` from a parent's
-  // useEffect) re-runs this effect once the protocol exists. Without
-  // `device?.protocol` in the dep list the effect only sees the original
-  // `protocol = null` snapshot and never connects.
-  const protocol = device?.protocol ?? null;
+  // Effect keys on the protocol so that lazy protocol attachment re-runs
+  // this effect once the protocol exists. Callers that pass `protocolOverride`
+  // get React-tracked changes; callers that rely on `device.protocol`
+  // mutation must trigger a re-render in the parent so this hook re-renders
+  // and sees the new value.
+  const protocol = protocolOverride !== undefined ? protocolOverride : (device?.protocol ?? null);
 
   useEffect(() => {
     setAudioData(null);
@@ -161,10 +172,10 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
   }, [device, protocol]);
 
   const toggleStreaming = useCallback(async () => {
-    if (!device?.protocol?.isConnected()) return;
+    if (!protocol?.isConnected()) return;
     const next = !isStreaming;
     try {
-      await device.protocol.setStreamEnabled(next);
+      await protocol.setStreamEnabled(next);
       isStreamingRef.current = next;
       setIsStreaming(next);
       setError(null);
@@ -177,10 +188,21 @@ export function useDeviceAudioStream(device: Device | null): UseDeviceAudioStrea
       setError(err instanceof Error ? err : new Error(String(err)));
       throw err;
     }
-  }, [device, isStreaming]);
+  }, [protocol, isStreaming]);
 
   const onTransientEvent = useCallback((callback: (msg: TransientMessage) => void) => {
     transientCallbacksRef.current.add(callback);
+    // Dev-mode leak warning: in production, callers MUST call the returned
+    // cleanup. If they forget, the Set grows on every remount. The threshold
+    // is loose (we never expect more than a couple of subscribers in practice)
+    // so a real leak shows up immediately.
+    if (import.meta.env.DEV && transientCallbacksRef.current.size > 16) {
+      console.warn(
+        `useDeviceAudioStream: ${transientCallbacksRef.current.size} transient ` +
+          `callbacks registered — likely missing cleanup. Each onTransientEvent ` +
+          `caller should invoke the returned unsubscribe in their useEffect cleanup.`
+      );
+    }
     return () => {
       transientCallbacksRef.current.delete(callback);
     };

@@ -13,7 +13,6 @@ import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { ScenesPanel, type Scene } from './components/ScenesPanel';
 import { AudioDebugPage } from './pages/AudioDebugPage';
-import { DeviceProtocol } from './services/protocol';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
 import type { GeneratorType } from './types';
 
@@ -31,13 +30,12 @@ export function MainShell() {
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
   // Protocol lazy-init lives in an effect (not render body) to keep render
-  // pure — directly mutating the device object during render violates React's
-  // purity contract and can misbehave under concurrent rendering.
+  // pure — directly mutating the device object during render violates
+  // React's purity contract and can misbehave under concurrent rendering.
+  // Device.ensureProtocol() encapsulates the if-not-set-create dance so
+  // both this and AudioDebugPage share the same lazy-init logic.
   useEffect(() => {
-    if (!selectedDevice || selectedDevice.protocol || selectedDevice.transports.length === 0) {
-      return;
-    }
-    selectedDevice.protocol = new DeviceProtocol(selectedDevice.transports[0].transport);
+    selectedDevice?.ensureProtocol();
     // `selectedDevice` is derived from `selectedId`; keying on id is correct.
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 

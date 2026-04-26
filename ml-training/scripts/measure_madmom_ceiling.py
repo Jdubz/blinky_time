@@ -1,7 +1,13 @@
 """Measure madmom CNN/RNN onset detector F1 on validation tracks.
 
-Run with venv311 (madmom requires Python 3.11):
-    venv311/bin/python scripts/measure_madmom_ceiling.py
+Run with venv311 (madmom requires Python ≤ 3.11):
+    cd ml-training
+    venv311/bin/python scripts/measure_madmom_ceiling.py [track_dir]
+
+The venv311 path is conventional under ml-training/. To recreate it:
+    python3.11 -m venv venv311 && venv311/bin/pip install madmom mir_eval
+The output JSON is written under ml-training/outputs/ regardless of CWD
+(resolved via Path(__file__) — see main()).
 
 Reads ground-truth onsets from .beats.json files (the same labels the
 device validation pipeline scores against) and runs madmom's
