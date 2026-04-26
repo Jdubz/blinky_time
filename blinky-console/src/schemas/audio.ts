@@ -49,6 +49,7 @@ export const MusicModeDataSchema = z.object({
   oss: z.number().nonnegative().optional(), // Smoothed onset strength
   ttb: z.number().int().optional(), // Frames until next beat
   bp: z.union([z.literal(0), z.literal(1)]).optional(), // Last beat predicted (1) vs fallback (0)
+  bs: z.number().min(0).max(1).optional(), // Beat stability (b150+, debug-mode only). Rolling stability of inter-beat intervals.
 });
 
 export type MusicModeData = z.infer<typeof MusicModeDataSchema>;
