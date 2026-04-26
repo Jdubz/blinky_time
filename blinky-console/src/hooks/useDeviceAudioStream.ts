@@ -59,7 +59,7 @@ function isMusicModeFinite(m: MusicModeData): boolean {
   ) {
     return false;
   }
-  for (const v of [m.pp, m.od, m.nn, m.per, m.ts, m.conf, m.cb, m.oss, m.bs]) {
+  for (const v of [m.pp, m.od, m.nn, m.per, m.ts, m.conf, m.cb, m.oss, m.bs, m.ttb]) {
     if (v !== undefined && !Number.isFinite(v)) return false;
   }
   return true;

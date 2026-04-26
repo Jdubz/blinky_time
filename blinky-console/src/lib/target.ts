@@ -19,6 +19,12 @@ export type Target = { kind: 'fleet' } | { kind: 'device'; id: string; protocol:
 /**
  * Fleet HTTP client. Always calls same-origin — the console is served
  * from blinky-server (or Caddy-proxied to it), so relative URLs work.
+ *
+ * Body-less by contract. The matching server routes
+ * (`/api/fleet/generator/{name}`, `/api/fleet/effect/{name}`,
+ * `/api/fleet/settings/{save,load,defaults}`) all encode any parameter
+ * in the URL path, so this helper deliberately doesn't take a body.
+ * Settings PUT (which carries a value) goes through `fleetPut` instead.
  */
 async function fleetPost(path: string): Promise<void> {
   const resp = await fetch(`/api/fleet${path}`, {

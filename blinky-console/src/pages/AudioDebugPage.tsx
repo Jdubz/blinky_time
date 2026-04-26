@@ -45,13 +45,21 @@ export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
 
   const stream = useDeviceAudioStream(selectedDevice);
 
-  const connectionState = stream.error
+  // Decouple machine state (used for CSS class + tests) from display label
+  // (user-facing copy) so a rename of one doesn't silently break the other.
+  const connectionState: 'error' | 'connected' | 'connecting' | 'disconnected' = stream.error
     ? 'error'
     : stream.isConnected
       ? 'connected'
       : selectedDevice
         ? 'connecting'
         : 'disconnected';
+  const connectionLabel: Record<typeof connectionState, string> = {
+    error: 'error',
+    connected: 'connected',
+    connecting: 'connecting',
+    disconnected: 'disconnected',
+  };
 
   return (
     <div className="audio-debug-page">
@@ -73,8 +81,12 @@ export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
             </option>
           ))}
         </select>
-        <span className={`audio-debug-status audio-debug-status-${connectionState}`}>
-          {connectionState}
+        <span
+          className={`audio-debug-status audio-debug-status-${connectionState}`}
+          role="status"
+          aria-live="polite"
+        >
+          {connectionLabel[connectionState]}
         </span>
       </div>
 

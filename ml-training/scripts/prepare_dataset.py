@@ -871,10 +871,14 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             if len(filtered) == 0 and len(raw_onsets) > 0:
                 # Stable single-line marker so a post-prep summary can grep:
                 #   grep -c MIN_SYSTEMS_DROPPED_ALL <prep.log>
+                # Goes to stderr because all-zero training targets are a
+                # silent contamination class — easy to lose in normal stdout
+                # progress noise, hard to detect post-hoc once mixed in.
                 print(f"MIN_SYSTEMS_DROPPED_ALL {audio_path.stem} "
                       f"min_systems={min_systems} raw_count={len(raw_onsets)} "
                       f"-- training will see all-zero targets for this track. "
-                      f"Check label file schema.")
+                      f"Check label file schema.",
+                      file=sys.stderr)
         else:
             filtered = raw_onsets
         beat_times = np.array([o["time"] for o in filtered])

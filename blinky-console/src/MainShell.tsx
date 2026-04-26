@@ -142,13 +142,16 @@ export function MainShell() {
             ? `All · ${devices.filter(d => d.isConnected()).length} connected`
             : (selectedDevice?.displayName ?? 'Device')}
         </span>
-        <button
-          className="btn btn-small shell-debug-btn"
-          onClick={() => setShowAudioDebug(true)}
-          title="Open audio stream debug page"
-        >
-          Audio Debug
-        </button>
+        {import.meta.env.DEV && (
+          <button
+            className="btn btn-small shell-debug-btn"
+            onClick={() => setShowAudioDebug(true)}
+            title="Open audio stream debug page"
+            aria-label="Open audio stream debug page"
+          >
+            Audio Debug
+          </button>
+        )}
       </header>
 
       <DeviceStrip

@@ -1529,7 +1529,15 @@ def main():
             best_epoch = min(rows_with_metric, key=lambda r: r[es_metric])
         else:
             best_epoch = max(rows_with_metric, key=lambda r: r[es_metric])
-        print(f"Best epoch (by {es_metric}): {best_epoch['epoch']}")
+        # Mid-run metric switches mean some early epochs may not have the
+        # current metric logged; the "Best epoch" line below refers only to
+        # epochs that recorded `es_metric`. Surface the filter when relevant.
+        if len(rows_with_metric) < len(log_rows):
+            print(f"Best epoch (by {es_metric}, among {len(rows_with_metric)}/"
+                  f"{len(log_rows)} epochs that logged the metric): "
+                  f"{best_epoch['epoch']}")
+        else:
+            print(f"Best epoch (by {es_metric}): {best_epoch['epoch']}")
         for k in ("val_loss", "val_binary_accuracy", "val_precision",
                   "val_recall", "val_f1", "val_peak_f1"):
             if k in best_epoch:
