@@ -65,13 +65,17 @@ labels:
   hard_binary_threshold: 0.1
 
 audio:
-  # Originally planned 80 mel (Schluter '14 spec) but the v33 80-mel prep
-  # crashed at 96% with disk exhaustion: 80×16 features are 2.7× larger
-  # than 30×16, projecting ~347 GB final + 137 GB mel_cache > 458 GB disk.
-  # Pivoted 2026-04-25 to 60 mel — still 2× the v32 representation,
-  # still extends fmax to Nyquist (8 kHz) to capture hi-hat/snare content,
-  # projects ~260 GB total which fits with margin.
-  n_mels: 60              # was 30 (v33 first-attempt was 80, ran out of disk)
+  # Originally planned 80 mel (Schluter '14 spec) but disk is the binding
+  # constraint at 458 GB:
+  #   80 mel: prep crashed at 96% (projection 347 GB final + 137 GB mel_cache)
+  #   60 mel: prep crashed at merge (209 GB shards + 246 GB merge scratch
+  #           = 455 GB peak, 3 GB short of physical disk capacity)
+  #   50 mel: 1.67× v32, peak ~380 GB, fits with margin
+  # Settled on 50 mel after two crashes 2026-04-25/26. Still tests the
+  # "more bands help" hypothesis (1.67×) and extends fmax to Nyquist
+  # (8 kHz) to capture hi-hat/snare content. 80-mel queued as v34+
+  # pending bigger disk.
+  n_mels: 50              # was 30 (60 ran out at merge step, 80 ran out at shard)
   fmin: 30                # was 40 (capture more bass detail)
   fmax: 8000              # was 4000 (Nyquist limit at 16 kHz sample rate)
 
@@ -102,4 +106,4 @@ data:
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v33_mel_only.h"
   c_array_name: "frame_onset_model_data"
-  max_model_size_kb: 28   # was 25 (input layer grows from 30→60 mels: layer 1 weights 30×32×5=4800 → 60×32×5=9600, model size ~17→~21 KB)
+  max_model_size_kb: 27   # was 25 (input layer grows from 30→50 mels: layer 1 weights 30×32×5=4800 → 50×32×5=8000, model size ~17→~20 KB)
