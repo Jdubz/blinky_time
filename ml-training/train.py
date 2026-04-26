@@ -592,6 +592,12 @@ def main():
                         help="Distillation temperature. Default: from config, or 2.0")
     parser.add_argument("--patience", type=int, default=None,
                         help="Early stopping patience (default: from config, or 15)")
+    parser.add_argument("--es-metric", default=None,
+                        choices=["val_loss", "val_peak_f1", "val_f1"],
+                        help="Override training.early_stopping_metric. Useful when "
+                             "resuming a checkpoint with a different metric than the "
+                             "config (the alternative is editing the config and forgetting "
+                             "to revert it). Default: from config.")
     parser.add_argument("--swa", action="store_true",
                         help="Enable Stochastic Weight Averaging over final epochs")
     parser.add_argument("--subsample", type=float, default=None,
@@ -1050,7 +1056,7 @@ def main():
     # The audit (B1, B2) flagged val_loss as misaligned with the firmware metric:
     # pos_weight scaling makes val_loss incomparable across runs, and frame-level
     # F1 rewards plateaus while peak-picking rewards sharp peaks.
-    es_metric = cfg["training"].get("early_stopping_metric", "val_loss")
+    es_metric = args.es_metric or cfg["training"].get("early_stopping_metric", "val_loss")
     if es_metric not in ("val_loss", "val_peak_f1", "val_f1"):
         raise ValueError(
             f"early_stopping_metric must be val_loss|val_peak_f1|val_f1, got {es_metric!r}"

@@ -879,6 +879,17 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                       f"-- training will see all-zero targets for this track. "
                       f"Check label file schema.",
                       file=sys.stderr)
+            elif len(raw_onsets) > 0:
+                drop_frac = 1.0 - (len(filtered) / len(raw_onsets))
+                # Only log when drop is unusually large (> 70% of onsets cut)
+                # — the typical filter at min_systems=3 cuts ~50%, so 70%+
+                # signals a per-track schema oddity worth investigating.
+                # Also grep-able: `grep MIN_SYSTEMS_HEAVY_FILTER <prep.log>`
+                if drop_frac > 0.70:
+                    print(f"MIN_SYSTEMS_HEAVY_FILTER {audio_path.stem} "
+                          f"{len(raw_onsets)} -> {len(filtered)} onsets "
+                          f"({100*drop_frac:.0f}% dropped at min_systems={min_systems})",
+                          file=sys.stderr)
         else:
             filtered = raw_onsets
         beat_times = np.array([o["time"] for o in filtered])

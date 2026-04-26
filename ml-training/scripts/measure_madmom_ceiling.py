@@ -185,7 +185,13 @@ def main() -> int:
         "tolerances_s": TOLERANCES_S,
         "results": per_track_results,
     }
-    out_path = Path("outputs/madmom_ceiling_edm_holdout.json")
+    # Resolve output path relative to this script (ml-training/) rather
+    # than the caller's CWD — running from the repo root used to silently
+    # write to the wrong directory.
+    out_path = (
+        Path(__file__).resolve().parent.parent
+        / "outputs" / "madmom_ceiling_edm_holdout.json"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\nFull per-track results → {out_path}")

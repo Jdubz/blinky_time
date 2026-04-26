@@ -32,6 +32,15 @@ export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
   // First-writer-wins: if MainShell or another view already attached a
   // protocol to this Device object, we leave it alone. This is safe because
   // Device objects are shared by reference across the whole app.
+  //
+  // Footgun acknowledged: this assumes a Device with a given `id` keeps its
+  // object identity for the lifetime of the registry. If the registry ever
+  // re-creates Device wrappers on each refresh (e.g. after a fleet sync),
+  // a previous assignment to `selectedDevice.protocol` would be lost on
+  // the new object and this effect would re-attach a fresh protocol —
+  // dropping the active connection. DeviceRegistry currently merges by id
+  // (services/sources/DeviceRegistry.ts), so the assumption holds; revisit
+  // here if registry semantics change.
   useEffect(() => {
     if (!selectedDevice || selectedDevice.protocol || selectedDevice.transports.length === 0) {
       return;
