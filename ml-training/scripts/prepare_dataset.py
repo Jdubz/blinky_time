@@ -1404,20 +1404,6 @@ def main():
             print("  (Non-interactive — skipping auto-delete. "
                   "Run interactively or pass --auto-clean-stale.)")
 
-    # --- Disk free precheck (post-cleanup) ---
-    # Moved after cleanup so --auto-clean-stale's freed space is what's
-    # compared. Otherwise we'd reject runs that would have fit cleanly.
-    free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
-    if free_gb < MIN_FREE_GB:
-        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir} after cleanup. "
-              f"Need at least {MIN_FREE_GB} GB to start dataprep "
-              f"(empirical from v31: ~130 GB final arrays + ~120 GB shard "
-              f"intermediates ≈ 250 GB peak; threshold leaves ~50 GB margin).\n"
-              f"  Tip: delete stale mel_cache entries, drop unused stems, or "
-              f"free space on the volume.",
-              file=sys.stderr)
-        sys.exit(1)
-
     # --- Prune stale mel cache entries ---
     mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
     if mel_cache_base.exists():
@@ -1459,6 +1445,22 @@ def main():
                 else:
                     print("  (Non-interactive — skipping. Delete manually or "
                           "pass --auto-clean-stale.)")
+
+    # --- Disk free precheck (post-cleanup, post-mel-cache-pruning) ---
+    # Runs AFTER both processed_v* cleanup AND stale mel_cache pruning so
+    # --auto-clean-stale's full reclamation counts toward the threshold.
+    # Otherwise stale-cache GB on disk would block runs that would fit
+    # cleanly after autoclean ran.
+    free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
+    if free_gb < MIN_FREE_GB:
+        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir} after cleanup. "
+              f"Need at least {MIN_FREE_GB} GB to start dataprep "
+              f"(empirical from v31: ~130 GB final arrays + ~120 GB shard "
+              f"intermediates ≈ 250 GB peak; threshold leaves ~50 GB margin).\n"
+              f"  Tip: delete stale mel_cache entries, drop unused stems, or "
+              f"free space on the volume.",
+              file=sys.stderr)
+        sys.exit(1)
 
     rng = np.random.default_rng(seed)
 

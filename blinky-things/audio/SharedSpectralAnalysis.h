@@ -41,8 +41,10 @@ namespace SpectralConstants {
     //
     // Triplet history:
     //   26 / 60-8000  — pre-v27 baseline (kept for back-compat)
-    //   30 / 40-4000  — v27/v28/v29/v30/v31/v32 (b129-b148)
-    //   80 / 30-8000  — v33+ (Schluter '14 spec, sample rate Nyquist limit)
+    //   30 / 40-4000  — v27/v28/v29/v30/v31/v32 (b129-b150)
+    //   60 / 30-8000  — v33 (forced down from 80 by disk constraints; still
+    //                  2× v32 mel resolution, still extends fmax to Nyquist)
+    //   80 / 30-8000  — v34+ (full Schluter '14 spec, blocked on bigger disk)
     constexpr int NUM_MEL_BANDS = 30;       // v32: 30 focused mel bands (40-4000 Hz)
     constexpr float MEL_MIN_FREQ = 40.0f;   // Hz (covers kick fundamental)
     constexpr float MEL_MAX_FREQ = 4000.0f; // Hz (snare wire cutoff; hi-hat excluded)
@@ -56,6 +58,7 @@ namespace SpectralConstants {
     static_assert(
         (NUM_MEL_BANDS == 26 && MEL_MIN_FREQ == 60.0f && MEL_MAX_FREQ == 8000.0f) ||
         (NUM_MEL_BANDS == 30 && MEL_MIN_FREQ == 40.0f && MEL_MAX_FREQ == 4000.0f) ||
+        (NUM_MEL_BANDS == 60 && MEL_MIN_FREQ == 30.0f && MEL_MAX_FREQ == 8000.0f) ||
         (NUM_MEL_BANDS == 80 && MEL_MIN_FREQ == 30.0f && MEL_MAX_FREQ == 8000.0f),
         "Mel config mismatch: NUM_MEL_BANDS/MEL_MIN_FREQ/MEL_MAX_FREQ must be a valid triplet"
     );
