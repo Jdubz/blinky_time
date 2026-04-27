@@ -30,42 +30,79 @@ static constexpr float MID_BIN_COUNT = static_cast<float>(
 static constexpr float HIGH_BIN_COUNT = static_cast<float>(
     SpectralConstants::NUM_BINS - SpectralConstants::HIGH_MIN_BIN);           // 95
 
-// Mel filterbank bin boundaries: 30 bands, 40-4000 Hz, 16 kHz / FFT-256.
-// Focused on kick (40-200 Hz, 3 bands) + snare (200-4000 Hz, 27 bands).
-// Hi-hat frequencies (4-8 kHz) excluded — saves bandwidth for onset-relevant bands.
-// MUST match librosa.filters.mel(sr=16000, n_fft=256, n_mels=30,
-//   fmin=40, fmax=4000, htk=True, norm=None).
+// Mel filterbank bin boundaries — generated to match librosa.filters.mel(sr=16000,
+// n_fft=256, n_mels=NUM_MEL_BANDS, fmin=MEL_MIN_FREQ, fmax=MEL_MAX_FREQ, htk=True,
+// norm=None). MUST stay in sync with NUM_MEL_BANDS / MEL_MIN_FREQ / MEL_MAX_FREQ
+// in SharedSpectralAnalysis.h — every change to those constants requires
+// regenerating this table. The static_assert below catches mismatches at
+// compile time; v33's regression (NUM_MEL_BANDS bumped 30 → 50 without
+// regenerating the table) silently zero-filled bands 30-49 to {0,0,0}, all
+// reading FFT bin 0 (DC) and producing identical mel ≈ 0.9 garbage. See
+// ML_IMPROVEMENT_PLAN.md 2026-04-27 entry. Regenerate via:
+//
+//   import librosa, numpy as np
+//   freqs = librosa.mel_frequencies(n_mels=N+2, fmin=FMIN, fmax=FMAX, htk=True)
+//   bins = freqs * 256 / 16000     # FFT-256 / 16 kHz
+//   for b in range(N):
+//     print({floor(bins[b]), round(bins[b+1]), ceil(bins[b+2])})
+static_assert(SpectralConstants::NUM_MEL_BANDS == 50
+              && SpectralConstants::MEL_MIN_FREQ == 30.0f
+              && SpectralConstants::MEL_MAX_FREQ == 8000.0f,
+    "MEL_BANDS[] table below is only generated for 50 mel × 30-8000 Hz. "
+    "Regenerate the table for the new triplet (and add the prior table to a "
+    "branch if you need multi-config support).");
+// 50 bands × 30-8000 Hz, 16 kHz / FFT-256 (Nyquist-spanning, v33+).
 static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
-    {  1,   1,   2},  // 0: 85 Hz center
-    {  1,   2,   3},  // 1: 134 Hz center
-    {  2,   3,   4},  // 2: 185 Hz center
-    {  3,   4,   5},  // 3: 239 Hz center
-    {  4,   5,   6},  // 4: 297 Hz center
-    {  5,   6,   7},  // 5: 358 Hz center
-    {  6,   7,   8},  // 6: 423 Hz center
-    {  7,   8,   9},  // 7: 492 Hz center
-    {  8,   9,  10},  // 8: 566 Hz center
-    {  9,  10,  12},  // 9: 643 Hz center
-    { 10,  12,  13},  // 10: 726 Hz center
-    { 12,  13,  15},  // 11: 814 Hz center
-    { 13,  15,  16},  // 12: 907 Hz center
-    { 15,  16,  18},  // 13: 1005 Hz center
-    { 16,  18,  20},  // 14: 1110 Hz center
-    { 18,  20,  21},  // 15: 1221 Hz center
-    { 20,  21,  23},  // 16: 1339 Hz center
-    { 21,  23,  26},  // 17: 1465 Hz center
-    { 23,  26,  28},  // 18: 1598 Hz center
-    { 26,  28,  30},  // 19: 1739 Hz center
-    { 28,  30,  33},  // 20: 1889 Hz center
-    { 30,  33,  35},  // 21: 2048 Hz center
-    { 33,  35,  38},  // 22: 2217 Hz center
-    { 35,  38,  41},  // 23: 2396 Hz center
-    { 38,  41,  45},  // 24: 2586 Hz center
-    { 41,  45,  48},  // 25: 2788 Hz center
-    { 45,  48,  52},  // 26: 3003 Hz center
-    { 48,  52,  56},  // 27: 3230 Hz center
-    { 52,  56,  60},  // 28: 3472 Hz center
-    { 56,  60,  64},  // 29: 3728 Hz center
+    {   0,   1,   2 },  // 0:     66 Hz center
+    {   1,   2,   3 },  // 1:    105 Hz center
+    {   1,   2,   3 },  // 2:    145 Hz center
+    {   2,   3,   4 },  // 3:    187 Hz center
+    {   2,   4,   5 },  // 4:    231 Hz center
+    {   3,   4,   6 },  // 5:    277 Hz center
+    {   4,   5,   7 },  // 6:    326 Hz center
+    {   5,   6,   7 },  // 7:    377 Hz center
+    {   6,   7,   8 },  // 8:    430 Hz center
+    {   6,   8,   9 },  // 9:    487 Hz center
+    {   7,   9,  10 },  // 10:    546 Hz center
+    {   8,  10,  11 },  // 11:    608 Hz center
+    {   9,  11,  12 },  // 12:    673 Hz center
+    {  10,  12,  14 },  // 13:    741 Hz center
+    {  11,  13,  15 },  // 14:    813 Hz center
+    {  13,  14,  16 },  // 15:    888 Hz center
+    {  14,  15,  17 },  // 16:    967 Hz center
+    {  15,  17,  19 },  // 17:   1050 Hz center
+    {  16,  18,  20 },  // 18:   1138 Hz center
+    {  18,  20,  22 },  // 19:   1229 Hz center
+    {  19,  21,  23 },  // 20:   1325 Hz center
+    {  21,  23,  25 },  // 21:   1426 Hz center
+    {  22,  25,  27 },  // 22:   1532 Hz center
+    {  24,  26,  29 },  // 23:   1643 Hz center
+    {  26,  28,  31 },  // 24:   1760 Hz center
+    {  28,  30,  33 },  // 25:   1882 Hz center
+    {  30,  32,  35 },  // 26:   2011 Hz center
+    {  32,  34,  37 },  // 27:   2146 Hz center
+    {  34,  37,  39 },  // 28:   2287 Hz center
+    {  36,  39,  42 },  // 29:   2436 Hz center
+    {  38,  41,  45 },  // 30:   2592 Hz center
+    {  41,  44,  47 },  // 31:   2756 Hz center
+    {  44,  47,  50 },  // 32:   2928 Hz center
+    {  46,  50,  53 },  // 33:   3109 Hz center
+    {  49,  53,  56 },  // 34:   3298 Hz center
+    {  52,  56,  60 },  // 35:   3498 Hz center
+    {  55,  59,  63 },  // 36:   3706 Hz center
+    {  59,  63,  67 },  // 37:   3926 Hz center
+    {  62,  66,  71 },  // 38:   4156 Hz center
+    {  66,  70,  75 },  // 39:   4398 Hz center
+    {  70,  74,  79 },  // 40:   4652 Hz center
+    {  74,  79,  84 },  // 41:   4918 Hz center
+    {  78,  83,  88 },  // 42:   5198 Hz center
+    {  83,  88,  93 },  // 43:   5492 Hz center
+    {  87,  93,  98 },  // 44:   5800 Hz center
+    {  92,  98, 104 },  // 45:   6124 Hz center
+    {  97, 103, 110 },  // 46:   6463 Hz center
+    { 103, 109, 116 },  // 47:   6820 Hz center
+    { 109, 115, 122 },  // 48:   7194 Hz center
+    { 115, 121, 127 },  // 49:   7587 Hz center
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
@@ -121,6 +158,12 @@ void SharedSpectralAnalysis::begin() {
             }
             weightSum += weight;
         }
+        // weightSum==0 means MEL_BANDS[band] is degenerate (startBin>endBin or
+        // all bins out of NUM_BINS range) — a build-time table error. Loud
+        // assert at boot so corruption is visible; the 0.0f fallback exists
+        // only to keep the device booting until serial is available to log.
+        BLINKY_ASSERT(weightSum > 0.0f,
+            "MEL_BANDS[band] yields weightSum==0 — corrupt mel filterbank table");
         linearMelInvWeightSum_[band] = (weightSum > 0) ? 1.0f / weightSum : 0.0f;
     }
     reset();

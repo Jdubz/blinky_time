@@ -2,6 +2,7 @@
 #include "../tests/SafetyTest.h"
 #include "../inputs/SerialConsole.h"
 #include "../audio/AudioTracker.h"
+#include "../types/BlinkyAssert.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -191,7 +192,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 100;
     data_.tracker.activationThreshold = 0.3f;
-    data_.tracker.pulseOnsetFloor = 0.1f;
+    data_.tracker.pulseOnsetFloor = 0.2f;
     data_.tracker.odfContrast = 1.25f;
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
@@ -426,17 +427,26 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Preserves all other settings instead of wiping everything.
     int fixedCount = 0;
 
+    // Out-of-range stored config values are configuration corruption — flash
+    // bit-rot, downgrade across an incompatible schema, or a bad save path.
+    // Always log at ERROR (no opt-out) and bump the global error counter so
+    // the corruption shows up in `show errors` even when WARN is gated off.
+    // Clamp is the recovery path so the device boots with usable values; it
+    // is not the silent-fallback path. See CLAUDE.md "No Silent Fallbacks".
     auto validateFloat = [&](float& value, float min, float max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
             float clamped = value < min ? min : max;
-            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
-                Serial.print(F("[WARN] Bad config "));
-                Serial.print(name);
-                Serial.print(F(": "));
-                Serial.print(value);
-                Serial.print(F(" -> "));
-                Serial.println(clamped);
-            }
+            Serial.print(F("[ERROR] Corrupt config "));
+            Serial.print(name);
+            Serial.print(F(": "));
+            Serial.print(value);
+            Serial.print(F(" out of ["));
+            Serial.print(min);
+            Serial.print(F(", "));
+            Serial.print(max);
+            Serial.print(F("], clamped to "));
+            Serial.println(clamped);
+            BlinkyAssert::failCount++;
             value = clamped;
             fixedCount++;
         }
@@ -444,17 +454,23 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
     // Macro-based integer validator — works with uint8_t, uint16_t, uint32_t
     // (lambdas can't be templated in C++11)
+    // Integer counterpart to validateFloat above. Same loud-failure rules:
+    // ERROR-level log (no opt-out), bumps BlinkyAssert::failCount, then clamps
+    // so the device still boots. See CLAUDE.md "No Silent Fallbacks".
     #define VALIDATE_INT(value, lo, hi, name) do { \
         if ((value) < (lo) || (value) > (hi)) { \
             auto _clamped = (value) < (lo) ? (lo) : (hi); \
-            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) { \
-                Serial.print(F("[WARN] Bad config ")); \
-                Serial.print(name); \
-                Serial.print(F(": ")); \
-                Serial.print(value); \
-                Serial.print(F(" -> ")); \
-                Serial.println(_clamped); \
-            } \
+            Serial.print(F("[ERROR] Corrupt config ")); \
+            Serial.print(name); \
+            Serial.print(F(": ")); \
+            Serial.print(value); \
+            Serial.print(F(" out of [")); \
+            Serial.print(lo); \
+            Serial.print(F(", ")); \
+            Serial.print(hi); \
+            Serial.print(F("], clamped to ")); \
+            Serial.println(_clamped); \
+            BlinkyAssert::failCount++; \
             (value) = _clamped; \
             fixedCount++; \
         } \

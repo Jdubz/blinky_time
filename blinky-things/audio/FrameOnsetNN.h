@@ -133,10 +133,18 @@ public:
         windowFilled_ = 0;
         windowWriteIdx_ = 0;
 
-        // Cache quantization params for incremental quantization
+        // Cache quantization params for incremental quantization. A non-positive
+        // scale means the model wasn't quantized correctly at export time —
+        // running inference with invScale=1.0 silently produces garbage. Fail
+        // init so the caller (AudioTracker::begin) sees nnActive_=false and
+        // BLINKY_ASSERTs there. See CLAUDE.md "No Silent Fallbacks".
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;
-            quantInvScale_ = (scale > 0.0f) ? (1.0f / scale) : 1.0f;
+            if (!(scale > 0.0f)) {
+                initError_ = 7;
+                return false;
+            }
+            quantInvScale_ = 1.0f / scale;
             quantZeroPoint_ = input_->params.zero_point;
         }
 
@@ -240,6 +248,13 @@ public:
 
         unsigned long t0 = micros();
         if (interpreter_->Invoke() != kTfLiteOk) {
+            // TFLite invoke failure in the 62.5 Hz hot path. Counter is logged
+            // by the debug printer, but a continuous failure mode would
+            // otherwise look like quiet content. Log first occurrence so the
+            // failure shows up in serial without spamming.
+            if (invokeErrors_ == 0) {
+                Serial.println(F("[ERROR] FrameOnsetNN: TFLite Invoke() failed (first occurrence)"));
+            }
             invokeErrors_++;
             return 0.0f;
         }
