@@ -1,12 +1,12 @@
 # ML Training Improvement Plan
 
+> **2026-04-27 corpus reset:** `edm_holdout/` (the GiantSteps LOFI adversarial corpus) was deleted entirely. Multiple regressions came from using adversarial content as the headline F1 metric and chasing model fixes for problems that were partly content-difficulty. **The only validation corpus going forward is `blinky-test-player/music/edm/` (18 tracks).** All historical F1 numbers in this doc that mention `edm_holdout` should be read as "measured on adversarial content that no longer informs decisions." See CLAUDE.md "CRITICAL: Validation Corpus".
+>
+> The GiantSteps LOFI tracks are still in the *training* corpus (they always were — `Makefile` symlinks them via `giantsteps-tempo-dataset/audio/*.mp3`); they're no longer treated as a separate evaluation set. The held-out role moves to a tier-1 subset of `edm/` once tier-1 is defined.
+
 > **2026-04-24 audit**: v30's on-device failure triggered a deep audit of the entire audio analysis stack. 24 findings across training data prep, training loop, TFLite export, firmware audio path, and validation observability. Detailed in `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md`. Fix plan tracked as tasks #77-#88. Key items that would have caught v30 automatically: activation-distribution logging (training + validation), peak-picked val F1, FP32 output quantization investigation.
 
-> **Corpus framing (2026-04-23).** The **primary** evaluation corpus is now `blinky-test-player/music/edm/` (18 tracks, deployment-representative: afrobeat, amapiano, breakbeat, dnb, dubstep, garage, reggaeton, techno, trance). The **secondary** corpus is `blinky-test-player/music/edm_holdout/` (25 GiantSteps LOFI tracks — hard/adversarial content where VISUALIZER_GOALS §5 says organic mode is the correct response).
->
-> edm/ tracks were byte-identical with training audio through v29. v30 is the first model prepared with both `--exclude-dir ../edm` **and** `--exclude-dir ../edm_holdout`, making both corpora clean held-out sets. A single-valued `--exclude-dir` argparse bug (fixed 2026-04-23) previously silently dropped one of the two exclusions.
->
-> **Pre-v30 F1 numbers on edm/ are training-contaminated upper bounds.** The v29 "ungated baseline on edm/" recorded in this doc (P=0.55, F1=0.547) is the cleanest pre-fix deployment-representative number we have; interpret with a contamination discount until v30 results replace it.
+> **Pre-v30 F1 numbers on edm/ are training-contaminated upper bounds.** The v29 "ungated baseline on edm/" recorded in this doc (P=0.55, F1=0.547) is the cleanest pre-fix deployment-representative number we have; interpret with a contamination discount until clean edm/ results replace it.
 
 ## 2026-04-22 — focal-loss regression + v29 reset
 

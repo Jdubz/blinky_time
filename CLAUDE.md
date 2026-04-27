@@ -26,6 +26,14 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 **Unresponsive device recovery:** `uhubctl -a cycle -p <port>` → server flash → wait for re-enumeration. Last resort: physical reset.
 
+## CRITICAL: Validation Corpus
+
+**The only validation corpus is `blinky-test-player/music/edm/` (18 tracks).** It contains representative EDM with clear percussion (techno×5, trance×3, dnb×2, breakbeat×2, dubstep, garage, reggaeton, trap, afrobeat, amapiano) — the content the system is designed to perform on. Lock in performance here before measuring anything else.
+
+**Do NOT introduce a "held-out" / "hard" / "adversarial" corpus and use it as a headline metric.** This has happened multiple times — most recently `edm_holdout/` (GiantSteps LOFI: ambient, phrase-shifting, intentionally challenging). Reporting F1 on adversarial content as the primary number normalises low scores ("F1 0.47 is fine, that's hard content") and burns weeks chasing model fixes for problems that look smaller on representative content. The adversarial-corpus pattern was deleted 2026-04-27 as part of a structural fix, not a policy.
+
+If you need to test against harder material, do it *after* edm/ is solid and report it as a tier-2 number with separate framing, not next to the headline F1. New corpora must clear that bar before being added — and never as a default in scripts.
+
 ## CRITICAL: No Silent Fallbacks
 
 **Errors must fail LOUDLY. Never silently substitute defaults, zero-fills, clamps, or empty values for invalid state.** A silent fallback is a production bug waiting to happen — it lets configuration drift, version mismatches, hardware faults, and model corruption masquerade as "working." When in doubt, assert, panic, or log at ERROR — never quietly continue with degraded data.

@@ -4,6 +4,8 @@
 **Owner:** Audio/ML
 **Supersedes:** ad-hoc `flat`/`rflux` streaming (b132)
 
+> **2026-04-27 corpus reset:** every reference to `edm_holdout` in this doc is historical. That corpus was deleted as the validation target — see CLAUDE.md "CRITICAL: Validation Corpus" and the corpus-reset note at the top of `ML_IMPROVEMENT_PLAN.md`. Numbers measured on it (gate (b) populations, v28/v29/v30 F1 quotes, etc.) reflect adversarial content and should not be treated as the headline metric.
+
 ## Goal
 
 **Choose a small set of deterministic features that genuinely help the NN discriminate true drum onsets from false ones on-device.**
