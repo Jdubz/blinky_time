@@ -1383,11 +1383,19 @@ def main():
     # both passed the 300 GB precheck and crashed mid-pipeline). The
     # dynamic formula below catches under-sized volumes at startup.
     def estimate_peak_disk_gb(n_files: int) -> tuple[float, str]:
-        """Upper-bound peak disk during prep, calibrated against v32.
-        Returns (gb, reasoning) for the error message."""
+        """Upper-bound peak disk during prep, calibrated against v33 actuals.
+        Returns (gb, reasoning) for the error message.
+
+        Recalibrated 2026-04-27 from 250 → 150 GB after v33 50-mel
+        post-reclaim peak measured at 205 GB (= 150 × 50/30 × 1.0 + 30
+        scratch ≈ 280 GB upper bound, with 75 GB margin to actual). The
+        old 250 GB baseline was from pre-reclaim measurements where the
+        mel_cache was pinned across merges; the per-merge reclaim landed
+        in #95 cuts peak disk by ~40%.
+        """
         n_mels_cfg = cfg["audio"].get("n_mels", 30)
         chunk_frames_cfg = cfg["training"].get("chunk_frames", 128)
-        REF_PEAK_GB = 250
+        REF_PEAK_GB = 150  # v33 post-reclaim baseline at 30-mel-equivalent
         REF_MELS = 30
         REF_FILES = 6732
         REF_CHUNK_FRAMES = 128

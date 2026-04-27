@@ -654,6 +654,81 @@ This **invalidates the v34 plan entirely**:
 - If on-device F1 ≤ 0.50 after b153 deploy: there's *another* firmware-vs-training mismatch we haven't found (window function? noise subtraction? log scaling?) — extend mel parity test to FFT magnitudes, then re-audit.
 - If activation distribution still saturates at 0.4: the model itself learned the saturated representation as a side effect of training data. Retrain v33 from clean mel with #97-equivalent persist_raw monitoring.
 
+### v33 b153 on edm/ — first clean baseline on the primary corpus (2026-04-27)
+
+Job 22c3a6abd57e: 18 tracks × 4 devices, persist_raw=true. **This is the only valid v33 metric** per the new corpus rule.
+
+**Headline:**
+
+```
+F1=0.570  P=0.564  R=0.612
+F1@50ms=0.370  F1@100ms=0.570  F1@150ms=0.636
+```
+
+**Per-track ranking:**
+
+| F1 | track | P | R | refOnsets |
+|---|---|---|---|---|
+| **0.720** | garage-uk-2step | 0.83 | 0.64 | 146 |
+| **0.674** | dnb-liquid-jungle | 0.62 | 0.75 | 119 |
+| **0.660** | reggaeton-fuego-lento | 0.64 | 0.68 | 147 |
+| **0.656** | techno-deep-ambience | 0.71 | 0.61 | 147 |
+| **0.643** | techno-minimal-emotion | 0.61 | 0.68 | 151 |
+| **0.624** | breakbeat-drive | 0.64 | 0.61 | 138 |
+| **0.610** | trance-party | 0.60 | 0.63 | 125 |
+| 0.593 | amapiano-vibez | 0.73 | 0.50 | 161 |
+| 0.593 | breakbeat-background | 0.67 | 0.54 | 142 |
+| 0.570 | dnb-energetic-breakbeat | 0.58 | 0.58 | 105 |
+| 0.570 | trance-goa-mantra | 0.57 | 0.58 | 100 |
+| 0.561 | afrobeat-feelgood-groove | 0.50 | 0.64 | 124 |
+| 0.516 | dubstep-edm-halftime | 0.54 | 0.51 | 114 |
+| 0.495 | techno-minimal-01 | 0.42 | 0.62 | 89 |
+| 0.487 | techno-dub-groove | 0.48 | 0.50 | 108 |
+| 0.471 | edm-trap-electro | 0.44 | 0.52 | 80 |
+| 0.449 | techno-machine-drum | 0.31 | 0.86 | 49 |
+| 0.365 | trance-infected-vibes | 0.28 | 0.56 | 71 |
+
+**Per-device (small spread):** 062CBD12EB69 F1=0.596, 2A798EF8E684 F1=0.588, 659C8DD3ADF8 F1=0.554, ABFBC41283E2 F1=0.542.
+
+**Activation distribution still saturated** (mean=0.453, p50=0.418, %>0.30 = 73.9%). Same shape as on the deleted edm_holdout corpus — confirms saturation is content-independent and is driven by input distribution mismatch, not by track difficulty.
+
+**Signal-vs-baseline cohens d is mixed and frequently negative.** Strong positive lift on breakbeat-background (+0.88) and breakbeat-drive (+0.72); strong negative on afrobeat (−0.56), trance-goa-mantra (−0.58), amapiano (−0.43), techno-deep-ambience (−0.40). Counterintuitively, the F1=0.72 best track (garage-uk-2step) has d≈0. This says the saturated sigmoid still carries onset information in its **derivatives** (sharp local changes) even when its absolute level is squashed; the firmware peak-picker recovers most of that value.
+
+### Tier-1 must-perform set (acceptance criterion: F1 ≥ 0.6 every track)
+
+The 7 tracks at F1 ≥ 0.6 cover the system's bread-and-butter content across genres:
+
+- garage-uk-2step (0.72) — clean 4-on-floor + ghost snares
+- dnb-liquid-jungle (0.67) — high-BPM breakbeat
+- reggaeton-fuego-lento (0.66) — dembow pattern
+- techno-deep-ambience (0.66) — minimal techno, clear kick
+- techno-minimal-emotion (0.64) — minimal techno
+- breakbeat-drive (0.62) — high-energy breaks
+- trance-party (0.61) — 4-on-floor with builds
+
+These 7 are the *acceptance criterion* for any future model deploy. v34 must hold or improve every one of them.
+
+### v34 plan — input domain adaptation (NOT a model architecture change)
+
+Single-axis change vs v33. Architecture, labels, n_mels, fmin/fmax, loss, optimiser all stay identical. Only the *input augmentation pipeline* changes — because the diagnosis is sim-to-real, not capacity.
+
+1. **Re-calibrate `target_rms_db` for 50-mel × 8-kHz.** The current value (−72 dBFS) was calibrated April 14 for 26-mel × 4-kHz fmax. Wider band integration at fmax=8000 raises mel mean at the same audio RMS. Procedure: capture device mel via `stream nn` mode while playing 3-4 representative tracks, compute mel-band mean over the capture, choose `target_rms_db` so training mel mean matches device mel mean (target ≈0.40 mean to match observed runtime).
+2. **Restore gain augmentation `[-18, +18] dB`.** v29 used this; v33 dropped it. The model never saw the level shifts it sees in deployment.
+3. **Add mic-profile sampling.** v29 had `mic_profile_flag` enabled; v33 didn't. Per-band gain shifts from the actual mic.
+4. **Optional: RIR augmentation.** Existing infra (`base.yaml: noise_dir`). Adds room reverb. Lower priority — gain aug is the bigger lever.
+
+**Falsifiable predictions for v34 on edm/:**
+
+- Activation mean drops from 0.453 → ≤0.25
+- Activation std rises from 0.234 → ≥0.30
+- Cohens d turns uniformly positive across tracks (no <-0.3 outliers)
+- Tier-1 tracks all reach F1 ≥ 0.7 (closing toward offline 0.690 ceiling)
+- Mid/bottom tier gains +0.05 minimum
+
+**Risk:** v34 could break the 7 tier-1 tracks while gaining the bottom 11. The acceptance bar is *no track regresses below F1 0.55* AND *every tier-1 track ≥ its current value*.
+
+If v34 succeeds: that's the new deployed model. If v34 plateaus or regresses: input-side hypothesis is wrong, return to investigating the saturated activation at the source (training itself produces saturated outputs vs the data — a curriculum/loss issue).
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
