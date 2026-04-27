@@ -61,6 +61,17 @@ public:
 
         initResolver();
 
+        // Compile-time check: the auto-generated `frame_onset_model_data_len`
+        // (in the model header) must match the actual byte array size. If
+        // they diverge — typically because the array was hand-edited or the
+        // header was partially updated — TFLite will read past the end and
+        // crash silently or produce garbage. Per PR 133 review.
+        static_assert(sizeof(frame_onset_model_data) == FRAME_ONSET_MODEL_DATA_SIZE,
+            "frame_onset_model_data array size doesn't match "
+            "FRAME_ONSET_MODEL_DATA_SIZE — re-export from export_tflite.py");
+        static_assert(sizeof(frame_onset_model_data) == frame_onset_model_data_len,
+            "frame_onset_model_data and *_len out of sync — re-export from export_tflite.py");
+
         if (frame_onset_model_data_len < 100) {
             initError_ = 4;  // Placeholder model
             return false;

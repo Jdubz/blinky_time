@@ -1994,17 +1994,21 @@ def main():
         # similarly. The earlier "keep cache through train for val mel
         # reads" comment was incorrect — val stems weren't in the train
         # cache to begin with.
-        mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
-        if mel_cache_base.exists():
+        # Reclaim only THIS run's cache, not the parent dir (which holds
+        # caches for all other config variants). Earlier code wiped the
+        # parent and forced re-computation of unrelated configs on next
+        # run, AND broke val-phase cache reads in this run since val mels
+        # share keys with train. Targeted reclaim per gemini PR 133 review.
+        if mel_cache_dir is not None and mel_cache_dir.exists():
             cache_size_gb = sum(
-                f.stat().st_size for f in mel_cache_base.rglob("*") if f.is_file()
+                f.stat().st_size for f in mel_cache_dir.rglob("*") if f.is_file()
             ) / (1024**3)
             if cache_size_gb > 1.0:
-                print(f"\n  Reclaiming mel_cache ({cache_size_gb:.1f} GB) "
+                print(f"\n  Reclaiming run-specific mel_cache ({cache_size_gb:.1f} GB) "
                       f"before {split_name} merge — features are baked into "
                       f"shards now and the cache has no within-run value left.",
                       flush=True)
-                shutil.rmtree(mel_cache_base)
+                shutil.rmtree(mel_cache_dir)
         _check_disk_space(output_dir, merge_est_gb * 1.2,
                           f"merge ({merge_est_gb:.1f} GB final array)")
 

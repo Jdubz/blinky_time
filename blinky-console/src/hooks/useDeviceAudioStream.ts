@@ -193,9 +193,14 @@ export function useDeviceAudioStream(
   const onTransientEvent = useCallback((callback: (msg: TransientMessage) => void) => {
     transientCallbacksRef.current.add(callback);
     // Dev-mode leak warning: in production, callers MUST call the returned
-    // cleanup. If they forget, the Set grows on every remount. The threshold
-    // is loose (we never expect more than a couple of subscribers in practice)
-    // so a real leak shows up immediately.
+    // cleanup. If they forget, the Set grows on every remount.
+    //
+    // The 16 threshold is intentionally loose: actual usage is 1-3
+    // subscribers (AudioDebugPage's transient log + maybe a future
+    // visualization panel + maybe a test harness). 16 is roughly 5×
+    // expected ceiling — high enough not to false-fire under React 18
+    // double-render in StrictMode, low enough that a real leak shows
+    // up within a few remounts.
     if (import.meta.env.DEV && transientCallbacksRef.current.size > 16) {
       console.warn(
         `useDeviceAudioStream: ${transientCallbacksRef.current.size} transient ` +
