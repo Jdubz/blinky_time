@@ -48,9 +48,9 @@ namespace SpectralConstants {
     //   60 / 30-8000  — v33 first-pivot (didn't fit, kept here for triplet
     //                  history)
     //   80 / 30-8000  — v34+ (full Schluter '14 spec, blocked on bigger disk)
-    constexpr int NUM_MEL_BANDS = 30;       // v32: 30 focused mel bands (40-4000 Hz)
-    constexpr float MEL_MIN_FREQ = 40.0f;   // Hz (covers kick fundamental)
-    constexpr float MEL_MAX_FREQ = 4000.0f; // Hz (snare wire cutoff; hi-hat excluded)
+    constexpr int NUM_MEL_BANDS = 50;       // v33: 50 mel bands (30-8000 Hz, Nyquist-spanning)
+    constexpr float MEL_MIN_FREQ = 30.0f;   // Hz (low-bass detail)
+    constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (Nyquist at 16 kHz sample rate; captures hi-hat/snare)
 
     // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
     // MUST match ml-training base.yaml mel_db_range.
