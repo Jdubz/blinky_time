@@ -1383,11 +1383,19 @@ def main():
     # both passed the 300 GB precheck and crashed mid-pipeline). The
     # dynamic formula below catches under-sized volumes at startup.
     def estimate_peak_disk_gb(n_files: int) -> tuple[float, str]:
-        """Upper-bound peak disk during prep, calibrated against v32.
-        Returns (gb, reasoning) for the error message."""
+        """Upper-bound peak disk during prep, calibrated against v33 actuals.
+        Returns (gb, reasoning) for the error message.
+
+        Recalibrated 2026-04-27 from 250 → 150 GB after v33 50-mel
+        post-reclaim peak measured at 205 GB (= 150 × 50/30 × 1.0 + 30
+        scratch ≈ 280 GB upper bound, with 75 GB margin to actual). The
+        old 250 GB baseline was from pre-reclaim measurements where the
+        mel_cache was pinned across merges; the per-merge reclaim landed
+        in #95 cuts peak disk by ~40%.
+        """
         n_mels_cfg = cfg["audio"].get("n_mels", 30)
         chunk_frames_cfg = cfg["training"].get("chunk_frames", 128)
-        REF_PEAK_GB = 250
+        REF_PEAK_GB = 150  # v33 post-reclaim baseline at 30-mel-equivalent
         REF_MELS = 30
         REF_FILES = 6732
         REF_CHUNK_FRAMES = 128
@@ -1651,19 +1659,31 @@ def main():
     # rather than mid-pipeline. v33 80-mel and 60-mel attempts both
     # passed the prior hardcoded 300 GB threshold and crashed mid-run;
     # the formula below would have rejected both at startup.
-    n_files_total = len(train_pairs) + len(val_pairs)
-    peak_gb, peak_reasoning = estimate_peak_disk_gb(n_files_total)
-    free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
-    print(f"\nDisk precheck: {free_gb:.1f} GB free, est. peak {peak_gb:.0f} GB needed "
-          f"({n_files_total} files at n_mels={cfg['audio'].get('n_mels', 30)}).")
-    if free_gb < peak_gb:
-        print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir.parent}; "
-              f"need ~{peak_gb:.0f} GB peak.\n"
-              f"  Estimate: {peak_reasoning}\n"
-              f"  Tip: reduce n_mels, drop augmentation variants, exclude "
-              f"large stems, or use a bigger volume.",
-              file=sys.stderr)
-        sys.exit(1)
+    #
+    # Resumption: if a train manifest exists, shards are already on disk
+    # and we only need merge-time space (~final_size × 1.2). The from-
+    # scratch peak estimate would over-reject in that case. Skip the
+    # startup precheck when resuming; the per-merge `_check_disk_space`
+    # gate (existing) catches insufficient space at the right moment.
+    train_manifest_exists = (output_dir / ".prep_progress_train.json").exists()
+    if train_manifest_exists:
+        free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
+        print(f"\nResuming from train manifest — skipping from-scratch peak "
+              f"estimate. {free_gb:.1f} GB free; per-merge check will gate.")
+    else:
+        n_files_total = len(train_pairs) + len(val_pairs)
+        peak_gb, peak_reasoning = estimate_peak_disk_gb(n_files_total)
+        free_gb = shutil.disk_usage(output_dir).free / (1024 ** 3)
+        print(f"\nDisk precheck: {free_gb:.1f} GB free, est. peak {peak_gb:.0f} GB needed "
+              f"({n_files_total} files at n_mels={cfg['audio'].get('n_mels', 30)}).")
+        if free_gb < peak_gb:
+            print(f"ERROR: Only {free_gb:.1f} GB free on {output_dir.parent}; "
+                  f"need ~{peak_gb:.0f} GB peak.\n"
+                  f"  Estimate: {peak_reasoning}\n"
+                  f"  Tip: reduce n_mels, drop augmentation variants, exclude "
+                  f"large stems, or use a bigger volume.",
+                  file=sys.stderr)
+            sys.exit(1)
 
     teacher_soft_dir = Path(args.teacher_soft_dir) if args.teacher_soft_dir else None
     generate_teacher = getattr(args, 'teacher', False) or teacher_soft_dir is not None
@@ -1961,26 +1981,34 @@ def main():
         # Check disk before merge
         expected_features = compute_input_features(cfg)
         merge_est_gb = sum(shard_counts) * chunk_frames * expected_features * 4 / (1024**3)
-        # Reclaim mel_cache before merge: shards already contain the
-        # augmented mel features baked in, so the cache is dead weight
-        # for the rest of THIS run. Keeping it pinned has crashed merges
-        # at high n_mels (v33 60-mel: 137 GB stale cache + 209 GB shards
-        # + 246 GB merge scratch = 455 GB peak, 3 GB short of the 458 GB
-        # volume). Only delete on the LAST merge iteration so a re-run
-        # of this same config could still benefit from the cache; we
-        # detect "last" by the split being val (val runs after train).
-        # On the train pass we keep the cache to speed val mel reads.
-        if split_name == "val":
-            mel_cache_base = Path(cfg.get("data", {}).get("mel_cache_dir", "data/mel_cache"))
-            if mel_cache_base.exists():
-                cache_size_gb = sum(
-                    f.stat().st_size for f in mel_cache_base.rglob("*") if f.is_file()
-                ) / (1024**3)
-                if cache_size_gb > 1.0:
-                    print(f"\n  Reclaiming mel_cache ({cache_size_gb:.1f} GB) "
-                          f"before merge — features are baked into shards now.",
-                          flush=True)
-                    shutil.rmtree(mel_cache_base)
+        # Reclaim mel_cache before merge: by the time we reach merge, the
+        # current split's shards already contain the augmented mel features
+        # baked in. The cache contains per-stem entries — and since the
+        # train/val split is file-level (disjoint stem sets), the cache
+        # built during train shard write has no entries the val phase
+        # would re-read. So the cache has zero within-run value after
+        # this point; reclaim it on every merge to free space.
+        #
+        # History: v33 50-mel crashed at train merge with 90 GB mel_cache
+        # pinned (137 GB free vs 205 GB needed). v33 60-mel crashed
+        # similarly. The earlier "keep cache through train for val mel
+        # reads" comment was incorrect — val stems weren't in the train
+        # cache to begin with.
+        # Reclaim only THIS run's cache, not the parent dir (which holds
+        # caches for all other config variants). Earlier code wiped the
+        # parent and forced re-computation of unrelated configs on next
+        # run, AND broke val-phase cache reads in this run since val mels
+        # share keys with train. Targeted reclaim per gemini PR 133 review.
+        if mel_cache_dir is not None and mel_cache_dir.exists():
+            cache_size_gb = sum(
+                f.stat().st_size for f in mel_cache_dir.rglob("*") if f.is_file()
+            ) / (1024**3)
+            if cache_size_gb > 1.0:
+                print(f"\n  Reclaiming run-specific mel_cache ({cache_size_gb:.1f} GB) "
+                      f"before {split_name} merge — features are baked into "
+                      f"shards now and the cache has no within-run value left.",
+                      flush=True)
+                shutil.rmtree(mel_cache_dir)
         _check_disk_space(output_dir, merge_est_gb * 1.2,
                           f"merge ({merge_est_gb:.1f} GB final array)")
 

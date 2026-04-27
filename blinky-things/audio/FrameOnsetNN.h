@@ -61,6 +61,17 @@ public:
 
         initResolver();
 
+        // Compile-time check: the auto-generated `frame_onset_model_data_len`
+        // (in the model header) must match the actual byte array size. If
+        // they diverge — typically because the array was hand-edited or the
+        // header was partially updated — TFLite will read past the end and
+        // crash silently or produce garbage. Per PR 133 review.
+        static_assert(sizeof(frame_onset_model_data) == FRAME_ONSET_MODEL_DATA_SIZE,
+            "frame_onset_model_data array size doesn't match "
+            "FRAME_ONSET_MODEL_DATA_SIZE — re-export from export_tflite.py");
+        static_assert(sizeof(frame_onset_model_data) == frame_onset_model_data_len,
+            "frame_onset_model_data and *_len out of sync — re-export from export_tflite.py");
+
         if (frame_onset_model_data_len < 100) {
             initError_ = 4;  // Placeholder model
             return false;
@@ -133,10 +144,18 @@ public:
         windowFilled_ = 0;
         windowWriteIdx_ = 0;
 
-        // Cache quantization params for incremental quantization
+        // Cache quantization params for incremental quantization. A non-positive
+        // scale means the model wasn't quantized correctly at export time —
+        // running inference with invScale=1.0 silently produces garbage. Fail
+        // init so the caller (AudioTracker::begin) sees nnActive_=false and
+        // BLINKY_ASSERTs there. See CLAUDE.md "No Silent Fallbacks".
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;
-            quantInvScale_ = (scale > 0.0f) ? (1.0f / scale) : 1.0f;
+            if (!(scale > 0.0f)) {
+                initError_ = 7;
+                return false;
+            }
+            quantInvScale_ = 1.0f / scale;
             quantZeroPoint_ = input_->params.zero_point;
         }
 
@@ -240,6 +259,13 @@ public:
 
         unsigned long t0 = micros();
         if (interpreter_->Invoke() != kTfLiteOk) {
+            // TFLite invoke failure in the 62.5 Hz hot path. Counter is logged
+            // by the debug printer, but a continuous failure mode would
+            // otherwise look like quiet content. Log first occurrence so the
+            // failure shows up in serial without spamming.
+            if (invokeErrors_ == 0) {
+                Serial.println(F("[ERROR] FrameOnsetNN: TFLite Invoke() failed (first occurrence)"));
+            }
             invokeErrors_++;
             return 0.0f;
         }

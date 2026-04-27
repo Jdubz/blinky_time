@@ -3,8 +3,8 @@
 // SHA256 prefix: fa087e0a364640ab
 // Exported: 2026-04-27T15:23:49Z
 
-#ifndef FRAME_ONSET_MODEL_DATA_H
-#define FRAME_ONSET_MODEL_DATA_H
+#ifndef FRAME_ONSET_MODEL_DATA_V33_MEL_ONLY_H
+#define FRAME_ONSET_MODEL_DATA_V33_MEL_ONLY_H
 
 #define FRAME_ONSET_MODEL_DATA_HASH "fa087e0a364640ab"
 #define FRAME_ONSET_MODEL_DATA_SIZE 20056
@@ -1686,4 +1686,4 @@ alignas(8) static const unsigned char frame_onset_model_data[] = {
 
 static const unsigned int frame_onset_model_data_len = 20056;
 
-#endif // FRAME_ONSET_MODEL_DATA_H
+#endif // FRAME_ONSET_MODEL_DATA_V33_MEL_ONLY_H

@@ -149,7 +149,7 @@ public:
     // Pulse detection thresholds
     float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-    float pulseOnsetFloor = 0.30f;     // NN activation threshold for peak-picking (sweep optimal 0.3-0.4)
+    float pulseOnsetFloor = 0.20f;     // NN activation threshold for peak-picking (v33 sweep: 0.20 lifts F1 0.398→0.442 vs 0.30; raising threshold doesn't improve P, just drops R)
     // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
 
     // Phase 2a crest-factor gate (Phase 4 Path A experiment).

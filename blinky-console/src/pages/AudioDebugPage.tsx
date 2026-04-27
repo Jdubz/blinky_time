@@ -9,8 +9,8 @@
 import { useEffect, useState } from 'react';
 import { AudioVisualizer } from '../components/AudioVisualizer';
 import { useDeviceAudioStream } from '../hooks/useDeviceAudioStream';
-import { DeviceProtocol } from '../services/protocol';
 import type { Device } from '../services/sources';
+import type { DeviceProtocol } from '../services/protocol';
 
 interface AudioDebugPageProps {
   devices: Device[];
@@ -19,40 +19,33 @@ interface AudioDebugPageProps {
 
 export function AudioDebugPage({ devices, onClose }: AudioDebugPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // `protocolNonce` bumps after we lazily attach a protocol to a device.
-  // Mutating `selectedDevice.protocol` doesn't change object identity, so
-  // without this bump useDeviceAudioStream wouldn't re-render to see the
-  // new protocol. The hook also keys on `device.protocol` internally, but
-  // that re-run only happens if THIS component re-renders first.
-  const [, setProtocolNonce] = useState(0);
+  // Tracking the current protocol in component state (rather than the prior
+  // nonce-bump-after-mutating-Device pattern) means the hook's deps see a
+  // real React-tracked value change when we attach a protocol — no implicit
+  // dependency on Device.protocol mutation order. The mutation still
+  // happens inside Device.ensureProtocol() so MainShell and this page see
+  // the same protocol instance for a given Device, but only this component
+  // tracks it for its own rendering.
+  const [protocol, setProtocol] = useState<DeviceProtocol | null>(null);
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
-  // Lazily initialise the protocol on the picked device, mirroring MainShell.
-  // First-writer-wins: if MainShell or another view already attached a
-  // protocol to this Device object, we leave it alone. This is safe because
-  // Device objects are shared by reference across the whole app.
-  //
-  // Footgun acknowledged: this assumes a Device with a given `id` keeps its
-  // object identity for the lifetime of the registry. If the registry ever
-  // re-creates Device wrappers on each refresh (e.g. after a fleet sync),
-  // a previous assignment to `selectedDevice.protocol` would be lost on
-  // the new object and this effect would re-attach a fresh protocol —
-  // dropping the active connection. DeviceRegistry currently merges by id
-  // (services/sources/DeviceRegistry.ts), so the assumption holds; revisit
-  // here if registry semantics change.
   useEffect(() => {
-    if (!selectedDevice || selectedDevice.protocol || selectedDevice.transports.length === 0) {
+    if (!selectedDevice) {
+      setProtocol(null);
       return;
     }
-    selectedDevice.protocol = new DeviceProtocol(selectedDevice.transports[0].transport);
-    setProtocolNonce(n => n + 1);
+    // ensureProtocol is idempotent: returns the existing Device.protocol if
+    // MainShell or another view already attached one, otherwise creates and
+    // stores a fresh one. The "first writer wins" invariant is encoded in
+    // the method, not duplicated at every call site.
+    setProtocol(selectedDevice.ensureProtocol());
     // selectedDevice is derived from selectedId via devices.find(); keying
-    // on selectedId alone is enough — adding selectedDevice would re-run the
-    // effect on identity changes without triggering meaningful work.
+    // on selectedId alone is correct — adding selectedDevice would re-run
+    // the effect on identity changes without triggering meaningful work.
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stream = useDeviceAudioStream(selectedDevice);
+  const stream = useDeviceAudioStream(selectedDevice, protocol);
 
   // Decouple machine state (used for CSS class + tests) from display label
   // (user-facing copy) so a rename of one doesn't silently break the other.

@@ -30,8 +30,8 @@ threshold is documented in the memory
 
 Usage:
     cd ml-training && ./venv/bin/python -m analysis.run_gate_b \
-        --job-result outputs/validation/holdout_<id>_raw.json \
-        --gt-dir ../blinky-test-player/music/edm_holdout \
+        --job-result outputs/validation/<id>_raw.json \
+        --gt-dir ../blinky-test-player/music/edm \
         --out outputs/gate_b/<run-label>
 """
 

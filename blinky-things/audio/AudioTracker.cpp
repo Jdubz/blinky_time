@@ -1,4 +1,5 @@
 #include "AudioTracker.h"
+#include "../types/BlinkyAssert.h"
 #include <math.h>
 #include <string.h>
 
@@ -52,6 +53,12 @@ bool AudioTracker::begin(uint32_t sampleRate) {
 
     bool nnOk = frameOnsetNN_.begin();
     nnActive_ = nnOk && frameOnsetNN_.isReady();
+    // NN init failure is a build-time / model-export bug, not a runtime
+    // condition. Silently falling back to mic-energy detection (see
+    // FrameOnsetNN.h) hides the regression from anyone reading device output.
+    // Assert loudly so the failure shows up in serial / error counter.
+    BLINKY_ASSERT(nnActive_,
+        "FrameOnsetNN failed to initialize — check getInitError(); falling back to mic energy");
 
 #ifdef ONSET_MODEL_USE_PCEN
     if (nnActive_) {

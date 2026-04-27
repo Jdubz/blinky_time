@@ -91,6 +91,10 @@ body {
   margin: 0 auto;
 }
 
+/* color-mix() is CSS Level 5: Chromium 111+ / Firefox 113+ / Safari 16.2+
+ * (Mar 2023). All usages here have a hex fallback in the var() so they
+ * degrade to the bare brand color on older browsers (no transparency).
+ * If we ever need deeper-history support, replace with rgba() fallbacks. */
 .shell-warning {
   padding: 0.75rem 1rem;
   background: color-mix(in srgb, var(--accent-warning, #facc15) 12%, transparent);

@@ -1,5 +1,7 @@
 # Audio-Reactive Architecture (AudioTracker)
 
+> **2026-04-27 note on F1 numbers:** older F1 quotes in this doc reference an `edm_holdout` corpus that has been deleted (it was adversarial GiantSteps LOFI content used as a headline metric, which kept producing misleadingly low scores). The only validation corpus going forward is `blinky-test-player/music/edm/`. See CLAUDE.md "CRITICAL: Validation Corpus".
+
 ## Overview
 
 AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.

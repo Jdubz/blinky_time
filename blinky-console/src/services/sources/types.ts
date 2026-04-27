@@ -15,7 +15,7 @@
  * {@link DeviceProtocol}.
  */
 
-import type { DeviceProtocol } from '../protocol';
+import { DeviceProtocol } from '../protocol';
 import type { Transport } from '../transport';
 
 export type SourceKind = 'webserial' | 'webbluetooth' | 'blinky-server';
@@ -93,5 +93,24 @@ export class Device {
 
   isConnected(): boolean {
     return this.protocol?.isConnected() ?? false;
+  }
+
+  /**
+   * Idempotently attach a DeviceProtocol bound to the first available
+   * transport. Returns the existing protocol if one is already set, or
+   * `null` if the device has no transports yet. Callers can use this in a
+   * `useEffect` to lazily initialize without each call site re-implementing
+   * the if-not-set-create dance (which previously appeared identically in
+   * MainShell and AudioDebugPage with a separate render-forcing nonce).
+   *
+   * The mutation here is the single source of truth for "this Device's
+   * protocol" — first writer wins, and subsequent consumers see the same
+   * instance. Keep the function small and side-effect-clear.
+   */
+  ensureProtocol(): DeviceProtocol | null {
+    if (this.protocol) return this.protocol;
+    if (this.transports.length === 0) return null;
+    this.protocol = new DeviceProtocol(this.transports[0].transport);
+    return this.protocol;
   }
 }

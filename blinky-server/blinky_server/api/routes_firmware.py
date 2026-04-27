@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
-from .deps import get_fleet, require_api_key
+from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import FlashRequest
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,10 @@ def _load_firmware_meta() -> dict[str, Any] | None:
 # ── Upload (instant) ─────────────────────────────────────────────────
 
 
-@router.post("/fleet/upload", dependencies=[Depends(require_api_key)])
+@router.post(
+    "/fleet/upload",
+    dependencies=[Depends(require_api_key), Depends(require_deploy_tool)],
+)
 async def fleet_upload(
     firmware: UploadFile,
     version: str | None = Form(None),
@@ -156,7 +159,10 @@ async def fleet_firmware_status() -> dict[str, Any]:
 # ── Flash (background job) ───────────────────────────────────────────
 
 
-@router.post("/fleet/flash", dependencies=[Depends(require_api_key)])
+@router.post(
+    "/fleet/flash",
+    dependencies=[Depends(require_api_key), Depends(require_deploy_tool)],
+)
 async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
     """Flash firmware to all connected nRF52840 devices.
 

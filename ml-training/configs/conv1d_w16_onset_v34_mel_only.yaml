@@ -1,0 +1,104 @@
+# Conv1D W16 v34 — same model as v33, fix the input distribution mismatch
+#
+# v33 b153 result on edm/ (primary corpus, 18 tracks × 4 devices, 2026-04-27):
+# F1=0.570 overall, 7 tracks at F1≥0.6 (tier-1 set: garage-uk-2step 0.72,
+# dnb-liquid-jungle 0.67, reggaeton-fuego-lento 0.66, techno-deep-ambience
+# 0.66, techno-minimal-emotion 0.64, breakbeat-drive 0.62, trance-party 0.61).
+# Offline val_peak_F1 = 0.690 — gap of +0.12 to on-device.
+#
+# Diagnosed cause (after mel-table fix in b153 closed an unrelated 0.27 gap):
+# input distribution mismatch. Device-mel measurement (stream nn capture
+# during music playback, techno-deep-ambience, ABFBC41283E2):
+#   training-clean mel mean = 0.369  (at target_rms_db=-72 dBFS, current)
+#   device mel mean during music = 0.754
+#   uniform per-band lift +0.32 to +0.44 (= +19 to +27 dB equivalent)
+# Activation on-device is saturated at mean=0.453 because the model rarely
+# saw inputs at this level during training.
+#
+# Single-axis change vs v33: input augmentation pipeline only.
+# Architecture, labels, n_mels, fmin/fmax, loss, optimiser unchanged —
+# the diagnosis is sim-to-real, not capacity.
+#
+# Fixes (in order of expected impact):
+# 1. target_rms_db: -72 → -30 dBFS
+#    Empirically calibrated: at -30, training-clean mel mean ≈ 0.75 (matches
+#    measured device mean 0.754). The previous -72 was set in April for
+#    26-mel × 4-kHz fmax; never re-validated for v33's 50-mel × 8-kHz.
+# 2. Restore gain augmentation [-18, +18] dB. v29's recipe used this; v33
+#    dropped it. Existing infrastructure: prepare_dataset.py:579 already
+#    iterates `for gain_db in [-18, -12, -6, 6, 12, 18]` when --augment is
+#    passed and a gain_db_range isn't otherwise overridden.
+# 3. RIR augmentation auto-enabled by Makefile if RIR_DIR exists.
+#
+# Falsifiable predictions on edm/:
+#   - Activation mean drops 0.453 → ≤0.25
+#   - Activation std rises 0.234 → ≥0.30
+#   - Cohens d at GT frames uniformly positive (no <-0.3 outliers)
+#   - Tier-1 tracks all reach F1 ≥ 0.7 (closing toward offline 0.690)
+#   - No tier-1 track regresses below current value (acceptance bar)
+#
+# Negative-result triggers:
+#   - Activation mean still ≥ 0.4 with new calibration: target_rms_db wasn't
+#     the binding constraint. Check FFT magnitude bias, log epsilon scaling,
+#     or whether stream nn capture itself was misleading.
+#   - F1 regresses on tier-1 with no compensating gain on bottom tier: the
+#     gain augmentation is over-augmenting; reduce range to [-12, +12].
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  # Identical to v33. Single-axis isolation.
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  # 50 mel × 30-8000 Hz — identical to v33 (mel resolution / fmax stay).
+  n_mels: 50
+  fmin: 30
+  fmax: 8000
+  # CALIBRATION CHANGE — only difference from v33's audio block.
+  # See header comment for derivation.
+  target_rms_db: -30
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  pos_weight: 0
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+  # The gain augmentation block is read by prepare_dataset.py when --augment
+  # is passed; if absent, prep uses a hardcoded [-18, -12, -6, 6, 12, 18]
+  # set (line 579). Keeping it implicit per existing convention.
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v34"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v34_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 27

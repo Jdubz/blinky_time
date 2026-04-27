@@ -13,8 +13,8 @@ import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { ScenesPanel, type Scene } from './components/ScenesPanel';
 import { AudioDebugPage } from './pages/AudioDebugPage';
-import { DeviceProtocol } from './services/protocol';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
+import type { DeviceProtocol } from './services/protocol';
 import type { GeneratorType } from './types';
 
 const GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
@@ -30,14 +30,19 @@ export function MainShell() {
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
-  // Protocol lazy-init lives in an effect (not render body) to keep render
-  // pure — directly mutating the device object during render violates React's
-  // purity contract and can misbehave under concurrent rendering.
+  // Track the protocol in React state so target/dispatch logic re-runs when
+  // it attaches. Calling `selectedDevice.ensureProtocol()` in an effect
+  // mutates the device object but does NOT trigger a render — so the first
+  // render after device selection sees `protocol: null` and dispatch falls
+  // back to fleet, until some unrelated state change re-runs the render.
+  // Mirrors the pattern used in AudioDebugPage. Per gemini PR 133 review.
+  const [protocol, setProtocol] = useState<DeviceProtocol | null>(null);
   useEffect(() => {
-    if (!selectedDevice || selectedDevice.protocol || selectedDevice.transports.length === 0) {
+    if (!selectedDevice) {
+      setProtocol(null);
       return;
     }
-    selectedDevice.protocol = new DeviceProtocol(selectedDevice.transports[0].transport);
+    setProtocol(selectedDevice.ensureProtocol());
     // `selectedDevice` is derived from `selectedId`; keying on id is correct.
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -54,8 +59,8 @@ export function MainShell() {
   let target: Target;
   let deviceUnavailable = false;
   if (selectedDevice) {
-    if (selectedDevice.protocol?.isConnected()) {
-      target = { kind: 'device', id: selectedDevice.id, protocol: selectedDevice.protocol };
+    if (protocol?.isConnected()) {
+      target = { kind: 'device', id: selectedDevice.id, protocol };
     } else {
       // Keep fleet target for typing but disable dispatch below.
       target = { kind: 'fleet' };

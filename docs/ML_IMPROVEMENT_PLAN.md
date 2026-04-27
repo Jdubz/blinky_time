@@ -1,12 +1,12 @@
 # ML Training Improvement Plan
 
+> **2026-04-27 corpus reset:** `edm_holdout/` (the GiantSteps LOFI adversarial corpus) was deleted entirely. Multiple regressions came from using adversarial content as the headline F1 metric and chasing model fixes for problems that were partly content-difficulty. **The only validation corpus going forward is `blinky-test-player/music/edm/` (18 tracks).** All historical F1 numbers in this doc that mention `edm_holdout` should be read as "measured on adversarial content that no longer informs decisions." See CLAUDE.md "CRITICAL: Validation Corpus".
+>
+> The GiantSteps LOFI tracks are still in the *training* corpus (they always were — `Makefile` symlinks them via `giantsteps-tempo-dataset/audio/*.mp3`); they're no longer treated as a separate evaluation set. The held-out role moves to a tier-1 subset of `edm/` once tier-1 is defined.
+
 > **2026-04-24 audit**: v30's on-device failure triggered a deep audit of the entire audio analysis stack. 24 findings across training data prep, training loop, TFLite export, firmware audio path, and validation observability. Detailed in `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md`. Fix plan tracked as tasks #77-#88. Key items that would have caught v30 automatically: activation-distribution logging (training + validation), peak-picked val F1, FP32 output quantization investigation.
 
-> **Corpus framing (2026-04-23).** The **primary** evaluation corpus is now `blinky-test-player/music/edm/` (18 tracks, deployment-representative: afrobeat, amapiano, breakbeat, dnb, dubstep, garage, reggaeton, techno, trance). The **secondary** corpus is `blinky-test-player/music/edm_holdout/` (25 GiantSteps LOFI tracks — hard/adversarial content where VISUALIZER_GOALS §5 says organic mode is the correct response).
->
-> edm/ tracks were byte-identical with training audio through v29. v30 is the first model prepared with both `--exclude-dir ../edm` **and** `--exclude-dir ../edm_holdout`, making both corpora clean held-out sets. A single-valued `--exclude-dir` argparse bug (fixed 2026-04-23) previously silently dropped one of the two exclusions.
->
-> **Pre-v30 F1 numbers on edm/ are training-contaminated upper bounds.** The v29 "ungated baseline on edm/" recorded in this doc (P=0.55, F1=0.547) is the cleanest pre-fix deployment-representative number we have; interpret with a contamination discount until v30 results replace it.
+> **Pre-v30 F1 numbers on edm/ are training-contaminated upper bounds.** The v29 "ungated baseline on edm/" recorded in this doc (P=0.55, F1=0.547) is the cleanest pre-fix deployment-representative number we have; interpret with a contamination discount until clean edm/ results replace it.
 
 ## 2026-04-22 — focal-loss regression + v29 reset
 
@@ -509,6 +509,225 @@ Replace `onsets_consensus` with raw madmom CNNOnsetProcessor outputs.
 
 - **Falsifiable prediction:** val_F1 frame ≥ 0.50. If still ≤ 0.40, the consensus-union wasn't the binding constraint and labels aren't the lever.
 - **Cost:** ~1 day (regenerate labels, retrain).
+
+## 2026-04-27 — v33 b151 mechanics, evidence from existing diagnostics
+
+v33 (50 mel, 30-8000 Hz) deployed at b151. Offline `val_peak_F1=0.690` (1.8× v32). On-device edm_holdout F1=0.449 — below v29's 0.484 ceiling. Before guessing at fixes, the existing `validate.json` was re-analyzed for what the diagnostics actually say. **No new validation runs required for these findings; all derived from `signals.gaps`, `diagnostics.onsetOffsetMs`, and per-track `onsetTracking` already in the b151 result.**
+
+### Per-track summary (25 tracks × 3 devices, mean per track)
+
+| | refOnsets | rate | F1 | P | R | IQR (ms) | medOff (ms) |
+|---|---|---|---|---|---|---|---|
+| Bottom 5 (mean) | 51 | 2.99 | 0.28 | 0.23 | 0.47 | 380 | — |
+| Top 5 (mean) | 116 | 4.19 | 0.61 | 0.55 | 0.71 | 160 | — |
+| All 25 mean | 84 | 3.43 | 0.45 | 0.39 | 0.57 | 244 | -3 |
+
+### Findings, with the correlation that backs each one
+
+**1. Model fires at content-independent rate.** `corr(refOnsets, rate) = +0.07`. Detection rate is ~3.4/sec ± 1.0 regardless of GT density (which spans 33→155 events/35s). The rate variance (CoV=0.29) is uncorrelated with content density. This is the bottleneck mechanism: dense-onset tracks happen to align FPs onto real onsets; sparse-onset tracks accumulate FPs as background noise.
+
+**2. Bottom tracks have *better* peak-mode feature discrimination than top tracks.** Mean cohensD on the bad-F1 bucket vs good-F1 bucket:
+
+| feature/peak | top-8 cohensD | bot-8 cohensD |
+|---|---|---|
+| centroid | 0.55 | **0.74** |
+| flatness | 0.63 | **0.78** |
+| rolloff | 0.40 | **0.66** |
+| hfc | 0.51 | 0.55 |
+| crest | **1.13** | 0.68 |
+| raw_flux | **0.72** | 0.63 |
+
+When the model fires on bad tracks, the input features look *more* onset-shaped (high centroid/flatness/rolloff peaks) than when it fires on good tracks. **Rules out "input features can't separate onset from non-onset" as the bottleneck** — the discrimination is there, it's just being applied to the wrong frames. Crest is the lone exception (better on good tracks); v29's reliance on crest may be one reason it hit ceiling without the others.
+
+**3. Frame-level cohensD is universally weak (~0.0 ± 0.15 across all 6 features).** Only peak-mode discrimination (when the model fires) is strong. Frames where the model *does not* fire look indistinguishable from GT-onset frames at the feature level. The model's temporal layers do most of the work; the per-frame features are ambient noise punctuated by sparse peaks.
+
+**4. IQR is a sparse-GT measurement artifact, not a timing problem.** `corr(refOnsets, IQR) = -0.905`. Median offset is -3 ms across all tracks — **timing calibration is correct**. mir_eval's onset matching pairs each detection with its nearest GT; on sparse-GT tracks, FPs land 200+ ms from any GT and inflate IQR mechanically. The "stdDev=129ms, iqr=193ms" stat in `diagnostics.onsetOffsetMs` is dominated by this matching artifact, not by genuine timing scatter.
+
+**5. F1 is dominated by content density.** `corr(refOnsets, F1) = +0.89`. Tracks with more GT events score higher F1 because the constant-rate model firing has more chances to align with real onsets. Single best predictor of track F1 is the GT count, beating any feature-discrimination metric.
+
+### Diagnosis
+
+The v33 bottleneck is **precision on sparse content driven by content-independent firing rate**. The model produces a detection roughly every 290 ms regardless of input. On dense EDM (refOnsets ≥ 100, ~3 events/sec) this is approximately right; on sparser content (refOnsets < 60, ~1.5 events/sec) the surplus firings become FPs (P drops from 0.55 → 0.23, recall holds 0.5+).
+
+This is not a representation problem (peak-mode features discriminate fine), not a timing problem (median offset 0), not a label problem (offline val_peak_F1=0.690 is real on the same labels). It is a **threshold/decision problem**: `pulseOnsetFloor=0.30` produces a near-constant cross-rate because the activation distribution is centered too close to the threshold.
+
+### What we still need persist_raw=true to verify
+
+The above diagnoses the symptom. To confirm the mechanism we need on-device activation telemetry, which the b151 run did not capture (`persist_raw=false`). Specifically:
+
+- **Activation mean/std/quantiles per track.** Hypothesis: distribution is centered near 0.30 with std ~0.08, so the threshold sits AT the noise floor. If true, the activation_stats `pAboveThreshold` will be ~50% in quiet sections.
+- **Per-frame activation at GT vs non-GT timestamps.** Hypothesis: signal-vs-baseline ratio on-device is much weaker than offline. If signal_frames at GT-onset frames have mean 0.5 vs baseline 0.3, threshold-based gating will fail; if 0.7 vs 0.2, gating works and the issue is elsewhere.
+- **Comparison of best (3642438, F1=0.70) vs worst (210560, F1=0.23) tracks.** Same model, dramatically different precision — what's different about the activation distribution?
+
+Tracked as #97 (re-validate 4 representative tracks with `persist_raw: true`).
+
+### Implications for next experiment
+
+If finding (1) is the binding constraint, three actionable directions, ranked by how falsifiable they are:
+
+1. **Threshold sweep on b151 firmware** (no retrain). Sweep `pulseonsetfloor` 0.25 → 0.55 with the existing b151 deployment. *Falsifiable prediction:* if there exists a threshold where dense-track F1 holds and sparse-track P rises to >0.4, the bottleneck is purely the threshold and a single-axis fix recovers ~0.05-0.08 F1. If no such threshold exists, the activation distribution itself is the problem (model output not separating onset from baseline) and we need recipe changes.
+2. **Re-validate v29 b151 with the same mel constants** (50/30-8000 Hz) to factor out the firmware change. v29 was last validated under 30-mel mel constants. If v29 also drops on 50-mel mels, the mel-resolution change in firmware is the real regressor.
+3. **Train v34 with focal loss + harder negatives** to break the constant-rate firing. Single-axis vs v33: same labels, same n_mels, but explicit `gamma=2.0` focal + 2× negative weighting. *Falsifiable prediction:* activation std rises from v33's offline 0.18-0.20 to >0.30, and the rate-vs-content-density correlation rises from 0.07 to >0.4.
+
+### Threshold sweep result (2026-04-27 — hypothesis (1) FALSIFIED)
+
+Sweep job 89d6b4295cde: `pulseonsetfloor ∈ {0.20, 0.30, 0.40, 0.50}` × 8 tracks (4 dense + 4 sparse) × 3 devices on b151.
+
+```
+thr   bucket    F1     P      R     rate/s
+0.20  DENSE    0.553  0.511  0.615  3.92
+0.20  SPARSE   0.330  0.253  0.595  3.47
+0.30  DENSE    0.561  0.585  0.544  3.00
+0.30  SPARSE   0.234  0.245  0.336  1.88
+0.40  DENSE    0.492  0.531  0.470  2.88
+0.40  SPARSE   0.238  0.260  0.320  1.98
+0.50  DENSE    0.496  0.606  0.438  2.35
+0.50  SPARSE   0.226  0.241  0.274  1.60
+```
+
+**Hypothesis falsified.** No threshold satisfies "hold dense F1 while raising sparse P >0.4". Sparse-track precision is **independent of threshold** (P=0.24-0.26 for all 4 thresholds while R drops from 0.60 → 0.27). Raising the threshold removes TPs and FPs at the same rate — i.e., the model's activation distribution at FP frames overlaps heavily with TP frames, with no "onset" peak rising clear of the noise floor.
+
+**Per-track sanity check confirms.** All 4 sparse tracks show P essentially flat across thresholds (210560: 0.15→0.20, 4017611: 0.15→0.13, 5335389: 0.29→0.20, 4611640: 0.42→0.44). The activation magnitude is not selectively higher at real onsets.
+
+**Decision:** the bottleneck is **activation distribution shape**, not threshold. Move to recipe changes (Exp 3) and capture activation telemetry (#97 persist_raw) to characterize the distribution before training v34.
+
+**Free stopgap.** thr=0.20 lifts BOTH-bucket F1 from 0.398 (default) to 0.442 (+0.044, +11%). Drop firmware default to 0.20 alongside the next deploy. Does not fix the real problem but recovers ~0.04 F1 at zero cost. Landed at b152 — `pulseOnsetFloor` default 0.30 → 0.20 in `AudioTracker.h`, `SerialConsole.cpp` (defaults reset), `ConfigStorage.cpp` (setDefaults).
+
+### persist_raw activation distribution (2026-04-27 — INVERTS the v33 plan)
+
+Job 7a60e695f827: `persist_raw=true` validation on 4 tracks (3642438, 3298908, 210560, 4017611) × 3 devices, ~1140 frames each. **The activation is centered HIGH, not low — and it does NOT separate GT-onset frames from non-GT frames on-device.**
+
+**On-device activation distribution (mean across 3 devices per track):**
+
+| track | F1 (b151) | mean | std | p50 | p90 | p99 | %>0.20 | %>0.30 |
+|---|---|---|---|---|---|---|---|---|
+| 210560 (sparse, F1=0.23) | 0.23 | 0.420 | 0.148 | 0.413 | 0.620 | 0.808 | 94% | 80% |
+| 3298908 (dense, F1=0.62) | 0.62 | 0.436 | 0.229 | 0.409 | 0.780 | 0.957 | 83% | 68% |
+| 3642438 (dense, F1=0.70) | 0.70 | 0.413 | 0.156 | 0.398 | 0.627 | 0.842 | 93% | 78% |
+| 4017611 (sparse, F1=0.26) | 0.26 | 0.424 | 0.164 | 0.407 | 0.640 | 0.855 | 93% | 78% |
+
+**Activation median is ~0.40 on every track.** The model's sigmoid output is centered near the upper-middle of [0,1], not collapsed near 0. The activation crosses 0.20 on 81-96% of frames and crosses 0.30 on 65-81% of frames. This is **output saturation**, not collapse — and explains exactly why threshold sweeps don't move precision: the threshold is slicing through the bulk of a near-constant distribution.
+
+**Signal-vs-baseline at GT frames (±50ms tolerance):**
+
+| track | nGT | gtMean | bgMean | lift | cohens D |
+|---|---|---|---|---|---|
+| 3642438 (dense, F1=0.70) | 477 | 0.398 | 0.423 | **−0.027** | **−0.179** |
+| 3298908 (dense, F1=0.62) | 326 | 0.485 | 0.417 | +0.068 | +0.300 |
+| 210560 (sparse, F1=0.23) | 96 | 0.431 | 0.419 | +0.011 | +0.079 |
+| 4017611 (sparse, F1=0.26) | 117 | 0.404 | 0.426 | **−0.022** | **−0.133** |
+
+**On 2 of 4 tracks the activation is LOWER at GT-onset frames than at random non-GT frames** (3642438 d=−0.18, 4017611 d=−0.13). On the dense F1=0.70 track — our *best* track — GT frames have *measurably lower* mean activation than non-GT frames. Only 3298908 shows meaningful positive lift (d=+0.30); 210560 is essentially 0.
+
+**The model's NN output is not signaling onset events on-device.** Activation is high everywhere; it neither rises at real onsets nor falls between them. The peak-picker is finding local maxima in near-constant high-activation noise — which explains the content-independent firing rate (corr=0.07 from earlier finding (1)) and why threshold sweeps don't separate TPs from FPs (sweep finding).
+
+**Why the offline-vs-on-device gap (val_peak_F1=0.690 → 0.449)? — ROOT CAUSE FOUND 2026-04-27**
+
+**The firmware mel filterbank table was stale at v33.** `MEL_BANDS[NUM_MEL_BANDS]` in `SharedSpectralAnalysis.cpp` was a 30-entry array literal from the v32 layout. When `NUM_MEL_BANDS` was bumped 30 → 50 for v33, the array literal was not regenerated. C++ aggregate initialization silently zero-filled bands 30-49 with `{0, 0, 0}`, all reading FFT bin 0 (DC). The neural network received identical garbage values (≈0.9 across bands 30-49) for 40% of its input on every frame.
+
+Mel parity test on a v33 holdout track (after fix): MAE between firmware and training mel = 0.004. Before fix: MAE = 0.113 (28× worse), with bands 42-49 producing exactly 0.9066 every frame.
+
+This explains every symptom in one mechanism:
+- Activation centered at 0.40 (not at 0): garbage-but-bounded mel values produce stable mid-range activations
+- No GT-vs-baseline separation: 40% of input is constant noise, drowning out the discriminative 60% the model learned
+- Threshold sweep doesn't help: no threshold can recover info that was lost at the input
+- Content-independent firing rate: the constant 40% of inputs make the activation roughly constant regardless of audio
+- 30-mel models worked perfectly (v29 F1=0.484 with no firmware fix needed): MEL_BANDS[] matched the v32 30-mel layout, so no zero-fill triggered
+
+The previous "input gain shift / +13dB" hypothesis was wrong — it was the right *symptom* (input distribution mismatch) but the wrong *cause*. The microphone-vs-studio gain difference is real but small; the dominant signal was that 20 of 50 mel bands were constant DC.
+
+**Fix:** regenerated 50-mel × 30-8000 Hz `MEL_BANDS[]` table in `SharedSpectralAnalysis.cpp` to match `librosa.filters.mel(sr=16000, n_fft=256, n_mels=50, fmin=30, fmax=8000, htk=True)`. Added a `static_assert(NUM_MEL_BANDS == 50 && MEL_MIN_FREQ == 30 && MEL_MAX_FREQ == 8000)` in the cpp so the next time the constants drift, compile fails instead of silently zero-filling. Built b153 with the fix.
+
+**Process gap (now closed):** the `static_assert` in `SharedSpectralAnalysis.h` validated the *constants triplet* but not whether the *table* matched. The bug was invisible to it. Plus several layered silent fallbacks (`weightSum > 0 ? sum/weightSum : 0.0f`) hid the corruption from runtime telemetry. Audit completed 2026-04-27 (#102) found ~10 silent fallbacks across the firmware audio path; CRITICAL/HIGH ones now fail loudly via `BLINKY_ASSERT` or ERROR-level logs. Rule added to `CLAUDE.md` under "CRITICAL: No Silent Fallbacks".
+
+This **invalidates the v34 plan entirely**:
+- ❌ Focal loss + harder negatives — wrong direction (was already excluded)
+- ❌ Input gain CMN (#101) — would have masked the symptom but not fixed the root cause; **superseded** since the table fix should restore offline-vs-on-device parity
+- ❌ Wider gain augmentation in training — same; not the binding constraint
+
+**Real next step: re-validate v33 b153 (firmware fix only, no retrain).** v33 was trained on properly computed 50-mel × 30-8000 Hz mel; the model itself is fine. With the firmware mel filterbank now matching training, the offline val_peak_F1=0.690 should translate much closer on-device. Predictions:
+- Activation distribution centered well below 0.4 with healthy std (ideally 0.10-0.20 mean, 0.20-0.30 std)
+- GT-vs-baseline cohens d positive on all tracks (ideally d > 0.5)
+- On-device F1 close to madmom CNN's 0.46 ceiling on this corpus, possibly higher
+
+**Falsifiable failure modes for the fix:**
+- If on-device F1 ≤ 0.50 after b153 deploy: there's *another* firmware-vs-training mismatch we haven't found (window function? noise subtraction? log scaling?) — extend mel parity test to FFT magnitudes, then re-audit.
+- If activation distribution still saturates at 0.4: the model itself learned the saturated representation as a side effect of training data. Retrain v33 from clean mel with #97-equivalent persist_raw monitoring.
+
+### v33 b153 on edm/ — first clean baseline on the primary corpus (2026-04-27)
+
+Job 22c3a6abd57e: 18 tracks × 4 devices, persist_raw=true. **This is the only valid v33 metric** per the new corpus rule.
+
+**Headline:**
+
+```
+F1=0.570  P=0.564  R=0.612
+F1@50ms=0.370  F1@100ms=0.570  F1@150ms=0.636
+```
+
+**Per-track ranking:**
+
+| F1 | track | P | R | refOnsets |
+|---|---|---|---|---|
+| **0.720** | garage-uk-2step | 0.83 | 0.64 | 146 |
+| **0.674** | dnb-liquid-jungle | 0.62 | 0.75 | 119 |
+| **0.660** | reggaeton-fuego-lento | 0.64 | 0.68 | 147 |
+| **0.656** | techno-deep-ambience | 0.71 | 0.61 | 147 |
+| **0.643** | techno-minimal-emotion | 0.61 | 0.68 | 151 |
+| **0.624** | breakbeat-drive | 0.64 | 0.61 | 138 |
+| **0.610** | trance-party | 0.60 | 0.63 | 125 |
+| 0.593 | amapiano-vibez | 0.73 | 0.50 | 161 |
+| 0.593 | breakbeat-background | 0.67 | 0.54 | 142 |
+| 0.570 | dnb-energetic-breakbeat | 0.58 | 0.58 | 105 |
+| 0.570 | trance-goa-mantra | 0.57 | 0.58 | 100 |
+| 0.561 | afrobeat-feelgood-groove | 0.50 | 0.64 | 124 |
+| 0.516 | dubstep-edm-halftime | 0.54 | 0.51 | 114 |
+| 0.495 | techno-minimal-01 | 0.42 | 0.62 | 89 |
+| 0.487 | techno-dub-groove | 0.48 | 0.50 | 108 |
+| 0.471 | edm-trap-electro | 0.44 | 0.52 | 80 |
+| 0.449 | techno-machine-drum | 0.31 | 0.86 | 49 |
+| 0.365 | trance-infected-vibes | 0.28 | 0.56 | 71 |
+
+**Per-device (small spread):** 062CBD12EB69 F1=0.596, 2A798EF8E684 F1=0.588, 659C8DD3ADF8 F1=0.554, ABFBC41283E2 F1=0.542.
+
+**Activation distribution still saturated** (mean=0.453, p50=0.418, %>0.30 = 73.9%). Same shape as on the deleted edm_holdout corpus — confirms saturation is content-independent and is driven by input distribution mismatch, not by track difficulty.
+
+**Signal-vs-baseline cohens d is mixed and frequently negative.** Strong positive lift on breakbeat-background (+0.88) and breakbeat-drive (+0.72); strong negative on afrobeat (−0.56), trance-goa-mantra (−0.58), amapiano (−0.43), techno-deep-ambience (−0.40). Counterintuitively, the F1=0.72 best track (garage-uk-2step) has d≈0. This says the saturated sigmoid still carries onset information in its **derivatives** (sharp local changes) even when its absolute level is squashed; the firmware peak-picker recovers most of that value.
+
+### Tier-1 must-perform set (acceptance criterion: F1 ≥ 0.6 every track)
+
+The 7 tracks at F1 ≥ 0.6 cover the system's bread-and-butter content across genres:
+
+- garage-uk-2step (0.72) — clean 4-on-floor + ghost snares
+- dnb-liquid-jungle (0.67) — high-BPM breakbeat
+- reggaeton-fuego-lento (0.66) — dembow pattern
+- techno-deep-ambience (0.66) — minimal techno, clear kick
+- techno-minimal-emotion (0.64) — minimal techno
+- breakbeat-drive (0.62) — high-energy breaks
+- trance-party (0.61) — 4-on-floor with builds
+
+These 7 are the *acceptance criterion* for any future model deploy. v34 must hold or improve every one of them.
+
+### v34 plan — input domain adaptation (NOT a model architecture change)
+
+Single-axis change vs v33. Architecture, labels, n_mels, fmin/fmax, loss, optimiser all stay identical. Only the *input augmentation pipeline* changes — because the diagnosis is sim-to-real, not capacity.
+
+1. **Re-calibrate `target_rms_db` for 50-mel × 8-kHz.** The current value (−72 dBFS) was calibrated April 14 for 26-mel × 4-kHz fmax. Wider band integration at fmax=8000 raises mel mean at the same audio RMS. Procedure: capture device mel via `stream nn` mode while playing 3-4 representative tracks, compute mel-band mean over the capture, choose `target_rms_db` so training mel mean matches device mel mean (target ≈0.40 mean to match observed runtime).
+2. **Restore gain augmentation `[-18, +18] dB`.** v29 used this; v33 dropped it. The model never saw the level shifts it sees in deployment.
+3. **Add mic-profile sampling.** v29 had `mic_profile_flag` enabled; v33 didn't. Per-band gain shifts from the actual mic.
+4. **Optional: RIR augmentation.** Existing infra (`base.yaml: noise_dir`). Adds room reverb. Lower priority — gain aug is the bigger lever.
+
+**Falsifiable predictions for v34 on edm/:**
+
+- Activation mean drops from 0.453 → ≤0.25
+- Activation std rises from 0.234 → ≥0.30
+- Cohens d turns uniformly positive across tracks (no <-0.3 outliers)
+- Tier-1 tracks all reach F1 ≥ 0.7 (closing toward offline 0.690 ceiling)
+- Mid/bottom tier gains +0.05 minimum
+
+**Risk:** v34 could break the 7 tier-1 tracks while gaining the bottom 11. The acceptance bar is *no track regresses below F1 0.55* AND *every tier-1 track ≥ its current value*.
+
+If v34 succeeds: that's the new deployed model. If v34 plateaus or regresses: input-side hypothesis is wrong, return to investigating the saturated activation at the source (training itself produces saturated outputs vs the data — a curriculum/loss issue).
 
 ### Tool fixes landed 2026-04-23
 
