@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..device.device import Device, DeviceState
 from ..firmware import upload_firmware
-from .deps import get_fleet, require_api_key
+from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import (
     CommandResponse,
     DeviceResponse,
@@ -207,7 +207,10 @@ async def fleet_discover() -> dict[str, Any]:
     }
 
 
-@router.post("/devices/{device_id}/flash", dependencies=[Depends(require_api_key)])
+@router.post(
+    "/devices/{device_id}/flash",
+    dependencies=[Depends(require_api_key), Depends(require_deploy_tool)],
+)
 async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     """Upload firmware to a device using the best available method.
 

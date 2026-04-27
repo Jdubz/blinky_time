@@ -53,3 +53,33 @@ async def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> No
     """FastAPI dependency that validates the X-API-Key header."""
     if not hmac.compare_digest(x_api_key, _get_api_key()):
         raise HTTPException(401, "Invalid API key")
+
+
+# Flash endpoints (/api/fleet/upload, /api/fleet/flash) must be reached only
+# via scripts/deploy.sh. The API key alone is not sufficient — direct curl
+# (even with the right key) bypasses the compile/upload/verify pipeline that
+# deploy.sh runs end-to-end. The v33 onset-model regression (2026-04-27) wasn't
+# caused by a bypassed deploy.sh, but during diagnosis we discovered Claude
+# was bypassing it routinely; this gate makes that fail loudly. The header
+# value is intentionally not a secret — the goal is to stop accidental
+# bypass, not to defend against an adversary with a valid API key.
+_DEPLOY_TOOL_PREFIX = "deploy.sh-"
+
+
+async def require_deploy_tool(
+    x_deploy_tool: str = Header(..., alias="X-Deploy-Tool"),
+) -> None:
+    """FastAPI dependency that requires the request comes from scripts/deploy.sh.
+
+    deploy.sh sets `X-Deploy-Tool: deploy.sh-<gitsha>`; any other value (or a
+    missing header) is rejected with 403. This is *not* a security mechanism —
+    it gates accidental direct-curl bypasses of the compile/upload/verify
+    pipeline. See CLAUDE.md "CRITICAL: Upload Safety".
+    """
+    if not x_deploy_tool.startswith(_DEPLOY_TOOL_PREFIX):
+        raise HTTPException(
+            403,
+            "X-Deploy-Tool header missing or invalid. "
+            "Use scripts/deploy.sh — direct curl against /fleet/upload or /fleet/flash "
+            "is forbidden (see CLAUDE.md 'CRITICAL: Upload Safety').",
+        )

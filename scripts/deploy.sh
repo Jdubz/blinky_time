@@ -47,6 +47,12 @@ if [[ -z "$API_KEY" ]]; then
     fail "No API key. Set BLINKY_API_KEY or create ~/.blinky-api-key" 3
 fi
 
+# Identify this deploy.sh invocation to the server. The server enforces
+# `X-Deploy-Tool: deploy.sh-<...>` on flash endpoints to make accidental
+# direct curl bypasses fail with 403 — see CLAUDE.md "CRITICAL: Upload Safety".
+GIT_SHA=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+DEPLOY_TOOL_HEADER="X-Deploy-Tool: deploy.sh-${GIT_SHA}"
+
 # ─── Step 1: Compile ─────────────────────────────────────────────────
 
 if $SKIP_COMPILE; then
@@ -72,6 +78,7 @@ echo "=== Uploading firmware to blinkyhost ==="
 
 UPLOAD_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/upload" \
     -H "X-API-Key: ${API_KEY}" \
+    -H "${DEPLOY_TOOL_HEADER}" \
     -F "firmware=@${HEX};filename=blinky-things.ino.hex" \
     -F "version=b${BUILD}" \
     --max-time 30 \
@@ -91,6 +98,7 @@ echo "=== Flashing all devices ==="
 
 FLASH_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/flash" \
     -H "X-API-Key: ${API_KEY}" \
+    -H "${DEPLOY_TOOL_HEADER}" \
     -H 'Content-Type: application/json' \
     -d "{\"firmware_path\": \"${FW_PATH}\"}" \
     --max-time 10 \

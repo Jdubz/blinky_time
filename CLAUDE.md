@@ -8,21 +8,43 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 
 **NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on nRF52840.** The DFU serial protocol has race conditions that can brick devices, requiring SWD hardware to recover.
 
-**Safe upload paths:**
-1. **Preferred:** `./scripts/deploy.sh` — compile → upload → flash via blinky-server → verify
-2. **Manual fleet flash:**
-   ```bash
-   curl -X POST http://blinkyhost.local:8420/api/fleet/upload \
-     -H "X-API-Key: $(cat ~/.blinky-api-key)" \
-     -F "firmware=@/tmp/blinky-build/blinky-things.ino.hex"
-   ```
-3. **Direct UF2 (bare chip):** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0`
+**Flashing connected devices: `./scripts/deploy.sh` is REQUIRED.** Direct `curl` against `/api/fleet/upload` or `/api/fleet/flash` is forbidden — the server enforces this via an `X-Deploy-Tool` header check that only `deploy.sh` sets, so manual curl returns 403. The API key alone is not sufficient. Use:
+
+```bash
+./scripts/deploy.sh                     # compile + upload + flash + verify
+./scripts/deploy.sh --skip-compile      # deploy already-compiled hex (e.g. after build.sh)
+./scripts/deploy.sh --no-bump           # recompile without bumping build number
+```
+
+deploy.sh runs the full pipeline (compile → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
+
+**Bare-chip recovery only:** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 
 blinky-server owns all serial/BLE connections — no port contention. See `docs/SAFETY.md` for the full safety model, `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for BLE DFU details.
 
 **Risky firmware:** always test on unenclosed bare chips first (reset button + SWD pads accessible). Installed devices have no physical access.
 
 **Unresponsive device recovery:** `uhubctl -a cycle -p <port>` → server flash → wait for re-enumeration. Last resort: physical reset.
+
+## CRITICAL: No Silent Fallbacks
+
+**Errors must fail LOUDLY. Never silently substitute defaults, zero-fills, clamps, or empty values for invalid state.** A silent fallback is a production bug waiting to happen — it lets configuration drift, version mismatches, hardware faults, and model corruption masquerade as "working." When in doubt, assert, panic, or log at ERROR — never quietly continue with degraded data.
+
+**The reference incident (2026-04-27, v33):** `MelBandDef MEL_BANDS[NUM_MEL_BANDS] = { /* 30 entries */ }` was left at the v32 size when `NUM_MEL_BANDS` bumped 30 → 50. C++ aggregate-init silently zero-filled the missing 20 entries to `{0,0,0}`, all reading FFT bin 0 (DC). The neural network received garbage in 40% of its input bands and the activation distribution collapsed. There was no compile error, no runtime error, no warning. Two weeks of training experiments and threshold sweeps were spent chasing a model-side hypothesis for a firmware-side data corruption.
+
+**Concrete patterns to refuse:**
+
+1. **Array literals smaller than the declared size.** Always either (a) static_assert that the initializer count equals the size, or (b) generate the full table programmatically. *Never rely on aggregate-init zero-fill for tail entries.*
+2. **Ternary fallbacks that mask invalid state.** `(weightSum > 0) ? sum / weightSum : 0.0f` is wrong when `weightSum == 0` represents a configuration bug, not a runtime case — assert instead. The principled exception is denormal/silence handling where 0 is the *correct* answer (e.g., NaN guards on FFT magnitudes during true silence) — those must be commented as such.
+3. **`validate*` / `clamp*` functions that silently coerce out-of-range values.** A corrupt config value should boot-loop with a logged error, not silently clamp to a default. If clamping is intentional (e.g., user-typed input), log every coercion at WARN with the original value.
+4. **Functions that return `false` / `0` / `nullptr` / empty without a serial log.** Callers may not check; the symptom is a feature that "just doesn't work." If returning a sentinel is unavoidable, log on the way out.
+5. **`switch` defaults / catchall `else` branches that absorb unexpected enum values.** Either handle every case explicitly or `panic("unhandled <enum>")` in the default. The whole point of the enum is exhaustiveness.
+6. **`if (!initialized) { init_with_defaults(); }` patterns.** Lazy init can mask a forgotten explicit init. Fail at the call site if state is uninitialized.
+7. **TFLite / TF status checks like `if (status != kTfLiteOk) return;` without a serial log.** The model silently stops inferring; the visualizer keeps running on stale activations.
+8. **`#ifdef` / `#elif` chains with an unguarded `#else` that compiles to a placeholder.** Use `#error` in the unhandled case so the wrong build never ships.
+9. **NaN/Inf substitution to 0** is acceptable only for known denormal cases (must be commented). For everything else, increment a counter *and* log on first occurrence.
+
+When you discover a silent fallback, the fix is to (a) assert / panic at the failing site, (b) add a `[FALLBACK]` serial log with file:line and the offending value, or (c) add a compile-time check that prevents the bad state. Do not just "improve" the comment.
 
 ## CRITICAL: Long-Running Scripts
 
