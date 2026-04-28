@@ -729,6 +729,36 @@ Single-axis change vs v33. Architecture, labels, n_mels, fmin/fmax, loss, optimi
 
 If v34 succeeds: that's the new deployed model. If v34 plateaus or regresses: input-side hypothesis is wrong, return to investigating the saturated activation at the source (training itself produces saturated outputs vs the data — a curriculum/loss issue).
 
+### v34 result + correction (2026-04-28)
+
+**v34 plateaued at val_peak_F1 = 0.627** (vs v33's 0.690), early-stopped at epoch 16. Best peak_F1 was epoch 1 (0.627), no improvement across all 16 epochs. Frame F1 still climbed (0.482 → 0.534) — pattern consistent with saturation: model learns to predict "high mel = onset-likely" on average (frame F1 up) but loses temporal contrast (peak F1 flat).
+
+**Correction to the v34 plan above:** the claim "v33 dropped gain aug, v34 restored it" was WRONG. Both v33 and v34 ran with `--augment` (Makefile default), both applied the same hardcoded `[-18, -12, -6, +6, +12, +18]` dB gain augmentation. The only substantive config diff was `target_rms_db: -72 → -30`.
+
+**Real cause:** interaction between `target_rms_db` and gain augmentation. At v34's `-30 + +18 dB = -12 dBFS` effective, the loudest training variant lands above device runtime (~-15 dBFS) and saturates bass mel bands. v33's `-72 + +18 dB = -54 dBFS` was well below saturation. Same gain aug, different baseline — different result.
+
+**Mel mean per config (measured):**
+- v33 prepped data: ~0.37 (bimodal: clean+aug-quiet around 0.10, conditioned around 0.75)
+- v34 prepped data: 0.808 (unimodal+saturated; +18 aug variant clips at 1.0)
+- Device runtime: 0.754
+
+v33's bimodal training distribution included device-like levels via the conditioned variant (compressor + whitening). It worked offline (val_peak_F1=0.690) and at degraded-but-functional on-device F1=0.570. v34 collapsed both modes into one centered too high, with the +18 dB aug pushing into saturation.
+
+### v34b plan (2026-04-28)
+
+Single-axis change vs v33: `target_rms_db: -72 → -48`. Calibrates the gain-aug *peak* to device level instead of the *center*:
+- target_rms_db + 18 = -30 dBFS (device level) → target_rms_db = -48
+- Clean variant: -48 dBFS, mel mean ~0.20
+- Gain aug peak: -30 dBFS, mel mean ~0.50 (no saturation)
+- Conditioned variant: lands near device level via compressor+whitening (mel ~0.7-0.8)
+
+This sits between v33 (-72) and v34 (-30) and tests whether the calibration direction is right when saturation is avoided. If v34b also plateaus around 0.62, the calibration hypothesis is wrong and we revert to v33-as-deployed and approach from a different angle.
+
+**Falsifiable predictions for v34b on edm/:**
+- val_peak_F1 ≥ 0.66 (between v33's 0.69 and v34's 0.63)
+- on-device F1 ≥ v33's 0.570 (acceptance bar)
+- Activation distribution mean ≤ 0.40 (vs v34 at 0.45)
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
