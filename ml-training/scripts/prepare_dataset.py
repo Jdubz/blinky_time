@@ -1720,7 +1720,14 @@ def main():
     chunk_frames = cfg["training"]["chunk_frames"]
     chunk_stride = cfg["training"]["chunk_stride"]
     n_mels = cfg["audio"]["n_mels"]
-    SHARD_BATCH = 500  # files per shard (limits RAM to ~3 GB)
+    # files per shard. Limits RAM growth from accumulated mel arrays + futures.
+    # Empirical: at 30 mel × 6 gain variants (v32 era), 500 files held ~3 GB.
+    # At 50 mel × restored gain aug (v34, 2026-04-27), 500 files OOM'd a 62 GB
+    # box at file 5500 (~58 GB anon-rss). The 15× growth over the original
+    # estimate likely comes from teacher activations + augmentation stacking
+    # (clean / conditioned / stretched / gain-augmented variants compose).
+    # Lowering to 150 keeps peak in-flight ~5-7 GB even at 50 mel.
+    SHARD_BATCH = 150
 
     # Thread pool for audio prefetching and parallel chunking.
     # librosa.load and numpy operations release the GIL, so threads give

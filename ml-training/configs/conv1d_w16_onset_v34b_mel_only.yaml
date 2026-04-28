@@ -1,0 +1,114 @@
+# Conv1D W16 v34b — single-axis recalibration after v34 failure
+#
+# v34 used target_rms_db=-30 to match measured device mel mean (0.754).
+# Result: plateaued at val_peak_F1=0.627 vs v33's 0.690. Root cause is
+# the interaction between target_rms_db and the gain augmentation in
+# prepare_dataset.py (`for gain_db in [-18, -12, -6, 6, 12, 18]`).
+#
+# At target_rms_db=-30 + gain_aug=+18 dB, the loudest training variant
+# audio is -12 dBFS RMS — louder than device runtime (~-15 dBFS RMS
+# effective) and well into bass-mel-band saturation territory once
+# instantaneous peaks are factored in. Training mel mean rose from v33's
+# ~0.37 to v34's 0.808; samples in the +18 dB variant saturated bands
+# 0-7 at 1.0 (88% of frames in the device-mel measurement already showed
+# band-0 saturation; v34 training added more saturated samples on top).
+# Saturated mel destroys the temporal contrast that peak-picking depends
+# on. Frame F1 still climbed (saturation correlates with onset-likely on
+# average) but peak F1 plateaued.
+#
+# Note on prior plan-doc claim "v33 dropped gain aug, v34 restored it":
+# WRONG. Both v33 and v34 ran with --augment (Makefile default), so
+# both used the same 6-step gain_aug set [-18, -12, -6, +6, +12, +18]
+# dB. The only substantive config diff was target_rms_db (-72 → -30).
+# Past experiments DID use this gain aug consistently — what was new
+# was the interaction with the raised target_rms_db.
+#
+# v34b fix: shift target_rms_db so the +18 dB gain aug peak lands at
+# device level (-30 dBFS RMS), not 18 dB past it. Math:
+#   target_rms_db + 18 = -30  →  target_rms_db = -48
+#
+# Predicted prep mel mean (linear interpolation from measured
+# v33 prep mean=0.37 at -72 and v34 prep mean=0.808 at -30):
+# at -48, composite prep mel mean ≈ 0.62. Per-variant prediction:
+#   - Clean variant: -48 dBFS RMS audio, mel mean ~0.40 (well below
+#     saturation; clean variant carries spectral content faithfully)
+#   - Gain aug +18 dB peak: -30 dBFS RMS audio, mel mean targets the
+#     device runtime level (measured 0.754) — this is the design intent.
+#     Whether training mel at -30 dBFS RMS produces 0.754 depends on the
+#     audio's spectral content; if it lands lower, the gap is closed by
+#     the conditioned variant's whitening rather than this path.
+#   - Conditioned variant: ~-42 dBFS pre-compressor; +6 dB makeup gain
+#     and per-band whitening pull mel toward 1.0 in active bands. Stays
+#     in the 0.7-0.85 range that matches device runtime distribution.
+#   - Conditioned + gain_aug+18: still saturating in bass bands but a
+#     much smaller fraction of training data than v34's regime.
+#
+# This sits between v33's -72 and v34's -30. Tests the calibration
+# direction without re-introducing v34's saturation. Single-axis change.
+#
+# Falsifiable predictions:
+#   - val_peak_F1 ≥ 0.66 (between v33's 0.69 and v34's 0.63)
+#   - frame F1 trajectory similar to v33's epochs 1-14
+#   - on-device F1 on edm/ ≥ v33's 0.570 (acceptance bar)
+#   - tier-1 tracks all hold their current F1
+#
+# Negative-result triggers:
+#   - val_peak_F1 ≤ 0.62: target_rms_db is not the right knob; revert to v33
+#     and approach from a different angle (model capacity? loss function?)
+#   - on-device F1 same as v33 b153 (0.570): the bimodal training
+#     distribution argument was wrong — calibration alone won't move it.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 50
+  fmin: 30
+  fmax: 8000
+  # The single change vs v33. See header comment for derivation.
+  target_rms_db: -48
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+  # NOTE: pos_weight is intentionally NOT here — train.py reads pos_weight
+  # exclusively from cfg["training"] (see train.py:657, 764). Listing it
+  # twice would be a configuration trap. Per PR 134 review.
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v34b"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v34b_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 27

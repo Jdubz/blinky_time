@@ -729,6 +729,38 @@ Single-axis change vs v33. Architecture, labels, n_mels, fmin/fmax, loss, optimi
 
 If v34 succeeds: that's the new deployed model. If v34 plateaus or regresses: input-side hypothesis is wrong, return to investigating the saturated activation at the source (training itself produces saturated outputs vs the data — a curriculum/loss issue).
 
+### v34 result + correction (2026-04-28)
+
+**v34 plateaued at val_peak_F1 = 0.627** (vs v33's 0.690), early-stopped at epoch 16. Best peak_F1 was epoch 1 (0.627), no improvement across all 16 epochs. Frame F1 still climbed (0.482 → 0.534) — pattern consistent with saturation: model learns to predict "high mel = onset-likely" on average (frame F1 up) but loses temporal contrast (peak F1 flat).
+
+**Correction to the v34 plan above:** the claim "v33 dropped gain aug, v34 restored it" was WRONG. Both v33 and v34 ran with `--augment` (Makefile default), both applied the same hardcoded `[-18, -12, -6, +6, +12, +18]` dB gain augmentation. The only substantive config diff was `target_rms_db: -72 → -30`.
+
+**Real cause:** interaction between `target_rms_db` and gain augmentation. At v34's `-30 + +18 dB = -12 dBFS RMS` effective, the loudest training variant lands above device runtime (~-15 dBFS RMS) and drives instantaneous peaks into clipping/saturation, saturating bass mel bands. v33's `-72 + +18 dB = -54 dBFS RMS` was well below saturation. Same gain aug, different RMS baseline — different result. (`target_rms_db` calibrates RMS, not peak; high-crest signals like drum transients can still clip near 0 dBFS even when RMS is well below it — that's the saturation mechanism.)
+
+**Mel mean per config (measured):**
+- v33 prepped data: ~0.37 (bimodal: clean+aug-quiet around 0.10, conditioned around 0.75)
+- v34 prepped data: 0.808 (unimodal+saturated; +18 aug variant clips at 1.0)
+- Device runtime: 0.754 (mel mean of firmware-computed mel during music playback — not directly comparable to training mel mean since the audio level at the mic is unknown)
+
+v33's bimodal training distribution included device-like levels via the conditioned variant (compressor + whitening). It worked offline (val_peak_F1=0.690) and at degraded-but-functional on-device F1=0.570. v34 collapsed both modes into one centered too high, with the +18 dB aug pushing into saturation.
+
+### v34b plan (2026-04-28)
+
+Single-axis change vs v33: `target_rms_db: -72 → -48`. Calibrates the gain-aug *peak* RMS to device level instead of the *center*:
+- target_rms_db + 18 = -30 dBFS RMS (target for the loudest aug variant) → target_rms_db = -48
+- **Predicted prep mel mean** (linear interpolation from measured v33=0.37 at -72 and v34=0.808 at -30): **~0.62** at -48
+- Per-variant prediction (rough; actual values are content-dependent):
+  - Clean variant: -48 dBFS RMS audio, mel mean ~0.40 (well below saturation; spectral content faithful)
+  - Gain aug +18 dB peak: -30 dBFS RMS audio, mel mean targets device-runtime distribution (measured 0.754). Whether this exact value is hit depends on the audio's spectral content — if training mel at -30 dBFS RMS lands somewhat lower, the conditioned variant's whitening still covers the device-loud regime.
+  - Conditioned variant: ~-42 dBFS RMS pre-compressor; +6 dB makeup + per-band whitening pull mel toward 1.0 in active bands. Stays in the 0.7-0.85 range.
+
+This sits between v33 (-72) and v34 (-30) and tests whether the calibration direction is right when saturation is avoided. If v34b also plateaus around 0.62, the calibration hypothesis is wrong and we revert to v33-as-deployed and approach from a different angle.
+
+**Falsifiable predictions for v34b:**
+- Offline val_peak_F1 ≥ 0.66 (between v33's 0.69 and v34's 0.63)
+- On-device F1 on edm/ ≥ v33's 0.570 (acceptance bar)
+- On-device NN activation mean ≤ 0.40 (vs v34's 0.45 — note: this is the model's *output* activation distribution measured during validation, not the training mel mean)
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
