@@ -6,32 +6,42 @@
 # prepare_dataset.py (`for gain_db in [-18, -12, -6, 6, 12, 18]`).
 #
 # At target_rms_db=-30 + gain_aug=+18 dB, the loudest training variant
-# audio is -12 dBFS — louder than device runtime (~-15 dBFS effective)
-# and well into bass-mel-band saturation territory. Training mel mean
-# rose from v33's ~0.37 to v34's 0.808; samples in the +18 dB variant
-# saturated bands 0-7 at 1.0 (88% of frames in the device-mel measurement
-# already showed band-0 saturation; v34 training added more saturated
-# samples on top). Saturated mel destroys the temporal contrast that
-# peak-picking depends on. Frame F1 still climbed (saturation correlates
-# with onset-likely on average) but peak F1 plateaued.
+# audio is -12 dBFS RMS — louder than device runtime (~-15 dBFS RMS
+# effective) and well into bass-mel-band saturation territory once
+# instantaneous peaks are factored in. Training mel mean rose from v33's
+# ~0.37 to v34's 0.808; samples in the +18 dB variant saturated bands
+# 0-7 at 1.0 (88% of frames in the device-mel measurement already showed
+# band-0 saturation; v34 training added more saturated samples on top).
+# Saturated mel destroys the temporal contrast that peak-picking depends
+# on. Frame F1 still climbed (saturation correlates with onset-likely on
+# average) but peak F1 plateaued.
 #
 # Note on prior plan-doc claim "v33 dropped gain aug, v34 restored it":
 # WRONG. Both v33 and v34 ran with --augment (Makefile default), so
-# both used the same gain_aug [-18, +18]. The only substantive config
-# diff was target_rms_db (-72 → -30). Past experiments DID use this
-# gain aug consistently — what was new was the interaction with the
-# raised target_rms_db.
+# both used the same 6-step gain_aug set [-18, -12, -6, +6, +12, +18]
+# dB. The only substantive config diff was target_rms_db (-72 → -30).
+# Past experiments DID use this gain aug consistently — what was new
+# was the interaction with the raised target_rms_db.
 #
 # v34b fix: shift target_rms_db so the +18 dB gain aug peak lands at
-# device level (-30 dBFS), not 18 dB past it. Math:
+# device level (-30 dBFS RMS), not 18 dB past it. Math:
 #   target_rms_db + 18 = -30  →  target_rms_db = -48
-# At -48 dBFS:
-#   - Clean variant: -48 dBFS effective, mel mean ~0.20
-#   - Gain aug peak (+18 dB): -30 dBFS effective, mel mean ~0.50 (no sat)
+#
+# Predicted prep mel mean (linear interpolation from measured
+# v33 prep mean=0.37 at -72 and v34 prep mean=0.808 at -30):
+# at -48, composite prep mel mean ≈ 0.62. Per-variant prediction:
+#   - Clean variant: -48 dBFS RMS audio, mel mean ~0.40 (well below
+#     saturation; clean variant carries spectral content faithfully)
+#   - Gain aug +18 dB peak: -30 dBFS RMS audio, mel mean targets the
+#     device runtime level (measured 0.754) — this is the design intent.
+#     Whether training mel at -30 dBFS RMS produces 0.754 depends on the
+#     audio's spectral content; if it lands lower, the gap is closed by
+#     the conditioned variant's whitening rather than this path.
 #   - Conditioned variant: ~-42 dBFS pre-compressor; +6 dB makeup gain
-#     and per-band whitening pull mel toward device level (mel ~0.7-0.8)
-#     — conditioned path is the primary device-level training signal
-#   - Conditioned + gain_aug+18: louder, but whitening normalizes
+#     and per-band whitening pull mel toward 1.0 in active bands. Stays
+#     in the 0.7-0.85 range that matches device runtime distribution.
+#   - Conditioned + gain_aug+18: still saturating in bass bands but a
+#     much smaller fraction of training data than v34's regime.
 #
 # This sits between v33's -72 and v34's -30. Tests the calibration
 # direction without re-introducing v34's saturation. Single-axis change.
@@ -78,7 +88,9 @@ features:
 
 loss:
   type: "bce"
-  pos_weight: 0
+  # NOTE: pos_weight is intentionally NOT here — train.py reads pos_weight
+  # exclusively from cfg["training"] (see train.py:657, 764). Listing it
+  # twice would be a configuration trap. Per PR 134 review.
 
 training:
   mixup: false
