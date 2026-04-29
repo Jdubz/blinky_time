@@ -1,5 +1,21 @@
 # ML Training Improvement Plan
 
+> **2026-04-29 active run: v34d (clean ONSET labels)**
+>
+> | field | value |
+> |-------|-------|
+> | hypothesis | drum-stem bleed (~30% of `kick_weighted_drums` onsets are FP per audit on edm/) is a meaningful contributor to the v33 ceiling. Filtering kw against full-mix onsets_consensus (>=2 systems, ±70ms) raises label F1 vs hand-curated GT from 0.657 → 0.745 in the audit; training on those cleaner labels should narrow the gap to publishable detectors |
+> | single-axis change vs v33 | ONLY the label source. Mel config (50 bands, fmin=30, fmax=8000), `target_rms_db=-72`, gain augmentation, model architecture, loss, all match v33 exactly |
+> | training status | running in tmux `v34d_train` since 2026-04-29 11:41; ~14 min/epoch; current best at epoch 14 (`val_peak_F1=0.394`); patience 15 |
+> | val_peak_F1 caveat | not directly comparable to v33's val_peak_F1 — v33 evaluated against noisy kw labels (F1=0.66 vs hand-curated GT), v34d against cleaner ones (F1=0.74). See "v34d val_peak_F1 metric shift caveat" section |
+> | apples-to-apples gate | `make eval` on edm/ with `.onsets_consensus.json` GT, run for both v33 and v34d post-train. Driver: `scripts/v34d_post_train.sh` (chains export → tflite size check → eval(v34d) → eval(v33) → comparison) |
+> | falsifiable predictions | (1) candidate mean F1 on edm/ exceeds v33 by ≥0.02 (audit suggested +0.09, accept anything ≥0.02 as a real lift); (2) precision rises more than recall; (3) tflite size ≤27 KB (architecture unchanged); (4) export INT8 std ≥0.30 (no activation collapse) |
+> | negative-result triggers | (a) candidate F1 on edm/ within ±0.02 of v33 → label cleanup didn't help, the ceiling is not label noise; (b) precision drops or stays flat → cleaner labels also broke something; (c) export std <0.20 → INT8 collapse; revert and investigate why cleaner labels destabilized quantization |
+> | what to NOT do | trust val_peak_F1 alone as the headline; report numbers without specifying which GT they're against; carry the "training is slower than v33" interpretation into post-eval analysis (it's a metric-shift, not a model-quality, signal) |
+> | follow-ups gated on this run | #72 multi-channel instrument model (only after v34d's clean labels prove out); #115 Phase 2 FMA scaling (needs v34d trained + deployed); #117 firing-routing rule on (centroid, crest) (parallel — already validated cross-device agreement at 90% on 2-bucket); deployment to fleet pending eval lift confirmation |
+>
+> Commit chain: prep + clean labels + diagnostics (e0e13088) → NaN logging (a93361f3) → eval onset-GT fix (a8af902e, da4d4485) → label-gen silent-fallback fixes (2dbdac01).
+>
 > **2026-04-27 corpus reset:** `edm_holdout/` (the GiantSteps LOFI adversarial corpus) was deleted entirely. Multiple regressions came from using adversarial content as the headline F1 metric and chasing model fixes for problems that were partly content-difficulty. **The only validation corpus going forward is `blinky-test-player/music/edm/` (18 tracks).** All historical F1 numbers in this doc that mention `edm_holdout` should be read as "measured on adversarial content that no longer informs decisions." See CLAUDE.md "CRITICAL: Validation Corpus".
 >
 > The GiantSteps LOFI tracks are still in the *training* corpus (they always were — `Makefile` symlinks them via `giantsteps-tempo-dataset/audio/*.mp3`); they're no longer treated as a separate evaluation set. The held-out role moves to a tier-1 subset of `edm/` once tier-1 is defined.
