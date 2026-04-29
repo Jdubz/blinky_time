@@ -31,3 +31,17 @@ namespace BlinkyAssert {
 // BLINKY_ASSERT(condition, "message") - logs and counts if condition is false
 #define BLINKY_ASSERT(cond, msg) \
     do { if (!(cond)) ::BlinkyAssert::onFail(F(msg)); } while(0)
+
+// BLINKY_ASSERT_ONCE - latches per call site, so a hot-loop NaN doesn't
+// flood Serial. Use for silent-fallback enforcement in audio DSP / NN
+// hot paths where a real bug would otherwise spam the log every frame.
+// Counter still increments on each failure so the rate is observable
+// via "show errors"; only the message is suppressed after first hit.
+#define BLINKY_ASSERT_ONCE(cond, msg) \
+    do { \
+        static bool _blinky_warned = false; \
+        if (!(cond)) { \
+            if (!_blinky_warned) { _blinky_warned = true; ::BlinkyAssert::onFail(F(msg)); } \
+            else { ++::BlinkyAssert::failCount; } \
+        } \
+    } while(0)
