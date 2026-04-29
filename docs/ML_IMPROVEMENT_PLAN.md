@@ -808,6 +808,43 @@ Ranked by evidence basis after 2026-04-28 peak-picker parity tests:
 2. **Cleaner training labels** (#72-blocker) — `kick_weighted` from demucs has 32% bleed contamination per HYBRID_FEATURE_ANALYSIS_PLAN.md. Cleaner targets directly improve offline F1, which firmware lifts further. ~few days of label-side work.
 3. **Recompute v33's actual offline-on-edm/ ceiling with the firmware-style peak-picker logic** (bass gate + PLP bias). If we can reproduce ~0.57 offline using the firmware-equivalent picker in `analysis/peak_picker.py` (#35), we have a fast offline iteration loop instead of the 30+ min per-experiment device-validation cycle.
 
+### Peak-picker tuning result (2026-04-28) — ceiling reached
+
+#1 above ran. Sweep `pulseonsetfloor ∈ {0.10, 0.15, 0.20, 0.25, 0.30, 0.40}` on 8 representative tracks looked like thr=0.25 won by +0.049. Full-corpus all-device validation showed the gain was **noise** — aggregate F1 0.570 → 0.570, median 0.581 → 0.581, q25 0.493 → 0.497, min 0.365 → 0.373. Per-track distribution: 9 improved / 7 regressed / 2 flat at thr=0.25, magnitudes cancel.
+
+**Why the sweep result was noise:** param-sweep batches values across devices (each threshold tested on essentially one device). With per-device F1 spread of ~0.054 (062CBD12EB69=0.596 vs ABFBC41283E2=0.542), and per-track variance comparable, single-device sweep results are dominated by which device received which value.
+
+**Correlation between baseline track features and Δ F1 at thr=0.25:** all |r| < 0.10 (random-noise level). Features tested: baseline F1, P, R, onset rate, refOnsets, density. **No observable feature predicts whether a track benefits from a higher or lower threshold** at our current corpus size.
+
+**Consequence:** further global-parameter sweeps (`bass_gate_max_boost`, `plp_bias_*`, etc.) will face the same ~0.05 noise floor at this corpus size. Global-threshold tuning has hit its ceiling. `pulseOnsetFloor=0.20` stays as default.
+
+### Parked plan: content-adaptive thresholding (do AFTER cleaner labels land)
+
+The data above shows: a single global threshold can't capture per-track optima, AND we can't predict the optimum from features observable in 18 tracks. Two things must change before adaptive thresholding is worth pursuing:
+
+1. **Larger validation corpus** — to fit a feature → threshold mapping that generalizes beyond 18 tracks. **FMA-medium Electronic subset is already on disk** at `/mnt/storage/blinky-ml-data/audio/fma/`: 6093 Electronic-tagged tracks. The mainstream-EDM sub-tags (Techno 155, House 55, Dubstep 36, DnB 2, Dance 57, Breakcore 50, Trip-Hop 79, Downtempo 25, Ambient Electronic 74, Glitch 58, IDM 19, Minimal Electronic 32, total ~640) are a 35× larger curated EDM corpus than our current 18 tracks. Excludes Chip Music (312) as non-relevant. **No download needed; just filter + apply algorithmic GT (madmom DBN beat tracker, confidence-filtered).**
+
+2. **Audio features that actually predict beat-detection difficulty** — per Schlüter '14 / Beat This! '24 / MIREX analyses, the strongest predictors are: onset density + IOI CV (strongest single predictor), harmonic-to-percussive ratio (HPSS), spectral flux variance, crest factor, bass dominance. BPM is weak. We already capture spectral flux (`v.raw_flux`), crest (`v.crest`), centroid (`v.centroid`) per frame in persist_raw `signal_frames`, plus onset density and BPM at the track level. **Missing only HPR (needs HPSS pass on audio) and bass dominance ratio (needs mel band capture during validation, currently only in `stream nn` mode).**
+
+#### Staged plan when this is unparked
+
+**Phase 1 — feature ↔ F1 correlation on existing 18 tracks (~1 day):**
+Compute {onset_density, IOI_CV, HPR, spectral_flux_std, crest, BPM, bass_dom} per track from existing `/tmp/v33_b153_edm.json` + the 18 audio files. Correlate against per-track F1 from b153 validation. Outcome:
+- *Strong correlation found* (|r| > 0.4 on 1-2 features) → Phase 2 is worthwhile
+- *No strong correlation* → 18 tracks aren't enough OR features don't predict at this scale OR adaptive isn't tractable. Drop the direction.
+
+**Phase 2 — repeat on FMA Electronic subset (~3-5 days):**
+Run madmom DBN on the ~640 mainstream-EDM FMA tracks; confidence-filter to ~200-500. Compute the same features. If Phase 1's correlation holds at scale, fit a feature → threshold mapping.
+
+**Phase 3 — implement adaptive rule in firmware (~1-2 weeks):**
+Implement chosen feature in firmware, build the runtime threshold-modulation rule, deploy, validate on edm/ + the FMA-derived held-out set.
+
+#### Why this is parked
+
+Cleaner training labels (#72, blocked) is the higher-priority near-term work. The peak-picker parity test showed that firmware peak-picker adds +0.12 F1 over offline; that lift amplifies any model-side improvement. Labels with 32% bleed contamination → cleaner labels → higher offline F1 → higher on-device F1 (with the +0.12 firmware lift on top). That's a more direct path than per-track threshold tuning at our current corpus size.
+
+Phase 1 of the adaptive direction is also independently useful as a **diagnostic asset** — even if we don't pursue adaptive thresholding, knowing which features predict difficulty tells us *which content the system handles well/poorly*. Worth doing once labels are in flight.
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
