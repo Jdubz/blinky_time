@@ -761,6 +761,53 @@ This sits between v33 (-72) and v34 (-30) and tests whether the calibration dire
 - On-device F1 on edm/ ≥ v33's 0.570 (acceptance bar)
 - On-device NN activation mean ≤ 0.40 (vs v34's 0.45 — note: this is the model's *output* activation distribution measured during validation, not the training mel mean)
 
+### v34b result + entire framing overturned (2026-04-28)
+
+v34b plateaued at val_peak_F1=0.477 by epoch 4 — far below v34's 0.627, far below v33's 0.690. Every attempt to "fix" the sim-to-real gap by raising target_rms_db has made things worse. Stopped at epoch 7.
+
+Stepped back and ran two parity tests with existing tooling:
+
+**Test 1: offline peak-picker on the v33 b153 on-device activation stream** (`/tmp/v33_b153_edm.json` from #97). Train-time `_peak_pick_1d` (simple local-max + threshold + 50 ms cooldown) applied to the recorded device activations:
+
+```
+                          F1 (mean across 18 edm/ tracks × 4 devices)
+firmware peak-picker      0.570  ← what we measured as on-device
+offline _peak_pick_1d     0.298  @ thr=0.20
+                          0.323  @ thr=0.30
+                          0.370  @ thr=0.40
+```
+
+The firmware peak-picker (bass gate + PLP bias + tempo-adaptive cooldown) is **adding +0.20-0.27 F1** vs simple local-max picking on the same activation stream. The complex gating works.
+
+**Test 2: offline `evaluate.py` on edm/ corpus directly** (mel computed offline by training pipeline, simple peak-picker applied). Aggregate F1 ≈ 0.45 across the 18 tracks. Firmware F1=0.570 on the same content. **Firmware beats offline by +0.12 F1** thanks to its peak-picker.
+
+### What the val_peak_F1=0.690 number actually was
+
+`val_peak_F1` during v33 training was measured on the **15% val_split of the *training* corpus** (`val_split: 0.15` in base.yaml). The edm/ corpus is excluded from training entirely. **These are different test sets.** The "0.690 offline → 0.570 on-device" delta is *not* a deployment loss — it's a content-difficulty gap between in-distribution training-val and held-out edm/, plus the simple-vs-complex picker delta going in our favor.
+
+### v33 b153 is performing optimally — there is no "sim-to-real gap" to close
+
+- Offline-on-edm/ with simple picker: **~0.45**
+- On-device (firmware peak-picker): **0.570**
+- Firmware adds +0.12 F1 on top of what the model output supports offline
+
+The on-device system is **outperforming a straightforward offline evaluation on the same content.** v34/v34b were chasing a phantom — there was no input-distribution gap to close because the firmware was already extracting more value from the model than offline tools assume.
+
+### Things now disproven (do not retry)
+
+- Raising `target_rms_db` to "match device level" — 2 experiments, both regressed
+- "Sim-to-real input distribution alignment" framing — based on mis-comparing different test sets
+- The April 14 base.yaml comment claiming `target_rms_db=-72` calibrates to device mel mean=0.775 — re-measured 2026-04-27, training mel mean at -72 is actually 0.37; either the original measurement was on the conditioned variant, or the calibration drifted across the 26→50 mel pipeline change. v33 worked despite this miscalibration.
+- Reading `val_peak_F1` reported during training as comparable to firmware F1 on held-out content — they're on different test sets.
+
+### Real next experiments
+
+Ranked by evidence basis after 2026-04-28 peak-picker parity tests:
+
+1. **Firmware peak-picker tuning sweep** — bass gate, PLP confidence threshold, cooldown. Currently adds +0.12 F1 over simple offline picker; tuning could find a better operating point. Cheap (no retraining), uses existing `param-sweep` tooling. **Highest expected ROI.**
+2. **Cleaner training labels** (#72-blocker) — `kick_weighted` from demucs has 32% bleed contamination per HYBRID_FEATURE_ANALYSIS_PLAN.md. Cleaner targets directly improve offline F1, which firmware lifts further. ~few days of label-side work.
+3. **Recompute v33's actual offline-on-edm/ ceiling with the firmware-style peak-picker logic** (bass gate + PLP bias). If we can reproduce ~0.57 offline using the firmware-equivalent picker in `analysis/peak_picker.py` (#35), we have a fast offline iteration loop instead of the 30+ min per-experiment device-validation cycle.
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.
