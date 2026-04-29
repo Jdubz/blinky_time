@@ -845,6 +845,44 @@ Cleaner training labels (#72, blocked) is the higher-priority near-term work. Th
 
 Phase 1 of the adaptive direction is also independently useful as a **diagnostic asset** — even if we don't pursue adaptive thresholding, knowing which features predict difficulty tells us *which content the system handles well/poorly*. Worth doing once labels are in flight.
 
+### Label audit — the actual ceiling (2026-04-28)
+
+After v34/v34b confirmed parameter tuning had hit a wall, audited every label source on disk against hand-curated `.beats.json` GT on the 18 edm/ tracks. **Result inverts the entire framing again.**
+
+```
+source                         F1@100  P      R      density
+kick_weighted (v29-v34 target)  0.577  0.45   0.85   1.99  ← contaminated, training target
+consensus_v2 (beats)            0.944  1.00   0.90   0.91
+consensus_v5 (beats)            0.981  0.97   1.00   1.04  ← essentially perfect, on disk
+onsets_consensus all            0.541  0.44   0.74   1.78
+onsets_consensus ≥3             0.563  0.50   0.68   1.44
+onsets_librosa                  0.559  0.43   0.85   2.13
+```
+
+**v33's on-device F1=0.570 ≈ kick_weighted label F1=0.577 against curated GT.** The model has been at the *label ceiling* this whole time, not a model ceiling. Every threshold sweep, target_rms_db tweak, and architecture experiment was bound by labels that match the eval GT only at F1=0.58.
+
+The contamination mechanism: bandpass onset detection runs on demucs-separated drum stems; demucs leaks tonal/harmonic content into the drum stem on ~30% of tracks; bandpass detector finds peaks in the bleed and labels them as "kicks" or "snares"; result is **2.21× the event density of the curated GT (14 of 18 tracks over-detect by >1.5×)**. Confirms the 32% bleed / 2× density finding documented in `HYBRID_FEATURE_ANALYSIS_PLAN.md` 2026-04-23.
+
+This also explains why **firmware F1 > offline F1 by +0.12** on the same content (peak-picker parity test 2026-04-28). The model trained to over-fire (labels are over-detected). Firmware peak-picker (bass gate / PLP bias / cooldown) suppresses the spurious firings the labels taught the model to make. The +0.12 firmware lift is *recovering from label noise.*
+
+### v34c plan — switch labels, nothing else (2026-04-28)
+
+`consensus_v5` (multi-system beat consensus from allin1 + beat_this + demucs_beats + essentia + librosa + madmom) matches the eval GT at F1=0.981. **100% coverage on the 6750-track training corpus** — labels exist for every track, no regeneration needed.
+
+v34c is v33 with one change: `--labels-dir` switches to `consensus_v5`. Architecture, audio params, target_rms_db (-72), augmentation — all identical to v33.
+
+**Falsifiable predictions:**
+- val_peak_F1 ≥ 0.85 (since labels match eval GT at 0.98)
+- on-device F1 on edm/ jumps from 0.570 to ≥ 0.75 (firmware peak-picker still adds its lift)
+- training mel mean similar to v33 (~0.37, since target_rms_db unchanged)
+- activation distribution shape similar to v33
+
+**Negative-result triggers:**
+- val_peak_F1 < 0.75: training is failing to exploit the cleaner labels (architecture or capacity issue)
+- on-device F1 ≤ v33's 0.570: switching labels didn't help — there's another bottleneck we haven't identified
+
+**Caveat about target type.** consensus_v5 is a *beat* target (1 per quarter note); kick_weighted was an *onset* target (every drum hit). The eval GT (.beats.json) is also beats — so the training-eval alignment improves. But on-device firing rate at v33 b153 was ~3.4/sec while beats are ~1.6/sec, meaning the firmware peak-picker already finds 2× more events than just beats. That extra reactivity comes from local maxima in the activation, not from the label set. Beat-trained model should still produce reactive firing once the firmware peak-picker layer is on top — but if visual reactivity feels too sparse after deploy, we revisit (e.g., switch to a curated onset+beat union once we can validate it).
+
 ### Tool fixes landed 2026-04-23
 
 - `prepare_dataset.py --exclude-dir` → `action='append'`: previously silently kept only the last value; now unions stems from all passed dirs.

@@ -1,0 +1,101 @@
+# Conv1D W16 v34c — fix the labels (the actual ceiling)
+#
+# 2026-04-28 label audit on edm/ vs hand-curated .beats.json:
+#
+#   source                         F1@100  P     R      density
+#   kick_weighted (v29-v34 train)   0.577  0.45  0.85   1.99 ← contaminated
+#   consensus_v2 (beats)            0.944  1.00  0.90   0.91
+#   consensus_v5 (beats)            0.981  0.97  1.00   1.04 ← essentially perfect
+#   onsets_consensus all            0.541  0.44  0.74   1.78
+#   onsets_consensus ≥3             0.563  0.50  0.68   1.44
+#   onsets_librosa                  0.559  0.43  0.85   2.13
+#
+# kick_weighted_drums (current training target) only matches the eval GT at
+# F1=0.577 because demucs drum stems leak ~30% bleed and bandpass onset
+# detection on bleed produces ~2× the event density of the curated GT. The
+# model has been training on labels that ARE WRONG by F1=0.42.
+#
+# v33's measured on-device F1=0.570 ≈ the label F1 ceiling 0.577. The model
+# is at the label ceiling, not the model ceiling. Every parameter sweep and
+# calibration tweak we've done was bound by labels.
+#
+# consensus_v5 (multi-system beat consensus across allin1, beat_this,
+# demucs_beats, essentia, librosa, madmom) matches hand-curated .beats.json
+# at F1=0.981 — essentially perfect alignment. 100% coverage on the 6750-
+# track training corpus (all tracks have consensus_v5 labels on disk).
+#
+# v34c is the same v33 architecture with one change: training labels switch
+# from kick_weighted_drums to consensus_v5 beat labels. Same model size,
+# same audio config (50 mel × 30-8000 Hz), same target_rms_db=-72 (proven
+# to work in v33). Single-axis change to the label target.
+#
+# Predicted result if labels were the binding constraint:
+#   - val_peak_F1 reaches 0.85+ (since labels match val GT at 0.98+)
+#   - on-device F1 on edm/ jumps from 0.570 toward 0.75-0.85 range
+#     (firmware peak-picker adds +0.12 F1 over offline; offline ceiling
+#     should also rise dramatically)
+#
+# Note on target type: consensus_v5 beats are BEAT positions (~1 per
+# quarter note). kick_weighted was an ONSET target (every drum hit). The
+# eval target (.beats.json) is also beats, so this aligns the training
+# target with the eval target. Visualizer reactivity may feel sparser
+# initially since model fires at beat positions only — but the firmware
+# peak-picker still finds local maxima, and on-device firing rate at v33
+# was ~3.4/sec which is 2× beat density (1.6/sec at 100 BPM), so even
+# beat-trained models should produce reasonable firing rates after the
+# firmware filter.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  # Default-path label loading: reads --labels-dir .beats.json files via
+  # the consensus-beats branch in prepare_dataset.py:941. No labels_type
+  # override needed (default "consensus" routes to that branch).
+  target_type: "binary"
+  hard_binary_threshold: 0.1
+  # neighbor_weight and label_shift_frames are kick_weighted-specific in
+  # the current prep code path; consensus path uses raw beat times.
+  # Leave them off to keep the prep behaviour clean for this experiment.
+
+audio:
+  # Identical to v33 (proven calibration).
+  n_mels: 50
+  fmin: 30
+  fmax: 8000
+  # target_rms_db inherits base.yaml -72 (which v33 used; v34/v34b proved
+  # raising it doesn't help — the issue was always labels).
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v34c"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v34c_mel_only.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 27
