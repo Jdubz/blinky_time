@@ -18,7 +18,14 @@ SHELL := /bin/bash
 STORAGE       := /mnt/storage/blinky-ml-data
 AUDIO_DIR     := $(STORAGE)/audio/combined
 LABELS_MULTI  := $(STORAGE)/labels/multi
-LABELS_CONSENSUS := $(STORAGE)/labels/consensus_v2
+# Onset labels (the actual training target — see CLAUDE.md "Task is Onset Detection").
+# Was previously $(STORAGE)/labels/consensus_v2 (BEAT consensus); switched 2026-04-29
+# to onsets_consensus to stop silently injecting beat-detection bias into training.
+# The historical consensus_v* dirs were archived to labels/_archive_beats_2026_04_29/.
+LABELS_ONSETS := $(STORAGE)/labels/onsets_consensus
+# Legacy alias preserved so any out-of-tree script that imports this Makefile
+# variable doesn't crash. Points at the new onset path; do not use for new code.
+LABELS_CONSENSUS := $(LABELS_ONSETS)
 PROCESSED_DIR := $(STORAGE)/processed
 RIR_DIR       := $(STORAGE)/rir/processed
 TEST_AUDIO    := ../blinky-test-player/music/edm

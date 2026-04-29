@@ -140,9 +140,15 @@ export:
 
 # Data paths — all bulk data on /mnt/storage to avoid filling the primary drive.
 # Processed data is large (80-130 GB per version) and regenerable from audio+labels.
+#
+# Task: ONSET DETECTION (every percussive event regardless of metrical position).
+# We are NOT doing beat detection. labels_dir must point at an onset-labeled
+# directory (e.g. onsets_consensus or kick_weighted_drums). Beat-consensus dirs
+# (consensus_v2/v3/v4/v5) are ARCHIVED and must not be used as training input —
+# loading them silently injects beat-detection bias into onset training.
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio/combined"
-  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v5"
+  labels_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
   processed_dir: "/mnt/storage/blinky-ml-data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
   noise_dir: "/mnt/storage/blinky-ml-data/noise"

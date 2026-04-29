@@ -26,6 +26,18 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 **Unresponsive device recovery:** `uhubctl -a cycle -p <port>` → server flash → wait for re-enumeration. Last resort: physical reset.
 
+## CRITICAL: Task is Onset Detection, Not Beat Detection
+
+**The model and firmware are doing ONSET DETECTION** — fire on every percussive event (kick, snare, ghost notes, hi-hats) regardless of metrical position. **We do NOT care whether an event lands on or off the beat.** Beat-detection framing is wrong for this task and creates noise — both metric noise (scoring against beat positions when the goal is to fire on every drum hit) and label noise (training on beat consensus teaches the model to suppress off-beat onsets, which we want to keep).
+
+Concrete consequences:
+- **Training labels must be onset-flavored** (`onsets_consensus`, `kick_weighted_drums`, etc.). Never use `consensus_v*` (beat tracker output) or anything from `allin1`/`beat_this`/`beatnet`/`demucs_beats` as a training target. Those directories are archived under `_archive_beats_2026_04_29/`. `prepare_dataset.py` refuses to load paths with those markers.
+- **Eval ground truth is `.onsets_consensus.json`**, not `.beats.json`. The blinky-server validation harness reads onsets_consensus when present (since 2026-04-29 it requires it). Beat GT files were archived out of `blinky-test-player/music/edm/`.
+- **Beat-tracking systems (allin1, beat_this, beatnet, demucs_beats, the BPM half of madmom)** still exist as reference scripts but their *output is beats* and must not flow into the training-label pipeline.
+- **BPM in firmware (PLP / ACF tempo tracking)** is fine — it's used to phase-lock the visualizer animation, not to gate onset detection. `beatGridPatternMin=0.0` (b149+ default) keeps the AND-gate off so the visualizer fires on every onset, not only on beats.
+
+When in doubt: an onset is *every percussive event*. A beat is *every metrical position*. We want the former. Beats are a strict subset of onsets, and a beat-detection model trained or scored on beats will *under-fire* on the deployment task.
+
 ## CRITICAL: Validation Corpus
 
 **The only validation corpus is `blinky-test-player/music/edm/` (18 tracks).** It contains representative EDM with clear percussion (techno×5, trance×3, dnb×2, breakbeat×2, dubstep, garage, reggaeton, trap, afrobeat, amapiano) — the content the system is designed to perform on. Lock in performance here before measuring anything else.

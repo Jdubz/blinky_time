@@ -21,10 +21,18 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac"}
 def discover_tracks(
     directory: str | Path,
 ) -> list[dict[str, str]]:
-    """Find audio files with matching .beats.json ground truth.
+    """Find audio files with matching onset ground truth.
 
-    Returns list of {name, audio_file, ground_truth, onset_ground_truth?}
-    sorted by name.
+    Task is ONSET DETECTION (every percussive event). Onset GT lives in
+    `<base>.onsets_consensus.json`. Older `.beats.json` files were beat
+    consensus and are not appropriate ground truth for onset evaluation —
+    they were archived 2026-04-29 to remove the long-running confusion
+    where firmware F1 was scored against the wrong target.
+
+    Returns list of {name, audio_file, ground_truth, onset_ground_truth}
+    sorted by name. `ground_truth` and `onset_ground_truth` both point at
+    the .onsets_consensus.json file (kept as two keys for back-compat with
+    callers that still pass both into load_ground_truth).
     """
     d = Path(directory)
     if not d.is_dir():
@@ -38,51 +46,54 @@ def discover_tracks(
         if suffix not in AUDIO_EXTENSIONS:
             continue
         base = Path(fname).stem
-        gt_file = f"{base}.beats.json"
-        if gt_file not in files:
+        onset_file = f"{base}.onsets_consensus.json"
+        if onset_file not in files:
+            # No onset GT for this track — skip silently (matches old behaviour
+            # of skipping tracks without GT).
             continue
+        gt_path = str(d / onset_file)
         track: dict[str, str] = {
             "name": base,
             "audio_file": str(d / fname),
-            "ground_truth": str(d / gt_file),
+            "ground_truth": gt_path,
+            "onset_ground_truth": gt_path,
         }
-        onset_file = f"{base}.onsets_consensus.json"
-        if onset_file in files:
-            track["onset_ground_truth"] = str(d / onset_file)
         tracks.append(track)
 
     return tracks
 
 
 def load_ground_truth(gt_path: str, onset_path: str | None = None) -> GroundTruth:
-    """Load ground truth from .beats.json and optional .onsets_consensus.json."""
-    with open(gt_path) as f:
+    """Load onset ground truth from a `.onsets_consensus.json` file.
+
+    Schema: ``{"onsets": [{"time": float, "strength": float, "systems": int}]}``
+    Both `gt_path` and `onset_path` are expected to be the same file (the
+    onsets_consensus json) — the dual-arg signature is preserved for back-
+    compat but the legacy beat-consensus path no longer exists.
+    """
+    onset_data_path = onset_path or gt_path
+    with open(onset_data_path) as f:
         data = json.load(f)
 
+    raw_onsets = data.get("onsets", [])
+    onsets = [GroundTruthOnset(time=o["time"], strength=o.get("strength", 1.0)) for o in raw_onsets]
+
+    # Build hits list from onsets too — some scoring code paths still iterate
+    # `gt.hits` for things like timing-offset measurement. Each onset becomes
+    # a hit with type="onset" and expect_trigger=True (full-mix consensus
+    # implies the onset is real and should trigger).
     hits = [
         GroundTruthHit(
-            time=h["time"],
-            type=h.get("type", "beat"),
-            strength=h.get("strength", 1.0),
-            expect_trigger=h.get("expectTrigger", True),
+            time=o["time"],
+            type="onset",
+            strength=o.get("strength", 1.0),
+            expect_trigger=True,
         )
-        for h in data.get("hits", [])
+        for o in raw_onsets
     ]
 
-    onsets = None
-    if onset_path:
-        try:
-            with open(onset_path) as f:
-                onset_data = json.load(f)
-            onsets = [
-                GroundTruthOnset(time=o["time"], strength=o.get("strength", 1.0))
-                for o in onset_data.get("onsets", [])
-            ]
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            log.warning("Failed to load onset ground truth %s: %s", onset_path, e)
-
     return GroundTruth(
-        pattern=data.get("pattern", Path(gt_path).stem),
+        pattern=data.get("pattern", Path(onset_data_path).stem),
         duration_ms=data.get("durationMs", 0),
         hits=hits,
         onsets=onsets,

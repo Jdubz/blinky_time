@@ -761,6 +761,42 @@ This sits between v33 (-72) and v34 (-30) and tests whether the calibration dire
 - On-device F1 on edm/ ≥ v33's 0.570 (acceptance bar)
 - On-device NN activation mean ≤ 0.40 (vs v34's 0.45 — note: this is the model's *output* activation distribution measured during validation, not the training mel mean)
 
+### 2026-04-29 — beat-detection confusion cleaned up
+
+The v34/v34b/v34c sequence was muddled by a long-standing confusion between **onset detection** (the actual deployment task — fire on every percussive event) and **beat detection** (firing only on metrical positions). Three artifacts created and propagated this confusion:
+
+1. **`labels_dir` defaulted to `consensus_v5` in `base.yaml`** — beat consensus from `allin1`, `beat_this`, `beatnet`, `demucs_beats`, plus the BPM half of madmom. Any training run that didn't explicitly override `labels_dir` was being trained against beat targets without the config making that visible.
+
+2. **Eval ground-truth files in `blinky-test-player/music/edm/` were named `.beats.json`** — but the validation harness was actually scoring against `.onsets_consensus.json` (when present, since `scoring.py:315-331`). All 18 edm/ tracks had both files. The misnaming meant our offline label audits compared training labels to `.beats.json` (wrong reference) and produced misleading F1 numbers — the actual on-device F1=0.570 was always against onsets, not beats.
+
+3. **Internal variable names (`beat_times`, `beat_strengths`)** in `prepare_dataset.py` and `train.py` were used for any timestamp source — onset OR beat — making code review unable to tell whether a particular run was beat- or onset-targeted.
+
+**Cleanup landed 2026-04-29 (this commit and the next):**
+- `base.yaml` `labels_dir` now points at `onsets_consensus`. Every training run gets onset targets unless explicitly overridden.
+- `prepare_dataset.py` default-fallback branch raises if the labels path matches a beat-tracker marker (`consensus_v*`, `beat_this`, `beatnet`, `demucs_beats`, `allin1`).
+- `consensus_v2/v3/v4/v5` and the older `consensus`, `consensus-3sys`, `consensus-combined` label directories moved out of `/mnt/storage/blinky-ml-data/labels/` into `_archive_beats_2026_04_29/`. The training pipeline can no longer find them at the canonical path.
+- `.beats.json` files in `blinky-test-player/music/edm/` archived under `blinky-test-player/music/_archive_beats_gt/`. The eval harness now requires `.onsets_consensus.json` (which all 18 tracks had).
+- `track_discovery.py` and `load_ground_truth` rewritten to find onset GT directly. The legacy beat-consensus loader path no longer exists.
+- `Makefile` `LABELS_CONSENSUS` retained as alias of `LABELS_ONSETS` (= `onsets_consensus`) so out-of-tree scripts don't crash.
+- `annotate-beats.py` archived; not used in any active pipeline.
+- v34c config and 200+ GB of beat-trained processed data removed from disk.
+- `CLAUDE.md` adds an explicit "Task is Onset Detection, Not Beat Detection" section.
+
+**v33 b153 (deployed) re-audited against the correct reference:**
+
+```
+source                                 F1@100   P     R      density (vs onsets_consensus.json)
+kick_weighted (current train)           0.657   0.65  0.72   1.21
+onsets_consensus all (= GT itself)      1.000   1.00  1.00   1.00
+onsets_consensus ≥2                     0.974   1.00  0.95   0.95
+onsets_consensus ≥3                     0.893   1.00  0.81   0.81
+onsets_consensus ≥4                     0.672   1.00  0.51   0.51
+onsets_consensus ≥5                     0.563   1.00  0.40   0.40
+consensus_v5 (BEATS — wrong type)       0.549   0.74  0.45   0.64
+```
+
+`kick_weighted` matches eval GT at F1=0.657 (not the 0.577 my earlier audit reported against the wrong `.beats.json` reference). v33's on-device F1=0.570 sits ~0.09 below this label ceiling — narrower than the 0.12 gap we'd been chasing.
+
 ### v34b result + entire framing overturned (2026-04-28)
 
 v34b plateaued at val_peak_F1=0.477 by epoch 4 — far below v34's 0.627, far below v33's 0.690. Every attempt to "fix" the sim-to-real gap by raising target_rms_db has made things worse. Stopped at epoch 7.
