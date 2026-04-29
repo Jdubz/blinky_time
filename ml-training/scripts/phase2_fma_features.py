@@ -124,21 +124,31 @@ def main():
     for g, c in sorted(genre_counts.items(), key=lambda x: -x[1]):
         log.info("  %-25s %d", g, c)
 
-    # Per-track features
+    # Per-track features. Tracks with <5 GT onsets get surfaced (not silently
+    # dropped) — that's almost always either (a) ambient material with no
+    # percussive onsets (legitimate, but caller should know), or (b) a GT
+    # generation failure (silent generator crash). Caller decides policy.
     out = {}
-    have_gt = 0
-    sparse_gt = 0
+    sparse_tracks: list[tuple[int, int, str]] = []
     for _, row in df.iterrows():
         tid = row['track_id']
         gt = load_onset_gt(tid)
         if gt.size < 5:
-            sparse_gt += 1
+            sparse_tracks.append((tid, int(gt.size), row.get('title', '')))
             continue
-        have_gt += 1
-        # GT-derived features
+        # GT-derived features. We've already gated gt.size >= 5 above, so
+        # diff() produces >=4 IOIs and duration > 0 — fail loud rather than
+        # masking either with a 0-fallback (a track that snuck past the
+        # gate but produces degenerate features is a data-integrity bug).
         iois = np.diff(gt)
         iois = iois[iois > 0.02]
-        duration = float(gt[-1] - gt[0]) if gt.size >= 2 else 0.0
+        duration = float(gt[-1] - gt[0])
+        if duration <= 0 or iois.size == 0:
+            raise ValueError(
+                f"track {tid} passed gt_count gate ({gt.size}) but has "
+                f"degenerate timing: duration={duration}, iois.size={iois.size}. "
+                f"GT file: {ONSETS_DIR / f'{tid:06d}.onsets.json'}"
+            )
         out[tid] = {
             'audio_path': row['audio_path'],
             'onset_gt_path': str(ONSETS_DIR / f"{tid:06d}.onsets.json"),
@@ -146,12 +156,20 @@ def main():
             'title': row['title'],
             'gt_count': int(gt.size),
             'duration_s': duration,
-            'onset_density': float(gt.size / duration) if duration > 0 else 0.0,
-            'ioi_cv': float(iois.std() / iois.mean()) if iois.size and iois.mean() > 0 else 0.0,
-            'ioi_mean_ms': float(iois.mean() * 1000) if iois.size else 0.0,
+            'onset_density': float(gt.size / duration),
+            'ioi_cv': float(iois.std() / iois.mean()),
+            'ioi_mean_ms': float(iois.mean() * 1000),
         }
 
-    log.info("tracks with usable GT: %d (sparse_gt skipped: %d)", have_gt, sparse_gt)
+    log.info("tracks with usable GT: %d", len(out))
+    if sparse_tracks:
+        log.warning("[FALLBACK] %d tracks dropped for GT count <5 — surface them so the "
+                    "caller can decide whether they are legitimate ambient material "
+                    "or upstream GT-generation failures:", len(sparse_tracks))
+        for tid, n, title in sparse_tracks[:20]:
+            log.warning("  track_id=%d  gt_count=%d  title=%r", tid, n, title)
+        if len(sparse_tracks) > 20:
+            log.warning("  ... +%d more", len(sparse_tracks) - 20)
 
     out_path = Path('/tmp/phase2_fma_features.json')
     out_path.write_text(json.dumps(out, indent=2))

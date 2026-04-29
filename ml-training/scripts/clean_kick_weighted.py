@@ -31,12 +31,29 @@ log = logging.getLogger("clean_kw")
 
 
 def filter_track(kw_path: Path, cons_path: Path, tol_s: float, min_systems: int) -> dict | None:
-    """Return cleaned kw dict, or None to skip (missing/skipped/empty)."""
-    if not cons_path.exists():
-        return None
+    """Return cleaned kw dict, or None ONLY for the legitimate skip case
+    (kw.skipped=true means upstream drum separation failed for this track —
+    that's a data fact, not a script-level decision).
+
+    All other failure modes raise loudly: missing consensus, malformed JSON,
+    inconsistent metadata. Silently swallowing those would let the cleaned
+    label corpus differ from what we think it contains, which would poison
+    downstream training.
+    """
     kw = json.loads(kw_path.read_text())
     if kw.get("skipped"):
+        # Legitimate: drum-stem separation failed upstream for this track.
+        # The kw labeler explicitly marks the track as unusable; honoring
+        # that flag is not a fallback.
         return None
+    if not cons_path.exists():
+        raise FileNotFoundError(
+            f"kw labels exist but consensus is missing for {kw_path.stem}: "
+            f"expected {cons_path}. Both label sources should be generated "
+            f"from the same audio corpus; a gap means the multi-system "
+            f"labeling pipeline didn't finish for this track. Re-run "
+            f"label_beats.py + merge_consensus_labels_v2.py before retrying."
+        )
     cons = json.loads(cons_path.read_text())
 
     cons_supported = sorted(
@@ -46,15 +63,18 @@ def filter_track(kw_path: Path, cons_path: Path, tol_s: float, min_systems: int)
     cons_systems_by_time = {o["time"]: o.get("systems", 1) for o in cons.get("onsets", [])}
 
     if not cons_supported:
-        kw["onsets"] = []
-        kw["filter"] = {
-            "method": "stem_vs_mix_consensus",
-            "tolerance_s": tol_s,
-            "min_systems": min_systems,
-            "kept": 0,
-            "dropped": len(kw.get("onsets", [])),
-        }
-        return kw
+        # Empty consensus AT min_systems threshold means either (a) the
+        # track has very few onsets even by lenient detectors (likely
+        # ambient/silent — surface it), or (b) min_systems is set too
+        # high. Either way, dropping ALL kw onsets silently is wrong —
+        # the user needs to see this case to decide policy.
+        raise ValueError(
+            f"No consensus onsets at min_systems>={min_systems} for "
+            f"{kw_path.stem}: consensus file has "
+            f"{len(cons.get('onsets', []))} total onsets, but none are "
+            f"backed by >={min_systems} systems. Lower --min-systems or "
+            f"investigate the track."
+        )
 
     cons_arr = np.asarray(cons_supported)
     kept = []
