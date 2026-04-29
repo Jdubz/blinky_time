@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -174,7 +173,15 @@ class DeviceProtocol:
         await self._transport.write_line(line)
 
     async def _send_and_collect(self, command: str, timeout: float) -> str:
-        """Send command and accumulate response lines until a silence gap."""
+        """Send command and accumulate response lines until a silence gap.
+
+        Raises TimeoutError if the device produces no response within ``timeout``.
+        Callers that want best-effort semantics (e.g. cleanup paths that fire
+        commands at potentially-disconnected devices) must wrap in try/except.
+        Silently swallowing the timeout was the root cause of the "stale
+        settings corrupt tests" failure mode — a missed `defaults` reply let
+        validation runs proceed against prior-experiment settings.
+        """
         self._response_buf.clear()
         self._pending = True
         self._cancelled = False
@@ -182,8 +189,11 @@ class DeviceProtocol:
 
         await self._raw_send(command)
 
-        with contextlib.suppress(TimeoutError):
+        timed_out = False
+        try:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
+        except TimeoutError:
+            timed_out = True
 
         self._pending = False
 
@@ -193,6 +203,17 @@ class DeviceProtocol:
 
         result = "\n".join(self._response_buf)
         self._response_buf.clear()
+
+        if timed_out:
+            log.warning(
+                "[FALLBACK] device command %r timed out after %.2fs (got %d bytes); raising",
+                command, timeout, len(result),
+            )
+            raise TimeoutError(
+                f"Device command timed out after {timeout:.2f}s: {command!r} "
+                f"(partial response: {len(result)} bytes)"
+            )
+
         return result
 
     def _handle_line(self, line: str) -> None:

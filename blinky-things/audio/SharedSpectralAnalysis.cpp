@@ -655,9 +655,20 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
         magSum += mag;
     }
 
+    // Total spectral energy. NaN/Inf here would mean magnitudes_[] contains
+    // non-finite values — an upstream bug (FFT/compressor/whitening). The
+    // safeIsFinite-guard prevents NaN propagation into the NN input window;
+    // a counter+log on first occurrence is the correct enforcement per
+    // CLAUDE.md no-silent-fallbacks but requires diagnostic plumbing this
+    // module doesn't have today (logged as follow-up #103).
     totalEnergy_ = safeIsFinite(energy) ? energy : 0.0f;
 
-    // Spectral centroid (center of mass, in Hz)
+    // Spectral centroid (center of mass, in Hz). Two cases land in the else
+    // branch:
+    //   1. magSum == 0  — legitimate denormal case (true silence has no
+    //      spectral mass; centroid is undefined and 0 is the correct sentinel).
+    //   2. !safeIsFinite(weightedSum) — upstream-bug case (mirror of
+    //      totalEnergy above; same follow-up applies).
     if (magSum > 0.0f && safeIsFinite(weightedSum)) {
         float centroidBin = weightedSum / magSum;
         spectralCentroid_ = centroidBin * SpectralConstants::BIN_FREQ_HZ;

@@ -1601,9 +1601,16 @@ def main():
             print(f"WARNING: Duplicate stem '{af.stem}' — skipping {af}", file=sys.stderr)
             continue
         seen_stems.add(af.stem)
+        # Marker file just needs to exist for the audio to enter the trainset;
+        # the actual label content is loaded later from the labels_type-specific
+        # dir (kick_weighted_dir / onset_consensus_dir / etc.). We accept any of
+        # the historical marker shapes so we can drop legacy beat-tracker
+        # symlinks in labels/combined without breaking pairing.
         label_candidates = [
             af.parent / f"{af.stem}.beats.json",
             labels_dir / f"{af.stem}.beats.json",
+            labels_dir / f"{af.stem}.onsets.json",
+            labels_dir / f"{af.stem}.kick_weighted.json",
         ]
         for lf in label_candidates:
             if lf.exists():

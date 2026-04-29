@@ -881,6 +881,100 @@ Cleaner training labels (#72, blocked) is the higher-priority near-term work. Th
 
 Phase 1 of the adaptive direction is also independently useful as a **diagnostic asset** — even if we don't pursue adaptive thresholding, knowing which features predict difficulty tells us *which content the system handles well/poorly*. Worth doing once labels are in flight.
 
+#### Phase 1 results (2026-04-29) — strong signal, Phase 2 unparked
+
+Ran on `/tmp/v33_b153_edm.json` (v33 b153 capture, 18 edm/ tracks, mean F1=0.570 std=0.089) while v34d prep was running. Per-track features aggregated across 4 devices, correlated against mean f1_100ms.
+
+```
+feature           pearson_r  spearman   note
+ioi_mean_ms        -0.687    -0.488     sparse rhythms hurt
+flatness_mean      -0.524    -0.635     noisy/textural content hurts
+nn_std             +0.527    +0.593     runtime confidence proxy
+centroid_mean      -0.385    -0.480     treble-heavy content hurts
+crest_mean         +0.371    +0.410     peaky transients help
+onset_density      +0.350    +0.375     dense rhythms easier
+ioi_cv             -0.016    -0.350     mild
+rolloff_mean       -0.122    -0.304     mild
+flux_std/mean      -0.139/-0.20  +0.04/+0.10  none
+```
+
+**Five features cleared |r|>0.4 (Pearson or Spearman). Phase 2 (FMA Electronic scaling) is worthwhile.** Three independent signals point the same way: `flatness↑ + centroid↑ + ioi_mean↑` all predict lower F1 — the model struggles with sparse, treble-heavy, textural content (think pads, ambient passages, hi-hat-led grooves). Conversely it handles dense, bass-heavy, peaky transient content well.
+
+**Two actionable angles independent of Phase 2:**
+
+1. **`nn_std` as a runtime confidence metric.** It's purely model-output variance — no audio analysis, free at inference time. Strong correlation (r=+0.53) with track-level F1. Could feed a runtime "model is uncertain → tighten threshold or fall back to peak-picker" rule without any feature plumbing. Cheaper to ship than centroid-based adaptive thresholding.
+
+2. **Training-data composition signal.** The harmonic/textural content the model fails on (high flatness, high centroid) probably maps to FMA tracks the htdemucs drum-stem path produces noisy bleed for. v34d's stem-vs-mix consensus filter should have caught most of this, but the same content categories should be over-represented when picking validation tier-2 tracks for v34d evaluation.
+
+**Phase 2 plan now active**: Run madmom DBN on the ~640 FMA Electronic tracks, confidence-filter to ~200-500, repeat the correlation. If `flatness_mean` and `nn_std` hold at scale, fit a feature → threshold mapping. Phase 1 script: `/tmp/phase1_feature_f1_corr.py`. Results JSON: `/tmp/phase1_results.json`.
+
+### Firing-routing prototype (#114, 2026-04-29) — strong per-track signal
+
+Re-framing the parked classification idea. The earlier TP-vs-FP question (`/tmp/firing_classify.py`) found AUC≈0.50 — features at firing time can't *gate* firings. But the *routing* question — "do features split firings into perceptually distinct buckets that map to different visual effects?" — has a clean signal.
+
+Two-axis rule on (centroid, crest) at firing time, thresholds = population medians of the v33 b153 capture (cen=20.06, crest=7.81):
+
+| quadrant | crest | centroid | label |
+|----------|-------|----------|-------|
+| LB·HC    | high  | low      | kick  |
+| HB·HC    | high  | high     | snare |
+| LB·LC    | low   | low      | bass-pad |
+| HB·LC    | low   | high     | tex (textural) |
+
+**Result on 18 edm/ tracks, 13991 firings:**
+
+```
+track                              n     kick%  snare%  bass%   tex%
+techno-minimal-emotion           855    67.6   18.4    3.7   10.3
+reggaeton-fuego-lento            727    61.9   12.8   15.0   10.3
+techno-deep-ambience             724    59.9    3.2   32.5    4.4
+...
+amapiano-vibez                   677    18.8   17.7   10.5   53.0
+dubstep-edm-halftime             833    12.2   25.0    0.2   62.5
+edm-trap-electro                 808     7.9   18.2    2.2   71.7
+
+kick% spread across tracks: 60 points (8% → 68%)
+snare% spread:               39 points (3% → 42%)
+```
+
+**Verdict: STRONG.** A deterministic firmware rule on (centroid, crest) at trigger time produces real per-track variation that maps to track style. `techno-minimal-emotion` is kick-led (68% kick), `edm-trap-electro` is texture-led (72% tex), `techno-minimal-01` is snare-heavy (42% snare). This is the routing signal the parked task (#114) was after.
+
+**What this enables:** route firings to different generators/effects without retraining the model — kick-bucket firings drive bass-impact effects, snare-bucket firings drive treble-flash effects, tex-bucket firings drive ambient/textural effects.
+
+**Open questions before shipping:**
+1. **Cross-device agreement.** A single audio event produces 4 device firings; do they agree on bucket? If routing decisions disagree across the 4 LEDs, the visual will look incoherent. Quick test: pick GT onsets, find each device's firing within ±50ms, count bucket agreement.
+2. **Threshold robustness.** Population medians are fit to v33 b153 on edm/. Need to verify they hold across content the model wasn't designed around — particularly the high-flatness/high-centroid content Phase 1 flagged as failure-prone.
+3. **Firmware feasibility.** Centroid + crest are already computed per-frame in `SharedSpectralAnalysis` (lines 660, 758). Adding the bucket assignment to `TransientEvent` is straight-forward; routing the buckets to different effects is a Generator/Effect-layer change.
+
+Prototype script: `/tmp/firing_route.py`.
+
+#### Cross-device agreement (#117, 2026-04-29) — 4-bucket fails, 2-bucket passes
+
+Tested cross-device bucket agreement on 1537 multi-device GT-onset events from `/tmp/v33_b153_edm.json`. For each event, found each device's firing within ±50ms and recorded its assigned bucket. Pass criterion: ≥75% of 4-device events have ≥3/4 devices voting the same bucket.
+
+**4-bucket (centroid × crest) — FAIL @ 69.4% majority, 39.0% unanimous.** Confusion matrix shows the crest axis is the noise source: 1562 cross-crest disagreements vs 1089 cross-centroid. Per-device AGC differences move the crest factor enough that a global threshold can't survive. Symptom in practice: techno-minimal-01 (4.8% unanimous) would have devices voting kick/bass-pad/snare/tex on the same audio event.
+
+**2-bucket (centroid only) — PASS @ 89.8% majority, 67.3% unanimous.** Dropping the crest axis collapses the rule to "bass-leaning" vs "treble-leaning" but recovers cross-device coherence. Two visual channels (low-band-impact effect vs high-band-highlight effect) is what the firmware can route reliably given the same-content / different-mic-response constraint.
+
+**Decision:** ship the 2-bucket centroid rule, not the 4-bucket prototype. Crest factor remains useful as a per-device intensity modulator (peakier firings = brighter on that device's LEDs) but should not gate routing across devices.
+
+Scripts: `/tmp/firing_route_agreement.py` (4-bucket fail), `/tmp/firing_route_1axis.py` (2-bucket pass).
+
+### v34d val_peak_F1 metric shift caveat (2026-04-29)
+
+Comparing v34d to v33 via `val_peak_F1` is misleading. The two runs evaluate against *different val targets*:
+
+| run  | train labels                | val labels (the eval target) | F1 vs hand-curated GT |
+|------|-----------------------------|------------------------------|------------------------|
+| v33  | `kick_weighted_drums` (raw) | same (raw)                   | 0.657                  |
+| v34d | `kick_weighted_clean`       | same (cleaned)               | 0.745                  |
+
+v33 epoch-1 `val_peak_F1=0.65` is the model's score against val labels that are themselves only F1=0.66 vs GT — a moving target. v34d epoch-1 `val_peak_F1=0.35` is vs val labels that are F1=0.745 vs GT. The metric drop is partly an artefact of stricter eval, not pure model regression.
+
+**The apples-to-apples comparison is `evaluate.py` on edm/ with hand-curated `.onsets_consensus.json` GT, which is identical for both runs.** v33 b153 scored 0.570 there. v34d's edm/ score (post-training, post-export, post-deploy) is the comparable number — not val_peak_F1.
+
+This caveat applies to *every* future run on cleaned labels: their `val_peak_F1` will look lower than v33-era runs not because they're worse, but because the eval target is more honest. Plan headlines should track on-device edm/ F1, not val_peak_F1.
+
 ### Label audit — the actual ceiling (2026-04-28)
 
 After v34/v34b confirmed parameter tuning had hit a wall, audited every label source on disk against hand-curated `.beats.json` GT on the 18 edm/ tracks. **Result inverts the entire framing again.**
