@@ -211,9 +211,23 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
     all_results = []
 
     for audio_path in audio_files:
-        label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
+        # Onset GT is the eval target (task is onset detection, not beat
+        # detection — see CLAUDE.md). Beat .beats.json was archived
+        # 2026-04-29; the legacy fallback below is kept only so older test
+        # corpora that still have .beats.json don't error out, but it's
+        # logged at WARN to surface mis-curated corpora.
+        label_path = audio_path.parent / f"{audio_path.stem}.onsets_consensus.json"
+        is_onset_gt = True
         if not label_path.exists():
-            continue
+            legacy = audio_path.parent / f"{audio_path.stem}.beats.json"
+            if legacy.exists():
+                print(f"  WARN: {audio_path.stem} has only legacy .beats.json — "
+                      f"this is BEAT GT, not onset GT, and scores will be wrong "
+                      f"for the onset-detection task.")
+                label_path = legacy
+                is_onset_gt = False
+            else:
+                continue
 
         # Load and process (normalize RMS to match firmware AGC level)
         audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
@@ -277,10 +291,15 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         activations = all_activations[:, 0]  # ch0: onset (or kick for instrument models)
         is_instrument_model = n_out_ch >= 3
 
-        # Load ground truth beats
+        # Load ground truth. Schema differs between onset GT (`onsets_consensus.json`,
+        # the current target) and the legacy `beats.json` (kept for back-compat
+        # with old corpora; logged at WARN above).
         with open(label_path) as f:
             labels = json.load(f)
-        ref_beats = np.array([h["time"] for h in labels["hits"] if h.get("expectTrigger", True)])
+        if is_onset_gt:
+            ref_beats = np.array([o["time"] for o in labels.get("onsets", [])])
+        else:
+            ref_beats = np.array([h["time"] for h in labels["hits"] if h.get("expectTrigger", True)])
 
         # Peak-pick activations to get estimated onset times.
         # Named est_beats for legacy JSON compatibility, but these are onset
