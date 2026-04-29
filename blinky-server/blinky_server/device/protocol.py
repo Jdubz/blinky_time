@@ -207,7 +207,9 @@ class DeviceProtocol:
         if timed_out:
             log.warning(
                 "[FALLBACK] device command %r timed out after %.2fs (got %d bytes); raising",
-                command, timeout, len(result),
+                command,
+                timeout,
+                len(result),
             )
             raise TimeoutError(
                 f"Device command timed out after {timeout:.2f}s: {command!r} "
