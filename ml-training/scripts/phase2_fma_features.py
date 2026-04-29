@@ -88,9 +88,22 @@ def filter_tracks() -> pd.DataFrame:
 
 
 def load_onset_gt(track_id: int) -> np.ndarray:
-    """Load onsets_consensus times. Returns empty array if missing."""
+    """Load onsets_consensus times. Raises FileNotFoundError if missing.
+
+    filter_tracks() already filters to tracks with audio on disk, and our
+    label pipeline produces consensus alongside audio — a missing GT here
+    means upstream label generation didn't finish for this track. Surfacing
+    that via raise lets the caller decide policy (retry generation, drop
+    track, halt) rather than silently producing a corpus-wide bias toward
+    well-labeled tracks.
+    """
     p = ONSETS_DIR / f"{track_id:06d}.onsets.json"
-    if not p.exists(): return np.array([], dtype=np.float64)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"onsets_consensus missing for FMA track {track_id}: {p}. "
+            f"Either re-run generate_onset_consensus.py for this track or "
+            f"remove it from the audio corpus."
+        )
     d = json.loads(p.read_text())
     times = sorted(o['time'] for o in d.get('onsets', []))
     return np.asarray(times, dtype=np.float64)
