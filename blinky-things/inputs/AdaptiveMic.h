@@ -104,8 +104,20 @@ private:
   volatile static uint32_t s_numSamples;
   volatile static uint16_t s_maxAbs;
 
-  // FFT sample ring buffer
-  static constexpr int FFT_RING_SIZE = 512;
+  // FFT sample ring buffer.
+  //
+  // History: was 512 samples (= 32 ms at 16 kHz) until b154's overrun
+  // observability (#124) measured 5-6 overruns/sec on every device,
+  // discarding 14-17% of all audio because LED rendering and ACF spikes
+  // routinely block the main loop for >32 ms.
+  //
+  // 2048 samples (= 128 ms) gives the consumer four times the headroom
+  // — covers a 100 ms FastLED.show() plus a 4-8 ms ACF spike without
+  // overrunning. Cost: 2048 × 2 bytes = 4 KB SRAM (vs 1 KB before),
+  // well within the nRF52840's free RAM budget (~210 KB local). Power-
+  // of-two size required by the `& (FFT_RING_SIZE - 1)` index mask in
+  // getSamplesForExternal.
+  static constexpr int FFT_RING_SIZE = 2048;
   volatile static int16_t s_fftRing[FFT_RING_SIZE];
   volatile static uint32_t s_fftWriteIdx;
   static uint32_t s_extFftReadIdx;
