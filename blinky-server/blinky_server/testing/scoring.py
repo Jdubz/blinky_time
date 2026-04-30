@@ -38,8 +38,17 @@ def _compute_latency_histogram(offsets_ms: list[int]) -> LatencyHistogram | None
 
     Distinguishes tight jitter from bimodal outliers that the mean-only
     report hides.
+
+    Returns None if there are fewer than 3 offsets — a histogram with 0-2
+    bins is meaningless. This is not a silent skip in the dangerous sense:
+    the caller checks for None and the absence of histogram is itself a
+    signal (the track had almost no detections).
     """
     if len(offsets_ms) < 3:
+        log.debug(
+            "Skipping latency histogram: only %d offsets (<3 required)",
+            len(offsets_ms),
+        )
         return None
     edges = _LATENCY_BIN_EDGES
     labels: list[str] = []

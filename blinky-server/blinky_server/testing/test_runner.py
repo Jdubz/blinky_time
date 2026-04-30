@@ -37,26 +37,55 @@ async def _sync_clock(device: Device) -> float | None:
     Sends `json info` (which includes `millis` field) and measures
     round-trip time. Returns offset_ms = server_epoch_ms - firmware_millis,
     or None if sync fails.
+
+    A None return means the test session will record without a clock
+    offset, leaving firmware-timestamped events uncorrelated with server
+    audio playback timing. Each failure path now logs at WARN with
+    [FALLBACK] so the degradation is visible in normal validation logs;
+    previous DEBUG-level logging hid systemic issues (e.g. firmware build
+    that doesn't include the `millis` field at all) until per-track
+    timing analysis surfaced the misalignment downstream.
+
+    Caller stays responsible for deciding policy — typically one device
+    failing clock-sync is tolerable, but all devices failing means the
+    entire run's timing is unreliable and the caller should halt.
     """
+    t_send = time.time() * 1000
     try:
-        t_send = time.time() * 1000
         resp = await device.protocol.send_command("json info")
-        t_recv = time.time() * 1000
-
-        info = json.loads(resp)
-        fw_millis: float | None = info.get("millis")
-        if fw_millis is None:
-            return None
-
-        # Estimate firmware time at midpoint of round-trip
-        rtt = t_recv - t_send
-        server_midpoint = t_send + rtt / 2
-        offset = server_midpoint - fw_millis
-        log.debug("Clock sync %s: offset=%.0fms rtt=%.0fms", device.id[:12], offset, rtt)
-        return offset
-    except Exception as e:
-        log.debug("Clock sync failed for %s: %s", device.id[:12], e)
+    except (TimeoutError, ConnectionError) as e:
+        log.warning("[FALLBACK] clock sync %s: send_command failed: %s", device.id[:12], e)
         return None
+    t_recv = time.time() * 1000
+
+    try:
+        info = json.loads(resp)
+    except json.JSONDecodeError as e:
+        log.warning(
+            "[FALLBACK] clock sync %s: malformed json info response (%d chars): %s",
+            device.id[:12],
+            len(resp),
+            e,
+        )
+        return None
+
+    fw_millis_raw = info.get("millis")
+    if fw_millis_raw is None:
+        log.warning(
+            "[FALLBACK] clock sync %s: firmware response has no `millis` field "
+            "(keys=%s) — firmware build may pre-date b117",
+            device.id[:12],
+            sorted(info.keys()),
+        )
+        return None
+    fw_millis = float(fw_millis_raw)
+
+    # Estimate firmware time at midpoint of round-trip
+    rtt = t_recv - t_send
+    server_midpoint = t_send + rtt / 2
+    offset = server_midpoint - fw_millis
+    log.debug("Clock sync %s: offset=%.0fms rtt=%.0fms", device.id[:12], offset, rtt)
+    return offset
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
@@ -109,14 +138,30 @@ async def _record_and_play(
     Returns (playback_result, {device_id: TestData}).
     """
     sessions: dict[str, TestSession] = {}
+    sync_failures = 0
     for device in devices:
         session = device.start_test_session()
         # Sync clocks before recording starts (while streaming is active)
         offset = await _sync_clock(device)
         if offset is not None:
             session.set_clock_offset(offset)
+        else:
+            sync_failures += 1
         session.start_recording()
         sessions[device.id] = session
+
+    # If every device failed clock sync, downstream timing is unreliable for
+    # the entire test (firmware events can't be aligned with audio playback).
+    # Halt loudly rather than recording a run that looks superficially normal
+    # but produces wrong F1 numbers.
+    if devices and sync_failures == len(devices):
+        raise RuntimeError(
+            f"Clock sync failed on ALL {len(devices)} devices — every "
+            f"firmware-timestamped event will be uncorrelated with audio "
+            f"playback timing. See [FALLBACK] log lines above for the per-"
+            f"device failure mode (commonly: firmware build missing the "
+            f"`millis` field, or all devices lost connection)."
+        )
 
     try:
         playback = await play_audio(audio_file, duration_ms=duration_ms, seek_sec=seek_sec)

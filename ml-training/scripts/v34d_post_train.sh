@@ -15,6 +15,9 @@ set -euo pipefail
 # Resolve ROOT relative to this script so the pipeline works on any checkout.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 V34D_OUT="/mnt/storage/blinky-ml-data/outputs/v34d"
+# v33's training artifacts predate the move to /mnt/storage and live under
+# the in-repo outputs/ tree. We invoke evaluate.py directly (rather than via
+# `make eval`) so we can point at the right OUTPUT_DIR for v33.
 V33_OUT="${ROOT}/outputs/v33_mel_only"
 V34D_CFG="configs/conv1d_w16_onset_v34d_clean_labels.yaml"
 V33_CFG="configs/conv1d_w16_onset_v33_mel_only.yaml"
@@ -60,12 +63,18 @@ make eval \
 # v33 was previously evaluated on-device (b153 = 0.570). Rerun the OFFLINE
 # eval here so v33 + v34d are scored under the same code path, against the
 # same hand-curated onsets_consensus GT, with the post-2026-04-29 evaluator
-# fix that requires onset GT (not the legacy beat GT).
+# fix that requires onset GT (not the legacy beat GT). Invoking evaluate.py
+# directly (not `make eval`) because v33's artifacts live under the in-repo
+# outputs/ tree, not /mnt/storage.
+[ -f "${V33_OUT}/model_checkpoint.pt" ] || \
+    { echo "ERROR: v33 model_checkpoint.pt not found at ${V33_OUT}"; exit 1; }
 echo
 echo ">>> Offline eval v33 on edm/ (re-baseline under onset-GT evaluator)"
-make eval \
-    CONFIG="${V33_CFG}" \
-    RUN_NAME=v33_mel_only \
+python3 evaluate.py \
+    --config "${V33_CFG}" \
+    --model "${V33_OUT}/model_checkpoint.pt" \
+    --audio-dir "${TEST_AUDIO}" \
+    --output-dir "${V33_OUT}/eval" \
     | tee "${V33_OUT}/eval_2026_04_29.log"
 
 # ---------- Step 4: side-by-side comparison ----------
