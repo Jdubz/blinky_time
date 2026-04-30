@@ -270,23 +270,50 @@ async def _flash_fleet_background(
 
             dev_label = f"{device.id[:12]} ({device.device_name or 'unknown'})"
             job.progress = int((i / total) * 90)
-            job.progress_message = f"Flashing {dev_label} ({i + 1}/{total})"
+            base_msg = f"Flashing {dev_label} ({i + 1}/{total})"
+            job.progress_message = base_msg
             log.info("Fleet flash: %s", job.progress_message)
 
             fleet.hold_reconnect(device.id, 120)
 
+            # Per-device progress callback: surface upload phase
+            # ("Releasing port", "USB-resetting", "Running uf2_upload.py", ...)
+            # so the client polling job.progress_message can see what's
+            # actually happening instead of a static "Flashing X (3/4)".
+            # Default-arg bindings (B023): capture base_msg + job by value
+            # so a stale closure from a prior iteration cannot fire after
+            # the loop advances.
+            def _per_phase_progress(
+                phase: str,
+                msg: str,
+                pct: int | None = None,
+                _base: str = base_msg,
+                _job: Any = job,
+            ) -> None:
+                _job.progress_message = f"{_base} — {phase}: {msg}"
+
             try:
-                result = await upload_firmware(device, str(firmware))
+                result = await upload_firmware(
+                    device, str(firmware), progress_callback=_per_phase_progress
+                )
                 results[device.id[:12]] = result
                 if result.get("status") != "ok":
+                    # Continue-on-error: one flaky USB port should not block
+                    # the rest of the fleet. Record the failure and proceed
+                    # to the next device. The aggregate result.status is
+                    # still "error" if any device failed (computed below).
                     log.error(
-                        "Fleet flash STOPPED: %s failed (%s)", dev_label, result.get("message")
+                        "Fleet flash: %s failed (%s) — continuing to next device",
+                        dev_label,
+                        result.get("message"),
                     )
-                    break
             except Exception as e:
                 results[device.id[:12]] = {"status": "error", "message": str(e)}
-                log.error("Fleet flash STOPPED: %s exception: %s", dev_label, e)
-                break
+                log.error(
+                    "Fleet flash: %s exception: %s — continuing to next device",
+                    dev_label,
+                    e,
+                )
             finally:
                 device.state = DeviceState.DISCONNECTED
 

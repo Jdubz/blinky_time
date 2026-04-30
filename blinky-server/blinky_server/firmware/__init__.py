@@ -26,11 +26,17 @@ async def upload_via_uf2(
     serial_port: str,
     firmware_path: str,
     transport: Transport,
+    progress_callback: Any = None,
 ) -> dict[str, Any]:
     """Upload firmware via UF2 mass storage bootloader.
 
     For serial (USB) connected devices only. No fallback to BLE DFU —
     if UF2 fails, the error is returned and must be investigated.
+
+    progress_callback (optional): callable(phase, msg, pct) — invoked at
+    each upload phase so callers can surface fine-grained progress to
+    their own UI / job state instead of seeing one static "Flashing X"
+    line for the entire 30-180s flash duration.
     """
     from .uf2_upload import upload_uf2
 
@@ -38,12 +44,14 @@ async def upload_via_uf2(
         serial_port=serial_port,
         firmware_path=firmware_path,
         transport=transport,
+        progress_callback=progress_callback,
     )
 
 
 async def upload_firmware(
     device: Any,
     firmware_path: str,
+    progress_callback: Any = None,
 ) -> dict[str, Any]:
     """Upload firmware using the method determined by device transport.
 
@@ -54,6 +62,9 @@ async def upload_firmware(
       1. DFU recovery (device stuck in bootloader) → BLE DFU direct
       2. Serial (USB) transport → UF2 mass storage
       3. BLE transport → BLE DFU with bootloader entry over BLE
+
+    progress_callback (optional): callable(phase, msg, pct) — currently
+    only wired into the UF2 path. BLE DFU paths ignore it (yet).
     """
     from ..device.device import DeviceState
 
@@ -78,6 +89,7 @@ async def upload_firmware(
             serial_port=device.port,
             firmware_path=firmware_path,
             transport=device.transport,
+            progress_callback=progress_callback,
         )
 
     # BLE-only devices: BLE DFU with bootloader entry over BLE
