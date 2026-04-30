@@ -70,12 +70,19 @@ make eval \
     { echo "ERROR: v33 model_checkpoint.pt not found at ${V33_OUT}"; exit 1; }
 echo
 echo ">>> Offline eval v33 on edm/ (re-baseline under onset-GT evaluator)"
-python3 evaluate.py \
+mkdir -p "${V33_OUT}/eval"
+# Use ${ROOT}/evaluate.py rather than the bare relative path: the script
+# does cd "${ROOT}" at top, but defensive coding here means a future
+# refactor that moves the cd out (or runs the script in a subshell)
+# won't silently fail to find evaluate.py.
+# Log is placed inside eval/ alongside the JSON artifacts for consistency
+# (the JSON goes to "${V33_OUT}/eval/eval_results.json" via --output-dir).
+python3 "${ROOT}/evaluate.py" \
     --config "${V33_CFG}" \
     --model "${V33_OUT}/model_checkpoint.pt" \
     --audio-dir "${TEST_AUDIO}" \
     --output-dir "${V33_OUT}/eval" \
-    | tee "${V33_OUT}/eval_2026_04_29.log"
+    | tee "${V33_OUT}/eval/eval_2026_04_29.log"
 
 # ---------- Step 4: side-by-side comparison ----------
 echo

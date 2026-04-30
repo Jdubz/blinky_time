@@ -56,6 +56,24 @@ async def _sync_clock(device: Device) -> float | None:
     except (TimeoutError, ConnectionError) as e:
         log.warning("[FALLBACK] clock sync %s: send_command failed: %s", device.id[:12], e)
         return None
+    except Exception as e:
+        # Unexpected exception type from send_command (protocol-level
+        # RuntimeError, AttributeError on a partially-init device, etc).
+        # The narrow catch above intentionally only covers the two known-
+        # recoverable failure modes; catching everything would conflate
+        # "lost connection" (per-device, recoverable) with "server bug"
+        # (systemic, should bubble). Log at ERROR with the type so
+        # operators investigate, then return None so the caller's
+        # all-devices-failed-aggregator can still escalate cleanly. If
+        # every device hits this we'll see one ERROR per device + one
+        # RuntimeError from _record_and_play — the right blast radius.
+        log.error(
+            "[FALLBACK] clock sync %s: UNEXPECTED %s from send_command: %s",
+            device.id[:12],
+            type(e).__name__,
+            e,
+        )
+        return None
     t_recv = time.time() * 1000
 
     try:
