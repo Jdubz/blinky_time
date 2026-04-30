@@ -64,16 +64,28 @@ def filter_tracks() -> pd.DataFrame:
     title_col = t[('track', 'title')]
     genre_top = t[('track', 'genre_top')]
 
-    # Parse genre lists (stringified Python lists)
+    # Parse genre lists. The genres column is heterogeneous: most cells are
+    # stringified Python lists like "[181, 296]"; a small fraction are NaN
+    # (float) for tracks with no genre tags; rarely they're already lists.
+    # Skip everything that isn't a non-empty iterable of ints.
     rows = []
     for tid, gstr in genres_col.items():
-        try:
-            gids = ast.literal_eval(gstr) if isinstance(gstr, str) else gstr
-        except (SyntaxError, ValueError):
+        if isinstance(gstr, str):
+            try:
+                gids = ast.literal_eval(gstr)
+            except (SyntaxError, ValueError):
+                continue
+        elif isinstance(gstr, (list, tuple, set)):
+            gids = gstr
+        else:
+            # NaN, None, or other non-iterable scalar — track has no usable
+            # genre annotation; skip without crashing on `set(gstr)`.
             continue
-        if not gids: continue
+        if not gids:
+            continue
         matched = set(gids) & MAINSTREAM_EDM_GENRE_IDS
-        if not matched: continue
+        if not matched:
+            continue
         # Confirm audio file is on disk
         audio_path = FMA_AUDIO / f"{int(tid):06d}.mp3"
         if not audio_path.exists(): continue

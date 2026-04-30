@@ -103,11 +103,20 @@ def detect_madmom_subprocess(audio_path: Path, processor: str = "CNN") -> np.nda
 
     madmom requires Python 3.11 (venv311), so we call it as a subprocess.
     Supports CNNOnsetProcessor and RNNOnsetProcessor.
+
+    A missing venv is a *systemic* failure — every track will lose 2 of 5
+    consensus systems silently if we let it through. Raises immediately
+    rather than returning empty so the corpus build halts on first call.
     """
     venv311 = Path(__file__).parent.parent / "venv311"
     python311 = venv311 / "bin" / "python3"
     if not python311.exists():
-        return np.array([], dtype=np.float64)
+        raise RuntimeError(
+            f"madmom subprocess infrastructure missing: {python311} not found. "
+            f"Without madmom, the consensus corpus would be missing 2 of 5 "
+            f"systems on every track — refusing to proceed. Create the "
+            f"Python 3.11 venv at {venv311} and re-run."
+        )
 
     proc_class = f"{processor}OnsetProcessor"
     # Pass audio path as command-line argument to avoid string injection

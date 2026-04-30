@@ -406,25 +406,31 @@ void SharedSpectralAnalysis::computeMagnitudesAndPhases() {
     // FFT output should always be finite; non-finite values indicate
     // an upstream bug (arena overflow, ringbuffer corruption, etc.).
     // BLINKY_ASSERT_ONCE makes the first hit visible without flooding
-    // Serial if the bug fires every frame.
+    // Serial if the bug fires every frame. Each safeIsFinite result is
+    // cached and reused across the assert + fallback to keep the hot
+    // loop tight (per PR 135 review feedback).
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         float real = vReal_[i];
         float imag = vImag_[i];
 
-        BLINKY_ASSERT_ONCE(safeIsFinite(real), "FFT real non-finite");
-        BLINKY_ASSERT_ONCE(safeIsFinite(imag), "FFT imag non-finite");
-        if (!safeIsFinite(real)) real = 0.0f;
-        if (!safeIsFinite(imag)) imag = 0.0f;
+        const bool realOk = safeIsFinite(real);
+        const bool imagOk = safeIsFinite(imag);
+        BLINKY_ASSERT_ONCE(realOk, "FFT real non-finite");
+        BLINKY_ASSERT_ONCE(imagOk, "FFT imag non-finite");
+        if (!realOk) real = 0.0f;
+        if (!imagOk) imag = 0.0f;
 
         // Magnitude: sqrt(real^2 + imag^2)
         float mag = sqrtf(real * real + imag * imag);
-        BLINKY_ASSERT_ONCE(safeIsFinite(mag), "FFT magnitude non-finite");
-        magnitudes_[i] = safeIsFinite(mag) ? mag : 0.0f;
+        const bool magOk = safeIsFinite(mag);
+        BLINKY_ASSERT_ONCE(magOk, "FFT magnitude non-finite");
+        magnitudes_[i] = magOk ? mag : 0.0f;
 
         // Phase: atan2(imag, real) -> [-pi, pi]
         float phase = atan2f(imag, real);
-        BLINKY_ASSERT_ONCE(safeIsFinite(phase), "FFT phase non-finite");
-        phases_[i] = safeIsFinite(phase) ? phase : 0.0f;
+        const bool phaseOk = safeIsFinite(phase);
+        BLINKY_ASSERT_ONCE(phaseOk, "FFT phase non-finite");
+        phases_[i] = phaseOk ? phase : 0.0f;
     }
 }
 

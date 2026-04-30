@@ -175,7 +175,12 @@ class DeviceProtocol:
     async def _send_and_collect(self, command: str, timeout: float) -> str:
         """Send command and accumulate response lines until a silence gap.
 
-        Raises TimeoutError if the device produces no response within ``timeout``.
+        Raises TimeoutError if the response is not finalized within
+        ``timeout`` — i.e. the response_event was never set, regardless of
+        whether partial lines arrived. The buffer length is reported in the
+        TimeoutError message so callers can distinguish "no reply at all"
+        from "reply arrived but never terminated."
+
         Callers that want best-effort semantics (e.g. cleanup paths that fire
         commands at potentially-disconnected devices) must wrap in try/except.
         Silently swallowing the timeout was the root cause of the "stale

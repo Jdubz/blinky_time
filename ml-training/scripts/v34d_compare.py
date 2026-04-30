@@ -68,7 +68,7 @@ def main() -> int:
             "est_cand": c.get("est_beats", 0),
         })
 
-    print(f"{'track':<32} {'ref':>5} {'F1_base':>8} {'F1_cand':>8} {'Δ':>+7} {'est_b':>6} {'est_c':>6}")
+    print(f"{'track':<32} {'ref':>5} {'F1_base':>8} {'F1_cand':>8} {'Δ':>7} {'est_b':>6} {'est_c':>6}")
     print("-" * 80)
     for r in sorted(rows, key=lambda r: r["delta"]):
         sign = "↓" if r["delta"] < -0.01 else ("↑" if r["delta"] > 0.01 else " ")
