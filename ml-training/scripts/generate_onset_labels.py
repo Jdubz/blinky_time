@@ -61,7 +61,15 @@ def process_track(args: tuple[Path, Path]) -> str | None:
             json.dump(result, f)
         return audio_path.stem
     except Exception as e:
-        print(f"ERROR processing {audio_path.stem}: {e}", file=sys.stderr)
+        # Per-track librosa failure (corrupt audio, decode error, OOM on huge
+        # WAV, etc.). We tolerate this individually but the aggregate is
+        # checked in main() and >5% failure raises so a corpus-wide problem
+        # (e.g., librosa version mismatch) doesn't silently produce a label
+        # corpus with random gaps.
+        import traceback
+        print(f"[FALLBACK] track {audio_path.stem} librosa onset_detect FAILED: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return None
 
 
@@ -155,7 +163,15 @@ def main():
     print(f"\nDone! Processed {successful} tracks in {elapsed:.1f}s "
           f"({successful / elapsed:.1f} tracks/s)")
     if errors > 0:
-        print(f"  {errors} tracks failed (see ERROR messages above)")
+        print(f"  {errors} tracks failed (see [FALLBACK] messages above)")
+        fail_rate = errors / max(1, done)
+        if fail_rate > 0.05:
+            raise RuntimeError(
+                f"Onset label generation failed for {errors}/{done} tracks "
+                f"({100*fail_rate:.1f}% > 5% threshold). This is systemic — "
+                f"refusing to declare success on a degraded label corpus. "
+                f"Investigate the failures listed above before re-running."
+            )
 
     # Final count
     total_outputs = len(list(output_dir.glob("*.onsets.json")))

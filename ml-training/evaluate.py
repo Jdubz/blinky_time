@@ -211,9 +211,21 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
     all_results = []
 
     for audio_path in audio_files:
-        label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
+        # Onset GT is the only valid eval target (task is onset detection,
+        # not beat detection — see CLAUDE.md). No .beats.json fallback:
+        # beat GT measures the wrong target and would silently poison the
+        # comparison. No silent skip on missing GT either: if an audio
+        # file made it into audio_files there must be a paired onset GT,
+        # otherwise the corpus is mis-curated and we want to halt.
+        label_path = audio_path.parent / f"{audio_path.stem}.onsets_consensus.json"
         if not label_path.exists():
-            continue
+            raise FileNotFoundError(
+                f"Onset GT missing for {audio_path}: expected {label_path}.\n"
+                f"Every audio file in the eval corpus must have a paired "
+                f"`.onsets_consensus.json`. Beat `.beats.json` is NOT a valid "
+                f"substitute (the deployment task is onset detection). Re-curate "
+                f"the corpus or remove the audio file before running eval."
+            )
 
         # Load and process (normalize RMS to match firmware AGC level)
         audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
@@ -277,10 +289,15 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         activations = all_activations[:, 0]  # ch0: onset (or kick for instrument models)
         is_instrument_model = n_out_ch >= 3
 
-        # Load ground truth beats
+        # Load onset GT. Schema is `{"onsets": [{"time": float, ...}, ...]}`.
         with open(label_path) as f:
             labels = json.load(f)
-        ref_beats = np.array([h["time"] for h in labels["hits"] if h.get("expectTrigger", True)])
+        ref_beats = np.array([o["time"] for o in labels["onsets"]])
+        if ref_beats.size == 0:
+            raise ValueError(
+                f"Onset GT for {audio_path} is empty: {label_path}. "
+                f"An empty GT would silently produce F1=0 — refusing to eval."
+            )
 
         # Peak-pick activations to get estimated onset times.
         # Named est_beats for legacy JSON compatibility, but these are onset

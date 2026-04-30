@@ -402,22 +402,35 @@ void SharedSpectralAnalysis::computeFFT() {
 
 void SharedSpectralAnalysis::computeMagnitudesAndPhases() {
     // Compute magnitude and phase for each frequency bin
-    // Only need first half (bins 0 to NUM_BINS-1) due to symmetry
+    // Only need first half (bins 0 to NUM_BINS-1) due to symmetry.
+    // FFT output should always be finite; non-finite values indicate
+    // an upstream bug (arena overflow, ringbuffer corruption, etc.).
+    // BLINKY_ASSERT_ONCE makes the first hit visible without flooding
+    // Serial if the bug fires every frame. Each safeIsFinite result is
+    // cached and reused across the assert + fallback to keep the hot
+    // loop tight (per PR 135 review feedback).
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         float real = vReal_[i];
         float imag = vImag_[i];
 
-        // Safety: Check for NaN/Inf from FFT output
-        if (!safeIsFinite(real)) real = 0.0f;
-        if (!safeIsFinite(imag)) imag = 0.0f;
+        const bool realOk = safeIsFinite(real);
+        const bool imagOk = safeIsFinite(imag);
+        BLINKY_ASSERT_ONCE(realOk, "FFT real non-finite");
+        BLINKY_ASSERT_ONCE(imagOk, "FFT imag non-finite");
+        if (!realOk) real = 0.0f;
+        if (!imagOk) imag = 0.0f;
 
         // Magnitude: sqrt(real^2 + imag^2)
         float mag = sqrtf(real * real + imag * imag);
-        magnitudes_[i] = safeIsFinite(mag) ? mag : 0.0f;
+        const bool magOk = safeIsFinite(mag);
+        BLINKY_ASSERT_ONCE(magOk, "FFT magnitude non-finite");
+        magnitudes_[i] = magOk ? mag : 0.0f;
 
         // Phase: atan2(imag, real) -> [-pi, pi]
         float phase = atan2f(imag, real);
-        phases_[i] = safeIsFinite(phase) ? phase : 0.0f;
+        const bool phaseOk = safeIsFinite(phase);
+        BLINKY_ASSERT_ONCE(phaseOk, "FFT phase non-finite");
+        phases_[i] = phaseOk ? phase : 0.0f;
     }
 }
 
@@ -496,6 +509,10 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
         logEnergy = (logEnergy + SpectralConstants::MEL_DB_RANGE)
                   / SpectralConstants::MEL_DB_RANGE;
 
+        // bandEnergy passed silenceThreshold above (>=1e-6), so logEnergy
+        // should be finite. Non-finite here means a magnitude poisoned the
+        // band sum upstream — log once per power-cycle.
+        BLINKY_ASSERT_ONCE(safeIsFinite(logEnergy), "mel logEnergy non-finite");
         outputMelBands[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
     }
 }
@@ -609,8 +626,11 @@ void SharedSpectralAnalysis::applyCompressor() {
     float alpha = (gainDb < smoothedGainDb_) ? attackAlpha : releaseAlpha;
     smoothedGainDb_ += alpha * (gainDb - smoothedGainDb_);
 
-    // Apply linear gain to all magnitudes
+    // Apply linear gain to all magnitudes. Non-finite linearGain indicates
+    // smoothedGainDb_ went out of physical range — almost always means the
+    // compressor input was non-finite earlier. Log once.
     float linearGain = powf(10.0f, smoothedGainDb_ / 20.0f);
+    BLINKY_ASSERT_ONCE(safeIsFinite(linearGain), "compressor linearGain non-finite");
     if (!safeIsFinite(linearGain)) linearGain = 1.0f;
 
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
@@ -655,9 +675,21 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
         magSum += mag;
     }
 
+    // Total spectral energy. NaN/Inf here would mean magnitudes_[] contains
+    // non-finite values — an upstream bug (FFT/compressor/whitening). The
+    // safeIsFinite-guard prevents NaN propagation into the NN input window;
+    // BLINKY_ASSERT_ONCE makes the bug visible without flooding Serial.
+    BLINKY_ASSERT_ONCE(safeIsFinite(energy), "totalEnergy non-finite");
     totalEnergy_ = safeIsFinite(energy) ? energy : 0.0f;
 
-    // Spectral centroid (center of mass, in Hz)
+    // Spectral centroid (center of mass, in Hz). Two cases land in the else
+    // branch:
+    //   1. magSum == 0  — legitimate denormal case (true silence has no
+    //      spectral mass; centroid is undefined and 0 is the correct sentinel).
+    //      No log on this path.
+    //   2. !safeIsFinite(weightedSum) — upstream-bug case (mirror of
+    //      totalEnergy above). Logged via BLINKY_ASSERT_ONCE.
+    BLINKY_ASSERT_ONCE(safeIsFinite(weightedSum), "centroid weightedSum non-finite");
     if (magSum > 0.0f && safeIsFinite(weightedSum)) {
         float centroidBin = weightedSum / magSum;
         spectralCentroid_ = centroidBin * SpectralConstants::BIN_FREQ_HZ;
@@ -792,10 +824,16 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
         magFloorSum += magFloor;
     }
 
+    // Pre-whitened raw shape features. magSum<=1e-10 / energySum<=1e-10 are
+    // legitimate denormal cases (quiet frames over the FIRST..LAST band slice);
+    // !safeIsFinite branches are upstream bugs and get logged via
+    // BLINKY_ASSERT_ONCE. Same separation as computeDerivedFeatures.
+    BLINKY_ASSERT_ONCE(safeIsFinite(weightedSum), "rawCentroid weightedSum non-finite");
     rawCentroid_ = (magSum > 1e-10f && safeIsFinite(weightedSum))
         ? (weightedSum / magSum)
         : 0.0f;
 
+    BLINKY_ASSERT_ONCE(safeIsFinite(energySum), "rawCrest energySum non-finite");
     if (energySum > 1e-10f && safeIsFinite(energySum)) {
         float rms = sqrtf(energySum / static_cast<float>(N));
         rawCrest_ = (rms > 1e-10f) ? (peakMag / rms) : 0.0f;
@@ -803,6 +841,7 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
         rawCrest_ = 0.0f;
     }
 
+    BLINKY_ASSERT_ONCE(safeIsFinite(hfcSum), "rawHFC hfcSum non-finite");
     rawHFC_ = safeIsFinite(hfcSum) ? hfcSum : 0.0f;
 
     // Raw flatness — Wiener entropy on floored mags over ALL bins. Matches

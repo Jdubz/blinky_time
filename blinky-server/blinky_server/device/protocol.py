@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -174,7 +173,20 @@ class DeviceProtocol:
         await self._transport.write_line(line)
 
     async def _send_and_collect(self, command: str, timeout: float) -> str:
-        """Send command and accumulate response lines until a silence gap."""
+        """Send command and accumulate response lines until a silence gap.
+
+        Raises TimeoutError if the response is not finalized within
+        ``timeout`` — i.e. the response_event was never set, regardless of
+        whether partial lines arrived. The buffer length is reported in the
+        TimeoutError message so callers can distinguish "no reply at all"
+        from "reply arrived but never terminated."
+
+        Callers that want best-effort semantics (e.g. cleanup paths that fire
+        commands at potentially-disconnected devices) must wrap in try/except.
+        Silently swallowing the timeout was the root cause of the "stale
+        settings corrupt tests" failure mode — a missed `defaults` reply let
+        validation runs proceed against prior-experiment settings.
+        """
         self._response_buf.clear()
         self._pending = True
         self._cancelled = False
@@ -182,8 +194,11 @@ class DeviceProtocol:
 
         await self._raw_send(command)
 
-        with contextlib.suppress(TimeoutError):
+        timed_out = False
+        try:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
+        except TimeoutError:
+            timed_out = True
 
         self._pending = False
 
@@ -193,6 +208,23 @@ class DeviceProtocol:
 
         result = "\n".join(self._response_buf)
         self._response_buf.clear()
+
+        if timed_out:
+            # `result` is the joined str of newline-delimited response lines, so
+            # `len(result)` is character count, not raw byte count. Worded
+            # accordingly — distinguishes "no reply at all" (0 chars) from
+            # "reply arrived but never terminated" (>0 chars).
+            log.warning(
+                "[FALLBACK] device command %r timed out after %.2fs (got %d response chars); raising",
+                command,
+                timeout,
+                len(result),
+            )
+            raise TimeoutError(
+                f"Device command timed out after {timeout:.2f}s: {command!r} "
+                f"(partial response: {len(result)} chars)"
+            )
+
         return result
 
     def _handle_line(self, line: str) -> None:

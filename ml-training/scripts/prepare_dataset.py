@@ -939,16 +939,41 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                         if kw_types[nearest_idx] == "hihat":
                             beat_strengths[i] = 0.0
     else:
+        # Default fallback: load timestamps from a "hits" array in label_path.
+        # SAFETY: this codepath has historically been used for both onset-style
+        # labels and beat-consensus labels with identical schema, which silently
+        # injected beat-detection bias when the labels_dir pointed at a beat
+        # tracker output. The task is ONSET detection (see CLAUDE.md "Task is
+        # onset detection, not beat detection"). Refuse to load if the path
+        # name marks the labels as beat-only.
+        ld = str(label_path).lower()
+        if any(marker in ld for marker in ('consensus_v', 'consensus-3sys',
+                                            'consensus-combined', 'beat_this',
+                                            'beatnet', 'demucs_beats', 'allin1')):
+            raise ValueError(
+                f"Refusing to load beat-consensus labels for onset training: "
+                f"{label_path}\n"
+                f"This directory contains beat tracker output (4-on-the-floor "
+                f"metrical positions), not onset events. Loading it would teach "
+                f"the model to fire only on beats, which is not the deployment "
+                f"task. Point --labels-dir at an onset-labeled directory "
+                f"(onsets_consensus/, kick_weighted_drums/, etc.). See CLAUDE.md."
+            )
         with open(label_path) as f:
             labels = json.load(f)
         hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
+        # Note: variable kept as `beat_times` for downstream-compat with the
+        # rest of this function. These are ONSET times when the path is an
+        # onset directory; the variable name is a legacy from when this code
+        # also supported beat targets (now refused above).
         beat_times = np.array([h["time"] for h in hits])
         beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
 
     results = []
 
     # Time-stretch factors: original speed + stretched variants when augmenting.
-    # Resample-based stretch changes pitch (fine for beat detection).
+    # Resample-based stretch changes pitch (fine for onset detection — onsets
+    # happen at the same scaled times regardless of pitch).
     # Diversifies BPM distribution — training data is 33.5% at 120-140 BPM.
     time_stretch_factors = [1.0]
     if augment:
@@ -1576,9 +1601,16 @@ def main():
             print(f"WARNING: Duplicate stem '{af.stem}' — skipping {af}", file=sys.stderr)
             continue
         seen_stems.add(af.stem)
+        # Marker file just needs to exist for the audio to enter the trainset;
+        # the actual label content is loaded later from the labels_type-specific
+        # dir (kick_weighted_dir / onset_consensus_dir / etc.). We accept any of
+        # the historical marker shapes so we can drop legacy beat-tracker
+        # symlinks in labels/combined without breaking pairing.
         label_candidates = [
             af.parent / f"{af.stem}.beats.json",
             labels_dir / f"{af.stem}.beats.json",
+            labels_dir / f"{af.stem}.onsets.json",
+            labels_dir / f"{af.stem}.kick_weighted.json",
         ]
         for lf in label_candidates:
             if lf.exists():

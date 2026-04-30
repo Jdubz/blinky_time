@@ -1,5 +1,21 @@
 # ML Training Improvement Plan
 
+> **2026-04-29 active run: v34d (clean ONSET labels)**
+>
+> | field | value |
+> |-------|-------|
+> | hypothesis | drum-stem bleed (~30% of `kick_weighted_drums` onsets are FP per audit on edm/) is a meaningful contributor to the v33 ceiling. Filtering kw against full-mix onsets_consensus (>=2 systems, ±70ms) raises label F1 vs hand-curated GT from 0.657 → 0.745 in the audit; training on those cleaner labels should narrow the gap to publishable detectors |
+> | single-axis change vs v33 | ONLY the label source. Mel config (50 bands, fmin=30, fmax=8000), `target_rms_db=-72`, gain augmentation, model architecture, loss, all match v33 exactly |
+> | training status | running in tmux `v34d_train` since 2026-04-29 11:41; ~14 min/epoch; current best at epoch 14 (`val_peak_F1=0.394`); patience 15 |
+> | val_peak_F1 caveat | not directly comparable to v33's val_peak_F1 — v33 evaluated against noisy kw labels (F1=0.66 vs hand-curated GT), v34d against cleaner ones (F1=0.74). See "v34d val_peak_F1 metric shift caveat" section |
+> | apples-to-apples gate | `make eval` on edm/ with `.onsets_consensus.json` GT, run for both v33 and v34d post-train. Driver: `scripts/v34d_post_train.sh` (chains export → tflite size check → eval(v34d) → eval(v33) → comparison) |
+> | falsifiable predictions | (1) candidate mean F1 on edm/ exceeds v33 by ≥0.02 (audit suggested +0.09, accept anything ≥0.02 as a real lift); (2) precision rises more than recall; (3) tflite size ≤27 KB (architecture unchanged); (4) export INT8 std ≥0.30 (no activation collapse) |
+> | negative-result triggers | (a) candidate F1 on edm/ within ±0.02 of v33 → label cleanup didn't help, the ceiling is not label noise; (b) precision drops or stays flat → cleaner labels also broke something; (c) export std <0.20 → INT8 collapse; revert and investigate why cleaner labels destabilized quantization |
+> | what to NOT do | trust val_peak_F1 alone as the headline; report numbers without specifying which GT they're against; carry the "training is slower than v33" interpretation into post-eval analysis (it's a metric-shift, not a model-quality, signal) |
+> | follow-ups gated on this run | #72 multi-channel instrument model (only after v34d's clean labels prove out); #115 Phase 2 FMA scaling (needs v34d trained + deployed); #117 firing-routing rule on (centroid, crest) (parallel — already validated cross-device agreement at 90% on 2-bucket); deployment to fleet pending eval lift confirmation |
+>
+> Commit chain: prep + clean labels + diagnostics (e0e13088) → NaN logging (a93361f3) → eval onset-GT fix (a8af902e, da4d4485) → label-gen silent-fallback fixes (2dbdac01).
+>
 > **2026-04-27 corpus reset:** `edm_holdout/` (the GiantSteps LOFI adversarial corpus) was deleted entirely. Multiple regressions came from using adversarial content as the headline F1 metric and chasing model fixes for problems that were partly content-difficulty. **The only validation corpus going forward is `blinky-test-player/music/edm/` (18 tracks).** All historical F1 numbers in this doc that mention `edm_holdout` should be read as "measured on adversarial content that no longer informs decisions." See CLAUDE.md "CRITICAL: Validation Corpus".
 >
 > The GiantSteps LOFI tracks are still in the *training* corpus (they always were — `Makefile` symlinks them via `giantsteps-tempo-dataset/audio/*.mp3`); they're no longer treated as a separate evaluation set. The held-out role moves to a tier-1 subset of `edm/` once tier-1 is defined.
@@ -760,6 +776,258 @@ This sits between v33 (-72) and v34 (-30) and tests whether the calibration dire
 - Offline val_peak_F1 ≥ 0.66 (between v33's 0.69 and v34's 0.63)
 - On-device F1 on edm/ ≥ v33's 0.570 (acceptance bar)
 - On-device NN activation mean ≤ 0.40 (vs v34's 0.45 — note: this is the model's *output* activation distribution measured during validation, not the training mel mean)
+
+### 2026-04-29 — beat-detection confusion cleaned up
+
+The v34/v34b/v34c sequence was muddled by a long-standing confusion between **onset detection** (the actual deployment task — fire on every percussive event) and **beat detection** (firing only on metrical positions). Three artifacts created and propagated this confusion:
+
+1. **`labels_dir` defaulted to `consensus_v5` in `base.yaml`** — beat consensus from `allin1`, `beat_this`, `beatnet`, `demucs_beats`, plus the BPM half of madmom. Any training run that didn't explicitly override `labels_dir` was being trained against beat targets without the config making that visible.
+
+2. **Eval ground-truth files in `blinky-test-player/music/edm/` were named `.beats.json`** — but the validation harness was actually scoring against `.onsets_consensus.json` (when present, since `scoring.py:315-331`). All 18 edm/ tracks had both files. The misnaming meant our offline label audits compared training labels to `.beats.json` (wrong reference) and produced misleading F1 numbers — the actual on-device F1=0.570 was always against onsets, not beats.
+
+3. **Internal variable names (`beat_times`, `beat_strengths`)** in `prepare_dataset.py` and `train.py` were used for any timestamp source — onset OR beat — making code review unable to tell whether a particular run was beat- or onset-targeted.
+
+**Cleanup landed 2026-04-29 (this commit and the next):**
+- `base.yaml` `labels_dir` now points at `onsets_consensus`. Every training run gets onset targets unless explicitly overridden.
+- `prepare_dataset.py` default-fallback branch raises if the labels path matches a beat-tracker marker (`consensus_v*`, `beat_this`, `beatnet`, `demucs_beats`, `allin1`).
+- `consensus_v2/v3/v4/v5` and the older `consensus`, `consensus-3sys`, `consensus-combined` label directories moved out of `/mnt/storage/blinky-ml-data/labels/` into `_archive_beats_2026_04_29/`. The training pipeline can no longer find them at the canonical path.
+- `.beats.json` files in `blinky-test-player/music/edm/` archived under `blinky-test-player/music/_archive_beats_gt/`. The eval harness now requires `.onsets_consensus.json` (which all 18 tracks had).
+- `track_discovery.py` and `load_ground_truth` rewritten to find onset GT directly. The legacy beat-consensus loader path no longer exists.
+- `Makefile` `LABELS_CONSENSUS` retained as alias of `LABELS_ONSETS` (= `onsets_consensus`) so out-of-tree scripts don't crash.
+- `annotate-beats.py` archived; not used in any active pipeline.
+- v34c config and 200+ GB of beat-trained processed data removed from disk.
+- `CLAUDE.md` adds an explicit "Task is Onset Detection, Not Beat Detection" section.
+
+**v33 b153 (deployed) re-audited against the correct reference:**
+
+```
+source                                 F1@100   P     R      density (vs onsets_consensus.json)
+kick_weighted (current train)           0.657   0.65  0.72   1.21
+onsets_consensus all (= GT itself)      1.000   1.00  1.00   1.00
+onsets_consensus ≥2                     0.974   1.00  0.95   0.95
+onsets_consensus ≥3                     0.893   1.00  0.81   0.81
+onsets_consensus ≥4                     0.672   1.00  0.51   0.51
+onsets_consensus ≥5                     0.563   1.00  0.40   0.40
+consensus_v5 (BEATS — wrong type)       0.549   0.74  0.45   0.64
+```
+
+`kick_weighted` matches eval GT at F1=0.657 (not the 0.577 my earlier audit reported against the wrong `.beats.json` reference). v33's on-device F1=0.570 sits ~0.09 below this label ceiling — narrower than the 0.12 gap we'd been chasing.
+
+### v34b result + entire framing overturned (2026-04-28)
+
+v34b plateaued at val_peak_F1=0.477 by epoch 4 — far below v34's 0.627, far below v33's 0.690. Every attempt to "fix" the sim-to-real gap by raising target_rms_db has made things worse. Stopped at epoch 7.
+
+Stepped back and ran two parity tests with existing tooling:
+
+**Test 1: offline peak-picker on the v33 b153 on-device activation stream** (`/tmp/v33_b153_edm.json` from #97). Train-time `_peak_pick_1d` (simple local-max + threshold + 50 ms cooldown) applied to the recorded device activations:
+
+```
+                          F1 (mean across 18 edm/ tracks × 4 devices)
+firmware peak-picker      0.570  ← what we measured as on-device
+offline _peak_pick_1d     0.298  @ thr=0.20
+                          0.323  @ thr=0.30
+                          0.370  @ thr=0.40
+```
+
+The firmware peak-picker (bass gate + PLP bias + tempo-adaptive cooldown) is **adding +0.20-0.27 F1** vs simple local-max picking on the same activation stream. The complex gating works.
+
+**Test 2: offline `evaluate.py` on edm/ corpus directly** (mel computed offline by training pipeline, simple peak-picker applied). Aggregate F1 ≈ 0.45 across the 18 tracks. Firmware F1=0.570 on the same content. **Firmware beats offline by +0.12 F1** thanks to its peak-picker.
+
+### What the val_peak_F1=0.690 number actually was
+
+`val_peak_F1` during v33 training was measured on the **15% val_split of the *training* corpus** (`val_split: 0.15` in base.yaml). The edm/ corpus is excluded from training entirely. **These are different test sets.** The "0.690 offline → 0.570 on-device" delta is *not* a deployment loss — it's a content-difficulty gap between in-distribution training-val and held-out edm/, plus the simple-vs-complex picker delta going in our favor.
+
+### v33 b153 is performing optimally — there is no "sim-to-real gap" to close
+
+- Offline-on-edm/ with simple picker: **~0.45**
+- On-device (firmware peak-picker): **0.570**
+- Firmware adds +0.12 F1 on top of what the model output supports offline
+
+The on-device system is **outperforming a straightforward offline evaluation on the same content.** v34/v34b were chasing a phantom — there was no input-distribution gap to close because the firmware was already extracting more value from the model than offline tools assume.
+
+### Things now disproven (do not retry)
+
+- Raising `target_rms_db` to "match device level" — 2 experiments, both regressed
+- "Sim-to-real input distribution alignment" framing — based on mis-comparing different test sets
+- The April 14 base.yaml comment claiming `target_rms_db=-72` calibrates to device mel mean=0.775 — re-measured 2026-04-27, training mel mean at -72 is actually 0.37; either the original measurement was on the conditioned variant, or the calibration drifted across the 26→50 mel pipeline change. v33 worked despite this miscalibration.
+- Reading `val_peak_F1` reported during training as comparable to firmware F1 on held-out content — they're on different test sets.
+
+### Real next experiments
+
+Ranked by evidence basis after 2026-04-28 peak-picker parity tests:
+
+1. **Firmware peak-picker tuning sweep** — bass gate, PLP confidence threshold, cooldown. Currently adds +0.12 F1 over simple offline picker; tuning could find a better operating point. Cheap (no retraining), uses existing `param-sweep` tooling. **Highest expected ROI.**
+2. **Cleaner training labels** (#72-blocker) — `kick_weighted` from demucs has 32% bleed contamination per HYBRID_FEATURE_ANALYSIS_PLAN.md. Cleaner targets directly improve offline F1, which firmware lifts further. ~few days of label-side work.
+3. **Recompute v33's actual offline-on-edm/ ceiling with the firmware-style peak-picker logic** (bass gate + PLP bias). If we can reproduce ~0.57 offline using the firmware-equivalent picker in `analysis/peak_picker.py` (#35), we have a fast offline iteration loop instead of the 30+ min per-experiment device-validation cycle.
+
+### Peak-picker tuning result (2026-04-28) — ceiling reached
+
+#1 above ran. Sweep `pulseonsetfloor ∈ {0.10, 0.15, 0.20, 0.25, 0.30, 0.40}` on 8 representative tracks looked like thr=0.25 won by +0.049. Full-corpus all-device validation showed the gain was **noise** — aggregate F1 0.570 → 0.570, median 0.581 → 0.581, q25 0.493 → 0.497, min 0.365 → 0.373. Per-track distribution: 9 improved / 7 regressed / 2 flat at thr=0.25, magnitudes cancel.
+
+**Why the sweep result was noise:** param-sweep batches values across devices (each threshold tested on essentially one device). With per-device F1 spread of ~0.054 (062CBD12EB69=0.596 vs ABFBC41283E2=0.542), and per-track variance comparable, single-device sweep results are dominated by which device received which value.
+
+**Correlation between baseline track features and Δ F1 at thr=0.25:** all |r| < 0.10 (random-noise level). Features tested: baseline F1, P, R, onset rate, refOnsets, density. **No observable feature predicts whether a track benefits from a higher or lower threshold** at our current corpus size.
+
+**Consequence:** further global-parameter sweeps (`bass_gate_max_boost`, `plp_bias_*`, etc.) will face the same ~0.05 noise floor at this corpus size. Global-threshold tuning has hit its ceiling. `pulseOnsetFloor=0.20` stays as default.
+
+### Parked plan: content-adaptive thresholding (do AFTER cleaner labels land)
+
+The data above shows: a single global threshold can't capture per-track optima, AND we can't predict the optimum from features observable in 18 tracks. Two things must change before adaptive thresholding is worth pursuing:
+
+1. **Larger validation corpus** — to fit a feature → threshold mapping that generalizes beyond 18 tracks. **FMA-medium Electronic subset is already on disk** at `/mnt/storage/blinky-ml-data/audio/fma/`: 6093 Electronic-tagged tracks. The mainstream-EDM sub-tags (Techno 155, House 55, Dubstep 36, DnB 2, Dance 57, Breakcore 50, Trip-Hop 79, Downtempo 25, Ambient Electronic 74, Glitch 58, IDM 19, Minimal Electronic 32, total ~640) are a 35× larger curated EDM corpus than our current 18 tracks. Excludes Chip Music (312) as non-relevant. **No download needed; just filter + apply algorithmic GT (madmom DBN beat tracker, confidence-filtered).**
+
+2. **Audio features that actually predict beat-detection difficulty** — per Schlüter '14 / Beat This! '24 / MIREX analyses, the strongest predictors are: onset density + IOI CV (strongest single predictor), harmonic-to-percussive ratio (HPSS), spectral flux variance, crest factor, bass dominance. BPM is weak. We already capture spectral flux (`v.raw_flux`), crest (`v.crest`), centroid (`v.centroid`) per frame in persist_raw `signal_frames`, plus onset density and BPM at the track level. **Missing only HPR (needs HPSS pass on audio) and bass dominance ratio (needs mel band capture during validation, currently only in `stream nn` mode).**
+
+#### Staged plan when this is unparked
+
+**Phase 1 — feature ↔ F1 correlation on existing 18 tracks (~1 day):**
+Compute {onset_density, IOI_CV, HPR, spectral_flux_std, crest, BPM, bass_dom} per track from existing `/tmp/v33_b153_edm.json` + the 18 audio files. Correlate against per-track F1 from b153 validation. Outcome:
+- *Strong correlation found* (|r| > 0.4 on 1-2 features) → Phase 2 is worthwhile
+- *No strong correlation* → 18 tracks aren't enough OR features don't predict at this scale OR adaptive isn't tractable. Drop the direction.
+
+**Phase 2 — repeat on FMA Electronic subset (~3-5 days):**
+Run madmom DBN on the ~640 mainstream-EDM FMA tracks; confidence-filter to ~200-500. Compute the same features. If Phase 1's correlation holds at scale, fit a feature → threshold mapping.
+
+**Phase 3 — implement adaptive rule in firmware (~1-2 weeks):**
+Implement chosen feature in firmware, build the runtime threshold-modulation rule, deploy, validate on edm/ + the FMA-derived held-out set.
+
+#### Why this is parked
+
+Cleaner training labels (#72, blocked) is the higher-priority near-term work. The peak-picker parity test showed that firmware peak-picker adds +0.12 F1 over offline; that lift amplifies any model-side improvement. Labels with 32% bleed contamination → cleaner labels → higher offline F1 → higher on-device F1 (with the +0.12 firmware lift on top). That's a more direct path than per-track threshold tuning at our current corpus size.
+
+Phase 1 of the adaptive direction is also independently useful as a **diagnostic asset** — even if we don't pursue adaptive thresholding, knowing which features predict difficulty tells us *which content the system handles well/poorly*. Worth doing once labels are in flight.
+
+#### Phase 1 results (2026-04-29) — strong signal, Phase 2 unparked
+
+Ran on `/tmp/v33_b153_edm.json` (v33 b153 capture, 18 edm/ tracks, mean F1=0.570 std=0.089) while v34d prep was running. Per-track features aggregated across 4 devices, correlated against mean f1_100ms.
+
+```
+feature           pearson_r  spearman   note
+ioi_mean_ms        -0.687    -0.488     sparse rhythms hurt
+flatness_mean      -0.524    -0.635     noisy/textural content hurts
+nn_std             +0.527    +0.593     runtime confidence proxy
+centroid_mean      -0.385    -0.480     treble-heavy content hurts
+crest_mean         +0.371    +0.410     peaky transients help
+onset_density      +0.350    +0.375     dense rhythms easier
+ioi_cv             -0.016    -0.350     mild
+rolloff_mean       -0.122    -0.304     mild
+flux_std/mean      -0.139/-0.20  +0.04/+0.10  none
+```
+
+**Five features cleared |r|>0.4 (Pearson or Spearman). Phase 2 (FMA Electronic scaling) is worthwhile.** Three independent signals point the same way: `flatness↑ + centroid↑ + ioi_mean↑` all predict lower F1 — the model struggles with sparse, treble-heavy, textural content (think pads, ambient passages, hi-hat-led grooves). Conversely it handles dense, bass-heavy, peaky transient content well.
+
+**Two actionable angles independent of Phase 2:**
+
+1. **`nn_std` as a runtime confidence metric.** It's purely model-output variance — no audio analysis, free at inference time. Strong correlation (r=+0.53) with track-level F1. Could feed a runtime "model is uncertain → tighten threshold or fall back to peak-picker" rule without any feature plumbing. Cheaper to ship than centroid-based adaptive thresholding.
+
+2. **Training-data composition signal.** The harmonic/textural content the model fails on (high flatness, high centroid) probably maps to FMA tracks the htdemucs drum-stem path produces noisy bleed for. v34d's stem-vs-mix consensus filter should have caught most of this, but the same content categories should be over-represented when picking validation tier-2 tracks for v34d evaluation.
+
+**Phase 2 plan now active**: Run madmom DBN on the ~640 FMA Electronic tracks, confidence-filter to ~200-500, repeat the correlation. If `flatness_mean` and `nn_std` hold at scale, fit a feature → threshold mapping. Phase 1 script: `/tmp/phase1_feature_f1_corr.py`. Results JSON: `/tmp/phase1_results.json`.
+
+### Firing-routing prototype (#114, 2026-04-29) — strong per-track signal
+
+Re-framing the parked classification idea. The earlier TP-vs-FP question (`/tmp/firing_classify.py`) found AUC≈0.50 — features at firing time can't *gate* firings. But the *routing* question — "do features split firings into perceptually distinct buckets that map to different visual effects?" — has a clean signal.
+
+Two-axis rule on (centroid, crest) at firing time, thresholds = population medians of the v33 b153 capture (cen=20.06, crest=7.81):
+
+| quadrant | crest | centroid | label |
+|----------|-------|----------|-------|
+| LB·HC    | high  | low      | kick  |
+| HB·HC    | high  | high     | snare |
+| LB·LC    | low   | low      | bass-pad |
+| HB·LC    | low   | high     | tex (textural) |
+
+**Result on 18 edm/ tracks, 13991 firings:**
+
+```
+track                              n     kick%  snare%  bass%   tex%
+techno-minimal-emotion           855    67.6   18.4    3.7   10.3
+reggaeton-fuego-lento            727    61.9   12.8   15.0   10.3
+techno-deep-ambience             724    59.9    3.2   32.5    4.4
+...
+amapiano-vibez                   677    18.8   17.7   10.5   53.0
+dubstep-edm-halftime             833    12.2   25.0    0.2   62.5
+edm-trap-electro                 808     7.9   18.2    2.2   71.7
+
+kick% spread across tracks: 60 points (8% → 68%)
+snare% spread:               39 points (3% → 42%)
+```
+
+**Verdict: STRONG.** A deterministic firmware rule on (centroid, crest) at trigger time produces real per-track variation that maps to track style. `techno-minimal-emotion` is kick-led (68% kick), `edm-trap-electro` is texture-led (72% tex), `techno-minimal-01` is snare-heavy (42% snare). This is the routing signal the parked task (#114) was after.
+
+**What this enables:** route firings to different generators/effects without retraining the model — kick-bucket firings drive bass-impact effects, snare-bucket firings drive treble-flash effects, tex-bucket firings drive ambient/textural effects.
+
+**Open questions before shipping:**
+1. **Cross-device agreement.** A single audio event produces 4 device firings; do they agree on bucket? If routing decisions disagree across the 4 LEDs, the visual will look incoherent. Quick test: pick GT onsets, find each device's firing within ±50ms, count bucket agreement.
+2. **Threshold robustness.** Population medians are fit to v33 b153 on edm/. Need to verify they hold across content the model wasn't designed around — particularly the high-flatness/high-centroid content Phase 1 flagged as failure-prone.
+3. **Firmware feasibility.** Centroid + crest are already computed per-frame in `SharedSpectralAnalysis` (lines 660, 758). Adding the bucket assignment to `TransientEvent` is straight-forward; routing the buckets to different effects is a Generator/Effect-layer change.
+
+Prototype script: `/tmp/firing_route.py`.
+
+#### Cross-device agreement (#117, 2026-04-29) — 4-bucket fails, 2-bucket passes
+
+Tested cross-device bucket agreement on 1537 multi-device GT-onset events from `/tmp/v33_b153_edm.json`. For each event, found each device's firing within ±50ms and recorded its assigned bucket. Pass criterion: ≥75% of 4-device events have ≥3/4 devices voting the same bucket.
+
+**4-bucket (centroid × crest) — FAIL @ 69.4% majority, 39.0% unanimous.** Confusion matrix shows the crest axis is the noise source: 1562 cross-crest disagreements vs 1089 cross-centroid. Per-device AGC differences move the crest factor enough that a global threshold can't survive. Symptom in practice: techno-minimal-01 (4.8% unanimous) would have devices voting kick/bass-pad/snare/tex on the same audio event.
+
+**2-bucket (centroid only) — PASS @ 89.8% majority, 67.3% unanimous.** Dropping the crest axis collapses the rule to "bass-leaning" vs "treble-leaning" but recovers cross-device coherence. Two visual channels (low-band-impact effect vs high-band-highlight effect) is what the firmware can route reliably given the same-content / different-mic-response constraint.
+
+**Decision:** ship the 2-bucket centroid rule, not the 4-bucket prototype. Crest factor remains useful as a per-device intensity modulator (peakier firings = brighter on that device's LEDs) but should not gate routing across devices.
+
+Scripts: `/tmp/firing_route_agreement.py` (4-bucket fail), `/tmp/firing_route_1axis.py` (2-bucket pass).
+
+### v34d val_peak_F1 metric shift caveat (2026-04-29)
+
+Comparing v34d to v33 via `val_peak_F1` is misleading. The two runs evaluate against *different val targets*:
+
+| run  | train labels                | val labels (the eval target) | F1 vs hand-curated GT |
+|------|-----------------------------|------------------------------|------------------------|
+| v33  | `kick_weighted_drums` (raw) | same (raw)                   | 0.657                  |
+| v34d | `kick_weighted_clean`       | same (cleaned)               | 0.745                  |
+
+v33 epoch-1 `val_peak_F1=0.65` is the model's score against val labels that are themselves only F1=0.66 vs GT — a moving target. v34d epoch-1 `val_peak_F1=0.35` is vs val labels that are F1=0.745 vs GT. The metric drop is partly an artefact of stricter eval, not pure model regression.
+
+**The apples-to-apples comparison is `evaluate.py` on edm/ with hand-curated `.onsets_consensus.json` GT, which is identical for both runs.** v33 b153 scored 0.570 there. v34d's edm/ score (post-training, post-export, post-deploy) is the comparable number — not val_peak_F1.
+
+This caveat applies to *every* future run on cleaned labels: their `val_peak_F1` will look lower than v33-era runs not because they're worse, but because the eval target is more honest. Plan headlines should track on-device edm/ F1, not val_peak_F1.
+
+### Label audit — the actual ceiling (2026-04-28)
+
+After v34/v34b confirmed parameter tuning had hit a wall, audited every label source on disk against hand-curated `.beats.json` GT on the 18 edm/ tracks. **Result inverts the entire framing again.**
+
+```
+source                         F1@100  P      R      density
+kick_weighted (v29-v34 target)  0.577  0.45   0.85   1.99  ← contaminated, training target
+consensus_v2 (beats)            0.944  1.00   0.90   0.91
+consensus_v5 (beats)            0.981  0.97   1.00   1.04  ← essentially perfect, on disk
+onsets_consensus all            0.541  0.44   0.74   1.78
+onsets_consensus ≥3             0.563  0.50   0.68   1.44
+onsets_librosa                  0.559  0.43   0.85   2.13
+```
+
+**v33's on-device F1=0.570 ≈ kick_weighted label F1=0.577 against curated GT.** The model has been at the *label ceiling* this whole time, not a model ceiling. Every threshold sweep, target_rms_db tweak, and architecture experiment was bound by labels that match the eval GT only at F1=0.58.
+
+The contamination mechanism: bandpass onset detection runs on demucs-separated drum stems; demucs leaks tonal/harmonic content into the drum stem on ~30% of tracks; bandpass detector finds peaks in the bleed and labels them as "kicks" or "snares"; result is **2.21× the event density of the curated GT (14 of 18 tracks over-detect by >1.5×)**. Confirms the 32% bleed / 2× density finding documented in `HYBRID_FEATURE_ANALYSIS_PLAN.md` 2026-04-23.
+
+This also explains why **firmware F1 > offline F1 by +0.12** on the same content (peak-picker parity test 2026-04-28). The model trained to over-fire (labels are over-detected). Firmware peak-picker (bass gate / PLP bias / cooldown) suppresses the spurious firings the labels taught the model to make. The +0.12 firmware lift is *recovering from label noise.*
+
+### v34c plan — switch labels, nothing else (2026-04-28)
+
+`consensus_v5` (multi-system beat consensus from allin1 + beat_this + demucs_beats + essentia + librosa + madmom) matches the eval GT at F1=0.981. **100% coverage on the 6750-track training corpus** — labels exist for every track, no regeneration needed.
+
+v34c is v33 with one change: `--labels-dir` switches to `consensus_v5`. Architecture, audio params, target_rms_db (-72), augmentation — all identical to v33.
+
+**Falsifiable predictions:**
+- val_peak_F1 ≥ 0.85 (since labels match eval GT at 0.98)
+- on-device F1 on edm/ jumps from 0.570 to ≥ 0.75 (firmware peak-picker still adds its lift)
+- training mel mean similar to v33 (~0.37, since target_rms_db unchanged)
+- activation distribution shape similar to v33
+
+**Negative-result triggers:**
+- val_peak_F1 < 0.75: training is failing to exploit the cleaner labels (architecture or capacity issue)
+- on-device F1 ≤ v33's 0.570: switching labels didn't help — there's another bottleneck we haven't identified
+
+**Caveat about target type.** consensus_v5 is a *beat* target (1 per quarter note); kick_weighted was an *onset* target (every drum hit). The eval GT (.beats.json) is also beats — so the training-eval alignment improves. But on-device firing rate at v33 b153 was ~3.4/sec while beats are ~1.6/sec, meaning the firmware peak-picker already finds 2× more events than just beats. That extra reactivity comes from local maxima in the activation, not from the label set. Beat-trained model should still produce reactive firing once the firmware peak-picker layer is on top — but if visual reactivity feels too sparse after deploy, we revisit (e.g., switch to a curated onset+beat union once we can validate it).
 
 ### Tool fixes landed 2026-04-23
 

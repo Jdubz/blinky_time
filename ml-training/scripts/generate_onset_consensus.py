@@ -103,11 +103,20 @@ def detect_madmom_subprocess(audio_path: Path, processor: str = "CNN") -> np.nda
 
     madmom requires Python 3.11 (venv311), so we call it as a subprocess.
     Supports CNNOnsetProcessor and RNNOnsetProcessor.
+
+    A missing venv is a *systemic* failure — every track will lose 2 of 5
+    consensus systems silently if we let it through. Raises immediately
+    rather than returning empty so the corpus build halts on first call.
     """
     venv311 = Path(__file__).parent.parent / "venv311"
     python311 = venv311 / "bin" / "python3"
     if not python311.exists():
-        return np.array([], dtype=np.float64)
+        raise RuntimeError(
+            f"madmom subprocess infrastructure missing: {python311} not found. "
+            f"Without madmom, the consensus corpus would be missing 2 of 5 "
+            f"systems on every track — refusing to proceed. Create the "
+            f"Python 3.11 venv at {venv311} and re-run."
+        )
 
     proc_class = f"{processor}OnsetProcessor"
     # Pass audio path as command-line argument to avoid string injection
@@ -124,12 +133,42 @@ def detect_madmom_subprocess(audio_path: Path, processor: str = "CNN") -> np.nda
             [str(python311), "-c", script, str(audio_path)],
             capture_output=True, text=True, timeout=120
         )
-        if result.returncode != 0:
-            return np.array([], dtype=np.float64)
-        onsets = json.loads(result.stdout.strip())
-        return np.array(onsets, dtype=np.float64)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+    except FileNotFoundError as e:
+        # Python 3.11 venv missing — systemic failure, every track will fail.
+        # Halt loudly rather than silently producing a corpus where madmom
+        # never contributed.
+        raise RuntimeError(
+            f"madmom subprocess infrastructure broken: {e}. "
+            f"Expected python at {python311}. Without madmom, the consensus "
+            f"corpus would be missing 2 of 5 systems on every track — refusing "
+            f"to proceed. Verify the madmom venv is installed and re-run."
+        ) from e
+    except subprocess.TimeoutExpired:
+        # 120s is generous; a real timeout means something is hung.
+        # Per-track failure is acceptable (some files have edge cases),
+        # but log so corpus-wide degradation is visible.
+        print(f"  [FALLBACK] madmom {processor} TIMEOUT on {audio_path.name} "
+              f"(>120s) — track will have only {TOTAL_SYSTEMS - 1} systems",
+              file=sys.stderr)
         return np.array([], dtype=np.float64)
+
+    if result.returncode != 0:
+        # Non-zero exit (model crash, bad audio). Log stderr so the failure
+        # mode is visible and corpus-wide patterns can be spotted.
+        print(f"  [FALLBACK] madmom {processor} FAILED on {audio_path.name} "
+              f"(exit {result.returncode}): {result.stderr.strip()[:200]}",
+              file=sys.stderr)
+        return np.array([], dtype=np.float64)
+    try:
+        onsets = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as e:
+        # subprocess succeeded but produced un-parseable output. That's a
+        # real bug (script printed extra chars) — log details, raise.
+        raise RuntimeError(
+            f"madmom {processor} on {audio_path.name} returned invalid JSON: "
+            f"{e}. stdout head: {result.stdout[:200]!r}"
+        ) from e
+    return np.array(onsets, dtype=np.float64)
 
 
 def merge_onsets(all_onsets: list[np.ndarray], tolerance: float,
@@ -246,7 +285,17 @@ def process_track(args: tuple) -> str | None:
         return stem
 
     except Exception as e:
-        print(f"ERROR {stem}: {e}", file=sys.stderr)
+        # Per-track failures (corrupt MP3, essentia choke on weird format, etc.)
+        # are tolerable across a 6000-track corpus, but the failure mode AND
+        # the file MUST be visible — we previously printed `ERROR {stem}: {e}`
+        # and lost the traceback, leaving silent gaps in the output. Now we
+        # also include the exception type and full traceback so a systemic
+        # failure (e.g., essentia version mismatch) shows its signature
+        # instead of looking like 6000 unrelated track-specific bugs.
+        import traceback
+        print(f"[FALLBACK] track {stem} consensus FAILED: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return None
 
 
@@ -320,10 +369,13 @@ def main():
     t0 = time.time()
     done = 0
 
+    failed_stems: list[str] = []
     if args.workers <= 1:
         for item in work_items:
             result = process_track(item)
             done += 1
+            if result is None:
+                failed_stems.append(item[0].stem)
             if done % 10 == 0:
                 elapsed = time.time() - t0
                 rate = done / elapsed if elapsed > 0 else 0
@@ -331,8 +383,17 @@ def main():
                 print(f"  {done}/{len(work_items)} ({rate:.1f}/s, ETA {eta:.0f}s)")
     else:
         with Pool(processes=args.workers) as pool:
-            for result in pool.imap_unordered(process_track, work_items, chunksize=1):
+            # imap (NOT imap_unordered) is required so that the result yielded
+            # at position i corresponds to work_items[i]. We zip the two so
+            # failed tracks (result=None) can be attributed back to their stem
+            # for the failure summary. Throughput cost vs imap_unordered is
+            # negligible since process_track latency is dominated by
+            # subprocess startup and audio I/O, not scheduling.
+            for item, result in zip(work_items,
+                                    pool.imap(process_track, work_items, chunksize=1)):
                 done += 1
+                if result is None:
+                    failed_stems.append(item[0].stem)
                 if done % 10 == 0:
                     elapsed = time.time() - t0
                     rate = done / elapsed if elapsed > 0 else 0
@@ -341,6 +402,28 @@ def main():
     elapsed = time.time() - t0
     total = len(list(output_dir.glob("*.onsets.json")))
     print(f"Done! {done} processed in {elapsed:.1f}s. Total: {total} files.")
+
+    # Corpus-wide failure summary. Per-track failures get logged inline above
+    # but they're easy to miss across thousands of lines; a final tally makes
+    # systemic problems (e.g., madmom venv broken → 100% failure rate) visible
+    # at a glance, and a >5% failure rate raises rather than silently producing
+    # a degraded label corpus.
+    if failed_stems:
+        fail_rate = len(failed_stems) / max(1, done)
+        print(f"\nFAILED tracks ({len(failed_stems)}/{done} = {100*fail_rate:.1f}%):",
+              file=sys.stderr)
+        for s in failed_stems[:50]:
+            print(f"  {s}", file=sys.stderr)
+        if len(failed_stems) > 50:
+            print(f"  ... +{len(failed_stems) - 50} more", file=sys.stderr)
+        if fail_rate > 0.05:
+            raise RuntimeError(
+                f"Consensus generation failed for {len(failed_stems)}/{done} "
+                f"tracks ({100*fail_rate:.1f}% > 5% threshold). This is "
+                f"systemic — refusing to declare success on a degraded label "
+                f"corpus. Investigate the failures listed above before "
+                f"re-running."
+            )
 
 
 if __name__ == "__main__":
