@@ -243,30 +243,32 @@ void setup() {
     // Initialize LED strip (must be done in setup, not global scope)
     uint16_t numLeds = config.matrix.width * config.matrix.height;
 #ifdef BLINKY_PLATFORM_NRF52840
-    if (numLeds > 256) {
-      // High LED count: use async PWM driver (pre-allocated buffers, non-blocking show)
-      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
-      leds = asyncStrip;  // Assign before validity check so cleanup() can free it
-      if (!asyncStrip || !asyncStrip->isValid()) {
-        haltWithError(F("ERROR: Async LED strip allocation failed"));
-      }
-      Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
-      Serial.print(numLeds);
-      Serial.println(F(" LEDs)"));
-    } else
-#endif
-    {
-      // Standard path: Adafruit NeoPixel (reliable for smaller LED counts)
-      neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
-          numLeds, config.matrix.ledPin, config.matrix.ledType);
-      if (!neoPixelStrip) {
-        haltWithError(F("ERROR: NeoPixel allocation failed"));
-      }
-      leds = new(std::nothrow) NeoPixelLedStrip(*neoPixelStrip);
-      if (!leds) {
-        haltWithError(F("ERROR: LED strip wrapper allocation failed"));
-      }
+    // nRF52840: always use async PWM driver. RGB-only (no RGBW), targets 120+
+    // LED hardware. Non-blocking show() returns once DMA is queued instead of
+    // blocking the main loop for ~30 µs/LED (~3.6 ms at 120 LEDs, ~30 ms at
+    // 1024 LEDs) — frees that time for audio drain and FFT processing.
+    // Pre-allocated PWM pattern buffer also avoids the per-frame malloc/free
+    // that fragments the heap with Adafruit_NeoPixel.
+    auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
+    leds = asyncStrip;  // Assign before validity check so cleanup() can free it
+    if (!asyncStrip || !asyncStrip->isValid()) {
+      haltWithError(F("ERROR: Async LED strip allocation failed"));
     }
+    Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
+    Serial.print(numLeds);
+    Serial.println(F(" LEDs)"));
+#else
+    // Non-nRF52840 platforms: Adafruit NeoPixel (blocking bit-bang)
+    neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
+        numLeds, config.matrix.ledPin, config.matrix.ledType);
+    if (!neoPixelStrip) {
+      haltWithError(F("ERROR: NeoPixel allocation failed"));
+    }
+    leds = new(std::nothrow) NeoPixelLedStrip(*neoPixelStrip);
+    if (!leds) {
+      haltWithError(F("ERROR: LED strip wrapper allocation failed"));
+    }
+#endif
 
     leds->begin();
     leds->setBrightness(min((int)config.matrix.brightness, 255));
