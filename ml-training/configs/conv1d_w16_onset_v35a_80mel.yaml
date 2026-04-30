@@ -1,0 +1,101 @@
+# Conv1D W16 v35a — 64-mel retry (mid-step from v33's 50 toward Schluter's 80)
+#
+# Single-axis change vs v33: n_mels 50 → 64. Tests whether the mel-
+# resolution gradient that gave v33 its +0.13 lift (over v29) continues
+# past 50 bands.
+#
+# Why 64 not 80:
+#   1. Empty-filter check (librosa.filters.mel htk=True): at sr=16000,
+#      n_fft=256, fmin=30, fmax=8000, n_mels=80 produces 1 empty band
+#      (center ~128 Hz, no FFT bin between adjacent mel boundaries).
+#      We can't actually USE 80 distinct features when one is zero-filled
+#      by construction — the FFT resolution doesn't support 80 useful
+#      mel bands at 16 kHz with 256-FFT. n_mels=64 has zero empty bands.
+#   2. Disk precheck: 80 mel × current augmentation projects 430 GB peak
+#      against 400 GB free post-cleanup. 64 mel projects ~340 GB, fits.
+#   3. 50 → 64 is still a real resolution step (+28% bands). If it lifts
+#      F1 we know the gradient continues; if it doesn't, going to 80 is
+#      unlikely to help either (the empty-filter case adds noise, not
+#      signal).
+#
+# Reaching the original 80-mel target requires a firmware sample-rate
+# bump to 22.05 kHz (queued as v35c-prereq) — at that rate the FFT
+# resolution becomes 86 Hz/bin and 80 mel has no empty bands.
+#
+# Architecture: Conv1D channels [32,32], kernel [5,5], window 16. v33's
+# recipe unchanged. Param count grows because layer-1 weights scale with
+# n_mels:
+#   v33 (50 mel): L1=8032, L2=5152, out=33 → total 13,217 params
+#   v35a (64 mel): L1=10272, L2=5152, out=33 → total 15,457 params (+17%)
+# INT8 size: ~13 KB → ~16 KB. Under max_model_size_kb=27 with margin.
+# Firmware impact (deploy-only, not offline eval): MEL_BANDS table
+# regenerated for 64 bands, NUM_MEL_BANDS bumped 50→64, mel buffers
+# 4×64 floats=1.0KB SRAM (vs 4×50=800B), NN window 16×64×4=4.1KB
+# (vs 3.2KB). Arena currently 8 KB, will need to verify post-export.
+#
+# Falsifiable predictions:
+#   - Offline F1 on edm/ (mir_eval onset, 50ms window, vs onsets_consensus)
+#     > 0.65 within 30 epochs. v33 = 0.617. +0.03 is the threshold.
+#   - INT8 export std ≥ 0.30 (no activation collapse). v33 was 0.34.
+#   - max_model_size_kb=27 KB not breached.
+#
+# Negative-result triggers:
+#   - Offline edm/ F1 within ±0.02 of v33's 0.617 → mel resolution past
+#     50 isn't the lever at 16 kHz; the input-resolution hypothesis is
+#     exhausted without a sample-rate increase. Pivot to v35b (multi-
+#     channel) or v35c (frame rate).
+#   - INT8 export std < 0.20 → activation collapse, see v30/v31/v32 case
+#     study; revert and investigate.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  # v33's labels (raw kick_weighted_drums). v34d's clean variant didn't
+  # change F1 — using raw labels here keeps v35a a strict single-axis
+  # test of the mel-resolution change.
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  n_mels: 64                # was 50 (the only substantive change vs v33)
+  fmin: 30
+  fmax: 8000
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v35a"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v35a_80mel.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 27

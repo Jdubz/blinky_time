@@ -1,5 +1,23 @@
 # ML Training Improvement Plan
 
+> **2026-04-29 — Structural-change research after v34d closed flat**
+>
+> v34d closed with offline F1 0.616 vs v33's 0.617 (flat). Cleaner labels are not the binding constraint. Surveyed all prior runs to identify which structural directions are exhausted vs untried; what follows is the queued experiment list. Each is a single-axis change vs the v33 baseline (50 mel, 30-8000 Hz, [32,32] Conv1D W16, kick_weighted_drums labels). All have a falsifiable prediction; abandon at first negative result that contradicts it.
+>
+> | # | experiment | single-axis change | falsifiable prediction | effort | requires firmware change? |
+> |---|------------|--------------------|------------------------|--------|----------------------------|
+> | v35a | **64-mel retry** (was 80; pivoted) | `n_mels: 50 → 64` | offline F1 on edm/ > 0.65 (vs v33's 0.617) | 1 day prep+train | yes for deploy (NUM_MEL_BANDS, MEL_BANDS table); no for offline eval |
+> | v35b | **Multi-channel instrument output** (#72) | `num_output_channels: 1 → 3` (kick/snare/hihat heads), `labels_type: instrument` | max(kick, snare) channel F1 > 0.617 OR kick channel precision > v33's 0.39 | 1 day prep+train | yes for deploy (Conv1D output dim, FrameOnsetNN consumer) |
+> | v35c | **Frame rate 62.5 → 100 Hz** | hop 256 → 160, frame_rate 62.5 → 100 in config + firmware | offline F1 > 0.65 OR per-onset offset stdDev < 60ms (vs v33's 99ms) | 2-3 days (firmware audio chain change + retrain) | YES, firmware required |
+> | v35d | **Knowledge distillation from BS-RoFormer** | soft labels from BS-RoFormer/madmom RNN on FMA full corpus + train v33 with KD loss | offline F1 > 0.70 | 3-5 days (FMA-scale teacher inference + KD pipeline) | no |
+> | v35e | **Multi-resolution mel** (Böck-style stacked) | concat 20+40+80 mel bands as 140-channel input | offline F1 > 0.65 | 1 day | yes for deploy |
+>
+> **What's explicitly off the table (already disproven):** wider/deeper Conv1D (exp-wide-* set), W16→W32 widening (exp-w32), additional loss variants (9 tried), hybrid spectral features as NN inputs (gate-b dead), continuous-vs-binary label strengths (v31), min_systems threshold tightening (v32), `target_rms_db` raising (v34/v34b), single-detector → 5-detector consensus, hard PLP AND-gate, label cleanup alone (v34d). See "Things explicitly disproven" sections throughout this doc for the supporting evidence.
+>
+> **Run order:** v35a first (cheapest, most directly tests the same structural axis that gave v33 its +0.13). v35b sequential next (GPU shared with v35a). v35c-e queued pending v35a/b results.
+>
+> **v35a 80→64-mel pivot (2026-04-29):** Original v35a config was 80 mel. Two issues surfaced at prep time: (a) librosa empty-filter warning at sr=16000 / n_fft=256 / fmin=30 / fmax=8000 / n_mels=80 → 1 of 80 mel bands has no FFT bins between adjacent boundaries (band ~128 Hz) and produces zero filter response — we cannot use 80 distinct features when one is zero-filled by construction; (b) prep disk precheck projected 430 GB peak vs 400 GB free (post-cleanup). 64 mel has zero empty filters and projects ~340 GB peak. The 50→64 step is still a real test of the resolution gradient that gave v33's lift; reaching 80 cleanly requires a sample-rate increase to ≥22.05 kHz first.
+>
 > **2026-04-29 19:00 — v34d EVAL RESULT: flat with v33 (negative result triggered)**
 >
 > | metric (offline, edm/ 18 tracks) | GT used | v33 | v34d | Δ |
