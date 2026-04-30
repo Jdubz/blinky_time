@@ -68,27 +68,44 @@ def filter_tracks() -> pd.DataFrame:
     # stringified Python lists like "[181, 296]"; a small fraction are NaN
     # (float) for tracks with no genre tags; rarely they're already lists.
     # Skip everything that isn't a non-empty iterable of ints.
+    #
+    # Each skip path is counted so the caller (and humans reading the log)
+    # can see WHY tracks didn't make the filtered set — silent `continue`s
+    # in a 100k-row loop made it impossible to tell whether the script
+    # produced a small list because of bad data, bad filters, or bad disk.
     rows = []
+    skipped = {
+        "unparseable_genre": 0,
+        "non_iterable_genre": 0,
+        "empty_genre_list": 0,
+        "no_subgenre_match": 0,
+        "audio_missing": 0,
+    }
     for tid, gstr in genres_col.items():
         if isinstance(gstr, str):
             try:
                 gids = ast.literal_eval(gstr)
             except (SyntaxError, ValueError):
+                skipped["unparseable_genre"] += 1
                 continue
         elif isinstance(gstr, (list, tuple, set)):
             gids = gstr
         else:
             # NaN, None, or other non-iterable scalar — track has no usable
             # genre annotation; skip without crashing on `set(gstr)`.
+            skipped["non_iterable_genre"] += 1
             continue
         if not gids:
+            skipped["empty_genre_list"] += 1
             continue
         matched = set(gids) & MAINSTREAM_EDM_GENRE_IDS
         if not matched:
+            skipped["no_subgenre_match"] += 1
             continue
-        # Confirm audio file is on disk
         audio_path = FMA_AUDIO / f"{int(tid):06d}.mp3"
-        if not audio_path.exists(): continue
+        if not audio_path.exists():
+            skipped["audio_missing"] += 1
+            continue
         rows.append({
             'track_id': int(tid),
             'audio_path': str(audio_path),
@@ -96,6 +113,15 @@ def filter_tracks() -> pd.DataFrame:
             'genre_top': genre_top.get(tid, ''),
             'title': str(title_col.get(tid, '')),
         })
+
+    total_in = len(genres_col)
+    total_out = len(rows)
+    log.info("filter_tracks: %d / %d total tracks kept (%.1f%%)",
+             total_out, total_in, 100 * total_out / max(1, total_in))
+    log.info("filter_tracks skip breakdown:")
+    for reason, count in skipped.items():
+        if count > 0:
+            log.info("  %-20s %d", reason, count)
     return pd.DataFrame(rows)
 
 

@@ -15,22 +15,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from ..transport.base import Transport
 
 log = logging.getLogger(__name__)
 
+# Phase-update hook: callable(phase, msg, pct). pct is 0-100 (or None
+# when the phase hasn't computed a percentage yet) so callers can drive
+# a progress bar; `phase` is a short tag like "prepare" / "upload" /
+# "done"; `msg` is human-readable detail.
+ProgressCallback = Callable[[str, str, int | None], None]
+
 
 async def upload_via_uf2(
     serial_port: str,
     firmware_path: str,
     transport: Transport,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Upload firmware via UF2 mass storage bootloader.
 
     For serial (USB) connected devices only. No fallback to BLE DFU —
     if UF2 fails, the error is returned and must be investigated.
+
+    progress_callback (optional): callable(phase, msg, pct) — invoked at
+    each upload phase so callers can surface fine-grained progress to
+    their own UI / job state instead of seeing one static "Flashing X"
+    line for the entire 30-180s flash duration.
     """
     from .uf2_upload import upload_uf2
 
@@ -38,12 +51,14 @@ async def upload_via_uf2(
         serial_port=serial_port,
         firmware_path=firmware_path,
         transport=transport,
+        progress_callback=progress_callback,
     )
 
 
 async def upload_firmware(
     device: Any,
     firmware_path: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Upload firmware using the method determined by device transport.
 
@@ -54,6 +69,9 @@ async def upload_firmware(
       1. DFU recovery (device stuck in bootloader) → BLE DFU direct
       2. Serial (USB) transport → UF2 mass storage
       3. BLE transport → BLE DFU with bootloader entry over BLE
+
+    progress_callback (optional): callable(phase, msg, pct) — currently
+    only wired into the UF2 path. BLE DFU paths ignore it (yet).
     """
     from ..device.device import DeviceState
 
@@ -64,6 +82,17 @@ async def upload_firmware(
 
         if not device.ble_address:
             return {"status": "error", "message": "DFU recovery but BLE address unknown"}
+        if progress_callback is not None:
+            # WARN, not INFO: silently dropping a caller-supplied callback
+            # is the soft silent-fallback pattern CLAUDE.md prohibits.
+            # Surfacing this at WARN ensures the operator sees the
+            # mismatch in normal validation-run logs, not only when
+            # debug logging is enabled.
+            log.warning(
+                "[FALLBACK] upload_firmware: progress_callback provided but "
+                "DFU-recovery (BLE) path does not yet support it; caller will "
+                "not see phase updates"
+            )
         dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
         return await upload_ble_dfu(
             app_ble_address=device.ble_address,
@@ -78,6 +107,7 @@ async def upload_firmware(
             serial_port=device.port,
             firmware_path=firmware_path,
             transport=device.transport,
+            progress_callback=progress_callback,
         )
 
     # BLE-only devices: BLE DFU with bootloader entry over BLE
@@ -85,6 +115,17 @@ async def upload_firmware(
         from .ble_dfu import upload_ble_dfu
         from .compile import ensure_dfu_zip
 
+        if progress_callback is not None:
+            # WARN, not INFO: silently dropping a caller-supplied callback
+            # is the soft silent-fallback pattern CLAUDE.md prohibits.
+            # Surfacing this at WARN ensures the operator sees the
+            # mismatch in normal validation-run logs, not only when
+            # debug logging is enabled.
+            log.warning(
+                "[FALLBACK] upload_firmware: progress_callback provided but "
+                "BLE DFU path does not yet support it; caller will not see "
+                "phase updates"
+            )
         dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
         ble_transport = device.transport
 

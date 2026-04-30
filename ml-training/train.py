@@ -654,7 +654,18 @@ def main():
     epochs = args.epochs or cfg["training"]["epochs"]
     batch_size = args.batch_size or cfg["training"]["batch_size"]
     lr = args.lr or cfg["training"]["learning_rate"]
-    beat_pos_weight = cfg["training"].get("pos_weight", 0)  # 0 = auto-calculate from data
+    # pos_weight sentinel:
+    #   0  → auto-derive from class frequencies ((1 - mean) / mean) at
+    #        line ~775 (binary path) or per-channel at lines ~764-770
+    #        (multi-output path). This is what every config in the repo
+    #        currently uses.
+    #   N  → literal positive-class weight, applied unchanged.
+    #   [list] → per-channel literal weights for multi-output models.
+    # 0-as-sentinel is a footgun pattern (a literal weight of 0 would
+    # silently zero out positive gradients) but it's the established
+    # convention. If we ever want a literal 0, wire a separate config
+    # key like `pos_weight_auto: false`.
+    beat_pos_weight = cfg["training"].get("pos_weight", 0)
 
     if args.device is None or args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

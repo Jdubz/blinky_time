@@ -507,6 +507,17 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
 
         out_.print(F(",\"millis\":"));
         out_.print(millis());
+
+        // Audio overrun counters (monotonic from boot). See AdaptiveMic
+        // and ML_IMPROVEMENT_PLAN "Audio sampling overrun" (2026-04-29).
+        // These let server-side validation correlate F1 swings with
+        // overrun events, and let any operator spot a device whose main
+        // loop is falling behind the audio stream.
+        out_.print(F(",\"audioOverruns\":"));
+        out_.print(AdaptiveMic::getOverrunCount());
+        out_.print(F(",\"audioSamplesLost\":"));
+        out_.print(AdaptiveMic::getOverrunSamplesLost());
+
         out_.println(F("}"));
         return true;
     }

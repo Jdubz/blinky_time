@@ -1,6 +1,58 @@
 # ML Training Improvement Plan
 
-> **2026-04-29 active run: v34d (clean ONSET labels)**
+> **2026-04-29 — Audio sampling overrun discovered (silent fallback in firmware)**
+>
+> Investigating whether the on-device single-thread loop drops audio samples surfaced a silent fallback at `blinky-things/inputs/AdaptiveMic.cpp:195-197`. The PDM ISR is free-running DMA (sampling never stops at the hardware level), but when the main loop stalls longer than ~32 ms (the 512-sample FFT ring fill time at 16 kHz), the consumer silently advances its read pointer to discard old samples. No counter, no log — currently invisible to telemetry. Triggers: LED rendering (5–50 ms blocking), ACF/PLP spikes (~4–8 ms every 100 ms), BLE/WiFi ISR preemption.
+>
+> **Symptom of overrun:** the next 256-sample FFT window contains audio from two non-contiguous time periods (e.g., samples 32–287 then 320–543). One frame of mel/flux features is bogus; the next frame re-locks. Estimated 5–10% of frames at typical load.
+>
+> **Why this matters for F1:** v33 offline = 0.617 (we measured 2026-04-29), v33 on-device b153 = 0.570. The -0.05 gap is consistent with overrun-induced spectral corruption, since offline pipelines have no overruns. A counterfactual where overruns are eliminated could lift on-device toward the offline number — same magnitude as v35a's predicted lift, with no model retraining.
+>
+> **Three layers, ordered by cost and gated on the next one's evidence:**
+>
+> | # | task | what it does | cost | gate |
+> |---|------|--------------|------|------|
+> | #124 | **Overrun observability** | Counter + BLINKY_ASSERT_ONCE on first hit + count exposed via `json info`. No behavior change. | 30 min firmware | None — do first |
+> | #125 | **FFT ring 512 → 2048 samples** | Pushes overrun threshold from 32 ms to 128 ms main-loop stall tolerance. ~3 KB SRAM. | 1–2 hr firmware + revalidation | If #124 shows >1 overrun/sec under typical load |
+> | #126 | **Decouple LED rendering** | Move FastLED.show() to a timer-driven task so audio frame deadline is independent of LED count. | 1–2 days firmware (FreeRTOS task) | If overruns persist after #125 |
+>
+> Implementing #124 first as a measurement step. Running in parallel with v35a training (separate hardware: GPU vs Cortex-M4F). Measurement results will inform whether v35-experiment lifts or audio-pipeline fixes are higher-leverage next.
+>
+> **2026-04-29 — Structural-change research after v34d closed flat**
+>
+> v34d closed with offline F1 0.616 vs v33's 0.617 (flat). Cleaner labels are not the binding constraint. Surveyed all prior runs to identify which structural directions are exhausted vs untried; what follows is the queued experiment list. Each is a single-axis change vs the v33 baseline (50 mel, 30-8000 Hz, [32,32] Conv1D W16, kick_weighted_drums labels). All have a falsifiable prediction; abandon at first negative result that contradicts it.
+>
+> | # | experiment | single-axis change | falsifiable prediction | effort | requires firmware change? |
+> |---|------------|--------------------|------------------------|--------|----------------------------|
+> | v35a | **64-mel retry** (was 80; pivoted) | `n_mels: 50 → 64` | offline F1 on edm/ > 0.65 (vs v33's 0.617) | 1 day prep+train | yes for deploy (NUM_MEL_BANDS, MEL_BANDS table); no for offline eval |
+> | v35b | **Multi-channel instrument output** (#72) | `num_output_channels: 1 → 3` (kick/snare/hihat heads), `labels_type: instrument` | max(kick, snare) channel F1 > 0.617 OR kick channel precision > v33's 0.39 | 1 day prep+train | yes for deploy (Conv1D output dim, FrameOnsetNN consumer) |
+> | v35c | **Frame rate 62.5 → 100 Hz** | hop 256 → 160, frame_rate 62.5 → 100 in config + firmware | offline F1 > 0.65 OR per-onset offset stdDev < 60ms (vs v33's 99ms) | 2-3 days (firmware audio chain change + retrain) | YES, firmware required |
+> | v35d | **Knowledge distillation from BS-RoFormer** | soft labels from BS-RoFormer/madmom RNN on FMA full corpus + train v33 with KD loss | offline F1 > 0.70 | 3-5 days (FMA-scale teacher inference + KD pipeline) | no |
+> | v35e | **Multi-resolution mel** (Böck-style stacked) | concat 20+40+80 mel bands as 140-channel input | offline F1 > 0.65 | 1 day | yes for deploy |
+>
+> **What's explicitly off the table (already disproven):** wider/deeper Conv1D (exp-wide-* set), W16→W32 widening (exp-w32), additional loss variants (9 tried), hybrid spectral features as NN inputs (gate-b dead), continuous-vs-binary label strengths (v31), min_systems threshold tightening (v32), `target_rms_db` raising (v34/v34b), single-detector → 5-detector consensus, hard PLP AND-gate, label cleanup alone (v34d). See "Things explicitly disproven" sections throughout this doc for the supporting evidence.
+>
+> **Run order:** v35a first (cheapest, most directly tests the same structural axis that gave v33 its +0.13). v35b sequential next (GPU shared with v35a). v35c-e queued pending v35a/b results.
+>
+> **v35a 80→64-mel pivot (2026-04-29):** Original v35a config was 80 mel. Two issues surfaced at prep time: (a) librosa empty-filter warning at sr=16000 / n_fft=256 / fmin=30 / fmax=8000 / n_mels=80 → 1 of 80 mel bands has no FFT bins between adjacent boundaries (band ~128 Hz) and produces zero filter response — we cannot use 80 distinct features when one is zero-filled by construction; (b) prep disk precheck projected 430 GB peak vs 400 GB free (post-cleanup). 64 mel has zero empty filters and projects ~340 GB peak. The 50→64 step is still a real test of the resolution gradient that gave v33's lift; reaching 80 cleanly requires a sample-rate increase to ≥22.05 kHz first.
+>
+> **2026-04-29 19:00 — v34d EVAL RESULT: flat with v33 (negative result triggered)**
+>
+> | metric (offline, edm/ 18 tracks) | GT used | v33 | v34d | Δ |
+> |----------------------------------|---------|-----|------|---|
+> | Primary F1 (mir_eval onset, 50ms) | onsets_consensus | 0.617 | 0.616 | -0.001 |
+> | onset_F1 (librosa loose GT)       | .onsets.json     | 0.843 | 0.847 | +0.004 |
+> | kw_onset_F1                        | kick_weighted    | 0.890 | 0.888 | -0.002 |
+>
+> 16 of 18 tracks moved by less than ±0.01; the 2 with motion (techno-machine-drum, edm-trap-electro) both dipped slightly. No track lifted meaningfully. **This hits the negative-result trigger committed to in the run plan.** The ~30% bleed contamination in kick_weighted was real (audit on edm/: F1 vs hand-curated GT 0.657 → 0.745 after cleanup) but the model wasn't fitting that noise — cleaning it didn't help. **Don't deploy v34d.** Conclusions:
+> 1. The post-v32 synthesis stands: the binding constraint is structural (mel resolution × fmax × architecture), not label noise.
+> 2. #72 (multi-channel instrument model) is technically unblocked but the "clean labels first" rationale is undercut — pursuing it now needs a fresh hypothesis, not a "labels were the problem" hypothesis.
+> 3. #115 (Phase 2 FMA correlation) keeps value as a content-difficulty diagnostic but no longer blocks on v34d deployment.
+> 4. Phase 1's nn_std confidence proxy and the 2-bucket centroid routing rule remain shippable independent of model retraining.
+>
+> Eval artifacts: `outputs/v33_mel_only/eval/eval_results.json` (re-baselined under post-2026-04-29 onset-GT evaluator), `/mnt/storage/blinky-ml-data/outputs/v34d/eval/eval_results.json`. Comparison script: `scripts/v34d_compare.py`. Original training logs: `/mnt/storage/blinky-ml-data/outputs/v34d/training.log` (E14 best, val_peak_F1=0.394 — note val_peak_F1 metric-shift caveat).
+>
+> **2026-04-29 active run: v34d (clean ONSET labels) — CLOSED, see eval result above**
 >
 > | field | value |
 > |-------|-------|

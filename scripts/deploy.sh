@@ -113,17 +113,55 @@ if [[ -z "$JOB_ID" ]]; then
 fi
 
 # ─── Step 4: Poll for flash completion ───────────────────────────────
+#
+# Timeout budget: a single device can legitimately take 90-180s on a
+# flaky USB hub (uhubctl recoveries, multiple bootloader-entry retries),
+# and the per-device timeout in uf2_upload.py is itself ~180s. With 4
+# devices that's a worst-case 12 min plus the 10s USB-stabilization
+# wait and ~30s verify. We poll for 15 min and warn if any single
+# device sits in the same progressMessage for more than 4 min — that's
+# a strong signal the device-specific failure path is running.
 
 echo ""
 echo "=== Waiting for flash to complete ==="
 
-for i in $(seq 1 60); do  # 60 × 5s = 5 min max
-    sleep 5
+POLL_INTERVAL_S=5
+MAX_POLLS=180                     # 180 × 5s = 15 min total budget
+PER_PHASE_WARN_S=240              # warn if same progressMessage for >4 min
+last_progress=""
+job_start_t=$(date +%s)           # never reset — for total elapsed labels
+phase_t0=$job_start_t             # reset on each phase change
+last_print_t=0
+
+for i in $(seq 1 ${MAX_POLLS}); do
+    sleep ${POLL_INTERVAL_S}
     JOB_STATUS=$(curl -sf "${BLINKY_SERVER}/api/fleet/jobs/${JOB_ID}" 2>/dev/null)
     STATUS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
     PROGRESS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('progressMessage',''))" 2>/dev/null)
 
-    echo "  [${i}] ${STATUS}: ${PROGRESS}"
+    now=$(date +%s)
+    elapsed_total=$((now - job_start_t))
+    if [[ "$PROGRESS" != "$last_progress" ]]; then
+        # New phase. Reset the in-phase clock; the t+Ns label always
+        # measures from job_start_t (total elapsed since polling began),
+        # not since the previous phase, so operators can see the run
+        # duration at a glance.
+        last_progress="$PROGRESS"
+        phase_t0=$now
+        last_print_t=$now
+        echo "  [t+${elapsed_total}s] ${STATUS}: ${PROGRESS}"
+    elif (( now - last_print_t >= 30 )); then
+        # Same phase for 30+ seconds — print a heartbeat with both
+        # in-phase elapsed (for stall detection) and total elapsed
+        # (for run-duration awareness).
+        in_phase=$((now - phase_t0))
+        last_print_t=$now
+        warn_marker=""
+        if (( in_phase >= PER_PHASE_WARN_S )); then
+            warn_marker=" [WARN: stuck >${PER_PHASE_WARN_S}s on this phase]"
+        fi
+        echo "  [t+${elapsed_total}s in-phase ${in_phase}s]${warn_marker}"
+    fi
 
     if [[ "$STATUS" == "complete" ]]; then
         echo ""
@@ -137,11 +175,16 @@ for dev_id, info in r.get('per_device', {}).items():
     ver = info.get('version') or '?'
     name = info.get('device_name') or '?'
     ok = '✓' if flash == 'ok' else '✗'
-    print(f'    {dev_id}  {name:20s}  flash={flash} {ok}  version={ver}')
+    extra = ''
+    if flash != 'ok' and info.get('message'):
+        extra = f'  [{info[\"message\"][:80]}]'
+    print(f'    {dev_id}  {name:20s}  flash={flash} {ok}  version={ver}{extra}')
 "
         FLASH_STATUS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('result',{}).get('status','error'))" 2>/dev/null)
         if [[ "$FLASH_STATUS" != "ok" ]]; then
-            fail "Flash completed with errors" 2
+            # Compute partial-success message
+            PARTIAL_MSG=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('result',{}).get('message','?'))" 2>/dev/null)
+            fail "Flash completed with errors: ${PARTIAL_MSG}. Re-run './scripts/deploy.sh --skip-compile' to retry the failed devices." 2
         fi
         break
     elif [[ "$STATUS" == "error" ]]; then
@@ -151,7 +194,9 @@ for dev_id, info in r.get('per_device', {}).items():
 done
 
 if [[ "$STATUS" != "complete" ]]; then
-    fail "Flash timed out (5 min). Check server logs." 2
+    # Surface what we last saw so the operator knows where it stalled,
+    # not just "timed out".
+    fail "Flash polling timed out after $((MAX_POLLS * POLL_INTERVAL_S))s. Last server status: '${PROGRESS}'. Re-run './scripts/deploy.sh --skip-compile' to retry, or check 'sudo journalctl -u blinky-server' for the full per-device log." 2
 fi
 
 # ─── Step 5: Reset all devices to defaults ────────────────────────────
