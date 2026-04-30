@@ -110,16 +110,38 @@ const AudioControl& AudioTracker::update(float dt) {
     // 1. Mic input
     mic_.update(dt);
 
-    // 2. Feed spectral analysis
+    // 2-3. Drain audio backlog. Each iteration of this loop reads up to
+    // FFT_SIZE samples from the PDM ring and runs one FFT if a full
+    // window has accumulated.
+    //
+    // Why a loop: the consumer was previously capped at 256 samples per
+    // AudioTracker::update() call. The producer runs at 16 kHz = 62.5
+    // FFT-windows/sec, so the consumer needs ≥62.5 fps to keep up. Any
+    // dip below that (LED render spike, ACF/PLP burst, BLE ISR jitter)
+    // accumulates in the ring → eventual overrun. Measured at b155:
+    // 5.7 overruns/sec with ~10% audio loss across the fleet.
+    //
+    // Why bounded (MAX_DRAIN_ITERS = 4): if we let the loop run
+    // unbounded, a slow iteration that compounds compute would keep
+    // running FFTs until the ring drained — making the slow iter even
+    // slower. Cap at 4 FFTs/iter = ~8 ms worst-case added work, which
+    // covers a 64 ms backlog (= 4 × 16 ms audio per FFT). Anything
+    // beyond that is a different bug class (#126 LED-decouple territory).
+    //
+    // NN inference and pulse detection still run only on the LATEST
+    // spectral frame (see step 4 below) — by design, they emit events
+    // at the AudioTracker frame rate, not at the spectral frame rate.
+    // Mid-backlog frames feed ACF/PLP via the bass-flux/OSS sample
+    // path (step 6), which IS frame-by-frame, so onset timing accuracy
+    // for the rhythm tracker is preserved.
     static int16_t sampleBuffer[256];  // static: avoid 512 bytes on stack per frame
-    int samplesRead = mic_.getSamplesForExternal(sampleBuffer, 256);
-    if (samplesRead > 0) {
-        spectral_.addSamples(sampleBuffer, samplesRead);
-    }
-
-    // 3. Process spectral data when samples are available
+    constexpr int MAX_DRAIN_ITERS = 4;
     bool newSpectralFrame = false;
-    if (spectral_.hasSamples()) {
+    for (int drainIter = 0; drainIter < MAX_DRAIN_ITERS; drainIter++) {
+        int samplesRead = mic_.getSamplesForExternal(sampleBuffer, 256);
+        if (samplesRead == 0) break;  // ring empty
+        spectral_.addSamples(sampleBuffer, samplesRead);
+        if (!spectral_.hasSamples()) break;  // not enough for a full FFT yet
         spectral_.process();
     }
 
