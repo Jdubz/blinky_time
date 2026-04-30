@@ -121,17 +121,6 @@ def load_onset_gt(track_id: int) -> np.ndarray:
     return np.asarray(times, dtype=np.float64)
 
 
-def per_track_audio_features(audio_path: Path):
-    """Compute ioi-style features from the onset GT and audio-side
-    features that don't need NN inference. Mirror the Phase 1 feature set
-    where possible (ioi_mean, ioi_cv, onset_density). Audio-feature
-    side (flatness, centroid, crest, hfc) requires loading audio so we
-    skip those for now and keep this CPU-light — Phase 2 validation will
-    re-capture them from the device anyway.
-    """
-    return {}
-
-
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     id_to_title = load_genre_id_to_title()
@@ -149,7 +138,12 @@ def main():
     for g, c in sorted(genre_counts.items(), key=lambda x: -x[1]):
         log.info("  %-25s %d", g, c)
 
-    # Per-track features. Tracks with <5 GT onsets get surfaced (not silently
+    # Per-track features. We compute only GT-derived features here
+    # (onset_density, ioi_cv, ioi_mean_ms). Audio-side spectral features
+    # (flatness, centroid, crest, hfc, nn_std) are captured at validation
+    # time on-device via persist_raw — running them here would duplicate
+    # work and produce numbers that don't match what the firmware sees.
+    # Tracks with <5 GT onsets get surfaced (not silently
     # dropped) — that's almost always either (a) ambient material with no
     # percussive onsets (legitimate, but caller should know), or (b) a GT
     # generation failure (silent generator crash). Caller decides policy.

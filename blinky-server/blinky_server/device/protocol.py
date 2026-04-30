@@ -210,15 +210,19 @@ class DeviceProtocol:
         self._response_buf.clear()
 
         if timed_out:
+            # `result` is the joined str of newline-delimited response lines, so
+            # `len(result)` is character count, not raw byte count. Worded
+            # accordingly — distinguishes "no reply at all" (0 chars) from
+            # "reply arrived but never terminated" (>0 chars).
             log.warning(
-                "[FALLBACK] device command %r timed out after %.2fs (got %d bytes); raising",
+                "[FALLBACK] device command %r timed out after %.2fs (got %d response chars); raising",
                 command,
                 timeout,
                 len(result),
             )
             raise TimeoutError(
                 f"Device command timed out after {timeout:.2f}s: {command!r} "
-                f"(partial response: {len(result)} bytes)"
+                f"(partial response: {len(result)} chars)"
             )
 
         return result

@@ -60,6 +60,12 @@ def filter_track(kw_path: Path, cons_path: Path, tol_s: float, min_systems: int)
         o["time"] for o in cons.get("onsets", [])
         if o.get("systems", 1) >= min_systems
     )
+    # Float identity assumption: cons_supported is built from o["time"] and
+    # then queried below via float(cons_arr[idx]). Both sides are the same
+    # float bit pattern (sorted() and np.asarray() preserve floats exactly,
+    # and float(np.float64) round-trips losslessly). The dict lookup at
+    # line ~95 only works because of this — DO NOT introduce arithmetic on
+    # nearest_t before the lookup or the keys will mismatch.
     cons_systems_by_time = {o["time"]: o.get("systems", 1) for o in cons.get("onsets", [])}
 
     if not cons_supported:

@@ -383,7 +383,12 @@ def main():
                 print(f"  {done}/{len(work_items)} ({rate:.1f}/s, ETA {eta:.0f}s)")
     else:
         with Pool(processes=args.workers) as pool:
-            # zip parallels work_items so we can attribute failures back to stems
+            # imap (NOT imap_unordered) is required so that the result yielded
+            # at position i corresponds to work_items[i]. We zip the two so
+            # failed tracks (result=None) can be attributed back to their stem
+            # for the failure summary. Throughput cost vs imap_unordered is
+            # negligible since process_track latency is dominated by
+            # subprocess startup and audio I/O, not scheduling.
             for item, result in zip(work_items,
                                     pool.imap(process_track, work_items, chunksize=1)):
                 done += 1
