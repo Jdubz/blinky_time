@@ -1,5 +1,6 @@
 #include "AdaptiveMic.h"
 #include "../hal/PlatformConstants.h"
+#include "../types/BlinkyAssert.h"
 #include <math.h>
 
 // ============================================================================
@@ -36,6 +37,10 @@ volatile uint16_t AdaptiveMic::s_maxAbs     = 0;
 volatile int16_t AdaptiveMic::s_fftRing[AdaptiveMic::FFT_RING_SIZE] = {0};
 volatile uint32_t AdaptiveMic::s_fftWriteIdx = 0;
 uint32_t AdaptiveMic::s_extFftReadIdx = 0;
+
+// Overrun counters (monotonic from boot). See AdaptiveMic.h for rationale.
+volatile uint32_t AdaptiveMic::s_overrunCount = 0;
+volatile uint32_t AdaptiveMic::s_overrunSamplesLost = 0;
 
 // ---------- Public ----------
 AdaptiveMic::AdaptiveMic(IPdmMic& pdm, ISystemTime& time)
@@ -191,8 +196,26 @@ int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
   uint32_t available = writeIdx - s_extFftReadIdx;
   if (available == 0) return 0;
 
-  // If we fell behind by more than a full ring, catch up to avoid stale data
+  // If we fell behind by more than a full ring, catch up to avoid stale data.
+  //
+  // This is a silent fallback in spirit: the FFT window built immediately
+  // after this jump will contain audio from two non-contiguous time periods,
+  // producing one frame of bogus mel/flux features. The PDM ISR keeps
+  // sampling correctly throughout — the loss is purely in the consumer's
+  // ability to keep up with the producer.
+  //
+  // We can't refuse to drop here (no other recovery exists once the ring
+  // is overrun), but we MUST count and log so the corruption rate is
+  // observable in telemetry. Counters are exposed via SerialConsole's
+  // `json info` (see #124, plan-doc 2026-04-29). BLINKY_ASSERT_ONCE
+  // surfaces the first occurrence on Serial without flooding if the bug
+  // fires every loop iteration.
   if (available > FFT_RING_SIZE) {
+    uint32_t lost = available - FFT_RING_SIZE;
+    s_overrunCount++;
+    s_overrunSamplesLost += lost;
+    BLINKY_ASSERT_ONCE(false,
+        "AdaptiveMic FFT ring overrun (consumer fell behind producer)");
     s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
   }

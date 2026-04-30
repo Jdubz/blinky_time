@@ -1,5 +1,23 @@
 # ML Training Improvement Plan
 
+> **2026-04-29 — Audio sampling overrun discovered (silent fallback in firmware)**
+>
+> Investigating whether the on-device single-thread loop drops audio samples surfaced a silent fallback at `blinky-things/inputs/AdaptiveMic.cpp:195-197`. The PDM ISR is free-running DMA (sampling never stops at the hardware level), but when the main loop stalls longer than ~32 ms (the 512-sample FFT ring fill time at 16 kHz), the consumer silently advances its read pointer to discard old samples. No counter, no log — currently invisible to telemetry. Triggers: LED rendering (5–50 ms blocking), ACF/PLP spikes (~4–8 ms every 100 ms), BLE/WiFi ISR preemption.
+>
+> **Symptom of overrun:** the next 256-sample FFT window contains audio from two non-contiguous time periods (e.g., samples 32–287 then 320–543). One frame of mel/flux features is bogus; the next frame re-locks. Estimated 5–10% of frames at typical load.
+>
+> **Why this matters for F1:** v33 offline = 0.617 (we measured 2026-04-29), v33 on-device b153 = 0.570. The -0.05 gap is consistent with overrun-induced spectral corruption, since offline pipelines have no overruns. A counterfactual where overruns are eliminated could lift on-device toward the offline number — same magnitude as v35a's predicted lift, with no model retraining.
+>
+> **Three layers, ordered by cost and gated on the next one's evidence:**
+>
+> | # | task | what it does | cost | gate |
+> |---|------|--------------|------|------|
+> | #124 | **Overrun observability** | Counter + BLINKY_ASSERT_ONCE on first hit + count exposed via `json info`. No behavior change. | 30 min firmware | None — do first |
+> | #125 | **FFT ring 512 → 2048 samples** | Pushes overrun threshold from 32 ms to 128 ms main-loop stall tolerance. ~3 KB SRAM. | 1–2 hr firmware + revalidation | If #124 shows >1 overrun/sec under typical load |
+> | #126 | **Decouple LED rendering** | Move FastLED.show() to a timer-driven task so audio frame deadline is independent of LED count. | 1–2 days firmware (FreeRTOS task) | If overruns persist after #125 |
+>
+> Implementing #124 first as a measurement step. Running in parallel with v35a training (separate hardware: GPU vs Cortex-M4F). Measurement results will inform whether v35-experiment lifts or audio-pipeline fixes are higher-leverage next.
+>
 > **2026-04-29 — Structural-change research after v34d closed flat**
 >
 > v34d closed with offline F1 0.616 vs v33's 0.617 (flat). Cleaner labels are not the binding constraint. Surveyed all prior runs to identify which structural directions are exhausted vs untried; what follows is the queued experiment list. Each is a single-axis change vs the v33 baseline (50 mel, 30-8000 Hz, [32,32] Conv1D W16, kick_weighted_drums labels). All have a falsifiable prediction; abandon at first negative result that contradicts it.

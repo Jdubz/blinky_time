@@ -101,6 +101,25 @@ private:
   volatile static uint32_t s_fftWriteIdx;
   static uint32_t s_extFftReadIdx;
 
+  // Overrun observability. The PDM ISR is free-running DMA so audio
+  // never stops at the hardware level, but if the main loop stalls
+  // longer than ~32 ms (ring fill time at 16 kHz) the consumer falls
+  // behind and `getSamplesForExternal` advances its read pointer to
+  // discard old samples. Without these counters that drop is invisible
+  // — corrupted FFT windows look like normal frames in telemetry.
+  // Counters are monotonic from boot; a non-zero rate indicates
+  // overruns are happening at the rate of frames-with-corrupted-mel.
+  static volatile uint32_t s_overrunCount;
+  static volatile uint32_t s_overrunSamplesLost;
+
+ public:
+  // Read overrun counters (monotonic from boot). Accessed from
+  // SerialConsole `json info` and any debug telemetry path.
+  static uint32_t getOverrunCount() { return s_overrunCount; }
+  static uint32_t getOverrunSamplesLost() { return s_overrunSamplesLost; }
+
+ private:
+
   // Window/Range tracking
   float peakLevel = 0.0f;
   float valleyLevel = 0.0f;
