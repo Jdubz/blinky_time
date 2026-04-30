@@ -125,15 +125,14 @@ const AudioControl& AudioTracker::update(float dt) {
     // unbounded, a slow iteration that compounds compute would keep
     // running FFTs until the ring drained — making the slow iter even
     // slower. Cap at 4 FFTs/iter = ~8 ms worst-case added work, which
-    // covers a 64 ms backlog (= 4 × 16 ms audio per FFT). Anything
-    // beyond that is a different bug class (#126 LED-decouple territory).
+    // covers a 64 ms backlog (= 4 × 16 ms audio per FFT).
     //
-    // NN inference and pulse detection still run only on the LATEST
-    // spectral frame (see step 4 below) — by design, they emit events
-    // at the AudioTracker frame rate, not at the spectral frame rate.
-    // Mid-backlog frames feed ACF/PLP via the bass-flux/OSS sample
-    // path (step 6), which IS frame-by-frame, so onset timing accuracy
-    // for the rhythm tracker is preserved.
+    // Mid-loop spectral frames (drain iterations 1..N-1) update the
+    // shared spectral state but only the LAST iteration's frame feeds
+    // step 4 (NN inference) and step 6 (ACF/PLP). This is acceptable:
+    // the older frames are catch-up; the latest frame carries the
+    // current audio state and drives all downstream consumers at the
+    // AudioTracker frame rate.
     static int16_t sampleBuffer[256];  // static: avoid 512 bytes on stack per frame
     constexpr int MAX_DRAIN_ITERS = 4;
     bool newSpectralFrame = false;

@@ -68,10 +68,10 @@ public:
 
   // FFT-ring overrun counters (monotonic from boot). The PDM ISR is
   // free-running DMA so audio never stops at the hardware level, but
-  // if the main loop stalls longer than ~32 ms (ring fill time at
-  // 16 kHz) `getSamplesForExternal` discards old samples to catch up
-  // — that drop is invisible without these counters. Surfaced via
-  // SerialConsole's `json info`.
+  // if the main loop stalls longer than ~128 ms (ring fill time at
+  // 16 kHz with FFT_RING_SIZE = 2048) `getSamplesForExternal` discards
+  // old samples to catch up — that drop is invisible without these
+  // counters. Surfaced via SerialConsole's `json info`.
   static uint32_t getOverrunCount() { return s_overrunCount; }
   static uint32_t getOverrunSamplesLost() { return s_overrunSamplesLost; }
 
@@ -104,20 +104,10 @@ private:
   volatile static uint32_t s_numSamples;
   volatile static uint16_t s_maxAbs;
 
-  // FFT sample ring buffer.
-  //
-  // History: was 512 samples (= 32 ms at 16 kHz) until b154's overrun
-  // observability (#124) measured 5-6 overruns/sec on every device,
-  // discarding 14-17% of all audio because LED rendering and ACF spikes
-  // routinely block the main loop for >32 ms.
-  //
-  // 2048 samples (= 128 ms) gives the consumer four times the headroom
-  // — covers a 100 ms FastLED.show() plus a 4-8 ms ACF spike without
-  // overrunning. Cost: 2048 × 2 bytes = 4 KB SRAM (vs 1 KB before),
-  // well within the nRF52840's free RAM budget (~210 KB local). Power-
-  // of-two size required by the `& (FFT_RING_SIZE - 1)` index mask in
-  // getSamplesForExternal.
+  // 2048 samples = 128 ms headroom; was 512 (32 ms) until b154 overran 5-6×/sec (see #125).
   static constexpr int FFT_RING_SIZE = 2048;
+  static_assert((FFT_RING_SIZE & (FFT_RING_SIZE - 1)) == 0,
+                "FFT_RING_SIZE must be a power of two (used as ring mask in getSamplesForExternal)");
   volatile static int16_t s_fftRing[FFT_RING_SIZE];
   volatile static uint32_t s_fftWriteIdx;
   static uint32_t s_extFftReadIdx;
