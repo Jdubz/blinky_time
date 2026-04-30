@@ -78,7 +78,20 @@ async def _sync_clock(device: Device) -> float | None:
             sorted(info.keys()),
         )
         return None
-    fw_millis = float(fw_millis_raw)
+    try:
+        fw_millis = float(fw_millis_raw)
+    except (TypeError, ValueError) as e:
+        # `millis` is supposed to be a number per the b117+ contract, but
+        # if the firmware ever ships a string / nested dict / null-shaped
+        # value here we'd crash uncaught past both prior try blocks. The
+        # split-exception design of this function deserves a third guard.
+        log.warning(
+            "[FALLBACK] clock sync %s: `millis` field not numeric (raw=%r): %s",
+            device.id[:12],
+            fw_millis_raw,
+            e,
+        )
+        return None
 
     # Estimate firmware time at midpoint of round-trip
     rtt = t_recv - t_send

@@ -290,7 +290,13 @@ async def _flash_fleet_background(
                 _base: str = base_msg,
                 _job: Any = job,
             ) -> None:
-                _job.progress_message = f"{_base} — {phase}: {msg}"
+                # Include pct in the rendered message when the phase has
+                # one — uf2_upload.py emits 10/15/20/100 at known stages,
+                # which is genuine progress information; dropping it
+                # would be the soft silent-fallback pattern (accepting
+                # an arg and silently ignoring it).
+                pct_str = f" [{pct}%]" if pct is not None else ""
+                _job.progress_message = f"{_base} — {phase}: {msg}{pct_str}"
 
             try:
                 result = await upload_firmware(
