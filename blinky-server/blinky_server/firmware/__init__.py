@@ -83,13 +83,15 @@ async def upload_firmware(
         if not device.ble_address:
             return {"status": "error", "message": "DFU recovery but BLE address unknown"}
         if progress_callback is not None:
-            # BLE DFU path doesn't yet thread progress callbacks; log so a
-            # caller passing one knows their progress wiring is dead on
-            # this branch (avoids the "soft" silent-fallback pattern of
-            # accepting a callback and silently never invoking it).
-            log.info(
-                "upload_firmware: progress_callback provided but DFU-recovery "
-                "(BLE) path does not yet support it; caller will not see phase updates"
+            # WARN, not INFO: silently dropping a caller-supplied callback
+            # is the soft silent-fallback pattern CLAUDE.md prohibits.
+            # Surfacing this at WARN ensures the operator sees the
+            # mismatch in normal validation-run logs, not only when
+            # debug logging is enabled.
+            log.warning(
+                "[FALLBACK] upload_firmware: progress_callback provided but "
+                "DFU-recovery (BLE) path does not yet support it; caller will "
+                "not see phase updates"
             )
         dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
         return await upload_ble_dfu(
@@ -114,9 +116,15 @@ async def upload_firmware(
         from .compile import ensure_dfu_zip
 
         if progress_callback is not None:
-            log.info(
-                "upload_firmware: progress_callback provided but BLE DFU "
-                "path does not yet support it; caller will not see phase updates"
+            # WARN, not INFO: silently dropping a caller-supplied callback
+            # is the soft silent-fallback pattern CLAUDE.md prohibits.
+            # Surfacing this at WARN ensures the operator sees the
+            # mismatch in normal validation-run logs, not only when
+            # debug logging is enabled.
+            log.warning(
+                "[FALLBACK] upload_firmware: progress_callback provided but "
+                "BLE DFU path does not yet support it; caller will not see "
+                "phase updates"
             )
         dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
         ble_transport = device.transport

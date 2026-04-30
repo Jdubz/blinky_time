@@ -75,7 +75,7 @@ public:
   static uint32_t getOverrunCount() { return s_overrunCount; }
   static uint32_t getOverrunSamplesLost() { return s_overrunSamplesLost; }
 
-public:
+  // ---- Construction / lifecycle ----
   AdaptiveMic(IPdmMic& pdm, ISystemTime& time);
 
   bool begin(uint32_t sampleRate = Platform::Microphone::DEFAULT_SAMPLE_RATE,

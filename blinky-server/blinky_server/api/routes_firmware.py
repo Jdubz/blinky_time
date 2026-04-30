@@ -356,11 +356,18 @@ async def _flash_fleet_background(
     per_device = {}
     for short_id, flash_result in results.items():
         v = verified.get(short_id, {})
-        per_device[short_id] = {
+        per_device_entry: dict[str, Any] = {
             "flash": flash_result.get("status", "error"),
             "version": v.get("version"),
             "device_name": v.get("device_name"),
         }
+        # Surface the failure detail so deploy.sh (and any other client
+        # rendering the per-device result) can print *why* a device
+        # failed, not just that it did. Only included for failures to
+        # keep the success path noise-free.
+        if flash_result.get("status") != "ok" and flash_result.get("message"):
+            per_device_entry["message"] = flash_result["message"]
+        per_device[short_id] = per_device_entry
 
     job.progress = 100
     return {

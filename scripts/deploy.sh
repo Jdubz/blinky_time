@@ -129,7 +129,8 @@ POLL_INTERVAL_S=5
 MAX_POLLS=180                     # 180 × 5s = 15 min total budget
 PER_PHASE_WARN_S=240              # warn if same progressMessage for >4 min
 last_progress=""
-phase_t0=$(date +%s)
+job_start_t=$(date +%s)           # never reset — for total elapsed labels
+phase_t0=$job_start_t             # reset on each phase change
 last_print_t=0
 
 for i in $(seq 1 ${MAX_POLLS}); do
@@ -139,23 +140,27 @@ for i in $(seq 1 ${MAX_POLLS}); do
     PROGRESS=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('progressMessage',''))" 2>/dev/null)
 
     now=$(date +%s)
+    elapsed_total=$((now - job_start_t))
     if [[ "$PROGRESS" != "$last_progress" ]]; then
-        # New phase. Reset the in-phase clock and print the transition.
-        elapsed_total=$((now - phase_t0))
+        # New phase. Reset the in-phase clock; the t+Ns label always
+        # measures from job_start_t (total elapsed since polling began),
+        # not since the previous phase, so operators can see the run
+        # duration at a glance.
         last_progress="$PROGRESS"
         phase_t0=$now
         last_print_t=$now
         echo "  [t+${elapsed_total}s] ${STATUS}: ${PROGRESS}"
     elif (( now - last_print_t >= 30 )); then
-        # Same phase for 30+ seconds — print a heartbeat with elapsed
-        # time so the operator knows the script is alive but stalled.
+        # Same phase for 30+ seconds — print a heartbeat with both
+        # in-phase elapsed (for stall detection) and total elapsed
+        # (for run-duration awareness).
         in_phase=$((now - phase_t0))
         last_print_t=$now
         warn_marker=""
         if (( in_phase >= PER_PHASE_WARN_S )); then
             warn_marker=" [WARN: stuck >${PER_PHASE_WARN_S}s on this phase]"
         fi
-        echo "  [in-phase ${in_phase}s]${warn_marker}"
+        echo "  [t+${elapsed_total}s in-phase ${in_phase}s]${warn_marker}"
     fi
 
     if [[ "$STATUS" == "complete" ]]; then

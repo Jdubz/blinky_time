@@ -8,6 +8,7 @@ Two test types:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -53,6 +54,13 @@ async def _sync_clock(device: Device) -> float | None:
     t_send = time.time() * 1000
     try:
         resp = await device.protocol.send_command("json info")
+    # `TimeoutError` here covers `asyncio.TimeoutError` too: pyproject.toml
+    # requires Python >= 3.11, where asyncio.TimeoutError is an alias for
+    # builtins.TimeoutError. ruff UP041 enforces this modern idiom — listing
+    # both would be redundant. If pyproject.toml ever drops to 3.10, this
+    # catch becomes incorrect and asyncio.TimeoutError would slip through
+    # to the `except Exception` arm below (still handled, but at ERROR
+    # level instead of WARN).
     except (TimeoutError, ConnectionError) as e:
         log.warning("[FALLBACK] clock sync %s: send_command failed: %s", device.id[:12], e)
         return None
@@ -170,22 +178,32 @@ async def _record_and_play(
     """
     sessions: dict[str, TestSession] = {}
     sync_failures = 0
+    # Sync all clocks BEFORE starting any recording. The previous order
+    # ("start_recording in the same loop as sync") meant a final raise
+    # in the all-failed guard left every session in the recording state
+    # — buffers allocated, OS resources held, no path to clean shutdown.
+    # Two-pass design: pass 1 checks the all-failed predicate cleanly;
+    # pass 2 actually opens recordings only after we know the run is
+    # viable.
     for device in devices:
         session = device.start_test_session()
-        # Sync clocks before recording starts (while streaming is active)
         offset = await _sync_clock(device)
         if offset is not None:
             session.set_clock_offset(offset)
         else:
             sync_failures += 1
-        session.start_recording()
         sessions[device.id] = session
 
     # If every device failed clock sync, downstream timing is unreliable for
     # the entire test (firmware events can't be aligned with audio playback).
     # Halt loudly rather than recording a run that looks superficially normal
-    # but produces wrong F1 numbers.
+    # but produces wrong F1 numbers. Clean up the test sessions we just
+    # opened so we don't leak per-device state across the raise.
     if devices and sync_failures == len(devices):
+        for device in devices:
+            if device.id in sessions:
+                with contextlib.suppress(Exception):
+                    device.stop_test_session()
         raise RuntimeError(
             f"Clock sync failed on ALL {len(devices)} devices — every "
             f"firmware-timestamped event will be uncorrelated with audio "
@@ -193,6 +211,11 @@ async def _record_and_play(
             f"device failure mode (commonly: firmware build missing the "
             f"`millis` field, or all devices lost connection)."
         )
+
+    # Run is viable — start recording on every session.
+    for device in devices:
+        if device.id in sessions:
+            sessions[device.id].start_recording()
 
     try:
         playback = await play_audio(audio_file, duration_ms=duration_ms, seek_sec=seek_sec)
