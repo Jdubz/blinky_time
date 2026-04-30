@@ -1,6 +1,22 @@
 # ML Training Improvement Plan
 
-> **2026-04-29 active run: v34d (clean ONSET labels)**
+> **2026-04-29 19:00 — v34d EVAL RESULT: flat with v33 (negative result triggered)**
+>
+> | metric (offline, edm/ 18 tracks) | GT used | v33 | v34d | Δ |
+> |----------------------------------|---------|-----|------|---|
+> | Primary F1 (mir_eval onset, 50ms) | onsets_consensus | 0.617 | 0.616 | -0.001 |
+> | onset_F1 (librosa loose GT)       | .onsets.json     | 0.843 | 0.847 | +0.004 |
+> | kw_onset_F1                        | kick_weighted    | 0.890 | 0.888 | -0.002 |
+>
+> 16 of 18 tracks moved by less than ±0.01; the 2 with motion (techno-machine-drum, edm-trap-electro) both dipped slightly. No track lifted meaningfully. **This hits the negative-result trigger committed to in the run plan.** The ~30% bleed contamination in kick_weighted was real (audit on edm/: F1 vs hand-curated GT 0.657 → 0.745 after cleanup) but the model wasn't fitting that noise — cleaning it didn't help. **Don't deploy v34d.** Conclusions:
+> 1. The post-v32 synthesis stands: the binding constraint is structural (mel resolution × fmax × architecture), not label noise.
+> 2. #72 (multi-channel instrument model) is technically unblocked but the "clean labels first" rationale is undercut — pursuing it now needs a fresh hypothesis, not a "labels were the problem" hypothesis.
+> 3. #115 (Phase 2 FMA correlation) keeps value as a content-difficulty diagnostic but no longer blocks on v34d deployment.
+> 4. Phase 1's nn_std confidence proxy and the 2-bucket centroid routing rule remain shippable independent of model retraining.
+>
+> Eval artifacts: `outputs/v33_mel_only/eval/eval_results.json` (re-baselined under post-2026-04-29 onset-GT evaluator), `/mnt/storage/blinky-ml-data/outputs/v34d/eval/eval_results.json`. Comparison script: `scripts/v34d_compare.py`. Original training logs: `/mnt/storage/blinky-ml-data/outputs/v34d/training.log` (E14 best, val_peak_F1=0.394 — note val_peak_F1 metric-shift caveat).
+>
+> **2026-04-29 active run: v34d (clean ONSET labels) — CLOSED, see eval result above**
 >
 > | field | value |
 > |-------|-------|
