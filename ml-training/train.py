@@ -852,11 +852,26 @@ def main():
         # low baseline and learns to spike UP at onsets. Without this, the zero
         # bias starts at sigmoid(0) = 0.5, leading to flat ~0.6 activations where
         # the model compromises between pos_weight pushing up and neg loss pushing down.
-        if hasattr(model, 'output_conv') and pos_ratio_mean > 0:
-            init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
-            with torch.no_grad():
-                model.output_conv.bias.fill_(init_bias)
-            print(f"  Output bias init: {init_bias:.3f} (sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+        if hasattr(model, 'output_conv'):
+            if multichannel_targets:
+                # Per-channel bias from each channel's own positive ratio. v35b
+                # had hihat at 0.35% — uniform bias from a global mean would
+                # leave hihat severely under-initialized. Each channel gets the
+                # log-prior matching its own class density.
+                with torch.no_grad():
+                    for ch in range(n_ch):
+                        ch_ratio = float(y_sample[:, :, ch].mean())
+                        if ch_ratio > 0 and ch_ratio < 1:
+                            init_bias = math.log(ch_ratio / (1 - ch_ratio))
+                            model.output_conv.bias[ch].fill_(init_bias)
+                            name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
+                            print(f"  Output bias init [{name}]: {init_bias:.3f} "
+                                  f"(sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+            elif pos_ratio_mean > 0:
+                init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
+                with torch.no_grad():
+                    model.output_conv.bias.fill_(init_bias)
+                print(f"  Output bias init: {init_bias:.3f} (sigmoid={1/(1+math.exp(-init_bias)):.4f})")
         # Quant-Noise: stochastic INT8 quantization during training (Fan et al. 2020)
         quant_noise_ratio = cfg["training"].get("quant_noise", 0.0)
         if quant_noise_ratio > 0:
