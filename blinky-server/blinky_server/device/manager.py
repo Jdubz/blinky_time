@@ -232,13 +232,24 @@ class FleetManager:
             return False
 
     async def send_to_all(self, command: str) -> dict[str, str]:
-        """Send a command to all connected devices."""
+        """Send a command to all known devices and return per-device status.
+
+        Every known device appears in the result dict. Devices not in
+        CONNECTED state get a `"skipped: state=<state>"` entry rather than
+        being silently filtered out — callers (deploy.sh, validation jobs)
+        rely on full per-device visibility to fail loud when a fleet-wide
+        command misses some subset of devices. Pre-2026-05-01 the filtered
+        devices were silently dropped, which made deploy.sh's
+        "Done" line a lie when one device was re-enumerating during the call.
+        """
         results: dict[str, str] = {}
         tasks: list[tuple[str, asyncio.Task[str]]] = []
         for device in self._devices.values():
             if device.state == DeviceState.CONNECTED:
                 task = asyncio.create_task(device.protocol.send_command(command))
                 tasks.append((device.id, task))
+            else:
+                results[device.id] = f"skipped: state={device.state.value}"
         for device_id, task in tasks:
             try:
                 results[device_id] = await task

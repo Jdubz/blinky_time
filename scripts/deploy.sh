@@ -199,25 +199,143 @@ if [[ "$STATUS" != "complete" ]]; then
     fail "Flash polling timed out after $((MAX_POLLS * POLL_INTERVAL_S))s. Last server status: '${PROGRESS}'. Re-run './scripts/deploy.sh --skip-compile' to retry, or check 'sudo journalctl -u blinky-server' for the full per-device log." 2
 fi
 
-# ─── Step 5: Reset all devices to defaults ────────────────────────────
-# Settings persist in flash across firmware updates. Stale values from
-# experiments silently corrupt test results. Always reset after deploy.
+# ─── Step 5: Restore runtime settings (defaults) ────────────────────────
+# Note: `defaults` resets soft runtime tunables (mic, audio tracker params,
+# generators) — it does NOT wipe device identity (matrix size, deviceId).
+# That preservation is intentional: fleet devices keep their identity across
+# every firmware deploy. To wipe identity, use `factory`/`reset` (heavy,
+# wipes everything; deploy.sh does not invoke it because it would unconfig
+# every device on every flash).
+#
+# Per-device status is now displayed instead of "Done" — pre-2026-05-01
+# this step silently skipped devices not in CONNECTED state. Now devices
+# that didn't ACK the command surface explicitly and the deploy fails loud.
+
+run_fleet_command() {
+    local cmd_label="$1"
+    local cmd="$2"
+    local resp_json
+    resp_json=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+        -H "X-API-Key: ${API_KEY}" \
+        -H "${DEPLOY_TOOL_HEADER}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"command\": \"${cmd}\"}" 2>&1) || {
+        echo "  [ERROR] ${cmd_label}: HTTP request failed" >&2
+        return 1
+    }
+
+    # Parse the per-device dict, print one row per device, and exit non-zero
+    # if any device was skipped or returned an error response.
+    if ! echo "$resp_json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+fails = 0
+for dev_id, resp in data.items():
+    short = dev_id[:12]
+    resp_str = str(resp).strip()
+    if resp_str.startswith('skipped:') or resp_str.startswith('error:'):
+        print(f'  {short} FAIL: {resp_str}')
+        fails += 1
+    else:
+        first_line = resp_str.split(chr(10))[0][:60]
+        print(f'  {short} OK ({first_line})')
+sys.exit(1 if fails else 0)
+"; then
+        return 1
+    fi
+    return 0
+}
 
 echo ""
-echo "=== Resetting all devices to defaults ==="
-if ! curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
-    -H "X-API-Key: ${API_KEY}" \
-    -H 'Content-Type: application/json' \
-    -d '{"command": "defaults"}' > /dev/null 2>&1; then
-    echo "  [WARNING] defaults reset may have failed — devices could have stale settings" >&2
+echo "=== Restoring runtime settings (defaults) ==="
+if ! run_fleet_command "defaults" "defaults"; then
+    fail "defaults command did not land on every device. State stale; investigate before next test." 4
 fi
-if ! curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
-    -H "X-API-Key: ${API_KEY}" \
-    -H 'Content-Type: application/json' \
-    -d '{"command": "save"}' > /dev/null 2>&1; then
-    echo "  [WARNING] save may have failed" >&2
+
+echo ""
+echo "=== Saving settings to flash (save) ==="
+if ! run_fleet_command "save" "save"; then
+    fail "save command did not land on every device. Reboot will lose the just-applied defaults." 4
 fi
-echo "  Done"
+
+# ─── Step 6: Post-deploy state assertion ────────────────────────────────
+# Verify each device's actual state matches expectations. Catches:
+#   - flash succeeded but device booted to wrong version (rare, partial flash)
+#   - audio loop overrun-bound at boot (fixed by b156 drain loop, but regressions
+#     would surface here)
+#   - fps unexpectedly low (perf regression, e.g., the v36-fmax merge gate)
+
+echo ""
+echo "=== Verifying post-deploy state ==="
+sleep 6  # let the LoopMetrics 5s window close so fps reads are non-zero
+
+export EXPECTED_BUILD="b${BUILD}"
+export API_KEY BLINKY_SERVER
+DEVICES_JSON=$(curl -sf -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>&1) || {
+    fail "Failed to list devices for post-deploy verification: ${DEVICES_JSON}" 4
+}
+
+echo "$DEVICES_JSON" | python3 -c "
+import json, sys, urllib.request, os
+
+API_KEY = os.environ['API_KEY']
+SERVER = os.environ['BLINKY_SERVER']
+EXPECTED = os.environ['EXPECTED_BUILD']
+
+devices = json.loads(sys.stdin.read())
+fails = []
+for d in devices:
+    dev_id = d.get('id', '?')
+    short = dev_id[:12]
+    state = d.get('state', '?')
+    if state != 'connected':
+        fails.append(f'{short} state={state}')
+        print(f'  {short} FAIL: state={state}')
+        continue
+    req = urllib.request.Request(
+        f'{SERVER}/api/devices/{dev_id}/command',
+        data=b'{\"command\": \"json info\"}',
+        headers={'X-API-Key': API_KEY, 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            wrap = json.loads(r.read())
+        info = json.loads(wrap['response'])
+    except Exception as e:
+        fails.append(f'{short} json info failed: {e}')
+        print(f'  {short} FAIL: json info: {e}')
+        continue
+
+    version = info.get('version', '?')
+    fps = info.get('fps', 0.0)
+    overruns = info.get('audioOverruns', -1)
+    samples_lost = info.get('audioSamplesLost', -1)
+
+    # Hard checks: version, basic counters present.
+    if version != EXPECTED:
+        fails.append(f'{short} version={version} expected={EXPECTED}')
+        print(f'  {short} FAIL: version={version} expected={EXPECTED} fps={fps} overruns={overruns}')
+        continue
+    if overruns < 0 or samples_lost < 0:
+        # New firmware should always expose these; if missing, instrumentation regressed.
+        fails.append(f'{short} missing audio overrun counters')
+        print(f'  {short} FAIL: missing overrun counters in json info')
+        continue
+
+    # Soft warnings: fps low / overruns high. Don't fail deploy on these
+    # (boot-time stalls produce a few overruns expectedly), but surface them.
+    warn = []
+    if fps > 0 and fps < 30:
+        warn.append(f'fps={fps:.1f}<30')
+    if overruns > 5:
+        warn.append(f'overruns={overruns}')
+    warn_str = ' WARN:' + ','.join(warn) if warn else ''
+    print(f'  {short} OK version={version} fps={fps:.1f} overruns={overruns}{warn_str}')
+
+print(f'pass={len(devices)-len(fails)}/{len(devices)}', file=sys.stderr)
+sys.exit(1 if fails else 0)
+" || fail "Post-deploy state assertion failed (see rows above). Devices may have flashed but booted to an unexpected state." 4
 
 echo ""
 echo "============================================================"
