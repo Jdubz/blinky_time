@@ -249,6 +249,12 @@ void setup() {
     // 1024 LEDs) — frees that time for audio drain and FFT processing.
     // Pre-allocated PWM pattern buffer also avoids the per-frame malloc/free
     // that fragments the heap with Adafruit_NeoPixel.
+    //
+    // Verified at 1 LED on b157 fleet test chips (boot, audio loop healthy,
+    // post-boot overrun rate ~0/sec). PWM timing math is count-independent
+    // (each LED is 24 PWM values @ 800 KHz), so 8-16 LED bench setups use
+    // the same code path with no count-dependent thresholds. The hard upper
+    // bound is 1365 LEDs (PWM SEQ[n].CNT 15-bit limit, enforced in begin()).
     auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
     leds = asyncStrip;  // Assign before validity check so cleanup() can free it
     if (!asyncStrip || !asyncStrip->isValid()) {
