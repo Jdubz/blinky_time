@@ -68,10 +68,10 @@ public:
 
   // FFT-ring overrun counters (monotonic from boot). The PDM ISR is
   // free-running DMA so audio never stops at the hardware level, but
-  // if the main loop stalls longer than ~32 ms (ring fill time at
-  // 16 kHz) `getSamplesForExternal` discards old samples to catch up
-  // — that drop is invisible without these counters. Surfaced via
-  // SerialConsole's `json info`.
+  // if the main loop stalls longer than ~128 ms (ring fill time at
+  // 16 kHz with FFT_RING_SIZE = 2048) `getSamplesForExternal` discards
+  // old samples to catch up — that drop is invisible without these
+  // counters. Surfaced via SerialConsole's `json info`.
   static uint32_t getOverrunCount() { return s_overrunCount; }
   static uint32_t getOverrunSamplesLost() { return s_overrunSamplesLost; }
 
@@ -104,8 +104,10 @@ private:
   volatile static uint32_t s_numSamples;
   volatile static uint16_t s_maxAbs;
 
-  // FFT sample ring buffer
-  static constexpr int FFT_RING_SIZE = 512;
+  // 2048 samples = 128 ms headroom; was 512 (32 ms) until b154 overran 5-6×/sec (see #125).
+  static constexpr int FFT_RING_SIZE = 2048;
+  static_assert((FFT_RING_SIZE & (FFT_RING_SIZE - 1)) == 0,
+                "FFT_RING_SIZE must be a power of two (used as ring mask in getSamplesForExternal)");
   volatile static int16_t s_fftRing[FFT_RING_SIZE];
   volatile static uint32_t s_fftWriteIdx;
   static uint32_t s_extFftReadIdx;

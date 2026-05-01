@@ -110,16 +110,56 @@ const AudioControl& AudioTracker::update(float dt) {
     // 1. Mic input
     mic_.update(dt);
 
-    // 2. Feed spectral analysis
-    static int16_t sampleBuffer[256];  // static: avoid 512 bytes on stack per frame
-    int samplesRead = mic_.getSamplesForExternal(sampleBuffer, 256);
-    if (samplesRead > 0) {
-        spectral_.addSamples(sampleBuffer, samplesRead);
-    }
-
-    // 3. Process spectral data when samples are available
+    // 2-3. Drain audio backlog. Each iteration reads up to FFT_SIZE
+    // samples from the PDM ring and runs one FFT.
+    //
+    // Why a loop: pre-b156 the consumer was capped at 256 samples per
+    // update() call. Producer runs at 16 kHz = 62.5 FFT-windows/sec,
+    // so the consumer needs ≥62.5 fps to keep up. Any dip below that
+    // (LED spike, ACF/PLP burst, BLE ISR jitter) accumulates in the
+    // ring → eventual overrun. Pre-b156 fleet measurement (b154/b155
+    // observability code, ring size 512): 5.7 overruns/sec, 10-17%
+    // audio loss across all 4 devices. Post-fix b156: ~0/sec.
+    //
+    // Why bounded (MAX_DRAIN_ITERS = 4): unbounded recovery makes a
+    // slow iteration even slower (compute compounds). Cap at 4
+    // FFTs/iter ≈ 8 ms added worst-case work, covering 64 ms of
+    // backlog. With the 128 ms ring size (#125), a fully-saturated
+    // ring takes ~2 update() calls to fully drain.
+    //
+    // KNOWN ONSET COST during catch-up: NN inference (step 4) runs
+    // ONLY on the last drain iteration's spectral frame. If the loop
+    // processes 4 windows in one update() — i.e., the main loop
+    // stalled long enough to back up 64 ms of audio — onsets in the
+    // first 3 windows never reach the NN. They advance the spectral
+    // state (good for ACF/PLP, which only needs the latest frame
+    // anyway) but don't fire onset events. This is a strict
+    // improvement over the pre-b156 alternative (overrun → samples
+    // dropped at the ring entirely), but it does mean during a stall
+    // the onset detector sees roughly 1 of every 4 backlog frames.
+    // The visualizer still fires on the latest frame so the listener
+    // sees a hit, just not for every drum in a fast fill if a stall
+    // happened simultaneously.
+    //
+    // Read-buffer is sized to FFT_SIZE. getSamplesForExternal returns
+    // min(ring_available, maxCount), so a full read fills the accumulator
+    // exactly in one shot; a partial read (ring had < FFT_SIZE samples)
+    // is also fine — addSamples accumulates, !hasSamples() breaks the
+    // loop, and the next update() picks up the rest. The static_assert
+    // pins the buffer-FFT relationship: if the buffer were sized smaller
+    // than FFT_SIZE it would take multiple reads per window and the
+    // !hasSamples() branch would no longer mean "ring is partial," it
+    // would mean "we need another read pass" (different semantics).
+    static int16_t sampleBuffer[SpectralConstants::FFT_SIZE];  // static: avoid stack churn
+    static_assert(sizeof(sampleBuffer) / sizeof(sampleBuffer[0]) == SpectralConstants::FFT_SIZE,
+                  "drain-loop sampleBuffer must equal FFT_SIZE so one read fills one window");
+    constexpr int MAX_DRAIN_ITERS = 4;
     bool newSpectralFrame = false;
-    if (spectral_.hasSamples()) {
+    for (int drainIter = 0; drainIter < MAX_DRAIN_ITERS; drainIter++) {
+        int samplesRead = mic_.getSamplesForExternal(sampleBuffer, SpectralConstants::FFT_SIZE);
+        if (samplesRead == 0) break;  // ring empty
+        spectral_.addSamples(sampleBuffer, samplesRead);
+        if (!spectral_.hasSamples()) break;  // partial window — wait for next update()
         spectral_.process();
     }
 
