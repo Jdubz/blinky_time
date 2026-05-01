@@ -83,3 +83,50 @@ async def require_deploy_tool(
             "Use scripts/deploy.sh — direct curl against /fleet/upload or /fleet/flash "
             "is forbidden (see CLAUDE.md 'CRITICAL: Upload Safety').",
         )
+
+
+# Commands that mutate persistent device state or device lifecycle. Sending
+# these in a loop without proper reboot/reconnection handling leaves devices
+# in error states (see fps_sweep.py incident, 2026-05-01). These have zero
+# legitimate callers outside of deploy.sh, so the cost of gating them is
+# zero and the cost of NOT gating them is real (manual fleet recovery).
+#
+# Left intentionally open: gen/effect/set/save/load/defaults (legitimate
+# UI use from blinky-console) and read-only commands (json info, ping).
+_DEPLOY_GATED_COMMAND_PREFIXES = (
+    "device upload",  # writes new device config to flash
+    "reboot",  # device lifecycle — resets connection state
+)
+
+
+def is_deploy_gated_command(cmd: str) -> bool:
+    """True if `cmd` is a device-mutating command that requires X-Deploy-Tool.
+
+    Used by /devices/{id}/command and /fleet/command to gate the dangerous
+    subset of free-text commands while keeping UI-driven commands open.
+    """
+    cmd_stripped = cmd.strip().lower()
+    return any(
+        cmd_stripped == prefix or cmd_stripped.startswith(prefix + " ")
+        for prefix in _DEPLOY_GATED_COMMAND_PREFIXES
+    )
+
+
+def assert_command_allowed(cmd: str, x_deploy_tool: str | None) -> None:
+    """Raise 403 if `cmd` is deploy-gated and X-Deploy-Tool is missing/invalid.
+
+    Call from any route that accepts a free-text command string. Read the
+    X-Deploy-Tool header optionally (`Header(None)`) so legitimate UI
+    callers without the header still reach this check rather than failing
+    earlier on a required-header validation.
+    """
+    if not is_deploy_gated_command(cmd):
+        return
+    if x_deploy_tool is None or not x_deploy_tool.startswith(_DEPLOY_TOOL_PREFIX):
+        raise HTTPException(
+            403,
+            f"Command '{cmd[:40]}' requires X-Deploy-Tool header. "
+            "Device-mutating commands (device upload, reboot) must be issued "
+            "by scripts/deploy.sh — direct curl is forbidden. "
+            "See CLAUDE.md 'CRITICAL: Upload Safety'.",
+        )

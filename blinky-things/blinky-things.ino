@@ -27,6 +27,7 @@
 #include "types/Version.h"           // Version information from repository
 #include "tests/SafeMode.h"          // Crash recovery system
 #include "hal/DefaultHal.h"          // HAL singleton instances
+#include "audio/LoopMetrics.h"       // Main-loop fps + frame-time observability (#137)
 #include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper (Adafruit)
 #include "hal/hardware/Nrf52PwmLedStrip.h"  // Async PWM driver (nRF52840)
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
@@ -501,37 +502,27 @@ void loop() {
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 
-  // FPS counter — only tracks when log output is enabled (saves 3 comparisons/frame in production)
-  static uint32_t fpsFrameCount = 0;
-  static uint32_t fpsWindowStart = 0;
-  static uint32_t fpsMinFrameMs = UINT32_MAX;
-  static uint32_t fpsMaxFrameMs = 0;
-  if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
-    uint32_t frameMs = (lastMs == 0) ? 0 : (now - lastMs);
-    fpsFrameCount++;
-    if (frameMs > 0 && frameMs < fpsMinFrameMs) fpsMinFrameMs = frameMs;
-    if (frameMs > fpsMaxFrameMs) fpsMaxFrameMs = frameMs;
-  }
-  if (now - fpsWindowStart >= 5000) {
-    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
-      uint32_t elapsed = now - fpsWindowStart;
-      float fps = fpsFrameCount * 1000.0f / (elapsed > 0 ? elapsed : 1);
-      Serial.print(F("[FPS] "));
-      Serial.print(fps, 1);
-      Serial.print(F(" fps  frame: "));
-      Serial.print(fpsMinFrameMs);
-      Serial.print(F("-"));
-      Serial.print(fpsMaxFrameMs);
-      Serial.print(F("ms  acf="));
-      Serial.print(audioController ? audioController->getLastAcfMs() : 0);
-      Serial.print(F("+"));
-      Serial.print(audioController ? audioController->getLastPlpMs() : 0);
-      Serial.println(F("ms"));
-    }
-    fpsFrameCount = 0;
-    fpsWindowStart = now;
-    fpsMinFrameMs = 999;
-    fpsMaxFrameMs = 0;
+  // FPS counter — always-on (cheap), queryable via `json info`. The serial
+  // print remains log-level-gated so production output isn't noisy, but the
+  // underlying counters are always tracked so any operator can read them.
+  // Required for v36-fmax (#136) merge gate: ≥30 fps under typical load.
+  LoopMetrics::tick(now);
+  static uint32_t lastFpsLogMs = 0;
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO &&
+      LoopMetrics::getLastWindowMs() != lastFpsLogMs &&
+      LoopMetrics::getLastWindowMs() != 0) {
+    lastFpsLogMs = LoopMetrics::getLastWindowMs();
+    Serial.print(F("[FPS] "));
+    Serial.print(LoopMetrics::getFps(), 1);
+    Serial.print(F(" fps  frame: "));
+    Serial.print(LoopMetrics::getMinFrameMs());
+    Serial.print(F("-"));
+    Serial.print(LoopMetrics::getMaxFrameMs());
+    Serial.print(F("ms  acf="));
+    Serial.print(audioController ? audioController->getLastAcfMs() : 0);
+    Serial.print(F("+"));
+    Serial.print(audioController ? audioController->getLastPlpMs() : 0);
+    Serial.println(F("ms"));
   }
 
   // Frame time diagnostics: only warn for unexpectedly long frames.

@@ -85,6 +85,53 @@ async def test_send_command_empty_rejected(api_client: AsyncClient) -> None:
     assert resp.status_code == 422  # min_length=1 validation
 
 
+async def test_send_command_device_upload_blocked_without_deploy_tool(
+    api_client: AsyncClient,
+) -> None:
+    """`device upload` requires X-Deploy-Tool header (CLAUDE.md upload safety)."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": 'device upload {"deviceId":"x","ledWidth":1,"ledHeight":1}'},
+    )
+    assert resp.status_code == 403
+    assert "X-Deploy-Tool" in resp.json()["detail"]
+
+
+async def test_send_command_reboot_blocked_without_deploy_tool(
+    api_client: AsyncClient,
+) -> None:
+    """`reboot` requires X-Deploy-Tool header."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": "reboot"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_send_command_device_upload_allowed_with_deploy_tool(
+    api_client: AsyncClient,
+) -> None:
+    """deploy.sh's X-Deploy-Tool header passes the gate."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": 'device upload {"deviceId":"x","ledWidth":1,"ledHeight":1}'},
+        headers={"X-Deploy-Tool": "deploy.sh-abc1234"},
+    )
+    # 200 (mock device responds) — the gate is what we're testing here.
+    assert resp.status_code == 200
+
+
+async def test_fleet_command_reboot_blocked_without_deploy_tool(
+    api_client: AsyncClient,
+) -> None:
+    """Fleet-wide raw command endpoint has the same gate."""
+    resp = await api_client.post(
+        "/api/fleet/command",
+        json={"command": "reboot"},
+    )
+    assert resp.status_code == 403
+
+
 async def test_set_generator(api_client: AsyncClient) -> None:
     resp = await api_client.post("/api/devices/MOCK_DEVICE_000/generator/water")
     assert resp.status_code == 200

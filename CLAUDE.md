@@ -8,7 +8,7 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 
 **NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on nRF52840.** The DFU serial protocol has race conditions that can brick devices, requiring SWD hardware to recover.
 
-**Flashing connected devices: `./scripts/deploy.sh` is REQUIRED.** Direct `curl` against `/api/fleet/upload` or `/api/fleet/flash` is forbidden — the server enforces this via an `X-Deploy-Tool` header check that only `deploy.sh` sets, so manual curl returns 403. The API key alone is not sufficient. Use:
+**Flashing connected devices: `./scripts/deploy.sh` is REQUIRED.** Direct `curl` against `/api/fleet/upload`, `/api/fleet/flash`, or `/api/devices/{id}/command` with a device-mutating command body (`device upload`, `reboot`) is forbidden — the server enforces this via an `X-Deploy-Tool` header check that only `deploy.sh` sets, so manual curl returns 403. The API key alone is not sufficient. Use:
 
 ```bash
 ./scripts/deploy.sh                     # compile + upload + flash + verify
@@ -17,6 +17,8 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 ```
 
 deploy.sh runs the full pipeline (compile → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
+
+**The deploy.sh-only rule is broader than firmware flashing.** It also covers any sequence of API calls that mutates persistent device state or device lifecycle: `device upload` (writes config to flash), `reboot`, fleet-wide config sweeps that loop over multiple settings, etc. Even though those go through `/api/devices/{id}/command` (not `/api/fleet/upload`), running them in an ad-hoc loop without a tested workflow leaves devices in `error`/`connecting` states and requires manual recovery. The server enforces this for `device upload` and `reboot` (the two with zero legitimate non-deploy callers); for others the discipline is on the operator. **If a real test needs different device configurations, build firmware variants with each config baked in and deploy each via `deploy.sh` — do NOT script API config flips on running fleet devices.**
 
 **Bare-chip recovery only:** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 

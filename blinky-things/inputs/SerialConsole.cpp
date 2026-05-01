@@ -3,6 +3,7 @@
 #include "../types/BlinkyAssert.h"
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
+#include "../audio/LoopMetrics.h"
 #include "BatteryMonitor.h"
 #include "../audio/AudioTracker.h"
 #include "../devices/DeviceConfig.h"
@@ -517,6 +518,17 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(AdaptiveMic::getOverrunCount());
         out_.print(F(",\"audioSamplesLost\":"));
         out_.print(AdaptiveMic::getOverrunSamplesLost());
+
+        // Main-loop fps + frame-time range (#137). The publicly-readable
+        // values are the LAST CLOSED 5 s window — stable from one read to
+        // the next regardless of operator timing. v36-fmax (#136) needs
+        // these as the merge gate (≥30 fps under typical music+LED load).
+        out_.print(F(",\"fps\":"));
+        out_.print(LoopMetrics::getFps(), 1);
+        out_.print(F(",\"minFrameMs\":"));
+        out_.print(LoopMetrics::getMinFrameMs());
+        out_.print(F(",\"maxFrameMs\":"));
+        out_.print(LoopMetrics::getMaxFrameMs());
 
         out_.println(F("}"));
         return true;
