@@ -141,10 +141,15 @@ const AudioControl& AudioTracker::update(float dt) {
     // sees a hit, just not for every drum in a fast fill if a stall
     // happened simultaneously.
     //
-    // Read-buffer size MUST match FFT_SIZE so each iteration's read
-    // can fill the spectral accumulator in one shot (otherwise
-    // !hasSamples() breaks early and leaves samples stranded in the
-    // ring). Enforced via static_assert below.
+    // Read-buffer is sized to FFT_SIZE. getSamplesForExternal returns
+    // min(ring_available, maxCount), so a full read fills the accumulator
+    // exactly in one shot; a partial read (ring had < FFT_SIZE samples)
+    // is also fine — addSamples accumulates, !hasSamples() breaks the
+    // loop, and the next update() picks up the rest. The static_assert
+    // pins the buffer-FFT relationship: if the buffer were sized smaller
+    // than FFT_SIZE it would take multiple reads per window and the
+    // !hasSamples() branch would no longer mean "ring is partial," it
+    // would mean "we need another read pass" (different semantics).
     static int16_t sampleBuffer[SpectralConstants::FFT_SIZE];  // static: avoid stack churn
     static_assert(sizeof(sampleBuffer) / sizeof(sampleBuffer[0]) == SpectralConstants::FFT_SIZE,
                   "drain-loop sampleBuffer must equal FFT_SIZE so one read fills one window");
