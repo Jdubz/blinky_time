@@ -96,6 +96,12 @@ async def require_deploy_tool(
 _DEPLOY_GATED_COMMAND_PREFIXES = (
     "device upload",  # writes new device config to flash
     "reboot",  # device lifecycle — resets connection state
+    # Heavy resets that wipe identity/settings flash. Self-documenting name
+    # 'wipe_device_identity' (#141) plus deprecated aliases 'factory'/'reset'.
+    # blinky-console does not invoke these; only deploy.sh's reprovision path.
+    "wipe_device_identity",
+    "factory",
+    "reset",
 )
 
 

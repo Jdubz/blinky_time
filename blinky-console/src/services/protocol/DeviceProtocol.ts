@@ -395,7 +395,9 @@ export class DeviceProtocol {
   }
 
   async resetDefaults(): Promise<void> {
-    await this.send('defaults');
+    // Firmware #141: 'defaults' renamed to 'restore_runtime_settings'.
+    // Old name still works (deprecation-warns); new name is self-documenting.
+    await this.send('restore_runtime_settings');
   }
 
   async requestBatteryStatus(): Promise<void> {

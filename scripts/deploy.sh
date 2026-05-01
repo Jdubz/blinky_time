@@ -247,13 +247,13 @@ sys.exit(1 if fails else 0)
 }
 
 echo ""
-echo "=== Restoring runtime settings (defaults) ==="
-if ! run_fleet_command "defaults" "defaults"; then
-    fail "defaults command did not land on every device. State stale; investigate before next test." 4
+echo "=== Restoring runtime settings ==="
+if ! run_fleet_command "restore_runtime_settings" "restore_runtime_settings"; then
+    fail "restore_runtime_settings did not land on every device. State stale; investigate before next test." 4
 fi
 
 echo ""
-echo "=== Saving settings to flash (save) ==="
+echo "=== Saving settings to flash ==="
 if ! run_fleet_command "save" "save"; then
     fail "save command did not land on every device. Reboot will lose the just-applied defaults." 4
 fi

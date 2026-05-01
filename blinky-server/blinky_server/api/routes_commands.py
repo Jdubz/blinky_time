@@ -120,5 +120,13 @@ async def fleet_load_settings() -> dict[str, str]:
 
 @router.post("/fleet/settings/defaults")
 async def fleet_restore_defaults() -> dict[str, str]:
-    """Restore factory defaults on all connected devices."""
-    return await get_fleet().send_to_all("defaults")
+    """Restore runtime tunables on all connected devices.
+
+    Resets soft settings (mic params, audio tracker config, generators).
+    Does NOT wipe device identity or matrix size. To wipe identity, use
+    POST /fleet/wipe (sends `wipe_device_identity` — deploy-gated).
+
+    Endpoint path retained for blinky-console compatibility; firmware
+    command name updated to `restore_runtime_settings` per #141.
+    """
+    return await get_fleet().send_to_all("restore_runtime_settings")

@@ -773,14 +773,36 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         return true;
     }
 
-    if (strcmp(cmd, "defaults") == 0) {
+    // Restore runtime tunables (mic params, audio tracker config, generators).
+    // Does NOT touch device identity (matrix size, deviceId, deviceName) or the
+    // stored config in flash. This is the command deploy.sh sends after every
+    // flash. Older 'defaults' alias kept for blinky-console + tooling rolling
+    // forward; new 'restore_runtime_settings' name is self-documenting at the
+    // operator layer (see #141).
+    if (strcmp(cmd, "restore_runtime_settings") == 0 || strcmp(cmd, "defaults") == 0) {
+        if (strcmp(cmd, "defaults") == 0) {
+            logWarn(F("[DEPRECATED] 'defaults' renamed to 'restore_runtime_settings' "
+                     "(only resets runtime tunables; does NOT wipe device identity). "
+                     "Old name still works."));
+        }
         restoreDefaults();
 
         out_.println(F("OK"));
         return true;
     }
 
-    if (strcmp(cmd, "reset") == 0 || strcmp(cmd, "factory") == 0) {
+    // Wipe everything: device identity (matrix, deviceId) AND runtime tunables.
+    // Heavy operation — used during reprovisioning or when a device's stored
+    // config needs to be replaced with the firmware-baked default.
+    // 'wipe_device_identity' is the new self-documenting name; 'reset'/'factory'
+    // kept as deprecated aliases for one release cycle.
+    if (strcmp(cmd, "wipe_device_identity") == 0
+        || strcmp(cmd, "reset") == 0
+        || strcmp(cmd, "factory") == 0) {
+        if (strcmp(cmd, "reset") == 0 || strcmp(cmd, "factory") == 0) {
+            logWarn(F("[DEPRECATED] 'reset'/'factory' renamed to 'wipe_device_identity' "
+                     "(makes the destructive scope explicit). Old names still work."));
+        }
         if (configStorage_) {
             configStorage_->factoryReset();
             restoreDefaults();
