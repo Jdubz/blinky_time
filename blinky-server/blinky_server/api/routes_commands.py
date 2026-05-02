@@ -133,5 +133,12 @@ async def fleet_restore_defaults() -> dict[str, str]:
 
     Endpoint path retained for blinky-console compatibility; firmware
     command name updated to `restore_runtime_settings` per #141.
+
+    Response shape NOTE: as of #139 (send_to_all visibility fix),
+    disconnected devices appear in the result dict with a
+    `"skipped: state=<state>"` value rather than being silently dropped.
+    UI callers (blinky-console "Restore Defaults" button) should treat
+    `skipped:`-prefixed values as informational, not as errors — the
+    fail-loud requirement is for deploy.sh callers, not user-facing UI.
     """
     return await get_fleet().send_to_all("restore_runtime_settings")

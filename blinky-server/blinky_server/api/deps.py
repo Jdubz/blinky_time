@@ -122,6 +122,10 @@ _DEPLOY_GATED_EXACT = (
 # for the factory/reset entries).
 _DEPLOY_GATED_COMMAND_LIST = _DEPLOY_GATED_PREFIXES + _DEPLOY_GATED_EXACT
 
+# Module-level compiled regex — keeps the gate hot-path independent of
+# Python's regex cache size. Per PR 138 round-12 review.
+_WHITESPACE_RE = re.compile(r"\s+")
+
 
 def is_deploy_gated_command(cmd: str) -> bool:
     """True if `cmd` is a device-mutating command that requires X-Deploy-Tool.
@@ -139,7 +143,7 @@ def is_deploy_gated_command(cmd: str) -> bool:
     so a hypothetical future `reset_session <args>` safe command isn't
     accidentally caught. Per PR 138 round-8 review.
     """
-    cmd_normalized = re.sub(r"\s+", " ", cmd.strip().lower())
+    cmd_normalized = _WHITESPACE_RE.sub(" ", cmd.strip().lower())
     if cmd_normalized in _DEPLOY_GATED_EXACT:
         return True
     return any(

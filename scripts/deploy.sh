@@ -237,7 +237,10 @@ run_fleet_command() {
         -H "${DEPLOY_TOOL_HEADER}" \
         -H 'Content-Type: application/json' \
         -d "$body" 2>&1) || {
-        echo "  [ERROR] ${cmd_label}: HTTP request failed" >&2
+        # Surface the captured stderr so the operator sees timeout vs 403 vs
+        # 5xx vs network error, not just a generic "HTTP request failed".
+        # Per PR 138 round-12 review.
+        echo "  [ERROR] ${cmd_label}: HTTP request failed: ${resp_json}" >&2
         return 1
     }
 

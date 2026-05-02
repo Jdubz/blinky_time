@@ -69,7 +69,16 @@ inline void tick(uint32_t now) {
         // (16×WINDOW_MS = 80 s; real window closes in ~5 s under
         // normal load and at most ~10 s under heavy stalls per the
         // drain-loop ceiling) and reset cleanly without publishing
-        // the bad reading. Per PR 138 round-9 review (HIGH).
+        // the bad reading.
+        //
+        // Stall vs wrap ambiguity: if the loop is genuinely stuck for
+        // >80 s (deadlock, power glitch, hard fault), this branch also
+        // fires and discards. That's the right call either way — a
+        // stalled-then-recovered window's fps would be more misleading
+        // than the prior good reading. The operator sees lastFps stay
+        // pinned at the last good value, which on its own signals
+        // something's wrong (no fps movement = main loop not running).
+        // Per PR 138 rounds 9 + 12 review.
         uint32_t elapsed = now - s.windowStart;
         if (elapsed > 16U * WINDOW_MS) {
             // Wrap or extreme stall — discard this window's data,
