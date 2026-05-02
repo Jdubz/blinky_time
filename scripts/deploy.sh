@@ -333,9 +333,43 @@ for d in devices:
     warn_str = ' WARN:' + ','.join(warn) if warn else ''
     print(f'  {short} OK version={version} fps={fps:.1f} overruns={overruns}{warn_str}')
 
-print(f'pass={len(devices)-len(fails)}/{len(devices)}', file=sys.stderr)
+# Failure-class taxonomy (#142): if EVERY device is unreachable, the cause is
+# almost certainly upstream (host USB stack, server, network) rather than
+# coincident firmware bricks on N devices. Surface that distinction so the
+# operator knows whether to investigate firmware or restart blinkyhost.
+# 2026-05-01 incident: I diagnosed '4 bricked devices' from 'all 4 unreachable'
+# when actually blinkyhost's USB stack was stale. Reboot fixed it; firmware
+# was fine. Saved as memory: feedback_brick_diagnosis_first_rule.md.
+total = len(devices)
+unreachable = sum(1 for d in devices if d.get('state') != 'connected')
+all_unreachable = total > 0 and unreachable == total
+print(f'pass={total-len(fails)}/{total}', file=sys.stderr)
+if all_unreachable:
+    print(f'all_unreachable=1', file=sys.stderr)
 sys.exit(1 if fails else 0)
-" || fail "Post-deploy state assertion failed (see rows above). Devices may have flashed but booted to an unexpected state." 4
+" || {
+    # Re-evaluate whether the failure is host-side (all unreachable) or
+    # device-specific. If host-side, advise reboot rather than implying
+    # bricks; if device-specific, the per-row FAIL output above tells
+    # the operator which devices to investigate.
+    UNREACHABLE_COUNT=$(curl -sf -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
+        python3 -c "import json,sys; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('state')!='connected'), len(ds))")
+    UNREACH=$(echo "$UNREACHABLE_COUNT" | awk '{print $1}')
+    TOTAL=$(echo "$UNREACHABLE_COUNT" | awk '{print $2}')
+    if [[ -n "$TOTAL" && "$TOTAL" -gt 0 && "$UNREACH" == "$TOTAL" ]]; then
+        echo ""
+        echo "  All $TOTAL device(s) unreachable simultaneously — this pattern almost"
+        echo "  always means the HOST USB stack is stuck (kernel/udev), not firmware"
+        echo "  bricks. Try:"
+        echo "    1. ssh blinkyhost.local sudo systemctl restart systemd-udevd"
+        echo "    2. If that doesn't help, ssh blinkyhost.local sudo reboot"
+        echo "    3. Then re-run this deploy with --skip-compile"
+        echo "  See memory: feedback_brick_diagnosis_first_rule.md"
+        fail "All devices unreachable — likely host USB stack, not firmware. Recovery steps printed above." 5
+    else
+        fail "Post-deploy state assertion failed (see rows above). $UNREACH/$TOTAL device(s) in unexpected state — investigate per-device causes." 4
+    fi
+}
 
 echo ""
 echo "============================================================"

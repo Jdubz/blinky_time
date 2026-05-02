@@ -323,7 +323,29 @@ async def _flash_fleet_background(
             finally:
                 device.state = DeviceState.DISCONNECTED
 
-            await asyncio.sleep(3)
+            # Inter-device settle: 3s was too short on the 2026-05-01 deploy
+            # where devices 3+4 hit `_wait_for_uf2_drive` 5s timeouts because
+            # the host USB stack hadn't processed the previous device's reset
+            # yet. Bumping to 8s + an explicit `udevadm settle` lets the kernel
+            # finish queued USB events before we trigger the next DFU reset.
+            # `udevadm settle --timeout=10` blocks until the udev event queue
+            # is empty (or 10s, whichever comes first) — usually returns in
+            # <1s when healthy, much longer when the stack is jammed (which
+            # is the early-warning we want).
+            await asyncio.sleep(8)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "udevadm",
+                    "settle",
+                    "--timeout=10",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+            except (FileNotFoundError, OSError) as e:
+                # udevadm not on PATH or other fork issue — log and continue.
+                # Not a deploy-stopper; the 8s sleep alone usually suffices.
+                log.warning("udevadm settle skipped: %s", e)
     finally:
         job.progress_message = "Waiting for USB stabilization"
         log.info("Fleet flash: waiting 10s for USB stabilization...")
