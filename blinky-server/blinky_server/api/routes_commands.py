@@ -123,8 +123,11 @@ async def fleet_restore_defaults() -> dict[str, str]:
     """Restore runtime tunables on all connected devices.
 
     Resets soft settings (mic params, audio tracker config, generators).
-    Does NOT wipe device identity or matrix size. To wipe identity, use
-    POST /fleet/wipe (sends `wipe_device_identity` — deploy-gated).
+    Does NOT wipe device identity or matrix size. To wipe identity,
+    POST /fleet/command with body `{"command": "wipe_device_identity"}`
+    and the X-Deploy-Tool header (deploy-gated; only deploy.sh has the
+    header by default). No dedicated /fleet/wipe endpoint exists —
+    deploy.sh's reprovision path is the canonical caller.
 
     Endpoint path retained for blinky-console compatibility; firmware
     command name updated to `restore_runtime_settings` per #141.

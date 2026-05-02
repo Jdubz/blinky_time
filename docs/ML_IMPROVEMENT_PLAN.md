@@ -57,7 +57,7 @@
 > |------|------|-------------------|
 > | 1 | Spike firmware: PDM ISR 16→32 kHz, FFT_SIZE 256→512, regenerate MEL_BANDS for 80 × 32 kHz × 512 (fmin=30, fmax=14000). Build, flash one bench device. | Audio loop alive, no boot loop |
 > | 2 | Measure on-device fps under typical music + LED load. Read `json info` overrun counters over 60 s. | **fps ≥ 30 sustained** AND overrun rate ≤ 0.1/s. If <30 fps: investigate FFT lib, consider 22.05 kHz fallback. If overruns: ring buffer may need re-sizing for the new rate. |
-> | 3 | Update training config: sr=32000, n_fft=512, n_mels=80, fmin=30, fmax=14000. Re-prep on existing audio (FMA at 44.1/22 kHz upsamples cleanly to 32). | Prep completes, positive ratio matches v33's |
+> | 3 | Update training config: sr=31250, n_fft=512, n_mels=80, fmin=30, fmax=14000. Re-prep on existing audio (FMA at 44.1/22 kHz upsamples cleanly to 31.25). | Prep completes, positive ratio matches v33's |
 > | 4 | Train v36-fmax. Falsifiable predictions: (a) offline F1 on edm/ > 0.75 (vs v33's 0.617); (b) val activation std ≥ 0.30 (no INT8 collapse); (c) tflite size ≤ 35 KB (model grows because of larger input but not unboundedly). | All three predictions hit |
 > | 5 | Deploy and measure on-device F1 vs v33 baseline. | On-device F1 lift ≥ 0.05 |
 > | 6 | If F1 lifts: design upper-band HFC gate + centroid threshold using v36 firing-time features. These are deterministic post-NN filters that should add ≥0.02 precision without recall loss. | — |

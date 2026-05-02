@@ -886,11 +886,26 @@ def main():
                         model.output_conv.bias[ch].fill_(init_bias)
                         print(f"  Output bias init [{name}]: {init_bias:.3f} "
                               f"(sigmoid={1/(1+math.exp(-init_bias)):.4f})")
-            elif pos_ratio_mean > 0:
+            elif pos_ratio_mean > 0 and pos_ratio_mean < 1:
                 init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
                 with torch.no_grad():
                     model.output_conv.bias.fill_(init_bias)
                 print(f"  Output bias init: {init_bias:.3f} (sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+            else:
+                # pos_ratio_mean == 0 (no positives) or 1 (no negatives) —
+                # same silent-fallback class as the multichannel branch above
+                # caught by PR 138 round-3. Hard-fail per CLAUDE.md "No Silent
+                # Fallbacks". Per PR 138 round-4 review: round-3 only fixed
+                # the multichannel path; the single-channel else-branch was
+                # silently doing nothing (bias stayed 0 → sigmoid(0)=0.5,
+                # exact v30/v31/v32 collapse pattern).
+                raise ValueError(
+                    f"Output bias init: pos_ratio_mean={pos_ratio_mean:.4f} — "
+                    f"degenerate dataset (all zero or all one). Inspect "
+                    f"label pipeline before training. Common causes: empty "
+                    f"label files; mis-aligned label_shift_frames; dataset "
+                    f"entirely on one side of hard_binary_threshold."
+                )
         # Quant-Noise: stochastic INT8 quantization during training (Fan et al. 2020)
         quant_noise_ratio = cfg["training"].get("quant_noise", 0.0)
         if quant_noise_ratio > 0:

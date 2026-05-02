@@ -209,9 +209,10 @@ fi
 # Note: `defaults` resets soft runtime tunables (mic, audio tracker params,
 # generators) — it does NOT wipe device identity (matrix size, deviceId).
 # That preservation is intentional: fleet devices keep their identity across
-# every firmware deploy. To wipe identity, use `factory`/`reset` (heavy,
+# every firmware deploy. To wipe identity, use `wipe_device_identity`
+# (formerly `factory`/`reset` — old aliases still work, see #141). Heavy:
 # wipes everything; deploy.sh does not invoke it because it would unconfig
-# every device on every flash).
+# every device on every flash.
 #
 # Per-device status is now displayed instead of "Done" — pre-2026-05-01
 # this step silently skipped devices not in CONNECTED state. Now devices
