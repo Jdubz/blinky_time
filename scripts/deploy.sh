@@ -232,7 +232,7 @@ run_fleet_command() {
         echo "  [ERROR] ${cmd_label}: failed to build JSON body" >&2
         return 1
     }
-    resp_json=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
+    resp_json=$(curl -sf --max-time 15 -X POST "${BLINKY_SERVER}/api/fleet/command" \
         -H "X-API-Key: ${API_KEY}" \
         -H "${DEPLOY_TOOL_HEADER}" \
         -H 'Content-Type: application/json' \
@@ -292,7 +292,7 @@ sleep 6  # let the LoopMetrics 5s window close so fps reads are non-zero
 
 export EXPECTED_BUILD="b${BUILD}"
 export API_KEY BLINKY_SERVER
-DEVICES_JSON=$(curl -sf -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>&1) || {
+DEVICES_JSON=$(curl -sf --max-time 15 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>&1) || {
     fail "Failed to list devices for post-deploy verification: ${DEVICES_JSON}" 4
 }
 
@@ -350,6 +350,10 @@ for d in devices:
 
     # Soft warnings: fps low / overruns high. Don't fail deploy on these
     # (boot-time stalls produce a few overruns expectedly), but surface them.
+    # TODO(v36-fmax #136): once v36 firmware ships with NN re-enabled, fps
+    # < 30 must become a HARD FAIL (the v36 merge gate per ML_IMPROVEMENT_PLAN).
+    # Currently soft because v33-era firmware on slower devices can dip below
+    # 30 transiently and the deploy isn't gating on perf yet.
     warn = []
     if fps > 0 and fps < 30:
         warn.append(f'fps={fps:.1f}<30')
@@ -377,7 +381,7 @@ sys.exit(1 if fails else 0)
     # device-specific. If host-side, advise reboot rather than implying
     # bricks; if device-specific, the per-row FAIL output above tells
     # the operator which devices to investigate.
-    UNREACHABLE_COUNT=$(curl -sf -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
+    UNREACHABLE_COUNT=$(curl -sf --max-time 10 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
         python3 -c "import json,sys; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('state')!='connected'), len(ds))")
     UNREACH=$(echo "$UNREACHABLE_COUNT" | awk '{print $1}')
     TOTAL=$(echo "$UNREACHABLE_COUNT" | awk '{print $2}')

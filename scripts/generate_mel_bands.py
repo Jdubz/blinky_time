@@ -76,6 +76,16 @@ def generate_mel_bands(
             empty_count += 1
             bands.append((start, center, end, 0.0))
             continue
+        # Monotonicity invariant the firmware relies on. mel_frequencies()
+        # output is strictly monotone, so this should always hold; assert
+        # explicitly so a future change to the binning math (or a librosa
+        # behavior change) trips here at generation time rather than
+        # producing a silently malformed table that fails at firmware boot.
+        # Per PR 138 round-5 review.
+        assert start <= center <= end, (
+            f"band {i}: non-monotone vertices ({start}, {center}, {end}) — "
+            f"firmware triangle reconstruction assumes start <= center <= end"
+        )
         center_hz = center * bin_hz
         bands.append((start, center, end, center_hz))
 

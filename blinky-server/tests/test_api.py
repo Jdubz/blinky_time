@@ -106,6 +106,7 @@ async def test_send_command_reboot_blocked_without_deploy_tool(
         json={"command": "reboot"},
     )
     assert resp.status_code == 403
+    assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
 async def test_send_command_device_upload_allowed_with_deploy_tool(
@@ -130,6 +131,7 @@ async def test_fleet_command_reboot_blocked_without_deploy_tool(
         json={"command": "reboot"},
     )
     assert resp.status_code == 403
+    assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
 async def test_send_command_wipe_device_identity_blocked(
@@ -141,6 +143,7 @@ async def test_send_command_wipe_device_identity_blocked(
         json={"command": "wipe_device_identity"},
     )
     assert resp.status_code == 403
+    assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
 async def test_send_command_factory_alias_blocked(
@@ -152,6 +155,7 @@ async def test_send_command_factory_alias_blocked(
         json={"command": "factory"},
     )
     assert resp.status_code == 403
+    assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
 async def test_send_command_reset_alias_blocked(
@@ -163,6 +167,7 @@ async def test_send_command_reset_alias_blocked(
         json={"command": "reset"},
     )
     assert resp.status_code == 403
+    assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
 # Unit-level edge cases for is_deploy_gated_command itself. The prefix-match
