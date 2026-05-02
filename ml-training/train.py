@@ -858,30 +858,38 @@ def main():
                 # had hihat at 0.35% — uniform bias from a global mean would
                 # leave hihat severely under-initialized. Each channel gets the
                 # log-prior matching its own class density.
+                #
+                # Validate per-channel ratios FIRST (before entering the
+                # torch.no_grad() context), so a degenerate channel raises
+                # cleanly without entering the no-grad scope. Per PR 138
+                # round-9 review.
+                ch_ratios: list[tuple[int, float, str]] = []
+                for ch in range(n_ch):
+                    ch_ratio = float(y_sample[:, :, ch].mean())
+                    name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
+                    # ch_ratio == 0 (no positives) or 1 (no negatives) is
+                    # a label-pipeline bug, not a valid training condition.
+                    # Continuing past it would silently leave bias=0.0 →
+                    # sigmoid(0)=0.5, which is exactly what RetinaNet's
+                    # low-prior init was designed to avoid; the v30/v31/v32
+                    # collapse pattern starts here. Hard-fail per CLAUDE.md
+                    # "No Silent Fallbacks".
+                    if ch_ratio == 0 or ch_ratio == 1:
+                        raise ValueError(
+                            f"Output bias init [{name}]: ch_ratio="
+                            f"{ch_ratio:.4f} — degenerate channel (no "
+                            f"positives or no negatives). Inspect the "
+                            f"label pipeline for an empty/full channel "
+                            f"before training. Common causes: stem-derived "
+                            f"per-instrument labels with broken stem "
+                            f"separation; mis-aligned label_shift_frames; "
+                            f"dataset entirely on one side of "
+                            f"hard_binary_threshold."
+                        )
+                    ch_ratios.append((ch, ch_ratio, name))
+                # All channels validated — apply biases under one no-grad scope.
                 with torch.no_grad():
-                    for ch in range(n_ch):
-                        ch_ratio = float(y_sample[:, :, ch].mean())
-                        name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
-                        # ch_ratio == 0 (no positives) or 1 (no negatives) is
-                        # a label-pipeline bug, not a valid training condition.
-                        # Continuing past it would silently leave bias=0.0 →
-                        # sigmoid(0)=0.5, which is exactly what RetinaNet's
-                        # low-prior init was designed to avoid; the v30/v31/v32
-                        # collapse pattern starts here. Hard-fail per CLAUDE.md
-                        # "No Silent Fallbacks". Per PR 138 round-2 review:
-                        # warn-and-continue was itself a silent fallback.
-                        if ch_ratio == 0 or ch_ratio == 1:
-                            raise ValueError(
-                                f"Output bias init [{name}]: ch_ratio="
-                                f"{ch_ratio:.4f} — degenerate channel (no "
-                                f"positives or no negatives). Inspect the "
-                                f"label pipeline for an empty/full channel "
-                                f"before training. Common causes: stem-derived "
-                                f"per-instrument labels with broken stem "
-                                f"separation; mis-aligned label_shift_frames; "
-                                f"dataset entirely on one side of "
-                                f"hard_binary_threshold."
-                            )
+                    for ch, ch_ratio, name in ch_ratios:
                         init_bias = math.log(ch_ratio / (1 - ch_ratio))
                         model.output_conv.bias[ch].fill_(init_bias)
                         print(f"  Output bias init [{name}]: {init_bias:.3f} "

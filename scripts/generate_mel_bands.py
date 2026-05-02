@@ -171,7 +171,16 @@ def main() -> int:
         # Open in 'x' mode would refuse to overwrite — for safety against
         # accidental clobbers the operator must explicitly delete the
         # previous output. But that's stricter than typical workflow; use
-        # 'w' here and document the overwrite.
+        # 'w' here and warn loudly when an overwrite is happening so a
+        # surprised "wait, did I just clobber the live table?" is at least
+        # surfaced. Per PR 138 round-9 review.
+        import os
+        if os.path.exists(args.output):
+            print(
+                f"WARNING: overwriting existing {args.output} "
+                f"(previous content lost)",
+                file=sys.stderr,
+            )
         with open(args.output, "w") as f:
             f.write(cpp)
             f.write("\n")

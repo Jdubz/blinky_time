@@ -368,7 +368,10 @@ for d in devices:
         warn.append(f'fps={fps:.1f}<30')
     if overruns > 5:
         warn.append(f'overruns={overruns}')
-    warn_str = ' WARN:' + ','.join(warn) if warn else ''
+    # Space after WARN: improves readability when scanning the deploy
+    # output — `WARN: fps=0.0` is more visible than `WARN:fps=0.0`. Per
+    # PR 138 round-9 review.
+    warn_str = '  WARN: ' + ', '.join(warn) if warn else ''
     print(f'  {short} OK version={version} fps={fps:.1f} overruns={overruns}{warn_str}')
 
 # Failure-class taxonomy (#142): if EVERY device is unreachable, the cause is

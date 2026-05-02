@@ -158,6 +158,19 @@ async def test_send_command_wipe_device_identity_blocked(
     assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
+async def test_send_command_wipe_device_identity_allowed_with_deploy_tool(
+    api_client: AsyncClient,
+) -> None:
+    """`wipe_device_identity` passes the gate when deploy tool is set; mock
+    transport accepts it as part of the renamed command set (#141)."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": "wipe_device_identity"},
+        headers={"X-Deploy-Tool": "deploy.sh-abc1234"},
+    )
+    assert resp.status_code == 200
+
+
 async def test_send_command_factory_alias_blocked(
     api_client: AsyncClient,
 ) -> None:

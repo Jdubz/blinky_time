@@ -60,8 +60,26 @@ inline void tick(uint32_t now) {
     if (s.windowStart == 0) {
         s.windowStart = now;
     } else if (now - s.windowStart >= WINDOW_MS) {
-        // elapsed >= WINDOW_MS by the branch condition, so always > 0.
+        // elapsed is unsigned modular arithmetic. millis() wraps at
+        // 2^32 ms ≈ 49.7 days; when now wraps past zero mid-window,
+        // (now - s.windowStart) underflows to a large value (close to
+        // 4.29 GB ms), the branch fires immediately, and we'd report
+        // a spuriously low fps for that one window. Detect that case
+        // by an elapsed bound far above any plausible window
+        // (16×WINDOW_MS = 80 s; real window closes in ~5 s under
+        // normal load and at most ~10 s under heavy stalls per the
+        // drain-loop ceiling) and reset cleanly without publishing
+        // the bad reading. Per PR 138 round-9 review (HIGH).
         uint32_t elapsed = now - s.windowStart;
+        if (elapsed > 16U * WINDOW_MS) {
+            // Wrap or extreme stall — discard this window's data,
+            // start fresh. Public readings remain at last good window.
+            s.windowStart = now;
+            s.frameCount  = 0;
+            s.minFrameMs  = UINT32_MAX;
+            s.maxFrameMs  = 0;
+            return;
+        }
         s.lastFps      = s.frameCount * 1000.0f / elapsed;
         // minFrameMs == UINT32_MAX means no dt was sampled this window
         // (only the very first window's first tick, before prevTickMs was
