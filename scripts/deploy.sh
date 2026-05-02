@@ -18,6 +18,12 @@
 #   1 = compile failed
 #   2 = upload/flash failed
 #   3 = missing API key
+#   4 = post-deploy assertion failed (specific device(s) in unexpected state —
+#       per-row FAIL output identifies which devices to investigate)
+#   5 = all devices unreachable simultaneously (host USB stack heuristic —
+#       almost always a host-side problem, not firmware brick. The script
+#       prints recovery steps before exiting; see also
+#       memory: feedback_brick_diagnosis_first_rule.md)
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -26,6 +32,13 @@ BLINKY_SERVER="http://blinkyhost.local:8420"
 HEX="/tmp/blinky-build/blinky-things.ino.hex"
 SKIP_COMPILE=false
 NO_BUMP=false
+# How long to wait after flashing before reading back fps via json info.
+# LoopMetrics publishes a fresh fps reading every WINDOW_MS (5 s) — we add
+# a 1 s margin so the first window has unambiguously closed before the
+# post-deploy assertion runs. Per PR 138 round-14 review (LOW #3, name
+# the magic number rather than burying it inline). When v36-fmax ships
+# with NN re-enabled, this also gates the fps≥30 hard check.
+LOOP_METRICS_SETTLE_S=6
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -199,25 +212,230 @@ if [[ "$STATUS" != "complete" ]]; then
     fail "Flash polling timed out after $((MAX_POLLS * POLL_INTERVAL_S))s. Last server status: '${PROGRESS}'. Re-run './scripts/deploy.sh --skip-compile' to retry, or check 'sudo journalctl -u blinky-server' for the full per-device log." 2
 fi
 
-# ─── Step 5: Reset all devices to defaults ────────────────────────────
-# Settings persist in flash across firmware updates. Stale values from
-# experiments silently corrupt test results. Always reset after deploy.
+# ─── Step 5: Restore runtime settings (defaults) ────────────────────────
+# Note: `defaults` resets soft runtime tunables (mic, audio tracker params,
+# generators) — it does NOT wipe device identity (matrix size, deviceId).
+# That preservation is intentional: fleet devices keep their identity across
+# every firmware deploy. To wipe identity, use `wipe_device_identity`
+# (formerly `factory`/`reset` — old aliases still work, see #141). Heavy:
+# wipes everything; deploy.sh does not invoke it because it would unconfig
+# every device on every flash.
+#
+# Per-device status is now displayed instead of "Done" — pre-2026-05-01
+# this step silently skipped devices not in CONNECTED state. Now devices
+# that didn't ACK the command surface explicitly and the deploy fails loud.
+
+run_fleet_command() {
+    local cmd_label="$1"
+    local cmd="$2"
+    local resp_json
+    # Build the JSON body via python3 to handle quoting safely. Embedding
+    # ${cmd} bare into a "{\"command\": \"${cmd}\"}" template would silently
+    # corrupt the body for any cmd containing quotes/braces (per PR 138
+    # review). Current callers only pass static strings, but that's not a
+    # property we want to depend on if the function is reused later.
+    local body
+    body=$(CMD="$cmd" python3 -c 'import json, os; print(json.dumps({"command": os.environ["CMD"]}))') || {
+        echo "  [ERROR] ${cmd_label}: failed to build JSON body" >&2
+        return 1
+    }
+    resp_json=$(curl -sf --max-time 15 -X POST "${BLINKY_SERVER}/api/fleet/command" \
+        -H "X-API-Key: ${API_KEY}" \
+        -H "${DEPLOY_TOOL_HEADER}" \
+        -H 'Content-Type: application/json' \
+        -d "$body" 2>&1) || {
+        # Surface the captured stderr so the operator sees timeout vs 403 vs
+        # 5xx vs network error, not just a generic "HTTP request failed".
+        # Per PR 138 round-12 review.
+        echo "  [ERROR] ${cmd_label}: HTTP request failed: ${resp_json}" >&2
+        return 1
+    }
+
+    # Parse the per-device dict, print one row per device, and exit non-zero
+    # if any device's response doesn't start with "OK". Per PR 138 review:
+    # the previous "fail only on skipped/error prefixes" was too permissive
+    # — a firmware error string that didn't start with those prefixes would
+    # silently pass. Firmware command handlers all respond with "OK..." on
+    # success (see SerialConsole.cpp), so anchor on that.
+    if ! echo "$resp_json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+fails = 0
+for dev_id, resp in data.items():
+    short = dev_id[:12]
+    resp_str = str(resp).strip()
+    first_line = resp_str.split(chr(10))[0][:60]
+    if resp_str.startswith('OK'):
+        print(f'  {short} OK ({first_line})')
+    else:
+        print(f'  {short} FAIL: {first_line}')
+        fails += 1
+sys.exit(1 if fails else 0)
+"; then
+        return 1
+    fi
+    return 0
+}
 
 echo ""
-echo "=== Resetting all devices to defaults ==="
-if ! curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
-    -H "X-API-Key: ${API_KEY}" \
-    -H 'Content-Type: application/json' \
-    -d '{"command": "defaults"}' > /dev/null 2>&1; then
-    echo "  [WARNING] defaults reset may have failed — devices could have stale settings" >&2
+echo "=== Restoring runtime settings ==="
+if ! run_fleet_command "restore_runtime_settings" "restore_runtime_settings"; then
+    fail "restore_runtime_settings did not land on every device. State stale; investigate before next test." 4
 fi
-if ! curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
-    -H "X-API-Key: ${API_KEY}" \
-    -H 'Content-Type: application/json' \
-    -d '{"command": "save"}' > /dev/null 2>&1; then
-    echo "  [WARNING] save may have failed" >&2
+
+echo ""
+echo "=== Saving settings to flash ==="
+if ! run_fleet_command "save" "save"; then
+    fail "save command did not land on every device. Reboot will lose the just-applied defaults." 4
 fi
-echo "  Done"
+
+# ─── Step 6: Post-deploy state assertion ────────────────────────────────
+# Verify each device's actual state matches expectations. Catches:
+#   - flash succeeded but device booted to wrong version (rare, partial flash)
+#   - audio loop overrun-bound at boot (fixed by b156 drain loop, but regressions
+#     would surface here)
+#   - fps unexpectedly low (perf regression, e.g., the v36-fmax merge gate)
+
+echo ""
+echo "=== Verifying post-deploy state ==="
+sleep "$LOOP_METRICS_SETTLE_S"  # let the LoopMetrics 5s window close so fps reads are non-zero
+
+export EXPECTED_BUILD="b${BUILD}"
+export API_KEY BLINKY_SERVER
+DEVICES_JSON=$(curl -sf --max-time 15 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>&1) || {
+    fail "Failed to list devices for post-deploy verification: ${DEVICES_JSON}" 4
+}
+
+echo "$DEVICES_JSON" | python3 -c "
+import json, sys, urllib.request, os
+
+API_KEY = os.environ['API_KEY']
+SERVER = os.environ['BLINKY_SERVER']
+EXPECTED = os.environ['EXPECTED_BUILD']
+
+devices = json.loads(sys.stdin.read())
+fails = []
+for d in devices:
+    dev_id = d.get('id', '?')
+    short = dev_id[:12]
+    state = d.get('state', '?')
+    if state != 'connected':
+        fails.append(f'{short} state={state}')
+        print(f'  {short} FAIL: state={state}')
+        continue
+    # Build body via json.dumps for consistency with run_fleet_command's
+    # safe-quoting pattern. 'json info' has no special chars so the inline
+    # literal worked, but copy-paste reuse on a different command could
+    # break — per PR 138 round-3 review.
+    req = urllib.request.Request(
+        f'{SERVER}/api/devices/{dev_id}/command',
+        data=json.dumps({'command': 'json info'}).encode(),
+        headers={'X-API-Key': API_KEY, 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            wrap = json.loads(r.read())
+        info = json.loads(wrap['response'])
+    except Exception as e:
+        fails.append(f'{short} json info failed: {e}')
+        print(f'  {short} FAIL: json info: {e}')
+        continue
+
+    version = info.get('version', '?')
+    fps = info.get('fps', 0.0)
+    overruns = info.get('audioOverruns', -1)
+    samples_lost = info.get('audioSamplesLost', -1)
+
+    # Hard checks: version, basic counters present.
+    if version != EXPECTED:
+        fails.append(f'{short} version={version} expected={EXPECTED}')
+        print(f'  {short} FAIL: version={version} expected={EXPECTED} fps={fps} overruns={overruns}')
+        continue
+    if overruns < 0 or samples_lost < 0:
+        # New firmware should always expose these; if missing, instrumentation regressed.
+        fails.append(f'{short} missing audio overrun counters')
+        print(f'  {short} FAIL: missing overrun counters in json info')
+        continue
+
+    # Soft warnings: fps low / overruns high. Don't fail deploy on these
+    # (boot-time stalls produce a few overruns expectedly), but surface them.
+    # TODO(v36-fmax #136): once v36 firmware ships with NN re-enabled, fps
+    # < 30 must become a HARD FAIL (the v36 merge gate per ML_IMPROVEMENT_PLAN).
+    # ALSO: fps == 0.0 means LoopMetrics' first 5s window hasn't closed yet
+    # (slow USB re-enumeration ate the sleep margin) — currently silently
+    # skipped by `fps > 0` guard. At v36 promotion, this needs to become
+    # either a hard fail OR a polled retry until the window closes. Don't
+    # ship the hard-fail without closing this hole.
+    warn = []
+    if fps == 0.0:
+        # LoopMetrics window hasn't closed yet — slow USB re-enumeration
+        # eating into the 6s sleep margin. Surface so operator sees it
+        # rather than the check silently passing on no-data. Per PR 138
+        # round-7 review.
+        warn.append('fps=0.0(window-unclosed)')
+    elif fps < 30:
+        warn.append(f'fps={fps:.1f}<30')
+    if overruns > 5:
+        warn.append(f'overruns={overruns}')
+    # Space after WARN: improves readability when scanning the deploy
+    # output — `WARN: fps=0.0` is more visible than `WARN:fps=0.0`. Per
+    # PR 138 round-9 review.
+    warn_str = '  WARN: ' + ', '.join(warn) if warn else ''
+    print(f'  {short} OK version={version} fps={fps:.1f} overruns={overruns}{warn_str}')
+
+# Failure-class taxonomy (#142): if EVERY device is unreachable, the cause is
+# almost certainly upstream (host USB stack, server, network) rather than
+# coincident firmware bricks on N devices. Surface that distinction so the
+# operator knows whether to investigate firmware or restart blinkyhost.
+# 2026-05-01 incident: I diagnosed '4 bricked devices' from 'all 4 unreachable'
+# when actually blinkyhost's USB stack was stale. Reboot fixed it; firmware
+# was fine. Saved as memory: feedback_brick_diagnosis_first_rule.md.
+total = len(devices)
+unreachable = sum(1 for d in devices if d.get('state') != 'connected')
+all_unreachable = total > 0 and unreachable == total
+print(f'pass={total-len(fails)}/{total}', file=sys.stderr)
+if all_unreachable:
+    print(f'all_unreachable=1', file=sys.stderr)
+sys.exit(1 if fails else 0)
+" || {
+    # Re-evaluate whether the failure is host-side (all unreachable) or
+    # device-specific. If host-side, advise reboot rather than implying
+    # bricks; if device-specific, the per-row FAIL output above tells
+    # the operator which devices to investigate.
+    UNREACHABLE_COUNT=$(curl -sf --max-time 10 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
+        python3 -c "import json,sys; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('state')!='connected'), len(ds))" 2>/dev/null)
+    UNREACH=$(echo "$UNREACHABLE_COUNT" | awk '{print $1}')
+    TOTAL=$(echo "$UNREACHABLE_COUNT" | awk '{print $2}')
+    # Three branches:
+    #   (a) TOTAL is empty → server itself unreachable (curl failed); diagnose accordingly
+    #   (b) TOTAL > 0 AND UNREACH == TOTAL → all devices unreachable, likely host USB
+    #   (c) Otherwise → specific device(s) failed, deploy state diverged
+    # Pre-fix (PR 138 round-11 review): branch (a) silently fell through to (c)
+    # with a misleading "investigate per-device" message — server-down case looked
+    # like a device failure.
+    if [[ -z "$TOTAL" ]]; then
+        echo ""
+        echo "  Could not reach blinky-server to diagnose post-deploy state."
+        echo "  Either the server crashed mid-deploy, the network is down, or the"
+        echo "  X-API-Key was rejected. Check:"
+        echo "    1. ssh blinkyhost.local sudo systemctl status blinky-server"
+        echo "    2. ssh blinkyhost.local sudo journalctl -u blinky-server -n 50"
+        fail "Could not reach server to diagnose post-deploy state — server may be down." 5
+    elif [[ "$TOTAL" -gt 0 && "$UNREACH" == "$TOTAL" ]]; then
+        echo ""
+        echo "  All $TOTAL device(s) unreachable simultaneously — this pattern almost"
+        echo "  always means the HOST USB stack is stuck (kernel/udev), not firmware"
+        echo "  bricks. Try:"
+        echo "    1. ssh blinkyhost.local sudo systemctl restart systemd-udevd"
+        echo "    2. If that doesn't help, ssh blinkyhost.local sudo reboot"
+        echo "    3. Then re-run this deploy with --skip-compile"
+        echo "  See memory: feedback_brick_diagnosis_first_rule.md"
+        fail "All devices unreachable — likely host USB stack, not firmware. Recovery steps printed above." 5
+    else
+        fail "Post-deploy state assertion failed (see rows above). $UNREACH/$TOTAL device(s) in unexpected state — investigate per-device causes." 4
+    fi
+}
 
 echo ""
 echo "============================================================"

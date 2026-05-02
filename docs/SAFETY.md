@@ -192,7 +192,7 @@ CLI upload method. `arduino-cli upload` and `adafruit-nrfutil` remain BANNED.
 1. Check Serial output for error messages
    ↓
 2. Is it a config issue?
-   ├─ YES → Use serial console "factoryreset" command
+   ├─ YES → Use serial console `wipe_device_identity` command (formerly `factory`/`reset` — old aliases still work; see #141)
    └─ NO  → Continue
    ↓
 3. Can device boot at all?
@@ -292,8 +292,8 @@ python scripts/check_config_safety.py  # MUST PASS
 
 **If device crashes:**
 1. Check serial output
-2. Try factory reset via serial
-3. Reflash via Arduino IDE
+2. Try `wipe_device_identity` via serial console (formerly `factory`/`reset`)
+3. Reflash via `./scripts/deploy.sh`
 4. If bricked: SWD recovery (see DEVELOPMENT.md)
 
 **NEVER:**

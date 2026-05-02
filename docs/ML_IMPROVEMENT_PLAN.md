@@ -1,5 +1,108 @@
 # ML Training Improvement Plan
 
+> **2026-05-01 — v36 spike result + status**
+>
+> **Firmware spike measurement (b160).** PDM 31.25 kHz / FFT-512 / 80
+> mel / fmax 14 kHz, NN disabled (v33 model can't accept 80-mel input).
+> NN-disabled audio path measured at fps=357-654 on bare hardware =
+> ~1.5-3 ms/iter. Adding the NN cost back in (80-mel input matmul ≈
+> 1.6× v33's NN time) projects to ≈43 fps with NN re-enabled. **The
+> 30 fps merge gate is comfortably reachable; 60 fps stretch is not.**
+>
+> **Sample rate decision: 31.25 kHz over 32 kHz.** The Adafruit nRF52
+> PDM library natively supports 31250 Hz (`PDM_FREQ_2000K` / `RATIO_64`).
+> 32000 Hz exact would need register-level overrides not worth the
+> risk. 31.25 kHz Nyquist (15.625 kHz) leaves safe margin over the
+> 14 kHz fmax target; frame period 512/31250 = 16.4 ms is unchanged
+> from v33's 16.0 ms.
+>
+> **v36 prep status.** Running in tmux `v36_prep`, processed dir
+> `/mnt/storage/blinky-ml-data/processed_v36`. Same kick_weighted_clean
+> labels as v34d (the `feedback_label_improvements_propagate` rule —
+> data-side wins propagate forward). Single-axis change vs v34d:
+> audio.* config only. Same model architecture, loss, augmentation.
+>
+> **Next-step gating.** When prep + train complete: bump
+> `MAX_INPUT_FEATURES` 64 → 160 in FrameOnsetNN.h (fits 80-mel + delta),
+> redeploy firmware with NN re-enabled, measure on-device fps under
+> typical music+LED load. Falsifiable predictions: offline F1 on edm/
+> > 0.70 (vs v33's 0.617 / v34d's 0.616), val_peak_F1 > 0.55 (vs
+> v34d's 0.394 — apples-to-apples on clean labels; the original
+> "0.71 vs 0.616" mixed val_peak_F1 with edm/ Onset F1, see metric
+> reference table below), INT8 export std ≥ 0.30, on-device fps ≥ 30.
+>
+> **2026-05-02 — v36 RESULT: NEGATIVE on the deployment metric**
+>
+> Training completed via early-stop at epoch 24 (best epoch 9). Eval ran via `scripts/v36_post_train.sh`.
+>
+> | metric (offline, edm/ 18 tracks) | v33 | v34d | v36 | Δ vs v33 |
+> |----------------------------------|-----|------|-----|----------|
+> | edm/ Onset F1 (mir_eval onset, 50ms, vs onsets_consensus GT) | 0.617 | 0.616 | **0.537** | **−0.080** |
+> | tracks: down / flat / up vs v33  |     |      | 14 / 2 / 2 | regression broad-based |
+> | val_peak_F1 (own clean-labels target) | 0.690 (raw labels) | 0.394 | 0.524 | n/a (different label distribution) |
+> | activation std at best epoch     | 0.247 | 0.234 | 0.215 | continued <0.30 ceiling |
+>
+> The +0.13 val_peak_F1 over v34d **did not translate** to the deployment metric. 14 of 18 edm/ tracks regressed; only 2 improved (techno-minimal-emotion +0.026, trance-infected-vibes +0.045 — both edge content). The two predictions that mattered both failed: edm/ Onset F1 (0.537 < 0.70 target, regression vs v33) and activation std (0.215 < 0.30 target, ceiling unbroken). **Don't deploy v36.** No firmware rev, no on-device measurement.
+>
+> Conclusions:
+> 1. Adding spectral resolution (50→80 mel, 8→14 kHz fmax, 16→31.25 kHz sr, n_fft 256→512) without aligning labels to the new content **hurt** the metric. The training labels are kick-biased; the new 8–14 kHz bands carry hi-hat/cymbal energy the labels under-reward, and on a smaller training set (4.77M chunks vs v33's 7.18M, due to clean-labels filtering) the model couldn't learn to use the new bands productively.
+> 2. The full-spectrum hypothesis isn't dead, but it's gated on **labels that reward hi-hat/cymbal onsets**, not on more spectrum alone. That's exactly what task #135 (hybrid supervision: per-instrument + onsets_consensus fallback) provides.
+> 3. The "synthesis" prediction of 0.71 was built on architecture-capacity-isn't-the-binding-constraint, but treated *labels* as fixed when in fact our labels are the binding constraint that's still load-bearing. Re-read the synthesis with that correction before designing the next experiment.
+>
+> Eval artifacts: `/mnt/storage/blinky-ml-data/outputs/v36_fmax/{eval/eval_results.json, comparison_v33_v36.txt, comparison_v34d_v36.txt}`. Pipeline: `scripts/v36_post_train.sh`.
+>
+> Next experiment is **#135 hybrid supervision**, not another spectral-resolution variant.
+>
+> **2026-05-01 — Pivot: full-spectrum input is the next experiment, v35a-e killed**
+>
+> v35b (multi-channel kick/snare/hihat) was killed mid-training after a strategic re-read of the synthesis (lines ~466-484). The v35 queue (a-e) was incrementing on the wrong axes: **none of v35a-e bumped fmax above 8 kHz**, and the synthesis identifies fmax (4-8 kHz vs published 10-17 kHz) and mel resolution (30-50 vs 80-128) as the dominant deltas vs published 0.85+ F1 systems. Schlüter '14 hit 0.89 with a comparable parameter count (~10K) using 80 mel × 27 Hz–16 kHz at 100 Hz frame rate. Architecture capacity is *not* the binding constraint at our scale; spectral coverage is.
+>
+> **The next experiment must bump the audio sample rate.** Everything else flows from that:
+>
+> | | current (v33) | proposed (v36-fmax) |
+> |---|---|---|
+> | sample rate (PDM ISR) | 16 kHz | **31.25 kHz** (PDM library native; 32 kHz exact would need register overrides) |
+> | Nyquist | 8 kHz | **16 kHz** |
+> | FFT_SIZE | 256 | 512 (preserves 16 ms frame) |
+> | bin freq | 62.5 Hz | 62.5 Hz |
+> | mel bands | 50 | 80 |
+> | fmax | 8 kHz | **14 kHz** |
+> | per-frame compute | 1× | ~2× |
+>
+> This unlocks two things at once: (a) the model finally has hihat/cymbal/snare-snap energy (8-15 kHz band) in its input, which is exactly what the synthesis predicts is missing; (b) deterministic post-NN gates we already use (`bassGate`, `crestGateMin`) can be extended with **upper-band HFC gate** and **centroid threshold** that today are useless because the discriminating frequencies aren't in our spectrum.
+>
+> **Hard constraint: on-device frame rate must hold ≥30 fps (target 60).** Offline MACS estimates have proven unreliable as a perf predictor — on-device runs much slower than MACS suggests. The actual perf gate is measured fps from the firmware audio loop, not theoretical MAC count. The b156 drain loop and b157 async LED driver freed substantial headroom; the 32 kHz / 80-mel bump is expected to eat ~half of that headroom. Validation must measure on a real device under typical music + LED load before committing to the larger model.
+>
+> **Why this is now feasible (wasn't before):** v33-era audio loop was already overrun-bound at 1× compute (b154 measured 5.7 overruns/sec, 14-17% audio loss). Doubling FFT/mel compute on that pipeline would have pushed it deep below 60 fps with cascading audio loss. Post-b157 (drain loop fully each iter, async PWM LEDs not blocking show()), the loop has actual headroom to spend on bigger spectral analysis. The audio infrastructure work was the prerequisite for this experiment, not a parallel track.
+>
+> **Concrete plan, gated on perf measurement:**
+>
+> | step | what | gate to next step |
+> |------|------|-------------------|
+> | 1 | Spike firmware: PDM ISR 16→32 kHz, FFT_SIZE 256→512, regenerate MEL_BANDS for 80 × 32 kHz × 512 (fmin=30, fmax=14000). Build, flash one bench device. | Audio loop alive, no boot loop |
+> | 2 | Measure on-device fps under typical music + LED load. Read `json info` overrun counters over 60 s. | **fps ≥ 30 sustained** AND overrun rate ≤ 0.1/s. If <30 fps: investigate FFT lib, consider 22.05 kHz fallback. If overruns: ring buffer may need re-sizing for the new rate. |
+> | 3 | Update training config: sr=31250, n_fft=512, n_mels=80, fmin=30, fmax=14000. Re-prep on existing audio (FMA at 44.1/22 kHz upsamples cleanly to 31.25). | Prep completes, positive ratio matches v33's |
+> | 4 | Train v36-fmax. Falsifiable predictions: (a) offline F1 on edm/ > 0.75 (vs v33's 0.617); (b) val activation std ≥ 0.30 (no INT8 collapse); (c) tflite size ≤ 35 KB (model grows because of larger input but not unboundedly). | All three predictions hit |
+> | 5 | Deploy and measure on-device F1 vs v33 baseline. | On-device F1 lift ≥ 0.05 |
+> | 6 | If F1 lifts: design upper-band HFC gate + centroid threshold using v36 firing-time features. These are deterministic post-NN filters that should add ≥0.02 precision without recall loss. | — |
+>
+> **Negative-result triggers** (any one kills the experiment, surface for re-strategy):
+> - Step 2 fps < 30 → audio capacity issue, fall back to 22.05 kHz × 64-mel as a smaller bump.
+> - Step 4 F1 ≤ 0.65 → fmax wasn't the binding constraint we thought; rerun gate-b on full-spectrum features to see if discriminative info is there but the model isn't using it.
+> - Step 4 activation std < 0.20 → 80-mel collapsed under quantization; revisit pos_weight / focal loss. Don't let this lead another v30/v31/v32 chase.
+> - Step 5 on-device F1 lift < 0.05 → the offline-vs-on-device gap (already 0.05 at v33) widened further; investigate firmware overrun rate, mel parity, ISR jitter.
+>
+> **Killed from the v35 queue:**
+> - **v35a (64-mel @ 8 kHz)** — half-step on mel resolution, zero on fmax. Subsumed by v36's 80 mel × 14 kHz.
+> - **v35b (multi-channel instrument)** — orthogonal to ceiling, no theoretical reason to lift F1. Killed mid-training 2026-05-01.
+> - **v35c (frame rate 62.5 → 100 Hz)** — temporal resolution, not spectral. Defer until v36 lands; reconsider then.
+> - **v35d (KD from BS-RoFormer)** — teacher would help label quality but our INPUT is bandlimited; KD on bandlimited input ≠ KD on full-spectrum input. Defer until v36 lands.
+> - **v35e (multi-resolution mel @ 8 kHz)** — the plan itself notes "reaching 80 cleanly requires sample-rate increase to ≥22.05 kHz first" (line 37). Subsumed by v36.
+>
+> **What's already working that we keep:** `bassGate` (active, ~1.05-1.5× threshold boost when bass ratio < 33% — main reason on-device 0.62 beats raw val 0.55), `crestGateMin` (configurable). Once v36 lands, extend with upper-band HFC + centroid gates that today are useless because their input is bandlimited.
+>
+> Tracked as task #136. v35a/c/d/e tasks (#121, #122, #123, plus v35a/b which were never enumerated) are deleted as superseded.
+
 > **2026-04-29 — Audio sampling overrun discovered (silent fallback in firmware)**
 >
 > Investigating whether the on-device single-thread loop drops audio samples surfaced a silent fallback at `blinky-things/inputs/AdaptiveMic.cpp:195-197`. The PDM ISR is free-running DMA (sampling never stops at the hardware level), but when the main loop stalls longer than ~32 ms (the 512-sample FFT ring fill time at 16 kHz), the consumer silently advances its read pointer to discard old samples. No counter, no log — currently invisible to telemetry. Triggers: LED rendering (5–50 ms blocking), ACF/PLP spikes (~4–8 ms every 100 ms), BLE/WiFi ISR preemption.
@@ -1042,6 +1145,16 @@ v33 epoch-1 `val_peak_F1=0.65` is the model's score against val labels that are 
 **The apples-to-apples comparison is `evaluate.py` on edm/ with hand-curated `.onsets_consensus.json` GT, which is identical for both runs.** v33 b153 scored 0.570 there. v34d's edm/ score (post-training, post-export, post-deploy) is the comparable number — not val_peak_F1.
 
 This caveat applies to *every* future run on cleaned labels: their `val_peak_F1` will look lower than v33-era runs not because they're worse, but because the eval target is more honest. Plan headlines should track on-device edm/ F1, not val_peak_F1.
+
+**Metric-name reference (cross-quote whenever comparing runs):**
+
+| Metric                | Source                                              | Apples-to-apples within… |
+|-----------------------|-----------------------------------------------------|---------------------------|
+| `val_peak_F1`         | `training_log.csv` col 9 — peak-picked F1 vs the run's *own* val labels (post-training-time threshold sweep) | runs that share the same `kick_weighted_dir` / `labels_type` |
+| edm/ Onset F1         | `evaluate.py --output-dir .../eval` → `eval_results.json` `f1` field, mir_eval onset, 50ms tolerance, vs hand-curated `.onsets_consensus.json` | all runs from 2026-04-29 onward (post-onset-GT-evaluator-fix) |
+| edm/ on-device F1     | blinky-server validation harness against the deployed firmware build | all firmware builds with the same peak-picker config and `pulseonsetfloor` |
+
+When in doubt: the tables in run-result blocks should use the **same metric column header** for every run on a row, and label what that column is. Mis-attribution (treating v34d's edm/ Onset F1 0.616 as if it were a `val_peak_F1` baseline for v36) is the v34d/v36 confusion that triggered an hour-long mis-investigation 2026-05-02 04:00. Per the metric audit on 2026-05-02.
 
 ### Label audit — the actual ceiling (2026-04-28)
 

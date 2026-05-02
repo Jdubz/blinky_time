@@ -852,11 +852,74 @@ def main():
         # low baseline and learns to spike UP at onsets. Without this, the zero
         # bias starts at sigmoid(0) = 0.5, leading to flat ~0.6 activations where
         # the model compromises between pos_weight pushing up and neg loss pushing down.
-        if hasattr(model, 'output_conv') and pos_ratio_mean > 0:
-            init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
-            with torch.no_grad():
-                model.output_conv.bias.fill_(init_bias)
-            print(f"  Output bias init: {init_bias:.3f} (sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+        if hasattr(model, 'output_conv'):
+            if multichannel_targets:
+                # Per-channel bias from each channel's own positive ratio. v35b
+                # had hihat at 0.35% — uniform bias from a global mean would
+                # leave hihat severely under-initialized. Each channel gets the
+                # log-prior matching its own class density.
+                #
+                # Validate per-channel ratios FIRST (before entering the
+                # torch.no_grad() context), so a degenerate channel raises
+                # cleanly without entering the no-grad scope. Per PR 138
+                # round-9 review.
+                ch_ratios: list[tuple[int, float, str]] = []
+                for ch in range(n_ch):
+                    ch_ratio = float(y_sample[:, :, ch].mean())
+                    name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
+                    # ch_ratio == 0 (no positives) or 1 (no negatives) is
+                    # a label-pipeline bug, not a valid training condition.
+                    # Continuing past it would silently leave bias=0.0 →
+                    # sigmoid(0)=0.5, which is exactly what RetinaNet's
+                    # low-prior init was designed to avoid; the v30/v31/v32
+                    # collapse pattern starts here. Hard-fail per CLAUDE.md
+                    # "No Silent Fallbacks".
+                    #
+                    # Exact float equality is intentional: the mean of a
+                    # {0,1} tensor is exactly 0.0 or 1.0 only when every
+                    # label is identical. No epsilon needed — any positive
+                    # ratio in (0, 1) is valid for training. Per PR 138
+                    # round-13 review.
+                    if ch_ratio == 0 or ch_ratio == 1:
+                        raise ValueError(
+                            f"Output bias init [{name}]: ch_ratio="
+                            f"{ch_ratio:.4f} — degenerate channel (no "
+                            f"positives or no negatives). Inspect the "
+                            f"label pipeline for an empty/full channel "
+                            f"before training. Common causes: stem-derived "
+                            f"per-instrument labels with broken stem "
+                            f"separation; mis-aligned label_shift_frames; "
+                            f"dataset entirely on one side of "
+                            f"hard_binary_threshold."
+                        )
+                    ch_ratios.append((ch, ch_ratio, name))
+                # All channels validated — apply biases under one no-grad scope.
+                with torch.no_grad():
+                    for ch, ch_ratio, name in ch_ratios:
+                        init_bias = math.log(ch_ratio / (1 - ch_ratio))
+                        model.output_conv.bias[ch].fill_(init_bias)
+                        print(f"  Output bias init [{name}]: {init_bias:.3f} "
+                              f"(sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+            elif pos_ratio_mean > 0 and pos_ratio_mean < 1:
+                init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
+                with torch.no_grad():
+                    model.output_conv.bias.fill_(init_bias)
+                print(f"  Output bias init: {init_bias:.3f} (sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+            else:
+                # pos_ratio_mean == 0 (no positives) or 1 (no negatives) —
+                # same silent-fallback class as the multichannel branch above
+                # caught by PR 138 round-3. Hard-fail per CLAUDE.md "No Silent
+                # Fallbacks". Per PR 138 round-4 review: round-3 only fixed
+                # the multichannel path; the single-channel else-branch was
+                # silently doing nothing (bias stayed 0 → sigmoid(0)=0.5,
+                # exact v30/v31/v32 collapse pattern).
+                raise ValueError(
+                    f"Output bias init: pos_ratio_mean={pos_ratio_mean:.4f} — "
+                    f"degenerate dataset (all zero or all one). Inspect "
+                    f"label pipeline before training. Common causes: empty "
+                    f"label files; mis-aligned label_shift_frames; dataset "
+                    f"entirely on one side of hard_binary_threshold."
+                )
         # Quant-Noise: stochastic INT8 quantization during training (Fan et al. 2020)
         quant_noise_ratio = cfg["training"].get("quant_noise", 0.0)
         if quant_noise_ratio > 0:

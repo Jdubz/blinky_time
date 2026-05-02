@@ -137,7 +137,10 @@ class DeviceProtocol:
         return await self.send_command("load")
 
     async def restore_defaults(self) -> str:
-        return await self.send_command("defaults")
+        # Firmware accepts the new self-documenting name and the old 'defaults'
+        # alias (deprecation-warns on the alias). Send the new name so up-to-
+        # date devices stop logging the warning. See firmware #141.
+        return await self.send_command("restore_runtime_settings")
 
     async def set_generator(self, name: str) -> str:
         return await self.send_command(f"gen {name}")

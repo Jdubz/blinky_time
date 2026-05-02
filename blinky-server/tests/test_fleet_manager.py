@@ -49,11 +49,18 @@ async def test_release_nonexistent(fleet_with_devices: FleetManager) -> None:
     assert not ok
 
 
-async def test_send_to_all_skips_disconnected(fleet_with_devices: FleetManager) -> None:
-    # Disconnect one device
+async def test_send_to_all_reports_disconnected(fleet_with_devices: FleetManager) -> None:
+    """Disconnected devices appear in results with `skipped: state=…` entry.
+
+    Pre-2026-05-01 they were silently filtered out; deploy.sh treated the
+    truncated dict as success even when some devices missed the command.
+    """
     await fleet_with_devices.release_device("MOCK_DEVICE_000")
 
     results = await fleet_with_devices.send_to_all("ble")
-    # Only the connected device should respond
-    assert len(results) == 1
+    # Both devices appear; the released one is marked skipped, the other got the command.
+    assert len(results) == 2
+    assert "MOCK_DEVICE_000" in results
+    assert results["MOCK_DEVICE_000"].startswith("skipped: state=")
     assert "MOCK_DEVICE_001" in results
+    assert not results["MOCK_DEVICE_001"].startswith("skipped:")

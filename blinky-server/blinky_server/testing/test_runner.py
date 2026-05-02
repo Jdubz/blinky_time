@@ -128,12 +128,17 @@ async def _sync_clock(device: Device) -> float | None:
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
-    """Reset device to defaults, then apply any test-specific commands.
+    """Reset runtime settings, then apply any test-specific commands.
 
-    Always resets to factory defaults first — stale settings from prior
+    Always resets runtime tunables first — stale settings from prior
     experiments persist in flash and silently corrupt test results.
+    Note: this does NOT wipe device identity (matrix size, deviceId).
+    For full reprovisioning, use deploy.sh --reprovision (sends
+    `wipe_device_identity`).
     """
-    await device.protocol.send_command("defaults")
+    # Send the new self-documenting name; firmware accepts the old 'defaults'
+    # alias too with a deprecation warning. See #141.
+    await device.protocol.send_command("restore_runtime_settings")
     await asyncio.sleep(0.1)
     if commands:
         for cmd in commands:

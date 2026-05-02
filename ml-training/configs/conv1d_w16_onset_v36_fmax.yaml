@@ -1,0 +1,127 @@
+# Conv1D W16 v36 — full-spectrum mel (fmax=14 kHz)
+#
+# The synthesis (ML_IMPROVEMENT_PLAN.md, lines ~466-484) identifies fmax
+# (4-8 kHz vs published 10-17 kHz) and mel resolution (30-50 vs 80-128)
+# as the dominant deltas vs Schluter '14 / Bock '12 / Beat-This! systems
+# that hit F1 0.85+. Architecture capacity isn't the binding constraint
+# at our 10K-param scale; spectral coverage is.
+#
+# Single-axis change vs v34d: audio.* config only. Same kick_weighted_clean
+# labels (consensus-filtered ≥2 systems within ±70 ms — v34d's audit
+# proved +0.26 precision over raw kick_weighted_drums), same model
+# architecture, same loss, same augmentation. v36 puts hi-hat / cymbal /
+# snare-snap energy (8-15 kHz, currently dropped) into the model's input
+# for the first time.
+#
+# Audio config rationale:
+#   sample_rate 31250: nRF52840 PDM library natively supports this rate
+#     (PDM_FREQ_2000K / RATIO_64). 32000 would require register-level
+#     overrides; 31250 keeps the firmware path stable.
+#   n_fft 512: preserves ~16 ms frame at 31.25 kHz (512/31250 = 16.4 ms,
+#     v33 was 16.0 ms at 256/16000). Same temporal resolution; doubled
+#     spectral resolution.
+#   n_mels 80: full Schluter '14 spec. v35a hit librosa empty-filter
+#     warning at 80 mel × 16 kHz (1 of 80 bands had no FFT bins between
+#     adjacent boundaries). 80 × 31.25 kHz × 512 has zero degenerate
+#     bands — verified via scripts/generate_mel_bands.py.
+#   fmax 14000: under Nyquist (15.625 kHz) with safety margin. Captures
+#     cymbal / hi-hat fundamental + most of the second harmonic.
+#
+# Firmware spike (2026-05-01, b160): NN-disabled audio path runs at
+# 350-650 fps on bare hardware (~1.5-3 ms/iter). Predicted v36-with-NN
+# fps ≈ 43 (audio ~3 ms + NN ~20 ms × 1.6 mel ratio). Above the 30 fps
+# merge gate, below the 60 fps stretch.
+#
+# Falsifiable predictions:
+#   - val_peak_F1 > 0.55 (vs v34d's 0.394 — apples-to-apples on the same
+#     kick_weighted_clean labels). Originally written as ">0.71 vs 0.616",
+#     but 0.616 is v34d's *edm/ Onset F1* (deployment metric), not its
+#     val_peak_F1 — comparing the two is the metric-conflation that the
+#     v34d caveat in ML_IMPROVEMENT_PLAN.md warns about. The honest
+#     prediction on the val_peak_F1 axis is "noticeably above v34d's
+#     0.394", which 0.55 captures with margin.
+#   - edm/ Onset F1 > 0.70 (vs v33's 0.617 / v34d's 0.616, +0.08).
+#     This is the deployment metric — measured offline by evaluate.py
+#     against hand-curated .onsets_consensus.json GT, identical eval
+#     code path for all three runs.
+#   - INT8 export std ≥ 0.30 (richer input = more activation variance,
+#     should comfortably clear the v30/v31/v32 collapse threshold)
+#   - tflite size ≤ 35 KB (input grows but architecture unchanged)
+#   - on-device fps ≥ 30 with NN active (firmware perf gate)
+#
+# ACTUAL RESULT (training stopped 2026-05-02 06:29 UTC, early-stop epoch 24):
+#   - best val_peak_F1 = 0.5245 (epoch 9) — +0.13 over v34d, BELOW the
+#     0.55 prediction
+#   - activation std plateau ~0.22 — below 0.30 prediction (continued
+#     pattern: 80 mel didn't break the std<0.30 ceiling either)
+#   - edm/ Onset F1: TBD via scripts/v36_post_train.sh
+#   - tflite size: TBD via scripts/v36_post_train.sh
+#
+# Negative-result triggers (original — kept for record):
+#   - val_peak_F1 ≤ 0.55 (originally written as 0.65 against the wrong
+#     baseline; corrected here): fmax wasn't the binding constraint we
+#     thought. v36's 0.5245 is in this band — borderline, leans negative.
+#     Decision deferred until edm/ Onset F1 lands.
+#   - on-device F1 lift < 0.05: offline-vs-on-device gap widened.
+#     Investigate firmware overrun rate, mel parity, ISR jitter.
+#   - INT8 export std < 0.20: 80-mel collapsed under quantization.
+#     Revisit pos_weight or focal loss before declaring v36 dead.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  # Inherit v34d's cleaned labels — that finding is independent of model
+  # architecture, propagates forward. See feedback_label_improvements_propagate.
+  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_clean"
+  neighbor_weight: 0.25
+  label_shift_frames: 1
+  hard_binary_threshold: 0.1
+
+audio:
+  sample_rate: 31250        # PDM library native (PDM_FREQ_2000K / RATIO_64)
+  n_fft: 512                # preserves 16 ms frame at 31.25 kHz
+  hop_length: 512           # no overlap (hop = FFT size)
+  n_mels: 80                # full Schluter '14 spec, no degenerate bands at this sr/n_fft
+  fmin: 30                  # low-bass detail (matches v33+)
+  fmax: 14000               # under 15.625 kHz Nyquist; captures cymbal/hihat
+  log_epsilon: 1.0e-7       # firmware SharedSpectralAnalysis match
+  mel_db_range: 60          # firmware match
+  frame_rate: 61.04         # 31250 / 512
+  target_rms_db: -72        # v33+ baseline (v34/v34b/v34c proved this is correct)
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "bce"
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "/mnt/storage/blinky-ml-data/processed_v36"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v36_fmax.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 35

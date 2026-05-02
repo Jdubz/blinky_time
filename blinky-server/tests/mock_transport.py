@@ -163,8 +163,12 @@ class MockTransport(Transport):
         if cmd == "load":
             return "OK settings loaded"
 
-        if cmd == "defaults":
-            return "OK defaults restored"
+        # Both the new self-documenting name (#141) and the legacy alias.
+        if cmd in ("restore_runtime_settings", "defaults"):
+            return "OK runtime settings restored"
+
+        if cmd in ("wipe_device_identity", "factory", "reset"):
+            return "OK device identity wiped"
 
         if cmd == "ble":
             return "[BLE] role=scanner state=active\n[BLE] packets_rx=0 duped=0 dropped=0"

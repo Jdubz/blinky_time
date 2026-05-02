@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from ..device.device import Device, DeviceState
-from .deps import get_fleet
+from .deps import assert_command_allowed, get_fleet
 from .models import CommandRequest, CommandResponse, SettingValueRequest
 
 router = APIRouter(tags=["commands"])
@@ -30,8 +30,19 @@ def _get_connected_device(device_id: str) -> Device:
 
 
 @router.post("/devices/{device_id}/command")
-async def send_command(device_id: str, body: CommandRequest) -> CommandResponse:
-    """Send a raw command to a device."""
+async def send_command(
+    device_id: str,
+    body: CommandRequest,
+    x_deploy_tool: str | None = Header(None, alias="X-Deploy-Tool"),
+) -> CommandResponse:
+    """Send a raw command to a device.
+
+    Device-mutating commands require the X-Deploy-Tool header set by
+    scripts/deploy.sh; everything else is open. See
+    deps._DEPLOY_GATED_COMMAND_LIST for the canonical gated set and
+    deps.assert_command_allowed for the matching rule.
+    """
+    assert_command_allowed(body.command, x_deploy_tool)
     device = _get_connected_device(device_id)
     resp = await device.protocol.send_command(body.command)
     return CommandResponse(response=resp)
@@ -66,8 +77,16 @@ async def control_stream(device_id: str, mode: str) -> CommandResponse:
 
 
 @router.post("/fleet/command")
-async def fleet_command(body: CommandRequest) -> dict[str, str]:
-    """Send a command to all connected devices."""
+async def fleet_command(
+    body: CommandRequest,
+    x_deploy_tool: str | None = Header(None, alias="X-Deploy-Tool"),
+) -> dict[str, str]:
+    """Send a command to all connected devices.
+
+    Same deploy-gate as /devices/{id}/command for fleet-wide raw commands.
+    See deps._DEPLOY_GATED_COMMAND_LIST for the canonical gated set.
+    """
+    assert_command_allowed(body.command, x_deploy_tool)
     return await get_fleet().send_to_all(body.command)
 
 
@@ -103,5 +122,25 @@ async def fleet_load_settings() -> dict[str, str]:
 
 @router.post("/fleet/settings/defaults")
 async def fleet_restore_defaults() -> dict[str, str]:
-    """Restore factory defaults on all connected devices."""
-    return await get_fleet().send_to_all("defaults")
+    """Restore runtime tunables on all connected devices.
+
+    Resets soft settings (mic params, audio tracker config, generators).
+    Does NOT wipe device identity or matrix size. To wipe identity,
+    POST /fleet/command with body `{"command": "wipe_device_identity"}`
+    and the X-Deploy-Tool header. The wipe command (and its deprecated
+    `factory`/`reset` aliases, plus `device upload`/`reboot`) is in the
+    deploy-gated set — see deps._DEPLOY_GATED_COMMAND_LIST for the
+    canonical list. No dedicated /fleet/wipe endpoint exists; deploy.sh
+    is the canonical caller.
+
+    Endpoint path retained for blinky-console compatibility; firmware
+    command name updated to `restore_runtime_settings` per #141.
+
+    Response shape NOTE: as of #139 (send_to_all visibility fix),
+    disconnected devices appear in the result dict with a
+    `"skipped: state=<state>"` value rather than being silently dropped.
+    UI callers (blinky-console "Restore Defaults" button) should treat
+    `skipped:`-prefixed values as informational, not as errors — the
+    fail-loud requirement is for deploy.sh callers, not user-facing UI.
+    """
+    return await get_fleet().send_to_all("restore_runtime_settings")
