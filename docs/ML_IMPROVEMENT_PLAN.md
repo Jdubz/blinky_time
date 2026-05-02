@@ -1,5 +1,117 @@
 # ML Training Improvement Plan
 
+> **2026-05-01 evening — v36 spike landed; prep in flight**
+>
+> Firmware spike confirmed audio-path budget fits — and the entire deploy
+> session generated a chain of misdiagnoses worth recording so the next
+> session doesn't repeat them.
+>
+> **v36 firmware spike result (b160).** Built with PDM 16 → 31.25 kHz, FFT
+> 256 → 512, mel 50 → 80, fmax 8 → 14 kHz, NN inference disabled (model
+> still v33-shape, can't accept 80-mel input). Deployed to fleet, hit a
+> diagnostic dead-end (more on that below), but two devices that flashed
+> cleanly came back at fps=357 and fps=654 (NN disabled). That's audio
+> path running in ~1.5-3 ms/iter, comfortably under the 16 ms frame
+> budget. Adding NN inference back in (estimated +20 ms for 80-mel input
+> matmul) projects to ≈43 fps in steady state — above the 30 fps merge
+> gate, below the 60 fps stretch.
+>
+> **Why I used 31.25 kHz, not 32 kHz.** The Adafruit nRF52 PDM library
+> natively supports 31250 Hz (`PDM_FREQ_2000K` / `RATIO_64`). 32000 Hz
+> would require register-level overrides to the PDM clock that aren't
+> worth the risk for this experiment. 31.25 kHz Nyquist = 15.625 kHz,
+> still leaves comfortable margin above the 14 kHz fmax target. Frame
+> period at 512/31250 = 16.4 ms is essentially identical to v33's 16.0 ms.
+>
+> **Deploy session that didn't crash my devices but I thought it did.**
+> Two of the four flashes errored at 5.2 s ("UPLOAD FAILED"); subsequent
+> state assertion came back with `?` versions on all four; ssh blinkyhost
+> showed `ls /dev/ttyACM*: No such file or directory`. I diagnosed "4
+> bricks, abort." Wrong: the host's USB stack got stuck after rapid
+> back-to-back UF2 resets. Rebooting blinkyhost brought all four devices
+> back instantly, the two that had flashed cleanly were running v36
+> firmware happily. Recovery actions taken (saved as memory
+> feedback_brick_diagnosis_first_rule.md):
+>   - **Heuristic**: N>1 devices on same host showing identical failure
+>     simultaneously = upstream cause (host USB stack, fleet manager,
+>     udev). Run `lsusb`, `ls /sys/bus/usb/devices/`, `dmesg | tail`
+>     before concluding firmware brick.
+>   - **`/dev/serial/by-id/` missing as a directory** is host udev failure
+>     — firmware on chip N can't delete the directory.
+>   - **deploy.sh post-deploy assertion** now distinguishes "all
+>     unreachable = host USB stack" from "specific failure" and prints
+>     the host-side recovery steps (#142).
+>   - **routes_firmware.py** now does 8 s + `udevadm settle --timeout=10`
+>     between flashes (was 3 s sleep). Settle returns <1 s on a healthy
+>     stack, ~10 s when jammed — early-warning of the failure mode.
+>
+> **v36 prep launched 2026-05-01 ~20:23** in tmux session `v36_prep`,
+> processed dir `/mnt/storage/blinky-ml-data/processed_v36`, log
+> `ml-training/outputs/v36_fmax/prep.log`. Disk precheck reported 401 GB
+> free vs 392 GB peak need (10 GB margin — tight; will monitor). Single-
+> axis change vs v34d: audio.* config only. Same kick_weighted_clean
+> labels (the `feedback_label_improvements_propagate` lesson — v34d's
+> +0.26 precision audit is independent of model architecture and
+> propagates forward). Same model architecture, loss, augmentation.
+>
+> **Next step gating.** Once v36 prep completes, train v36 model
+> (~1-2 hr GPU). When trained: bump `MAX_INPUT_FEATURES` 64 → 160 in
+> FrameOnsetNN.h (so 80-mel × 2-with-delta fits), redeploy firmware
+> with NN re-enabled, measure on-device fps under typical music+LED
+> load. Falsifiable predictions: offline F1 on edm/ > 0.71 (vs v34d's
+> flat 0.616), on-device F1 > 0.70 (vs v33's 0.617), INT8 export
+> std ≥ 0.30, on-device fps ≥ 30.
+>
+> **2026-05-01 — Pivot: full-spectrum input is the next experiment, v35a-e killed**
+>
+> v35b (multi-channel kick/snare/hihat) was killed mid-training after a strategic re-read of the synthesis (lines ~466-484). The v35 queue (a-e) was incrementing on the wrong axes: **none of v35a-e bumped fmax above 8 kHz**, and the synthesis identifies fmax (4-8 kHz vs published 10-17 kHz) and mel resolution (30-50 vs 80-128) as the dominant deltas vs published 0.85+ F1 systems. Schlüter '14 hit 0.89 with a comparable parameter count (~10K) using 80 mel × 27 Hz–16 kHz at 100 Hz frame rate. Architecture capacity is *not* the binding constraint at our scale; spectral coverage is.
+>
+> **The next experiment must bump the audio sample rate.** Everything else flows from that:
+>
+> | | current (v33) | proposed (v36-fmax) |
+> |---|---|---|
+> | sample rate (PDM ISR) | 16 kHz | **32 kHz** |
+> | Nyquist | 8 kHz | **16 kHz** |
+> | FFT_SIZE | 256 | 512 (preserves 16 ms frame) |
+> | bin freq | 62.5 Hz | 62.5 Hz |
+> | mel bands | 50 | 80 |
+> | fmax | 8 kHz | **14 kHz** |
+> | per-frame compute | 1× | ~2× |
+>
+> This unlocks two things at once: (a) the model finally has hihat/cymbal/snare-snap energy (8-15 kHz band) in its input, which is exactly what the synthesis predicts is missing; (b) deterministic post-NN gates we already use (`bassGate`, `crestGateMin`) can be extended with **upper-band HFC gate** and **centroid threshold** that today are useless because the discriminating frequencies aren't in our spectrum.
+>
+> **Hard constraint: on-device frame rate must hold ≥30 fps (target 60).** Offline MACS estimates have proven unreliable as a perf predictor — on-device runs much slower than MACS suggests. The actual perf gate is measured fps from the firmware audio loop, not theoretical MAC count. The b156 drain loop and b157 async LED driver freed substantial headroom; the 32 kHz / 80-mel bump is expected to eat ~half of that headroom. Validation must measure on a real device under typical music + LED load before committing to the larger model.
+>
+> **Why this is now feasible (wasn't before):** v33-era audio loop was already overrun-bound at 1× compute (b154 measured 5.7 overruns/sec, 14-17% audio loss). Doubling FFT/mel compute on that pipeline would have pushed it deep below 60 fps with cascading audio loss. Post-b157 (drain loop fully each iter, async PWM LEDs not blocking show()), the loop has actual headroom to spend on bigger spectral analysis. The audio infrastructure work was the prerequisite for this experiment, not a parallel track.
+>
+> **Concrete plan, gated on perf measurement:**
+>
+> | step | what | gate to next step |
+> |------|------|-------------------|
+> | 1 | Spike firmware: PDM ISR 16→32 kHz, FFT_SIZE 256→512, regenerate MEL_BANDS for 80 × 32 kHz × 512 (fmin=30, fmax=14000). Build, flash one bench device. | Audio loop alive, no boot loop |
+> | 2 | Measure on-device fps under typical music + LED load. Read `json info` overrun counters over 60 s. | **fps ≥ 30 sustained** AND overrun rate ≤ 0.1/s. If <30 fps: investigate FFT lib, consider 22.05 kHz fallback. If overruns: ring buffer may need re-sizing for the new rate. |
+> | 3 | Update training config: sr=32000, n_fft=512, n_mels=80, fmin=30, fmax=14000. Re-prep on existing audio (FMA at 44.1/22 kHz upsamples cleanly to 32). | Prep completes, positive ratio matches v33's |
+> | 4 | Train v36-fmax. Falsifiable predictions: (a) offline F1 on edm/ > 0.75 (vs v33's 0.617); (b) val activation std ≥ 0.30 (no INT8 collapse); (c) tflite size ≤ 35 KB (model grows because of larger input but not unboundedly). | All three predictions hit |
+> | 5 | Deploy and measure on-device F1 vs v33 baseline. | On-device F1 lift ≥ 0.05 |
+> | 6 | If F1 lifts: design upper-band HFC gate + centroid threshold using v36 firing-time features. These are deterministic post-NN filters that should add ≥0.02 precision without recall loss. | — |
+>
+> **Negative-result triggers** (any one kills the experiment, surface for re-strategy):
+> - Step 2 fps < 30 → audio capacity issue, fall back to 22.05 kHz × 64-mel as a smaller bump.
+> - Step 4 F1 ≤ 0.65 → fmax wasn't the binding constraint we thought; rerun gate-b on full-spectrum features to see if discriminative info is there but the model isn't using it.
+> - Step 4 activation std < 0.20 → 80-mel collapsed under quantization; revisit pos_weight / focal loss. Don't let this lead another v30/v31/v32 chase.
+> - Step 5 on-device F1 lift < 0.05 → the offline-vs-on-device gap (already 0.05 at v33) widened further; investigate firmware overrun rate, mel parity, ISR jitter.
+>
+> **Killed from the v35 queue:**
+> - **v35a (64-mel @ 8 kHz)** — half-step on mel resolution, zero on fmax. Subsumed by v36's 80 mel × 14 kHz.
+> - **v35b (multi-channel instrument)** — orthogonal to ceiling, no theoretical reason to lift F1. Killed mid-training 2026-05-01.
+> - **v35c (frame rate 62.5 → 100 Hz)** — temporal resolution, not spectral. Defer until v36 lands; reconsider then.
+> - **v35d (KD from BS-RoFormer)** — teacher would help label quality but our INPUT is bandlimited; KD on bandlimited input ≠ KD on full-spectrum input. Defer until v36 lands.
+> - **v35e (multi-resolution mel @ 8 kHz)** — the plan itself notes "reaching 80 cleanly requires sample-rate increase to ≥22.05 kHz first" (line 37). Subsumed by v36.
+>
+> **What's already working that we keep:** `bassGate` (active, ~1.05-1.5× threshold boost when bass ratio < 33% — main reason on-device 0.62 beats raw val 0.55), `crestGateMin` (configurable). Once v36 lands, extend with upper-band HFC + centroid gates that today are useless because their input is bandlimited.
+>
+> Tracked as task #136. v35a/c/d/e tasks (#121, #122, #123, plus v35a/b which were never enumerated) are deleted as superseded.
+
 > **2026-04-29 — Audio sampling overrun discovered (silent fallback in firmware)**
 >
 > Investigating whether the on-device single-thread loop drops audio samples surfaced a silent fallback at `blinky-things/inputs/AdaptiveMic.cpp:195-197`. The PDM ISR is free-running DMA (sampling never stops at the hardware level), but when the main loop stalls longer than ~32 ms (the 512-sample FFT ring fill time at 16 kHz), the consumer silently advances its read pointer to discard old samples. No counter, no log — currently invisible to telemetry. Triggers: LED rendering (5–50 ms blocking), ACF/PLP spikes (~4–8 ms every 100 ms), BLE/WiFi ISR preemption.
