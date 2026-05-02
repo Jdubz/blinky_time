@@ -342,6 +342,22 @@ async def _flash_fleet_background(
                     stderr=asyncio.subprocess.DEVNULL,
                 )
                 await proc.wait()
+                # Exit code 1 means the udev event queue was still non-empty
+                # after 10 s — exactly the host-USB-jam pattern from
+                # 2026-05-01. Don't fail the deploy on it (we already slept
+                # 8 s and the next device's flash will retry independently),
+                # but DO log loudly so the operator sees the early-warning.
+                # Pre-fix this was silently treated as success, defeating the
+                # purpose of calling settle in the first place. Per PR 138
+                # review (claude bot HIGH).
+                if proc.returncode != 0:
+                    log.warning(
+                        "udevadm settle exited rc=%d after 10s — USB event "
+                        "queue still busy. Next device's flash may hit the "
+                        "_wait_for_uf2_drive 5s timeout (see "
+                        "feedback_brick_diagnosis_first_rule).",
+                        proc.returncode,
+                    )
             except (FileNotFoundError, OSError) as e:
                 # udevadm not on PATH or other fork issue — log and continue.
                 # Not a deploy-stopper; the 8s sleep alone usually suffices.

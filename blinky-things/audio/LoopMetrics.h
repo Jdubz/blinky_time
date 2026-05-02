@@ -58,6 +58,11 @@ inline void tick(uint32_t now) {
         // elapsed >= WINDOW_MS by the branch condition, so always > 0.
         uint32_t elapsed = now - s.windowStart;
         s.lastFps      = s.frameCount * 1000.0f / elapsed;
+        // minFrameMs == UINT32_MAX means no dt was sampled this window
+        // (only the very first window's first tick, before prevTickMs was
+        // set, can produce this). 0 is the correct reading there — it's
+        // not a masked failure, just a "no data yet" sentinel. Documented
+        // per CLAUDE.md No-Silent-Fallbacks principled-exception rule.
         s.lastMinMs    = (s.minFrameMs == UINT32_MAX) ? 0 : s.minFrameMs;
         s.lastMaxMs    = s.maxFrameMs;
         s.lastWindowMs = now;

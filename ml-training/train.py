@@ -861,12 +861,26 @@ def main():
                 with torch.no_grad():
                     for ch in range(n_ch):
                         ch_ratio = float(y_sample[:, :, ch].mean())
-                        if ch_ratio > 0 and ch_ratio < 1:
-                            init_bias = math.log(ch_ratio / (1 - ch_ratio))
-                            model.output_conv.bias[ch].fill_(init_bias)
-                            name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
-                            print(f"  Output bias init [{name}]: {init_bias:.3f} "
-                                  f"(sigmoid={1/(1+math.exp(-init_bias)):.4f})")
+                        name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
+                        # ch_ratio == 0 (no positives) or 1 (no negatives) is
+                        # almost certainly a label-pipeline bug, not a valid
+                        # training condition. Per CLAUDE.md "No Silent
+                        # Fallbacks": fail loud rather than silently keeping
+                        # bias=0 (which produces sigmoid(0)=0.5 — the opposite
+                        # of what the low-baseline RetinaNet init is for).
+                        # Per PR 138 review.
+                        if ch_ratio == 0 or ch_ratio == 1:
+                            print(f"  [WARN] Output bias init [{name}]: "
+                                  f"ch_ratio={ch_ratio:.4f} — degenerate "
+                                  f"channel, no valid log-prior. Check "
+                                  f"dataset for empty/full channel before "
+                                  f"trusting downstream training metrics.",
+                                  flush=True)
+                            continue
+                        init_bias = math.log(ch_ratio / (1 - ch_ratio))
+                        model.output_conv.bias[ch].fill_(init_bias)
+                        print(f"  Output bias init [{name}]: {init_bias:.3f} "
+                              f"(sigmoid={1/(1+math.exp(-init_bias)):.4f})")
             elif pos_ratio_mean > 0:
                 init_bias = math.log(pos_ratio_mean / (1 - pos_ratio_mean))
                 with torch.no_grad():

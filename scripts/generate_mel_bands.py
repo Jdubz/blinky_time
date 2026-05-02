@@ -82,12 +82,15 @@ def generate_mel_bands(
         )
         sys.exit(2)
 
-    # Sanity check: verify all bins fit in uint8_t (i.e., n_fft <= 512 keeps us under 256 bins).
+    # Sanity check: verify all bins fit in uint8_t (max index 255). n_fft=512
+    # gives n_bins=256 (indices 0..255), which is the largest n_fft that fits.
+    # n_fft >= 1024 would overflow MelBandDef.{startBin,centerBin,endBin}.
     n_bins = n_fft // 2
     if n_bins > 256:
         print(
-            f"ERROR: n_bins={n_bins} > 256, exceeds uint8_t MelBandDef.endBin range. "
-            f"Either widen MelBandDef in SharedSpectralAnalysis.h to uint16_t or reduce n_fft.",
+            f"ERROR: n_bins={n_bins} > 256, exceeds uint8_t MelBandDef.endBin range "
+            f"(max index 255). Either widen MelBandDef in SharedSpectralAnalysis.h "
+            f"to uint16_t or reduce n_fft to ≤512.",
             file=sys.stderr,
         )
         sys.exit(3)

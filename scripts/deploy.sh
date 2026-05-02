@@ -215,17 +215,31 @@ run_fleet_command() {
     local cmd_label="$1"
     local cmd="$2"
     local resp_json
+    # Build the JSON body via python3 to handle quoting safely. Embedding
+    # ${cmd} bare into a "{\"command\": \"${cmd}\"}" template would silently
+    # corrupt the body for any cmd containing quotes/braces (per PR 138
+    # review). Current callers only pass static strings, but that's not a
+    # property we want to depend on if the function is reused later.
+    local body
+    body=$(CMD="$cmd" python3 -c 'import json, os; print(json.dumps({"command": os.environ["CMD"]}))') || {
+        echo "  [ERROR] ${cmd_label}: failed to build JSON body" >&2
+        return 1
+    }
     resp_json=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/command" \
         -H "X-API-Key: ${API_KEY}" \
         -H "${DEPLOY_TOOL_HEADER}" \
         -H 'Content-Type: application/json' \
-        -d "{\"command\": \"${cmd}\"}" 2>&1) || {
+        -d "$body" 2>&1) || {
         echo "  [ERROR] ${cmd_label}: HTTP request failed" >&2
         return 1
     }
 
     # Parse the per-device dict, print one row per device, and exit non-zero
-    # if any device was skipped or returned an error response.
+    # if any device's response doesn't start with "OK". Per PR 138 review:
+    # the previous "fail only on skipped/error prefixes" was too permissive
+    # — a firmware error string that didn't start with those prefixes would
+    # silently pass. Firmware command handlers all respond with "OK..." on
+    # success (see SerialConsole.cpp), so anchor on that.
     if ! echo "$resp_json" | python3 -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -233,12 +247,12 @@ fails = 0
 for dev_id, resp in data.items():
     short = dev_id[:12]
     resp_str = str(resp).strip()
-    if resp_str.startswith('skipped:') or resp_str.startswith('error:'):
-        print(f'  {short} FAIL: {resp_str}')
-        fails += 1
-    else:
-        first_line = resp_str.split(chr(10))[0][:60]
+    first_line = resp_str.split(chr(10))[0][:60]
+    if resp_str.startswith('OK'):
         print(f'  {short} OK ({first_line})')
+    else:
+        print(f'  {short} FAIL: {first_line}')
+        fails += 1
 sys.exit(1 if fails else 0)
 "; then
         return 1
