@@ -82,15 +82,23 @@ def generate_mel_bands(
         )
         sys.exit(2)
 
-    # Sanity check: verify all bins fit in uint8_t (max index 255). n_fft=512
-    # gives n_bins=256 (indices 0..255), which is the largest n_fft that fits.
-    # n_fft >= 1024 would overflow MelBandDef.{startBin,centerBin,endBin}.
-    n_bins = n_fft // 2
-    if n_bins > 256:
+    # Sanity check: every bin index emitted to the firmware MEL_BANDS table
+    # must fit in uint8_t (max value 255). The earlier "n_bins <= 256" check
+    # was wrong on two counts: (a) a 512-point FFT produces 257 unique
+    # real-valued bins (0..256, including DC and Nyquist), and (b) for
+    # configs where fmax approaches Nyquist the end bin index *can* be 256
+    # — which silently wraps to 0 when assigned to uint8_t in firmware,
+    # exactly the v33-class regression this script was written to prevent.
+    # Validate the actual emitted per-band max_end_bin instead. Per PR 138
+    # round-2 review (claude bot HIGH).
+    max_end_bin = max(end for _, _, end, _ in bands)
+    if max_end_bin > 255:
         print(
-            f"ERROR: n_bins={n_bins} > 256, exceeds uint8_t MelBandDef.endBin range "
-            f"(max index 255). Either widen MelBandDef in SharedSpectralAnalysis.h "
-            f"to uint16_t or reduce n_fft to ≤512.",
+            f"ERROR: band end bin {max_end_bin} > 255 — exceeds uint8_t "
+            f"MelBandDef.endBin limit. This would silently wrap to "
+            f"{max_end_bin & 0xFF} in firmware. Either lower fmax (current "
+            f"config has n_fft={n_fft} giving {n_fft//2 + 1} usable bins) or "
+            f"widen MelBandDef in SharedSpectralAnalysis.h to uint16_t.",
             file=sys.stderr,
         )
         sys.exit(3)

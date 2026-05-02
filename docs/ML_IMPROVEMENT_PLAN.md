@@ -1,66 +1,33 @@
 # ML Training Improvement Plan
 
-> **2026-05-01 evening — v36 spike landed; prep in flight**
+> **2026-05-01 — v36 spike result + status**
 >
-> Firmware spike confirmed audio-path budget fits — and the entire deploy
-> session generated a chain of misdiagnoses worth recording so the next
-> session doesn't repeat them.
+> **Firmware spike measurement (b160).** PDM 31.25 kHz / FFT-512 / 80
+> mel / fmax 14 kHz, NN disabled (v33 model can't accept 80-mel input).
+> NN-disabled audio path measured at fps=357-654 on bare hardware =
+> ~1.5-3 ms/iter. Adding the NN cost back in (80-mel input matmul ≈
+> 1.6× v33's NN time) projects to ≈43 fps with NN re-enabled. **The
+> 30 fps merge gate is comfortably reachable; 60 fps stretch is not.**
 >
-> **v36 firmware spike result (b160).** Built with PDM 16 → 31.25 kHz, FFT
-> 256 → 512, mel 50 → 80, fmax 8 → 14 kHz, NN inference disabled (model
-> still v33-shape, can't accept 80-mel input). Deployed to fleet, hit a
-> diagnostic dead-end (more on that below), but two devices that flashed
-> cleanly came back at fps=357 and fps=654 (NN disabled). That's audio
-> path running in ~1.5-3 ms/iter, comfortably under the 16 ms frame
-> budget. Adding NN inference back in (estimated +20 ms for 80-mel input
-> matmul) projects to ≈43 fps in steady state — above the 30 fps merge
-> gate, below the 60 fps stretch.
+> **Sample rate decision: 31.25 kHz over 32 kHz.** The Adafruit nRF52
+> PDM library natively supports 31250 Hz (`PDM_FREQ_2000K` / `RATIO_64`).
+> 32000 Hz exact would need register-level overrides not worth the
+> risk. 31.25 kHz Nyquist (15.625 kHz) leaves safe margin over the
+> 14 kHz fmax target; frame period 512/31250 = 16.4 ms is unchanged
+> from v33's 16.0 ms.
 >
-> **Why I used 31.25 kHz, not 32 kHz.** The Adafruit nRF52 PDM library
-> natively supports 31250 Hz (`PDM_FREQ_2000K` / `RATIO_64`). 32000 Hz
-> would require register-level overrides to the PDM clock that aren't
-> worth the risk for this experiment. 31.25 kHz Nyquist = 15.625 kHz,
-> still leaves comfortable margin above the 14 kHz fmax target. Frame
-> period at 512/31250 = 16.4 ms is essentially identical to v33's 16.0 ms.
+> **v36 prep status.** Running in tmux `v36_prep`, processed dir
+> `/mnt/storage/blinky-ml-data/processed_v36`. Same kick_weighted_clean
+> labels as v34d (the `feedback_label_improvements_propagate` rule —
+> data-side wins propagate forward). Single-axis change vs v34d:
+> audio.* config only. Same model architecture, loss, augmentation.
 >
-> **Deploy session that didn't crash my devices but I thought it did.**
-> Two of the four flashes errored at 5.2 s ("UPLOAD FAILED"); subsequent
-> state assertion came back with `?` versions on all four; ssh blinkyhost
-> showed `ls /dev/ttyACM*: No such file or directory`. I diagnosed "4
-> bricks, abort." Wrong: the host's USB stack got stuck after rapid
-> back-to-back UF2 resets. Rebooting blinkyhost brought all four devices
-> back instantly, the two that had flashed cleanly were running v36
-> firmware happily. Recovery actions taken (saved as memory
-> feedback_brick_diagnosis_first_rule.md):
->   - **Heuristic**: N>1 devices on same host showing identical failure
->     simultaneously = upstream cause (host USB stack, fleet manager,
->     udev). Run `lsusb`, `ls /sys/bus/usb/devices/`, `dmesg | tail`
->     before concluding firmware brick.
->   - **`/dev/serial/by-id/` missing as a directory** is host udev failure
->     — firmware on chip N can't delete the directory.
->   - **deploy.sh post-deploy assertion** now distinguishes "all
->     unreachable = host USB stack" from "specific failure" and prints
->     the host-side recovery steps (#142).
->   - **routes_firmware.py** now does 8 s + `udevadm settle --timeout=10`
->     between flashes (was 3 s sleep). Settle returns <1 s on a healthy
->     stack, ~10 s when jammed — early-warning of the failure mode.
->
-> **v36 prep launched 2026-05-01 ~20:23** in tmux session `v36_prep`,
-> processed dir `/mnt/storage/blinky-ml-data/processed_v36`, log
-> `ml-training/outputs/v36_fmax/prep.log`. Disk precheck reported 401 GB
-> free vs 392 GB peak need (10 GB margin — tight; will monitor). Single-
-> axis change vs v34d: audio.* config only. Same kick_weighted_clean
-> labels (the `feedback_label_improvements_propagate` lesson — v34d's
-> +0.26 precision audit is independent of model architecture and
-> propagates forward). Same model architecture, loss, augmentation.
->
-> **Next step gating.** Once v36 prep completes, train v36 model
-> (~1-2 hr GPU). When trained: bump `MAX_INPUT_FEATURES` 64 → 160 in
-> FrameOnsetNN.h (so 80-mel × 2-with-delta fits), redeploy firmware
-> with NN re-enabled, measure on-device fps under typical music+LED
-> load. Falsifiable predictions: offline F1 on edm/ > 0.71 (vs v34d's
-> flat 0.616), on-device F1 > 0.70 (vs v33's 0.617), INT8 export
-> std ≥ 0.30, on-device fps ≥ 30.
+> **Next-step gating.** When prep + train complete: bump
+> `MAX_INPUT_FEATURES` 64 → 160 in FrameOnsetNN.h (fits 80-mel + delta),
+> redeploy firmware with NN re-enabled, measure on-device fps under
+> typical music+LED load. Falsifiable predictions: offline F1 on edm/
+> > 0.71 (vs v34d's flat 0.616), on-device F1 > 0.70 (vs v33's 0.617),
+> INT8 export std ≥ 0.30, on-device fps ≥ 30.
 >
 > **2026-05-01 — Pivot: full-spectrum input is the next experiment, v35a-e killed**
 >
@@ -70,7 +37,7 @@
 >
 > | | current (v33) | proposed (v36-fmax) |
 > |---|---|---|
-> | sample rate (PDM ISR) | 16 kHz | **32 kHz** |
+> | sample rate (PDM ISR) | 16 kHz | **31.25 kHz** (PDM library native; 32 kHz exact would need register overrides) |
 > | Nyquist | 8 kHz | **16 kHz** |
 > | FFT_SIZE | 256 | 512 (preserves 16 ms frame) |
 > | bin freq | 62.5 Hz | 62.5 Hz |

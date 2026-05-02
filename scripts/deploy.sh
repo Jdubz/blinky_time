@@ -18,6 +18,12 @@
 #   1 = compile failed
 #   2 = upload/flash failed
 #   3 = missing API key
+#   4 = post-deploy assertion failed (specific device(s) in unexpected state —
+#       per-row FAIL output identifies which devices to investigate)
+#   5 = all devices unreachable simultaneously (host USB stack heuristic —
+#       almost always a host-side problem, not firmware brick. The script
+#       prints recovery steps before exiting; see also
+#       memory: feedback_brick_diagnosis_first_rule.md)
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"

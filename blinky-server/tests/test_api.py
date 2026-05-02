@@ -132,6 +132,86 @@ async def test_fleet_command_reboot_blocked_without_deploy_tool(
     assert resp.status_code == 403
 
 
+async def test_send_command_wipe_device_identity_blocked(
+    api_client: AsyncClient,
+) -> None:
+    """`wipe_device_identity` (heavy reset) requires X-Deploy-Tool."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": "wipe_device_identity"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_send_command_factory_alias_blocked(
+    api_client: AsyncClient,
+) -> None:
+    """Old `factory` alias still gated (deprecated but accepted)."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": "factory"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_send_command_reset_alias_blocked(
+    api_client: AsyncClient,
+) -> None:
+    """Old `reset` alias still gated."""
+    resp = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command",
+        json={"command": "reset"},
+    )
+    assert resp.status_code == 403
+
+
+# Unit-level edge cases for is_deploy_gated_command itself. The prefix-match
+# logic does case folding + strip + adjacent-word check; non-trivial enough
+# that regressions deserve direct coverage rather than only round-tripping
+# through the API.
+def test_is_deploy_gated_case_insensitive() -> None:
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert is_deploy_gated_command("REBOOT")
+    assert is_deploy_gated_command("Reboot")
+
+
+def test_is_deploy_gated_strips_whitespace() -> None:
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert is_deploy_gated_command("  reboot  ")
+    assert is_deploy_gated_command("\treboot")
+
+
+def test_is_deploy_gated_no_substring_match() -> None:
+    """Adjacent-word match must not gate `rebooting`, `reset_gain`, etc."""
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert not is_deploy_gated_command("rebooting")
+    assert not is_deploy_gated_command("reset_gain")
+    assert not is_deploy_gated_command("factory_install")
+
+
+def test_is_deploy_gated_prefix_with_args() -> None:
+    """`device upload <json>` form is gated."""
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert is_deploy_gated_command('device upload {"deviceId":"x"}')
+    assert is_deploy_gated_command("device upload arbitrary args")
+
+
+def test_is_deploy_gated_passthrough_safe_commands() -> None:
+    """Safe commands aren't gated."""
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert not is_deploy_gated_command("json info")
+    assert not is_deploy_gated_command("ping")
+    assert not is_deploy_gated_command("restore_runtime_settings")
+    assert not is_deploy_gated_command("save")
+    assert not is_deploy_gated_command("gen fire")
+    assert not is_deploy_gated_command("set foo 1")
+
+
 async def test_set_generator(api_client: AsyncClient) -> None:
     resp = await api_client.post("/api/devices/MOCK_DEVICE_000/generator/water")
     assert resp.status_code == 200
