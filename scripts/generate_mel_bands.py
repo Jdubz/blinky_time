@@ -72,20 +72,25 @@ def generate_mel_bands(
         # pattern bands which produce weightSum=1.0 at boot. PR 138 round-3
         # bot review claimed these were degenerate — bot's analysis was
         # wrong; tracing the firmware bin loop confirms.
-        if end <= start:
-            empty_count += 1
-            bands.append((start, center, end, 0.0))
-            continue
         # Monotonicity invariant the firmware relies on. mel_frequencies()
         # output is strictly monotone, so this should always hold; assert
         # explicitly so a future change to the binning math (or a librosa
         # behavior change) trips here at generation time rather than
         # producing a silently malformed table that fails at firmware boot.
-        # Per PR 138 round-5 review.
+        # MUST run BEFORE the degenerate-band check: a non-monotone triplet
+        # like (3, 5, 4) has end > start (so passes degenerate) but center
+        # > end (violates invariant). Per PR 138 rounds 5+6 review.
         assert start <= center <= end, (
             f"band {i}: non-monotone vertices ({start}, {center}, {end}) — "
             f"firmware triangle reconstruction assumes start <= center <= end"
         )
+        if end <= start:
+            # Degenerate (zero-width triangle) → firmware weightSum==0 →
+            # boot assert. Fail at generation time instead. The bands list
+            # is discarded after the empty_count > 0 sys.exit below; we
+            # don't need to append a placeholder here.
+            empty_count += 1
+            continue
         center_hz = center * bin_hz
         bands.append((start, center, end, center_hz))
 

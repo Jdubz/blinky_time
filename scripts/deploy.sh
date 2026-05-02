@@ -352,8 +352,11 @@ for d in devices:
     # (boot-time stalls produce a few overruns expectedly), but surface them.
     # TODO(v36-fmax #136): once v36 firmware ships with NN re-enabled, fps
     # < 30 must become a HARD FAIL (the v36 merge gate per ML_IMPROVEMENT_PLAN).
-    # Currently soft because v33-era firmware on slower devices can dip below
-    # 30 transiently and the deploy isn't gating on perf yet.
+    # ALSO: fps == 0.0 means LoopMetrics' first 5s window hasn't closed yet
+    # (slow USB re-enumeration ate the sleep margin) — currently silently
+    # skipped by `fps > 0` guard. At v36 promotion, this needs to become
+    # either a hard fail OR a polled retry until the window closes. Don't
+    # ship the hard-fail without closing this hole.
     warn = []
     if fps > 0 and fps < 30:
         warn.append(f'fps={fps:.1f}<30')
