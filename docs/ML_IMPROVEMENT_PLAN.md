@@ -1,5 +1,42 @@
 # ML Training Improvement Plan
 
+> **2026-05-02 — Literature review + reframe (READ THIS BEFORE PLANNING NEW EXPERIMENTS)**
+>
+> After v36 closed flat-to-negative on edm/ Onset F1 (0.537 vs v33's 0.617), commissioned a literature review of small-CNN onset detectors to ground next steps in research rather than continued speculation. Three findings re-frame the prior reading of our experiments:
+>
+> **1. We misread v34d.** The "label cleanup doesn't help" reading is not what the literature predicts. kick_weighted_clean fixed errors *within* the kick distribution; it didn't *expand coverage* to hi-hats or ghost notes. Schlüter '14, Vogl '17, and Wu '18 (drum transcription review) all separate "label noise" from "label coverage" as orthogonal axes. v34d cleaned noise. The relevant axis for lifting edm/ F1 is coverage. v34d's flat result is consistent with literature, not a refutation of label-side levers.
+>
+> **2. "Architecture isn't the binding constraint" is not literature-supported at our scale.** Every published small-CNN onset detector that hits F1 ≥0.85 runs at **25K–100K params** (Schlüter & Böck 2014 ICASSP, Böck et al. 2012 DAFx, Stahl & Sturm 2023 Audio Mostly). Our 10K INT8 budget is **off-distribution from anything in the published onset literature**. Our internal "Conv1D wider doesn't help" ablation was tested entirely below the published parameter range — it cannot generalize upward. We may be capacity-constrained and not know it.
+>
+> **3. The eval ceiling itself is suspect.** Inter-annotator F1 on hand-curated drum onsets caps at ~0.92–0.95 on clean material; **lower on dense electronic content** (Cartwright 2018, Gillick et al. 2019). Our `.onsets_consensus.json` GT is consensus-derived from 5 detectors, not hand-curated. The practical F1 ceiling against consensus GT is plausibly ~0.75–0.80, not the 0.88–0.91 published systems hit on Böck-corpus hand-curated GT. **v33's 0.617 may be much closer to a measurement ceiling than a model ceiling.**
+>
+> **What's grounded vs speculative in the proposed hybrid supervision (#135):**
+>
+> *Grounded:* Multi-instrument heads (Vogl et al. 2017 ISMIR, Cartwright & Bello 2018, Jacques & Roebel 2018) and masked loss for missing labels (Fonseca et al. 2020 ICASSP, DCASE 2024 Task 4) are independently well-published. Risk of unpredictable behavior is low.
+>
+> *Speculative:* The combination of multi-instrument heads + onsets_consensus fallback head + max-OR pooling at inference for *onset detection* is novel — no published precedent. Multi-instrument heads have been shown to improve *per-instrument* F1 in the literature, not combined any-onset F1 via max-OR. That decoder is engineering, not literature.
+>
+> **Re-framed experiment ordering (replaces the prior synthesis-driven roadmap):**
+>
+> | # | Experiment | Cost | Predicted lift | Decision it unlocks |
+> |---|---|---|---|---|
+> | **1** | **Hand-curate GT on the 18 edm/ tracks** (replaces consensus-derived GT) | 4–8 hours of careful tap-clicking | re-establishes ceiling; v33 measured F1 likely rises 0.05–0.10 from cleaner GT alone, with no model change | tells us whether 0.617 is a measurement ceiling or model ceiling. **Cheapest, most diagnostic — do first.** |
+> | **2** | **Per-class F1 breakdown of v33 on edm/** (kick/snare/hihat separately, using BS-RoFormer stems for class assignment on output predictions) | 1 day of analysis | diagnostic only | tells us whether hi-hat recall is in fact the gap (label-coverage hypothesis). If v33 hi-hat recall ≥0.80, label coverage isn't binding and #135 won't help. |
+> | 3 | Hybrid supervision (#135) — only if (1)+(2) confirm coverage gap | 1 week prep+train | +0.05–0.10 F1 if coverage is binding | direct test of label-coverage hypothesis. Pre-registered falsification: F1 ≤ v33 + 0.02 means the constraint is elsewhere (capacity or eval GT). |
+> | 4 | Knowledge distillation from BS-RoFormer / madmom RNN onset (cheap to combine with #3) | 1 week | +0.03–0.08 | KD on channel 3 (any-onset) instead of binarized consensus. Free upgrade. |
+> | 5 | HPSS preprocessing → percussive-only mel input | 2 days | ±0.03 | de-prioritize; literature gains modest and pre-deep-learning |
+>
+> **The big shift:** experiments 1 and 2 are diagnostic and cheap. We have been treating 0.617 as a fixed baseline and hypothesising about why we can't beat it. Without measuring (a) what the GT itself is worth and (b) which class of onsets we're missing, we are optimising against shadows. **Run 1 and 2 before any training experiment, including #135.**
+>
+> **Things to stop saying / believing in this doc until measured:**
+> - "Architecture isn't the constraint" — not supported by literature at our scale
+> - "Label cleanup doesn't help" — actually means "cleaning kick labels doesn't expand coverage to hi-hats"; the cleaner labels still improve their own metric (kw F1 0.66 → 0.74)
+> - "F1 ≥ 0.70 is reachable" / "synthesis says 0.71" — synthesis treated labels as fixed; if labels are coverage-limited and eval GT is consensus-noisy, the *measured* ceiling against current GT might be lower than that
+>
+> Full literature review notes: see `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` for citations and per-paper detail.
+>
+> ---
+
 > **2026-05-01 — v36 spike result + status**
 >
 > **Firmware spike measurement (b160).** PDM 31.25 kHz / FFT-512 / 80
