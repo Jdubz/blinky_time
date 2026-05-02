@@ -2,6 +2,7 @@
 
 import hmac
 import os
+import re
 
 from fastapi import Header, HTTPException
 
@@ -93,16 +94,27 @@ async def require_deploy_tool(
 #
 # Left intentionally open: gen/effect/set/save/load/defaults (legitimate
 # UI use from blinky-console) and read-only commands (json info, ping).
-_DEPLOY_GATED_COMMAND_PREFIXES = (
+# Prefix-form gated commands: gate exact match AND `prefix <args>` form.
+# These commands take arguments (`device upload {json}`) or could (`reboot`
+# is no-arg today but reasonable to gate any future arg form too).
+_DEPLOY_GATED_PREFIXES = (
     "device upload",  # writes new device config to flash
     "reboot",  # device lifecycle — resets connection state
-    # Heavy resets that wipe identity/settings flash. Self-documenting name
-    # 'wipe_device_identity' (#141) plus deprecated aliases 'factory'/'reset'.
-    # blinky-console does not invoke these; only deploy.sh's reprovision path.
-    "wipe_device_identity",
-    "factory",
-    "reset",
+    "wipe_device_identity",  # heavy reset; self-documenting name (#141)
 )
+
+# Exact-match-only gated commands: deprecated aliases for wipe_device_identity.
+# Kept as exact-match-only (not prefix) so a future safe command like a
+# hypothetical `reset_session <args>` isn't accidentally caught — `reset`
+# the alias is no-arg and won't conflict with itself. Per PR 138 round-8
+# review.
+_DEPLOY_GATED_EXACT = (
+    "factory",  # deprecated alias
+    "reset",  # deprecated alias
+)
+
+# Combined for callers (e.g., CLAUDE.md docstring) that want the canonical list.
+_DEPLOY_GATED_COMMAND_PREFIXES = _DEPLOY_GATED_PREFIXES + _DEPLOY_GATED_EXACT
 
 
 def is_deploy_gated_command(cmd: str) -> bool:
@@ -113,16 +125,20 @@ def is_deploy_gated_command(cmd: str) -> bool:
 
     Whitespace is collapsed before matching so `"device  upload"` (double
     space) and `" device\tupload"` are gated identically to canonical
-    `"device upload"`. Per PR 138 round-7 review: the firmware also
-    wouldn't recognize the malformed form, but normalizing here keeps the
-    gate's contract independent of the firmware's tokenizer.
-    """
-    import re
+    `"device upload"`. The firmware also wouldn't recognize the malformed
+    form, but normalizing here keeps the gate's contract independent of
+    the firmware's tokenizer.
 
+    The deprecated `factory`/`reset` aliases are gated as exact-match only,
+    so a hypothetical future `reset_session <args>` safe command isn't
+    accidentally caught. Per PR 138 round-8 review.
+    """
     cmd_normalized = re.sub(r"\s+", " ", cmd.strip().lower())
+    if cmd_normalized in _DEPLOY_GATED_EXACT:
+        return True
     return any(
         cmd_normalized == prefix or cmd_normalized.startswith(prefix + " ")
-        for prefix in _DEPLOY_GATED_COMMAND_PREFIXES
+        for prefix in _DEPLOY_GATED_PREFIXES
     )
 
 

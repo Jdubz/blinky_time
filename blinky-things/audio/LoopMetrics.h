@@ -52,6 +52,11 @@ inline void tick(uint32_t now) {
     s.prevTickMs = now;
     s.frameCount++;
 
+    // windowStart==0 is the "not-started" sentinel. millis()==0 is
+    // theoretically possible at boot — if both are 0 on the very first
+    // tick, this branch fires again on tick 2 with the same effect (the
+    // window starts from tick 2's timestamp instead of tick 1's, error
+    // ≈18 ms at 55 fps). Harmless; no special-case needed.
     if (s.windowStart == 0) {
         s.windowStart = now;
     } else if (now - s.windowStart >= WINDOW_MS) {
