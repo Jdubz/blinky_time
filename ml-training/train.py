@@ -874,6 +874,12 @@ def main():
                     # low-prior init was designed to avoid; the v30/v31/v32
                     # collapse pattern starts here. Hard-fail per CLAUDE.md
                     # "No Silent Fallbacks".
+                    #
+                    # Exact float equality is intentional: the mean of a
+                    # {0,1} tensor is exactly 0.0 or 1.0 only when every
+                    # label is identical. No epsilon needed — any positive
+                    # ratio in (0, 1) is valid for training. Per PR 138
+                    # round-13 review.
                     if ch_ratio == 0 or ch_ratio == 1:
                         raise ValueError(
                             f"Output bias init [{name}]: ch_ratio="

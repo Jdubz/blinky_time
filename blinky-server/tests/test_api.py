@@ -230,6 +230,16 @@ def test_is_deploy_gated_prefix_with_args() -> None:
     assert is_deploy_gated_command("device upload arbitrary args")
 
 
+def test_is_deploy_gated_prefix_bare_no_args() -> None:
+    """Bare `device upload` (no args) hits the `cmd_normalized == prefix`
+    branch of is_deploy_gated_command's any() — the prefix-with-args test
+    only exercises the `startswith(prefix + " ")` branch. Per PR 138
+    round-13 review."""
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert is_deploy_gated_command("device upload")
+
+
 def test_is_deploy_gated_passthrough_safe_commands() -> None:
     """Safe commands aren't gated."""
     from blinky_server.api.deps import is_deploy_gated_command

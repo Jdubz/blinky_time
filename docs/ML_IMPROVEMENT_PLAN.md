@@ -26,8 +26,32 @@
 > `MAX_INPUT_FEATURES` 64 → 160 in FrameOnsetNN.h (fits 80-mel + delta),
 > redeploy firmware with NN re-enabled, measure on-device fps under
 > typical music+LED load. Falsifiable predictions: offline F1 on edm/
-> > 0.71 (vs v34d's flat 0.616), on-device F1 > 0.70 (vs v33's 0.617),
-> INT8 export std ≥ 0.30, on-device fps ≥ 30.
+> > 0.70 (vs v33's 0.617 / v34d's 0.616), val_peak_F1 > 0.55 (vs
+> v34d's 0.394 — apples-to-apples on clean labels; the original
+> "0.71 vs 0.616" mixed val_peak_F1 with edm/ Onset F1, see metric
+> reference table below), INT8 export std ≥ 0.30, on-device fps ≥ 30.
+>
+> **2026-05-02 — v36 RESULT: NEGATIVE on the deployment metric**
+>
+> Training completed via early-stop at epoch 24 (best epoch 9). Eval ran via `scripts/v36_post_train.sh`.
+>
+> | metric (offline, edm/ 18 tracks) | v33 | v34d | v36 | Δ vs v33 |
+> |----------------------------------|-----|------|-----|----------|
+> | edm/ Onset F1 (mir_eval onset, 50ms, vs onsets_consensus GT) | 0.617 | 0.616 | **0.537** | **−0.080** |
+> | tracks: down / flat / up vs v33  |     |      | 14 / 2 / 2 | regression broad-based |
+> | val_peak_F1 (own clean-labels target) | 0.690 (raw labels) | 0.394 | 0.524 | n/a (different label distribution) |
+> | activation std at best epoch     | 0.247 | 0.234 | 0.215 | continued <0.30 ceiling |
+>
+> The +0.13 val_peak_F1 over v34d **did not translate** to the deployment metric. 14 of 18 edm/ tracks regressed; only 2 improved (techno-minimal-emotion +0.026, trance-infected-vibes +0.045 — both edge content). The two predictions that mattered both failed: edm/ Onset F1 (0.537 < 0.70 target, regression vs v33) and activation std (0.215 < 0.30 target, ceiling unbroken). **Don't deploy v36.** No firmware rev, no on-device measurement.
+>
+> Conclusions:
+> 1. Adding spectral resolution (50→80 mel, 8→14 kHz fmax, 16→31.25 kHz sr, n_fft 256→512) without aligning labels to the new content **hurt** the metric. The training labels are kick-biased; the new 8–14 kHz bands carry hi-hat/cymbal energy the labels under-reward, and on a smaller training set (4.77M chunks vs v33's 7.18M, due to clean-labels filtering) the model couldn't learn to use the new bands productively.
+> 2. The full-spectrum hypothesis isn't dead, but it's gated on **labels that reward hi-hat/cymbal onsets**, not on more spectrum alone. That's exactly what task #135 (hybrid supervision: per-instrument + onsets_consensus fallback) provides.
+> 3. The "synthesis" prediction of 0.71 was built on architecture-capacity-isn't-the-binding-constraint, but treated *labels* as fixed when in fact our labels are the binding constraint that's still load-bearing. Re-read the synthesis with that correction before designing the next experiment.
+>
+> Eval artifacts: `/mnt/storage/blinky-ml-data/outputs/v36_fmax/{eval/eval_results.json, comparison_v33_v36.txt, comparison_v34d_v36.txt}`. Pipeline: `scripts/v36_post_train.sh`.
+>
+> Next experiment is **#135 hybrid supervision**, not another spectral-resolution variant.
 >
 > **2026-05-01 — Pivot: full-spectrum input is the next experiment, v35a-e killed**
 >
@@ -1121,6 +1145,16 @@ v33 epoch-1 `val_peak_F1=0.65` is the model's score against val labels that are 
 **The apples-to-apples comparison is `evaluate.py` on edm/ with hand-curated `.onsets_consensus.json` GT, which is identical for both runs.** v33 b153 scored 0.570 there. v34d's edm/ score (post-training, post-export, post-deploy) is the comparable number — not val_peak_F1.
 
 This caveat applies to *every* future run on cleaned labels: their `val_peak_F1` will look lower than v33-era runs not because they're worse, but because the eval target is more honest. Plan headlines should track on-device edm/ F1, not val_peak_F1.
+
+**Metric-name reference (cross-quote whenever comparing runs):**
+
+| Metric                | Source                                              | Apples-to-apples within… |
+|-----------------------|-----------------------------------------------------|---------------------------|
+| `val_peak_F1`         | `training_log.csv` col 9 — peak-picked F1 vs the run's *own* val labels (post-training-time threshold sweep) | runs that share the same `kick_weighted_dir` / `labels_type` |
+| edm/ Onset F1         | `evaluate.py --output-dir .../eval` → `eval_results.json` `f1` field, mir_eval onset, 50ms tolerance, vs hand-curated `.onsets_consensus.json` | all runs from 2026-04-29 onward (post-onset-GT-evaluator-fix) |
+| edm/ on-device F1     | blinky-server validation harness against the deployed firmware build | all firmware builds with the same peak-picker config and `pulseonsetfloor` |
+
+When in doubt: the tables in run-result blocks should use the **same metric column header** for every run on a row, and label what that column is. Mis-attribution (treating v34d's edm/ Onset F1 0.616 as if it were a `val_peak_F1` baseline for v36) is the v34d/v36 confusion that triggered an hour-long mis-investigation 2026-05-02 04:00. Per the metric audit on 2026-05-02.
 
 ### Label audit — the actual ceiling (2026-04-28)
 

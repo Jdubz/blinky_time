@@ -33,18 +33,35 @@
 # merge gate, below the 60 fps stretch.
 #
 # Falsifiable predictions:
-#   - val_peak_F1 > 0.71 (vs v34d's flat 0.616 — fmax was the binding
-#     constraint that v34d's label-cleanup couldn't move)
-#   - on-device F1 on edm/ > 0.70 (vs v33's 0.617, +0.08)
+#   - val_peak_F1 > 0.55 (vs v34d's 0.394 — apples-to-apples on the same
+#     kick_weighted_clean labels). Originally written as ">0.71 vs 0.616",
+#     but 0.616 is v34d's *edm/ Onset F1* (deployment metric), not its
+#     val_peak_F1 — comparing the two is the metric-conflation that the
+#     v34d caveat in ML_IMPROVEMENT_PLAN.md warns about. The honest
+#     prediction on the val_peak_F1 axis is "noticeably above v34d's
+#     0.394", which 0.55 captures with margin.
+#   - edm/ Onset F1 > 0.70 (vs v33's 0.617 / v34d's 0.616, +0.08).
+#     This is the deployment metric — measured offline by evaluate.py
+#     against hand-curated .onsets_consensus.json GT, identical eval
+#     code path for all three runs.
 #   - INT8 export std ≥ 0.30 (richer input = more activation variance,
 #     should comfortably clear the v30/v31/v32 collapse threshold)
 #   - tflite size ≤ 35 KB (input grows but architecture unchanged)
 #   - on-device fps ≥ 30 with NN active (firmware perf gate)
 #
-# Negative-result triggers:
-#   - val_peak_F1 ≤ 0.65: fmax wasn't the binding constraint we thought.
-#     Re-run gate-b on full-spectrum features to see if the discriminative
-#     info is there but the model isn't using it.
+# ACTUAL RESULT (training stopped 2026-05-02 06:29 UTC, early-stop epoch 24):
+#   - best val_peak_F1 = 0.5245 (epoch 9) — +0.13 over v34d, BELOW the
+#     0.55 prediction
+#   - activation std plateau ~0.22 — below 0.30 prediction (continued
+#     pattern: 80 mel didn't break the std<0.30 ceiling either)
+#   - edm/ Onset F1: TBD via scripts/v36_post_train.sh
+#   - tflite size: TBD via scripts/v36_post_train.sh
+#
+# Negative-result triggers (original — kept for record):
+#   - val_peak_F1 ≤ 0.55 (originally written as 0.65 against the wrong
+#     baseline; corrected here): fmax wasn't the binding constraint we
+#     thought. v36's 0.5245 is in this band — borderline, leans negative.
+#     Decision deferred until edm/ Onset F1 lands.
 #   - on-device F1 lift < 0.05: offline-vs-on-device gap widened.
 #     Investigate firmware overrun rate, mel parity, ISR jitter.
 #   - INT8 export std < 0.20: 80-mel collapsed under quantization.
