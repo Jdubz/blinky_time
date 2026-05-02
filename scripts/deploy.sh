@@ -394,10 +394,25 @@ sys.exit(1 if fails else 0)
     # bricks; if device-specific, the per-row FAIL output above tells
     # the operator which devices to investigate.
     UNREACHABLE_COUNT=$(curl -sf --max-time 10 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
-        python3 -c "import json,sys; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('state')!='connected'), len(ds))")
+        python3 -c "import json,sys; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('state')!='connected'), len(ds))" 2>/dev/null)
     UNREACH=$(echo "$UNREACHABLE_COUNT" | awk '{print $1}')
     TOTAL=$(echo "$UNREACHABLE_COUNT" | awk '{print $2}')
-    if [[ -n "$TOTAL" && "$TOTAL" -gt 0 && "$UNREACH" == "$TOTAL" ]]; then
+    # Three branches:
+    #   (a) TOTAL is empty → server itself unreachable (curl failed); diagnose accordingly
+    #   (b) TOTAL > 0 AND UNREACH == TOTAL → all devices unreachable, likely host USB
+    #   (c) Otherwise → specific device(s) failed, deploy state diverged
+    # Pre-fix (PR 138 round-11 review): branch (a) silently fell through to (c)
+    # with a misleading "investigate per-device" message — server-down case looked
+    # like a device failure.
+    if [[ -z "$TOTAL" ]]; then
+        echo ""
+        echo "  Could not reach blinky-server to diagnose post-deploy state."
+        echo "  Either the server crashed mid-deploy, the network is down, or the"
+        echo "  X-API-Key was rejected. Check:"
+        echo "    1. ssh blinkyhost.local sudo systemctl status blinky-server"
+        echo "    2. ssh blinkyhost.local sudo journalctl -u blinky-server -n 50"
+        fail "Could not reach server to diagnose post-deploy state — server may be down." 5
+    elif [[ "$TOTAL" -gt 0 && "$UNREACH" == "$TOTAL" ]]; then
         echo ""
         echo "  All $TOTAL device(s) unreachable simultaneously — this pattern almost"
         echo "  always means the HOST USB stack is stuck (kernel/udev), not firmware"

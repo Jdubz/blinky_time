@@ -127,7 +127,7 @@ async def fleet_restore_defaults() -> dict[str, str]:
     POST /fleet/command with body `{"command": "wipe_device_identity"}`
     and the X-Deploy-Tool header. The wipe command (and its deprecated
     `factory`/`reset` aliases, plus `device upload`/`reboot`) is in the
-    deploy-gated set — see deps._DEPLOY_GATED_COMMAND_PREFIXES for the
+    deploy-gated set — see deps._DEPLOY_GATED_COMMAND_LIST for the
     canonical list. No dedicated /fleet/wipe endpoint exists; deploy.sh
     is the canonical caller.
 

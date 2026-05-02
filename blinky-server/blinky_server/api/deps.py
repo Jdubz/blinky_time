@@ -162,7 +162,8 @@ def assert_command_allowed(cmd: str, x_deploy_tool: str | None) -> None:
         raise HTTPException(
             403,
             f"Command '{cmd[:40]}' requires X-Deploy-Tool header. "
-            "Device-mutating commands (device upload, reboot) must be issued "
-            "by scripts/deploy.sh — direct curl is forbidden. "
-            "See CLAUDE.md 'CRITICAL: Upload Safety'.",
+            "Device-mutating commands must be issued by scripts/deploy.sh "
+            "— direct curl is forbidden. See CLAUDE.md 'CRITICAL: Upload "
+            "Safety' or _DEPLOY_GATED_COMMAND_LIST in this module for the "
+            "full gated list.",
         )

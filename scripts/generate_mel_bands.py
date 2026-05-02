@@ -20,6 +20,7 @@ parity assertion already in that file.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import numpy as np
@@ -174,7 +175,6 @@ def main() -> int:
         # 'w' here and warn loudly when an overwrite is happening so a
         # surprised "wait, did I just clobber the live table?" is at least
         # surfaced. Per PR 138 round-9 review.
-        import os
         if os.path.exists(args.output):
             print(
                 f"WARNING: overwriting existing {args.output} "

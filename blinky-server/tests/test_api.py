@@ -261,14 +261,22 @@ def test_is_deploy_gated_deprecated_aliases_exact_only() -> None:
     Prefix-form match would also gate hypothetical safe future commands
     like `reset_session <args>` or `factory_install <package>`. PR 138
     round-8 split the aliases into _DEPLOY_GATED_EXACT to prevent that.
+    Case-folding and whitespace strip apply equally to the exact-match
+    path (per PR 138 round-11 review — explicitly testing both aliases).
     """
     from blinky_server.api.deps import is_deploy_gated_command
 
     # Exact match: gated.
     assert is_deploy_gated_command("factory")
     assert is_deploy_gated_command("reset")
-    assert is_deploy_gated_command("FACTORY")  # case-folded
-    assert is_deploy_gated_command("  reset  ")  # whitespace stripped
+    # Case-folding applies to BOTH deprecated aliases:
+    assert is_deploy_gated_command("FACTORY")
+    assert is_deploy_gated_command("Factory")
+    assert is_deploy_gated_command("RESET")
+    assert is_deploy_gated_command("Reset")
+    # Whitespace strip applies to both:
+    assert is_deploy_gated_command("  reset  ")
+    assert is_deploy_gated_command("\tfactory\n")
     # Prefix form (with args): NOT gated, because these aliases are no-arg.
     assert not is_deploy_gated_command("factory install")
     assert not is_deploy_gated_command("reset session")
