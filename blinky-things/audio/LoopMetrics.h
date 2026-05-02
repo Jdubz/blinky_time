@@ -99,6 +99,11 @@ inline void tick(uint32_t now) {
 inline float    getFps()           { return state().lastFps; }
 inline uint32_t getMinFrameMs()    { return state().lastMinMs; }
 inline uint32_t getMaxFrameMs()    { return state().lastMaxMs; }
+// 0 = no window has closed yet (boot edge case). Callers using this value
+// as a "new window" sentinel (e.g., once-per-window logging in blinky-
+// things.ino) must explicitly handle the 0 case to avoid a spurious
+// initial fire. The 49.7-day wrap-discard branch in tick() does NOT reset
+// this to 0 — only the boot-init path sees 0.
 inline uint32_t getLastWindowMs()  { return state().lastWindowMs; }
 
 }  // namespace LoopMetrics

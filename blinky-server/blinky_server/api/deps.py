@@ -113,14 +113,14 @@ _DEPLOY_GATED_EXACT = (
     "reset",  # deprecated alias
 )
 
-# Combined list for documentation cross-references (CLAUDE.md, error messages).
-# WARNING: this is a heterogeneous list — some entries are prefix-form, some
-# are exact-match-only. Do NOT iterate this directly with a prefix matcher;
-# call is_deploy_gated_command() which dispatches to the right matching rule
-# per entry. Per PR 138 round-9 review.
-_DEPLOY_GATED_ALL_COMMANDS = _DEPLOY_GATED_PREFIXES + _DEPLOY_GATED_EXACT
-# Backward-compat alias for any external caller that imported the old name.
-_DEPLOY_GATED_COMMAND_PREFIXES = _DEPLOY_GATED_ALL_COMMANDS
+# Combined heterogeneous list for documentation cross-references (CLAUDE.md,
+# error messages). Some entries are prefix-form, some are exact-match-only.
+# Do NOT iterate this directly with a prefix matcher; call
+# is_deploy_gated_command() which dispatches to the right matching rule per
+# entry. Per PR 138 round-10 review: name reflects the heterogeneous nature
+# (the previous _COMMAND_PREFIXES name implied prefix-form, which was wrong
+# for the factory/reset entries).
+_DEPLOY_GATED_COMMAND_LIST = _DEPLOY_GATED_PREFIXES + _DEPLOY_GATED_EXACT
 
 
 def is_deploy_gated_command(cmd: str) -> bool:
