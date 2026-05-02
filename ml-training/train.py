@@ -863,20 +863,25 @@ def main():
                         ch_ratio = float(y_sample[:, :, ch].mean())
                         name = channel_names[ch] if ch < len(channel_names) else f"ch{ch}"
                         # ch_ratio == 0 (no positives) or 1 (no negatives) is
-                        # almost certainly a label-pipeline bug, not a valid
-                        # training condition. Per CLAUDE.md "No Silent
-                        # Fallbacks": fail loud rather than silently keeping
-                        # bias=0 (which produces sigmoid(0)=0.5 — the opposite
-                        # of what the low-baseline RetinaNet init is for).
-                        # Per PR 138 review.
+                        # a label-pipeline bug, not a valid training condition.
+                        # Continuing past it would silently leave bias=0.0 →
+                        # sigmoid(0)=0.5, which is exactly what RetinaNet's
+                        # low-prior init was designed to avoid; the v30/v31/v32
+                        # collapse pattern starts here. Hard-fail per CLAUDE.md
+                        # "No Silent Fallbacks". Per PR 138 round-2 review:
+                        # warn-and-continue was itself a silent fallback.
                         if ch_ratio == 0 or ch_ratio == 1:
-                            print(f"  [WARN] Output bias init [{name}]: "
-                                  f"ch_ratio={ch_ratio:.4f} — degenerate "
-                                  f"channel, no valid log-prior. Check "
-                                  f"dataset for empty/full channel before "
-                                  f"trusting downstream training metrics.",
-                                  flush=True)
-                            continue
+                            raise ValueError(
+                                f"Output bias init [{name}]: ch_ratio="
+                                f"{ch_ratio:.4f} — degenerate channel (no "
+                                f"positives or no negatives). Inspect the "
+                                f"label pipeline for an empty/full channel "
+                                f"before training. Common causes: stem-derived "
+                                f"per-instrument labels with broken stem "
+                                f"separation; mis-aligned label_shift_frames; "
+                                f"dataset entirely on one side of "
+                                f"hard_binary_threshold."
+                            )
                         init_bias = math.log(ch_ratio / (1 - ch_ratio))
                         model.output_conv.bias[ch].fill_(init_bias)
                         print(f"  Output bias init [{name}]: {init_bias:.3f} "

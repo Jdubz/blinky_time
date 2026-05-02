@@ -312,9 +312,13 @@ for d in devices:
         fails.append(f'{short} state={state}')
         print(f'  {short} FAIL: state={state}')
         continue
+    # Build body via json.dumps for consistency with run_fleet_command's
+    # safe-quoting pattern. 'json info' has no special chars so the inline
+    # literal worked, but copy-paste reuse on a different command could
+    # break — per PR 138 round-3 review.
     req = urllib.request.Request(
         f'{SERVER}/api/devices/{dev_id}/command',
-        data=b'{\"command\": \"json info\"}',
+        data=json.dumps({'command': 'json info'}).encode(),
         headers={'X-API-Key': API_KEY, 'Content-Type': 'application/json'},
         method='POST',
     )
