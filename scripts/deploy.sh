@@ -32,6 +32,13 @@ BLINKY_SERVER="http://blinkyhost.local:8420"
 HEX="/tmp/blinky-build/blinky-things.ino.hex"
 SKIP_COMPILE=false
 NO_BUMP=false
+# How long to wait after flashing before reading back fps via json info.
+# LoopMetrics publishes a fresh fps reading every WINDOW_MS (5 s) — we add
+# a 1 s margin so the first window has unambiguously closed before the
+# post-deploy assertion runs. Per PR 138 round-14 review (LOW #3, name
+# the magic number rather than burying it inline). When v36-fmax ships
+# with NN re-enabled, this also gates the fps≥30 hard check.
+LOOP_METRICS_SETTLE_S=6
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -291,7 +298,7 @@ fi
 
 echo ""
 echo "=== Verifying post-deploy state ==="
-sleep 6  # let the LoopMetrics 5s window close so fps reads are non-zero
+sleep "$LOOP_METRICS_SETTLE_S"  # let the LoopMetrics 5s window close so fps reads are non-zero
 
 export EXPECTED_BUILD="b${BUILD}"
 export API_KEY BLINKY_SERVER

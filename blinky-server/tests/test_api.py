@@ -240,6 +240,20 @@ def test_is_deploy_gated_prefix_bare_no_args() -> None:
     assert is_deploy_gated_command("device upload")
 
 
+def test_is_deploy_gated_wipe_device_identity_prefix_with_args() -> None:
+    """`wipe_device_identity` is currently no-arg, but it's in
+    _DEPLOY_GATED_PREFIXES (not _DEPLOY_GATED_EXACT) so a hypothetical
+    future arg form like `wipe_device_identity --keep-bond` would still
+    be gated. Per PR 138 round-14 review (test-coverage gap)."""
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert is_deploy_gated_command("wipe_device_identity")
+    assert is_deploy_gated_command("wipe_device_identity --keep-bond")
+    # Substring/false-positive check — `wipe_device_identity_full` is a
+    # different command, not gated, even though it starts with the prefix.
+    assert not is_deploy_gated_command("wipe_device_identity_full")
+
+
 def test_is_deploy_gated_passthrough_safe_commands() -> None:
     """Safe commands aren't gated."""
     from blinky_server.api.deps import is_deploy_gated_command

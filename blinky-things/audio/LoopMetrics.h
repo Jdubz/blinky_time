@@ -83,10 +83,17 @@ inline void tick(uint32_t now) {
         if (elapsed > 16U * WINDOW_MS) {
             // Wrap or extreme stall — discard this window's data,
             // start fresh. Public readings remain at last good window.
+            //
+            // Reset prevTickMs alongside the rest so the first dt sample
+            // of the new window is *not* `now - <pre-wrap stale value>`,
+            // which would inject a multi-day or multi-second garbage
+            // value into minFrameMs/maxFrameMs and stay sticky for the
+            // whole new window. Per PR 138 round-14 review (MEDIUM #6).
             s.windowStart = now;
             s.frameCount  = 0;
             s.minFrameMs  = UINT32_MAX;
             s.maxFrameMs  = 0;
+            s.prevTickMs  = 0;
             return;
         }
         s.lastFps      = s.frameCount * 1000.0f / elapsed;

@@ -163,9 +163,15 @@ def assert_command_allowed(cmd: str, x_deploy_tool: str | None) -> None:
     if not is_deploy_gated_command(cmd):
         return
     if x_deploy_tool is None or not x_deploy_tool.startswith(_DEPLOY_TOOL_PREFIX):
+        # `device upload <large JSON>` is the realistic worst case: the
+        # JSON body can be hundreds of chars, and truncating mid-payload
+        # (the prior 40-char cap) made the message confusing. 60 chars
+        # + ellipsis surfaces enough to identify the command without
+        # spilling the full body. Per PR 138 round-14 review (LOW #1).
+        cmd_display = cmd if len(cmd) <= 60 else cmd[:60] + "…"
         raise HTTPException(
             403,
-            f"Command '{cmd[:40]}' requires X-Deploy-Tool header. "
+            f"Command '{cmd_display}' requires X-Deploy-Tool header. "
             "Device-mutating commands must be issued by scripts/deploy.sh "
             "— direct curl is forbidden. See CLAUDE.md 'CRITICAL: Upload "
             "Safety' or _DEPLOY_GATED_COMMAND_LIST in this module for the "
