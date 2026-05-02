@@ -358,7 +358,13 @@ for d in devices:
     # either a hard fail OR a polled retry until the window closes. Don't
     # ship the hard-fail without closing this hole.
     warn = []
-    if fps > 0 and fps < 30:
+    if fps == 0.0:
+        # LoopMetrics window hasn't closed yet — slow USB re-enumeration
+        # eating into the 6s sleep margin. Surface so operator sees it
+        # rather than the check silently passing on no-data. Per PR 138
+        # round-7 review.
+        warn.append('fps=0.0(window-unclosed)')
+    elif fps < 30:
         warn.append(f'fps={fps:.1f}<30')
     if overruns > 5:
         warn.append(f'overruns={overruns}')

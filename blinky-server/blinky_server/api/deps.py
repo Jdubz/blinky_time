@@ -110,10 +110,18 @@ def is_deploy_gated_command(cmd: str) -> bool:
 
     Used by /devices/{id}/command and /fleet/command to gate the dangerous
     subset of free-text commands while keeping UI-driven commands open.
+
+    Whitespace is collapsed before matching so `"device  upload"` (double
+    space) and `" device\tupload"` are gated identically to canonical
+    `"device upload"`. Per PR 138 round-7 review: the firmware also
+    wouldn't recognize the malformed form, but normalizing here keeps the
+    gate's contract independent of the firmware's tokenizer.
     """
-    cmd_stripped = cmd.strip().lower()
+    import re
+
+    cmd_normalized = re.sub(r"\s+", " ", cmd.strip().lower())
     return any(
-        cmd_stripped == prefix or cmd_stripped.startswith(prefix + " ")
+        cmd_normalized == prefix or cmd_normalized.startswith(prefix + " ")
         for prefix in _DEPLOY_GATED_COMMAND_PREFIXES
     )
 

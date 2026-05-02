@@ -158,10 +158,26 @@ def main() -> int:
     p.add_argument("--fmax", type=float, required=True)
     p.add_argument("--n-fft", type=int, required=True)
     p.add_argument("--sr", type=int, required=True)
+    p.add_argument("--output", type=str, default=None,
+                   help="Write to file instead of stdout. Failures (disk full, "
+                        "permission, parent dir missing) raise an exception "
+                        "rather than silently producing an empty file from "
+                        "shell redirection. Per PR 138 round-7 review.")
     args = p.parse_args()
 
     bands = generate_mel_bands(args.n_mels, args.fmin, args.fmax, args.n_fft, args.sr)
-    print(emit_cpp(bands, args.n_mels, args.fmin, args.fmax, args.n_fft, args.sr))
+    cpp = emit_cpp(bands, args.n_mels, args.fmin, args.fmax, args.n_fft, args.sr)
+    if args.output:
+        # Open in 'x' mode would refuse to overwrite — for safety against
+        # accidental clobbers the operator must explicitly delete the
+        # previous output. But that's stricter than typical workflow; use
+        # 'w' here and document the overwrite.
+        with open(args.output, "w") as f:
+            f.write(cpp)
+            f.write("\n")
+        print(f"Wrote {args.n_mels}-band table to {args.output}", file=sys.stderr)
+    else:
+        print(cpp)
     return 0
 
 

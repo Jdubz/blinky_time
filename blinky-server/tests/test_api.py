@@ -134,6 +134,18 @@ async def test_fleet_command_reboot_blocked_without_deploy_tool(
     assert "X-Deploy-Tool" in resp.json()["detail"]
 
 
+async def test_fleet_command_reboot_allowed_with_deploy_tool(
+    api_client: AsyncClient,
+) -> None:
+    """Fleet-wide raw command also passes the gate when deploy tool is set."""
+    resp = await api_client.post(
+        "/api/fleet/command",
+        json={"command": "reboot"},
+        headers={"X-Deploy-Tool": "deploy.sh-abc1234"},
+    )
+    assert resp.status_code == 200
+
+
 async def test_send_command_wipe_device_identity_blocked(
     api_client: AsyncClient,
 ) -> None:
@@ -215,6 +227,19 @@ def test_is_deploy_gated_passthrough_safe_commands() -> None:
     assert not is_deploy_gated_command("save")
     assert not is_deploy_gated_command("gen fire")
     assert not is_deploy_gated_command("set foo 1")
+
+
+def test_is_deploy_gated_collapses_whitespace() -> None:
+    """`device  upload` (double space), `\\tdevice\\tupload` etc. all gated."""
+    from blinky_server.api.deps import is_deploy_gated_command
+
+    assert is_deploy_gated_command("device  upload")
+    assert is_deploy_gated_command("device\tupload")
+    assert is_deploy_gated_command("device\t upload {}")
+    assert is_deploy_gated_command("device\t\tupload x")
+    # Sanity: still doesn't false-positive on adjacent words after normalization.
+    assert not is_deploy_gated_command("device_upload")
+    assert not is_deploy_gated_command("undevice upload")
 
 
 async def test_set_generator(api_client: AsyncClient) -> None:
