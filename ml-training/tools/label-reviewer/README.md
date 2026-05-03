@@ -3,18 +3,40 @@
 Web UI for reviewing **and correcting** onset training labels against audio waveforms.
 
 Onset corrections are the human ground truth — once edited, they are the final
-truth and must flow through training and validation. The tool itself only edits
-onsets; the next step is wiring corrections into `prepare_dataset.py` and the
-GT validation harness so model training and Onset F1 both see the corrected
-labels.
+truth and must flow through training and validation. `prepare_dataset.py` and
+the blinky-server validation harness both apply the overlay automatically (see
+"How edits flow into training and validation" below).
 
 ## Quick Start
 
 ```bash
-cd ml-training
-python tools/label-reviewer/server.py
+cd ml-training && make reviewer
 # Open http://localhost:8765
 ```
+
+The two default corpora are registered automatically — switch between them in
+the **Corpus** dropdown at the top of the page; no restart:
+
+| Corpus | Audio | Auto onsets | Human edits |
+|---|---|---|---|
+| `training` | `/mnt/storage/blinky-ml-data/audio/combined` | `labels/onsets_consensus/` | `labels/onsets_human/` (devtop-local) |
+| `edm` | `blinky-test-player/music/edm/` | same dir (`*.onsets_consensus.json`) | same dir (`*.onsets_human.json`, **commits to git**) |
+
+Edits to the `edm` corpus ride with `git pull` to blinkyhost, where the
+validation harness applies them on the next test run. Edits to `training` stay
+on devtop and are picked up by the next `prepare_dataset.py` run.
+
+## Adding more corpora
+
+Pass one or more `--corpus` flags. Each is `name=audio_dir,onset_dir,human_edits_dir[,beat_dir,librosa_dir]`:
+
+```bash
+python tools/label-reviewer/server.py \
+    --corpus my_corpus=/path/to/audio,/path/to/onsets,/path/to/edits
+```
+
+`--no-defaults` skips the built-in `training` + `edm` corpora; pass it with
+`--corpus` to register a custom-only set.
 
 ## Viewer Tab
 
@@ -87,12 +109,10 @@ jump to that track in the viewer.
 
 ## Storage
 
-Auto labels live unchanged in `--onset-labels`
-(`/mnt/storage/blinky-ml-data/labels/onsets_consensus/`).
+Auto labels live unchanged in each corpus's `onset_dir`. Human corrections
+live in the corpus's `human_edits_dir`, one file per track:
 
-Human corrections live in a parallel directory, one file per track:
-
-`{--human-edits}/{stem}.onsets_human.json`:
+`{human_edits_dir}/{stem}.onsets_human.json`:
 
 ```json
 {
@@ -144,45 +164,62 @@ def apply_human_edits(auto_onsets, edits_doc):
 
 ```bash
 python tools/label-reviewer/server.py --port 8765
-python tools/label-reviewer/server.py --audio-dir /path/to/audio
-python tools/label-reviewer/server.py --onset-labels /path/to/onsets
-python tools/label-reviewer/server.py --human-edits /path/to/edits
+
+# Add a corpus on top of the defaults
+python tools/label-reviewer/server.py \
+    --corpus my_corpus=/path/to/audio,/path/to/onsets,/path/to/edits
+
+# Replace defaults entirely
+python tools/label-reviewer/server.py --no-defaults \
+    --corpus only_one=/p/audio,/p/onsets,/p/edits
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | 8765 | Server port |
-| `--audio-dir` | `/mnt/storage/blinky-ml-data/audio/combined` | Audio files |
-| `--beat-labels` | `.../labels/consensus_v5` | Beat label directory (read-only) |
-| `--onset-labels` | `.../labels/onsets_consensus` | Auto onset labels (read-only) |
-| `--librosa-onsets` | `.../labels/onsets_librosa` | Librosa onset cache |
-| `--human-edits` | `.../labels/onsets_human` | Where edit overlays are written |
+| `--corpus` | (defaults below) | `name=audio_dir,onset_dir,human_edits_dir[,beat_dir,librosa_dir]`. Repeatable. |
+| `--no-defaults` | off | Skip the built-in `training` + `edm` corpora |
+| `--review-state` | `/mnt/storage/.../labels/review_state.json` | Per-corpus review state file |
+
+The reviewer probes both `<stem>.onsets_consensus.json` and `<stem>.onsets.json`
+when reading auto onsets — it works against either filename convention.
 
 ## API
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET`  | `/api/tracks?page=&per_page=&status=` | Paginated track list |
-| `GET`  | `/api/labels?stem=` | All labels for a track, including `human_edits` overlay |
-| `POST` | `/api/edits` | Body: full edit doc `{stem, source, source_count, edits, created}` — atomic full-document write |
-| `POST` | `/api/review` | Body: `{stem, status, notes}` — review state |
-| `GET`  | `/audio/<stem>.<ext>` | Audio file with HTTP Range support |
+| `GET`  | `/api/corpora` | Registered corpora + track counts |
+| `GET`  | `/api/tracks?corpus=&page=&per_page=&status=` | Paginated track list (per corpus) |
+| `GET`  | `/api/labels?corpus=&stem=` | All labels for a track, including `human_edits` overlay |
+| `POST` | `/api/edits` | Body: `{corpus, stem, source, source_count, edits, created}` — atomic full-document write |
+| `POST` | `/api/review` | Body: `{corpus, stem, status, notes}` |
+| `GET`  | `/audio/<corpus>/<stem>.<ext>` | Audio file with HTTP Range support |
 
-## Next step (not yet done)
+## How edits flow into training and validation
 
-Wire human edits into the training pipeline so corrections actually move
-metrics. Specifically:
+**Validation (blinkyhost).** The blinky-server validation harness's
+`track_discovery.discover_tracks()` looks for a sibling `<stem>.onsets_human.json`
+next to each audio file. If present, `load_ground_truth()` merges it via
+`apply_human_edits()` (in `blinky_server/testing/onset_label_merge.py`). The
+merged onsets carry a `source` field (`'auto' | 'auto_edited' | 'human'`) so
+scoring can later split metrics by provenance.
 
-1. `ml-training/scripts/prepare_dataset.py` should load `--human-edits` and
-   apply `apply_human_edits()` to every track that has an edit overlay before
-   emitting training targets.
-2. The blinky-server validation harness should apply the same merge to
-   `.onsets_consensus.json` GT before scoring Onset F1, so a model that fires
-   on a human-created onset gets credit and one that fires on a human-removed
-   onset gets penalised.
+Curate the EDM corpus in the reviewer → `git add blinky-test-player/music/edm/*.onsets_human.json`
+→ `git commit && git push` → on blinkyhost: `git pull && sudo systemctl restart
+blinky-server`. The next test run uses the corrected ground truth.
 
-Until both are done, the corrected data is collected but not leveraged — the
-whole point of the system. Treat the tool as incomplete.
+**Training (devtop).** `prepare_dataset.py` reads
+`labels.onset_human_dirs` from the config (default: `/mnt/storage/.../onsets_human/`
+plus `blinky-test-player/music/edm/` as a fallback). For each track, it merges
+the overlay before generating frame targets. Created onsets bypass the
+`min_systems` filter (they're human-confirmed). Edit footprint is logged per
+track as `HUMAN_EDITS_APPLIED <stem> edited=N removed=M created=K`.
+
+**Drift safety.** `generate_onset_consensus.py` refuses to overwrite the
+auto onset file for any track that has a human overlay, unless explicitly
+forced with `--force-regenerate --allow-stale-edits`. The merge function
+loud-fails on `source_count` mismatch (`HumanEditDriftError`) so a stale
+overlay never silently corrupts training or scoring.
 
 ## Keyboard reference
 

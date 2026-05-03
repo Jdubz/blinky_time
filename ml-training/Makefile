@@ -221,28 +221,19 @@ status:
 	@echo "=== Recent Runs ==="
 	@ls -dt $(STORAGE)/outputs/*/ 2>/dev/null | head -5
 
-REVIEWER         := $(PYTHON) tools/label-reviewer/server.py
-REVIEWER_PORT    := 8765
-HUMAN_EDITS_DIR  := $(STORAGE)/labels/onsets_human
+REVIEWER       := $(PYTHON) tools/label-reviewer/server.py
+REVIEWER_PORT  := 8765
 
-# Curate the training corpus. Edits land in $(HUMAN_EDITS_DIR), which lives
-# only on devtop — they're applied to training via the labels.onset_human_dirs
-# config and never leave this machine.
-reviewer-train:
-	$(REVIEWER) --port $(REVIEWER_PORT) \
-		--audio-dir $(AUDIO_DIR) \
-		--onset-labels $(LABELS_ONSETS) \
-		--human-edits $(HUMAN_EDITS_DIR)
-
-# Curate the in-repo validation corpus (blinky-test-player/music/edm). Edits
-# are written next to the audio so `git add && git commit && git push` is the
-# sync mechanism: blinkyhost picks them up via `git pull` and the validation
-# harness applies them automatically (see track_discovery.load_ground_truth).
-reviewer-edm:
-	$(REVIEWER) --port $(REVIEWER_PORT) \
-		--audio-dir $(TEST_AUDIO) \
-		--onset-labels $(TEST_AUDIO) \
-		--human-edits $(TEST_AUDIO)
+# Launch the label reviewer. The default corpora (training + edm) are
+# registered automatically; switch between them in the UI dropdown — no
+# restart needed. Pass --corpus name=audio,onset,human to add more.
+#
+# Edits land in:
+#   training corpus -> /mnt/storage/.../labels/onsets_human/  (devtop-local)
+#   edm corpus      -> blinky-test-player/music/edm/          (commits via git
+#                                                              -> blinkyhost)
+reviewer:
+	$(REVIEWER) --port $(REVIEWER_PORT)
 
 clean:
 	@echo "This would delete processed data. Use 'make clean-confirm' to proceed."
@@ -262,9 +253,8 @@ help:
 	@echo "  status           Show dataset/pipeline status"
 	@echo "  calibrate        Mic calibration pipeline"
 	@echo ""
-	@echo "Label curation (label reviewer):"
-	@echo "  reviewer-train   Curate the training corpus (edits in $(HUMAN_EDITS_DIR))"
-	@echo "  reviewer-edm     Curate the in-repo validation corpus (edits in $(TEST_AUDIO))"
+	@echo "Label curation:"
+	@echo "  reviewer         Launch label reviewer (training + edm corpora; switch in UI)"
 	@echo ""
 	@echo "Key Options:"
 	@echo "  CONFIG=$(CONFIG)"

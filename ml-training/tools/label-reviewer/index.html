@@ -109,6 +109,8 @@
 
 <div class="header">
   <h1>Label Reviewer</h1>
+  <label for="corpus-select" style="font-size:12px;color:#888">Corpus:</label>
+  <select id="corpus-select" onchange="switchCorpus(this.value)" title="Switch corpus"></select>
   <div class="stats" id="stats">Loading...</div>
 </div>
 
@@ -226,6 +228,8 @@ const SAVE_DEBOUNCE_MS = 400;
 const EPS = 1e-6;
 
 let ws = null;
+let allCorpora = [];
+let currentCorpus = '';
 let currentTracks = [];
 let currentIndex = 0;
 let allLabels = {};
@@ -302,8 +306,9 @@ function showTab(name, btn) {
 }
 
 async function loadTrackList(page = 0) {
+  if (!currentCorpus) return;
   const filter = document.getElementById('status-filter').value;
-  const resp = await fetch(`/api/tracks?page=${page}&per_page=100&status=${filter}`);
+  const resp = await fetch(`/api/tracks?corpus=${encodeURIComponent(currentCorpus)}&page=${page}&per_page=100&status=${filter}`);
   const data = await resp.json();
 
   let html = '<table><tr><th>#</th><th>Track</th><th>Status</th><th>Beats</th><th>Onsets</th></tr>';
@@ -341,13 +346,65 @@ function jumpToTrack(stem) {
 }
 
 async function init() {
-  const resp = await fetch('/api/tracks?page=0&per_page=10000');
+  // Discover corpora and populate the dropdown.
+  const corporaResp = await fetch('/api/corpora');
+  const corporaData = await corporaResp.json();
+  allCorpora = corporaData.corpora || [];
+  const sel = document.getElementById('corpus-select');
+  sel.innerHTML = '';
+  if (allCorpora.length === 0) {
+    document.getElementById('stats').textContent = 'No corpora registered.';
+    return;
+  }
+  allCorpora.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.name;
+    opt.textContent = `${c.name} (${c.track_count})`;
+    opt.title = c.description || `${c.audio_dir}`;
+    sel.appendChild(opt);
+  });
+
+  // Restore last selection from localStorage if it's still available.
+  const remembered = localStorage.getItem('lr.corpus');
+  const initial = (remembered && allCorpora.some(c => c.name === remembered))
+    ? remembered
+    : allCorpora[0].name;
+  sel.value = initial;
+  await loadCorpus(initial);
+}
+
+async function switchCorpus(name) {
+  if (!name || name === currentCorpus) return;
+  // Flush any pending edits for the current track on the outgoing corpus.
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; await saveEdits(); }
+  await loadCorpus(name);
+}
+
+async function loadCorpus(name) {
+  currentCorpus = name;
+  localStorage.setItem('lr.corpus', name);
+
+  // Reset per-corpus UI state.
+  selectedKey = null;
+  toggleAddLabelMode(false);
+  renderEditPanel();
+
+  const resp = await fetch(`/api/tracks?corpus=${encodeURIComponent(name)}&page=0&per_page=10000`);
   const data = await resp.json();
-  currentTracks = data.tracks;
+  currentTracks = data.tracks || [];
+  currentIndex = 0;
+
+  const reviewed = currentTracks.filter(t => t.review_status === 'reviewed').length;
+  const withOnsets = currentTracks.filter(t => t.has_onset_consensus).length;
   document.getElementById('stats').textContent =
-    `${data.total} tracks | ${data.tracks.filter(t => t.has_onset_consensus).length} with onset labels | ` +
-    `${data.tracks.filter(t => t.review_status === 'reviewed').length} reviewed`;
-  if (currentTracks.length > 0) loadCurrentTrack();
+    `[${name}] ${data.total} tracks | ${withOnsets} with onset labels | ${reviewed} reviewed`;
+
+  if (currentTracks.length > 0) {
+    loadCurrentTrack();
+  } else {
+    document.getElementById('track-name').textContent = '— (empty corpus) —';
+    document.getElementById('nav-info').textContent = '0 / 0';
+  }
 }
 
 async function loadCurrentTrack() {
@@ -365,9 +422,9 @@ async function loadCurrentTrack() {
   toggleAddLabelMode(false);
   renderEditPanel();
 
-  ws.load(`/audio/${track.stem}${track.audio_ext}`);
+  ws.load(`/audio/${encodeURIComponent(currentCorpus)}/${encodeURIComponent(track.stem)}${track.audio_ext}`);
 
-  const resp = await fetch(`/api/labels?stem=${track.stem}`);
+  const resp = await fetch(`/api/labels?corpus=${encodeURIComponent(currentCorpus)}&stem=${encodeURIComponent(track.stem)}`);
   allLabels = await resp.json();
   humanEdits = allLabels.human_edits || emptyEditsDoc();
   humanEdits.stem = track.stem;
@@ -697,8 +754,9 @@ function scheduleSave() {
 
 async function saveEdits() {
   const track = currentTracks[currentIndex];
-  if (!track) return;
+  if (!track || !currentCorpus) return;
   const body = {
+    corpus: currentCorpus,
     stem: track.stem,
     source: humanEdits.source || 'onsets_consensus',
     source_count: humanEdits.source_count,
@@ -739,17 +797,18 @@ function nextTrack() {
 
 async function setReview(status) {
   const track = currentTracks[currentIndex];
+  if (!track || !currentCorpus) return;
   const notes = document.getElementById('review-notes').value;
   await fetch('/api/review', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stem: track.stem, status, notes }),
+    body: JSON.stringify({ corpus: currentCorpus, stem: track.stem, status, notes }),
   });
   track.review_status = status;
   const reviewed = currentTracks.filter(t => t.review_status === 'reviewed').length;
   const problems = currentTracks.filter(t => t.review_status === 'problem').length;
   document.getElementById('stats').textContent =
-    `${currentTracks.length} tracks | ${reviewed} reviewed | ${problems} problems`;
+    `[${currentCorpus}] ${currentTracks.length} tracks | ${reviewed} reviewed | ${problems} problems`;
 }
 
 document.addEventListener('keydown', (e) => {
@@ -779,8 +838,9 @@ window.addEventListener('beforeunload', () => {
   if (saveTimer) {
     // best-effort sync flush
     const track = currentTracks[currentIndex];
-    if (track) {
+    if (track && currentCorpus) {
       const body = JSON.stringify({
+        corpus: currentCorpus,
         stem: track.stem,
         source: humanEdits.source || 'onsets_consensus',
         source_count: humanEdits.source_count,
