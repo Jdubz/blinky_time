@@ -151,12 +151,14 @@ def apply_human_edits(
         merged.append(entry)
 
     for c in created:
-        merged.append({
-            "time": float(c["time"]),
-            "strength": float(c.get("strength", 1.0)),
-            "systems": 0,           # no auto support — mark explicitly
-            "source": "human",
-        })
+        merged.append(
+            {
+                "time": float(c["time"]),
+                "strength": float(c.get("strength", 1.0)),
+                "systems": 0,  # no auto support — mark explicitly
+                "source": "human",
+            }
+        )
 
     merged.sort(key=lambda x: x["time"])
 

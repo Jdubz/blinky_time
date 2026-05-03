@@ -34,9 +34,17 @@ def _write_track(d, stem, onsets, edits_doc=None):
 
 
 def test_discover_includes_human_edits_when_present(tmp_path, auto_onsets):
-    _write_track(tmp_path, "foo", auto_onsets, edits_doc={
-        "stem": "foo", "source_count": 3, "edits": {}, "created": [],
-    })
+    _write_track(
+        tmp_path,
+        "foo",
+        auto_onsets,
+        edits_doc={
+            "stem": "foo",
+            "source_count": 3,
+            "edits": {},
+            "created": [],
+        },
+    )
     _write_track(tmp_path, "bar", auto_onsets)
 
     tracks = {t["name"]: t for t in discover_tracks(tmp_path)}
@@ -72,8 +80,10 @@ def test_load_ground_truth_no_overlay_unchanged(tmp_path, auto_onsets):
 
 def test_load_ground_truth_drift_loud_fails(tmp_path, auto_onsets):
     bad_edits = {
-        "stem": "foo", "source_count": 99,  # auto has 3, doc says 99
-        "edits": {}, "created": [],
+        "stem": "foo",
+        "source_count": 99,  # auto has 3, doc says 99
+        "edits": {},
+        "created": [],
     }
     _write_track(tmp_path, "foo", auto_onsets, edits_doc=bad_edits)
     tracks = discover_tracks(tmp_path)

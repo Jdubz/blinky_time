@@ -55,9 +55,13 @@ def _validate_doc_shape(doc: dict) -> None:
     edits = doc.get("edits", {})
     created = doc.get("created", [])
     if not isinstance(edits, dict):
-        raise ValueError(f"edits doc 'edits' must be a dict, got {type(edits).__name__}")
+        raise ValueError(
+            f"edits doc 'edits' must be a dict, got {type(edits).__name__}"
+        )
     if not isinstance(created, list):
-        raise ValueError(f"edits doc 'created' must be a list, got {type(created).__name__}")
+        raise ValueError(
+            f"edits doc 'created' must be a list, got {type(created).__name__}"
+        )
 
 
 def load_human_edits(path: Path | str) -> dict | None:
@@ -150,12 +154,14 @@ def apply_human_edits(
         merged.append(entry)
 
     for c in created:
-        merged.append({
-            "time": float(c["time"]),
-            "strength": float(c.get("strength", 1.0)),
-            "systems": 0,           # no auto support — mark explicitly
-            "source": "human",
-        })
+        merged.append(
+            {
+                "time": float(c["time"]),
+                "strength": float(c.get("strength", 1.0)),
+                "systems": 0,  # no auto support — mark explicitly
+                "source": "human",
+            }
+        )
 
     merged.sort(key=lambda x: x["time"])
 

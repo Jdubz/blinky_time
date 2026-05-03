@@ -86,7 +86,10 @@ def load_ground_truth(gt_path: str, human_edits_path: str | None = None) -> Grou
     if edits_doc is not None and (stats["edited"] or stats["removed"] or stats["created"]):
         log.info(
             "Loaded human edits for %s: %d edited, %d removed, %d created (vs %d auto)",
-            Path(gt_path).stem, stats["edited"], stats["removed"], stats["created"],
+            Path(gt_path).stem,
+            stats["edited"],
+            stats["removed"],
+            stats["created"],
             len(raw_onsets),
         )
 
