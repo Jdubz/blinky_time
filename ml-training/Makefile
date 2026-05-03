@@ -15,7 +15,13 @@
 SHELL := /bin/bash
 
 # --- Paths ---
+# Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
+#   STORAGE — /mnt/storage SATA SSD: warm tier for audio corpora, labels, RIR, noise.
+#   NVME    — /mnt/nvme LVM-linear pool over 2× USB-NVMe (~462 GB): hot tier for
+#             processed_v*, mel_cache, training outputs. Single mount point so
+#             prep peak (~370 GB shards+final during merge) doesn't surprise us.
 STORAGE       := /mnt/storage/blinky-ml-data
+NVME          := /mnt/nvme
 AUDIO_DIR     := $(STORAGE)/audio/combined
 LABELS_MULTI  := $(STORAGE)/labels/multi
 # Onset labels (the actual training target — see CLAUDE.md "Task is Onset Detection").
@@ -26,7 +32,7 @@ LABELS_ONSETS := $(STORAGE)/labels/onsets_consensus
 # Legacy alias preserved so any out-of-tree script that imports this Makefile
 # variable doesn't crash. Points at the new onset path; do not use for new code.
 LABELS_CONSENSUS := $(LABELS_ONSETS)
-PROCESSED_DIR := $(STORAGE)/processed
+PROCESSED_DIR := $(NVME)/processed
 RIR_DIR       := $(STORAGE)/rir/processed
 TEST_AUDIO    := ../blinky-test-player/music/edm
 CONFIG        := configs/wider_rf.yaml
@@ -36,7 +42,7 @@ CONFIG        := configs/wider_rf.yaml
 _CONFIG_NAME  := $(basename $(notdir $(CONFIG)))
 _TIMESTAMP    := $(shell date +%Y%m%d-%H%M%S)
 RUN_NAME      ?= $(_CONFIG_NAME)-$(_TIMESTAMP)
-OUTPUT_DIR    := $(STORAGE)/outputs/$(RUN_NAME)
+OUTPUT_DIR    := $(NVME)/outputs/$(RUN_NAME)
 
 # --- Tunables ---
 SYSTEMS       := beat_this,essentia,librosa,madmom
@@ -215,6 +221,29 @@ status:
 	@echo "=== Recent Runs ==="
 	@ls -dt $(STORAGE)/outputs/*/ 2>/dev/null | head -5
 
+REVIEWER         := $(PYTHON) tools/label-reviewer/server.py
+REVIEWER_PORT    := 8765
+HUMAN_EDITS_DIR  := $(STORAGE)/labels/onsets_human
+
+# Curate the training corpus. Edits land in $(HUMAN_EDITS_DIR), which lives
+# only on devtop — they're applied to training via the labels.onset_human_dirs
+# config and never leave this machine.
+reviewer-train:
+	$(REVIEWER) --port $(REVIEWER_PORT) \
+		--audio-dir $(AUDIO_DIR) \
+		--onset-labels $(LABELS_ONSETS) \
+		--human-edits $(HUMAN_EDITS_DIR)
+
+# Curate the in-repo validation corpus (blinky-test-player/music/edm). Edits
+# are written next to the audio so `git add && git commit && git push` is the
+# sync mechanism: blinkyhost picks them up via `git pull` and the validation
+# harness applies them automatically (see track_discovery.load_ground_truth).
+reviewer-edm:
+	$(REVIEWER) --port $(REVIEWER_PORT) \
+		--audio-dir $(TEST_AUDIO) \
+		--onset-labels $(TEST_AUDIO) \
+		--human-edits $(TEST_AUDIO)
+
 clean:
 	@echo "This would delete processed data. Use 'make clean-confirm' to proceed."
 
@@ -232,6 +261,10 @@ help:
 	@echo "  eval             Evaluate on test tracks"
 	@echo "  status           Show dataset/pipeline status"
 	@echo "  calibrate        Mic calibration pipeline"
+	@echo ""
+	@echo "Label curation (label reviewer):"
+	@echo "  reviewer-train   Curate the training corpus (edits in $(HUMAN_EDITS_DIR))"
+	@echo "  reviewer-edm     Curate the in-repo validation corpus (edits in $(TEST_AUDIO))"
 	@echo ""
 	@echo "Key Options:"
 	@echo "  CONFIG=$(CONFIG)"

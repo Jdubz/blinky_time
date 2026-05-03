@@ -369,7 +369,7 @@ async def run_validation(
 
             for track in tracks:
                 track_name = track["name"]
-                gt = load_ground_truth(track["ground_truth"])
+                gt = load_ground_truth(track["ground_truth"], track.get("human_edits"))
                 track_seek = seek_sec
                 if track_seek is None:
                     track_manifest = manifest.get(track_name, {})
@@ -520,7 +520,7 @@ async def run_param_sweep(
 
                 for track in tracks:
                     track_name = track["name"]
-                    gt = load_ground_truth(track["ground_truth"])
+                    gt = load_ground_truth(track["ground_truth"], track.get("human_edits"))
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
 
@@ -833,7 +833,7 @@ async def _eval_param_value(
     track_scores: list[float] = []
     for track in tracks:
         track_name = track["name"]
-        gt = load_ground_truth(track["ground_truth"])
+        gt = load_ground_truth(track["ground_truth"], track.get("human_edits"))
         track_manifest_entry = manifest.get(track_name, {})
         track_seek = track_manifest_entry.get("seekOffset", 0)
 

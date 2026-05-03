@@ -27,6 +27,7 @@ AUDIO_DIR = Path("/mnt/storage/blinky-ml-data/audio/combined")
 BEAT_LABELS_DIR = Path("/mnt/storage/blinky-ml-data/labels/consensus_v5")
 ONSET_LABELS_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_consensus")
 LIBROSA_ONSET_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_librosa")
+HUMAN_EDITS_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_human")
 REVIEW_STATE_PATH = Path("/mnt/storage/blinky-ml-data/labels/review_state.json")
 STATIC_DIR = Path(__file__).parent
 
@@ -35,8 +36,21 @@ tracks: list[dict] = []
 review_state: dict = {}
 
 
+def _onset_consensus_exists(stem: str) -> bool:
+    return (
+        (ONSET_LABELS_DIR / f"{stem}.onsets_consensus.json").exists()
+        or (ONSET_LABELS_DIR / f"{stem}.onsets.json").exists()
+    )
+
+
 def load_tracks():
-    """Build track index from beat labels + audio files."""
+    """Build track index from audio + onset / beat labels.
+
+    A track is included if it has audio AND at least one of (onset consensus,
+    beat labels). This lets the reviewer work against corpora that ship
+    onset GT only (e.g. blinky-test-player/music/edm/, post-2026-04-29 when
+    the beat consensus files were archived).
+    """
     global tracks
     audio_extensions = {".mp3", ".wav", ".flac", ".ogg"}
     audio_index = {}
@@ -45,19 +59,18 @@ def load_tracks():
             audio_index[f.stem] = f
 
     tracks = []
-    for label_file in sorted(BEAT_LABELS_DIR.glob("*.beats.json")):
-        stem = label_file.stem.replace(".beats", "")
-        if stem not in audio_index:
-            continue
-
-        has_onset_consensus = (ONSET_LABELS_DIR / f"{stem}.onsets.json").exists()
+    for stem, audio_path in sorted(audio_index.items()):
+        has_beat_labels = (BEAT_LABELS_DIR / f"{stem}.beats.json").exists()
+        has_onset_consensus = _onset_consensus_exists(stem)
         has_librosa_onsets = (LIBROSA_ONSET_DIR / f"{stem}.onsets.json").exists()
+        if not (has_beat_labels or has_onset_consensus):
+            continue
 
         tracks.append({
             "stem": stem,
-            "audio_path": str(audio_index[stem]),
-            "audio_ext": audio_index[stem].suffix,
-            "has_beat_labels": True,
+            "audio_path": str(audio_path),
+            "audio_ext": audio_path.suffix,
+            "has_beat_labels": has_beat_labels,
             "has_onset_consensus": has_onset_consensus,
             "has_librosa_onsets": has_librosa_onsets,
             "review_status": review_state.get(stem, {}).get("status", "unreviewed"),
@@ -79,6 +92,45 @@ def save_review_state():
         json.dump(review_state, f, indent=2)
 
 
+def _empty_edits_doc(stem: str, source_count: int = 0) -> dict:
+    return {
+        "stem": stem,
+        "source": "onsets_consensus",
+        "source_count": source_count,
+        "edits": {},
+        "created": [],
+    }
+
+
+def _human_edits_path(stem: str) -> Path:
+    return HUMAN_EDITS_DIR / f"{stem}.onsets_human.json"
+
+
+def load_human_edits(stem: str, source_count: int = 0) -> dict:
+    """Load human edit overlay for a track. Returns empty doc if missing."""
+    path = _human_edits_path(stem)
+    if not path.exists():
+        return _empty_edits_doc(stem, source_count)
+    with open(path) as f:
+        doc = json.load(f)
+    doc.setdefault("stem", stem)
+    doc.setdefault("source", "onsets_consensus")
+    doc.setdefault("source_count", source_count)
+    doc.setdefault("edits", {})
+    doc.setdefault("created", [])
+    return doc
+
+
+def save_human_edits(stem: str, doc: dict) -> None:
+    """Persist human edit overlay. Caller is responsible for shape."""
+    HUMAN_EDITS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _human_edits_path(stem)
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(doc, f, indent=2)
+    tmp.replace(path)
+
+
 def get_track_labels(stem: str) -> dict:
     """Load all available labels for a track."""
     result = {"stem": stem, "beats": [], "onsets_consensus": [], "onsets_librosa": []}
@@ -94,14 +146,27 @@ def get_track_labels(stem: str) -> dict:
             for h in data.get("hits", []) if h.get("expectTrigger", True)
         ]
 
-    # Onset consensus labels
-    onset_path = ONSET_LABELS_DIR / f"{stem}.onsets.json"
-    if onset_path.exists():
-        with open(onset_path) as f:
-            data = json.load(f)
-        result["onsets_consensus"] = data.get("onsets", [])
-        result["onset_systems"] = data.get("total_systems", 0)
-        result["onset_systems_succeeded"] = data.get("systems_succeeded", 0)
+    # Onset consensus labels.
+    #
+    # Filename varies by realm: the in-repo validation corpus
+    # (blinky-test-player/music/edm/) uses `<stem>.onsets_consensus.json`,
+    # while the training corpus dir (labels/onsets_consensus/) uses the
+    # shorter `<stem>.onsets.json`. Probe the longer name first because the
+    # training-corpus dir occasionally also contains stale `<stem>.onsets.json`
+    # librosa files that are NOT the 5-system consensus.
+    onset_candidates = [
+        ONSET_LABELS_DIR / f"{stem}.onsets_consensus.json",
+        ONSET_LABELS_DIR / f"{stem}.onsets.json",
+    ]
+    for onset_path in onset_candidates:
+        if onset_path.exists():
+            with open(onset_path) as f:
+                data = json.load(f)
+            result["onsets_consensus"] = data.get("onsets", [])
+            result["onset_systems"] = data.get("total_systems", 0)
+            result["onset_systems_succeeded"] = data.get("systems_succeeded", 0)
+            result["onset_source_file"] = onset_path.name
+            break
 
     # Librosa onsets (simpler format)
     librosa_path = LIBROSA_ONSET_DIR / f"{stem}.onsets.json"
@@ -109,6 +174,9 @@ def get_track_labels(stem: str) -> dict:
         with open(librosa_path) as f:
             data = json.load(f)
         result["onsets_librosa"] = [{"time": t} for t in data.get("onsets", [])]
+
+    # Human edit overlay
+    result["human_edits"] = load_human_edits(stem, len(result["onsets_consensus"]))
 
     return result
 
@@ -171,7 +239,32 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/api/review":
+        if path == "/api/edits":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(content_length))
+            stem = body.get("stem")
+            if not stem:
+                self.send_json({"error": "stem required"}, 400)
+                return
+
+            # Validate shape — refuse anything we don't recognize so we don't
+            # silently persist garbage (no silent fallbacks).
+            edits = body.get("edits", {})
+            created = body.get("created", [])
+            if not isinstance(edits, dict) or not isinstance(created, list):
+                self.send_json({"error": "edits must be dict, created must be list"}, 400)
+                return
+
+            doc = {
+                "stem": stem,
+                "source": body.get("source", "onsets_consensus"),
+                "source_count": int(body.get("source_count", 0)),
+                "edits": edits,
+                "created": created,
+            }
+            save_human_edits(stem, doc)
+            self.send_json({"ok": True, "doc": doc})
+        elif path == "/api/review":
             content_length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(content_length))
             stem = body.get("stem")
@@ -266,7 +359,7 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
 
 
 def main():
-    global AUDIO_DIR, BEAT_LABELS_DIR, ONSET_LABELS_DIR, LIBROSA_ONSET_DIR, REVIEW_STATE_PATH
+    global AUDIO_DIR, BEAT_LABELS_DIR, ONSET_LABELS_DIR, LIBROSA_ONSET_DIR, HUMAN_EDITS_DIR, REVIEW_STATE_PATH
 
     parser = argparse.ArgumentParser(description="Label reviewer web UI")
     parser.add_argument("--port", type=int, default=8765)
@@ -274,12 +367,14 @@ def main():
     parser.add_argument("--beat-labels", type=Path, default=BEAT_LABELS_DIR)
     parser.add_argument("--onset-labels", type=Path, default=ONSET_LABELS_DIR)
     parser.add_argument("--librosa-onsets", type=Path, default=LIBROSA_ONSET_DIR)
+    parser.add_argument("--human-edits", type=Path, default=HUMAN_EDITS_DIR)
     args = parser.parse_args()
 
     AUDIO_DIR = args.audio_dir
     BEAT_LABELS_DIR = args.beat_labels
     ONSET_LABELS_DIR = args.onset_labels
     LIBROSA_ONSET_DIR = args.librosa_onsets
+    HUMAN_EDITS_DIR = args.human_edits
 
     load_review_state()
     load_tracks()
