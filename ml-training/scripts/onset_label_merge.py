@@ -35,6 +35,7 @@ import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -49,22 +50,18 @@ class HumanEditDriftError(Exception):
     """
 
 
-def _validate_doc_shape(doc: dict) -> None:
+def _validate_doc_shape(doc: dict[str, Any]) -> None:
     if not isinstance(doc, dict):
         raise ValueError(f"edits doc must be a dict, got {type(doc).__name__}")
     edits = doc.get("edits", {})
     created = doc.get("created", [])
     if not isinstance(edits, dict):
-        raise ValueError(
-            f"edits doc 'edits' must be a dict, got {type(edits).__name__}"
-        )
+        raise ValueError(f"edits doc 'edits' must be a dict, got {type(edits).__name__}")
     if not isinstance(created, list):
-        raise ValueError(
-            f"edits doc 'created' must be a list, got {type(created).__name__}"
-        )
+        raise ValueError(f"edits doc 'created' must be a list, got {type(created).__name__}")
 
 
-def load_human_edits(path: Path | str) -> dict | None:
+def load_human_edits(path: Path | str) -> dict[str, Any] | None:
     """Load an edits doc from disk. Returns ``None`` if the file does not exist.
 
     Callers decide whether absent-file means "no edits" (the default behaviour
@@ -75,7 +72,7 @@ def load_human_edits(path: Path | str) -> dict | None:
     if not p.exists():
         return None
     with open(p) as f:
-        doc = json.load(f)
+        doc: dict[str, Any] = json.load(f)
     _validate_doc_shape(doc)
     return doc
 
@@ -83,7 +80,7 @@ def load_human_edits(path: Path | str) -> dict | None:
 def find_human_edits_for_stem(
     stem: str,
     candidate_dirs: Sequence[Path | str],
-) -> tuple[Path, dict] | None:
+) -> tuple[Path, dict[str, Any]] | None:
     """Search for ``<stem>.onsets_human.json`` across the given dirs in order.
 
     Returns ``(path, doc)`` for the first hit, or ``None`` if no overlay exists.
@@ -99,9 +96,9 @@ def find_human_edits_for_stem(
 
 
 def apply_human_edits(
-    auto_onsets: Sequence[dict],
-    edits_doc: dict | None,
-) -> tuple[list[dict], dict]:
+    auto_onsets: Sequence[dict[str, Any]],
+    edits_doc: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Merge a human edits doc over the auto onset list.
 
     Returns ``(merged_onsets, stats)``. Each merged entry has at least::
@@ -118,8 +115,13 @@ def apply_human_edits(
     set and differs from ``len(auto_onsets)``.
     """
     if edits_doc is None:
-        merged = [{**o, "source": "auto"} for o in auto_onsets]
-        return merged, {"total": len(merged), "edited": 0, "removed": 0, "created": 0}
+        passthrough: list[dict[str, Any]] = [{**o, "source": "auto"} for o in auto_onsets]
+        return passthrough, {
+            "total": len(passthrough),
+            "edited": 0,
+            "removed": 0,
+            "created": 0,
+        }
 
     _validate_doc_shape(edits_doc)
     source_count = edits_doc.get("source_count")
@@ -133,7 +135,7 @@ def apply_human_edits(
     edits = edits_doc.get("edits", {})
     created = edits_doc.get("created", [])
 
-    merged: list[dict] = []
+    merged: list[dict[str, Any]] = []
     edited_count = 0
     removed_count = 0
 
