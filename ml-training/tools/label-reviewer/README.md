@@ -10,9 +10,10 @@ the blinky-server validation harness both apply the overlay automatically (see
 ## Quick Start
 
 ```bash
-cd ml-training && make reviewer
-# Open http://localhost:8765
+make reviewer
 ```
+
+Then open <http://localhost:8765>. That's it.
 
 The two default corpora are registered automatically — switch between them in
 the **Corpus** dropdown at the top of the page; no restart:
