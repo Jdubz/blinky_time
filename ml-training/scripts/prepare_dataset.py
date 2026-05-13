@@ -902,12 +902,17 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             raw_onsets = raw_auto_onsets
 
         if min_systems > 1:
-            # Human-created entries have systems=0 by construction in the merge
-            # helper but are human-confirmed — let them pass the min_systems
-            # gate. Edited entries keep their auto `systems` count.
+            # Any entry a human has touched (created from scratch OR edited an
+            # auto entry) is curated ground truth and bypasses the min_systems
+            # gate. Without `auto_edited` in the bypass list, a human-corrected
+            # 1- or 2-system onset would still be dropped — silently discarding
+            # the curation work for any onset weak enough to need correcting in
+            # the first place. Untouched auto entries (`source == "auto"`) keep
+            # the consensus gate.
+            HUMAN_TOUCHED = {"human", "auto_edited"}
             filtered = [
                 o for o in raw_onsets
-                if o.get("source") == "human" or o.get("systems", 0) >= min_systems
+                if o.get("source") in HUMAN_TOUCHED or o.get("systems", 0) >= min_systems
             ]
             # Catch the silent-empty-track failure mode: if a label file
             # uses a different schema (e.g. older format with no `systems`

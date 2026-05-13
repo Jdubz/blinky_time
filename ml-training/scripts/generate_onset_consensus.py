@@ -228,10 +228,15 @@ def merge_onsets(all_onsets: list[np.ndarray], tolerance: float,
 
 
 def process_track(args: tuple) -> str | None:
-    """Process one track through all onset detection systems."""
-    audio_path, output_path, librosa_cache_path = args
+    """Process one track through all onset detection systems.
 
-    if output_path.exists():
+    Tuple layout: (audio_path, output_path, librosa_cache_path, force).
+    `force=True` overwrites an existing output (paired with main()'s
+    `--force-regenerate`); `force=False` skips re-processing.
+    """
+    audio_path, output_path, librosa_cache_path, force = args
+
+    if output_path.exists() and not force:
         return None
 
     stem = audio_path.stem
@@ -385,7 +390,7 @@ def main():
             blocked_by_edits.append(stem)
             continue
         librosa_cache = args.librosa_dir / f"{stem}.onsets.json"
-        work_items.append((audio_index[stem], out_path, librosa_cache))
+        work_items.append((audio_index[stem], out_path, librosa_cache, args.force_regenerate))
 
     # Also add test tracks (output as .onsets_consensus.json alongside audio)
     test_added = 0
@@ -405,7 +410,7 @@ def main():
                 blocked_by_edits.append(f.stem)
                 continue
             librosa_cache = args.librosa_dir / f"{f.stem}.onsets.json"
-            work_items.append((f, out_path, librosa_cache))
+            work_items.append((f, out_path, librosa_cache, args.force_regenerate))
             test_added += 1
 
     if blocked_by_edits:

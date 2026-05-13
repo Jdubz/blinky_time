@@ -219,7 +219,10 @@ status:
 	@echo "Processed train:  $$([ -f $(PROCESSED_DIR)/X_train.npy ] && DATADIR='$(PROCESSED_DIR)' $(PYTHON) -c "import numpy, os; print(len(numpy.load(os.path.join(os.environ['DATADIR'], 'X_train.npy'), mmap_mode='r')))" 2>/dev/null || echo 'none')"
 	@echo "Processed val:    $$([ -f $(PROCESSED_DIR)/X_val.npy ] && DATADIR='$(PROCESSED_DIR)' $(PYTHON) -c "import numpy, os; print(len(numpy.load(os.path.join(os.environ['DATADIR'], 'X_val.npy'), mmap_mode='r')))" 2>/dev/null || echo 'none')"
 	@echo "=== Recent Runs ==="
-	@ls -dt $(STORAGE)/outputs/*/ 2>/dev/null | head -5
+	@# Show NVMe runs (current OUTPUT_DIR root) and any leftover STORAGE runs
+	@# from the pre-NVMe-migration era. After the migration is complete and
+	@# old runs are archived/deleted, the STORAGE line will go silent.
+	@ls -dt $(NVME)/outputs/*/ $(STORAGE)/outputs/*/ 2>/dev/null | head -5
 
 REVIEWER       := $(PYTHON) tools/label-reviewer/server.py
 REVIEWER_PORT  := 8765
