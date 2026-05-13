@@ -66,7 +66,7 @@
  *
  * RELATED FILES:
  * - hal/DefaultHal.h: Uses Meyers Singleton for safe global HAL access
- * - tests/SafeMode.h: Detects crash loops at runtime (after static init)
+ * - hal/SafeBootWatchdog.h: GPREGRET2-based crash-loop recovery into BLE DFU
  *
  * Author: Blinky Time Project
  * Created after bricking incident from HAL refactoring, December 2024

@@ -107,6 +107,7 @@ namespace SafeBootWatchdog {
             NRF_POWER->GPREGRET = 0x57;    // GPREGRET path — stock bootloader fallback, survives hub power-cycle
         } else if (magic == 0xA8) {
             *bootloader_ram = 0xBEEF00A8;  // BLE DFU mode (custom bootloader only)
+            NRF_POWER->GPREGRET = 0xA8;    // DFU_MAGIC_OTA_RESET — stock bootloader fallback
         }
 
         // Clear boot counter

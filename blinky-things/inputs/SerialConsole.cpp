@@ -846,9 +846,10 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
             if (bleMode) {
                 *bootloader_ram = 0xBEEF00A8;
+                NRF_POWER->GPREGRET = 0xA8;  // DFU_MAGIC_OTA_RESET — stock bootloader fallback if RAM cleared
             } else {
                 *bootloader_ram = 0x5A1AD5;
-                NRF_POWER->GPREGRET = 0x57;  // Fallback if RAM cleared by hub power-cycle
+                NRF_POWER->GPREGRET = 0x57;  // DFU_MAGIC_UF2_RESET — stock bootloader fallback if RAM cleared
             }
             __DSB(); __ISB();
             NVIC_SystemReset();
