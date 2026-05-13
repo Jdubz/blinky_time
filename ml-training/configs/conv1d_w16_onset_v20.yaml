@@ -47,7 +47,7 @@ training:
   pos_weight: 0
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v20"
+  processed_dir: "/mnt/nvme/processed_v20"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v20.h"

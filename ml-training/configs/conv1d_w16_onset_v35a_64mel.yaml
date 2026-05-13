@@ -97,7 +97,7 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v35a"
+  processed_dir: "/mnt/nvme/processed_v35a"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v35a_64mel.h"

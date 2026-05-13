@@ -96,7 +96,7 @@ augmentation:
   # set (line 579). Keeping it implicit per existing convention.
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v34"
+  processed_dir: "/mnt/nvme/processed_v34"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v34_mel_only.h"

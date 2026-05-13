@@ -57,7 +57,7 @@ data:
   # crest, hfc] feature set. `stored_hybrid_features` below tells the dataset
   # loader the storage order so it can pick the requested column (crest lives
   # at index 30+2 = 32) without re-running prep.
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+  processed_dir: "/mnt/nvme/processed_v28"
   stored_hybrid_features: [flatness, raw_flux, crest, hfc]
 
 export:

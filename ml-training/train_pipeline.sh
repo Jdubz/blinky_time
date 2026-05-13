@@ -34,7 +34,9 @@ for arg in "${@:3}"; do
     esac
 done
 
-OUTPUT_DIR="outputs/$RUN_NAME"
+# Outputs land on the NVMe pool (see docs/ML_STORAGE_LAYOUT.md). Override
+# with OUTPUT_DIR=... if you need a different target.
+OUTPUT_DIR="${OUTPUT_DIR:-/mnt/nvme/outputs/$RUN_NAME}"
 mkdir -p "$OUTPUT_DIR"  # Create early so tee can write the log from the start
 
 # Read processed_dir from config — fail fast on parse errors
@@ -192,7 +194,10 @@ if [ "$SKIP_PREP" = false ]; then
         if [ -f "data/calibration/mic_profile.npz" ]; then
             MIC_PROFILE="--mic-profile data/calibration/mic_profile.npz"
         fi
-        TQDM_DISABLE=1 python scripts/prepare_dataset.py --config "$CONFIG" --output-dir "$DATA_DIR" --augment $USE_DELTA $MIC_PROFILE || {
+        # --auto-clean-stale: delete prior processed_v* dirs and stale mel_cache
+        # entries so prep never silently fills the disk mid-merge (CLAUDE.md
+        # "No silent fallbacks" — disk debris counts).
+        TQDM_DISABLE=1 python scripts/prepare_dataset.py --config "$CONFIG" --output-dir "$DATA_DIR" --augment --auto-clean-stale $USE_DELTA $MIC_PROFILE || {
             # Check if data was actually written despite validation warning
             if [ -f "$DATA_DIR/X_train.npy" ]; then
                 echo "  (Data prep completed with warnings — continuing)"

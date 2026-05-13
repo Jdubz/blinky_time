@@ -74,7 +74,7 @@ When you discover a silent fallback, the fix is to (a) assert / panic at the fai
 
 Always use tmux:
 ```bash
-tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir outputs/<experiment> 2>&1 | tee outputs/<experiment>/training.log"
+tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir /mnt/nvme/outputs/<experiment> 2>&1 | tee /mnt/nvme/outputs/<experiment>/training.log"
 ```
 
 `train.py` enforces this — it refuses to start outside tmux/screen unless `--allow-foreground` is passed.
@@ -115,6 +115,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 |----------|---------|
 | `docs/VISUALIZER_GOALS.md` | Design philosophy — visual quality over metrics |
 | `docs/AUDIO_ARCHITECTURE.md` | AudioTracker, FrameOnsetNN, PLP, spectral analysis |
+| `docs/ML_STORAGE_LAYOUT.md` | NVMe pool / SATA tier layout for ML data; disk budget; recovery |
 | `docs/AUDIO-TUNING-GUIDE.md` | Main testing guide, tunable params, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
@@ -126,6 +127,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
+| `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |
 | `blinky-test-player/NEXT_TESTS.md` | Priority testing tasks |

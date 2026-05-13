@@ -54,7 +54,7 @@ augmentation:
 data:
   # raw_flux is at storage column n_mels+1 = 31 (second hybrid slot). Dataset
   # loader picks it via compute_feature_indices.
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+  processed_dir: "/mnt/nvme/processed_v28"
   stored_hybrid_features: [flatness, raw_flux, crest, hfc]
 
 export:
