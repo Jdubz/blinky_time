@@ -119,7 +119,13 @@ review_state: dict[
 
 
 def _onset_consensus_path(corpus: Corpus, stem: str) -> Path | None:
-    """Return the auto-onset file for a stem, probing both filename forms."""
+    """Return the auto-onset file for a stem, probing both filename forms.
+
+    NOTE: callers must `_validate_stem(stem)` first if `stem` comes from
+    user input. This function is also called during filesystem iteration
+    where stems may legitimately start with `.` (e.g., hidden files); the
+    untrusted-input gate lives at the request-handler boundary instead.
+    """
     candidates = [
         corpus.onset_dir / f"{stem}.onsets_consensus.json",
         corpus.onset_dir / f"{stem}.onsets.json",
@@ -235,8 +241,29 @@ def _empty_edits_doc(stem: str, source_count: int = 0) -> dict[str, Any]:
     }
 
 
+def _validate_stem(stem: str) -> str:
+    """Reject any stem that could traverse out of its corpus directory.
+
+    `stem` comes from query parameters or POST body and is used to construct
+    paths under `corpus.human_edits_dir` / `corpus.onset_dir`. A value
+    containing `/`, `\\`, or starting with `.` could escape the intended
+    directory. We reject loudly instead of silently sanitizing so callers
+    notice their bug rather than a request succeeding on the wrong file.
+    """
+    if not stem or not isinstance(stem, str):
+        raise ValueError(f"invalid stem: {stem!r}")
+    if "/" in stem or "\\" in stem or stem.startswith("."):
+        raise ValueError(f"invalid stem (path traversal): {stem!r}")
+    # Belt-and-suspenders: after the explicit checks above, `Path(stem).name`
+    # should equal `stem` for any input that survives. If it doesn't, we have
+    # a sneakier traversal vector that the explicit rules above missed.
+    if Path(stem).name != stem:
+        raise ValueError(f"invalid stem (Path.name mismatch): {stem!r}")
+    return stem
+
+
 def _human_edits_path(corpus: Corpus, stem: str) -> Path:
-    return corpus.human_edits_dir / f"{stem}.onsets_human.json"
+    return corpus.human_edits_dir / f"{_validate_stem(stem)}.onsets_human.json"
 
 
 def load_human_edits(
@@ -402,6 +429,11 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
             if not stem:
                 self.send_json({"error": "stem parameter required"}, 400)
                 return
+            try:
+                _validate_stem(stem)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, 400)
+                return
             labels = get_track_labels(corpus, stem)
             labels["review"] = review_state.get(corpus.name, {}).get(stem, {})
             self.send_json(labels)
@@ -428,8 +460,17 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
 
-        # Static files (fall-through)
-        file_path = STATIC_DIR / path.lstrip("/")
+        # Static files (fall-through). Resolve + prefix-check defends against
+        # `/../etc/passwd`-style requests that would otherwise traverse out of
+        # STATIC_DIR. Even though the reviewer is a localhost dev tool, the
+        # default bind is 0.0.0.0 (LAN-reachable) — cheap to fix, no reason not to.
+        try:
+            file_path = (STATIC_DIR / path.lstrip("/")).resolve()
+            static_root = STATIC_DIR.resolve()
+            file_path.relative_to(static_root)  # raises if not under STATIC_DIR
+        except (ValueError, OSError):
+            self.send_error(403)
+            return
         if file_path.exists() and file_path.is_file():
             content_type = mimetypes.guess_type(str(file_path))[0] or "text/plain"
             self.serve_file(file_path, content_type)
@@ -445,7 +486,14 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
 
+        # Cap request body to prevent memory exhaustion. 1 MB is generous —
+        # the largest legitimate POST is an `/api/edits` doc for a single
+        # track, which is well under that.
+        MAX_BODY_BYTES = 1 * 1024 * 1024
         content_length = int(self.headers.get("Content-Length", 0))
+        if content_length < 0 or content_length > MAX_BODY_BYTES:
+            self.send_error(413, f"Content-Length must be 0..{MAX_BODY_BYTES}")
+            return
         body = json.loads(self.rfile.read(content_length))
 
         corpus_name = body.get("corpus")
@@ -459,6 +507,11 @@ class LabelReviewerHandler(SimpleHTTPRequestHandler):
         stem = body.get("stem")
         if not stem:
             self.send_json({"error": "stem required"}, 400)
+            return
+        try:
+            _validate_stem(stem)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, 400)
             return
 
         if path == "/api/edits":

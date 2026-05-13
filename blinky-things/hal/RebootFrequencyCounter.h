@@ -78,12 +78,33 @@ namespace RebootFrequencyCounter {
     static constexpr uint32_t RECORD_MAGIC    = 0xB007FEEDUL;
     static constexpr size_t   RECORD_SIZE     = 10;
 
+    // CRC-protected counter record. The magic alone is a weak integrity check
+    // — any 4 random flash bytes matching `0xB007FEED` would pass, and a bit
+    // flip from counter=1 → counter=5 would silently trigger DFU recovery on
+    // a healthy device. CRC-16/CCITT over magic+counter+reserved catches both
+    // (LittleFS gives us atomic writes but not bit-flip detection at rest).
     struct __attribute__((packed)) Record {
         uint32_t magic;     // RECORD_MAGIC
         uint8_t  counter;   // consecutive reboots without markStable
-        uint8_t  reserved[5];
+        uint8_t  reserved[3];
+        uint16_t crc16;     // CRC-16/CCITT over the preceding 8 bytes
     };
     static_assert(sizeof(Record) == RECORD_SIZE, "Record size mismatch");
+
+    // Plain CRC-16/CCITT (poly 0x1021, init 0xFFFF). Inlined to avoid pulling
+    // in a CRC dependency — the bootloader has its own copy at a different
+    // address, and the 8-byte input means the cost is negligible.
+    inline uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
+        uint16_t crc = 0xFFFF;
+        for (size_t i = 0; i < len; i++) {
+            crc ^= static_cast<uint16_t>(data[i]) << 8;
+            for (int j = 0; j < 8; j++) {
+                crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021)
+                                     : static_cast<uint16_t>(crc << 1);
+            }
+        }
+        return crc;
+    }
 
     // Module-local state — `static` gives internal linkage; safe because only
     // .ino includes this header (matches the SafeBootWatchdog pattern).
@@ -92,7 +113,8 @@ namespace RebootFrequencyCounter {
 
     /**
      * Read the counter record from flash. Returns 0 if file is missing,
-     * unreadable, or corrupted (any of these are treated as "first boot").
+     * unreadable, corrupted, or CRC-mismatched (all treated as "first boot"
+     * — a fail-safe default that never spuriously triggers recovery).
      */
     inline uint8_t readCounter() {
         using namespace Adafruit_LittleFS_Namespace;
@@ -106,26 +128,49 @@ namespace RebootFrequencyCounter {
         if (n != sizeof(rec) || rec.magic != RECORD_MAGIC) {
             return 0;
         }
+        const uint16_t expected = crc16_ccitt(
+            reinterpret_cast<const uint8_t*>(&rec), sizeof(rec) - sizeof(rec.crc16));
+        if (rec.crc16 != expected) {
+            Serial.print(F("[FALLBACK] RebootFrequencyCounter: CRC mismatch (read=0x"));
+            Serial.print(rec.crc16, HEX);
+            Serial.print(F(" expected=0x"));
+            Serial.print(expected, HEX);
+            Serial.println(F(") — treating as 0"));
+            return 0;
+        }
         return rec.counter;
     }
 
     /**
-     * Write the counter record to flash. Silent on failure — the next boot
-     * will either see the stale value (boot proceeds normally) or trigger
-     * recovery one boot later. No halt on write failure.
+     * Write the counter record to flash. Returns true on full success.
+     * Callers in the threshold-trip path MUST check the return value — a
+     * silent failure there would leave the counter at threshold and trap
+     * the device in a permanent BLE DFU re-entry loop after recovery
+     * completes (see checkAndIncrement).
      */
-    inline void writeCounter(uint8_t value) {
+    inline bool writeCounter(uint8_t value) {
         using namespace Adafruit_LittleFS_Namespace;
-        Record rec = { RECORD_MAGIC, value, {0, 0, 0, 0, 0} };
+        Record rec = { RECORD_MAGIC, value, {0, 0, 0}, 0 };
+        rec.crc16 = crc16_ccitt(
+            reinterpret_cast<const uint8_t*>(&rec), sizeof(rec) - sizeof(rec.crc16));
         // Remove + recreate to ensure clean write (LittleFS handles wear).
         InternalFS.remove(COUNTER_FILE);
         File f(InternalFS);
         if (!f.open(COUNTER_FILE, FILE_O_WRITE)) {
             Serial.println(F("[FALLBACK] RebootFrequencyCounter: file open failed"));
-            return;
+            return false;
         }
-        f.write(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
+        const size_t written = f.write(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
         f.close();
+        if (written != sizeof(rec)) {
+            Serial.print(F("[FALLBACK] RebootFrequencyCounter: short write ("));
+            Serial.print(written);
+            Serial.print(F("/"));
+            Serial.print(sizeof(rec));
+            Serial.println(F(" bytes)"));
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -135,22 +180,36 @@ namespace RebootFrequencyCounter {
     inline void checkAndIncrement() {
         bootCount_ = readCounter();
 
-        if (bootCount_ + 1 >= REBOOT_THRESHOLD) {
+        // Promote to uint16_t before adding 1 to make the comparison unambiguous
+        // and immune to any future REBOOT_THRESHOLD change crossing 255.
+        const uint16_t next = static_cast<uint16_t>(bootCount_) + 1;
+
+        if (next >= REBOOT_THRESHOLD) {
             Serial.print(F("[BOOT] RebootFrequencyCounter threshold reached ("));
-            Serial.print((unsigned)bootCount_ + 1);
+            Serial.print(next);
             Serial.print(F("/"));
             Serial.print(REBOOT_THRESHOLD);
             Serial.println(F(") — entering BLE DFU recovery"));
+
             // Clear the counter BEFORE entering recovery — otherwise a power
             // cycle in DFU mode would leave the counter at threshold, causing
-            // a re-entry loop after recovery completes.
-            writeCounter(0);
+            // a re-entry loop after recovery completes. If the clear FAILS,
+            // we must NOT enter DFU: the device would then trap in a permanent
+            // DFU re-entry loop on every subsequent power-on. Falling through
+            // to a normal boot is safer — the next stable boot will retry the
+            // clear during tickStable(), and if the bug persists we'll hit
+            // threshold again on the next cycle.
+            if (!writeCounter(0)) {
+                Serial.println(F("[FALLBACK] RebootFrequencyCounter: clear failed, "
+                                 "skipping DFU recovery this boot to avoid permanent loop"));
+                return;
+            }
             SafeBootWatchdog::enterBleDfuBootloader();  // Never returns
         }
 
-        writeCounter(bootCount_ + 1);
+        writeCounter(next);  // failure logged inside; non-fatal at this step
         Serial.print(F("[BOOT] RebootFrequencyCounter: "));
-        Serial.print((unsigned)(bootCount_ + 1));
+        Serial.print(next);
         Serial.print(F("/"));
         Serial.println(REBOOT_THRESHOLD);
     }
@@ -164,7 +223,9 @@ namespace RebootFrequencyCounter {
         if (nowMs < STABLE_UPTIME_MS) return;
         writeCounter(0);
         stableMarked_ = true;
-        Serial.println(F("[BOOT] RebootFrequencyCounter cleared (5min stable uptime)"));
+        Serial.print(F("[BOOT] RebootFrequencyCounter cleared ("));
+        Serial.print(STABLE_UPTIME_MS / 60000UL);
+        Serial.println(F("min stable uptime)"));
     }
 
     /**
