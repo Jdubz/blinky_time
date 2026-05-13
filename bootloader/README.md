@@ -20,9 +20,14 @@ then retry the firmware upload wirelessly.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `update-bootloader-ota-default.uf2` | Self-update UF2 (flash via UF2 mass storage) |
+| File | Date | Features | Purpose |
+|------|------|----------|---------|
+| `restore-stock-bootloader-0.6.2.dfu.zip` | Mar 29 | none (stock) | Roll back to factory Seeed bootloader |
+| `update-bootloader-0.8.0-ota-default.dfu.zip` | Mar 29 | DEFAULT_TO_OTA_DFU only | First OTA-default build (BLE DFU recovery, no QSPI) |
+| `update-bootloader-ota-default.uf2` | Mar 29 | DEFAULT_TO_OTA_DFU only | Same as above, UF2 format for mass-storage flash |
+| `update-bootloader-qspi-ota.uf2` | Mar 31 | RAM magic + QSPI staged OTA, **no** DEFAULT_TO_OTA_DFU | Previous production fleet bootloader |
+| **`update-bootloader-qspi-ota-default.uf2`** | **May 13** | **RAM magic + QSPI + DEFAULT_TO_OTA_DFU** | **Current target for sculpture installs (F1 in `docs/SCULPTURE_BLE_RECOVERY_PLAN.md`)** |
+| `update-bootloader-qspi-ota-default_s140_7.3.0.zip` | May 13 | Same + SoftDevice | DFU.zip form, for OTA bootloader update via fleet server |
 
 ## How to Flash
 
@@ -33,11 +38,17 @@ next boot).
 ```bash
 # Via uf2_upload.py (recommended — handles bootloader entry + UF2 copy)
 python3 tools/uf2_upload.py /dev/ttyACM0 \
-    --uf2 bootloader/update-bootloader-ota-default.uf2
+    --uf2 bootloader/update-bootloader-qspi-ota-default.uf2
 
-# Via make target
+# Via make target (update Makefile's BOOTLOADER_UF2 to point at this file
+# before running, currently still references update-bootloader-ota-default.uf2)
 make bootloader-update UPLOAD_PORT=/dev/ttyACM0
 ```
+
+**Always test on a bench device first.** Verify the new bootloader boots
+the existing app, then erase the app region (SWD) to confirm DFU mode
+defaults to BLE OTA (not USB UF2). Only after both pass: flash sculpture
+units.
 
 ## Behavior Change
 

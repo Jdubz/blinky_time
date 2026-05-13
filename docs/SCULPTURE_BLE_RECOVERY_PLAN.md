@@ -48,15 +48,19 @@ The recovery system today has three layers:
 
 ## Required fixes (priority order)
 
-### F1 — Rebuild bootloader with `DEFAULT_TO_OTA_DFU` (closes R3) — P0
+### F1 — Rebuild bootloader with `DEFAULT_TO_OTA_DFU` (closes R3) — **BUILT (2026-05-13)**
 
-**Change:** Add `target_compile_definitions(bootloader PUBLIC ... DEFAULT_TO_OTA_DFU)` for the `xiao_nrf52840_ble_sense` board build (or unconditionally in `CMakeLists.txt`).
+**Change:** Added `CFLAGS += -DDEFAULT_TO_OTA_DFU` in `Adafruit_nRF52_Bootloader/Makefile` and rebuilt for `xiao_nrf52840_ble_sense`.
 
-**Effect:** With this flag, an invalid app *or* any DFU entry that doesn't specify UF2/serial defaults to BLE DFU (`main.c:489-494`). Mid-DFU interruption, QSPI commit failure, vector-table corruption — all roads lead to BLE DFU advertising forever instead of USB UF2 mode forever.
+**Effect:** With this flag, an invalid app *or* any DFU entry that doesn't specify UF2/serial defaults to BLE DFU (`main.c:489-494`). Mid-DFU interruption, QSPI commit failure, vector-table corruption — all roads lead to BLE DFU advertising forever instead of USB UF2 mode forever. Combined with the pre-existing RAM-magic + QSPI staged-OTA patches that were already in the custom bootloader on the fleet.
 
-**Deploy:** SWD-flash via Pi GPIO (`openocd -f interface/bcm2835gpio-swd.cfg -f target/nrf52.cfg`) to every bench unit first, validate, then to sculpture units.
+**Artifacts committed in `bootloader/`:**
+- `update-bootloader-qspi-ota-default.uf2` (75 KB) — UF2 mass-storage update
+- `update-bootloader-qspi-ota-default_s140_7.3.0.zip` (193 KB) — DFU.zip for OTA update via fleet
 
-**Verify:** SWD-erase the app region on a bench unit, power-cycle, confirm device enters BLE DFU and fleet server can connect to bootloader address and reflash.
+**Deploy:** `make bootloader-update UPLOAD_PORT=/dev/ttyACM0` (single device) or `make bootloader-update-all` (whole bench rack). Top-level Makefile `BOOTLOADER_UF2` already points at the new file.
+
+**Verify:** SWD-erase the app region on a bench unit, power-cycle, confirm device enters BLE DFU and fleet server can connect to bootloader address and reflash. (Test T1.)
 
 ### F2 — Remove or rewrite `SafeMode::enterSafeMode()` (closes R1) — P0
 

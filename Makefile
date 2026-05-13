@@ -229,7 +229,7 @@ uf2-test:
 
 # --- Bootloader update (BLE DFU recovery mode) ---
 
-BOOTLOADER_UF2 = bootloader/update-bootloader-ota-default.uf2
+BOOTLOADER_UF2 = bootloader/update-bootloader-qspi-ota-default.uf2
 
 # Update bootloader on a single device (enters UF2, copies bootloader update UF2)
 # The MBR performs a power-fail-safe copy into the bootloader region.
