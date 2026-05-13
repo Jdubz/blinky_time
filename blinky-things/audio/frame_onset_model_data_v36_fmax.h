@@ -3,8 +3,8 @@
 // SHA256 prefix: f91a1d011a6a2934
 // Exported: 2026-05-02T14:54:00Z
 
-#ifndef FRAME_ONSET_MODEL_DATA_H
-#define FRAME_ONSET_MODEL_DATA_H
+#ifndef FRAME_ONSET_MODEL_DATA_V36_FMAX_H
+#define FRAME_ONSET_MODEL_DATA_V36_FMAX_H
 
 #define FRAME_ONSET_MODEL_DATA_HASH "f91a1d011a6a2934"
 #define FRAME_ONSET_MODEL_DATA_SIZE 24856
@@ -2086,4 +2086,4 @@ alignas(8) static const unsigned char frame_onset_model_data[] = {
 
 static const unsigned int frame_onset_model_data_len = 24856;
 
-#endif // FRAME_ONSET_MODEL_DATA_H
+#endif // FRAME_ONSET_MODEL_DATA_V36_FMAX_H
