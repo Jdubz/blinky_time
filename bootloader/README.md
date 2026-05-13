@@ -26,8 +26,29 @@ then retry the firmware upload wirelessly.
 | `update-bootloader-0.8.0-ota-default.dfu.zip` | Mar 29 | DEFAULT_TO_OTA_DFU only | First OTA-default build (BLE DFU recovery, no QSPI) |
 | `update-bootloader-ota-default.uf2` | Mar 29 | DEFAULT_TO_OTA_DFU only | Same as above, UF2 format for mass-storage flash |
 | `update-bootloader-qspi-ota.uf2` | Mar 31 | RAM magic + QSPI staged OTA, **no** DEFAULT_TO_OTA_DFU | Previous production fleet bootloader |
-| **`update-bootloader-qspi-ota-default.uf2`** | **May 13** | **RAM magic + QSPI + DEFAULT_TO_OTA_DFU** | **Current target for sculpture installs (F1 in `docs/SCULPTURE_BLE_RECOVERY_PLAN.md`)** |
+| **`update-bootloader-qspi-ota-default.uf2`** | **May 13** | **RAM magic + QSPI + DEFAULT_TO_OTA_DFU (physical-user-DFU exempted)** | **Current target for sculpture installs (F1 in `docs/SCULPTURE_BLE_RECOVERY_PLAN.md`)** |
 | `update-bootloader-qspi-ota-default_s140_7.3.0.zip` | May 13 | Same + SoftDevice | DFU.zip form, for OTA bootloader update via fleet server |
+
+### Critical fix in current build (`0.8.0-2-g6827504`)
+
+The original `DEFAULT_TO_OTA_DFU` implementation forced BLE OTA mode for
+*any* DFU entry without an explicit UF2/serial magic — including the
+physical-user paths: **double-tap reset, DFU button, and
+`APP_ASKS_FOR_SINGLE_TAP_RESET`**. That broke wired recovery on
+USB-accessible devices: double-tapping reset went to BLE DFU instead of
+USB UF2 mass-storage.
+
+The current build excludes physical-user DFU entry from the
+`DEFAULT_TO_OTA_DFU` coercion. F1 now fires only for "silent" triggers
+(invalid app from mid-DFU corruption, app-initiated DFU without
+explicit magic) — the actual sealed-sculpture scenario it was designed
+for. Physical paths retain their traditional UF2 behavior.
+
+Verified on bench device 2A798EF8 (2026-05-13):
+- Double-tap reset → USB UF2 mode ✓
+- `bootloader` serial command → USB UF2 mode ✓
+- `bootloader ble` serial command → BLE DFU mode ✓
+- 1200-baud touch (Arduino-style upload) → USB UF2 mode ✓
 
 ## How to Flash
 
