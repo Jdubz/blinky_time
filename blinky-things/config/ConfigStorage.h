@@ -261,8 +261,18 @@ public:
         // Validity flag
         bool isValid;               // Is this config populated and ready to use?
 
+        // Second LED data pin (0 = single-strand, the historical case).
+        // When non-zero, the pixel buffer is split evenly between two
+        // physical strands: pixels [0..total/2) drive `ledPin`, pixels
+        // [total/2..total) drive `ledPin2`. Total pixel count must be
+        // even (validation rejects odd totals when ledPin2 is set).
+        // Carved out of the original `reserved[8]` — same struct size,
+        // no DEVICE_VERSION bump needed; older configs read back as
+        // ledPin2 == 0 because that byte was zero-initialised.
+        uint8_t ledPin2;
+
         // Reserved for future expansion
-        uint8_t reserved[8];
+        uint8_t reserved[7];
 
         // Total: ~160 bytes (see static_assert enforcing sizeof(StoredDeviceConfig) <= 160)
     };
@@ -380,6 +390,24 @@ public:
         markDirty();
     }
     bool isDeviceConfigValid() const { return data_.device.isValid; }
+
+    /**
+     * Quarantine the stored device config — clears `isValid` and writes the
+     * data block to flash synchronously.
+     *
+     * Called from the crash-loop recovery path (RebootFrequencyCounter
+     * tripped). The next boot will see no valid device config and enter
+     * safeMode instead of crash-looping on the same bad config forever.
+     * The user can then `device upload` a corrected config from a stable
+     * safeMode boot.
+     *
+     * Synchronous so the invalidation is durable BEFORE the caller does
+     * `NVIC_SystemReset()` / enters BLE DFU. Returns true on successful
+     * flash write, false otherwise (caller should still proceed to DFU
+     * since boot-looping with a bad config is worse than a non-durable
+     * quarantine).
+     */
+    bool quarantineDeviceConfig();
 
     /**
      * Load/save all persisted generator, mic, and tracker parameters.

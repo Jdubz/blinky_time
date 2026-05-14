@@ -173,6 +173,22 @@ namespace RebootFrequencyCounter {
         return true;
     }
 
+    // Optional hook invoked at the moment the boot-counter threshold is
+    // reached, immediately before the device enters BLE DFU recovery. Lets
+    // the caller (blinky-things.ino) quarantine the stored device config so
+    // the next boot won't repeat the crash-loop on the same bad config.
+    // Without this hook, a config that crashes the app on every boot
+    // (e.g. a misconfigured multi-strand setup that hard-faults during
+    // LED-strip init) would keep tripping the threshold and re-entering DFU
+    // forever after each recovery flash, with no way to break the cycle
+    // wirelessly.
+    using OnThresholdHook = void (*)();
+    inline OnThresholdHook& onThresholdHook() {
+        static OnThresholdHook h = nullptr;
+        return h;
+    }
+    inline void setOnThresholdHook(OnThresholdHook h) { onThresholdHook() = h; }
+
     /**
      * Increment the boot counter; if threshold reached, enter BLE DFU
      * recovery and never return. MUST be called after `InternalFS.begin()`.
@@ -203,6 +219,14 @@ namespace RebootFrequencyCounter {
                 Serial.println(F("[FALLBACK] RebootFrequencyCounter: clear failed, "
                                  "skipping DFU recovery this boot to avoid permanent loop"));
                 return;
+            }
+            // Invite the caller (typically the .ino) to quarantine state
+            // that may have caused the crash-loop — e.g., the stored device
+            // config — before we hand control to the DFU bootloader. Best-
+            // effort: hook is optional, errors inside are logged by the hook
+            // itself, and we proceed to DFU either way.
+            if (onThresholdHook()) {
+                onThresholdHook()();
             }
             SafeBootWatchdog::enterBleDfuBootloader();  // Never returns
         }

@@ -501,6 +501,12 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(cfg.ledHeight);
             out_.print(F(",\"leds\":"));
             out_.print(cfg.ledWidth * cfg.ledHeight);
+            out_.print(F(",\"ledPin\":"));
+            out_.print(cfg.ledPin);
+            if (cfg.ledPin2 != 0) {
+                out_.print(F(",\"ledPin2\":"));
+                out_.print(cfg.ledPin2);
+            }
             out_.print(F(",\"configured\":true}"));
         } else {
             out_.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
@@ -910,6 +916,7 @@ void SerialConsole::showDeviceConfig() {
     doc["ledWidth"] = cfg.ledWidth;
     doc["ledHeight"] = cfg.ledHeight;
     doc["ledPin"] = cfg.ledPin;
+    doc["ledPin2"] = cfg.ledPin2;
     doc["brightness"] = cfg.brightness;
     doc["ledType"] = cfg.ledType;
     doc["orientation"] = cfg.orientation;
@@ -973,6 +980,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.ledWidth = doc["ledWidth"] | 0;
     newConfig.ledHeight = doc["ledHeight"] | 1;
     newConfig.ledPin = doc["ledPin"] | 10;
+    newConfig.ledPin2 = doc["ledPin2"] | 0;   // 0 = single-strand (default)
     newConfig.brightness = doc["brightness"] | 100;
     newConfig.ledType = doc["ledType"] | 12390;  // Default: NEO_GRB + NEO_KHZ800
     newConfig.orientation = doc["orientation"] | 0;

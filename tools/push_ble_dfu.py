@@ -4,10 +4,18 @@
 Usage:
   ./push_ble_dfu.py <dfu.zip>             # auto-pick first AdaDFU device
   ./push_ble_dfu.py <dfu.zip> <MAC>       # specific bootloader BLE address (xx:xx:xx:xx:xx:xx)
+
+WARNING: Do NOT wrap this script with a `timeout` shorter than the estimated
+transfer time printed at start. Interrupting mid-flash can brick the target
+device on both transports (AdaDFU stops advertising; only SWD recovers it).
+A 500 KB application DFU takes ~5-6 minutes at default MTU 23.
 """
 import asyncio
 import logging
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -117,15 +125,68 @@ async def main() -> int:
     print(f"Bootloader MAC: {target_mac}  (app-mode MAC: {app_addr})")
     print(f"Pushing: {dfu_zip}")
 
+    # ── Pre-flight: estimate transfer time + warn loudly ──────────────────
+    #
+    # Legacy DFU at default MTU 23 → 20-byte data chunks per BLE write.
+    # Empirically each chunk is ~8-12 ms round-trip in practice (Nordic
+    # legacy DFU + BlueZ host stack, no service-discovery cache, BlueZ
+    # default connection interval ~30 ms). That's ~1.7 KB/s sustained
+    # throughput. Add ~30 s for connect/scan/erase/verify overhead.
+    payload_bytes = _payload_size(dfu_zip)
+    bytes_per_sec = 1700.0
+    overhead_s = 45.0
+    estimated_s = overhead_s + payload_bytes / bytes_per_sec
+    recommended_timeout_s = int(estimated_s * 1.5 + 60)
+    print()
+    print("=" * 68)
+    print("  BLE DFU PRE-FLIGHT")
+    print("=" * 68)
+    print(f"  payload         : {payload_bytes:,} bytes")
+    print(f"  estimated time  : {estimated_s/60:.1f} min")
+    print(f"  recommended     : `timeout {recommended_timeout_s}` (or no wrapper)")
+    print(f"  DO NOT INTERRUPT — SIGTERM mid-flash can brick the target on")
+    print(f"  both transports, leaving SWD as the only recovery path.")
+    print("=" * 68)
+    print()
+
+    # If we *are* sitting under a `timeout` wrapper, the OS will SIGTERM us
+    # mid-flash with no recourse. Catch it and at least log the danger before
+    # the kernel cleans up — the BLE transaction won't complete but a future
+    # operator will at least know what to look for.
+    def _on_term(signum, _frame):
+        sys.stderr.write(
+            f"\n!!! SIGTERM received during BLE DFU — target may be bricked !!!\n"
+            f"!!! See tools/push_ble_dfu.py preflight notice !!!\n"
+        )
+        sys.stderr.flush()
+        # Re-raise default behaviour so we still exit; caller's timeout has spoken.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    signal.signal(signal.SIGTERM, _on_term)
+
+    t0 = time.monotonic()
     result = await upload_ble_dfu(
         app_ble_address=app_addr,
         dfu_zip_path=dfu_zip,
         enter_bootloader_via_serial=None,
         enter_bootloader_via_ble=None,
-        progress_callback=lambda phase, msg, pct: print(f"  [{phase}] {msg}" + (f"  ({pct}%)" if pct is not None else "")),
+        progress_callback=lambda phase, msg, pct: print(
+            f"  [{phase}] {msg}"
+            + (f"  ({pct}%)" if pct is not None else "")
+            + (f"  [+{time.monotonic() - t0:.0f}s]" if pct is not None else "")
+        ),
     )
     print(f"\nResult: {result}")
     return 0 if result.get("status") == "ok" else 3
+
+
+def _payload_size(zip_path: str) -> int:
+    """Return the size in bytes of the firmware payload inside a DFU.zip,
+    accounting for the same leading-FF trim _parse_trim does for BL/SD types.
+    """
+    init_packet, firmware, image_type = _parse_trim(zip_path)
+    return len(firmware)
 
 
 if __name__ == "__main__":

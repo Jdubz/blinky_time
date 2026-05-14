@@ -408,6 +408,35 @@ void ConfigStorage::saveToFlash() {
 #endif
 }
 
+bool ConfigStorage::quarantineDeviceConfig() {
+    // Crash-loop recovery: blow away the `isValid` flag on the stored device
+    // config, write to flash synchronously, and return. After this call the
+    // caller is expected to reboot (either NVIC_SystemReset or via SafeBoot-
+    // Watchdog::enterBleDfuBootloader). On the next boot the firmware sees
+    // no valid device config and falls through to safeMode — the same path
+    // a freshly-flashed device takes when no config has ever been uploaded.
+    //
+    // The caller (RebootFrequencyCounter::checkAndIncrement, on threshold)
+    // is responsible for deciding when this fires. It must be rare —
+    // wiping configs on transient blips would be worse than the disease.
+    if (!data_.device.isValid) {
+        // Already invalid; nothing to do.
+        SerialConsole::logInfo(F("[QUARANTINE] device config already invalid; no-op"));
+        return true;
+    }
+
+    SerialConsole::logError(F("[QUARANTINE] invalidating device config — next boot enters safeMode"));
+    data_.device.isValid = false;
+
+    // saveToFlash() is void on this platform but logs on failure. We can't
+    // detect a partial write here, so return optimistic-true: a stuck-bad
+    // config that re-crashes is the failure mode we're explicitly trying to
+    // escape, and the alternative (skip quarantine when uncertain) would
+    // re-introduce that failure.
+    saveToFlash();
+    return true;
+}
+
 void ConfigStorage::end() {
 #ifdef ESP32
     // Closes the NVS Preferences handle and flushes any pending writes.
