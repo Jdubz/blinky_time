@@ -29,9 +29,7 @@
 #include "audio/LoopMetrics.h"       // Main-loop fps + frame-time observability (#137)
 #include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper (Adafruit)
 #include "hal/hardware/Nrf52PwmLedStrip.h"  // Async PWM driver (nRF52840)
-// Note: CompositeLedStrip header exists at hal/hardware/CompositeLedStrip.h
-// for future multi-strand wiring but is not currently instantiated by setup().
-// See setup()'s LED init comment for context.
+#include "hal/hardware/CompositeLedStrip.h"  // Two-strand composite LED strip
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
 #include "devices/TestChipConfig.h"           // Fallback config for unconfigured chips
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
@@ -276,27 +274,77 @@ void setup() {
     // the same code path with no count-dependent thresholds. The hard upper
     // bound is 1365 LEDs (PWM SEQ[n].CNT 15-bit limit, enforced in begin()).
     //
-    // Multi-strand support is dormant in firmware. The schema fields
-    // (StoredDeviceConfig.ledPin2, MatrixConfig.ledPin2), the JSON parser,
-    // and CompositeLedStrip in HAL are landed so the data layout is
-    // already settled — but the LED-init code path that would instantiate
-    // a CompositeLedStrip is intentionally NOT here yet. Reason: the
-    // first end-to-end attempt on a sealed cart-inner on 2026-05-14
-    // hard-faulted during boot with a multi-strand config and required
-    // SWD recovery. The crash hasn't been isolated yet; per the
-    // "validate on recoverable device first" rule, we don't ship a
-    // wire-up to production firmware until the root cause is known. A
-    // config with `ledPin2 != 0` is currently accepted by the schema /
-    // validator but ignored at runtime — devices boot single-strand on
-    // `ledPin` regardless. See feedback_validate_on_recoverable_first.md.
-    auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
-    leds = asyncStrip;  // Assign before validity check so cleanup() can free it
-    if (!asyncStrip || !asyncStrip->isValid()) {
-      haltWithError(F("ERROR: Async LED strip allocation failed"));
+    // Multi-strand: when ledPin2 is non-zero, split the pixel buffer evenly
+    // across two physical strands, each driven by its own PWM peripheral.
+    // CompositeLedStrip dispatches pixel writes (0..N/2-1 → strand 1 on
+    // ledPin; N/2..N-1 → strand 2 on ledPin2) and the renderer sees one
+    // logical strip of N pixels.
+    //
+    // Each Nrf52PwmLedStrip grabs a free PWM via findFreePwm() — nRF52840
+    // has 4 PWM peripherals so a 2-strand config has plenty of headroom.
+    // The two DMAs run concurrently on hardware; CPU latency for show()
+    // is single-strand's, not 2×.
+    //
+    // Recovery if this path crashes mid-init (the failure mode cart-inner-
+    // old hit on 2026-05-14): RebootFrequencyCounter trips after 5 rapid
+    // reboots → quarantineDeviceConfig() invalidates the offending config →
+    // next boot enters safeMode (no app crash) → operator re-uploads a
+    // corrected config. See feedback_validate_on_recoverable_first.md and
+    // ConfigStorage::quarantineDeviceConfig().
+    bool useComposite = false;
+    if (config.matrix.ledPin2 != 0 && (numLeds % 2 == 0)) {
+      const uint16_t halfLeds = numLeds / 2;
+      Serial.print(F("[INFO] Multi-strand init: "));
+      Serial.print(halfLeds);
+      Serial.print(F(" LEDs on pin D"));
+      Serial.print(config.matrix.ledPin);
+      Serial.print(F(" + "));
+      Serial.print(halfLeds);
+      Serial.print(F(" LEDs on pin D"));
+      Serial.println(config.matrix.ledPin2);
+
+      Serial.println(F("[DEBUG]   alloc strand 1..."));
+      auto* s1 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin);
+      Serial.print(F("[DEBUG]   strand 1 alloc: ptr="));
+      Serial.print((uintptr_t)s1, HEX);
+      Serial.print(F(" valid="));
+      Serial.println(s1 && s1->isValid() ? F("yes") : F("no"));
+
+      Serial.println(F("[DEBUG]   alloc strand 2..."));
+      auto* s2 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin2);
+      Serial.print(F("[DEBUG]   strand 2 alloc: ptr="));
+      Serial.print((uintptr_t)s2, HEX);
+      Serial.print(F(" valid="));
+      Serial.println(s2 && s2->isValid() ? F("yes") : F("no"));
+
+      if (s1 && s1->isValid() && s2 && s2->isValid()) {
+        Serial.println(F("[DEBUG]   wrap in CompositeLedStrip..."));
+        auto* composite = new(std::nothrow) CompositeLedStrip(s1, s2);
+        if (composite) {
+          leds = composite;
+          useComposite = true;
+          Serial.println(F("[INFO]   composite wrap OK"));
+        } else {
+          Serial.println(F("[ERROR] CompositeLedStrip alloc failed — falling back to single-strand"));
+          delete s1;
+          delete s2;
+        }
+      } else {
+        Serial.println(F("[ERROR] strand alloc/validity failed — falling back to single-strand"));
+        delete s1;
+        delete s2;
+      }
     }
-    Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
-    Serial.print(numLeds);
-    Serial.println(F(" LEDs)"));
+    if (!useComposite) {
+      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
+      leds = asyncStrip;  // Assign before validity check so cleanup() can free it
+      if (!asyncStrip || !asyncStrip->isValid()) {
+        haltWithError(F("ERROR: Async LED strip allocation failed"));
+      }
+      Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
+      Serial.print(numLeds);
+      Serial.println(F(" LEDs)"));
+    }
 #else
     // Non-nRF52840 platforms: Adafruit NeoPixel (blocking bit-bang)
     neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
