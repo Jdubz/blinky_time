@@ -15,13 +15,30 @@
  *
  * Ownership: this class takes ownership of both underlying strips and
  * deletes them in its destructor.
+ *
+ * **Invariant:** both strands must be non-null. The caller (typically the
+ * .ino's LED-init block) is responsible for verifying allocation success
+ * BEFORE constructing this wrapper. We loud-halt rather than carry silent
+ * null guards through every accessor — silent fallback on a missing
+ * strand would mean half the LEDs go dark with no operator signal, which
+ * violates the no-silent-fallbacks rule (PR #139 review).
  */
 class CompositeLedStrip : public ILedStrip {
 public:
     CompositeLedStrip(ILedStrip* strand1, ILedStrip* strand2)
         : s1_(strand1), s2_(strand2),
           n1_(strand1 ? strand1->numPixels() : 0),
-          n2_(strand2 ? strand2->numPixels() : 0) {}
+          n2_(strand2 ? strand2->numPixels() : 0) {
+        if (s1_ == nullptr || s2_ == nullptr) {
+            // The .ino path is required to fall back to single-strand on
+            // strand-alloc failure rather than wrapping nulls. Reaching
+            // here means the caller missed that check — refuse to run
+            // silently with broken pixel routing.
+            Serial.println(F("[FATAL] CompositeLedStrip constructed with null strand — halting"));
+            Serial.flush();
+            while (true) { /* halt */ }
+        }
+    }
 
     ~CompositeLedStrip() override {
         delete s1_;
@@ -32,23 +49,23 @@ public:
     CompositeLedStrip& operator=(const CompositeLedStrip&) = delete;
 
     void begin() override {
-        if (s1_) s1_->begin();
-        if (s2_) s2_->begin();
+        s1_->begin();
+        s2_->begin();
     }
 
     void show() override {
         // Start both transmissions. With Nrf52PwmLedStrip's async DMA path
         // each strand kicks off independently and runs concurrently on its
         // own PWM peripheral.
-        if (s1_) s1_->show();
-        if (s2_) s2_->show();
+        s1_->show();
+        s2_->show();
     }
 
     void setPixelColor(uint16_t index, uint8_t r, uint8_t g, uint8_t b) override {
         if (index < n1_) {
-            if (s1_) s1_->setPixelColor(index, r, g, b);
+            s1_->setPixelColor(index, r, g, b);
         } else if (index < n1_ + n2_) {
-            if (s2_) s2_->setPixelColor(index - n1_, r, g, b);
+            s2_->setPixelColor(index - n1_, r, g, b);
         }
         // Out-of-range writes are silently dropped to match the behaviour
         // of the underlying single-strand drivers.
@@ -56,24 +73,26 @@ public:
 
     void setPixelColor(uint16_t index, uint32_t color) override {
         if (index < n1_) {
-            if (s1_) s1_->setPixelColor(index, color);
+            s1_->setPixelColor(index, color);
         } else if (index < n1_ + n2_) {
-            if (s2_) s2_->setPixelColor(index - n1_, color);
+            s2_->setPixelColor(index - n1_, color);
         }
     }
 
     void clear() override {
-        if (s1_) s1_->clear();
-        if (s2_) s2_->clear();
+        s1_->clear();
+        s2_->clear();
     }
 
     void setBrightness(uint8_t brightness) override {
-        if (s1_) s1_->setBrightness(brightness);
-        if (s2_) s2_->setBrightness(brightness);
+        s1_->setBrightness(brightness);
+        s2_->setBrightness(brightness);
     }
 
     uint8_t getBrightness() const override {
-        return s1_ ? s1_->getBrightness() : 0;
+        // Both strands carry the same brightness (setBrightness propagates
+        // to both). Forward to s1_ as the canonical source.
+        return s1_->getBrightness();
     }
 
     uint16_t numPixels() const override {
@@ -81,9 +100,8 @@ public:
     }
 
     uint32_t Color(uint8_t r, uint8_t g, uint8_t b) const override {
-        // Both strands use the same colour-packing convention; forward to
-        // either. Use s1_ as the canonical source.
-        return s1_ ? s1_->Color(r, g, b) : ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+        // Both strands use the same colour-packing convention.
+        return s1_->Color(r, g, b);
     }
 
 private:

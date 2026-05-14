@@ -66,6 +66,11 @@ LEDMapper ledMapper;
 // Adafruit_NeoPixel allocates memory in constructor - unsafe at global scope
 Adafruit_NeoPixel* neoPixelStrip = nullptr;
 ILedStrip* leds = nullptr;
+// Set true when a multi-strand config (ledPin2 != 0) was requested but
+// the multi-strand alloc failed and we fell back to single-strand on
+// ledPin only. Surfaces in `json info` as `ledMode: "degraded"` so the
+// fleet console can spot it without log triage (PR #139 review).
+bool ledModeDegraded = false;
 
 // New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
@@ -328,11 +333,13 @@ void setup() {
           Serial.println(F("[ERROR] CompositeLedStrip alloc failed — falling back to single-strand"));
           delete s1;
           delete s2;
+          ledModeDegraded = true;
         }
       } else {
         Serial.println(F("[ERROR] strand alloc/validity failed — falling back to single-strand"));
         delete s1;
         delete s2;
+        ledModeDegraded = true;
       }
     }
     if (!useComposite) {
@@ -343,7 +350,12 @@ void setup() {
       }
       Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
       Serial.print(numLeds);
-      Serial.println(F(" LEDs)"));
+      Serial.println(F(" LEDs"));
+      if (ledModeDegraded) {
+        Serial.println(F(", DEGRADED — multi-strand requested but fell back to single)"));
+      } else {
+        Serial.println(F(")"));
+      }
     }
 #else
     // Non-nRF52840 platforms: Adafruit NeoPixel (blocking bit-bang)

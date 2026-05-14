@@ -55,3 +55,6 @@ blinky-server/web/
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor scratch logs
+excalidraw.log

@@ -13,10 +13,18 @@ A 500 KB application DFU takes ~5-6 minutes at default MTU 23.
 import asyncio
 import logging
 import os
+import re
 import signal
 import sys
 import time
 from pathlib import Path
+
+# BD_ADDR canonical form: 6 hex octets separated by colons, e.g. F2:1B:FD:62:12:C4.
+# Bleak accepts upper- or lower-case; we validate then upper() for downstream
+# stability. A bad MAC slipping through silently produces wrong arithmetic in
+# _bl_minus_one() and a bewildering "device not found" scan failure with no
+# breadcrumb pointing at the typo (PR #139 review).
+_BLE_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "blinky-server"))
@@ -104,7 +112,18 @@ async def main() -> int:
         print(__doc__, file=sys.stderr)
         return 1
     dfu_zip = sys.argv[1]
-    target_mac = sys.argv[2].upper() if len(sys.argv) == 3 else None
+    target_mac = sys.argv[2] if len(sys.argv) == 3 else None
+
+    if target_mac is not None:
+        if not _BLE_MAC_RE.match(target_mac):
+            print(
+                f"ERROR: invalid BLE MAC format: {target_mac!r}\n"
+                f"       expected six hex octets separated by ':' "
+                f"(e.g. F2:1B:FD:62:12:C4)",
+                file=sys.stderr,
+            )
+            return 1
+        target_mac = target_mac.upper()
 
     if not Path(dfu_zip).is_file():
         print(f"DFU zip not found: {dfu_zip}", file=sys.stderr)

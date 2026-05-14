@@ -506,6 +506,15 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             if (cfg.ledPin2 != 0) {
                 out_.print(F(",\"ledPin2\":"));
                 out_.print(cfg.ledPin2);
+                // ledMode signals whether the multi-strand path is live or
+                // whether init fell back to single-strand on ledPin only —
+                // surfaced so fleet tooling can flag a sealed device whose
+                // LED layout doesn't match its config without log triage
+                // (PR #139 review).
+                extern bool ledModeDegraded;
+                out_.print(F(",\"ledMode\":\""));
+                out_.print(ledModeDegraded ? F("degraded") : F("multistrand"));
+                out_.print(F("\""));
             }
             out_.print(F(",\"configured\":true}"));
         } else {

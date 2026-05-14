@@ -29,6 +29,15 @@
  * Failure modes (deliberately fail-safe):
  *   - File missing or unreadable → counter treated as 0 → device boots
  *     normally. No spurious recovery on first install or LittleFS corruption.
+ *     **Trade-off:** if LittleFS is genuinely corrupted (not just missing-on-
+ *     first-install), this disables crash-loop detection silently — a buggy
+ *     app crash-looping on a corrupt-LittleFS device will never trigger BLE
+ *     DFU recovery. The companion safeguard SafeBootWatchdog (GPREGRET2,
+ *     no flash dep) still catches setup() crashes within a single power
+ *     session. Cross-power-cycle persistence on a corrupt-FS device is
+ *     unrecoverable wirelessly. Accepted as the safer default: spurious
+ *     DFU on every fresh install would be far worse than the rare
+ *     corrupt-FS edge case.
  *   - Flash write fails → silent (next boot will see stale counter and either
  *     boot fine or trigger recovery one boot later). No fatal halt.
  *
