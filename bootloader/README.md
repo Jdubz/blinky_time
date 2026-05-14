@@ -26,10 +26,33 @@ then retry the firmware upload wirelessly.
 | `update-bootloader-0.8.0-ota-default.dfu.zip` | Mar 29 | DEFAULT_TO_OTA_DFU only | First OTA-default build (BLE DFU recovery, no QSPI) |
 | `update-bootloader-ota-default.uf2` | Mar 29 | DEFAULT_TO_OTA_DFU only | Same as above, UF2 format for mass-storage flash |
 | `update-bootloader-qspi-ota.uf2` | Mar 31 | RAM magic + QSPI staged OTA, **no** DEFAULT_TO_OTA_DFU | Previous production fleet bootloader |
-| **`update-bootloader-qspi-ota-default.uf2`** | **May 13** | **RAM magic + QSPI + DEFAULT_TO_OTA_DFU (physical-user-DFU exempted)** | **Current target for sculpture installs (F1 in `docs/SCULPTURE_BLE_RECOVERY_PLAN.md`)** |
+| **`update-bootloader-qspi-ota-default.uf2`** | **May 13** | **RAM magic + QSPI + DEFAULT_TO_OTA_DFU + dual-transport DFU mode** | **Current target for sculpture installs (F1 in `docs/SCULPTURE_BLE_RECOVERY_PLAN.md`)** |
 | `update-bootloader-qspi-ota-default_s140_7.3.0.zip` | May 13 | Same + SoftDevice | DFU.zip form, for OTA bootloader update via fleet server |
 
-### Critical fix in current build (`0.8.0-2-g6827504`)
+### Third critical fix in current build (`0.8.0-4-g76d1e60`): dual-transport DFU mode
+
+Stock behavior gated which DFU transport was active on entry mode: a UF2/serial
+DFU entry got USB MSC only, an OTA entry got BLE only. That meant a device's
+recoverability depended on how it last entered DFU mode — fine for the wired
+workflow, fatal once you commit to one bootloader image for both sealed and
+USB-accessible devices.
+
+The current build always brings up BOTH transports whenever the bootloader is in
+DFU mode (entry-mode-agnostic):
+- `check_dfu_mode()` always calls `ble_stack_init()` + `usb_init()`
+- `bootloader_dfu_start()` always registers `dfu_transport_ble_update_start()`,
+  regardless of the `ota` flag
+
+Result: a single bootloader image works for every device. Whoever reaches the
+device first — host PC over USB-MSC drop, or fleet server over BLE — wins.
+
+Verified on hat (sn `C04C56F9DFC31D84`, 2026-05-13):
+- `bootloader` serial command → both `/dev/sde` (USB MSC) and BLE `AdaDFU` advertising visible simultaneously ✓
+
+End-to-end DFU completion via each transport on this build still owes a roll
+across the bench fleet — track that separately, not as a property of this fix.
+
+### Critical fix in prior build (`0.8.0-2-g6827504`)
 
 The original `DEFAULT_TO_OTA_DFU` implementation forced BLE OTA mode for
 *any* DFU entry without an explicit UF2/serial magic — including the
