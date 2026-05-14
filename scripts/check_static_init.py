@@ -164,8 +164,12 @@ def check_directory(directory: Path) -> list:
 
     for filepath in directory.rglob('*'):
         if filepath.suffix.lower() in extensions:
-            # Skip mock and test directories for hardware classes
-            if 'mock' in str(filepath).lower():
+            path_str = str(filepath).lower()
+            # Skip mocks, tests, and archived sketches — those aren't part of
+            # the active firmware build and predate the no-static-init rule.
+            if 'mock' in path_str:
+                continue
+            if '/archive/' in path_str or path_str.startswith('archive/'):
                 continue
             issues = check_file(filepath)
             all_issues.extend(issues)

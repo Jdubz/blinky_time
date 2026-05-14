@@ -123,6 +123,7 @@ public:
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
     // v89: pulseNNGate. v91: PLP OLA removed (direct pattern interpolation).
     // v92: plpVarianceSens. v93: plpDecayRate. v94: PlasmaGlobe replaces Lightning.
+    // Version 95: crestGateMin added to StoredTrackerParams (124-byte struct, see static_assert).
     static const uint8_t SETTINGS_VERSION = 95;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
