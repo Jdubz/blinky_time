@@ -50,6 +50,43 @@ Verified on bench device 2A798EF8 (2026-05-13):
 - `bootloader ble` serial command → BLE DFU mode ✓
 - 1200-baud touch (Arduino-style upload) → USB UF2 mode ✓
 
+### Second critical fix in same build: SD-region write guard
+
+The bootloader's `in_app_space()` originally used `USER_FLASH_START`
+(= `MBR_SIZE`, 0x1000) as the lower bound. That range silently included
+the SoftDevice (0x1000–`CODE_REGION_1_START`, e.g. 0x1000–0x27000 for
+S140 v7.3.0). An app UF2 with blocks targeting addresses inside the SD
+region — whether from a combined SD+app hex, OR a hand-crafted "kill"
+UF2 — would silently erase SD pages and write 0xFFs back. The result
+was a half-corrupted SoftDevice and a hard-to-diagnose WDT reset loop
+(symptom: app crashes ~every 15 s, no hint that flash got scribbled on).
+
+Fix:
+- `in_app_space()` now uses `CODE_REGION_1_START` as the lower bound
+  (runtime SD end, collapses to `MBR_SIZE` if no SD).
+- Write-handler's "skip MBR" branch extended to cover the full pre-app
+  region (`addr < CODE_REGION_1_START`) — matches the existing
+  silent-skip semantics for combined SD+app hex UF2s.
+
+Host-side: `tools/uf2_upload.py` now also validates `--uf2` files (this
+path previously bypassed all safety checks). An app-family UF2 must
+have at least one block targeting the app region and may not contain
+blocks targeting the bootloader region; a bootloader-family UF2 must
+target bootloader/UICR/MBR/SD only. Defense in depth.
+
+### App start address (S140 v7.3.0)
+
+If you ever need to craft a UF2 that targets the app region (e.g., for
+a recovery test), the app start address is **`CODE_REGION_1_START`**,
+which equals `SD_SIZE_GET(MBR_SIZE)` at runtime. For S140 v7.3.0 this
+resolves to **0x27000**, NOT 0x26000. Addresses 0x1000–0x27000 are the
+SoftDevice — writing 0xFFs there corrupts the running BLE stack.
+
+The bench-device F1 destructive test that triggered the fixes above
+made exactly this mistake: wrote to 0x26000 thinking it was the app
+start. With the fix in place the bootloader silently ignores those
+blocks (no harm done), and the host tool refuses the UF2 outright.
+
 ## How to Flash
 
 The update UF2 uses the MBR's power-fail-safe `SD_MBR_COMMAND_COPY_BL` to
