@@ -7,12 +7,12 @@ divergence between what the model trained on and what the device actually sees.
 Usage:
     # Compare training data vs one device capture
     python scripts/mel_distribution_check.py \\
-        --training /mnt/storage/blinky-ml-data/processed_v18/X_train.npy \\
+        --training /mnt/nvme/processed_v18/X_train.npy \\
         --capture capture.jsonl
 
     # Compare against multiple captures
     python scripts/mel_distribution_check.py \\
-        --training /mnt/storage/blinky-ml-data/processed_v18/X_train.npy \\
+        --training /mnt/nvme/processed_v18/X_train.npy \\
         --capture capture1.jsonl capture2.jsonl capture3.jsonl
 """
 

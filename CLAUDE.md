@@ -74,7 +74,11 @@ When you discover a silent fallback, the fix is to (a) assert / panic at the fai
 
 Always use tmux:
 ```bash
-tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir outputs/<experiment> 2>&1 | tee outputs/<experiment>/training.log"
+# Output dir defaults to /mnt/nvme/outputs (training server). On a laptop or
+# any machine without /mnt/nvme mounted, override with BLINKY_OUTPUT_DIR=...
+# before the command, or substitute a local path directly.
+OUT="${BLINKY_OUTPUT_DIR:-/mnt/nvme/outputs}"
+tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir $OUT/<experiment> 2>&1 | tee $OUT/<experiment>/training.log"
 ```
 
 `train.py` enforces this — it refuses to start outside tmux/screen unless `--allow-foreground` is passed.
@@ -115,9 +119,11 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 |----------|---------|
 | `docs/VISUALIZER_GOALS.md` | Design philosophy — visual quality over metrics |
 | `docs/AUDIO_ARCHITECTURE.md` | AudioTracker, FrameOnsetNN, PLP, spectral analysis |
+| `docs/ML_STORAGE_LAYOUT.md` | NVMe pool / SATA tier layout for ML data; disk budget; recovery |
 | `docs/AUDIO-TUNING-GUIDE.md` | Main testing guide, tunable params, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
+| `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | Published onset/drum-detection systems with F1 numbers, architectures, label sources — quote this before claiming "the literature says X" |
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
@@ -125,6 +131,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
+| `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |
 | `blinky-test-player/NEXT_TESTS.md` | Priority testing tasks |

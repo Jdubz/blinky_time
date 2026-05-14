@@ -67,7 +67,7 @@ echo ">>> Export v36 to TFLite INT8"
 make export \
     CONFIG="${V36_CFG}" \
     RUN_NAME=v36_fmax \
-    PROCESSED_DIR=/mnt/storage/blinky-ml-data/processed_v36 \
+    PROCESSED_DIR=/mnt/nvme/processed_v36 \
     | tee "${V36_OUT}/export.log"
 
 [ -f "${V36_OUT}/frame_onset_model_data_int8.tflite" ] || \

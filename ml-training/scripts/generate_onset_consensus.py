@@ -228,10 +228,15 @@ def merge_onsets(all_onsets: list[np.ndarray], tolerance: float,
 
 
 def process_track(args: tuple) -> str | None:
-    """Process one track through all onset detection systems."""
-    audio_path, output_path, librosa_cache_path = args
+    """Process one track through all onset detection systems.
 
-    if output_path.exists():
+    Tuple layout: (audio_path, output_path, librosa_cache_path, force).
+    `force=True` overwrites an existing output (paired with main()'s
+    `--force-regenerate`); `force=False` skips re-processing.
+    """
+    audio_path, output_path, librosa_cache_path, force = args
+
+    if output_path.exists() and not force:
         return None
 
     stem = audio_path.stem
@@ -312,7 +317,44 @@ def main():
                              "Not processed unless explicitly passed.")
     parser.add_argument("--workers", type=int, default=1,
                         help="Workers (madmom subprocess limits parallelism)")
+    parser.add_argument(
+        "--force-regenerate", action="store_true",
+        help="Overwrite existing onset files instead of skipping. Off by default — "
+             "every existing file is kept. Use sparingly: regeneration changes the "
+             "auto onset list and invalidates any human-edit overlay indexed against it.",
+    )
+    parser.add_argument(
+        "--human-edits-dirs",
+        nargs="*",
+        type=Path,
+        default=[
+            Path("/mnt/storage/blinky-ml-data/labels/onsets_human"),
+            Path(__file__).resolve().parents[2] / "blinky-test-player" / "music" / "edm",
+        ],
+        help="Directories scanned for `<stem>.onsets_human.json` overlays. With "
+             "--force-regenerate, regeneration of any track that has an overlay "
+             "is REFUSED unless --allow-stale-edits is also passed (the new auto "
+             "list will not match the indices in the overlay — see "
+             "scripts/onset_label_merge.py:HumanEditDriftError).",
+    )
+    parser.add_argument(
+        "--allow-stale-edits", action="store_true",
+        help="Pair with --force-regenerate to overwrite even when a human edit "
+             "overlay exists. The overlay will become drift-flagged at training/"
+             "validation time and the affected tracks must be re-curated.",
+    )
     args = parser.parse_args()
+
+    def _stems_with_human_edits() -> set[str]:
+        stems: set[str] = set()
+        for d in args.human_edits_dirs or []:
+            if not d.exists():
+                continue
+            for f in d.glob("*.onsets_human.json"):
+                stems.add(f.name[: -len(".onsets_human.json")])
+        return stems
+
+    curated_stems = _stems_with_human_edits()
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -332,15 +374,23 @@ def main():
     # Build work items: training labels
     work_items = []
     already_done = 0
+    blocked_by_edits: list[str] = []
     for stem in sorted(label_stems):
         if stem not in audio_index:
             continue
         out_path = output_dir / f"{stem}.onsets.json"
-        if out_path.exists():
+        if out_path.exists() and not args.force_regenerate:
             already_done += 1
             continue
+        if (
+            args.force_regenerate
+            and not args.allow_stale_edits
+            and stem in curated_stems
+        ):
+            blocked_by_edits.append(stem)
+            continue
         librosa_cache = args.librosa_dir / f"{stem}.onsets.json"
-        work_items.append((audio_index[stem], out_path, librosa_cache))
+        work_items.append((audio_index[stem], out_path, librosa_cache, args.force_regenerate))
 
     # Also add test tracks (output as .onsets_consensus.json alongside audio)
     test_added = 0
@@ -349,12 +399,36 @@ def main():
             if f.suffix.lower() not in audio_extensions:
                 continue
             out_path = args.test_dir / f"{f.stem}.onsets_consensus.json"
-            if out_path.exists():
+            if out_path.exists() and not args.force_regenerate:
                 already_done += 1
                 continue
+            if (
+                args.force_regenerate
+                and not args.allow_stale_edits
+                and f.stem in curated_stems
+            ):
+                blocked_by_edits.append(f.stem)
+                continue
             librosa_cache = args.librosa_dir / f"{f.stem}.onsets.json"
-            work_items.append((f, out_path, librosa_cache))
+            work_items.append((f, out_path, librosa_cache, args.force_regenerate))
             test_added += 1
+
+    if blocked_by_edits:
+        print(
+            f"REFUSING to regenerate {len(blocked_by_edits)} track(s) with human edit "
+            f"overlays — re-curation would be required after regeneration:",
+            file=sys.stderr,
+        )
+        for stem in blocked_by_edits[:20]:
+            print(f"  - {stem}", file=sys.stderr)
+        if len(blocked_by_edits) > 20:
+            print(f"  ... ({len(blocked_by_edits) - 20} more)", file=sys.stderr)
+        print(
+            "Pass --allow-stale-edits with --force-regenerate to override (you must "
+            "then re-curate these tracks). Otherwise drop --force-regenerate.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     print(f"  {already_done} already done, {len(work_items)} to process")
     if test_added > 0:

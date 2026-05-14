@@ -28,6 +28,7 @@ import sys
 import os
 import re
 import glob
+import struct
 import time
 import json
 import shutil
@@ -467,6 +468,149 @@ def validate_hex(hex_path, verbose=False):
 # ============================================================
 #  Phase 2: UF2 conversion
 # ============================================================
+
+def validate_uf2(uf2_path, verbose=False):
+    """Inspect a pre-converted .uf2 file and refuse it if any block would
+    overwrite a region the host has no business writing.
+
+    Applies to the nRF52840 board (S140 v7.3.0 SoftDevice). The bootloader
+    itself now refuses these writes too (see Adafruit_nRF52_Bootloader's
+    ghostfat.c in_app_space fix, 2026-05-13), but a second line of defense
+    on the host catches mistakes before they ever leave this machine.
+
+    Regions per UF2 family ID:
+      0xADA52840 (nRF52840 app):  may write [0x27000, 0xE6000)
+                                  MBR (0x0–0x1000) and SD (0x1000–0x27000)
+                                  blocks silently tolerated (combined SD+app
+                                  UF2 case), but reported.
+      0xd663823c (nRF52840 boot): may write [0xF4000, 0xFE000), UICR @
+                                  0x10001000. MBR + SD blocks tolerated.
+
+    Returns True if safe to upload, False otherwise.
+
+    History: bench device 2A798EF8 was bricked into a WDT loop on
+    2026-05-13 by a hand-crafted "kill app" UF2 that wrote to 0x26000.
+    That address was inside the SoftDevice. The bootloader of the time
+    silently overwrote SD pages. This check would have refused that UF2.
+    """
+    print_section("UF2 SAFETY VALIDATION")
+    print(f"  UF2 file: {uf2_path}")
+    print(f"  Size:     {uf2_path.stat().st_size:,} bytes")
+
+    UF2_MAGIC_START0 = 0x0A324655
+    UF2_MAGIC_START1 = 0x9E5D5157
+    UF2_MAGIC_END    = 0x0AB16F30
+    FAMILY_NRF52_APP  = 0xADA52840
+    FAMILY_NRF52_BOOT = 0xD663823C
+    # S140 v7.3.0 ends at 0x27000 (CODE_REGION_1_START). The on-device
+    # bootloader reads this at runtime via SD_SIZE_GET; the host can't query
+    # it through a UF2 file, so we hard-code it here. The bootloader expects
+    # combined-SD-included builds to match — and update-bootloader scripts
+    # link against S140 7.3.0 only. If the SoftDevice ever changes, three
+    # things must be updated together:
+    #
+    #   1. This constant.
+    #   2. The Adafruit_nRF52_Bootloader's SOFTDEVICE_VERSION (build config).
+    #   3. bootloader/README.md's "SoftDevice: S140 vX.Y.Z" line.
+    #
+    # We can't compile-time-assert across those three, but the
+    # `tests/test_uf2_safety.py` suite (TODO follow-up) should verify the
+    # constant matches what `bootloader/update-bootloader-qspi-ota-default.uf2`
+    # actually expects. PR #139 review flagged this for follow-up.
+    SD_END_S140_730 = 0x27000
+    BOOTLOADER_REGION_START = 0xF4000
+    BOOTLOADER_MBR_PARAMS = 0xFE000  # MBR Params Page (1-page settings area)
+    FLASH_END = 0x100000  # nRF52840 has 1 MB of flash; addresses must not exceed this
+    UICR = 0x10001000
+
+    data = uf2_path.read_bytes()
+    if len(data) % 512 != 0:
+        print(f"  [FAIL] UF2 size {len(data)} is not a multiple of 512")
+        return False
+
+    n_blocks = len(data) // 512
+    families = set()
+    addrs = []
+    bad_app = []
+    bad_boot = []
+    for i in range(0, len(data), 512):
+        block = data[i:i+512]
+        m0, m1, _flags, addr, _psize, _bno, _nblk, fam = struct.unpack('<8I', block[:32])
+        end = struct.unpack('<I', block[508:512])[0]
+        if m0 != UF2_MAGIC_START0 or m1 != UF2_MAGIC_START1 or end != UF2_MAGIC_END:
+            print(f"  [FAIL] block {i//512}: invalid magic")
+            return False
+        families.add(fam)
+        addrs.append(addr)
+
+    if len(families) != 1:
+        print(f"  [FAIL] UF2 mixes multiple family IDs: {[hex(f) for f in families]}")
+        return False
+    family = families.pop()
+
+    if family == FAMILY_NRF52_APP:
+        # Refuse anything inside bootloader region; tolerate MBR/SD blocks.
+        for a in addrs:
+            if BOOTLOADER_REGION_START <= a < BOOTLOADER_MBR_PARAMS or a == UICR:
+                bad_app.append(a)
+        if bad_app:
+            uniq = sorted(set(bad_app))
+            print(f"  [FAIL] app-family UF2 contains {len(bad_app)} block(s) "
+                  f"targeting bootloader/UICR region")
+            for a in uniq[:8]:
+                print(f"         0x{a:08X}")
+            if len(uniq) > 8:
+                print(f"         ... +{len(uniq)-8} more")
+            print("  Upload BLOCKED — an app UF2 must not contain bootloader bytes.")
+            return False
+        sd_blocks = sum(1 for a in addrs if a < SD_END_S140_730)
+        app_blocks = sum(1 for a in addrs if a >= SD_END_S140_730)
+        if sd_blocks > 0:
+            print(f"  [WARN] {sd_blocks} block(s) target MBR/SoftDevice region "
+                  f"(< 0x{SD_END_S140_730:X}). The bootloader will silently "
+                  f"skip these (combined SD+app UF2 is OK), but if you didn't "
+                  f"intend to ship SD bytes, your hex includes the SD.")
+        if app_blocks == 0:
+            print(f"  [FAIL] No blocks target the app region (>= 0x{SD_END_S140_730:X}). "
+                  f"This UF2 would not modify the app and may corrupt other regions.")
+            return False
+        print(f"  [PASS] app-family UF2: {app_blocks} app block(s), "
+              f"{sd_blocks} MBR/SD block(s) tolerated")
+        return True
+
+    if family == FAMILY_NRF52_BOOT:
+        # Refuse blocks targeting app region (outside bootloader, MBR, SD, UICR).
+        # The bootloader-region tail extends to the end of flash (0x100000):
+        # BOOTLOADER_MBR_PARAMS (0xFE000) is the start of the MBR Params Page
+        # which the bootloader writes to during self-update. Earlier this
+        # validator used `BOOTLOADER_MBR_PARAMS + 0x1000` which equals
+        # 0xFF000 — accidentally also accepting the bootloader settings page
+        # (0xFF000-0x100000). Use FLASH_END so the intent is explicit and
+        # any address >= flash end gets rejected outright.
+        for a in addrs:
+            if BOOTLOADER_REGION_START <= a < FLASH_END:
+                continue
+            if a == UICR:
+                continue
+            if a < SD_END_S140_730:  # MBR/SD region — silently tolerated
+                continue
+            bad_boot.append(a)
+        if bad_boot:
+            uniq = sorted(set(bad_boot))
+            print(f"  [FAIL] bootloader-family UF2 contains {len(bad_boot)} "
+                  f"block(s) targeting the app region")
+            for a in uniq[:8]:
+                print(f"         0x{a:08X}")
+            if len(uniq) > 8:
+                print(f"         ... +{len(uniq)-8} more")
+            return False
+        print(f"  [PASS] bootloader-family UF2: all {n_blocks} block(s) target "
+              f"bootloader/UICR/MBR/SD")
+        return True
+
+    print(f"  [FAIL] Unrecognised UF2 family ID 0x{family:08X}")
+    return False
+
 
 def convert_to_uf2(hex_path, output_dir=None):
     """Convert Intel HEX to UF2 format using the platform's uf2conv.py.
@@ -2366,6 +2510,19 @@ def main():
                 print(f"ERROR: UF2 file not found: {uf2_path}")
                 return 1
             print(f"Using pre-converted UF2: {uf2_path}")
+            # NEW: validate pre-converted UF2 too. The original help text
+            # said "--uf2 ... skip validation and conversion" but the
+            # validation skip was an oversight — a hand-crafted UF2 that
+            # targets the SoftDevice region can permanently brick the
+            # device (bench unit 2A798EF8, 2026-05-13). Validation here
+            # is fast and refuses obvious foot-guns.
+            if _active_board["firmware_ext"] == ".hex":  # nRF52840 only for now
+                if not args.skip_validation:
+                    if not validate_uf2(uf2_path, verbose=args.verbose):
+                        print_failure("UF2 SAFETY VALIDATION FAILED - Upload blocked")
+                        return 1
+                else:
+                    print("  WARNING: Skipping UF2 safety validation")
         else:
             hex_path = find_hex_file(args)
 

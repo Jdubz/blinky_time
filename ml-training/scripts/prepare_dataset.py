@@ -40,6 +40,16 @@ import time as _time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
+# Human edit overlay merge (see scripts/onset_label_merge.py).
+# Imported via path-relative addition so this script remains runnable as
+# `python scripts/prepare_dataset.py` without `pip install -e .`.
+sys.path.insert(0, str(Path(__file__).parent))
+from onset_label_merge import (  # noqa: E402
+    HumanEditDriftError,
+    apply_human_edits,
+    find_human_edits_for_stem,
+)
+
 # Track active shard temp dirs for crash cleanup. Shard dirs are created
 # in output_dir (not /tmp) so they're easy to find if orphaned. The atexit
 # handler cleans them up on normal exit and Python exceptions. Note: atexit
@@ -858,9 +868,52 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         with open(onset_path) as f:
             onset_data = json.load(f)
         min_systems = cfg.get("labels", {}).get("min_systems", 1)
-        raw_onsets = onset_data["onsets"]
+        raw_auto_onsets = onset_data["onsets"]
+
+        # Merge human edit overlay if present (see tools/label-reviewer/).
+        # Created entries are human-confirmed and bypass the min_systems filter
+        # below; edited/removed entries flow through it like the original auto
+        # entries (a removed entry simply doesn't reach this point).
+        human_dirs = cfg.get("labels", {}).get("onset_human_dirs", [])
+        if human_dirs:
+            hit = find_human_edits_for_stem(audio_path.stem, human_dirs)
+            if hit is not None:
+                edits_path, edits_doc = hit
+                try:
+                    raw_onsets, merge_stats = apply_human_edits(raw_auto_onsets, edits_doc)
+                except HumanEditDriftError as exc:
+                    raise HumanEditDriftError(
+                        f"{audio_path.stem}: {exc} (overlay: {edits_path})"
+                    ) from None
+                if merge_stats["edited"] or merge_stats["removed"] or merge_stats["created"]:
+                    # Stable single-line marker for grep-able prep summaries.
+                    print(
+                        f"HUMAN_EDITS_APPLIED {audio_path.stem} "
+                        f"edited={merge_stats['edited']} "
+                        f"removed={merge_stats['removed']} "
+                        f"created={merge_stats['created']} "
+                        f"(auto={len(raw_auto_onsets)} -> {merge_stats['total']}) "
+                        f"src={edits_path.name}",
+                        file=sys.stderr,
+                    )
+            else:
+                raw_onsets = raw_auto_onsets
+        else:
+            raw_onsets = raw_auto_onsets
+
         if min_systems > 1:
-            filtered = [o for o in raw_onsets if o.get("systems", 0) >= min_systems]
+            # Any entry a human has touched (created from scratch OR edited an
+            # auto entry) is curated ground truth and bypasses the min_systems
+            # gate. Without `auto_edited` in the bypass list, a human-corrected
+            # 1- or 2-system onset would still be dropped — silently discarding
+            # the curation work for any onset weak enough to need correcting in
+            # the first place. Untouched auto entries (`source == "auto"`) keep
+            # the consensus gate.
+            HUMAN_TOUCHED = {"human", "auto_edited"}
+            filtered = [
+                o for o in raw_onsets
+                if o.get("source") in HUMAN_TOUCHED or o.get("systems", 0) >= min_systems
+            ]
             # Catch the silent-empty-track failure mode: if a label file
             # uses a different schema (e.g. older format with no `systems`
             # field), the filter drops everything and produces empty

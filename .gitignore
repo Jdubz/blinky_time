@@ -33,6 +33,8 @@ ml-training/outputs/parity/
 *.whl
 *.tar.gz
 *.zip
+# Exception: bootloader artifacts ship as DFU.zip; we want them in git
+!bootloader/*.zip
 *.onnx
 *.pt
 *.pth
@@ -53,3 +55,6 @@ blinky-server/web/
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor scratch logs
+excalidraw.log

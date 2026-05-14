@@ -15,7 +15,13 @@
 SHELL := /bin/bash
 
 # --- Paths ---
+# Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
+#   STORAGE — /mnt/storage SATA SSD: warm tier for audio corpora, labels, RIR, noise.
+#   NVME    — /mnt/nvme LVM-linear pool over 2× USB-NVMe (~462 GB): hot tier for
+#             processed_v*, mel_cache, training outputs. Single mount point so
+#             prep peak (~370 GB shards+final during merge) doesn't surprise us.
 STORAGE       := /mnt/storage/blinky-ml-data
+NVME          := /mnt/nvme
 AUDIO_DIR     := $(STORAGE)/audio/combined
 LABELS_MULTI  := $(STORAGE)/labels/multi
 # Onset labels (the actual training target — see CLAUDE.md "Task is Onset Detection").
@@ -26,7 +32,7 @@ LABELS_ONSETS := $(STORAGE)/labels/onsets_consensus
 # Legacy alias preserved so any out-of-tree script that imports this Makefile
 # variable doesn't crash. Points at the new onset path; do not use for new code.
 LABELS_CONSENSUS := $(LABELS_ONSETS)
-PROCESSED_DIR := $(STORAGE)/processed
+PROCESSED_DIR := $(NVME)/processed
 RIR_DIR       := $(STORAGE)/rir/processed
 TEST_AUDIO    := ../blinky-test-player/music/edm
 CONFIG        := configs/wider_rf.yaml
@@ -36,7 +42,7 @@ CONFIG        := configs/wider_rf.yaml
 _CONFIG_NAME  := $(basename $(notdir $(CONFIG)))
 _TIMESTAMP    := $(shell date +%Y%m%d-%H%M%S)
 RUN_NAME      ?= $(_CONFIG_NAME)-$(_TIMESTAMP)
-OUTPUT_DIR    := $(STORAGE)/outputs/$(RUN_NAME)
+OUTPUT_DIR    := $(NVME)/outputs/$(RUN_NAME)
 
 # --- Tunables ---
 SYSTEMS       := beat_this,essentia,librosa,madmom
@@ -213,7 +219,24 @@ status:
 	@echo "Processed train:  $$([ -f $(PROCESSED_DIR)/X_train.npy ] && DATADIR='$(PROCESSED_DIR)' $(PYTHON) -c "import numpy, os; print(len(numpy.load(os.path.join(os.environ['DATADIR'], 'X_train.npy'), mmap_mode='r')))" 2>/dev/null || echo 'none')"
 	@echo "Processed val:    $$([ -f $(PROCESSED_DIR)/X_val.npy ] && DATADIR='$(PROCESSED_DIR)' $(PYTHON) -c "import numpy, os; print(len(numpy.load(os.path.join(os.environ['DATADIR'], 'X_val.npy'), mmap_mode='r')))" 2>/dev/null || echo 'none')"
 	@echo "=== Recent Runs ==="
-	@ls -dt $(STORAGE)/outputs/*/ 2>/dev/null | head -5
+	@# Show NVMe runs (current OUTPUT_DIR root) and any leftover STORAGE runs
+	@# from the pre-NVMe-migration era. After the migration is complete and
+	@# old runs are archived/deleted, the STORAGE line will go silent.
+	@ls -dt $(NVME)/outputs/*/ $(STORAGE)/outputs/*/ 2>/dev/null | head -5
+
+REVIEWER       := $(PYTHON) tools/label-reviewer/server.py
+REVIEWER_PORT  := 8765
+
+# Launch the label reviewer. The default corpora (training + edm) are
+# registered automatically; switch between them in the UI dropdown — no
+# restart needed. Pass --corpus name=audio,onset,human to add more.
+#
+# Edits land in:
+#   training corpus -> /mnt/storage/.../labels/onsets_human/  (devtop-local)
+#   edm corpus      -> blinky-test-player/music/edm/          (commits via git
+#                                                              -> blinkyhost)
+reviewer:
+	$(REVIEWER) --port $(REVIEWER_PORT)
 
 clean:
 	@echo "This would delete processed data. Use 'make clean-confirm' to proceed."
@@ -232,6 +255,9 @@ help:
 	@echo "  eval             Evaluate on test tracks"
 	@echo "  status           Show dataset/pipeline status"
 	@echo "  calibrate        Mic calibration pipeline"
+	@echo ""
+	@echo "Label curation:"
+	@echo "  reviewer         Launch label reviewer (training + edm corpora; switch in UI)"
 	@echo ""
 	@echo "Key Options:"
 	@echo "  CONFIG=$(CONFIG)"

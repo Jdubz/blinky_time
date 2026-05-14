@@ -501,6 +501,21 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(cfg.ledHeight);
             out_.print(F(",\"leds\":"));
             out_.print(cfg.ledWidth * cfg.ledHeight);
+            out_.print(F(",\"ledPin\":"));
+            out_.print(cfg.ledPin);
+            if (cfg.ledPin2 != 0) {
+                out_.print(F(",\"ledPin2\":"));
+                out_.print(cfg.ledPin2);
+                // ledMode signals whether the multi-strand path is live or
+                // whether init fell back to single-strand on ledPin only —
+                // surfaced so fleet tooling can flag a sealed device whose
+                // LED layout doesn't match its config without log triage
+                // (PR #139 review).
+                extern bool ledModeDegraded;
+                out_.print(F(",\"ledMode\":\""));
+                out_.print(ledModeDegraded ? F("degraded") : F("multistrand"));
+                out_.print(F("\""));
+            }
             out_.print(F(",\"configured\":true}"));
         } else {
             out_.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
@@ -846,9 +861,10 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
             if (bleMode) {
                 *bootloader_ram = 0xBEEF00A8;
+                NRF_POWER->GPREGRET = 0xA8;  // DFU_MAGIC_OTA_RESET — stock bootloader fallback if RAM cleared
             } else {
                 *bootloader_ram = 0x5A1AD5;
-                NRF_POWER->GPREGRET = 0x57;  // Fallback if RAM cleared by hub power-cycle
+                NRF_POWER->GPREGRET = 0x57;  // DFU_MAGIC_UF2_RESET — stock bootloader fallback if RAM cleared
             }
             __DSB(); __ISB();
             NVIC_SystemReset();
@@ -909,6 +925,7 @@ void SerialConsole::showDeviceConfig() {
     doc["ledWidth"] = cfg.ledWidth;
     doc["ledHeight"] = cfg.ledHeight;
     doc["ledPin"] = cfg.ledPin;
+    doc["ledPin2"] = cfg.ledPin2;
     doc["brightness"] = cfg.brightness;
     doc["ledType"] = cfg.ledType;
     doc["orientation"] = cfg.orientation;
@@ -972,6 +989,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.ledWidth = doc["ledWidth"] | 0;
     newConfig.ledHeight = doc["ledHeight"] | 1;
     newConfig.ledPin = doc["ledPin"] | 10;
+    newConfig.ledPin2 = doc["ledPin2"] | 0;   // 0 = single-strand (default)
     newConfig.brightness = doc["brightness"] | 100;
     newConfig.ledType = doc["ledType"] | 12390;  // Default: NEO_GRB + NEO_KHZ800
     newConfig.orientation = doc["orientation"] | 0;

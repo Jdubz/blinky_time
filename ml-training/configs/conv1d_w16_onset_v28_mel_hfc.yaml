@@ -52,7 +52,7 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v28"
+  processed_dir: "/mnt/nvme/processed_v28"
   stored_hybrid_features: [flatness, raw_flux, crest, hfc]
 
 export:

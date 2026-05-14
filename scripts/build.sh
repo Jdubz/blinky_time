@@ -107,6 +107,17 @@ if $BUMP; then
     BUILD=$((BUILD + 1))
 fi
 
+# Embed git state into the version string. Build numbers can be reused
+# (--no-bump or branch hopping), but commit SHA + dirty flag uniquely
+# identifies the source tree that produced the binary. This is how
+# `json info` reliably tells you what code is actually on a device — a
+# stale `b162` alone lied about deployed code on 2026-05-14 and led to
+# bricking cart-inner.
+GIT_SHA=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "nogit")
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+    GIT_SHA="${GIT_SHA}-dirty"
+fi
+
 # --- Generate Version.h ---
 cat > blinky-things/types/Version.h << EOF
 #pragma once
@@ -116,11 +127,15 @@ cat > blinky-things/types/Version.h << EOF
 // See blinky-things/BUILD_NUMBER for the current value.
 
 #define FIRMWARE_BUILD $BUILD
-#define FIRMWARE_VERSION "b$BUILD"
+#define FIRMWARE_GIT_SHA "$GIT_SHA"
+// FIRMWARE_VERSION embeds both the build number AND the git SHA so a
+// reused build number (--no-bump) can't disguise different code on a
+// running device.
+#define FIRMWARE_VERSION "b$BUILD-$GIT_SHA"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 EOF
 
-echo "=== Build $BUILD ==="
+echo "=== Build $BUILD ($GIT_SHA) ==="
 
 # --- Select FQBN ---
 if $ESP32; then

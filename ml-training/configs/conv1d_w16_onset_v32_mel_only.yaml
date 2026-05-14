@@ -25,7 +25,7 @@
 # event coverage (all percussive + strongly-confirmed harmonic onsets).
 #
 # Requires: rerun prepare_dataset.py with --output-dir
-# /mnt/storage/blinky-ml-data/processed_v32 (the labels filter happens at
+# /mnt/nvme/processed_v32 (the labels filter happens at
 # prep time, so existing processed_v31 cannot be reused).
 
 model:
@@ -84,7 +84,7 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/storage/blinky-ml-data/processed_v32"
+  processed_dir: "/mnt/nvme/processed_v32"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v32_mel_only.h"

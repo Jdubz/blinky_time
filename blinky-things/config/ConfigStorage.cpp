@@ -408,6 +408,80 @@ void ConfigStorage::saveToFlash() {
 #endif
 }
 
+bool ConfigStorage::quarantineDeviceConfig() {
+    // Crash-loop recovery: blow away the `isValid` flag on the stored device
+    // config, write to flash synchronously, and verify by re-reading. After
+    // this call the caller is expected to reboot (either NVIC_SystemReset or
+    // via SafeBootWatchdog::enterBleDfuBootloader). On the next boot the
+    // firmware sees no valid device config and falls through to safeMode —
+    // the same path a freshly-flashed device takes when no config has ever
+    // been uploaded.
+    //
+    // The caller (RebootFrequencyCounter::checkAndIncrement, on threshold)
+    // is responsible for deciding when this fires. It must be rare —
+    // wiping configs on transient blips would be worse than the disease.
+    if (!data_.device.isValid) {
+        // Already invalid; nothing to do.
+        SerialConsole::logInfo(F("[QUARANTINE] device config already invalid; no-op"));
+        return true;
+    }
+
+    SerialConsole::logError(F("[QUARANTINE] invalidating device config — next boot enters safeMode"));
+    data_.device.isValid = false;
+
+    // saveToFlash() is void on this platform; it logs internally on failure
+    // but the caller can't see the result. Best we can do is verify the
+    // write by re-reading the config from flash and confirming `isValid` is
+    // now false on the persisted copy. If the persisted copy still reads
+    // valid, the write either failed outright or was rolled back — log it
+    // loudly so the operator knows the next boot will replay the crash
+    // instead of falling into safeMode.
+    saveToFlash();
+
+    // Re-read into a scratch struct without disturbing the in-RAM `data_`
+    // (which other code paths may still depend on this boot session).
+    //
+    // Pessimistic default: treat read failure as "still valid", which causes
+    // the post-block to log loudly and return false. This is the
+    // intentionally-safe behaviour on an unrecognised platform — cppcheck
+    // sees the if/elif chain preprocess out under its default config and
+    // warns the subsequent `if (persisted_valid)` is "always true". That's
+    // correct under cppcheck's worldview, but exactly the desired runtime
+    // behaviour: if we can't verify, treat as failure.
+    bool persisted_valid = true;
+#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    if (flashOk && configFile != nullptr) {
+        using namespace Adafruit_LittleFS_Namespace;
+        ConfigData verify = {};
+        configFile->open(CONFIG_FILENAME, FILE_O_READ);
+        if (*configFile) {
+            uint32_t n = configFile->read(reinterpret_cast<uint8_t*>(&verify), sizeof(ConfigData));
+            configFile->close();
+            if (n == sizeof(ConfigData)) {
+                persisted_valid = verify.device.isValid;
+            }
+        }
+    }
+#elif defined(ESP32)
+    // ESP32 path: read back via NVS to verify. Best-effort.
+    ConfigData verify = {};
+    if (prefs.getBytes(NVS_KEY, &verify, sizeof(ConfigData)) == sizeof(ConfigData)) {
+        persisted_valid = verify.device.isValid;
+    }
+#endif
+
+    // cppcheck-suppress knownConditionTrueFalse
+    if (persisted_valid) {
+        SerialConsole::logError(F("[QUARANTINE] FLASH WRITE DID NOT PERSIST — next "
+                                  "boot will replay the crash. Recovery requires "
+                                  "manual `factory` or BLE-DFU app reflash."));
+        return false;
+    }
+
+    SerialConsole::logInfo(F("[QUARANTINE] flash write verified — safeMode armed"));
+    return true;
+}
+
 void ConfigStorage::end() {
 #ifdef ESP32
     // Closes the NVS Preferences handle and flushes any pending writes.

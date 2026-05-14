@@ -18,6 +18,11 @@ struct MatrixConfig {
   uint8_t width;
   uint8_t height;
   uint8_t ledPin;
+  // Second LED data pin for two-strand devices. 0 = single strand (default).
+  // When non-zero, pixels [0..total/2) go to `ledPin`, pixels [total/2..total)
+  // go to `ledPin2`; the renderer is unaware of the split (CompositeLedStrip
+  // dispatches the writes in hardware/).
+  uint8_t ledPin2;
   uint8_t brightness;
   uint32_t ledType;
   MatrixOrientation orientation;

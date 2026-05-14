@@ -64,6 +64,15 @@ labels:
   sigma_frames: 2           # Gaussian smoothing width, only used if target_type is "gaussian"
   beat_value: 1.0           # Peak activation at beat center
   nonbeat_value: 0.0        # Background activation
+  # Human edit overlay — written by tools/label-reviewer/. Each track's auto
+  # consensus labels are merged with `<stem>.onsets_human.json` from the first
+  # of these dirs that has the file. Edits move/remove/add onsets; created
+  # entries get systems=0 (and bypass the min_systems filter — they're
+  # human-confirmed). Empty list disables overlay.
+  onset_human_dirs:
+    - "/mnt/storage/blinky-ml-data/labels/onsets_human"
+    - "../blinky-test-player/music/edm"     # in-repo validation overlay; rides via git pull
+                                            # so EDM curation flows into training too.
 
 # Training hyperparameters (shared across model variants)
 training:
@@ -138,8 +147,13 @@ export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"
   c_array_name: "frame_beat_model_data"
 
-# Data paths — all bulk data on /mnt/storage to avoid filling the primary drive.
-# Processed data is large (80-130 GB per version) and regenerable from audio+labels.
+# Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
+#   /mnt/nvme    — 463 GB LVM-linear pool over 2× USB-NVMe. Hot path for prep+train.
+#                  Holds processed_v*/, mel_cache/, outputs/, scratch/.
+#   /mnt/storage — 458 GB SATA SSD. Warm tier: audio corpora, labels, noise, RIR,
+#                  stems archive. Read-heavy but not latency-critical.
+#
+# Processed data is large (80-220 GB per version) and regenerable from audio+labels.
 #
 # Task: ONSET DETECTION (every percussive event regardless of metrical position).
 # We are NOT doing beat detection. labels_dir must point at an onset-labeled
@@ -149,8 +163,8 @@ export:
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio/combined"
   labels_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
-  processed_dir: "/mnt/storage/blinky-ml-data/processed"
+  processed_dir: "/mnt/nvme/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
   noise_dir: "/mnt/storage/blinky-ml-data/noise"
-  mel_cache_dir: "/mnt/storage/blinky-ml-data/mel_cache"
+  mel_cache_dir: "/mnt/nvme/mel_cache"
   test_set: "../blinky-test-player/music/edm"

@@ -15,12 +15,18 @@ class GroundTruthHit:
     type: str
     strength: float
     expect_trigger: bool = True
+    # Provenance: 'auto' (5-system consensus, untouched), 'auto_edited'
+    # (consensus entry whose time/strength was hand-corrected), or 'human'
+    # (label added by a human reviewer that didn't exist in the consensus).
+    # Defaults to 'auto' so existing tests/fixtures keep working unchanged.
+    source: str = "auto"
 
 
 @dataclass
 class GroundTruthOnset:
     time: float  # seconds
     strength: float
+    source: str = "auto"
 
 
 @dataclass

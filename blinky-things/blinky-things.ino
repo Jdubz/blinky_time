@@ -25,15 +25,16 @@
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
 #include "render/RenderPipeline.h"  // Generator/Effect/Renderer management
 #include "types/Version.h"           // Version information from repository
-#include "tests/SafeMode.h"          // Crash recovery system
 #include "hal/DefaultHal.h"          // HAL singleton instances
 #include "audio/LoopMetrics.h"       // Main-loop fps + frame-time observability (#137)
 #include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper (Adafruit)
 #include "hal/hardware/Nrf52PwmLedStrip.h"  // Async PWM driver (nRF52840)
+#include "hal/hardware/CompositeLedStrip.h"  // Two-strand composite LED strip
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
 #include "devices/TestChipConfig.h"           // Fallback config for unconfigured chips
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
 #include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
+#include "hal/RebootFrequencyCounter.h"      // Flash-backed crash-loop detector (survives power cycles)
 #include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
 #include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
 
@@ -65,6 +66,11 @@ LEDMapper ledMapper;
 // Adafruit_NeoPixel allocates memory in constructor - unsafe at global scope
 Adafruit_NeoPixel* neoPixelStrip = nullptr;
 ILedStrip* leds = nullptr;
+// Set true when a multi-strand config (ledPin2 != 0) was requested but
+// the multi-strand alloc failed and we fell back to single-strand on
+// ledPin only. Surfaces in `json info` as `ledMode: "degraded"` so the
+// fleet console can spot it without log triage (PR #139 review).
+bool ledModeDegraded = false;
 
 // New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
@@ -147,9 +153,6 @@ void setup() {
   // persists across all reset types (WDT, soft reset, HardFault).
   SafeBootWatchdog::begin();
 
-  // Software crash detection (complementary — uses .noinit RAM)
-  SafeMode::check();
-
   // Initialize serial with default baud rate (config not loaded yet)
   // Increase RX buffer to handle large device config JSON commands (default 256 is too small)
 #ifdef BLINKY_PLATFORM_ESP32S3
@@ -166,15 +169,34 @@ void setup() {
   // Debug: detailed boot info
   if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
     Serial.print(F("[DEBUG] Boot count: "));
-    Serial.print(SafeMode::getCrashCount());
+    Serial.print(SafeBootWatchdog::getBootCount());
     Serial.print(F("/"));
-    Serial.println(SafeMode::CRASH_THRESHOLD);
+    Serial.println(SafeBootWatchdog::BOOT_FAIL_THRESHOLD);
   }
 
   // Initialize configuration storage and load device config from flash.
   // Falls back to TEST_CHIP_CONFIG if no config stored — avoids safe mode
   // on bare chips so audio analysis and serial commands still work.
   configStorage.begin();
+
+  // Wire the crash-loop quarantine hook BEFORE checkAndIncrement so that if
+  // the threshold is tripped on this boot, the stored device config is
+  // invalidated before we hand off to BLE DFU recovery. Without this, a
+  // config that crashes the app every boot (e.g., misconfigured multi-strand
+  // hardware) would just re-crash forever after each recovery firmware
+  // flash — there'd be no way to break the loop wirelessly.
+  RebootFrequencyCounter::setOnThresholdHook([]() {
+    configStorage.quarantineDeviceConfig();
+  });
+
+  // Flash-backed crash-loop detector — catches runtime crashes that survive
+  // setup() (and therefore SafeBootWatchdog's GPREGRET2 markStable clear) and
+  // those across power cycles. MUST be called after configStorage.begin()
+  // (which initializes LittleFS) and BEFORE the rest of setup (so we trip
+  // recovery before any potentially-crashing component runs).
+  // See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F4).
+  RebootFrequencyCounter::checkAndIncrement();
+
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
   if (!validDeviceConfig) {
     config = TEST_CHIP_CONFIG;
@@ -256,14 +278,85 @@ void setup() {
     // (each LED is 24 PWM values @ 800 KHz), so 8-16 LED bench setups use
     // the same code path with no count-dependent thresholds. The hard upper
     // bound is 1365 LEDs (PWM SEQ[n].CNT 15-bit limit, enforced in begin()).
-    auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
-    leds = asyncStrip;  // Assign before validity check so cleanup() can free it
-    if (!asyncStrip || !asyncStrip->isValid()) {
-      haltWithError(F("ERROR: Async LED strip allocation failed"));
+    //
+    // Multi-strand: when ledPin2 is non-zero, split the pixel buffer evenly
+    // across two physical strands, each driven by its own PWM peripheral.
+    // CompositeLedStrip dispatches pixel writes (0..N/2-1 → strand 1 on
+    // ledPin; N/2..N-1 → strand 2 on ledPin2) and the renderer sees one
+    // logical strip of N pixels.
+    //
+    // Each Nrf52PwmLedStrip grabs a free PWM via findFreePwm() — nRF52840
+    // has 4 PWM peripherals so a 2-strand config has plenty of headroom.
+    // The two DMAs run concurrently on hardware; CPU latency for show()
+    // is single-strand's, not 2×.
+    //
+    // Recovery if this path crashes mid-init (the failure mode cart-inner-
+    // old hit on 2026-05-14): RebootFrequencyCounter trips after 5 rapid
+    // reboots → quarantineDeviceConfig() invalidates the offending config →
+    // next boot enters safeMode (no app crash) → operator re-uploads a
+    // corrected config. See feedback_validate_on_recoverable_first.md and
+    // ConfigStorage::quarantineDeviceConfig().
+    bool useComposite = false;
+    if (config.matrix.ledPin2 != 0 && (numLeds % 2 == 0)) {
+      const uint16_t halfLeds = numLeds / 2;
+      Serial.print(F("[INFO] Multi-strand init: "));
+      Serial.print(halfLeds);
+      Serial.print(F(" LEDs on pin D"));
+      Serial.print(config.matrix.ledPin);
+      Serial.print(F(" + "));
+      Serial.print(halfLeds);
+      Serial.print(F(" LEDs on pin D"));
+      Serial.println(config.matrix.ledPin2);
+
+      Serial.println(F("[DEBUG]   alloc strand 1..."));
+      auto* s1 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin);
+      Serial.print(F("[DEBUG]   strand 1 alloc: ptr="));
+      Serial.print((uintptr_t)s1, HEX);
+      Serial.print(F(" valid="));
+      Serial.println(s1 && s1->isValid() ? F("yes") : F("no"));
+
+      Serial.println(F("[DEBUG]   alloc strand 2..."));
+      auto* s2 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin2);
+      Serial.print(F("[DEBUG]   strand 2 alloc: ptr="));
+      Serial.print((uintptr_t)s2, HEX);
+      Serial.print(F(" valid="));
+      Serial.println(s2 && s2->isValid() ? F("yes") : F("no"));
+
+      if (s1 && s1->isValid() && s2 && s2->isValid()) {
+        Serial.println(F("[DEBUG]   wrap in CompositeLedStrip..."));
+        auto* composite = new(std::nothrow) CompositeLedStrip(s1, s2);
+        if (composite) {
+          leds = composite;
+          useComposite = true;
+          Serial.println(F("[INFO]   composite wrap OK"));
+        } else {
+          Serial.println(F("[ERROR] CompositeLedStrip alloc failed — falling back to single-strand"));
+          delete s1;
+          delete s2;
+          ledModeDegraded = true;
+        }
+      } else {
+        Serial.println(F("[ERROR] strand alloc/validity failed — falling back to single-strand"));
+        delete s1;
+        delete s2;
+        ledModeDegraded = true;
+      }
     }
-    Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
-    Serial.print(numLeds);
-    Serial.println(F(" LEDs)"));
+    if (!useComposite) {
+      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
+      leds = asyncStrip;  // Assign before validity check so cleanup() can free it
+      if (!asyncStrip || !asyncStrip->isValid()) {
+        haltWithError(F("ERROR: Async LED strip allocation failed"));
+      }
+      Serial.print(F("[INFO] LED driver: Nrf52PwmLedStrip (async, "));
+      Serial.print(numLeds);
+      Serial.println(F(" LEDs"));
+      if (ledModeDegraded) {
+        Serial.println(F(", DEGRADED — multi-strand requested but fell back to single)"));
+      } else {
+        Serial.println(F(")"));
+      }
+    }
 #else
     // Non-nRF52840 platforms: Adafruit NeoPixel (blocking bit-bang)
     neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
@@ -416,8 +509,19 @@ void setup() {
   }
   Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
 
-  // BLE DFU service — allows wireless firmware updates from fleet server
-  bleDfu.begin();
+  // BLE DFU service — allows wireless firmware updates from fleet server.
+  // Failure is not fatal (NUS-based `bootloader ble` still works), but it
+  // removes a recovery path on sealed sculpture devices, so log loudly per
+  // no-silent-fallbacks rule. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F6).
+  {
+    err_t bleDfuErr = bleDfu.begin();
+    if (bleDfuErr != ERROR_NONE) {
+      Serial.print(F("[FALLBACK] bleDfu.begin() failed err=0x"));
+      Serial.println((unsigned)bleDfuErr, HEX);
+      Serial.println(F("[FALLBACK] Bootloader-mode BLE DFU advertisement may be unavailable."));
+      Serial.println(F("[FALLBACK] App-mode `bootloader ble` command still works via NUS."));
+    }
+  }
 
   // NUS peripheral — bidirectional serial-over-BLE for fleet server
   bleNus.begin();
@@ -488,10 +592,11 @@ void setup() {
 
   Serial.println(F("Ready."));
 
-  // Mark boot as stable - we made it through setup without crashing
-  // This resets the crash counter so future boots start fresh
-  SafeMode::markStable();
-  SafeBootWatchdog::markStable();
+  // NOTE: SafeBootWatchdog::markStable() is intentionally NOT called here.
+  // Deferred to loop() once millis() >= 60000 — a runtime crash that happens
+  // after setup() completes but before that point should still count toward
+  // the boot-fail threshold and eventually trigger BLE DFU recovery on sealed
+  // devices. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F3).
 
   Serial.print(F("[BOOT] Watchdog active, boot attempt #"));
   Serial.println(SafeBootWatchdog::getBootCount());
@@ -499,6 +604,26 @@ void setup() {
 
 void loop() {
   SafeBootWatchdog::feed();  // Keep hardware WDT alive
+
+  // Deferred markStable: keep the boot-fail counter armed for the first 60s
+  // of runtime, so that a crash shortly after setup() still counts toward the
+  // BLE DFU recovery threshold (F3 in SCULPTURE_BLE_RECOVERY_PLAN.md). After
+  // 60s of stable uptime we assume the boot succeeded and clear the counter.
+  static bool stableMarked = false;
+  if (!stableMarked && millis() >= 60000) {
+    SafeBootWatchdog::markStable();
+    stableMarked = true;
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+      Serial.println(F("[BOOT] Marked stable (60s uptime) — boot-fail counter cleared"));
+    }
+  }
+
+  // Flash-backed crash counter — separately clears at 5min uptime (F4).
+  // Two thresholds because: the in-RAM GPREGRET2 counter wipes on power-on so
+  // 60s is enough; the flash counter persists, so we want stronger evidence
+  // (5 min) that the device is genuinely stable before clearing it.
+  RebootFrequencyCounter::tickStable(millis());
+
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 

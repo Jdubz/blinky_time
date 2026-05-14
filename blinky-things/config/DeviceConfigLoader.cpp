@@ -29,6 +29,7 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     matrix.width = stored.ledWidth;
     matrix.height = stored.ledHeight;
     matrix.ledPin = stored.ledPin;
+    matrix.ledPin2 = stored.ledPin2;
     matrix.brightness = stored.brightness;
     matrix.ledType = stored.ledType;
     matrix.orientation = (MatrixOrientation)stored.orientation;
@@ -101,6 +102,7 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     outStored.ledWidth = config.matrix.width;
     outStored.ledHeight = config.matrix.height;
     outStored.ledPin = config.matrix.ledPin;
+    outStored.ledPin2 = config.matrix.ledPin2;
     outStored.brightness = config.matrix.brightness;
     outStored.ledType = config.matrix.ledType;
     outStored.orientation = (uint8_t)config.matrix.orientation;
@@ -170,6 +172,25 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
     if (stored.ledPin > LED_PIN_MAX) {
         SerialConsole::logWarn(F("Invalid LED pin"));
         return false;
+    }
+
+    // Validate second LED pin (multi-strand). 0 means single-strand; any
+    // other value must be a valid pin, distinct from ledPin, and the total
+    // pixel count must be even (so the buffer can split cleanly across
+    // strands).
+    if (stored.ledPin2 != 0) {
+        if (stored.ledPin2 > LED_PIN_MAX) {
+            SerialConsole::logWarn(F("Invalid ledPin2"));
+            return false;
+        }
+        if (stored.ledPin2 == stored.ledPin) {
+            SerialConsole::logWarn(F("ledPin2 must differ from ledPin"));
+            return false;
+        }
+        if ((ledCount & 1) != 0) {
+            SerialConsole::logWarn(F("Multi-strand requires even total LED count"));
+            return false;
+        }
     }
 
     // Validate brightness (0-255)

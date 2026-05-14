@@ -83,6 +83,16 @@ def main():
         critical=True,
     ))
 
+    # The label-merge module is deliberately duplicated between ml-training
+    # and blinky-server (Pi can't carry ml-training deps). This check fails
+    # if the two copies diverge — without enforcement the "keep in sync"
+    # docstring guidance has already drifted once (PR #139 review).
+    critical_results.append(run_check(
+        "onset_label_merge.py parity (ml-training ↔ blinky-server)",
+        [sys.executable, "scripts/check_label_merge_sync.py"],
+        critical=True,
+    ))
+
     # --- Warning checks (report but don't block) ---
 
     warning_results.append(run_check(

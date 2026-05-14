@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .onset_label_merge import apply_human_edits, load_human_edits
 from .types import GroundTruth, GroundTruthHit, GroundTruthOnset
 
 log = logging.getLogger(__name__)
@@ -54,21 +55,52 @@ def discover_tracks(
             "audio_file": str(d / fname),
             "ground_truth": str(d / onset_file),
         }
+        # Optional human-edit overlay sits next to the audio. Riding with git
+        # is the sync mechanism between curation (devtop) and validation
+        # (blinkyhost) — the file is checked in.
+        human_file = f"{base}.onsets_human.json"
+        if human_file in files:
+            track["human_edits"] = str(d / human_file)
         tracks.append(track)
 
     return tracks
 
 
-def load_ground_truth(gt_path: str) -> GroundTruth:
+def load_ground_truth(gt_path: str, human_edits_path: str | None = None) -> GroundTruth:
     """Load onset ground truth from a `.onsets_consensus.json` file.
 
     Schema: ``{"onsets": [{"time": float, "strength": float, "systems": int}]}``
+
+    If ``human_edits_path`` is provided and the file exists, the human-curated
+    overlay is merged in (see :mod:`onset_label_merge`). The merged onsets
+    carry a ``source`` field (``'auto' | 'auto_edited' | 'human'``) so scoring
+    can later split metrics by provenance.
     """
     with open(gt_path) as f:
         data = json.load(f)
 
     raw_onsets = data.get("onsets", [])
-    onsets = [GroundTruthOnset(time=o["time"], strength=o.get("strength", 1.0)) for o in raw_onsets]
+
+    edits_doc = load_human_edits(human_edits_path) if human_edits_path else None
+    merged, stats = apply_human_edits(raw_onsets, edits_doc)
+    if edits_doc is not None and (stats["edited"] or stats["removed"] or stats["created"]):
+        log.info(
+            "Loaded human edits for %s: %d edited, %d removed, %d created (vs %d auto)",
+            Path(gt_path).stem,
+            stats["edited"],
+            stats["removed"],
+            stats["created"],
+            len(raw_onsets),
+        )
+
+    onsets = [
+        GroundTruthOnset(
+            time=o["time"],
+            strength=o.get("strength", 1.0),
+            source=o.get("source", "auto"),
+        )
+        for o in merged
+    ]
 
     # Build hits list from onsets too — some scoring code paths still iterate
     # `gt.hits` for things like timing-offset measurement. Each onset becomes
@@ -80,8 +112,9 @@ def load_ground_truth(gt_path: str) -> GroundTruth:
             type="onset",
             strength=o.get("strength", 1.0),
             expect_trigger=True,
+            source=o.get("source", "auto"),
         )
-        for o in raw_onsets
+        for o in merged
     ]
 
     return GroundTruth(
