@@ -63,13 +63,24 @@ def test_remove_drops_entry(auto_onsets):
     assert stats == {"total": 2, "edited": 0, "removed": 1, "created": 0}
 
 
-def test_create_with_default_strength():
+def test_create_strength_required():
+    """A created entry without `strength` must raise — the old default of 1.0
+    was a silent fallback (PR #139 review). Curators have to declare the
+    intended strength explicitly; the schema requires it."""
     doc = {"source_count": 0, "edits": {}, "created": [{"time": 0.5}]}
-    merged, _ = apply_human_edits([], doc)
-    assert len(merged) == 1
-    assert merged[0]["strength"] == 1.0
-    assert merged[0]["systems"] == 0
-    assert merged[0]["source"] == "human"
+    with pytest.raises(ValueError, match="missing required field 'strength'"):
+        apply_human_edits([], doc)
+
+
+def test_create_rejects_negative_time_and_strength():
+    """Negative time/strength would sort to nonsense positions and quietly
+    corrupt training; PR #139 review asked for a loud-fail check."""
+    bad_time = {"source_count": 0, "edits": {}, "created": [{"time": -0.1, "strength": 1.0}]}
+    with pytest.raises(ValueError, match="negative"):
+        apply_human_edits([], bad_time)
+    bad_strength = {"source_count": 0, "edits": {}, "created": [{"time": 0.5, "strength": -0.5}]}
+    with pytest.raises(ValueError, match="negative"):
+        apply_human_edits([], bad_strength)
 
 
 def test_full_mix_sorts_by_time(auto_onsets):

@@ -191,6 +191,40 @@ pip3 install intelhex
 make BOARD=xiao_nrf52840_ble_sense DEFAULT_TO_OTA_DFU=1 all
 ```
 
+## Build Provenance (binary artifacts committed to this repo)
+
+Binary blobs in git can't self-describe their build environment, so the
+current set of committed artifacts maps to the following toolchain and
+upstream-fork state. Re-derive this section any time a new bootloader UF2
+is committed. PR #139 review specifically flagged binary-in-git provenance
+as an audit concern; this section is the answer.
+
+**Current artifacts** (`update-bootloader-qspi-ota-default*`,
+`update-bootloader-bl-only_rev52840.zip`):
+- **Upstream base**: Adafruit_nRF52_Bootloader v0.10.0 (release tag) +
+  local fork `blinky-local-patches` branch at commit `d7be9be`
+  ("flash_nrf5x: SD-aware page erase + write for dual-transport DFU").
+- **Reported version string**: `0.8.0-5-gd7be9be` (the `0.8.0` prefix is
+  the upstream version; the `-5-gd7be9be` suffix is `git describe`
+  output on the local fork).
+- **Compiler**: arm-none-eabi-gcc 9.2.1 (the version bundled with the
+  Seeeduino nRF52 1.1.12 Arduino core).
+- **Build flags**: `BOARD=xiao_nrf52840_ble_sense DEFAULT_TO_OTA_DFU=1`.
+- **SoftDevice bundled in `*_s140_7.3.0.zip`**: Nordic S140 v7.3.0
+  (sd_id=0x0123, sd_ver=7003000). The `_nosd.uf2` variant excludes the
+  SoftDevice (used for bootloader-only updates over the existing SD).
+- **`bootloader-bl-only_rev52840.zip` is a legacy adafruit-nrfutil
+  package** with `--dev-type 0x0052 --dev-revision 52840 --sd-req 0x0123`.
+  The `52840` device-revision matches what the bootloader's
+  `dfu_init_prevalidate` requires (`ADAFRUIT_DEV_REV` for nRF52840 boards);
+  using `0xFFFF` was the cause of an INIT_DFU rejection investigated on
+  2026-05-13.
+
+The local fork is published at `Jdubz/Adafruit_nRF52_Bootloader`, branch
+`blinky-local-patches`. A future PR should add a build matrix in CI that
+rebuilds the artifacts from that commit and diffs against the committed
+binaries to prove no manual tampering.
+
 ## Critical Fixes (applied to upstream v0.10.0)
 
 ### 1. OTAFIX-style DFU mode selection (`src/main.c`)

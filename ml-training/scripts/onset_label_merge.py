@@ -59,6 +59,25 @@ def _validate_doc_shape(doc: dict[str, Any]) -> None:
         raise ValueError(f"edits doc 'edits' must be a dict, got {type(edits).__name__}")
     if not isinstance(created, list):
         raise ValueError(f"edits doc 'created' must be a list, got {type(created).__name__}")
+    # `created` entries are human-authored ground truth; loud-fail on shape
+    # violations rather than silently coercing. PR #139 review flagged that
+    # the previous `c.get("strength", 1.0)` fallback in apply_human_edits
+    # was a no-silent-fallbacks rule violation — schema requires `strength`,
+    # so absent should raise. Same for negative time/strength: those would
+    # downstream-sort to nonsense positions and quietly corrupt training.
+    for i, c in enumerate(created):
+        if not isinstance(c, dict):
+            raise ValueError(f"created[{i}] must be a dict, got {type(c).__name__}")
+        if "time" not in c:
+            raise ValueError(f"created[{i}] missing required field 'time'")
+        if "strength" not in c:
+            raise ValueError(f"created[{i}] missing required field 'strength'")
+        t = float(c["time"])
+        s = float(c["strength"])
+        if t < 0:
+            raise ValueError(f"created[{i}].time is negative ({t})")
+        if s < 0:
+            raise ValueError(f"created[{i}].strength is negative ({s})")
 
 
 def load_human_edits(path: Path | str) -> dict[str, Any] | None:
@@ -156,10 +175,15 @@ def apply_human_edits(
         merged.append(entry)
 
     for c in created:
+        # _validate_doc_shape already enforced presence + non-negativity of
+        # both fields; raise on absence here would be a redundant defensive
+        # check, but use direct indexing so a missing field surfaces as
+        # KeyError rather than a silent default (rules out a regression that
+        # adds a different code path that skips validation).
         merged.append(
             {
                 "time": float(c["time"]),
-                "strength": float(c.get("strength", 1.0)),
+                "strength": float(c["strength"]),
                 "systems": 0,  # no auto support — mark explicitly
                 "source": "human",
             }

@@ -74,7 +74,11 @@ When you discover a silent fallback, the fix is to (a) assert / panic at the fai
 
 Always use tmux:
 ```bash
-tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir /mnt/nvme/outputs/<experiment> 2>&1 | tee /mnt/nvme/outputs/<experiment>/training.log"
+# Output dir defaults to /mnt/nvme/outputs (training server). On a laptop or
+# any machine without /mnt/nvme mounted, override with BLINKY_OUTPUT_DIR=...
+# before the command, or substitute a local path directly.
+OUT="${BLINKY_OUTPUT_DIR:-/mnt/nvme/outputs}"
+tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir $OUT/<experiment> 2>&1 | tee $OUT/<experiment>/training.log"
 ```
 
 `train.py` enforces this — it refuses to start outside tmux/screen unless `--allow-foreground` is passed.

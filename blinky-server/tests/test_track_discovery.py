@@ -60,8 +60,14 @@ def test_load_ground_truth_applies_overlay(tmp_path, auto_onsets):
         "created": [{"time": 0.4, "strength": 1.0}],
     }
     _write_track(tmp_path, "foo", auto_onsets, edits_doc=edits)
-    tracks = discover_tracks(tmp_path)
-    gt = load_ground_truth(tracks[0]["ground_truth"], tracks[0]["human_edits"])
+    # Look up by name — discover_tracks() filesystem-order is platform-
+    # dependent (alphabetical on glibc readdir but not guaranteed by POSIX).
+    # Indexing by position was flaky on macOS and ext4-with-htree in
+    # different orders; PR #139 review flagged this. Adjacent test
+    # `test_track_discovery_finds_human_edits` already uses dict-by-name.
+    tracks = {t["name"]: t for t in discover_tracks(tmp_path)}
+    foo = tracks["foo"]
+    gt = load_ground_truth(foo["ground_truth"], foo["human_edits"])
 
     assert [round(o.time, 3) for o in gt.onsets] == [0.4, 1.05, 2.0]
     assert [o.source for o in gt.onsets] == ["human", "auto_edited", "auto"]
@@ -72,8 +78,8 @@ def test_load_ground_truth_applies_overlay(tmp_path, auto_onsets):
 
 def test_load_ground_truth_no_overlay_unchanged(tmp_path, auto_onsets):
     _write_track(tmp_path, "foo", auto_onsets)
-    tracks = discover_tracks(tmp_path)
-    gt = load_ground_truth(tracks[0]["ground_truth"])
+    tracks = {t["name"]: t for t in discover_tracks(tmp_path)}
+    gt = load_ground_truth(tracks["foo"]["ground_truth"])
     assert [o.time for o in gt.onsets] == [1.0, 2.0, 3.0]
     assert all(o.source == "auto" for o in gt.onsets)
 
@@ -86,9 +92,10 @@ def test_load_ground_truth_drift_loud_fails(tmp_path, auto_onsets):
         "created": [],
     }
     _write_track(tmp_path, "foo", auto_onsets, edits_doc=bad_edits)
-    tracks = discover_tracks(tmp_path)
+    tracks = {t["name"]: t for t in discover_tracks(tmp_path)}
+    foo = tracks["foo"]
     with pytest.raises(HumanEditDriftError):
-        load_ground_truth(tracks[0]["ground_truth"], tracks[0]["human_edits"])
+        load_ground_truth(foo["ground_truth"], foo["human_edits"])
 
 
 def test_apply_human_edits_unit_smoke(auto_onsets):

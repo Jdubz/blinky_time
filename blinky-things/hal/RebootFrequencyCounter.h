@@ -231,7 +231,16 @@ namespace RebootFrequencyCounter {
             SafeBootWatchdog::enterBleDfuBootloader();  // Never returns
         }
 
-        writeCounter(next);  // failure logged inside; non-fatal at this step
+        // writeCounter logs internally on failure, but a silent failure here
+        // would leave the counter stuck at the prior value — meaning the next
+        // crash adds 0 to it, and the threshold trip is delayed by one boot.
+        // Direction of error is "safe" (we err on the side of NOT entering
+        // DFU recovery), but the operator deserves a loud notice that the
+        // crash-loop detector is running degraded.
+        if (!writeCounter(next)) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: counter persist "
+                             "failed — crash-loop detection degraded this boot"));
+        }
         Serial.print(F("[BOOT] RebootFrequencyCounter: "));
         Serial.print(next);
         Serial.print(F("/"));
@@ -241,11 +250,20 @@ namespace RebootFrequencyCounter {
     /**
      * Call from loop() every iteration; idempotent. Clears the counter once
      * the device has been up for `STABLE_UPTIME_MS`.
+     *
+     * Only marks the in-RAM "done" flag when the flash write succeeds —
+     * otherwise a transient LittleFS error would permanently disarm the
+     * stable-clear path for this power session, and the counter would carry
+     * forward to the next boot at a higher-than-expected value.
      */
     inline void tickStable(uint32_t nowMs) {
         if (stableMarked_) return;
         if (nowMs < STABLE_UPTIME_MS) return;
-        writeCounter(0);
+        if (!writeCounter(0)) {
+            // Don't set stableMarked_; we'll retry on the next loop iteration.
+            // writeCounter() already logged the failure path.
+            return;
+        }
         stableMarked_ = true;
         Serial.print(F("[BOOT] RebootFrequencyCounter cleared ("));
         Serial.print(STABLE_UPTIME_MS / 60000UL);
@@ -253,9 +271,14 @@ namespace RebootFrequencyCounter {
     }
 
     /**
-     * Diagnostic: boot counter at startup (before increment).
+     * Diagnostic: the counter value read from flash at boot, BEFORE this
+     * boot's increment. So on the 3rd consecutive crash-boot it returns 2,
+     * not 3. Named explicitly to head off the off-by-one confusion noted
+     * in PR #139 review. Currently not called from setup logging — the
+     * `checkAndIncrement` path prints the post-increment value (`next`)
+     * directly.
      */
-    inline uint8_t getBootCount() { return bootCount_; }
+    inline uint8_t getPriorBootCount() { return bootCount_; }
 
 }  // namespace RebootFrequencyCounter
 

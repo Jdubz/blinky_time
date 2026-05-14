@@ -28,6 +28,7 @@ import sys
 import os
 import re
 import glob
+import struct
 import time
 import json
 import shutil
@@ -501,15 +502,27 @@ def validate_uf2(uf2_path, verbose=False):
     UF2_MAGIC_END    = 0x0AB16F30
     FAMILY_NRF52_APP  = 0xADA52840
     FAMILY_NRF52_BOOT = 0xD663823C
-    # S140 v7.3.0 ends at 0x27000; if the SD changes, update this.
-    # The on-device bootloader reads CODE_REGION_1_START at runtime — host
-    # can't, so we hard-code the worst case and document it loudly.
+    # S140 v7.3.0 ends at 0x27000 (CODE_REGION_1_START). The on-device
+    # bootloader reads this at runtime via SD_SIZE_GET; the host can't query
+    # it through a UF2 file, so we hard-code it here. The bootloader expects
+    # combined-SD-included builds to match — and update-bootloader scripts
+    # link against S140 7.3.0 only. If the SoftDevice ever changes, three
+    # things must be updated together:
+    #
+    #   1. This constant.
+    #   2. The Adafruit_nRF52_Bootloader's SOFTDEVICE_VERSION (build config).
+    #   3. bootloader/README.md's "SoftDevice: S140 vX.Y.Z" line.
+    #
+    # We can't compile-time-assert across those three, but the
+    # `tests/test_uf2_safety.py` suite (TODO follow-up) should verify the
+    # constant matches what `bootloader/update-bootloader-qspi-ota-default.uf2`
+    # actually expects. PR #139 review flagged this for follow-up.
     SD_END_S140_730 = 0x27000
     BOOTLOADER_REGION_START = 0xF4000
-    BOOTLOADER_MBR_PARAMS = 0xFE000
+    BOOTLOADER_MBR_PARAMS = 0xFE000  # MBR Params Page (1-page settings area)
+    FLASH_END = 0x100000  # nRF52840 has 1 MB of flash; addresses must not exceed this
     UICR = 0x10001000
 
-    import struct
     data = uf2_path.read_bytes()
     if len(data) % 512 != 0:
         print(f"  [FAIL] UF2 size {len(data)} is not a multiple of 512")
@@ -567,8 +580,15 @@ def validate_uf2(uf2_path, verbose=False):
 
     if family == FAMILY_NRF52_BOOT:
         # Refuse blocks targeting app region (outside bootloader, MBR, SD, UICR).
+        # The bootloader-region tail extends to the end of flash (0x100000):
+        # BOOTLOADER_MBR_PARAMS (0xFE000) is the start of the MBR Params Page
+        # which the bootloader writes to during self-update. Earlier this
+        # validator used `BOOTLOADER_MBR_PARAMS + 0x1000` which equals
+        # 0xFF000 — accidentally also accepting the bootloader settings page
+        # (0xFF000-0x100000). Use FLASH_END so the intent is explicit and
+        # any address >= flash end gets rejected outright.
         for a in addrs:
-            if BOOTLOADER_REGION_START <= a <= (BOOTLOADER_MBR_PARAMS + 0x1000):
+            if BOOTLOADER_REGION_START <= a < FLASH_END:
                 continue
             if a == UICR:
                 continue
