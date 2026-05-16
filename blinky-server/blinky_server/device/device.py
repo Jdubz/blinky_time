@@ -24,6 +24,13 @@ class DeviceState(StrEnum):
     CONNECTED = "connected"
     ERROR = "error"
     DFU_RECOVERY = "dfu_recovery"
+    # PRESENT: the device is advertising on BLE (we see it in passive scans)
+    # but we deliberately don't hold a GATT connection. Fleet commands reach
+    # it via the broadcaster (manufacturer-data advertising); per-device
+    # commands (flash, etc.) bring the connection up just-in-time and tear
+    # it down again afterward. Distinct from DISCONNECTED, which means
+    # "we used to be connected and got dropped".
+    PRESENT = "present"
 
 
 class Device:

@@ -187,7 +187,14 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
     fleet = get_fleet()
-    flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
+    # PRESENT BLE devices are flashable too — we just-in-time connect for
+    # the flash and disconnect after. The broadcaster gets paused around
+    # the flash (BCM43455 can't both advertise and act as central).
+    flashable_states = (
+        DeviceState.CONNECTED,
+        DeviceState.DFU_RECOVERY,
+        DeviceState.PRESENT,
+    )
 
     if body.device_ids is not None:
         # Explicit whitelist: only flash THESE devices. Validate every ID
@@ -307,6 +314,20 @@ async def _flash_fleet_background(
     for sid in all_serial_ids:
         fleet.hold_reconnect(sid, 600)
 
+    # Single-radio adapters (BCM43455 on Pi 4) refuse to act as central
+    # (GATT connect) while advertising. BLE DFU + UF2-flash-of-BLE-devices
+    # both need a central connection, so stop the broadcaster before any
+    # device-level flash and restart it after the whole job.
+    broadcaster_was_running = (
+        fleet.broadcaster is not None and fleet.broadcaster.is_running
+    )
+    if broadcaster_was_running:
+        log.info("Fleet flash: pausing broadcaster for the duration of the job")
+        try:
+            await fleet.broadcaster.stop()
+        except Exception:
+            log.exception("Failed to pause broadcaster cleanly; flash will still try")
+
     try:
         for i, dev_id in enumerate(device_ids):
             device = fleet.get_device(dev_id)
@@ -415,6 +436,15 @@ async def _flash_fleet_background(
         for sid in all_serial_ids:
             fleet.resume_reconnect(sid)
         fleet.resume_discovery()
+        if broadcaster_was_running and fleet.broadcaster is not None:
+            log.info("Fleet flash: restarting broadcaster")
+            try:
+                await fleet.broadcaster.start()
+            except Exception:
+                log.exception(
+                    "Failed to restart broadcaster after flash — fleet commands will "
+                    "not be delivered over BLE until the server is restarted"
+                )
 
     # Verify firmware versions
     job.progress = 90

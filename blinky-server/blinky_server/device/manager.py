@@ -119,11 +119,6 @@ class FleetManager:
         # it via ``self.broadcaster``. Started in :meth:`start`; may be
         # None when BLE is disabled (``enable_ble=False``).
         self.broadcaster: FleetBroadcaster | None = None
-        # BLE devices tracked as "present" via passive scan. Keyed by BD
-        # address. We do NOT hold connections — commands go out via
-        # broadcaster — so there's no live Device object here, just
-        # last-seen metadata for the API. See _update_ble_presence.
-        self._ble_presence: dict[str, dict[str, Any]] = {}
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -156,49 +151,6 @@ class FleetManager:
 
     def get_all_devices(self) -> list[Device]:
         return list(self._devices.values())
-
-    def list_for_api(self) -> list[dict[str, Any]]:
-        """Combined view of serial Devices + BLE presence entries.
-
-        Both flavors come back in the same shape (DeviceResponse-compatible)
-        so the UI doesn't have to know which transport a device is on. BLE
-        entries have most metadata fields as None — without a connection
-        we can't read version/device_type/etc. — and ``state="present"``
-        rather than ``"connected"``.
-        """
-        from .device import STALE_THRESHOLD_S  # local import: avoids cycle on cold load
-
-        out: list[dict[str, Any]] = [d.to_dict() for d in self._devices.values()]
-        now = _time.monotonic()
-        for entry in self._ble_presence.values():
-            last_seen = entry["last_seen"]
-            ago = now - last_seen
-            stale = ago > STALE_THRESHOLD_S
-            out.append(
-                {
-                    "id": entry["id"],
-                    "port": entry["ble_address"],
-                    "platform": "nrf52840",
-                    "transport": "ble",
-                    "state": "present",
-                    "version": None,
-                    "device_type": None,
-                    "device_name": entry.get("name"),
-                    "width": None,
-                    "height": None,
-                    "leds": None,
-                    "configured": False,
-                    "safe_mode": False,
-                    "streaming": False,
-                    "hardware_sn": None,
-                    "ble_address": entry["ble_address"],
-                    "rssi": entry.get("rssi"),
-                    "mtu": None,
-                    "last_seen_ago": round(ago, 1),
-                    "stale": stale,
-                }
-            )
-        return out
 
     async def start(self) -> None:
         """Start background loop for device discovery and management.
@@ -435,9 +387,47 @@ class FleetManager:
 
             # BLE app-mode devices: track presence, do NOT connect. The BCM43455
             # adapter can't advertise (broadcast channel) while we hold central
-            # GATT connections; broadcaster takes priority.
+            # GATT connections; broadcaster takes priority. We still create
+            # a Device entry so /api/devices, flash routes, and the rest of
+            # the management surface have something to point at — but the
+            # BleTransport stays unconnected unless a per-device operation
+            # (flash, etc.) brings it up just-in-time.
             if disc.transport_type == "ble":
-                self._update_ble_presence(disc)
+                if device_id in known_ids:
+                    existing = self._devices[device_id]
+                    existing.last_seen = _time.monotonic()
+                    if disc.rssi is not None:
+                        existing.rssi = disc.rssi
+                    if disc.description and not existing.device_name:
+                        existing.device_name = disc.description
+                    continue
+                if device_id in self._dedup_excluded:
+                    continue
+                try:
+                    transport = _create_transport(disc)
+                    device = Device(
+                        device_id=device_id,
+                        port=disc.address,
+                        platform=disc.platform,
+                        transport=transport,
+                    )
+                    device.state = DeviceState.PRESENT
+                    device.last_seen = _time.monotonic()
+                    device.device_name = disc.description
+                    if disc.rssi is not None:
+                        device.rssi = disc.rssi
+                    if disc.address:
+                        device.ble_address = disc.address
+                    self._devices[device_id] = device
+                    self._device_discovery[device_id] = disc
+                    log.info(
+                        "BLE device present: %s (%s, RSSI=%s)",
+                        device_id,
+                        disc.description or "unnamed",
+                        disc.rssi,
+                    )
+                except Exception:
+                    log.exception("Failed to track BLE device %s", device_id[:12])
                 continue
 
             if device_id in known_ids:
@@ -483,22 +473,6 @@ class FleetManager:
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
         # prefer serial (faster, more reliable) and disconnect the wireless one.
         await self._deduplicate_transports()
-
-    def _update_ble_presence(self, disc: DiscoveredDevice) -> None:
-        """Record a BLE device as 'present' without connecting.
-
-        Per-scan signal: BD address, advertised name, RSSI, last_seen
-        timestamp. The broadcaster delivers commands to whichever devices
-        are in range — we don't need per-device state to do that, only to
-        let the UI know what's out there.
-        """
-        self._ble_presence[disc.device_id] = {
-            "id": disc.device_id,
-            "ble_address": disc.address,
-            "name": disc.description,
-            "rssi": disc.rssi,
-            "last_seen": _time.monotonic(),
-        }
 
     async def broadcast(self, command: str) -> dict[str, str]:
         """Send a command to every device in range.

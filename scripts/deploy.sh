@@ -122,8 +122,14 @@ DEVICES_JSON=$(curl -sf "${BLINKY_SERVER}/api/devices" --max-time 5 2>/dev/null)
 
 DEVICE_IDS_JSON=$(echo "$DEVICES_JSON" | python3 -c "
 import json, sys
+# Flashable states:
+#   connected -> serial device, persistent transport
+#   present   -> BLE device, just-in-time GATT connect via the flash route
+# dfu_recovery is intentionally excluded from the default scope: flashing
+# a stuck device is a deliberate operator action, not a routine deploy.
+flashable = {'connected', 'present'}
 ds = json.load(sys.stdin)
-ids = [d['id'] for d in ds if d.get('platform') == 'nrf52840' and d.get('state') == 'connected']
+ids = [d['id'] for d in ds if d.get('platform') == 'nrf52840' and d.get('state') in flashable]
 print(json.dumps(ids))
 ")
 

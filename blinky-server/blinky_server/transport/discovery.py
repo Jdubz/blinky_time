@@ -162,13 +162,21 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
                     app_addr,
                 )
             else:
+                # Identify our own firmware by advertised-name prefix. Without
+                # a GATT connect we can't read `json info`, so we infer the
+                # platform from the BLE name set by Adafruit's NUS service.
+                # Devices we control advertise as "Blinky-<device_type>-<id>";
+                # anything else under our NUS UUID would be a different
+                # peripheral entirely (no current support).
+                name = dev.name or ""
+                platform = "nrf52840" if name.startswith("Blinky") else "unknown"
                 devices.append(
                     DiscoveredDevice(
                         device_id=addr,
-                        platform="unknown",
+                        platform=platform,
                         transport_type="ble",
                         address=addr,
-                        description=dev.name or "BLE device",
+                        description=name or "BLE device",
                         rssi=adv.rssi,
                     )
                 )
