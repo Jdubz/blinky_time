@@ -26,6 +26,14 @@ log = logging.getLogger(__name__)
 DISCOVERY_INTERVAL_S = 10
 RECONNECT_INTERVAL_S = 5
 
+# Max auto-recovery attempts per device. After this many consecutive
+# failures, halt auto-recovery for that device and surface via the
+# /api/fleet/status endpoint as recovery_blocked. Operator must clear
+# the state manually (e.g. by physically inspecting the device) before
+# auto-recovery resumes. Prevents hammering a device that's hung in a
+# way our flash sequence can't fix.
+MAX_AUTO_RECOVERY_ATTEMPTS = 3
+
 # Reap non-recoverable devices that haven't communicated in this long.
 # Removed from /api/devices so dead slots stop accumulating. Re-discovered
 # fresh on the next scan if the device comes back.
@@ -1037,6 +1045,27 @@ class FleetManager:
             state = self._dfu_recovery_state.setdefault(device.id, {"fails": 0, "backoff": 0})
             fail_count = state["fails"]
 
+            # P4: stop hammering a device that keeps failing. After
+            # MAX_AUTO_RECOVERY_ATTEMPTS, the device is presumed to need
+            # operator attention (radio interference, firmware bug, hardware
+            # issue, etc.). Continuing to attempt risks further damage to a
+            # partially-flashed device. Log loudly on the transition so the
+            # operator sees it in the journal exactly once per giveup event.
+            if fail_count >= MAX_AUTO_RECOVERY_ATTEMPTS:
+                if not state.get("gave_up_logged"):
+                    log.error(
+                        "Auto-recovery GIVING UP for %s (%s) after %d attempts. "
+                        "Manual intervention required. State persists across server "
+                        "restarts via the dfu_recovery_state dict (in-memory only — "
+                        "a restart clears the cap, which is intentional: a fresh boot "
+                        "is a deliberate operator action).",
+                        device.id[:12],
+                        device.device_name or "unknown",
+                        fail_count,
+                    )
+                    state["gave_up_logged"] = True
+                continue
+
             if fail_count > 0:
                 # Exponential backoff: 1, 2, 4, 8 min (called every 60s)
                 skip_calls = min(2 ** (fail_count - 1), 8)
@@ -1066,6 +1095,22 @@ class FleetManager:
                 self._dfu_recovery_active.add(device.id)
                 self.pause_discovery()
                 self.hold_reconnect(device.id, 600)
+                # Stop the broadcaster: BLE DFU needs central GATT, and the
+                # BCM43455 single radio refuses to register an advertisement
+                # while we hold central GATT connections (verified live
+                # 2026-05-16 via bluez `Failed (0x03)`). Reverse direction
+                # (GATT central while advertising) is not directly observed
+                # but the same radio constraint applies — don't risk it.
+                broadcaster_was_running = (
+                    self.broadcaster is not None and self.broadcaster.is_running
+                )
+                if broadcaster_was_running and self.broadcaster is not None:
+                    try:
+                        await self.broadcaster.stop()
+                    except Exception:
+                        log.exception(
+                            "Auto-recovery: broadcaster stop failed; recovery may fail too"
+                        )
                 try:
                     from ..firmware.ble_dfu import upload_ble_dfu
                     from ..firmware.compile import ensure_dfu_zip
@@ -1096,6 +1141,15 @@ class FleetManager:
                     self._dfu_recovery_active.discard(device.id)
                     self.resume_discovery()
                     self.resume_reconnect(device.id)
+                    if broadcaster_was_running and self.broadcaster is not None:
+                        try:
+                            await self.broadcaster.start()
+                        except Exception:
+                            log.exception(
+                                "Auto-recovery: failed to restart broadcaster — fleet "
+                                "commands will not reach BLE devices until the server "
+                                "is restarted"
+                            )
 
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, liveness checks, and DFU recovery."""

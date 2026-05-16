@@ -122,3 +122,108 @@ def test_load_rejects_missing_firmware_file(tmp_path, monkeypatch) -> None:
     # set_recovery_firmware doesn't check existence; load does.
     # (Path was valid at set time, deleted before load — simulated here.)
     assert fm._load_recovery_firmware() is None
+
+
+# ── Watchdog ping regression: cart_inner brick 2026-05-16 ──────────────
+
+
+async def test_watchdog_ping_fires_during_full_cycle(monkeypatch) -> None:
+    """In the normal (non-paused) loop path, systemd_notify.watchdog() must
+    be invoked at the end of each successful cycle.
+
+    Without this, systemd's WatchdogSec timer fires and SIGKILLs the process
+    — even if the process is otherwise healthy.
+    """
+    import asyncio
+
+    from blinky_server import systemd_notify
+    from blinky_server.device import manager as mgr_mod
+
+    ping_count = 0
+
+    def fake_ping() -> None:
+        nonlocal ping_count
+        ping_count += 1
+
+    monkeypatch.setattr(systemd_notify, "watchdog", fake_ping)
+    monkeypatch.setattr(mgr_mod, "DISCOVERY_INTERVAL_S", 0.01)
+
+    async def noop_async(*_a, **_kw):
+        return None
+
+    # Avoid real network/scan side-effects.
+    monkeypatch.setattr(
+        "blinky_server.transport.discovery.cleanup_stale_ble_connections", noop_async
+    )
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+    monkeypatch.setattr(fleet, "_discover_and_connect", noop_async)
+    monkeypatch.setattr(fleet, "_reconnect_disconnected", noop_async)
+    monkeypatch.setattr(fleet, "_check_serial_threads", lambda: None)
+
+    await fleet.start()
+    try:
+        await asyncio.sleep(0.05)  # ~5 cycles at 10ms interval
+    finally:
+        await fleet.stop()
+
+    # At least one full cycle should have pinged. Exact count is timing-
+    # dependent (asyncio scheduling), but zero would mean the bug is back.
+    assert ping_count >= 1, "systemd_notify.watchdog() not called from full-cycle path"
+
+
+async def test_watchdog_ping_fires_during_paused_discovery(monkeypatch) -> None:
+    """REGRESSION: while pause_discovery() depth > 0 (i.e. a flash is
+    running), the loop takes a 'continue' path. That path MUST still
+    ping systemd, or the watchdog fires mid-flash and SIGKILLs the
+    process — bricking the device being flashed.
+
+    Evidence: 2026-05-16 cart_inner was bricked because the original
+    pause path skipped the ping. Server's last ping was just before
+    pause_discovery() was called; systemd killed the process exactly
+    WatchdogSec=120s later, mid-DFU at 20% transfer.
+    """
+    import asyncio
+
+    from blinky_server import systemd_notify
+    from blinky_server.device import manager as mgr_mod
+
+    ping_count = 0
+
+    def fake_ping() -> None:
+        nonlocal ping_count
+        ping_count += 1
+
+    monkeypatch.setattr(systemd_notify, "watchdog", fake_ping)
+    monkeypatch.setattr(mgr_mod, "DISCOVERY_INTERVAL_S", 0.01)
+
+    async def noop_async(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(
+        "blinky_server.transport.discovery.cleanup_stale_ble_connections", noop_async
+    )
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+    # If the loop takes the pause path, none of these should be called.
+    discover_called = 0
+
+    async def discover(*_a, **_kw):
+        nonlocal discover_called
+        discover_called += 1
+
+    monkeypatch.setattr(fleet, "_discover_and_connect", discover)
+    monkeypatch.setattr(fleet, "_reconnect_disconnected", noop_async)
+    monkeypatch.setattr(fleet, "_check_serial_threads", lambda: None)
+
+    fleet.pause_discovery()
+    await fleet.start()
+    try:
+        await asyncio.sleep(0.05)  # ~5 paused cycles at 10ms interval
+    finally:
+        await fleet.stop()
+
+    assert discover_called == 0, "pause_discovery() did not block the work path"
+    assert (
+        ping_count >= 1
+    ), "systemd_notify.watchdog() not called from pause path (this is the cart_inner brick bug)"

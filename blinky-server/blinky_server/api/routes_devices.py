@@ -307,8 +307,39 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
                 await fleet.broadcaster.stop()
             except Exception:
                 log.exception("Failed to pause broadcaster cleanly; flash will still try")
+            # P3 guard: assert broadcaster is actually stopped before we
+            # enter DFU. If stop() failed silently the radio would still
+            # be advertising while we try to act as central — the BCM43455
+            # rejects that with bluez "Failed (0x03)" and we'd brick a
+            # device. Don't start a destructive operation under uncertainty.
+            if fleet.broadcaster is not None and fleet.broadcaster.is_running:
+                raise HTTPException(
+                    503,
+                    "Broadcaster did not stop cleanly — refusing to start BLE flash "
+                    "to avoid radio contention. Check logs and restart blinky-server.",
+                )
         try:
-            result = await upload_firmware(device, str(firmware))
+            # P5: hard timeout on the whole flash. Observed transfer rate is
+            # ~21s per 10% of the application image (542 KB), so ~3.5 min for
+            # the transfer plus ~1 min for init/scan/cache. 600s is generous
+            # (~2x worst case). Past that, abort cleanly with an error rather
+            # than letting the operation run until something else (watchdog,
+            # external timeout) tears it down destructively mid-write.
+            result = await asyncio.wait_for(
+                upload_firmware(device, str(firmware)),
+                timeout=600.0,
+            )
+        except TimeoutError:
+            log.error(
+                "Flash of %s (%s) exceeded 600s — aborted. Device may be in DFU bootloader.",
+                device_id[:12],
+                device.device_name or "unknown",
+            )
+            result = {
+                "status": "error",
+                "message": "flash exceeded 600s timeout",
+                "elapsed_s": 600.0,
+            }
         finally:
             device.state = DeviceState.DISCONNECTED
             if is_serial_flash:

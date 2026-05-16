@@ -327,6 +327,20 @@ async def _flash_fleet_background(
             await fleet.broadcaster.stop()
         except Exception:
             log.exception("Failed to pause broadcaster cleanly; flash will still try")
+        # P3 guard: refuse to proceed if the broadcaster did NOT actually
+        # stop. Starting BLE DFU with the radio still advertising risks a
+        # bluez "Failed (0x03)" mid-flash. Better to fail loud here than
+        # corrupt a device.
+        if fleet.broadcaster is not None and fleet.broadcaster.is_running:
+            log.error(
+                "Fleet flash aborted: broadcaster did not stop cleanly. "
+                "Refusing to enter DFU under radio contention."
+            )
+            return {
+                "status": "error",
+                "message": "broadcaster did not stop; flash aborted to avoid radio contention",
+                "per_device": {},
+            }
 
     try:
         for i, dev_id in enumerate(device_ids):
@@ -366,8 +380,18 @@ async def _flash_fleet_background(
                 _job.progress_message = f"{_base} — {phase}: {msg}{pct_str}"
 
             try:
-                result = await upload_firmware(
-                    device, str(firmware), progress_callback=_per_phase_progress
+                # P5: hard 600s per-device timeout. Observed BLE DFU rate
+                # is ~21s per 10% of a 542KB image so transfer is ~3.5
+                # minutes, plus init/scan/cache overhead. 600s leaves ~2x
+                # margin without giving up on a slow but functional flash.
+                # Without this, a hung flash would run until systemd's
+                # watchdog or some other backstop tore us down — exactly
+                # the failure mode that bricked cart_inner.
+                result = await asyncio.wait_for(
+                    upload_firmware(
+                        device, str(firmware), progress_callback=_per_phase_progress
+                    ),
+                    timeout=600.0,
                 )
                 results[device.id[:12]] = result
                 if result.get("status") != "ok":
@@ -380,6 +404,15 @@ async def _flash_fleet_background(
                         dev_label,
                         result.get("message"),
                     )
+            except TimeoutError:
+                results[device.id[:12]] = {
+                    "status": "error",
+                    "message": "flash exceeded 600s timeout",
+                }
+                log.error(
+                    "Fleet flash: %s exceeded 600s — aborted, continuing to next device",
+                    dev_label,
+                )
             except Exception as e:
                 results[device.id[:12]] = {"status": "error", "message": str(e)}
                 log.error(
