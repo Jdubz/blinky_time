@@ -130,6 +130,15 @@ async def upload_firmware(
         ble_transport = device.transport
 
         async def enter_bootloader_via_ble(cmd: str) -> None:
+            # PRESENT devices are tracked-by-scan only, no GATT held. We
+            # bring up the NUS connection just-in-time to issue the
+            # "bootloader ble" command, then drop it — upload_ble_dfu does
+            # its own bootloader-address connect for the DFU itself. The
+            # transport.connect() guard is idempotent (no-op if already
+            # connected) so this also works the rare path where something
+            # previously left a CONNECTED transport in place.
+            if not ble_transport.is_connected:
+                await ble_transport.connect()
             await ble_transport.write_line(cmd)
             await asyncio.sleep(0.5)
             await ble_transport.disconnect()

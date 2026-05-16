@@ -400,6 +400,18 @@ class FleetManager:
                         existing.rssi = disc.rssi
                     if disc.description and not existing.device_name:
                         existing.device_name = disc.description
+                    # The device is advertising NUS again, so it's back in
+                    # app mode. Reset transient post-op states (after a
+                    # flash leaves state=DISCONNECTED; after a previous
+                    # DFU_RECOVERY where the device has now recovered).
+                    # PRESENT is the steady-state for any BLE peer we can
+                    # see; flashing again needs the state check to pass.
+                    if existing.state in (
+                        DeviceState.DISCONNECTED,
+                        DeviceState.ERROR,
+                        DeviceState.DFU_RECOVERY,
+                    ):
+                        existing.state = DeviceState.PRESENT
                     continue
                 if device_id in self._dedup_excluded:
                     continue
