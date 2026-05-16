@@ -202,7 +202,7 @@ class BleTransport(Transport):
         Notifications may split across MTU boundaries. Reassemble into
         complete lines and dispatch via callback.
         """
-        log.info("BLE RX %s: %d bytes", self._address[:12], len(data))
+        log.debug("BLE RX %s: %d bytes", self._address, len(data))
         self._rx_buf += bytes(data)
         while b"\n" in self._rx_buf:
             line, self._rx_buf = self._rx_buf.split(b"\n", 1)

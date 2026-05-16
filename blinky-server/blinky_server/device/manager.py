@@ -23,6 +23,14 @@ log = logging.getLogger(__name__)
 DISCOVERY_INTERVAL_S = 10
 RECONNECT_INTERVAL_S = 5
 
+# Reap non-recoverable devices that haven't communicated in this long.
+# Removed from /api/devices so dead slots stop accumulating. Re-discovered
+# fresh on the next scan if the device comes back.
+# DFU_RECOVERY excluded — it represents a device stuck in bootloader; reaping
+# would let it be re-discovered and stuck again in a flap loop.
+REAP_THRESHOLD_S = 900.0  # 15 min
+REAP_INTERVAL_CYCLES = 6  # every 6th background cycle (~60s)
+
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
     """Create the appropriate transport for a discovered device."""
@@ -674,6 +682,39 @@ class FleetManager:
         if tasks:
             await asyncio.gather(*tasks)
 
+    async def _reap_stale_devices(self) -> None:
+        """Evict devices that have been disconnected/errored for too long.
+
+        Removes from the in-memory fleet so /api/devices stops returning a
+        dead slot. The device will be re-discovered on the next scan if it
+        comes back. CONNECTED/CONNECTING devices are exempt (liveness handles
+        those). DFU_RECOVERY is exempt — those are stuck in bootloader and
+        re-discovery would just re-stick them in a flap loop; operator must
+        intervene via /api/devices/{id}/flash or DELETE.
+        """
+        now = _time.monotonic()
+        reapable = {DeviceState.DISCONNECTED, DeviceState.ERROR}
+        victims: list[str] = []
+        for device in list(self._devices.values()):
+            if device.state not in reapable:
+                continue
+            if device.last_seen is None:
+                continue  # never connected — leave alone, discovery is still trying
+            if (now - device.last_seen) < REAP_THRESHOLD_S:
+                continue
+            victims.append(device.id)
+
+        for device_id in victims:
+            device = self._devices.get(device_id)
+            ago = (now - device.last_seen) if device and device.last_seen else None
+            log.warning(
+                "Reaping stale device %s (state=%s, last_seen=%.0fs ago)",
+                device_id[:12],
+                device.state.value if device else "?",
+                ago if ago is not None else -1,
+            )
+            await self.remove_device(device_id)
+
     async def _ping_device(self, device: Device) -> None:
         """Ping a single device; trigger disconnect handling on failure.
 
@@ -849,6 +890,9 @@ class FleetManager:
                 # DFU recovery check every 6th cycle (~60s)
                 if cycle % 6 == 0:
                     await self._auto_recover_dfu_devices()
+                # Reap long-dead non-recoverable devices every 6th cycle (~60s)
+                if cycle % REAP_INTERVAL_CYCLES == 0:
+                    await self._reap_stale_devices()
             except asyncio.CancelledError:
                 break
             except Exception as e:

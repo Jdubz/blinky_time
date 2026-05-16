@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -141,21 +140,24 @@ async def fleet_status() -> dict[str, Any]:
     """Fleet health summary — aggregate stats across all devices.
 
     Returns counts by state and transport, plus per-device health info
-    (RSSI, last_seen, transport type). Designed for BLE-only fleet
-    monitoring dashboards.
+    (RSSI, last_seen, transport, staleness). Designed for the Hub status
+    pill and the console fleet monitor.
     """
     fleet = get_fleet()
     devices = fleet.get_all_devices()
-    now = time.monotonic()
 
     by_state: dict[str, int] = {}
     by_transport: dict[str, int] = {}
+    stale_count = 0
     device_health: list[dict[str, Any]] = []
 
     for d in devices:
         by_state[d.state.value] = by_state.get(d.state.value, 0) + 1
         ttype = d.transport.transport_type
         by_transport[ttype] = by_transport.get(ttype, 0) + 1
+        if d.is_stale:
+            stale_count += 1
+        ago = d.last_seen_ago
         device_health.append(
             {
                 "id": d.id,
@@ -163,16 +165,18 @@ async def fleet_status() -> dict[str, Any]:
                 "transport": ttype,
                 "state": d.state.value,
                 "rssi": d.rssi,
-                "last_seen_ago": round(now - d.last_seen, 1) if d.last_seen else None,
+                "last_seen_ago": round(ago, 1) if ago is not None else None,
+                "stale": d.is_stale,
                 "version": d.version,
                 "ble_address": d.ble_address,
             }
         )
 
-    connected = by_state.get("connected", 0)
     return {
         "total": len(devices),
-        "connected": connected,
+        "connected": by_state.get("connected", 0),
+        "stale": stale_count,
+        "dfu_recovery": by_state.get("dfu_recovery", 0),
         "by_state": by_state,
         "by_transport": by_transport,
         "devices": device_health,

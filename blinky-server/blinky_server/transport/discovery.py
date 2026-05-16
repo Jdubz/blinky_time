@@ -296,8 +296,10 @@ async def cleanup_stale_ble_connections() -> None:
             if len(parts) >= 2 and parts[0] == "Device":
                 addr = parts[1]
                 name = " ".join(parts[2:]) if len(parts) > 2 else ""
-                # Only disconnect Blinky/AdaDFU devices (not other BLE peripherals)
-                if name in ("Blinky", "AdaDFU"):
+                # Only disconnect Blinky/AdaDFU devices (not other BLE peripherals).
+                # Match by prefix — configured devices use names like
+                # "Blinky-hat_v1-84" once a device_type has been written.
+                if name.startswith("Blinky") or name.startswith("AdaDFU"):
                     subprocess.run(
                         ["bluetoothctl", "disconnect", addr],
                         capture_output=True,
@@ -308,8 +310,7 @@ async def cleanup_stale_ble_connections() -> None:
 
     try:
         disconnected = await asyncio.to_thread(_cleanup)
-        if disconnected:
-            log.info("Cleaned up %d stale BLE connections", disconnected)
+        log.info("BLE cleanup: disconnected %d stale connection(s)", disconnected)
     except Exception as e:
         log.warning("BLE stale connection cleanup failed: %s", e)
 

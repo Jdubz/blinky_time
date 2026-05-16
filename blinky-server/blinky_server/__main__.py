@@ -16,6 +16,12 @@ def main() -> None:
     parser.add_argument(
         "--log-level", default="info", choices=["debug", "info", "warning", "error"]
     )
+    parser.add_argument(
+        "--access-log",
+        action="store_true",
+        help="Enable uvicorn HTTP access logs (off by default; Hub polls /api/devices "
+        "every few seconds and floods the journal)",
+    )
     parser.add_argument("--no-ble", action="store_true", help="Disable BLE discovery")
     parser.add_argument(
         "--no-serial", action="store_true", help="Disable serial discovery (wireless-only mode)"
@@ -70,7 +76,13 @@ def main() -> None:
         enable_serial=not args.no_serial,
         wifi_hosts=wifi_hosts,
     )
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level,
+        access_log=args.access_log,
+    )
 
 
 if __name__ == "__main__":

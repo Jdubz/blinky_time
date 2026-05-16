@@ -60,6 +60,7 @@ class DeviceResponse(BaseModel):
     rssi: int | None = None
     mtu: int | None = None
     last_seen_ago: float | None = None
+    stale: bool = False
 
 
 class SettingResponse(BaseModel):
