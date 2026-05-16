@@ -1114,10 +1114,14 @@ class FleetManager:
                 if self._discovery_pause_count > 0:
                     # Paused intentionally (BLE DFU in progress, etc). Still counts
                     # as a healthy tick for the watchdog — we ARE doing work,
-                    # just elsewhere.
+                    # just elsewhere. CRITICAL: ping systemd here too; otherwise
+                    # WatchdogSec fires and SIGKILLs mid-DFU, bricking the device
+                    # that was being flashed. Verified live 2026-05-16: missing
+                    # this ping caused a watchdog-kill at 20% DFU on cart_inner.
                     self._loop_last_ok = _time.monotonic()
                     self._loop_cycles = cycle
                     self._loop_consecutive_errors = 0
+                    systemd_notify.watchdog()
                     continue
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
