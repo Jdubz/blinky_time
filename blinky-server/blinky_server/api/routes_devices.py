@@ -180,9 +180,7 @@ async def fleet_status() -> dict[str, Any]:
             }
         )
 
-    broadcaster_status = (
-        fleet.broadcaster.status() if fleet.broadcaster is not None else None
-    )
+    broadcaster_status = fleet.broadcaster.status() if fleet.broadcaster is not None else None
     return {
         "total": len(devices),
         "connected": by_state.get("connected", 0),
@@ -299,11 +297,10 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         fleet.pause_discovery()
         # Stop the broadcaster: BLE DFU needs central GATT, which the
         # BCM43455 can't do while advertising. Restart it after the flash.
-        broadcaster_was_running = (
-            fleet.broadcaster is not None and fleet.broadcaster.is_running
-        )
+        broadcaster_was_running = fleet.broadcaster is not None and fleet.broadcaster.is_running
         if broadcaster_was_running:
             try:
+                assert fleet.broadcaster is not None  # narrowed by check above
                 await fleet.broadcaster.stop()
             except Exception:
                 log.exception("Failed to pause broadcaster cleanly; flash will still try")

@@ -66,23 +66,30 @@ class _Advertisement(ServiceInterface):
         self._released_event = asyncio.Event()
 
     @method()
-    def Release(self):  # noqa: ANN201, N802 — D-Bus method; annotations are signatures
+    def Release(self) -> None:
         """Called by BlueZ when it removes this advertisement."""
-        log.warning(
-            "BlueZ released our fleet advertisement — slot lost; will re-register"
-        )
+        # D-Bus calls this when our advertisement slot is revoked (adapter
+        # went down, manager was reset, etc.); name capitalization is the
+        # D-Bus method name, not a Python style choice.
+        log.warning("BlueZ released our fleet advertisement — slot lost; will re-register")
         # Setting in a sync method called from D-Bus is fine; asyncio.Event
         # is thread-safe enough for the loop-affinity D-Bus uses internally.
         self._released_event.set()
 
+    # The annotations on the two methods below are D-Bus type signatures,
+    # NOT Python type annotations — dbus-next reads __annotations__['return']
+    # and uses the string verbatim as the D-Bus signature. "s" is a string,
+    # "a{qv}" is a dict<uint16, variant>. Ruff (F821/F722/UP037) cannot
+    # know these are signatures, so we suppress on each line; mypy
+    # (valid-type/name-defined) is similarly told to ignore.
     @dbus_property(access=PropertyAccess.READ)
-    def Type(self) -> "s":  # type: ignore[name-defined,valid-type]  # noqa: N802
+    def Type(self) -> "s":  # type: ignore[name-defined]  # noqa: F821, UP037
         # 'broadcast' = we don't accept GATT connects from anyone scanning us.
         # Devices stay passive scanners; nothing connects to nothing.
         return "broadcast"
 
     @dbus_property(access=PropertyAccess.READ)
-    def ManufacturerData(self) -> "a{qv}":  # type: ignore[name-defined,valid-type]  # noqa: N802
+    def ManufacturerData(self) -> "a{qv}":  # type: ignore[valid-type]  # noqa: F722
         # BlueZ wants a Variant per value — wrap bytes as 'ay'.
         return {k: Variant("ay", v) for k, v in self._manufacturer_data.items()}
 
@@ -93,9 +100,7 @@ class _Advertisement(ServiceInterface):
         self._manufacturer_data = {company_id: payload}
         # ServiceInterface.emit_properties_changed will publish the new value
         # on the object's PropertiesChanged signal. BlueZ subscribes to this.
-        self.emit_properties_changed(
-            {"ManufacturerData": {company_id: Variant("ay", payload)}}
-        )
+        self.emit_properties_changed({"ManufacturerData": {company_id: Variant("ay", payload)}})
 
 
 class FleetBroadcaster:
@@ -147,7 +152,10 @@ class FleetBroadcaster:
         introspection = await bus.introspect(BLUEZ_SERVICE, self._adapter_path)
         proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
         mgr = proxy.get_interface(LE_ADV_MGR_IFACE)
-        await mgr.call_register_advertisement(self._object_path, {})
+        # call_register_advertisement is a dynamically-generated method on
+        # the proxy interface (dbus-fast builds it from the introspection
+        # XML), so mypy can't see it statically.
+        await mgr.call_register_advertisement(self._object_path, {})  # type: ignore[attr-defined]
 
         self._bus = bus
         self._adv = adv
@@ -166,7 +174,9 @@ class FleetBroadcaster:
             proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
             mgr = proxy.get_interface(LE_ADV_MGR_IFACE)
             with contextlib.suppress(DBusError):
-                await mgr.call_unregister_advertisement(self._object_path)
+                # Dynamically-generated method on the proxy interface
+                # (see note in start() above).
+                await mgr.call_unregister_advertisement(self._object_path)  # type: ignore[attr-defined]
         finally:
             if adv is not None:
                 with contextlib.suppress(Exception):

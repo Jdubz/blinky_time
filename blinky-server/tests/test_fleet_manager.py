@@ -224,9 +224,9 @@ async def test_watchdog_ping_fires_during_paused_discovery(monkeypatch) -> None:
         await fleet.stop()
 
     assert discover_called == 0, "pause_discovery() did not block the work path"
-    assert (
-        ping_count >= 1
-    ), "systemd_notify.watchdog() not called from pause path (this is the cart_inner brick bug)"
+    assert ping_count >= 1, (
+        "systemd_notify.watchdog() not called from pause path (this is the cart_inner brick bug)"
+    )
 
 
 async def test_watchdog_ping_continues_during_inline_blocking_call(monkeypatch) -> None:

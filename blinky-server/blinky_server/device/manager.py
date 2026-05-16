@@ -207,7 +207,9 @@ class FleetManager:
                 self.broadcaster = FleetBroadcaster()
                 await self.broadcaster.start()
             except Exception:
-                log.exception("Fleet broadcaster failed to start — fleet commands will not be delivered over BLE")
+                log.exception(
+                    "Fleet broadcaster failed to start — fleet commands will not be delivered over BLE"
+                )
                 self.broadcaster = None
         # Start the independent watchdog pinger FIRST so it begins pinging
         # before anything else can stall.
@@ -902,12 +904,12 @@ class FleetManager:
             victims.append(device.id)
 
         for device_id in victims:
-            device = self._devices.get(device_id)
-            ago = (now - device.last_seen) if device and device.last_seen else None
+            device_opt = self._devices.get(device_id)
+            ago = (now - device_opt.last_seen) if device_opt and device_opt.last_seen else None
             log.warning(
                 "Reaping stale device %s (state=%s, last_seen=%.0fs ago)",
                 device_id[:12],
-                device.state.value if device else "?",
+                device_opt.state.value if device_opt else "?",
                 ago if ago is not None else -1,
             )
             await self.remove_device(device_id)

@@ -318,9 +318,7 @@ async def _flash_fleet_background(
     # (GATT connect) while advertising. BLE DFU + UF2-flash-of-BLE-devices
     # both need a central connection, so stop the broadcaster before any
     # device-level flash and restart it after the whole job.
-    broadcaster_was_running = (
-        fleet.broadcaster is not None and fleet.broadcaster.is_running
-    )
+    broadcaster_was_running = fleet.broadcaster is not None and fleet.broadcaster.is_running
     if broadcaster_was_running:
         log.info("Fleet flash: pausing broadcaster for the duration of the job")
         try:
@@ -388,9 +386,7 @@ async def _flash_fleet_background(
                 # watchdog or some other backstop tore us down — exactly
                 # the failure mode that bricked cart_inner.
                 result = await asyncio.wait_for(
-                    upload_firmware(
-                        device, str(firmware), progress_callback=_per_phase_progress
-                    ),
+                    upload_firmware(device, str(firmware), progress_callback=_per_phase_progress),
                     timeout=600.0,
                 )
                 results[device.id[:12]] = result

@@ -261,9 +261,11 @@ async def upload_uf2(
                 output=output[-500:],
             )
         else:
-            error_lines = [l for l in captured_lines if "ERROR" in l or "FAILED" in l]
-            msg = error_lines[-1] if error_lines else (
-                captured_lines[-1] if captured_lines else "Unknown error"
+            error_lines = [line for line in captured_lines if "ERROR" in line or "FAILED" in line]
+            msg = (
+                error_lines[-1]
+                if error_lines
+                else (captured_lines[-1] if captured_lines else "Unknown error")
             )
             result["message"] = msg.strip()
             result["output"] = output[-500:]
