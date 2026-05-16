@@ -122,6 +122,19 @@ class FleetManager:
         self._loop_last_ok: float | None = None
         self._loop_cycles: int = 0
         self._loop_consecutive_errors: int = 0
+        # Separate watchdog-pinger task. Runs independently of the main
+        # background loop so a long inline await (e.g. an 8-min BLE DFU
+        # called from inside the loop's auto-recovery branch) does NOT
+        # block the systemd watchdog ping. Whatever the main loop is
+        # doing, this task pings on a fixed cadence while the asyncio
+        # event loop is alive — which is exactly what the systemd
+        # watchdog wants to know. A hard event-loop deadlock still
+        # SIGKILLs us, as intended.
+        # Verified necessary 2026-05-16: ping inside the loop's pause
+        # path doesn't fire when auto-recovery awaits upload_ble_dfu
+        # INSIDE the loop iteration — the loop never returns to the
+        # top of while until DFU completes.
+        self._watchdog_task: asyncio.Task[None] | None = None
         # Fleet broadcaster — BLE radio-style command channel. Owned by
         # the manager so its lifecycle matches the fleet's; routes get at
         # it via ``self.broadcaster``. Started in :meth:`start`; may be
@@ -196,12 +209,20 @@ class FleetManager:
             except Exception:
                 log.exception("Fleet broadcaster failed to start — fleet commands will not be delivered over BLE")
                 self.broadcaster = None
+        # Start the independent watchdog pinger FIRST so it begins pinging
+        # before anything else can stall.
+        self._watchdog_task = asyncio.create_task(self._watchdog_pinger())
         self._discovery_task = asyncio.create_task(self._background_loop())
         log.info("Fleet manager started")
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
         self._running = False
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watchdog_task
+            self._watchdog_task = None
         if self._discovery_task:
             self._discovery_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1157,6 +1178,41 @@ class FleetManager:
                                 "commands will not reach BLE devices until the server "
                                 "is restarted"
                             )
+
+    # Fixed cadence for the independent watchdog pinger. WATCHDOG_USEC from
+    # systemd is typically 120s; ping every 30s gives 4x headroom even if
+    # we miss a beat. Decoupled from DISCOVERY_INTERVAL_S to make it clear
+    # that this lives outside the main loop.
+    WATCHDOG_PING_INTERVAL_S = 30.0
+
+    async def _watchdog_pinger(self) -> None:
+        """Ping systemd's watchdog on a fixed cadence, independent of the
+        main background loop.
+
+        Why this is a separate task: long-running operations inside the
+        background loop (BLE DFU via auto-recovery, in particular) `await`
+        for many minutes. While that await is pending, the main loop never
+        returns to its `while self._running` head, so the in-loop watchdog
+        ping (full-cycle path AND pause-path) never fires. We pinned this
+        live on 2026-05-16 — the first kill was the cause of cart_inner's
+        partial-flash brick.
+
+        A separate task pings while the asyncio event loop is alive, which
+        is exactly what we want the systemd watchdog to gate on. A hard
+        event-loop deadlock still SIGKILLs us — by design.
+        """
+        log.info(
+            "Watchdog pinger started (every %.1fs)",
+            self.WATCHDOG_PING_INTERVAL_S,
+        )
+        try:
+            while self._running:
+                systemd_notify.watchdog()
+                await asyncio.sleep(self.WATCHDOG_PING_INTERVAL_S)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            log.info("Watchdog pinger stopped")
 
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, liveness checks, and DFU recovery."""

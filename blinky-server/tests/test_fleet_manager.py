@@ -227,3 +227,74 @@ async def test_watchdog_ping_fires_during_paused_discovery(monkeypatch) -> None:
     assert (
         ping_count >= 1
     ), "systemd_notify.watchdog() not called from pause path (this is the cart_inner brick bug)"
+
+
+async def test_watchdog_ping_continues_during_inline_blocking_call(monkeypatch) -> None:
+    """REGRESSION 2: watchdog must ping even when the background loop is
+    blocked on an inline `await` (e.g. multi-minute BLE DFU via auto-recovery).
+
+    Evidence: 2026-05-16 cart_inner SECOND brick attempt — the pause-path
+    ping I added in e79f8a41 only fires when the loop iterates. Auto-recovery
+    calls `await upload_ble_dfu(...)` INSIDE the loop body, so the loop
+    never returns to its `while` head for the multi-minute duration; the
+    in-loop ping never fires; systemd SIGKILLs again.
+
+    Fix: separate _watchdog_pinger task running independently. This test
+    verifies the pinger continues even with the main loop's
+    _discover_and_connect deliberately stuck on a long await.
+    """
+    import asyncio
+
+    from blinky_server import systemd_notify
+    from blinky_server.device import manager as mgr_mod
+
+    ping_count = 0
+
+    def fake_ping() -> None:
+        nonlocal ping_count
+        ping_count += 1
+
+    monkeypatch.setattr(systemd_notify, "watchdog", fake_ping)
+    monkeypatch.setattr(mgr_mod, "DISCOVERY_INTERVAL_S", 0.01)
+    # Tight watchdog cadence so the test runs fast
+    monkeypatch.setattr(mgr_mod.FleetManager, "WATCHDOG_PING_INTERVAL_S", 0.01)
+
+    async def noop_async(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(
+        "blinky_server.transport.discovery.cleanup_stale_ble_connections", noop_async
+    )
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+
+    # Simulate the main loop being stuck on a long inline await (like
+    # auto-recovery's upload_ble_dfu). The loop enters this and never
+    # returns to its while head until the test ends.
+    stuck_started = asyncio.Event()
+
+    async def stuck_forever(*_a, **_kw):
+        stuck_started.set()
+        await asyncio.sleep(10)  # would block longer than the test
+
+    monkeypatch.setattr(fleet, "_discover_and_connect", stuck_forever)
+    monkeypatch.setattr(fleet, "_reconnect_disconnected", noop_async)
+    monkeypatch.setattr(fleet, "_check_serial_threads", lambda: None)
+
+    await fleet.start()
+    try:
+        # Wait for the loop to enter the stuck call
+        await asyncio.wait_for(stuck_started.wait(), timeout=1.0)
+        # Now the main loop is stuck. Sleep long enough for the
+        # independent watchdog pinger to fire many times.
+        await asyncio.sleep(0.1)  # 10x WATCHDOG_PING_INTERVAL_S=0.01
+    finally:
+        await fleet.stop()
+
+    # Without the separate pinger task, ping_count would be 0 (or near 0)
+    # — only the start-time first ping. With the separate task, we expect
+    # multiple pings during the blocked window.
+    assert ping_count >= 3, (
+        f"Watchdog pinger did not continue while main loop was blocked. "
+        f"Got {ping_count} pings. This is the cart_inner SECOND brick bug."
+    )
