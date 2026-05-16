@@ -188,16 +188,53 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
 
     fleet = get_fleet()
     flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
-    devices = [
-        d
-        for d in fleet.get_all_devices()
-        if d.platform == "nrf52840" and d.state in flashable_states
-    ]
+
+    if body.device_ids is not None:
+        # Explicit whitelist: only flash THESE devices. Validate every ID
+        # resolves and is flashable — fail loud on a typo or stale ID rather
+        # than silently dropping it (operator thought they were deploying
+        # to N but actually deployed to N-1).
+        devices = []
+        missing: list[str] = []
+        wrong_state: list[str] = []
+        for device_id in body.device_ids:
+            d = fleet.get_device(device_id)
+            if d is None:
+                missing.append(device_id)
+                continue
+            if d.platform != "nrf52840" or d.state not in flashable_states:
+                wrong_state.append(f"{device_id}({d.platform},{d.state.value})")
+                continue
+            devices.append(d)
+        if missing or wrong_state:
+            raise HTTPException(
+                400,
+                "device_ids whitelist had bad entries — "
+                f"unknown: {missing or '[]'}, "
+                f"not flashable: {wrong_state or '[]'}",
+            )
+    else:
+        # No whitelist provided — back-compat: flash all eligible. Auto-
+        # recovery WILL NOT be armed in this branch (see below).
+        devices = [
+            d
+            for d in fleet.get_all_devices()
+            if d.platform == "nrf52840" and d.state in flashable_states
+        ]
     if not devices:
         raise HTTPException(404, "No flashable nRF52840 devices")
 
-    fleet.set_recovery_firmware(str(firmware))
     device_ids = [d.id for d in devices]
+    if body.device_ids is not None:
+        # Only arm auto-recovery for explicitly-scoped deploys. An unscoped
+        # fleet flash skips arming so we don't auto-flash a dev unit on the
+        # bench during the next cycle.
+        fleet.set_recovery_firmware(str(firmware), device_ids)
+    else:
+        log.warning(
+            "Fleet flash without device_ids whitelist — auto-recovery NOT armed "
+            "(pass device_ids in FlashRequest to opt in)"
+        )
 
     jm = _get_flash_job_manager()
 

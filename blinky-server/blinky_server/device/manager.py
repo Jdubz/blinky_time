@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import time as _time
@@ -92,6 +93,11 @@ class FleetManager:
         self._dedup_excluded: set[str] = set()
         # DFU recovery state (per-device tracking for auto-retry).
         self._recovery_firmware_path: str | None = None
+        # Whitelist of device IDs eligible for auto-recovery. Empty = nothing
+        # auto-recovers, even if a firmware path is set — the whitelist is
+        # the safety belt against flashing a dev unit that happens to be in
+        # DFU at the same time the cart fleet is being deployed.
+        self._recovery_device_ids: set[str] = set()
         self._dfu_recovery_state: dict[str, dict[str, int]] = {}
         # Per-device set tracking which devices have active DFU recovery.
         # Prevents the background loop from starting a second recovery on a
@@ -147,14 +153,21 @@ class FleetManager:
         The API is available immediately — devices connect asynchronously.
         """
         self._running = True
-        # Arm DFU auto-recovery from the persisted pointer if it points at a
-        # file that still exists. Critical for unattended boots: a device
-        # stuck in DFU bootloader at power-on needs recovery without an
-        # operator running deploy.sh first.
+        # Arm DFU auto-recovery from persisted state if a previous deploy
+        # left a firmware path AND an explicit device whitelist. Critical
+        # for unattended boots: a device on the whitelist stuck in DFU
+        # bootloader at power-on recovers itself without operator
+        # intervention. Devices not on the whitelist are left alone.
         persisted = self._load_recovery_firmware()
         if persisted:
-            self._recovery_firmware_path = persisted
-            log.info("DFU auto-recovery armed from persisted path: %s", persisted)
+            firmware_path, device_ids = persisted
+            self._recovery_firmware_path = firmware_path
+            self._recovery_device_ids = device_ids
+            log.info(
+                "DFU auto-recovery armed from persisted state: %s (devices: %s)",
+                firmware_path,
+                ", ".join(sorted(device_ids)) or "<none>",
+            )
         self._discovery_task = asyncio.create_task(self._background_loop())
         log.info("Fleet manager started (devices connecting in background)")
 
@@ -773,40 +786,86 @@ class FleetManager:
 
     @staticmethod
     def _recovery_state_path() -> Path:
-        """Persistent state file for recovery firmware path.
+        """Persistent state file for recovery firmware + device whitelist.
 
         Lives under ``~/.local/share/blinky-server/`` so it survives reboots.
         Previously /tmp, which is tmpfs on Pi — a power cycle erased it and
         any device stuck in DFU bootloader could no longer auto-recover.
+
+        File format: JSON ``{"firmware_path": str, "device_ids": [str, ...]}``.
+        An older plain-string format used to live here; it's rejected on load
+        because it has no whitelist, and auto-flashing all dfu_recovery
+        devices unscoped is unsafe (could clobber a dev unit on the bench).
         """
         from ..paths import data_dir
 
-        return data_dir() / "recovery-firmware.path"
+        return data_dir() / "recovery-firmware.json"
 
-    def set_recovery_firmware(self, firmware_path: str) -> None:
-        """Set the firmware path used for automatic DFU recovery.
+    def set_recovery_firmware(self, firmware_path: str, device_ids: list[str]) -> None:
+        """Arm automatic DFU recovery, scoped to an explicit device whitelist.
 
-        When set, the fleet manager will automatically attempt BLE DFU on
-        devices discovered in DFU_RECOVERY state (stuck in bootloader after
-        a failed update). This eliminates the need for operator intervention.
+        When armed, the fleet manager attempts BLE DFU on devices in this
+        list that show up in DFU_RECOVERY state. Devices NOT in the list
+        are left alone — this is the safety mechanism that keeps a cart
+        deploy from auto-flashing a hat being developed separately, etc.
 
-        Persisted to ~/.local/share/blinky-server/ so a Pi reboot during or
-        after a deploy doesn't strand devices in bootloader.
+        Persisted to ~/.local/share/blinky-server/ so the arm survives a
+        reboot. After a power cycle a stuck device still auto-recovers
+        without operator intervention.
+
+        Raises ValueError on an empty device_ids list — passing no list at
+        all would silently disable recovery while looking like it was armed,
+        which is the "no silent fallback" failure mode.
         """
+        if not device_ids:
+            raise ValueError("set_recovery_firmware requires a non-empty device_ids list")
         self._recovery_firmware_path = firmware_path
-        with contextlib.suppress(OSError):
-            self._recovery_state_path().write_text(firmware_path)
-        log.info("Recovery firmware set: %s", firmware_path)
-
-    def _load_recovery_firmware(self) -> str | None:
-        """Load persisted recovery firmware path from state file."""
+        self._recovery_device_ids = set(device_ids)
+        state = {"firmware_path": firmware_path, "device_ids": sorted(set(device_ids))}
         try:
-            path = self._recovery_state_path().read_text().strip()
-            if path and Path(path).is_file():
-                return path
+            self._recovery_state_path().write_text(json.dumps(state))
         except OSError:
-            pass
-        return None
+            log.warning("Failed to persist recovery-firmware state")
+        log.info(
+            "Recovery firmware armed: %s (devices: %s)",
+            firmware_path,
+            ", ".join(sorted(set(device_ids))) or "<none>",
+        )
+
+    def _load_recovery_firmware(self) -> tuple[str, set[str]] | None:
+        """Load persisted recovery firmware path + device whitelist.
+
+        Returns (firmware_path, device_ids) on success. Returns None if the
+        state file is missing, the firmware file no longer exists, the file
+        is malformed, OR it's in the legacy plain-string format (which had
+        no whitelist — refusing those is safer than auto-flashing the wrong
+        device).
+        """
+        path = self._recovery_state_path()
+        try:
+            raw = path.read_text().strip()
+        except OSError:
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning(
+                "Ignoring legacy recovery-firmware state at %s (plain string; "
+                "no device whitelist — refusing to auto-flash unscoped)",
+                path,
+            )
+            return None
+        firmware_path = data.get("firmware_path")
+        device_ids = data.get("device_ids")
+        if not (isinstance(firmware_path, str) and isinstance(device_ids, list) and device_ids):
+            log.warning("Ignoring malformed recovery-firmware state at %s", path)
+            return None
+        if not Path(firmware_path).is_file():
+            log.warning("Recovery firmware %s no longer exists; not arming", firmware_path)
+            return None
+        return firmware_path, set(device_ids)
 
     async def _auto_recover_dfu_devices(self) -> None:
         """Automatically push firmware to devices stuck in DFU bootloader.
@@ -823,19 +882,30 @@ class FleetManager:
 
         firmware_path = self._recovery_firmware_path
         if not firmware_path:
-            firmware_path = self._load_recovery_firmware()
-            if firmware_path:
+            persisted = self._load_recovery_firmware()
+            if persisted:
+                firmware_path, device_ids = persisted
                 self._recovery_firmware_path = firmware_path
+                self._recovery_device_ids = device_ids
         if not firmware_path:
             return
 
         if not os.path.isfile(firmware_path):
             return
 
+        # No whitelist = nothing to recover. The whitelist is the safety
+        # belt against auto-flashing a device the operator didn't include
+        # in this deploy (e.g. a dev unit in DFU on the bench). An armed
+        # firmware path without a whitelist is treated as not-armed.
+        if not self._recovery_device_ids:
+            return
+
         dfu_devices = [
             d
             for d in self._devices.values()
-            if d.state == DeviceState.DFU_RECOVERY and d.ble_address
+            if d.state == DeviceState.DFU_RECOVERY
+            and d.ble_address
+            and d.id in self._recovery_device_ids
         ]
         if not dfu_devices:
             return

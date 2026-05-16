@@ -104,16 +104,45 @@ if [[ -z "$FW_PATH" ]]; then
     fail "Upload returned no firmware_path" 2
 fi
 
-# ─── Step 3: Flash all devices ───────────────────────────────────────
+# ─── Step 3: Build target device whitelist ───────────────────────────
+#
+# Pass an explicit device_ids whitelist to /api/fleet/flash so:
+#  - The flash targets ONLY these devices (we never silently widen scope).
+#  - The server arms auto-recovery scoped to THIS list. After a power cycle,
+#    a whitelisted device stuck in DFU auto-recovers without an operator;
+#    a non-whitelisted device (e.g. a dev unit in DFU on the bench) is
+#    left alone.
+#
+# Default scope: every currently-CONNECTED nRF52840. Devices in
+# `dfu_recovery` are excluded by default — flashing a stuck device is
+# a deliberate operator action and shouldn't ride along on a routine deploy.
+
+DEVICES_JSON=$(curl -sf "${BLINKY_SERVER}/api/devices" --max-time 5 2>/dev/null) \
+    || fail "Could not query /api/devices for whitelist" 2
+
+DEVICE_IDS_JSON=$(echo "$DEVICES_JSON" | python3 -c "
+import json, sys
+ds = json.load(sys.stdin)
+ids = [d['id'] for d in ds if d.get('platform') == 'nrf52840' and d.get('state') == 'connected']
+print(json.dumps(ids))
+")
+
+DEVICE_COUNT_PRE=$(echo "$DEVICE_IDS_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+if [[ "$DEVICE_COUNT_PRE" -eq 0 ]]; then
+    fail "No connected nRF52840 devices to flash" 2
+fi
+echo "  Targets: ${DEVICE_COUNT_PRE} connected nRF52840(s)"
+
+# ─── Step 4: Flash whitelisted devices ───────────────────────────────
 
 echo ""
-echo "=== Flashing all devices ==="
+echo "=== Flashing whitelisted devices ==="
 
 FLASH_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/flash" \
     -H "X-API-Key: ${API_KEY}" \
     -H "${DEPLOY_TOOL_HEADER}" \
     -H 'Content-Type: application/json' \
-    -d "{\"firmware_path\": \"${FW_PATH}\"}" \
+    -d "{\"firmware_path\": \"${FW_PATH}\", \"device_ids\": ${DEVICE_IDS_JSON}}" \
     --max-time 10 \
     2>/dev/null) || fail "Flash request failed" 2
 
@@ -125,7 +154,7 @@ if [[ -z "$JOB_ID" ]]; then
     fail "Flash returned no job_id" 2
 fi
 
-# ─── Step 4: Poll for flash completion ───────────────────────────────
+# ─── Step 5: Poll for flash completion ───────────────────────────────
 #
 # Timeout budget: a single device can legitimately take 90-180s on a
 # flaky USB hub (uhubctl recoveries, multiple bootloader-entry retries),
@@ -212,7 +241,7 @@ if [[ "$STATUS" != "complete" ]]; then
     fail "Flash polling timed out after $((MAX_POLLS * POLL_INTERVAL_S))s. Last server status: '${PROGRESS}'. Re-run './scripts/deploy.sh --skip-compile' to retry, or check 'sudo journalctl -u blinky-server' for the full per-device log." 2
 fi
 
-# ─── Step 5: Restore runtime settings (defaults) ────────────────────────
+# ─── Step 6: Restore runtime settings (defaults) ────────────────────────
 # Note: `defaults` resets soft runtime tunables (mic, audio tracker params,
 # generators) — it does NOT wipe device identity (matrix size, deviceId).
 # That preservation is intentional: fleet devices keep their identity across
@@ -289,7 +318,7 @@ if ! run_fleet_command "save" "save"; then
     fail "save command did not land on every device. Reboot will lose the just-applied defaults." 4
 fi
 
-# ─── Step 6: Post-deploy state assertion ────────────────────────────────
+# ─── Step 7: Post-deploy state assertion ────────────────────────────────
 # Verify each device's actual state matches expectations. Catches:
 #   - flash succeeded but device booted to wrong version (rare, partial flash)
 #   - audio loop overrun-bound at boot (fixed by b156 drain loop, but regressions

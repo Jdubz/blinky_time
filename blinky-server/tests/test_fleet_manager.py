@@ -64,3 +64,61 @@ async def test_send_to_all_reports_disconnected(fleet_with_devices: FleetManager
     assert results["MOCK_DEVICE_000"].startswith("skipped: state=")
     assert "MOCK_DEVICE_001" in results
     assert not results["MOCK_DEVICE_001"].startswith("skipped:")
+
+
+# ── Recovery firmware whitelist ─────────────────────────────────────
+
+
+def _make_fleet() -> FleetManager:
+    return FleetManager(enable_ble=False, enable_serial=False)
+
+
+def test_set_recovery_firmware_persists(tmp_path, monkeypatch) -> None:
+    """Path + whitelist round-trip through the JSON state file."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    fw = tmp_path / "fw.hex"
+    fw.write_bytes(b"x" * 2000)
+    fm = _make_fleet()
+    fm.set_recovery_firmware(str(fw), ["AA:BB", "CC:DD"])
+
+    loaded = fm._load_recovery_firmware()
+    assert loaded is not None
+    path, ids = loaded
+    assert path == str(fw)
+    assert ids == {"AA:BB", "CC:DD"}
+
+
+def test_set_recovery_firmware_requires_non_empty_whitelist(tmp_path, monkeypatch) -> None:
+    """Empty whitelist must raise — silent no-op would mask the fact that
+    auto-recovery is disabled while looking like it was armed."""
+    import pytest
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    fw = tmp_path / "fw.hex"
+    fw.write_bytes(b"x" * 2000)
+    fm = _make_fleet()
+    with pytest.raises(ValueError):
+        fm.set_recovery_firmware(str(fw), [])
+
+
+def test_load_rejects_legacy_plain_string_format(tmp_path, monkeypatch) -> None:
+    """A plain-string state file from before the JSON migration has no
+    whitelist; auto-flashing unscoped is unsafe so we ignore it."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    fm = _make_fleet()
+    legacy = fm._recovery_state_path()
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("/tmp/old-firmware.hex")  # not JSON
+
+    assert fm._load_recovery_firmware() is None
+
+
+def test_load_rejects_missing_firmware_file(tmp_path, monkeypatch) -> None:
+    """If the firmware file pointed to by persisted state no longer exists,
+    we must not try to arm recovery — the BLE DFU upload would fail anyway."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    fm = _make_fleet()
+    fm.set_recovery_firmware(str(tmp_path / "ghost.hex"), ["X"])
+    # set_recovery_firmware doesn't check existence; load does.
+    # (Path was valid at set time, deleted before load — simulated here.)
+    assert fm._load_recovery_firmware() is None

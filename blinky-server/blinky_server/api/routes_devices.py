@@ -245,7 +245,9 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         raise HTTPException(400, f"Upload not yet supported for platform: {device.platform}")
 
     fleet = get_fleet()
-    fleet.set_recovery_firmware(str(firmware))
+    # Per-device flash arms auto-recovery for THIS device only — the explicit
+    # whitelist keeps a future DFU bounce from auto-flashing unrelated devices.
+    fleet.set_recovery_firmware(str(firmware), [device.id])
 
     # Hold time: UF2 takes ~60s, BLE DFU takes ~8 min
     is_ble_only = (
