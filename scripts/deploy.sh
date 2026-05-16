@@ -40,10 +40,27 @@ NO_BUMP=false
 # with NN re-enabled, this also gates the fps≥30 hard check.
 LOOP_METRICS_SETTLE_S=6
 
+DEVICES_ARG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-bump)       NO_BUMP=true; shift ;;
         --skip-compile)  SKIP_COMPILE=true; shift ;;
+        --devices)       DEVICES_ARG="$2"; shift 2 ;;
+        --devices=*)     DEVICES_ARG="${1#--devices=}"; shift ;;
+        -h|--help)
+            cat <<EOF
+Usage: ./scripts/deploy.sh --devices <list> [--no-bump] [--skip-compile]
+
+  --devices <list>   Comma-separated device IDs OR the literal 'all' to
+                     deploy to every flashable device in range. Required.
+                     Use --devices=list to print the candidate IDs without
+                     starting a deploy.
+
+Devices in dfu_recovery are intentionally excluded from 'all' — flashing
+a stuck device is a deliberate operator action via --devices <id>.
+EOF
+            exit 0
+            ;;
         *)               echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -58,6 +75,32 @@ if [[ -z "$API_KEY" && -f ~/.blinky-api-key ]]; then
 fi
 if [[ -z "$API_KEY" ]]; then
     fail "No API key. Set BLINKY_API_KEY or create ~/.blinky-api-key" 3
+fi
+
+# Show the candidate flashable devices and exit. Useful for figuring out
+# which IDs to pass to --devices without committing to a deploy.
+if [[ "$DEVICES_ARG" == "list" ]]; then
+    echo "Flashable devices currently visible to blinky-server:"
+    curl -sf "${BLINKY_SERVER}/api/devices" | python3 -c "
+import json, sys
+flashable = {'connected', 'present'}
+ds = json.load(sys.stdin)
+candidates = [d for d in ds if d.get('platform') == 'nrf52840' and d.get('state') in flashable]
+if not candidates:
+    print('  (none)')
+    sys.exit(0)
+for d in candidates:
+    print(f\"  {d['id']:25} state={d['state']:9} name={d.get('device_name') or '-'}\")"
+    exit 0
+fi
+
+# Explicit device whitelist is required: no auto-derive of 'all flashable',
+# because that scope picks up sibling devices an operator might not want
+# to touch (development units in the same room, etc.). Pass --devices=all
+# to opt into 'every flashable device in range', or --devices=ID1,ID2 for
+# an explicit subset.
+if [[ -z "$DEVICES_ARG" ]]; then
+    fail "missing --devices. Use './scripts/deploy.sh --devices list' to see candidates, then --devices=ID1,ID2 or --devices=all." 6
 fi
 
 # Identify this deploy.sh invocation to the server. The server enforces
@@ -104,40 +147,41 @@ if [[ -z "$FW_PATH" ]]; then
     fail "Upload returned no firmware_path" 2
 fi
 
-# ─── Step 3: Build target device whitelist ───────────────────────────
+# ─── Step 3: Resolve the target device whitelist ─────────────────────
 #
-# Pass an explicit device_ids whitelist to /api/fleet/flash so:
-#  - The flash targets ONLY these devices (we never silently widen scope).
-#  - The server arms auto-recovery scoped to THIS list. After a power cycle,
-#    a whitelisted device stuck in DFU auto-recovers without an operator;
-#    a non-whitelisted device (e.g. a dev unit in DFU on the bench) is
-#    left alone.
+# The whitelist is required (see arg parsing above). Two forms accepted:
+#   --devices=all       -> every flashable nRF52840 in range
+#   --devices=ID1,ID2   -> exactly these device IDs
 #
-# Default scope: every currently-CONNECTED nRF52840. Devices in
-# `dfu_recovery` are excluded by default — flashing a stuck device is
-# a deliberate operator action and shouldn't ride along on a routine deploy.
+# In both cases we resolve to a JSON array and pass it to /api/fleet/flash.
+# The server validates each ID exists + is flashable; unknown or wrong-
+# state IDs fail loudly rather than being silently dropped.
 
 DEVICES_JSON=$(curl -sf "${BLINKY_SERVER}/api/devices" --max-time 5 2>/dev/null) \
     || fail "Could not query /api/devices for whitelist" 2
 
-DEVICE_IDS_JSON=$(echo "$DEVICES_JSON" | python3 -c "
-import json, sys
-# Flashable states:
-#   connected -> serial device, persistent transport
-#   present   -> BLE device, just-in-time GATT connect via the flash route
-# dfu_recovery is intentionally excluded from the default scope: flashing
-# a stuck device is a deliberate operator action, not a routine deploy.
-flashable = {'connected', 'present'}
+DEVICE_IDS_JSON=$(echo "$DEVICES_JSON" | DEVICES_ARG="$DEVICES_ARG" python3 -c "
+import json, os, sys
 ds = json.load(sys.stdin)
-ids = [d['id'] for d in ds if d.get('platform') == 'nrf52840' and d.get('state') in flashable]
-print(json.dumps(ids))
+flashable = {'connected', 'present'}
+arg = os.environ['DEVICES_ARG']
+if arg == 'all':
+    candidates = [d for d in ds if d.get('platform') == 'nrf52840' and d.get('state') in flashable]
+    ids = [d['id'] for d in candidates]
+    print(json.dumps(ids))
+else:
+    # Explicit comma-separated list. Trust the operator on naming; the
+    # server will 400 on any unknown / not-flashable ID.
+    ids = [s.strip() for s in arg.split(',') if s.strip()]
+    print(json.dumps(ids))
 ")
 
 DEVICE_COUNT_PRE=$(echo "$DEVICE_IDS_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
 if [[ "$DEVICE_COUNT_PRE" -eq 0 ]]; then
-    fail "No connected nRF52840 devices to flash" 2
+    fail "No devices in the --devices whitelist (got '${DEVICES_ARG}')" 2
 fi
-echo "  Targets: ${DEVICE_COUNT_PRE} connected nRF52840(s)"
+echo "  Targets (${DEVICES_ARG}): ${DEVICE_COUNT_PRE} device(s)"
+echo "$DEVICE_IDS_JSON" | python3 -c "import json,sys; [print(f'    {i}') for i in json.load(sys.stdin)]"
 
 # ─── Step 4: Flash whitelisted devices ───────────────────────────────
 
