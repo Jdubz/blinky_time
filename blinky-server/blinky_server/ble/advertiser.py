@@ -51,7 +51,7 @@ class _Advertisement(ServiceInterface):
     emitting PropertiesChanged is how we re-aim the broadcast at runtime.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         super().__init__(LE_ADV_IFACE)
         # Seed with a single-byte non-empty payload so BlueZ has something
         # to put on-air at registration time. The real packet shows up via
@@ -70,7 +70,11 @@ class _Advertisement(ServiceInterface):
         # detail). Event.set() is not thread-safe, so we schedule it via
         # call_soon_threadsafe on the captured loop. PR #140 review —
         # this was the silent-failure path that prompted the audit.
-        self._loop = loop or asyncio.get_event_loop()
+        #
+        # `loop` is required (not defaulted to asyncio.get_event_loop())
+        # because get_event_loop() is deprecated in 3.10+ when there is
+        # no running loop. start() always passes the running loop.
+        self._loop = loop
         self._released_event = asyncio.Event()
 
     @method()
@@ -338,12 +342,12 @@ class FleetBroadcaster:
             raise RuntimeError("FleetBroadcaster not started")
 
         async with self._lock:
-            seq = self._next_sequence()
-            packet = _proto.build_packet(_proto.PacketType.COMMAND, command, seq)
+            my_seq = self._next_sequence()
+            packet = _proto.build_packet(_proto.PacketType.COMMAND, command, my_seq)
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
             self._last_command = command
             self._broadcasts_sent += 1
-            log.info("Broadcast cmd seq=%d: %r", seq, command)
+            log.info("Broadcast cmd seq=%d: %r", my_seq, command)
 
         # Hold on-air OUTSIDE the lock. Concurrent broadcasts will
         # acquire the lock and re-aim the payload; this caller's
@@ -360,10 +364,13 @@ class FleetBroadcaster:
             # the previous command's (source, seq).
             if self._adv is None:
                 return  # stop() raced us
-            # If another caller re-aimed mid-sleep, their command is the
-            # current payload — don't clobber it with a no-op. Detect by
-            # whether _last_command still matches what we set.
-            if self._last_command != command:
+            # Gate on the sequence number captured at broadcast time, NOT
+            # on the command string. Two back-to-back identical commands
+            # advance the sequence to different values; comparing strings
+            # would let the FIRST wake-up kill the SECOND broadcast's
+            # still-live on-air window (PR #140 review — verified would
+            # bite scenes that send `set foo X` then `set foo Y`).
+            if self._sequence != my_seq:
                 return
             noop_seq = self._next_sequence()
             noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE))

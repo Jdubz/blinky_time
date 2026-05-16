@@ -30,8 +30,35 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-BL_REPO="${BL_REPO:-/home/jdubz/Development/Adafruit_nRF52_Bootloader}"
 DEFAULT_BL_UF2="$REPO/bootloader/update-bootloader-qspi-ota-default.uf2"
+
+# BL_REPO defaults to a sibling checkout of Adafruit_nRF52_Bootloader.
+# Override with env BL_REPO=/path/... for other layouts. We fail loud
+# (rather than silently noop'ing verify_bootloader.py) if the directory
+# isn't there — PR #140 review: the previous hardcoded $HOME path was
+# author-machine-specific and would silently do nothing on CI / other
+# operators' boxes.
+BL_REPO="${BL_REPO:-$REPO/../Adafruit_nRF52_Bootloader}"
+if [ ! -d "$BL_REPO" ]; then
+    cat >&2 <<EOF
+ERROR: BL_REPO is not a directory: $BL_REPO
+
+The bootloader-source verifier (scripts/verify_bootloader.py) needs the
+Adafruit_nRF52_Bootloader source tree to run its source-level invariant
+checks. Either:
+
+  * clone it as a sibling to this repo:
+      cd "$(dirname "$REPO")"
+      git clone https://github.com/adafruit/Adafruit_nRF52_Bootloader.git
+      (then git checkout the blinky-local-patches branch, or whichever
+       branch this fleet's BL is built from)
+
+  * or set BL_REPO to wherever you have it:
+      BL_REPO=/your/path ./scripts/deploy-bootloader.sh ...
+
+EOF
+    exit 2
+fi
 
 PORT=""
 BL_UF2="$DEFAULT_BL_UF2"
