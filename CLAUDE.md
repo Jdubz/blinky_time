@@ -28,6 +28,20 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 **Unresponsive device recovery:** `uhubctl -a cycle -p <port>` → server flash → wait for re-enumeration. Last resort: physical reset.
 
+## CRITICAL: Bootloader changes are higher-stakes than firmware changes
+
+**Bootloader updates go through `./scripts/deploy-bootloader.sh`, not deploy.sh or direct UF2 drops.** That wrapper enforces three safety layers introduced after the 2026-05-15 hat-bricking incident:
+
+1. **Source-level invariant check** (`scripts/verify_bootloader.py`): refuses to flash any BL whose `check_dfu_mode()` has an `if (_ota_dfu)` branch that does not initialize USB. This is the literal failure mode that bricked the hat — a BL change removed `usb_init()` from the OTA path, and when the firmware's `RebootFrequencyCounter` auto-quarantine triggered `DEFAULT_TO_OTA_DFU`, the BL came up with BLE only. No BLE host nearby → device unreachable → SWD required.
+2. **Pre-flash version log**: captures the running BL's `INFO_UF2.TXT` so you know exactly what you're rolling back from if something goes wrong.
+3. **Post-flash verification**: re-enters DFU after the device reboots and confirms the new BL version is what was intended.
+
+**The invariant the verifier enforces** (do not break this without understanding why): *every code path inside `check_dfu_mode()` that reaches `bootloader_dfu_start()` must first initialize USB*. The bootloader has both a USB MSC transport (UF2 drag-drop) and a BLE OTA transport. Either can be the operator's reach to the device. Removing USB from any DFU entry path — even one that "seems like it'd only happen with BLE" — silently breaks recovery for the subset of devices that fall into that path without a BLE host nearby. Per the 2026-05-15 incident, this includes the `DEFAULT_TO_OTA_DFU` auto-recovery on invalid-app boot.
+
+**SWD recovery for fully-bricked devices.** A Raspberry Pi Zero W at `swd-flash.local` is provisioned for SWD recovery: `ssh swd-flash.local` then `cd ~/swd-recovery && cat README.md` for wiring + commands. The Pi has the known-good fleet BL (0.8.0-4-g76d1e60), MBR, and SoftDevice S140 7.3.0 hex files staged. Use this as the recovery of last resort when a device drops off USB and isn't reachable via BLE.
+
+**Test bootloaders on a SACRIFICIAL device.** Do not flash an experimental BL to the only available test device. If only one device is on the bench, build the BL change against the known-good (`git log blinky-local-patches` to find the last-stable BL commit) and verify with `scripts/verify_bootloader.py` BEFORE flashing. The verifier catches the specific bug class that bricked the hat; pass it before committing to a flash.
+
 ## CRITICAL: Task is Onset Detection, Not Beat Detection
 
 **The model and firmware are doing ONSET DETECTION** — fire on every percussive event (kick, snare, ghost notes, hi-hats) regardless of metrical position. **We do NOT care whether an event lands on or off the beat.** Beat-detection framing is wrong for this task and creates noise — both metric noise (scoring against beat positions when the goal is to fire on every drum hit) and label noise (training on beat consensus teaches the model to suppress off-beat onsets, which we want to keep).
