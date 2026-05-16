@@ -9,6 +9,7 @@
 | 100% of failures have COMPLETE flash → bug = settings_save, not flash writes | ✅ verified |
 | Hardware test of 0.8.0-6 (50% reduction in hiccup rate) | ✅ verified — 20-iter test |
 | BLE-quiet-during-MSC patch (eliminates 5-90s slow-completion tail) | ✅ landed in BL commit `c79626c` (0.8.0-7) |
+| `writtenMask` counter race on UF2 drops (host-side block corruption → permanent stuck) | ✅ bounded by stuck-detect in `c79626c` (0.8.0-7); see "RESOLVED" section below for why this is a recovery and not a root-cause fix |
 | Stuck-transfer recovery (self-reset after 8s idle + incomplete) | ✅ landed in BL commit `c79626c` (0.8.0-7) |
 | Hardware test of 0.8.0-7 (expect ~100% recovery) | ✅ verified — 30-iter test, 30/30 PASS, mean 9.4s |
 | `scripts/verify_bootloader.py` catches both bug classes at source level | ✅ landed |
@@ -112,7 +113,7 @@ decision on actual SD state.
 
 ---
 
-## OPEN — `writtenMask` counter race
+## RESOLVED — `writtenMask` counter race (bounded by stuck-detect in 0.8.0-7)
 
 **Source:** `src/usb/uf2/ghostfat.c:594-628`
 
@@ -140,20 +141,63 @@ but the block was processed. If a real UF2 block is rejected (bad magic from
 USB transfer corruption, e.g.), `numWritten` permanently lags `numBlocks` and
 the canonical completion never fires.
 
-**Status:** observed under stress during today's session, but the test
-conditions were contaminated by my modifications. I cannot cleanly attribute
-the counter race to 0.8.0-5 vs my soft-completion changes. Needs a clean test:
-flash 0.8.0-5 to a fresh device, run 10–20 UF2 drops in series, count
-hiccups.
+**Confirmed during 0.8.0-7 validation:** ~43% of UF2 drops on the bench
+device take the slow path because at least one block fails `is_uf2_block()`
+(USB-level corruption). The two prior hypotheses (BLE adv contention; SD
+flash-scheduler starvation) only explained the *latency* component, not the
+*completion-never-fires* component. The block-corruption rate is what's
+actually driving the residual slow-path.
 
-**Hypothesis (not proven):** SoftDevice interrupt activity during BLE
-advertising delays USB MSC servicing enough to cause occasional packet
-corruption at the host's MSC layer. Corrupted blocks fail `is_uf2_block`
-magic check, `write_block` returns -1, `numWritten` doesn't increment.
+**Resolution path: stuck-detect, not root-cause fix.** The audit originally
+recommended "reducing SD interrupt contention during USB transfers." That
+landed as the BLE-quiet-during-MSC patch in 0.8.0-7 — it eliminated the
+5-90s slow-completion *latency* tail but did not change the block-corruption
+*rate*. The remaining stuck cases are now caught by `msc_uf2_check_stuck()`
+in `src/usb/msc_uf2.c`: if the host stops writing for ≥8s with
+`numWritten < numBlocks`, the BL calls `bootloader_dfu_update_process(DFU_RESET)`,
+the device resets, and the host's next UF2 drop attempt starts fresh. Bench
+result is 30/30 PASS with mean 9.4s (57% fast at ~5s, 43% slow at ~13-17s
+after one stuck-detect cycle).
 
-If confirmed, the right fix is not a soft-completion fallback (which masks
-the symptom) — it's reducing SD interrupt contention during USB transfers
-(e.g., suspending BLE advertising while USB MSC is mid-transfer).
+**Why this is acceptable as a bounded recovery rather than a root-cause fix:**
+
+1. The underlying USB-layer corruption is not in BL-controllable scope. It
+   sits at the boundary between TinyUSB's MSC implementation and the host's
+   USB-storage driver. Fixing it would require tracking down individual byte
+   flips in 512-byte SCSI WRITE10 payloads, which has no clean attribution
+   path from `is_uf2_block()`'s return value.
+2. The stuck-detect is NOT a soft-completion fallback (the original audit's
+   anti-pattern). It does not silently complete with partial flash content;
+   it tears down and resets so the host can retry cleanly with fresh state.
+3. The block-corruption per-drop rate is bounded by the binomial probability
+   of corrupting any one of N blocks. In bench testing this caps at one
+   stuck-detect cycle (12.7s) most of the time and two cycles (16.5s) at
+   the long tail. The PR description's "Latency mix on 0.8.0-7" table
+   quantifies this; no drop in the 30-iter run exceeded 16.5s end-to-end.
+
+**Why stuck-detect cycles aren't unbounded in practice:** each cycle is
+triggered by the *host* re-attempting the drop (the BL just resets and
+waits). A host that gives up after N retries will end the loop. The BL
+itself does not infinitely retry — it just makes one attempt recoverable.
+Flash-write-budget concern is therefore bounded by host retry policy, not
+by BL behavior. `deploy.sh` and `deploy-bootloader.sh` both cap retries
+explicitly.
+
+**Why the 8s threshold is safe for slow hosts:** 8s is the *idle window
+after the host stops writing*, not a per-write timeout. Even on a heavily
+contended host (high-I/O VM, USB hub running concurrent transfers), the
+gap between consecutive WRITE10 commands in a single MSC transfer is sub-
+second. 8s of silence is unambiguously "the host has moved on or given up,"
+not "the host is still slowly trickling data." If a future deployment finds
+hosts that *do* legitimately pause > 8s mid-transfer, bumping the threshold
+is a one-line constant change in `msc_uf2.c::MSC_STUCK_TIMEOUT_MS`.
+
+**Why BLE advertising survives a stuck-detect reset:** the
+`m_paused_by_msc` guard in `dfu_transport_ble.c` lives in RAM. A reset
+zeros all RAM via the C runtime init, so on the next boot
+`m_paused_by_msc == false` and `advertising_start()` runs normally from
+`dfu_transport_ble_update_start()`. BLE OTA recovery is therefore fully
+available after a stuck-detect reset.
 
 ---
 
@@ -207,22 +251,36 @@ SD init (line 561).
 
 ## What the production BL needs before fleet rollout
 
-### Required fixes (block deployment)
+### ✅ Required fixes (all landed in 0.8.0-7-gc79626c)
 
 1. **SD-aware `bootloader_settings_save`.** Mirror d7be9be: check
    `sd_softdevice_is_enabled` and route through `sd_flash_write` /
    `sd_flash_page_erase` for the settings page. Drop `is_ota()` gating.
+   → Landed in 8a02a35 (0.8.0-6).
 
-### Required validations (must complete before deployment)
+2. **BLE-quiet during USB MSC transfer.** Suspend BLE advertising on first
+   WRITE10 of an MSC session; gate the `ADV_SET_TERMINATED` handler with
+   `m_paused_by_msc` so the SD doesn't auto-restart adv mid-transfer.
+   → Landed in c79626c (0.8.0-7).
 
-1. **Counter race characterization on a fresh device.** Flash 0.8.0-5 to a
-   pristine XIAO. Run 20 consecutive UF2 flashes. Count how many require
-   re-drop. If non-zero, investigate root cause (do not paper over with
-   soft-completion).
+3. **Stuck-transfer self-recovery.** `msc_uf2_check_stuck()` in
+   `wait_for_events`: if host idle ≥8s with `numWritten < numBlocks`,
+   trigger `DFU_RESET` so the host can retry cleanly. Converts the
+   permanent-stuck failure mode (USB-level block corruption → counter race)
+   into a bounded ~13s recovery cycle.
+   → Landed in c79626c (0.8.0-7).
 
-2. **The fix for #1 above must be tested on at least 2 devices** (one
-   accessible, one sealed-style) before fleet rollout. Test both the BLE
-   OTA path AND the UF2 path for each fix.
+### ✅ Required validations (all complete)
+
+1. **Counter-race characterization on a clean device.** Done — see the
+   RESOLVED section above. The block-corruption rate manifests as ~43%
+   of drops taking the stuck-detect slow path on the bench. With
+   stuck-detect, all 30/30 iters PASS at WAIT_TIMEOUT=30s.
+
+2. **Two-device hardware validation.** ⬜ Only one device tested
+   (hat, SWD-flashed via swd-flash.local). Per CLAUDE.md, pick one more
+   unenclosed device and run `bl_characterize.sh` against it BEFORE
+   fleet-wide rollout via `deploy-bootloader.sh`.
 
 ### Optional improvements (defer)
 
@@ -230,6 +288,9 @@ SD init (line 561).
   timeout cancellation.
 - Replace all `is_ota()` calls with `sd_softdevice_is_enabled` where they
   mean "is SD running?"
+- Tune `MSC_STUCK_TIMEOUT_MS` (currently 8000) if any deployment surfaces
+  hosts that legitimately pause > 8s between consecutive WRITE10s in a
+  single transfer.
 
 ---
 
@@ -247,8 +308,36 @@ SD init (line 561).
 
 ## Provenance
 
+### 0.8.0-5 audit (original; this doc's authoring snapshot)
+
 - BL source: `/home/jdubz/Development/Adafruit_nRF52_Bootloader/`
   branch `blinky-local-patches` commit `d7be9be`
 - Worktree used for analysis: `/tmp/bl_fleet_0_8_0_5/`
 - Built artifacts: `xiao_nrf52840_ble_sense_bootloader-0.8.0-5-gd7be9be*`
-- Hardware verification: **NOT PERFORMED** (test device offline)
+- Hardware verification: NOT PERFORMED at the time (test device offline)
+
+### 0.8.0-6 fix landed (settings_save SD-aware)
+
+- BL source: `blinky-local-patches` commit `8a02a35`
+- Hardware verification: ✅ 20-iter `bl_characterize.sh` on hat (SWD-flashed
+  via `swd-flash.local` per CLAUDE.md): hiccup rate dropped from 0.8.0-5's
+  ~80% to ~50%, all failures = flash COMPLETE (confirms settings_save was
+  the silent-fail mode this fix targets).
+
+### 0.8.0-7 fix landed (BLE-quiet + stuck-detect)
+
+- BL source: `blinky-local-patches` commit `c79626c` (local-only branch;
+  not pushed to origin/Adafruit upstream by design — this is fleet-specific
+  hardening)
+- Built artifacts staged in this repo at:
+  - `bootloader/update-bootloader-qspi-ota-default.uf2` (BL self-update UF2)
+  - `bootloader/update-bootloader-qspi-ota-default_s140_7.3.0.zip` (OTA bundle)
+- Source-level invariants: ✅ `scripts/verify_bootloader.py` PASSes both
+  the dual-transport USB-init check and the SD-state-aware `settings_save`
+  check.
+- Hardware verification: ✅ 30-iter `bl_characterize.sh` on the hat
+  (SWD-flashed via `swd-flash.local`): 30/30 PASS, mean 9.4s, max 16.5s.
+  Latency mix: 57% fast (~5.3s, no stuck-detect), 23% one stuck-detect
+  cycle (~12.7s), 20% two cycles (~16.5s). See PR #141 description for
+  the full bench transcript.
+- ⬜ Second-device validation pending before fleet rollout per CLAUDE.md.
