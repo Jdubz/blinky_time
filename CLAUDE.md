@@ -10,10 +10,14 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 
 **Flashing connected devices: `./scripts/deploy.sh` is REQUIRED.** Direct `curl` against `/api/fleet/upload`, `/api/fleet/flash`, or `/api/devices/{id}/command` with a device-mutating command body (`device upload`, `reboot`) is forbidden — the server enforces this via an `X-Deploy-Tool` header check that only `deploy.sh` sets, so manual curl returns 403. The API key alone is not sufficient. Use:
 
+`./scripts/deploy.sh` requires an explicit `--devices` target — passing `all`, an explicit comma-separated list of device IDs, or `list` to enumerate candidates. Unscoped fleet flashes were removed in PR #140 after the cart_inner brick incident.
+
 ```bash
-./scripts/deploy.sh                     # compile + upload + flash + verify
-./scripts/deploy.sh --skip-compile      # deploy already-compiled hex (e.g. after build.sh)
-./scripts/deploy.sh --no-bump           # recompile without bumping build number
+./scripts/deploy.sh --devices=all                   # compile + upload + flash all devices + verify
+./scripts/deploy.sh --devices=cart_inner,cart_outer # scope to a subset
+./scripts/deploy.sh --devices=list                  # show candidates and exit
+./scripts/deploy.sh --devices=all --skip-compile    # deploy already-compiled hex
+./scripts/deploy.sh --devices=all --no-bump         # recompile without bumping build number
 ```
 
 deploy.sh runs the full pipeline (compile → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.

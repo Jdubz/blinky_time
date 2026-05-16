@@ -2,6 +2,8 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../physics/BackgroundModel.h"
+#include "../physics/LinearBackground.h"
+#include "../physics/MatrixBackground.h"
 #include "../types/ColorPalette.h"
 #include "../math/SimplexNoise.h"
 
@@ -164,8 +166,14 @@ private:
     // the device. Verified live 2026-05-16: caused gen-water to hard-reset
     // both 1D and 2D cart devices within milliseconds of the switch.
     alignas(8) uint8_t backgroundBuffer_[64];
+    // Compile-time check that the buffer fits the largest BackgroundModel
+    // subclass we placement-new into it. Listed explicitly rather than via
+    // a sizeof literal (the previous form `sizeof(uint8_t[64]) >= 32` was
+    // trivially true and caught nothing — PR #140 review).
     static_assert(
-        sizeof(uint8_t[64]) >= 32,
-        "backgroundBuffer_ smaller than expected — review BackgroundModel subclass sizes"
+        sizeof(backgroundBuffer_) >= sizeof(LinearBackground)
+            && sizeof(backgroundBuffer_) >= sizeof(MatrixBackground),
+        "backgroundBuffer_ is smaller than the largest BackgroundModel "
+        "subclass — bump the buffer size or shrink the subclass"
     );
 };

@@ -1,18 +1,20 @@
-# Bootloader Production Audit — 0.8.0-5-gd7be9be
+# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6
 
-**Date:** 2026-05-15  
-**Scope:** Adafruit_nRF52_Bootloader at commit `d7be9be` (the fleet-deployed BL)  
-**Target:** XIAO nRF52840 Sense  
-**Bottom line:** **NOT production-ready.** One confirmed latent bug + one open question.
+**Status as of 2026-05-16:**
 
----
+| Item | Status |
+|------|--------|
+| `bootloader_settings_save` SD-aware fix | ✅ landed in BL commit `8a02a35` (0.8.0-6) |
+| 80% USB-flash hiccup on 0.8.0-5 measured on real hardware | ✅ verified (`scripts/bl_characterize.sh`) |
+| 100% of failures have COMPLETE flash → bug = settings_save, not flash writes | ✅ verified |
+| Hardware test of 0.8.0-6 (expect 0% hiccup) | ⬜ pending — needs deployment to a working device |
+| Counter race on small-UF2 BL self-update (100% fail at 142-block file) | ⬜ open, separate from settings_save bug |
+| `scripts/verify_bootloader.py` catches both bug classes at source level | ✅ landed |
+| `scripts/deploy-bootloader.sh` gates flash on verifier | ✅ landed |
 
-## Method
-
-Source-level review with line-numbered citations. No hardware testing — the only
-test device (hat) is offline awaiting SWD recovery. Conclusions are limited to
-what static analysis can establish; runtime behavior must be confirmed on a
-recoverable device before fleet rollout.
+This document captures outstanding actions and the verified diagnostic
+evidence behind them. It is NOT a historical narrative — see git log
+for that.
 
 ---
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from blinky_server.device.device import DeviceState
 from blinky_server.device.manager import FleetManager
 
@@ -115,13 +117,51 @@ def test_load_rejects_legacy_plain_string_format(tmp_path, monkeypatch) -> None:
 
 def test_load_rejects_missing_firmware_file(tmp_path, monkeypatch) -> None:
     """If the firmware file pointed to by persisted state no longer exists,
-    we must not try to arm recovery — the BLE DFU upload would fail anyway."""
+    we must not try to arm recovery — the BLE DFU upload would fail anyway.
+
+    set_recovery_firmware now also fails loud if the file is missing at
+    set time (PR #140 review), so this test creates the file, arms, then
+    deletes it on disk to simulate a between-arm-and-recovery deletion.
+    """
+    from blinky_server import paths as paths_mod
+
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    paths_mod._clear_cache()
     fm = _make_fleet()
-    fm.set_recovery_firmware(str(tmp_path / "ghost.hex"), ["X"])
-    # set_recovery_firmware doesn't check existence; load does.
-    # (Path was valid at set time, deleted before load — simulated here.)
+    hex_path = tmp_path / "ghost.hex"
+    hex_path.write_text("dummy-firmware-blob")  # exists at set time
+    fm.set_recovery_firmware(str(hex_path), ["X"])
+    hex_path.unlink()  # gone between arm and recovery
     assert fm._load_recovery_firmware() is None
+
+
+def test_set_recovery_firmware_rejects_missing_file(tmp_path, monkeypatch) -> None:
+    """set_recovery_firmware must fail loud if the firmware path doesn't
+    exist at set time (PR #140 review — no silent deferral)."""
+    from blinky_server import paths as paths_mod
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    paths_mod._clear_cache()
+    fm = _make_fleet()
+    with pytest.raises(ValueError, match="does not exist"):
+        fm.set_recovery_firmware(str(tmp_path / "absent.hex"), ["X"])
+
+
+def test_set_recovery_firmware_rejects_non_string_ids(tmp_path, monkeypatch) -> None:
+    """set_recovery_firmware must reject non-string device_ids (PR #140
+    review — JSON could round-trip None or numbers and silently fail
+    to match any real device)."""
+    from blinky_server import paths as paths_mod
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    paths_mod._clear_cache()
+    fm = _make_fleet()
+    hex_path = tmp_path / "fw.hex"
+    hex_path.write_text("dummy")
+    with pytest.raises(ValueError, match="non-empty strings"):
+        fm.set_recovery_firmware(str(hex_path), [None])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="non-empty strings"):
+        fm.set_recovery_firmware(str(hex_path), [""])
 
 
 # ── Watchdog ping regression: cart_inner brick 2026-05-16 ──────────────
@@ -256,8 +296,11 @@ async def test_watchdog_ping_continues_during_inline_blocking_call(monkeypatch) 
 
     monkeypatch.setattr(systemd_notify, "watchdog", fake_ping)
     monkeypatch.setattr(mgr_mod, "DISCOVERY_INTERVAL_S", 0.01)
-    # Tight watchdog cadence so the test runs fast
-    monkeypatch.setattr(mgr_mod.FleetManager, "WATCHDOG_PING_INTERVAL_S", 0.01)
+    # Tight watchdog cadence so the test runs fast. Patch the
+    # interval-resolution method (replaces the previous WATCHDOG_PING_INTERVAL_S
+    # class constant which was replaced by _watchdog_ping_interval()
+    # reading $WATCHDOG_USEC — PR #140 review).
+    monkeypatch.setattr(mgr_mod.FleetManager, "_watchdog_ping_interval", lambda self: 0.01)
 
     async def noop_async(*_a, **_kw):
         return None
@@ -287,7 +330,7 @@ async def test_watchdog_ping_continues_during_inline_blocking_call(monkeypatch) 
         await asyncio.wait_for(stuck_started.wait(), timeout=1.0)
         # Now the main loop is stuck. Sleep long enough for the
         # independent watchdog pinger to fire many times.
-        await asyncio.sleep(0.1)  # 10x WATCHDOG_PING_INTERVAL_S=0.01
+        await asyncio.sleep(0.1)  # 10x the patched 0.01s ping interval
     finally:
         await fleet.stop()
 

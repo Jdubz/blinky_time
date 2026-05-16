@@ -532,29 +532,48 @@ class FleetManager:
           - "<serial-id>": per-serial-device response or skipped: state=…
         """
         results: dict[str, str] = {}
-        if self.broadcaster is not None and self.broadcaster.is_running:
-            try:
-                await self.broadcaster.broadcast_command(command)
-                results["broadcast"] = f"OK ({self.broadcaster.broadcasts_sent} sent)"
-            except Exception as exc:
-                log.exception("Broadcast %r failed", command)
-                results["broadcast"] = f"error: {exc}"
-        elif self._enable_ble:
-            results["broadcast"] = "error: broadcaster not running"
 
-        # Fan out to any non-BLE devices we still hold a connection to —
-        # serial (cart-side devices), test mocks, future transports. BLE
-        # is broadcaster-only (no per-device connection state to message).
-        for device_id, device in list(self._devices.items()):
-            if device.transport.transport_type == "ble":
-                continue
-            if device.state != DeviceState.CONNECTED:
-                results[device_id] = f"skipped: state={device.state.value}"
-                continue
-            try:
-                results[device_id] = await device.protocol.send_command(command)
-            except Exception as exc:
-                results[device_id] = f"error: {exc}"
+        # Run BLE broadcast (3s on-air hold) concurrently with serial
+        # fan-out (sub-100ms each). Previously the serial devices waited
+        # for the broadcaster's full 3-second window before getting their
+        # command — pointless serialization. PR #140 review.
+        async def _do_broadcast() -> None:
+            if self.broadcaster is not None and self.broadcaster.is_running:
+                try:
+                    await self.broadcaster.broadcast_command(command)
+                    results["broadcast"] = "OK"
+                except Exception as exc:
+                    log.exception("Broadcast %r failed", command)
+                    results["broadcast"] = f"error: {exc}"
+            elif self._enable_ble:
+                results["broadcast"] = "error: broadcaster not running"
+
+        async def _do_serial_fanout() -> None:
+            # Fan out to any non-BLE devices we still hold a connection to —
+            # serial (cart-side devices), test mocks, future transports.
+            # BLE is broadcaster-only (no per-device connection state to
+            # message).
+            serial_tasks: list[tuple[str, asyncio.Task[str]]] = []
+            skipped: dict[str, str] = {}
+            for device_id, device in list(self._devices.items()):
+                if device.transport.transport_type == "ble":
+                    continue
+                if device.state != DeviceState.CONNECTED:
+                    skipped[device_id] = f"skipped: state={device.state.value}"
+                    continue
+                serial_tasks.append(
+                    (device_id, asyncio.create_task(device.protocol.send_command(command)))
+                )
+            # Await all serial sends in parallel; one slow device shouldn't
+            # delay the others.
+            for device_id, task in serial_tasks:
+                try:
+                    results[device_id] = await task
+                except Exception as exc:
+                    results[device_id] = f"error: {exc}"
+            results.update(skipped)
+
+        await asyncio.gather(_do_broadcast(), _do_serial_fanout())
         return results
 
     async def _deduplicate_transports(self) -> None:
@@ -890,9 +909,16 @@ class FleetManager:
         those). DFU_RECOVERY is exempt — those are stuck in bootloader and
         re-discovery would just re-stick them in a flap loop; operator must
         intervene via /api/devices/{id}/flash or DELETE.
+
+        PRESENT devices are now ALSO reapable. PR #140 review: BLE devices
+        in PRESENT state that go out of range stop being seen by discovery
+        (last_seen stops updating), but the slot stays in the fleet forever
+        — accumulating ghost entries over time. Discovery refreshes
+        last_seen on every scan, so PRESENT + stale last_seen really does
+        mean "device disappeared." Same REAP_THRESHOLD_S applies.
         """
         now = _time.monotonic()
-        reapable = {DeviceState.DISCONNECTED, DeviceState.ERROR}
+        reapable = {DeviceState.DISCONNECTED, DeviceState.ERROR, DeviceState.PRESENT}
         victims: list[str] = []
         for device in list(self._devices.values()):
             if device.state not in reapable:
@@ -967,12 +993,27 @@ class FleetManager:
         reboot. After a power cycle a stuck device still auto-recovers
         without operator intervention.
 
-        Raises ValueError on an empty device_ids list — passing no list at
-        all would silently disable recovery while looking like it was armed,
-        which is the "no silent fallback" failure mode.
+        Raises ValueError on:
+          * an empty device_ids list (would silently disable recovery while
+            looking like it was armed — the "no silent fallback" failure mode)
+          * a missing firmware file (fail loud at set time rather than
+            getting a no-op-with-warning at recovery time when the operator
+            isn't around to notice — PR #140 review)
+          * any non-string entry in device_ids (the JSON round-trip would
+            otherwise pass through e.g. ``[None]`` which would never match
+            a real device ID)
         """
         if not device_ids:
             raise ValueError("set_recovery_firmware requires a non-empty device_ids list")
+        if not all(isinstance(d, str) and d for d in device_ids):
+            raise ValueError(
+                f"set_recovery_firmware: device_ids must all be non-empty strings, "
+                f"got {device_ids!r}"
+            )
+        if not Path(firmware_path).is_file():
+            raise ValueError(
+                f"set_recovery_firmware: firmware file does not exist: {firmware_path}"
+            )
         self._recovery_firmware_path = firmware_path
         self._recovery_device_ids = set(device_ids)
         state = {"firmware_path": firmware_path, "device_ids": sorted(set(device_ids))}
@@ -1013,13 +1054,31 @@ class FleetManager:
             return None
         firmware_path = data.get("firmware_path")
         device_ids = data.get("device_ids")
-        if not (isinstance(firmware_path, str) and isinstance(device_ids, list) and device_ids):
+        if not (
+            isinstance(firmware_path, str)
+            and isinstance(device_ids, list)
+            and device_ids
+            and all(isinstance(d, str) and d for d in device_ids)
+        ):
             log.warning("Ignoring malformed recovery-firmware state at %s", path)
+            self._clear_recovery_state_file(path, reason="malformed")
             return None
         if not Path(firmware_path).is_file():
             log.warning("Recovery firmware %s no longer exists; not arming", firmware_path)
+            self._clear_recovery_state_file(path, reason="firmware-missing")
             return None
         return firmware_path, set(device_ids)
+
+    @staticmethod
+    def _clear_recovery_state_file(path: Path, reason: str) -> None:
+        """Remove a stale recovery-state JSON so the rejection log fires
+        once, not on every boot. PR #140 review.
+        """
+        try:
+            path.unlink(missing_ok=True)
+            log.info("Cleared stale recovery-firmware state (%s)", reason)
+        except OSError:
+            log.exception("Failed to clear stale recovery-firmware state")
 
     async def _auto_recover_dfu_devices(self) -> None:
         """Automatically push firmware to devices stuck in DFU bootloader.
@@ -1134,6 +1193,23 @@ class FleetManager:
                         log.exception(
                             "Auto-recovery: broadcaster stop failed; recovery may fail too"
                         )
+                    # P3 guard mirroring the flash route: if the broadcaster
+                    # didn't actually stop, refuse to enter BLE DFU. Mid-flash
+                    # radio contention against the BCM43455 (advertising +
+                    # GATT-central) produces "Failed (0x03)" and was the
+                    # cart_inner brick mode. PR #140 review — auto-recovery
+                    # was missing this guard that the flash routes have.
+                    if self.broadcaster is not None and self.broadcaster.is_running:
+                        log.error(
+                            "Auto-recovery: broadcaster did not stop cleanly for %s — "
+                            "refusing to enter BLE DFU; will retry next cycle",
+                            device.id[:12],
+                        )
+                        state["fails"] = fail_count + 1
+                        self._dfu_recovery_active.discard(device.id)
+                        self.resume_discovery()
+                        self.resume_reconnect(device.id)
+                        continue
                 try:
                     from ..firmware.ble_dfu import upload_ble_dfu
                     from ..firmware.compile import ensure_dfu_zip
@@ -1181,11 +1257,23 @@ class FleetManager:
                                 "is restarted"
                             )
 
-    # Fixed cadence for the independent watchdog pinger. WATCHDOG_USEC from
-    # systemd is typically 120s; ping every 30s gives 4x headroom even if
-    # we miss a beat. Decoupled from DISCOVERY_INTERVAL_S to make it clear
-    # that this lives outside the main loop.
-    WATCHDOG_PING_INTERVAL_S = 30.0
+    # Fallback ping cadence when systemd doesn't provide WATCHDOG_USEC
+    # (running outside a unit, or WatchdogSec=0). 30s is conservative.
+    WATCHDOG_PING_INTERVAL_FALLBACK_S = 30.0
+
+    def _watchdog_ping_interval(self) -> float:
+        """Compute the watchdog ping cadence from $WATCHDOG_USEC.
+
+        Per systemd docs, services should ping at half the watchdog
+        interval to leave headroom for missed beats. PR #140 review:
+        the previous hardcoded 30s broke for tighter WatchdogSec settings
+        (e.g., WatchdogSec=15s would miss every other beat).
+        """
+        wdog = systemd_notify.watchdog_sec()
+        if wdog is None:
+            return self.WATCHDOG_PING_INTERVAL_FALLBACK_S
+        # half-interval per systemd convention
+        return max(wdog / 2.0, 1.0)
 
     async def _watchdog_pinger(self) -> None:
         """Ping systemd's watchdog on a fixed cadence, independent of the
@@ -1203,14 +1291,12 @@ class FleetManager:
         is exactly what we want the systemd watchdog to gate on. A hard
         event-loop deadlock still SIGKILLs us — by design.
         """
-        log.info(
-            "Watchdog pinger started (every %.1fs)",
-            self.WATCHDOG_PING_INTERVAL_S,
-        )
+        interval = self._watchdog_ping_interval()
+        log.info("Watchdog pinger started (every %.1fs)", interval)
         try:
             while self._running:
                 systemd_notify.watchdog()
-                await asyncio.sleep(self.WATCHDOG_PING_INTERVAL_S)
+                await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
         finally:

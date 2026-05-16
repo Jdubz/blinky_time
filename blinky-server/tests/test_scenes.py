@@ -23,14 +23,19 @@ from blinky_server.scenes import (
 def isolated_scenes_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Redirect the scenes store to a throwaway tmp dir for each test.
 
-    Also clears the module-level cached Path so the next call to _data_dir
-    re-derives from XDG_DATA_HOME.
+    Also clears the module-level cached Paths (both ``scenes._CACHED_DATA_DIR``
+    and ``paths._{data,firmware,scenes}_dir``) so the next call re-derives
+    from XDG_DATA_HOME. PR #140 review: paths.py now also caches.
     """
+    from blinky_server import paths as paths_mod
+
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.setattr(scenes_mod, "_CACHED_DATA_DIR", None)
+    paths_mod._clear_cache()
     yield
     # Post-test reset so other test modules don't see a leaked pointer.
     monkeypatch.setattr(scenes_mod, "_CACHED_DATA_DIR", None)
+    paths_mod._clear_cache()
 
 
 def _scene(name: str, generator: str = "fire") -> Scene:

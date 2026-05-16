@@ -65,6 +65,11 @@ def build_packet(
     (source BD addr, sequence). Reusing the same sequence number for the
     same source intentionally makes the packet a no-op on the receiver
     — useful for re-arming a slot without re-emitting a command.
+
+    Raises ``ValueError`` if the payload exceeds ``EXTENDED_PAYLOAD_MAX``.
+    Without this guard, BlueZ silently truncates or rejects the
+    advertisement update — the exact silent-failure pattern CLAUDE.md
+    "no silent fallbacks" rule forbids (PR #140 review).
     """
     if not (0 <= sequence <= 0xFF):
         raise ValueError(f"sequence must fit in a byte, got {sequence}")
@@ -72,5 +77,11 @@ def build_packet(
         raise ValueError(f"fragment must fit in a byte, got {fragment}")
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
+    if len(payload) > EXTENDED_PAYLOAD_MAX:
+        raise ValueError(
+            f"payload is {len(payload)} bytes; max is {EXTENDED_PAYLOAD_MAX} "
+            f"(EXTENDED_PAYLOAD_MAX). Split the command, or use the fragment "
+            f"field for multi-packet delivery."
+        )
     header = bytes((PROTOCOL_VERSION, int(packet_type), sequence, fragment))
     return header + payload

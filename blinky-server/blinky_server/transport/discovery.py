@@ -318,7 +318,11 @@ async def cleanup_stale_ble_connections() -> None:
 
     try:
         disconnected = await asyncio.to_thread(_cleanup)
-        log.info("BLE cleanup: disconnected %d stale connection(s)", disconnected)
+        # Only log when there's something to report — this runs every
+        # discovery cycle (~10s) and was flooding journals with
+        # "disconnected 0" lines on stable fleets. PR #140 review.
+        if disconnected:
+            log.info("BLE cleanup: disconnected %d stale connection(s)", disconnected)
     except Exception as e:
         log.warning("BLE stale connection cleanup failed: %s", e)
 

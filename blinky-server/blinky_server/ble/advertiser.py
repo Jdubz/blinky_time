@@ -66,11 +66,18 @@ class _Advertisement(ServiceInterface):
         self._released_event = asyncio.Event()
 
     @method()
-    def Release(self) -> None:
-        """Called by BlueZ when it removes this advertisement."""
-        # D-Bus calls this when our advertisement slot is revoked (adapter
-        # went down, manager was reset, etc.); name capitalization is the
-        # D-Bus method name, not a Python style choice.
+    def Release(self):  # type: ignore[no-untyped-def]
+        """Called by BlueZ when it removes this advertisement.
+
+        Intentionally no return annotation: dbus-fast reads the return
+        annotation as a D-Bus signature string; the absence of an
+        annotation means "void return" which is what BlueZ expects. A
+        Python ``-> None`` would set ``__annotations__['return'] = None``
+        and dbus-fast would TypeError at decorator time.
+
+        Method name capitalization matches the D-Bus interface
+        (``org.bluez.LEAdvertisement1.Release``), not Python style.
+        """
         log.warning("BlueZ released our fleet advertisement — slot lost; will re-register")
         # Setting in a sync method called from D-Bus is fine; asyncio.Event
         # is thread-safe enough for the loop-affinity D-Bus uses internally.
@@ -128,47 +135,86 @@ class FleetBroadcaster:
         # Serializes broadcast() calls; rapid back-to-back PropertiesChanged
         # emits can confuse BlueZ if they arrive mid-advertising-cycle.
         self._lock = asyncio.Lock()
+        # Serializes start()/stop() so concurrent calls (e.g. fleet restart
+        # racing with auto-recovery) don't double-register the advertisement
+        # with BlueZ. PR #140 review (TOCTOU race on _bus is not None).
+        self._lifecycle_lock = asyncio.Lock()
+        # Watchdog: monitors _adv._released_event so we don't silently
+        # broadcast into a slot BlueZ has revoked (adapter bounce, manager
+        # reset, slot-limit exceeded). PR #140 review item — fail-loud rule.
+        self._release_monitor: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Connect to BlueZ and register the advertisement slot."""
-        if self._bus is not None:
-            return
-        # Skip when running without a real D-Bus (CI, dev shell): the system
-        # bus address is absent and trying to connect would block forever.
-        if not os.environ.get("DBUS_SYSTEM_BUS_ADDRESS") and not os.path.exists(
-            "/run/dbus/system_bus_socket"
-        ):
-            raise RuntimeError(
-                "FleetBroadcaster requires the system D-Bus; not present in this env"
+        async with self._lifecycle_lock:
+            if self._bus is not None:
+                return
+            # Skip when running without a real D-Bus (CI, dev shell): the
+            # system bus address is absent and trying to connect would block
+            # forever.
+            if not os.environ.get("DBUS_SYSTEM_BUS_ADDRESS") and not os.path.exists(
+                "/run/dbus/system_bus_socket"
+            ):
+                raise RuntimeError(
+                    "FleetBroadcaster requires the system D-Bus; not present in this env"
+                )
+
+            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+            adv = _Advertisement()
+            bus.export(self._object_path, adv)
+
+            # Tell BlueZ about the advertisement object. RegisterAdvertisement
+            # returns when BlueZ has accepted the slot — failure here means we
+            # never get on-air, so raise instead of swallowing.
+            introspection = await bus.introspect(BLUEZ_SERVICE, self._adapter_path)
+            proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
+            mgr = proxy.get_interface(LE_ADV_MGR_IFACE)
+            # call_register_advertisement is a dynamically-generated method on
+            # the proxy interface (dbus-fast builds it from the introspection
+            # XML), so mypy can't see it statically.
+            await mgr.call_register_advertisement(self._object_path, {})  # type: ignore[attr-defined]
+
+            self._bus = bus
+            self._adv = adv
+            self._release_monitor = asyncio.create_task(
+                self._monitor_release(adv), name="ble-broadcaster-release-monitor"
             )
-
-        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-        adv = _Advertisement()
-        bus.export(self._object_path, adv)
-
-        # Tell BlueZ about the advertisement object. RegisterAdvertisement
-        # returns when BlueZ has accepted the slot — failure here means we
-        # never get on-air, so raise instead of swallowing.
-        introspection = await bus.introspect(BLUEZ_SERVICE, self._adapter_path)
-        proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
-        mgr = proxy.get_interface(LE_ADV_MGR_IFACE)
-        # call_register_advertisement is a dynamically-generated method on
-        # the proxy interface (dbus-fast builds it from the introspection
-        # XML), so mypy can't see it statically.
-        await mgr.call_register_advertisement(self._object_path, {})  # type: ignore[attr-defined]
-
-        self._bus = bus
-        self._adv = adv
-        log.info("Fleet broadcaster registered with BlueZ (%s)", self._adapter_path)
+            log.info("Fleet broadcaster registered with BlueZ (%s)", self._adapter_path)
 
     async def stop(self) -> None:
         """Unregister the advertisement + tear down the bus connection."""
+        async with self._lifecycle_lock:
+            release_monitor = self._release_monitor
+            self._release_monitor = None
+            await self._teardown_locked()
+
+        # Cancel the release-monitor outside the lock so a release-firing
+        # monitor that ALSO triggers teardown doesn't end up awaiting
+        # itself. Skip cancellation when stop() is called from within the
+        # monitor task (current_task == release_monitor).
+        if (
+            release_monitor is not None
+            and not release_monitor.done()
+            and release_monitor is not asyncio.current_task()
+        ):
+            release_monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await release_monitor
+
+    async def _teardown_locked(self) -> None:
+        """Inner teardown — caller MUST hold _lifecycle_lock.
+
+        Split out from stop() so the release-monitor can tear the bus
+        down without recursively cancelling itself.
+        """
         if self._bus is None:
             return
         bus = self._bus
-        self._bus = None
         adv = self._adv
-        self._adv = None
+
+        # Unregister + tear down BEFORE nulling our state. If unregister
+        # raises, the slot is still registered in BlueZ and a subsequent
+        # start() would fail with AlreadyExists. PR #140 review.
         try:
             introspection = await bus.introspect(BLUEZ_SERVICE, self._adapter_path)
             proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
@@ -182,7 +228,41 @@ class FleetBroadcaster:
                 with contextlib.suppress(Exception):
                     bus.unexport(self._object_path)
             bus.disconnect()
+            self._bus = None
+            self._adv = None
             log.info("Fleet broadcaster unregistered")
+
+    async def _monitor_release(self, adv: _Advertisement) -> None:
+        """Watch for BlueZ revoking our advertisement slot.
+
+        When BlueZ calls Release() (adapter went down, manager reset,
+        advertisement-slot limit exceeded, etc.), our slot is gone but
+        `_bus` and `_adv` are still set — `is_running` would lie and
+        `broadcast_command()` would emit PropertiesChanged into a dead
+        slot, silently dropping fleet commands.
+
+        On release: tear down (so is_running goes False), log at ERROR
+        with operator-visible guidance. A future enhancement could
+        attempt re-registration here; for now we surface the failure
+        loudly so the operator can decide whether to restart the
+        service. PR #140 review — closes the silent-failure path.
+        """
+        try:
+            await adv._released_event.wait()
+        except asyncio.CancelledError:
+            return
+        log.error(
+            "BlueZ revoked the fleet advertisement slot — fleet commands will "
+            "stop reaching devices until restart. Investigate adapter / "
+            "advertisement-slot capacity, then restart blinky-server.",
+        )
+        # Tear down so is_running correctly returns False. Acquire the
+        # lifecycle lock directly and call _teardown_locked — calling
+        # stop() from here would deadlock on the cancel-and-await of self.
+        async with self._lifecycle_lock:
+            self._release_monitor = None
+            with contextlib.suppress(Exception):
+                await self._teardown_locked()
 
     @property
     def is_running(self) -> bool:
