@@ -1117,9 +1117,16 @@ class FleetManager:
 
                     dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
                     assert device.ble_address is not None  # filtered above
-                    result = await upload_ble_dfu(
-                        app_ble_address=device.ble_address,
-                        dfu_zip_path=dfu_zip,
+                    # P5: hard 600s timeout. Mirrors the flash-route guard.
+                    # Without this, a hung BLE DFU here would run until
+                    # something else tears it down — which is exactly the
+                    # destructive scenario that bricked cart_inner.
+                    result = await asyncio.wait_for(
+                        upload_ble_dfu(
+                            app_ble_address=device.ble_address,
+                            dfu_zip_path=dfu_zip,
+                        ),
+                        timeout=600.0,
                     )
 
                     if result.get("status") == "ok":
