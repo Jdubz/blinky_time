@@ -51,7 +51,7 @@ class _Advertisement(ServiceInterface):
     emitting PropertiesChanged is how we re-aim the broadcast at runtime.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         super().__init__(LE_ADV_IFACE)
         # Seed with a single-byte non-empty payload so BlueZ has something
         # to put on-air at registration time. The real packet shows up via
@@ -61,8 +61,16 @@ class _Advertisement(ServiceInterface):
         self._manufacturer_data: dict[int, bytes] = {
             _proto.COMPANY_ID: bytes([_proto.PROTOCOL_VERSION])
         }
-        # On Release(), BlueZ has removed our advertisement (revoked the slot,
-        # adapter went down, etc.) Set by the manager so we can resurrect it.
+        # On Release(), BlueZ has removed our advertisement (revoked the
+        # slot, adapter went down, etc.) Monitored by FleetBroadcaster's
+        # _release_monitor task.
+        #
+        # Captured loop reference: D-Bus method handlers can fire on a
+        # dispatch thread that is NOT the asyncio loop thread (dbus-fast
+        # detail). Event.set() is not thread-safe, so we schedule it via
+        # call_soon_threadsafe on the captured loop. PR #140 review —
+        # this was the silent-failure path that prompted the audit.
+        self._loop = loop or asyncio.get_event_loop()
         self._released_event = asyncio.Event()
 
     @method()
@@ -77,11 +85,15 @@ class _Advertisement(ServiceInterface):
 
         Method name capitalization matches the D-Bus interface
         (``org.bluez.LEAdvertisement1.Release``), not Python style.
+
+        Thread safety: dbus-fast may dispatch this on a non-asyncio
+        thread, so the Event.set() call MUST go through
+        ``call_soon_threadsafe`` on the captured event loop. A direct
+        ``set()`` from a foreign thread is a silent-failure race
+        (PR #140 review).
         """
         log.warning("BlueZ released our fleet advertisement — slot lost; will re-register")
-        # Setting in a sync method called from D-Bus is fine; asyncio.Event
-        # is thread-safe enough for the loop-affinity D-Bus uses internally.
-        self._released_event.set()
+        self._loop.call_soon_threadsafe(self._released_event.set)
 
     # The annotations on the two methods below are D-Bus type signatures,
     # NOT Python type annotations — dbus-next reads __annotations__['return']
@@ -160,7 +172,10 @@ class FleetBroadcaster:
                 )
 
             bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-            adv = _Advertisement()
+            # Pass the running loop explicitly so Release() (which may
+            # fire on a non-asyncio thread) can schedule its Event.set
+            # back onto the right loop.
+            adv = _Advertisement(loop=asyncio.get_running_loop())
             bus.export(self._object_path, adv)
 
             # Tell BlueZ about the advertisement object. RegisterAdvertisement
@@ -311,6 +326,13 @@ class FleetBroadcaster:
         emit is reliable on its own; we don't re-emit during the window.
         Same-source duplicates while the packet is on-air are dropped by
         firmware dedup on (source BD addr, sequence).
+
+        Concurrency model: the lock is held only while mutating the
+        advertisement payload (a ~1 ms PropertiesChanged emit). The 3 s
+        on-air sleep happens OUTSIDE the lock so a concurrent stop()
+        or another broadcast doesn't have to wait the full window
+        (PR #140 review). Same-payload re-aim from a second concurrent
+        broadcast is fine — the firmware dedups by (source, seq).
         """
         if self._adv is None:
             raise RuntimeError("FleetBroadcaster not started")
@@ -323,8 +345,13 @@ class FleetBroadcaster:
             self._broadcasts_sent += 1
             log.info("Broadcast cmd seq=%d: %r", seq, command)
 
-            await asyncio.sleep(self.COMMAND_ONAIR_MS / 1000.0)
+        # Hold on-air OUTSIDE the lock. Concurrent broadcasts will
+        # acquire the lock and re-aim the payload; this caller's
+        # on-air timer just expires and falls through to the no-op
+        # re-arm below.
+        await asyncio.sleep(self.COMMAND_ONAIR_MS / 1000.0)
 
+        async with self._lock:
             # Drop back to a no-op packet (type=0x00). The firmware's
             # BleScanner routes by packet type and falls through to
             # packetsDropped++ for anything outside SETTINGS/SCENE/COMMAND.
@@ -333,6 +360,11 @@ class FleetBroadcaster:
             # the previous command's (source, seq).
             if self._adv is None:
                 return  # stop() raced us
+            # If another caller re-aimed mid-sleep, their command is the
+            # current payload — don't clobber it with a no-op. Detect by
+            # whether _last_command still matches what we set.
+            if self._last_command != command:
+                return
             noop_seq = self._next_sequence()
             noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE))
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)

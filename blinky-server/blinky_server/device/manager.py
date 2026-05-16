@@ -553,25 +553,27 @@ class FleetManager:
             # serial (cart-side devices), test mocks, future transports.
             # BLE is broadcaster-only (no per-device connection state to
             # message).
-            serial_tasks: list[tuple[str, asyncio.Task[str]]] = []
-            skipped: dict[str, str] = {}
+            ids: list[str] = []
+            tasks: list[asyncio.Task[str]] = []
             for device_id, device in list(self._devices.items()):
                 if device.transport.transport_type == "ble":
                     continue
                 if device.state != DeviceState.CONNECTED:
-                    skipped[device_id] = f"skipped: state={device.state.value}"
+                    results[device_id] = f"skipped: state={device.state.value}"
                     continue
-                serial_tasks.append(
-                    (device_id, asyncio.create_task(device.protocol.send_command(command)))
-                )
-            # Await all serial sends in parallel; one slow device shouldn't
-            # delay the others.
-            for device_id, task in serial_tasks:
-                try:
-                    results[device_id] = await task
-                except Exception as exc:
-                    results[device_id] = f"error: {exc}"
-            results.update(skipped)
+                ids.append(device_id)
+                tasks.append(asyncio.create_task(device.protocol.send_command(command)))
+            # Gather concurrently with return_exceptions so a single slow
+            # or failing device doesn't block collecting results for the
+            # others (PR #140 review — previously awaited sequentially,
+            # which serialized failure timeouts).
+            if tasks:
+                outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+                for device_id, outcome in zip(ids, outcomes, strict=True):
+                    if isinstance(outcome, BaseException):
+                        results[device_id] = f"error: {outcome}"
+                    else:
+                        results[device_id] = outcome
 
         await asyncio.gather(_do_broadcast(), _do_serial_fanout())
         return results
@@ -1317,12 +1319,17 @@ class FleetManager:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
                 cycle += 1
                 if self._discovery_pause_count > 0:
-                    # Paused intentionally (BLE DFU in progress, etc). Still counts
-                    # as a healthy tick for the watchdog — we ARE doing work,
-                    # just elsewhere. CRITICAL: ping systemd here too; otherwise
-                    # WatchdogSec fires and SIGKILLs mid-DFU, bricking the device
-                    # that was being flashed. Verified live 2026-05-16: missing
-                    # this ping caused a watchdog-kill at 20% DFU on cart_inner.
+                    # Paused intentionally (BLE DFU in progress, etc). Still
+                    # counts as a healthy tick for the watchdog — we ARE
+                    # doing work, just elsewhere.
+                    #
+                    # The in-loop systemd_notify.watchdog() call here is
+                    # now defense-in-depth: the independent _watchdog_pinger
+                    # task is the primary mechanism that keeps systemd happy
+                    # while a long await (BLE DFU auto-recovery) blocks
+                    # this loop. Don't remove this call thinking the
+                    # pinger covers it — it's belt-and-braces for the
+                    # 2026-05-16 cart_inner regression.
                     self._loop_last_ok = _time.monotonic()
                     self._loop_cycles = cycle
                     self._loop_consecutive_errors = 0
@@ -1343,9 +1350,13 @@ class FleetManager:
                 if cycle % REAP_INTERVAL_CYCLES == 0:
                     await self._reap_stale_devices()
                 # Mark this cycle as healthy AFTER all work succeeded.
-                # The systemd watchdog ping rides on the same condition —
-                # if the loop is silently raising every cycle, we WANT
-                # systemd to kill us. A failing loop is a hang in disguise.
+                # The systemd watchdog ping here is defense-in-depth (the
+                # independent _watchdog_pinger task is the primary). It's
+                # left in deliberately: a long inline await IS our hang
+                # scenario, and the pinger covers it. The in-loop call
+                # exists so that a loop that completes a full cycle marks
+                # _loop_last_ok and pings within the same critical
+                # section — keep them adjacent.
                 self._loop_last_ok = _time.monotonic()
                 self._loop_cycles = cycle
                 self._loop_consecutive_errors = 0

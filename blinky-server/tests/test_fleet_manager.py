@@ -30,10 +30,18 @@ async def test_get_all_devices(fleet_with_devices: FleetManager) -> None:
     assert len(devices) == 2
 
 
-async def test_send_to_all(fleet_with_devices: FleetManager) -> None:
-    results = await fleet_with_devices.send_to_all("ble")
-    assert len(results) == 2
-    for _device_id, resp in results.items():
+async def test_broadcast_to_all(fleet_with_devices: FleetManager) -> None:
+    """`broadcast` is the production fan-out path (replaces send_to_all
+    for callers; send_to_all is kept as a legacy serial-only entry point
+    used by deploy.sh-style flows). Per-device dict round-trips."""
+    results = await fleet_with_devices.broadcast("ble")
+    # Two mock serial devices in the fixture; broadcaster is disabled in
+    # the fixture so no "broadcast" key.
+    assert "MOCK_DEVICE_000" in results
+    assert "MOCK_DEVICE_001" in results
+    for device_id, resp in results.items():
+        if device_id == "broadcast":
+            continue
         assert "[BLE]" in resp
 
 
@@ -51,7 +59,7 @@ async def test_release_nonexistent(fleet_with_devices: FleetManager) -> None:
     assert not ok
 
 
-async def test_send_to_all_reports_disconnected(fleet_with_devices: FleetManager) -> None:
+async def test_broadcast_reports_disconnected(fleet_with_devices: FleetManager) -> None:
     """Disconnected devices appear in results with `skipped: state=…` entry.
 
     Pre-2026-05-01 they were silently filtered out; deploy.sh treated the
@@ -59,9 +67,10 @@ async def test_send_to_all_reports_disconnected(fleet_with_devices: FleetManager
     """
     await fleet_with_devices.release_device("MOCK_DEVICE_000")
 
-    results = await fleet_with_devices.send_to_all("ble")
-    # Both devices appear; the released one is marked skipped, the other got the command.
-    assert len(results) == 2
+    results = await fleet_with_devices.broadcast("ble")
+    # Both devices appear; the released one is marked skipped, the other
+    # got the command. (`broadcast` may also have a "broadcast" key from
+    # the BLE broadcaster, but it's disabled in the test fixture.)
     assert "MOCK_DEVICE_000" in results
     assert results["MOCK_DEVICE_000"].startswith("skipped: state=")
     assert "MOCK_DEVICE_001" in results
