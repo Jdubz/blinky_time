@@ -62,7 +62,11 @@ This burns hours when you don't know about it: you flash a BL, drop a UF2, send 
 Rules:
 - **Between any two resets** (CDC `reboot`, CDC `bootloader`, SWD reset, UF2 drop), insert **at least one full 60-second uptime window** so `markStable()` fires and clears the counter.
 - **Don't chain `device upload` + `reboot` + `device upload` + `reboot`** to "verify persistence" — that's the exact pattern that trips the trap. Upload once, wait >60s, optionally do one verification reboot, then wait >60s again.
-- **If a previously-configured device boots into safeMode unexpectedly**, the watchdog quarantine is the most likely cause. Recovery: drop firmware → boot to app → wait 75s → re-upload config → wait 75s.
+- **If a previously-configured device boots into safeMode unexpectedly**, the watchdog quarantine is the most likely cause. Recovery, in order — do NOT shortcut to ad-hoc UF2 drops or direct `curl` against the device API:
+  1. `./scripts/deploy.sh --devices=<id>` (or `--devices=<mac>` if not enrolled) → boots latest firmware to APP.
+  2. Wait ≥75s of uptime so `SafeBootWatchdog::markStable()` fires and clears the RebootFrequencyCounter.
+  3. Push the device config via the fleet API's `device upload` command — gated through deploy.sh's `X-Deploy-Tool` header (per the upload-safety section at the top of this file). If you have access only to local CDC, `device upload <JSON>` over `/dev/ttyACM0` is acceptable for the bench device but NEVER for an enrolled fleet device.
+  4. Wait another ≥75s for the new config's first stable boot before any further reset.
 - For BL iteration cycles (SWD-flash → bl_characterize → SWD-flash again), this is also the reason `bl_characterize.sh` works at 30s WAIT_TIMEOUT but back-to-back wait_test.sh runs are flaky — bl_characterize sleeps 2s between iters but each iter is itself >30s (timeout + recovery), keeping cycle time above 60s.
 
 The 60s threshold is intentional and load-bearing for sculpture-device recovery. Don't tune it down; tune your test scripts up.
