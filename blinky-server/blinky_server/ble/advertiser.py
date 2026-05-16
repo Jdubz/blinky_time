@@ -186,27 +186,34 @@ class FleetBroadcaster:
     def last_command(self) -> str | None:
         return self._last_command
 
-    async def broadcast_command(
-        self,
-        command: str,
-        *,
-        repeat: int = 3,
-        repeat_interval_s: float = 0.15,
-    ) -> None:
+    # How long to keep a real command on-air after broadcast_command(). After
+    # this window, we replace the AD payload with a no-op packet (type=0x00,
+    # which the firmware's BleScanner::update() drops at its packet-type
+    # switch). The no-op stays on-air until the next command. Two reasons
+    # we don't want the real command lingering:
+    #   1. If a device reboots, its scanner comes up and would re-execute
+    #      the still-on-air command — a crash loop if that command is the
+    #      one that crashed the device in the first place.
+    #   2. Devices coming into range later would pick up an old command.
+    # 300 ms is long enough that the firmware's scan window (50 ms at 50%
+    # duty) catches at least one full advertisement at BlueZ's ~1 Hz ad
+    # interval, with comfortable margin.
+    COMMAND_ONAIR_MS = 300
+
+    async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.
 
-        ``repeat`` re-emits the same packet (with the same sequence number,
-        so the firmware dedups) to compensate for the lossy nature of
-        passive scanning — a scanner that's processing the previous packet
-        may miss the next one. With repeat=3 and a 150 ms gap, the packet
-        is on-air across ~450 ms, which is several advertising intervals;
-        we're robust against any single scanner-window miss.
+        Sets the BLE advertisement's manufacturer-data to a COMMAND packet
+        carrying ``command``, holds it on-air for ``COMMAND_ONAIR_MS``,
+        then replaces it with a no-op packet so the air falls silent
+        (broadcast-wise) until the next call.
 
-        Same-sequence repeats are intentionally a no-op on the firmware
-        side (dedup by source+sequence). To force re-execution of the same
-        command string, increment ``self._sequence`` between calls — done
-        automatically here for distinct ``command`` strings via
-        :meth:`_next_sequence`.
+        Each call advances the sequence number, so a same-text command
+        sent twice still triggers the firmware (different (source, seq)
+        tuple) — but holding the same packet on-air for 300 ms with one
+        emit is reliable on its own; we don't re-emit during the window.
+        Same-source duplicates while the packet is on-air are dropped by
+        firmware dedup on (source BD addr, sequence).
         """
         if self._adv is None:
             raise RuntimeError("FleetBroadcaster not started")
@@ -219,14 +226,19 @@ class FleetBroadcaster:
             self._broadcasts_sent += 1
             log.info("Broadcast cmd seq=%d: %r", seq, command)
 
-            # Re-emit PropertiesChanged a few times to compensate for missed
-            # scanner windows. PropertiesChanged with the same data is cheap;
-            # BlueZ re-serializes the AD payload on each one.
-            for _ in range(max(0, repeat - 1)):
-                await asyncio.sleep(repeat_interval_s)
-                if self._adv is None:
-                    break  # stop() raced us
-                self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
+            await asyncio.sleep(self.COMMAND_ONAIR_MS / 1000.0)
+
+            # Drop back to a no-op packet (type=0x00). The firmware's
+            # BleScanner routes by packet type and falls through to
+            # packetsDropped++ for anything outside SETTINGS/SCENE/COMMAND.
+            # Using a fresh sequence ensures the firmware re-processes
+            # (and drops) the new packet rather than dedup'ing it against
+            # the previous command's (source, seq).
+            if self._adv is None:
+                return  # stop() raced us
+            noop_seq = self._next_sequence()
+            noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE))
+            self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)
 
     def _next_sequence(self) -> int:
         self._sequence = (self._sequence + 1) & 0xFF
