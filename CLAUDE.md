@@ -46,6 +46,27 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 **Test bootloaders on a SACRIFICIAL device.** Do not flash an experimental BL to the only available test device. If only one device is on the bench, build the BL change against the known-good (`git log blinky-local-patches` to find the last-stable BL commit) and verify with `scripts/verify_bootloader.py` BEFORE flashing. The verifier catches the specific bug class that bricked the hat; pass it before committing to a flash.
 
+**Current fleet BL: 0.8.0-7-gc79626c** (staged in `bootloader/update-bootloader-qspi-ota-default.uf2`). On top of 0.8.0-4's dual-transport baseline, 0.8.0-7 adds:
+- `bootloader_settings_save` SD-aware (no more silent fail on UF2 path → was 80% hiccup pre-fix)
+- BLE adv paused during USB MSC transfer + ADV_SET_TERMINATED auto-restart guard (eliminates 5-90s slow-completion tail)
+- `msc_uf2_check_stuck()` self-recovery (8s idle + incomplete → DFU_RESET → boot to app; converts permanent stuck into ~13s recovery)
+- Bench measurement: 30/30 PASS at 30s timeout, mean 9.4s per UF2 drop (vs. unbounded hangs on 0.8.0-5).
+See `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md` for the diagnostic narrative.
+
+## CRITICAL: 60-second rule between device resets
+
+The firmware's `SafeBootWatchdog::markStable()` is **deferred to 60s of uptime** (`blinky-things.ino:613-614`) so that mid-init crashes still count toward the BLE-DFU recovery threshold (F3 in SCULPTURE_BLE_RECOVERY_PLAN.md). The corollary: **any sequence of resets faster than 60s apart bumps `RebootFrequencyCounter` and, at 5 cumulative trips, fires the quarantine hook (`configStorage.quarantineDeviceConfig()` in `.ino:189`)**. That hook flips `data_.device.isValid = false`, and the device boots into safeMode with `{"status":"unconfigured"}` the next time around — even though nothing actually crashed.
+
+This burns hours when you don't know about it: you flash a BL, drop a UF2, send `reboot` over CDC, do another `bootloader` cmd, etc. — each is a real reset, the counter accumulates silently, and the device suddenly forgets its config. Re-uploading the config via `device upload` works, but only if you THEN let uptime cross 60s before the next reset.
+
+Rules:
+- **Between any two resets** (CDC `reboot`, CDC `bootloader`, SWD reset, UF2 drop), insert **at least one full 60-second uptime window** so `markStable()` fires and clears the counter.
+- **Don't chain `device upload` + `reboot` + `device upload` + `reboot`** to "verify persistence" — that's the exact pattern that trips the trap. Upload once, wait >60s, optionally do one verification reboot, then wait >60s again.
+- **If a previously-configured device boots into safeMode unexpectedly**, the watchdog quarantine is the most likely cause. Recovery: drop firmware → boot to app → wait 75s → re-upload config → wait 75s.
+- For BL iteration cycles (SWD-flash → bl_characterize → SWD-flash again), this is also the reason `bl_characterize.sh` works at 30s WAIT_TIMEOUT but back-to-back wait_test.sh runs are flaky — bl_characterize sleeps 2s between iters but each iter is itself >30s (timeout + recovery), keeping cycle time above 60s.
+
+The 60s threshold is intentional and load-bearing for sculpture-device recovery. Don't tune it down; tune your test scripts up.
+
 ## CRITICAL: Task is Onset Detection, Not Beat Detection
 
 **The model and firmware are doing ONSET DETECTION** — fire on every percussive event (kick, snare, ghost notes, hi-hats) regardless of metrical position. **We do NOT care whether an event lands on or off the beat.** Beat-detection framing is wrong for this task and creates noise — both metric noise (scoring against beat positions when the goal is to fire on every drum hit) and label noise (training on beat consensus teaches the model to suppress off-beat onsets, which we want to keep).
