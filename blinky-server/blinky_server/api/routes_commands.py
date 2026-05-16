@@ -81,43 +81,46 @@ async def fleet_command(
     body: CommandRequest,
     x_deploy_tool: str | None = Header(None, alias="X-Deploy-Tool"),
 ) -> dict[str, str]:
-    """Send a command to all connected devices.
+    """Broadcast a command to every device in range.
 
     Same deploy-gate as /devices/{id}/command for fleet-wide raw commands.
     See deps._DEPLOY_GATED_COMMAND_LIST for the canonical gated set.
+    Commands go out via BLE manufacturer-data advertising (no per-device
+    connection); any serial devices get the same command line written down
+    their persistent transport.
     """
     assert_command_allowed(body.command, x_deploy_tool)
-    return await get_fleet().send_to_all(body.command)
+    return await get_fleet().broadcast(body.command)
 
 
 @router.post("/fleet/generator/{name}")
 async def fleet_generator(name: str) -> dict[str, str]:
     """Switch all devices to a generator."""
-    return await get_fleet().send_to_all(f"gen {name}")
+    return await get_fleet().broadcast(f"gen {name}")
 
 
 @router.post("/fleet/effect/{name}")
 async def fleet_effect(name: str) -> dict[str, str]:
     """Switch all devices to an effect."""
-    return await get_fleet().send_to_all(f"effect {name}")
+    return await get_fleet().broadcast(f"effect {name}")
 
 
 @router.put("/fleet/settings/{name}")
 async def fleet_set_setting(name: str, body: SettingValueRequest) -> dict[str, str]:
     """Set a setting on all devices."""
-    return await get_fleet().send_to_all(f"set {name} {body.value}")
+    return await get_fleet().broadcast(f"set {name} {body.value}")
 
 
 @router.post("/fleet/settings/save")
 async def fleet_save_settings() -> dict[str, str]:
     """Save settings on all connected devices to flash."""
-    return await get_fleet().send_to_all("save")
+    return await get_fleet().broadcast("save")
 
 
 @router.post("/fleet/settings/load")
 async def fleet_load_settings() -> dict[str, str]:
     """Load settings from flash on all connected devices."""
-    return await get_fleet().send_to_all("load")
+    return await get_fleet().broadcast("load")
 
 
 @router.post("/fleet/settings/defaults")
@@ -143,4 +146,4 @@ async def fleet_restore_defaults() -> dict[str, str]:
     `skipped:`-prefixed values as informational, not as errors — the
     fail-loud requirement is for deploy.sh callers, not user-facing UI.
     """
-    return await get_fleet().send_to_all("restore_runtime_settings")
+    return await get_fleet().broadcast("restore_runtime_settings")

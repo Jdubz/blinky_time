@@ -45,8 +45,13 @@ def _get_connected_device(device_id: str) -> Device:
 
 @router.get("/devices")
 async def list_devices() -> list[DeviceResponse]:
-    """List all known devices."""
-    return [DeviceResponse(**d.to_dict()) for d in get_fleet().get_all_devices()]
+    """List all known devices — serial (connected) + BLE (present via scan).
+
+    BLE entries report ``state="present"`` and have most metadata fields
+    null because we don't hold a connection to read them. Commands to BLE
+    devices go through ``/api/fleet/*`` (broadcast), not per-device.
+    """
+    return [DeviceResponse(**d) for d in get_fleet().list_for_api()]
 
 
 @router.get("/devices/{device_id}")
@@ -140,46 +145,51 @@ async def fleet_status() -> dict[str, Any]:
     """Fleet health summary — aggregate stats across all devices.
 
     Returns counts by state and transport, plus per-device health info
-    (RSSI, last_seen, transport, staleness). Designed for the Hub status
-    pill and the console fleet monitor.
+    (RSSI, last_seen, transport, staleness). Includes broadcaster health
+    (BLE commands go through it) and background-loop health.
     """
     fleet = get_fleet()
-    devices = fleet.get_all_devices()
+    entries = fleet.list_for_api()  # serial + BLE presence
 
     by_state: dict[str, int] = {}
     by_transport: dict[str, int] = {}
     stale_count = 0
     device_health: list[dict[str, Any]] = []
 
-    for d in devices:
-        by_state[d.state.value] = by_state.get(d.state.value, 0) + 1
-        ttype = d.transport.transport_type
+    for d in entries:
+        state = d["state"]
+        ttype = d["transport"]
+        by_state[state] = by_state.get(state, 0) + 1
         by_transport[ttype] = by_transport.get(ttype, 0) + 1
-        if d.is_stale:
+        if d.get("stale"):
             stale_count += 1
-        ago = d.last_seen_ago
         device_health.append(
             {
-                "id": d.id,
-                "name": d.device_name,
+                "id": d["id"],
+                "name": d.get("device_name"),
                 "transport": ttype,
-                "state": d.state.value,
-                "rssi": d.rssi,
-                "last_seen_ago": round(ago, 1) if ago is not None else None,
-                "stale": d.is_stale,
-                "version": d.version,
-                "ble_address": d.ble_address,
+                "state": state,
+                "rssi": d.get("rssi"),
+                "last_seen_ago": d.get("last_seen_ago"),
+                "stale": d.get("stale", False),
+                "version": d.get("version"),
+                "ble_address": d.get("ble_address"),
             }
         )
 
+    broadcaster_status = (
+        fleet.broadcaster.status() if fleet.broadcaster is not None else None
+    )
     return {
-        "total": len(devices),
+        "total": len(entries),
         "connected": by_state.get("connected", 0),
+        "present": by_state.get("present", 0),
         "stale": stale_count,
         "dfu_recovery": by_state.get("dfu_recovery", 0),
         "by_state": by_state,
         "by_transport": by_transport,
         "loop": fleet.loop_health(),
+        "broadcaster": broadcaster_status,
         "devices": device_health,
     }
 

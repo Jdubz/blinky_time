@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import systemd_notify
+from ..ble.advertiser import FleetBroadcaster
 from ..transport.base import Transport
 from ..transport.discovery import (
     DiscoveredDevice,
@@ -113,6 +114,16 @@ class FleetManager:
         self._loop_last_ok: float | None = None
         self._loop_cycles: int = 0
         self._loop_consecutive_errors: int = 0
+        # Fleet broadcaster — BLE radio-style command channel. Owned by
+        # the manager so its lifecycle matches the fleet's; routes get at
+        # it via ``self.broadcaster``. Started in :meth:`start`; may be
+        # None when BLE is disabled (``enable_ble=False``).
+        self.broadcaster: FleetBroadcaster | None = None
+        # BLE devices tracked as "present" via passive scan. Keyed by BD
+        # address. We do NOT hold connections — commands go out via
+        # broadcaster — so there's no live Device object here, just
+        # last-seen metadata for the API. See _update_ble_presence.
+        self._ble_presence: dict[str, dict[str, Any]] = {}
 
     @property
     def devices(self) -> dict[str, Device]:
@@ -146,11 +157,56 @@ class FleetManager:
     def get_all_devices(self) -> list[Device]:
         return list(self._devices.values())
 
+    def list_for_api(self) -> list[dict[str, Any]]:
+        """Combined view of serial Devices + BLE presence entries.
+
+        Both flavors come back in the same shape (DeviceResponse-compatible)
+        so the UI doesn't have to know which transport a device is on. BLE
+        entries have most metadata fields as None — without a connection
+        we can't read version/device_type/etc. — and ``state="present"``
+        rather than ``"connected"``.
+        """
+        from .device import STALE_THRESHOLD_S  # local import: avoids cycle on cold load
+
+        out: list[dict[str, Any]] = [d.to_dict() for d in self._devices.values()]
+        now = _time.monotonic()
+        for entry in self._ble_presence.values():
+            last_seen = entry["last_seen"]
+            ago = now - last_seen
+            stale = ago > STALE_THRESHOLD_S
+            out.append(
+                {
+                    "id": entry["id"],
+                    "port": entry["ble_address"],
+                    "platform": "nrf52840",
+                    "transport": "ble",
+                    "state": "present",
+                    "version": None,
+                    "device_type": None,
+                    "device_name": entry.get("name"),
+                    "width": None,
+                    "height": None,
+                    "leds": None,
+                    "configured": False,
+                    "safe_mode": False,
+                    "streaming": False,
+                    "hardware_sn": None,
+                    "ble_address": entry["ble_address"],
+                    "rssi": entry.get("rssi"),
+                    "mtu": None,
+                    "last_seen_ago": round(ago, 1),
+                    "stale": stale,
+                }
+            )
+        return out
+
     async def start(self) -> None:
         """Start background loop for device discovery and management.
 
-        All device connections (serial + BLE) happen in the background loop.
-        The API is available immediately — devices connect asynchronously.
+        Serial device connections happen in the background loop. BLE
+        devices do NOT hold persistent connections — fleet commands go
+        out via :attr:`broadcaster` (manufacturer-data advertising). See
+        :class:`FleetBroadcaster` for the rationale.
         """
         self._running = True
         # Arm DFU auto-recovery from persisted state if a previous deploy
@@ -168,8 +224,20 @@ class FleetManager:
                 firmware_path,
                 ", ".join(sorted(device_ids)) or "<none>",
             )
+        # Bring up the BLE broadcaster. Single-radio adapters (BCM43455 on
+        # Pi 4) refuse advertising while we hold GATT central connections,
+        # so the broadcaster MUST come up before any per-device connect
+        # attempt — and we MUST NOT auto-connect to BLE devices during
+        # normal operation.
+        if self._enable_ble:
+            try:
+                self.broadcaster = FleetBroadcaster()
+                await self.broadcaster.start()
+            except Exception:
+                log.exception("Fleet broadcaster failed to start — fleet commands will not be delivered over BLE")
+                self.broadcaster = None
         self._discovery_task = asyncio.create_task(self._background_loop())
-        log.info("Fleet manager started (devices connecting in background)")
+        log.info("Fleet manager started")
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
@@ -182,6 +250,10 @@ class FleetManager:
             await device.disconnect()
         self._devices.clear()
         self._device_discovery.clear()
+        if self.broadcaster is not None:
+            with contextlib.suppress(Exception):
+                await self.broadcaster.stop()
+            self.broadcaster = None
         log.info("Fleet manager stopped")
 
     def hold_reconnect(self, device_id: str, seconds: float) -> None:
@@ -335,7 +407,14 @@ class FleetManager:
     # ── Internal ──
 
     async def _discover_and_connect(self) -> None:
-        """Discover devices across all transports and connect to new ones."""
+        """Discover devices across transports.
+
+        Serial devices are connected and held (high-bandwidth telemetry use
+        cases still require a persistent link). BLE devices are NOT
+        connected — they're tracked as "present" entries via passive scan
+        only. Commands to BLE devices go out via the broadcaster, never
+        per-connection. See class docstring for the architectural rationale.
+        """
         self._refresh_dedup_exclusions()
         discovered = await discover_all(
             serial_scan=self._enable_serial,
@@ -354,6 +433,13 @@ class FleetManager:
                 self._handle_dfu_recovery_device(disc)
                 continue
 
+            # BLE app-mode devices: track presence, do NOT connect. The BCM43455
+            # adapter can't advertise (broadcast channel) while we hold central
+            # GATT connections; broadcaster takes priority.
+            if disc.transport_type == "ble":
+                self._update_ble_presence(disc)
+                continue
+
             if device_id in known_ids:
                 existing = self._devices[device_id]
                 # Update address if it changed (USB re-enumeration)
@@ -367,16 +453,11 @@ class FleetManager:
                     existing.port = disc.address
                 continue
 
-            # Skip BLE devices that were previously deduped with a serial device.
-            # Without this, deduped devices get rediscovered immediately and thrash
-            # in a connect → dedup → disconnect → rediscover loop.
+            # Skip devices previously deduped (e.g. shared BLE+serial identity).
             if device_id in self._dedup_excluded:
                 continue
 
-            # New device — connect.
-            # No file-based serial lock check needed: the server is the sole serial
-            # consumer. During firmware flashing, upload routes call pause_discovery()
-            # + hold_reconnect() to prevent contention with the uf2_upload subprocess.
+            # New serial device — connect.
             try:
                 transport = _create_transport(disc)
                 device = Device(
@@ -402,6 +483,62 @@ class FleetManager:
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
         # prefer serial (faster, more reliable) and disconnect the wireless one.
         await self._deduplicate_transports()
+
+    def _update_ble_presence(self, disc: DiscoveredDevice) -> None:
+        """Record a BLE device as 'present' without connecting.
+
+        Per-scan signal: BD address, advertised name, RSSI, last_seen
+        timestamp. The broadcaster delivers commands to whichever devices
+        are in range — we don't need per-device state to do that, only to
+        let the UI know what's out there.
+        """
+        self._ble_presence[disc.device_id] = {
+            "id": disc.device_id,
+            "ble_address": disc.address,
+            "name": disc.description,
+            "rssi": disc.rssi,
+            "last_seen": _time.monotonic(),
+        }
+
+    async def broadcast(self, command: str) -> dict[str, str]:
+        """Send a command to every device in range.
+
+        Two channels in parallel:
+          1. BLE broadcaster — fires off a manufacturer-data advertisement
+             that all listening blinky devices decode. No per-device state.
+          2. Serial devices — write the same command line down each USB
+             serial transport (the small set we still hold persistent
+             connections for).
+
+        Returns a per-source result map for the UI:
+          - "broadcast": status of the BLE advert
+          - "<serial-id>": per-serial-device response or skipped: state=…
+        """
+        results: dict[str, str] = {}
+        if self.broadcaster is not None and self.broadcaster.is_running:
+            try:
+                await self.broadcaster.broadcast_command(command)
+                results["broadcast"] = f"OK ({self.broadcaster.broadcasts_sent} sent)"
+            except Exception as exc:
+                log.exception("Broadcast %r failed", command)
+                results["broadcast"] = f"error: {exc}"
+        elif self._enable_ble:
+            results["broadcast"] = "error: broadcaster not running"
+
+        # Fan out to any non-BLE devices we still hold a connection to —
+        # serial (cart-side devices), test mocks, future transports. BLE
+        # is broadcaster-only (no per-device connection state to message).
+        for device_id, device in list(self._devices.items()):
+            if device.transport.transport_type == "ble":
+                continue
+            if device.state != DeviceState.CONNECTED:
+                results[device_id] = f"skipped: state={device.state.value}"
+                continue
+            try:
+                results[device_id] = await device.protocol.send_command(command)
+            except Exception as exc:
+                results[device_id] = f"error: {exc}"
+        return results
 
     async def _deduplicate_transports(self) -> None:
         """Remove duplicate connections to the same physical device.
