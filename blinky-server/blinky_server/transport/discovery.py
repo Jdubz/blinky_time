@@ -162,13 +162,21 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
                     app_addr,
                 )
             else:
+                # Identify our own firmware by advertised-name prefix. Without
+                # a GATT connect we can't read `json info`, so we infer the
+                # platform from the BLE name set by Adafruit's NUS service.
+                # Devices we control advertise as "Blinky-<device_type>-<id>";
+                # anything else under our NUS UUID would be a different
+                # peripheral entirely (no current support).
+                name = dev.name or ""
+                platform = "nrf52840" if name.startswith("Blinky") else "unknown"
                 devices.append(
                     DiscoveredDevice(
                         device_id=addr,
-                        platform="unknown",
+                        platform=platform,
                         transport_type="ble",
                         address=addr,
-                        description=dev.name or "BLE device",
+                        description=name or "BLE device",
                         rssi=adv.rssi,
                     )
                 )
@@ -296,8 +304,10 @@ async def cleanup_stale_ble_connections() -> None:
             if len(parts) >= 2 and parts[0] == "Device":
                 addr = parts[1]
                 name = " ".join(parts[2:]) if len(parts) > 2 else ""
-                # Only disconnect Blinky/AdaDFU devices (not other BLE peripherals)
-                if name in ("Blinky", "AdaDFU"):
+                # Only disconnect Blinky/AdaDFU devices (not other BLE peripherals).
+                # Match by prefix — configured devices use names like
+                # "Blinky-hat_v1-84" once a device_type has been written.
+                if name.startswith("Blinky") or name.startswith("AdaDFU"):
                     subprocess.run(
                         ["bluetoothctl", "disconnect", addr],
                         capture_output=True,
@@ -308,8 +318,11 @@ async def cleanup_stale_ble_connections() -> None:
 
     try:
         disconnected = await asyncio.to_thread(_cleanup)
+        # Only log when there's something to report — this runs every
+        # discovery cycle (~10s) and was flooding journals with
+        # "disconnected 0" lines on stable fleets. PR #140 review.
         if disconnected:
-            log.info("Cleaned up %d stale BLE connections", disconnected)
+            log.info("BLE cleanup: disconnected %d stale connection(s)", disconnected)
     except Exception as e:
         log.warning("BLE stale connection cleanup failed: %s", e)
 

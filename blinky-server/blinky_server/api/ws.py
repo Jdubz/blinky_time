@@ -159,7 +159,7 @@ async def _recv_fleet_loop(ws: WebSocket, fleet: FleetManager) -> None:
                             }
                         )
                 else:
-                    results = await fleet.send_to_all(cmd)
+                    results = await fleet.broadcast(cmd)
                     await ws.send_json(
                         {
                             "type": "fleet_response",

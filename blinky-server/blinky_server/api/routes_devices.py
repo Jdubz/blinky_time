@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,6 +19,7 @@ from .models import (
     StatusResponse,
 )
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["devices"])
 
 
@@ -46,7 +47,12 @@ def _get_connected_device(device_id: str) -> Device:
 
 @router.get("/devices")
 async def list_devices() -> list[DeviceResponse]:
-    """List all known devices."""
+    """List all known devices.
+
+    BLE devices report ``state="present"`` and have most metadata fields
+    null because we don't hold a connection to read them. Commands to BLE
+    devices go through ``/api/fleet/*`` (broadcast), not per-device.
+    """
     return [DeviceResponse(**d.to_dict()) for d in get_fleet().get_all_devices()]
 
 
@@ -141,40 +147,50 @@ async def fleet_status() -> dict[str, Any]:
     """Fleet health summary — aggregate stats across all devices.
 
     Returns counts by state and transport, plus per-device health info
-    (RSSI, last_seen, transport type). Designed for BLE-only fleet
-    monitoring dashboards.
+    (RSSI, last_seen, transport, staleness). Includes broadcaster health
+    (BLE commands go through it) and background-loop health.
     """
     fleet = get_fleet()
     devices = fleet.get_all_devices()
-    now = time.monotonic()
 
     by_state: dict[str, int] = {}
     by_transport: dict[str, int] = {}
+    stale_count = 0
     device_health: list[dict[str, Any]] = []
 
     for d in devices:
-        by_state[d.state.value] = by_state.get(d.state.value, 0) + 1
+        state = d.state.value
         ttype = d.transport.transport_type
+        by_state[state] = by_state.get(state, 0) + 1
         by_transport[ttype] = by_transport.get(ttype, 0) + 1
+        if d.is_stale:
+            stale_count += 1
+        ago = d.last_seen_ago
         device_health.append(
             {
                 "id": d.id,
                 "name": d.device_name,
                 "transport": ttype,
-                "state": d.state.value,
+                "state": state,
                 "rssi": d.rssi,
-                "last_seen_ago": round(now - d.last_seen, 1) if d.last_seen else None,
+                "last_seen_ago": round(ago, 1) if ago is not None else None,
+                "stale": d.is_stale,
                 "version": d.version,
                 "ble_address": d.ble_address,
             }
         )
 
-    connected = by_state.get("connected", 0)
+    broadcaster_status = fleet.broadcaster.status() if fleet.broadcaster is not None else None
     return {
         "total": len(devices),
-        "connected": connected,
+        "connected": by_state.get("connected", 0),
+        "present": by_state.get("present", 0),
+        "stale": stale_count,
+        "dfu_recovery": by_state.get("dfu_recovery", 0),
         "by_state": by_state,
         "by_transport": by_transport,
+        "loop": fleet.loop_health(),
+        "broadcaster": broadcaster_status,
         "devices": device_health,
     }
 
@@ -225,7 +241,15 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
 
     device = _get_device_or_404(device_id)
 
-    if device.state not in (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY):
+    # PRESENT BLE devices are reachable for flash: we just-in-time connect
+    # for the flash via the existing BleTransport, with the broadcaster
+    # paused for the duration (single-radio adapters refuse central role
+    # while advertising).
+    if device.state not in (
+        DeviceState.CONNECTED,
+        DeviceState.DFU_RECOVERY,
+        DeviceState.PRESENT,
+    ):
         raise HTTPException(409, f"Device not connected (state={device.state.value})")
 
     # Validate firmware path — restrict to allowed directories
@@ -240,7 +264,9 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         raise HTTPException(400, f"Upload not yet supported for platform: {device.platform}")
 
     fleet = get_fleet()
-    fleet.set_recovery_firmware(str(firmware))
+    # Per-device flash arms auto-recovery for THIS device only — the explicit
+    # whitelist keeps a future DFU bounce from auto-flashing unrelated devices.
+    fleet.set_recovery_firmware(str(firmware), [device.id])
 
     # Hold time: UF2 takes ~60s, BLE DFU takes ~8 min
     is_ble_only = (
@@ -269,8 +295,48 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
 
         fleet.hold_reconnect(device_id, hold_time)
         fleet.pause_discovery()
+        # Stop the broadcaster: BLE DFU needs central GATT, which the
+        # BCM43455 can't do while advertising. Restart it after the flash.
+        broadcaster_was_running = fleet.broadcaster is not None and fleet.broadcaster.is_running
+        if broadcaster_was_running:
+            try:
+                assert fleet.broadcaster is not None  # narrowed by check above
+                await fleet.broadcaster.stop()
+            except Exception:
+                log.exception("Failed to pause broadcaster cleanly; flash will still try")
+            # P3 guard: assert broadcaster is actually stopped before we
+            # enter DFU. If stop() failed silently the radio would still
+            # be advertising while we try to act as central — the BCM43455
+            # rejects that with bluez "Failed (0x03)" and we'd brick a
+            # device. Don't start a destructive operation under uncertainty.
+            if fleet.broadcaster is not None and fleet.broadcaster.is_running:
+                raise HTTPException(
+                    503,
+                    "Broadcaster did not stop cleanly — refusing to start BLE flash "
+                    "to avoid radio contention. Check logs and restart blinky-server.",
+                )
         try:
-            result = await upload_firmware(device, str(firmware))
+            # P5: hard timeout on the whole flash. Observed transfer rate is
+            # ~21s per 10% of the application image (542 KB), so ~3.5 min for
+            # the transfer plus ~1 min for init/scan/cache. 600s is generous
+            # (~2x worst case). Past that, abort cleanly with an error rather
+            # than letting the operation run until something else (watchdog,
+            # external timeout) tears it down destructively mid-write.
+            result = await asyncio.wait_for(
+                upload_firmware(device, str(firmware)),
+                timeout=600.0,
+            )
+        except TimeoutError:
+            log.error(
+                "Flash of %s (%s) exceeded 600s — aborted. Device may be in DFU bootloader.",
+                device_id[:12],
+                device.device_name or "unknown",
+            )
+            result = {
+                "status": "error",
+                "message": "flash exceeded 600s timeout",
+                "elapsed_s": 600.0,
+            }
         finally:
             device.state = DeviceState.DISCONNECTED
             if is_serial_flash:
@@ -280,6 +346,14 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
             fleet.resume_reconnect(device_id)
             for sid in sibling_ids:
                 fleet.resume_reconnect(sid)
+            if broadcaster_was_running and fleet.broadcaster is not None:
+                try:
+                    await fleet.broadcaster.start()
+                except Exception:
+                    log.exception(
+                        "Failed to restart broadcaster after flash — fleet commands "
+                        "will not reach BLE devices until the server is restarted"
+                    )
 
     if result["status"] == "ok":
         return FlashResponse(**result)

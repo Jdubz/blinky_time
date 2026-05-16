@@ -50,18 +50,14 @@ _CACHED_DATA_DIR: Path | None = None
 def _data_dir() -> Path:
     """Return the scenes directory, creating it once at first access.
 
-    Earlier versions called ``mkdir(parents=True, exist_ok=True)`` on every
-    list/get/save/delete op. The syscall overhead was trivial, but the
-    repeated work also obscured the question "where are scenes persisted?"
-    in logs. Caching after the first call makes the location visible once
-    and avoids a filesystem hit per request.
+    Cached so we don't mkdir on every list/get/save/delete op and so the
+    "where are scenes persisted?" question shows up once in logs at boot.
     """
     global _CACHED_DATA_DIR
     if _CACHED_DATA_DIR is None:
-        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-        d = Path(base) / "blinky-server" / "scenes"
-        d.mkdir(parents=True, exist_ok=True)
-        _CACHED_DATA_DIR = d
+        from .paths import scenes_dir
+
+        _CACHED_DATA_DIR = scenes_dir()
     return _CACHED_DATA_DIR
 
 

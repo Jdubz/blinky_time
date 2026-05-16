@@ -12,6 +12,11 @@ from .protocol import DeviceProtocol
 
 log = logging.getLogger(__name__)
 
+# A device is considered "stale" if it hasn't communicated in this long.
+# For CONNECTED devices, liveness check kicks in well before this.
+# For DISCONNECTED/ERROR, this marks the slot as long-abandoned (UI hint).
+STALE_THRESHOLD_S = 300.0
+
 
 class DeviceState(StrEnum):
     DISCONNECTED = "disconnected"
@@ -19,6 +24,13 @@ class DeviceState(StrEnum):
     CONNECTED = "connected"
     ERROR = "error"
     DFU_RECOVERY = "dfu_recovery"
+    # PRESENT: the device is advertising on BLE (we see it in passive scans)
+    # but we deliberately don't hold a GATT connection. Fleet commands reach
+    # it via the broadcaster (manufacturer-data advertising); per-device
+    # commands (flash, etc.) bring the connection up just-in-time and tear
+    # it down again afterward. Distinct from DISCONNECTED, which means
+    # "we used to be connected and got dropped".
+    PRESENT = "present"
 
 
 class Device:
@@ -141,8 +153,28 @@ class Device:
     def unsubscribe_stream(self, q: asyncio.Queue[dict[str, Any] | None]) -> None:
         self._stream_subscribers.discard(q)
 
+    @property
+    def last_seen_ago(self) -> float | None:
+        """Seconds since last successful comms, or None if never seen."""
+        if self.last_seen is None:
+            return None
+        return _time.monotonic() - self.last_seen
+
+    @property
+    def is_stale(self) -> bool:
+        """True if no comms within STALE_THRESHOLD_S.
+
+        Devices that have never been seen (last_seen is None, e.g. mid-CONNECTING)
+        are not stale yet — they're new. A stuck DFU_RECOVERY device whose
+        last_seen rolls past the threshold reports stale=True so operators can
+        spot it without scrolling timestamps.
+        """
+        ago = self.last_seen_ago
+        return ago is not None and ago > STALE_THRESHOLD_S
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize device state for API responses."""
+        ago = self.last_seen_ago
         d: dict[str, Any] = {
             "id": self.id,
             "port": self.port,
@@ -161,9 +193,8 @@ class Device:
             "hardware_sn": self.hardware_sn,
             "ble_address": self.ble_address,
             "rssi": self.rssi,
-            "last_seen_ago": round(_time.monotonic() - self.last_seen, 1)
-            if self.last_seen
-            else None,
+            "last_seen_ago": round(ago, 1) if ago is not None else None,
+            "stale": self.is_stale,
         }
         # BLE-specific: expose negotiated MTU for diagnostics
         if hasattr(self.transport, "mtu"):

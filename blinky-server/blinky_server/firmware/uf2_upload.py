@@ -211,14 +211,45 @@ async def upload_uf2(
     ]
 
     try:
+        # Stream stdout/stderr to the journal in real time AND collect into
+        # `output` for the result message. Without the streaming half, a UF2
+        # failure during the multi-minute copy phase shows up as a single
+        # "UPLOAD FAILED" line in the journal with no breadcrumb — the actual
+        # uf2_upload.py logs (where mount happened, what copy did, etc.) only
+        # live in the API response. That makes triage from `journalctl -u`
+        # impossible. Verified necessary 2026-05-16 after repeated cart_inner
+        # UF2 failures couldn't be diagnosed from the journal alone.
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(tool.parent),
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
-        output = stdout.decode("utf-8", errors="replace")
+
+        captured_lines: list[str] = []
+
+        async def _drain() -> None:
+            assert proc.stdout is not None
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    log.info("[uf2_upload] %s", line)
+                    captured_lines.append(line)
+
+        try:
+            await asyncio.wait_for(_drain(), timeout=300)
+        except TimeoutError:
+            log.warning("[uf2_upload] streaming hit 300s timeout; killing")
+            proc.kill()
+            raise
+
+        # By here the subprocess should have closed stdout. `wait()` ensures
+        # returncode is populated.
+        await proc.wait()
+        output = "\n".join(captured_lines)
 
         if proc.returncode == 0:
             progress("done", "Upload complete!", 100)
@@ -230,9 +261,12 @@ async def upload_uf2(
                 output=output[-500:],
             )
         else:
-            lines = output.strip().split("\n")
-            error_lines = [line for line in lines if "ERROR" in line or "FAILED" in line]
-            msg = error_lines[-1] if error_lines else lines[-1] if lines else "Unknown error"
+            error_lines = [line for line in captured_lines if "ERROR" in line or "FAILED" in line]
+            msg = (
+                error_lines[-1]
+                if error_lines
+                else (captured_lines[-1] if captured_lines else "Unknown error")
+            )
             result["message"] = msg.strip()
             result["output"] = output[-500:]
 

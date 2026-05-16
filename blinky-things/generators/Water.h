@@ -2,6 +2,8 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../physics/BackgroundModel.h"
+#include "../physics/LinearBackground.h"
+#include "../physics/MatrixBackground.h"
 #include "../types/ColorPalette.h"
 #include "../math/SimplexNoise.h"
 
@@ -155,6 +157,23 @@ private:
     // Bioluminescence: blue-green glow triggered by pulse events
     uint8_t glowBuffer_[MAX_RIPPLE_LEDS] = {0};
 
-    // Static buffer for placement new
-    uint8_t backgroundBuffer_[64];
+    // Static buffer for placement new. MUST be aligned for the largest
+    // BackgroundModel subclass we placement-new into it — otherwise the
+    // vptr (4-byte aligned on Cortex-M4) ends up at a misaligned address
+    // when prior members (`rippleFlip_` bool followed by uint8_t glowBuffer_)
+    // push the byte offset off a 4-byte boundary. First virtual call would
+    // do a misaligned 4-byte load and the chip's UsageFault handler resets
+    // the device. Verified live 2026-05-16: caused gen-water to hard-reset
+    // both 1D and 2D cart devices within milliseconds of the switch.
+    alignas(8) uint8_t backgroundBuffer_[64];
+    // Compile-time check that the buffer fits the largest BackgroundModel
+    // subclass we placement-new into it. Listed explicitly rather than via
+    // a sizeof literal (the previous form `sizeof(uint8_t[64]) >= 32` was
+    // trivially true and caught nothing — PR #140 review).
+    static_assert(
+        sizeof(backgroundBuffer_) >= sizeof(LinearBackground)
+            && sizeof(backgroundBuffer_) >= sizeof(MatrixBackground),
+        "backgroundBuffer_ is smaller than the largest BackgroundModel "
+        "subclass — bump the buffer size or shrink the subclass"
+    );
 };

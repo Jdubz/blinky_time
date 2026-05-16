@@ -21,6 +21,17 @@ class ReleaseRequest(BaseModel):
 
 class FlashRequest(BaseModel):
     firmware_path: str = Field(..., description="Path to .hex or .uf2 firmware file on the server")
+    device_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Explicit whitelist of device IDs this deploy targets. When provided, "
+            "the fleet flash flashes only these devices AND auto-recovery is armed "
+            "ONLY for these devices. When omitted, fleet flash falls back to "
+            "all eligible nRF52840s (back-compat) but auto-recovery is NOT armed — "
+            "an unscoped deploy could otherwise auto-flash a device the operator "
+            "didn't intend (e.g. a dev unit on the bench)."
+        ),
+    )
 
 
 class FlashResponse(BaseModel):
@@ -60,6 +71,7 @@ class DeviceResponse(BaseModel):
     rssi: int | None = None
     mtu: int | None = None
     last_seen_ago: float | None = None
+    stale: bool = False
 
 
 class SettingResponse(BaseModel):

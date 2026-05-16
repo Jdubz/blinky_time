@@ -2,9 +2,10 @@
 
 Endpoints are under ``/api/scenes`` (prefix added in app.py).
 
-Apply semantics: the scene's command sequence is sent via ``FleetManager.send_to_all``
-so every connected device gets the same configuration. Subset targeting isn't
-wired yet - add ``?device_ids=id1,id2`` when needed.
+Apply semantics: the scene's command sequence is broadcast via
+``FleetManager.broadcast`` so every device in range gets the same
+configuration. Subset targeting isn't wired yet - BLE broadcasts hit
+everything advertising on the radio.
 
 Security: scene names are used to derive on-disk filenames via ``slugify``
 (lowercased + non-alphanumerics->'-'). We validate the URL-path ``name``
@@ -105,7 +106,7 @@ async def scenes_apply(name: str) -> dict[str, object]:
     commands = scene_to_commands(scene)
     results: list[dict[str, object]] = []
     for cmd in commands:
-        responses = await fleet.send_to_all(cmd)
+        responses = await fleet.broadcast(cmd)
         results.append({"command": cmd, "responses": responses})
     last_responses = results[-1]["responses"] if results else {}
     return {

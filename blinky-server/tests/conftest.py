@@ -46,7 +46,10 @@ async def mock_device(mock_transport: MockTransport) -> Device:
 @pytest_asyncio.fixture
 async def fleet_with_devices() -> AsyncGenerator[FleetManager, None]:
     """Fleet manager with 2 mock devices (no real hardware)."""
-    fleet = FleetManager()
+    # enable_ble=False keeps the FleetBroadcaster out of tests — it needs a
+    # real BlueZ D-Bus connection and would also add a "broadcast" entry to
+    # fleet command results that the existing test cases don't expect.
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
 
     # Manually add mock devices instead of running discovery
     for i, (platform, info) in enumerate(

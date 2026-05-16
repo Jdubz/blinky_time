@@ -332,8 +332,13 @@ protected:
     BoundaryBehavior* boundary_;
     ForceAdapter* forceAdapter_;
 
-    // Static buffers for placement new (avoid heap allocation)
-    uint8_t spawnBuffer_[32] = {0};
-    uint8_t boundaryBuffer_[32] = {0};
-    uint8_t forceBuffer_[48] = {0};
+    // Static buffers for placement new (avoid heap allocation). MUST be
+    // aligned for the largest subclass placement-new'd into them — otherwise
+    // the object's vptr ends up at a misaligned address and the first virtual
+    // call traps with a UsageFault on Cortex-M4. Companion fix to Water's
+    // backgroundBuffer_; applied here too as defense-in-depth so future
+    // subclasses or class-layout changes can't reintroduce the bug.
+    alignas(8) uint8_t spawnBuffer_[32] = {0};
+    alignas(8) uint8_t boundaryBuffer_[32] = {0};
+    alignas(8) uint8_t forceBuffer_[48] = {0};
 };

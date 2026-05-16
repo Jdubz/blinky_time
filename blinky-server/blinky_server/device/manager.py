@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import time as _time
 from pathlib import Path
 from typing import Any
 
+from .. import systemd_notify
+from ..ble.advertiser import FleetBroadcaster
 from ..transport.base import Transport
 from ..transport.discovery import (
     DiscoveredDevice,
@@ -22,6 +25,22 @@ log = logging.getLogger(__name__)
 
 DISCOVERY_INTERVAL_S = 10
 RECONNECT_INTERVAL_S = 5
+
+# Max auto-recovery attempts per device. After this many consecutive
+# failures, halt auto-recovery for that device and surface via the
+# /api/fleet/status endpoint as recovery_blocked. Operator must clear
+# the state manually (e.g. by physically inspecting the device) before
+# auto-recovery resumes. Prevents hammering a device that's hung in a
+# way our flash sequence can't fix.
+MAX_AUTO_RECOVERY_ATTEMPTS = 3
+
+# Reap non-recoverable devices that haven't communicated in this long.
+# Removed from /api/devices so dead slots stop accumulating. Re-discovered
+# fresh on the next scan if the device comes back.
+# DFU_RECOVERY excluded — it represents a device stuck in bootloader; reaping
+# would let it be re-discovered and stuck again in a flap loop.
+REAP_THRESHOLD_S = 900.0  # 15 min
+REAP_INTERVAL_CYCLES = 6  # every 6th background cycle (~60s)
 
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
@@ -83,6 +102,11 @@ class FleetManager:
         self._dedup_excluded: set[str] = set()
         # DFU recovery state (per-device tracking for auto-retry).
         self._recovery_firmware_path: str | None = None
+        # Whitelist of device IDs eligible for auto-recovery. Empty = nothing
+        # auto-recovers, even if a firmware path is set — the whitelist is
+        # the safety belt against flashing a dev unit that happens to be in
+        # DFU at the same time the cart fleet is being deployed.
+        self._recovery_device_ids: set[str] = set()
         self._dfu_recovery_state: dict[str, dict[str, int]] = {}
         # Per-device set tracking which devices have active DFU recovery.
         # Prevents the background loop from starting a second recovery on a
@@ -92,10 +116,51 @@ class FleetManager:
         # running concurrently on the same device. Lock is acquired before any
         # DFU operation and held for its entire duration.
         self._dfu_locks: dict[str, asyncio.Lock] = {}
+        # Background-loop health. Updated after every successful cycle so
+        # external watchdogs (systemd, /api/fleet/status) can detect a wedge
+        # — `_running == True` is not enough, the loop can be alive but stuck.
+        self._loop_last_ok: float | None = None
+        self._loop_cycles: int = 0
+        self._loop_consecutive_errors: int = 0
+        # Separate watchdog-pinger task. Runs independently of the main
+        # background loop so a long inline await (e.g. an 8-min BLE DFU
+        # called from inside the loop's auto-recovery branch) does NOT
+        # block the systemd watchdog ping. Whatever the main loop is
+        # doing, this task pings on a fixed cadence while the asyncio
+        # event loop is alive — which is exactly what the systemd
+        # watchdog wants to know. A hard event-loop deadlock still
+        # SIGKILLs us, as intended.
+        # Verified necessary 2026-05-16: ping inside the loop's pause
+        # path doesn't fire when auto-recovery awaits upload_ble_dfu
+        # INSIDE the loop iteration — the loop never returns to the
+        # top of while until DFU completes.
+        self._watchdog_task: asyncio.Task[None] | None = None
+        # Fleet broadcaster — BLE radio-style command channel. Owned by
+        # the manager so its lifecycle matches the fleet's; routes get at
+        # it via ``self.broadcaster``. Started in :meth:`start`; may be
+        # None when BLE is disabled (``enable_ble=False``).
+        self.broadcaster: FleetBroadcaster | None = None
 
     @property
     def devices(self) -> dict[str, Device]:
         return self._devices
+
+    def loop_health(self) -> dict[str, Any]:
+        """Background-loop health snapshot for external watchdogs and APIs.
+
+        ``last_cycle_ago`` is None until the first successful cycle finishes
+        (boot window); after that, ``None`` should be treated as a hang by
+        consumers. ``consecutive_errors > 0`` means the loop is failing but
+        still trying.
+        """
+        last_ok = self._loop_last_ok
+        ago = (_time.monotonic() - last_ok) if last_ok is not None else None
+        return {
+            "running": self._running,
+            "cycles": self._loop_cycles,
+            "last_cycle_ago": round(ago, 1) if ago is not None else None,
+            "consecutive_errors": self._loop_consecutive_errors,
+        }
 
     def get_device(self, device_id: str) -> Device | None:
         """Look up device by ID. Supports partial ID prefix match."""
@@ -111,16 +176,55 @@ class FleetManager:
     async def start(self) -> None:
         """Start background loop for device discovery and management.
 
-        All device connections (serial + BLE) happen in the background loop.
-        The API is available immediately — devices connect asynchronously.
+        Serial device connections happen in the background loop. BLE
+        devices do NOT hold persistent connections — fleet commands go
+        out via :attr:`broadcaster` (manufacturer-data advertising). See
+        :class:`FleetBroadcaster` for the rationale.
         """
         self._running = True
+        # Arm DFU auto-recovery from persisted state if a previous deploy
+        # left a firmware path AND an explicit device whitelist. Critical
+        # for unattended boots: a device on the whitelist stuck in DFU
+        # bootloader at power-on recovers itself without operator
+        # intervention. Devices not on the whitelist are left alone.
+        persisted = self._load_recovery_firmware()
+        if persisted:
+            firmware_path, device_ids = persisted
+            self._recovery_firmware_path = firmware_path
+            self._recovery_device_ids = device_ids
+            log.info(
+                "DFU auto-recovery armed from persisted state: %s (devices: %s)",
+                firmware_path,
+                ", ".join(sorted(device_ids)) or "<none>",
+            )
+        # Bring up the BLE broadcaster. Single-radio adapters (BCM43455 on
+        # Pi 4) refuse advertising while we hold GATT central connections,
+        # so the broadcaster MUST come up before any per-device connect
+        # attempt — and we MUST NOT auto-connect to BLE devices during
+        # normal operation.
+        if self._enable_ble:
+            try:
+                self.broadcaster = FleetBroadcaster()
+                await self.broadcaster.start()
+            except Exception:
+                log.exception(
+                    "Fleet broadcaster failed to start — fleet commands will not be delivered over BLE"
+                )
+                self.broadcaster = None
+        # Start the independent watchdog pinger FIRST so it begins pinging
+        # before anything else can stall.
+        self._watchdog_task = asyncio.create_task(self._watchdog_pinger())
         self._discovery_task = asyncio.create_task(self._background_loop())
-        log.info("Fleet manager started (devices connecting in background)")
+        log.info("Fleet manager started")
 
     async def stop(self) -> None:
         """Disconnect all devices and stop background tasks."""
         self._running = False
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watchdog_task
+            self._watchdog_task = None
         if self._discovery_task:
             self._discovery_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -129,6 +233,10 @@ class FleetManager:
             await device.disconnect()
         self._devices.clear()
         self._device_discovery.clear()
+        if self.broadcaster is not None:
+            with contextlib.suppress(Exception):
+                await self.broadcaster.stop()
+            self.broadcaster = None
         log.info("Fleet manager stopped")
 
     def hold_reconnect(self, device_id: str, seconds: float) -> None:
@@ -282,7 +390,14 @@ class FleetManager:
     # ── Internal ──
 
     async def _discover_and_connect(self) -> None:
-        """Discover devices across all transports and connect to new ones."""
+        """Discover devices across transports.
+
+        Serial devices are connected and held (high-bandwidth telemetry use
+        cases still require a persistent link). BLE devices are NOT
+        connected — they're tracked as "present" entries via passive scan
+        only. Commands to BLE devices go out via the broadcaster, never
+        per-connection. See class docstring for the architectural rationale.
+        """
         self._refresh_dedup_exclusions()
         discovered = await discover_all(
             serial_scan=self._enable_serial,
@@ -301,6 +416,63 @@ class FleetManager:
                 self._handle_dfu_recovery_device(disc)
                 continue
 
+            # BLE app-mode devices: track presence, do NOT connect. The BCM43455
+            # adapter can't advertise (broadcast channel) while we hold central
+            # GATT connections; broadcaster takes priority. We still create
+            # a Device entry so /api/devices, flash routes, and the rest of
+            # the management surface have something to point at — but the
+            # BleTransport stays unconnected unless a per-device operation
+            # (flash, etc.) brings it up just-in-time.
+            if disc.transport_type == "ble":
+                if device_id in known_ids:
+                    existing = self._devices[device_id]
+                    existing.last_seen = _time.monotonic()
+                    if disc.rssi is not None:
+                        existing.rssi = disc.rssi
+                    if disc.description and not existing.device_name:
+                        existing.device_name = disc.description
+                    # The device is advertising NUS again, so it's back in
+                    # app mode. Reset transient post-op states (after a
+                    # flash leaves state=DISCONNECTED; after a previous
+                    # DFU_RECOVERY where the device has now recovered).
+                    # PRESENT is the steady-state for any BLE peer we can
+                    # see; flashing again needs the state check to pass.
+                    if existing.state in (
+                        DeviceState.DISCONNECTED,
+                        DeviceState.ERROR,
+                        DeviceState.DFU_RECOVERY,
+                    ):
+                        existing.state = DeviceState.PRESENT
+                    continue
+                if device_id in self._dedup_excluded:
+                    continue
+                try:
+                    transport = _create_transport(disc)
+                    device = Device(
+                        device_id=device_id,
+                        port=disc.address,
+                        platform=disc.platform,
+                        transport=transport,
+                    )
+                    device.state = DeviceState.PRESENT
+                    device.last_seen = _time.monotonic()
+                    device.device_name = disc.description
+                    if disc.rssi is not None:
+                        device.rssi = disc.rssi
+                    if disc.address:
+                        device.ble_address = disc.address
+                    self._devices[device_id] = device
+                    self._device_discovery[device_id] = disc
+                    log.info(
+                        "BLE device present: %s (%s, RSSI=%s)",
+                        device_id,
+                        disc.description or "unnamed",
+                        disc.rssi,
+                    )
+                except Exception:
+                    log.exception("Failed to track BLE device %s", device_id[:12])
+                continue
+
             if device_id in known_ids:
                 existing = self._devices[device_id]
                 # Update address if it changed (USB re-enumeration)
@@ -314,16 +486,11 @@ class FleetManager:
                     existing.port = disc.address
                 continue
 
-            # Skip BLE devices that were previously deduped with a serial device.
-            # Without this, deduped devices get rediscovered immediately and thrash
-            # in a connect → dedup → disconnect → rediscover loop.
+            # Skip devices previously deduped (e.g. shared BLE+serial identity).
             if device_id in self._dedup_excluded:
                 continue
 
-            # New device — connect.
-            # No file-based serial lock check needed: the server is the sole serial
-            # consumer. During firmware flashing, upload routes call pause_discovery()
-            # + hold_reconnect() to prevent contention with the uf2_upload subprocess.
+            # New serial device — connect.
             try:
                 transport = _create_transport(disc)
                 device = Device(
@@ -349,6 +516,67 @@ class FleetManager:
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
         # prefer serial (faster, more reliable) and disconnect the wireless one.
         await self._deduplicate_transports()
+
+    async def broadcast(self, command: str) -> dict[str, str]:
+        """Send a command to every device in range.
+
+        Two channels in parallel:
+          1. BLE broadcaster — fires off a manufacturer-data advertisement
+             that all listening blinky devices decode. No per-device state.
+          2. Serial devices — write the same command line down each USB
+             serial transport (the small set we still hold persistent
+             connections for).
+
+        Returns a per-source result map for the UI:
+          - "broadcast": status of the BLE advert
+          - "<serial-id>": per-serial-device response or skipped: state=…
+        """
+        results: dict[str, str] = {}
+
+        # Run BLE broadcast (3s on-air hold) concurrently with serial
+        # fan-out (sub-100ms each). Previously the serial devices waited
+        # for the broadcaster's full 3-second window before getting their
+        # command — pointless serialization. PR #140 review.
+        async def _do_broadcast() -> None:
+            if self.broadcaster is not None and self.broadcaster.is_running:
+                try:
+                    await self.broadcaster.broadcast_command(command)
+                    results["broadcast"] = "OK"
+                except Exception as exc:
+                    log.exception("Broadcast %r failed", command)
+                    results["broadcast"] = f"error: {exc}"
+            elif self._enable_ble:
+                results["broadcast"] = "error: broadcaster not running"
+
+        async def _do_serial_fanout() -> None:
+            # Fan out to any non-BLE devices we still hold a connection to —
+            # serial (cart-side devices), test mocks, future transports.
+            # BLE is broadcaster-only (no per-device connection state to
+            # message).
+            ids: list[str] = []
+            tasks: list[asyncio.Task[str]] = []
+            for device_id, device in list(self._devices.items()):
+                if device.transport.transport_type == "ble":
+                    continue
+                if device.state != DeviceState.CONNECTED:
+                    results[device_id] = f"skipped: state={device.state.value}"
+                    continue
+                ids.append(device_id)
+                tasks.append(asyncio.create_task(device.protocol.send_command(command)))
+            # Gather concurrently with return_exceptions so a single slow
+            # or failing device doesn't block collecting results for the
+            # others (PR #140 review — previously awaited sequentially,
+            # which serialized failure timeouts).
+            if tasks:
+                outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+                for device_id, outcome in zip(ids, outcomes, strict=True):
+                    if isinstance(outcome, BaseException):
+                        results[device_id] = f"error: {outcome}"
+                    else:
+                        results[device_id] = outcome
+
+        await asyncio.gather(_do_broadcast(), _do_serial_fanout())
+        return results
 
     async def _deduplicate_transports(self) -> None:
         """Remove duplicate connections to the same physical device.
@@ -674,6 +902,46 @@ class FleetManager:
         if tasks:
             await asyncio.gather(*tasks)
 
+    async def _reap_stale_devices(self) -> None:
+        """Evict devices that have been disconnected/errored for too long.
+
+        Removes from the in-memory fleet so /api/devices stops returning a
+        dead slot. The device will be re-discovered on the next scan if it
+        comes back. CONNECTED/CONNECTING devices are exempt (liveness handles
+        those). DFU_RECOVERY is exempt — those are stuck in bootloader and
+        re-discovery would just re-stick them in a flap loop; operator must
+        intervene via /api/devices/{id}/flash or DELETE.
+
+        PRESENT devices are now ALSO reapable. PR #140 review: BLE devices
+        in PRESENT state that go out of range stop being seen by discovery
+        (last_seen stops updating), but the slot stays in the fleet forever
+        — accumulating ghost entries over time. Discovery refreshes
+        last_seen on every scan, so PRESENT + stale last_seen really does
+        mean "device disappeared." Same REAP_THRESHOLD_S applies.
+        """
+        now = _time.monotonic()
+        reapable = {DeviceState.DISCONNECTED, DeviceState.ERROR, DeviceState.PRESENT}
+        victims: list[str] = []
+        for device in list(self._devices.values()):
+            if device.state not in reapable:
+                continue
+            if device.last_seen is None:
+                continue  # never connected — leave alone, discovery is still trying
+            if (now - device.last_seen) < REAP_THRESHOLD_S:
+                continue
+            victims.append(device.id)
+
+        for device_id in victims:
+            device_opt = self._devices.get(device_id)
+            ago = (now - device_opt.last_seen) if device_opt and device_opt.last_seen else None
+            log.warning(
+                "Reaping stale device %s (state=%s, last_seen=%.0fs ago)",
+                device_id[:12],
+                device_opt.state.value if device_opt else "?",
+                ago if ago is not None else -1,
+            )
+            await self.remove_device(device_id)
+
     async def _ping_device(self, device: Device) -> None:
         """Ping a single device; trigger disconnect handling on failure.
 
@@ -698,33 +966,121 @@ class FleetManager:
             with contextlib.suppress(Exception):
                 device._on_transport_disconnect()
 
-    # Persistent state file for recovery firmware path (survives server restarts)
-    _RECOVERY_FIRMWARE_STATE = Path("/tmp/blinky-recovery-firmware.path")
+    @staticmethod
+    def _recovery_state_path() -> Path:
+        """Persistent state file for recovery firmware + device whitelist.
 
-    def set_recovery_firmware(self, firmware_path: str) -> None:
-        """Set the firmware path used for automatic DFU recovery.
+        Lives under ``~/.local/share/blinky-server/`` so it survives reboots.
+        Previously /tmp, which is tmpfs on Pi — a power cycle erased it and
+        any device stuck in DFU bootloader could no longer auto-recover.
 
-        When set, the fleet manager will automatically attempt BLE DFU on
-        devices discovered in DFU_RECOVERY state (stuck in bootloader after
-        a failed update). This eliminates the need for operator intervention.
-
-        Persisted to /tmp so it survives server restarts (but not reboots,
-        which is fine — a reboot means the firmware file in /tmp is gone too).
+        File format: JSON ``{"firmware_path": str, "device_ids": [str, ...]}``.
+        An older plain-string format used to live here; it's rejected on load
+        because it has no whitelist, and auto-flashing all dfu_recovery
+        devices unscoped is unsafe (could clobber a dev unit on the bench).
         """
-        self._recovery_firmware_path = firmware_path
-        with contextlib.suppress(OSError):
-            self._RECOVERY_FIRMWARE_STATE.write_text(firmware_path)
-        log.info("Recovery firmware set: %s", firmware_path)
+        from ..paths import data_dir
 
-    def _load_recovery_firmware(self) -> str | None:
-        """Load persisted recovery firmware path from state file."""
+        return data_dir() / "recovery-firmware.json"
+
+    def set_recovery_firmware(self, firmware_path: str, device_ids: list[str]) -> None:
+        """Arm automatic DFU recovery, scoped to an explicit device whitelist.
+
+        When armed, the fleet manager attempts BLE DFU on devices in this
+        list that show up in DFU_RECOVERY state. Devices NOT in the list
+        are left alone — this is the safety mechanism that keeps a cart
+        deploy from auto-flashing a hat being developed separately, etc.
+
+        Persisted to ~/.local/share/blinky-server/ so the arm survives a
+        reboot. After a power cycle a stuck device still auto-recovers
+        without operator intervention.
+
+        Raises ValueError on:
+          * an empty device_ids list (would silently disable recovery while
+            looking like it was armed — the "no silent fallback" failure mode)
+          * a missing firmware file (fail loud at set time rather than
+            getting a no-op-with-warning at recovery time when the operator
+            isn't around to notice — PR #140 review)
+          * any non-string entry in device_ids (the JSON round-trip would
+            otherwise pass through e.g. ``[None]`` which would never match
+            a real device ID)
+        """
+        if not device_ids:
+            raise ValueError("set_recovery_firmware requires a non-empty device_ids list")
+        if not all(isinstance(d, str) and d for d in device_ids):
+            raise ValueError(
+                f"set_recovery_firmware: device_ids must all be non-empty strings, "
+                f"got {device_ids!r}"
+            )
+        if not Path(firmware_path).is_file():
+            raise ValueError(
+                f"set_recovery_firmware: firmware file does not exist: {firmware_path}"
+            )
+        self._recovery_firmware_path = firmware_path
+        self._recovery_device_ids = set(device_ids)
+        state = {"firmware_path": firmware_path, "device_ids": sorted(set(device_ids))}
         try:
-            path = self._RECOVERY_FIRMWARE_STATE.read_text().strip()
-            if path and Path(path).is_file():
-                return path
+            self._recovery_state_path().write_text(json.dumps(state))
         except OSError:
-            pass
-        return None
+            log.warning("Failed to persist recovery-firmware state")
+        log.info(
+            "Recovery firmware armed: %s (devices: %s)",
+            firmware_path,
+            ", ".join(sorted(set(device_ids))) or "<none>",
+        )
+
+    def _load_recovery_firmware(self) -> tuple[str, set[str]] | None:
+        """Load persisted recovery firmware path + device whitelist.
+
+        Returns (firmware_path, device_ids) on success. Returns None if the
+        state file is missing, the firmware file no longer exists, the file
+        is malformed, OR it's in the legacy plain-string format (which had
+        no whitelist — refusing those is safer than auto-flashing the wrong
+        device).
+        """
+        path = self._recovery_state_path()
+        try:
+            raw = path.read_text().strip()
+        except OSError:
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning(
+                "Ignoring legacy recovery-firmware state at %s (plain string; "
+                "no device whitelist — refusing to auto-flash unscoped)",
+                path,
+            )
+            return None
+        firmware_path = data.get("firmware_path")
+        device_ids = data.get("device_ids")
+        if not (
+            isinstance(firmware_path, str)
+            and isinstance(device_ids, list)
+            and device_ids
+            and all(isinstance(d, str) and d for d in device_ids)
+        ):
+            log.warning("Ignoring malformed recovery-firmware state at %s", path)
+            self._clear_recovery_state_file(path, reason="malformed")
+            return None
+        if not Path(firmware_path).is_file():
+            log.warning("Recovery firmware %s no longer exists; not arming", firmware_path)
+            self._clear_recovery_state_file(path, reason="firmware-missing")
+            return None
+        return firmware_path, set(device_ids)
+
+    @staticmethod
+    def _clear_recovery_state_file(path: Path, reason: str) -> None:
+        """Remove a stale recovery-state JSON so the rejection log fires
+        once, not on every boot. PR #140 review.
+        """
+        try:
+            path.unlink(missing_ok=True)
+            log.info("Cleared stale recovery-firmware state (%s)", reason)
+        except OSError:
+            log.exception("Failed to clear stale recovery-firmware state")
 
     async def _auto_recover_dfu_devices(self) -> None:
         """Automatically push firmware to devices stuck in DFU bootloader.
@@ -741,19 +1097,30 @@ class FleetManager:
 
         firmware_path = self._recovery_firmware_path
         if not firmware_path:
-            firmware_path = self._load_recovery_firmware()
-            if firmware_path:
+            persisted = self._load_recovery_firmware()
+            if persisted:
+                firmware_path, device_ids = persisted
                 self._recovery_firmware_path = firmware_path
+                self._recovery_device_ids = device_ids
         if not firmware_path:
             return
 
         if not os.path.isfile(firmware_path):
             return
 
+        # No whitelist = nothing to recover. The whitelist is the safety
+        # belt against auto-flashing a device the operator didn't include
+        # in this deploy (e.g. a dev unit in DFU on the bench). An armed
+        # firmware path without a whitelist is treated as not-armed.
+        if not self._recovery_device_ids:
+            return
+
         dfu_devices = [
             d
             for d in self._devices.values()
-            if d.state == DeviceState.DFU_RECOVERY and d.ble_address
+            if d.state == DeviceState.DFU_RECOVERY
+            and d.ble_address
+            and d.id in self._recovery_device_ids
         ]
         if not dfu_devices:
             return
@@ -761,6 +1128,27 @@ class FleetManager:
         for device in dfu_devices:
             state = self._dfu_recovery_state.setdefault(device.id, {"fails": 0, "backoff": 0})
             fail_count = state["fails"]
+
+            # P4: stop hammering a device that keeps failing. After
+            # MAX_AUTO_RECOVERY_ATTEMPTS, the device is presumed to need
+            # operator attention (radio interference, firmware bug, hardware
+            # issue, etc.). Continuing to attempt risks further damage to a
+            # partially-flashed device. Log loudly on the transition so the
+            # operator sees it in the journal exactly once per giveup event.
+            if fail_count >= MAX_AUTO_RECOVERY_ATTEMPTS:
+                if not state.get("gave_up_logged"):
+                    log.error(
+                        "Auto-recovery GIVING UP for %s (%s) after %d attempts. "
+                        "Manual intervention required. State persists across server "
+                        "restarts via the dfu_recovery_state dict (in-memory only — "
+                        "a restart clears the cap, which is intentional: a fresh boot "
+                        "is a deliberate operator action).",
+                        device.id[:12],
+                        device.device_name or "unknown",
+                        fail_count,
+                    )
+                    state["gave_up_logged"] = True
+                continue
 
             if fail_count > 0:
                 # Exponential backoff: 1, 2, 4, 8 min (called every 60s)
@@ -791,15 +1179,55 @@ class FleetManager:
                 self._dfu_recovery_active.add(device.id)
                 self.pause_discovery()
                 self.hold_reconnect(device.id, 600)
+                # Stop the broadcaster: BLE DFU needs central GATT, and the
+                # BCM43455 single radio refuses to register an advertisement
+                # while we hold central GATT connections (verified live
+                # 2026-05-16 via bluez `Failed (0x03)`). Reverse direction
+                # (GATT central while advertising) is not directly observed
+                # but the same radio constraint applies — don't risk it.
+                broadcaster_was_running = (
+                    self.broadcaster is not None and self.broadcaster.is_running
+                )
+                if broadcaster_was_running and self.broadcaster is not None:
+                    try:
+                        await self.broadcaster.stop()
+                    except Exception:
+                        log.exception(
+                            "Auto-recovery: broadcaster stop failed; recovery may fail too"
+                        )
+                    # P3 guard mirroring the flash route: if the broadcaster
+                    # didn't actually stop, refuse to enter BLE DFU. Mid-flash
+                    # radio contention against the BCM43455 (advertising +
+                    # GATT-central) produces "Failed (0x03)" and was the
+                    # cart_inner brick mode. PR #140 review — auto-recovery
+                    # was missing this guard that the flash routes have.
+                    if self.broadcaster is not None and self.broadcaster.is_running:
+                        log.error(
+                            "Auto-recovery: broadcaster did not stop cleanly for %s — "
+                            "refusing to enter BLE DFU; will retry next cycle",
+                            device.id[:12],
+                        )
+                        state["fails"] = fail_count + 1
+                        self._dfu_recovery_active.discard(device.id)
+                        self.resume_discovery()
+                        self.resume_reconnect(device.id)
+                        continue
                 try:
                     from ..firmware.ble_dfu import upload_ble_dfu
                     from ..firmware.compile import ensure_dfu_zip
 
                     dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
                     assert device.ble_address is not None  # filtered above
-                    result = await upload_ble_dfu(
-                        app_ble_address=device.ble_address,
-                        dfu_zip_path=dfu_zip,
+                    # P5: hard 600s timeout. Mirrors the flash-route guard.
+                    # Without this, a hung BLE DFU here would run until
+                    # something else tears it down — which is exactly the
+                    # destructive scenario that bricked cart_inner.
+                    result = await asyncio.wait_for(
+                        upload_ble_dfu(
+                            app_ble_address=device.ble_address,
+                            dfu_zip_path=dfu_zip,
+                        ),
+                        timeout=600.0,
                     )
 
                     if result.get("status") == "ok":
@@ -821,6 +1249,60 @@ class FleetManager:
                     self._dfu_recovery_active.discard(device.id)
                     self.resume_discovery()
                     self.resume_reconnect(device.id)
+                    if broadcaster_was_running and self.broadcaster is not None:
+                        try:
+                            await self.broadcaster.start()
+                        except Exception:
+                            log.exception(
+                                "Auto-recovery: failed to restart broadcaster — fleet "
+                                "commands will not reach BLE devices until the server "
+                                "is restarted"
+                            )
+
+    # Fallback ping cadence when systemd doesn't provide WATCHDOG_USEC
+    # (running outside a unit, or WatchdogSec=0). 30s is conservative.
+    WATCHDOG_PING_INTERVAL_FALLBACK_S = 30.0
+
+    def _watchdog_ping_interval(self) -> float:
+        """Compute the watchdog ping cadence from $WATCHDOG_USEC.
+
+        Per systemd docs, services should ping at half the watchdog
+        interval to leave headroom for missed beats. PR #140 review:
+        the previous hardcoded 30s broke for tighter WatchdogSec settings
+        (e.g., WatchdogSec=15s would miss every other beat).
+        """
+        wdog = systemd_notify.watchdog_sec()
+        if wdog is None:
+            return self.WATCHDOG_PING_INTERVAL_FALLBACK_S
+        # half-interval per systemd convention
+        return max(wdog / 2.0, 1.0)
+
+    async def _watchdog_pinger(self) -> None:
+        """Ping systemd's watchdog on a fixed cadence, independent of the
+        main background loop.
+
+        Why this is a separate task: long-running operations inside the
+        background loop (BLE DFU via auto-recovery, in particular) `await`
+        for many minutes. While that await is pending, the main loop never
+        returns to its `while self._running` head, so the in-loop watchdog
+        ping (full-cycle path AND pause-path) never fires. We pinned this
+        live on 2026-05-16 — the first kill was the cause of cart_inner's
+        partial-flash brick.
+
+        A separate task pings while the asyncio event loop is alive, which
+        is exactly what we want the systemd watchdog to gate on. A hard
+        event-loop deadlock still SIGKILLs us — by design.
+        """
+        interval = self._watchdog_ping_interval()
+        log.info("Watchdog pinger started (every %.1fs)", interval)
+        try:
+            while self._running:
+                systemd_notify.watchdog()
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            log.info("Watchdog pinger stopped")
 
     async def _background_loop(self) -> None:
         """Periodic discovery, reconnection, liveness checks, and DFU recovery."""
@@ -830,14 +1312,29 @@ class FleetManager:
             try:
                 await cleanup_stale_ble_connections()
                 await asyncio.sleep(2)
-            except Exception as e:
-                log.warning("BLE cleanup failed (non-fatal): %s", e)
+            except Exception:
+                log.exception("BLE cleanup failed (non-fatal)")
         while self._running:
             try:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
                 cycle += 1
                 if self._discovery_pause_count > 0:
-                    continue  # Skip discovery while BLE DFU or other ops in progress
+                    # Paused intentionally (BLE DFU in progress, etc). Still
+                    # counts as a healthy tick for the watchdog — we ARE
+                    # doing work, just elsewhere.
+                    #
+                    # The in-loop systemd_notify.watchdog() call here is
+                    # now defense-in-depth: the independent _watchdog_pinger
+                    # task is the primary mechanism that keeps systemd happy
+                    # while a long await (BLE DFU auto-recovery) blocks
+                    # this loop. Don't remove this call thinking the
+                    # pinger covers it — it's belt-and-braces for the
+                    # 2026-05-16 cart_inner regression.
+                    self._loop_last_ok = _time.monotonic()
+                    self._loop_cycles = cycle
+                    self._loop_consecutive_errors = 0
+                    systemd_notify.watchdog()
+                    continue
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
                 # Detect dead serial reader threads (thread exited but device still
@@ -849,7 +1346,38 @@ class FleetManager:
                 # DFU recovery check every 6th cycle (~60s)
                 if cycle % 6 == 0:
                     await self._auto_recover_dfu_devices()
+                # Reap long-dead non-recoverable devices every 6th cycle (~60s)
+                if cycle % REAP_INTERVAL_CYCLES == 0:
+                    await self._reap_stale_devices()
+                # Mark this cycle as healthy AFTER all work succeeded.
+                # The systemd watchdog ping here is defense-in-depth (the
+                # independent _watchdog_pinger task is the primary). It's
+                # left in deliberately: a long inline await IS our hang
+                # scenario, and the pinger covers it. The in-loop call
+                # exists so that a loop that completes a full cycle marks
+                # _loop_last_ok and pings within the same critical
+                # section — keep them adjacent.
+                self._loop_last_ok = _time.monotonic()
+                self._loop_cycles = cycle
+                self._loop_consecutive_errors = 0
+                systemd_notify.watchdog()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                log.error("Background loop error: %s", e)
+            except Exception:
+                self._loop_consecutive_errors += 1
+                # log.exception preserves the traceback — log.error("%s", e)
+                # would lose it and make post-event diagnosis impossible.
+                log.exception(
+                    "Background loop error (cycle %d, consecutive errors %d)",
+                    cycle,
+                    self._loop_consecutive_errors,
+                )
+                # Backoff to avoid spinning if the failure is persistent
+                # (e.g. BlueZ wedged). Cap at 5x normal interval so we still
+                # try to recover periodically.
+                extra_sleep = min(
+                    self._loop_consecutive_errors * DISCOVERY_INTERVAL_S,
+                    5 * DISCOVERY_INTERVAL_S,
+                )
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.sleep(extra_sleep)

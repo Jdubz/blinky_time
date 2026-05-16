@@ -13,40 +13,50 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
+from ..paths import firmware_dir
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import FlashRequest
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
-# Persistent firmware metadata — survives server restarts (not reboots).
-_FIRMWARE_META_PATH = Path("/tmp/blinky-firmware-current.json")
+
+# Firmware + metadata live in persistent storage so auto-recovery still
+# works after a reboot. The previous /tmp paths vanished on every power
+# cycle, leaving any device stuck in DFU bootloader permanently dark.
+def _firmware_meta_path() -> Path:
+    return firmware_dir() / "firmware-meta.json"
+
+
+def _firmware_hex_path() -> Path:
+    return firmware_dir() / "firmware.hex"
 
 
 def _save_firmware_meta(meta: dict[str, Any]) -> None:
     """Persist current firmware metadata to disk."""
     import json
 
+    path = _firmware_meta_path()
     try:
-        _FIRMWARE_META_PATH.write_text(json.dumps(meta))
+        path.write_text(json.dumps(meta))
     except OSError:
-        log.warning("Failed to persist firmware metadata to %s", _FIRMWARE_META_PATH)
+        log.warning("Failed to persist firmware metadata to %s", path)
 
 
 def _load_firmware_meta() -> dict[str, Any] | None:
     """Load persisted firmware metadata, or None if not available."""
     import json
 
+    path = _firmware_meta_path()
     try:
-        if _FIRMWARE_META_PATH.is_file():
-            return json.loads(_FIRMWARE_META_PATH.read_text())  # type: ignore[no-any-return]
+        if path.is_file():
+            return json.loads(path.read_text())  # type: ignore[no-any-return]
     except (OSError, json.JSONDecodeError):
         pass
     return None
@@ -86,8 +96,7 @@ async def fleet_upload(
 
     # Use a stable filename (not user-controlled) to avoid path issues.
     # Overwriting is intentional — only the latest upload matters.
-    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / "firmware.hex"
-    hex_path.parent.mkdir(parents=True, exist_ok=True)
+    hex_path = _firmware_hex_path()
     hex_path.write_bytes(content)
 
     log.info("Fleet upload: stored firmware.hex (%d bytes, version=%s)", len(content), version)
@@ -178,17 +187,61 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
     fleet = get_fleet()
-    flashable_states = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY)
-    devices = [
-        d
-        for d in fleet.get_all_devices()
-        if d.platform == "nrf52840" and d.state in flashable_states
-    ]
+    # PRESENT BLE devices are flashable too — we just-in-time connect for
+    # the flash and disconnect after. The broadcaster gets paused around
+    # the flash (BCM43455 can't both advertise and act as central).
+    flashable_states = (
+        DeviceState.CONNECTED,
+        DeviceState.DFU_RECOVERY,
+        DeviceState.PRESENT,
+    )
+
+    if body.device_ids is not None:
+        # Explicit whitelist: only flash THESE devices. Validate every ID
+        # resolves and is flashable — fail loud on a typo or stale ID rather
+        # than silently dropping it (operator thought they were deploying
+        # to N but actually deployed to N-1).
+        devices = []
+        missing: list[str] = []
+        wrong_state: list[str] = []
+        for device_id in body.device_ids:
+            d = fleet.get_device(device_id)
+            if d is None:
+                missing.append(device_id)
+                continue
+            if d.platform != "nrf52840" or d.state not in flashable_states:
+                wrong_state.append(f"{device_id}({d.platform},{d.state.value})")
+                continue
+            devices.append(d)
+        if missing or wrong_state:
+            raise HTTPException(
+                400,
+                "device_ids whitelist had bad entries — "
+                f"unknown: {missing or '[]'}, "
+                f"not flashable: {wrong_state or '[]'}",
+            )
+    else:
+        # No whitelist provided — back-compat: flash all eligible. Auto-
+        # recovery WILL NOT be armed in this branch (see below).
+        devices = [
+            d
+            for d in fleet.get_all_devices()
+            if d.platform == "nrf52840" and d.state in flashable_states
+        ]
     if not devices:
         raise HTTPException(404, "No flashable nRF52840 devices")
 
-    fleet.set_recovery_firmware(str(firmware))
     device_ids = [d.id for d in devices]
+    if body.device_ids is not None:
+        # Only arm auto-recovery for explicitly-scoped deploys. An unscoped
+        # fleet flash skips arming so we don't auto-flash a dev unit on the
+        # bench during the next cycle.
+        fleet.set_recovery_firmware(str(firmware), device_ids)
+    else:
+        log.warning(
+            "Fleet flash without device_ids whitelist — auto-recovery NOT armed "
+            "(pass device_ids in FlashRequest to opt in)"
+        )
 
     jm = _get_flash_job_manager()
 
@@ -261,6 +314,32 @@ async def _flash_fleet_background(
     for sid in all_serial_ids:
         fleet.hold_reconnect(sid, 600)
 
+    # Single-radio adapters (BCM43455 on Pi 4) refuse to act as central
+    # (GATT connect) while advertising. BLE DFU + UF2-flash-of-BLE-devices
+    # both need a central connection, so stop the broadcaster before any
+    # device-level flash and restart it after the whole job.
+    broadcaster_was_running = fleet.broadcaster is not None and fleet.broadcaster.is_running
+    if broadcaster_was_running:
+        log.info("Fleet flash: pausing broadcaster for the duration of the job")
+        try:
+            await fleet.broadcaster.stop()
+        except Exception:
+            log.exception("Failed to pause broadcaster cleanly; flash will still try")
+        # P3 guard: refuse to proceed if the broadcaster did NOT actually
+        # stop. Starting BLE DFU with the radio still advertising risks a
+        # bluez "Failed (0x03)" mid-flash. Better to fail loud here than
+        # corrupt a device.
+        if fleet.broadcaster is not None and fleet.broadcaster.is_running:
+            log.error(
+                "Fleet flash aborted: broadcaster did not stop cleanly. "
+                "Refusing to enter DFU under radio contention."
+            )
+            return {
+                "status": "error",
+                "message": "broadcaster did not stop; flash aborted to avoid radio contention",
+                "per_device": {},
+            }
+
     try:
         for i, dev_id in enumerate(device_ids):
             device = fleet.get_device(dev_id)
@@ -299,8 +378,16 @@ async def _flash_fleet_background(
                 _job.progress_message = f"{_base} — {phase}: {msg}{pct_str}"
 
             try:
-                result = await upload_firmware(
-                    device, str(firmware), progress_callback=_per_phase_progress
+                # P5: hard 600s per-device timeout. Observed BLE DFU rate
+                # is ~21s per 10% of a 542KB image so transfer is ~3.5
+                # minutes, plus init/scan/cache overhead. 600s leaves ~2x
+                # margin without giving up on a slow but functional flash.
+                # Without this, a hung flash would run until systemd's
+                # watchdog or some other backstop tore us down — exactly
+                # the failure mode that bricked cart_inner.
+                result = await asyncio.wait_for(
+                    upload_firmware(device, str(firmware), progress_callback=_per_phase_progress),
+                    timeout=600.0,
                 )
                 results[device.id[:12]] = result
                 if result.get("status") != "ok":
@@ -313,6 +400,15 @@ async def _flash_fleet_background(
                         dev_label,
                         result.get("message"),
                     )
+            except TimeoutError:
+                results[device.id[:12]] = {
+                    "status": "error",
+                    "message": "flash exceeded 600s timeout",
+                }
+                log.error(
+                    "Fleet flash: %s exceeded 600s — aborted, continuing to next device",
+                    dev_label,
+                )
             except Exception as e:
                 results[device.id[:12]] = {"status": "error", "message": str(e)}
                 log.error(
@@ -369,6 +465,15 @@ async def _flash_fleet_background(
         for sid in all_serial_ids:
             fleet.resume_reconnect(sid)
         fleet.resume_discovery()
+        if broadcaster_was_running and fleet.broadcaster is not None:
+            log.info("Fleet flash: restarting broadcaster")
+            try:
+                await fleet.broadcaster.start()
+            except Exception:
+                log.exception(
+                    "Failed to restart broadcaster after flash — fleet commands will "
+                    "not be delivered over BLE until the server is restarted"
+                )
 
     # Verify firmware versions
     job.progress = 90

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .. import systemd_notify
 from ..device.manager import FleetManager
 from .deps import set_fleet
 
@@ -53,8 +54,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     fm = FleetManager(**app.state.fleet_kwargs)
     set_fleet(fm)
     await fm.start()
+    # READY only after the fleet loop is running. With Type=notify, systemd
+    # holds dependents (Caddy, Hub) until this fires, so don't lie about
+    # readiness — services that proxy to us would 502 against a half-up server.
+    systemd_notify.ready()
+    systemd_notify.status("ready; fleet manager running")
     yield
     # Shutdown: kill any playing audio, stop fleet
+    systemd_notify.stopping()
     await stop_audio()
     await kill_orphan_audio()
     await fm.stop()
