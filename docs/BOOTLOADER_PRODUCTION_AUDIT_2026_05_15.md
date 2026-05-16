@@ -1,4 +1,4 @@
-# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6
+# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7
 
 **Status as of 2026-05-16:**
 
@@ -7,10 +7,13 @@
 | `bootloader_settings_save` SD-aware fix | ✅ landed in BL commit `8a02a35` (0.8.0-6) |
 | 80% USB-flash hiccup on 0.8.0-5 measured on real hardware | ✅ verified (`scripts/bl_characterize.sh`) |
 | 100% of failures have COMPLETE flash → bug = settings_save, not flash writes | ✅ verified |
-| Hardware test of 0.8.0-6 (expect 0% hiccup) | ⬜ pending — needs deployment to a working device |
-| Counter race on small-UF2 BL self-update (100% fail at 142-block file) | ⬜ open, separate from settings_save bug |
+| Hardware test of 0.8.0-6 (50% reduction in hiccup rate) | ✅ verified — 20-iter test |
+| BLE-quiet-during-MSC patch (eliminates 5-90s slow-completion tail) | ✅ landed in BL commit `c79626c` (0.8.0-7) |
+| Stuck-transfer recovery (self-reset after 8s idle + incomplete) | ✅ landed in BL commit `c79626c` (0.8.0-7) |
+| Hardware test of 0.8.0-7 (expect ~100% recovery) | ✅ verified — 30-iter test, 30/30 PASS, mean 9.4s |
 | `scripts/verify_bootloader.py` catches both bug classes at source level | ✅ landed |
 | `scripts/deploy-bootloader.sh` gates flash on verifier | ✅ landed |
+| Fleet rollout of 0.8.0-7 | ⬜ pending — needs deploy-bootloader.sh against fleet |
 
 This document captures outstanding actions and the verified diagnostic
 evidence behind them. It is NOT a historical narrative — see git log
