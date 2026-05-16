@@ -195,10 +195,17 @@ class FleetBroadcaster:
     #      the still-on-air command — a crash loop if that command is the
     #      one that crashed the device in the first place.
     #   2. Devices coming into range later would pick up an old command.
-    # 300 ms is long enough that the firmware's scan window (50 ms at 50%
-    # duty) catches at least one full advertisement at BlueZ's ~1 Hz ad
-    # interval, with comfortable margin.
-    COMMAND_ONAIR_MS = 300
+    #
+    # Sized for reliable delivery: firmware scanner runs at 100 ms interval
+    # with 50 ms window (50% duty). At BlueZ's ~200 ms ad interval that's
+    # ~15 on-air emissions in this window, so the scanner catches 5+ even
+    # if it spends half its time in scan-off. Verified live 2026-05-16:
+    # at COMMAND_ONAIR_MS=300, cart_outer received 2 of 5 broadcast commands
+    # (40% delivery) — packets_rx=2 on the firmware diagnostic. We need
+    # significantly longer on-air time for reliable single-shot delivery.
+    # Firmware dedups subsequent same-(source,seq) packets, so a longer
+    # window does NOT cause re-execution.
+    COMMAND_ONAIR_MS = 3000
 
     async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.
