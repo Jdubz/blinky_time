@@ -8,6 +8,7 @@ import time as _time
 from pathlib import Path
 from typing import Any
 
+from .. import systemd_notify
 from ..transport.base import Transport
 from ..transport.discovery import (
     DiscoveredDevice,
@@ -100,10 +101,33 @@ class FleetManager:
         # running concurrently on the same device. Lock is acquired before any
         # DFU operation and held for its entire duration.
         self._dfu_locks: dict[str, asyncio.Lock] = {}
+        # Background-loop health. Updated after every successful cycle so
+        # external watchdogs (systemd, /api/fleet/status) can detect a wedge
+        # — `_running == True` is not enough, the loop can be alive but stuck.
+        self._loop_last_ok: float | None = None
+        self._loop_cycles: int = 0
+        self._loop_consecutive_errors: int = 0
 
     @property
     def devices(self) -> dict[str, Device]:
         return self._devices
+
+    def loop_health(self) -> dict[str, Any]:
+        """Background-loop health snapshot for external watchdogs and APIs.
+
+        ``last_cycle_ago`` is None until the first successful cycle finishes
+        (boot window); after that, ``None`` should be treated as a hang by
+        consumers. ``consecutive_errors > 0`` means the loop is failing but
+        still trying.
+        """
+        last_ok = self._loop_last_ok
+        ago = (_time.monotonic() - last_ok) if last_ok is not None else None
+        return {
+            "running": self._running,
+            "cycles": self._loop_cycles,
+            "last_cycle_ago": round(ago, 1) if ago is not None else None,
+            "consecutive_errors": self._loop_consecutive_errors,
+        }
 
     def get_device(self, device_id: str) -> Device | None:
         """Look up device by ID. Supports partial ID prefix match."""
@@ -123,6 +147,14 @@ class FleetManager:
         The API is available immediately — devices connect asynchronously.
         """
         self._running = True
+        # Arm DFU auto-recovery from the persisted pointer if it points at a
+        # file that still exists. Critical for unattended boots: a device
+        # stuck in DFU bootloader at power-on needs recovery without an
+        # operator running deploy.sh first.
+        persisted = self._load_recovery_firmware()
+        if persisted:
+            self._recovery_firmware_path = persisted
+            log.info("DFU auto-recovery armed from persisted path: %s", persisted)
         self._discovery_task = asyncio.create_task(self._background_loop())
         log.info("Fleet manager started (devices connecting in background)")
 
@@ -739,8 +771,17 @@ class FleetManager:
             with contextlib.suppress(Exception):
                 device._on_transport_disconnect()
 
-    # Persistent state file for recovery firmware path (survives server restarts)
-    _RECOVERY_FIRMWARE_STATE = Path("/tmp/blinky-recovery-firmware.path")
+    @staticmethod
+    def _recovery_state_path() -> Path:
+        """Persistent state file for recovery firmware path.
+
+        Lives under ``~/.local/share/blinky-server/`` so it survives reboots.
+        Previously /tmp, which is tmpfs on Pi — a power cycle erased it and
+        any device stuck in DFU bootloader could no longer auto-recover.
+        """
+        from ..paths import data_dir
+
+        return data_dir() / "recovery-firmware.path"
 
     def set_recovery_firmware(self, firmware_path: str) -> None:
         """Set the firmware path used for automatic DFU recovery.
@@ -749,18 +790,18 @@ class FleetManager:
         devices discovered in DFU_RECOVERY state (stuck in bootloader after
         a failed update). This eliminates the need for operator intervention.
 
-        Persisted to /tmp so it survives server restarts (but not reboots,
-        which is fine — a reboot means the firmware file in /tmp is gone too).
+        Persisted to ~/.local/share/blinky-server/ so a Pi reboot during or
+        after a deploy doesn't strand devices in bootloader.
         """
         self._recovery_firmware_path = firmware_path
         with contextlib.suppress(OSError):
-            self._RECOVERY_FIRMWARE_STATE.write_text(firmware_path)
+            self._recovery_state_path().write_text(firmware_path)
         log.info("Recovery firmware set: %s", firmware_path)
 
     def _load_recovery_firmware(self) -> str | None:
         """Load persisted recovery firmware path from state file."""
         try:
-            path = self._RECOVERY_FIRMWARE_STATE.read_text().strip()
+            path = self._recovery_state_path().read_text().strip()
             if path and Path(path).is_file():
                 return path
         except OSError:
@@ -871,14 +912,20 @@ class FleetManager:
             try:
                 await cleanup_stale_ble_connections()
                 await asyncio.sleep(2)
-            except Exception as e:
-                log.warning("BLE cleanup failed (non-fatal): %s", e)
+            except Exception:
+                log.exception("BLE cleanup failed (non-fatal)")
         while self._running:
             try:
                 await asyncio.sleep(DISCOVERY_INTERVAL_S)
                 cycle += 1
                 if self._discovery_pause_count > 0:
-                    continue  # Skip discovery while BLE DFU or other ops in progress
+                    # Paused intentionally (BLE DFU in progress, etc). Still counts
+                    # as a healthy tick for the watchdog — we ARE doing work,
+                    # just elsewhere.
+                    self._loop_last_ok = _time.monotonic()
+                    self._loop_cycles = cycle
+                    self._loop_consecutive_errors = 0
+                    continue
                 await self._discover_and_connect()
                 await self._reconnect_disconnected()
                 # Detect dead serial reader threads (thread exited but device still
@@ -893,7 +940,31 @@ class FleetManager:
                 # Reap long-dead non-recoverable devices every 6th cycle (~60s)
                 if cycle % REAP_INTERVAL_CYCLES == 0:
                     await self._reap_stale_devices()
+                # Mark this cycle as healthy AFTER all work succeeded.
+                # The systemd watchdog ping rides on the same condition —
+                # if the loop is silently raising every cycle, we WANT
+                # systemd to kill us. A failing loop is a hang in disguise.
+                self._loop_last_ok = _time.monotonic()
+                self._loop_cycles = cycle
+                self._loop_consecutive_errors = 0
+                systemd_notify.watchdog()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                log.error("Background loop error: %s", e)
+            except Exception:
+                self._loop_consecutive_errors += 1
+                # log.exception preserves the traceback — log.error("%s", e)
+                # would lose it and make post-event diagnosis impossible.
+                log.exception(
+                    "Background loop error (cycle %d, consecutive errors %d)",
+                    cycle,
+                    self._loop_consecutive_errors,
+                )
+                # Backoff to avoid spinning if the failure is persistent
+                # (e.g. BlueZ wedged). Cap at 5x normal interval so we still
+                # try to recover periodically.
+                extra_sleep = min(
+                    self._loop_consecutive_errors * DISCOVERY_INTERVAL_S,
+                    5 * DISCOVERY_INTERVAL_S,
+                )
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.sleep(extra_sleep)

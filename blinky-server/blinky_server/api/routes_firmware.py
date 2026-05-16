@@ -13,40 +13,50 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
+from ..paths import firmware_dir
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import FlashRequest
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
-# Persistent firmware metadata — survives server restarts (not reboots).
-_FIRMWARE_META_PATH = Path("/tmp/blinky-firmware-current.json")
+
+# Firmware + metadata live in persistent storage so auto-recovery still
+# works after a reboot. The previous /tmp paths vanished on every power
+# cycle, leaving any device stuck in DFU bootloader permanently dark.
+def _firmware_meta_path() -> Path:
+    return firmware_dir() / "firmware-meta.json"
+
+
+def _firmware_hex_path() -> Path:
+    return firmware_dir() / "firmware.hex"
 
 
 def _save_firmware_meta(meta: dict[str, Any]) -> None:
     """Persist current firmware metadata to disk."""
     import json
 
+    path = _firmware_meta_path()
     try:
-        _FIRMWARE_META_PATH.write_text(json.dumps(meta))
+        path.write_text(json.dumps(meta))
     except OSError:
-        log.warning("Failed to persist firmware metadata to %s", _FIRMWARE_META_PATH)
+        log.warning("Failed to persist firmware metadata to %s", path)
 
 
 def _load_firmware_meta() -> dict[str, Any] | None:
     """Load persisted firmware metadata, or None if not available."""
     import json
 
+    path = _firmware_meta_path()
     try:
-        if _FIRMWARE_META_PATH.is_file():
-            return json.loads(_FIRMWARE_META_PATH.read_text())  # type: ignore[no-any-return]
+        if path.is_file():
+            return json.loads(path.read_text())  # type: ignore[no-any-return]
     except (OSError, json.JSONDecodeError):
         pass
     return None
@@ -86,8 +96,7 @@ async def fleet_upload(
 
     # Use a stable filename (not user-controlled) to avoid path issues.
     # Overwriting is intentional — only the latest upload matters.
-    hex_path = Path(tempfile.gettempdir()) / "blinky-upload" / "firmware.hex"
-    hex_path.parent.mkdir(parents=True, exist_ok=True)
+    hex_path = _firmware_hex_path()
     hex_path.write_bytes(content)
 
     log.info("Fleet upload: stored firmware.hex (%d bytes, version=%s)", len(content), version)

@@ -179,6 +179,7 @@ async def fleet_status() -> dict[str, Any]:
         "dfu_recovery": by_state.get("dfu_recovery", 0),
         "by_state": by_state,
         "by_transport": by_transport,
+        "loop": fleet.loop_health(),
         "devices": device_health,
     }
 
