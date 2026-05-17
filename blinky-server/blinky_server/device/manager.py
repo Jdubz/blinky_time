@@ -11,6 +11,18 @@ from typing import Any
 
 from .. import systemd_notify
 from ..ble.advertiser import FleetBroadcaster
+from ..firmware.anomalies import SignalHistory
+from ..firmware.anomalies import check_all as check_anomalies
+from ..firmware.flash_job import (
+    FlashJob,
+    FlashJobState,
+    FlashTransport,
+    NoReachableTransport,
+    TransportProbe,
+    select_transport,
+)
+from ..firmware.uf2_upload import flash_uf2_for_job
+from ..firmware.verify import run_verify
 from ..transport.base import Transport
 from ..transport.discovery import (
     DiscoveredDevice,
@@ -116,6 +128,40 @@ class FleetManager:
         # running concurrently on the same device. Lock is acquired before any
         # DFU operation and held for its entire duration.
         self._dfu_locks: dict[str, asyncio.Lock] = {}
+        # ── Flash-job rewrite (Phase 3) ───────────────────────────────────
+        # The next-generation flash entry point lives in ``flash_device``
+        # below. While this scaffolding is being built up phase by phase, the
+        # legacy ``_dfu_locks`` / ``_dfu_recovery_active`` / ``upload_ble_dfu``
+        # paths above continue to handle real auto-recovery flashes. Phase 8
+        # rewires auto-recovery to go through ``flash_device`` and the legacy
+        # tables retire then.
+        #
+        # _flash_jobs: device_id → currently-or-most-recently-active FlashJob.
+        # Cleared from active by ``_run_flash_job`` when the job terminates;
+        # see ``_recent_flash_attempts`` for completed-flash dedup state.
+        self._flash_jobs: dict[str, FlashJob] = {}
+        # _recent_flash_attempts: device_id → time.time() of the most recent
+        # terminal transition. Auto-recovery (Phase 8) consults this and the
+        # window below to dedup; explicit operator requests via
+        # ``flash_device`` ignore the window (operator already accepted the
+        # cost). Closes the cascade bug from 2026-05-17 where UF2 succeeded,
+        # was mislabelled as failed, and then auto-recovery re-flashed via
+        # BLE-DFU. See [[project-deploy-flash-cascade-bug]].
+        #
+        # TODO(L4): this is an in-memory dict; the dedup window is lost on
+        # server restart. A device that failed 30 s ago looks "clean" after
+        # a quick restart, so the auto-recovery loop could re-fire
+        # immediately. The persistent flash-attempt audit log specced in
+        # docs/FLASH_LOCKDOWN_PLAN.md §L4 closes this gap by rebuilding
+        # this dict from `/var/lib/blinky-server/flash_attempts.jsonl` on
+        # boot. Until L4 lands, restart timing matters — the auto-recovery
+        # loop's per-cycle dedup-gate is the only line of defense.
+        self._recent_flash_attempts: dict[str, float] = {}
+        # 10-minute dedup window. Slack accommodates: a slow UF2 + bootloader
+        # reboot (up to ~2 min on 0.8.0-4), plus the app's first-boot init,
+        # plus a margin for the operator to notice anomalies. Tuned via
+        # ``FLASH_DEDUP_WINDOW_S`` class constant — overridable per test.
+        self._flash_job_locks: dict[str, asyncio.Lock] = {}
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
         # — `_running == True` is not enough, the loop can be alive but stuck.
@@ -172,6 +218,298 @@ class FleetManager:
 
     def get_all_devices(self) -> list[Device]:
         return list(self._devices.values())
+
+    # ────────────────────────────────────────────────────────────────────
+    # Flash-job API (Phase 3 scaffolding — see [[project-deploy-flash-cascade-bug]])
+    #
+    # ``flash_device`` is the single entry point that future auto-recovery
+    # (Phase 8) and explicit operator flashes (Phase 7) will both go
+    # through. The per-device lock + ``_flash_jobs`` table are what enforce
+    # "at most one in-flight flash per device" — preventing the duplicate
+    # write the 2026-05-17 cascade produced. While the orchestrator is
+    # still a stub (this phase), legacy auto-recovery (``upload_ble_dfu``
+    # called from ``_background_loop``) keeps working unchanged.
+    # ────────────────────────────────────────────────────────────────────
+
+    # Window in seconds during which a freshly-completed (or freshly-failed)
+    # flash blocks auto-recovery from triggering a new flash on the same
+    # device. Operator-initiated flashes via ``flash_device`` ignore this.
+    # Per-test override possible by mutating ``FleetManager.FLASH_DEDUP_WINDOW_S``.
+    FLASH_DEDUP_WINDOW_S: float = 600.0  # 10 minutes
+
+    def get_flash_job(self, device_id: str) -> FlashJob | None:
+        """Return the most recent ``FlashJob`` for the device, or None."""
+        return self._flash_jobs.get(device_id)
+
+    def list_flash_jobs(self, active_only: bool = False) -> list[FlashJob]:
+        """Snapshot of all known flash jobs. Used by ``GET /api/jobs``."""
+        if active_only:
+            return [j for j in self._flash_jobs.values() if j.is_active]
+        return list(self._flash_jobs.values())
+
+    def should_attempt_auto_recovery(self, device_id: str) -> bool:
+        """Decide whether auto-recovery may flash this device right now.
+
+        Returns False if either:
+          - an active flash job already exists for the device (in flight)
+          - a recent flash terminated within ``FLASH_DEDUP_WINDOW_S``
+
+        Auto-recovery (Phase 8 wiring) calls this BEFORE invoking
+        ``flash_device``. The check + the flash_device call must happen
+        atomically wrt other auto-recovery passes; the per-device flash
+        lock provides that ordering.
+        """
+        existing = self._flash_jobs.get(device_id)
+        if existing is not None and existing.is_active:
+            return False
+        last = self._recent_flash_attempts.get(device_id)
+        if last is None:
+            return True
+        return (_time.time() - last) >= self.FLASH_DEDUP_WINDOW_S
+
+    def _get_flash_job_lock(self, device_id: str) -> asyncio.Lock:
+        """Lazy per-device lock. Creates on first request."""
+        lock = self._flash_job_locks.get(device_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._flash_job_locks[device_id] = lock
+        return lock
+
+    async def flash_device(
+        self,
+        device_id: str,
+        firmware_path: Path,
+        *,
+        expected_version: str | None = None,
+    ) -> FlashJob:
+        """Explicit flash request. Returns a ``FlashJob`` immediately.
+
+        Idempotent under concurrent calls: if another caller's flash job
+        for the same device is already in flight, returns that job rather
+        than creating a second one. (This is the structural fix for the
+        cascade bug — there is no path to "two writes for one device.")
+
+        Does NOT consult the dedup window. Auto-recovery is the caller
+        responsible for ``should_attempt_auto_recovery`` first; an explicit
+        operator flash always proceeds.
+
+        The actual write happens on a background task, so the returned job
+        starts in ``PENDING`` or ``SELECTING_TRANSPORT`` and the caller
+        observes progress via ``job.wait_until_terminal()`` /
+        ``GET /api/jobs/{job_id}`` polling.
+        """
+        lock = self._get_flash_job_lock(device_id)
+        async with lock:
+            existing = self._flash_jobs.get(device_id)
+            if existing is not None and existing.is_active:
+                log.info(
+                    "flash_device(%s): returning in-flight job %s (state=%s)",
+                    device_id,
+                    existing.job_id,
+                    existing.state.value,
+                )
+                return existing
+            job = FlashJob(
+                device_id=device_id,
+                firmware_path=firmware_path,
+                expected_version=expected_version,
+            )
+            self._flash_jobs[device_id] = job
+            log.info(
+                "flash_device(%s): created job %s, firmware=%s, expected_version=%s",
+                device_id,
+                job.job_id,
+                firmware_path,
+                expected_version,
+            )
+        # Launch the orchestrator OUTSIDE the lock so a long-running flash
+        # doesn't block subsequent flash_device queries for the same device
+        # (those will see is_active=True and return the in-flight job).
+        task = asyncio.create_task(self._run_flash_job(job), name=f"flash-job-{job.job_id}")
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return job
+
+    async def _run_flash_job(self, job: FlashJob) -> None:
+        """Drive a ``FlashJob`` through its state machine.
+
+        Phase 7: UF2 path is wired. Phase 9 wires BLE-DFU (still a stub
+        here — fails the job with a clear message rather than silently
+        falling back to UF2, per feedback_flash_safety_policy).
+
+        Flow (UF2):
+          PENDING → SELECTING_TRANSPORT → WRITING (subprocess writes
+          UF2 to MSC) → VERIFYING (run_verify polls device signals) →
+          COMPLETED. The verify phase NEVER auto-fails on wall-clock;
+          orchestrator gives it ~5 min of polling and surfaces anomalies
+          if signals don't progress.
+
+        Always records ``_recent_flash_attempts`` on terminal transition,
+        regardless of success/failure — so auto-recovery (Phase 8) dedup
+        catches "I just tried this device" even when the attempt failed.
+        """
+        try:
+            job.transition(FlashJobState.SELECTING_TRANSPORT)
+            probe = self._build_transport_probe(job.device_id)
+            try:
+                transport = select_transport(probe)
+            except NoReachableTransport as exc:
+                job.set_error(str(exc))
+                job.transition(FlashJobState.FAILED)
+                return
+            job.set_transport(transport)
+
+            if transport is FlashTransport.UF2:
+                await self._run_uf2_flash(job)
+            elif transport is FlashTransport.BLE_DFU:
+                # Phase 9 will replace this with the real BLE-DFU wiring.
+                job.set_error("BLE-DFU flash path not yet wired (Phase 9 of rewrite)")
+                job.transition(FlashJobState.FAILED)
+            else:
+                # Exhaustiveness guard — if FlashTransport gains a variant,
+                # we want a loud error, not a silent fallthrough.
+                job.set_error(f"unknown transport: {transport!r}")
+                job.transition(FlashJobState.FAILED)
+        except asyncio.CancelledError:
+            # Operator-initiated cancel propagated through. Mark abandoned.
+            if not job.is_terminal:
+                job.transition(FlashJobState.ABANDONED)
+            raise
+        except Exception as exc:
+            log.exception("flash job %s crashed: %s", job.job_id, exc)
+            job.set_error(f"orchestrator crashed: {exc}")
+            if not job.is_terminal:
+                job.transition(FlashJobState.FAILED)
+        finally:
+            # Stamp dedup timestamp on every terminal exit. Held under the
+            # per-device lock so a concurrent should_attempt_auto_recovery
+            # call sees a consistent (jobs + timestamps) snapshot.
+            lock = self._get_flash_job_lock(job.device_id)
+            async with lock:
+                self._recent_flash_attempts[job.device_id] = _time.time()
+
+    async def _run_uf2_flash(self, job: FlashJob) -> None:
+        """UF2 branch of ``_run_flash_job``. Phase 7 implementation.
+
+        The split exists for testability — Phase 9 will add an analogous
+        ``_run_ble_dfu_flash`` and we don't want one monolithic method
+        with branched logic for both transports.
+        """
+        device = self._devices.get(job.device_id)
+        if device is None:
+            job.set_error(f"device {job.device_id} disappeared between selection and write")
+            job.transition(FlashJobState.FAILED)
+            return
+
+        # UF2 is USB-only; if we got here with a non-serial transport, the
+        # transport-selector code in flash_job.select_transport has a bug
+        # and we want it loud, not a silent fall-back to a stale
+        # ``device.port`` attribute. ``Transport.address`` is on the
+        # abstract base class — every concrete transport has it — so a
+        # defensive ``hasattr()`` check on top of this guard would just
+        # mask the bug behind a silent substitution if the invariant
+        # ever broke.
+        if device.transport.transport_type != "serial":
+            job.set_error(
+                f"UF2 flash requires a serial transport, got "
+                f"{device.transport.transport_type!r} (transport selector bug)"
+            )
+            job.transition(FlashJobState.FAILED)
+            return
+
+        # WRITING: subprocess + progress callbacks.
+        job.transition(FlashJobState.WRITING)
+        write_ok = await flash_uf2_for_job(
+            job,
+            serial_port=device.transport.address,
+            firmware_path=str(job.firmware_path),
+            transport=device.transport,
+        )
+        if not write_ok:
+            # ``flash_uf2_for_job`` already set ``job.error``.
+            job.transition(FlashJobState.FAILED)
+            return
+
+        # VERIFYING: progressive sub-states + anomaly detection.
+        job.transition(FlashJobState.VERIFYING)
+        history = SignalHistory(
+            write_completed_at=job.write_completed_at or _time.time(),
+            expected_version=job.expected_version,
+            # `previous_version` is what the device reported at discovery
+            # handshake (`json info` populates `device.version`). The
+            # `detect_stale_firmware` detector compares the post-flash
+            # version against this — when the new firmware boots but
+            # `json info` still reports the old build string, that's the
+            # "BL accepted UF2 but didn't update the valid-app marker"
+            # failure mode we hit on 2026-05-17 with bootloader 0.8.0-4.
+            # Without this wiring the field stays None and the detector
+            # silently never fires.
+            previous_version=device.version,
+        )
+        signals = _FleetVerifySignals(fleet=self, device_id=job.device_id, history=history)
+        # Wrap run_verify in a soft 5-minute total cap. The verify state
+        # machine itself never fails on wall-clock; this is the
+        # orchestrator's safety net for "operator isn't watching, give
+        # up eventually." Per design, the failure surfaces as anomalies
+        # in the job, not as a hard FAILED unless we genuinely have no
+        # other signal.
+        try:
+            await asyncio.wait_for(
+                self._verify_with_anomaly_checks(job, signals, history),
+                timeout=300.0,
+            )
+            job.transition(FlashJobState.COMPLETED)
+        except TimeoutError:
+            # Verify never converged. Surface as FAILED with the anomaly
+            # set the detectors built up.
+            check_anomalies(job, history)
+            job.set_error("verify did not converge within 5 minutes")
+            job.transition(FlashJobState.FAILED)
+
+    async def _verify_with_anomaly_checks(
+        self,
+        job: FlashJob,
+        signals: _FleetVerifySignals,
+        history: SignalHistory,
+    ) -> None:
+        """Run ``run_verify`` concurrently with a periodic anomaly sweep.
+
+        The anomaly sweep just calls ``check_anomalies(job, history)``
+        every couple of seconds. The history is populated by the signals
+        wrapper, which appends timestamps as it observes events.
+        """
+
+        async def _anomaly_loop() -> None:
+            while True:
+                await asyncio.sleep(2.0)
+                check_anomalies(job, history)
+
+        # signals.history is wired in via the constructor (see
+        # _FleetVerifySignals docstring); no need to assign here.
+        anomaly_task = asyncio.create_task(_anomaly_loop(), name=f"anomaly-{job.job_id}")
+        try:
+            await run_verify(job, signals)
+        finally:
+            anomaly_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await anomaly_task
+
+    def _build_transport_probe(self, device_id: str) -> TransportProbe:
+        """Snapshot which interfaces reach this device *right now*.
+
+        Phase 3: USB-CDC app handshake is the only signal wired up; BLE-DFU
+        advert detection is stubbed to False. Phase 5 fills in the BLE
+        branch (the AdaDFU discovery hook already exists in
+        ``transport.discovery``; this just needs to consult it).
+        """
+        device = self._devices.get(device_id)
+        has_usb_app = (
+            device is not None
+            and device.transport.transport_type == "serial"
+            and device.transport.is_connected
+        )
+        # Phase 5 TODO: detect AdaDFU advert at device's bootloader BLE addr.
+        return TransportProbe(has_usb_app=has_usb_app, has_ble_dfu_advert=False)
 
     async def start(self) -> None:
         """Start background loop for device discovery and management.
@@ -1121,6 +1459,13 @@ class FleetManager:
             if d.state == DeviceState.DFU_RECOVERY
             and d.ble_address
             and d.id in self._recovery_device_ids
+            # Phase 7 safety: skip legacy auto-recovery if the new flash-job
+            # path is currently handling this device, or has very recently
+            # completed/failed a flash on it. This is the cascade-bug fix
+            # (see [[project-deploy-flash-cascade-bug]]) — keeps the legacy
+            # path from racing the new orchestrator. Phase 8 will fold the
+            # legacy path entirely; this gate is enough until then.
+            and self.should_attempt_auto_recovery(d.id)
         ]
         if not dfu_devices:
             return
@@ -1381,3 +1726,182 @@ class FleetManager:
                 )
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.sleep(extra_sleep)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase 7: production VerifySignals for the UF2 path.
+#
+# Plugs the verify state machine into real fleet state. The signals are:
+#   - has_re_enumerated_since: snapshot the device's USB device-number
+#       at first call, then watch for any change after `since`. The
+#       lsusb device number changes on every USB re-enumeration so this
+#       is the cleanest signal short of inotify on /dev.
+#   - is_serial_connected: check Device.transport.is_connected (the
+#       FleetManager's normal reconnect loop maintains this).
+#   - get_handshake_info: send `json info` via Device.protocol and
+#       parse the response as a dict. None on any I/O error.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _FleetVerifySignals:
+    """Verify-signal source backed by FleetManager + udev sysfs reads.
+
+    Constructed with the ``SignalHistory`` the anomaly sweep will read
+    from. Wiring history in via the constructor (rather than as a
+    settable attribute the caller is expected to assign after the fact)
+    closes a non-obvious invisible-dependency: if a future test or
+    caller constructs ``_FleetVerifySignals`` and forgets an external
+    ``signals.history = history`` line, the anomaly sweep silently
+    sees no data and detectors never fire.
+    """
+
+    def __init__(
+        self,
+        fleet: FleetManager,
+        device_id: str,
+        history: SignalHistory,
+    ) -> None:
+        self._fleet = fleet
+        self._device_id = device_id
+        self._initial_devnum: int | None = None
+        self._initial_devnum_captured_at: float = 0.0
+        self.history: SignalHistory = history
+        # One-shot flag: the first exception bubbling out of
+        # is_serial_connected gets logged at WARN; subsequent ones at
+        # DEBUG. Verify polls every ~250 ms, so logging every miss
+        # would spam journalctl during a normal multi-second
+        # AWAITING_APP_BOOT window — but a silent failure here stalls
+        # the state machine invisibly, which CLAUDE.md explicitly
+        # forbids. First-call WARN gives the operator a single
+        # discoverable line; the polling loop's existing forward
+        # progress (or lack thereof) provides the rest of the signal.
+        self._is_connected_warned: bool = False
+
+    async def has_re_enumerated_since(self, device_id: str, since: float) -> bool:
+        """True if the USB device number changed after ``since``.
+
+        First call captures the baseline. Subsequent calls compare to
+        the current device number. The device's serial number is the
+        stable identity; we look it up in ``/dev/serial/by-id`` and
+        read the device number from sysfs.
+        """
+        current_devnum = self._read_devnum_for_device()
+        if self._initial_devnum is None:
+            # First poll — capture baseline. Don't claim re-enumeration
+            # yet; the next poll will compare.
+            self._initial_devnum = current_devnum
+            self._initial_devnum_captured_at = _time.time()
+            return False
+        # Re-enum is signalled by the device number changing.
+        if current_devnum is not None and current_devnum != self._initial_devnum:
+            # Record into history for anomaly detection.
+            self.history.re_enum_timestamps.append(_time.time())
+            # Bump the baseline so we only count this re-enum once
+            # toward the "has it happened?" signal. Multiple bounces
+            # are caught by anomaly detectors via the history.
+            self._initial_devnum = current_devnum
+            return True
+        return False
+
+    async def is_serial_connected(self, device_id: str) -> bool:
+        device = self._fleet._devices.get(device_id)
+        if device is None:
+            return False
+        try:
+            return bool(device.transport.is_connected)
+        except Exception as exc:
+            # Returning False on an unexpected exception stalls the
+            # verify state machine at AWAITING_APP_BOOT — invisible to
+            # the operator if not logged. CLAUDE.md forbids the silent
+            # form. Compromise: WARN on the first occurrence so it
+            # shows up in journalctl without --debug; DEBUG on
+            # subsequent ones (verify polls every ~250 ms, so a true
+            # WARN every iteration would drown the log). The first
+            # line is the discoverable bread crumb; the lack of
+            # forward progress on the job is the ongoing signal.
+            if not self._is_connected_warned:
+                self._is_connected_warned = True
+                log.warning(
+                    "is_serial_connected(%s) raised %s: %s — "
+                    "treating as 'not connected'; subsequent occurrences logged at debug",
+                    device_id,
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                log.debug(
+                    "is_serial_connected(%s) raised: %s",
+                    device_id,
+                    exc,
+                )
+            return False
+
+    async def get_handshake_info(self, device_id: str) -> dict[str, Any] | None:
+        device = self._fleet._devices.get(device_id)
+        if device is None:
+            return None
+        try:
+            # Match the existing reconnect loop's probe — `json info` is
+            # what the SerialConsole responds to with the firmware's
+            # full identity blob (version, device config, safeMode flag).
+            reply = await device.protocol.send_command("json info")
+        except Exception as exc:
+            log.debug(
+                "get_handshake_info(%s): protocol raised %s",
+                device_id,
+                exc,
+            )
+            return None
+        if not isinstance(reply, str) or not reply.strip():
+            return None
+        # The firmware emits JSON; tolerate leading/trailing log lines.
+        try:
+            payload = json.loads(reply.strip())
+        except json.JSONDecodeError:
+            # Some replies include a prose preamble — pull out the first
+            # `{...}` block as a fallback.
+            start = reply.find("{")
+            end = reply.rfind("}")
+            if start == -1 or end == -1 or end < start:
+                return None
+            try:
+                payload = json.loads(reply[start : end + 1])
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(payload, dict):
+            return None
+        self.history.handshakes.append((_time.time(), payload))
+        return payload
+
+    def _read_devnum_for_device(self) -> int | None:
+        """Look up the device's current USB device number via sysfs.
+
+        Maps device_id (serial number, e.g., '062CBD12EB6961C8') to its
+        ``/dev/serial/by-id/usb-Seeed_XIAO_nRF52840_Sense_<sn>-if00``
+        symlink → realpath → ``/sys/class/tty/<name>/device/...``
+        chain → ``devnum`` file. Returns None if the device isn't
+        currently enumerated (which is itself a signal: still in
+        bootloader, or unplugged).
+        """
+        try:
+            by_id = Path("/dev/serial/by-id")
+            if not by_id.exists():
+                return None
+            for entry in by_id.iterdir():
+                if self._device_id not in entry.name:
+                    continue
+                tty_path = entry.resolve()  # e.g. /dev/ttyACM1
+                tty_name = tty_path.name  # 'ttyACM1'
+                # /sys/class/tty/ttyACM1/device → ../../../1-1.3:1.0
+                sys_dev = Path(f"/sys/class/tty/{tty_name}/device")
+                if not sys_dev.exists():
+                    continue
+                # Walk up to the parent USB device (the one with devnum).
+                usb_dev = sys_dev.resolve().parent
+                devnum_file = usb_dev / "devnum"
+                if devnum_file.is_file():
+                    return int(devnum_file.read_text().strip())
+            return None
+        except Exception as exc:
+            log.debug("_read_devnum_for_device(%s) raised %s", self._device_id, exc)
+            return None

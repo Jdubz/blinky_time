@@ -43,6 +43,44 @@ LE_ADV_MGR_IFACE = "org.bluez.LEAdvertisingManager1"
 LE_ADV_IFACE = "org.bluez.LEAdvertisement1"
 
 
+# Backoff schedule for RegisterAdvertisement retries (exponential).
+# Totals ~7.5 s before the final attempt re-raises. Module-level
+# constant rather than per-call so it doesn't re-allocate on every
+# `start()` invocation.
+_BACKOFFS_S: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+
+
+# D-Bus error types that indicate a transient "slot still busy" condition
+# we should retry on. Anything else (adapter down, permission, missing
+# service) will fail identically on every retry — re-raise immediately
+# so the operator gets the real diagnostic without waiting through the
+# backoff.
+_TRANSIENT_REGISTER_ERROR_TYPES = frozenset(
+    {
+        "org.bluez.Error.Failed",  # generic, what BlueZ returns for the slot-still-held case
+        "org.bluez.Error.AlreadyExists",  # slot literally still registered
+    }
+)
+
+
+def _is_transient_register_error(exc: DBusError) -> bool:
+    """True if ``exc`` looks like a retryable RegisterAdvertisement failure.
+
+    Matches by D-Bus error type (the canonical name like
+    ``org.bluez.Error.Failed``) rather than text, so locale or BlueZ
+    version changes to the human-readable string don't break us. Older
+    dbus-fast versions don't always populate ``.type``; fall back to a
+    substring check on the message as a last resort.
+    """
+    err_type = getattr(exc, "type", "") or ""
+    if err_type in _TRANSIENT_REGISTER_ERROR_TYPES:
+        return True
+    # Fallback for libraries that don't expose .type or use the older
+    # generic DBusError wrapping. Keep the substring narrow.
+    msg = str(exc).lower()
+    return "failed to register advertisement" in msg or "alreadyexists" in msg
+
+
 class _Advertisement(ServiceInterface):
     """D-Bus object implementing org.bluez.LEAdvertisement1.
 
@@ -188,10 +226,54 @@ class FleetBroadcaster:
             introspection = await bus.introspect(BLUEZ_SERVICE, self._adapter_path)
             proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
             mgr = proxy.get_interface(LE_ADV_MGR_IFACE)
-            # call_register_advertisement is a dynamically-generated method on
-            # the proxy interface (dbus-fast builds it from the introspection
-            # XML), so mypy can't see it statically.
-            await mgr.call_register_advertisement(self._object_path, {})  # type: ignore[attr-defined]
+
+            # Retry on TRANSIENT DBusError: when blinky-server restarts
+            # back-to-back, BlueZ can still be holding the previous
+            # instance's advertisement slot for a brief window after the
+            # old client connection dropped. The next register call sees
+            # "org.bluez.Error.Failed" or "org.bluez.Error.AlreadyExists"
+            # until BlueZ notices the old registration is dead.
+            # ~7.5 s of exponential backoff is usually enough.
+            #
+            # Non-transient errors (adapter down, permission denied, bad
+            # path, BlueZ service unknown) will fail identically on every
+            # retry — re-raise immediately so the operator sees the real
+            # cause in <1 s instead of waiting through 7.5 s of backoff
+            # for the same message.
+            #
+            # call_register_advertisement is a dynamically-generated
+            # method on the proxy interface (dbus-fast builds it from the
+            # introspection XML), so mypy can't see it statically.
+            for attempt in range(1, len(_BACKOFFS_S) + 2):  # 1..5
+                try:
+                    await mgr.call_register_advertisement(  # type: ignore[attr-defined]
+                        self._object_path, {}
+                    )
+                    break
+                except DBusError as exc:
+                    if not _is_transient_register_error(exc):
+                        log.error(
+                            "RegisterAdvertisement failed with non-transient "
+                            "error (%s) — not retrying: %s",
+                            getattr(exc, "type", "?"),
+                            exc,
+                        )
+                        raise
+                    if attempt > len(_BACKOFFS_S):  # final attempt exhausted
+                        log.error(
+                            "RegisterAdvertisement failed after %d attempts: %s",
+                            attempt,
+                            exc,
+                        )
+                        raise
+                    backoff = _BACKOFFS_S[attempt - 1]
+                    log.warning(
+                        "RegisterAdvertisement attempt %d failed (%s) — retrying in %.1fs",
+                        attempt,
+                        exc,
+                        backoff,
+                    )
+                    await asyncio.sleep(backoff)
 
             self._bus = bus
             self._adv = adv
@@ -305,16 +387,24 @@ class FleetBroadcaster:
     #      one that crashed the device in the first place.
     #   2. Devices coming into range later would pick up an old command.
     #
-    # Sized for reliable delivery: firmware scanner runs at 100 ms interval
-    # with 50 ms window (50% duty). At BlueZ's ~200 ms ad interval that's
-    # ~15 on-air emissions in this window, so the scanner catches 5+ even
-    # if it spends half its time in scan-off. Verified live 2026-05-16:
-    # at COMMAND_ONAIR_MS=300, cart_outer received 2 of 5 broadcast commands
-    # (40% delivery) — packets_rx=2 on the firmware diagnostic. We need
-    # significantly longer on-air time for reliable single-shot delivery.
-    # Firmware dedups subsequent same-(source,seq) packets, so a longer
-    # window does NOT cause re-execution.
-    COMMAND_ONAIR_MS = 3000
+    # Sized for reliable single-packet delivery. The firmware scanner runs
+    # at 100ms interval / 50ms window (50% duty); BlueZ on hci0 emits at
+    # ~50ms intervals empirically (measured 2026-05-17: ~20 retransmits/sec
+    # observed on both cart devices). 800ms gives ~16 retransmits per
+    # broadcast, of which the scanner can catch ~8 — overwhelmingly enough
+    # for one to land.
+    #
+    # The previous 3000ms value compensated for scene-apply firing 4
+    # separate broadcasts back-to-back (gen / effect / huespeed / hueshift)
+    # which had a measured ~37% per-packet capture rate. Scene apply is
+    # now a single `scene` broadcast (server scene_to_commands +
+    # firmware handleSceneCommand, b164), so the long window is no longer
+    # needed and was hurting feel: a 4-command scene took ~12s end-to-end.
+    # At 800ms the single scene packet lands in <1s.
+    #
+    # Firmware dedups subsequent same-(source, seq) packets, so reception
+    # of multiple retransmits within the window cannot cause re-execution.
+    COMMAND_ONAIR_MS = 800
 
     async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.

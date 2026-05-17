@@ -121,28 +121,97 @@ def test_data_dir_creates_the_directory() -> None:
 def test_scene_to_commands_off_mode() -> None:
     s = _scene("Off", generator="fire")
     s.effect_mode = "off"
-    assert scene_to_commands(s) == ["gen fire", "effect none"]
+    cmds = scene_to_commands(s)
+    assert len(cmds) == 1
+    parts = cmds[0].split()
+    assert parts[0] == "scene"
+    assert parts[1] == "fire"
+    assert parts[2] == "off"
 
 
-def test_scene_to_commands_static_mode_sets_both_huespeed_and_hueshift() -> None:
+def test_scene_to_commands_static_mode_emits_hue() -> None:
     s = _scene("Static", generator="water")
     s.effect_mode = "static"
     s.effect_hue = 0.42
     cmds = scene_to_commands(s)
-    # Order matters: generator → effect hue → huespeed 0 → hueshift
-    assert cmds[0] == "gen water"
-    assert cmds[1] == "effect hue"
-    assert cmds[2] == "set huespeed 0"
-    assert cmds[3].startswith("set hueshift ")
-    assert "0.42" in cmds[3]
+    assert len(cmds) == 1
+    parts = cmds[0].split()
+    assert parts[:3] == ["scene", "water", "static"]
+    # parts[3] = speed, parts[4] = hue. Compare as floats — the str
+    # representation isn't pinned (could be "0.42" or "0.42000…").
+    assert float(parts[4]) == pytest.approx(0.42)
 
 
-def test_scene_to_commands_rotate_mode_uses_huespeed() -> None:
+def test_scene_to_commands_rotate_mode_emits_speed() -> None:
     s = _scene("Rotate", generator="lightning")
     s.effect_mode = "rotate"
     s.effect_speed = 1.1
     cmds = scene_to_commands(s)
-    assert cmds[0] == "gen lightning"
-    assert cmds[1] == "effect hue"
-    assert cmds[2].startswith("set huespeed ")
-    assert "1.1" in cmds[2]
+    assert len(cmds) == 1
+    parts = cmds[0].split()
+    assert parts[:3] == ["scene", "lightning", "rotate"]
+    assert float(parts[3]) == pytest.approx(1.1)
+
+
+def test_scene_to_commands_always_emits_all_four_args() -> None:
+    """Firmware parser is fixed-arity. Even modes that ignore one of the
+    floats must still emit both, or the firmware errors out."""
+    for mode in ("off", "rotate", "static"):
+        s = _scene(f"All-{mode}", generator="fire")
+        s.effect_mode = mode  # type: ignore[assignment]
+        parts = scene_to_commands(s)[0].split()
+        assert len(parts) == 5, f"{mode}: expected 5 tokens, got {parts}"
+
+
+# ── /scenes/next + /scenes/previous cursor math ─────────────────────────────
+# The naive `(idx + direction) % N` misbehaves on the "no cursor" sentinel
+# (idx == -1). `(-1 + -1) % N` lands on N-2 in Python, so `/previous`
+# from a fresh install would skip the last
+# scene. The fix lives in `_next_cursor_index`; these are the pinned
+# regression tests for the boundary behaviours.
+
+
+def test_next_cursor_index_no_cursor_next_lands_on_first() -> None:
+    from blinky_server.api.routes_scenes import _next_cursor_index
+
+    assert _next_cursor_index(-1, 1, 3) == 0
+
+
+def test_next_cursor_index_no_cursor_previous_lands_on_last() -> None:
+    from blinky_server.api.routes_scenes import _next_cursor_index
+
+    # The bug: pre-fix this returned 1 (= N-2). Must return 2 (last index).
+    assert _next_cursor_index(-1, -1, 3) == 2
+    assert _next_cursor_index(-1, -1, 5) == 4
+    # Single-scene library — last == first; both directions stay put.
+    assert _next_cursor_index(-1, -1, 1) == 0
+    assert _next_cursor_index(-1, 1, 1) == 0
+
+
+def test_next_cursor_index_with_cursor_wraps() -> None:
+    from blinky_server.api.routes_scenes import _next_cursor_index
+
+    # Normal advance.
+    assert _next_cursor_index(0, 1, 3) == 1
+    assert _next_cursor_index(1, 1, 3) == 2
+    # Wrap on /next from end.
+    assert _next_cursor_index(2, 1, 3) == 0
+    # Wrap on /previous from start.
+    assert _next_cursor_index(0, -1, 3) == 2
+    # Mid-list /previous.
+    assert _next_cursor_index(2, -1, 3) == 1
+
+
+def test_list_scenes_skips_dotfiles() -> None:
+    """``scene_cursor`` writes ``.cursor.json`` + ``.cursor.json.tmp`` to
+    the scenes data directory. ``list_scenes`` must skip both, otherwise
+    every cursor write would produce a Pydantic-validation warning and a
+    spurious unreadable-scene log line. The dot-prefix filter is
+    load-bearing; this test pins it."""
+    save_scene(_scene("Real"))
+    # Simulate the cursor + its in-flight tmp file.
+    sdir = scenes_mod._data_dir()
+    (sdir / ".cursor.json").write_text('{"current":"Real"}')
+    (sdir / ".cursor.json.tmp").write_text("partial")
+    names = [s.name for s in list_scenes()]
+    assert names == ["Real"]

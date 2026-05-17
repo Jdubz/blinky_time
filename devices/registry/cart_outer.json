@@ -1,0 +1,11 @@
+{
+  "deviceId": "cart_outer",
+  "deviceName": "Cart Outer",
+  "ledWidth": 96,
+  "ledHeight": 1,
+  "ledPin": 10,
+  "ledType": 12390,
+  "orientation": 0,
+  "layoutType": 1,
+  "brightness": 80
+}

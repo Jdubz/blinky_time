@@ -231,6 +231,24 @@ private:
                     setMapping(gx, gy, ledIndex);
                 }
             }
+        } else if (orientation == HORIZONTAL_ZIGZAG) {
+            // Row-major serpentine ("big bucket" wiring). Data starts at
+            // top-left, row 0 runs L→R, row 1 R→L, row 2 L→R, ...
+            //
+            // 14x8 example:
+            //   Row 0:   LEDs 0..13       (left to right)
+            //   Row 1:   LEDs 27..14      (right to left)
+            //   Row 2:   LEDs 28..41      (left to right)
+            //   ...
+            //   Row 7:   LEDs 98..111
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int ledIndex = (y % 2 == 0)
+                        ? (y * width + x)
+                        : (y * width + (width - 1 - x));
+                    setMapping(x, y, ledIndex);
+                }
+            }
         } else {
             // Standard row-major mapping (horizontal layouts like bucket totem)
             for (int y = 0; y < height; y++) {

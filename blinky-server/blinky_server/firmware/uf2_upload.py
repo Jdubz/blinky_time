@@ -23,12 +23,24 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .flash_job import FlashJob
 
 log = logging.getLogger(__name__)
+
+# tools/uf2_upload.py emits this exact line once the entire UF2 file has
+# landed on the bootloader's MSC drive successfully — i.e., the bytes
+# are on flash. Anything after this in the subprocess (verify-reboot
+# wait, drive-disappear timer) is informational only; the write itself
+# is done. Phase 7 of the flash-job rewrite stops treating subsequent
+# timeouts as failures — closes the cascade bug from 2026-05-17.
+_WRITE_COMPLETE_RE = re.compile(r"\[PASS\] Wrote ([\d,]+) ?/ ?([\d,]+) bytes")
 
 
 def _find_uf2_tool() -> Path | None:
@@ -277,3 +289,192 @@ async def upload_uf2(
 
     result["elapsed_s"] = round(time.monotonic() - t0, 1)
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase 7: FlashJob-aware UF2 path.
+#
+# Same physical steps as ``upload_uf2`` (disconnect → USB reset → run
+# tools/uf2_upload.py) but the success criterion is "we saw [PASS] Wrote
+# N / N bytes on stdout," NOT "the subprocess exited 0." The subprocess's
+# trailing verify-reboot phase has a 60s wall-clock that fires reliably
+# on the 0.8.0-4 bootloader — but the write itself has already succeeded
+# by that point, and treating the subsequent timeout as a flash failure
+# is what triggered the duplicate-flash cascade we lived through on
+# 2026-05-17.
+#
+# Once the write-complete line is detected, this function:
+#   1. Records progress on the job (transitions WRITING bytes counter)
+#   2. Terminates the subprocess (we don't need its verify-wait)
+#   3. Returns True — the caller (orchestrator) transitions to VERIFYING
+#      and hands off to firmware.verify.run_verify, which observes the
+#      actual device reboot + handshake on its own poll loop
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def flash_uf2_for_job(
+    job: FlashJob,
+    serial_port: str,
+    firmware_path: str,
+    transport: Any,
+) -> bool:
+    """Write firmware to one device via UF2, bound to a ``FlashJob``.
+
+    Pre-condition: ``job.state == WRITING`` (orchestrator transitioned it).
+    Updates ``job.bytes_written`` / ``job.bytes_total`` as ``[PASS] Wrote
+    N / N bytes`` appears on the subprocess's stdout.
+
+    Returns True iff that line was seen — meaning the bootloader
+    received and committed every UF2 block. False on any subprocess
+    failure that happens *before* that line (file-not-found, MSC mount
+    failure, bootloader entry failure, etc.).
+
+    Critically, this function does NOT wait for the subprocess to exit
+    cleanly. Once write-complete is seen, the subprocess is terminated
+    so the orchestrator can begin verify polling without the spurious
+    60s tail. The bootloader at that point has the new firmware on
+    flash and proceeds to boot it independently of any host action.
+    """
+    from .flash_job import FlashJobState  # avoid top-level cycle
+
+    assert job.state is FlashJobState.WRITING, (
+        f"flash_uf2_for_job expected WRITING, got {job.state.value}"
+    )
+
+    tool = _find_uf2_tool()
+    if not tool:
+        job.set_error("uf2_upload.py not found in tools/")
+        return False
+
+    if not os.path.isfile(firmware_path):
+        job.set_error(f"firmware file not found: {firmware_path}")
+        return False
+
+    # Same prep as upload_uf2: capture USB device path + serial number,
+    # disconnect transport, USB-reset, re-discover the (possibly renamed)
+    # serial port.
+    usb_dev_path = _get_usb_dev_path(serial_port)
+    device_usb_sn: str | None = None
+    by_id_dir = Path("/dev/serial/by-id")
+    if by_id_dir.exists():
+        real_port = str(Path(serial_port).resolve())
+        for entry in by_id_dir.iterdir():
+            if str(entry.resolve()) == real_port:
+                parts = entry.name.rsplit("_", 1)
+                if len(parts) == 2:
+                    device_usb_sn = parts[1].split("-")[0]
+                break
+
+    with contextlib.suppress(Exception):
+        await transport.disconnect()
+
+    if usb_dev_path:
+        usb_ok = await _usb_reset_device(usb_dev_path)
+        if usb_ok:
+            await asyncio.sleep(3)
+            if device_usb_sn and by_id_dir.exists():
+                for entry in by_id_dir.iterdir():
+                    if device_usb_sn in entry.name:
+                        serial_port = str(entry.resolve())
+                        break
+
+    cmd = ["python3", str(tool), "--hex", firmware_path, serial_port, "-v"]
+    log.info("flash_uf2_for_job %s: launching %s", job.job_id, " ".join(cmd))
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(tool.parent),
+    )
+
+    write_seen = False
+    captured: list[str] = []
+
+    async def _stream() -> None:
+        nonlocal write_seen
+        assert proc.stdout is not None
+        while True:
+            raw = await proc.stdout.readline()
+            if not raw:
+                return
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if not line:
+                continue
+            captured.append(line)
+            log.info("[uf2_upload] %s", line)
+            m = _WRITE_COMPLETE_RE.search(line)
+            if m and not write_seen:
+                write_seen = True
+                # Strip thousands separators (the subprocess pretty-prints
+                # the numbers) before converting.
+                bytes_written = int(m.group(1).replace(",", ""))
+                bytes_total = int(m.group(2).replace(",", ""))
+                try:
+                    job.record_progress(bytes_written, bytes_total)
+                except Exception as exc:
+                    # Don't let a progress-update bug derail the flash.
+                    log.warning(
+                        "flash_uf2_for_job: record_progress raised %s; continuing",
+                        exc,
+                    )
+                log.info(
+                    "flash_uf2_for_job %s: write complete (%d/%d) — "
+                    "letting subprocess finish umount/eject; verify handled "
+                    "by FlashJob, subprocess exit code ignored",
+                    job.job_id,
+                    bytes_written,
+                    bytes_total,
+                )
+                # NOTE: do NOT terminate the subprocess here. Phase 7 live
+                # test 2026-05-17 showed that on 0.8.0-4 bootloaders, the
+                # umount/eject step the subprocess does AFTER this log
+                # line is what signals the bootloader "transfer complete."
+                # Killing here leaves the MSC drive mounted and the
+                # bootloader stuck in MSC mode indefinitely. We let the
+                # subprocess run to natural exit; its trailing
+                # "wait-for-drive-to-disappear" will time out and exit
+                # non-zero, but we ignore that exit code (the write itself
+                # succeeded, which is all this function reports).
+                # Continue draining stdout — the umount/eject logs are
+                # useful to keep in the journal for diagnostics.
+
+    try:
+        await asyncio.wait_for(_stream(), timeout=300)
+    except TimeoutError:
+        # Capture write_seen state in the log line — a timeout AFTER
+        # `[PASS] Wrote N/N bytes` still returns success from this
+        # function (the write succeeded; the verify-wait phase of the
+        # subprocess just couldn't confirm reboot in 60 s), and being
+        # able to tell those two cases apart from journalctl alone
+        # matters for post-mortems.
+        log.warning(
+            "flash_uf2_for_job %s: stream hit 300s timeout (write_seen=%s)",
+            job.job_id,
+            write_seen,
+        )
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+
+    # Subprocess should have exited on its own (success path: ran to
+    # completion of its umount/eject + verify-wait phases). Drain any
+    # residual on best effort.
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(proc.wait(), timeout=10)
+
+    if write_seen:
+        # The subprocess may have exited non-zero (its own verify-wait
+        # gave up at 60s — exactly the false-failure we're closing out).
+        # We don't propagate that; the write succeeded.
+        return True
+
+    # No write-complete line → real failure. Surface the most actionable
+    # message we captured.
+    error_lines = [li for li in captured if "ERROR" in li or "FAILED" in li]
+    msg = (
+        error_lines[-1].strip()
+        if error_lines
+        else (captured[-1].strip() if captured else "UF2 subprocess produced no output")
+    )
+    job.set_error(f"UF2 write did not complete: {msg}")
+    return False

@@ -8,10 +8,44 @@
 // Construction / Destruction
 // ---------------------------------------------------------------------------
 
-Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin)
+Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin, uint32_t ledType)
     : numPixels_(numPixels), pin_(pin), brightness_(0),
+      rOffset_(0), gOffset_(0), bOffset_(0),
       pixels_(nullptr), pwmBuffer_(nullptr), pwmBufferLen_(0),
       pwm_(nullptr), begun_(false), transmitting_(false) {
+
+    // Decode the NEO_* ledType byte layout (see header). Mask to lower 8
+    // bits — the upper bits hold the 400/800 KHz speed selector which this
+    // driver ignores (WS2812B 800 KHz is hardcoded in the PWM timing).
+    uint8_t order = (uint8_t)(ledType & 0xFF);
+    bOffset_ = (order >> 0) & 0x3;
+    gOffset_ = (order >> 2) & 0x3;
+    rOffset_ = (order >> 4) & 0x3;
+
+    // Validate offsets. The NEO_* encoding uses 2-bit fields that can hold
+    // values 0-3, but this driver allocates only 3 bytes per pixel (RGB).
+    // An offset of 3 — produced by RGBW-style constants the hardware does
+    // not support — would walk one byte past the slot and corrupt the
+    // next pixel on every write. Fail loud at construction per
+    // CLAUDE.md "No Silent Fallbacks": leave the buffers unallocated
+    // so isValid() reports false; the caller already haltWithError's
+    // on !isValid().
+    bool offsets_in_range = rOffset_ <= 2 && gOffset_ <= 2 && bOffset_ <= 2;
+    bool offsets_distinct = rOffset_ != gOffset_ && rOffset_ != bOffset_ && gOffset_ != bOffset_;
+    if (!offsets_in_range || !offsets_distinct) {
+        Serial.print(F("[ERROR] Nrf52PwmLedStrip: invalid ledType 0x"));
+        Serial.print(ledType, HEX);
+        Serial.print(F(" decoded r="));
+        Serial.print(rOffset_);
+        Serial.print(F(" g="));
+        Serial.print(gOffset_);
+        Serial.print(F(" b="));
+        Serial.print(bOffset_);
+        Serial.println(offsets_in_range
+            ? F(" (offsets must be distinct; check device JSON)")
+            : F(" (offsets must be 0-2; RGBW types are not supported)"));
+        return;
+    }
 
     uint32_t numBytes = (uint32_t)numPixels * 3;
     pixels_ = new(std::nothrow) uint8_t[numBytes];
@@ -107,9 +141,9 @@ void Nrf52PwmLedStrip::setPixelColor(uint16_t index, uint8_t r, uint8_t g, uint8
     }
 
     uint8_t* p = &pixels_[index * 3];
-    p[0] = g;  // GRB order
-    p[1] = r;
-    p[2] = b;
+    p[rOffset_] = r;
+    p[gOffset_] = g;
+    p[bOffset_] = b;
 }
 
 void Nrf52PwmLedStrip::setPixelColor(uint16_t index, uint32_t color) {

@@ -3,9 +3,11 @@
 #include "../hal/PlatformConstants.h"
 
 enum MatrixOrientation {
-  HORIZONTAL = 0,  // Standard horizontal layout (fire-totem)
-  VERTICAL = 1,    // Vertical layout (tube-light)
-  PANEL_GRID = 2   // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
+  HORIZONTAL = 0,         // Standard horizontal row-major (fire-totem, bucket-totem)
+  VERTICAL = 1,           // Vertical column-major zigzag (tube-light)
+  PANEL_GRID = 2,         // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
+  HORIZONTAL_ZIGZAG = 3   // Row-major serpentine — data starts top-left, row 0 L→R,
+                          // row 1 R→L, row 2 L→R, ... (big-bucket-style wiring)
 };
 
 enum LayoutType {
@@ -30,11 +32,19 @@ struct MatrixConfig {
 };
 
 struct ChargingConfig {
-  bool fastChargeEnabled;
-  float lowBatteryThreshold;
-  float criticalBatteryThreshold;
-  float minVoltage;
-  float maxVoltage;
+  // Single source of truth for "does this device have a battery?".
+  // Set from StoredDeviceConfig::battery by DeviceConfigLoader::loadFromFlash.
+  // When false, the entire battery subsystem is skipped: no
+  // BatteryMonitor allocation, no setFastCharge call, no periodic ADC
+  // read, no charging-state polling, no battery telemetry stream. The
+  // BatteryMonitor pointer (`battery` in blinky-things.ino) is left
+  // null and downstream code null-checks it.
+  //
+  // When true, the BatteryMonitor uses the static `Platform::Battery::*`
+  // thresholds directly at the point of use — the previously-stored
+  // per-device threshold values are NOT configurable per operator
+  // direction. fastCharge is hardcoded on (always-true) at init time.
+  bool battery;
 };
 
 struct IMUConfig {
@@ -58,6 +68,14 @@ struct MicConfig {
   uint8_t bufferSize;
 };
 
+struct InputConfig {
+  // GPIO pin for the "cycle to next generator" button. 0 = unused (no button).
+  // Pin is read with INPUT_PULLUP (button shorts to GND on press). The polling
+  // + debounce logic lives in the main loop; this struct just carries the
+  // wiring info from the per-device config.
+  uint8_t buttonPin;
+};
+
 struct DeviceConfig {
   const char* deviceName;
   MatrixConfig matrix;
@@ -65,4 +83,5 @@ struct DeviceConfig {
   IMUConfig imu;
   BlinkySerialConfig serial;
   MicConfig microphone;
+  InputConfig input;
 };

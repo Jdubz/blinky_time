@@ -282,6 +282,31 @@ SD init (line 561).
    unenclosed device and run `bl_characterize.sh` against it BEFORE
    fleet-wide rollout via `deploy-bootloader.sh`.
 
+3. **Characterize whether the ~43% block-corruption rate is bench-specific
+   or representative.** ⬜ The 0.8.0-7 bench run showed 43% of UF2 drops
+   hit at least one is_uf2_block() rejection (slow path via stuck-detect).
+   That rate is higher than expected for USB-layer corruption on a healthy
+   stack and may be partly attributable to the bench rig (USB hub model,
+   host xhci_hcd driver, hub-port contention). Before fleet rollout, the
+   second-device validation above should ALSO answer:
+   - Does the rate vary by host machine / USB hub? (Test on devtop +
+     blinkyhost, or on a different hub port.)
+   - Does the rate vary by UF2 file size? Specifically: 142-block BL
+     self-update (`update-bootloader-qspi-ota-default.uf2`, ~72 KB) vs.
+     2120-block firmware (`blinky-things.uf2`, ~1 MB). If the rate is
+     proportional to block count, that's binomial per-block corruption.
+     If it's independent of size, the cause is per-session (first-write
+     race, mount-time setup) and not per-block.
+   - Does upstream vanilla Adafruit 0.8.0 (no blinky-local-patches) on
+     the same bench show the same rate? If yes, the patches inherited
+     the issue; if no, the patches introduced something subtle.
+
+   Stuck-detect handles all three cases correctly today, so this is a
+   characterization task — not a blocker. But understanding the baseline
+   matters for capacity planning the per-device deploy timeout, and for
+   triaging future reports of "this device takes longer to flash than
+   the others."
+
 ### Optional improvements (defer)
 
 - UF2 first-write hook to set `dfu_startup_packet_received` for cleaner
@@ -331,7 +356,10 @@ SD init (line 561).
   hardening)
 - Built artifacts staged in this repo at:
   - `bootloader/update-bootloader-qspi-ota-default.uf2` (BL self-update UF2)
+    - sha256: `cf6a0679a977876d811062fa06193f225e9180def45a6d36afdc3469d6e8e966`
   - `bootloader/update-bootloader-qspi-ota-default_s140_7.3.0.zip` (OTA bundle)
+    - sha256: `46c9ebab838fd2d598350012f529c9cbfa75252c75ab01699c12a6d428d60526`
+- If either binary is replaced, re-run `sha256sum bootloader/update-bootloader-qspi-ota-default*` and update these hashes — they're the source of truth for the integrity chain since the BL source branch is intentionally local-only.
 - Source-level invariants: ✅ `scripts/verify_bootloader.py` PASSes both
   the dual-transport USB-init check and the SD-state-aware `settings_save`
   check.

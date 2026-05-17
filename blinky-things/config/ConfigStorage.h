@@ -271,8 +271,34 @@ public:
         // ledPin2 == 0 because that byte was zero-initialised.
         uint8_t ledPin2;
 
+        // GPIO pin for the "cycle to next generator" button. 0 = unused.
+        // Carved out of the original `reserved[7]` — same struct size, no
+        // DEVICE_VERSION bump needed; older configs read back as
+        // buttonPin == 0 because that byte was zero-initialised. Pin is
+        // read with INPUT_PULLUP (active-low on press). Polling and
+        // debounce live in the main loop (see blinky-things.ino).
+        uint8_t buttonPin;
+
+        // Battery-equipped flag. When true, runtime DeviceConfig.charging
+        // gets populated with the static `Platform::Battery::*` constants
+        // (VOLTAGE_FULL/EMPTY, DEFAULT_LOW/CRITICAL_THRESHOLD, fastCharge
+        // always on); when false, battery monitoring is disabled entirely.
+        // The previous per-device voltage / fastCharge / threshold fields
+        // higher up in this struct are NO LONGER PARSED from incoming
+        // JSON and NO LONGER WRITTEN at upload time — they're now firmware
+        // constants per operator direction. Pre-existing flash bytes are
+        // ignored at load time.
+        //
+        // Carved out of the original `reserved[6]` — same struct size, no
+        // DEVICE_VERSION bump needed; older configs read back as
+        // battery == false (zero-initialised), which is correct for the
+        // non-battery majority. Battery-equipped devices (tube_v2, hat_v1)
+        // need a one-time `device upload` with `"battery": true` to flip
+        // the byte; this is captured in their registry JSON.
+        bool battery;
+
         // Reserved for future expansion
-        uint8_t reserved[7];
+        uint8_t reserved[5];
 
         // Total: ~160 bytes (see static_assert enforcing sizeof(StoredDeviceConfig) <= 160)
     };

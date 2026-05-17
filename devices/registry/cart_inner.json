@@ -1,0 +1,12 @@
+{
+  "deviceId": "cart_inner",
+  "deviceName": "Cart Inner",
+  "ledWidth": 104,
+  "ledHeight": 1,
+  "ledPin": 10,
+  "ledPin2": 9,
+  "ledType": 12390,
+  "orientation": 0,
+  "layoutType": 1,
+  "brightness": 80
+}

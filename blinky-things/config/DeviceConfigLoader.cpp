@@ -1,6 +1,7 @@
 #include "DeviceConfigLoader.h"
 #include "../inputs/SerialConsole.h"
 #include "../hal/PlatformDetect.h"
+#include "../hal/PlatformConstants.h"
 
 // Static storage for deviceName string only (since DeviceConfig.deviceName is const char*)
 // Other fields are copied by value, so they can be local variables
@@ -35,12 +36,16 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     matrix.orientation = (MatrixOrientation)stored.orientation;
     matrix.layoutType = (LayoutType)stored.layoutType;
 
+    // Single boolean. When false, blinky-things.ino skips
+    // BatteryMonitor allocation entirely; when true, it allocates and
+    // sources thresholds from `Platform::Battery::*` at the point of
+    // use (no intermediary fields). The legacy per-device threshold
+    // bytes in StoredDeviceConfig (fastChargeEnabled, lowBattery*,
+    // critical*, minVoltage, maxVoltage) are intentionally ignored —
+    // they exist for flash-layout back-compat but no longer
+    // participate in runtime behavior.
     ChargingConfig charging;
-    charging.fastChargeEnabled = stored.fastChargeEnabled;
-    charging.lowBatteryThreshold = stored.lowBatteryThreshold;
-    charging.criticalBatteryThreshold = stored.criticalBatteryThreshold;
-    charging.minVoltage = stored.minVoltage;
-    charging.maxVoltage = stored.maxVoltage;
+    charging.battery = stored.battery;
 
     IMUConfig imu;
     imu.upVectorX = stored.upVectorX;
@@ -60,6 +65,9 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     mic.sampleRate = stored.sampleRate;
     mic.bufferSize = stored.bufferSize;
 
+    InputConfig input;
+    input.buttonPin = stored.buttonPin;
+
     // Populate output DeviceConfig (structs copied by value, deviceName by pointer)
     outConfig.deviceName = deviceNameBuffer;
     outConfig.matrix = matrix;
@@ -67,6 +75,7 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     outConfig.imu = imu;
     outConfig.serial = serial;
     outConfig.microphone = mic;
+    outConfig.input = input;
 
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
         Serial.print(F("[INFO] Loaded device: "));
@@ -108,12 +117,13 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     outStored.orientation = (uint8_t)config.matrix.orientation;
     outStored.layoutType = (uint8_t)config.matrix.layoutType;
 
-    // Copy charging config
-    outStored.fastChargeEnabled = config.charging.fastChargeEnabled;
-    outStored.lowBatteryThreshold = config.charging.lowBatteryThreshold;
-    outStored.criticalBatteryThreshold = config.charging.criticalBatteryThreshold;
-    outStored.minVoltage = config.charging.minVoltage;
-    outStored.maxVoltage = config.charging.maxVoltage;
+    // Copy charging config. Only the `battery` byte is load-bearing now;
+    // the legacy threshold/voltage/fastCharge bytes stay in
+    // StoredDeviceConfig for flash layout back-compat but are no longer
+    // written from the runtime side. They're zero-initialised in
+    // uploadDeviceConfig and stay zero, which is fine because
+    // loadFromFlash doesn't read them.
+    outStored.battery = config.charging.battery;
 
     // Copy IMU config
     outStored.upVectorX = config.imu.upVectorX;
@@ -132,6 +142,9 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     // Copy mic config
     outStored.sampleRate = config.microphone.sampleRate;
     outStored.bufferSize = config.microphone.bufferSize;
+
+    // Copy input config
+    outStored.buttonPin = config.input.buttonPin;
 
     // Mark as valid
     outStored.isValid = true;
@@ -200,10 +213,24 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         return false;
     }
 
-    // Validate orientation
-    if (stored.orientation > 2) {  // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID
+    // Validate orientation (must match MatrixOrientation enum in DeviceConfig.h)
+    // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID, 3=HORIZONTAL_ZIGZAG
+    if (stored.orientation > 3) {
         SerialConsole::logWarn(F("Invalid orientation"));
         return false;
+    }
+
+    // Validate buttonPin (0 = unused; any other value must be a valid GPIO
+    // distinct from ledPin / ledPin2 to prevent stomping on LED data).
+    if (stored.buttonPin != 0) {
+        if (stored.buttonPin > LED_PIN_MAX) {
+            SerialConsole::logWarn(F("Invalid buttonPin"));
+            return false;
+        }
+        if (stored.buttonPin == stored.ledPin || stored.buttonPin == stored.ledPin2) {
+            SerialConsole::logWarn(F("buttonPin must differ from ledPin/ledPin2"));
+            return false;
+        }
     }
 
     // Validate layout type
@@ -212,15 +239,14 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         return false;
     }
 
-    // Validate voltage ranges
-    if (stored.minVoltage >= stored.maxVoltage) {
-        SerialConsole::logWarn(F("Invalid voltage range"));
-        return false;
-    }
-    if (stored.minVoltage < 2.5f || stored.maxVoltage > 5.0f) {
-        SerialConsole::logWarn(F("Voltage out of safe range"));
-        return false;
-    }
+    // Voltage range check removed — the per-device minVoltage/maxVoltage
+    // bytes in StoredDeviceConfig are no longer load-bearing. They're
+    // zeroed by uploadDeviceConfig and ignored at load time;
+    // battery-equipped devices source thresholds from
+    // `Platform::Battery::*` constants in blinky-things.ino. Leaving
+    // the check in would falsely reject any new upload with
+    // `"battery": true` (zeroed fields make `0 >= 0` true → fail).
+    // See StoredDeviceConfig::battery for the schema rationale.
 
     // Validate sample rate (common PDM rates: 8000, 16000, 32000, 44100, 48000)
     // Intentionally warn-only (not hard error) to allow flexibility for:

@@ -24,6 +24,7 @@
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
 #include "render/RenderPipeline.h"  // Generator/Effect/Renderer management
+#include "inputs/GeneratorButton.h"  // Debounced GPIO button → cycle generator
 #include "types/Version.h"           // Version information from repository
 #include "hal/DefaultHal.h"          // HAL singleton instances
 #include "audio/LoopMetrics.h"       // Main-loop fps + frame-time observability (#137)
@@ -82,6 +83,7 @@ bool ledModeDegraded = false;
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
 RenderPipeline* pipeline = nullptr;  // Manages generators, effects, and rendering
+GeneratorButton generatorButton;     // Per-device "next generator" button (no-op if buttonPin==0)
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
@@ -242,12 +244,29 @@ void setup() {
     }
   }
 
-  // Initialize HAL-enabled components - ALWAYS initialize (even in safe mode)
-  // Audio and battery monitoring work independently of LED configuration
+  // Initialize HAL-enabled components.
+  //
+  // Audio is initialized on every device (works independently of LED config,
+  // needed for serial-streamed audio diagnostics even in safe mode).
+  //
+  // Battery is only allocated when this device is battery-equipped per the
+  // config. Non-battery devices (carts, buckets, display, umbrella) leave
+  // the BQ24074 charger IC unpowered — instantiating BatteryMonitor on
+  // them wastes a heap allocation, would halt boot if that allocation
+  // failed, and would run an ADC poll + GPIO read every main-loop
+  // iteration (see line ~761) for a charging-state that can never
+  // change. The downstream call sites all null-check `battery` already,
+  // so leaving it null is the cleanest "fully disabled" state.
   audioController = new(std::nothrow) AudioTracker(DefaultHal::pdm(), DefaultHal::time());
-  battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
-  if (!audioController || !battery) {
-    haltWithError(F("ERROR: HAL component allocation failed"));
+  if (!audioController) {
+    haltWithError(F("ERROR: AudioController allocation failed"));
+  }
+  battery = nullptr;
+  if (validDeviceConfig && config.charging.battery) {
+    battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+    if (!battery) {
+      haltWithError(F("ERROR: BatteryMonitor allocation failed"));
+    }
   }
 
   // Initialize audio controller (uses default or configured sample rate)
@@ -309,14 +328,14 @@ void setup() {
       Serial.println(config.matrix.ledPin2);
 
       Serial.println(F("[DEBUG]   alloc strand 1..."));
-      auto* s1 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin);
+      auto* s1 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin, config.matrix.ledType);
       Serial.print(F("[DEBUG]   strand 1 alloc: ptr="));
       Serial.print((uintptr_t)s1, HEX);
       Serial.print(F(" valid="));
       Serial.println(s1 && s1->isValid() ? F("yes") : F("no"));
 
       Serial.println(F("[DEBUG]   alloc strand 2..."));
-      auto* s2 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin2);
+      auto* s2 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin2, config.matrix.ledType);
       Serial.print(F("[DEBUG]   strand 2 alloc: ptr="));
       Serial.print((uintptr_t)s2, HEX);
       Serial.print(F(" valid="));
@@ -343,7 +362,7 @@ void setup() {
       }
     }
     if (!useComposite) {
-      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
+      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin, config.matrix.ledType);
       leds = asyncStrip;  // Assign before validity check so cleanup() can free it
       if (!asyncStrip || !asyncStrip->isValid()) {
         haltWithError(F("ERROR: Async LED strip allocation failed"));
@@ -421,6 +440,23 @@ void setup() {
 
     SerialConsole::logDebug(F("RenderPipeline initialized"));
 
+    // Per-device "cycle generator" button. No-op when buttonPin == 0.
+    // Logs the pin assignment at INFO so it's visible during deployment
+    // verification (matches the "BLE name:" / "[INFO] Device:" pattern).
+    //
+    // The pin is bound once here; runtime `device upload` updates the
+    // persisted buttonPin but does NOT re-init the GPIO. That's
+    // consistent with the rest of the device config (ledPin, ledType,
+    // orientation, etc. all also bind at setup() and require a reboot
+    // to take effect). `SerialConsole::uploadDeviceConfig` already
+    // prints `**REBOOT DEVICE TO APPLY CONFIGURATION**` to make the
+    // requirement explicit at upload time.
+    generatorButton.begin(config.input.buttonPin);
+    if (config.input.buttonPin != 0) {
+      Serial.print(F("[INFO] Generator-cycle button on pin D"));
+      Serial.println(config.input.buttonPin);
+    }
+
     // Load effect parameters from flash
     if (configStorage.isValid()) {
       // Load parameters directly into generators' internal storage
@@ -454,13 +490,21 @@ void setup() {
   }
   // End of LED system initialization
 
-  // Initialize battery monitor - ALWAYS initialize (even in safe mode)
-  if (!battery->begin()) {
-    SerialConsole::logWarn(F("Battery monitor failed to start"));
+  // Initialize battery monitor on battery-equipped devices. The
+  // `battery` global is non-null iff `config.charging.battery` is true
+  // (gated at allocation, line ~250), so reaching this branch means
+  // we have a real BatteryMonitor to bring up. Fast charge is
+  // hardcoded on — per operator direction it's never configurable
+  // per-device.
+  if (battery) {
+    if (!battery->begin()) {
+      SerialConsole::logWarn(F("Battery monitor failed to start"));
+    } else {
+      battery->setFastCharge(true);
+      SerialConsole::logDebug(F("Battery monitor initialized"));
+    }
   } else {
-    bool fastCharge = validDeviceConfig ? config.charging.fastChargeEnabled : false;
-    battery->setFastCharge(fastCharge);
-    SerialConsole::logDebug(F("Battery monitor initialized"));
+    SerialConsole::logDebug(F("Battery monitor skipped (no battery on this device)"));
   }
 
   // Rhythm tracking handled internally by AudioTracker (ACF+Comb+PLL)
@@ -624,6 +668,17 @@ void loop() {
   // (5 min) that the device is genuinely stable before clearing it.
   RebootFrequencyCounter::tickStable(millis());
 
+  // Per-device "next generator" button. No-op if buttonPin == 0 in config.
+  // Poll every loop iter — debounce lives inside GeneratorButton, so this
+  // is just a cheap digitalRead + timestamp check on most iterations.
+  if (generatorButton.poll()) {
+    GeneratorButton::cycleGenerator(pipeline);
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+      Serial.print(F("[BUTTON] Generator -> "));
+      Serial.println(pipeline->getGeneratorName());
+    }
+  }
+
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 
@@ -717,15 +772,23 @@ void loop() {
     }
   }
 
-  // Track charging state changes
-  bool currentChargingState = battery ? battery->isCharging() : false;
-  if (currentChargingState != prevChargingState) {
-    if (currentChargingState) {
-      SerialConsole::logInfo(F("Charging started"));
-    } else {
-      SerialConsole::logInfo(F("Charging stopped"));
+  // Track charging-state transitions. Skipped entirely on non-battery
+  // devices where `battery` is null — no ADC read, no GPIO poll, no
+  // comparison work per loop iteration. The previous form
+  // (`battery ? battery->isCharging() : false`) was already cheap on
+  // non-battery devices, but wrapping the whole block makes the
+  // dead-code-elimination intent unambiguous and means the
+  // `prevChargingState` comparison also doesn't run.
+  if (battery) {
+    bool currentChargingState = battery->isCharging();
+    if (currentChargingState != prevChargingState) {
+      if (currentChargingState) {
+        SerialConsole::logInfo(F("Charging started"));
+      } else {
+        SerialConsole::logInfo(F("Charging stopped"));
+      }
+      prevChargingState = currentChargingState;
     }
-    prevChargingState = currentChargingState;
   }
 
   // Render current generator through the effect pipeline (only if valid config)
@@ -804,18 +867,22 @@ void loop() {
   }
 #endif
 
-  // Battery monitoring - periodic voltage check
+  // Battery monitoring - periodic voltage check. Gated on `battery`
+  // being non-null (which it is iff the device is battery-equipped per
+  // the conditional allocation at setup() ~line 250). Thresholds come
+  // straight from `Platform::Battery::*` — chemistry-derived
+  // constants, not configurable per device.
   static uint32_t lastBatteryCheck = 0;
-  if (battery && validDeviceConfig && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+  if (battery && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
-    if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
+    if (voltage > 0 && voltage < Platform::Battery::VOLTAGE_CRITICAL) {
       if (SerialConsole::getGlobalLogLevel() >= LogLevel::ERROR) {
         Serial.print(F("[ERROR] CRITICAL BATTERY: "));
         Serial.print(voltage);
         Serial.println(F("V"));
       }
-    } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
+    } else if (voltage > 0 && voltage < Platform::Battery::VOLTAGE_LOW) {
       if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
         Serial.print(F("[WARN] Low battery: "));
         Serial.print(voltage);

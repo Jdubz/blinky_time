@@ -400,6 +400,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     // NOTE: handleBeatTrackingCommand is called BEFORE settings registry
     // in handleCommand() to avoid "set" conflicts
     if (handleJsonCommand(cmd)) return true;
+    if (handleSceneCommand(cmd)) return true;
     if (handleGeneratorCommand(cmd)) return true;
     if (handleEffectCommand(cmd)) return true;
     if (handleBatteryCommand(cmd)) return true;
@@ -931,12 +932,11 @@ void SerialConsole::showDeviceConfig() {
     doc["orientation"] = cfg.orientation;
     doc["layoutType"] = cfg.layoutType;
 
-    // Charging configuration
-    doc["fastChargeEnabled"] = cfg.fastChargeEnabled;
-    doc["lowBatteryThreshold"] = serialized(String(cfg.lowBatteryThreshold, 2));
-    doc["criticalBatteryThreshold"] = serialized(String(cfg.criticalBatteryThreshold, 2));
-    doc["minVoltage"] = serialized(String(cfg.minVoltage, 2));
-    doc["maxVoltage"] = serialized(String(cfg.maxVoltage, 2));
+    // Battery flag. Per-device thresholds are no longer configurable —
+    // the runtime values come from Platform::Battery::* when battery is
+    // true. We surface only the single boolean here so `device show`
+    // mirrors the JSON schema the registry uses.
+    doc["battery"] = cfg.battery;
 
     // IMU configuration
     doc["upVectorX"] = serialized(String(cfg.upVectorX, 2));
@@ -955,6 +955,9 @@ void SerialConsole::showDeviceConfig() {
     // Microphone configuration
     doc["sampleRate"] = cfg.sampleRate;
     doc["bufferSize"] = cfg.bufferSize;
+
+    // Input configuration
+    doc["buttonPin"] = cfg.buttonPin;
 
     // Serialize through TeeStream (routes to Serial + BLE NUS)
     serializeJsonPretty(doc, out_);
@@ -995,12 +998,26 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.orientation = doc["orientation"] | 0;
     newConfig.layoutType = doc["layoutType"] | 0;
 
-    // Charging configuration
-    newConfig.fastChargeEnabled = doc["fastChargeEnabled"] | false;
-    newConfig.lowBatteryThreshold = doc["lowBatteryThreshold"] | 3.5f;
-    newConfig.criticalBatteryThreshold = doc["criticalBatteryThreshold"] | 3.3f;
-    newConfig.minVoltage = doc["minVoltage"] | 3.0f;
-    newConfig.maxVoltage = doc["maxVoltage"] | 4.2f;
+    // Battery flag. Per operator rule, the threshold/voltage/fast-charge
+    // values are NOT configurable per device — they're hardcoded in the
+    // firmware (`Platform::Battery::*` constants for thresholds,
+    // hardcoded `true` for fast charge). When `battery == true`,
+    // blinky-things.ino allocates BatteryMonitor and references the
+    // constants directly at the point of use; when `false`, the entire
+    // battery subsystem is skipped (no allocation, no init, no per-loop
+    // poll). The old per-device JSON keys (fastChargeEnabled,
+    // lowBatteryThreshold, criticalBatteryThreshold, minVoltage,
+    // maxVoltage) are no longer read and have no effect — they're
+    // silently dropped if present in incoming JSON. We zero the
+    // corresponding StoredDeviceConfig fields explicitly so partial
+    // uploads from an old client can't leave stale flash bytes that
+    // might be misread by a future revision.
+    newConfig.battery = doc["battery"] | false;
+    newConfig.fastChargeEnabled = false;
+    newConfig.lowBatteryThreshold = 0.0f;
+    newConfig.criticalBatteryThreshold = 0.0f;
+    newConfig.minVoltage = 0.0f;
+    newConfig.maxVoltage = 0.0f;
 
     // IMU configuration
     newConfig.upVectorX = doc["upVectorX"] | 0.0f;
@@ -1020,13 +1037,25 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.sampleRate = doc["sampleRate"] | 16000;
     newConfig.bufferSize = doc["bufferSize"] | 32;
 
+    // Input configuration (0 = no button; missing key parses to 0)
+    newConfig.buttonPin = doc["buttonPin"] | 0;
+
     // Mark as valid
     newConfig.isValid = true;
 
-    // Validate configuration
+    // Validate configuration. `DeviceConfigLoader::validate` runs the same
+    // checks here at upload time that it runs on every loadFromFlash, so
+    // a bad config is rejected before being persisted — no deferred
+    // safe-mode boot. The specific field that failed is printed at WARN
+    // by validate() right before it returns false, so the operator gets
+    // the precise reason on the serial stream (the generic ERROR below
+    // just points them at the WARN line).
     if (!DeviceConfigLoader::validate(newConfig)) {
         out_.println(F("ERROR: Device config validation failed"));
-        out_.println(F("Check LED count, pin numbers, and voltage ranges"));
+        out_.println(F("See [WARN] line above for the specific field. Common issues:"));
+        out_.println(F("  - ledPin/ledPin2/buttonPin out of range or colliding"));
+        out_.println(F("  - LED count zero or exceeds platform limit"));
+        out_.println(F("  - voltage thresholds inconsistent (min >= max)"));
         return;
     }
 
@@ -1253,6 +1282,130 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
     }
 
     return false;
+}
+
+// === SCENE COMMAND (atomic bundle for fleet apply) ===
+//
+// `scene <generator> <effect_mode> <speed> <hue>` — one packet replaces the
+// previous 4-command sequence (`gen X`, `effect Y`, `set huespeed Z`,
+// `set hueshift W`) so a single BLE broadcast atomically lands the entire
+// scene state. With the old 4-packet protocol, per-packet capture on the
+// scanner was ~37% (measured 2026-05-17 on cart_inner/cart_outer at 3 ft
+// with broadcaster on-air 3s per packet), so devices routinely caught a
+// random subset of the 4 commands and landed on mismatched state. One
+// packet at the broadcaster's 800 ms on-air gives ~16 retransmits per
+// press, well above the threshold for reliable capture.
+//
+// Validation is all-or-nothing: bad args print an ERROR and apply nothing.
+// No silent clamping (CLAUDE.md "No Silent Fallbacks"); the server-side
+// Pydantic model already validates ranges, so a runtime out-of-range here
+// means a wire-format or version mismatch worth surfacing.
+bool SerialConsole::handleSceneCommand(const char* cmd) {
+    if (strncmp(cmd, "scene", 5) != 0) return false;
+    if (cmd[5] != ' ' && cmd[5] != '\0') return false;   // not "scene "/"scene"
+    if (cmd[5] == '\0') {
+        out_.println(F("Usage: scene <fire|water|lightning|audio> <off|rotate|static> <speed 0-2> <hue 0-1>"));
+        return true;
+    }
+
+    if (!pipeline_) {
+        out_.println(F("ERROR: scene unavailable (no render pipeline)"));
+        return true;
+    }
+
+    // Tokenize 4 args in place from a local copy.
+    char buf[64];
+    strncpy(buf, cmd + 6, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char* tok[4] = {nullptr, nullptr, nullptr, nullptr};
+    int n = 0;
+    char* p = buf;
+    while (*p && n < 4) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        tok[n++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) { *p = '\0'; p++; }
+    }
+    if (n != 4) {
+        out_.println(F("Usage: scene <fire|water|lightning|audio> <off|rotate|static> <speed 0-2> <hue 0-1>"));
+        return true;
+    }
+
+    // Generator name → enum
+    GeneratorType genType;
+    if      (strcmp(tok[0], "fire") == 0)      genType = GeneratorType::FIRE;
+    else if (strcmp(tok[0], "water") == 0)     genType = GeneratorType::WATER;
+    else if (strcmp(tok[0], "lightning") == 0) genType = GeneratorType::LIGHTNING;
+    else if (strcmp(tok[0], "audio") == 0)     genType = GeneratorType::AUDIO;
+    else {
+        out_.print(F("ERROR: unknown generator: "));
+        out_.println(tok[0]);
+        return true;
+    }
+
+    // Effect mode token (matches server's EffectMode literal)
+    bool modeOff    = (strcmp(tok[1], "off") == 0);
+    bool modeRotate = (strcmp(tok[1], "rotate") == 0);
+    bool modeStatic = (strcmp(tok[1], "static") == 0);
+    if (!modeOff && !modeRotate && !modeStatic) {
+        out_.print(F("ERROR: unknown effect mode: "));
+        out_.println(tok[1]);
+        return true;
+    }
+
+    // Float args. strtof's `end` pointer must land on '\0' for a clean parse.
+    char* end;
+    float speed = strtof(tok[2], &end);
+    if (end == tok[2] || *end != '\0' || speed < 0.0f || speed > 2.0f) {
+        out_.print(F("ERROR: speed must be 0-2: "));
+        out_.println(tok[2]);
+        return true;
+    }
+    float hue = strtof(tok[3], &end);
+    if (end == tok[3] || *end != '\0' || hue < 0.0f || hue > 1.0f) {
+        out_.print(F("ERROR: hue must be 0-1: "));
+        out_.println(tok[3]);
+        return true;
+    }
+
+    // Hue effect required for any non-off mode.
+    if (!modeOff && !hueEffect_) {
+        out_.println(F("ERROR: hue effect not available"));
+        return true;
+    }
+
+    // All validated — apply atomically.
+    if (!pipeline_->setGenerator(genType)) {
+        out_.println(F("ERROR: setGenerator failed"));
+        return true;
+    }
+    EffectType effType = modeOff ? EffectType::NONE : EffectType::HUE_ROTATION;
+    if (!pipeline_->setEffect(effType)) {
+        out_.println(F("ERROR: setEffect failed"));
+        return true;
+    }
+    if (modeRotate) {
+        effectRotationSpeed_ = speed;
+        effectHueShift_ = 0.0f;
+    } else if (modeStatic) {
+        effectRotationSpeed_ = 0.0f;
+        effectHueShift_ = hue;
+    }
+    // mode "off" leaves the hue params alone — they're irrelevant when the
+    // effect is disabled, and preserving their last value keeps the next
+    // rotate/static apply consistent with what the operator last set.
+    syncEffectSettings();
+
+    out_.print(F("OK scene "));
+    out_.print(tok[0]);
+    out_.print(F(" "));
+    out_.print(tok[1]);
+    out_.print(F(" "));
+    out_.print(speed, 3);
+    out_.print(F(" "));
+    out_.println(hue, 3);
+    return true;
 }
 
 // === WATER SETTINGS (Particle-based) ===

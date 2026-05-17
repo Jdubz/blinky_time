@@ -98,6 +98,7 @@ def create_app(
     from .routes_commands import router as commands_router
     from .routes_devices import router as devices_router
     from .routes_firmware import router as firmware_router
+    from .routes_flash_jobs import router as flash_jobs_router
     from .routes_scenes import router as scenes_router
     from .routes_testing import router as testing_router
     from .ws import router as ws_router
@@ -105,6 +106,7 @@ def create_app(
     app.include_router(devices_router, prefix="/api")
     app.include_router(commands_router, prefix="/api")
     app.include_router(firmware_router, prefix="/api")
+    app.include_router(flash_jobs_router, prefix="/api")
     app.include_router(scenes_router, prefix="/api")
     app.include_router(testing_router, prefix="/api")
     app.include_router(ws_router)

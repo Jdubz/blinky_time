@@ -240,6 +240,7 @@ private:
     bool handleConfigCommand(const char* cmd);
     bool handleGeneratorCommand(const char* cmd);
     bool handleEffectCommand(const char* cmd);
+    bool handleSceneCommand(const char* cmd);     // Atomic gen+effect+hue apply
     bool handleLogCommand(const char* cmd);
     bool handleDebugCommand(const char* cmd);     // Debug channel control
     bool handleFakeAudioCommand(const char* cmd); // Synthetic audio for visual debug
