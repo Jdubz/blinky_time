@@ -999,8 +999,13 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.orientation = doc["orientation"] | 0;
     newConfig.layoutType = doc["layoutType"] | 0;
 
-    // Charging configuration
-    newConfig.fastChargeEnabled = doc["fastChargeEnabled"] | false;
+    // Charging configuration. fastChargeEnabled defaults to true: the
+    // operator rule is that battery-equipped devices ALWAYS get fast
+    // charge, and on non-battery devices the field is inert (no battery
+    // connected to the BQ24074, the charge-current pin just floats).
+    // Defaulting to true lets registry JSONs omit the field entirely
+    // for the common case; only override (= false) needs to be explicit.
+    newConfig.fastChargeEnabled = doc["fastChargeEnabled"] | true;
     newConfig.lowBatteryThreshold = doc["lowBatteryThreshold"] | 3.5f;
     newConfig.criticalBatteryThreshold = doc["criticalBatteryThreshold"] | 3.3f;
     newConfig.minVoltage = doc["minVoltage"] | 3.0f;

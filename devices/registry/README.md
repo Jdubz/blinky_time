@@ -16,100 +16,94 @@ other.
 
 | Device ID | Description | LEDs | Layout | File |
 |-----------|-------------|------|--------|------|
-| `hat_v1` | Festival Hat v1 | 89 (string) | LINEAR | `hat_v1.json` |
-| `tube_v2` | Tube Light v2 | 60 (4x15 matrix) | MATRIX, vertical zigzag | `tube_v2.json` |
-| `bucket_v3` | Bucket Totem v3 | 128 (16x8 matrix) | MATRIX, horizontal straight | `bucket_v3.json` |
-| `big_bucket_v1` | Big Bucket | 112 (14x8 matrix) | MATRIX, horizontal zigzag, button on D1 cycles generator. **Outlier:** `ledType=6` (NEO_RGB) — LED part is wired native RGB byte order, not the fleet-standard GRB. | `big_bucket_v1.json` |
-| `cart_inner` | Cart Inner | 104 (2×52 matrix, two strands) | MATRIX, horizontal row-major. Strand 1 on D10, strand 2 on D9; firmware splits the pixel buffer in half across the two strands. | `cart_inner.json` |
+| `hat_v1` | Festival Hat v1 | 89 (linear string) | LINEAR, single strand on D0. Battery-powered. | `hat_v1.json` |
+| `tube_v2` | Tube Light v2 | 60 (4×15 matrix) | MATRIX, vertical zigzag on D10. Battery-powered. | `tube_v2.json` |
+| `bucket_v3` | Bucket Totem v3 | 128 (16×8 matrix) | MATRIX, horizontal row-major on D10. Z-inverted. | `bucket_v3.json` |
+| `big_bucket_v1` | Big Bucket | 112 (14×8 matrix) | MATRIX, horizontal zigzag (serpentine) on D0; button on D1 cycles generator. **Outlier:** `ledType=6` (NEO_RGB) because the LED part is wired native RGB, not the fleet-standard GRB. | `big_bucket_v1.json` |
+| `cart_inner` | Cart Inner | 104 (linear, two 52-LED strands) | LINEAR, strand 1 on D10 + strand 2 on D9; firmware splits the 104-pixel buffer in half across the two pins. | `cart_inner.json` |
 | `cart_outer` | Cart Outer | 96 (linear single strand) | LINEAR, single strand on D10. | `cart_outer.json` |
+| `long_tube_v1` | Long Tube | 240 (4×60 matrix) | MATRIX, vertical zigzag on D10. | `long_tube_v1.json` |
+| `cart_umbrella_v1` | Cart Umbrella | 128 (8×16 matrix) | MATRIX, horizontal row-major on D10. Z-inverted (mounted pointing down). **In progress** — specs unverified against hardware. | `cart_umbrella_v1.json` |
+| `display_v1` | Display | 1024 (32×32 panel grid) | MATRIX, PANEL_GRID orientation on D10. **ESP32-S3 platform retired 2026-03** — hardware exists but no firmware path today. | `display_v1.json` |
 
 ## JSON Schema
 
-All device configuration files must follow this schema:
+**Design principle: only specify what's actually unique to this device.**
+Every field has a firmware default in `SerialConsole::uploadDeviceConfig`
+that gets applied when the field is missing from the JSON. The registry
+files are intentionally minimal — fields whose value equals the
+firmware default should be omitted, so a glance at the JSON shows
+only the per-device facts.
+
+### Required fields
+
+These must be present:
 
 ```json
 {
-  // Device identification
-  "deviceId": "string",           // Unique ID (alphanumeric + underscore)
-  "deviceName": "string",         // Human-readable name (max 31 chars)
-
-  // LED Matrix Configuration
-  "ledWidth": number,             // Matrix width (or total count for linear)
-  "ledHeight": number,            // Matrix height (1 for linear)
-  "ledPin": number,               // GPIO pin number for LED data (0-48)
-  "brightness": number,           // Default brightness (0-255)
-  "ledType": number,              // Adafruit_NeoPixel NEO_* constant (lower 8 bits encode
-                                  // R/G/B byte ordering; e.g. 82 = NEO_GRB, 6 = NEO_RGB).
-                                  // The firmware driver only allocates 3 bytes per pixel,
-                                  // so NEO_RGBW-style values (offsets >2) are rejected.
-                                  // 12390 = NEO_GRB + NEO_KHZ800 is the default.
-  "orientation": number,          // 0=HORIZONTAL  — plain row-major (data flows L→R every row;
-                                  //                 use when each row is a separate strip
-                                  //                 jumpered back to column 0).
-                                  // 1=VERTICAL    — column-major zigzag (data snakes column-by-
-                                  //                 column, common for vertical tube fixtures).
-                                  // 2=PANEL_GRID  — 2×2 of equal sub-panels chained
-                                  //                 TL→TR→BL→BR, each sub-panel row serpentine.
-                                  // 3=HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R,
-                                  //                 row 1 R→L, row 2 L→R, … Use for a single
-                                  //                 strip snaked back and forth across rows
-                                  //                 (big-bucket-style hand-wired panels).
-  "layoutType": number,           // 0=MATRIX, 1=LINEAR, 2=RANDOM
-
-  // Battery/Charging Configuration
-  "fastChargeEnabled": boolean,   // Enable fast charge mode
-  "lowBatteryThreshold": number,  // Low battery voltage (typically 3.5V)
-  "criticalBatteryThreshold": number, // Critical voltage (typically 3.3V)
-  "minVoltage": number,           // Minimum voltage (typically 3.0V)
-  "maxVoltage": number,           // Maximum voltage (typically 4.2V for LiPo)
-
-  // IMU Configuration (motion sensor)
-  "upVectorX": number,            // Up vector X component (0.0-1.0)
-  "upVectorY": number,            // Up vector Y component (0.0-1.0)
-  "upVectorZ": number,            // Up vector Z component (0.0-1.0)
-  "rotationDegrees": number,      // Rotation angle in degrees
-  "invertZ": boolean,             // Invert Z axis
-  "swapXY": boolean,              // Swap X and Y axes
-  "invertX": boolean,             // Invert X axis
-  "invertY": boolean,             // Invert Y axis
-
-  // Serial Communication
-  "baudRate": number,             // Baud rate (typically 115200)
-  "initTimeoutMs": number,        // Serial init timeout in milliseconds
-
-  // Microphone Configuration
-  "sampleRate": number,           // Sample rate in Hz (8000, 16000, 32000, etc.)
-  "bufferSize": number,           // Buffer size (typically 32)
-
-  // Input Configuration
-  "buttonPin": number             // GPIO pin for "cycle to next generator" button.
-                                  // 0 = unused (default). Wired between pin and GND;
-                                  // firmware uses INPUT_PULLUP, 200ms debounce.
-                                  // Must differ from ledPin / ledPin2.
+  "deviceId":   "string",  // unique ID (alphanumeric + underscore)
+  "deviceName": "string",  // human-readable name (max 31 chars)
+  "ledWidth":   number,    // matrix width, or total count for linear strips
+  "ledHeight":  number,    // matrix height; 1 for linear strips
+  "ledPin":     number,    // GPIO pin for LED data (0-47 on nRF52840)
+  "ledType":    number,    // see ledType constants below
+  "orientation": number,   // see orientation values below
+  "layoutType": number     // 0=MATRIX, 1=LINEAR, 2=RANDOM
 }
 ```
 
-## Field Descriptions
+### Optional fields (with firmware defaults)
 
-### LED Type Constants
-- `12390` = `NEO_GRB + NEO_KHZ800` (standard WS2812B for nRF52840)
-  - NEO_GRB = color order (green-red-blue)
-  - KHZ800 = 800 kHz signal speed
+Add only when this device needs a non-default value:
 
-### Orientation Values
-- `0` = HORIZONTAL (fire rises upward in normal orientation)
-- `1` = VERTICAL (fire rises sideways - for tube lights)
+| Field | Default | When to override |
+|---|---|---|
+| `ledPin2` | `0` (single-strand) | Multi-strand devices (e.g. cart_inner has two 52-LED strands on pins 10 + 9; firmware splits the buffer in half) |
+| `brightness` | `100` | Per-device tuning |
+| `fastChargeEnabled` | `true` | Almost never. Operator rule: fast-charge is universally on. Override (= false) only for an exotic situation |
+| `lowBatteryThreshold` | `3.5` V | Battery devices only (tube_v2, hat_v1). Inert when no battery |
+| `criticalBatteryThreshold` | `3.3` V | Battery devices only |
+| `minVoltage` | `3.0` V | Battery devices only |
+| `maxVoltage` | `4.2` V (LiPo) | Battery devices only |
+| `upVectorX` / `upVectorY` / `upVectorZ` | `0` / `0` / `1` | When the device is mounted with a non-vertical "up" |
+| `rotationDegrees` | `0` | When the device's "north" is rotated relative to the chip |
+| `invertZ` | `false` | LEDs facing downward (bucket_v3, cart_umbrella_v1) |
+| `swapXY` | `false` | LED data path runs columns-as-rows |
+| `invertX` / `invertY` | `false` | Strip wired right-to-left or bottom-to-top |
+| `baudRate` | `115200` | Never — universal |
+| `initTimeoutMs` | `2000` | Never — universal |
+| `sampleRate` | `16000` | Never — universal (other valid: 8000/32000/44100/48000) |
+| `bufferSize` | `32` | Never — universal |
+| `buttonPin` | `0` (no button) | When a physical generator-cycle button is wired (big_bucket_v1 on D1). Must differ from `ledPin` / `ledPin2` |
 
-### Layout Type Values
-- `0` = MATRIX_LAYOUT (2D grid, heat propagates upward)
-- `1` = LINEAR_LAYOUT (single string, heat propagates sideways)
-- `2` = RANDOM_LAYOUT (scattered LEDs, omnidirectional heat)
+### ledType constants
 
-### Battery Voltage Guidelines (LiPo)
-- **Max Voltage**: 4.2V (fully charged)
-- **Low Warning**: 3.5V (~10% remaining)
-- **Critical**: 3.3V (~0% remaining - shutdown soon)
-- **Min Voltage**: 3.0V (over-discharge protection)
+The lower 8 bits encode the R/G/B byte ordering. The driver only
+allocates 3 bytes per pixel, so NEO_RGBW-style values (any offset > 2)
+are rejected at construction with an `[ERROR]` log.
+
+- `12390` = `NEO_GRB + NEO_KHZ800` — standard WS2812B (fleet default for new configs)
+- `82` = same NEO_GRB byte ordering, no speed-flag bits — functionally identical to 12390 on this firmware (the driver masks to lower 8 bits)
+- `6` = `NEO_RGB` — used by big_bucket_v1 because that panel's LED part is wired in native RGB order
+
+### Orientation values
+
+- `0` = HORIZONTAL — plain row-major (data flows L→R every row; use when each row is a separate strip jumpered back to column 0)
+- `1` = VERTICAL — column-major zigzag (data snakes column-by-column, common for vertical tube fixtures)
+- `2` = PANEL_GRID — 2×2 of equal sub-panels chained TL→TR→BL→BR, each sub-panel row serpentine
+- `3` = HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R, row 1 R→L, row 2 L→R, … (single strip snaked back and forth, big-bucket-style hand-wired panels)
+
+### Battery thresholds (LiPo)
+
+Only meaningful when the device has a battery. The voltage thresholds
+are inert on non-battery devices (voltage reads as 0 → low/critical
+checks never trigger), so omitting them from a non-battery device's
+JSON is the right move, not a bug. Standard values:
+
+- **maxVoltage**: 4.2 V (fully charged)
+- **lowBatteryThreshold**: 3.5 V (~10% remaining, alert)
+- **criticalBatteryThreshold**: 3.3 V (~0%, shutdown soon)
+- **minVoltage**: 3.0 V (over-discharge protection)
 
 ## Uploading a Device Config
 
