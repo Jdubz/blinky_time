@@ -81,9 +81,15 @@ def list_scenes() -> list[Scene]:
     Previously sorted by filename (slug) which diverges from the name when
     scenes contain non-ASCII or punctuation — the UI would show scenes out
     of the expected alphabetical order. Sorts by ``name`` now.
+
+    Skips hidden files (names starting with ``.``) so the scene cursor
+    state file (``.cursor.json``, managed by ``scene_cursor``) doesn't
+    spam Pydantic validation warnings every list call.
     """
     scenes: list[Scene] = []
     for p in _data_dir().glob("*.json"):
+        if p.name.startswith("."):
+            continue
         try:
             scenes.append(Scene.model_validate_json(p.read_text()))
         except Exception as e:

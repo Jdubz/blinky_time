@@ -188,10 +188,39 @@ class FleetBroadcaster:
             introspection = await bus.introspect(BLUEZ_SERVICE, self._adapter_path)
             proxy = bus.get_proxy_object(BLUEZ_SERVICE, self._adapter_path, introspection)
             mgr = proxy.get_interface(LE_ADV_MGR_IFACE)
-            # call_register_advertisement is a dynamically-generated method on
-            # the proxy interface (dbus-fast builds it from the introspection
-            # XML), so mypy can't see it statically.
-            await mgr.call_register_advertisement(self._object_path, {})  # type: ignore[attr-defined]
+
+            # Retry on DBusError: when blinky-server restarts back-to-back,
+            # BlueZ can still be holding the previous instance's advertisement
+            # slot for a brief window after the old client connection dropped.
+            # The next register call sees "Failed to register advertisement"
+            # (a generic DBusError) until BlueZ notices the old registration
+            # is dead. ~7.5s of exponential backoff is usually enough.
+            #
+            # call_register_advertisement is a dynamically-generated method
+            # on the proxy interface (dbus-fast builds it from the
+            # introspection XML), so mypy can't see it statically.
+            backoffs = (0.5, 1.0, 2.0, 4.0)
+            for attempt, backoff in enumerate((*backoffs, None), start=1):
+                try:
+                    await mgr.call_register_advertisement(  # type: ignore[attr-defined]
+                        self._object_path, {}
+                    )
+                    break
+                except DBusError as exc:
+                    if backoff is None:
+                        log.error(
+                            "RegisterAdvertisement failed after %d attempts: %s",
+                            attempt,
+                            exc,
+                        )
+                        raise
+                    log.warning(
+                        "RegisterAdvertisement attempt %d failed (%s) — retrying in %.1fs",
+                        attempt,
+                        exc,
+                        backoff,
+                    )
+                    await asyncio.sleep(backoff)
 
             self._bus = bus
             self._adv = adv
