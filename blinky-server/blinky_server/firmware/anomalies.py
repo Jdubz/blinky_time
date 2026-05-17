@@ -17,12 +17,14 @@ verify polling loop.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from .flash_job import FlashJob
 
+log = logging.getLogger(__name__)
 
 # Stable anomaly names — used in job.anomalies, log lines, and UI.
 CRASH_LOOP_SUSPECTED = "crash_loop_suspected"
@@ -117,9 +119,7 @@ def detect_quarantine(history: SignalHistory) -> bool:
         return True
     # Nested ``device.safeMode`` (legacy / verbose form).
     device_info = last_info.get("device")
-    if isinstance(device_info, dict) and device_info.get("safeMode") is True:
-        return True
-    return False
+    return isinstance(device_info, dict) and device_info.get("safeMode") is True
 
 
 def detect_stale_firmware(
@@ -210,12 +210,26 @@ def check_all(
         job.add_anomaly(BOOTLOADER_OSCILLATING)
 
 
+_VERSION_KEYS = ("version", "firmware_version", "fw_version", "build")
+
+
 def _extract_version(info: dict[str, Any]) -> str | None:
     """Same lookup ``firmware.verify._extract_version`` uses — duplicated
     here to keep the anomaly module independent of the verify module.
-    If the firmware ever settles on a canonical key, simplify both."""
-    for key in ("version", "firmware_version", "fw_version", "build"):
+    If the firmware ever settles on a canonical key, simplify both.
+
+    Logs at debug when the handshake info dict has none of the known
+    version keys — that's how you find out a new firmware revision
+    started reporting under an unknown key. PR 142 review (claude[bot]
+    minor note)."""
+    for key in _VERSION_KEYS:
         v = info.get(key)
         if isinstance(v, str) and v:
             return v
+    if info:
+        log.debug(
+            "handshake info has no recognized version key (tried %s); keys present: %s",
+            list(_VERSION_KEYS),
+            list(info.keys()),
+        )
     return None

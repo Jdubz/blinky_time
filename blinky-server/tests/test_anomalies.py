@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from blinky_server.firmware.anomalies import (
     BOOTLOADER_OSCILLATING,
     CRASH_LOOP_SUSPECTED,
@@ -25,7 +23,6 @@ from blinky_server.firmware.anomalies import (
     detect_stale_firmware,
 )
 from blinky_server.firmware.flash_job import FlashJob
-
 
 # --- crash_loop ------------------------------------------------------------
 
@@ -71,9 +68,7 @@ def test_quarantine_status_unconfigured_fires() -> None:
 
 def test_quarantine_nested_safemode_fires() -> None:
     """Verbose-form signature: device.safeMode == True."""
-    history = SignalHistory(
-        handshakes=[(1000.0, {"device": {"safeMode": True}})]
-    )
+    history = SignalHistory(handshakes=[(1000.0, {"device": {"safeMode": True}})])
     assert detect_quarantine(history) is True
 
 
@@ -160,9 +155,7 @@ def test_no_reboot_past_threshold_no_enums_fires() -> None:
 
 
 def test_no_reboot_silenced_by_post_write_enum() -> None:
-    history = SignalHistory(
-        write_completed_at=600.0, re_enum_timestamps=[700.0]
-    )
+    history = SignalHistory(write_completed_at=600.0, re_enum_timestamps=[700.0])
     assert detect_no_reboot(history, now=1000.0, threshold_s=300.0) is False
 
 

@@ -48,10 +48,12 @@ LE_ADV_IFACE = "org.bluez.LEAdvertisement1"
 # service) will fail identically on every retry — re-raise immediately
 # so the operator gets the real diagnostic without waiting through the
 # backoff. PR 142 review.
-_TRANSIENT_REGISTER_ERROR_TYPES = frozenset({
-    "org.bluez.Error.Failed",         # generic, what BlueZ returns for the slot-still-held case
-    "org.bluez.Error.AlreadyExists",  # slot literally still registered
-})
+_TRANSIENT_REGISTER_ERROR_TYPES = frozenset(
+    {
+        "org.bluez.Error.Failed",  # generic, what BlueZ returns for the slot-still-held case
+        "org.bluez.Error.AlreadyExists",  # slot literally still registered
+    }
+)
 
 
 def _is_transient_register_error(exc: DBusError) -> bool:

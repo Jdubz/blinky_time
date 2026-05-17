@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 class FlashJobState(enum.Enum):
@@ -303,8 +306,7 @@ class FlashJob:
             )
         if bytes_written < 0 or bytes_total < 0 or bytes_written > bytes_total:
             raise ValueError(
-                f"invalid progress: bytes_written={bytes_written}, "
-                f"bytes_total={bytes_total}"
+                f"invalid progress: bytes_written={bytes_written}, bytes_total={bytes_total}"
             )
         self.bytes_written = bytes_written
         self.bytes_total = bytes_total
@@ -317,7 +319,19 @@ class FlashJob:
         Separated from ``transition()`` so a non-fatal warning (e.g., a
         verify sub-state that timed out without failing) can attach a
         description without forcing a terminal state.
+
+        Errors are the primary post-mortem signal, so log loudly on an
+        overwrite — silently losing the first error string is the kind
+        of thing that turns a 5-minute debug into a 5-hour one. PR 142
+        review (claude[bot] item #1).
         """
+        if self.error is not None and self.error != msg:
+            log.warning(
+                "flash job %s error overwritten: was %r, now %r",
+                self.job_id,
+                self.error,
+                msg,
+            )
         self.error = msg
         self._notify_change()
 
@@ -335,7 +349,13 @@ class FlashJob:
 
     @property
     def duration_s(self) -> float:
-        end = self.finished_at if self.is_terminal else time.time()
+        # `finished_at` is set by the state-machine transition into any
+        # terminal state, so it's non-None whenever is_terminal is true.
+        # Mypy can't see the invariant — the explicit None check keeps it
+        # happy AND defends against a future bug that breaks the link.
+        end = (
+            self.finished_at if (self.is_terminal and self.finished_at is not None) else time.time()
+        )
         return end - self.created_at
 
     @property
@@ -352,9 +372,7 @@ class FlashJob:
             "expected_version": self.expected_version,
             "state": self.state.value,
             "transport": self.transport.value if self.transport else None,
-            "verify_sub_state": (
-                self.verify_sub_state.value if self.verify_sub_state else None
-            ),
+            "verify_sub_state": (self.verify_sub_state.value if self.verify_sub_state else None),
             "anomalies": list(self.anomalies),
             "bytes_written": self.bytes_written,
             "bytes_total": self.bytes_total,
@@ -389,9 +407,7 @@ class FlashJob:
                 return self.is_terminal
         return True
 
-    async def wait_for_change(
-        self, since_seq: int, timeout: float | None = None
-    ) -> int:
+    async def wait_for_change(self, since_seq: int, timeout: float | None = None) -> int:
         """Wait until ``seq`` advances past ``since_seq``. Returns current ``seq``.
 
         Designed for long-poll endpoints: caller snapshots ``seq``, sends the
@@ -406,7 +422,7 @@ class FlashJob:
             event = self._ensure_event()
             try:
                 await asyncio.wait_for(event.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return self._seq
         return self._seq
 

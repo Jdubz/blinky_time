@@ -24,7 +24,6 @@ from blinky_server.firmware.flash_job import (
     FlashTransport,
 )
 
-
 # --- fixtures ---------------------------------------------------------------
 
 
@@ -64,9 +63,7 @@ async def test_flash_device_returns_existing_job_under_concurrency(
         fleet.flash_device("dev-1", Path("/tmp/fw.hex")),
         fleet.flash_device("dev-1", Path("/tmp/fw.hex")),
     )
-    assert a.job_id == b.job_id, (
-        f"expected same job, got {a.job_id} and {b.job_id}"
-    )
+    assert a.job_id == b.job_id, f"expected same job, got {a.job_id} and {b.job_id}"
     await a.wait_until_terminal(timeout=2.0)
 
 

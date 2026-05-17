@@ -11,7 +11,8 @@ from typing import Any
 
 from .. import systemd_notify
 from ..ble.advertiser import FleetBroadcaster
-from ..firmware.anomalies import SignalHistory, check_all as check_anomalies
+from ..firmware.anomalies import SignalHistory
+from ..firmware.anomalies import check_all as check_anomalies
 from ..firmware.flash_job import (
     FlashJob,
     FlashJobState,
@@ -146,6 +147,16 @@ class FleetManager:
         # cost). Closes the cascade bug from 2026-05-17 where UF2 succeeded,
         # was mislabelled as failed, and then auto-recovery re-flashed via
         # BLE-DFU. See [[project-deploy-flash-cascade-bug]].
+        #
+        # TODO(L4): this is an in-memory dict; the dedup window is lost on
+        # server restart. A device that failed 30 s ago looks "clean" after
+        # a quick restart, so the auto-recovery loop could re-fire
+        # immediately. The persistent flash-attempt audit log specced in
+        # docs/FLASH_LOCKDOWN_PLAN.md §L4 closes this gap by rebuilding
+        # this dict from `/var/lib/blinky-server/flash_attempts.jsonl` on
+        # boot. Until L4 lands, restart timing matters — the auto-recovery
+        # loop's per-cycle dedup-gate is the only line of defense.
+        # PR 142 review (claude[bot] item #3).
         self._recent_flash_attempts: dict[str, float] = {}
         # 10-minute dedup window. Slack accommodates: a slow UF2 + bootloader
         # reboot (up to ~2 min on 0.8.0-4), plus the app's first-boot init,
@@ -253,9 +264,9 @@ class FleetManager:
         if existing is not None and existing.is_active:
             return False
         last = self._recent_flash_attempts.get(device_id)
-        if last is not None and (_time.time() - last) < self.FLASH_DEDUP_WINDOW_S:
-            return False
-        return True
+        if last is None:
+            return True
+        return (_time.time() - last) >= self.FLASH_DEDUP_WINDOW_S
 
     def _get_flash_job_lock(self, device_id: str) -> asyncio.Lock:
         """Lazy per-device lock. Creates on first request."""
@@ -315,9 +326,7 @@ class FleetManager:
         # Launch the orchestrator OUTSIDE the lock so a long-running flash
         # doesn't block subsequent flash_device queries for the same device
         # (those will see is_active=True and return the in-flight job).
-        task = asyncio.create_task(
-            self._run_flash_job(job), name=f"flash-job-{job.job_id}"
-        )
+        task = asyncio.create_task(self._run_flash_job(job), name=f"flash-job-{job.job_id}")
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return job
@@ -355,9 +364,7 @@ class FleetManager:
                 await self._run_uf2_flash(job)
             elif transport is FlashTransport.BLE_DFU:
                 # Phase 9 will replace this with the real BLE-DFU wiring.
-                job.set_error(
-                    "BLE-DFU flash path not yet wired (Phase 9 of rewrite)"
-                )
+                job.set_error("BLE-DFU flash path not yet wired (Phase 9 of rewrite)")
                 job.transition(FlashJobState.FAILED)
             else:
                 # Exhaustiveness guard — if FlashTransport gains a variant,
@@ -391,9 +398,7 @@ class FleetManager:
         """
         device = self._devices.get(job.device_id)
         if device is None:
-            job.set_error(
-                f"device {job.device_id} disappeared between selection and write"
-            )
+            job.set_error(f"device {job.device_id} disappeared between selection and write")
             job.transition(FlashJobState.FAILED)
             return
 
@@ -401,7 +406,9 @@ class FleetManager:
         job.transition(FlashJobState.WRITING)
         write_ok = await flash_uf2_for_job(
             job,
-            serial_port=device.transport.address if hasattr(device.transport, "address") else device.port,
+            serial_port=device.transport.address
+            if hasattr(device.transport, "address")
+            else device.port,
             firmware_path=str(job.firmware_path),
             transport=device.transport,
         )
@@ -429,7 +436,7 @@ class FleetManager:
                 timeout=300.0,
             )
             job.transition(FlashJobState.COMPLETED)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Verify never converged. Surface as FAILED with the anomaly
             # set the detectors built up.
             check_anomalies(job, history)
@@ -439,7 +446,7 @@ class FleetManager:
     async def _verify_with_anomaly_checks(
         self,
         job: FlashJob,
-        signals: "_FleetVerifySignals",
+        signals: _FleetVerifySignals,
         history: SignalHistory,
     ) -> None:
         """Run ``run_verify`` concurrently with a periodic anomaly sweep.
@@ -448,15 +455,14 @@ class FleetManager:
         every couple of seconds. The history is populated by the signals
         wrapper, which appends timestamps as it observes events.
         """
+
         async def _anomaly_loop() -> None:
             while True:
                 await asyncio.sleep(2.0)
                 check_anomalies(job, history)
 
         signals.history = history  # let signals populate it as they observe
-        anomaly_task = asyncio.create_task(
-            _anomaly_loop(), name=f"anomaly-{job.job_id}"
-        )
+        anomaly_task = asyncio.create_task(_anomaly_loop(), name=f"anomaly-{job.job_id}")
         try:
             await run_verify(job, signals)
         finally:
@@ -1698,7 +1704,6 @@ class FleetManager:
                     await asyncio.sleep(extra_sleep)
 
 
-
 # ─────────────────────────────────────────────────────────────────────
 # Phase 7: production VerifySignals for the UF2 path.
 #
@@ -1717,7 +1722,7 @@ class FleetManager:
 class _FleetVerifySignals:
     """Verify-signal source backed by FleetManager + udev sysfs reads."""
 
-    def __init__(self, fleet: "FleetManager", device_id: str) -> None:
+    def __init__(self, fleet: FleetManager, device_id: str) -> None:
         self._fleet = fleet
         self._device_id = device_id
         self._initial_devnum: int | None = None
@@ -1832,7 +1837,5 @@ class _FleetVerifySignals:
                     return int(devnum_file.read_text().strip())
             return None
         except Exception as exc:
-            log.debug(
-                "_read_devnum_for_device(%s) raised %s", self._device_id, exc
-            )
+            log.debug("_read_devnum_for_device(%s) raised %s", self._device_id, exc)
             return None

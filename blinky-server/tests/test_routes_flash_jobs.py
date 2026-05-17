@@ -211,11 +211,11 @@ async def test_list_returns_jobs_newest_first(
     api_client_authed: tuple[AsyncClient, FleetManager], fw_file: Path
 ) -> None:
     client, _ = api_client_authed
-    a = await client.post(
+    await client.post(
         "/api/flash-jobs",
         json={"device_id": "dev-1", "firmware_path": str(fw_file)},
     )
-    b = await client.post(
+    await client.post(
         "/api/flash-jobs",
         json={"device_id": "dev-2", "firmware_path": str(fw_file)},
     )

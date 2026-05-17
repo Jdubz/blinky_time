@@ -170,6 +170,7 @@ def test_scene_to_commands_always_emits_all_four_args() -> None:
 # scene. The fix lives in `_next_cursor_index`; these are the pinned
 # regression tests for the boundary behaviours.
 
+
 def test_next_cursor_index_no_cursor_next_lands_on_first() -> None:
     from blinky_server.api.routes_scenes import _next_cursor_index
 

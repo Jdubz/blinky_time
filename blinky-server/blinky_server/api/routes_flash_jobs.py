@@ -64,8 +64,14 @@ async def create_flash_job(body: FlashJobCreate) -> dict[str, Any]:
     fleet = get_fleet()
     fw_path = Path(body.firmware_path)
     if not fw_path.is_file():
+        # Surface the absolute resolved path alongside the operator-supplied
+        # value so the operator doesn't have to guess which working dir
+        # the server is interpreting a relative path against. PR 142
+        # review (claude[bot] minor note).
         raise HTTPException(
-            400, f"firmware_path does not exist on server: {body.firmware_path}"
+            400,
+            "firmware_path does not exist on server: "
+            f"{body.firmware_path!r} (resolved: {fw_path.resolve()})",
         )
     job = await fleet.flash_device(
         body.device_id,

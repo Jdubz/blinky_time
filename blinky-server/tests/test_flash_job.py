@@ -9,22 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
 from blinky_server.firmware.flash_job import (
+    TERMINAL_STATES,
     FlashJob,
     FlashJobState,
     FlashTransport,
     InvalidTransition,
     NoReachableTransport,
-    TERMINAL_STATES,
     TransportProbe,
     VerifySubState,
     select_transport,
 )
-
 
 # --- construction / defaults -------------------------------------------------
 
@@ -109,9 +109,7 @@ def test_invalid_transitions_raise(src: FlashJobState, dst: FlashJobState) -> No
         FlashJobState.ABANDONED,
     ],
 )
-def test_terminal_states_reject_all_transitions(
-    terminal: FlashJobState, to: FlashJobState
-) -> None:
+def test_terminal_states_reject_all_transitions(terminal: FlashJobState, to: FlashJobState) -> None:
     job = _job_in_state(terminal)
     with pytest.raises(InvalidTransition):
         job.transition(to)
@@ -343,16 +341,21 @@ def test_to_dict_when_terminal() -> None:
 def test_seq_increments_on_every_mutation() -> None:
     job = FlashJob(device_id="d", firmware_path=Path("/f"))
     snaps = [job.seq]
-    job.transition(FlashJobState.SELECTING_TRANSPORT); snaps.append(job.seq)
-    job.set_transport(FlashTransport.UF2);             snaps.append(job.seq)
-    job.transition(FlashJobState.WRITING);             snaps.append(job.seq)
-    job.record_progress(10, 100);                      snaps.append(job.seq)
-    job.record_progress(50, 100);                      snaps.append(job.seq)
-    job.transition(FlashJobState.VERIFYING);           snaps.append(job.seq)
-    job.set_verify_sub_state(VerifySubState.AWAITING_REBOOT); snaps.append(job.seq)
-    job.add_anomaly("stale_firmware");                 snaps.append(job.seq)
-    job.set_error("transient");                        snaps.append(job.seq)
-    job.transition(FlashJobState.COMPLETED);           snaps.append(job.seq)
+
+    def _step(action) -> None:
+        action()
+        snaps.append(job.seq)
+
+    _step(lambda: job.transition(FlashJobState.SELECTING_TRANSPORT))
+    _step(lambda: job.set_transport(FlashTransport.UF2))
+    _step(lambda: job.transition(FlashJobState.WRITING))
+    _step(lambda: job.record_progress(10, 100))
+    _step(lambda: job.record_progress(50, 100))
+    _step(lambda: job.transition(FlashJobState.VERIFYING))
+    _step(lambda: job.set_verify_sub_state(VerifySubState.AWAITING_REBOOT))
+    _step(lambda: job.add_anomaly("stale_firmware"))
+    _step(lambda: job.set_error("transient"))
+    _step(lambda: job.transition(FlashJobState.COMPLETED))
     # Strictly monotonic.
     assert snaps == sorted(snaps)
     assert len(set(snaps)) == len(snaps)
@@ -370,9 +373,12 @@ async def test_wait_for_change_returns_on_mutation() -> None:
         await asyncio.sleep(0.02)
         job.transition(FlashJobState.SELECTING_TRANSPORT)
 
-    asyncio.create_task(trigger())
+    # Hold a reference per RUF006 — without it the task could be garbage-
+    # collected mid-flight before its sleep completes.
+    trigger_task = asyncio.create_task(trigger())
     new_seq = await job.wait_for_change(since_seq=start_seq, timeout=1.0)
     assert new_seq > start_seq
+    await trigger_task
 
 
 @pytest.mark.asyncio
@@ -397,9 +403,7 @@ async def test_wait_for_change_does_not_miss_pre_wait_mutation() -> None:
     # Mutate BEFORE calling wait_for_change.
     job.transition(FlashJobState.SELECTING_TRANSPORT)
     # Should return immediately with the new seq.
-    result = await asyncio.wait_for(
-        job.wait_for_change(since_seq=snap, timeout=5.0), timeout=0.5
-    )
+    result = await asyncio.wait_for(job.wait_for_change(since_seq=snap, timeout=5.0), timeout=0.5)
     assert result > snap
 
 
@@ -434,7 +438,7 @@ def test_transport_probe_is_frozen() -> None:
     """Selector decisions are auditable — the probe is immutable so a
     later mutation can't retroactively change the recorded inputs."""
     probe = TransportProbe(has_usb_app=True, has_ble_dfu_advert=False)
-    with pytest.raises(Exception):  # FrozenInstanceError; subclass of AttributeError
+    with pytest.raises(FrozenInstanceError):
         probe.has_usb_app = False  # type: ignore[misc]
 
 

@@ -116,20 +116,22 @@ async def run_verify(
 
     while True:
         # --- 1) AWAITING_REBOOT ----------------------------------------
-        if current_sub is VerifySubState.AWAITING_REBOOT:
-            if await signals.has_re_enumerated_since(job.device_id, reboot_since):
-                current_sub = VerifySubState.AWAITING_APP_BOOT
-                job.set_verify_sub_state(current_sub)
-                sub_state_entered_at = time.time()
-                last_logged_at = 0.0
+        if current_sub is VerifySubState.AWAITING_REBOOT and await signals.has_re_enumerated_since(
+            job.device_id, reboot_since
+        ):
+            current_sub = VerifySubState.AWAITING_APP_BOOT
+            job.set_verify_sub_state(current_sub)
+            sub_state_entered_at = time.time()
+            last_logged_at = 0.0
 
         # --- 2) AWAITING_APP_BOOT --------------------------------------
-        if current_sub is VerifySubState.AWAITING_APP_BOOT:
-            if await signals.is_serial_connected(job.device_id):
-                current_sub = VerifySubState.AWAITING_HANDSHAKE
-                job.set_verify_sub_state(current_sub)
-                sub_state_entered_at = time.time()
-                last_logged_at = 0.0
+        if current_sub is VerifySubState.AWAITING_APP_BOOT and await signals.is_serial_connected(
+            job.device_id
+        ):
+            current_sub = VerifySubState.AWAITING_HANDSHAKE
+            job.set_verify_sub_state(current_sub)
+            sub_state_entered_at = time.time()
+            last_logged_at = 0.0
 
         # --- 3) AWAITING_HANDSHAKE -------------------------------------
         if current_sub is VerifySubState.AWAITING_HANDSHAKE:
@@ -165,9 +167,10 @@ async def run_verify(
         # --- Progress log ----------------------------------------------
         now = time.time()
         elapsed_in_sub = now - sub_state_entered_at
-        if elapsed_in_sub >= progress_log_every_s and (
-            now - last_logged_at
-        ) >= progress_log_every_s:
+        if (
+            elapsed_in_sub >= progress_log_every_s
+            and (now - last_logged_at) >= progress_log_every_s
+        ):
             log.info(
                 "verify job=%s device=%s sub=%s elapsed_in_sub=%.0fs",
                 job.job_id,

@@ -10,7 +10,7 @@ No hardware. No FleetManager integration yet (Phase 7 wires it).
 from __future__ import annotations
 
 import asyncio
-import time
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -43,9 +43,7 @@ class MockVerifySignals:
         self.calls.append("is_serial")
         return self.serial_connected
 
-    async def get_handshake_info(
-        self, device_id: str
-    ) -> dict[str, Any] | None:
+    async def get_handshake_info(self, device_id: str) -> dict[str, Any] | None:
         self.calls.append("handshake")
         return self.handshake_info
 
@@ -88,9 +86,7 @@ async def test_fast_boot_to_verified_no_version_check() -> None:
     signals.serial_connected = True
     signals.handshake_info = {"version": "b166"}
 
-    await asyncio.wait_for(
-        run_verify(job, signals, poll_interval_s=0.01), timeout=1.0
-    )
+    await asyncio.wait_for(run_verify(job, signals, poll_interval_s=0.01), timeout=1.0)
 
     assert job.verify_sub_state is VerifySubState.VERIFIED
 
@@ -106,9 +102,7 @@ async def test_version_match_required_when_expected_set() -> None:
     signals.serial_connected = True
     signals.handshake_info = {"version": "b166-fd3b4729-dirty"}
 
-    await asyncio.wait_for(
-        run_verify(job, signals, poll_interval_s=0.01), timeout=1.0
-    )
+    await asyncio.wait_for(run_verify(job, signals, poll_interval_s=0.01), timeout=1.0)
 
     assert job.verify_sub_state is VerifySubState.VERIFIED
 
@@ -128,10 +122,8 @@ async def test_version_mismatch_stays_in_version_match_sub_state() -> None:
     # Let it run a few cycles, then cancel and inspect.
     await asyncio.sleep(0.1)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert job.verify_sub_state is VerifySubState.AWAITING_VERSION_MATCH
     assert job.state is FlashJobState.VERIFYING  # no fail, no complete
@@ -200,10 +192,8 @@ async def test_stuck_signals_never_fail_the_job() -> None:
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(asyncio.shield(task), timeout=0.15)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert job.state is FlashJobState.VERIFYING
     assert job.verify_sub_state is VerifySubState.AWAITING_REBOOT
@@ -227,9 +217,7 @@ async def test_handshake_response_without_version_field_advances_anyway() -> Non
     signals1.re_enumerated = True
     signals1.serial_connected = True
     signals1.handshake_info = {"connected": True}  # no version key
-    await asyncio.wait_for(
-        run_verify(job1, signals1, poll_interval_s=0.01), timeout=1.0
-    )
+    await asyncio.wait_for(run_verify(job1, signals1, poll_interval_s=0.01), timeout=1.0)
     assert job1.verify_sub_state is VerifySubState.VERIFIED
 
     # With expected_version: missing version field keeps us awaiting.
@@ -242,10 +230,8 @@ async def test_handshake_response_without_version_field_advances_anyway() -> Non
     task = asyncio.create_task(run_verify(job2, signals2, poll_interval_s=0.01))
     await asyncio.sleep(0.1)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
     assert job2.verify_sub_state is VerifySubState.AWAITING_VERSION_MATCH
 
 
@@ -264,9 +250,7 @@ async def test_version_extracted_from_any_known_key(key: str) -> None:
     signals.re_enumerated = True
     signals.serial_connected = True
     signals.handshake_info = {key: "b166"}
-    await asyncio.wait_for(
-        run_verify(job, signals, poll_interval_s=0.01), timeout=1.0
-    )
+    await asyncio.wait_for(run_verify(job, signals, poll_interval_s=0.01), timeout=1.0)
     assert job.verify_sub_state is VerifySubState.VERIFIED
 
 

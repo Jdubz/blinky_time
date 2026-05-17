@@ -442,7 +442,17 @@ async def flash_uf2_for_job(
     try:
         await asyncio.wait_for(_stream(), timeout=300)
     except TimeoutError:
-        log.warning("flash_uf2_for_job %s: stream hit 300s timeout", job.job_id)
+        # Capture write_seen state in the log line — a timeout AFTER
+        # `[PASS] Wrote N/N bytes` still returns success from this
+        # function (the write succeeded; the verify-wait phase of the
+        # subprocess just couldn't confirm reboot in 60 s), and being
+        # able to tell those two cases apart from journalctl alone
+        # matters for post-mortems. PR 142 review (claude[bot] item #2).
+        log.warning(
+            "flash_uf2_for_job %s: stream hit 300s timeout (write_seen=%s)",
+            job.job_id,
+            write_seen,
+        )
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
 

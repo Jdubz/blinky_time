@@ -154,7 +154,4 @@ def scene_to_commands(scene: Scene) -> list[str]:
     the firmware parser fixed-arity. The firmware ignores the inactive
     param (see ``handleSceneCommand``).
     """
-    return [
-        f"scene {scene.generator} {scene.effect_mode} "
-        f"{scene.effect_speed} {scene.effect_hue}"
-    ]
+    return [f"scene {scene.generator} {scene.effect_mode} {scene.effect_speed} {scene.effect_hue}"]

@@ -54,7 +54,15 @@ def get_current() -> str | None:
     applied yet on this install (or the cursor file is malformed)."""
     try:
         data = json.loads(_cursor_path().read_text())
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        # The common case for a fresh install — no cursor yet. Don't log.
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        # File exists but is unreadable/corrupt — surprising enough to be
+        # worth a debug log so an operator chasing a "next press lands
+        # somewhere weird" report can correlate. PR 142 review
+        # (claude[bot] item #4).
+        log.debug("scene cursor unreadable, treating as absent: %s", exc)
         return None
     name = data.get("current")
     return name if isinstance(name, str) and name else None
