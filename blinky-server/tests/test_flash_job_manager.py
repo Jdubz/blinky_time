@@ -124,20 +124,22 @@ async def test_stub_fails_with_no_reachable_transport_when_device_absent(
 
 
 @pytest.mark.asyncio
-async def test_stub_fails_with_not_wired_when_transport_selected(
+async def test_uf2_path_picked_for_serial_device_without_firmware_file(
     fleet: FleetManager,
 ) -> None:
-    """When a USB-app device IS reachable, the stub gets through transport
-    selection (UF2 chosen) and then fails with the explicit Phase 3 stub
-    marker. Confirms the orchestration chain works up to the not-yet-wired
-    boundary."""
+    """When a USB-app device IS reachable, ``_run_flash_job`` selects UF2
+    and enters the WRITING phase. With a non-existent firmware file the
+    subprocess wrapper fails fast with "firmware file not found" — proves
+    the orchestrator passes selection and routes into the UF2 branch.
+
+    Phase 7 replaced the "transport not yet wired" stub error from
+    Phase 3 with the real UF2 wrapper, so this test now checks for the
+    file-missing error instead.
+    """
     from blinky_server.device.device import Device
 
     from .mock_transport import MockTransport
 
-    # Mimic a real USB-CDC device: transport_type='serial'. The default
-    # 'mock' wouldn't match the probe's "is this a USB-CDC app handshake?"
-    # signal, which is correctly specific to serial transports.
     transport = MockTransport(transport_type="serial")
     device = Device(
         device_id="TEST_SERIAL_001",
@@ -148,11 +150,12 @@ async def test_stub_fails_with_not_wired_when_transport_selected(
     await device.connect()
     fleet._devices["TEST_SERIAL_001"] = device
     job = await fleet.flash_device("TEST_SERIAL_001", Path("/tmp/fw.hex"))
-    await job.wait_until_terminal(timeout=2.0)
+    await job.wait_until_terminal(timeout=5.0)
     assert job.state is FlashJobState.FAILED
-    assert job.transport is FlashTransport.UF2  # got past selection
+    assert job.transport is FlashTransport.UF2  # selection happened
     assert job.error is not None
-    assert "not yet wired" in job.error.lower()
+    # Reached the UF2 wrapper, which fails on missing firmware file.
+    assert "firmware file not found" in job.error.lower()
 
 
 # --- should_attempt_auto_recovery -----------------------------------------
