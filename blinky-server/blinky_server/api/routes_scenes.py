@@ -19,6 +19,7 @@ import re
 
 from fastapi import APIRouter, HTTPException
 
+from .. import scene_cursor
 from ..scenes import (
     Scene,
     delete_scene,
@@ -81,9 +82,8 @@ def scenes_delete(name: str) -> dict[str, bool]:
     return {"deleted": delete_scene(name)}
 
 
-@router.post("/scenes/{name}/apply")
-async def scenes_apply(name: str) -> dict[str, object]:
-    """Apply a scene to every connected device.
+async def _apply_scene(scene: Scene) -> dict[str, object]:
+    """Run a scene's command sequence through the fleet broadcaster.
 
     Apply doesn't abort on partial failure because a half-applied state is
     worse than retrying — but the response includes per-command per-device
@@ -91,6 +91,29 @@ async def scenes_apply(name: str) -> dict[str, object]:
     command (e.g. ``gen fire`` succeeds on device A but fails on device B,
     then ``effect hue`` succeeds on both; without the full trace a client
     would only see the successful last step).
+
+    Also updates the scene cursor so subsequent ``/api/scenes/next``
+    or ``/api/scenes/previous`` calls advance from this scene.
+    """
+    fleet = get_fleet()
+    commands = scene_to_commands(scene)
+    results: list[dict[str, object]] = []
+    for cmd in commands:
+        responses = await fleet.broadcast(cmd)
+        results.append({"command": cmd, "responses": responses})
+    scene_cursor.set_current(scene.name)
+    last_responses = results[-1]["responses"] if results else {}
+    return {
+        "scene": scene.name,
+        "commands": commands,
+        "results": results,
+        "responses": last_responses,  # backward-compat alias for prior callers
+    }
+
+
+@router.post("/scenes/{name}/apply")
+async def scenes_apply(name: str) -> dict[str, object]:
+    """Apply a scene to every connected device.
 
     Response shape: ``{scene, commands, results: [{command, responses:
     {device_id: "ok"|"error: ...", ...}}, ...]}``. ``responses`` is kept
@@ -101,17 +124,76 @@ async def scenes_apply(name: str) -> dict[str, object]:
     scene = get_scene(name)
     if scene is None:
         raise HTTPException(404, f"Scene not found: {name}")
+    return await _apply_scene(scene)
 
-    fleet = get_fleet()
-    commands = scene_to_commands(scene)
-    results: list[dict[str, object]] = []
-    for cmd in commands:
-        responses = await fleet.broadcast(cmd)
-        results.append({"command": cmd, "responses": responses})
-    last_responses = results[-1]["responses"] if results else {}
+
+def _resolve_cursor_index(scenes: list[Scene]) -> int:
+    """Return the current cursor's index in ``scenes``.
+
+    Returns ``-1`` (interpreted as "before the start") if there's no
+    persisted cursor or if the cursored scene has been deleted - so
+    ``/next`` lands on index 0 and ``/previous`` lands on the last
+    scene, both of which are the least-surprising behaviours.
+    """
+    cursor_name = scene_cursor.get_current()
+    if not cursor_name:
+        return -1
+    for i, s in enumerate(scenes):
+        if s.name == cursor_name:
+            return i
+    return -1
+
+
+async def _step_and_apply(direction: int) -> dict[str, object]:
+    """Internal: walk the sorted scene list by ``direction`` (±1) from
+    the persisted cursor, apply, and update the cursor. Wraps."""
+    scenes = list_scenes()
+    if not scenes:
+        raise HTTPException(409, "No scenes saved; create one first")
+    current_idx = _resolve_cursor_index(scenes)
+    next_idx = (current_idx + direction) % len(scenes)
+    response = await _apply_scene(scenes[next_idx])
+    # Augment with cursor info so a client can render "scene N of M".
+    response["index"] = next_idx
+    response["count"] = len(scenes)
+    return response
+
+
+@router.post("/scenes/next")
+async def scenes_next() -> dict[str, object]:
+    """Advance to the next scene in alphabetical order and apply it.
+
+    The cursor is persisted by scene NAME (not index) in
+    ``scenes_dir()/.cursor.json``. Adding, deleting, or renaming scenes
+    between presses doesn't randomly shift the cursor relative to the
+    operator's expectation — the cursor just re-finds its name in the
+    new list, or falls back to the start if its scene was deleted.
+
+    Wraps around the end of the list. 409 if the scene library is empty.
+    Designed for hardware-button consumers: one fixed URL, no name
+    interpolation, no client-side cursor file."""
+    return await _step_and_apply(+1)
+
+
+@router.post("/scenes/previous")
+async def scenes_previous() -> dict[str, object]:
+    """Mirror of ``/next`` in the opposite direction."""
+    return await _step_and_apply(-1)
+
+
+@router.get("/scenes/current")
+def scenes_current() -> dict[str, object]:
+    """Report the cursor state without changing it.
+
+    Useful for the Hub UI to highlight the currently-applied scene
+    chip. Returns ``current=null`` if no scene has ever been applied
+    via ``/apply`` / ``/next`` / ``/previous`` on this install, or if
+    the cursor's scene was deleted."""
+    scenes = list_scenes()
+    cursor_name = scene_cursor.get_current()
+    index = _resolve_cursor_index(scenes) if cursor_name else -1
     return {
-        "scene": scene.name,
-        "commands": commands,
-        "results": results,
-        "responses": last_responses,  # backward-compat alias for prior callers
+        "current": scenes[index].name if index >= 0 else None,
+        "index": index if index >= 0 else None,
+        "count": len(scenes),
     }

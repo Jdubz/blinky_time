@@ -7,8 +7,9 @@ This directory contains JSON configuration files for different Blinky hardware d
 | Device ID | Description | LEDs | Layout | File |
 |-----------|-------------|------|--------|------|
 | `hat_v1` | Festival Hat v1 | 89 (string) | LINEAR | `hat_v1.json` |
-| `tube_v2` | Tube Light v2 | 60 (4x15 matrix) | MATRIX | `tube_v2.json` |
-| `bucket_v3` | Bucket Totem v3 | 128 (16x8 matrix) | MATRIX | `bucket_v3.json` |
+| `tube_v2` | Tube Light v2 | 60 (4x15 matrix) | MATRIX, vertical zigzag | `tube_v2.json` |
+| `bucket_v3` | Bucket Totem v3 | 128 (16x8 matrix) | MATRIX, horizontal straight | `bucket_v3.json` |
+| `big_bucket_v1` | Big Bucket | 112 (14x8 matrix) | MATRIX, horizontal zigzag, button on D1 cycles generator | `big_bucket_v1.json` |
 
 ## JSON Schema
 
@@ -26,7 +27,8 @@ All device configuration files must follow this schema:
   "ledPin": number,               // GPIO pin number for LED data (0-48)
   "brightness": number,           // Default brightness (0-255)
   "ledType": number,              // NeoPixel type constant (12390 = NEO_GRB + NEO_KHZ800)
-  "orientation": number,          // 0=HORIZONTAL, 1=VERTICAL
+  "orientation": number,          // 0=HORIZONTAL (row-major), 1=VERTICAL (column zigzag),
+                                  // 2=PANEL_GRID (2x2 serpentine), 3=HORIZONTAL_ZIGZAG (row serpentine)
   "layoutType": number,           // 0=MATRIX, 1=LINEAR, 2=RANDOM
 
   // Battery/Charging Configuration
@@ -52,7 +54,13 @@ All device configuration files must follow this schema:
 
   // Microphone Configuration
   "sampleRate": number,           // Sample rate in Hz (8000, 16000, 32000, etc.)
-  "bufferSize": number            // Buffer size (typically 32)
+  "bufferSize": number,           // Buffer size (typically 32)
+
+  // Input Configuration
+  "buttonPin": number             // GPIO pin for "cycle to next generator" button.
+                                  // 0 = unused (default). Wired between pin and GND;
+                                  // firmware uses INPUT_PULLUP, 200ms debounce.
+                                  // Must differ from ledPin / ledPin2.
 }
 ```
 

@@ -24,6 +24,7 @@
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
 #include "render/RenderPipeline.h"  // Generator/Effect/Renderer management
+#include "inputs/GeneratorButton.h"  // Debounced GPIO button → cycle generator
 #include "types/Version.h"           // Version information from repository
 #include "hal/DefaultHal.h"          // HAL singleton instances
 #include "audio/LoopMetrics.h"       // Main-loop fps + frame-time observability (#137)
@@ -82,6 +83,7 @@ bool ledModeDegraded = false;
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
 RenderPipeline* pipeline = nullptr;  // Manages generators, effects, and rendering
+GeneratorButton generatorButton;     // Per-device "next generator" button (no-op if buttonPin==0)
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
@@ -421,6 +423,15 @@ void setup() {
 
     SerialConsole::logDebug(F("RenderPipeline initialized"));
 
+    // Per-device "cycle generator" button. No-op when buttonPin == 0.
+    // Logs the pin assignment at INFO so it's visible during deployment
+    // verification (matches the "BLE name:" / "[INFO] Device:" pattern).
+    generatorButton.begin(config.input.buttonPin);
+    if (config.input.buttonPin != 0) {
+      Serial.print(F("[INFO] Generator-cycle button on pin D"));
+      Serial.println(config.input.buttonPin);
+    }
+
     // Load effect parameters from flash
     if (configStorage.isValid()) {
       // Load parameters directly into generators' internal storage
@@ -623,6 +634,17 @@ void loop() {
   // 60s is enough; the flash counter persists, so we want stronger evidence
   // (5 min) that the device is genuinely stable before clearing it.
   RebootFrequencyCounter::tickStable(millis());
+
+  // Per-device "next generator" button. No-op if buttonPin == 0 in config.
+  // Poll every loop iter — debounce lives inside GeneratorButton, so this
+  // is just a cheap digitalRead + timestamp check on most iterations.
+  if (generatorButton.poll()) {
+    GeneratorButton::cycleGenerator(pipeline);
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+      Serial.print(F("[BUTTON] Generator -> "));
+      Serial.println(pipeline->getGeneratorName());
+    }
+  }
 
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;

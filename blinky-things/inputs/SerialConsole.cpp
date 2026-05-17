@@ -956,6 +956,9 @@ void SerialConsole::showDeviceConfig() {
     doc["sampleRate"] = cfg.sampleRate;
     doc["bufferSize"] = cfg.bufferSize;
 
+    // Input configuration
+    doc["buttonPin"] = cfg.buttonPin;
+
     // Serialize through TeeStream (routes to Serial + BLE NUS)
     serializeJsonPretty(doc, out_);
     out_.println();
@@ -1019,6 +1022,9 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     // Microphone configuration
     newConfig.sampleRate = doc["sampleRate"] | 16000;
     newConfig.bufferSize = doc["bufferSize"] | 32;
+
+    // Input configuration (0 = no button; missing key parses to 0)
+    newConfig.buttonPin = doc["buttonPin"] | 0;
 
     // Mark as valid
     newConfig.isValid = true;

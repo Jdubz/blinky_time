@@ -60,6 +60,9 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     mic.sampleRate = stored.sampleRate;
     mic.bufferSize = stored.bufferSize;
 
+    InputConfig input;
+    input.buttonPin = stored.buttonPin;
+
     // Populate output DeviceConfig (structs copied by value, deviceName by pointer)
     outConfig.deviceName = deviceNameBuffer;
     outConfig.matrix = matrix;
@@ -67,6 +70,7 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     outConfig.imu = imu;
     outConfig.serial = serial;
     outConfig.microphone = mic;
+    outConfig.input = input;
 
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
         Serial.print(F("[INFO] Loaded device: "));
@@ -132,6 +136,9 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     // Copy mic config
     outStored.sampleRate = config.microphone.sampleRate;
     outStored.bufferSize = config.microphone.bufferSize;
+
+    // Copy input config
+    outStored.buttonPin = config.input.buttonPin;
 
     // Mark as valid
     outStored.isValid = true;
@@ -200,10 +207,24 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         return false;
     }
 
-    // Validate orientation
-    if (stored.orientation > 2) {  // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID
+    // Validate orientation (must match MatrixOrientation enum in DeviceConfig.h)
+    // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID, 3=HORIZONTAL_ZIGZAG
+    if (stored.orientation > 3) {
         SerialConsole::logWarn(F("Invalid orientation"));
         return false;
+    }
+
+    // Validate buttonPin (0 = unused; any other value must be a valid GPIO
+    // distinct from ledPin / ledPin2 to prevent stomping on LED data).
+    if (stored.buttonPin != 0) {
+        if (stored.buttonPin > LED_PIN_MAX) {
+            SerialConsole::logWarn(F("Invalid buttonPin"));
+            return false;
+        }
+        if (stored.buttonPin == stored.ledPin || stored.buttonPin == stored.ledPin2) {
+            SerialConsole::logWarn(F("buttonPin must differ from ledPin/ledPin2"));
+            return false;
+        }
     }
 
     // Validate layout type

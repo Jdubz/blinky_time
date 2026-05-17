@@ -3,9 +3,11 @@
 #include "../hal/PlatformConstants.h"
 
 enum MatrixOrientation {
-  HORIZONTAL = 0,  // Standard horizontal layout (fire-totem)
-  VERTICAL = 1,    // Vertical layout (tube-light)
-  PANEL_GRID = 2   // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
+  HORIZONTAL = 0,         // Standard horizontal row-major (fire-totem, bucket-totem)
+  VERTICAL = 1,           // Vertical column-major zigzag (tube-light)
+  PANEL_GRID = 2,         // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
+  HORIZONTAL_ZIGZAG = 3   // Row-major serpentine — data starts top-left, row 0 L→R,
+                          // row 1 R→L, row 2 L→R, ... (big-bucket-style wiring)
 };
 
 enum LayoutType {
@@ -58,6 +60,14 @@ struct MicConfig {
   uint8_t bufferSize;
 };
 
+struct InputConfig {
+  // GPIO pin for the "cycle to next generator" button. 0 = unused (no button).
+  // Pin is read with INPUT_PULLUP (button shorts to GND on press). The polling
+  // + debounce logic lives in the main loop; this struct just carries the
+  // wiring info from the per-device config.
+  uint8_t buttonPin;
+};
+
 struct DeviceConfig {
   const char* deviceName;
   MatrixConfig matrix;
@@ -65,4 +75,5 @@ struct DeviceConfig {
   IMUConfig imu;
   BlinkySerialConfig serial;
   MicConfig microphone;
+  InputConfig input;
 };
