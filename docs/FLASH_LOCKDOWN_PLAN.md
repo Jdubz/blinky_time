@@ -6,6 +6,16 @@
 cleanly, Phase 7 live test surfaced both a real 0.8.0-4 bootloader bug
 AND structural safety holes in our existing flash code.
 
+**Revision 2026-05-17 (evening):** `cart_inner` recovered via operator-
+directed `deploy.sh --devices=<BLE addr>` (F2 closed below). Recovery
+exposed two additional gaps to fold into the lockdown: (a) the
+identity-across-transports problem in `_recovery_device_ids` / any
+future `_device_in_flight` (b) the whitelist-reload timing: today the
+JSON file is loaded once at startup and only refreshed when
+`set_recovery_firmware()` is called from `fleet_flash`. The running
+server can hold a stale whitelist for hours after a file edit. Both
+gaps captured in §L1/L3 below.
+
 ## Why
 
 Today's session shipped six dormant infrastructure phases of the
@@ -47,11 +57,22 @@ What went wrong:
    mounted indefinitely after a clean write+umount+eject; the
    bootloader never exits MSC on its own. `msc_uf2_check_stuck()` in
    0.8.0-7 is the fix per `CLAUDE.md` but the cart devices are still
-   on 0.8.0-4.
+   on 0.8.0-4. **2026-05-17 PM refinement:** the failure mode has a
+   second symptom besides stuck-MSC. After a clean UF2 write, the BL
+   re-enumerates as bootloader (PID `0x0045`) and re-advertises
+   `AdaDFU` over BLE while keeping MSC up — even though the app bytes
+   are correctly committed to flash (verified byte-for-byte at
+   `0x27000` against `CURRENT.UF2`). The "valid app" marker write
+   silently fails (`bootloader_settings_save` ~80% hiccup pre-fix),
+   so the BL stays in `DEFAULT_TO_OTA_DFU` mode and refuses to boot
+   the (correctly-installed) app. Recovery requires either BL update
+   to `0.8.0-7` OR a BLE-DFU through `deploy.sh` whose completion
+   handshake clears the OTA flag via a different code path.
 
-`cart_inner` is currently stuck in 0.8.0-4 bootloader MSC mode at
-session end. **Do not retry any flash against it without first
-implementing the lockdown below.**
+`cart_inner` was stuck in 0.8.0-4 bootloader MSC + BLE-DFU mode at
+session start; recovered via BLE-DFU through `deploy.sh` (F2 below).
+**Until the lockdown lands, do not retry any flash against any cart
+device without explicit operator go-ahead per attempt.**
 
 ## Goal
 
@@ -93,6 +114,31 @@ firmware checks `device_id in self._device_in_flight` first and raises
 This is the canonical "I'm flashing this device right now" claim,
 independent of which lock or which transport.
 
+**L1.1 — Identity equivalence across transports.** A naive `set[str]`
+treats `062CBD12EB6961C8` (cart_inner USB SN) and `E9:A8:5C:A5:BB:BE`
+(cart_inner BLE app addr) as different devices, even though they are
+the same physical chip. Today's `_recovery_device_ids` whitelist has
+this exact bug: a flash that armed under one identity won't dedupe
+against a recovery attempt under the other identity. Required for
+L1 to actually be a single in-flight claim:
+
+- `FleetManager` keeps an `identity_groups: dict[str, str]` (alias →
+  canonical) that resolves all known identifiers for a physical device
+  (USB SN, BLE app addr, BLE bootloader addr — the +1/-1 pair from
+  `_bootloader_to_app_address()`) to a single canonical key. Use the
+  USB SN where known, BLE app addr otherwise.
+- `_device_in_flight` and `_recovery_device_ids` are stored against
+  canonical keys. Membership tests run the input through
+  `resolve_canonical(id)` first.
+- Identity groups are populated when a device is first discovered on
+  any transport — the discovery code already has the cross-transport
+  visibility (`_bootloader_to_app_address` in `discovery.py:87`).
+  Persist groups to disk so they survive restart.
+
+Without L1.1, L1's "single in-flight set" still has the gap that bit
+the 5/16 brick: the SN-only whitelist couldn't match the
+BLE-addr-only device when it went into DFU-recovery state.
+
 ### L2. Privatize the two transport implementations
 
 - Rename `upload_uf2()` → `_uf2_write_impl()`.
@@ -116,6 +162,18 @@ at `FleetManager.flash_device()`.
 - `_background_loop` auto-recovery → calls `flash_device()` with
   `force=False` so dedup applies. Drop the separate `_dfu_locks` set
   in the same commit.
+- **L3.1 — whitelist re-read on auto-recovery task launch.** Today
+  `_recovery_device_ids` is loaded from
+  `~/.local/share/blinky-server/recovery-firmware.json` exactly once
+  at server startup and refreshed only when `fleet_flash` calls
+  `set_recovery_firmware()`. A direct edit of the file requires a
+  server restart to take effect — that's an unintended escape hatch
+  going the wrong way (operator can think they've extended the
+  whitelist when in-memory state is still the old list, and the next
+  flash narrows it again). Fix: the auto-recovery branch in
+  `_background_loop` should re-read the JSON file at task launch (or
+  on a short TTL — e.g. 10 s cached). The file is small; the cost is
+  trivial. Same canonical-resolution applies (L1.1).
 
 After this, the only code that ever calls the `_impl` functions is
 `_run_flash_job`.
@@ -179,17 +237,31 @@ changes" and `deploy-bootloader.sh`. **Out of scope for the lockdown
 work**, but the lockdown becomes much more effective once the
 underlying flash failure mode is gone.
 
-### F2. cart_inner currently in bootloader (session end 2026-05-17)
+### F2. cart_inner recovery (closed 2026-05-17 evening)
 
-Will need a recovery action when work resumes. Per the operator's
-direction at session close: not via SWD tonight. Options for next
-session:
+**Closed.** `cart_inner` was recovered the same day. Sequence:
 
-- Wait — sometimes 0.8.0-4 eventually exits (not reliably).
-- Allow the existing legacy auto-recovery loop to fire a BLE-DFU once
-  the dedup window expires (this is the system's designed recovery
-  path; treat as F1's symptom, not a new flash request).
-- SWD recovery via `swd-flash.local` Pi.
+1. Operator pulled `cart_inner` from the enclosure and reconnected it
+   over USB. The XIAO came up in dual UF2-MSC + BLE-AdaDFU mode (the
+   BL's standard "no valid app" recovery posture).
+2. Tried UF2 drop via `tools/uf2_upload.py --already-in-bootloader`
+   first — write succeeded byte-for-byte, but BL stayed in DFU mode
+   (F1's second symptom, the `bootloader_settings_save` silent-fail).
+3. Operator-directed `./scripts/deploy.sh --devices=E9:A8:5C:A5:BB:BE
+   --skip-compile --no-bump` — BLE-DFU through the post-watchdog-fix
+   pipeline completed cleanly in ~6 min (watchdog-pinger task
+   confirmed alive throughout). BL exited DFU, app booted, both serial
+   and BLE transports show `cart_inner` running `b166-c3acc4fd-dirty`,
+   configured=true, safe_mode=false.
+4. `save` step in deploy.sh timed out at the 2 s confirmation window;
+   re-issued via `POST /api/devices/.../settings/save` directly
+   (legitimate non-deploy-gated route per `deps.py:95`), firmware
+   ACKed `OK`. Persistence confirmed.
+
+Lessons captured in the F1 refinement above and in new memory
+`project_bl_0804_settings_save_silent_fail`. The two L-additions
+(L1.1 identity equivalence, L3.1 whitelist re-read) come from this
+recovery's specific failure surfaces.
 
 ### F3. BLE atomic-scene fix (the original session goal)
 
@@ -208,6 +280,7 @@ the lockdown lands.
 - `[[feedback-flash-safety-policy]]` (auto-memory)
 - `[[feedback-no-unauthorized-retries]]` (auto-memory)
 - `[[project-deploy-flash-cascade-bug]]` (auto-memory)
+- `[[project-bl-0804-settings-save-silent-fail]]` (auto-memory, 2026-05-17)
 - `CLAUDE.md` "Upload Safety (nRF52840)" section
 - Commits 8a5701d6, 431c55bc, 7bb84e4e, 14cd1ba5, f2216da2, f5849e5b
   (flash-job rewrite Phases 1-6)
