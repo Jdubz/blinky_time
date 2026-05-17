@@ -932,12 +932,11 @@ void SerialConsole::showDeviceConfig() {
     doc["orientation"] = cfg.orientation;
     doc["layoutType"] = cfg.layoutType;
 
-    // Charging configuration
-    doc["fastChargeEnabled"] = cfg.fastChargeEnabled;
-    doc["lowBatteryThreshold"] = serialized(String(cfg.lowBatteryThreshold, 2));
-    doc["criticalBatteryThreshold"] = serialized(String(cfg.criticalBatteryThreshold, 2));
-    doc["minVoltage"] = serialized(String(cfg.minVoltage, 2));
-    doc["maxVoltage"] = serialized(String(cfg.maxVoltage, 2));
+    // Battery flag. Per-device thresholds are no longer configurable —
+    // the runtime values come from Platform::Battery::* when battery is
+    // true. We surface only the single boolean here so `device show`
+    // mirrors the JSON schema the registry uses.
+    doc["battery"] = cfg.battery;
 
     // IMU configuration
     doc["upVectorX"] = serialized(String(cfg.upVectorX, 2));
@@ -999,17 +998,20 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.orientation = doc["orientation"] | 0;
     newConfig.layoutType = doc["layoutType"] | 0;
 
-    // Charging configuration. fastChargeEnabled defaults to true: the
-    // operator rule is that battery-equipped devices ALWAYS get fast
-    // charge, and on non-battery devices the field is inert (no battery
-    // connected to the BQ24074, the charge-current pin just floats).
-    // Defaulting to true lets registry JSONs omit the field entirely
-    // for the common case; only override (= false) needs to be explicit.
-    newConfig.fastChargeEnabled = doc["fastChargeEnabled"] | true;
-    newConfig.lowBatteryThreshold = doc["lowBatteryThreshold"] | 3.5f;
-    newConfig.criticalBatteryThreshold = doc["criticalBatteryThreshold"] | 3.3f;
-    newConfig.minVoltage = doc["minVoltage"] | 3.0f;
-    newConfig.maxVoltage = doc["maxVoltage"] | 4.2f;
+    // Battery flag. Per operator rule, threshold/voltage/fast-charge
+    // values are NOT configurable per device — they are static
+    // `Platform::Battery::*` constants applied at load time when
+    // `battery == true`. The old per-device JSON keys
+    // (fastChargeEnabled, lowBatteryThreshold, criticalBatteryThreshold,
+    // minVoltage, maxVoltage) are no longer read. We do still zero the
+    // corresponding StoredDeviceConfig fields so a partial upload from
+    // an old client doesn't leave stale bytes in flash.
+    newConfig.battery = doc["battery"] | false;
+    newConfig.fastChargeEnabled = false;
+    newConfig.lowBatteryThreshold = 0.0f;
+    newConfig.criticalBatteryThreshold = 0.0f;
+    newConfig.minVoltage = 0.0f;
+    newConfig.maxVoltage = 0.0f;
 
     // IMU configuration
     newConfig.upVectorX = doc["upVectorX"] | 0.0f;

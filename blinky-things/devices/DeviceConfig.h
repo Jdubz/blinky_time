@@ -32,6 +32,17 @@ struct MatrixConfig {
 };
 
 struct ChargingConfig {
+  // True if this device is battery-equipped. Set from StoredDeviceConfig
+  // by DeviceConfigLoader::loadFromFlash. When true, the threshold/voltage
+  // fields below are populated from `Platform::Battery::*` constants
+  // (NOT from the stored per-device values, which are no longer
+  // configurable). When false, battery monitoring code (see
+  // blinky-things.ino battery branch) is skipped entirely.
+  bool battery;
+
+  // Static values populated by DeviceConfigLoader. These are read but
+  // not written by the JSON upload path anymore — they exist on the
+  // runtime DeviceConfig for the battery code to read off of.
   bool fastChargeEnabled;
   float lowBatteryThreshold;
   float criticalBatteryThreshold;

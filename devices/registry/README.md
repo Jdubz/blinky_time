@@ -60,11 +60,7 @@ Add only when this device needs a non-default value:
 |---|---|---|
 | `ledPin2` | `0` (single-strand) | Multi-strand devices (e.g. cart_inner has two 52-LED strands on pins 10 + 9; firmware splits the buffer in half) |
 | `brightness` | `100` | Per-device tuning |
-| `fastChargeEnabled` | `true` | Almost never. Operator rule: fast-charge is universally on. Override (= false) only for an exotic situation |
-| `lowBatteryThreshold` | `3.5` V | Battery devices only (tube_v2, hat_v1). Inert when no battery |
-| `criticalBatteryThreshold` | `3.3` V | Battery devices only |
-| `minVoltage` | `3.0` V | Battery devices only |
-| `maxVoltage` | `4.2` V (LiPo) | Battery devices only |
+| `battery` | `false` | Battery-equipped devices only (today: tube_v2, hat_v1). When `true`, the firmware enables battery monitoring + fast charge and applies the **static** `Platform::Battery::*` thresholds (LiPo: low=3.5V, critical=3.3V, min=3.0V, max=4.2V). These values are NOT configurable per device — they are chemistry-derived constants in `blinky-things/hal/PlatformConstants.h`. When `false`/omitted, battery code paths are skipped entirely. |
 | `upVectorX` / `upVectorY` / `upVectorZ` | `0` / `0` / `1` | When the device is mounted with a non-vertical "up" |
 | `rotationDegrees` | `0` | When the device's "north" is rotated relative to the chip |
 | `invertZ` | `false` | LEDs facing downward (bucket_v3, cart_umbrella_v1) |
@@ -93,17 +89,23 @@ are rejected at construction with an `[ERROR]` log.
 - `2` = PANEL_GRID — 2×2 of equal sub-panels chained TL→TR→BL→BR, each sub-panel row serpentine
 - `3` = HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R, row 1 R→L, row 2 L→R, … (single strip snaked back and forth, big-bucket-style hand-wired panels)
 
-### Battery thresholds (LiPo)
+### Battery support
 
-Only meaningful when the device has a battery. The voltage thresholds
-are inert on non-battery devices (voltage reads as 0 → low/critical
-checks never trigger), so omitting them from a non-battery device's
-JSON is the right move, not a bug. Standard values:
+A single boolean field — `"battery": true` — switches on monitoring +
+fast charge for battery-equipped devices (tube_v2, hat_v1 today). The
+threshold values are NOT configurable per device; they're chemistry-
+constants in `blinky-things/hal/PlatformConstants.h`:
 
-- **maxVoltage**: 4.2 V (fully charged)
-- **lowBatteryThreshold**: 3.5 V (~10% remaining, alert)
-- **criticalBatteryThreshold**: 3.3 V (~0%, shutdown soon)
-- **minVoltage**: 3.0 V (over-discharge protection)
+- **VOLTAGE_FULL**: 4.2 V (fully charged, LiPo)
+- **VOLTAGE_LOW** = `DEFAULT_LOW_THRESHOLD`: 3.5 V (~10%, alert)
+- **VOLTAGE_CRITICAL** = `DEFAULT_CRITICAL_THRESHOLD`: 3.3 V (~0%, shutdown soon)
+- **VOLTAGE_EMPTY**: 3.0 V (over-discharge protection)
+
+When `battery: false` (or omitted) the firmware skips `battery->begin()`
+entirely — no setFastCharge call, no periodic ADC reads, no threshold
+comparisons. Non-battery hardware leaves the BQ24074 unpowered, so
+those operations were always no-ops; the explicit gate just makes the
+intent unambiguous.
 
 ## Uploading a Device Config
 

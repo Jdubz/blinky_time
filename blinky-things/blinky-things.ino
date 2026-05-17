@@ -475,13 +475,21 @@ void setup() {
   }
   // End of LED system initialization
 
-  // Initialize battery monitor - ALWAYS initialize (even in safe mode)
-  if (!battery->begin()) {
-    SerialConsole::logWarn(F("Battery monitor failed to start"));
+  // Initialize battery monitor — only on devices that actually have a
+  // battery wired. Non-battery devices (carts, buckets, display,
+  // umbrella) leave the charger IC unpowered; running setFastCharge()
+  // there just toggles a floating pin. The `battery` flag in
+  // DeviceConfig.charging is the single source of truth (see
+  // ConfigStorage::StoredDeviceConfig::battery for the schema rationale).
+  if (validDeviceConfig && config.charging.battery) {
+    if (!battery->begin()) {
+      SerialConsole::logWarn(F("Battery monitor failed to start"));
+    } else {
+      battery->setFastCharge(config.charging.fastChargeEnabled);
+      SerialConsole::logDebug(F("Battery monitor initialized"));
+    }
   } else {
-    bool fastCharge = validDeviceConfig ? config.charging.fastChargeEnabled : false;
-    battery->setFastCharge(fastCharge);
-    SerialConsole::logDebug(F("Battery monitor initialized"));
+    SerialConsole::logDebug(F("Battery monitor skipped (no battery on this device)"));
   }
 
   // Rhythm tracking handled internally by AudioTracker (ACF+Comb+PLL)
@@ -836,9 +844,14 @@ void loop() {
   }
 #endif
 
-  // Battery monitoring - periodic voltage check
+  // Battery monitoring - periodic voltage check. Gated on
+  // `config.charging.battery` so non-battery devices skip the ADC
+  // read + threshold compare entirely (the thresholds are zero on
+  // those devices, which would fire false low/critical alerts if any
+  // ADC noise made it through the `voltage > 0` guard).
   static uint32_t lastBatteryCheck = 0;
-  if (battery && validDeviceConfig && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+  if (battery && validDeviceConfig && config.charging.battery
+      && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {

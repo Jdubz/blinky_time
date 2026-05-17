@@ -8,6 +8,5 @@
   "orientation": 1,
   "layoutType": 0,
   "brightness": 120,
-  "lowBatteryThreshold": 3.5,
-  "criticalBatteryThreshold": 3.3
+  "battery": true
 }

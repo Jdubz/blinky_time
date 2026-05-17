@@ -7,7 +7,5 @@
   "ledType": 82,
   "orientation": 0,
   "layoutType": 1,
-  "brightness": 100,
-  "lowBatteryThreshold": 3.6,
-  "criticalBatteryThreshold": 3.4
+  "battery": true
 }
