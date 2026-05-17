@@ -58,6 +58,56 @@ def scenes_list() -> list[Scene]:
     return list_scenes()
 
 
+# NOTE: specific /scenes/<word> routes (current, next, previous) MUST be
+# declared before the parameterised /scenes/{name} route below. FastAPI
+# matches routes in declaration order; without this ordering a request
+# for /scenes/current is matched by /scenes/{name} with name="current"
+# and returns a 404 "Scene not found: current" instead of cursor state.
+# /scenes/next and /scenes/previous don't currently collide (different
+# HTTP method than GET /scenes/{name}) but moving them up is the safer
+# convention so a future GET /scenes/{name}/... route doesn't surprise us.
+
+
+@router.get("/scenes/current")
+def scenes_current() -> dict[str, object]:
+    """Report the cursor state without changing it.
+
+    Useful for the Hub UI to highlight the currently-applied scene
+    chip. Returns ``current=null`` if no scene has ever been applied
+    via ``/apply`` / ``/next`` / ``/previous`` on this install, or if
+    the cursor's scene was deleted."""
+    scenes = list_scenes()
+    cursor_name = scene_cursor.get_current()
+    index = _resolve_cursor_index(scenes) if cursor_name else -1
+    return {
+        "current": scenes[index].name if index >= 0 else None,
+        "index": index if index >= 0 else None,
+        "count": len(scenes),
+    }
+
+
+@router.post("/scenes/next")
+async def scenes_next() -> dict[str, object]:
+    """Advance to the next scene in alphabetical order and apply it.
+
+    The cursor is persisted by scene NAME (not index) in
+    ``scenes_dir()/.cursor.json``. Adding, deleting, or renaming scenes
+    between presses doesn't randomly shift the cursor relative to the
+    operator's expectation — the cursor just re-finds its name in the
+    new list, or falls back to the start if its scene was deleted.
+
+    Wraps around the end of the list. 409 if the scene library is empty.
+    Designed for hardware-button consumers: one fixed URL, no name
+    interpolation, no client-side cursor file."""
+    return await _step_and_apply(+1)
+
+
+@router.post("/scenes/previous")
+async def scenes_previous() -> dict[str, object]:
+    """Mirror of ``/next`` in the opposite direction."""
+    return await _step_and_apply(-1)
+
+
 @router.get("/scenes/{name}")
 def scenes_get(name: str) -> Scene:
     _validate_name_or_404(name)
@@ -157,43 +207,3 @@ async def _step_and_apply(direction: int) -> dict[str, object]:
     response["index"] = next_idx
     response["count"] = len(scenes)
     return response
-
-
-@router.post("/scenes/next")
-async def scenes_next() -> dict[str, object]:
-    """Advance to the next scene in alphabetical order and apply it.
-
-    The cursor is persisted by scene NAME (not index) in
-    ``scenes_dir()/.cursor.json``. Adding, deleting, or renaming scenes
-    between presses doesn't randomly shift the cursor relative to the
-    operator's expectation — the cursor just re-finds its name in the
-    new list, or falls back to the start if its scene was deleted.
-
-    Wraps around the end of the list. 409 if the scene library is empty.
-    Designed for hardware-button consumers: one fixed URL, no name
-    interpolation, no client-side cursor file."""
-    return await _step_and_apply(+1)
-
-
-@router.post("/scenes/previous")
-async def scenes_previous() -> dict[str, object]:
-    """Mirror of ``/next`` in the opposite direction."""
-    return await _step_and_apply(-1)
-
-
-@router.get("/scenes/current")
-def scenes_current() -> dict[str, object]:
-    """Report the cursor state without changing it.
-
-    Useful for the Hub UI to highlight the currently-applied scene
-    chip. Returns ``current=null`` if no scene has ever been applied
-    via ``/apply`` / ``/next`` / ``/previous`` on this install, or if
-    the cursor's scene was deleted."""
-    scenes = list_scenes()
-    cursor_name = scene_cursor.get_current()
-    index = _resolve_cursor_index(scenes) if cursor_name else -1
-    return {
-        "current": scenes[index].name if index >= 0 else None,
-        "index": index if index >= 0 else None,
-        "count": len(scenes),
-    }
