@@ -40,7 +40,21 @@ still exist as a fallback" is explicitly NOT the target state. Every
 protection currently in the legacy paths MUST be migrated to the
 canonical path before the legacy code is deleted — no regressions,
 no orphan wrappers, no `# deprecated` stubs that linger past the
-migration commit. See "Audit before deletion" below for the checklist.
+migration commit. See `docs/FLASH_LOCKDOWN_AUDIT.md` for the
+complete protection-by-protection inventory; the four operator-
+confirmed design decisions from that audit are:
+
+1. **BLE post-DFU verify** extends `run_verify` (single verify path,
+   BLE branch handles random-static-address-change).
+2. **Phase-string progress callbacks** are dropped — `FlashJob` state
+   machine + bytes counter + journalctl already cover what operators
+   need. No new `FlashJob.phase` field.
+3. **600s wall-clock timeout** is a `flash_device(timeout=600.0)`
+   kwarg — path owns the deadline, per-transport defaults inside.
+4. **`FleetManager.flash_fleet(device_ids, firmware_path, ...)`** is
+   the new home for multi-device sequencing (inter-device `udevadm
+   settle`, sibling `hold_reconnect`, batch version-verify,
+   continue-on-error). Routes are thin pass-throughs.
 
 ## Why
 
