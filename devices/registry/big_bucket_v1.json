@@ -5,7 +5,7 @@
   "ledHeight": 8,
   "ledPin": 0,
   "brightness": 100,
-  "ledType": 82,
+  "ledType": 6,
   "orientation": 3,
   "layoutType": 0,
   "fastChargeEnabled": true,
