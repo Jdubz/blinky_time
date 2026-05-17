@@ -59,12 +59,11 @@ def get_current() -> str | None:
         return None
     except (OSError, json.JSONDecodeError) as exc:
         # File exists but is unreadable/corrupt. Something wrote a bad
-        # file — that's surprising enough to warrant a WARN (not debug)
-        # so an operator chasing a "next press restarts from the
-        # beginning" report sees the cause without having to enable
-        # debug logging first. FileNotFoundError stays silent above
-        # (the fresh-install common case). PR 142 review (claude[bot]
-        # item #5, second review).
+        # file — that's surprising enough to warrant a WARN so an
+        # operator chasing a "next press restarts from the beginning"
+        # report sees the cause without having to enable debug logging
+        # first. FileNotFoundError stays silent above (the fresh-
+        # install common case).
         log.warning("scene cursor unreadable, treating as absent: %s", exc)
         return None
     name = data.get("current")
@@ -84,7 +83,7 @@ def set_current(name: str | None) -> None:
     with a dot, ``list_scenes`` would try to parse it as a scene and
     fail. Tested by ``test_list_scenes_skips_dotfiles`` in tests/. If
     you change ``_CURSOR_FILENAME`` to something not dot-prefixed, also
-    add an explicit denylist in ``list_scenes``. PR 142 review."""
+    add an explicit denylist in ``list_scenes``."""
     path = _cursor_path()
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:

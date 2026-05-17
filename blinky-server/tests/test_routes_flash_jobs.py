@@ -54,10 +54,35 @@ async def api_client_authed() -> AsyncGenerator[tuple[AsyncClient, FleetManager]
     set_fleet(None)  # type: ignore[arg-type]
 
 
+@pytest.fixture(autouse=True)
+def _isolated_firmware_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[None, None]:
+    """Redirect ``firmware_dir()`` to a per-test tmp dir.
+
+    POST /api/flash-jobs constrains ``firmware_path`` to be under
+    ``firmware_dir()`` (closes the arbitrary-path probe vector).
+    Without this isolation, tests writing to ``tmp_path`` directly
+    would fail the new check.
+    """
+    from blinky_server import paths as paths_mod
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    paths_mod._clear_cache()
+    yield
+    paths_mod._clear_cache()
+
+
 @pytest.fixture
-def fw_file(tmp_path: Path) -> Path:
-    """A real on-disk file the API can find at body.firmware_path."""
-    p = tmp_path / "firmware.hex"
+def fw_file() -> Path:
+    """A real on-disk file the API can find at body.firmware_path.
+
+    Lives under ``firmware_dir()`` to satisfy the new upload-dir
+    constraint on POST /api/flash-jobs.
+    """
+    from blinky_server.paths import firmware_dir
+
+    p = firmware_dir() / "firmware.hex"
     p.write_text(":00000001FF\n")  # minimal valid-looking Intel HEX
     return p
 
@@ -85,13 +110,33 @@ async def test_post_creates_job_returns_202(
 async def test_post_rejects_missing_firmware_path(
     api_client_authed: tuple[AsyncClient, FleetManager],
 ) -> None:
+    """A path inside the upload directory but with no file on disk
+    triggers the 'does not exist' 400."""
+    from blinky_server.paths import firmware_dir
+
     client, _ = api_client_authed
+    missing = firmware_dir() / "missing.hex"
     resp = await client.post(
         "/api/flash-jobs",
-        json={"device_id": "dev-1", "firmware_path": "/nonexistent/path.hex"},
+        json={"device_id": "dev-1", "firmware_path": str(missing)},
     )
     assert resp.status_code == 400
     assert "does not exist" in resp.json()["detail"]
+
+
+async def test_post_rejects_firmware_path_outside_upload_dir(
+    api_client_authed: tuple[AsyncClient, FleetManager],
+) -> None:
+    """Paths outside ``firmware_dir()`` are rejected up-front — closes the
+    arbitrary-path probe vector (an API-key holder could otherwise probe
+    ``firmware_path`` values and read which files exist on the server)."""
+    client, _ = api_client_authed
+    resp = await client.post(
+        "/api/flash-jobs",
+        json={"device_id": "dev-1", "firmware_path": "/etc/passwd"},
+    )
+    assert resp.status_code == 400
+    assert "upload directory" in resp.json()["detail"]
 
 
 @pytest.mark.parametrize(

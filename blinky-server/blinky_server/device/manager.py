@@ -156,7 +156,6 @@ class FleetManager:
         # this dict from `/var/lib/blinky-server/flash_attempts.jsonl` on
         # boot. Until L4 lands, restart timing matters — the auto-recovery
         # loop's per-cycle dedup-gate is the only line of defense.
-        # PR 142 review (claude[bot] item #3).
         self._recent_flash_attempts: dict[str, float] = {}
         # 10-minute dedup window. Slack accommodates: a slow UF2 + bootloader
         # reboot (up to ~2 min on 0.8.0-4), plus the app's first-boot init,
@@ -404,14 +403,12 @@ class FleetManager:
 
         # UF2 is USB-only; if we got here with a non-serial transport, the
         # transport-selector code in flash_job.select_transport has a bug
-        # and we want it loud, not a silent fall-back to the stale
-        # `device.port` attribute. PR 142 review (claude[bot] HIGH item 1):
-        # the previous `hasattr(...) else device.port` ternary was the
-        # CLAUDE.md "silent fallback" anti-pattern. Transport.address is
-        # on the abstract base class — every concrete transport has it —
-        # so the hasattr() check was masking a non-existent failure mode
-        # AND silently substituting the wrong value if the invariant ever
-        # broke.
+        # and we want it loud, not a silent fall-back to a stale
+        # ``device.port`` attribute. ``Transport.address`` is on the
+        # abstract base class — every concrete transport has it — so a
+        # defensive ``hasattr()`` check on top of this guard would just
+        # mask the bug behind a silent substitution if the invariant
+        # ever broke.
         if device.transport.transport_type != "serial":
             job.set_error(
                 f"UF2 flash requires a serial transport, got "
@@ -445,9 +442,8 @@ class FleetManager:
             # `json info` still reports the old build string, that's the
             # "BL accepted UF2 but didn't update the valid-app marker"
             # failure mode we hit on 2026-05-17 with bootloader 0.8.0-4.
-            # PR 142 review (claude[bot] item 7): before this wiring,
-            # `previous_version` was always None and detect_stale_firmware
-            # silently never fired.
+            # Without this wiring the field stays None and the detector
+            # silently never fires.
             previous_version=device.version,
         )
         signals = _FleetVerifySignals(fleet=self, device_id=job.device_id, history=history)
@@ -1754,10 +1750,9 @@ class _FleetVerifySignals:
     from. Wiring history in via the constructor (rather than as a
     settable attribute the caller is expected to assign after the fact)
     closes a non-obvious invisible-dependency: if a future test or
-    caller constructs ``_FleetVerifySignals`` and forgets the external
+    caller constructs ``_FleetVerifySignals`` and forgets an external
     ``signals.history = history`` line, the anomaly sweep silently
-    sees no data and detectors never fire. PR 142 review (claude[bot]
-    item 6, second review).
+    sees no data and detectors never fire.
     """
 
     def __init__(
@@ -1771,6 +1766,16 @@ class _FleetVerifySignals:
         self._initial_devnum: int | None = None
         self._initial_devnum_captured_at: float = 0.0
         self.history: SignalHistory = history
+        # One-shot flag: the first exception bubbling out of
+        # is_serial_connected gets logged at WARN; subsequent ones at
+        # DEBUG. Verify polls every ~250 ms, so logging every miss
+        # would spam journalctl during a normal multi-second
+        # AWAITING_APP_BOOT window — but a silent failure here stalls
+        # the state machine invisibly, which CLAUDE.md explicitly
+        # forbids. First-call WARN gives the operator a single
+        # discoverable line; the polling loop's existing forward
+        # progress (or lack thereof) provides the rest of the signal.
+        self._is_connected_warned: bool = False
 
     async def has_re_enumerated_since(self, device_id: str, since: float) -> bool:
         """True if the USB device number changed after ``since``.
@@ -1805,18 +1810,30 @@ class _FleetVerifySignals:
         try:
             return bool(device.transport.is_connected)
         except Exception as exc:
-            # CLAUDE.md "no silent fallbacks": returning False here on an
-            # unexpected error stalls the verify state machine at
-            # AWAITING_APP_BOOT indefinitely, which is exactly the kind
-            # of invisible failure that turns a 5-min debug into hours.
-            # Log at debug so the verify-poll path is diagnosable from
-            # journalctl without spamming the WARN channel on every
-            # poll. PR 142 review (claude[bot] HIGH item 2).
-            log.debug(
-                "is_serial_connected(%s) treating exception as 'not connected': %s",
-                device_id,
-                exc,
-            )
+            # Returning False on an unexpected exception stalls the
+            # verify state machine at AWAITING_APP_BOOT — invisible to
+            # the operator if not logged. CLAUDE.md forbids the silent
+            # form. Compromise: WARN on the first occurrence so it
+            # shows up in journalctl without --debug; DEBUG on
+            # subsequent ones (verify polls every ~250 ms, so a true
+            # WARN every iteration would drown the log). The first
+            # line is the discoverable bread crumb; the lack of
+            # forward progress on the job is the ongoing signal.
+            if not self._is_connected_warned:
+                self._is_connected_warned = True
+                log.warning(
+                    "is_serial_connected(%s) raised %s: %s — "
+                    "treating as 'not connected'; subsequent occurrences logged at debug",
+                    device_id,
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                log.debug(
+                    "is_serial_connected(%s) raised: %s",
+                    device_id,
+                    exc,
+                )
             return False
 
     async def get_handshake_info(self, device_id: str) -> dict[str, Any] | None:

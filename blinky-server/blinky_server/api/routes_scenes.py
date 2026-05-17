@@ -153,9 +153,9 @@ async def _apply_scene(scene: Scene) -> dict[str, object]:
     "what scene did I last ask for?" model matches operator mental model
     better than "what scene did every device confirm?". A subsequent
     ``/api/scenes/next`` press always advances from the last-requested
-    scene, not the last-fully-delivered one. PR 142 review documented
-    this; if the policy ever changes, gate the ``set_current`` call on
-    inspecting ``results`` for per-device acks.
+    scene, not the last-fully-delivered one. If the policy ever changes,
+    gate the ``set_current`` call on inspecting ``results`` for
+    per-device acks.
     """
     fleet = get_fleet()
     commands = scene_to_commands(scene)

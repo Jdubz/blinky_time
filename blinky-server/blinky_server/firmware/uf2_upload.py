@@ -447,7 +447,7 @@ async def flash_uf2_for_job(
         # function (the write succeeded; the verify-wait phase of the
         # subprocess just couldn't confirm reboot in 60 s), and being
         # able to tell those two cases apart from journalctl alone
-        # matters for post-mortems. PR 142 review (claude[bot] item #2).
+        # matters for post-mortems.
         log.warning(
             "flash_uf2_for_job %s: stream hit 300s timeout (write_seen=%s)",
             job.job_id,

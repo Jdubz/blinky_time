@@ -164,9 +164,9 @@ def test_scene_to_commands_always_emits_all_four_args() -> None:
 
 
 # ── /scenes/next + /scenes/previous cursor math ─────────────────────────────
-# PR 142 review (gemini HIGH, Copilot MED): the naive `(idx + direction) % N`
-# misbehaves on the "no cursor" sentinel (idx == -1). `(-1 + -1) % N` lands
-# on N-2 in Python, so `/previous` from a fresh install would skip the last
+# The naive `(idx + direction) % N` misbehaves on the "no cursor" sentinel
+# (idx == -1). `(-1 + -1) % N` lands on N-2 in Python, so `/previous`
+# from a fresh install would skip the last
 # scene. The fix lives in `_next_cursor_index`; these are the pinned
 # regression tests for the boundary behaviours.
 
@@ -206,8 +206,8 @@ def test_list_scenes_skips_dotfiles() -> None:
     """``scene_cursor`` writes ``.cursor.json`` + ``.cursor.json.tmp`` to
     the scenes data directory. ``list_scenes`` must skip both, otherwise
     every cursor write would produce a Pydantic-validation warning and a
-    spurious unreadable-scene log line. PR 142 review noted that the
-    dot-prefix filter is load-bearing; this test pins it."""
+    spurious unreadable-scene log line. The dot-prefix filter is
+    load-bearing; this test pins it."""
     save_scene(_scene("Real"))
     # Simulate the cursor + its in-flight tmp file.
     sdir = scenes_mod._data_dir()

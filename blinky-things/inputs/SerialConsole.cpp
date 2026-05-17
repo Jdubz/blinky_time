@@ -1048,8 +1048,8 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     // a bad config is rejected before being persisted — no deferred
     // safe-mode boot. The specific field that failed is printed at WARN
     // by validate() right before it returns false, so the operator gets
-    // the precise reason on the serial stream (PR 142 review: Copilot
-    // flagged the previous generic ERROR as not actionable).
+    // the precise reason on the serial stream (the generic ERROR below
+    // just points them at the WARN line).
     if (!DeviceConfigLoader::validate(newConfig)) {
         out_.println(F("ERROR: Device config validation failed"));
         out_.println(F("See [WARN] line above for the specific field. Common issues:"));

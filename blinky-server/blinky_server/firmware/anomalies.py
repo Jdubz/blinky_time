@@ -215,7 +215,7 @@ def _extract_version(info: dict[str, Any]) -> str | None:
     """Pull the firmware version string out of a ``json info`` response.
 
     Delegates to ``firmware.utils.extract_version`` — the canonical
-    version-key list lives there and is shared with ``verify.py``.
-    PR 142 review flagged the previously-duplicated copy as a sync hazard.
+    version-key list lives there and is shared with ``verify.py`` to
+    avoid the sync hazard of duplicated key tables.
     """
     return extract_version(info)

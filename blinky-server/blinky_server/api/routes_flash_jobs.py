@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..device.manager import FleetManager
+from ..paths import firmware_dir
 from .deps import get_fleet, require_api_key, require_deploy_tool
 
 log = logging.getLogger(__name__)
@@ -65,16 +66,30 @@ async def create_flash_job(
     is a device-mutating, hard-to-reverse operation; the
     ``X-Deploy-Tool`` header acts as the operator-intent check.
     """
-    fw_path = Path(body.firmware_path)
-    if not fw_path.is_file():
-        # Surface the absolute resolved path alongside the operator-supplied
-        # value so the operator doesn't have to guess which working dir
-        # the server is interpreting a relative path against. PR 142
-        # review (claude[bot] minor note).
+    fw_path = Path(body.firmware_path).resolve()
+    # Constrain `firmware_path` to the upload directory that
+    # ``POST /api/fleet/upload`` writes to. Without this guard, any
+    # API-key holder can probe arbitrary filesystem paths by observing
+    # the 400 response (file exists vs. doesn't). Not exploitable
+    # beyond what an enrolled operator already has — they still hold
+    # the deploy-tool gate — but the constraint matches the principle
+    # that firmware comes from the upload pipeline, not from random
+    # paths the operator typed.
+    upload_dir = firmware_dir().resolve()
+    if not fw_path.is_relative_to(upload_dir):
         raise HTTPException(
             400,
-            "firmware_path does not exist on server: "
-            f"{body.firmware_path!r} (resolved: {fw_path.resolve()})",
+            f"firmware_path must be under the upload directory ({upload_dir}); "
+            f"got {body.firmware_path!r} (resolved: {fw_path})",
+        )
+    if not fw_path.is_file():
+        # Surface the absolute resolved path alongside the operator-
+        # supplied value so the operator doesn't have to guess which
+        # working dir the server is interpreting a relative path
+        # against.
+        raise HTTPException(
+            400,
+            f"firmware_path does not exist on server: {body.firmware_path!r} (resolved: {fw_path})",
         )
     job = await fleet.flash_device(
         body.device_id,
@@ -100,9 +115,9 @@ async def get_flash_job(
     sleep + re-poll on the client side. Server-side long-poll (if we
     want it) would be a separate endpoint.
 
-    Auth: requires ``X-API-Key`` (added 2026-05-17 per PR 142 review).
-    Job metadata (firmware path, device ID, timestamps, anomalies)
-    leaks operational detail; gating on API key matches the POST path.
+    Auth: requires ``X-API-Key``. Job metadata (firmware path, device
+    ID, timestamps, anomalies) leaks operational detail, so the GET
+    surface is gated like the POST.
 
     TODO: ``_flash_jobs`` is keyed by ``device_id``, so this is an O(n)
     scan over the table. Fine for small fleets; if a per-id long-poll
@@ -132,9 +147,11 @@ async def list_flash_jobs(
     device is NOT visible here — earlier jobs for the same device are
     overwritten. If multi-flash history matters, the L4 persistent
     audit log spec'd in ``docs/FLASH_LOCKDOWN_PLAN.md`` is the right
-    home for it. PR 142 review.
+    home for it.
 
-    Auth: requires ``X-API-Key`` (added 2026-05-17 per PR 142 review).
+    Auth: requires ``X-API-Key``. Job metadata (firmware path, device
+    ID, timestamps, anomalies) leaks operational detail, so the GET
+    surface is gated like the POST.
     """
     jobs = fleet.list_flash_jobs(active_only=active)
     jobs.sort(key=lambda j: j.created_at, reverse=True)

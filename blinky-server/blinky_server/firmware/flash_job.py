@@ -322,8 +322,7 @@ class FlashJob:
 
         Errors are the primary post-mortem signal, so log loudly on an
         overwrite — silently losing the first error string is the kind
-        of thing that turns a 5-minute debug into a 5-hour one. PR 142
-        review (claude[bot] item #1).
+        of thing that turns a 5-minute debug into a 5-hour one.
         """
         if self.error is not None and self.error != msg:
             log.warning(
@@ -394,16 +393,36 @@ class FlashJob:
     async def wait_until_terminal(self, timeout: float | None = None) -> bool:
         """Block until the job reaches a terminal state (or ``timeout``).
 
+        ``timeout`` is an *absolute* elapsed cap from this call's entry,
+        not a per-change reset. A job that produces several non-terminal
+        transitions before finishing (PENDING → SELECTING → WRITING →
+        VERIFYING …) won't extend the deadline on each one — the caller
+        gets back control no later than ``timeout`` seconds after the
+        call started. ``timeout=None`` waits indefinitely.
+
         Returns True if terminal, False if the timeout fired first. Common
         use: auto-recovery and deploy.sh both want "wait for this flash to
         be done, no matter what done means" without writing their own
         polling loop.
         """
+        if timeout is None:
+            while not self.is_terminal:
+                snap = self._seq
+                await self.wait_for_change(since_seq=snap, timeout=None)
+            return True
+
+        deadline = time.monotonic() + timeout
         while not self.is_terminal:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self.is_terminal
             snap = self._seq
-            new_seq = await self.wait_for_change(since_seq=snap, timeout=timeout)
+            new_seq = await self.wait_for_change(since_seq=snap, timeout=remaining)
             if new_seq == snap:
-                # Timeout fired without a change.
+                # Per-iteration wait_for_change returned without a change
+                # — either the deadline elapsed or the spurious-wake path
+                # in wait_for_change fired. Re-check is_terminal once
+                # more (a transition could have just landed) and exit.
                 return self.is_terminal
         return True
 

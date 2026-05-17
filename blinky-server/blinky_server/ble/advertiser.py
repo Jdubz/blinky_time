@@ -43,18 +43,18 @@ LE_ADV_MGR_IFACE = "org.bluez.LEAdvertisingManager1"
 LE_ADV_IFACE = "org.bluez.LEAdvertisement1"
 
 
+# Backoff schedule for RegisterAdvertisement retries (exponential).
+# Totals ~7.5 s before the final attempt re-raises. Module-level
+# constant rather than per-call so it doesn't re-allocate on every
+# `start()` invocation.
+_BACKOFFS_S: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+
+
 # D-Bus error types that indicate a transient "slot still busy" condition
 # we should retry on. Anything else (adapter down, permission, missing
 # service) will fail identically on every retry — re-raise immediately
 # so the operator gets the real diagnostic without waiting through the
-# backoff. PR 142 review.
-# Backoff schedule for RegisterAdvertisement retries (exponential).
-# Totals ~7.5 s before the final attempt re-raises. Module-level
-# constant rather than per-call so it doesn't re-allocate on every
-# `start()` invocation. PR 142 review (claude[bot] item 8).
-_BACKOFFS_S: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
-
-
+# backoff.
 _TRANSIENT_REGISTER_ERROR_TYPES = frozenset(
     {
         "org.bluez.Error.Failed",  # generic, what BlueZ returns for the slot-still-held case
@@ -239,9 +239,7 @@ class FleetBroadcaster:
             # path, BlueZ service unknown) will fail identically on every
             # retry — re-raise immediately so the operator sees the real
             # cause in <1 s instead of waiting through 7.5 s of backoff
-            # for the same message. PR 142 review: Copilot flagged the
-            # over-broad catch + the sentinel-None-as-final-iteration
-            # pattern; this rewrite addresses both.
+            # for the same message.
             #
             # call_register_advertisement is a dynamically-generated
             # method on the proxy interface (dbus-fast builds it from the

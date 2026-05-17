@@ -2,10 +2,10 @@
 
 Single home for utilities used by more than one module under
 ``blinky_server/firmware/``. The first occupant is the version-key
-lookup that was duplicated between ``verify.py`` and ``anomalies.py``
-(PR 142 review noted the duplication and that the canonical key list
-is load-bearing — any change to it must land in both places, which is
-exactly the kind of coupling that drifts).
+lookup that used to be duplicated between ``verify.py`` and
+``anomalies.py`` — the canonical key list is load-bearing, so a
+change to it must land in both places, exactly the kind of implicit
+coupling that drifts. One source of truth here.
 """
 
 from __future__ import annotations

@@ -447,12 +447,10 @@ void setup() {
     // The pin is bound once here; runtime `device upload` updates the
     // persisted buttonPin but does NOT re-init the GPIO. That's
     // consistent with the rest of the device config (ledPin, ledType,
-    // orientation, etc. all also bind at setup() and require a reboot to
-    // take effect). `SerialConsole::uploadDeviceConfig` already prints
-    // `**REBOOT DEVICE TO APPLY CONFIGURATION**`. PR 142 review: Copilot
-    // flagged the reload gap; we picked "document, don't hot-reload"
-    // because hot-swapping a single field would diverge from how the
-    // rest of the config behaves.
+    // orientation, etc. all also bind at setup() and require a reboot
+    // to take effect). `SerialConsole::uploadDeviceConfig` already
+    // prints `**REBOOT DEVICE TO APPLY CONFIGURATION**` to make the
+    // requirement explicit at upload time.
     generatorButton.begin(config.input.buttonPin);
     if (config.input.buttonPin != 0) {
       Serial.print(F("[INFO] Generator-cycle button on pin D"));
