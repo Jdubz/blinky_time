@@ -14,9 +14,12 @@ to the operator's mental model:
 Stored as a tiny JSON file in the scenes data dir for the same reasons
 scenes themselves persist there (atomic replace via temp + rename,
 survives server restart, inspectable by hand). Concurrent writers
-clobber each other but the file is one line of JSON so a half-written
-read is implausible; readers fall back to "no cursor" if the file is
-malformed, which is the correct behaviour anyway.
+clobber each other (last writer wins), but ``set_current`` uses
+``os.replace(tmp, path)`` so a torn read is impossible by construction
+— the readable file is always either the previous fully-written
+version or the new fully-written version. Readers still fall back to
+"no cursor" if the file is malformed, which is the correct behaviour
+for the unlikely case of an external hand-edit gone wrong.
 
 The cursor is set by:
 
@@ -61,7 +64,16 @@ def set_current(name: str | None) -> None:
     """Persist the last-applied scene name. ``None`` clears the cursor.
 
     Atomic replace so a crash mid-write can't leave a half-truncated
-    file that ``get_current()`` would then read as garbage."""
+    file that ``get_current()`` would then read as garbage.
+
+    Tmp-file naming: ``.cursor.json`` + ``.tmp`` = ``.cursor.json.tmp``,
+    which still starts with ``.``. This is load-bearing — the scenes
+    directory is enumerated by ``scenes.list_scenes`` for the scene
+    library; if the tmp file (or the cursor file itself) didn't start
+    with a dot, ``list_scenes`` would try to parse it as a scene and
+    fail. Tested by ``test_list_scenes_skips_dotfiles`` in tests/. If
+    you change ``_CURSOR_FILENAME`` to something not dot-prefixed, also
+    add an explicit denylist in ``list_scenes``. PR 142 review."""
     path = _cursor_path()
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:

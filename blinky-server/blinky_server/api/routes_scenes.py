@@ -194,6 +194,22 @@ def _resolve_cursor_index(scenes: list[Scene]) -> int:
     return -1
 
 
+def _next_cursor_index(current_idx: int, direction: int, count: int) -> int:
+    """Pick the target index for a ``/next`` or ``/previous`` step.
+
+    ``current_idx == -1`` is the "no cursor" sentinel from
+    ``_resolve_cursor_index`` (no persisted cursor, or the cursored
+    scene was deleted). The naive ``(current_idx + direction) % count``
+    misbehaves there: ``(-1 + -1) % N`` evaluates to ``N - 2`` in Python,
+    so ``/previous`` would skip the last scene. Special-case the
+    no-cursor state to match ``_resolve_cursor_index``'s contract:
+    ``/next`` lands on index 0, ``/previous`` lands on the last index.
+    """
+    if current_idx == -1:
+        return 0 if direction == 1 else count - 1
+    return (current_idx + direction) % count
+
+
 async def _step_and_apply(direction: int) -> dict[str, object]:
     """Internal: walk the sorted scene list by ``direction`` (±1) from
     the persisted cursor, apply, and update the cursor. Wraps."""
@@ -201,7 +217,7 @@ async def _step_and_apply(direction: int) -> dict[str, object]:
     if not scenes:
         raise HTTPException(409, "No scenes saved; create one first")
     current_idx = _resolve_cursor_index(scenes)
-    next_idx = (current_idx + direction) % len(scenes)
+    next_idx = _next_cursor_index(current_idx, direction, len(scenes))
     response = await _apply_scene(scenes[next_idx])
     # Augment with cursor info so a client can render "scene N of M".
     response["index"] = next_idx

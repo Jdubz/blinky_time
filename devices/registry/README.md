@@ -9,7 +9,7 @@ This directory contains JSON configuration files for different Blinky hardware d
 | `hat_v1` | Festival Hat v1 | 89 (string) | LINEAR | `hat_v1.json` |
 | `tube_v2` | Tube Light v2 | 60 (4x15 matrix) | MATRIX, vertical zigzag | `tube_v2.json` |
 | `bucket_v3` | Bucket Totem v3 | 128 (16x8 matrix) | MATRIX, horizontal straight | `bucket_v3.json` |
-| `big_bucket_v1` | Big Bucket | 112 (14x8 matrix) | MATRIX, horizontal zigzag, button on D1 cycles generator | `big_bucket_v1.json` |
+| `big_bucket_v1` | Big Bucket | 112 (14x8 matrix) | MATRIX, horizontal zigzag, button on D1 cycles generator. **Outlier:** `ledType=6` (NEO_RGB) — LED part is wired native RGB byte order, not the fleet-standard GRB. | `big_bucket_v1.json` |
 
 ## JSON Schema
 
@@ -26,9 +26,22 @@ All device configuration files must follow this schema:
   "ledHeight": number,            // Matrix height (1 for linear)
   "ledPin": number,               // GPIO pin number for LED data (0-48)
   "brightness": number,           // Default brightness (0-255)
-  "ledType": number,              // NeoPixel type constant (12390 = NEO_GRB + NEO_KHZ800)
-  "orientation": number,          // 0=HORIZONTAL (row-major), 1=VERTICAL (column zigzag),
-                                  // 2=PANEL_GRID (2x2 serpentine), 3=HORIZONTAL_ZIGZAG (row serpentine)
+  "ledType": number,              // Adafruit_NeoPixel NEO_* constant (lower 8 bits encode
+                                  // R/G/B byte ordering; e.g. 82 = NEO_GRB, 6 = NEO_RGB).
+                                  // The firmware driver only allocates 3 bytes per pixel,
+                                  // so NEO_RGBW-style values (offsets >2) are rejected.
+                                  // 12390 = NEO_GRB + NEO_KHZ800 is the default.
+  "orientation": number,          // 0=HORIZONTAL  — plain row-major (data flows L→R every row;
+                                  //                 use when each row is a separate strip
+                                  //                 jumpered back to column 0).
+                                  // 1=VERTICAL    — column-major zigzag (data snakes column-by-
+                                  //                 column, common for vertical tube fixtures).
+                                  // 2=PANEL_GRID  — 2×2 of equal sub-panels chained
+                                  //                 TL→TR→BL→BR, each sub-panel row serpentine.
+                                  // 3=HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R,
+                                  //                 row 1 R→L, row 2 L→R, … Use for a single
+                                  //                 strip snaked back and forth across rows
+                                  //                 (big-bucket-style hand-wired panels).
   "layoutType": number,           // 0=MATRIX, 1=LINEAR, 2=RANDOM
 
   // Battery/Charging Configuration

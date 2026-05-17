@@ -22,6 +22,31 @@ Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin, uint32_t led
     gOffset_ = (order >> 2) & 0x3;
     rOffset_ = (order >> 4) & 0x3;
 
+    // Validate offsets. The NEO_* encoding uses 2-bit fields that can hold
+    // values 0-3, but this driver allocates only 3 bytes per pixel (RGB).
+    // An offset of 3 — produced by RGBW-style constants the hardware does
+    // not support — would walk one byte past the slot and corrupt the next
+    // pixel on every write. PR 142 review (gemini HIGH): fail loud at
+    // construction per CLAUDE.md "No Silent Fallbacks". Leave the buffers
+    // unallocated so isValid() reports false; the caller already
+    // haltWithError's on !isValid().
+    bool offsets_in_range = rOffset_ <= 2 && gOffset_ <= 2 && bOffset_ <= 2;
+    bool offsets_distinct = rOffset_ != gOffset_ && rOffset_ != bOffset_ && gOffset_ != bOffset_;
+    if (!offsets_in_range || !offsets_distinct) {
+        Serial.print(F("[ERROR] Nrf52PwmLedStrip: invalid ledType 0x"));
+        Serial.print(ledType, HEX);
+        Serial.print(F(" decoded r="));
+        Serial.print(rOffset_);
+        Serial.print(F(" g="));
+        Serial.print(gOffset_);
+        Serial.print(F(" b="));
+        Serial.print(bOffset_);
+        Serial.println(offsets_in_range
+            ? F(" (offsets must be distinct; check device JSON)")
+            : F(" (offsets must be 0-2; RGBW types are not supported)"));
+        return;
+    }
+
     uint32_t numBytes = (uint32_t)numPixels * 3;
     pixels_ = new(std::nothrow) uint8_t[numBytes];
     if (pixels_) {

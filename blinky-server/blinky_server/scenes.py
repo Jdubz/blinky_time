@@ -138,18 +138,23 @@ def delete_scene(name: str) -> bool:
 def scene_to_commands(scene: Scene) -> list[str]:
     """Translate a Scene into the firmware command sequence that realises it.
 
-    Order matters: generator first so the effect doesn't briefly paint over
-    the wrong pattern; effect next; effect params last because setting
-    `huespeed`/`hueshift` with no hue effect active is a no-op.
+    Returns a single ``scene <gen> <mode> <speed> <hue>`` command — the
+    firmware (b164+) applies generator + effect + hue params atomically in
+    one handleCommand call, so one BLE broadcast packet replaces what
+    previously took 4. Pre-b164 this returned 2-4 commands (`gen X`,
+    `effect Y`, `set huespeed Z`, `set hueshift W`); each rode on BLE for
+    3s in series, and per-packet capture was ~37% (measured 2026-05-17),
+    which made fleet scene-apply slow and unreliable (~12s per press,
+    devices routinely caught random subsets and landed on mismatched
+    state). A single packet at 800ms on-air gives ~16 retransmits per
+    press — capture odds approach 100% in <1s.
+
+    Both ``speed`` and ``hue`` are always emitted even when the effect mode
+    makes one of them irrelevant — keeps the wire format positional and
+    the firmware parser fixed-arity. The firmware ignores the inactive
+    param (see ``handleSceneCommand``).
     """
-    cmds: list[str] = [f"gen {scene.generator}"]
-    if scene.effect_mode == "off":
-        cmds.append("effect none")
-        return cmds
-    cmds.append("effect hue")
-    if scene.effect_mode == "static":
-        cmds.append("set huespeed 0")
-        cmds.append(f"set hueshift {scene.effect_hue}")
-    else:  # rotate
-        cmds.append(f"set huespeed {scene.effect_speed}")
-    return cmds
+    return [
+        f"scene {scene.generator} {scene.effect_mode} "
+        f"{scene.effect_speed} {scene.effect_hue}"
+    ]
