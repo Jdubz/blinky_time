@@ -311,14 +311,14 @@ void setup() {
       Serial.println(config.matrix.ledPin2);
 
       Serial.println(F("[DEBUG]   alloc strand 1..."));
-      auto* s1 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin);
+      auto* s1 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin, config.matrix.ledType);
       Serial.print(F("[DEBUG]   strand 1 alloc: ptr="));
       Serial.print((uintptr_t)s1, HEX);
       Serial.print(F(" valid="));
       Serial.println(s1 && s1->isValid() ? F("yes") : F("no"));
 
       Serial.println(F("[DEBUG]   alloc strand 2..."));
-      auto* s2 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin2);
+      auto* s2 = new(std::nothrow) Nrf52PwmLedStrip(halfLeds, config.matrix.ledPin2, config.matrix.ledType);
       Serial.print(F("[DEBUG]   strand 2 alloc: ptr="));
       Serial.print((uintptr_t)s2, HEX);
       Serial.print(F(" valid="));
@@ -345,7 +345,7 @@ void setup() {
       }
     }
     if (!useComposite) {
-      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin);
+      auto* asyncStrip = new(std::nothrow) Nrf52PwmLedStrip(numLeds, config.matrix.ledPin, config.matrix.ledType);
       leds = asyncStrip;  // Assign before validity check so cleanup() can free it
       if (!asyncStrip || !asyncStrip->isValid()) {
         haltWithError(F("ERROR: Async LED strip allocation failed"));

@@ -8,10 +8,19 @@
 // Construction / Destruction
 // ---------------------------------------------------------------------------
 
-Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin)
+Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin, uint32_t ledType)
     : numPixels_(numPixels), pin_(pin), brightness_(0),
+      rOffset_(0), gOffset_(0), bOffset_(0),
       pixels_(nullptr), pwmBuffer_(nullptr), pwmBufferLen_(0),
       pwm_(nullptr), begun_(false), transmitting_(false) {
+
+    // Decode the NEO_* ledType byte layout (see header). Mask to lower 8
+    // bits — the upper bits hold the 400/800 KHz speed selector which this
+    // driver ignores (WS2812B 800 KHz is hardcoded in the PWM timing).
+    uint8_t order = (uint8_t)(ledType & 0xFF);
+    bOffset_ = (order >> 0) & 0x3;
+    gOffset_ = (order >> 2) & 0x3;
+    rOffset_ = (order >> 4) & 0x3;
 
     uint32_t numBytes = (uint32_t)numPixels * 3;
     pixels_ = new(std::nothrow) uint8_t[numBytes];
@@ -107,9 +116,9 @@ void Nrf52PwmLedStrip::setPixelColor(uint16_t index, uint8_t r, uint8_t g, uint8
     }
 
     uint8_t* p = &pixels_[index * 3];
-    p[0] = g;  // GRB order
-    p[1] = r;
-    p[2] = b;
+    p[rOffset_] = r;
+    p[gOffset_] = g;
+    p[bOffset_] = b;
 }
 
 void Nrf52PwmLedStrip::setPixelColor(uint16_t index, uint32_t color) {
