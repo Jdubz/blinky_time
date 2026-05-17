@@ -2,6 +2,16 @@
 
 This directory contains JSON configuration files for different Blinky hardware devices. Each JSON file defines a complete device configuration that can be uploaded to the firmware via serial or web console.
 
+**Source of truth:** these files are the intended-canonical config for each
+physical device. To push a registry entry to a connected device today, send
+its full contents as a single `device upload <json>` command via the
+`X-Deploy-Tool`-gated fleet-API endpoint. There is no `deploy-config.sh`
+wrapper yet — that's a planned addition so the registry can be enforced
+in the same way `deploy.sh` enforces firmware. Until that lands, treat
+`git diff` of this directory against the live device's `device show`
+output as the audit path; any drift wants fixing on one side or the
+other.
+
 ## Available Devices
 
 | Device ID | Description | LEDs | Layout | File |
@@ -10,6 +20,8 @@ This directory contains JSON configuration files for different Blinky hardware d
 | `tube_v2` | Tube Light v2 | 60 (4x15 matrix) | MATRIX, vertical zigzag | `tube_v2.json` |
 | `bucket_v3` | Bucket Totem v3 | 128 (16x8 matrix) | MATRIX, horizontal straight | `bucket_v3.json` |
 | `big_bucket_v1` | Big Bucket | 112 (14x8 matrix) | MATRIX, horizontal zigzag, button on D1 cycles generator. **Outlier:** `ledType=6` (NEO_RGB) — LED part is wired native RGB byte order, not the fleet-standard GRB. | `big_bucket_v1.json` |
+| `cart_inner` | Cart Inner | 104 (2×52 matrix, two strands) | MATRIX, horizontal row-major. Strand 1 on D10, strand 2 on D9; firmware splits the pixel buffer in half across the two strands. | `cart_inner.json` |
+| `cart_outer` | Cart Outer | 96 (linear single strand) | LINEAR, single strand on D10. | `cart_outer.json` |
 
 ## JSON Schema
 
