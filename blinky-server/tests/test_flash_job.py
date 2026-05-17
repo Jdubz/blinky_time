@@ -18,8 +18,11 @@ from blinky_server.firmware.flash_job import (
     FlashJobState,
     FlashTransport,
     InvalidTransition,
+    NoReachableTransport,
     TERMINAL_STATES,
+    TransportProbe,
     VerifySubState,
+    select_transport,
 )
 
 
@@ -398,6 +401,41 @@ async def test_wait_for_change_does_not_miss_pre_wait_mutation() -> None:
         job.wait_for_change(since_seq=snap, timeout=5.0), timeout=0.5
     )
     assert result > snap
+
+
+# --- transport selection (Phase 2) -----------------------------------------
+
+
+def test_select_transport_prefers_usb_when_available() -> None:
+    """USB > BLE per feedback_flash_safety_policy. Even when BLE is also
+    reachable, USB wins — the cascade bug came from these paths racing."""
+    probe = TransportProbe(has_usb_app=True, has_ble_dfu_advert=True)
+    assert select_transport(probe) is FlashTransport.UF2
+
+
+def test_select_transport_usb_only() -> None:
+    probe = TransportProbe(has_usb_app=True, has_ble_dfu_advert=False)
+    assert select_transport(probe) is FlashTransport.UF2
+
+
+def test_select_transport_ble_only() -> None:
+    """Falls back to BLE-DFU when USB-CDC app handshake is absent."""
+    probe = TransportProbe(has_usb_app=False, has_ble_dfu_advert=True)
+    assert select_transport(probe) is FlashTransport.BLE_DFU
+
+
+def test_select_transport_raises_when_unreachable() -> None:
+    probe = TransportProbe(has_usb_app=False, has_ble_dfu_advert=False)
+    with pytest.raises(NoReachableTransport):
+        select_transport(probe)
+
+
+def test_transport_probe_is_frozen() -> None:
+    """Selector decisions are auditable — the probe is immutable so a
+    later mutation can't retroactively change the recorded inputs."""
+    probe = TransportProbe(has_usb_app=True, has_ble_dfu_advert=False)
+    with pytest.raises(Exception):  # FrozenInstanceError; subclass of AttributeError
+        probe.has_usb_app = False  # type: ignore[misc]
 
 
 # --- helpers ----------------------------------------------------------------

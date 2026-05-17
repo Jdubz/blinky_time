@@ -104,6 +104,72 @@ class InvalidTransition(Exception):
     """
 
 
+class NoReachableTransport(Exception):
+    """No physical path reaches this device right now — cannot flash.
+
+    Raised by ``select_transport`` when both USB-CDC (app-mode) and
+    BLE-DFU (bootloader AdaDFU advertisement) are absent. The right
+    response is to defer the flash and surface the unreachability to the
+    operator, not to retry blindly. Common reasons:
+      - device is in bootloader CDC-DFU mode with neither MSC nor OTA
+        (the "stuck after 1200-baud touch" state we hit on 2026-05-17)
+      - device is powered off
+      - device is too far for the cart-side hci0 radio AND no USB cable
+    """
+
+
+@dataclass(frozen=True)
+class TransportProbe:
+    """Snapshot of which interfaces can reach the device *right now*.
+
+    The orchestrator builds one of these at job start (during
+    ``SELECTING_TRANSPORT``) from the current ``Device`` / discovery
+    state, then hands it to ``select_transport``. Snapshotting up-front
+    (rather than re-probing inside the selector) keeps the decision
+    auditable: the exact inputs that drove the choice are logged with
+    the job.
+    """
+
+    # True iff the device has an *app-mode* USB-CDC connection — i.e. the
+    # firmware's ``SerialConsole`` is responsive, so the orchestrator can
+    # issue ``bootloader`` to drop the device into UF2 MSC mode for UF2
+    # writes. A bootloader-CDC-DFU enumeration (the post-1200-baud-touch
+    # state) does NOT count: the bootloader's CDC doesn't speak our
+    # SerialConsole protocol.
+    has_usb_app: bool
+
+    # True iff the device's bootloader BLE address is currently
+    # advertising the AdaDFU service. This is the prerequisite for the
+    # BLE-DFU path.
+    has_ble_dfu_advert: bool
+
+
+def select_transport(probe: TransportProbe) -> FlashTransport:
+    """Pick the flash transport for a job. Pinned for the job's lifetime.
+
+    Decision rule (per ``feedback_flash_safety_policy``: USB > BLE):
+      1. USB-CDC app present → UF2 (fast, no radio contention with the
+         broadcaster, no BlueZ slot management).
+      2. Otherwise, AdaDFU advert present → BLE-DFU.
+      3. Otherwise → raise ``NoReachableTransport`` — the orchestrator
+         must not silently retry; the operator decides.
+
+    The "both present" case picks UF2 by rule 1 — there is intentionally
+    no policy lever to override that here. The cascade bug we're closing
+    out (see [[project-deploy-flash-cascade-bug]]) was caused by the two
+    transports racing; collapsing the choice to USB-when-available is
+    exactly the point.
+    """
+    if probe.has_usb_app:
+        return FlashTransport.UF2
+    if probe.has_ble_dfu_advert:
+        return FlashTransport.BLE_DFU
+    raise NoReachableTransport(
+        "Device is not reachable: no USB-CDC app handshake and no AdaDFU "
+        "advertisement. Cannot flash. Defer until one transport reappears."
+    )
+
+
 @dataclass
 class FlashJob:
     """One device, one flash attempt.
