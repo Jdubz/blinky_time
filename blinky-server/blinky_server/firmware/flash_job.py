@@ -373,6 +373,22 @@ class FlashJob:
     # Async coordination
     # ------------------------------------------------------------------ #
 
+    async def wait_until_terminal(self, timeout: float | None = None) -> bool:
+        """Block until the job reaches a terminal state (or ``timeout``).
+
+        Returns True if terminal, False if the timeout fired first. Common
+        use: auto-recovery and deploy.sh both want "wait for this flash to
+        be done, no matter what done means" without writing their own
+        polling loop.
+        """
+        while not self.is_terminal:
+            snap = self._seq
+            new_seq = await self.wait_for_change(since_seq=snap, timeout=timeout)
+            if new_seq == snap:
+                # Timeout fired without a change.
+                return self.is_terminal
+        return True
+
     async def wait_for_change(
         self, since_seq: int, timeout: float | None = None
     ) -> int:

@@ -11,6 +11,13 @@ from typing import Any
 
 from .. import systemd_notify
 from ..ble.advertiser import FleetBroadcaster
+from ..firmware.flash_job import (
+    FlashJob,
+    FlashJobState,
+    NoReachableTransport,
+    TransportProbe,
+    select_transport,
+)
 from ..transport.base import Transport
 from ..transport.discovery import (
     DiscoveredDevice,
@@ -116,6 +123,31 @@ class FleetManager:
         # running concurrently on the same device. Lock is acquired before any
         # DFU operation and held for its entire duration.
         self._dfu_locks: dict[str, asyncio.Lock] = {}
+        # ── Flash-job rewrite (Phase 3) ───────────────────────────────────
+        # The next-generation flash entry point lives in ``flash_device``
+        # below. While this scaffolding is being built up phase by phase, the
+        # legacy ``_dfu_locks`` / ``_dfu_recovery_active`` / ``upload_ble_dfu``
+        # paths above continue to handle real auto-recovery flashes. Phase 8
+        # rewires auto-recovery to go through ``flash_device`` and the legacy
+        # tables retire then.
+        #
+        # _flash_jobs: device_id → currently-or-most-recently-active FlashJob.
+        # Cleared from active by ``_run_flash_job`` when the job terminates;
+        # see ``_recent_flash_attempts`` for completed-flash dedup state.
+        self._flash_jobs: dict[str, FlashJob] = {}
+        # _recent_flash_attempts: device_id → time.time() of the most recent
+        # terminal transition. Auto-recovery (Phase 8) consults this and the
+        # window below to dedup; explicit operator requests via
+        # ``flash_device`` ignore the window (operator already accepted the
+        # cost). Closes the cascade bug from 2026-05-17 where UF2 succeeded,
+        # was mislabelled as failed, and then auto-recovery re-flashed via
+        # BLE-DFU. See [[project-deploy-flash-cascade-bug]].
+        self._recent_flash_attempts: dict[str, float] = {}
+        # 10-minute dedup window. Slack accommodates: a slow UF2 + bootloader
+        # reboot (up to ~2 min on 0.8.0-4), plus the app's first-boot init,
+        # plus a margin for the operator to notice anomalies. Tuned via
+        # ``FLASH_DEDUP_WINDOW_S`` class constant — overridable per test.
+        self._flash_job_locks: dict[str, asyncio.Lock] = {}
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
         # — `_running == True` is not enough, the loop can be alive but stuck.
@@ -172,6 +204,179 @@ class FleetManager:
 
     def get_all_devices(self) -> list[Device]:
         return list(self._devices.values())
+
+    # ────────────────────────────────────────────────────────────────────
+    # Flash-job API (Phase 3 scaffolding — see [[project-deploy-flash-cascade-bug]])
+    #
+    # ``flash_device`` is the single entry point that future auto-recovery
+    # (Phase 8) and explicit operator flashes (Phase 7) will both go
+    # through. The per-device lock + ``_flash_jobs`` table are what enforce
+    # "at most one in-flight flash per device" — preventing the duplicate
+    # write the 2026-05-17 cascade produced. While the orchestrator is
+    # still a stub (this phase), legacy auto-recovery (``upload_ble_dfu``
+    # called from ``_background_loop``) keeps working unchanged.
+    # ────────────────────────────────────────────────────────────────────
+
+    # Window in seconds during which a freshly-completed (or freshly-failed)
+    # flash blocks auto-recovery from triggering a new flash on the same
+    # device. Operator-initiated flashes via ``flash_device`` ignore this.
+    # Per-test override possible by mutating ``FleetManager.FLASH_DEDUP_WINDOW_S``.
+    FLASH_DEDUP_WINDOW_S: float = 600.0  # 10 minutes
+
+    def get_flash_job(self, device_id: str) -> FlashJob | None:
+        """Return the most recent ``FlashJob`` for the device, or None."""
+        return self._flash_jobs.get(device_id)
+
+    def list_flash_jobs(self, active_only: bool = False) -> list[FlashJob]:
+        """Snapshot of all known flash jobs. Used by ``GET /api/jobs``."""
+        if active_only:
+            return [j for j in self._flash_jobs.values() if j.is_active]
+        return list(self._flash_jobs.values())
+
+    def should_attempt_auto_recovery(self, device_id: str) -> bool:
+        """Decide whether auto-recovery may flash this device right now.
+
+        Returns False if either:
+          - an active flash job already exists for the device (in flight)
+          - a recent flash terminated within ``FLASH_DEDUP_WINDOW_S``
+
+        Auto-recovery (Phase 8 wiring) calls this BEFORE invoking
+        ``flash_device``. The check + the flash_device call must happen
+        atomically wrt other auto-recovery passes; the per-device flash
+        lock provides that ordering.
+        """
+        existing = self._flash_jobs.get(device_id)
+        if existing is not None and existing.is_active:
+            return False
+        last = self._recent_flash_attempts.get(device_id)
+        if last is not None and (_time.time() - last) < self.FLASH_DEDUP_WINDOW_S:
+            return False
+        return True
+
+    def _get_flash_job_lock(self, device_id: str) -> asyncio.Lock:
+        """Lazy per-device lock. Creates on first request."""
+        lock = self._flash_job_locks.get(device_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._flash_job_locks[device_id] = lock
+        return lock
+
+    async def flash_device(
+        self,
+        device_id: str,
+        firmware_path: Path,
+        *,
+        expected_version: str | None = None,
+    ) -> FlashJob:
+        """Explicit flash request. Returns a ``FlashJob`` immediately.
+
+        Idempotent under concurrent calls: if another caller's flash job
+        for the same device is already in flight, returns that job rather
+        than creating a second one. (This is the structural fix for the
+        cascade bug — there is no path to "two writes for one device.")
+
+        Does NOT consult the dedup window. Auto-recovery is the caller
+        responsible for ``should_attempt_auto_recovery`` first; an explicit
+        operator flash always proceeds.
+
+        The actual write happens on a background task, so the returned job
+        starts in ``PENDING`` or ``SELECTING_TRANSPORT`` and the caller
+        observes progress via ``job.wait_until_terminal()`` /
+        ``GET /api/jobs/{job_id}`` polling.
+        """
+        lock = self._get_flash_job_lock(device_id)
+        async with lock:
+            existing = self._flash_jobs.get(device_id)
+            if existing is not None and existing.is_active:
+                log.info(
+                    "flash_device(%s): returning in-flight job %s (state=%s)",
+                    device_id,
+                    existing.job_id,
+                    existing.state.value,
+                )
+                return existing
+            job = FlashJob(
+                device_id=device_id,
+                firmware_path=firmware_path,
+                expected_version=expected_version,
+            )
+            self._flash_jobs[device_id] = job
+            log.info(
+                "flash_device(%s): created job %s, firmware=%s, expected_version=%s",
+                device_id,
+                job.job_id,
+                firmware_path,
+                expected_version,
+            )
+        # Launch the orchestrator OUTSIDE the lock so a long-running flash
+        # doesn't block subsequent flash_device queries for the same device
+        # (those will see is_active=True and return the in-flight job).
+        task = asyncio.create_task(
+            self._run_flash_job(job), name=f"flash-job-{job.job_id}"
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return job
+
+    async def _run_flash_job(self, job: FlashJob) -> None:
+        """Drive a ``FlashJob`` through its state machine.
+
+        Phase 3 STUB: walks PENDING → SELECTING_TRANSPORT, builds the
+        transport probe, picks the transport, then transitions to FAILED
+        with an explicit "transport not yet wired" error. Phase 7 wires
+        the UF2 branch; Phase 9 wires the BLE-DFU branch. This stub
+        exists so the orchestration scaffolding (lock, table, dedup
+        timestamp) can be tested before the transport implementations.
+
+        Always records ``_recent_flash_attempts`` on terminal transition,
+        regardless of success/failure — so dedup catches "I just tried
+        this device" even when the attempt failed.
+        """
+        try:
+            job.transition(FlashJobState.SELECTING_TRANSPORT)
+            probe = self._build_transport_probe(job.device_id)
+            try:
+                transport = select_transport(probe)
+            except NoReachableTransport as exc:
+                job.set_error(str(exc))
+                job.transition(FlashJobState.FAILED)
+                return
+            job.set_transport(transport)
+            # Phase 3 stub — replaced in Phase 7 (UF2) / Phase 9 (BLE-DFU).
+            job.set_error(
+                "flash transport not yet wired in Phase 3 scaffolding "
+                f"(selected={transport.value})"
+            )
+            job.transition(FlashJobState.FAILED)
+        except Exception as exc:
+            log.exception("flash job %s crashed: %s", job.job_id, exc)
+            job.set_error(f"orchestrator crashed: {exc}")
+            if not job.is_terminal:
+                job.transition(FlashJobState.FAILED)
+        finally:
+            # Stamp dedup timestamp on every terminal exit. Held under the
+            # per-device lock so a concurrent should_attempt_auto_recovery
+            # call sees a consistent (jobs + timestamps) snapshot.
+            lock = self._get_flash_job_lock(job.device_id)
+            async with lock:
+                self._recent_flash_attempts[job.device_id] = _time.time()
+
+    def _build_transport_probe(self, device_id: str) -> TransportProbe:
+        """Snapshot which interfaces reach this device *right now*.
+
+        Phase 3: USB-CDC app handshake is the only signal wired up; BLE-DFU
+        advert detection is stubbed to False. Phase 5 fills in the BLE
+        branch (the AdaDFU discovery hook already exists in
+        ``transport.discovery``; this just needs to consult it).
+        """
+        device = self._devices.get(device_id)
+        has_usb_app = (
+            device is not None
+            and device.transport.transport_type == "serial"
+            and device.transport.is_connected
+        )
+        # Phase 5 TODO: detect AdaDFU advert at device's bootloader BLE addr.
+        return TransportProbe(has_usb_app=has_usb_app, has_ble_dfu_advert=False)
 
     async def start(self) -> None:
         """Start background loop for device discovery and management.
