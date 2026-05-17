@@ -48,6 +48,13 @@ LE_ADV_IFACE = "org.bluez.LEAdvertisement1"
 # service) will fail identically on every retry — re-raise immediately
 # so the operator gets the real diagnostic without waiting through the
 # backoff. PR 142 review.
+# Backoff schedule for RegisterAdvertisement retries (exponential).
+# Totals ~7.5 s before the final attempt re-raises. Module-level
+# constant rather than per-call so it doesn't re-allocate on every
+# `start()` invocation. PR 142 review (claude[bot] item 8).
+_BACKOFFS_S: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+
+
 _TRANSIENT_REGISTER_ERROR_TYPES = frozenset(
     {
         "org.bluez.Error.Failed",  # generic, what BlueZ returns for the slot-still-held case
@@ -239,7 +246,6 @@ class FleetBroadcaster:
             # call_register_advertisement is a dynamically-generated
             # method on the proxy interface (dbus-fast builds it from the
             # introspection XML), so mypy can't see it statically.
-            _BACKOFFS_S = (0.5, 1.0, 2.0, 4.0)  # 4 retries → ~7.5 s total
             for attempt in range(1, len(_BACKOFFS_S) + 2):  # 1..5
                 try:
                     await mgr.call_register_advertisement(  # type: ignore[attr-defined]

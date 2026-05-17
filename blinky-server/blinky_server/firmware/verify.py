@@ -36,6 +36,7 @@ import time
 from typing import Any, Protocol
 
 from .flash_job import FlashJob, FlashJobState, VerifySubState
+from .utils import extract_version
 
 log = logging.getLogger(__name__)
 
@@ -186,13 +187,8 @@ async def run_verify(
 def _extract_version(info: dict[str, Any]) -> str | None:
     """Pull the firmware version string out of a ``json info`` response.
 
-    The firmware emits the version under various key names depending on
-    the build vintage — we accept any of the common ones. This is a
-    surface area best kept in one place; if the firmware ever settles
-    on a canonical key, simplify here.
+    Delegates to ``firmware.utils.extract_version`` — the canonical
+    version-key list lives there and is shared with ``anomalies.py``.
+    PR 142 review flagged this previously-duplicated copy as a sync hazard.
     """
-    for key in ("version", "firmware_version", "fw_version", "build"):
-        v = info.get(key)
-        if isinstance(v, str) and v:
-            return v
-    return None
+    return extract_version(info)

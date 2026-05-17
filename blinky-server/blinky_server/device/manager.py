@@ -402,13 +402,29 @@ class FleetManager:
             job.transition(FlashJobState.FAILED)
             return
 
+        # UF2 is USB-only; if we got here with a non-serial transport, the
+        # transport-selector code in flash_job.select_transport has a bug
+        # and we want it loud, not a silent fall-back to the stale
+        # `device.port` attribute. PR 142 review (claude[bot] HIGH item 1):
+        # the previous `hasattr(...) else device.port` ternary was the
+        # CLAUDE.md "silent fallback" anti-pattern. Transport.address is
+        # on the abstract base class — every concrete transport has it —
+        # so the hasattr() check was masking a non-existent failure mode
+        # AND silently substituting the wrong value if the invariant ever
+        # broke.
+        if device.transport.transport_type != "serial":
+            job.set_error(
+                f"UF2 flash requires a serial transport, got "
+                f"{device.transport.transport_type!r} (transport selector bug)"
+            )
+            job.transition(FlashJobState.FAILED)
+            return
+
         # WRITING: subprocess + progress callbacks.
         job.transition(FlashJobState.WRITING)
         write_ok = await flash_uf2_for_job(
             job,
-            serial_port=device.transport.address
-            if hasattr(device.transport, "address")
-            else device.port,
+            serial_port=device.transport.address,
             firmware_path=str(job.firmware_path),
             transport=device.transport,
         )
@@ -419,11 +435,22 @@ class FleetManager:
 
         # VERIFYING: progressive sub-states + anomaly detection.
         job.transition(FlashJobState.VERIFYING)
-        signals = _FleetVerifySignals(fleet=self, device_id=job.device_id)
         history = SignalHistory(
             write_completed_at=job.write_completed_at or _time.time(),
             expected_version=job.expected_version,
+            # `previous_version` is what the device reported at discovery
+            # handshake (`json info` populates `device.version`). The
+            # `detect_stale_firmware` detector compares the post-flash
+            # version against this — when the new firmware boots but
+            # `json info` still reports the old build string, that's the
+            # "BL accepted UF2 but didn't update the valid-app marker"
+            # failure mode we hit on 2026-05-17 with bootloader 0.8.0-4.
+            # PR 142 review (claude[bot] item 7): before this wiring,
+            # `previous_version` was always None and detect_stale_firmware
+            # silently never fired.
+            previous_version=device.version,
         )
+        signals = _FleetVerifySignals(fleet=self, device_id=job.device_id, history=history)
         # Wrap run_verify in a soft 5-minute total cap. The verify state
         # machine itself never fails on wall-clock; this is the
         # orchestrator's safety net for "operator isn't watching, give
@@ -461,7 +488,8 @@ class FleetManager:
                 await asyncio.sleep(2.0)
                 check_anomalies(job, history)
 
-        signals.history = history  # let signals populate it as they observe
+        # signals.history is wired in via the constructor (see
+        # _FleetVerifySignals docstring); no need to assign here.
         anomaly_task = asyncio.create_task(_anomaly_loop(), name=f"anomaly-{job.job_id}")
         try:
             await run_verify(job, signals)
@@ -1720,18 +1748,29 @@ class FleetManager:
 
 
 class _FleetVerifySignals:
-    """Verify-signal source backed by FleetManager + udev sysfs reads."""
+    """Verify-signal source backed by FleetManager + udev sysfs reads.
 
-    def __init__(self, fleet: FleetManager, device_id: str) -> None:
+    Constructed with the ``SignalHistory`` the anomaly sweep will read
+    from. Wiring history in via the constructor (rather than as a
+    settable attribute the caller is expected to assign after the fact)
+    closes a non-obvious invisible-dependency: if a future test or
+    caller constructs ``_FleetVerifySignals`` and forgets the external
+    ``signals.history = history`` line, the anomaly sweep silently
+    sees no data and detectors never fire. PR 142 review (claude[bot]
+    item 6, second review).
+    """
+
+    def __init__(
+        self,
+        fleet: FleetManager,
+        device_id: str,
+        history: SignalHistory,
+    ) -> None:
         self._fleet = fleet
         self._device_id = device_id
         self._initial_devnum: int | None = None
         self._initial_devnum_captured_at: float = 0.0
-        # ``run_verify`` doesn't know about SignalHistory — Phase 7
-        # populates this from outside (manager._verify_with_anomaly_checks
-        # assigns to .history) so the anomaly sweep can read what the
-        # signals have observed.
-        self.history: SignalHistory | None = None
+        self.history: SignalHistory = history
 
     async def has_re_enumerated_since(self, device_id: str, since: float) -> bool:
         """True if the USB device number changed after ``since``.
@@ -1751,8 +1790,7 @@ class _FleetVerifySignals:
         # Re-enum is signalled by the device number changing.
         if current_devnum is not None and current_devnum != self._initial_devnum:
             # Record into history for anomaly detection.
-            if self.history is not None:
-                self.history.re_enum_timestamps.append(_time.time())
+            self.history.re_enum_timestamps.append(_time.time())
             # Bump the baseline so we only count this re-enum once
             # toward the "has it happened?" signal. Multiple bounces
             # are caught by anomaly detectors via the history.
@@ -1766,7 +1804,19 @@ class _FleetVerifySignals:
             return False
         try:
             return bool(device.transport.is_connected)
-        except Exception:
+        except Exception as exc:
+            # CLAUDE.md "no silent fallbacks": returning False here on an
+            # unexpected error stalls the verify state machine at
+            # AWAITING_APP_BOOT indefinitely, which is exactly the kind
+            # of invisible failure that turns a 5-min debug into hours.
+            # Log at debug so the verify-poll path is diagnosable from
+            # journalctl without spamming the WARN channel on every
+            # poll. PR 142 review (claude[bot] HIGH item 2).
+            log.debug(
+                "is_serial_connected(%s) treating exception as 'not connected': %s",
+                device_id,
+                exc,
+            )
             return False
 
     async def get_handshake_info(self, device_id: str) -> dict[str, Any] | None:
@@ -1803,8 +1853,7 @@ class _FleetVerifySignals:
                 return None
         if not isinstance(payload, dict):
             return None
-        if self.history is not None:
-            self.history.handshakes.append((_time.time(), payload))
+        self.history.handshakes.append((_time.time(), payload))
         return payload
 
     def _read_devnum_for_device(self) -> int | None:

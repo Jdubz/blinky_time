@@ -58,11 +58,14 @@ def get_current() -> str | None:
         # The common case for a fresh install — no cursor yet. Don't log.
         return None
     except (OSError, json.JSONDecodeError) as exc:
-        # File exists but is unreadable/corrupt — surprising enough to be
-        # worth a debug log so an operator chasing a "next press lands
-        # somewhere weird" report can correlate. PR 142 review
-        # (claude[bot] item #4).
-        log.debug("scene cursor unreadable, treating as absent: %s", exc)
+        # File exists but is unreadable/corrupt. Something wrote a bad
+        # file — that's surprising enough to warrant a WARN (not debug)
+        # so an operator chasing a "next press restarts from the
+        # beginning" report sees the cause without having to enable
+        # debug logging first. FileNotFoundError stays silent above
+        # (the fresh-install common case). PR 142 review (claude[bot]
+        # item #5, second review).
+        log.warning("scene cursor unreadable, treating as absent: %s", exc)
         return None
     name = data.get("current")
     return name if isinstance(name, str) and name else None

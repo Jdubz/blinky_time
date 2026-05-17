@@ -22,6 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..device.manager import FleetManager
 from .deps import get_fleet, require_api_key, require_deploy_tool
 
 log = logging.getLogger(__name__)
@@ -49,7 +50,10 @@ class FlashJobCreate(BaseModel):
     status_code=202,
     dependencies=[Depends(require_api_key), Depends(require_deploy_tool)],
 )
-async def create_flash_job(body: FlashJobCreate) -> dict[str, Any]:
+async def create_flash_job(
+    body: FlashJobCreate,
+    fleet: FleetManager = Depends(get_fleet),
+) -> dict[str, Any]:
     """Create a flash job. Returns immediately (202 Accepted) with the
     job snapshot — the actual write runs in the background.
 
@@ -61,7 +65,6 @@ async def create_flash_job(body: FlashJobCreate) -> dict[str, Any]:
     is a device-mutating, hard-to-reverse operation; the
     ``X-Deploy-Tool`` header acts as the operator-intent check.
     """
-    fleet = get_fleet()
     fw_path = Path(body.firmware_path)
     if not fw_path.is_file():
         # Surface the absolute resolved path alongside the operator-supplied
@@ -81,8 +84,14 @@ async def create_flash_job(body: FlashJobCreate) -> dict[str, Any]:
     return job.to_dict()
 
 
-@router.get("/flash-jobs/{job_id}")
-async def get_flash_job(job_id: str) -> dict[str, Any]:
+@router.get(
+    "/flash-jobs/{job_id}",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_flash_job(
+    job_id: str,
+    fleet: FleetManager = Depends(get_fleet),
+) -> dict[str, Any]:
     """Return the current snapshot of one flash job.
 
     For long-polling: pass ``seq`` from a previous snapshot in your
@@ -90,22 +99,43 @@ async def get_flash_job(job_id: str) -> dict[str, Any]:
     waiting). If you need to *wait* for the next change, add a small
     sleep + re-poll on the client side. Server-side long-poll (if we
     want it) would be a separate endpoint.
+
+    Auth: requires ``X-API-Key`` (added 2026-05-17 per PR 142 review).
+    Job metadata (firmware path, device ID, timestamps, anomalies)
+    leaks operational detail; gating on API key matches the POST path.
+
+    TODO: ``_flash_jobs`` is keyed by ``device_id``, so this is an O(n)
+    scan over the table. Fine for small fleets; if a per-id long-poll
+    endpoint ever lands, add a secondary ``_flash_jobs_by_id`` index.
     """
-    fleet = get_fleet()
     for job in fleet.list_flash_jobs():
         if job.job_id == job_id:
             return job.to_dict()
     raise HTTPException(404, f"flash job not found: {job_id}")
 
 
-@router.get("/flash-jobs")
-async def list_flash_jobs(active: bool = False) -> dict[str, Any]:
+@router.get(
+    "/flash-jobs",
+    dependencies=[Depends(require_api_key)],
+)
+async def list_flash_jobs(
+    active: bool = False,
+    fleet: FleetManager = Depends(get_fleet),
+) -> dict[str, Any]:
     """List flash jobs. ``?active=true`` filters to in-flight only.
 
     Order: most-recently-created first, regardless of state. Useful for
     a dashboard view of "what's the flashing system been doing lately."
+
+    Note: ``_flash_jobs`` retains exactly one ``FlashJob`` per
+    ``device_id`` (the latest one), so multi-step history of a single
+    device is NOT visible here — earlier jobs for the same device are
+    overwritten. If multi-flash history matters, the L4 persistent
+    audit log spec'd in ``docs/FLASH_LOCKDOWN_PLAN.md`` is the right
+    home for it. PR 142 review.
+
+    Auth: requires ``X-API-Key`` (added 2026-05-17 per PR 142 review).
     """
-    fleet = get_fleet()
     jobs = fleet.list_flash_jobs(active_only=active)
     jobs.sort(key=lambda j: j.created_at, reverse=True)
     return {"jobs": [j.to_dict() for j in jobs], "count": len(jobs)}

@@ -142,8 +142,20 @@ async def _apply_scene(scene: Scene) -> dict[str, object]:
     then ``effect hue`` succeeds on both; without the full trace a client
     would only see the successful last step).
 
-    Also updates the scene cursor so subsequent ``/api/scenes/next``
-    or ``/api/scenes/previous`` calls advance from this scene.
+    **Cursor semantics: tracks operator intent, NOT delivery.**
+
+    ``scene_cursor.set_current()`` is called unconditionally after the
+    broadcast loop, regardless of per-device delivery status. This is
+    deliberate: BLE broadcast is fire-and-forget with ~37%-~100% per-
+    packet capture depending on conditions, so a strict "advance only on
+    100% delivery" rule would routinely fail to update the cursor when
+    the operator visibly saw the scene take effect on most devices. The
+    "what scene did I last ask for?" model matches operator mental model
+    better than "what scene did every device confirm?". A subsequent
+    ``/api/scenes/next`` press always advances from the last-requested
+    scene, not the last-fully-delivered one. PR 142 review documented
+    this; if the policy ever changes, gate the ``set_current`` call on
+    inspecting ``results`` for per-device acks.
     """
     fleet = get_fleet()
     commands = scene_to_commands(scene)
