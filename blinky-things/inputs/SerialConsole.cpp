@@ -998,14 +998,20 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.orientation = doc["orientation"] | 0;
     newConfig.layoutType = doc["layoutType"] | 0;
 
-    // Battery flag. Per operator rule, threshold/voltage/fast-charge
-    // values are NOT configurable per device — they are static
-    // `Platform::Battery::*` constants applied at load time when
-    // `battery == true`. The old per-device JSON keys
-    // (fastChargeEnabled, lowBatteryThreshold, criticalBatteryThreshold,
-    // minVoltage, maxVoltage) are no longer read. We do still zero the
-    // corresponding StoredDeviceConfig fields so a partial upload from
-    // an old client doesn't leave stale bytes in flash.
+    // Battery flag. Per operator rule, the threshold/voltage/fast-charge
+    // values are NOT configurable per device — they're hardcoded in the
+    // firmware (`Platform::Battery::*` constants for thresholds,
+    // hardcoded `true` for fast charge). When `battery == true`,
+    // blinky-things.ino allocates BatteryMonitor and references the
+    // constants directly at the point of use; when `false`, the entire
+    // battery subsystem is skipped (no allocation, no init, no per-loop
+    // poll). The old per-device JSON keys (fastChargeEnabled,
+    // lowBatteryThreshold, criticalBatteryThreshold, minVoltage,
+    // maxVoltage) are no longer read and have no effect — they're
+    // silently dropped if present in incoming JSON. We zero the
+    // corresponding StoredDeviceConfig fields explicitly so partial
+    // uploads from an old client can't leave stale flash bytes that
+    // might be misread by a future revision.
     newConfig.battery = doc["battery"] | false;
     newConfig.fastChargeEnabled = false;
     newConfig.lowBatteryThreshold = 0.0f;

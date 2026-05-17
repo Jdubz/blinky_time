@@ -22,11 +22,7 @@ const DeviceConfig TEST_CHIP_CONFIG = {
     .layoutType = LINEAR_LAYOUT
   },
   .charging = {
-    .fastChargeEnabled = false,
-    .lowBatteryThreshold = 3.5f,
-    .criticalBatteryThreshold = 3.3f,
-    .minVoltage = Platform::Battery::VOLTAGE_EMPTY,
-    .maxVoltage = Platform::Battery::VOLTAGE_FULL
+    .battery = false  // bare test chip — no battery wired
   },
   .imu = {
     .upVectorX = 0.0f,

@@ -36,29 +36,16 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     matrix.orientation = (MatrixOrientation)stored.orientation;
     matrix.layoutType = (LayoutType)stored.layoutType;
 
-    // Battery monitoring is gated on the single `battery` flag. When set,
-    // the threshold/voltage values come from `Platform::Battery::*` static
-    // constants (operator rule: NOT configurable per-device, always the
-    // same chemistry-derived LiPo values). When unset, the fields are
-    // zeroed and the battery-monitoring code paths skip themselves.
-    // The legacy per-device threshold fields in StoredDeviceConfig are
-    // intentionally ignored — they exist for flash-layout back-compat
-    // but no longer participate in runtime behavior.
+    // Single boolean. When false, blinky-things.ino skips
+    // BatteryMonitor allocation entirely; when true, it allocates and
+    // sources thresholds from `Platform::Battery::*` at the point of
+    // use (no intermediary fields). The legacy per-device threshold
+    // bytes in StoredDeviceConfig (fastChargeEnabled, lowBattery*,
+    // critical*, minVoltage, maxVoltage) are intentionally ignored —
+    // they exist for flash-layout back-compat but no longer
+    // participate in runtime behavior.
     ChargingConfig charging;
     charging.battery = stored.battery;
-    if (stored.battery) {
-        charging.fastChargeEnabled = true;
-        charging.lowBatteryThreshold = Platform::Battery::DEFAULT_LOW_THRESHOLD;
-        charging.criticalBatteryThreshold = Platform::Battery::DEFAULT_CRITICAL_THRESHOLD;
-        charging.minVoltage = Platform::Battery::VOLTAGE_EMPTY;
-        charging.maxVoltage = Platform::Battery::VOLTAGE_FULL;
-    } else {
-        charging.fastChargeEnabled = false;
-        charging.lowBatteryThreshold = 0.0f;
-        charging.criticalBatteryThreshold = 0.0f;
-        charging.minVoltage = 0.0f;
-        charging.maxVoltage = 0.0f;
-    }
 
     IMUConfig imu;
     imu.upVectorX = stored.upVectorX;
@@ -130,18 +117,13 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     outStored.orientation = (uint8_t)config.matrix.orientation;
     outStored.layoutType = (uint8_t)config.matrix.layoutType;
 
-    // Copy charging config. The per-device threshold fields are no longer
-    // load-bearing (loadFromFlash sources them from Platform::Battery::*
-    // constants based on the `battery` flag), but we still write whatever
-    // the runtime config holds so a `device show` after upload + reboot
-    // doesn't surprise the operator with zeros. The single source of
-    // truth at runtime is `battery`.
+    // Copy charging config. Only the `battery` byte is load-bearing now;
+    // the legacy threshold/voltage/fastCharge bytes stay in
+    // StoredDeviceConfig for flash layout back-compat but are no longer
+    // written from the runtime side. They're zero-initialised in
+    // uploadDeviceConfig and stay zero, which is fine because
+    // loadFromFlash doesn't read them.
     outStored.battery = config.charging.battery;
-    outStored.fastChargeEnabled = config.charging.fastChargeEnabled;
-    outStored.lowBatteryThreshold = config.charging.lowBatteryThreshold;
-    outStored.criticalBatteryThreshold = config.charging.criticalBatteryThreshold;
-    outStored.minVoltage = config.charging.minVoltage;
-    outStored.maxVoltage = config.charging.maxVoltage;
 
     // Copy IMU config
     outStored.upVectorX = config.imu.upVectorX;
@@ -257,21 +239,14 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         return false;
     }
 
-    // Validate voltage ranges — only when the device is battery-equipped.
-    // Non-battery devices store zeros for these fields (which would
-    // otherwise fail the min<max check) since the per-device threshold
-    // values are no longer load-bearing — see `loadFromFlash` and the
-    // comment on `StoredDeviceConfig::battery` for the rationale.
-    if (stored.battery) {
-        if (stored.minVoltage >= stored.maxVoltage) {
-            SerialConsole::logWarn(F("Invalid voltage range"));
-            return false;
-        }
-        if (stored.minVoltage < 2.5f || stored.maxVoltage > 5.0f) {
-            SerialConsole::logWarn(F("Voltage out of safe range"));
-            return false;
-        }
-    }
+    // Voltage range check removed — the per-device minVoltage/maxVoltage
+    // bytes in StoredDeviceConfig are no longer load-bearing. They're
+    // zeroed by uploadDeviceConfig and ignored at load time;
+    // battery-equipped devices source thresholds from
+    // `Platform::Battery::*` constants in blinky-things.ino. Leaving
+    // the check in would falsely reject any new upload with
+    // `"battery": true` (zeroed fields make `0 >= 0` true → fail).
+    // See StoredDeviceConfig::battery for the schema rationale.
 
     // Validate sample rate (common PDM rates: 8000, 16000, 32000, 44100, 48000)
     // Intentionally warn-only (not hard error) to allow flexibility for:

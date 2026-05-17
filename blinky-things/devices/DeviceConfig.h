@@ -32,22 +32,19 @@ struct MatrixConfig {
 };
 
 struct ChargingConfig {
-  // True if this device is battery-equipped. Set from StoredDeviceConfig
-  // by DeviceConfigLoader::loadFromFlash. When true, the threshold/voltage
-  // fields below are populated from `Platform::Battery::*` constants
-  // (NOT from the stored per-device values, which are no longer
-  // configurable). When false, battery monitoring code (see
-  // blinky-things.ino battery branch) is skipped entirely.
+  // Single source of truth for "does this device have a battery?".
+  // Set from StoredDeviceConfig::battery by DeviceConfigLoader::loadFromFlash.
+  // When false, the entire battery subsystem is skipped: no
+  // BatteryMonitor allocation, no setFastCharge call, no periodic ADC
+  // read, no charging-state polling, no battery telemetry stream. The
+  // BatteryMonitor pointer (`battery` in blinky-things.ino) is left
+  // null and downstream code null-checks it.
+  //
+  // When true, the BatteryMonitor uses the static `Platform::Battery::*`
+  // thresholds directly at the point of use — the previously-stored
+  // per-device threshold values are NOT configurable per operator
+  // direction. fastCharge is hardcoded on (always-true) at init time.
   bool battery;
-
-  // Static values populated by DeviceConfigLoader. These are read but
-  // not written by the JSON upload path anymore — they exist on the
-  // runtime DeviceConfig for the battery code to read off of.
-  bool fastChargeEnabled;
-  float lowBatteryThreshold;
-  float criticalBatteryThreshold;
-  float minVoltage;
-  float maxVoltage;
 };
 
 struct IMUConfig {

@@ -244,12 +244,29 @@ void setup() {
     }
   }
 
-  // Initialize HAL-enabled components - ALWAYS initialize (even in safe mode)
-  // Audio and battery monitoring work independently of LED configuration
+  // Initialize HAL-enabled components.
+  //
+  // Audio is initialized on every device (works independently of LED config,
+  // needed for serial-streamed audio diagnostics even in safe mode).
+  //
+  // Battery is only allocated when this device is battery-equipped per the
+  // config. Non-battery devices (carts, buckets, display, umbrella) leave
+  // the BQ24074 charger IC unpowered — instantiating BatteryMonitor on
+  // them wastes a heap allocation, would halt boot if that allocation
+  // failed, and would run an ADC poll + GPIO read every main-loop
+  // iteration (see line ~761) for a charging-state that can never
+  // change. The downstream call sites all null-check `battery` already,
+  // so leaving it null is the cleanest "fully disabled" state.
   audioController = new(std::nothrow) AudioTracker(DefaultHal::pdm(), DefaultHal::time());
-  battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
-  if (!audioController || !battery) {
-    haltWithError(F("ERROR: HAL component allocation failed"));
+  if (!audioController) {
+    haltWithError(F("ERROR: AudioController allocation failed"));
+  }
+  battery = nullptr;
+  if (validDeviceConfig && config.charging.battery) {
+    battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+    if (!battery) {
+      haltWithError(F("ERROR: BatteryMonitor allocation failed"));
+    }
   }
 
   // Initialize audio controller (uses default or configured sample rate)
@@ -475,17 +492,17 @@ void setup() {
   }
   // End of LED system initialization
 
-  // Initialize battery monitor — only on devices that actually have a
-  // battery wired. Non-battery devices (carts, buckets, display,
-  // umbrella) leave the charger IC unpowered; running setFastCharge()
-  // there just toggles a floating pin. The `battery` flag in
-  // DeviceConfig.charging is the single source of truth (see
-  // ConfigStorage::StoredDeviceConfig::battery for the schema rationale).
-  if (validDeviceConfig && config.charging.battery) {
+  // Initialize battery monitor on battery-equipped devices. The
+  // `battery` global is non-null iff `config.charging.battery` is true
+  // (gated at allocation, line ~250), so reaching this branch means
+  // we have a real BatteryMonitor to bring up. Fast charge is
+  // hardcoded on — per operator direction it's never configurable
+  // per-device.
+  if (battery) {
     if (!battery->begin()) {
       SerialConsole::logWarn(F("Battery monitor failed to start"));
     } else {
-      battery->setFastCharge(config.charging.fastChargeEnabled);
+      battery->setFastCharge(true);
       SerialConsole::logDebug(F("Battery monitor initialized"));
     }
   } else {
@@ -757,15 +774,23 @@ void loop() {
     }
   }
 
-  // Track charging state changes
-  bool currentChargingState = battery ? battery->isCharging() : false;
-  if (currentChargingState != prevChargingState) {
-    if (currentChargingState) {
-      SerialConsole::logInfo(F("Charging started"));
-    } else {
-      SerialConsole::logInfo(F("Charging stopped"));
+  // Track charging-state transitions. Skipped entirely on non-battery
+  // devices where `battery` is null — no ADC read, no GPIO poll, no
+  // comparison work per loop iteration. The previous form
+  // (`battery ? battery->isCharging() : false`) was already cheap on
+  // non-battery devices, but wrapping the whole block makes the
+  // dead-code-elimination intent unambiguous and means the
+  // `prevChargingState` comparison also doesn't run.
+  if (battery) {
+    bool currentChargingState = battery->isCharging();
+    if (currentChargingState != prevChargingState) {
+      if (currentChargingState) {
+        SerialConsole::logInfo(F("Charging started"));
+      } else {
+        SerialConsole::logInfo(F("Charging stopped"));
+      }
+      prevChargingState = currentChargingState;
     }
-    prevChargingState = currentChargingState;
   }
 
   // Render current generator through the effect pipeline (only if valid config)
@@ -844,23 +869,22 @@ void loop() {
   }
 #endif
 
-  // Battery monitoring - periodic voltage check. Gated on
-  // `config.charging.battery` so non-battery devices skip the ADC
-  // read + threshold compare entirely (the thresholds are zero on
-  // those devices, which would fire false low/critical alerts if any
-  // ADC noise made it through the `voltage > 0` guard).
+  // Battery monitoring - periodic voltage check. Gated on `battery`
+  // being non-null (which it is iff the device is battery-equipped per
+  // the conditional allocation at setup() ~line 250). Thresholds come
+  // straight from `Platform::Battery::*` — chemistry-derived
+  // constants, not configurable per device.
   static uint32_t lastBatteryCheck = 0;
-  if (battery && validDeviceConfig && config.charging.battery
-      && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+  if (battery && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
-    if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
+    if (voltage > 0 && voltage < Platform::Battery::VOLTAGE_CRITICAL) {
       if (SerialConsole::getGlobalLogLevel() >= LogLevel::ERROR) {
         Serial.print(F("[ERROR] CRITICAL BATTERY: "));
         Serial.print(voltage);
         Serial.println(F("V"));
       }
-    } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
+    } else if (voltage > 0 && voltage < Platform::Battery::VOLTAGE_LOW) {
       if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
         Serial.print(F("[WARN] Low battery: "));
         Serial.print(voltage);
