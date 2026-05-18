@@ -1244,17 +1244,48 @@ class FleetManager:
                 job.transition(FlashJobState.FAILED)
                 return
 
-            if result.get("status") != "ok":
-                job.set_error(f"BLE DFU failed: {result.get('message', 'unknown error')}")
+            # Two conditions must BOTH hold for the BLE-DFU job to be
+            # treated as successful:
+            #   1. ``status == "ok"`` — the DFU transfer itself
+            #      completed at the protocol level (all bytes acked,
+            #      activate command sent).
+            #   2. ``verified is True`` — the device re-appeared as the
+            #      app over BLE within the post-reboot verify window.
+            #
+            # Checking BOTH (defense in depth) means that if a future
+            # regression in ``_ble_dfu_write_impl`` re-introduces the
+            # 2026-05-18 false-success pattern (status=ok + verified=
+            # False — transfer done, device never seen advertising as
+            # app), the orchestrator still routes to FAILED. The
+            # device may be left in DFU after a failed verify and the
+            # operator must know — silently calling it completed
+            # opened a 10-min auto-recovery dedup window over a stuck
+            # device, which is exactly what the BLE-only fleet
+            # cannot tolerate. See docs/BLE_FLEET_RELIABILITY_PLAN.md
+            # item A.
+            if result.get("status") != "ok" or not result.get("verified", False):
+                msg = result.get("message", "unknown error")
+                if result.get("status") == "ok" and not result.get("verified", False):
+                    # Defensive log: this branch only fires if the
+                    # downstream impl regressed. Surface loudly so the
+                    # cause is obvious in postmortems.
+                    log.error(
+                        "BLE DFU job %s: impl returned status=ok but verified=False "
+                        "— treating as FAILED to prevent silent stuck-in-DFU. msg=%s",
+                        job.job_id,
+                        msg,
+                    )
+                job.set_error(f"BLE DFU failed: {msg}")
                 job.transition(FlashJobState.FAILED)
                 return
 
-            # ``_ble_dfu_write_impl`` returned ok — its own post-DFU
-            # verify already scanned for the rebooted device (with the
-            # random-static-address-change fallback). Map directly to
-            # COMPLETED. The lockdown plan calls for migrating this
-            # verify into a BLE-aware ``run_verify`` branch later;
-            # until that lands, the legacy verify is what we trust.
+            # ``_ble_dfu_write_impl`` returned ok AND verified — its
+            # own post-DFU verify already scanned for the rebooted
+            # device (with the random-static-address-change fallback).
+            # Map directly to COMPLETED. The lockdown plan calls for
+            # migrating this verify into a BLE-aware ``run_verify``
+            # branch later; until that lands, the legacy verify is
+            # what we trust.
             job.transition(FlashJobState.VERIFYING)
             job.transition(FlashJobState.COMPLETED)
         finally:

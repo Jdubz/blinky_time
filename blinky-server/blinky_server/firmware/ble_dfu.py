@@ -784,9 +784,37 @@ async def _ble_dfu_write_impl(
             verified=True,
         )
     else:
+        # **Failure path.** The DFU transfer succeeded at the protocol
+        # level (all bytes acknowledged, activate command sent) but the
+        # device never re-appeared as the app over BLE within the
+        # 3x ~11s verify window (~33 s of scanning + sleeps).
+        #
+        # We MUST mark this as ``status="error"`` so the orchestrator
+        # (``FleetManager._run_ble_dfu_flash`` line ~1247) routes the
+        # FlashJob to FAILED rather than COMPLETED. Pre-fix this path
+        # returned ``status="ok", verified=False`` and the orchestrator
+        # only inspected ``status`` — so the job was marked completed,
+        # ``verified_at`` populated, and the auto-recovery dedup window
+        # opened, silently locking the device out of further retry for
+        # 10 minutes despite the device never having booted to app.
+        # Observed live 2026-05-18: 4 successive auto-recoveries all
+        # marked "Auto-recovery succeeded" yet devices remained stuck
+        # in DFU. See docs/BLE_FLEET_RELIABILITY_PLAN.md item A.
+        #
+        # For the 100%-BLE-managed deployment this code is on the
+        # critical path: there is no USB-DFU fallback, so a false
+        # success here is a permanent silent failure.
         progress("done", "BLE DFU transfer complete but device not seen advertising", 100)
         last_result.update(
-            message="BLE DFU transfer complete (device not yet seen — may still be booting)",
+            status="error",
+            message=(
+                "BLE DFU verify failed: device did not advertise as app after "
+                "3 post-reboot scans (~33 s). Transfer completed at the protocol "
+                "level — likely causes: (a) BL silently rejected the new app "
+                "(bootloader_settings_save fault), (b) the new app crashes in "
+                "init before BLE comes up, or (c) the device is genuinely out "
+                "of range. Investigate via USB if available."
+            ),
             elapsed_s=elapsed,
             verified=False,
         )

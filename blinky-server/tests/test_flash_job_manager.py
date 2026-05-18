@@ -610,7 +610,12 @@ async def test_ble_dfu_flash_calls_upload_ble_dfu_for_dfu_recovery(
 
     async def fake_upload_ble_dfu(**kwargs: Any) -> dict[str, Any]:
         captured_kwargs.update(kwargs)
-        return {"status": "ok", "message": "mocked", "elapsed_s": 0.1}
+        # ``verified=True`` is required for the orchestrator to treat
+        # the result as a success. status=ok alone is not enough — see
+        # the defense-in-depth check added in PR #145 (the 2026-05-18
+        # BLE-DFU silent-stuck postmortem). A regression that drops
+        # the verified field would fail this test.
+        return {"status": "ok", "message": "mocked", "elapsed_s": 0.1, "verified": True}
 
     monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", fake_upload_ble_dfu)
     monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
@@ -665,6 +670,74 @@ async def test_ble_dfu_flash_fails_on_upload_error(
     assert job.state is FlashJobState.FAILED
     assert job.error is not None
     assert "preflight RSSI too weak" in job.error
+
+
+@pytest.mark.asyncio
+async def test_ble_dfu_flash_fails_when_transfer_ok_but_verify_failed(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Defense-in-depth: orchestrator must route status=ok+verified=False to FAILED.
+
+    The 2026-05-18 silent-stuck-in-DFU bug: ``_ble_dfu_write_impl``
+    returned ``status="ok"`` even when the post-reboot verify scans
+    failed (device never re-advertised as app). The orchestrator only
+    checked ``status`` and marked the FlashJob COMPLETED, opening the
+    auto-recovery dedup window over a still-stuck device.
+
+    ``_ble_dfu_write_impl`` was fixed to set ``status="error"`` in that
+    path, but the orchestrator must ALSO require ``verified=True`` so
+    a future regression in the impl can't silently re-introduce the
+    false success. This test pins the orchestrator's contract by
+    feeding it the exact pre-fix shape (status=ok + verified=False)
+    and asserting the job ends up FAILED.
+
+    See docs/BLE_FLEET_RELIABILITY_PLAN.md item A.
+    """
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.firmware import ble_dfu as ble_dfu_mod
+    from blinky_server.firmware import compile as compile_mod
+
+    from .mock_transport import MockTransport
+
+    device = Device(
+        device_id="verify-flake",
+        port="dummy",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="ble"),  # type: ignore[arg-type]
+    )
+    device.ble_address = "AA:BB:CC:DD:EE:FF"
+    device.state = DeviceState.DFU_RECOVERY
+    fleet._devices["verify-flake"] = device
+
+    fw_file = tmp_path / "fw.hex"
+    fw_file.write_text(":00000001FF\n")
+
+    async def ok_status_but_not_verified(**kwargs: Any) -> dict[str, Any]:
+        # Exactly the regression shape: transfer completed at the
+        # protocol level, but verify never saw the device come back.
+        return {
+            "status": "ok",
+            "message": "BLE DFU transfer complete (device not yet seen — may still be booting)",
+            "elapsed_s": 33.4,
+            "verified": False,
+        }
+
+    monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", ok_status_but_not_verified)
+    monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
+
+    job = await fleet.flash_device("verify-flake", fw_file)
+    await job.wait_until_terminal(timeout=5.0)
+
+    assert job.state is FlashJobState.FAILED, (
+        f"orchestrator must NOT mark a status=ok+verified=False BLE-DFU result as "
+        f"COMPLETED — that's the silent-stuck-in-DFU regression. Got {job.state}."
+    )
+    assert job.error is not None
+    # The orchestrator preserves the impl's message so operators can
+    # tell verify-failed apart from a true transfer-error.
+    assert "device not yet seen" in job.error
 
 
 @pytest.mark.asyncio
