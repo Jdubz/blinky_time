@@ -47,15 +47,25 @@ public:
     // history (BLE_FLEET_RELIABILITY_PLAN.md item #3).
     static const size_t SEEN_RING_SIZE = 8;
 
-    // CMD_ID_RING_SIZE 8 — analogous to SEEN_RING_SIZE but tracking the
-    // last 16-bit command_id observed PER SOURCE. Used for COMMAND_V2
-    // idempotency (BLE_FLEET_RELIABILITY_PLAN.md item #2): a logical
-    // fleet command's N re-emits all carry the same command_id; the
-    // ring lets firmware identify the second and onward emit as "same
-    // logical command" and skip re-dispatching, even though each emit
-    // has a fresh BLE-level sequence number (so the seq-dedup ring
-    // wouldn't catch them). Per-source rather than global because each
-    // broadcaster has its own command_id counter starting at 1.
+    // CMD_ID_RING_SIZE 8 — ring of recent 16-bit command_ids seen on
+    // the air. Used for COMMAND_V2 idempotency (BLE_FLEET_RELIABILITY_
+    // PLAN.md item #2): a logical fleet command's N re-emits all carry
+    // the same command_id; the ring lets firmware identify the second
+    // and onward emit as "same logical command" and skip re-dispatching,
+    // even though each emit has a fresh BLE-level sequence number (so
+    // the seq-dedup ring wouldn't catch them).
+    //
+    // GLOBAL ring (not per-source) — discovered 2026-05-19 that BlueZ
+    // rotates the source random address per emit slot for non-
+    // connectable ``type="broadcast"`` advertisements (LE privacy
+    // default), so per-source tracking sees every emit as a "new
+    // source" and never matches. Globally tracking the last 8 cmd_ids
+    // works correctly for our single-broadcaster fleet (one Pi running
+    // blinky-server). Limitation: if two broadcasters ever both emit
+    // commands with overlapping cmd_id space, the second would be
+    // incorrectly deduped against the first — but each broadcaster has
+    // its own monotonic uint16 counter and we don't deploy multi-
+    // broadcaster setups today.
     static const size_t CMD_ID_RING_SIZE = 8;
 
     // Matches BleProtocol::MAX_PAYLOAD. Kept as its own constant so the
@@ -88,13 +98,13 @@ private:
     bool isDuplicateSeen(const uint8_t* srcAddr, uint8_t seq) const;
     void recordSeen(const uint8_t* srcAddr, uint8_t seq);
 
-    // Producer-only helpers for the per-source command_id ring used by
-    // COMMAND_V2 idempotency. Returns true if this command_id matches
-    // the source's last accepted value (i.e. this is a re-emit of an
-    // already-applied logical command). Updates the ring either way so
-    // a subsequent emit of the same logical command also short-
-    // circuits even if the very-first emit was the entry-creation.
-    bool checkAndRecordCommandId(const uint8_t* srcAddr, uint16_t cmdId);
+    // Producer-only helper for the global command_id ring used by
+    // COMMAND_V2 idempotency. Returns true if this command_id is
+    // already in the recent-ids ring (re-emit of an already-applied
+    // logical command — skip dispatch). Returns false if it's a new
+    // value, after FIFO-inserting it into the ring (so the same
+    // command_id on subsequent emits is recognized as a duplicate).
+    bool checkAndRecordCommandId(uint16_t cmdId);
 
     static BleScanner* instance_;
 
@@ -125,24 +135,12 @@ private:
     uint8_t seenCount_ = 0;
     uint8_t seenHead_ = 0;
 
-    // Per-source last-command_id table for COMMAND_V2 idempotency.
-    // Producer-only; no synchronization. Lookup is by source address
-    // (existing entry → update its command_id; new source → append,
-    // FIFO-evicting the oldest entry once the ring is full).
-    //
-    // Different shape from seenRing_ because:
-    //   - seenRing_ tracks the LAST 8 (source, seq) PAIRS globally —
-    //     a single source can occupy multiple slots (one per emit).
-    //   - cmdIdRing_ tracks the LAST command_id PER source —
-    //     one slot per distinct source, value updated on each new
-    //     command from that source.
-    struct CmdIdEntry {
-        uint8_t addr[6];
-        uint16_t commandId;
-    };
-    CmdIdEntry cmdIdRing_[CMD_ID_RING_SIZE];
+    // Global ring of recent command_ids seen on the air. Producer-only;
+    // no synchronization. FIFO eviction. Source address intentionally
+    // NOT tracked — see CMD_ID_RING_SIZE rationale above for why.
+    uint16_t cmdIdRing_[CMD_ID_RING_SIZE];
     uint8_t cmdIdCount_ = 0;
-    uint8_t cmdIdHead_ = 0;  // next insert slot for new sources (FIFO)
+    uint8_t cmdIdHead_ = 0;  // next insert slot (FIFO)
 
     // Diagnostics — incremented in producer context; main-loop reads
     // are best-effort snapshots (a single byte-aligned uint32 read is

@@ -71,40 +71,24 @@ void BleScanner::recordSeen(const uint8_t* srcAddr, uint8_t seq) {
     }
 }
 
-bool BleScanner::checkAndRecordCommandId(const uint8_t* srcAddr, uint16_t cmdId) {
-    // Look up the source's existing entry. If found, this is an
-    // already-known source — compare command_id to the stored value:
-    //   - same value → this packet is a re-emit of the SAME logical
-    //                   command; tell the caller to skip dispatch. The
-    //                   stored value stays unchanged (it already
-    //                   matches).
-    //   - different  → this is a new logical command from the same
-    //                   source; update the stored value to the new
-    //                   command_id and let the caller dispatch.
-    //
-    // If not found, this is a new source (or one that fell out of the
-    // ring). Insert at cmdIdHead_, FIFO-evicting the oldest entry if
-    // the ring is full. First emit from a new source always dispatches
-    // because there's no prior value to match against.
+bool BleScanner::checkAndRecordCommandId(uint16_t cmdId) {
+    // Linear scan over the global recent-ids ring. If we've seen this
+    // cmdId in the last CMD_ID_RING_SIZE distinct commands, this is a
+    // re-emit of the same logical command — skip dispatch.
     for (size_t i = 0; i < cmdIdCount_; ++i) {
-        CmdIdEntry& e = cmdIdRing_[i];
-        if (memcmp(e.addr, srcAddr, 6) == 0) {
-            if (e.commandId == cmdId) {
-                return true;  // duplicate — skip dispatch
-            }
-            e.commandId = cmdId;
-            return false;     // new logical command from known source
+        if (cmdIdRing_[i] == cmdId) {
+            return true;
         }
     }
-    // New source. FIFO insert.
-    CmdIdEntry& slot = cmdIdRing_[cmdIdHead_];
-    memcpy(slot.addr, srcAddr, 6);
-    slot.commandId = cmdId;
+    // New cmdId. FIFO-insert at cmdIdHead_, evicting the oldest entry
+    // when the ring is full. First emit of a new logical command
+    // always dispatches because there's no matching ring entry.
+    cmdIdRing_[cmdIdHead_] = cmdId;
     cmdIdHead_ = (cmdIdHead_ + 1) % CMD_ID_RING_SIZE;
     if (cmdIdCount_ < CMD_ID_RING_SIZE) {
         ++cmdIdCount_;
     }
-    return false;             // first emit from this source
+    return false;
 }
 
 void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
@@ -205,7 +189,7 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
             }
             uint16_t cmdId = msd[payloadOffset] |
                              (static_cast<uint16_t>(msd[payloadOffset + 1]) << 8);
-            if (checkAndRecordCommandId(srcAddr, cmdId)) {
+            if (checkAndRecordCommandId(cmdId)) {
                 ++packetsIdempotent_;
                 return;
             }
