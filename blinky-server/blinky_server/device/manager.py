@@ -1664,6 +1664,51 @@ class FleetManager:
                         disc.address,
                     )
                     existing.port = disc.address
+                # The device is on the USB bus again. Reset transient
+                # post-flash states so the reconnect loop picks it up
+                # next cycle (DFU_RECOVERY: returned from BLE-DFU
+                # bootloader; DISCONNECTED/ERROR: prior connect dropped).
+                # Mirror the BLE branch's analogous transition above.
+                # Without this, a device that recovered from BLE-DFU
+                # stays in dfu_recovery state forever even though it's
+                # back on serial — exactly the bug observed live after
+                # PR #143's BLE-DFU hardware test.
+                if existing.state in (
+                    DeviceState.DFU_RECOVERY,
+                    DeviceState.DISCONNECTED,
+                    DeviceState.ERROR,
+                ):
+                    prior_state = existing.state.value
+                    # Rebuild the SerialTransport against the freshly-
+                    # discovered port — the old transport might be bound
+                    # to a stale device path if USB renumbered during
+                    # the DFU cycle. ``_reconnect_disconnected`` reads
+                    # ``device.transport`` on its next pass to call
+                    # ``connect()``, so the transport must be current.
+                    try:
+                        existing.transport = _create_transport(disc)
+                    except Exception:
+                        log.exception(
+                            "Failed to rebuild transport for %s on re-discovery",
+                            device_id[:12],
+                        )
+                    existing.state = DeviceState.DISCONNECTED
+                    # Refresh the cached discovery snapshot so the
+                    # reconnect loop sees the current transport_type
+                    # (was 'ble_dfu' if we'd promoted to DFU recovery).
+                    self._device_discovery[device_id] = disc
+                    # Reset the reconnect-backoff counter so the first
+                    # post-recovery reconnect attempt fires immediately
+                    # rather than waiting through whatever backoff the
+                    # prior failures accumulated.
+                    self._reconnect_failures.pop(device_id, None)
+                    self._reconnect_blackout.pop(device_id, None)
+                    log.info(
+                        "Device %s re-appeared on serial after %s; "
+                        "transitioning to DISCONNECTED for reconnect",
+                        device_id[:12],
+                        prior_state,
+                    )
                 continue
 
             # Skip devices previously deduped (e.g. shared BLE+serial identity).

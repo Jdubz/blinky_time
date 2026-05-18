@@ -1934,3 +1934,79 @@ async def test_identity_aliases_load_on_start(
 
     assert fleet.resolve_canonical("FA:E6:7D:A9:8B:3A") == "AABBCCDDEEFF0011"
     assert fleet.resolve_canonical("AABBCCDDEEFF0011") == "AABBCCDDEEFF0011"
+
+
+@pytest.mark.asyncio
+async def test_dfu_recovery_to_disconnected_transition_when_serial_reappears(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A device that recovered from BLE-DFU back to USB MUST transition
+    out of DFU_RECOVERY state so the reconnect loop can pick it up.
+    Pre-fix (PR #143 hardware-test follow-up), the discovery loop's
+    serial-known-id branch updated the port but left the state at
+    DFU_RECOVERY forever — the device stayed in dfu_recovery in the
+    fleet API indefinitely even though it was healthy on USB.
+    """
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.transport.discovery import DiscoveredDevice
+
+    from .mock_transport import MockTransport
+
+    # Seed: a device that was previously in app mode (so it exists in
+    # _devices, keyed by SN) and is now in DFU_RECOVERY (we just
+    # finished a BLE-DFU flash). Reconnect backoff state from the prior
+    # liveness drop is also seeded so we can assert the fix clears it.
+    sn = "AABBCCDDEEFF0011"
+    device = Device(
+        device_id=sn,
+        port="/dev/ttyACM-stale",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="serial"),  # type: ignore[arg-type]
+    )
+    device.state = DeviceState.DFU_RECOVERY
+    device.ble_address = "FA:E6:7D:A9:8B:3A"
+    fleet._devices[sn] = device
+    fleet._reconnect_failures[sn] = 7  # accumulated backoff
+    fleet._reconnect_blackout[sn] = 9_999_999_999.0  # active blackout
+
+    # Discovery sees the device back on USB.
+    fresh_disc = DiscoveredDevice(
+        device_id=sn,
+        platform="nrf52840",
+        transport_type="serial",
+        address="/dev/ttyACM-fresh",
+    )
+
+    async def fake_discover_all(**_kwargs: Any) -> list[DiscoveredDevice]:
+        return [fresh_disc]
+
+    monkeypatch.setattr(
+        "blinky_server.device.manager.discover_all",
+        fake_discover_all,
+    )
+    # Skip the dedup-exclusion refresh (also reads from disk).
+    monkeypatch.setattr(fleet, "_refresh_dedup_exclusions", lambda: None)
+    # _create_transport will be called for the transport rebuild; let it
+    # build a real SerialTransport but stub the constructor so we don't
+    # actually open the (fake) port.
+    from blinky_server.device import manager as mgr_mod
+
+    def fake_create_transport(disc: DiscoveredDevice) -> Any:
+        return MockTransport(transport_type="serial")
+
+    monkeypatch.setattr(mgr_mod, "_create_transport", fake_create_transport)
+
+    await fleet._discover_and_connect()
+
+    # State transitioned to DISCONNECTED so the reconnect loop can pick
+    # it up next cycle.
+    assert device.state is DeviceState.DISCONNECTED
+    # Port string updated.
+    assert device.port == "/dev/ttyACM-fresh"
+    # Transport rebuilt (the old one was stale — port may have changed).
+    assert isinstance(device.transport, MockTransport)
+    # Reconnect-backoff state cleared.
+    assert sn not in fleet._reconnect_failures
+    assert sn not in fleet._reconnect_blackout
+    # Discovery snapshot refreshed so reconnect loop sees serial type.
+    assert fleet._device_discovery[sn] is fresh_disc
