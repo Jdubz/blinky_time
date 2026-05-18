@@ -60,21 +60,55 @@ def _get_usb_dev_path(serial_port: str) -> str | None:
     """Get the /dev/bus/usb/BBB/DDD path for a serial port's USB device.
 
     Must be called while the port is still active (before transport disconnect).
-    """
-    import glob as _glob
 
+    Path traversal: `/sys/class/tty/<ttyACMx>/device` is the USB interface
+    (e.g. `1-1.3:1.0`). The interface's parent is the USB DEVICE
+    (`1-1.3`). The device's parent is the upstream USB HUB (`1-1`).
+    We want the DEVICE, so `device/..` — exactly one level up.
+
+    Earlier revisions used `device/../..` (two levels) which landed on
+    the HUB; a USBDEVFS_RESET ioctl against the hub blasts every
+    downstream port. On a multi-cart bench (both carts on the same
+    hub) this collaterally reset whichever device was NOT the flash
+    target, contributing to the 2026-05-18 SafeBootWatchdog quarantine
+    cascade. Sanity check below verifies the resolved path is an end
+    device by requiring an `idVendor` that matches the Seeed XIAO
+    (0x2886) — a hub would have a different VID.
+    """
     real_path = str(Path(serial_port).resolve())
     dev_name = Path(real_path).name
 
-    for tty_dir in _glob.glob(f"/sys/class/tty/{dev_name}/device/../.."):
-        try:
-            p = Path(tty_dir).resolve()
-            busnum = (p / "busnum").read_text().strip()
-            devnum = (p / "devnum").read_text().strip()
-            return f"/dev/bus/usb/{int(busnum):03d}/{int(devnum):03d}"
-        except (ValueError, OSError):
-            pass
-    return None
+    candidate = Path(f"/sys/class/tty/{dev_name}/device/..").resolve()
+    try:
+        busnum_path = candidate / "busnum"
+        devnum_path = candidate / "devnum"
+        vendor_path = candidate / "idVendor"
+        if not (busnum_path.is_file() and devnum_path.is_file() and vendor_path.is_file()):
+            log.warning(
+                "USB device sysfs at %s missing expected attributes — "
+                "refusing to compute reset path",
+                candidate,
+            )
+            return None
+        vendor = vendor_path.read_text().strip().lower()
+        # XIAO nRF52840 Sense VID. If we see anything else (e.g. 2109
+        # = VIA Labs hub), our path traversal is wrong and the reset
+        # would blast the wrong device. Refuse.
+        if vendor != "2886":
+            log.error(
+                "USB device sysfs at %s has VID %s (expected 2886 for XIAO). "
+                "Aborting — pinned-path bug? Path was: %s",
+                candidate,
+                vendor,
+                f"/sys/class/tty/{dev_name}/device/..",
+            )
+            return None
+        busnum = busnum_path.read_text().strip()
+        devnum = devnum_path.read_text().strip()
+        return f"/dev/bus/usb/{int(busnum):03d}/{int(devnum):03d}"
+    except (ValueError, OSError) as e:
+        log.warning("Failed to compute USB device path for %s: %s", serial_port, e)
+        return None
 
 
 def _find_usb_reset_tool() -> Path | None:
