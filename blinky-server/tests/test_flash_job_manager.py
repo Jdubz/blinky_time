@@ -1523,3 +1523,188 @@ async def test_whitelist_reload_warns_once_when_file_disappears(
         r for r in caplog.records if r.levelname == "WARNING" and "no longer readable" in r.message
     ]
     assert warns2 == [], "second missing-file detection re-warned (should be latched)"
+
+
+# --- L4: persistent flash-attempt audit log ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audit_log_appended_on_terminal_transition(
+    fleet: FleetManager,
+) -> None:
+    """Every terminal FlashJob MUST append a JSON line to the audit log
+    so the dedup window can be rebuilt on the next server start.
+    Without this file, ``_recent_flash_attempts`` resets to empty at
+    boot — auto-recovery's first cycle could re-fire on a device that
+    just failed pre-restart."""
+    import json as _json
+
+    audit_path = fleet._flash_audit_log_path()
+    assert not audit_path.is_file(), "test precondition: clean audit log"
+
+    job = await fleet.flash_device("dev-A", Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=2.0)
+    assert job.state is FlashJobState.FAILED
+
+    assert audit_path.is_file()
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    entry = _json.loads(lines[0])
+    assert entry["job_id"] == job.job_id
+    assert entry["device_id"] == "dev-A"
+    assert entry["canonical_id"] == "dev-A"
+    assert entry["is_auto_recovery"] is False
+    assert entry["state"] == "failed"
+    assert entry["finished_at"] is not None
+    assert entry["created_at"] <= entry["finished_at"]
+
+
+@pytest.mark.asyncio
+async def test_audit_log_appended_per_job(fleet: FleetManager) -> None:
+    """Two separate flashes produce two separate audit lines, in order.
+    Append-only semantics are required for the boot-time replay to
+    correctly find the most-recent finish for each canonical."""
+    import json as _json
+
+    a = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
+    await a.wait_until_terminal(timeout=2.0)
+    b = await fleet.flash_device("dev-2", Path("/tmp/fw.hex"))
+    await b.wait_until_terminal(timeout=2.0)
+
+    lines = fleet._flash_audit_log_path().read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    devs = [_json.loads(li)["device_id"] for li in lines]
+    assert devs == ["dev-1", "dev-2"]
+
+
+@pytest.mark.asyncio
+async def test_audit_log_rebuilds_recent_flash_attempts_on_start(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of L4: ``_load_recent_flash_attempts_from_audit_log``
+    reads recent entries from disk and populates the in-memory dedup
+    table. Without this, a server restart erases the dedup window.
+
+    We simulate restart by clearing the in-memory dict and calling the
+    loader directly, with an audit log we wrote ourselves."""
+    import json as _json
+    import time as _t
+
+    now = _t.time()
+    audit_path = fleet._flash_audit_log_path()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    # Two recent entries (inside dedup window) + one stale entry.
+    entries = [
+        {
+            "job_id": "j1",
+            "device_id": "dev-X",
+            "canonical_id": "dev-X",
+            "is_auto_recovery": False,
+            "firmware_path": "/tmp/x.hex",
+            "expected_version": None,
+            "transport": "uf2",
+            "created_at": now - 120,
+            "started_at": now - 119,
+            "write_completed_at": now - 110,
+            "verified_at": now - 100,
+            "finished_at": now - 100,  # 100s ago = within 600s window
+            "state": "completed",
+            "error": None,
+            "anomalies": [],
+        },
+        {
+            "job_id": "j2",
+            "device_id": "dev-Y",
+            "canonical_id": "dev-Y",
+            "is_auto_recovery": True,
+            "firmware_path": "/tmp/x.hex",
+            "expected_version": None,
+            "transport": "ble_dfu",
+            "created_at": now - 1000,
+            "started_at": now - 999,
+            "write_completed_at": None,
+            "verified_at": None,
+            "finished_at": now - 999,  # 999s ago = OUTSIDE 600s window
+            "state": "failed",
+            "error": "timeout",
+            "anomalies": [],
+        },
+        {
+            "job_id": "j3",
+            "device_id": "dev-X",
+            "canonical_id": "dev-X",
+            "is_auto_recovery": False,
+            "firmware_path": "/tmp/x.hex",
+            "expected_version": None,
+            "transport": "uf2",
+            "created_at": now - 30,
+            "started_at": now - 29,
+            "write_completed_at": now - 20,
+            "verified_at": now - 10,
+            "finished_at": now - 10,  # MORE recent than j1 — should win
+            "state": "completed",
+            "error": None,
+            "anomalies": [],
+        },
+    ]
+    with audit_path.open("w", encoding="utf-8") as fh:
+        for e in entries:
+            fh.write(_json.dumps(e) + "\n")
+
+    fleet._recent_flash_attempts.clear()
+    fleet._load_recent_flash_attempts_from_audit_log()
+
+    # dev-X has two entries; the more-recent finished_at wins.
+    assert "dev-X" in fleet._recent_flash_attempts
+    assert abs(fleet._recent_flash_attempts["dev-X"] - (now - 10)) < 1.0
+    # dev-Y is outside the dedup window; skipped.
+    assert "dev-Y" not in fleet._recent_flash_attempts
+    # Dedup check honors the rebuild: a fresh force=False call for
+    # dev-X is blocked (just-flashed window).
+    assert fleet.should_attempt_auto_recovery("dev-X") is False
+
+
+@pytest.mark.asyncio
+async def test_audit_log_tolerates_malformed_lines(
+    fleet: FleetManager, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A power-cut mid-write or any other source of corruption can in
+    theory leave a malformed line in the audit log. The loader MUST
+    skip such lines without bailing on the whole file — losing the
+    entire dedup window over one bad line would be the worse failure."""
+    import json as _json
+    import time as _t
+
+    now = _t.time()
+    audit_path = fleet._flash_audit_log_path()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    good_entry = {
+        "job_id": "good",
+        "device_id": "dev-good",
+        "canonical_id": "dev-good",
+        "is_auto_recovery": False,
+        "firmware_path": "/tmp/x.hex",
+        "expected_version": None,
+        "transport": "uf2",
+        "created_at": now - 30,
+        "started_at": now - 29,
+        "write_completed_at": now - 20,
+        "verified_at": now - 10,
+        "finished_at": now - 10,
+        "state": "completed",
+        "error": None,
+        "anomalies": [],
+    }
+    with audit_path.open("w", encoding="utf-8") as fh:
+        fh.write("this is not json\n")
+        fh.write(_json.dumps(good_entry) + "\n")
+        fh.write('{"partial": tru\n')  # truncated
+
+    fleet._recent_flash_attempts.clear()
+    fleet._load_recent_flash_attempts_from_audit_log()
+
+    # The good entry is loaded; bad entries skipped.
+    assert "dev-good" in fleet._recent_flash_attempts
+    # WARN logs for the two bad lines.
+    warns = [r for r in caplog.records if r.levelname == "WARNING" and "unparseable" in r.message]
+    assert len(warns) == 2

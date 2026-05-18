@@ -868,7 +868,14 @@ class FleetManager:
                     if entry.fails == MAX_AUTO_RECOVERY_ATTEMPTS:
                         entry.gave_up_logged = False
                     self._recovery_retry_state[canonical] = entry
-            # L2: reset the orchestrator-context-var. Token-based reset
+            # L4: append to the persistent audit log so the dedup window
+            # survives a server restart. Inside the lock so other code
+            # sees the in-memory _recent_flash_attempts update and the
+            # disk entry as a consistent snapshot. The write itself
+            # tolerates failure (logs WARN) — a failed audit append
+            # doesn't block the orchestrator from exiting.
+            self._write_flash_audit_entry(job, canonical)
+            # Reset the orchestrator-context-var. Token-based reset
             # restores the prior value (default False, or — if some
             # future code composes orchestrator entries — the outer
             # True). Done LAST so any error during dedup-table cleanup
@@ -1248,6 +1255,13 @@ class FleetManager:
                 firmware_path,
                 ", ".join(sorted(device_ids)) or "<none>",
             )
+        # L4: rebuild the dedup window from the persistent audit log so
+        # a server restart doesn't erase "I just flashed this device" —
+        # otherwise auto-recovery's first cycle after restart could
+        # re-fire on a device that just failed pre-restart. Reads only
+        # the entries inside FLASH_DEDUP_WINDOW_S of now; older entries
+        # are skipped.
+        self._load_recent_flash_attempts_from_audit_log()
         # Bring up the BLE broadcaster. Single-radio adapters (BCM43455 on
         # Pi 4) refuse advertising while we hold GATT central connections,
         # so the broadcaster MUST come up before any per-device connect
@@ -2028,6 +2042,138 @@ class FleetManager:
         from ..paths import data_dir
 
         return data_dir() / "recovery-firmware.json"
+
+    @staticmethod
+    def _flash_audit_log_path() -> Path:
+        """Append-only JSONL audit of every ``FlashJob`` terminal transition.
+
+        Lives under ``~/.local/share/blinky-server/`` alongside the
+        recovery state. One JSON object per line; each line is a
+        complete snapshot of a terminal FlashJob (job_id, device_id,
+        canonical_id, firmware_path, state, error, timestamps, etc).
+
+        The file is the persistent backing of ``_recent_flash_attempts``:
+        without it, a server restart erases the dedup window and
+        auto-recovery on the first cycle after restart could
+        re-flash a device that just failed pre-restart. The plan §L4
+        calls this out as "an unintended escape hatch for the very
+        mistake we're guarding against" (the 2026-05-17 cascade).
+        """
+        from ..paths import data_dir
+
+        return data_dir() / "flash_attempts.jsonl"
+
+    def _write_flash_audit_entry(self, job: FlashJob, canonical: str) -> None:
+        """Append one JSONL line for a terminal ``FlashJob``.
+
+        Called from ``_run_flash_job``'s finally under the per-device
+        lock. Failures here MUST NOT propagate (the flash succeeded
+        as far as the device cares); they're logged at WARN so the
+        operator sees them in the journal. Synchronous file I/O —
+        the cost is negligible relative to the flash itself (~100ms
+        worst case on a busy filesystem; the flash itself is minutes).
+        """
+        entry: dict[str, Any] = {
+            "job_id": job.job_id,
+            "device_id": job.device_id,
+            "canonical_id": canonical,
+            "is_auto_recovery": job.is_auto_recovery,
+            "firmware_path": str(job.firmware_path),
+            "expected_version": job.expected_version,
+            "transport": job.transport.value if job.transport else None,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "write_completed_at": job.write_completed_at,
+            "verified_at": job.verified_at,
+            "finished_at": job.finished_at,
+            "state": job.state.value,
+            "error": job.error,
+            "anomalies": list(job.anomalies),
+        }
+        path = self._flash_audit_log_path()
+        try:
+            # Append with newline. ``open(append)`` is atomic for a
+            # single write() of bytes shorter than PIPE_BUF (4 KB on
+            # Linux). Our entries are well under that; concurrent
+            # writers from separate processes (we don't have any
+            # today, but defensive) would not interleave.
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except OSError as exc:
+            log.warning(
+                "Failed to append flash-audit entry for job %s: %s — "
+                "dedup window won't survive restart for this attempt",
+                job.job_id,
+                exc,
+            )
+
+    def _load_recent_flash_attempts_from_audit_log(self) -> None:
+        """Repopulate ``_recent_flash_attempts`` from the JSONL audit log.
+
+        Called at server start. Reads every entry in the file and
+        keeps those with a ``finished_at`` within
+        ``FLASH_DEDUP_WINDOW_S`` of now. Older entries are skipped
+        (they're outside the window so they wouldn't dedup anyway,
+        and we don't want stale data lingering in memory).
+
+        Tolerant of partial / corrupt lines: a line that can't be
+        parsed as JSON is skipped with a WARN, the rest of the file
+        is still consumed. The audit log is append-only by contract,
+        so corruption should be exceedingly rare — but a power-cut
+        mid-write could in theory leave a truncated final line.
+
+        Without this method, ``_recent_flash_attempts`` starts empty
+        at boot — auto-recovery's first cycle could re-fire on a
+        device that just failed pre-restart (the cascade pattern the
+        plan §L4 closes).
+        """
+        path = self._flash_audit_log_path()
+        if not path.is_file():
+            return
+        now = _time.time()
+        loaded = 0
+        skipped_old = 0
+        skipped_bad = 0
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line_num, raw in enumerate(fh, start=1):
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        entry = json.loads(raw)
+                    except json.JSONDecodeError:
+                        log.warning("Flash-audit log line %d unparseable; skipping", line_num)
+                        skipped_bad += 1
+                        continue
+                    canonical = entry.get("canonical_id") or entry.get("device_id")
+                    finished_at = entry.get("finished_at")
+                    if not isinstance(canonical, str) or not isinstance(finished_at, (int, float)):
+                        skipped_bad += 1
+                        continue
+                    if (now - finished_at) >= self.FLASH_DEDUP_WINDOW_S:
+                        skipped_old += 1
+                        continue
+                    # Take the MAX of the existing in-memory value (if
+                    # any) and the audit value — multiple historical
+                    # attempts for the same canonical should resolve
+                    # to the most-recent one, which is the conservative
+                    # choice for dedup.
+                    existing = self._recent_flash_attempts.get(canonical)
+                    if existing is None or finished_at > existing:
+                        self._recent_flash_attempts[canonical] = finished_at
+                    loaded += 1
+        except OSError as exc:
+            log.warning("Failed to read flash-audit log %s: %s", path, exc)
+            return
+        if loaded or skipped_bad:
+            log.info(
+                "Flash-audit log: rebuilt dedup window from %d entries "
+                "(%d skipped as stale, %d skipped as malformed)",
+                loaded,
+                skipped_old,
+                skipped_bad,
+            )
 
     def set_recovery_firmware(self, firmware_path: str, device_ids: list[str]) -> None:
         """Arm automatic DFU recovery, scoped to an explicit device whitelist.
