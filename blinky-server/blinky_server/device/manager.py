@@ -868,13 +868,19 @@ class FleetManager:
                     if entry.fails == MAX_AUTO_RECOVERY_ATTEMPTS:
                         entry.gave_up_logged = False
                     self._recovery_retry_state[canonical] = entry
-            # L4: append to the persistent audit log so the dedup window
-            # survives a server restart. Inside the lock so other code
-            # sees the in-memory _recent_flash_attempts update and the
-            # disk entry as a consistent snapshot. The write itself
-            # tolerates failure (logs WARN) — a failed audit append
-            # doesn't block the orchestrator from exiting.
-            self._write_flash_audit_entry(job, canonical)
+                # L4: append to the persistent audit log so the dedup
+                # window survives a server restart. INSIDE the lock so
+                # any concurrent reader sees the in-memory
+                # _recent_flash_attempts update and the on-disk entry
+                # as a single consistent snapshot — and so a crash
+                # between the in-memory update and the on-disk write
+                # is impossible (defeats the whole point of L4 for
+                # this attempt). Sync I/O held under the lock is
+                # ~1 ms; the flash itself is seconds-to-minutes, so
+                # the lock-hold cost is negligible. The write
+                # tolerates OSError internally (logs WARN), so a
+                # disk failure doesn't propagate out of the finally.
+                self._write_flash_audit_entry(job, canonical)
             # Reset the orchestrator-context-var. Token-based reset
             # restores the prior value (default False, or — if some
             # future code composes orchestrator entries — the outer
