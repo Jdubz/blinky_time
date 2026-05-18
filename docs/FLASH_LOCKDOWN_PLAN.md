@@ -16,6 +16,45 @@ JSON file is loaded once at startup and only refreshed when
 server can hold a stale whitelist for hours after a file edit. Both
 gaps captured in §L1/L3 below.
 
+**Hardware-test gate (added 2026-05-18 after live-test discovery):**
+Every new code path in the canonical orchestrator MUST be live-tested
+end-to-end on real hardware BEFORE the corresponding legacy code is
+deleted in L3d. The lockdown's whole premise — "remove the legacy
+because the canonical path covers everything" — is only safe when the
+canonical path is empirically proven, not just unit-tested.
+
+Concrete evidence for this gate: L0's `_run_uf2_flash` had a subtle
+bug where `_FleetVerifySignals` captured the USB devnum baseline at
+first poll instead of construction. The unit tests passed (with mock
+devnums), but the live flash on FPS Sweep stalled in AWAITING_REBOOT
+for 337 s because the baseline locked onto the post-reboot devnum.
+Bug fix in commit `a1cf7401`. Same risk applies to every other code
+path that subtly differs between legacy and canonical — only real
+hardware shakes those out.
+
+**Hardware-test checklist (must be green before L3d):**
+
+1. UF2 flash via `POST /api/flash-jobs` on a non-cart bench chip,
+   start to finish, with the canonical orchestrator. State machine
+   transitions cleanly through WRITING → VERIFYING (sub-states) →
+   COMPLETED. Verified live 2026-05-18 (job 6b00cc98d5e3): 43.89 s
+   end-to-end, no anomalies.
+2. BLE-DFU flash via `POST /api/flash-jobs` on a device that's in
+   DFU_RECOVERY state. Should reach VERIFIED through
+   `_run_ble_dfu_flash` (L0). NOT YET EXERCISED on real hardware.
+3. Auto-recovery cycle via `_background_loop` calling `flash_device`
+   (after L3c migrates that branch). NOT YET EXERCISED.
+4. Concurrent flash attempts on different devices (no global
+   serialization), with broadcaster correctly stopped + restarted
+   once per cycle. NOT YET EXERCISED.
+5. Concurrent flash attempts on the SAME device (different aliases —
+   e.g. one route uses SN, another uses BLE addr) must dedup via
+   L1.1's canonical resolver. NOT YET EXERCISED.
+
+L3d cannot land until items 1-5 are all green on real hardware. Any
+canonical-path bug surfaced at this stage gets fixed (with a
+regression test) before legacy delete is reattempted.
+
 **Revision 2026-05-18:** F3 closed (server-side BLE atomic-scene
 committed in `752ebc16`, operator confirmed fleet-wide ≥b164 floor).
 Three rounds of PR 142 review hardened lockdown-adjacent code without
