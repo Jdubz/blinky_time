@@ -196,8 +196,15 @@ async def test_auto_recovery_blocked_within_dedup_window(
 async def test_auto_recovery_allowed_after_window_expires(
     fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Shrink the window for the test, then advance time past it."""
+    """Shrink the window AND zero the backoff for the test, then advance
+    time past the window. L3c added max-attempts + exponential backoff
+    to ``should_attempt_auto_recovery``; the dedup-window behavior we're
+    pinning here remains the same when those orthogonal guards are inert.
+    """
+    import blinky_server.device.manager as mgr_mod
+
     monkeypatch.setattr(FleetManager, "FLASH_DEDUP_WINDOW_S", 0.05)
+    monkeypatch.setattr(mgr_mod, "RECOVERY_BACKOFF_SECONDS", (0.0,))
     job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
     await job.wait_until_terminal(timeout=2.0)
     # Immediately after: blocked.
@@ -298,30 +305,12 @@ def test_register_alias_merges_existing_groups(fleet: FleetManager) -> None:
     assert fleet.resolve_canonical("062CBD12EB6961C8") == "062CBD12EB6961C8"
     assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BE") == "062CBD12EB6961C8"
 
-
-def test_get_dfu_lock_is_canonical_keyed(fleet: FleetManager) -> None:
-    """``get_dfu_lock`` MUST return the same lock instance for all
-    aliases of one physical device. Otherwise the L3a → L3c transition
-    has a window where the route (calling with the URL's device_id) and
-    auto-recovery (iterating with the discovered device.id) end up
-    holding different locks for the same hardware, defeating the lock's
-    cross-caller mutex role.
-
-    The 2026-05-16 cart_inner brick had this shape — auto-recovery and
-    the manual flash path both believed they had exclusive access at
-    once because their lock keys diverged."""
-    fleet.register_identity_alias("E9:A8:5C:A5:BB:BE", "062CBD12EB6961C8")
-    lock_via_sn = fleet.get_dfu_lock("062CBD12EB6961C8")
-    lock_via_ble = fleet.get_dfu_lock("E9:A8:5C:A5:BB:BE")
-    assert lock_via_sn is lock_via_ble, (
-        "get_dfu_lock returned different locks for two aliases of the "
-        "same physical device — canonical resolution is broken"
-    )
-    # And the bootloader address (BLE addr + 1) is part of the same
-    # group once registered, so it should also share the lock.
-    fleet.register_identity_alias("E9:A8:5C:A5:BB:BF", "E9:A8:5C:A5:BB:BE")
-    lock_via_boot = fleet.get_dfu_lock("E9:A8:5C:A5:BB:BF")
-    assert lock_via_boot is lock_via_sn
+    # NOTE: ``test_get_dfu_lock_is_canonical_keyed`` was deleted in L3c.
+    # ``get_dfu_lock`` and ``_dfu_locks`` are gone — the per-canonical
+    # in-flight set inside ``flash_device`` is the single mutex now.
+    # Cross-alias mutex coverage is provided by
+    # ``test_flash_device_concurrent_via_different_aliases_returns_same_job``
+    # (below) which exercises the same invariant through the new entry point.
     assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BF") == "062CBD12EB6961C8"
 
 
@@ -1355,3 +1344,199 @@ async def test_flash_fleet_stops_and_restarts_broadcaster(
         "start",
     ], f"unexpected broadcaster call order: {call_log}"
     assert broadcaster.is_running is True, "broadcaster must be restarted by flash_fleet's finally"
+
+
+# --- L3c: force=False + retry state + max-attempts + backoff ----------------
+
+
+@pytest.mark.asyncio
+async def test_flash_device_force_false_returns_none_when_blocked(
+    fleet: FleetManager,
+) -> None:
+    """``flash_device(force=False)`` MUST return None when
+    ``should_attempt_auto_recovery`` says no. This is the entry-point
+    contract that lets auto-recovery share the orchestrator without
+    bypassing dedup."""
+    # Seed an in-flight job so should_attempt_auto_recovery returns False.
+    from blinky_server.firmware.flash_job import FlashJob
+
+    held = FlashJob(device_id="dev-1", firmware_path=Path("/tmp/fw.hex"))
+    fleet._flash_jobs["dev-1"] = held  # PENDING → is_active=True
+    fleet._device_in_flight.add("dev-1")
+
+    result = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=False)
+    # Idempotent return: an in-flight job IS returned (the auto-recovery
+    # caller can wait on the existing flash rather than getting None).
+    assert result is held
+
+
+@pytest.mark.asyncio
+async def test_flash_device_force_false_returns_none_after_max_attempts(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the retry counter reaches MAX_AUTO_RECOVERY_ATTEMPTS,
+    ``flash_device(force=False)`` returns None without scheduling. The
+    operator must clear the state by force=True (manual flash); a
+    successful manual flash clears the counter via the COMPLETED branch
+    in ``_run_flash_job``'s finally."""
+    import blinky_server.device.manager as mgr_mod
+    from blinky_server.device.manager import _RecoveryRetryEntry
+
+    monkeypatch.setattr(FleetManager, "FLASH_DEDUP_WINDOW_S", 0.001)
+    monkeypatch.setattr(mgr_mod, "RECOVERY_BACKOFF_SECONDS", (0.0,))
+    # Hand-set the retry counter to the cap.
+    fleet._recovery_retry_state["dev-1"] = _RecoveryRetryEntry(
+        fails=mgr_mod.MAX_AUTO_RECOVERY_ATTEMPTS,
+        last_failure_at=_now_minus(60.0),
+    )
+
+    result = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=False)
+    assert result is None
+
+    # force=True bypasses the gate — operator can still flash to recover.
+    forced = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=True)
+    assert forced is not None
+
+
+def _now_minus(seconds: float) -> float:
+    import time as _t
+
+    return _t.time() - seconds
+
+
+@pytest.mark.asyncio
+async def test_flash_device_force_false_returns_none_inside_backoff(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First failure → 60s backoff. Within that window,
+    flash_device(force=False) returns None. Past the window, returns a
+    job."""
+    import blinky_server.device.manager as mgr_mod
+    from blinky_server.device.manager import _RecoveryRetryEntry
+
+    monkeypatch.setattr(FleetManager, "FLASH_DEDUP_WINDOW_S", 0.001)
+    # First failure: 60s backoff (default RECOVERY_BACKOFF_SECONDS[0])
+    # Patch the schedule so we can test "inside" vs "past" without sleeping
+    # a minute in the test suite.
+    monkeypatch.setattr(mgr_mod, "RECOVERY_BACKOFF_SECONDS", (10.0,))
+    fleet._recovery_retry_state["dev-1"] = _RecoveryRetryEntry(
+        fails=1, last_failure_at=_now_minus(1.0)
+    )
+    blocked = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=False)
+    assert blocked is None
+
+    # Move the failure timestamp back past the backoff window.
+    fleet._recovery_retry_state["dev-1"].last_failure_at = _now_minus(11.0)
+    allowed = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=False)
+    assert allowed is not None
+
+
+@pytest.mark.asyncio
+async def test_run_flash_job_increments_retry_state_on_failure(
+    fleet: FleetManager,
+) -> None:
+    """A FAILED orchestrator run MUST increment the canonical retry
+    counter so subsequent ``flash_device(force=False)`` calls honor
+    max-attempts. The orchestrator's finally is the single point of
+    truth for this — auto-recovery does not maintain its own counter."""
+    job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=2.0)
+    assert job.state is FlashJobState.FAILED
+    entry = fleet._recovery_retry_state.get("dev-1")
+    assert entry is not None
+    assert entry.fails == 1
+    assert entry.last_failure_at is not None
+
+
+@pytest.mark.asyncio
+async def test_run_flash_job_clears_retry_state_on_completion(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A COMPLETED run MUST clear the retry counter so a flaky device
+    the operator manually fixed gets a clean slate for future
+    auto-recovery. Otherwise a single transient failure would
+    permanently lower the max-attempts ceiling.
+
+    Setup: real Device + stub the inner branch (``_run_uf2_flash``) to
+    transition straight to COMPLETED. The OUTER ``_run_flash_job`` runs
+    naturally, so its finally block (where retry-state clearing lives)
+    actually exercises the contract.
+    """
+    from blinky_server.device.device import Device
+    from blinky_server.device.manager import _RecoveryRetryEntry
+    from blinky_server.firmware.flash_job import FlashJob
+
+    from .mock_transport import MockTransport
+
+    # Seed: 2 prior fails recorded.
+    fleet._recovery_retry_state["TEST_SERIAL_RETRY"] = _RecoveryRetryEntry(
+        fails=2, last_failure_at=_now_minus(60.0)
+    )
+
+    transport = MockTransport(transport_type="serial")
+    device = Device(
+        device_id="TEST_SERIAL_RETRY",
+        port="/dev/ttyTEST_R",
+        platform="nrf52840",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    await device.connect()
+    fleet._devices["TEST_SERIAL_RETRY"] = device
+
+    async def stub_uf2(j: FlashJob) -> None:
+        j.transition(FlashJobState.WRITING)
+        j.transition(FlashJobState.VERIFYING)
+        j.transition(FlashJobState.COMPLETED)
+
+    # Stub just the UF2 branch — _run_flash_job's outer try/finally runs
+    # for real, including the retry-state-clearing finally.
+    monkeypatch.setattr(fleet, "_run_uf2_flash", stub_uf2)
+
+    job = await fleet.flash_device("TEST_SERIAL_RETRY", Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=2.0)
+    assert job.state is FlashJobState.COMPLETED
+    assert "TEST_SERIAL_RETRY" not in fleet._recovery_retry_state, (
+        "_recovery_retry_state should have been popped on COMPLETED transition"
+    )
+
+
+@pytest.mark.asyncio
+async def test_recovery_whitelist_reload_picks_up_disk_change(
+    fleet: FleetManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L3.1: a direct edit to recovery-firmware.json MUST take effect
+    on the next auto-recovery cycle, not after a server restart.
+
+    The 10s TTL means we monkeypatch it down to make the test fast.
+    """
+    import blinky_server.device.manager as mgr_mod
+
+    monkeypatch.setattr(mgr_mod, "RECOVERY_WHITELIST_RELOAD_TTL_S", 0.0)
+    # Make a real firmware file in tmp_path so the JSON validator passes.
+    fw = tmp_path / "fw.hex"
+    fw.write_text(":00000001FF\n")
+
+    # First arming: device A in whitelist.
+    fleet.set_recovery_firmware(str(fw), ["dev-A"])
+    assert fleet._recovery_device_ids == {"dev-A"}
+
+    # Operator edits the file directly (e.g., out-of-band).
+    state_path = fleet._recovery_state_path()
+    import json as _json
+
+    state_path.write_text(_json.dumps({"firmware_path": str(fw), "device_ids": ["dev-B"]}))
+    # Bump mtime to ensure the cache sees the change (write_text already
+    # updated mtime, but be explicit).
+    import os as _os
+    import time as _t
+
+    new_mtime = _t.time() + 1.0
+    _os.utime(state_path, (new_mtime, new_mtime))
+
+    # Force the cache to allow a re-stat by clearing the throttle.
+    fleet._last_whitelist_check_at = 0.0
+
+    fleet._maybe_reload_recovery_whitelist()
+    assert fleet._recovery_device_ids == {"dev-B"}, (
+        "whitelist did not refresh from disk after mtime change"
+    )

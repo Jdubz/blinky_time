@@ -273,82 +273,73 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     # particular; the whitelist controls which devices it would TRY for.
     fleet.set_recovery_firmware(str(firmware), [device.id])
 
-    # ── Transitional DFU lock (L3a → L3c) ────────────────────────────────
-    # Until L3c migrates the auto-recovery branch to ``flash_device()``, it
-    # still calls the legacy ``upload_ble_dfu`` wrapper directly. Holding
-    # the legacy DFU lock here is what stops auto-recovery from starting a
-    # parallel BLE-DFU on the same device while THIS flash is in-flight
-    # (auto-recovery's own ``dfu_lock.locked()`` check skips when held).
-    # After L3c, auto-recovery goes through ``flash_device()`` too and the
-    # canonical in-flight set is sufficient; this whole block + the
-    # ``_dfu_locks`` field disappear at that point.
-    dfu_lock = fleet.get_dfu_lock(device_id)
-    if dfu_lock.locked():
-        raise HTTPException(409, f"DFU already in progress for device {device_id}")
+    # L3c: the legacy DFU-lock acquisition is gone. ``flash_device``'s
+    # canonical in-flight set is the single mutex now: an auto-recovery
+    # cycle that tries this device while we're in flight gets ``None``
+    # back from ``flash_device(force=False)`` and skips it.
 
     is_serial_flash = device.transport.transport_type == "serial"
     sibling_ids: list[str] = []
 
-    async with dfu_lock:
-        # ── Sibling USB-bus protection (UF2 only) ─────────────────────────
-        # UF2 flash performs a USB bus reset (USBDEVFS_RESET on the target's
-        # USB device path) that briefly disrupts ALL serial devices on the
-        # same hub. Hold sibling auto-reconnect timers across the flash so
-        # the manager doesn't redial them mid-bus-reset.
-        #
-        # We do NOT pause discovery or hold-reconnect the TARGET device:
-        # the orchestrator's ``_FleetVerifySignals.is_serial_connected()``
-        # poll requires ``device.transport.is_connected`` to become True
-        # after the post-flash reboot, and that re-connection is driven by
-        # the discovery loop. Live test 2026-05-18 on FPS Sweep with
-        # discovery paused: verify stalled in AWAITING_APP_BOOT for the
-        # full 5 min cap (the device WAS up, but its transport never
-        # reconnected). With discovery running: verify converges in ~15s.
-        #
-        # The BLE-DFU path doesn't need anything from the route: the
-        # orchestrator calls ``pause_discovery`` + ``hold_reconnect`` +
-        # ``broadcaster.stop()`` inside ``_run_ble_dfu_flash`` for the
-        # narrower window where they're actually needed (BLE radio
-        # coordination) and releases them before its own verify scan.
-        if is_serial_flash:
-            for dev in fleet.get_all_devices():
-                if dev.id != device.id and dev.transport.transport_type == "serial":
-                    fleet.hold_reconnect(dev.id, 600)
-                    sibling_ids.append(dev.id)
+    # ── Sibling USB-bus protection (UF2 only) ────────────────────────────
+    # UF2 flash performs a USB bus reset (USBDEVFS_RESET on the target's
+    # USB device path) that briefly disrupts ALL serial devices on the
+    # same hub. Hold sibling auto-reconnect timers across the flash so
+    # the manager doesn't redial them mid-bus-reset.
+    #
+    # We do NOT pause discovery or hold-reconnect the TARGET device:
+    # the orchestrator's ``_FleetVerifySignals.is_serial_connected()``
+    # poll requires ``device.transport.is_connected`` to become True
+    # after the post-flash reboot, and that re-connection is driven by
+    # the discovery loop. Live test 2026-05-18 on FPS Sweep with
+    # discovery paused: verify stalled in AWAITING_APP_BOOT for the
+    # full 5 min cap (the device WAS up, but its transport never
+    # reconnected). With discovery running: verify converges in ~15s.
+    #
+    # The BLE-DFU path doesn't need anything from the route: the
+    # orchestrator calls ``pause_discovery`` + ``hold_reconnect`` +
+    # ``broadcaster.stop()`` inside ``_run_ble_dfu_flash`` for the
+    # narrower window where they're actually needed (BLE radio
+    # coordination) and releases them before its own verify scan.
+    if is_serial_flash:
+        for dev in fleet.get_all_devices():
+            if dev.id != device.id and dev.transport.transport_type == "serial":
+                fleet.hold_reconnect(dev.id, 600)
+                sibling_ids.append(dev.id)
 
+    try:
+        # ── Single flash entry point ──────────────────────────────────
+        # ``flash_device()`` returns a ``FlashJob`` immediately (it
+        # schedules ``_run_flash_job`` as a background task). The
+        # orchestrator's internal wall-clocks cap the run: ~600s for the
+        # write + 300s for verify on UF2; 600s wait_for on
+        # ``_ble_dfu_write_impl`` for the BLE path. The 900s outer cap
+        # here is the route's safety net if the orchestrator itself
+        # hangs past its own deadlines.
+        job = await fleet.flash_device(
+            device_id=device.id,
+            firmware_path=firmware,
+        )
         try:
-            # ── Single flash entry point ──────────────────────────────────
-            # ``flash_device()`` returns a ``FlashJob`` immediately (it
-            # schedules ``_run_flash_job`` as a background task). The
-            # orchestrator's internal wall-clocks cap the run: ~600s for the
-            # write + 300s for verify on UF2; 600s wait_for on
-            # ``_ble_dfu_write_impl`` for the BLE path. The 900s outer cap
-            # here is the route's safety net if the orchestrator itself
-            # hangs past its own deadlines.
-            job = await fleet.flash_device(
-                device_id=device.id,
-                firmware_path=firmware,
-            )
-            try:
-                await job.wait_until_terminal(timeout=900.0)
-            except TimeoutError as exc:
-                raise HTTPException(
-                    504,
-                    f"flash job {job.job_id} did not reach terminal state within 900s",
-                ) from exc
-
-            if job.state is FlashJobState.COMPLETED:
-                transport_name = job.transport.value if job.transport else "unknown"
-                return FlashResponse(
-                    status="ok",
-                    message=f"Firmware uploaded via {transport_name}",
-                    elapsed_s=round(job.duration_s, 2),
-                )
-            # FAILED or ABANDONED — surface the orchestrator's error
+            await job.wait_until_terminal(timeout=900.0)
+        except TimeoutError as exc:
             raise HTTPException(
-                500,
-                job.error or f"flash {job.state.value} without specific error",
+                504,
+                f"flash job {job.job_id} did not reach terminal state within 900s",
+            ) from exc
+
+        if job.state is FlashJobState.COMPLETED:
+            transport_name = job.transport.value if job.transport else "unknown"
+            return FlashResponse(
+                status="ok",
+                message=f"Firmware uploaded via {transport_name}",
+                elapsed_s=round(job.duration_s, 2),
             )
-        finally:
-            for sid in sibling_ids:
-                fleet.resume_reconnect(sid)
+        # FAILED or ABANDONED — surface the orchestrator's error
+        raise HTTPException(
+            500,
+            job.error or f"flash {job.state.value} without specific error",
+        )
+    finally:
+        for sid in sibling_ids:
+            fleet.resume_reconnect(sid)

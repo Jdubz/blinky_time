@@ -7,8 +7,9 @@ import logging
 import os
 import time as _time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 from .. import systemd_notify
 from ..ble.advertiser import FleetBroadcaster
@@ -51,6 +52,37 @@ RECONNECT_INTERVAL_S = 5
 # auto-recovery resumes. Prevents hammering a device that's hung in a
 # way our flash sequence can't fix.
 MAX_AUTO_RECOVERY_ATTEMPTS = 3
+
+# Exponential backoff between auto-recovery attempts (in seconds).
+# Indexed by the prior consecutive-failure count: after fails=1 wait
+# 60s, after fails=2 wait 120s, etc. Capped at the last entry. Keeps
+# us from hammering a flaky BLE radio in tight succession while still
+# being responsive enough that a transient interference window doesn't
+# stretch into an outage.
+RECOVERY_BACKOFF_SECONDS: tuple[float, ...] = (60.0, 120.0, 240.0, 480.0)
+
+# How long to cache the on-disk whitelist file before rechecking its
+# mtime. 10 s is long enough that a busy auto-recovery cycle doesn't
+# stat() the file every iteration, short enough that an operator
+# editing the JSON sees their change reflected on the next cycle.
+RECOVERY_WHITELIST_RELOAD_TTL_S = 10.0
+
+
+@dataclass
+class _RecoveryRetryEntry:
+    """Per-canonical auto-recovery state (L3c).
+
+    Replaces the pre-L3c `_dfu_recovery_state[id]` dict-of-int with a
+    typed structure that lives on FleetManager. The orchestrator's
+    `_run_flash_job` finally block writes it (increment on
+    FAILED/ABANDONED, clear on COMPLETED); `should_attempt_auto_recovery`
+    reads it (max attempts + exponential backoff).
+    """
+
+    fails: int = 0
+    last_failure_at: float | None = None
+    gave_up_logged: bool = False
+
 
 # Reap non-recoverable devices that haven't communicated in this long.
 # Removed from /api/devices so dead slots stop accumulating. Re-discovered
@@ -125,22 +157,23 @@ class FleetManager:
         # the safety belt against flashing a dev unit that happens to be in
         # DFU at the same time the cart fleet is being deployed.
         self._recovery_device_ids: set[str] = set()
-        self._dfu_recovery_state: dict[str, dict[str, int]] = {}
-        # Per-device set tracking which devices have active DFU recovery.
-        # Prevents the background loop from starting a second recovery on a
-        # device that's already being recovered (e.g., by a manual flash).
-        self._dfu_recovery_active: set[str] = set()
-        # Per-device DFU locks: prevent auto-recovery and manual flash from
-        # running concurrently on the same device. Lock is acquired before any
-        # DFU operation and held for its entire duration.
-        self._dfu_locks: dict[str, asyncio.Lock] = {}
+        # L3c: replaced the legacy `_dfu_recovery_state` / `_dfu_locks` /
+        # `_dfu_recovery_active`. Per-canonical retry state lives here; the
+        # orchestrator's `_run_flash_job` finally writes it; the in-flight
+        # set + flash-job lock take over the mutual exclusion role the old
+        # `_dfu_locks` had between auto-recovery and the flash routes.
+        self._recovery_retry_state: dict[str, _RecoveryRetryEntry] = {}
+        # L3.1: on-disk whitelist reload cache. We stat() the file at most
+        # once per RECOVERY_WHITELIST_RELOAD_TTL_S, and only re-load the
+        # JSON when mtime changes. Closes the "operator edited the file
+        # but the server has the old whitelist cached" gap.
+        self._last_whitelist_check_at: float = 0.0
+        self._last_whitelist_mtime: float | None = None
         # ── Flash-job rewrite (Phase 3) ───────────────────────────────────
         # The next-generation flash entry point lives in ``flash_device``
-        # below. While this scaffolding is being built up phase by phase, the
-        # legacy ``_dfu_locks`` / ``_dfu_recovery_active`` / ``upload_ble_dfu``
-        # paths above continue to handle real auto-recovery flashes. Phase 8
-        # rewires auto-recovery to go through ``flash_device`` and the legacy
-        # tables retire then.
+        # below. Per-canonical in-flight set + ``_flash_job_locks`` enforce
+        # "at most one flash per device" across all callers (the L3a/L3b/L3c
+        # routes + auto-recovery).
         #
         # _flash_jobs: device_id → currently-or-most-recently-active FlashJob.
         # Cleared from active by ``_run_flash_job`` when the job terminates;
@@ -194,11 +227,10 @@ class FleetManager:
         # ── L1: single in-flight set ────────────────────────────────────
         # Populated when a `FlashJob` enters PENDING, cleared on terminal
         # transition. Anything that touches firmware MUST check
-        # membership here first (after resolving to canonical). The
-        # legacy `_dfu_locks` / `_flash_job_locks` sets exist alongside
-        # this for now — L3 migrates the legacy paths to consult
-        # `_device_in_flight` instead, and L3d deletes the legacy sets.
-        # Keys are canonical IDs from `resolve_canonical()`.
+        # membership here first (after resolving to canonical). After
+        # L3c, this is the single mutex for "at most one flash per
+        # device" — the legacy `_dfu_locks` field is gone. Keys are
+        # canonical IDs from `resolve_canonical()`.
         self._device_in_flight: set[str] = set()
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
@@ -366,7 +398,12 @@ class FleetManager:
           - the device (under its canonical ID) is in the
             ``_device_in_flight`` set, OR
           - an active flash job already exists for the device, OR
-          - a recent flash terminated within ``FLASH_DEDUP_WINDOW_S``.
+          - a recent flash terminated within ``FLASH_DEDUP_WINDOW_S``, OR
+          - the device has hit ``MAX_AUTO_RECOVERY_ATTEMPTS`` consecutive
+            auto-recovery failures (L3c), OR
+          - the device is inside the exponential backoff window for its
+            current `fails` count (L3c — schedule from
+            ``RECOVERY_BACKOFF_SECONDS``).
 
         Caller passes whatever ID they have — BLE addr or SN. The
         canonical resolver collapses aliases so a flash that started
@@ -376,10 +413,10 @@ class FleetManager:
         device, so auto-recovery never fired even though the device
         was eligible.
 
-        Auto-recovery (Phase 8 wiring) calls this BEFORE invoking
-        ``flash_device``. The check + the flash_device call must happen
-        atomically wrt other auto-recovery passes; the per-device flash
-        lock provides that ordering.
+        Auto-recovery calls this via ``flash_device(force=False)``: that
+        path consults this method and returns ``None`` if False. The
+        explicit-flash path (``force=True``, the route default) ignores
+        this check — the operator has already accepted the cost.
         """
         canonical = self.resolve_canonical(device_id)
         if canonical in self._device_in_flight:
@@ -388,9 +425,25 @@ class FleetManager:
         if existing is not None and existing.is_active:
             return False
         last = self._recent_flash_attempts.get(canonical)
-        if last is None:
-            return True
-        return (_time.time() - last) >= self.FLASH_DEDUP_WINDOW_S
+        if last is not None and (_time.time() - last) < self.FLASH_DEDUP_WINDOW_S:
+            return False
+        # L3c: max-attempts + exponential backoff. These checks used to
+        # live in `_auto_recover_dfu_devices`'s local `_dfu_recovery_state`
+        # dict; pulled into the orchestrator so the same gating applies
+        # regardless of which caller invokes `flash_device(force=False)`.
+        retry = self._recovery_retry_state.get(canonical)
+        if retry is not None:
+            if retry.fails >= MAX_AUTO_RECOVERY_ATTEMPTS:
+                return False
+            if retry.last_failure_at is not None and retry.fails > 0:
+                # Pick backoff seconds for this fails count (clamped to the
+                # last entry — the highest fails count just keeps that
+                # ceiling indefinitely until max-attempts kicks in).
+                idx = min(retry.fails - 1, len(RECOVERY_BACKOFF_SECONDS) - 1)
+                backoff_s = RECOVERY_BACKOFF_SECONDS[idx]
+                if (_time.time() - retry.last_failure_at) < backoff_s:
+                    return False
+        return True
 
     def _get_flash_job_lock(self, device_id: str) -> asyncio.Lock:
         """Lazy per-device lock. Creates on first request."""
@@ -400,23 +453,51 @@ class FleetManager:
             self._flash_job_locks[device_id] = lock
         return lock
 
+    @overload
     async def flash_device(
         self,
         device_id: str,
         firmware_path: Path,
         *,
         expected_version: str | None = None,
-    ) -> FlashJob:
-        """Explicit flash request. Returns a ``FlashJob`` immediately.
+        force: Literal[True] = True,
+    ) -> FlashJob: ...
+
+    @overload
+    async def flash_device(
+        self,
+        device_id: str,
+        firmware_path: Path,
+        *,
+        expected_version: str | None = None,
+        force: Literal[False],
+    ) -> FlashJob | None: ...
+
+    async def flash_device(
+        self,
+        device_id: str,
+        firmware_path: Path,
+        *,
+        expected_version: str | None = None,
+        force: bool = True,
+    ) -> FlashJob | None:
+        """Flash request — operator-explicit (``force=True``, default) or
+        auto-recovery (``force=False``).
 
         Idempotent under concurrent calls: if another caller's flash job
         for the same device is already in flight, returns that job rather
         than creating a second one. (This is the structural fix for the
         cascade bug — there is no path to "two writes for one device.")
 
-        Does NOT consult the dedup window. Auto-recovery is the caller
-        responsible for ``should_attempt_auto_recovery`` first; an explicit
-        operator flash always proceeds.
+        ``force=True`` (operator-explicit): always proceeds. Does NOT
+        consult the dedup window or the auto-recovery retry counter —
+        the operator has already accepted the cost.
+
+        ``force=False`` (auto-recovery, L3c): consults
+        ``should_attempt_auto_recovery`` (dedup window, max attempts,
+        exponential backoff) and returns ``None`` if any of those
+        guards say no. Returning a ``FlashJob`` means we passed the
+        guards and the orchestrator is scheduled.
 
         The actual write happens on a background task, so the returned job
         starts in ``PENDING`` or ``SELECTING_TRANSPORT`` and the caller
@@ -433,6 +514,9 @@ class FleetManager:
         async with lock:
             existing = self._flash_jobs.get(canonical)
             if existing is not None and existing.is_active:
+                # Idempotent return applies even to force=False: an
+                # in-flight job IS the auto-recovery flash, just one a
+                # previous cycle scheduled. The caller can wait on it.
                 log.info(
                     "flash_device(%s): returning in-flight job %s (state=%s)",
                     device_id,
@@ -440,6 +524,15 @@ class FleetManager:
                     existing.state.value,
                 )
                 return existing
+            if not force and not self.should_attempt_auto_recovery(device_id):
+                # Auto-recovery dedup said no (dedup window, max attempts,
+                # or backoff). Don't schedule — caller (auto-recovery
+                # loop) is responsible for trying again next cycle.
+                log.debug(
+                    "flash_device(%s, force=False): blocked by should_attempt_auto_recovery",
+                    device_id,
+                )
+                return None
             job = FlashJob(
                 device_id=device_id,
                 firmware_path=firmware_path,
@@ -447,13 +540,14 @@ class FleetManager:
             )
             self._flash_jobs[canonical] = job
             # L1: register in the single in-flight set so any other code
-            # path (legacy or canonical) that checks before touching
-            # firmware can see this device is occupied. Cleared by
-            # `_run_flash_job`'s `finally` block under the same lock.
+            # path that checks before touching firmware sees this device
+            # is occupied. Cleared by `_run_flash_job`'s `finally` block
+            # under the same lock.
             self._device_in_flight.add(canonical)
             log.info(
-                "flash_device(%s): created job %s, firmware=%s, expected_version=%s",
+                "flash_device(%s, force=%s): created job %s, firmware=%s, expected_version=%s",
                 device_id,
+                force,
                 job.job_id,
                 firmware_path,
                 expected_version,
@@ -699,15 +793,34 @@ class FleetManager:
             if not job.is_terminal:
                 job.transition(FlashJobState.FAILED)
         finally:
-            # Stamp dedup timestamp + clear in-flight on every terminal
-            # exit. Held under the per-device lock (keyed by canonical
-            # ID) so a concurrent ``should_attempt_auto_recovery`` call
-            # sees a consistent (jobs + timestamps + in-flight) snapshot.
+            # Stamp dedup timestamp + clear in-flight + update retry
+            # counter on every terminal exit. Held under the per-device
+            # lock (keyed by canonical ID) so a concurrent
+            # ``should_attempt_auto_recovery`` call sees a consistent
+            # (jobs + timestamps + in-flight + retry-counter) snapshot.
             canonical = self.resolve_canonical(job.device_id)
             lock = self._get_flash_job_lock(canonical)
             async with lock:
                 self._recent_flash_attempts[canonical] = _time.time()
                 self._device_in_flight.discard(canonical)
+                # L3c: update the canonical retry counter so the next
+                # `flash_device(force=False)` for this device honors
+                # max-attempts and backoff. Operator-initiated flashes
+                # (force=True) ALSO update this — a successful manual
+                # flash clears prior auto-recovery failures, which is
+                # exactly what an operator-fixed device wants.
+                if job.state is FlashJobState.COMPLETED:
+                    self._recovery_retry_state.pop(canonical, None)
+                elif job.state in (FlashJobState.FAILED, FlashJobState.ABANDONED):
+                    entry = self._recovery_retry_state.get(canonical) or _RecoveryRetryEntry()
+                    entry.fails += 1
+                    entry.last_failure_at = _time.time()
+                    # Reset the "gave up" log latch when fails crosses
+                    # MAX_AUTO_RECOVERY_ATTEMPTS for the first time —
+                    # next auto-recovery cycle will log the giveup once.
+                    if entry.fails == MAX_AUTO_RECOVERY_ATTEMPTS:
+                        entry.gave_up_logged = False
+                    self._recovery_retry_state[canonical] = entry
             # L2: reset the orchestrator-context-var. Token-based reset
             # restores the prior value (default False, or — if some
             # future code composes orchestrator entries — the outer
@@ -1148,27 +1261,6 @@ class FleetManager:
         """Clear reconnect blackout for a device, allowing auto-reconnect."""
         self._reconnect_blackout.pop(device_id, None)
 
-    def get_dfu_lock(self, device_id: str) -> asyncio.Lock:
-        """Get the per-device DFU lock. Creates one if it doesn't exist.
-
-        Keyed by the CANONICAL device ID (L1.1) so the SN form, the
-        BLE app address, and the BLE bootloader address for one
-        physical device all resolve to the same lock instance.
-        Otherwise the L3a → L3c transition would have a window where
-        the route (calling with the URL's device_id) and auto-recovery
-        (iterating with the discovered device.id) could end up holding
-        different locks for the same hardware — defeating the whole
-        point of the lock as a cross-caller mutex.
-
-        The legacy `_dfu_locks` field goes away entirely in L3c when
-        auto-recovery migrates to `flash_device()` and the canonical
-        in-flight set takes over the role of this lock.
-        """
-        canonical = self.resolve_canonical(device_id)
-        if canonical not in self._dfu_locks:
-            self._dfu_locks[canonical] = asyncio.Lock()
-        return self._dfu_locks[canonical]
-
     def pause_discovery(self) -> None:
         """Pause background discovery (e.g., during BLE DFU scan)."""
         self._discovery_pause_count += 1
@@ -1222,11 +1314,9 @@ class FleetManager:
         self._reconnect_failures.pop(device_id, None)
         self._reconnect_blackout.pop(device_id, None)
         self._backoff_skip.pop(device_id, None)
-        self._dfu_recovery_state.pop(device_id, None)
-        # `_dfu_locks` is keyed by canonical (`get_dfu_lock` resolves before
-        # insertion), so the pop must also use canonical or the lock entry
-        # would survive the device removal and accumulate forever.
-        self._dfu_locks.pop(self.resolve_canonical(device_id), None)
+        # L3c: drop the device's retry state too. Keyed by canonical
+        # because `_run_flash_job`'s finally writes it under canonical.
+        self._recovery_retry_state.pop(self.resolve_canonical(device_id), None)
         log.info("Removed device %s from fleet", device_id[:12])
 
     async def reconnect_device(self, device_id: str) -> bool:
@@ -2001,189 +2091,157 @@ class FleetManager:
         except OSError:
             log.exception("Failed to clear stale recovery-firmware state")
 
-    async def _auto_recover_dfu_devices(self) -> None:
-        """Automatically push firmware to devices stuck in DFU bootloader.
+    def _maybe_reload_recovery_whitelist(self) -> None:
+        """L3.1: refresh ``_recovery_firmware_path`` / ``_recovery_device_ids``
+        from the persisted JSON if the file's mtime has changed.
 
-        Runs periodically. For each DFU_RECOVERY device with a known BLE
-        address, attempts BLE DFU using the recovery firmware. Uses exponential
-        backoff to avoid flooding BLE with retry attempts.
+        Closes the gap where an operator-edited recovery-firmware.json
+        wouldn't take effect until a server restart. The stat() call is
+        rate-limited to once per ``RECOVERY_WHITELIST_RELOAD_TTL_S`` so
+        a high-frequency auto-recovery cycle doesn't hammer the
+        filesystem; the JSON re-read only fires when mtime changes.
         """
-        if self._dfu_recovery_active:
-            # Skip entire cycle if any recovery is in-flight. BLE DFU uses
-            # the adapter exclusively (BleakScanner conflicts with concurrent
-            # scans), so we serialize recovery attempts even across devices.
+        now = _time.monotonic()
+        if now - self._last_whitelist_check_at < RECOVERY_WHITELIST_RELOAD_TTL_S:
             return
+        self._last_whitelist_check_at = now
+        path = self._recovery_state_path()
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if self._last_whitelist_mtime is not None and mtime == self._last_whitelist_mtime:
+            return
+        self._last_whitelist_mtime = mtime
+        persisted = self._load_recovery_firmware()
+        if persisted is None:
+            return
+        firmware_path, device_ids = persisted
+        if firmware_path != self._recovery_firmware_path or device_ids != self._recovery_device_ids:
+            log.info(
+                "Auto-recovery whitelist refreshed from disk: %s (devices: %s)",
+                firmware_path,
+                ", ".join(sorted(device_ids)) or "<none>",
+            )
+            self._recovery_firmware_path = firmware_path
+            self._recovery_device_ids = device_ids
 
+    async def _auto_recover_dfu_devices(self) -> None:
+        """L3c: thin loop over ``flash_device(force=False)`` for devices
+        stuck in DFU bootloader.
+
+        The pre-L3c version owned the lock, the retry counter, the
+        backoff schedule, the broadcaster stop/start, pause_discovery,
+        hold_reconnect, AND the direct ``upload_ble_dfu`` call. All of
+        that is gone — the orchestrator's ``_run_flash_job`` owns the
+        BLE-DFU plumbing, ``flash_device(force=False)`` owns the
+        max-attempts + backoff dedup, and the canonical in-flight set
+        takes over the lock-handling role.
+
+        What's left here:
+
+          - Re-read the whitelist from disk if its mtime changed
+            (L3.1 — closes the operator-edit-without-restart gap).
+          - Filter the fleet to DFU_RECOVERY devices with a BLE address
+            that are in the whitelist (canonical-resolved).
+          - For each, call ``flash_device(force=False)``:
+            * ``None`` returned → blocked by dedup / max-attempts /
+              backoff. Log the giveup once if we just hit the cap.
+            * ``FlashJob`` returned → wait for terminal. Log result.
+
+        Strictly serial: one device at a time, finish fully before next.
+        BLE DFU uses the radio exclusively so concurrent recovery
+        attempts would interfere; the in-flight set already enforces
+        per-device, but we ALSO want per-cycle for cross-device.
+        """
+        self._maybe_reload_recovery_whitelist()
         firmware_path = self._recovery_firmware_path
-        if not firmware_path:
-            persisted = self._load_recovery_firmware()
-            if persisted:
-                firmware_path, device_ids = persisted
-                self._recovery_firmware_path = firmware_path
-                self._recovery_device_ids = device_ids
-        if not firmware_path:
+        if not firmware_path or not os.path.isfile(firmware_path):
             return
-
-        if not os.path.isfile(firmware_path):
-            return
-
         # No whitelist = nothing to recover. The whitelist is the safety
         # belt against auto-flashing a device the operator didn't include
-        # in this deploy (e.g. a dev unit in DFU on the bench). An armed
-        # firmware path without a whitelist is treated as not-armed.
+        # in this deploy.
         if not self._recovery_device_ids:
             return
+
+        # Canonical-resolved whitelist so an SN-only whitelist still
+        # matches a BLE-addr-only DFU device after the alias is registered
+        # (the cart_inner 2026-05-16 brick mode).
+        whitelist_canonical = {self.resolve_canonical(wid) for wid in self._recovery_device_ids}
 
         dfu_devices = [
             d
             for d in self._devices.values()
             if d.state == DeviceState.DFU_RECOVERY
             and d.ble_address
-            and d.id in self._recovery_device_ids
-            # Phase 7 safety: skip legacy auto-recovery if the new flash-job
-            # path is currently handling this device, or has very recently
-            # completed/failed a flash on it. This is the cascade-bug fix
-            # (see [[project-deploy-flash-cascade-bug]]) — keeps the legacy
-            # path from racing the new orchestrator. Phase 8 will fold the
-            # legacy path entirely; this gate is enough until then.
-            and self.should_attempt_auto_recovery(d.id)
+            and self.resolve_canonical(d.id) in whitelist_canonical
         ]
         if not dfu_devices:
             return
 
         for device in dfu_devices:
-            state = self._dfu_recovery_state.setdefault(device.id, {"fails": 0, "backoff": 0})
-            fail_count = state["fails"]
+            canonical = self.resolve_canonical(device.id)
 
-            # P4: stop hammering a device that keeps failing. After
-            # MAX_AUTO_RECOVERY_ATTEMPTS, the device is presumed to need
-            # operator attention (radio interference, firmware bug, hardware
-            # issue, etc.). Continuing to attempt risks further damage to a
-            # partially-flashed device. Log loudly on the transition so the
-            # operator sees it in the journal exactly once per giveup event.
-            if fail_count >= MAX_AUTO_RECOVERY_ATTEMPTS:
-                if not state.get("gave_up_logged"):
+            # Log "GIVING UP" exactly once when we've hit max-attempts.
+            # `should_attempt_auto_recovery` will keep returning False
+            # for this device until the operator manually flashes it
+            # (which clears the retry counter on COMPLETED).
+            retry = self._recovery_retry_state.get(canonical)
+            if retry is not None and retry.fails >= MAX_AUTO_RECOVERY_ATTEMPTS:
+                if not retry.gave_up_logged:
                     log.error(
                         "Auto-recovery GIVING UP for %s (%s) after %d attempts. "
-                        "Manual intervention required. State persists across server "
-                        "restarts via the dfu_recovery_state dict (in-memory only — "
-                        "a restart clears the cap, which is intentional: a fresh boot "
-                        "is a deliberate operator action).",
+                        "Manual intervention required. State is in-memory only — "
+                        "a server restart clears the cap, which is intentional: "
+                        "a fresh boot is a deliberate operator action.",
                         device.id[:12],
                         device.device_name or "unknown",
-                        fail_count,
+                        retry.fails,
                     )
-                    state["gave_up_logged"] = True
+                    retry.gave_up_logged = True
                 continue
 
-            if fail_count > 0:
-                # Exponential backoff: 1, 2, 4, 8 min (called every 60s)
-                skip_calls = min(2 ** (fail_count - 1), 8)
-                if state["backoff"] < skip_calls:
-                    state["backoff"] += 1
-                    continue
-                state["backoff"] = 0
-
             log.info(
-                "Auto-recovering DFU device %s (BLE: %s, attempt %d)...",
+                "Auto-recovering DFU device %s (BLE: %s, attempt %d/%d)...",
                 device.id[:12],
                 device.ble_address,
-                fail_count + 1,
+                (retry.fails if retry else 0) + 1,
+                MAX_AUTO_RECOVERY_ATTEMPTS,
             )
 
-            # Acquire per-device DFU lock — if manual flash is in progress,
-            # skip this device rather than blocking the background loop.
-            dfu_lock = self.get_dfu_lock(device.id)
-            if dfu_lock.locked():
-                log.info(
-                    "DFU lock held for %s (manual flash in progress?) — skipping auto-recovery",
+            # Single entry point: orchestrator handles transport selection
+            # (BLE-DFU for DFU_RECOVERY state), pause_discovery,
+            # hold_reconnect, broadcaster.stop, write, verify, and the
+            # finally-block update of `_recovery_retry_state`. We just
+            # wait for terminal and log the outcome.
+            job = await self.flash_device(device.id, Path(firmware_path), force=False)
+            if job is None:
+                # Blocked by `should_attempt_auto_recovery` (recently
+                # attempted, in-flight elsewhere, or inside backoff).
+                # Try again next cycle.
+                continue
+
+            # 900s outer cap: orchestrator's _run_ble_dfu_flash internally
+            # bounds at 600s wait_for around the BLE-DFU impl plus its
+            # verify scan. 900s leaves margin for the verify-scan tail.
+            terminal = await job.wait_until_terminal(timeout=900.0)
+            if not terminal:
+                log.error(
+                    "Auto-recovery for %s: wait_until_terminal hit 900s cap — "
+                    "orchestrator may still be running",
                     device.id[:12],
                 )
                 continue
 
-            async with dfu_lock:
-                self._dfu_recovery_active.add(device.id)
-                self.pause_discovery()
-                self.hold_reconnect(device.id, 600)
-                # Stop the broadcaster: BLE DFU needs central GATT, and the
-                # BCM43455 single radio refuses to register an advertisement
-                # while we hold central GATT connections (verified live
-                # 2026-05-16 via bluez `Failed (0x03)`). Reverse direction
-                # (GATT central while advertising) is not directly observed
-                # but the same radio constraint applies — don't risk it.
-                broadcaster_was_running = (
-                    self.broadcaster is not None and self.broadcaster.is_running
+            if job.state is FlashJobState.COMPLETED:
+                log.info("Auto-recovery succeeded for %s!", device.id[:12])
+            else:
+                log.warning(
+                    "Auto-recovery failed for %s: state=%s error=%s",
+                    device.id[:12],
+                    job.state.value,
+                    job.error or "(none)",
                 )
-                if broadcaster_was_running and self.broadcaster is not None:
-                    try:
-                        await self.broadcaster.stop()
-                    except Exception:
-                        log.exception(
-                            "Auto-recovery: broadcaster stop failed; recovery may fail too"
-                        )
-                    # P3 guard mirroring the flash route: if the broadcaster
-                    # didn't actually stop, refuse to enter BLE DFU. Mid-flash
-                    # radio contention against the BCM43455 (advertising +
-                    # GATT-central) produces "Failed (0x03)" and was the
-                    # cart_inner brick mode. PR #140 review — auto-recovery
-                    # was missing this guard that the flash routes have.
-                    if self.broadcaster is not None and self.broadcaster.is_running:
-                        log.error(
-                            "Auto-recovery: broadcaster did not stop cleanly for %s — "
-                            "refusing to enter BLE DFU; will retry next cycle",
-                            device.id[:12],
-                        )
-                        state["fails"] = fail_count + 1
-                        self._dfu_recovery_active.discard(device.id)
-                        self.resume_discovery()
-                        self.resume_reconnect(device.id)
-                        continue
-                try:
-                    from ..firmware.ble_dfu import upload_ble_dfu
-                    from ..firmware.compile import ensure_dfu_zip
-
-                    dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
-                    assert device.ble_address is not None  # filtered above
-                    # P5: hard 600s timeout. Mirrors the flash-route guard.
-                    # Without this, a hung BLE DFU here would run until
-                    # something else tears it down — which is exactly the
-                    # destructive scenario that bricked cart_inner.
-                    result = await asyncio.wait_for(
-                        upload_ble_dfu(
-                            app_ble_address=device.ble_address,
-                            dfu_zip_path=dfu_zip,
-                        ),
-                        timeout=600.0,
-                    )
-
-                    if result.get("status") == "ok":
-                        log.info("Auto-recovery succeeded for %s!", device.id[:12])
-                        device.state = DeviceState.DISCONNECTED
-                        self._dfu_recovery_state.pop(device.id, None)
-                    else:
-                        state["fails"] = fail_count + 1
-                        log.warning(
-                            "Auto-recovery failed for %s (attempt %d): %s",
-                            device.id[:12],
-                            fail_count + 1,
-                            result.get("message", ""),
-                        )
-                except Exception as e:
-                    state["fails"] = fail_count + 1
-                    log.error("Auto-recovery error for %s: %s", device.id[:12], e)
-                finally:
-                    self._dfu_recovery_active.discard(device.id)
-                    self.resume_discovery()
-                    self.resume_reconnect(device.id)
-                    if broadcaster_was_running and self.broadcaster is not None:
-                        try:
-                            await self.broadcaster.start()
-                        except Exception:
-                            log.exception(
-                                "Auto-recovery: failed to restart broadcaster — fleet "
-                                "commands will not reach BLE devices until the server "
-                                "is restarted"
-                            )
 
     # Fallback ping cadence when systemd doesn't provide WATCHDOG_USEC
     # (running outside a unit, or WatchdogSec=0). 30s is conservative.

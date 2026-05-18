@@ -243,27 +243,10 @@ async def test_route_arms_recovery_whitelist_for_target_only(
     )
 
 
-async def test_route_blocks_when_legacy_dfu_lock_held(
-    api_with_device: tuple[AsyncClient, FleetManager, Device],
-    fw_file: Path,
-) -> None:
-    """Transitional protection (L3a → L3c): the route still acquires the
-    legacy DFU lock, which is what auto-recovery currently checks before
-    starting a parallel BLE-DFU. If something already holds the lock,
-    the route MUST return 409 rather than starting a racing flash.
-
-    This test goes away in L3c when auto-recovery migrates to
-    ``flash_device()`` and ``_dfu_locks`` is deleted (canonical
-    in-flight set takes over)."""
-    client, fleet, device = api_with_device
-    lock = fleet.get_dfu_lock(device.id)
-    await lock.acquire()
-    try:
-        resp = await client.post(
-            f"/api/devices/{device.id}/flash",
-            json={"firmware_path": str(fw_file)},
-        )
-        assert resp.status_code == 409
-        assert "DFU already in progress" in resp.json()["detail"]
-    finally:
-        lock.release()
+# NOTE: ``test_route_blocks_when_legacy_dfu_lock_held`` was deleted in L3c.
+# The legacy ``_dfu_locks`` / ``get_dfu_lock`` mechanism is gone — the
+# canonical in-flight set inside ``flash_device`` is the single mutex
+# now. Concurrent flashes of the same device are handled by
+# ``flash_device`` returning the existing in-flight job (covered by
+# ``test_flash_device_returns_existing_job_under_concurrency`` in
+# test_flash_job_manager.py).
