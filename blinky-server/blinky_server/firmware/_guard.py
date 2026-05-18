@@ -5,9 +5,8 @@ that exactly one code path produces flashes: ``FleetManager.flash_device()``
 → ``_run_flash_job`` → either ``_uf2_write_impl_for_job`` or
 ``_ble_dfu_write_impl``. Anything else that calls those write impls
 directly is bypassing the per-device lock, the canonical-key resolver,
-the dedup window, the broadcaster guard, and the audit log — exactly
-the parallel-path-existing-in-the-first-place that caused the
-2026-05-17 cascade.
+the dedup window, and the broadcaster guard — exactly the parallel-
+path-existing-in-the-first-place that caused the 2026-05-17 cascade.
 
 This module is the boundary. ``_run_flash_job`` sets the ContextVar
 to ``True`` before invoking either impl; each impl's first line asks
@@ -15,12 +14,10 @@ to ``True`` before invoking either impl; each impl's first line asks
 on False. Tests can prove the invariant by importing an impl directly,
 calling it, and asserting the exception.
 
-The legacy public wrappers (``upload_uf2`` / ``upload_ble_dfu``) set
-the ContextVar manually before delegating, so existing call sites
-keep working through L3a-L3c. Those wrappers are marked
-``# REMOVE IN L3d`` and the L3d commit deletes them — at which
-point the guard becomes load-bearing and the "single entry point"
-invariant is structurally enforced.
+As of L3d, there are NO legacy wrappers around the impls anymore.
+The only function in the codebase that calls ``enter_orchestrator_context``
+is ``_run_flash_job`` itself. Any future caller that wants to write
+firmware MUST route through ``FleetManager.flash_device()``.
 
 ContextVar (vs. plain global) is the right primitive: asyncio task
 isolation means concurrent flashes on different devices each get

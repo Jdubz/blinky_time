@@ -823,85 +823,14 @@ async def test_ble_dfu_write_impl_outside_orchestrator_raises() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_legacy_upload_uf2_wrapper_sets_context_and_works() -> None:
-    """The L3d-tagged legacy wrapper exists ONLY to keep current
-    callers (firmware/__init__.upload_via_uf2, the legacy routes)
-    working through L3a-L3c. It MUST set the ContextVar so the
-    guarded impl accepts the call. Once L3d deletes the wrapper,
-    this test goes away with it.
-
-    We don't actually run a flash; we monkeypatch the impl to a no-op
-    and verify the wrapper reaches it without raising."""
-    from blinky_server.firmware import uf2_upload as uf2_mod
-
-    called_with_context_set = False
-
-    async def fake_impl(**kwargs: Any) -> dict[str, Any]:
-        # If the wrapper did its job, the ContextVar is True here.
-        nonlocal called_with_context_set
-        from blinky_server.firmware._guard import _inside_flash_job_orchestrator
-
-        called_with_context_set = _inside_flash_job_orchestrator.get()
-        return {"status": "ok", "elapsed_s": 0.1}
-
-    # We bypass the assert by patching the impl AFTER the wrapper enters
-    # the context. The real impl's first line is the assert; we replace
-    # the whole function so the assert doesn't fire — what we're proving
-    # is "the wrapper sets the context before calling the impl."
-    import contextlib
-
-    @contextlib.contextmanager
-    def patched():
-        original = uf2_mod._uf2_write_impl
-        uf2_mod._uf2_write_impl = fake_impl  # type: ignore[assignment]
-        try:
-            yield
-        finally:
-            uf2_mod._uf2_write_impl = original  # type: ignore[assignment]
-
-    with patched():
-        result = await uf2_mod.upload_uf2(
-            serial_port="/dev/null",
-            firmware_path="/tmp/x.hex",
-            transport=None,
-        )
-    assert result["status"] == "ok"
-    assert called_with_context_set, "legacy wrapper failed to set the orchestrator ContextVar"
-
-
-@pytest.mark.asyncio
-async def test_legacy_upload_ble_dfu_wrapper_sets_context_and_works() -> None:
-    """BLE-DFU side of the same invariant."""
-    from blinky_server.firmware import ble_dfu as ble_dfu_mod
-
-    called_with_context_set = False
-
-    async def fake_impl(**kwargs: Any) -> dict[str, Any]:
-        nonlocal called_with_context_set
-        from blinky_server.firmware._guard import _inside_flash_job_orchestrator
-
-        called_with_context_set = _inside_flash_job_orchestrator.get()
-        return {"status": "ok", "elapsed_s": 0.1}
-
-    import contextlib
-
-    @contextlib.contextmanager
-    def patched():
-        original = ble_dfu_mod._ble_dfu_write_impl
-        ble_dfu_mod._ble_dfu_write_impl = fake_impl  # type: ignore[assignment]
-        try:
-            yield
-        finally:
-            ble_dfu_mod._ble_dfu_write_impl = original  # type: ignore[assignment]
-
-    with patched():
-        result = await ble_dfu_mod.upload_ble_dfu(
-            app_ble_address="AA:BB:CC:DD:EE:FF",
-            dfu_zip_path="/tmp/x.dfu.zip",
-        )
-    assert result["status"] == "ok"
-    assert called_with_context_set, "legacy upload_ble_dfu wrapper failed to set the ContextVar"
+# NOTE: ``test_legacy_upload_uf2_wrapper_sets_context_and_works`` and
+# ``test_legacy_upload_ble_dfu_wrapper_sets_context_and_works`` were
+# deleted in L3d. The legacy ``upload_uf2`` / ``upload_ble_dfu``
+# wrappers they tested no longer exist. ``FleetManager.flash_device()``
+# is the only entry point that sets the orchestrator ContextVar; that
+# behavior is covered by the operator-flash and fleet-flash hardware
+# tests (L3a / L3b) plus the test below
+# (``test_test_task_context_unaffected_by_orchestrator_task``).
 
 
 @pytest.mark.asyncio
@@ -943,87 +872,11 @@ async def test_orchestrator_context_does_not_leak_across_tasks() -> None:
     await asyncio.gather(in_context(), sibling_check_task())
 
 
-@pytest.mark.asyncio
-async def test_legacy_wrappers_reset_context_on_return() -> None:
-    """Beyond setting the context on entry, the legacy wrappers MUST
-    reset it on return. Without this, a wrapper call would leak the
-    ContextVar=True back to the caller's task — and any subsequent
-    direct call to an impl in that same task would slip past the guard.
-    Verifies both the success path (impl returns) and the failure path
-    (impl raises) properly restore the prior context value."""
-    from blinky_server.firmware import ble_dfu as ble_dfu_mod
-    from blinky_server.firmware import uf2_upload as uf2_mod
-    from blinky_server.firmware._guard import (
-        OutsideFlashJobContextError,
-        _inside_flash_job_orchestrator,
-    )
-
-    async def ok_impl(**kwargs: Any) -> dict[str, Any]:
-        return {"status": "ok", "elapsed_s": 0.1}
-
-    async def raising_impl(**kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("simulated impl failure")
-
-    # ── UF2 wrapper, success path ─────────────────────────────────────
-    orig_uf2 = uf2_mod._uf2_write_impl
-    uf2_mod._uf2_write_impl = ok_impl  # type: ignore[assignment]
-    try:
-        assert _inside_flash_job_orchestrator.get() is False
-        await uf2_mod.upload_uf2(
-            serial_port="/dev/null", firmware_path="/tmp/x.hex", transport=None
-        )
-        assert _inside_flash_job_orchestrator.get() is False, (
-            "upload_uf2 leaked ContextVar=True after successful return"
-        )
-        # Confirm the leak would matter: a direct call now must still raise.
-        with pytest.raises(OutsideFlashJobContextError):
-            await uf2_mod._uf2_write_impl_for_job(
-                job=None,  # type: ignore[arg-type]
-                serial_port="/dev/null",
-                firmware_path="/tmp/x.hex",
-                transport=None,
-            )
-    finally:
-        uf2_mod._uf2_write_impl = orig_uf2  # type: ignore[assignment]
-
-    # ── UF2 wrapper, failure path ─────────────────────────────────────
-    uf2_mod._uf2_write_impl = raising_impl  # type: ignore[assignment]
-    try:
-        with pytest.raises(RuntimeError, match="simulated impl failure"):
-            await uf2_mod.upload_uf2(
-                serial_port="/dev/null", firmware_path="/tmp/x.hex", transport=None
-            )
-        assert _inside_flash_job_orchestrator.get() is False, (
-            "upload_uf2 leaked ContextVar=True after impl raised"
-        )
-    finally:
-        uf2_mod._uf2_write_impl = orig_uf2  # type: ignore[assignment]
-
-    # ── BLE-DFU wrapper, success path ─────────────────────────────────
-    orig_ble = ble_dfu_mod._ble_dfu_write_impl
-    ble_dfu_mod._ble_dfu_write_impl = ok_impl  # type: ignore[assignment]
-    try:
-        await ble_dfu_mod.upload_ble_dfu(
-            app_ble_address="AA:BB:CC:DD:EE:FF", dfu_zip_path="/tmp/x.zip"
-        )
-        assert _inside_flash_job_orchestrator.get() is False, (
-            "upload_ble_dfu leaked ContextVar=True after successful return"
-        )
-    finally:
-        ble_dfu_mod._ble_dfu_write_impl = orig_ble  # type: ignore[assignment]
-
-    # ── BLE-DFU wrapper, failure path ─────────────────────────────────
-    ble_dfu_mod._ble_dfu_write_impl = raising_impl  # type: ignore[assignment]
-    try:
-        with pytest.raises(RuntimeError, match="simulated impl failure"):
-            await ble_dfu_mod.upload_ble_dfu(
-                app_ble_address="AA:BB:CC:DD:EE:FF", dfu_zip_path="/tmp/x.zip"
-            )
-        assert _inside_flash_job_orchestrator.get() is False, (
-            "upload_ble_dfu leaked ContextVar=True after impl raised"
-        )
-    finally:
-        ble_dfu_mod._ble_dfu_write_impl = orig_ble  # type: ignore[assignment]
+# NOTE: ``test_legacy_wrappers_reset_context_on_return`` was deleted in
+# L3d alongside the legacy wrappers themselves. The orchestrator's own
+# context-reset on exit is covered by the operator-flash hardware tests
+# (each new flash_device call must succeed, which requires the previous
+# call's context to have reset cleanly).
 
 
 @pytest.mark.asyncio

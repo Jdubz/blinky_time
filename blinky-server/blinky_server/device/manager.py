@@ -70,13 +70,13 @@ RECOVERY_WHITELIST_RELOAD_TTL_S = 10.0
 
 @dataclass
 class _RecoveryRetryEntry:
-    """Per-canonical auto-recovery state (L3c).
+    """Per-canonical auto-recovery state.
 
-    Replaces the pre-L3c `_dfu_recovery_state[id]` dict-of-int with a
-    typed structure that lives on FleetManager. The orchestrator's
-    `_run_flash_job` finally block writes it (increment on
-    FAILED/ABANDONED, clear on COMPLETED); `should_attempt_auto_recovery`
-    reads it (max attempts + exponential backoff).
+    Lives on FleetManager keyed by canonical device id. The orchestrator's
+    `_run_flash_job` finally block writes it (increment on FAILED/ABANDONED,
+    clear on COMPLETED); `should_attempt_auto_recovery` reads it (max
+    attempts + exponential backoff). Auto-recovery loop calls
+    `flash_device(force=False)` which consults the same checks.
     """
 
     fails: int = 0
@@ -157,11 +157,11 @@ class FleetManager:
         # the safety belt against flashing a dev unit that happens to be in
         # DFU at the same time the cart fleet is being deployed.
         self._recovery_device_ids: set[str] = set()
-        # L3c: replaced the legacy `_dfu_recovery_state` / `_dfu_locks` /
-        # `_dfu_recovery_active`. Per-canonical retry state lives here; the
-        # orchestrator's `_run_flash_job` finally writes it; the in-flight
-        # set + flash-job lock take over the mutual exclusion role the old
-        # `_dfu_locks` had between auto-recovery and the flash routes.
+        # Per-canonical auto-recovery retry state. The orchestrator's
+        # `_run_flash_job` finally writes it; `should_attempt_auto_recovery`
+        # reads it to enforce max attempts + exponential backoff for
+        # `flash_device(force=False)` callers. The `_device_in_flight` set
+        # is the cross-caller mutex for "at most one flash per device."
         self._recovery_retry_state: dict[str, _RecoveryRetryEntry] = {}
         # L3.1: on-disk whitelist reload cache. We stat() the file at most
         # once per RECOVERY_WHITELIST_RELOAD_TTL_S, and only re-load the
@@ -224,13 +224,14 @@ class FleetManager:
         # infrastructure standalone so L1's `_device_in_flight` can
         # use canonical keys from day one.
         self._identity_groups: dict[str, str] = {}
-        # ── L1: single in-flight set ────────────────────────────────────
+        # ── Single in-flight set ────────────────────────────────────────
         # Populated when a `FlashJob` enters PENDING, cleared on terminal
         # transition. Anything that touches firmware MUST check
-        # membership here first (after resolving to canonical). After
-        # L3c, this is the single mutex for "at most one flash per
-        # device" — the legacy `_dfu_locks` field is gone. Keys are
-        # canonical IDs from `resolve_canonical()`.
+        # membership here first (after resolving to canonical). This is
+        # the single mutex for "at most one flash per device" — every
+        # caller (operator route, fleet flash, auto-recovery) routes
+        # through `flash_device` which honors this. Keys are canonical
+        # IDs from `resolve_canonical()`.
         self._device_in_flight: set[str] = set()
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
@@ -246,10 +247,10 @@ class FleetManager:
         # event loop is alive — which is exactly what the systemd
         # watchdog wants to know. A hard event-loop deadlock still
         # SIGKILLs us, as intended.
-        # Verified necessary 2026-05-16: ping inside the loop's pause
-        # path doesn't fire when auto-recovery awaits upload_ble_dfu
-        # INSIDE the loop iteration — the loop never returns to the
-        # top of while until DFU completes.
+        # Verified necessary 2026-05-16: a ping inside the loop's pause
+        # path doesn't fire when an auto-recovery iteration awaits a
+        # multi-minute BLE-DFU flash inline — the loop never returns to
+        # the top of while until the orchestrator's wait completes.
         self._watchdog_task: asyncio.Task[None] | None = None
         # Fleet broadcaster — BLE radio-style command channel. Owned by
         # the manager so its lifecycle matches the fleet's; routes get at
@@ -290,15 +291,19 @@ class FleetManager:
         return list(self._devices.values())
 
     # ────────────────────────────────────────────────────────────────────
-    # Flash-job API (Phase 3 scaffolding — see [[project-deploy-flash-cascade-bug]])
+    # Flash-job API (see ``docs/FLASH_LOCKDOWN_PLAN.md`` and
+    # ``[[project-deploy-flash-cascade-bug]]``)
     #
-    # ``flash_device`` is the single entry point that future auto-recovery
-    # (Phase 8) and explicit operator flashes (Phase 7) will both go
-    # through. The per-device lock + ``_flash_jobs`` table are what enforce
-    # "at most one in-flight flash per device" — preventing the duplicate
-    # write the 2026-05-17 cascade produced. While the orchestrator is
-    # still a stub (this phase), legacy auto-recovery (``upload_ble_dfu``
-    # called from ``_background_loop``) keeps working unchanged.
+    # ``flash_device`` is THE single entry point — operator routes
+    # (``POST /api/devices/{id}/flash``, fleet flash via ``flash_fleet``),
+    # auto-recovery, and any future caller all converge here. The
+    # per-device lock + ``_flash_jobs`` table + ``_device_in_flight``
+    # canonical-keyed set enforce "at most one in-flight flash per
+    # device" — preventing the duplicate write the 2026-05-17 cascade
+    # produced. The orchestrator-context ContextVar (see
+    # ``firmware/_guard.py``) makes the invariant structural: a write
+    # impl called outside ``_run_flash_job`` raises before it touches
+    # firmware.
     # ────────────────────────────────────────────────────────────────────
 
     # Window in seconds during which a freshly-completed (or freshly-failed)
@@ -427,10 +432,10 @@ class FleetManager:
         last = self._recent_flash_attempts.get(canonical)
         if last is not None and (_time.time() - last) < self.FLASH_DEDUP_WINDOW_S:
             return False
-        # L3c: max-attempts + exponential backoff. These checks used to
-        # live in `_auto_recover_dfu_devices`'s local `_dfu_recovery_state`
-        # dict; pulled into the orchestrator so the same gating applies
-        # regardless of which caller invokes `flash_device(force=False)`.
+        # Max-attempts + exponential backoff. The orchestrator owns
+        # this gating so it applies uniformly to every caller that
+        # invokes `flash_device(force=False)` (currently just the
+        # auto-recovery loop; future callers get the same protection).
         retry = self._recovery_retry_state.get(canonical)
         if retry is not None:
             if retry.fails >= MAX_AUTO_RECOVERY_ATTEMPTS:
@@ -924,14 +929,13 @@ class FleetManager:
             job.transition(FlashJobState.FAILED)
 
     async def _run_ble_dfu_flash(self, job: FlashJob) -> None:
-        """BLE-DFU branch of ``_run_flash_job``. L0 of the lockdown.
+        """BLE-DFU branch of ``_run_flash_job``.
 
         Three reachability cases, distinguished by ``device.state``:
 
         * ``DFU_RECOVERY`` — the device is already in its bootloader
           advertising the AdaDFU service. Skip bootloader entry; go
-          straight to the DFU transfer. This is the recovery case the
-          legacy ``upload_firmware`` had as its first dispatch branch.
+          straight to the DFU transfer.
 
         * App-mode over **BLE** — device is healthy and we're talking
           over NUS. Issue ``bootloader ble`` via NUS, give the bootloader
@@ -955,17 +959,9 @@ class FleetManager:
         The ``_ble_dfu_write_impl`` call retains its built-in post-DFU
         verify (scan + NUS+RSSI fallback for random-static-address-
         change). The plan is to migrate that into a BLE-aware
-        ``run_verify`` branch later; for now, success of the legacy
+        ``run_verify`` branch later; for now, success of the impl's
         verify maps directly to ``FlashJobState.COMPLETED``.
         """
-        # L2: call the guarded impl directly. The orchestrator's
-        # ContextVar (set in `_run_flash_job`) is in scope, so the
-        # impl's `assert_inside_orchestrator` passes. Using the legacy
-        # `upload_ble_dfu` wrapper here would work (it sets the
-        # ContextVar itself, idempotent under token-based reset) but
-        # binds us to the wrapper's existence — after L3d when the
-        # wrapper is deleted, this import would break. Wire to the
-        # impl directly so L3d's deletion is a pure remove, no edits.
         from ..firmware.compile import ensure_dfu_zip
 
         device = self._devices.get(job.device_id)
@@ -983,8 +979,7 @@ class FleetManager:
             return
 
         # Determine bootloader-entry mechanism. None means "already in
-        # bootloader" — the legacy `upload_firmware`'s DFU_RECOVERY
-        # short-circuit.
+        # bootloader" — the DFU_RECOVERY fast path.
         enter_via_serial = None
         enter_via_ble = None
         if device.state is not DeviceState.DFU_RECOVERY:
@@ -2127,18 +2122,16 @@ class FleetManager:
             self._recovery_device_ids = device_ids
 
     async def _auto_recover_dfu_devices(self) -> None:
-        """L3c: thin loop over ``flash_device(force=False)`` for devices
+        """Thin loop over ``flash_device(force=False)`` for devices
         stuck in DFU bootloader.
 
-        The pre-L3c version owned the lock, the retry counter, the
-        backoff schedule, the broadcaster stop/start, pause_discovery,
-        hold_reconnect, AND the direct ``upload_ble_dfu`` call. All of
-        that is gone — the orchestrator's ``_run_flash_job`` owns the
-        BLE-DFU plumbing, ``flash_device(force=False)`` owns the
-        max-attempts + backoff dedup, and the canonical in-flight set
-        takes over the lock-handling role.
+        The orchestrator's ``_run_flash_job`` owns the BLE-DFU plumbing
+        (pause_discovery, hold_reconnect, broadcaster stop/start, write,
+        verify); ``flash_device(force=False)`` owns the max-attempts +
+        backoff dedup via ``should_attempt_auto_recovery``; the canonical
+        in-flight set is the cross-caller mutex.
 
-        What's left here:
+        What this method does:
 
           - Re-read the whitelist from disk if its mtime changed
             (L3.1 — closes the operator-edit-without-restart gap).

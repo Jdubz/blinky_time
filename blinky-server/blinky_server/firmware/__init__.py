@@ -1,152 +1,34 @@
-"""Firmware upload orchestration.
+"""Firmware-flashing implementation modules.
 
-Single dispatch: upload_firmware() picks the best method per device.
+The single entry point for any flash is ``FleetManager.flash_device()``
+(in ``blinky_server.device.manager``); it dispatches to either
+``_uf2_write_impl_for_job`` (UF2 over USB-MSC) or ``_ble_dfu_write_impl``
+(Nordic Legacy DFU over BLE), both gated by the
+``_inside_flash_job_orchestrator`` ContextVar so direct calls fail loud
+with ``OutsideFlashJobContextError``. See ``docs/FLASH_LOCKDOWN_PLAN.md``
+for the architecture and ``firmware/_guard.py`` for the lockdown
+mechanism.
 
-Upload method is determined by transport type — NO FALLBACK:
-- Serial (USB) → UF2 mass storage bootloader
-- BLE → BLE DFU (Legacy Nordic protocol)
-- DFU recovery → BLE DFU direct (device already in bootloader)
+Modules in this package:
 
-If the chosen method fails, the error is returned immediately.
-The operator must investigate and fix the issue.
+  - ``compile``: builds the ``.hex`` (and the DFU ``.zip`` adafruit-nrfutil
+    expects for BLE-DFU) from the Arduino-CLI command, in a worker
+    thread.
+  - ``uf2_upload``: launches and watches the ``tools/uf2_upload.py``
+    subprocess that writes a UF2 image to the device's bootloader MSC.
+  - ``ble_dfu``: implements the Nordic Legacy DFU protocol over BLE
+    using bleak.
+  - ``flash_job``: ``FlashJob`` state machine + ``select_transport``
+    transport-picker.
+  - ``verify``: post-flash state-machine that polls device signals
+    (re-enumeration, app-mode handshake, version string) and stamps
+    ``FlashJob.verify_sub_state``.
+  - ``anomalies``: post-hoc detectors that compare ``SignalHistory``
+    timestamps against expected timing windows and surface anomalies
+    on the ``FlashJob``.
+  - ``_guard``: the lockdown ContextVar + ``OutsideFlashJobContextError``.
+
+Nothing in this package should be called from outside its boundary
+except via ``FleetManager.flash_device()``. Direct imports of the
+``_impl`` functions in production code raise at the entry guard.
 """
-
-from __future__ import annotations
-
-import asyncio
-import logging
-from collections.abc import Callable
-from typing import Any
-
-from ..transport.base import Transport
-
-log = logging.getLogger(__name__)
-
-# Phase-update hook: callable(phase, msg, pct). pct is 0-100 (or None
-# when the phase hasn't computed a percentage yet) so callers can drive
-# a progress bar; `phase` is a short tag like "prepare" / "upload" /
-# "done"; `msg` is human-readable detail.
-ProgressCallback = Callable[[str, str, int | None], None]
-
-
-async def upload_via_uf2(
-    serial_port: str,
-    firmware_path: str,
-    transport: Transport,
-    progress_callback: ProgressCallback | None = None,
-) -> dict[str, Any]:
-    """Upload firmware via UF2 mass storage bootloader.
-
-    For serial (USB) connected devices only. No fallback to BLE DFU —
-    if UF2 fails, the error is returned and must be investigated.
-
-    progress_callback (optional): callable(phase, msg, pct) — invoked at
-    each upload phase so callers can surface fine-grained progress to
-    their own UI / job state instead of seeing one static "Flashing X"
-    line for the entire 30-180s flash duration.
-    """
-    from .uf2_upload import upload_uf2
-
-    return await upload_uf2(
-        serial_port=serial_port,
-        firmware_path=firmware_path,
-        transport=transport,
-        progress_callback=progress_callback,
-    )
-
-
-async def upload_firmware(
-    device: Any,
-    firmware_path: str,
-    progress_callback: ProgressCallback | None = None,
-) -> dict[str, Any]:
-    """Upload firmware using the method determined by device transport.
-
-    NO FALLBACK between methods. If the chosen method fails, the error
-    is returned immediately for investigation.
-
-    Dispatch:
-      1. DFU recovery (device stuck in bootloader) → BLE DFU direct
-      2. Serial (USB) transport → UF2 mass storage
-      3. BLE transport → BLE DFU with bootloader entry over BLE
-
-    progress_callback (optional): callable(phase, msg, pct) — currently
-    only wired into the UF2 path. BLE DFU paths ignore it (yet).
-    """
-    from ..device.device import DeviceState
-
-    # DFU recovery: device is stuck in bootloader, push firmware directly
-    if device.state == DeviceState.DFU_RECOVERY:
-        from .ble_dfu import upload_ble_dfu
-        from .compile import ensure_dfu_zip
-
-        if not device.ble_address:
-            return {"status": "error", "message": "DFU recovery but BLE address unknown"}
-        if progress_callback is not None:
-            # WARN, not INFO: silently dropping a caller-supplied callback
-            # is the soft silent-fallback pattern CLAUDE.md prohibits.
-            # Surfacing this at WARN ensures the operator sees the
-            # mismatch in normal validation-run logs, not only when
-            # debug logging is enabled.
-            log.warning(
-                "[FALLBACK] upload_firmware: progress_callback provided but "
-                "DFU-recovery (BLE) path does not yet support it; caller will "
-                "not see phase updates"
-            )
-        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
-        return await upload_ble_dfu(
-            app_ble_address=device.ble_address,
-            dfu_zip_path=dfu_zip,
-        )
-
-    transport_type = device.transport.transport_type
-
-    # Serial (USB) devices: UF2 only, no fallback
-    if transport_type == "serial":
-        return await upload_via_uf2(
-            serial_port=device.port,
-            firmware_path=firmware_path,
-            transport=device.transport,
-            progress_callback=progress_callback,
-        )
-
-    # BLE-only devices: BLE DFU with bootloader entry over BLE
-    if transport_type == "ble":
-        from .ble_dfu import upload_ble_dfu
-        from .compile import ensure_dfu_zip
-
-        if progress_callback is not None:
-            # WARN, not INFO: silently dropping a caller-supplied callback
-            # is the soft silent-fallback pattern CLAUDE.md prohibits.
-            # Surfacing this at WARN ensures the operator sees the
-            # mismatch in normal validation-run logs, not only when
-            # debug logging is enabled.
-            log.warning(
-                "[FALLBACK] upload_firmware: progress_callback provided but "
-                "BLE DFU path does not yet support it; caller will not see "
-                "phase updates"
-            )
-        dfu_zip = await asyncio.to_thread(ensure_dfu_zip, firmware_path)
-        ble_transport = device.transport
-
-        async def enter_bootloader_via_ble(cmd: str) -> None:
-            # PRESENT devices are tracked-by-scan only, no GATT held. We
-            # bring up the NUS connection just-in-time to issue the
-            # "bootloader ble" command, then drop it — upload_ble_dfu does
-            # its own bootloader-address connect for the DFU itself. The
-            # transport.connect() guard is idempotent (no-op if already
-            # connected) so this also works the rare path where something
-            # previously left a CONNECTED transport in place.
-            if not ble_transport.is_connected:
-                await ble_transport.connect()
-            await ble_transport.write_line(cmd)
-            await asyncio.sleep(0.5)
-            await ble_transport.disconnect()
-
-        return await upload_ble_dfu(
-            app_ble_address=device.port,
-            dfu_zip_path=dfu_zip,
-            enter_bootloader_via_ble=enter_bootloader_via_ble,
-        )
-
-    return {"status": "error", "message": f"No upload method for transport: {transport_type}"}

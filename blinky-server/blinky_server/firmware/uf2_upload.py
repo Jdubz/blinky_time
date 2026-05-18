@@ -29,11 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ._guard import (
-    assert_inside_orchestrator,
-    enter_orchestrator_context,
-    reset_orchestrator_context,
-)
+from ._guard import assert_inside_orchestrator
 
 if TYPE_CHECKING:
     from .flash_job import FlashJob
@@ -150,10 +146,9 @@ async def _uf2_write_impl(
 
     GUARDED: callable only from inside ``_run_flash_job`` (the
     ContextVar is set by the orchestrator). Direct calls raise
-    ``OutsideFlashJobContextError``. The legacy public name
-    ``upload_uf2`` (below) is a wrapper that sets the ContextVar
-    manually so existing call sites keep working through L3a-L3c;
-    L3d deletes the wrapper.
+    ``OutsideFlashJobContextError``. There is no legacy public wrapper
+    anymore — the only path to this function is
+    ``FleetManager.flash_device()``.
 
     Disconnects the server transport, USB-resets the device to clear CDC
     state, then launches uf2_upload.py to handle bootloader entry, UF2
@@ -306,46 +301,9 @@ async def _uf2_write_impl(
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Legacy public wrapper — REMOVE IN L3d.
+# FlashJob-aware UF2 path.
 #
-# Existing callers (firmware/__init__.upload_via_uf2, the legacy
-# route paths) import `upload_uf2` by name. Until L3a-L3c migrates
-# every caller to route through `FleetManager.flash_device()`, this
-# wrapper preserves the old call signature and sets the orchestrator
-# ContextVar manually so the guarded impl above will accept the call.
-#
-# L3d deletes this wrapper. The verification grep at that point must
-# return zero hits for `upload_uf2` outside the impl rename itself.
-# ─────────────────────────────────────────────────────────────────────
-async def upload_uf2(
-    serial_port: str,
-    firmware_path: str,
-    transport: Any,
-    protocol: Any = None,
-    progress_callback: Callable[..., None] | None = None,
-) -> dict[str, Any]:
-    """Legacy entry point — delegates to the guarded `_uf2_write_impl`.
-
-    REMOVE IN L3d. New callers MUST go through
-    `FleetManager.flash_device()` instead.
-    """
-    token = enter_orchestrator_context()
-    try:
-        return await _uf2_write_impl(
-            serial_port=serial_port,
-            firmware_path=firmware_path,
-            transport=transport,
-            protocol=protocol,
-            progress_callback=progress_callback,
-        )
-    finally:
-        reset_orchestrator_context(token)
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Phase 7: FlashJob-aware UF2 path.
-#
-# Same physical steps as ``upload_uf2`` (disconnect → USB reset → run
+# Same physical steps as ``_uf2_write_impl`` (disconnect → USB reset → run
 # tools/uf2_upload.py) but the success criterion is "we saw [PASS] Wrote
 # N / N bytes on stdout," NOT "the subprocess exited 0." The subprocess's
 # trailing verify-reboot phase has a 60s wall-clock that fires reliably
@@ -408,7 +366,7 @@ async def _uf2_write_impl_for_job(
         job.set_error(f"firmware file not found: {firmware_path}")
         return False
 
-    # Same prep as upload_uf2: capture USB device path + serial number,
+    # Same prep as `_uf2_write_impl`: capture USB device path + serial number,
     # disconnect transport, USB-reset, re-discover the (possibly renamed)
     # serial port.
     usb_dev_path = _get_usb_dev_path(serial_port)

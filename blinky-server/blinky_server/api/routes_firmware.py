@@ -302,14 +302,14 @@ async def _flash_fleet_background(
     firmware: Path,
     job: Any,
 ) -> dict[str, Any]:
-    """L3b: thin wrapper around ``FleetManager.flash_fleet()``.
+    """Thin wrapper around ``FleetManager.flash_fleet()``.
 
     Drives the JobManager super-job's progress display from the strictly-
     serial per-device iterations the orchestrator runs. The actual flash
     work (per-device transport selection, write, verify, BLE radio
     coordination, sibling serial holds, udevadm settle between
-    iterations) lives inside ``flash_fleet()`` / ``_run_flash_job`` —
-    NOT here. The legacy ``firmware.upload_firmware`` import is gone.
+    iterations) lives inside ``flash_fleet()`` / ``_run_flash_job``,
+    not here.
 
     deploy.sh + UI clients poll
     ``GET /api/fleet/jobs/{id}`` and read ``progressMessage`` —

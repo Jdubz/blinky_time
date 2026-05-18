@@ -229,13 +229,12 @@ async def fleet_discover() -> dict[str, Any]:
 async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     """Upload firmware to a device using the best available method.
 
-    L3a (FLASH_LOCKDOWN_PLAN.md): the route validates inputs + arms the
-    auto-recovery whitelist, then delegates the actual write to
-    ``FleetManager.flash_device()``. The orchestrator owns every
-    per-device protection (canonical-key dedup, in-flight set, transport
-    selection, BLE radio coordination, write, verify, cleanup). Direct
-    calls to the legacy ``firmware.upload_firmware`` dispatcher are gone
-    — the only path to a write impl is now ``_run_flash_job``.
+    The route validates inputs + arms the auto-recovery whitelist, then
+    delegates the actual write to ``FleetManager.flash_device()``. The
+    orchestrator owns every per-device protection (canonical-key dedup,
+    in-flight set, transport selection, BLE radio coordination, write,
+    verify, cleanup). ``_run_flash_job`` is the only path to a write
+    impl.
 
     Automatic transport selection happens inside the orchestrator's
     ``select_transport`` based on a fresh probe of the device:
