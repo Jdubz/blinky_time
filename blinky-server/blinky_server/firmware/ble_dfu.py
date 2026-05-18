@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 
 
 async def _scan_with_retry(
-    make_coro: Callable[[], Any], *, attempts: int = 3, delay: float = 3.0
+    make_coro: Callable[[], Any], *, attempts: int = 3, delay: float = 5.0
 ) -> Any:
     """Call a BLE-scan coroutine factory; retry on transient BlueZ
     "Operation already in progress" errors.
@@ -62,16 +62,24 @@ async def _scan_with_retry(
     Catching the InProgress error and retrying after a short delay
     is cheaper than coordinating an adapter-wide lock between the
     discovery loop and the orchestrator (which would need to thread
-    through ``transport/discovery.py`` as well). The retry delay
-    needs to exceed the longest in-flight scan; the discovery loop's
-    default BleakScanner timeout is 5 s, so 3 s x 3 attempts = 9 s
-    typically suffices. The orchestrator's outer wall-clock cap
-    (600 s) absorbs the worst case.
+    through ``transport/discovery.py`` as well). Each retry delay
+    needs to exceed the discovery loop's BleakScanner timeout (5 s
+    default) so the in-flight scan finishes before the next attempt;
+    the default ``delay=5.0`` matches. Three attempts give ~15 s of
+    total wait, well inside the orchestrator's outer wall-clock cap
+    (600 s) that absorbs the worst case.
 
     Added in PR #143 to address the race exposed by the
     ``has_ble_app`` probe path (Copilot #1) — the legacy DFU_RECOVERY
     path skipped preflight, so this race didn't surface until now.
+
+    ``attempts`` must be >= 1. ``ValueError`` is raised for invalid
+    values so the failure mode is deterministic at the call site
+    rather than surfacing as an ``AssertionError`` further inside.
     """
+    if attempts < 1:
+        raise ValueError(f"attempts must be >= 1, got {attempts}")
+
     last_exc: BleakDBusError | None = None
     for attempt in range(1, attempts + 1):
         try:
@@ -92,7 +100,10 @@ async def _scan_with_retry(
                 )
                 await asyncio.sleep(delay)
                 continue
-    # Exhausted retries.
+    # Exhausted retries. ``last_exc`` is guaranteed non-None: ``attempts``
+    # is validated >= 1 above, so the loop body runs at least once and
+    # any path reaching here must have hit the InProgress branch (which
+    # sets ``last_exc``) — non-InProgress errors re-raise directly.
     assert last_exc is not None
     raise last_exc
 

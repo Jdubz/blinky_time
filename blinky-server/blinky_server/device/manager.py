@@ -1664,6 +1664,13 @@ class FleetManager:
                         disc.address,
                     )
                     existing.port = disc.address
+                # Refresh the cached discovery snapshot for every known
+                # device that re-appears, regardless of current state.
+                # A CONNECTED device that USB-re-enumerates (port change,
+                # bus change) needs its cache updated too, otherwise a
+                # subsequent disconnect → reconnect would use stale
+                # discovery metadata (PR #144 review — gemini).
+                self._device_discovery[device_id] = disc
                 # The device is on the USB bus again. Reset transient
                 # post-flash states so the reconnect loop picks it up
                 # next cycle (DFU_RECOVERY: returned from BLE-DFU
@@ -1693,10 +1700,6 @@ class FleetManager:
                             device_id[:12],
                         )
                     existing.state = DeviceState.DISCONNECTED
-                    # Refresh the cached discovery snapshot so the
-                    # reconnect loop sees the current transport_type
-                    # (was 'ble_dfu' if we'd promoted to DFU recovery).
-                    self._device_discovery[device_id] = disc
                     # Reset the reconnect-backoff counter so the first
                     # post-recovery reconnect attempt fires immediately
                     # rather than waiting through whatever backoff the

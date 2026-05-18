@@ -16,7 +16,9 @@ Implementation note: instead of unregister/re-register on every command
 (which would briefly stop advertising mid-cycle), we keep the
 advertisement registered and emit ``PropertiesChanged`` on
 ``ManufacturerData``. BlueZ picks up the new payload on its next
-advertising interval (~100 ms default).
+advertising interval — see ``_Advertisement.MinInterval`` /
+``MaxInterval`` below for the values we declare (50-100 ms) and the
+rationale.
 """
 
 from __future__ import annotations
@@ -155,13 +157,24 @@ class _Advertisement(ServiceInterface):
         return {k: Variant("ay", v) for k, v in self._manufacturer_data.items()}
 
     # ── Advertising interval (PR #143 follow-up, May 18 research) ───────
-    # BlueZ's default ``LEAdvertisement1.MinInterval`` /
-    # ``MaxInterval`` is 1280 ms — i.e. the radio actually emits the
-    # configured payload ONCE every ~1.28 s by default. Our
-    # ``COMMAND_REEMIT_HOLD_MS = 250 ms`` was assuming the BlueZ
-    # interval was ~100 ms; with the real 1280 ms default, an entire
-    # re-emit slot often elapses without a single on-air packet, which
-    # explains the cart-side ``packets_rx=13 / 6 h`` floor we measured.
+    #
+    # Units: BlueZ's ``LEAdvertisement1.MinInterval`` and ``MaxInterval``
+    # are in MILLISECONDS per its D-Bus API spec. The numbers we return
+    # below (50 and 100) are therefore 50 ms and 100 ms.
+    #
+    # Why we declare these explicitly:
+    # The documented BlueZ default for ``LEAdvertisement1.MinInterval``
+    # / ``MaxInterval`` is ~1280 ms — at that rate, an entire
+    # ``COMMAND_REEMIT_HOLD_MS`` (250 ms) re-emit slot can elapse without
+    # a single on-air packet, and a fresh-seq command can be missed
+    # entirely. The empirical "~50 ms intervals" observation referenced
+    # elsewhere in this module (older comment block in
+    # ``FleetBroadcaster.broadcast_command``) was measured on a single
+    # adapter / kernel combination; some kernels honour the documented
+    # default, others clamp to the request, and a few ignore the property
+    # altogether and emit at ~50 ms. Declaring the property is defensive
+    # — it removes the kernel-dependent variability and pins us to a
+    # known-good range.
     #
     # 20 ms is the BLE spec minimum for legacy non-connectable
     # broadcast. We don't go that low because (a) it eats radio time
@@ -172,8 +185,13 @@ class _Advertisement(ServiceInterface):
     #   - Within nRF52840 firmware scan window: 50 ms interval / 50 ms
     #     window = >= one on-air landing per window every time
     #   - Modest power impact (broadcaster is always plugged in)
-    # See ``docs/FLASH_LOCKDOWN_PLAN.md``-adjacent BLE-reliability notes
-    # and the May 18 research summary in PR #143 comments.
+    #
+    # **Caveat:** declaring the property is no guarantee BlueZ honours
+    # it. Some kernel / mgmt-api versions silently clamp the value (see
+    # bluez#314, bluez#833). When that happens we fall back to the
+    # kernel's own default. Empirical verification on a new adapter is
+    # the only ground truth; on the BCM43455 (May 2026) BlueZ honoured
+    # the request and emissions landed inside the 50-100 ms window.
     @dbus_property(access=PropertyAccess.READ)
     def MinInterval(self) -> "u":  # type: ignore[name-defined]  # noqa: F821, UP037
         return 50
@@ -405,8 +423,9 @@ class FleetBroadcaster:
     def last_command(self) -> str | None:
         return self._last_command
 
-    # How long to keep a real command on-air after broadcast_command(). After
-    # this window, we replace the AD payload with a no-op packet (type=0x00,
+    # How long to keep each individual emit on-air before replacing it
+    # with the next emit (or the no-op terminator). After the full
+    # re-emit cycle, the AD payload becomes a no-op packet (type=0x00,
     # which the firmware's BleScanner::update() drops at its packet-type
     # switch). The no-op stays on-air until the next command. Two reasons
     # we don't want the real command lingering:
@@ -415,17 +434,13 @@ class FleetBroadcaster:
     #      one that crashed the device in the first place.
     #   2. Devices coming into range later would pick up an old command.
     #
-    # Sized for reliable single-packet delivery. The firmware scanner runs
-    # at 100ms interval / 50ms window (50% duty); BlueZ on hci0 emits at
-    # ~50ms intervals empirically (measured 2026-05-17: ~20 retransmits/sec
-    # observed on both cart devices). 800ms gives ~16 retransmits per
-    # broadcast, of which the scanner can catch ~8 — overwhelmingly enough
-    # Per-emit hold time. Each command is re-emitted COMMAND_REEMIT_COUNT
-    # times with a fresh sequence number; this is how long each individual
-    # emit stays on-air before being replaced by the next emit (or the
-    # no-op terminator). Lower bound is the BlueZ advertising interval
-    # (~100ms) — the slot needs at least one advertising cycle to actually
-    # transmit on-air. 250ms gives ~2 advertising cycles per emit.
+    # Lower bound is the BlueZ advertising interval declared on
+    # ``_Advertisement.MaxInterval`` (100 ms) — the slot needs at least
+    # one advertising cycle to actually transmit on-air. 250 ms gives
+    # ~2-5 advertising cycles per emit (within the 50-100 ms range BlueZ
+    # is configured to use), which is enough for the firmware's
+    # 100 ms scan interval / 50 ms window to catch each emit at least
+    # once in expectation.
     COMMAND_REEMIT_HOLD_MS = 250
 
     # How many times to re-emit each command with a fresh sequence.

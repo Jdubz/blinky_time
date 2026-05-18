@@ -6,6 +6,7 @@ failure limit, serial liveness, release hold fix, device info population.
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
 
 from blinky_server.device.device import Device, DeviceState
@@ -584,3 +585,25 @@ async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
     assert len(noop_emits) == 1
     # And the noop's seq is fresh (advanced past all command emits).
     assert noop_emits[0] > max(seqs)
+
+
+# ── _scan_with_retry input validation (PR #144 review) ─────────────────
+
+
+@pytest.mark.parametrize("attempts", [0, -1, -5])
+async def test_scan_with_retry_rejects_non_positive_attempts(attempts: int) -> None:
+    """``_scan_with_retry`` raises ``ValueError`` for ``attempts < 1``.
+
+    The earlier implementation would fall through to
+    ``assert last_exc is not None`` if no attempt was ever made,
+    surfacing an unhelpful ``AssertionError``. PR #144 review pinned
+    the contract: misuse should raise a clear ``ValueError`` at the
+    call site instead.
+    """
+    from blinky_server.firmware.ble_dfu import _scan_with_retry
+
+    async def _never_called() -> object:
+        raise AssertionError("coroutine factory should not be invoked")
+
+    with pytest.raises(ValueError, match="attempts must be >= 1"):
+        await _scan_with_retry(_never_called, attempts=attempts)
