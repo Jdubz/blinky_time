@@ -516,3 +516,71 @@ async def test_pause_resume_discovery() -> None:
     # Should not go below 0
     fleet.resume_discovery()
     assert fleet._discovery_pause_count == 0
+
+
+# ── PR #143 follow-up: broadcaster re-emit reliability ──
+
+
+async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences() -> None:
+    """A single broadcast_command call MUST emit the command payload
+    multiple times with FRESH sequence numbers (per
+    ``COMMAND_REEMIT_COUNT``). This is the fix for the cart-side BLE
+    receive flakiness measured 2026-05-18: the firmware's BleScanner
+    has a single-slot rxBuffer and dedups by (source, seq), so the
+    pre-fix one-emit-per-command meant one chance per command to land.
+
+    The test pins the contract: emits a single command, observes how
+    many distinct sequences hit ``_set_manufacturer_payload`` carrying
+    that command, and asserts it matches ``COMMAND_REEMIT_COUNT``.
+    """
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+    from blinky_server.ble.protocol import COMPANY_ID, PacketType
+
+    bc = FleetBroadcaster()
+    # Skip the real D-Bus connect; stub the advertisement object so we
+    # can observe payload changes.
+    fake_adv = MagicMock()
+    payloads_emitted: list[bytes] = []
+
+    def capture_payload(company_id: int, payload: bytes) -> None:
+        assert company_id == COMPANY_ID
+        payloads_emitted.append(payload)
+
+    fake_adv._set_manufacturer_payload = capture_payload
+    bc._adv = fake_adv
+
+    # Speed up the test: emit hold-time → ~zero
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    await bc.broadcast_command("gen plasma")
+
+    # Decode the payloads we captured.
+    command_emits = []
+    noop_emits = []
+    for p in payloads_emitted:
+        # Packet layout: [version, type, seq, fragment, ...payload]
+        if len(p) < 4:
+            continue
+        ptype = p[1]
+        seq = p[2]
+        if ptype == PacketType.COMMAND.value:
+            cmd = p[4:].decode("utf-8", errors="replace")
+            command_emits.append((seq, cmd))
+        elif ptype == 0x00:
+            noop_emits.append(seq)
+
+    # Exactly COMMAND_REEMIT_COUNT command emits, all carrying the same
+    # command, each with a distinct sequence.
+    assert len(command_emits) == FleetBroadcaster.COMMAND_REEMIT_COUNT, (
+        f"expected {FleetBroadcaster.COMMAND_REEMIT_COUNT} re-emits, got {len(command_emits)}"
+    )
+    seqs = [s for s, _c in command_emits]
+    assert len(set(seqs)) == len(seqs), f"seqs not unique: {seqs}"
+    assert all(c == "gen plasma" for _s, c in command_emits)
+
+    # Exactly one noop terminator at the end.
+    assert len(noop_emits) == 1
+    # And the noop's seq is fresh (advanced past all command emits).
+    assert noop_emits[0] > max(seqs)

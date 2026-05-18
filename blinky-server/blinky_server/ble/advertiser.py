@@ -392,58 +392,94 @@ class FleetBroadcaster:
     # ~50ms intervals empirically (measured 2026-05-17: ~20 retransmits/sec
     # observed on both cart devices). 800ms gives ~16 retransmits per
     # broadcast, of which the scanner can catch ~8 — overwhelmingly enough
-    # for one to land.
+    # Per-emit hold time. Each command is re-emitted COMMAND_REEMIT_COUNT
+    # times with a fresh sequence number; this is how long each individual
+    # emit stays on-air before being replaced by the next emit (or the
+    # no-op terminator). Lower bound is the BlueZ advertising interval
+    # (~100ms) — the slot needs at least one advertising cycle to actually
+    # transmit on-air. 250ms gives ~2 advertising cycles per emit.
+    COMMAND_REEMIT_HOLD_MS = 250
+
+    # How many times to re-emit each command with a fresh sequence.
+    # Rationale (PR #143 hardware-test on FPS Sweep + carts, May 18):
+    # The firmware's BleScanner has a single-slot rxBuffer. If the slot
+    # is busy when an advertisement arrives, the packet is silently
+    # dropped (firmware diag: ``packets_rx=13`` / ``duped=4892`` /
+    # ``dropped=21`` on cart_inner after 6h uptime — 13 unique accepted
+    # vs the many hundreds of broadcasts that fired). The firmware
+    # dedups by ``(source BD addr, sequence)`` — multiple emits with
+    # the SAME seq inside the on-air window count as 1 chance.
     #
-    # The previous 3000ms value compensated for scene-apply firing 4
-    # separate broadcasts back-to-back (gen / effect / huespeed / hueshift)
-    # which had a measured ~37% per-packet capture rate. Scene apply is
-    # now a single `scene` broadcast (server scene_to_commands +
-    # firmware handleSceneCommand, b164), so the long window is no longer
-    # needed and was hurting feel: a 4-command scene took ~12s end-to-end.
-    # At 800ms the single scene packet lands in <1s.
+    # Re-emitting with FRESH sequences each time gives the firmware N
+    # independent chances to catch the same payload. The firmware
+    # APPLIES each accepted packet (gen/effect/save/load/set are all
+    # idempotent), so applying the same command N times is harmless.
     #
-    # Firmware dedups subsequent same-(source, seq) packets, so reception
-    # of multiple retransmits within the window cannot cause re-execution.
-    COMMAND_ONAIR_MS = 800
+    # 5 x 250ms = 1250ms total air time per command. At the firmware's
+    # 100ms scan interval / 50ms window, the chance of all 5 hitting a
+    # busy main loop drops to <1% under reasonable load.
+    COMMAND_REEMIT_COUNT = 5
 
     async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.
 
-        Sets the BLE advertisement's manufacturer-data to a COMMAND packet
-        carrying ``command``, holds it on-air for ``COMMAND_ONAIR_MS``,
-        then replaces it with a no-op packet so the air falls silent
-        (broadcast-wise) until the next call.
+        Emits the command as a manufacturer-data BLE advertisement
+        ``COMMAND_REEMIT_COUNT`` times in succession with FRESH sequence
+        numbers per emit, each held on-air for ``COMMAND_REEMIT_HOLD_MS``.
+        After the last emit, replaces the advertisement with a no-op
+        packet so the air falls silent.
 
-        Each call advances the sequence number, so a same-text command
-        sent twice still triggers the firmware (different (source, seq)
-        tuple) — but holding the same packet on-air for 300 ms with one
-        emit is reliable on its own; we don't re-emit during the window.
-        Same-source duplicates while the packet is on-air are dropped by
-        firmware dedup on (source BD addr, sequence).
+        Why repeat with fresh sequences?
+        ``FleetBroadcaster.COMMAND_REEMIT_COUNT`` has the full reasoning;
+        the short version: the firmware's BleScanner has a single-slot
+        rxBuffer and a (source, sequence) dedup. Multiple emits of the
+        SAME sequence look like 1 chance to the firmware (later emits
+        are deduped). Multiple emits of DIFFERENT sequences carrying the
+        same command payload give the firmware multiple chances to
+        catch the command — and applying an idempotent command (gen,
+        effect, set, save, load) twice is harmless.
 
-        Concurrency model: the lock is held only while mutating the
-        advertisement payload (a ~1 ms PropertiesChanged emit). The 3 s
-        on-air sleep happens OUTSIDE the lock so a concurrent stop()
-        or another broadcast doesn't have to wait the full window
-        (PR #140 review). Same-payload re-aim from a second concurrent
-        broadcast is fine — the firmware dedups by (source, seq).
+        Concurrency: the lock is held only while mutating the payload
+        (~1 ms PropertiesChanged emit). The per-emit hold happens
+        OUTSIDE the lock so a concurrent ``stop()`` or another
+        broadcast can interleave. A concurrent broadcast of a different
+        command WILL clobber the in-flight re-emit cycle (this is
+        deliberate — the operator's most recent command takes
+        priority); the firmware will receive whichever payload was on
+        the air during its scan window.
         """
         if self._adv is None:
             raise RuntimeError("FleetBroadcaster not started")
 
-        async with self._lock:
-            my_seq = self._next_sequence()
-            packet = _proto.build_packet(_proto.PacketType.COMMAND, command, my_seq)
-            self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
-            self._last_command = command
-            self._broadcasts_sent += 1
-            log.info("Broadcast cmd seq=%d: %r", my_seq, command)
-
-        # Hold on-air OUTSIDE the lock. Concurrent broadcasts will
-        # acquire the lock and re-aim the payload; this caller's
-        # on-air timer just expires and falls through to the no-op
-        # re-arm below.
-        await asyncio.sleep(self.COMMAND_ONAIR_MS / 1000.0)
+        last_emit_seq = -1
+        for emit_idx in range(self.COMMAND_REEMIT_COUNT):
+            async with self._lock:
+                if self._adv is None:
+                    return  # stop() raced us
+                my_seq = self._next_sequence()
+                packet = _proto.build_packet(_proto.PacketType.COMMAND, command, my_seq)
+                self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
+                self._last_command = command
+                self._broadcasts_sent += 1
+                last_emit_seq = my_seq
+                log.info(
+                    "Broadcast cmd seq=%d (emit %d/%d): %r",
+                    my_seq,
+                    emit_idx + 1,
+                    self.COMMAND_REEMIT_COUNT,
+                    command,
+                )
+            # Hold on-air OUTSIDE the lock. Concurrent broadcasts can
+            # acquire the lock during this sleep and clobber the payload;
+            # the next iteration's lock re-acquire + sequence check
+            # detects the clobber and stops re-emitting (let the newer
+            # broadcast's re-emit cycle run instead).
+            await asyncio.sleep(self.COMMAND_REEMIT_HOLD_MS / 1000.0)
+            # If a concurrent broadcast advanced the sequence past our
+            # last emit, abandon the rest of OUR re-emit cycle so we
+            # don't fight the newer command.
+            if self._sequence != last_emit_seq:
+                return
 
         async with self._lock:
             # Drop back to a no-op packet (type=0x00). The firmware's
@@ -454,13 +490,10 @@ class FleetBroadcaster:
             # the previous command's (source, seq).
             if self._adv is None:
                 return  # stop() raced us
-            # Gate on the sequence number captured at broadcast time, NOT
-            # on the command string. Two back-to-back identical commands
-            # advance the sequence to different values; comparing strings
-            # would let the FIRST wake-up kill the SECOND broadcast's
-            # still-live on-air window (PR #140 review — verified would
-            # bite scenes that send `set foo X` then `set foo Y`).
-            if self._sequence != my_seq:
+            # Gate on the sequence number captured at the LAST emit:
+            # if a concurrent broadcast advanced the sequence past us,
+            # let its own no-op terminator run instead of stomping it.
+            if self._sequence != last_emit_seq:
                 return
             noop_seq = self._next_sequence()
             noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE))
