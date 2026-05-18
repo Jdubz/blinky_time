@@ -24,10 +24,30 @@ static const uint16_t COMPANY_ID = 0xFFFF;       // Private/testing use
 static const uint8_t PROTOCOL_VERSION = 0x01;
 
 enum PacketType : uint8_t {
-    SETTINGS = 0x01,   // JSON settings blob
-    SCENE    = 0x02,   // Scene/generator change
-    COMMAND  = 0x03,   // Arbitrary serial command string
+    SETTINGS    = 0x01,   // JSON settings blob
+    SCENE       = 0x02,   // Scene/generator change
+    COMMAND     = 0x03,   // Legacy: serial command string, NO idempotency token.
+                          // Firmware applies every accepted packet — relies on
+                          // operator-side idempotence (gen/effect/set/save/load
+                          // tolerate duplicates). Kept for backward compat with
+                          // pre-2026-05-18 server builds; new firmware accepts it.
+    COMMAND_V2  = 0x04,   // Serial command string with 16-bit command_id token.
+                          // The 2 bytes immediately after the 4-byte header
+                          // are the little-endian command_id; the actual
+                          // command string starts at byte (HEADER_SIZE + 2).
+                          // Firmware tracks the last command_id seen per
+                          // source and short-circuits any packet whose
+                          // command_id matches the source's last accepted
+                          // value — making N re-emits of one LOGICAL command
+                          // apply exactly once even if all N packets reach
+                          // the firmware. See BLE_FLEET_RELIABILITY_PLAN
+                          // item #2 for the rationale.
 };
+
+// COMMAND_V2 inserts a 16-bit command_id between the standard 4-byte
+// header and the payload bytes (LE on wire). Sized as a separate constant
+// so the receiver doesn't have to redo the offset math at every call site.
+static const size_t COMMAND_V2_TOKEN_SIZE = 2;
 
 struct __attribute__((packed)) Header {
     uint8_t version;

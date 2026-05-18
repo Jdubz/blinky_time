@@ -47,6 +47,17 @@ public:
     // history (BLE_FLEET_RELIABILITY_PLAN.md item #3).
     static const size_t SEEN_RING_SIZE = 8;
 
+    // CMD_ID_RING_SIZE 8 — analogous to SEEN_RING_SIZE but tracking the
+    // last 16-bit command_id observed PER SOURCE. Used for COMMAND_V2
+    // idempotency (BLE_FLEET_RELIABILITY_PLAN.md item #2): a logical
+    // fleet command's N re-emits all carry the same command_id; the
+    // ring lets firmware identify the second and onward emit as "same
+    // logical command" and skip re-dispatching, even though each emit
+    // has a fresh BLE-level sequence number (so the seq-dedup ring
+    // wouldn't catch them). Per-source rather than global because each
+    // broadcaster has its own command_id counter starting at 1.
+    static const size_t CMD_ID_RING_SIZE = 8;
+
     // Matches BleProtocol::MAX_PAYLOAD. Kept as its own constant so the
     // slot layout below is self-describing.
     static const size_t SLOT_PAYLOAD_MAX = BleProtocol::MAX_PAYLOAD;
@@ -60,6 +71,7 @@ public:
     uint32_t getPacketsReceived() const { return packetsReceived_; }
     uint32_t getPacketsDuped() const { return packetsDuped_; }
     uint32_t getPacketsDropped() const { return packetsDropped_; }
+    uint32_t getPacketsIdempotent() const { return packetsIdempotent_; }
     int8_t getLastRssi() const { return lastRssi_; }
     uint8_t getLastSequence() const { return lastSequence_; }
     bool isActive() const { return active_; }
@@ -75,6 +87,14 @@ private:
     // so no synchronization is involved. Naming reflects that.
     bool isDuplicateSeen(const uint8_t* srcAddr, uint8_t seq) const;
     void recordSeen(const uint8_t* srcAddr, uint8_t seq);
+
+    // Producer-only helpers for the per-source command_id ring used by
+    // COMMAND_V2 idempotency. Returns true if this command_id matches
+    // the source's last accepted value (i.e. this is a re-emit of an
+    // already-applied logical command). Updates the ring either way so
+    // a subsequent emit of the same logical command also short-
+    // circuits even if the very-first emit was the entry-creation.
+    bool checkAndRecordCommandId(const uint8_t* srcAddr, uint16_t cmdId);
 
     static BleScanner* instance_;
 
@@ -105,6 +125,25 @@ private:
     uint8_t seenCount_ = 0;
     uint8_t seenHead_ = 0;
 
+    // Per-source last-command_id table for COMMAND_V2 idempotency.
+    // Producer-only; no synchronization. Lookup is by source address
+    // (existing entry → update its command_id; new source → append,
+    // FIFO-evicting the oldest entry once the ring is full).
+    //
+    // Different shape from seenRing_ because:
+    //   - seenRing_ tracks the LAST 8 (source, seq) PAIRS globally —
+    //     a single source can occupy multiple slots (one per emit).
+    //   - cmdIdRing_ tracks the LAST command_id PER source —
+    //     one slot per distinct source, value updated on each new
+    //     command from that source.
+    struct CmdIdEntry {
+        uint8_t addr[6];
+        uint16_t commandId;
+    };
+    CmdIdEntry cmdIdRing_[CMD_ID_RING_SIZE];
+    uint8_t cmdIdCount_ = 0;
+    uint8_t cmdIdHead_ = 0;  // next insert slot for new sources (FIFO)
+
     // Diagnostics — incremented in producer context; main-loop reads
     // are best-effort snapshots (a single byte-aligned uint32 read is
     // atomic enough on Cortex-M4 for diag-printing purposes).
@@ -113,6 +152,7 @@ private:
     uint32_t packetsReceived_ = 0;
     uint32_t packetsDuped_ = 0;
     uint32_t packetsDropped_ = 0;
+    uint32_t packetsIdempotent_ = 0;  // COMMAND_V2 re-emits skipped via command_id match
     uint32_t startMs_ = 0;
     bool active_ = false;
 };

@@ -530,14 +530,16 @@ async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
     has a single-slot rxBuffer and dedups by (source, seq), so the
     pre-fix one-emit-per-command meant one chance per command to land.
 
-    The test pins the contract: emits a single command, observes how
-    many distinct sequences hit ``_set_manufacturer_payload`` carrying
-    that command, and asserts it matches ``COMMAND_REEMIT_COUNT``.
+    Layout in COMMAND_V2: ``[version, type, seq, fragment, cmdid_lo,
+    cmdid_hi, ...command-string]`` — a 2-byte command_id prefix
+    separates the header from the actual command bytes. The test pins
+    both the re-emit count contract (N emits, fresh seqs each) AND the
+    idempotency contract (all N emits share the SAME command_id).
     """
     from unittest.mock import MagicMock
 
     from blinky_server.ble.advertiser import FleetBroadcaster
-    from blinky_server.ble.protocol import COMPANY_ID, PacketType
+    from blinky_server.ble.protocol import COMMAND_V2_TOKEN_SIZE, COMPANY_ID, PacketType
 
     bc = FleetBroadcaster()
     # Skip the real D-Bus connect; stub the advertisement object so we
@@ -558,33 +560,103 @@ async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
     await bc.broadcast_command("gen plasma")
 
     # Decode the payloads we captured.
-    command_emits = []
-    noop_emits = []
+    command_emits: list[tuple[int, int, str]] = []
+    noop_emits: list[int] = []
     for p in payloads_emitted:
         # Packet layout: [version, type, seq, fragment, ...payload]
         if len(p) < 4:
             continue
         ptype = p[1]
         seq = p[2]
-        if ptype == PacketType.COMMAND.value:
-            cmd = p[4:].decode("utf-8", errors="replace")
-            command_emits.append((seq, cmd))
+        if ptype == PacketType.COMMAND_V2.value:
+            # COMMAND_V2: [hdr (4)] [cmdid LE (2)] [command string]
+            assert len(p) >= 4 + COMMAND_V2_TOKEN_SIZE
+            cmd_id = p[4] | (p[5] << 8)
+            cmd = p[4 + COMMAND_V2_TOKEN_SIZE :].decode("utf-8", errors="replace")
+            command_emits.append((seq, cmd_id, cmd))
         elif ptype == 0x00:
             noop_emits.append(seq)
 
     # Exactly COMMAND_REEMIT_COUNT command emits, all carrying the same
-    # command, each with a distinct sequence.
+    # command, each with a distinct sequence, all sharing one command_id.
     assert len(command_emits) == FleetBroadcaster.COMMAND_REEMIT_COUNT, (
         f"expected {FleetBroadcaster.COMMAND_REEMIT_COUNT} re-emits, got {len(command_emits)}"
     )
-    seqs = [s for s, _c in command_emits]
+    seqs = [s for s, _i, _c in command_emits]
     assert len(set(seqs)) == len(seqs), f"seqs not unique: {seqs}"
-    assert all(c == "gen plasma" for _s, c in command_emits)
+    assert all(c == "gen plasma" for _s, _i, c in command_emits)
+
+    # Idempotency invariant: every re-emit of one LOGICAL command carries
+    # the SAME command_id so the firmware can short-circuit re-emits as
+    # the same logical event. See BLE_FLEET_RELIABILITY_PLAN item #2.
+    cmd_ids = {i for _s, i, _c in command_emits}
+    assert len(cmd_ids) == 1, f"all re-emits should share one command_id, got {cmd_ids}"
+    assert 1 <= next(iter(cmd_ids)) <= 0xFFFF
 
     # Exactly one noop terminator at the end.
     assert len(noop_emits) == 1
     # And the noop's seq is fresh (advanced past all command emits).
     assert noop_emits[0] > max(seqs)
+
+
+async def test_broadcaster_assigns_distinct_command_ids_across_calls() -> None:
+    """Each call to ``broadcast_command`` MUST get its own command_id
+    so the firmware treats consecutive calls as different logical
+    commands (i.e. the second one isn't short-circuited as a re-emit
+    of the first). The id is a monotonic uint16 starting at 1.
+    """
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+    from blinky_server.ble.protocol import COMMAND_V2_TOKEN_SIZE, PacketType
+
+    bc = FleetBroadcaster()
+    fake_adv = MagicMock()
+    payloads: list[bytes] = []
+    fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
+    bc._adv = fake_adv
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    await bc.broadcast_command("gen plasma")
+    await bc.broadcast_command("effect hue")
+
+    ids_per_command: dict[str, set[int]] = {}
+    for p in payloads:
+        if len(p) < 4 + COMMAND_V2_TOKEN_SIZE or p[1] != PacketType.COMMAND_V2.value:
+            continue
+        cmd_id = p[4] | (p[5] << 8)
+        cmd = p[4 + COMMAND_V2_TOKEN_SIZE :].decode("utf-8", errors="replace")
+        ids_per_command.setdefault(cmd, set()).add(cmd_id)
+
+    assert set(ids_per_command.keys()) == {"gen plasma", "effect hue"}
+    plasma_ids = ids_per_command["gen plasma"]
+    hue_ids = ids_per_command["effect hue"]
+    assert len(plasma_ids) == 1 and len(hue_ids) == 1
+    assert plasma_ids != hue_ids, "consecutive broadcasts must use different command_ids"
+
+
+async def test_build_command_v2_packet_layout() -> None:
+    """Wire-format pin for COMMAND_V2 — the firmware-side decoder relies on
+    the exact byte order. Any change here MUST match
+    ``blinky-things/comms/BleProtocol.h`` (COMMAND_V2 = 0x04) and the
+    LE 2-byte command_id token immediately after the 4-byte header.
+    """
+    from blinky_server.ble.protocol import (
+        FRAGMENT_SINGLE,
+        PROTOCOL_VERSION,
+        PacketType,
+        build_command_v2_packet,
+    )
+
+    pkt = build_command_v2_packet("gen fire", sequence=7, command_id=0xBEEF)
+    assert pkt[0] == PROTOCOL_VERSION
+    assert pkt[1] == PacketType.COMMAND_V2.value == 0x04
+    assert pkt[2] == 7
+    assert pkt[3] == FRAGMENT_SINGLE
+    # Command ID little-endian
+    assert pkt[4] == 0xEF
+    assert pkt[5] == 0xBE
+    assert pkt[6:] == b"gen fire"
 
 
 # ── _scan_with_retry input validation (PR #144 review) ─────────────────

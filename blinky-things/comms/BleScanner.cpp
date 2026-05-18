@@ -71,6 +71,42 @@ void BleScanner::recordSeen(const uint8_t* srcAddr, uint8_t seq) {
     }
 }
 
+bool BleScanner::checkAndRecordCommandId(const uint8_t* srcAddr, uint16_t cmdId) {
+    // Look up the source's existing entry. If found, this is an
+    // already-known source — compare command_id to the stored value:
+    //   - same value → this packet is a re-emit of the SAME logical
+    //                   command; tell the caller to skip dispatch. The
+    //                   stored value stays unchanged (it already
+    //                   matches).
+    //   - different  → this is a new logical command from the same
+    //                   source; update the stored value to the new
+    //                   command_id and let the caller dispatch.
+    //
+    // If not found, this is a new source (or one that fell out of the
+    // ring). Insert at cmdIdHead_, FIFO-evicting the oldest entry if
+    // the ring is full. First emit from a new source always dispatches
+    // because there's no prior value to match against.
+    for (size_t i = 0; i < cmdIdCount_; ++i) {
+        CmdIdEntry& e = cmdIdRing_[i];
+        if (memcmp(e.addr, srcAddr, 6) == 0) {
+            if (e.commandId == cmdId) {
+                return true;  // duplicate — skip dispatch
+            }
+            e.commandId = cmdId;
+            return false;     // new logical command from known source
+        }
+    }
+    // New source. FIFO insert.
+    CmdIdEntry& slot = cmdIdRing_[cmdIdHead_];
+    memcpy(slot.addr, srcAddr, 6);
+    slot.commandId = cmdId;
+    cmdIdHead_ = (cmdIdHead_ + 1) % CMD_ID_RING_SIZE;
+    if (cmdIdCount_ < CMD_ID_RING_SIZE) {
+        ++cmdIdCount_;
+    }
+    return false;             // first emit from this source
+}
+
 void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
     // Parse manufacturer-specific data from the advertising packet.
     // The raw data blob is in report->data.p_data[0..report->data.len]
@@ -138,9 +174,39 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
             return;
         }
 
-        recordSeen(srcAddr, hdr.sequence);
-        lastSequence_ = hdr.sequence;
-        lastRssi_ = report->rssi;
+        // COMMAND_V2 carries a 16-bit command_id immediately after the
+        // header and before the actual command string. Two things happen
+        // here: (1) idempotency check — if this source's last accepted
+        // command_id matches, this is a re-emit of an already-applied
+        // logical command and we drop it; (2) prefix strip — the
+        // downstream consumer (CommandRouter etc.) expects only the
+        // command string, so we advance payloadOffset past the token
+        // and shrink payloadLen accordingly. Done BEFORE recordSeen()
+        // so that an idempotency-rejected packet still consumes a
+        // (src, seq) slot — a re-broadcast of the same seq should also
+        // get caught by the seq-dedup path on the next emission.
+        if (hdr.type == BleProtocol::COMMAND_V2) {
+            if (payloadLen < BleProtocol::COMMAND_V2_TOKEN_SIZE + 1) {
+                // Need at least the 2-byte token plus 1 byte of command.
+                ++packetsDropped_;
+                return;
+            }
+            uint16_t cmdId = msd[payloadOffset] |
+                             (static_cast<uint16_t>(msd[payloadOffset + 1]) << 8);
+            recordSeen(srcAddr, hdr.sequence);
+            lastSequence_ = hdr.sequence;
+            lastRssi_ = report->rssi;
+            if (checkAndRecordCommandId(srcAddr, cmdId)) {
+                ++packetsIdempotent_;
+                return;
+            }
+            payloadOffset += BleProtocol::COMMAND_V2_TOKEN_SIZE;
+            payloadLen    -= BleProtocol::COMMAND_V2_TOKEN_SIZE;
+        } else {
+            recordSeen(srcAddr, hdr.sequence);
+            lastSequence_ = hdr.sequence;
+            lastRssi_ = report->rssi;
+        }
 
         // Enqueue into the rx ring with drop-oldest on overrun. The
         // index updates + slot write share a brief noInterrupts()
@@ -210,6 +276,11 @@ void BleScanner::update() {
                 case BleProtocol::SETTINGS:
                 case BleProtocol::SCENE:
                 case BleProtocol::COMMAND:
+                case BleProtocol::COMMAND_V2:
+                    // For COMMAND_V2 the 2-byte command_id prefix was
+                    // stripped in handleReport() before enqueue, so
+                    // the downstream callback sees the same shape as
+                    // a legacy COMMAND packet (command string only).
                     callback_(payload, len);
                     break;
                 default:
@@ -231,6 +302,8 @@ void BleScanner::printDiagnostics(Print& out) const {
     out.print(packetsReceived_);
     out.print(F(" duped="));
     out.print(packetsDuped_);
+    out.print(F(" idempotent="));
+    out.print(packetsIdempotent_);
     out.print(F(" dropped="));
     out.print(packetsDropped_);
     if (packetsReceived_ > 0) {

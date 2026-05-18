@@ -230,6 +230,14 @@ class FleetBroadcaster:
         self._bus: MessageBus | None = None
         self._adv: _Advertisement | None = None
         self._sequence: int = 0
+        # Monotonic per-broadcaster command_id. Incremented ONCE per
+        # call to ``broadcast_command()``; the same value rides every
+        # one of the N re-emits of that logical command. Firmware uses
+        # this to identify re-emits as "same logical command, apply
+        # once" (BLE_FLEET_RELIABILITY_PLAN item #2). Starts at 0; the
+        # first command bumps it to 1 before emit, so the value on the
+        # wire is never 0 for a real command.
+        self._command_id: int = 0
         self._broadcasts_sent: int = 0
         self._last_command: str | None = None
         # Serializes broadcast() calls; rapid back-to-back PropertiesChanged
@@ -472,15 +480,19 @@ class FleetBroadcaster:
         After the last emit, replaces the advertisement with a no-op
         packet so the air falls silent.
 
-        Why repeat with fresh sequences?
-        ``FleetBroadcaster.COMMAND_REEMIT_COUNT`` has the full reasoning;
-        the short version: the firmware's BleScanner has a single-slot
-        rxBuffer and a (source, sequence) dedup. Multiple emits of the
-        SAME sequence look like 1 chance to the firmware (later emits
-        are deduped). Multiple emits of DIFFERENT sequences carrying the
-        same command payload give the firmware multiple chances to
-        catch the command — and applying an idempotent command (gen,
-        effect, set, save, load) twice is harmless.
+        Re-emit redundancy + idempotency:
+        Every re-emit of a single logical command carries the SAME
+        ``command_id`` (assigned once at the top of this method) but a
+        FRESH ``sequence``. The firmware uses ``sequence`` to dedup
+        bus-level retransmissions of identical packets and
+        ``command_id`` to short-circuit re-emits of the same logical
+        command after the first one is applied. Without command_id the
+        firmware would re-execute every fresh-seq emit
+        (``COMMAND_REEMIT_COUNT`` times for every fleet command),
+        which works for the idempotent gen/effect/save/load/set
+        commands we have today but is fragile — any future command
+        with side effects would multi-apply. See
+        BLE_FLEET_RELIABILITY_PLAN item #2.
 
         Concurrency: the lock is held only while mutating the payload
         (~1 ms PropertiesChanged emit). The per-emit hold happens
@@ -494,20 +506,31 @@ class FleetBroadcaster:
         if self._adv is None:
             raise RuntimeError("FleetBroadcaster not started")
 
+        # Assign the command_id ONCE per logical command, before the
+        # re-emit loop. Every re-emit below carries this same value;
+        # the firmware uses it to identify them as one logical command.
+        # Done outside the lock — the bump itself is atomic and we don't
+        # care if a concurrent broadcaster bumps next; sequence-clobber
+        # detection inside the loop handles the inter-command race.
+        my_command_id = self._next_command_id()
+
         last_emit_seq = -1
         for emit_idx in range(self.COMMAND_REEMIT_COUNT):
             async with self._lock:
                 if self._adv is None:
                     return  # stop() raced us
                 my_seq = self._next_sequence()
-                packet = _proto.build_packet(_proto.PacketType.COMMAND, command, my_seq)
+                packet = _proto.build_command_v2_packet(
+                    command, sequence=my_seq, command_id=my_command_id
+                )
                 self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
                 self._last_command = command
                 self._broadcasts_sent += 1
                 last_emit_seq = my_seq
                 log.info(
-                    "Broadcast cmd seq=%d (emit %d/%d): %r",
+                    "Broadcast cmd seq=%d cmd_id=%d (emit %d/%d): %r",
                     my_seq,
+                    my_command_id,
                     emit_idx + 1,
                     self.COMMAND_REEMIT_COUNT,
                     command,
@@ -546,11 +569,28 @@ class FleetBroadcaster:
         self._sequence = (self._sequence + 1) & 0xFF
         return self._sequence
 
+    def _next_command_id(self) -> int:
+        # uint16 rolling counter. Wraps after ~65k commands; at, say,
+        # 10 cmd/sec that's ~109 minutes — well beyond any realistic
+        # in-flight collision window with the firmware's per-source
+        # last-id memory (the firmware compares for equality with the
+        # PREVIOUS command_id, not membership in a set, so reuse only
+        # collides if the very-previous command happens to share the
+        # value).
+        self._command_id = (self._command_id + 1) & 0xFFFF
+        # Skip 0 on wrap — keep the on-wire value strictly non-zero so
+        # the firmware can't confuse a real command_id with a default-
+        # initialized cell. Cheap defensive guard.
+        if self._command_id == 0:
+            self._command_id = 1
+        return self._command_id
+
     def status(self) -> dict[str, Any]:
         """Health snapshot for /api/fleet/status."""
         return {
             "running": self.is_running,
             "broadcasts_sent": self._broadcasts_sent,
             "sequence": self._sequence,
+            "command_id": self._command_id,
             "last_command": self._last_command,
         }

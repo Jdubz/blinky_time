@@ -34,9 +34,18 @@ class PacketType(IntEnum):
     SETTINGS = 0x01
     SCENE = 0x02
     COMMAND = 0x03
+    # Same payload as COMMAND, but carries a 16-bit command_id token
+    # immediately after the 4-byte header. Firmware tracks the last
+    # command_id seen per source and short-circuits any packet whose
+    # command_id matches the source's last accepted value, so N re-emits
+    # of one LOGICAL command (the broadcaster's redundancy strategy)
+    # apply exactly once. See BLE_FLEET_RELIABILITY_PLAN item #2.
+    COMMAND_V2 = 0x04
 
 
 HEADER_SIZE = 4
+# Size of the command_id token COMMAND_V2 carries after the header.
+COMMAND_V2_TOKEN_SIZE = 2
 # Legacy LE advertising data limit is 31 bytes total for the whole AD payload.
 # Subtract the manufacturer-specific data AD wrapper (2 bytes type+len),
 # the company ID (2 bytes), and our 4-byte header = 23 bytes payload room
@@ -85,3 +94,44 @@ def build_packet(
         )
     header = bytes((PROTOCOL_VERSION, int(packet_type), sequence, fragment))
     return header + payload
+
+
+def build_command_v2_packet(
+    payload: bytes | str,
+    sequence: int,
+    command_id: int,
+    fragment: int = FRAGMENT_SINGLE,
+) -> bytes:
+    """Pack a COMMAND_V2 broadcast packet with idempotency token.
+
+    All N re-emits of a single LOGICAL command must share the same
+    ``command_id`` so the receiver can identify them as one event.
+    ``sequence`` should still advance monotonically across emits (the
+    seq-dedup ring relies on that to collapse bus-level retransmissions
+    of identical (src, seq) packets); the command_id is the higher-level
+    "same logical command" key, decoupled from the BLE-level sequence.
+
+    Layout on the wire (after BlueZ adds the 0xFFFF company ID prefix):
+      bytes[0]    version
+      bytes[1]    type = COMMAND_V2 (0x04)
+      bytes[2]    sequence
+      bytes[3]    fragment
+      bytes[4:6]  command_id (little-endian uint16)
+      bytes[6:]   command string
+
+    Raises ``ValueError`` for out-of-range arguments. The total bytes
+    must still fit in ``EXTENDED_PAYLOAD_MAX``; the token counts toward
+    that budget, so the effective command-string ceiling is
+    ``EXTENDED_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE = 238`` bytes.
+    """
+    if not (0 <= command_id <= 0xFFFF):
+        raise ValueError(f"command_id must fit in a uint16, got {command_id}")
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    token = bytes((command_id & 0xFF, (command_id >> 8) & 0xFF))
+    return build_packet(
+        PacketType.COMMAND_V2,
+        token + payload,
+        sequence=sequence,
+        fragment=fragment,
+    )
