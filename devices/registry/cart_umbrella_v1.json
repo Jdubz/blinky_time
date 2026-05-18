@@ -1,13 +1,12 @@
 {
-  "_status": "in-progress, specs unverified against hardware as of 2026-05-17",
+  "_comment": "8 vertical spokes, 13 LEDs each (104 total). Wiring: spoke 0 data-in-at-top (data flows down the spoke from canopy to tip); spokes 1-7 each data-in-at-bottom (data flows up from tip to canopy), all in the same direction — no per-column alternation, no zigzag. Hence orientation=4 (VERTICAL_FIRST_DOWN). Confirmed against hardware 2026-05-18 against controller SN DC9BECDFB0ECEE13.",
   "deviceId": "cart_umbrella_v1",
   "deviceName": "Cart Umbrella",
   "ledWidth": 8,
-  "ledHeight": 16,
+  "ledHeight": 13,
   "ledPin": 10,
   "ledType": 82,
-  "orientation": 0,
+  "orientation": 4,
   "layoutType": 0,
-  "brightness": 80,
-  "invertZ": true
+  "brightness": 80
 }

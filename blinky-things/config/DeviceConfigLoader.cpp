@@ -257,8 +257,9 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
     }
 
     // Validate orientation (must match MatrixOrientation enum in DeviceConfig.h)
-    // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID, 3=HORIZONTAL_ZIGZAG
-    if (stored.orientation > 3) {
+    // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID, 3=HORIZONTAL_ZIGZAG,
+    // 4=VERTICAL_FIRST_DOWN
+    if (stored.orientation > 4) {
         SerialConsole::logWarn(F("Invalid orientation"));
         return false;
     }
