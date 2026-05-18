@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..device.device import Device, DeviceState
-from ..firmware import upload_firmware
+from ..firmware.flash_job import FlashConflict, FlashJobState
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import (
     CommandResponse,
@@ -230,21 +229,23 @@ async def fleet_discover() -> dict[str, Any]:
 async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     """Upload firmware to a device using the best available method.
 
-    Automatically selects the upload method based on device transport:
-      - Serial devices: UF2 (USB mass storage), BLE DFU fallback
-      - BLE devices: BLE DFU with bootloader entry over BLE
-      - DFU recovery: BLE DFU direct (device already in bootloader)
+    The route validates inputs + arms the auto-recovery whitelist, then
+    delegates the actual write to ``FleetManager.flash_device()``. The
+    orchestrator owns every per-device protection (canonical-key dedup,
+    in-flight set, transport selection, BLE radio coordination, write,
+    verify, cleanup). ``_run_flash_job`` is the only path to a write
+    impl.
 
-    Serial UF2 is always preferred over wireless methods.
+    Automatic transport selection happens inside the orchestrator's
+    ``select_transport`` based on a fresh probe of the device:
+      - Serial reachable → UF2 (preferred; safer protocol, faster)
+      - BLE DFU bootloader advert observed → BLE DFU direct
+      - BLE app-mode → BLE DFU after issuing ``bootloader ble`` over NUS
     """
     from pathlib import Path
 
     device = _get_device_or_404(device_id)
 
-    # PRESENT BLE devices are reachable for flash: we just-in-time connect
-    # for the flash via the existing BleTransport, with the broadcaster
-    # paused for the duration (single-radio adapters refuse central role
-    # while advertising).
     if device.state not in (
         DeviceState.CONNECTED,
         DeviceState.DFU_RECOVERY,
@@ -264,98 +265,99 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         raise HTTPException(400, f"Upload not yet supported for platform: {device.platform}")
 
     fleet = get_fleet()
-    # Per-device flash arms auto-recovery for THIS device only — the explicit
-    # whitelist keeps a future DFU bounce from auto-flashing unrelated devices.
-    fleet.set_recovery_firmware(str(firmware), [device.id])
 
-    # Hold time: UF2 takes ~60s, BLE DFU takes ~8 min
-    is_ble_only = (
-        device.state == DeviceState.DFU_RECOVERY or device.transport.transport_type == "ble"
-    )
-    hold_time = 600 if is_ble_only else 120
+    # The legacy DFU-lock acquisition is gone (L3c). ``flash_device``'s
+    # canonical in-flight set is the single mutex now: an auto-recovery
+    # cycle that tries this device while we're in flight gets ``None``
+    # back from ``flash_device(force=False)`` and skips it.
 
-    # Acquire per-device DFU lock — prevents concurrent DFU from auto-recovery
-    dfu_lock = fleet.get_dfu_lock(device_id)
-    if dfu_lock.locked():
-        raise HTTPException(409, f"DFU already in progress for device {device_id}")
+    is_serial_flash = device.transport.transport_type == "serial"
+    sibling_ids: list[str] = []
 
-    async with dfu_lock:
-        # UF2 flash causes a USB bus reset that disrupts ALL serial devices on
-        # the same hub. Hold reconnect on sibling serial devices so the manager
-        # doesn't try to reconnect them while the bus is unstable.
-        # Sibling holds are inside the lock context so they're always cleaned
-        # up by the finally block, even on unexpected exceptions.
-        is_serial_flash = device.transport.transport_type == "serial"
-        sibling_ids: list[str] = []
-        if is_serial_flash:
-            for dev in fleet.get_all_devices():
-                if dev.id != device.id and dev.transport.transport_type == "serial":
-                    fleet.hold_reconnect(dev.id, hold_time)
-                    sibling_ids.append(dev.id)
+    # ── Sibling USB-bus protection (UF2 only) ────────────────────────────
+    # UF2 flash performs a USB bus reset (USBDEVFS_RESET on the target's
+    # USB device path) that briefly disrupts ALL serial devices on the
+    # same hub. Hold sibling auto-reconnect timers across the flash so
+    # the manager doesn't redial them mid-bus-reset.
+    #
+    # We do NOT pause discovery or hold-reconnect the TARGET device:
+    # the orchestrator's ``_FleetVerifySignals.is_serial_connected()``
+    # poll requires ``device.transport.is_connected`` to become True
+    # after the post-flash reboot, and that re-connection is driven by
+    # the discovery loop. Live test 2026-05-18 on FPS Sweep with
+    # discovery paused: verify stalled in AWAITING_APP_BOOT for the
+    # full 5 min cap (the device WAS up, but its transport never
+    # reconnected). With discovery running: verify converges in ~15s.
+    #
+    # The BLE-DFU path doesn't need anything from the route: the
+    # orchestrator calls ``pause_discovery`` + ``hold_reconnect`` +
+    # ``broadcaster.stop()`` inside ``_run_ble_dfu_flash`` for the
+    # narrower window where they're actually needed (BLE radio
+    # coordination) and releases them before its own verify scan.
+    if is_serial_flash:
+        for dev in fleet.get_all_devices():
+            if dev.id != device.id and dev.transport.transport_type == "serial":
+                fleet.hold_reconnect(dev.id, 600)
+                sibling_ids.append(dev.id)
 
-        fleet.hold_reconnect(device_id, hold_time)
-        fleet.pause_discovery()
-        # Stop the broadcaster: BLE DFU needs central GATT, which the
-        # BCM43455 can't do while advertising. Restart it after the flash.
-        broadcaster_was_running = fleet.broadcaster is not None and fleet.broadcaster.is_running
-        if broadcaster_was_running:
-            try:
-                assert fleet.broadcaster is not None  # narrowed by check above
-                await fleet.broadcaster.stop()
-            except Exception:
-                log.exception("Failed to pause broadcaster cleanly; flash will still try")
-            # P3 guard: assert broadcaster is actually stopped before we
-            # enter DFU. If stop() failed silently the radio would still
-            # be advertising while we try to act as central — the BCM43455
-            # rejects that with bluez "Failed (0x03)" and we'd brick a
-            # device. Don't start a destructive operation under uncertainty.
-            if fleet.broadcaster is not None and fleet.broadcaster.is_running:
-                raise HTTPException(
-                    503,
-                    "Broadcaster did not stop cleanly — refusing to start BLE flash "
-                    "to avoid radio contention. Check logs and restart blinky-server.",
-                )
+    try:
+        # ── Single flash entry point ──────────────────────────────────
+        # ``flash_device()`` returns a ``FlashJob`` immediately (it
+        # schedules ``_run_flash_job`` as a background task). The
+        # orchestrator's internal wall-clocks cap the run: ~600s for the
+        # write + 300s for verify on UF2; 600s wait_for on
+        # ``_ble_dfu_write_impl`` for the BLE path. The 900s outer cap
+        # here is the route's safety net if the orchestrator itself
+        # hangs past its own deadlines.
+        #
+        # ``FlashConflict`` (a different in-flight flash for the same
+        # device with different firmware) → 409. The whitelist arming
+        # happens AFTER we successfully obtained the FlashJob, so a
+        # conflicting second request can't overwrite the first's
+        # recovery-firmware pointer while the first is in flight.
         try:
-            # P5: hard timeout on the whole flash. Observed transfer rate is
-            # ~21s per 10% of the application image (542 KB), so ~3.5 min for
-            # the transfer plus ~1 min for init/scan/cache. 600s is generous
-            # (~2x worst case). Past that, abort cleanly with an error rather
-            # than letting the operation run until something else (watchdog,
-            # external timeout) tears it down destructively mid-write.
-            result = await asyncio.wait_for(
-                upload_firmware(device, str(firmware)),
-                timeout=600.0,
+            job = await fleet.flash_device(
+                device_id=device.id,
+                firmware_path=firmware,
             )
-        except TimeoutError:
-            log.error(
-                "Flash of %s (%s) exceeded 600s — aborted. Device may be in DFU bootloader.",
-                device_id[:12],
-                device.device_name or "unknown",
-            )
-            result = {
-                "status": "error",
-                "message": "flash exceeded 600s timeout",
-                "elapsed_s": 600.0,
-            }
-        finally:
-            device.state = DeviceState.DISCONNECTED
-            if is_serial_flash:
-                # Wait for USB bus to stabilize after UF2 bootloader exit
-                await asyncio.sleep(5)
-            fleet.resume_discovery()
-            fleet.resume_reconnect(device_id)
-            for sid in sibling_ids:
-                fleet.resume_reconnect(sid)
-            if broadcaster_was_running and fleet.broadcaster is not None:
-                try:
-                    await fleet.broadcaster.start()
-                except Exception:
-                    log.exception(
-                        "Failed to restart broadcaster after flash — fleet commands "
-                        "will not reach BLE devices until the server is restarted"
-                    )
+        except FlashConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
 
-    if result["status"] == "ok":
-        return FlashResponse(**result)
-    else:
-        raise HTTPException(500, result["message"])
+        # Arm auto-recovery for THIS device only — the explicit whitelist
+        # keeps a future DFU bounce from auto-flashing unrelated devices.
+        # Done AFTER ``flash_device`` returns OK so a conflicting second
+        # request can't overwrite the first's whitelist mid-flight.
+        fleet.set_recovery_firmware(str(firmware), [device.id])
+        terminal = await job.wait_until_terminal(timeout=900.0)
+        if not terminal:
+            # The orchestrator's task is still running in the
+            # background; its own internal caps (UF2: 600s write + 300s
+            # verify; BLE-DFU: 600s wait_for) will eventually transition
+            # the job, but the route doesn't wait that long. Sibling
+            # reconnect-holds are released in `finally` below, which is
+            # fine — the orchestrator's verify-poll doesn't depend on
+            # sibling state. The 504 response signals "result is
+            # in-flight; poll the job-status route to learn the outcome."
+            raise HTTPException(
+                504,
+                f"flash job {job.job_id} did not reach terminal state "
+                f"within 900s (state={job.state.value}); orchestrator "
+                "is still running in the background — poll "
+                f"GET /api/jobs/{job.job_id} for the eventual outcome",
+            )
+
+        if job.state is FlashJobState.COMPLETED:
+            transport_name = job.transport.value if job.transport else "unknown"
+            return FlashResponse(
+                status="ok",
+                message=f"Firmware uploaded via {transport_name}",
+                elapsed_s=round(job.duration_s, 2),
+            )
+        # FAILED or ABANDONED — surface the orchestrator's error
+        raise HTTPException(
+            500,
+            job.error or f"flash {job.state.value} without specific error",
+        )
+    finally:
+        for sid in sibling_ids:
+            fleet.resume_reconnect(sid)

@@ -38,6 +38,8 @@ from typing import Any
 from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
+from ._guard import assert_inside_orchestrator
+
 log = logging.getLogger(__name__)
 
 # Nordic DFU Service UUIDs
@@ -135,7 +137,7 @@ async def _reset_bootloader(client: BleakClient) -> None:
 
     Clears BlueZ state for this address. Does NOT reset the HCI adapter
     (that would disconnect all BLE devices). HCI reset is done between
-    retry attempts in upload_ble_dfu() instead.
+    retry attempts in `_ble_dfu_write_impl()` instead.
     """
     addr = client.address if hasattr(client, "address") else "unknown"
     try:
@@ -532,7 +534,7 @@ async def _preflight_ble_check(
     return True, "ok"
 
 
-async def upload_ble_dfu(
+async def _ble_dfu_write_impl(
     app_ble_address: str,
     dfu_zip_path: str,
     enter_bootloader_via_serial: Callable[..., Any] | None = None,
@@ -540,6 +542,12 @@ async def upload_ble_dfu(
     progress_callback: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Upload firmware via BLE DFU with automatic retry and error recovery.
+
+    GUARDED: callable only from inside ``_run_flash_job`` (the
+    ContextVar is set by the orchestrator). Direct calls raise
+    ``OutsideFlashJobContextError``. There is no legacy public wrapper
+    anymore — the only path to this function is
+    ``FleetManager.flash_device()``.
 
     Args:
         app_ble_address: Device's BLE address in app mode
@@ -553,6 +561,7 @@ async def upload_ble_dfu(
     Returns:
         dict with status, message, elapsed_s
     """
+    assert_inside_orchestrator("_ble_dfu_write_impl")
     t0 = time.monotonic()
     boot_addr = bootloader_address(app_ble_address)
 

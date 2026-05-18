@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..device.manager import FleetManager
+from ..firmware.flash_job import FlashConflict
 from ..paths import firmware_dir
 from .deps import get_fleet, require_api_key, require_deploy_tool
 
@@ -91,11 +92,17 @@ async def create_flash_job(
             400,
             f"firmware_path does not exist on server: {body.firmware_path!r} (resolved: {fw_path})",
         )
-    job = await fleet.flash_device(
-        body.device_id,
-        fw_path,
-        expected_version=body.expected_version,
-    )
+    try:
+        job = await fleet.flash_device(
+            body.device_id,
+            fw_path,
+            expected_version=body.expected_version,
+        )
+    except FlashConflict as exc:
+        # Another flash for the same device is in flight with a
+        # different firmware. Returning the in-flight job would
+        # mislead the caller into thinking their image landed.
+        raise HTTPException(409, str(exc)) from exc
     return job.to_dict()
 
 

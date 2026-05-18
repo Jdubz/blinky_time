@@ -206,23 +206,35 @@ or a new fleet-orchestrator layer (multi-device sequencing)**.
 - `output[-500:]` snippet in result dict — journalctl has full output.
 - `protocol: Any = None` unused parameter on `upload_uf2`.
 
-### Open design questions
+### Design decisions (operator-confirmed 2026-05-18)
 
-1. **BLE post-DFU verify vs canonical `run_verify`** — extend
-   `run_verify` for BLE, or have `_run_ble_dfu_flash` keep its own
-   3-attempt scan? Extending `run_verify` is cleaner but BLE re-discovery
-   is fundamentally different from USB-CDC handshake (random-static
-   address changes are a BLE-only concern).
+1. **BLE post-DFU verify lives in `run_verify`** — extended with a
+   BLE-aware branch. Random-static-address-change handling becomes a
+   BLE-specific code path inside `run_verify` rather than duplicated
+   in `_run_ble_dfu_flash`. Single verify code path; one place to
+   maintain. Implementation note: the existing `_FleetVerifySignals`
+   abstraction is USB-CDC oriented — needs a parallel `is_ble_advertising`
+   / `get_handshake_info_ble` signal set, or a transport-tagged signal
+   provider.
 
-2. **Phase progress strings** — useful operator UX or noise that
-   FlashJob's state machine already covers? If the former, extend
-   `FlashJob` with a phase field.
+2. **Phase-string progress callbacks dropped.** `FlashJob.state` +
+   `verify_sub_state` + `bytes_written` / `bytes_total` cover the
+   operator-UX surface. The `phase` strings (`"prepare"`, `"upload"`,
+   `"done"`) and the per-step messages don't reach the operator
+   today either (only INFO-logged); journalctl is the place to find
+   them, and that's preserved through `log.info` inside the impls.
+   No `FlashJob.phase` field needed.
 
-3. **600s overall flash timeout** — kwarg on `flash_device(timeout=)`,
-   or call `wait_until_terminal(600)` from the route layer? The latter
-   is cleaner (separation of concerns) but the route layer doesn't
-   own the cancellation path that should abort an in-flight flash.
+3. **`flash_device(timeout=600.0)` kwarg** — path owns the wall-clock.
+   Per-transport defaults applied inside `flash_device` (UF2: 120s
+   typical, BLE-DFU: 600s typical). Routes pass through the operator's
+   override if any. Cancellation propagates through the existing
+   `_run_flash_job` `CancelledError` → ABANDONED path; no new code
+   needed for that wire.
 
-4. **Fleet-flash orchestrator location** — new function on
-   `FleetManager` (`flash_fleet`), or new route handler that loops
-   over `flash_device`? `FleetManager` is more testable.
+4. **`FleetManager.flash_fleet(device_ids, firmware_path, ...)`** —
+   new method, single source of truth for multi-device sequencing.
+   Owns inter-device `udevadm settle`, sibling `hold_reconnect`,
+   batch version-verify poll loop, continue-on-error semantics.
+   Routes (`/api/fleet/flash`, future deploy.sh paths) are thin
+   pass-throughs. Testable in isolation against a mock fleet.

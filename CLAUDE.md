@@ -53,6 +53,33 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 - Bench measurement: 30/30 PASS at 30s timeout, mean 9.4s per UF2 drop (vs. unbounded hangs on 0.8.0-5).
 See `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md` for the diagnostic narrative.
 
+## CRITICAL: Single Flash Entry Point (blinky-server)
+
+**Inside blinky-server, every flash routes through `FleetManager.flash_device()` → `_run_flash_job` → the guarded write impl. There is exactly one entry point; direct calls to the `_impl` functions are forbidden by design and raise `OutsideFlashJobContextError` at runtime.**
+
+This is the structural fix for the 2026-05-17 cart_inner cascade: the legacy fleet had multiple parallel flash paths (`upload_firmware`, `upload_via_uf2`, `upload_uf2`, `upload_ble_dfu`, plus auto-recovery's separate code), each maintaining its own dedup state. A UF2 write succeeded but the route's verify timed out, the route then marked it FAILED, and auto-recovery's separate state machine saw "DFU device, not recently flashed" and re-flashed via BLE-DFU — over a successful UF2 write. Closing every parallel path is what makes the recurrence impossible. See `docs/FLASH_LOCKDOWN_PLAN.md` for the full plan + sequencing.
+
+**The invariant** (do not break this without understanding why):
+
+1. **There is exactly one public entry point: `FleetManager.flash_device(device_id, firmware_path, *, force=True)`.** Operator-facing routes (`POST /api/devices/{id}/flash`, `POST /api/fleet/flash` via `FleetManager.flash_fleet()`, `POST /api/flash-jobs` for explicit job creation) call it with `force=True` (default). The auto-recovery loop calls it with `force=False`. There is no other caller in production code.
+2. **`force=False` consults dedup**: returns `None` if `should_attempt_auto_recovery` says no (in-flight, recent attempt within `FLASH_DEDUP_WINDOW_S=600s`, max attempts hit, or inside exponential backoff). `force=True` ignores those checks — the operator already accepted the cost.
+3. **The actual writes live in guarded `_impl` functions**: `firmware.uf2_upload._uf2_write_impl_for_job` and `firmware.ble_dfu._ble_dfu_write_impl`. Each is `_`-prefixed, has `assert_inside_orchestrator(...)` as its first line, and raises `OutsideFlashJobContextError` if called outside `_run_flash_job` (the orchestrator that sets the `_inside_flash_job_orchestrator` ContextVar). The legacy public wrappers (`upload_uf2`, `upload_ble_dfu`, `upload_firmware`, `upload_via_uf2`) are deleted.
+4. **The audit log is the persistent ledger.** Every terminal FlashJob writes one JSONL line to `~/.local/share/blinky-server/flash_attempts.jsonl`. On server start, the loader rebuilds `_recent_flash_attempts` from entries within the dedup window. The 10-minute "I just flashed this device" window survives restarts.
+
+**Adding a new flash caller** (operator-facing, future MCP tool, etc.):
+- Call `await fleet.flash_device(device_id, firmware_path)` with `force=True`.
+- Wait on the returned `FlashJob` via `await job.wait_until_terminal(timeout=...)`.
+- Inspect `job.state` for COMPLETED vs FAILED/ABANDONED, `job.error` for the failure detail.
+- Do NOT import or call `_uf2_write_impl_for_job` / `_ble_dfu_write_impl` directly — the ContextVar guard will refuse them.
+
+**Adding a new auto-recovery-style caller** (something that should respect dedup + max-attempts + backoff):
+- Call with `force=False`. Returned `FlashJob` may be `None` if blocked.
+- Don't track your own retry counter; the orchestrator's `_recovery_retry_state` is the single source of truth.
+
+**Routes that mutate device state but aren't strictly "flashing"** still gate on `X-Deploy-Tool` (see the top of this file). Examples: `device upload <JSON>` (writes config to flash), `reboot`, `wipe_device_identity`. Those go through `/api/devices/{id}/command`, not `flash_device`. They have their own gating (`_DEPLOY_GATED_COMMAND_LIST` in `blinky_server/api/deps.py`) and should NOT route through the flash orchestrator — flashing is destructive in a specific way (writes the application slot of flash memory) that the orchestrator is calibrated for.
+
+**Audit-trail use:** `flash_attempts.jsonl` is also a forensic record. If a device's behavior since deploy is suspicious, `grep <device_id> ~/.local/share/blinky-server/flash_attempts.jsonl` gives the canonical history of every flash that touched it, with timestamps, transport, source (operator vs auto-recovery), and final state.
+
 ## CRITICAL: 60-second rule between device resets
 
 The firmware's `SafeBootWatchdog::markStable()` is **deferred to 60s of uptime** (`blinky-things.ino:613-614`) so that mid-init crashes still count toward the BLE-DFU recovery threshold (F3 in SCULPTURE_BLE_RECOVERY_PLAN.md). The corollary: **any sequence of resets faster than 60s apart bumps `RebootFrequencyCounter` and, at 5 cumulative trips, fires the quarantine hook (`configStorage.quarantineDeviceConfig()` in `.ino:189`)**. That hook flips `data_.device.isValid = false`, and the device boots into safeMode with `{"status":"unconfigured"}` the next time around — even though nothing actually crashed.
@@ -173,6 +200,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
+| `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
