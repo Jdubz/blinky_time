@@ -29,6 +29,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ._guard import (
+    assert_inside_orchestrator,
+    enter_orchestrator_context,
+    reset_orchestrator_context,
+)
+
 if TYPE_CHECKING:
     from .flash_job import FlashJob
 
@@ -133,7 +139,7 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
         return False
 
 
-async def upload_uf2(
+async def _uf2_write_impl(
     serial_port: str,
     firmware_path: str,
     transport: Any,
@@ -142,10 +148,18 @@ async def upload_uf2(
 ) -> dict[str, Any]:
     """Upload firmware to an nRF52840 device via UF2.
 
+    GUARDED: callable only from inside ``_run_flash_job`` (the
+    ContextVar is set by the orchestrator). Direct calls raise
+    ``OutsideFlashJobContextError``. The legacy public name
+    ``upload_uf2`` (below) is a wrapper that sets the ContextVar
+    manually so existing call sites keep working through L3a-L3c;
+    L3d deletes the wrapper.
+
     Disconnects the server transport, USB-resets the device to clear CDC
     state, then launches uf2_upload.py to handle bootloader entry, UF2
     detection, firmware copy, and verification.
     """
+    assert_inside_orchestrator("_uf2_write_impl")
     t0 = time.monotonic()
     result = {"status": "error", "message": "", "elapsed_s": 0}
 
@@ -292,6 +306,43 @@ async def upload_uf2(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Legacy public wrapper — REMOVE IN L3d.
+#
+# Existing callers (firmware/__init__.upload_via_uf2, the legacy
+# route paths) import `upload_uf2` by name. Until L3a-L3c migrates
+# every caller to route through `FleetManager.flash_device()`, this
+# wrapper preserves the old call signature and sets the orchestrator
+# ContextVar manually so the guarded impl above will accept the call.
+#
+# L3d deletes this wrapper. The verification grep at that point must
+# return zero hits for `upload_uf2` outside the impl rename itself.
+# ─────────────────────────────────────────────────────────────────────
+async def upload_uf2(
+    serial_port: str,
+    firmware_path: str,
+    transport: Any,
+    protocol: Any = None,
+    progress_callback: Callable[..., None] | None = None,
+) -> dict[str, Any]:
+    """Legacy entry point — delegates to the guarded `_uf2_write_impl`.
+
+    REMOVE IN L3d. New callers MUST go through
+    `FleetManager.flash_device()` instead.
+    """
+    token = enter_orchestrator_context()
+    try:
+        return await _uf2_write_impl(
+            serial_port=serial_port,
+            firmware_path=firmware_path,
+            transport=transport,
+            protocol=protocol,
+            progress_callback=progress_callback,
+        )
+    finally:
+        reset_orchestrator_context(token)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Phase 7: FlashJob-aware UF2 path.
 #
 # Same physical steps as ``upload_uf2`` (disconnect → USB reset → run
@@ -312,13 +363,19 @@ async def upload_uf2(
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def flash_uf2_for_job(
+async def _uf2_write_impl_for_job(
     job: FlashJob,
     serial_port: str,
     firmware_path: str,
     transport: Any,
 ) -> bool:
     """Write firmware to one device via UF2, bound to a ``FlashJob``.
+
+    GUARDED: callable only from inside ``_run_flash_job``. Direct calls
+    raise ``OutsideFlashJobContextError``. No legacy wrapper exists
+    for this function because it's only called from
+    ``manager._run_uf2_flash`` (which is itself only reached through
+    the orchestrator).
 
     Pre-condition: ``job.state == WRITING`` (orchestrator transitioned it).
     Updates ``job.bytes_written`` / ``job.bytes_total`` as ``[PASS] Wrote
@@ -335,10 +392,11 @@ async def flash_uf2_for_job(
     60s tail. The bootloader at that point has the new firmware on
     flash and proceeds to boot it independently of any host action.
     """
+    assert_inside_orchestrator("_uf2_write_impl_for_job")
     from .flash_job import FlashJobState  # avoid top-level cycle
 
     assert job.state is FlashJobState.WRITING, (
-        f"flash_uf2_for_job expected WRITING, got {job.state.value}"
+        f"_uf2_write_impl_for_job expected WRITING, got {job.state.value}"
     )
 
     tool = _find_uf2_tool()
@@ -379,7 +437,7 @@ async def flash_uf2_for_job(
                         break
 
     cmd = ["python3", str(tool), "--hex", firmware_path, serial_port, "-v"]
-    log.info("flash_uf2_for_job %s: launching %s", job.job_id, " ".join(cmd))
+    log.info("_uf2_write_impl_for_job %s: launching %s", job.job_id, " ".join(cmd))
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -415,11 +473,11 @@ async def flash_uf2_for_job(
                 except Exception as exc:
                     # Don't let a progress-update bug derail the flash.
                     log.warning(
-                        "flash_uf2_for_job: record_progress raised %s; continuing",
+                        "_uf2_write_impl_for_job: record_progress raised %s; continuing",
                         exc,
                     )
                 log.info(
-                    "flash_uf2_for_job %s: write complete (%d/%d) — "
+                    "_uf2_write_impl_for_job %s: write complete (%d/%d) — "
                     "letting subprocess finish umount/eject; verify handled "
                     "by FlashJob, subprocess exit code ignored",
                     job.job_id,
@@ -449,7 +507,7 @@ async def flash_uf2_for_job(
         # able to tell those two cases apart from journalctl alone
         # matters for post-mortems.
         log.warning(
-            "flash_uf2_for_job %s: stream hit 300s timeout (write_seen=%s)",
+            "_uf2_write_impl_for_job %s: stream hit 300s timeout (write_seen=%s)",
             job.job_id,
             write_seen,
         )

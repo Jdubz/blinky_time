@@ -38,6 +38,12 @@ from typing import Any
 from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
+from ._guard import (
+    assert_inside_orchestrator,
+    enter_orchestrator_context,
+    reset_orchestrator_context,
+)
+
 log = logging.getLogger(__name__)
 
 # Nordic DFU Service UUIDs
@@ -532,7 +538,7 @@ async def _preflight_ble_check(
     return True, "ok"
 
 
-async def upload_ble_dfu(
+async def _ble_dfu_write_impl(
     app_ble_address: str,
     dfu_zip_path: str,
     enter_bootloader_via_serial: Callable[..., Any] | None = None,
@@ -540,6 +546,13 @@ async def upload_ble_dfu(
     progress_callback: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Upload firmware via BLE DFU with automatic retry and error recovery.
+
+    GUARDED: callable only from inside ``_run_flash_job`` (the
+    ContextVar is set by the orchestrator). Direct calls raise
+    ``OutsideFlashJobContextError``. The legacy public name
+    ``upload_ble_dfu`` (below) is a wrapper that sets the ContextVar
+    manually so existing call sites keep working through L3a-L3c;
+    L3d deletes the wrapper.
 
     Args:
         app_ble_address: Device's BLE address in app mode
@@ -553,6 +566,7 @@ async def upload_ble_dfu(
     Returns:
         dict with status, message, elapsed_s
     """
+    assert_inside_orchestrator("_ble_dfu_write_impl")
     t0 = time.monotonic()
     boot_addr = bootloader_address(app_ble_address)
 
@@ -709,3 +723,41 @@ async def upload_ble_dfu(
         )
 
     return last_result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Legacy public wrapper — REMOVE IN L3d.
+#
+# Existing callers (firmware/__init__.upload_firmware, the legacy
+# manager.py auto-recovery branch) import `upload_ble_dfu` by name.
+# Until L3a-L3c migrates every caller to route through
+# `FleetManager.flash_device()`, this wrapper preserves the old call
+# signature and sets the orchestrator ContextVar manually so the
+# guarded impl above will accept the call.
+#
+# L3d deletes this wrapper. The verification grep at that point must
+# return zero hits for `upload_ble_dfu` outside the impl rename itself.
+# ─────────────────────────────────────────────────────────────────────
+async def upload_ble_dfu(
+    app_ble_address: str,
+    dfu_zip_path: str,
+    enter_bootloader_via_serial: Callable[..., Any] | None = None,
+    enter_bootloader_via_ble: Callable[..., Any] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+) -> dict[str, Any]:
+    """Legacy entry point — delegates to the guarded `_ble_dfu_write_impl`.
+
+    REMOVE IN L3d. New callers MUST go through
+    `FleetManager.flash_device()` instead.
+    """
+    token = enter_orchestrator_context()
+    try:
+        return await _ble_dfu_write_impl(
+            app_ble_address=app_ble_address,
+            dfu_zip_path=dfu_zip_path,
+            enter_bootloader_via_serial=enter_bootloader_via_serial,
+            enter_bootloader_via_ble=enter_bootloader_via_ble,
+            progress_callback=progress_callback,
+        )
+    finally:
+        reset_orchestrator_context(token)

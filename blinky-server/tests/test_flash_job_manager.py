@@ -597,7 +597,7 @@ async def test_ble_dfu_flash_calls_upload_ble_dfu_for_dfu_recovery(
         captured_kwargs.update(kwargs)
         return {"status": "ok", "message": "mocked", "elapsed_s": 0.1}
 
-    monkeypatch.setattr(ble_dfu_mod, "upload_ble_dfu", fake_upload_ble_dfu)
+    monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", fake_upload_ble_dfu)
     monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
 
     job = await fleet.flash_device("dfu-victim", fw_file)
@@ -641,7 +641,7 @@ async def test_ble_dfu_flash_fails_on_upload_error(
     async def failing_upload_ble_dfu(**kwargs: Any) -> dict[str, Any]:
         return {"status": "error", "message": "preflight RSSI too weak", "elapsed_s": 1.2}
 
-    monkeypatch.setattr(ble_dfu_mod, "upload_ble_dfu", failing_upload_ble_dfu)
+    monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", failing_upload_ble_dfu)
     monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
 
     job = await fleet.flash_device("will-fail", fw_file)
@@ -691,7 +691,7 @@ async def test_ble_dfu_flash_wall_clock_timeout(
         await asyncio.sleep(60)  # would hang the test; wait_for kills it first
         return {"status": "ok"}
 
-    monkeypatch.setattr(ble_dfu_mod, "upload_ble_dfu", hang_forever)
+    monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", hang_forever)
     monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
 
     # Replace asyncio.wait_for with a tiny-timeout version so the test
@@ -750,3 +750,180 @@ async def test_ble_dfu_flash_zip_build_failure_fails_cleanly(
     assert job.state is FlashJobState.FAILED
     assert job.error is not None
     assert "DFU zip build failed" in job.error
+
+
+# --- L2: orchestrator-context guard (the lockdown invariant) -------------
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_impl_outside_orchestrator_raises() -> None:
+    """The whole point of L2: calling `_uf2_write_impl` outside
+    `_run_flash_job` (i.e. with the ContextVar unset) must raise
+    `OutsideFlashJobContextError`. This is the structural lockdown —
+    after L3d when the legacy wrappers are gone, only the orchestrator
+    can call this impl, and any future "let me just call it directly"
+    drift fails loud at the first attempt."""
+    from blinky_server.firmware._guard import OutsideFlashJobContextError
+    from blinky_server.firmware.uf2_upload import _uf2_write_impl
+
+    with pytest.raises(OutsideFlashJobContextError):
+        await _uf2_write_impl(
+            serial_port="/dev/null",
+            firmware_path="/tmp/fake.hex",
+            transport=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_impl_for_job_outside_orchestrator_raises() -> None:
+    """Same guard applies to the FlashJob-bound variant."""
+    from blinky_server.firmware._guard import OutsideFlashJobContextError
+    from blinky_server.firmware.flash_job import FlashJob, FlashJobState
+    from blinky_server.firmware.uf2_upload import _uf2_write_impl_for_job
+
+    job = FlashJob(device_id="d", firmware_path=Path("/tmp/x.hex"))
+    job.transition(FlashJobState.SELECTING_TRANSPORT)
+    from blinky_server.firmware.flash_job import FlashTransport
+
+    job.set_transport(FlashTransport.UF2)
+    job.transition(FlashJobState.WRITING)
+    with pytest.raises(OutsideFlashJobContextError):
+        await _uf2_write_impl_for_job(
+            job=job,
+            serial_port="/dev/null",
+            firmware_path="/tmp/x.hex",
+            transport=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ble_dfu_write_impl_outside_orchestrator_raises() -> None:
+    """And the BLE-DFU impl — same boundary."""
+    from blinky_server.firmware._guard import OutsideFlashJobContextError
+    from blinky_server.firmware.ble_dfu import _ble_dfu_write_impl
+
+    with pytest.raises(OutsideFlashJobContextError):
+        await _ble_dfu_write_impl(
+            app_ble_address="AA:BB:CC:DD:EE:FF",
+            dfu_zip_path="/tmp/fake.dfu.zip",
+        )
+
+
+@pytest.mark.asyncio
+async def test_legacy_upload_uf2_wrapper_sets_context_and_works() -> None:
+    """The L3d-tagged legacy wrapper exists ONLY to keep current
+    callers (firmware/__init__.upload_via_uf2, the legacy routes)
+    working through L3a-L3c. It MUST set the ContextVar so the
+    guarded impl accepts the call. Once L3d deletes the wrapper,
+    this test goes away with it.
+
+    We don't actually run a flash; we monkeypatch the impl to a no-op
+    and verify the wrapper reaches it without raising."""
+    from blinky_server.firmware import uf2_upload as uf2_mod
+
+    called_with_context_set = False
+
+    async def fake_impl(**kwargs: Any) -> dict[str, Any]:
+        # If the wrapper did its job, the ContextVar is True here.
+        nonlocal called_with_context_set
+        from blinky_server.firmware._guard import _inside_flash_job_orchestrator
+
+        called_with_context_set = _inside_flash_job_orchestrator.get()
+        return {"status": "ok", "elapsed_s": 0.1}
+
+    # We bypass the assert by patching the impl AFTER the wrapper enters
+    # the context. The real impl's first line is the assert; we replace
+    # the whole function so the assert doesn't fire — what we're proving
+    # is "the wrapper sets the context before calling the impl."
+    import contextlib
+
+    @contextlib.contextmanager
+    def patched():
+        original = uf2_mod._uf2_write_impl
+        uf2_mod._uf2_write_impl = fake_impl  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            uf2_mod._uf2_write_impl = original  # type: ignore[assignment]
+
+    with patched():
+        result = await uf2_mod.upload_uf2(
+            serial_port="/dev/null",
+            firmware_path="/tmp/x.hex",
+            transport=None,
+        )
+    assert result["status"] == "ok"
+    assert called_with_context_set, "legacy wrapper failed to set the orchestrator ContextVar"
+
+
+@pytest.mark.asyncio
+async def test_legacy_upload_ble_dfu_wrapper_sets_context_and_works() -> None:
+    """BLE-DFU side of the same invariant."""
+    from blinky_server.firmware import ble_dfu as ble_dfu_mod
+
+    called_with_context_set = False
+
+    async def fake_impl(**kwargs: Any) -> dict[str, Any]:
+        nonlocal called_with_context_set
+        from blinky_server.firmware._guard import _inside_flash_job_orchestrator
+
+        called_with_context_set = _inside_flash_job_orchestrator.get()
+        return {"status": "ok", "elapsed_s": 0.1}
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def patched():
+        original = ble_dfu_mod._ble_dfu_write_impl
+        ble_dfu_mod._ble_dfu_write_impl = fake_impl  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            ble_dfu_mod._ble_dfu_write_impl = original  # type: ignore[assignment]
+
+    with patched():
+        result = await ble_dfu_mod.upload_ble_dfu(
+            app_ble_address="AA:BB:CC:DD:EE:FF",
+            dfu_zip_path="/tmp/x.dfu.zip",
+        )
+    assert result["status"] == "ok"
+    assert called_with_context_set, "legacy upload_ble_dfu wrapper failed to set the ContextVar"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_context_does_not_leak_across_tasks() -> None:
+    """ContextVar is task-local in asyncio — one task entering the
+    orchestrator context must NOT make the impl callable from a
+    sibling task. Cross-task contamination would defeat the entire
+    lockdown for concurrent flashes (each task has to set its own
+    context)."""
+    import asyncio
+
+    from blinky_server.firmware._guard import (
+        OutsideFlashJobContextError,
+        enter_orchestrator_context,
+        reset_orchestrator_context,
+    )
+    from blinky_server.firmware.uf2_upload import _uf2_write_impl
+
+    async def in_context() -> None:
+        token = enter_orchestrator_context()
+        try:
+            # Other task can't see our context — let it run and assert.
+            await asyncio.sleep(0)
+            await sibling_check.wait()
+        finally:
+            reset_orchestrator_context(token)
+
+    async def sibling_check_task() -> None:
+        # We're a different task. ContextVar default applies: False.
+        with pytest.raises(OutsideFlashJobContextError):
+            await _uf2_write_impl(
+                serial_port="/dev/null",
+                firmware_path="/tmp/x.hex",
+                transport=None,
+            )
+        sibling_check.set()
+
+    sibling_check = asyncio.Event()
+    await asyncio.gather(in_context(), sibling_check_task())

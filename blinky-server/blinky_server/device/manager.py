@@ -21,7 +21,7 @@ from ..firmware.flash_job import (
     TransportProbe,
     select_transport,
 )
-from ..firmware.uf2_upload import flash_uf2_for_job
+from ..firmware.uf2_upload import _uf2_write_impl_for_job
 from ..firmware.verify import run_verify
 from ..transport.base import Transport
 from ..transport.discovery import (
@@ -478,6 +478,19 @@ class FleetManager:
         regardless of success/failure — so auto-recovery (Phase 8) dedup
         catches "I just tried this device" even when the attempt failed.
         """
+        # L2: enter the orchestrator context. Every guarded write impl
+        # (`_uf2_write_impl`, `_uf2_write_impl_for_job`,
+        # `_ble_dfu_write_impl`) checks the ContextVar at entry and
+        # raises ``OutsideFlashJobContextError`` if it's not set.
+        # Setting it here gates ALL paths reachable from this function
+        # — the lockdown's "single entry point" invariant. Reset in
+        # the finally block so cross-task contamination is impossible.
+        from ..firmware._guard import (
+            enter_orchestrator_context,
+            reset_orchestrator_context,
+        )
+
+        _orch_token = enter_orchestrator_context()
         try:
             job.transition(FlashJobState.SELECTING_TRANSPORT)
             probe = self._build_transport_probe(job.device_id)
@@ -518,6 +531,12 @@ class FleetManager:
             async with lock:
                 self._recent_flash_attempts[canonical] = _time.time()
                 self._device_in_flight.discard(canonical)
+            # L2: reset the orchestrator-context-var. Token-based reset
+            # restores the prior value (default False, or — if some
+            # future code composes orchestrator entries — the outer
+            # True). Done LAST so any error during dedup-table cleanup
+            # doesn't leak the context-var into a subsequent task.
+            reset_orchestrator_context(_orch_token)
 
     async def _run_uf2_flash(self, job: FlashJob) -> None:
         """UF2 branch of ``_run_flash_job``. Phase 7 implementation.
@@ -560,7 +579,7 @@ class FleetManager:
         # IS the post-boot one). Verified live 2026-05-18 against FPS
         # Sweep — pre-fix: stuck in AWAITING_REBOOT for 5 min; post-fix:
         # detects re-enum immediately after BL exit. `write_completed_at`
-        # is filled in after flash_uf2_for_job lands so the timestamp
+        # is filled in after _uf2_write_impl_for_job lands so the timestamp
         # corresponds to bytes-on-flash rather than to verify-start.
         history = SignalHistory(
             write_completed_at=_time.time(),  # provisional, updated below
@@ -580,14 +599,14 @@ class FleetManager:
 
         # WRITING: subprocess + progress callbacks.
         job.transition(FlashJobState.WRITING)
-        write_ok = await flash_uf2_for_job(
+        write_ok = await _uf2_write_impl_for_job(
             job,
             serial_port=device.transport.address,
             firmware_path=str(job.firmware_path),
             transport=device.transport,
         )
         if not write_ok:
-            # ``flash_uf2_for_job`` already set ``job.error``.
+            # ``_uf2_write_impl_for_job`` already set ``job.error``.
             job.transition(FlashJobState.FAILED)
             return
 
@@ -649,7 +668,15 @@ class FleetManager:
         later; for now, success of the legacy verify maps directly to
         ``FlashJobState.COMPLETED``.
         """
-        from ..firmware.ble_dfu import upload_ble_dfu
+        # L2: call the guarded impl directly. The orchestrator's
+        # ContextVar (set in `_run_flash_job`) is in scope, so the
+        # impl's `assert_inside_orchestrator` passes. Using the legacy
+        # `upload_ble_dfu` wrapper here would work (it sets the
+        # ContextVar itself, idempotent under token-based reset) but
+        # binds us to the wrapper's existence — after L3d when the
+        # wrapper is deleted, this import would break. Wire to the
+        # impl directly so L3d's deletion is a pure remove, no edits.
+        from ..firmware.ble_dfu import _ble_dfu_write_impl
         from ..firmware.compile import ensure_dfu_zip
 
         device = self._devices.get(job.device_id)
@@ -754,7 +781,7 @@ class FleetManager:
 
             try:
                 result = await asyncio.wait_for(
-                    upload_ble_dfu(
+                    _ble_dfu_write_impl(
                         app_ble_address=device.ble_address,
                         dfu_zip_path=dfu_zip,
                         enter_bootloader_via_serial=enter_via_serial,
@@ -2129,7 +2156,7 @@ class _FleetVerifySignals:
         # re-enumerated=True correctly.
         #
         # Caller contract: construct this signals object BEFORE invoking
-        # `flash_uf2_for_job` (or any other code that triggers a USB
+        # `_uf2_write_impl_for_job` (or any other code that triggers a USB
         # reset / reboot of the target device).
         self._initial_devnum: int | None = self._read_devnum_for_device()
         self._initial_devnum_captured_at: float = _time.time()
