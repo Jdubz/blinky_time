@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time as _time
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -464,6 +465,172 @@ class FleetManager:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return job
+
+    async def flash_fleet(
+        self,
+        device_ids: list[str],
+        firmware_path: Path,
+        *,
+        per_device_timeout: float = 600.0,
+        expected_version: str | None = None,
+        on_iteration: Callable[[int, int, str, FlashJob | None, str | None], None] | None = None,
+    ) -> AsyncIterator[tuple[str, FlashJob | None, str | None]]:
+        """Strictly-serial multi-device flash.
+
+        Per ``feedback_flash_safety_policy`` ("one device at a time,
+        finish fully before next"): each device's flash reaches a
+        terminal state (``COMPLETED`` / ``FAILED`` / ``ABANDONED``)
+        before the next device's flash is scheduled. No parallelism
+        across devices; that's a structural defense against
+        cross-device interference (USB bus reset disrupting siblings,
+        BLE radio contention between simultaneous BLE-DFU flashes).
+
+        Yields ``(device_id, job, error)`` for each device as it
+        finishes:
+          - ``(id, FlashJob, None)`` — flash reached terminal state;
+            inspect ``job.state`` for COMPLETED vs FAILED/ABANDONED.
+          - ``(id, None, msg)`` — device couldn't be scheduled
+            (missing from the manager, wrong platform, etc.).
+          - ``(id, job, "timeout")`` — ``wait_until_terminal`` exceeded
+            the per-device cap; the orchestrator may still be running
+            in the background (its own internal caps will eventually
+            terminate it). Surfaces the timeout to the caller so
+            progress reporting can show it.
+
+        ``on_iteration(index, total, device_id, job, error)`` is
+        invoked synchronously between iterations. The JobManager
+        super-job's progress callback uses this to update its visible
+        progress + message without needing to consume the generator
+        out-of-band.
+
+        Batch-level coordination (done ONCE around the whole loop):
+          - Broadcaster paused if running, restored in ``finally``. The
+            orchestrator's per-device BLE-DFU branch sees
+            ``broadcaster_was_running=False`` and skips its own
+            stop/start — saves churn between BLE-DFU iterations.
+
+        Per-iteration coordination (per device, scoped to that flash):
+          - Sibling-serial ``hold_reconnect`` 600s for UF2 targets — the
+            UF2 USB bus reset disrupts other serial devices on the same
+            hub, so we freeze their reconnect timers across the flash.
+            Released between iterations so each next-target's siblings
+            are computed fresh. (Notably absent: ``pause_discovery`` and
+            target ``hold_reconnect`` — both block the orchestrator's
+            verify-via-reconnect; see ``project_deploy_flash_cascade_bug``
+            and the L3a hardware-test post-mortem.)
+          - ``udevadm settle`` + 8 s sleep after every UF2 iteration
+            except the last, so the kernel's USB event queue drains
+            before the next device's reset.
+        """
+        broadcaster_was_running = self.broadcaster is not None and self.broadcaster.is_running
+        if broadcaster_was_running and self.broadcaster is not None:
+            try:
+                await self.broadcaster.stop()
+            except Exception:
+                log.exception(
+                    "flash_fleet: broadcaster.stop() raised; refusing to proceed "
+                    "under uncertain radio state"
+                )
+            # Fail-loud — refuse to proceed if the radio is still advertising.
+            # Mid-flash radio contention against the BCM43455 is what
+            # bricked cart_inner on 2026-05-16, so this is a hard gate.
+            if self.broadcaster is not None and self.broadcaster.is_running:
+                err_msg = (
+                    "broadcaster did not stop cleanly; flash_fleet aborted "
+                    "to avoid BLE radio contention"
+                )
+                log.error("flash_fleet: %s", err_msg)
+                for did in device_ids:
+                    yield (did, None, err_msg)
+                return
+
+        total = len(device_ids)
+        try:
+            for i, device_id in enumerate(device_ids):
+                err: str | None = None
+                device = self._devices.get(self.resolve_canonical(device_id))
+                if device is None:
+                    err = f"device {device_id} not found in fleet"
+                    log.warning("flash_fleet[%d/%d]: %s", i + 1, total, err)
+                    if on_iteration is not None:
+                        on_iteration(i, total, device_id, None, err)
+                    yield (device_id, None, err)
+                    continue
+
+                # Per-iteration sibling holds (UF2 only — BLE targets don't
+                # USB-bus-reset, so they don't disrupt serial siblings).
+                is_serial_target = device.transport.transport_type == "serial"
+                sibling_ids: list[str] = []
+                if is_serial_target:
+                    for sibling in self.get_all_devices():
+                        if sibling.id != device.id and sibling.transport.transport_type == "serial":
+                            self.hold_reconnect(sibling.id, 600)
+                            sibling_ids.append(sibling.id)
+
+                job: FlashJob | None = None
+                try:
+                    job = await self.flash_device(
+                        device_id,
+                        firmware_path,
+                        expected_version=expected_version,
+                    )
+                    terminal = await job.wait_until_terminal(timeout=per_device_timeout)
+                    if not terminal:
+                        err = "timeout"
+                        log.error(
+                            "flash_fleet[%d/%d] %s: wait_until_terminal hit %ss cap",
+                            i + 1,
+                            total,
+                            device_id[:12],
+                            per_device_timeout,
+                        )
+                except Exception as exc:
+                    err = f"flash_device/wait raised: {exc}"
+                    log.exception("flash_fleet[%d/%d] %s: %s", i + 1, total, device_id[:12], err)
+                finally:
+                    for sid in sibling_ids:
+                        self.resume_reconnect(sid)
+
+                if on_iteration is not None:
+                    on_iteration(i, total, device_id, job, err)
+                yield (device_id, job, err)
+
+                # Inter-iteration USB settle (UF2 only — BLE doesn't need
+                # USB-bus stabilization). Skip after the last iteration.
+                if is_serial_target and i < total - 1:
+                    await asyncio.sleep(8)
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "udevadm",
+                            "settle",
+                            "--timeout=10",
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        await proc.wait()
+                        # rc=1 means the udev queue was still non-empty after
+                        # 10s — the host-USB-jam pattern from 2026-05-01.
+                        # Don't fail the deploy (the next device's flash
+                        # retries enumeration independently), but log
+                        # loudly so the operator sees the early warning.
+                        if proc.returncode != 0:
+                            log.warning(
+                                "flash_fleet: udevadm settle exited rc=%d after 10s — "
+                                "USB event queue still busy; next device's flash may "
+                                "hit a _wait_for_uf2_drive timeout",
+                                proc.returncode,
+                            )
+                    except (FileNotFoundError, OSError) as exc:
+                        log.warning("flash_fleet: udevadm settle skipped: %s", exc)
+        finally:
+            if broadcaster_was_running and self.broadcaster is not None:
+                try:
+                    await self.broadcaster.start()
+                except Exception:
+                    log.exception(
+                        "flash_fleet: failed to restart broadcaster — fleet "
+                        "commands will not reach BLE devices until manual restart"
+                    )
 
     async def _run_flash_job(self, job: FlashJob) -> None:
         """Drive a ``FlashJob`` through its state machine.

@@ -1032,3 +1032,219 @@ async def test_test_task_context_unaffected_by_orchestrator_task(
     await job.wait_until_terminal(timeout=5.0)
     # Whatever the orchestrator did with its context-copy is invisible here.
     assert _inside_flash_job_orchestrator.get() is False
+
+
+# --- L3b: fleet.flash_fleet strictly-serial iteration ----------------------
+
+
+@pytest.mark.asyncio
+async def test_flash_fleet_strictly_serial(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of L3b: ``flash_fleet`` MUST flash one device at
+    a time, with each device reaching terminal state before the next is
+    scheduled. We prove this by stubbing the orchestrator so each
+    flash_device call records when it ran, then asserting the runs are
+    strictly non-overlapping.
+    """
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from blinky_server.firmware.flash_job import FlashJob, FlashJobState, FlashTransport
+
+    in_flight: list[str] = []
+    overlap_seen: list[str] = []
+    completion_order: list[str] = []
+
+    async def stub_orchestrator(job: FlashJob) -> None:
+        if in_flight:
+            overlap_seen.append(f"{job.device_id} ran while {in_flight} still in flight")
+        in_flight.append(job.device_id)
+        # Yield to the loop so any sibling task that's racing has a
+        # chance to also enter — if strict-serial is broken, this is
+        # where the overlap would surface.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
+        in_flight.remove(job.device_id)
+        completion_order.append(job.device_id)
+        job.transition(FlashJobState.SELECTING_TRANSPORT)
+        job.set_transport(FlashTransport.UF2)
+        job.transition(FlashJobState.WRITING)
+        job.transition(FlashJobState.VERIFYING)
+        job.transition(FlashJobState.COMPLETED)
+
+    monkeypatch.setattr(fleet, "_run_flash_job", stub_orchestrator)
+
+    # Inject three "devices" by canonical mapping. They don't need real
+    # Device objects — the orchestrator stub doesn't touch them. But
+    # flash_fleet's "device not found" guard checks the manager's
+    # _devices dict, so populate it with placeholders.
+    from blinky_server.device.device import Device
+
+    from .mock_transport import MockTransport
+
+    device_ids: list[str] = []
+    for i in range(3):
+        d = Device(
+            device_id=f"DEV_{i}",
+            port=f"/dev/ttyTEST{i}",
+            platform="nrf52840",
+            transport=MockTransport(),  # type: ignore[arg-type]
+        )
+        await d.connect()
+        fleet._devices[d.id] = d
+        device_ids.append(d.id)
+
+    iterator: AsyncIterator[tuple[str, FlashJob | None, str | None]] = fleet.flash_fleet(
+        device_ids=device_ids,
+        firmware_path=Path("/tmp/fake.hex"),
+        per_device_timeout=5.0,
+    )
+
+    results = [t async for t in iterator]
+
+    assert overlap_seen == [], f"strict-serial violation: {overlap_seen}"
+    assert completion_order == device_ids, (
+        f"order broken: expected {device_ids}, got {completion_order}"
+    )
+    assert len(results) == 3
+    assert all(err is None for _, _, err in results), results
+    assert all(job is not None and job.state is FlashJobState.COMPLETED for _, job, _ in results)
+
+
+@pytest.mark.asyncio
+async def test_flash_fleet_continues_on_per_device_failure(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One device failing must NOT abort the batch — flash_fleet's
+    continue-on-error semantics are load-bearing for fleet operations
+    where a single flaky USB port shouldn't block the rest of the
+    deploy. (Per ``feedback_flash_safety_policy``: the OUTER loop
+    can continue; what's forbidden is parallel writes to the SAME
+    device.)
+    """
+    from blinky_server.device.device import Device
+    from blinky_server.firmware.flash_job import FlashJob, FlashJobState, FlashTransport
+
+    from .mock_transport import MockTransport
+
+    async def stub_orchestrator(job: FlashJob) -> None:
+        job.transition(FlashJobState.SELECTING_TRANSPORT)
+        job.set_transport(FlashTransport.UF2)
+        if job.device_id == "DEV_FAIL":
+            job.set_error("synthetic per-device failure")
+            job.transition(FlashJobState.FAILED)
+        else:
+            job.transition(FlashJobState.WRITING)
+            job.transition(FlashJobState.VERIFYING)
+            job.transition(FlashJobState.COMPLETED)
+
+    monkeypatch.setattr(fleet, "_run_flash_job", stub_orchestrator)
+
+    for did in ("DEV_OK_1", "DEV_FAIL", "DEV_OK_2"):
+        d = Device(
+            device_id=did,
+            port=f"/dev/ttyTEST_{did}",
+            platform="nrf52840",
+            transport=MockTransport(),  # type: ignore[arg-type]
+        )
+        await d.connect()
+        fleet._devices[d.id] = d
+
+    results = [
+        t
+        async for t in fleet.flash_fleet(
+            device_ids=["DEV_OK_1", "DEV_FAIL", "DEV_OK_2"],
+            firmware_path=Path("/tmp/fake.hex"),
+            per_device_timeout=5.0,
+        )
+    ]
+
+    assert len(results) == 3
+    by_id = {did: (job, err) for did, job, err in results}
+
+    assert by_id["DEV_OK_1"][0] is not None
+    assert by_id["DEV_OK_1"][0].state is FlashJobState.COMPLETED
+
+    fail_job, fail_err = by_id["DEV_FAIL"]
+    assert fail_job is not None
+    assert fail_job.state is FlashJobState.FAILED
+    assert fail_err is None  # err is the wait/iteration error, not the FlashJob's
+    assert fail_job.error == "synthetic per-device failure"
+
+    assert by_id["DEV_OK_2"][0] is not None
+    assert by_id["DEV_OK_2"][0].state is FlashJobState.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_flash_fleet_yields_error_for_unknown_device(
+    fleet: FleetManager,
+) -> None:
+    """An unknown device id yields ``(id, None, err)`` rather than
+    raising. The aggregate flash continues past it (deploy.sh's
+    aggregator needs the per-device report, even for typos).
+    """
+    results = [
+        t
+        async for t in fleet.flash_fleet(
+            device_ids=["does-not-exist"],
+            firmware_path=Path("/tmp/fake.hex"),
+            per_device_timeout=1.0,
+        )
+    ]
+    assert len(results) == 1
+    did, job, err = results[0]
+    assert did == "does-not-exist"
+    assert job is None
+    assert err is not None and "not found" in err
+
+
+@pytest.mark.asyncio
+async def test_flash_fleet_on_iteration_callback_receives_each_device(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route uses ``on_iteration`` to update its progress message.
+    Verify the callback fires once per device, in order, with the
+    expected (index, total, device_id, job, err) arguments.
+    """
+    from blinky_server.device.device import Device
+    from blinky_server.firmware.flash_job import FlashJob, FlashJobState, FlashTransport
+
+    from .mock_transport import MockTransport
+
+    async def stub(job: FlashJob) -> None:
+        job.transition(FlashJobState.SELECTING_TRANSPORT)
+        job.set_transport(FlashTransport.UF2)
+        job.transition(FlashJobState.WRITING)
+        job.transition(FlashJobState.VERIFYING)
+        job.transition(FlashJobState.COMPLETED)
+
+    monkeypatch.setattr(fleet, "_run_flash_job", stub)
+
+    for did in ("A", "B"):
+        d = Device(
+            device_id=did,
+            port=f"/dev/tty_{did}",
+            platform="nrf52840",
+            transport=MockTransport(),  # type: ignore[arg-type]
+        )
+        await d.connect()
+        fleet._devices[d.id] = d
+
+    callback_calls: list[tuple[int, int, str]] = []
+
+    def cb(i: int, total: int, did: str, _job: FlashJob | None, _err: str | None) -> None:
+        callback_calls.append((i, total, did))
+
+    async for _ in fleet.flash_fleet(
+        device_ids=["A", "B"],
+        firmware_path=Path("/tmp/fake.hex"),
+        per_device_timeout=5.0,
+        on_iteration=cb,
+    ):
+        pass
+
+    assert callback_calls == [(0, 2, "A"), (1, 2, "B")]
