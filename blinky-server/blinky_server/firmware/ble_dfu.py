@@ -37,10 +37,65 @@ from typing import Any
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.exc import BleakDBusError
 
 from ._guard import assert_inside_orchestrator
 
 log = logging.getLogger(__name__)
+
+
+async def _scan_with_retry(
+    make_coro: Callable[[], Any], *, attempts: int = 3, delay: float = 3.0
+) -> Any:
+    """Call a BLE-scan coroutine factory; retry on transient BlueZ
+    "Operation already in progress" errors.
+
+    BlueZ refuses to start a new scan while another scan is in flight
+    on the same adapter, returning ``org.bluez.Error.InProgress``.
+    The orchestrator pauses discovery (``FleetManager.pause_discovery``)
+    before its BLE-DFU operations, but ``pause_discovery`` is
+    non-atomic with respect to an already-running discovery scan —
+    a scan that started just before the pause continues until its
+    timeout (5-10 s) and the orchestrator's scan launched in that
+    window races with it.
+
+    Catching the InProgress error and retrying after a short delay
+    is cheaper than coordinating an adapter-wide lock between the
+    discovery loop and the orchestrator (which would need to thread
+    through ``transport/discovery.py`` as well). The retry delay
+    needs to exceed the longest in-flight scan; the discovery loop's
+    default BleakScanner timeout is 5 s, so 3 s x 3 attempts = 9 s
+    typically suffices. The orchestrator's outer wall-clock cap
+    (600 s) absorbs the worst case.
+
+    Added in PR #143 to address the race exposed by the
+    ``has_ble_app`` probe path (Copilot #1) — the legacy DFU_RECOVERY
+    path skipped preflight, so this race didn't surface until now.
+    """
+    last_exc: BleakDBusError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await make_coro()
+        except BleakDBusError as exc:
+            if "InProgress" not in str(exc):
+                # Not the race we know about; propagate as-is.
+                raise
+            last_exc = exc
+            if attempt < attempts:
+                log.warning(
+                    "BLE scan got org.bluez.Error.InProgress on attempt "
+                    "%d/%d; retrying after %.1fs (likely racing with the "
+                    "discovery loop's in-flight scan)",
+                    attempt,
+                    attempts,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+    # Exhausted retries.
+    assert last_exc is not None
+    raise last_exc
+
 
 # Nordic DFU Service UUIDs
 DFU_SERVICE_UUID = "00001530-1212-efde-1523-785feabcd123"
@@ -232,7 +287,9 @@ async def _dfu_transfer_inner(
         progress(
             "scan", f"Scanning for bootloader at {boot_addr} (attempt {scan_attempt + 1}/3)...", 20
         )
-        dev = await BleakScanner.find_device_by_address(boot_addr, timeout=15.0)
+        dev = await _scan_with_retry(
+            lambda: BleakScanner.find_device_by_address(boot_addr, timeout=15.0)
+        )
         if dev:
             break
         log.warning(
@@ -488,14 +545,16 @@ async def _preflight_ble_check(
 
     # Step 1: Scan and check RSSI
     progress("preflight", f"Scanning for {app_ble_address}...", 3)
-    dev = await BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
+    dev = await _scan_with_retry(
+        lambda: BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
+    )
     if not dev:
         return False, f"Device {app_ble_address} not found"
 
     # BleakScanner doesn't always report RSSI on find_device_by_address.
     # Do a full scan to get RSSI.
     rssi = None
-    discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
+    discovered = await _scan_with_retry(lambda: BleakScanner.discover(timeout=5.0, return_adv=True))
     for addr, (_d, adv) in discovered.items():
         if addr.upper() == app_ble_address.upper():
             rssi = adv.rssi
@@ -678,12 +737,16 @@ async def _ble_dfu_write_impl(
     for verify_attempt in range(3):
         progress("verify", f"Scanning for rebooted device (attempt {verify_attempt + 1}/3)...", 99)
         # First: try exact address match
-        dev = await BleakScanner.find_device_by_address(app_ble_address, timeout=8.0)
+        dev = await _scan_with_retry(
+            lambda: BleakScanner.find_device_by_address(app_ble_address, timeout=8.0)
+        )
         if dev:
             verified = True
             break
         # Fallback: scan for any nearby Blinky device with NUS service
-        discovered = await BleakScanner.discover(timeout=8.0, return_adv=True)
+        discovered = await _scan_with_retry(
+            lambda: BleakScanner.discover(timeout=8.0, return_adv=True)
+        )
         for addr, (_d, adv) in discovered.items():
             svc_uuids = [str(u).lower() for u in (adv.service_uuids or [])]
             name = adv.local_name or ""
