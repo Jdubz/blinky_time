@@ -217,6 +217,24 @@ class FlashJob:
     bytes_total: int = 0
     error: str | None = None
 
+    # Canonical device key pinned at job creation by ``flash_device``.
+    # ``_run_flash_job``'s finally uses this for lock acquisition,
+    # in-flight clearing, and retry-state update — so a mid-flight alias
+    # shift in ``_identity_groups`` (e.g., discovery learns the USB SN
+    # for a previously-BLE-only device while we're flashing it) doesn't
+    # cause those operations to leak under a stale key. None when a job
+    # is constructed directly (tests, scripts); the orchestrator falls
+    # back to ``resolve_canonical(device_id)`` in that case.
+    canonical_id: str | None = None
+
+    # True iff this job was scheduled by ``flash_device(force=False)`` —
+    # i.e., by the auto-recovery loop, not by an operator route.
+    # ``_run_flash_job``'s finally increments the auto-recovery retry
+    # counter only on jobs flagged here, so a string of failed operator
+    # flashes can't lock out auto-recovery (the legacy
+    # ``_dfu_recovery_state`` had the same scoping).
+    is_auto_recovery: bool = False
+
     # Bumped on every mutation so pollers can detect "anything changed
     # since the last snapshot" without diffing the whole struct. Pairs
     # with ``_change_event`` for async waits.

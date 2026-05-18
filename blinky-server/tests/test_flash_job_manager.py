@@ -1285,17 +1285,32 @@ async def test_flash_device_force_false_returns_none_inside_backoff(
 
 
 @pytest.mark.asyncio
-async def test_run_flash_job_increments_retry_state_on_failure(
+async def test_run_flash_job_increments_retry_state_only_for_auto_recovery_failures(
     fleet: FleetManager,
 ) -> None:
-    """A FAILED orchestrator run MUST increment the canonical retry
-    counter so subsequent ``flash_device(force=False)`` calls honor
-    max-attempts. The orchestrator's finally is the single point of
-    truth for this — auto-recovery does not maintain its own counter."""
-    job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
-    await job.wait_until_terminal(timeout=2.0)
-    assert job.state is FlashJobState.FAILED
-    entry = fleet._recovery_retry_state.get("dev-1")
+    """A FAILED orchestrator run from auto-recovery (force=False) MUST
+    increment the canonical retry counter so subsequent
+    ``flash_device(force=False)`` calls honor max-attempts. A FAILED
+    run from an operator route (force=True) MUST NOT — otherwise a
+    string of operator-driven failures would silently lock out
+    auto-recovery for that device. The orchestrator's finally
+    distinguishes via ``FlashJob.is_auto_recovery``."""
+    # First: operator-driven failure. Retry counter must NOT increment.
+    op_job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=True)
+    await op_job.wait_until_terminal(timeout=2.0)
+    assert op_job.state is FlashJobState.FAILED
+    assert op_job.is_auto_recovery is False
+    assert "dev-1" not in fleet._recovery_retry_state, (
+        "operator-driven failure (force=True) must not bump auto-recovery counter"
+    )
+
+    # Now: auto-recovery failure. Retry counter MUST increment.
+    auto_job = await fleet.flash_device("dev-2", Path("/tmp/fw.hex"), force=False)
+    assert auto_job is not None  # no prior failures → not blocked
+    await auto_job.wait_until_terminal(timeout=2.0)
+    assert auto_job.state is FlashJobState.FAILED
+    assert auto_job.is_auto_recovery is True
+    entry = fleet._recovery_retry_state.get("dev-2")
     assert entry is not None
     assert entry.fails == 1
     assert entry.last_failure_at is not None
@@ -1393,3 +1408,118 @@ async def test_recovery_whitelist_reload_picks_up_disk_change(
     assert fleet._recovery_device_ids == {"dev-B"}, (
         "whitelist did not refresh from disk after mtime change"
     )
+
+
+@pytest.mark.asyncio
+async def test_flash_device_pins_canonical_against_midflight_alias_shift(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``flash_device`` pins ``job.canonical_id`` at creation so a
+    later ``register_identity_alias`` call during the same flash
+    can't cause ``_run_flash_job``'s finally to clean up under a
+    different key — which would leak the in-flight set and the retry
+    state entry forever.
+
+    Simulates the realistic case where discovery learns a device's USB
+    SN while a BLE-DFU flash for that device's BLE address is in
+    flight: the alias gets registered, ``resolve_canonical(BLE_ADDR)``
+    starts returning the SN, and any code path that uses the live
+    resolver to find the job's keys would miss them.
+    """
+    from blinky_server.device.device import Device
+    from blinky_server.firmware.flash_job import FlashJob
+
+    from .mock_transport import MockTransport
+
+    transport = MockTransport(transport_type="serial")
+    device = Device(
+        device_id="FA:E6:7D:A9:8B:3A",  # BLE-style id
+        port="/dev/ttyTEST_A",
+        platform="nrf52840",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    await device.connect()
+    fleet._devices["FA:E6:7D:A9:8B:3A"] = device
+
+    # Stub the UF2 branch so the real `_run_flash_job` runs (and its
+    # finally fires) without doing real flash work. The stub also
+    # registers an identity alias mid-flight that DEMOTES the original
+    # canonical — `resolve_canonical("FA:E6:7D:A9:8B:3A")` now returns
+    # the SN, which is the case that breaks naive cleanup.
+    async def stub_uf2(j: FlashJob) -> None:
+        fleet.register_identity_alias("FA:E6:7D:A9:8B:3A", "AABBCCDDEEFF0011")
+        j.transition(FlashJobState.WRITING)
+        j.transition(FlashJobState.VERIFYING)
+        j.transition(FlashJobState.COMPLETED)
+
+    monkeypatch.setattr(fleet, "_run_uf2_flash", stub_uf2)
+
+    job = await fleet.flash_device("FA:E6:7D:A9:8B:3A", Path("/tmp/x.hex"))
+    # Pre-flash: in-flight under the original canonical (BLE addr).
+    assert "FA:E6:7D:A9:8B:3A" in fleet._device_in_flight
+    assert job.canonical_id == "FA:E6:7D:A9:8B:3A"
+
+    await job.wait_until_terminal(timeout=2.0)
+    assert job.state is FlashJobState.COMPLETED
+
+    # Post-flash: in-flight cleared under the ORIGINAL canonical even
+    # though `resolve_canonical("FA:E6:7D:A9:8B:3A")` now returns the
+    # SN. Without the canonical-pin, the finally would have done
+    # `_device_in_flight.discard("AABBCCDDEEFF0011")` (no-op) and
+    # leaked the BLE-keyed entry.
+    assert "FA:E6:7D:A9:8B:3A" not in fleet._device_in_flight, (
+        "in-flight entry leaked under stale canonical key after alias shift"
+    )
+    assert fleet.resolve_canonical("FA:E6:7D:A9:8B:3A") == "AABBCCDDEEFF0011"
+
+
+@pytest.mark.asyncio
+async def test_whitelist_reload_warns_once_when_file_disappears(
+    fleet: FleetManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the operator deletes the recovery-firmware.json file after
+    auto-recovery was armed, ``_maybe_reload_recovery_whitelist`` MUST
+    log a WARN exactly once and keep the in-memory state — so a
+    transient I/O issue can't silently disarm auto-recovery.
+    """
+    import blinky_server.device.manager as mgr_mod
+
+    monkeypatch.setattr(mgr_mod, "RECOVERY_WHITELIST_RELOAD_TTL_S", 0.0)
+    fw = tmp_path / "fw.hex"
+    fw.write_text(":00000001FF\n")
+    fleet.set_recovery_firmware(str(fw), ["dev-A"])
+    # Prime the mtime cache: first call observes the file.
+    fleet._maybe_reload_recovery_whitelist()
+    assert fleet._last_whitelist_mtime is not None
+
+    # Operator deletes the file.
+    state_path = fleet._recovery_state_path()
+    state_path.unlink()
+
+    caplog.clear()
+    fleet._last_whitelist_check_at = 0.0  # bypass TTL
+    fleet._maybe_reload_recovery_whitelist()
+
+    # In-memory state must be unchanged — disarm requires deliberate
+    # action via the API or restart, not a stat() failure.
+    assert fleet._recovery_firmware_path == str(fw)
+    assert fleet._recovery_device_ids == {"dev-A"}
+
+    # Exactly one WARN line about the file being unreadable.
+    warns = [
+        r for r in caplog.records if r.levelname == "WARNING" and "no longer readable" in r.message
+    ]
+    assert len(warns) == 1, f"expected exactly one WARN, got {[r.message for r in warns]}"
+
+    # Subsequent calls (within the same session, file still missing) do
+    # NOT re-warn — the latch prevents journal spam.
+    caplog.clear()
+    fleet._last_whitelist_check_at = 0.0
+    fleet._maybe_reload_recovery_whitelist()
+    warns2 = [
+        r for r in caplog.records if r.levelname == "WARNING" and "no longer readable" in r.message
+    ]
+    assert warns2 == [], "second missing-file detection re-warned (should be latched)"

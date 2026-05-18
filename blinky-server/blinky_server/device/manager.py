@@ -169,6 +169,11 @@ class FleetManager:
         # but the server has the old whitelist cached" gap.
         self._last_whitelist_check_at: float = 0.0
         self._last_whitelist_mtime: float | None = None
+        # One-shot WARN latch for "file disappeared after we'd loaded it"
+        # — prevents the auto-recovery cycle (every ~60s) from spamming
+        # the journal with the same message indefinitely. Reset when the
+        # file becomes readable again.
+        self._whitelist_missing_warned: bool = False
         # ── Flash-job rewrite (Phase 3) ───────────────────────────────────
         # The next-generation flash entry point lives in ``flash_device``
         # below. Per-canonical in-flight set + ``_flash_job_locks`` enforce
@@ -180,12 +185,13 @@ class FleetManager:
         # see ``_recent_flash_attempts`` for completed-flash dedup state.
         self._flash_jobs: dict[str, FlashJob] = {}
         # _recent_flash_attempts: device_id → time.time() of the most recent
-        # terminal transition. Auto-recovery (Phase 8) consults this and the
-        # window below to dedup; explicit operator requests via
-        # ``flash_device`` ignore the window (operator already accepted the
-        # cost). Closes the cascade bug from 2026-05-17 where UF2 succeeded,
-        # was mislabelled as failed, and then auto-recovery re-flashed via
-        # BLE-DFU. See [[project-deploy-flash-cascade-bug]].
+        # terminal transition. ``flash_device(force=False)`` consults this
+        # (via ``should_attempt_auto_recovery``) and the window below to
+        # dedup; explicit operator requests (``force=True``) ignore the
+        # window (operator already accepted the cost). Closes the cascade
+        # bug from 2026-05-17 where UF2 succeeded, was mislabelled as
+        # failed, and then auto-recovery re-flashed via BLE-DFU. See
+        # [[project-deploy-flash-cascade-bug]].
         #
         # TODO(L4): this is an in-memory dict; the dedup window is lost on
         # server restart. A device that failed 30 s ago looks "clean" after
@@ -542,12 +548,16 @@ class FleetManager:
                 device_id=device_id,
                 firmware_path=firmware_path,
                 expected_version=expected_version,
+                canonical_id=canonical,
+                is_auto_recovery=not force,
             )
             self._flash_jobs[canonical] = job
-            # L1: register in the single in-flight set so any other code
-            # path that checks before touching firmware sees this device
-            # is occupied. Cleared by `_run_flash_job`'s `finally` block
-            # under the same lock.
+            # Register in the single in-flight set so any other code path
+            # that checks before touching firmware sees this device is
+            # occupied. Cleared by `_run_flash_job`'s `finally` block
+            # under the same lock. The job pins ``canonical_id`` so a
+            # mid-flight alias shift in ``_identity_groups`` doesn't
+            # cause the finally cleanup to write under a different key.
             self._device_in_flight.add(canonical)
             log.info(
                 "flash_device(%s, force=%s): created job %s, firmware=%s, expected_version=%s",
@@ -744,22 +754,31 @@ class FleetManager:
     async def _run_flash_job(self, job: FlashJob) -> None:
         """Drive a ``FlashJob`` through its state machine.
 
-        Phase 7: UF2 path is wired. Phase 9 wires BLE-DFU (still a stub
-        here — fails the job with a clear message rather than silently
-        falling back to UF2, per feedback_flash_safety_policy).
+        This is THE orchestrator entry point — every flash in the system
+        runs through it, and the ContextVar guard
+        (``firmware/_guard.py``) makes that invariant structural.
+        Dispatches to ``_run_uf2_flash`` or ``_run_ble_dfu_flash`` based
+        on transport selection; both branches transition the job through
+        WRITING → VERIFYING → COMPLETED (or FAILED on error).
 
         Flow (UF2):
           PENDING → SELECTING_TRANSPORT → WRITING (subprocess writes
-          UF2 to MSC) → VERIFYING (run_verify polls device signals) →
-          COMPLETED. The verify phase NEVER auto-fails on wall-clock;
+          UF2 to MSC) → VERIFYING (``run_verify`` polls device signals)
+          → COMPLETED. The verify phase NEVER auto-fails on wall-clock;
           orchestrator gives it ~5 min of polling and surfaces anomalies
           if signals don't progress.
 
-        Always records ``_recent_flash_attempts`` on terminal transition,
-        regardless of success/failure — so auto-recovery (Phase 8) dedup
-        catches "I just tried this device" even when the attempt failed.
+        Flow (BLE-DFU):
+          PENDING → SELECTING_TRANSPORT → WRITING (``_ble_dfu_write_impl``
+          runs the Nordic Legacy DFU protocol) → VERIFYING → COMPLETED.
+
+        Always records ``_recent_flash_attempts`` and updates
+        ``_recovery_retry_state`` on terminal transition, regardless of
+        success/failure — so ``flash_device(force=False)`` dedup catches
+        "I just tried this device" and max-attempts/backoff fire correctly
+        for the next auto-recovery cycle.
         """
-        # L2: enter the orchestrator context. Every guarded write impl
+        # Enter the orchestrator context. Every guarded write impl
         # (`_uf2_write_impl`, `_uf2_write_impl_for_job`,
         # `_ble_dfu_write_impl`) checks the ContextVar at entry and
         # raises ``OutsideFlashJobContextError`` if it's not set.
@@ -803,20 +822,43 @@ class FleetManager:
             # lock (keyed by canonical ID) so a concurrent
             # ``should_attempt_auto_recovery`` call sees a consistent
             # (jobs + timestamps + in-flight + retry-counter) snapshot.
-            canonical = self.resolve_canonical(job.device_id)
+            # Use ``job.canonical_id`` (pinned at creation) rather than
+            # ``resolve_canonical(job.device_id)`` so a mid-flight alias
+            # shift can't cause us to clean up under a different key.
+            # Tests that construct ``FlashJob`` directly leave
+            # ``canonical_id=None``; the fallback re-resolves which is
+            # the same code path as before and works fine for them.
+            canonical = (
+                job.canonical_id
+                if job.canonical_id is not None
+                else self.resolve_canonical(job.device_id)
+            )
             lock = self._get_flash_job_lock(canonical)
             async with lock:
                 self._recent_flash_attempts[canonical] = _time.time()
                 self._device_in_flight.discard(canonical)
-                # L3c: update the canonical retry counter so the next
-                # `flash_device(force=False)` for this device honors
-                # max-attempts and backoff. Operator-initiated flashes
-                # (force=True) ALSO update this — a successful manual
-                # flash clears prior auto-recovery failures, which is
-                # exactly what an operator-fixed device wants.
+                # Update the auto-recovery retry counter so the next
+                # ``flash_device(force=False)`` for this device honors
+                # max-attempts and backoff. Behavior:
+                #   - COMPLETED (any caller): pop the counter. A
+                #     successful flash means the device is healthy —
+                #     even an operator-driven success clears prior
+                #     auto-recovery failures so the next cycle can
+                #     retry if anything goes wrong later.
+                #   - FAILED/ABANDONED with is_auto_recovery=True:
+                #     bump the counter. Auto-recovery making progress
+                #     toward its 3-strike budget.
+                #   - FAILED/ABANDONED with is_auto_recovery=False
+                #     (operator-driven): leave the counter alone.
+                #     Operator failures are the operator's concern;
+                #     they should not eat into auto-recovery's budget
+                #     for the same device.
                 if job.state is FlashJobState.COMPLETED:
                     self._recovery_retry_state.pop(canonical, None)
-                elif job.state in (FlashJobState.FAILED, FlashJobState.ABANDONED):
+                elif job.is_auto_recovery and job.state in (
+                    FlashJobState.FAILED,
+                    FlashJobState.ABANDONED,
+                ):
                     entry = self._recovery_retry_state.get(canonical) or _RecoveryRetryEntry()
                     entry.fails += 1
                     entry.last_failure_at = _time.time()
@@ -834,11 +876,11 @@ class FleetManager:
             reset_orchestrator_context(_orch_token)
 
     async def _run_uf2_flash(self, job: FlashJob) -> None:
-        """UF2 branch of ``_run_flash_job``. Phase 7 implementation.
+        """UF2 branch of ``_run_flash_job``.
 
-        The split exists for testability — Phase 9 will add an analogous
-        ``_run_ble_dfu_flash`` and we don't want one monolithic method
-        with branched logic for both transports.
+        The split from ``_run_ble_dfu_flash`` exists for testability —
+        each transport gets its own method so monkeypatching one branch
+        doesn't drag the other along.
         """
         device = self._devices.get(job.device_id)
         if device is None:
@@ -2095,6 +2137,14 @@ class FleetManager:
         rate-limited to once per ``RECOVERY_WHITELIST_RELOAD_TTL_S`` so
         a high-frequency auto-recovery cycle doesn't hammer the
         filesystem; the JSON re-read only fires when mtime changes.
+
+        File disappearance handling: if the file existed before and now
+        doesn't (stat raises OSError), we WARN loudly but keep the
+        in-memory state. The operator who genuinely wants to disarm
+        auto-recovery should call ``set_recovery_firmware`` with a new
+        whitelist or restart the server — silently disarming on a
+        stat() failure could mask transient I/O issues (NFS unmount,
+        permission flap) as deliberate disarm.
         """
         now = _time.monotonic()
         if now - self._last_whitelist_check_at < RECOVERY_WHITELIST_RELOAD_TTL_S:
@@ -2103,8 +2153,20 @@ class FleetManager:
         path = self._recovery_state_path()
         try:
             mtime = path.stat().st_mtime
-        except OSError:
+        except OSError as exc:
+            if self._last_whitelist_mtime is not None and not self._whitelist_missing_warned:
+                log.warning(
+                    "Recovery-firmware state file %s is no longer readable (%s). "
+                    "Keeping in-memory whitelist active; call set_recovery_firmware "
+                    "or restart the server to fully disarm auto-recovery.",
+                    path,
+                    exc,
+                )
+                self._whitelist_missing_warned = True
             return
+        # File came back after a missing-warning — reset the latch so a
+        # second disappearance gets logged again.
+        self._whitelist_missing_warned = False
         if self._last_whitelist_mtime is not None and mtime == self._last_whitelist_mtime:
             return
         self._last_whitelist_mtime = mtime
