@@ -362,9 +362,7 @@ class FleetManager:
             if transport is FlashTransport.UF2:
                 await self._run_uf2_flash(job)
             elif transport is FlashTransport.BLE_DFU:
-                # Phase 9 will replace this with the real BLE-DFU wiring.
-                job.set_error("BLE-DFU flash path not yet wired (Phase 9 of rewrite)")
-                job.transition(FlashJobState.FAILED)
+                await self._run_ble_dfu_flash(job)
             else:
                 # Exhaustiveness guard — if FlashTransport gains a variant,
                 # we want a loud error, not a silent fallthrough.
@@ -466,6 +464,189 @@ class FleetManager:
             job.set_error("verify did not converge within 5 minutes")
             job.transition(FlashJobState.FAILED)
 
+    async def _run_ble_dfu_flash(self, job: FlashJob) -> None:
+        """BLE-DFU branch of ``_run_flash_job``. L0 of the lockdown.
+
+        Three reachability cases, distinguished by ``device.state``:
+
+        * ``DFU_RECOVERY`` — the device is already in its bootloader
+          advertising the AdaDFU service. Skip bootloader entry; go
+          straight to the DFU transfer. This is the recovery case the
+          legacy ``upload_firmware`` had as its first dispatch branch.
+
+        * App-mode over **BLE** — device is healthy and we're talking
+          over NUS. Issue ``bootloader ble`` via NUS, give the bootloader
+          ~3 s to come up + start advertising, then DFU.
+
+        * App-mode over **serial** — device is healthy and we're talking
+          over USB-CDC. Issue ``bootloader ble`` via the serial console,
+          ~2 s wait. (Only reachable if ``select_transport`` chose
+          BLE_DFU even with USB present — which it doesn't today since
+          USB > BLE in the policy. Kept for completeness / future routes.)
+
+        Protections wrapped around the call (per FLASH_LOCKDOWN_AUDIT.md):
+        ``pause_discovery`` / ``hold_reconnect`` / ``broadcaster.stop()``
+        + verification guard + restart in ``finally``. BCM43455's single
+        radio cannot register an advertisement while we hold the GATT
+        central channel that ``upload_ble_dfu`` needs — flashing under
+        radio contention is what bricked cart_inner on 2026-05-16, so
+        the broadcaster check is fail-loud (refuses to enter DFU if the
+        broadcaster didn't stop cleanly).
+
+        The ``upload_ble_dfu`` call retains its built-in post-DFU verify
+        (scan + NUS+RSSI fallback for random-static-address-change). The
+        plan is to migrate that into a BLE-aware ``run_verify`` branch
+        later; for now, success of the legacy verify maps directly to
+        ``FlashJobState.COMPLETED``.
+        """
+        from ..firmware.ble_dfu import upload_ble_dfu
+        from ..firmware.compile import ensure_dfu_zip
+
+        device = self._devices.get(job.device_id)
+        if device is None:
+            job.set_error(f"device {job.device_id} disappeared between selection and write")
+            job.transition(FlashJobState.FAILED)
+            return
+
+        if not device.ble_address:
+            job.set_error(
+                f"BLE-DFU flash requires a known BLE address, but device "
+                f"{job.device_id[:12]} has none"
+            )
+            job.transition(FlashJobState.FAILED)
+            return
+
+        # Determine bootloader-entry mechanism. None means "already in
+        # bootloader" — the legacy `upload_firmware`'s DFU_RECOVERY
+        # short-circuit.
+        enter_via_serial = None
+        enter_via_ble = None
+        if device.state is not DeviceState.DFU_RECOVERY:
+            if device.transport.transport_type == "serial":
+                # Bind the protocol/transport at closure-build time so a
+                # late device-table mutation can't redirect the
+                # bootloader-entry command to a different device.
+                _protocol = device.protocol
+
+                async def _enter_via_serial(cmd: str) -> None:
+                    await _protocol.send_command(cmd)
+                    await asyncio.sleep(2)
+
+                enter_via_serial = _enter_via_serial
+            elif device.transport.transport_type == "ble":
+                # PRESENT BLE devices don't hold a persistent GATT
+                # connection; we bring up NUS just-in-time to issue the
+                # command, then drop it before upload_ble_dfu opens its
+                # own connection to the bootloader address. Idempotent
+                # connect (no-op if already connected) handles the rare
+                # path where something previously left a CONNECTED
+                # transport in place.
+                _ble_transport = device.transport
+
+                async def _enter_via_ble(cmd: str) -> None:
+                    if not _ble_transport.is_connected:
+                        await _ble_transport.connect()
+                    await _ble_transport.write_line(cmd)
+                    await asyncio.sleep(0.5)
+                    await _ble_transport.disconnect()
+
+                enter_via_ble = _enter_via_ble
+            else:
+                job.set_error(
+                    f"BLE-DFU flash needs serial/ble transport for bootloader "
+                    f"entry, got {device.transport.transport_type!r}"
+                )
+                job.transition(FlashJobState.FAILED)
+                return
+
+        # ── Radio-contention prevention ──────────────────────────────────
+        # BCM43455 single-radio constraint: can't simultaneously
+        # advertise (broadcaster) and act as GATT central (DFU client).
+        # Stop the broadcaster before we touch BLE; refuse to proceed if
+        # it didn't actually stop. This mirrors the legacy fleet-flash
+        # and auto-recovery branches. Documented in
+        # `docs/FLASH_LOCKDOWN_AUDIT.md`.
+        broadcaster_was_running = self.broadcaster is not None and self.broadcaster.is_running
+        if broadcaster_was_running and self.broadcaster is not None:
+            try:
+                await self.broadcaster.stop()
+            except Exception:
+                log.exception(
+                    "flash job %s: broadcaster.stop() raised; refusing to "
+                    "enter BLE DFU under uncertain radio state",
+                    job.job_id,
+                )
+            if self.broadcaster is not None and self.broadcaster.is_running:
+                job.set_error(
+                    "broadcaster did not stop cleanly — refusing to enter "
+                    "BLE DFU under radio contention"
+                )
+                job.transition(FlashJobState.FAILED)
+                return
+
+        self.pause_discovery()
+        # Long hold — BLE DFU at MTU=20 runs ~5-8 min on a 540 KB image,
+        # plus retries can extend that. 600 s matches the legacy
+        # auto-recovery / route values.
+        self.hold_reconnect(job.device_id, 600)
+
+        try:
+            # Build the DFU zip on a worker thread — adafruit-nrfutil
+            # genpkg shells out and we don't want it blocking the loop.
+            try:
+                dfu_zip = await asyncio.to_thread(ensure_dfu_zip, str(job.firmware_path))
+            except Exception as exc:
+                job.set_error(f"DFU zip build failed: {exc}")
+                job.transition(FlashJobState.FAILED)
+                return
+
+            job.transition(FlashJobState.WRITING)
+
+            try:
+                result = await asyncio.wait_for(
+                    upload_ble_dfu(
+                        app_ble_address=device.ble_address,
+                        dfu_zip_path=dfu_zip,
+                        enter_bootloader_via_serial=enter_via_serial,
+                        enter_bootloader_via_ble=enter_via_ble,
+                    ),
+                    # 600 s mirrors the legacy fleet-flash + auto-recovery
+                    # wall-clock. The current default; will become a
+                    # `flash_device(timeout=)` kwarg in L1.
+                    timeout=600.0,
+                )
+            except TimeoutError:
+                job.set_error("BLE DFU exceeded 600s wall-clock timeout")
+                job.transition(FlashJobState.FAILED)
+                return
+
+            if result.get("status") != "ok":
+                job.set_error(f"BLE DFU failed: {result.get('message', 'unknown error')}")
+                job.transition(FlashJobState.FAILED)
+                return
+
+            # ``upload_ble_dfu`` returned ok — its own post-DFU verify
+            # already scanned for the rebooted device (with the random-
+            # static-address-change fallback). Map directly to
+            # COMPLETED. The lockdown plan calls for migrating this
+            # verify into a BLE-aware ``run_verify`` branch later;
+            # until that lands, the legacy verify is what we trust.
+            job.transition(FlashJobState.VERIFYING)
+            job.transition(FlashJobState.COMPLETED)
+        finally:
+            self.resume_discovery()
+            self.resume_reconnect(job.device_id)
+            if broadcaster_was_running and self.broadcaster is not None:
+                try:
+                    await self.broadcaster.start()
+                except Exception:
+                    log.exception(
+                        "flash job %s: failed to restart broadcaster after "
+                        "BLE DFU — fleet commands will not reach BLE devices "
+                        "until manual restart",
+                        job.job_id,
+                    )
+
     async def _verify_with_anomaly_checks(
         self,
         job: FlashJob,
@@ -497,10 +678,25 @@ class FleetManager:
     def _build_transport_probe(self, device_id: str) -> TransportProbe:
         """Snapshot which interfaces reach this device *right now*.
 
-        Phase 3: USB-CDC app handshake is the only signal wired up; BLE-DFU
-        advert detection is stubbed to False. Phase 5 fills in the BLE
-        branch (the AdaDFU discovery hook already exists in
-        ``transport.discovery``; this just needs to consult it).
+        Two signals:
+          - ``has_usb_app``: true iff the device has a CONNECTED serial
+            transport (app-mode CDC handshake is responsive).
+          - ``has_ble_dfu_advert``: true iff the device is in
+            ``DFU_RECOVERY`` state (the discovery loop sets this when
+            it sees an ``AdaDFU`` BLE advertisement at the bootloader
+            address — see ``transport/discovery.py`` and the
+            ``_promote_dfu_advert_to_device`` logic in this module).
+            DFU_RECOVERY implies the device is parked in its bootloader
+            with the OTA-DFU service exposed; that's the entire signal
+            ``select_transport`` needs to pick the BLE-DFU branch.
+
+        Note: BLE-app-mode (a healthy connected BLE device that's NOT in
+        bootloader) is currently NOT a flash transport — bootloader
+        entry from app-mode-over-BLE goes through the ``_run_ble_dfu_flash``
+        path that issues ``bootloader ble`` via NUS first. That path
+        treats ``has_ble_dfu_advert == False`` AND
+        ``transport_type == "ble"`` as the "enter bootloader first"
+        case at the orchestrator level, not the probe level.
         """
         device = self._devices.get(device_id)
         has_usb_app = (
@@ -508,8 +704,15 @@ class FleetManager:
             and device.transport.transport_type == "serial"
             and device.transport.is_connected
         )
-        # Phase 5 TODO: detect AdaDFU advert at device's bootloader BLE addr.
-        return TransportProbe(has_usb_app=has_usb_app, has_ble_dfu_advert=False)
+        has_ble_dfu_advert = (
+            device is not None
+            and device.state is DeviceState.DFU_RECOVERY
+            and bool(device.ble_address)
+        )
+        return TransportProbe(
+            has_usb_app=has_usb_app,
+            has_ble_dfu_advert=has_ble_dfu_advert,
+        )
 
     async def start(self) -> None:
         """Start background loop for device discovery and management.
