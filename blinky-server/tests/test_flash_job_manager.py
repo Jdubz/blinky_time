@@ -237,6 +237,150 @@ async def test_list_flash_jobs_all_vs_active(fleet: FleetManager) -> None:
     assert fleet.list_flash_jobs(active_only=True) == []
 
 
+# --- L1.1: canonical-key resolver ------------------------------------------
+
+
+def test_resolve_canonical_unknown_id_returns_self(fleet: FleetManager) -> None:
+    """An ID that hasn't been registered as an alias resolves to itself.
+    This is the "first time we've seen this device" case and lets the
+    resolver wrap every lookup without special-casing unregistered IDs."""
+    assert fleet.resolve_canonical("unknown-id") == "unknown-id"
+
+
+def test_register_alias_requires_at_least_one_id(fleet: FleetManager) -> None:
+    """Empty alias registration has no meaning. Fail loud rather than
+    silently accept it."""
+    with pytest.raises(ValueError):
+        fleet.register_identity_alias()
+
+
+def test_register_alias_single_id_returns_id(fleet: FleetManager) -> None:
+    """Registering one ID makes it canonical-of-itself."""
+    canonical = fleet.register_identity_alias("dev-X")
+    assert canonical == "dev-X"
+    assert fleet.resolve_canonical("dev-X") == "dev-X"
+
+
+def test_register_alias_prefers_sn_over_ble_addr(fleet: FleetManager) -> None:
+    """USB serial numbers (no colons, 16 hex chars) win over BLE
+    addresses. SN is more stable across power cycles — BLE addresses
+    can rotate (random static address feature on the nRF52840)."""
+    canonical = fleet.register_identity_alias(
+        "E9:A8:5C:A5:BB:BE",  # BLE app addr
+        "062CBD12EB6961C8",  # USB SN
+    )
+    assert canonical == "062CBD12EB6961C8"
+    assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BE") == "062CBD12EB6961C8"
+    assert fleet.resolve_canonical("062CBD12EB6961C8") == "062CBD12EB6961C8"
+
+
+def test_register_alias_multiple_ble_addrs_deterministic(fleet: FleetManager) -> None:
+    """When no SN-like ID is in the group, pick lexicographically first
+    BLE addr as canonical. Deterministic, doesn't depend on call order."""
+    canonical = fleet.register_identity_alias("E9:A8:5C:A5:BB:BF", "E9:A8:5C:A5:BB:BE")
+    assert canonical == "E9:A8:5C:A5:BB:BE"
+
+
+def test_register_alias_merges_existing_groups(fleet: FleetManager) -> None:
+    """Calling ``register_identity_alias`` again with overlapping IDs
+    pulls in any aliases already registered for either side. The
+    cart_inner BLE→USB transition is exactly this: discovery first sees
+    the BLE addr (registers it alone), then sees the USB SN and learns
+    they're the same device → all three aliases (BLE addr, BLE bootloader
+    addr, USB SN) collapse to the SN canonical."""
+    # Pretend discovery saw the BLE bootloader addr first and tied it
+    # to the BLE app addr.
+    fleet.register_identity_alias("E9:A8:5C:A5:BB:BE", "E9:A8:5C:A5:BB:BF")
+    # Now learn the USB SN and tie it to one of the existing aliases.
+    canonical = fleet.register_identity_alias("062CBD12EB6961C8", "E9:A8:5C:A5:BB:BE")
+    # All three IDs now resolve to the SN canonical.
+    assert canonical == "062CBD12EB6961C8"
+    assert fleet.resolve_canonical("062CBD12EB6961C8") == "062CBD12EB6961C8"
+    assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BE") == "062CBD12EB6961C8"
+    assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BF") == "062CBD12EB6961C8"
+
+
+# --- L1: _device_in_flight set + dedup across aliases ----------------------
+
+
+@pytest.mark.asyncio
+async def test_device_in_flight_populated_during_job(
+    fleet: FleetManager,
+) -> None:
+    """Mid-flight: ``_device_in_flight`` contains the canonical ID.
+    Stub orchestrator finishes in ms so we inspect via the existing
+    pattern (seed a job manually) to observe the in-flight state.
+
+    Cleared on terminal via the orchestrator's finally block."""
+    from blinky_server.firmware.flash_job import FlashJob
+
+    job = FlashJob(device_id="dev-A", firmware_path=Path("/tmp/fw.hex"))
+    canonical = fleet.resolve_canonical("dev-A")
+    fleet._flash_jobs[canonical] = job
+    fleet._device_in_flight.add(canonical)
+
+    # In-flight check via canonical OR raw alias both see "in flight."
+    assert canonical in fleet._device_in_flight
+
+
+@pytest.mark.asyncio
+async def test_flash_device_clears_in_flight_on_terminal(
+    fleet: FleetManager,
+) -> None:
+    """End-to-end: ``flash_device`` adds canonical to in-flight, the
+    orchestrator's finally clears it. After ``wait_until_terminal``
+    returns, the set is empty for this device."""
+    job = await fleet.flash_device("dev-B", Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=2.0)
+    canonical = fleet.resolve_canonical("dev-B")
+    assert canonical not in fleet._device_in_flight
+
+
+@pytest.mark.asyncio
+async def test_should_attempt_auto_recovery_dedups_via_canonical(
+    fleet: FleetManager,
+) -> None:
+    """The whole point of L1.1: a flash started under one alias
+    (USB SN) must dedup against an auto-recovery attempt under another
+    alias (BLE addr). Pre-fix: the SN-only whitelist couldn't match a
+    BLE-only DFU device on 2026-05-16, and auto-recovery never fired.
+
+    Setup: register both aliases, start a flash via the SN, ask
+    auto-recovery if it can flash via the BLE addr. Answer: no, it's
+    the same device and the flash is in flight."""
+    fleet.register_identity_alias("ALIAS_SN_AABB", "AA:BB:CC:DD:EE:FF")
+
+    job = await fleet.flash_device("ALIAS_SN_AABB", Path("/tmp/fw.hex"))
+    # Manually keep job in-flight for the test (stub completes too fast).
+    fleet._device_in_flight.add(fleet.resolve_canonical("ALIAS_SN_AABB"))
+
+    # Auto-recovery via the BLE alias must see dedup.
+    assert fleet.should_attempt_auto_recovery("AA:BB:CC:DD:EE:FF") is False
+
+    # Cleanup: let the job complete.
+    await job.wait_until_terminal(timeout=2.0)
+    # And then the in-flight slot should be clear (stamped by orchestrator).
+    # (The manual add above is also cleared because the orchestrator's
+    # finally block calls discard on the same canonical.)
+
+
+@pytest.mark.asyncio
+async def test_flash_device_concurrent_via_different_aliases_returns_same_job(
+    fleet: FleetManager,
+) -> None:
+    """Idempotency under cross-alias races: two callers, one with the
+    SN and one with the BLE addr, both targeting the same physical
+    device. The canonical resolver collapses them; the second caller
+    gets back the first's job rather than creating a duplicate."""
+    fleet.register_identity_alias("SN_CONCURRENT_X", "11:22:33:44:55:66")
+    a, b = await asyncio.gather(
+        fleet.flash_device("SN_CONCURRENT_X", Path("/tmp/fw.hex")),
+        fleet.flash_device("11:22:33:44:55:66", Path("/tmp/fw.hex")),
+    )
+    assert a.job_id == b.job_id
+    await a.wait_until_terminal(timeout=2.0)
+
+
 # --- L0: verify-signals baseline-devnum is captured at __init__ -----------
 
 

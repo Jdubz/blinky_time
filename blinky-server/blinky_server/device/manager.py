@@ -162,6 +162,38 @@ class FleetManager:
         # plus a margin for the operator to notice anomalies. Tuned via
         # ``FLASH_DEDUP_WINDOW_S`` class constant — overridable per test.
         self._flash_job_locks: dict[str, asyncio.Lock] = {}
+        # ── L1.1: canonical-key resolver for cross-transport identity ────
+        # A single physical device can be addressed by multiple IDs over
+        # its lifetime: its USB serial number (when plugged in app-mode),
+        # its BLE app-mode address (when present-only), and its BLE
+        # bootloader address (`app_address - 1`, when in DFU recovery).
+        # All three are "the same device" — but absent a canonical key,
+        # data structures like `_recovery_device_ids` (whitelist) or
+        # the new `_device_in_flight` set treat them as different
+        # entities. That gap is what kept the 2026-05-16 cart_inner
+        # SN-only whitelist from matching the BLE-only DFU advert.
+        #
+        # `_identity_groups` maps every known alias to its canonical key.
+        # Canonical preference: USB serial number (no colons, 16 hex
+        # chars typical) > BLE app address > first ID seen. The
+        # `resolve_canonical()` method is a direct dict lookup that
+        # returns the input unchanged for unknown IDs — so callers can
+        # always wrap a lookup, and new IDs flow through unchanged
+        # until `register_identity_alias()` registers them.
+        #
+        # Wired by discovery in follow-up work; L1.1 lands the
+        # infrastructure standalone so L1's `_device_in_flight` can
+        # use canonical keys from day one.
+        self._identity_groups: dict[str, str] = {}
+        # ── L1: single in-flight set ────────────────────────────────────
+        # Populated when a `FlashJob` enters PENDING, cleared on terminal
+        # transition. Anything that touches firmware MUST check
+        # membership here first (after resolving to canonical). The
+        # legacy `_dfu_locks` / `_flash_job_locks` sets exist alongside
+        # this for now — L3 migrates the legacy paths to consult
+        # `_device_in_flight` instead, and L3d deletes the legacy sets.
+        # Keys are canonical IDs from `resolve_canonical()`.
+        self._device_in_flight: set[str] = set()
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
         # — `_running == True` is not enough, the loop can be alive but stuck.
@@ -237,9 +269,83 @@ class FleetManager:
     # Per-test override possible by mutating ``FleetManager.FLASH_DEDUP_WINDOW_S``.
     FLASH_DEDUP_WINDOW_S: float = 600.0  # 10 minutes
 
+    # ── L1.1: canonical-key resolver ───────────────────────────────────
+    #
+    # A device can have multiple IDs in flight at once (USB SN, BLE app
+    # addr, BLE bootloader addr = app addr - 1). The canonical key
+    # collapses them so a flash attempt or whitelist match doesn't miss
+    # the device just because it transitioned transports between the
+    # check and the action. The 2026-05-16 cart_inner brick was the
+    # textbook case: the recovery whitelist had the SN, but the device
+    # was in DFU advertising only its BLE bootloader address — so the
+    # whitelist couldn't match and auto-recovery never fired.
+
+    def resolve_canonical(self, device_id: str) -> str:
+        """Return the canonical key for `device_id`.
+
+        Returns the input unchanged if no alias has been registered for
+        it yet — this is the right behavior for "first time we've seen
+        this ID" and makes the resolver safe to wrap around any lookup.
+        """
+        return self._identity_groups.get(device_id, device_id)
+
+    def register_identity_alias(self, *ids: str) -> str:
+        """Register multiple IDs as aliases for one physical device.
+
+        Picks a canonical key from the union of all known aliases of
+        any input ID, plus the inputs themselves. Preference order:
+
+        1. A USB serial number (no colons, ≥12 chars). Most stable —
+           survives BLE-address-rotation on power cycle.
+        2. A BLE app address (with colons).
+        3. The first ID passed.
+
+        Returns the canonical key. Safe to call repeatedly with
+        overlapping ID sets; each call collapses any existing groups.
+        Raises ``ValueError`` on empty input — the API contract is
+        "tell me what's the same device," empty has no meaning.
+        """
+        if not ids:
+            raise ValueError("register_identity_alias requires at least one id")
+
+        # Collect every alias that's already known for any input ID,
+        # plus the inputs themselves. The union is "everything the
+        # caller has just said belongs to one physical device."
+        all_aliases: set[str] = set(ids)
+        for i in ids:
+            existing = self._identity_groups.get(i)
+            if existing is not None:
+                all_aliases.add(existing)
+                # Also pull in everything that pointed to this canonical.
+                for alias, canonical in self._identity_groups.items():
+                    if canonical == existing:
+                        all_aliases.add(alias)
+
+        # Pick canonical from the merged group.
+        def _looks_like_sn(s: str) -> bool:
+            return ":" not in s and len(s) >= 12
+
+        sn_candidates = [a for a in all_aliases if _looks_like_sn(a)]
+        if sn_candidates:
+            canonical = sorted(sn_candidates)[0]  # deterministic if multiple
+        else:
+            ble_candidates = [a for a in all_aliases if ":" in a]
+            canonical = sorted(ble_candidates)[0] if ble_candidates else sorted(all_aliases)[0]
+
+        # Map every alias (including the canonical) to the canonical.
+        for alias in all_aliases:
+            self._identity_groups[alias] = canonical
+
+        return canonical
+
     def get_flash_job(self, device_id: str) -> FlashJob | None:
-        """Return the most recent ``FlashJob`` for the device, or None."""
-        return self._flash_jobs.get(device_id)
+        """Return the most recent ``FlashJob`` for the device, or None.
+
+        Resolves through ``_identity_groups`` so a caller passing the
+        BLE address gets the job created under the device's USB SN
+        (and vice versa) as long as the alias has been registered.
+        """
+        return self._flash_jobs.get(self.resolve_canonical(device_id))
 
     def list_flash_jobs(self, active_only: bool = False) -> list[FlashJob]:
         """Snapshot of all known flash jobs. Used by ``GET /api/jobs``."""
@@ -250,19 +356,32 @@ class FleetManager:
     def should_attempt_auto_recovery(self, device_id: str) -> bool:
         """Decide whether auto-recovery may flash this device right now.
 
-        Returns False if either:
-          - an active flash job already exists for the device (in flight)
-          - a recent flash terminated within ``FLASH_DEDUP_WINDOW_S``
+        Returns False if any of:
+          - the device (under its canonical ID) is in the
+            ``_device_in_flight`` set, OR
+          - an active flash job already exists for the device, OR
+          - a recent flash terminated within ``FLASH_DEDUP_WINDOW_S``.
+
+        Caller passes whatever ID they have — BLE addr or SN. The
+        canonical resolver collapses aliases so a flash that started
+        under one ID dedups against an auto-recovery attempt under the
+        other. This is the 2026-05-16 cart_inner brick avoidance: the
+        legacy SN-only whitelist couldn't match the BLE-only DFU
+        device, so auto-recovery never fired even though the device
+        was eligible.
 
         Auto-recovery (Phase 8 wiring) calls this BEFORE invoking
         ``flash_device``. The check + the flash_device call must happen
         atomically wrt other auto-recovery passes; the per-device flash
         lock provides that ordering.
         """
-        existing = self._flash_jobs.get(device_id)
+        canonical = self.resolve_canonical(device_id)
+        if canonical in self._device_in_flight:
+            return False
+        existing = self._flash_jobs.get(canonical)
         if existing is not None and existing.is_active:
             return False
-        last = self._recent_flash_attempts.get(device_id)
+        last = self._recent_flash_attempts.get(canonical)
         if last is None:
             return True
         return (_time.time() - last) >= self.FLASH_DEDUP_WINDOW_S
@@ -298,9 +417,15 @@ class FleetManager:
         observes progress via ``job.wait_until_terminal()`` /
         ``GET /api/jobs/{job_id}`` polling.
         """
-        lock = self._get_flash_job_lock(device_id)
+        # Resolve to canonical key for lookups + in-flight dedup. The
+        # raw `device_id` is what the caller passed; canonical is the
+        # cross-transport-stable form. Two operators racing on the same
+        # physical device via different aliases (SN vs BLE addr) both
+        # resolve to the same canonical and dedup correctly.
+        canonical = self.resolve_canonical(device_id)
+        lock = self._get_flash_job_lock(canonical)
         async with lock:
-            existing = self._flash_jobs.get(device_id)
+            existing = self._flash_jobs.get(canonical)
             if existing is not None and existing.is_active:
                 log.info(
                     "flash_device(%s): returning in-flight job %s (state=%s)",
@@ -314,7 +439,12 @@ class FleetManager:
                 firmware_path=firmware_path,
                 expected_version=expected_version,
             )
-            self._flash_jobs[device_id] = job
+            self._flash_jobs[canonical] = job
+            # L1: register in the single in-flight set so any other code
+            # path (legacy or canonical) that checks before touching
+            # firmware can see this device is occupied. Cleared by
+            # `_run_flash_job`'s `finally` block under the same lock.
+            self._device_in_flight.add(canonical)
             log.info(
                 "flash_device(%s): created job %s, firmware=%s, expected_version=%s",
                 device_id,
@@ -379,12 +509,15 @@ class FleetManager:
             if not job.is_terminal:
                 job.transition(FlashJobState.FAILED)
         finally:
-            # Stamp dedup timestamp on every terminal exit. Held under the
-            # per-device lock so a concurrent should_attempt_auto_recovery
-            # call sees a consistent (jobs + timestamps) snapshot.
-            lock = self._get_flash_job_lock(job.device_id)
+            # Stamp dedup timestamp + clear in-flight on every terminal
+            # exit. Held under the per-device lock (keyed by canonical
+            # ID) so a concurrent ``should_attempt_auto_recovery`` call
+            # sees a consistent (jobs + timestamps + in-flight) snapshot.
+            canonical = self.resolve_canonical(job.device_id)
+            lock = self._get_flash_job_lock(canonical)
             async with lock:
-                self._recent_flash_attempts[job.device_id] = _time.time()
+                self._recent_flash_attempts[canonical] = _time.time()
+                self._device_in_flight.discard(canonical)
 
     async def _run_uf2_flash(self, job: FlashJob) -> None:
         """UF2 branch of ``_run_flash_job``. Phase 7 implementation.
