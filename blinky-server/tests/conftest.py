@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -14,6 +15,35 @@ from blinky_server.device.device import Device
 from blinky_server.device.manager import FleetManager
 
 from .mock_transport import MockTransport
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Generator[Path, None, None]:
+    """Redirect ``paths.data_dir()`` to a per-test tmp dir for every test.
+
+    Verified necessary 2026-05-18 — without this, ANY test that creates a
+    ``FleetManager`` and calls ``set_recovery_firmware()`` (directly or
+    via a flash route) writes to the developer's real
+    ``~/.local/share/blinky-server/recovery-firmware.json``. The running
+    blinky-server reads that file at boot, so a leaked test write
+    persisted into production auto-recovery state until manually cleaned
+    up. The first version of test_routes_devices_flash.py did this with
+    a fake ``L3A_TEST_DEV`` device id and we had to remove the file by
+    hand.
+
+    autouse + session-scoped tmp_path_factory + per-test monkeypatch
+    means every test gets a fresh isolated directory; the production
+    data dir is never touched by the test suite.
+    """
+    from blinky_server import paths as paths_mod
+
+    tmp_path = tmp_path_factory.mktemp("blinky-server-data")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    paths_mod._clear_cache()
+    yield tmp_path
+    paths_mod._clear_cache()
 
 
 @pytest.fixture

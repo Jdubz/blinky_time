@@ -548,7 +548,17 @@ class FleetManager:
         try:
             for i, device_id in enumerate(device_ids):
                 err: str | None = None
-                device = self._devices.get(self.resolve_canonical(device_id))
+                # Raw lookup (with prefix-match fallback) — NOT canonical
+                # resolution. When the same physical device has multiple
+                # entries (e.g., USB SN + BLE app addr), the caller's
+                # choice of identity selects which entry's transport we
+                # flash through. Canonical resolution would collapse them
+                # and might pick the wrong transport (e.g., flashing via
+                # the stale USB entry when the BLE entry is the one in
+                # DFU_RECOVERY). The orchestrator's `flash_device`
+                # canonical-resolves on its own for the in-flight dedup,
+                # which is the right place for that.
+                device = self.get_device(device_id)
                 if device is None:
                     err = f"device {device_id} not found in fleet"
                     log.warning("flash_fleet[%d/%d]: %s", i + 1, total, err)
@@ -1139,10 +1149,25 @@ class FleetManager:
         self._reconnect_blackout.pop(device_id, None)
 
     def get_dfu_lock(self, device_id: str) -> asyncio.Lock:
-        """Get the per-device DFU lock. Creates one if it doesn't exist."""
-        if device_id not in self._dfu_locks:
-            self._dfu_locks[device_id] = asyncio.Lock()
-        return self._dfu_locks[device_id]
+        """Get the per-device DFU lock. Creates one if it doesn't exist.
+
+        Keyed by the CANONICAL device ID (L1.1) so the SN form, the
+        BLE app address, and the BLE bootloader address for one
+        physical device all resolve to the same lock instance.
+        Otherwise the L3a → L3c transition would have a window where
+        the route (calling with the URL's device_id) and auto-recovery
+        (iterating with the discovered device.id) could end up holding
+        different locks for the same hardware — defeating the whole
+        point of the lock as a cross-caller mutex.
+
+        The legacy `_dfu_locks` field goes away entirely in L3c when
+        auto-recovery migrates to `flash_device()` and the canonical
+        in-flight set takes over the role of this lock.
+        """
+        canonical = self.resolve_canonical(device_id)
+        if canonical not in self._dfu_locks:
+            self._dfu_locks[canonical] = asyncio.Lock()
+        return self._dfu_locks[canonical]
 
     def pause_discovery(self) -> None:
         """Pause background discovery (e.g., during BLE DFU scan)."""
@@ -1198,7 +1223,10 @@ class FleetManager:
         self._reconnect_blackout.pop(device_id, None)
         self._backoff_skip.pop(device_id, None)
         self._dfu_recovery_state.pop(device_id, None)
-        self._dfu_locks.pop(device_id, None)
+        # `_dfu_locks` is keyed by canonical (`get_dfu_lock` resolves before
+        # insertion), so the pop must also use canonical or the lock entry
+        # would survive the device removal and accumulate forever.
+        self._dfu_locks.pop(self.resolve_canonical(device_id), None)
         log.info("Removed device %s from fleet", device_id[:12])
 
     async def reconnect_device(self, device_id: str) -> bool:

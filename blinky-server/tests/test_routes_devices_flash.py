@@ -28,30 +28,13 @@ from blinky_server.firmware.flash_job import FlashJob, FlashJobState, FlashTrans
 
 from .mock_transport import MockTransport
 
-
-@pytest.fixture(autouse=True)
-def _isolated_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncGenerator[None, None]:
-    """Redirect ``data_dir()`` to a per-test tmp dir.
-
-    Tests in this file exercise the route's call to
-    ``fleet.set_recovery_firmware()``, which persists to
-    ``data_dir() / 'recovery-firmware.json'``. Without this isolation
-    the tests would clobber the developer's live whitelist (the prod
-    blinky-server on this host reads it on boot, so leaked state then
-    contaminates production auto-recovery decisions until next deploy).
-
-    Verified necessary 2026-05-18 — a prior version of this test file
-    DID leak ``L3A_TEST_DEV`` into the running server's whitelist and
-    had to be manually cleaned up. Don't remove this fixture.
-    """
-    from blinky_server import paths as paths_mod
-
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    paths_mod._clear_cache()
-    yield  # type: ignore[misc]
-    paths_mod._clear_cache()
+# NOTE: ``conftest.py`` provides an autouse ``_isolated_data_dir`` fixture
+# that redirects ``paths.data_dir()`` to a per-test tmp dir for every
+# test. Without it, tests calling ``fleet.set_recovery_firmware()``
+# (directly or via a flash route) would leak into the developer's real
+# ``~/.local/share/blinky-server/recovery-firmware.json`` and the
+# running blinky-server would read that leak on boot. Verified by
+# accident on 2026-05-18.
 
 
 @pytest_asyncio.fixture

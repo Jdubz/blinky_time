@@ -297,6 +297,31 @@ def test_register_alias_merges_existing_groups(fleet: FleetManager) -> None:
     assert canonical == "062CBD12EB6961C8"
     assert fleet.resolve_canonical("062CBD12EB6961C8") == "062CBD12EB6961C8"
     assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BE") == "062CBD12EB6961C8"
+
+
+def test_get_dfu_lock_is_canonical_keyed(fleet: FleetManager) -> None:
+    """``get_dfu_lock`` MUST return the same lock instance for all
+    aliases of one physical device. Otherwise the L3a → L3c transition
+    has a window where the route (calling with the URL's device_id) and
+    auto-recovery (iterating with the discovered device.id) end up
+    holding different locks for the same hardware, defeating the lock's
+    cross-caller mutex role.
+
+    The 2026-05-16 cart_inner brick had this shape — auto-recovery and
+    the manual flash path both believed they had exclusive access at
+    once because their lock keys diverged."""
+    fleet.register_identity_alias("E9:A8:5C:A5:BB:BE", "062CBD12EB6961C8")
+    lock_via_sn = fleet.get_dfu_lock("062CBD12EB6961C8")
+    lock_via_ble = fleet.get_dfu_lock("E9:A8:5C:A5:BB:BE")
+    assert lock_via_sn is lock_via_ble, (
+        "get_dfu_lock returned different locks for two aliases of the "
+        "same physical device — canonical resolution is broken"
+    )
+    # And the bootloader address (BLE addr + 1) is part of the same
+    # group once registered, so it should also share the lock.
+    fleet.register_identity_alias("E9:A8:5C:A5:BB:BF", "E9:A8:5C:A5:BB:BE")
+    lock_via_boot = fleet.get_dfu_lock("E9:A8:5C:A5:BB:BF")
+    assert lock_via_boot is lock_via_sn
     assert fleet.resolve_canonical("E9:A8:5C:A5:BB:BF") == "062CBD12EB6961C8"
 
 
@@ -1248,3 +1273,85 @@ async def test_flash_fleet_on_iteration_callback_receives_each_device(
         pass
 
     assert callback_calls == [(0, 2, "A"), (1, 2, "B")]
+
+
+@pytest.mark.asyncio
+async def test_flash_fleet_stops_and_restarts_broadcaster(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """flash_fleet MUST stop the broadcaster at batch entry and restart
+    it at exit, even when there's only one device (BLE-DFU radio safety
+    matters for any single flash through this path). Verifying this is
+    structural, not behavioral — the orchestrator's per-device BLE-DFU
+    branch is supposed to see ``broadcaster_was_running=False`` and skip
+    its own stop/start, but only if the BATCH-level stop is correct.
+
+    Also exercises the finally path: even on a per-device failure the
+    broadcaster gets restarted.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from blinky_server.device.device import Device
+    from blinky_server.firmware.flash_job import FlashJob, FlashJobState, FlashTransport
+
+    from .mock_transport import MockTransport
+
+    # Inject a fake broadcaster that records start/stop calls and tracks
+    # is_running like the real BlueZ-backed one would.
+    broadcaster = MagicMock()
+    broadcaster.is_running = True
+    call_log: list[str] = []
+
+    async def stop() -> None:
+        call_log.append("stop")
+        broadcaster.is_running = False
+
+    async def start() -> None:
+        call_log.append("start")
+        broadcaster.is_running = True
+
+    broadcaster.stop = AsyncMock(side_effect=stop)
+    broadcaster.start = AsyncMock(side_effect=start)
+    fleet.broadcaster = broadcaster
+
+    async def stub(job: FlashJob) -> None:
+        # Record what flash_fleet has done to the broadcaster by the time
+        # the orchestrator's per-device branch would run — must be stopped.
+        call_log.append(f"orchestrator-saw-broadcaster-running={broadcaster.is_running}")
+        job.transition(FlashJobState.SELECTING_TRANSPORT)
+        job.set_transport(FlashTransport.UF2)
+        job.transition(FlashJobState.WRITING)
+        job.transition(FlashJobState.VERIFYING)
+        job.transition(FlashJobState.COMPLETED)
+
+    monkeypatch.setattr(fleet, "_run_flash_job", stub)
+
+    d = Device(
+        device_id="DEV_BC",
+        port="/dev/ttyBC",
+        platform="nrf52840",
+        transport=MockTransport(),  # type: ignore[arg-type]
+    )
+    await d.connect()
+    fleet._devices[d.id] = d
+
+    async for _ in fleet.flash_fleet(
+        device_ids=["DEV_BC"],
+        firmware_path=Path("/tmp/fake.hex"),
+        per_device_timeout=5.0,
+    ):
+        pass
+
+    # Order assertions:
+    #   1. stop at batch entry
+    #   2. orchestrator runs WITHOUT broadcaster running (no radio
+    #      contention is the whole point)
+    #   3. start at batch exit (in `finally`, so guaranteed even on
+    #      per-device failure)
+    assert call_log == [
+        "stop",
+        "orchestrator-saw-broadcaster-running=False",
+        "start",
+    ], f"unexpected broadcaster call order: {call_log}"
+    assert broadcaster.is_running is True, "broadcaster must be restarted by flash_fleet's finally"

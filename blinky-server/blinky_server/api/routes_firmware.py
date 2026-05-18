@@ -320,7 +320,7 @@ async def _flash_fleet_background(
     results: dict[str, dict[str, Any]] = {}
     total = len(device_ids)
 
-    def _label(device_id: str, fjob: FlashJob | None) -> str:
+    def _label(device_id: str) -> str:
         d = fleet.get_device(device_id)
         name = (d.device_name if d is not None else None) or "unknown"
         return f"{device_id[:12]} ({name})"
@@ -352,7 +352,7 @@ async def _flash_fleet_background(
         on_iteration=_on_iteration,
     ):
         short_id = device_id[:12]
-        dev_label = _label(device_id, fjob)
+        dev_label = _label(device_id)
 
         if fjob is None:
             # Device couldn't be scheduled (not in fleet, etc.)
