@@ -415,6 +415,36 @@ class FleetManager:
             job.transition(FlashJobState.FAILED)
             return
 
+        # Build the SignalHistory + _FleetVerifySignals BEFORE the flash so
+        # that the verify-signals snapshot of the device's USB devnum is
+        # the PRE-flash baseline. The flash workflow includes a USB
+        # reset and a BL → app reboot, both of which renumber the
+        # device; if signals were constructed post-flash, the baseline
+        # would already reflect the post-reboot devnum and the verify
+        # state machine would stall in AWAITING_REBOOT forever (the
+        # 0.8.0-4 BL doesn't help — even when the device IS happily
+        # booted, the verify can't tell because the devnum it remembers
+        # IS the post-boot one). Verified live 2026-05-18 against FPS
+        # Sweep — pre-fix: stuck in AWAITING_REBOOT for 5 min; post-fix:
+        # detects re-enum immediately after BL exit. `write_completed_at`
+        # is filled in after flash_uf2_for_job lands so the timestamp
+        # corresponds to bytes-on-flash rather than to verify-start.
+        history = SignalHistory(
+            write_completed_at=_time.time(),  # provisional, updated below
+            expected_version=job.expected_version,
+            # `previous_version` is what the device reported at discovery
+            # handshake (`json info` populates `device.version`). The
+            # `detect_stale_firmware` detector compares the post-flash
+            # version against this — when the new firmware boots but
+            # `json info` still reports the old build string, that's the
+            # "BL accepted UF2 but didn't update the valid-app marker"
+            # failure mode we hit on 2026-05-17 with bootloader 0.8.0-4.
+            # Without this wiring the field stays None and the detector
+            # silently never fires.
+            previous_version=device.version,
+        )
+        signals = _FleetVerifySignals(fleet=self, device_id=job.device_id, history=history)
+
         # WRITING: subprocess + progress callbacks.
         job.transition(FlashJobState.WRITING)
         write_ok = await flash_uf2_for_job(
@@ -429,22 +459,9 @@ class FleetManager:
             return
 
         # VERIFYING: progressive sub-states + anomaly detection.
+        # Sync write_completed_at into the history now that we have it.
+        history.write_completed_at = job.write_completed_at or _time.time()
         job.transition(FlashJobState.VERIFYING)
-        history = SignalHistory(
-            write_completed_at=job.write_completed_at or _time.time(),
-            expected_version=job.expected_version,
-            # `previous_version` is what the device reported at discovery
-            # handshake (`json info` populates `device.version`). The
-            # `detect_stale_firmware` detector compares the post-flash
-            # version against this — when the new firmware boots but
-            # `json info` still reports the old build string, that's the
-            # "BL accepted UF2 but didn't update the valid-app marker"
-            # failure mode we hit on 2026-05-17 with bootloader 0.8.0-4.
-            # Without this wiring the field stays None and the detector
-            # silently never fires.
-            previous_version=device.version,
-        )
-        signals = _FleetVerifySignals(fleet=self, device_id=job.device_id, history=history)
         # Wrap run_verify in a soft 5-minute total cap. The verify state
         # machine itself never fails on wall-clock; this is the
         # orchestrator's safety net for "operator isn't watching, give
@@ -1966,9 +1983,23 @@ class _FleetVerifySignals:
     ) -> None:
         self._fleet = fleet
         self._device_id = device_id
-        self._initial_devnum: int | None = None
-        self._initial_devnum_captured_at: float = 0.0
         self.history: SignalHistory = history
+        # Capture the USB devnum baseline AT CONSTRUCTION TIME, not at
+        # first poll. The flash workflow goes:
+        #   construct signals  →  USB reset  →  UF2 write  →  device
+        #   reboot (BL → app, devnum changes)  →  run_verify starts polling
+        # If the baseline were captured at first poll (the prior bug),
+        # it would lock onto the POST-reboot devnum and never see a
+        # subsequent change — verify stalls in AWAITING_REBOOT until
+        # the 5-min cap. Capturing at __init__ pins the PRE-reboot
+        # devnum, so the next compare after the reboot fires
+        # re-enumerated=True correctly.
+        #
+        # Caller contract: construct this signals object BEFORE invoking
+        # `flash_uf2_for_job` (or any other code that triggers a USB
+        # reset / reboot of the target device).
+        self._initial_devnum: int | None = self._read_devnum_for_device()
+        self._initial_devnum_captured_at: float = _time.time()
         # One-shot flag: the first exception bubbling out of
         # is_serial_connected gets logged at WARN; subsequent ones at
         # DEBUG. Verify polls every ~250 ms, so logging every miss
@@ -1981,27 +2012,40 @@ class _FleetVerifySignals:
         self._is_connected_warned: bool = False
 
     async def has_re_enumerated_since(self, device_id: str, since: float) -> bool:
-        """True if the USB device number changed after ``since``.
+        """True if the USB device number has changed since construction.
 
-        First call captures the baseline. Subsequent calls compare to
-        the current device number. The device's serial number is the
-        stable identity; we look it up in ``/dev/serial/by-id`` and
-        read the device number from sysfs.
+        Baseline is captured at __init__ — the caller is responsible for
+        constructing the signals object BEFORE the destructive flash so
+        the baseline reflects pre-flash state. The ``since`` parameter
+        is part of the `VerifySignals` protocol but not consulted here:
+        the construction-time snapshot IS our "before the flash" marker,
+        and that's what we compare against.
+
+        The device's serial number is the stable identity; we look it
+        up in ``/dev/serial/by-id`` and read the device number from
+        sysfs. Returns False when the device isn't enumerated right
+        now (mid-reboot or stuck in bootloader) — the next poll will
+        see the new devnum and fire.
         """
         current_devnum = self._read_devnum_for_device()
-        if self._initial_devnum is None:
-            # First poll — capture baseline. Don't claim re-enumeration
-            # yet; the next poll will compare.
-            self._initial_devnum = current_devnum
-            self._initial_devnum_captured_at = _time.time()
+        if current_devnum is None:
+            # Device not currently enumerated. Could be mid-reboot or
+            # stuck in BL — either way, not "we saw it re-enum on the
+            # other side" yet. Wait for the next poll.
             return False
-        # Re-enum is signalled by the device number changing.
-        if current_devnum is not None and current_devnum != self._initial_devnum:
-            # Record into history for anomaly detection.
+        if self._initial_devnum is None:
+            # Construction happened while the device wasn't enumerated
+            # (rare — would mean we built signals after the USB reset
+            # had already taken effect). Any enumeration we see now
+            # counts as re-enum. Bump the baseline so we don't fire
+            # again on the same enumeration.
             self.history.re_enum_timestamps.append(_time.time())
-            # Bump the baseline so we only count this re-enum once
-            # toward the "has it happened?" signal. Multiple bounces
-            # are caught by anomaly detectors via the history.
+            self._initial_devnum = current_devnum
+            return True
+        if current_devnum != self._initial_devnum:
+            # Re-enum detected. Bump the baseline so subsequent polls
+            # don't keep firing on the same edge.
+            self.history.re_enum_timestamps.append(_time.time())
             self._initial_devnum = current_devnum
             return True
         return False

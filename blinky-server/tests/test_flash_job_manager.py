@@ -237,6 +237,74 @@ async def test_list_flash_jobs_all_vs_active(fleet: FleetManager) -> None:
     assert fleet.list_flash_jobs(active_only=True) == []
 
 
+# --- L0: verify-signals baseline-devnum is captured at __init__ -----------
+
+
+def test_verify_signals_captures_devnum_baseline_at_construction(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: `_FleetVerifySignals` MUST snapshot the device's USB
+    devnum at construction time, not at first ``has_re_enumerated_since``
+    call. Otherwise the baseline lands AFTER the USB reset + BL → app
+    reboot and the state machine stalls in AWAITING_REBOOT for the
+    full 5-minute verify cap.
+
+    Verified live 2026-05-18 against FPS Sweep — pre-fix: job stalled
+    for 337 s in AWAITING_REBOOT then FAILED; post-fix: same device,
+    same firmware completed in 43.89 s via AWAITING_APP_BOOT → VERIFIED.
+    """
+    from blinky_server.device import manager as manager_mod
+    from blinky_server.firmware.anomalies import SignalHistory
+
+    # Make `_read_devnum_for_device` deterministic by returning a fixed
+    # value. The construction-time snapshot must equal whatever this
+    # returns at __init__.
+    devnums = iter([42, 99])  # first call (init) → 42; later poll → 99
+
+    def fake_read_devnum(self: Any) -> int | None:
+        return next(devnums)
+
+    monkeypatch.setattr(
+        manager_mod._FleetVerifySignals, "_read_devnum_for_device", fake_read_devnum
+    )
+
+    history = SignalHistory(write_completed_at=0.0)
+    signals = manager_mod._FleetVerifySignals(fleet=fleet, device_id="d", history=history)
+
+    # Baseline must be captured at __init__, not deferred.
+    assert signals._initial_devnum == 42
+
+
+@pytest.mark.asyncio
+async def test_verify_signals_detects_reenum_immediately_after_construction(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First call to ``has_re_enumerated_since`` after construction
+    must return True if the devnum has changed (i.e., the reboot
+    already happened). Pre-fix this returned False (because first-call
+    captured baseline + returned False) and the state machine stayed
+    in AWAITING_REBOOT forever even though the device had rebooted."""
+    from blinky_server.device import manager as manager_mod
+    from blinky_server.firmware.anomalies import SignalHistory
+
+    devnums = iter([42, 99])  # init captures 42; first poll reads 99
+
+    def fake_read_devnum(self: Any) -> int | None:
+        return next(devnums)
+
+    monkeypatch.setattr(
+        manager_mod._FleetVerifySignals, "_read_devnum_for_device", fake_read_devnum
+    )
+
+    history = SignalHistory(write_completed_at=0.0)
+    signals = manager_mod._FleetVerifySignals(fleet=fleet, device_id="d", history=history)
+    # Devnum has changed since __init__ (42 → 99) → re-enum detected.
+    assert await signals.has_re_enumerated_since("d", since=0.0) is True
+    assert len(history.re_enum_timestamps) == 1
+
+
 # --- L0: transport probe DFU_RECOVERY detection ----------------------------
 
 
@@ -314,12 +382,22 @@ def test_probe_no_ble_dfu_when_ble_address_unknown(fleet: FleetManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ble_dfu_flash_missing_ble_address_fails_cleanly(
+async def test_ble_dfu_flash_dfu_recovery_without_ble_address_unreachable(
     fleet: FleetManager,
 ) -> None:
-    """Defensive guard: if for some reason the orchestrator reaches the
-    BLE-DFU branch with a device that has no BLE address, fail loud
-    rather than hand `None` to ``upload_ble_dfu``."""
+    """A DFU_RECOVERY device with no BLE address is unreachable: probe
+    sees has_ble_dfu_advert=False (the address check fails) and there's
+    no USB-CDC since transport_type=ble. ``select_transport`` raises
+    ``NoReachableTransport`` and the job fails before reaching
+    ``_run_ble_dfu_flash``.
+
+    The in-method ``if not device.ble_address`` guard inside
+    ``_run_ble_dfu_flash`` is defensive — it covers the race where
+    ``ble_address`` was set at probe time but cleared by a concurrent
+    discovery cycle before the orchestrator read it again. That race
+    isn't easily testable from the public API; this test pins the
+    upstream reachability check that prevents the unsafe entry path
+    in the common case."""
     from blinky_server.device.device import Device, DeviceState
 
     from .mock_transport import MockTransport
@@ -334,17 +412,11 @@ async def test_ble_dfu_flash_missing_ble_address_fails_cleanly(
     device.state = DeviceState.DFU_RECOVERY
     fleet._devices["no-addr"] = device
 
-    # Force the BLE branch by setting state to DFU_RECOVERY (probe says
-    # has_ble_dfu_advert=False because BLE addr is None, but the test
-    # exercises the orchestrator's defensive guard for the case where
-    # somehow we still got routed here).
-    # ``select_transport`` will actually raise NoReachableTransport on
-    # this combination, so what we're really validating is that the
-    # error path produces a useful message either way.
     job = await fleet.flash_device("no-addr", Path("/tmp/fw.hex"))
     await job.wait_until_terminal(timeout=2.0)
     assert job.state is FlashJobState.FAILED
     assert job.error is not None
+    assert "not reachable" in job.error.lower()
 
 
 @pytest.mark.asyncio
@@ -434,6 +506,66 @@ async def test_ble_dfu_flash_fails_on_upload_error(
     assert job.state is FlashJobState.FAILED
     assert job.error is not None
     assert "preflight RSSI too weak" in job.error
+
+
+@pytest.mark.asyncio
+async def test_ble_dfu_flash_wall_clock_timeout(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """If ``upload_ble_dfu`` hangs beyond the orchestrator's 600s
+    wall-clock, the orchestrator must `wait_for`-cancel it and surface
+    a timeout error rather than letting the flash run forever. This
+    mirrors the legacy fleet-route + auto-recovery 600s caps that
+    prevented the cart_inner brick from running unbounded.
+
+    Test forces the timeout by short-circuiting the wait_for default
+    via a tiny mocked timeout. We can't actually wait 600s in a test.
+    """
+    from blinky_server.device import manager as manager_mod
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.firmware import ble_dfu as ble_dfu_mod
+    from blinky_server.firmware import compile as compile_mod
+
+    from .mock_transport import MockTransport
+
+    device = Device(
+        device_id="hang",
+        port="dummy",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="ble"),  # type: ignore[arg-type]
+    )
+    device.ble_address = "AA:BB:CC:DD:EE:FF"
+    device.state = DeviceState.DFU_RECOVERY
+    fleet._devices["hang"] = device
+
+    fw_file = tmp_path / "fw.hex"
+    fw_file.write_text(":00000001FF\n")
+
+    async def hang_forever(**kwargs: Any) -> dict[str, Any]:
+        await asyncio.sleep(60)  # would hang the test; wait_for kills it first
+        return {"status": "ok"}
+
+    monkeypatch.setattr(ble_dfu_mod, "upload_ble_dfu", hang_forever)
+    monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
+
+    # Replace asyncio.wait_for with a tiny-timeout version so the test
+    # doesn't actually wait 600s. We patch the asyncio module used by
+    # manager.py's _run_ble_dfu_flash.
+    original_wait_for = asyncio.wait_for
+
+    async def fast_wait_for(coro, timeout):  # type: ignore[no-untyped-def]
+        return await original_wait_for(coro, timeout=0.1)
+
+    monkeypatch.setattr(manager_mod.asyncio, "wait_for", fast_wait_for)
+
+    job = await fleet.flash_device("hang", fw_file)
+    await job.wait_until_terminal(timeout=5.0)
+
+    assert job.state is FlashJobState.FAILED
+    assert job.error is not None
+    assert "timeout" in job.error.lower()
 
 
 @pytest.mark.asyncio
