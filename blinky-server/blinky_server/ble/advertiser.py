@@ -154,6 +154,34 @@ class _Advertisement(ServiceInterface):
         # BlueZ wants a Variant per value — wrap bytes as 'ay'.
         return {k: Variant("ay", v) for k, v in self._manufacturer_data.items()}
 
+    # ── Advertising interval (PR #143 follow-up, May 18 research) ───────
+    # BlueZ's default ``LEAdvertisement1.MinInterval`` /
+    # ``MaxInterval`` is 1280 ms — i.e. the radio actually emits the
+    # configured payload ONCE every ~1.28 s by default. Our
+    # ``COMMAND_REEMIT_HOLD_MS = 250 ms`` was assuming the BlueZ
+    # interval was ~100 ms; with the real 1280 ms default, an entire
+    # re-emit slot often elapses without a single on-air packet, which
+    # explains the cart-side ``packets_rx=13 / 6 h`` floor we measured.
+    #
+    # 20 ms is the BLE spec minimum for legacy non-connectable
+    # broadcast. We don't go that low because (a) it eats radio time
+    # the BCM43455 also needs for scan + GATT central, and (b) some
+    # BlueZ kernels clamp the value silently. 50/100 ms gives us:
+    #   - ~10-20 emissions per re-emit slot (we want ≥ 2 per slot to
+    #     beat firmware single-slot rxBuffer drops)
+    #   - Within nRF52840 firmware scan window: 50 ms interval / 50 ms
+    #     window = >= one on-air landing per window every time
+    #   - Modest power impact (broadcaster is always plugged in)
+    # See ``docs/FLASH_LOCKDOWN_PLAN.md``-adjacent BLE-reliability notes
+    # and the May 18 research summary in PR #143 comments.
+    @dbus_property(access=PropertyAccess.READ)
+    def MinInterval(self) -> "u":  # type: ignore[name-defined]  # noqa: F821, UP037
+        return 50
+
+    @dbus_property(access=PropertyAccess.READ)
+    def MaxInterval(self) -> "u":  # type: ignore[name-defined]  # noqa: F821, UP037
+        return 100
+
     # Internal helper used by FleetBroadcaster to swap the bytes BlueZ
     # serializes on its next interval. Emits PropertiesChanged so BlueZ
     # picks up the new payload without re-registration.
