@@ -121,6 +121,28 @@ class NoReachableTransport(Exception):
     """
 
 
+class FlashConflict(Exception):
+    """Raised by ``flash_device(force=True)`` when an in-flight job for
+    the same canonical device exists with a DIFFERENT firmware path or
+    expected_version. Idempotent same-request returns the existing
+    ``FlashJob``; a conflicting request signals the race so the
+    second caller knows their image was NOT flashed.
+
+    The pre-PR-#143-Copilot-#6 behavior silently returned the in-flight
+    job for any concurrent call, which meant an operator triggering a
+    second flash with a NEW firmware would see the first flash's
+    success and assume their firmware landed — when in fact the
+    earlier image is what got written.
+
+    Routes catch this and surface 409 Conflict to the caller.
+    Auto-recovery (``force=False``) does NOT raise this — it always
+    defers to an in-flight job by returning it (auto-recovery's
+    purpose is to ensure the device gets SOME firmware; an
+    operator-driven flash with a different image is still better than
+    nothing).
+    """
+
+
 @dataclass(frozen=True)
 class TransportProbe:
     """Snapshot of which interfaces can reach the device *right now*.
@@ -143,8 +165,19 @@ class TransportProbe:
 
     # True iff the device's bootloader BLE address is currently
     # advertising the AdaDFU service. This is the prerequisite for the
-    # BLE-DFU path.
+    # BLE-DFU path when the device is already in bootloader mode.
     has_ble_dfu_advert: bool
+
+    # True iff the device is in BLE app mode (PRESENT state, NUS-reachable).
+    # The orchestrator can issue ``bootloader ble`` over NUS to send the
+    # device into the bootloader's AdaDFU service for a BLE-DFU write.
+    # Without this signal, ``select_transport`` would raise
+    # ``NoReachableTransport`` for app-mode BLE devices even though the
+    # routes (``POST /api/devices/{id}/flash``, fleet flash) accept
+    # ``DeviceState.PRESENT`` as flashable. Added in PR #143 Copilot
+    # review: the L3a/L3b routes documented BLE app-mode flashing but
+    # the orchestrator didn't actually support it.
+    has_ble_app: bool = False
 
 
 def select_transport(probe: TransportProbe) -> FlashTransport:
@@ -153,23 +186,28 @@ def select_transport(probe: TransportProbe) -> FlashTransport:
     Decision rule (per ``feedback_flash_safety_policy``: USB > BLE):
       1. USB-CDC app present → UF2 (fast, no radio contention with the
          broadcaster, no BlueZ slot management).
-      2. Otherwise, AdaDFU advert present → BLE-DFU.
-      3. Otherwise → raise ``NoReachableTransport`` — the orchestrator
+      2. Otherwise, AdaDFU advert present → BLE-DFU direct.
+      3. Otherwise, BLE app mode present → BLE-DFU (the orchestrator's
+         ``_run_ble_dfu_flash`` issues ``bootloader ble`` over NUS to
+         drop the device into the bootloader's AdaDFU service before
+         the actual DFU transfer).
+      4. Otherwise → raise ``NoReachableTransport`` — the orchestrator
          must not silently retry; the operator decides.
 
-    The "both present" case picks UF2 by rule 1 — there is intentionally
-    no policy lever to override that here. The cascade bug we're closing
-    out (see [[project-deploy-flash-cascade-bug]]) was caused by the two
-    transports racing; collapsing the choice to USB-when-available is
-    exactly the point.
+    The "both USB and BLE present" case picks UF2 by rule 1 — there is
+    intentionally no policy lever to override that here. The cascade
+    bug we're closing out (see [[project-deploy-flash-cascade-bug]])
+    was caused by the two transports racing; collapsing the choice to
+    USB-when-available is exactly the point.
     """
     if probe.has_usb_app:
         return FlashTransport.UF2
-    if probe.has_ble_dfu_advert:
+    if probe.has_ble_dfu_advert or probe.has_ble_app:
         return FlashTransport.BLE_DFU
     raise NoReachableTransport(
-        "Device is not reachable: no USB-CDC app handshake and no AdaDFU "
-        "advertisement. Cannot flash. Defer until one transport reappears."
+        "Device is not reachable: no USB-CDC app handshake, no BLE app "
+        "mode, and no AdaDFU advertisement. Cannot flash. Defer until "
+        "one transport reappears."
     )
 
 

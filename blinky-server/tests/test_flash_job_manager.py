@@ -13,6 +13,7 @@ provably correct *before* anything calls them.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -1474,16 +1475,65 @@ async def test_flash_device_pins_canonical_against_midflight_alias_shift(
 
 
 @pytest.mark.asyncio
-async def test_whitelist_reload_warns_once_when_file_disappears(
+async def test_whitelist_reload_disarms_on_deliberate_delete(
     fleet: FleetManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """If the operator deletes the recovery-firmware.json file after
-    auto-recovery was armed, ``_maybe_reload_recovery_whitelist`` MUST
-    log a WARN exactly once and keep the in-memory state — so a
-    transient I/O issue can't silently disarm auto-recovery.
+    """PR #143 Copilot #5: deliberate ``rm`` of recovery-firmware.json
+    is the operator's disarm signal. The in-memory whitelist MUST be
+    cleared on the next reload so auto-recovery doesn't keep trying
+    to flash devices the operator no longer wants auto-recovered.
+    Distinguished from transient I/O issues (other OSError → keep
+    state + WARN, exercised in the next test).
+    """
+    import logging
+
+    import blinky_server.device.manager as mgr_mod
+
+    caplog.set_level(logging.INFO, logger="blinky_server.device.manager")
+    monkeypatch.setattr(mgr_mod, "RECOVERY_WHITELIST_RELOAD_TTL_S", 0.0)
+    fw = tmp_path / "fw.hex"
+    fw.write_text(":00000001FF\n")
+    fleet.set_recovery_firmware(str(fw), ["dev-A"])
+    fleet._maybe_reload_recovery_whitelist()
+    assert fleet._last_whitelist_mtime is not None
+    assert fleet._recovery_device_ids == {"dev-A"}
+
+    # Operator deletes the file (deliberate disarm signal).
+    fleet._recovery_state_path().unlink()
+
+    caplog.clear()
+    fleet._last_whitelist_check_at = 0.0  # bypass TTL
+    fleet._maybe_reload_recovery_whitelist()
+
+    # In-memory state CLEARED — file-deletion = disarm intent.
+    assert fleet._recovery_firmware_path is None
+    assert fleet._recovery_device_ids == set()
+    assert fleet._last_whitelist_mtime is None
+    # Logged at INFO (deliberate state change, not an error).
+    info_msgs = [
+        r
+        for r in caplog.records
+        if r.levelname == "INFO" and "removed" in r.message and "disarming" in r.message
+    ]
+    assert len(info_msgs) == 1, (
+        f"expected one INFO disarm log, got {[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_whitelist_reload_keeps_state_on_transient_io_error(
+    fleet: FleetManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """PR #143 Copilot #5: a non-ENOENT OSError (PermissionError,
+    transient NFS issue, etc.) is NOT a disarm signal. The reloader
+    MUST keep the in-memory state and WARN once, so a permission
+    flap or unmount doesn't silently disarm auto-recovery.
     """
     import blinky_server.device.manager as mgr_mod
 
@@ -1491,38 +1541,38 @@ async def test_whitelist_reload_warns_once_when_file_disappears(
     fw = tmp_path / "fw.hex"
     fw.write_text(":00000001FF\n")
     fleet.set_recovery_firmware(str(fw), ["dev-A"])
-    # Prime the mtime cache: first call observes the file.
     fleet._maybe_reload_recovery_whitelist()
     assert fleet._last_whitelist_mtime is not None
 
-    # Operator deletes the file.
+    # Simulate a transient I/O by monkeypatching Path.stat() to raise
+    # PermissionError (a non-ENOENT OSError subclass).
     state_path = fleet._recovery_state_path()
-    state_path.unlink()
+    real_stat = Path.stat
 
-    caplog.clear()
-    fleet._last_whitelist_check_at = 0.0  # bypass TTL
-    fleet._maybe_reload_recovery_whitelist()
+    def flaky_stat(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self == state_path:
+            raise PermissionError("simulated transient I/O")
+        return real_stat(self, *args, **kwargs)
 
-    # In-memory state must be unchanged — disarm requires deliberate
-    # action via the API or restart, not a stat() failure.
-    assert fleet._recovery_firmware_path == str(fw)
-    assert fleet._recovery_device_ids == {"dev-A"}
+    monkeypatch.setattr(Path, "stat", flaky_stat)
 
-    # Exactly one WARN line about the file being unreadable.
-    warns = [
-        r for r in caplog.records if r.levelname == "WARNING" and "no longer readable" in r.message
-    ]
-    assert len(warns) == 1, f"expected exactly one WARN, got {[r.message for r in warns]}"
-
-    # Subsequent calls (within the same session, file still missing) do
-    # NOT re-warn — the latch prevents journal spam.
     caplog.clear()
     fleet._last_whitelist_check_at = 0.0
     fleet._maybe_reload_recovery_whitelist()
-    warns2 = [
-        r for r in caplog.records if r.levelname == "WARNING" and "no longer readable" in r.message
-    ]
-    assert warns2 == [], "second missing-file detection re-warned (should be latched)"
+
+    # In-memory state PRESERVED — transient I/O is not a disarm signal.
+    assert fleet._recovery_firmware_path == str(fw)
+    assert fleet._recovery_device_ids == {"dev-A"}
+    # Exactly one WARN about the file being unreadable.
+    warns = [r for r in caplog.records if r.levelname == "WARNING" and "unreadable" in r.message]
+    assert len(warns) == 1, f"expected one WARN, got {[r.message for r in warns]}"
+
+    # Latched — second reload (file still unreadable) doesn't re-WARN.
+    caplog.clear()
+    fleet._last_whitelist_check_at = 0.0
+    fleet._maybe_reload_recovery_whitelist()
+    warns2 = [r for r in caplog.records if r.levelname == "WARNING" and "unreadable" in r.message]
+    assert warns2 == [], "second transient-I/O detection re-warned (should be latched)"
 
 
 # --- L4: persistent flash-attempt audit log ---------------------------------
@@ -1708,3 +1758,179 @@ async def test_audit_log_tolerates_malformed_lines(
     # WARN logs for the two bad lines.
     warns = [r for r in caplog.records if r.levelname == "WARNING" and "unparseable" in r.message]
     assert len(warns) == 2
+
+
+# --- PR #143 review feedback ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flash_conflict_raised_for_different_firmware_force_true(
+    fleet: FleetManager,
+) -> None:
+    """PR #143 Copilot #6: a concurrent operator flash for the SAME
+    device with a DIFFERENT firmware path MUST raise ``FlashConflict``
+    rather than silently returning the in-flight job. Pre-fix,
+    the second caller would receive the first's job and assume their
+    image landed when only the FIRST image was actually written.
+    """
+    from blinky_server.firmware.flash_job import FlashConflict, FlashJob
+
+    # Seed an in-flight job manually so we don't have to race a real
+    # background task. PENDING → is_active is True.
+    held = FlashJob(
+        device_id="dev-conflict",
+        firmware_path=Path("/tmp/A.hex"),
+        canonical_id="dev-conflict",
+    )
+    fleet._flash_jobs["dev-conflict"] = held
+    fleet._device_in_flight.add("dev-conflict")
+
+    # Same firmware → idempotent return (no conflict).
+    same = await fleet.flash_device("dev-conflict", Path("/tmp/A.hex"), force=True)
+    assert same is held
+
+    # Different firmware + force=True → conflict raised.
+    with pytest.raises(FlashConflict, match="different firmware"):
+        await fleet.flash_device("dev-conflict", Path("/tmp/B.hex"), force=True)
+
+
+@pytest.mark.asyncio
+async def test_flash_conflict_NOT_raised_for_force_false(
+    fleet: FleetManager,
+) -> None:
+    """Auto-recovery (force=False) defers to an in-flight operator
+    flash even when the firmware differs — returns the existing job
+    so the auto-recovery loop can wait on it. Raising a conflict
+    here would crash the auto-recovery cycle uselessly."""
+    from blinky_server.firmware.flash_job import FlashJob
+
+    held = FlashJob(
+        device_id="dev-defer",
+        firmware_path=Path("/tmp/A.hex"),
+        canonical_id="dev-defer",
+    )
+    fleet._flash_jobs["dev-defer"] = held
+    fleet._device_in_flight.add("dev-defer")
+
+    # force=False with different firmware → return existing (no raise).
+    result = await fleet.flash_device("dev-defer", Path("/tmp/B.hex"), force=False)
+    assert result is held
+
+
+@pytest.mark.asyncio
+async def test_select_transport_handles_ble_app_mode(
+    fleet: FleetManager,
+) -> None:
+    """PR #143 Copilot #1: a PRESENT BLE device must be selectable
+    for BLE-DFU (the orchestrator's ``_run_ble_dfu_flash`` issues
+    ``bootloader ble`` over NUS to drop the device into the AdaDFU
+    service before the actual DFU transfer). Pre-fix,
+    ``_build_transport_probe`` returned ``has_ble_dfu_advert=False``
+    for PRESENT BLE devices and ``select_transport`` raised
+    ``NoReachableTransport``, breaking the routes that documented
+    BLE-app-mode flashing."""
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.firmware.flash_job import FlashTransport, select_transport
+
+    from .mock_transport import MockTransport
+
+    transport = MockTransport(transport_type="ble")
+    device = Device(
+        device_id="DEV_BLE_APP",
+        port="FA:E6:7D:A9:8B:3A",  # BLE addr stored in port field
+        platform="nrf52840",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    device.ble_address = "FA:E6:7D:A9:8B:3A"
+    device.state = DeviceState.PRESENT
+    fleet._devices["DEV_BLE_APP"] = device
+
+    probe = fleet._build_transport_probe("DEV_BLE_APP")
+    assert probe.has_usb_app is False
+    assert probe.has_ble_dfu_advert is False
+    assert probe.has_ble_app is True
+
+    chosen = select_transport(probe)
+    assert chosen is FlashTransport.BLE_DFU
+
+
+@pytest.mark.asyncio
+async def test_dedup_transports_registers_alias(fleet: FleetManager) -> None:
+    """PR #143 Copilot #2: ``_deduplicate_transports`` MUST call
+    ``register_identity_alias`` when it correlates a serial (SN-keyed)
+    device with a wireless (BLE-keyed) entry — pre-fix the canonical
+    resolver was a no-op in production because nothing wired this.
+    After dedup, ``resolve_canonical`` should map the BLE address (and
+    its ± 1 bootloader-address variants) to the SN canonical, so the
+    auto-recovery whitelist match works across transports.
+    """
+    from blinky_server.device.device import Device, DeviceState
+
+    from .mock_transport import MockTransport
+
+    # Two entries for the same physical device: serial + BLE.
+    serial_id = "FF11223344556677"
+    ble_app = "FA:E6:7D:A9:8B:3A"
+    ble_boot = "FA:E6:7D:A9:8B:3B"  # app+1
+
+    serial_dev = Device(
+        device_id=serial_id,
+        port="/dev/ttyTEST",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="serial"),  # type: ignore[arg-type]
+    )
+    await serial_dev.connect()
+    serial_dev.state = DeviceState.CONNECTED
+    serial_dev.hardware_sn = serial_id
+
+    ble_dev = Device(
+        device_id=ble_app,
+        port=ble_app,
+        platform="nrf52840",
+        transport=MockTransport(transport_type="ble"),  # type: ignore[arg-type]
+    )
+    await ble_dev.connect()
+    ble_dev.state = DeviceState.CONNECTED
+    ble_dev.hardware_sn = serial_id  # same chip
+    ble_dev.ble_address = ble_app
+
+    fleet._devices[serial_id] = serial_dev
+    fleet._devices[ble_app] = ble_dev
+
+    await fleet._deduplicate_transports()
+
+    # Aliases registered: BLE app + bootloader address both resolve to SN.
+    assert fleet.resolve_canonical(ble_app) == serial_id
+    assert fleet.resolve_canonical(ble_boot) == serial_id
+    assert fleet.resolve_canonical(serial_id) == serial_id
+
+    # Aliases persisted to disk for the next restart.
+    alias_path = fleet._identity_aliases_path()
+    assert alias_path.is_file()
+    persisted = json.loads(alias_path.read_text())
+    assert persisted[ble_app] == serial_id
+    assert persisted[ble_boot] == serial_id
+
+
+@pytest.mark.asyncio
+async def test_identity_aliases_load_on_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #143 Copilot #2: persisted aliases load at server start so
+    the canonical resolver works for the DFU-at-startup case (operator
+    restarts the server while a device is already in DFU; we can only
+    see the BLE form but the whitelist is keyed by SN).
+    """
+    # The conftest fixture has set XDG_DATA_HOME to a fresh tmp dir.
+    # Write a pre-existing aliases file there.
+    from blinky_server.paths import data_dir
+
+    aliases = {"FA:E6:7D:A9:8B:3A": "AABBCCDDEEFF0011", "AABBCCDDEEFF0011": "AABBCCDDEEFF0011"}
+    aliases_path = data_dir() / "device_aliases.json"
+    aliases_path.write_text(json.dumps(aliases))
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+    fleet._load_identity_aliases()
+
+    assert fleet.resolve_canonical("FA:E6:7D:A9:8B:3A") == "AABBCCDDEEFF0011"
+    assert fleet.resolve_canonical("AABBCCDDEEFF0011") == "AABBCCDDEEFF0011"

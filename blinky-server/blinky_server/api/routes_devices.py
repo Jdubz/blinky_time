@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..device.device import Device, DeviceState
-from ..firmware.flash_job import FlashJobState
+from ..firmware.flash_job import FlashConflict, FlashJobState
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import (
     CommandResponse,
@@ -265,14 +265,8 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         raise HTTPException(400, f"Upload not yet supported for platform: {device.platform}")
 
     fleet = get_fleet()
-    # Arm auto-recovery for THIS device only — the explicit whitelist keeps
-    # a future DFU bounce from auto-flashing unrelated devices. The
-    # orchestrator's canonical in-flight set + ``should_attempt_auto_recovery``
-    # dedup window are what stop auto-recovery from racing this flash in
-    # particular; the whitelist controls which devices it would TRY for.
-    fleet.set_recovery_firmware(str(firmware), [device.id])
 
-    # L3c: the legacy DFU-lock acquisition is gone. ``flash_device``'s
+    # The legacy DFU-lock acquisition is gone (L3c). ``flash_device``'s
     # canonical in-flight set is the single mutex now: an auto-recovery
     # cycle that tries this device while we're in flight gets ``None``
     # back from ``flash_device(force=False)`` and skips it.
@@ -315,17 +309,42 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         # ``_ble_dfu_write_impl`` for the BLE path. The 900s outer cap
         # here is the route's safety net if the orchestrator itself
         # hangs past its own deadlines.
-        job = await fleet.flash_device(
-            device_id=device.id,
-            firmware_path=firmware,
-        )
+        #
+        # ``FlashConflict`` (a different in-flight flash for the same
+        # device with different firmware) → 409. The whitelist arming
+        # happens AFTER we successfully obtained the FlashJob, so a
+        # conflicting second request can't overwrite the first's
+        # recovery-firmware pointer while the first is in flight.
         try:
-            await job.wait_until_terminal(timeout=900.0)
-        except TimeoutError as exc:
+            job = await fleet.flash_device(
+                device_id=device.id,
+                firmware_path=firmware,
+            )
+        except FlashConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+        # Arm auto-recovery for THIS device only — the explicit whitelist
+        # keeps a future DFU bounce from auto-flashing unrelated devices.
+        # Done AFTER ``flash_device`` returns OK so a conflicting second
+        # request can't overwrite the first's whitelist mid-flight.
+        fleet.set_recovery_firmware(str(firmware), [device.id])
+        terminal = await job.wait_until_terminal(timeout=900.0)
+        if not terminal:
+            # The orchestrator's task is still running in the
+            # background; its own internal caps (UF2: 600s write + 300s
+            # verify; BLE-DFU: 600s wait_for) will eventually transition
+            # the job, but the route doesn't wait that long. Sibling
+            # reconnect-holds are released in `finally` below, which is
+            # fine — the orchestrator's verify-poll doesn't depend on
+            # sibling state. The 504 response signals "result is
+            # in-flight; poll the job-status route to learn the outcome."
             raise HTTPException(
                 504,
-                f"flash job {job.job_id} did not reach terminal state within 900s",
-            ) from exc
+                f"flash job {job.job_id} did not reach terminal state "
+                f"within 900s (state={job.state.value}); orchestrator "
+                "is still running in the background — poll "
+                f"GET /api/jobs/{job.job_id} for the eventual outcome",
+            )
 
         if job.state is FlashJobState.COMPLETED:
             transport_name = job.transport.value if job.transport else "unknown"

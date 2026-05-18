@@ -21,6 +21,7 @@ from ..firmware._guard import (
 from ..firmware.anomalies import SignalHistory
 from ..firmware.anomalies import check_all as check_anomalies
 from ..firmware.flash_job import (
+    FlashConflict,
     FlashJob,
     FlashJobState,
     FlashTransport,
@@ -515,27 +516,77 @@ class FleetManager:
         observes progress via ``job.wait_until_terminal()`` /
         ``GET /api/jobs/{job_id}`` polling.
         """
-        # Resolve to canonical key for lookups + in-flight dedup. The
-        # raw `device_id` is what the caller passed; canonical is the
-        # cross-transport-stable form. Two operators racing on the same
-        # physical device via different aliases (SN vs BLE addr) both
-        # resolve to the same canonical and dedup correctly.
-        canonical = self.resolve_canonical(device_id)
+        # Normalize the caller-supplied identifier to the FULL device.id
+        # stored in `self._devices`. `get_device` accepts a prefix or
+        # alias and returns the matching `Device`; we then carry its
+        # `.id` through the rest of the function. This matters because
+        # `_run_flash_job` and the branch methods (`_run_uf2_flash`,
+        # `_run_ble_dfu_flash`) probe `self._devices.get(job.device_id)`
+        # downstream — and that lookup requires the FULL key, not a
+        # prefix or an alias. A caller passing "FA:E6" (prefix) would
+        # otherwise get a job whose orchestrator path immediately fails
+        # with "device disappeared between selection and write."
+        # Unknown devices fall through with the original input so the
+        # orchestrator's not-found path fires with the operator's input
+        # quoted back at them.
+        device_obj = self.get_device(device_id)
+        full_device_id = device_obj.id if device_obj is not None else device_id
+
+        # Resolve to canonical key for lookups + in-flight dedup. Two
+        # operators racing on the same physical device via different
+        # aliases (SN vs BLE addr) both resolve to the same canonical
+        # and dedup correctly.
+        canonical = self.resolve_canonical(full_device_id)
         lock = self._get_flash_job_lock(canonical)
         async with lock:
             existing = self._flash_jobs.get(canonical)
             if existing is not None and existing.is_active:
-                # Idempotent return applies even to force=False: an
-                # in-flight job IS the auto-recovery flash, just one a
-                # previous cycle scheduled. The caller can wait on it.
-                log.info(
-                    "flash_device(%s): returning in-flight job %s (state=%s)",
-                    device_id,
-                    existing.job_id,
-                    existing.state.value,
+                # Idempotent return ONLY for identical requests
+                # (same firmware path + same expected_version). A
+                # different firmware on a flash-in-flight is a
+                # genuine conflict: returning the existing job would
+                # report the FIRST request's success/failure as if it
+                # were the SECOND request's, and the operator would
+                # assume their NEW image landed.
+                same_firmware = (
+                    str(existing.firmware_path) == str(firmware_path)
+                    and existing.expected_version == expected_version
                 )
-                return existing
-            if not force and not self.should_attempt_auto_recovery(device_id):
+                if same_firmware:
+                    log.info(
+                        "flash_device(%s): returning in-flight job %s (state=%s, same request)",
+                        device_id,
+                        existing.job_id,
+                        existing.state.value,
+                    )
+                    return existing
+                if not force:
+                    # Auto-recovery defers to an in-flight operator
+                    # flash even with different firmware — better to
+                    # let the operator's image land than to schedule
+                    # a parallel auto-recovery write (which would
+                    # block on the in-flight set anyway). Returning
+                    # the existing job lets the caller wait on it.
+                    log.info(
+                        "flash_device(%s, force=False): in-flight job %s has "
+                        "different firmware (%s vs %s); deferring (returning "
+                        "in-flight job)",
+                        device_id,
+                        existing.job_id,
+                        existing.firmware_path,
+                        firmware_path,
+                    )
+                    return existing
+                raise FlashConflict(
+                    f"flash for {device_id[:12]} already in flight with a "
+                    f"different firmware (existing: {existing.firmware_path} "
+                    f"expected_version={existing.expected_version!r}; "
+                    f"requested: {firmware_path} "
+                    f"expected_version={expected_version!r}). Wait for the "
+                    f"in-flight job {existing.job_id} or cancel it before "
+                    f"re-flashing with a different image."
+                )
+            if not force and not self.should_attempt_auto_recovery(full_device_id):
                 # Auto-recovery dedup said no (dedup window, max attempts,
                 # or backoff). Don't schedule — caller (auto-recovery
                 # loop) is responsible for trying again next cycle.
@@ -545,7 +596,7 @@ class FleetManager:
                 )
                 return None
             job = FlashJob(
-                device_id=device_id,
+                device_id=full_device_id,
                 firmware_path=firmware_path,
                 expected_version=expected_version,
                 canonical_id=canonical,
@@ -688,8 +739,15 @@ class FleetManager:
 
                 job: FlashJob | None = None
                 try:
+                    # Use ``device.id`` (the full identity stored in
+                    # ``self._devices``) rather than the caller-supplied
+                    # ``device_id`` — ``get_device`` accepts a prefix, but
+                    # downstream lookups inside ``_run_flash_job`` /
+                    # ``_run_uf2_flash`` / ``_run_ble_dfu_flash`` use
+                    # ``job.device_id`` to read ``self._devices``, which
+                    # requires the FULL key.
                     job = await self.flash_device(
-                        device_id,
+                        device.id,
                         firmware_path,
                         expected_version=expected_version,
                     )
@@ -1062,9 +1120,16 @@ class FleetManager:
                 async def _enter_via_ble(cmd: str) -> None:
                     if not _ble_transport.is_connected:
                         await _ble_transport.connect()
-                    await _ble_transport.write_line(cmd)
-                    await asyncio.sleep(0.5)
-                    await _ble_transport.disconnect()
+                    try:
+                        await _ble_transport.write_line(cmd)
+                        await asyncio.sleep(0.5)
+                    finally:
+                        # Always drop the connection — a leaked GATT
+                        # channel blocks the BCM43455 from re-registering
+                        # for the bootloader connection that
+                        # _ble_dfu_write_impl is about to make.
+                        with contextlib.suppress(Exception):
+                            await _ble_transport.disconnect()
 
                 enter_via_ble = _enter_via_ble
             else:
@@ -1118,6 +1183,42 @@ class FleetManager:
 
             job.transition(FlashJobState.WRITING)
 
+            # Snapshot the firmware size up-front so the progress
+            # callback can convert ``_ble_dfu_write_impl``'s percent
+            # progress into an absolute bytes_written / bytes_total
+            # on the FlashJob (per PR #143 Gemini #9). The impl yields
+            # pct via its existing ``progress_callback`` signature
+            # (phase, msg, pct); we ignore phase/msg and synthesize
+            # bytes from pct. If the firmware file is unreadable
+            # (rare, would have already failed in zip-build above),
+            # fall back to a 0-byte total so the callback no-ops
+            # rather than crashing.
+            try:
+                _fw_size = job.firmware_path.stat().st_size
+            except OSError:
+                _fw_size = 0
+
+            def _ble_progress(_phase: str, _msg: str, pct: int | None = None) -> None:
+                if pct is None or _fw_size <= 0:
+                    return
+                # Clamp to 0..100 — the impl's existing pct mapping
+                # spans phases (35..99) so values can briefly hit
+                # 99 then drop on a retry. Don't let bytes_written
+                # go above bytes_total.
+                clamped = max(0, min(100, pct))
+                bytes_written = (_fw_size * clamped) // 100
+                try:
+                    job.record_progress(bytes_written, _fw_size)
+                except Exception as exc:
+                    # Progress reporting failure shouldn't derail the
+                    # flash; log once at DEBUG and continue.
+                    log.debug(
+                        "_run_ble_dfu_flash %s: record_progress raised %s; "
+                        "continuing without progress updates",
+                        job.job_id,
+                        exc,
+                    )
+
             try:
                 # Call via the module attribute (not a from-imported name)
                 # so ``monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl",
@@ -1132,10 +1233,10 @@ class FleetManager:
                         dfu_zip_path=dfu_zip,
                         enter_bootloader_via_serial=enter_via_serial,
                         enter_bootloader_via_ble=enter_via_ble,
+                        progress_callback=_ble_progress,
                     ),
                     # 600 s mirrors the legacy fleet-flash + auto-recovery
-                    # wall-clock. The current default; will become a
-                    # `flash_device(timeout=)` kwarg in L1.
+                    # wall-clock.
                     timeout=600.0,
                 )
             except TimeoutError:
@@ -1201,7 +1302,7 @@ class FleetManager:
     def _build_transport_probe(self, device_id: str) -> TransportProbe:
         """Snapshot which interfaces reach this device *right now*.
 
-        Two signals:
+        Three signals:
           - ``has_usb_app``: true iff the device has a CONNECTED serial
             transport (app-mode CDC handshake is responsive).
           - ``has_ble_dfu_advert``: true iff the device is in
@@ -1210,16 +1311,13 @@ class FleetManager:
             address — see ``transport/discovery.py`` and the
             ``_promote_dfu_advert_to_device`` logic in this module).
             DFU_RECOVERY implies the device is parked in its bootloader
-            with the OTA-DFU service exposed; that's the entire signal
-            ``select_transport`` needs to pick the BLE-DFU branch.
-
-        Note: BLE-app-mode (a healthy connected BLE device that's NOT in
-        bootloader) is currently NOT a flash transport — bootloader
-        entry from app-mode-over-BLE goes through the ``_run_ble_dfu_flash``
-        path that issues ``bootloader ble`` via NUS first. That path
-        treats ``has_ble_dfu_advert == False`` AND
-        ``transport_type == "ble"`` as the "enter bootloader first"
-        case at the orchestrator level, not the probe level.
+            with the OTA-DFU service exposed.
+          - ``has_ble_app``: true iff the device is in PRESENT state
+            with a BLE transport and a known address (NUS-reachable
+            for the ``bootloader ble`` command). The orchestrator's
+            ``_run_ble_dfu_flash`` issues that command over NUS to send
+            the device into the bootloader's AdaDFU service before the
+            DFU transfer.
         """
         device = self._devices.get(device_id)
         has_usb_app = (
@@ -1232,9 +1330,16 @@ class FleetManager:
             and device.state is DeviceState.DFU_RECOVERY
             and bool(device.ble_address)
         )
+        has_ble_app = (
+            device is not None
+            and device.transport.transport_type == "ble"
+            and device.state is DeviceState.PRESENT
+            and bool(device.ble_address)
+        )
         return TransportProbe(
             has_usb_app=has_usb_app,
             has_ble_dfu_advert=has_ble_dfu_advert,
+            has_ble_app=has_ble_app,
         )
 
     async def start(self) -> None:
@@ -1246,6 +1351,15 @@ class FleetManager:
         :class:`FleetBroadcaster` for the rationale.
         """
         self._running = True
+        # Load persisted device-identity aliases. Restoring them BEFORE
+        # the recovery-firmware whitelist is loaded matters because the
+        # whitelist match in ``_auto_recover_dfu_devices`` uses
+        # canonical-resolved keys: a SN-only whitelist needs the
+        # SN ↔ BLE-addr alias to match a DFU-state device's BLE form.
+        # Without this, the canonical resolver is a no-op at startup
+        # and the whitelist match works only after discovery has seen
+        # the device on both transports (a window of 1-2 cycles).
+        self._load_identity_aliases()
         # Arm DFU auto-recovery from persisted state if a previous deploy
         # left a firmware path AND an explicit device whitelist. Critical
         # for unattended boots: a device on the whitelist stuck in DFU
@@ -1691,6 +1805,41 @@ class FleetManager:
                             wireless_dev.ble_address,
                             serial_did[:12],
                         )
+                    # PR #143 Copilot #2: register the SN ↔ BLE alias
+                    # NOW (the canonical-resolver was a no-op in production
+                    # before this — `register_identity_alias` had no
+                    # caller outside tests). Wiring it here means the
+                    # auto-recovery whitelist match works across
+                    # transports: an SN-only whitelist matches a
+                    # DFU-recovery device that's advertising under
+                    # its BLE bootloader address (app_addr ± 1), and
+                    # vice versa. The bootloader address (app_addr + 1
+                    # on Nordic) is also added so a DFU-mode discovery
+                    # under the bootloader form resolves correctly.
+                    aliases: list[str] = [serial_did]
+                    if wireless_dev.ble_address:
+                        aliases.append(wireless_dev.ble_address)
+                        # Bootloader addr = app_addr ± 1 (last octet).
+                        # We don't know which sign Nordic chose for this
+                        # particular device, so register both and let
+                        # the alias map cover the bootloader form too.
+                        try:
+                            parts = wireless_dev.ble_address.split(":")
+                            last = int(parts[-1], 16)
+                            for offset in (1, -1):
+                                octet = (last + offset) & 0xFF
+                                parts_alt = [*parts[:-1], f"{octet:02X}"]
+                                aliases.append(":".join(parts_alt))
+                        except (ValueError, IndexError):
+                            pass
+                    canonical = self.register_identity_alias(*aliases)
+                    self._persist_identity_aliases()
+                    log.info(
+                        "Dedup: aliased %s to canonical %s (covers %d forms)",
+                        identity,
+                        canonical[:12],
+                        len(aliases),
+                    )
                     log.info(
                         "Dedup: %s (%s) is duplicate of serial device, disconnecting %s",
                         identity,
@@ -2050,6 +2199,72 @@ class FleetManager:
         return data_dir() / "recovery-firmware.json"
 
     @staticmethod
+    def _identity_aliases_path() -> Path:
+        """Persistent storage for ``_identity_groups``.
+
+        Lives alongside ``recovery-firmware.json`` so the
+        canonical-key resolver survives a server restart. The pre-PR
+        ``_identity_groups`` was in-memory only — meaning that after
+        every restart, the whitelist match for a DFU-state device
+        relied on discovery seeing the device on BOTH transports to
+        rebuild the SN ↔ BLE addr mapping. If the device was already
+        in DFU at startup (the recovery scenario), discovery would
+        only see the BLE form, the alias couldn't be re-established,
+        and an SN-only whitelist wouldn't match — closing exactly
+        the gap PR #143 Copilot #2 called out.
+
+        Format: JSON dict mapping alias → canonical. Loaded once at
+        ``start()`` and rewritten on every ``register_identity_alias``
+        call.
+        """
+        from ..paths import data_dir
+
+        return data_dir() / "device_aliases.json"
+
+    def _persist_identity_aliases(self) -> None:
+        """Append-write ``_identity_groups`` to disk.
+
+        Called from ``register_identity_alias`` after a successful
+        update. Failure logs WARN — alias persistence is best-effort,
+        and the in-memory state is still correct for the running
+        session.
+        """
+        path = self._identity_aliases_path()
+        try:
+            path.write_text(json.dumps(dict(self._identity_groups)))
+        except OSError as exc:
+            log.warning("Failed to persist device-aliases state: %s", exc)
+
+    def _load_identity_aliases(self) -> None:
+        """Read ``_identity_groups`` from disk at server start.
+
+        Tolerant of missing / malformed files (logs WARN, leaves the
+        in-memory dict empty — equivalent to the pre-PR behavior so
+        a corrupt file can't keep the server from starting).
+        """
+        path = self._identity_aliases_path()
+        if not path.is_file():
+            return
+        try:
+            raw = path.read_text()
+        except OSError as exc:
+            log.warning("Failed to read device-aliases state: %s", exc)
+            return
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            log.warning("device-aliases state is malformed (%s); ignoring", exc)
+            return
+        if not isinstance(data, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in data.items()
+        ):
+            log.warning("device-aliases state has unexpected shape; ignoring")
+            return
+        self._identity_groups.update(data)
+        if data:
+            log.info("Loaded %d device-alias mappings from disk", len(data))
+
+    @staticmethod
     def _flash_audit_log_path() -> Path:
         """Append-only JSONL audit of every ``FlashJob`` terminal transition.
 
@@ -2290,13 +2505,24 @@ class FleetManager:
         a high-frequency auto-recovery cycle doesn't hammer the
         filesystem; the JSON re-read only fires when mtime changes.
 
-        File disappearance handling: if the file existed before and now
-        doesn't (stat raises OSError), we WARN loudly but keep the
-        in-memory state. The operator who genuinely wants to disarm
-        auto-recovery should call ``set_recovery_firmware`` with a new
-        whitelist or restart the server — silently disarming on a
-        stat() failure could mask transient I/O issues (NFS unmount,
-        permission flap) as deliberate disarm.
+        File-absent handling (PR #143 Copilot review):
+
+        - ``FileNotFoundError`` (ENOENT): treat as operator intent to
+          disarm. The operator deliberately deleted the file; honor
+          that by clearing the in-memory ``_recovery_firmware_path``
+          and ``_recovery_device_ids``. Logs INFO so the disarm shows
+          up in the journal as a deliberate state change.
+        - Other ``OSError`` (PermissionError, transient I/O, NFS
+          unmount, etc.): keep the in-memory state and log a WARN
+          (latched on first occurrence to avoid spam). Distinguishing
+          ENOENT from generic I/O avoids silently disarming
+          auto-recovery on a transient mount issue while still
+          honoring the operator's explicit ``rm`` as a disarm signal.
+        - Invalid/malformed JSON: ``_load_recovery_firmware`` returns
+          None and ``_clear_recovery_state_file`` removes the bad file;
+          we treat that the same as the ENOENT path (clear in-memory
+          state) so a corrupted file doesn't leave stale recovery
+          armed.
         """
         now = _time.monotonic()
         if now - self._last_whitelist_check_at < RECOVERY_WHITELIST_RELOAD_TTL_S:
@@ -2305,25 +2531,54 @@ class FleetManager:
         path = self._recovery_state_path()
         try:
             mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            # Operator-deliberate delete: honor as disarm.
+            if self._recovery_firmware_path is not None or self._recovery_device_ids:
+                log.info(
+                    "Recovery-firmware state file %s removed; disarming "
+                    "auto-recovery (operator intent inferred from rm)",
+                    path,
+                )
+                self._recovery_firmware_path = None
+                self._recovery_device_ids = set()
+            self._last_whitelist_mtime = None
+            self._whitelist_missing_warned = False
+            return
         except OSError as exc:
+            # Transient I/O — preserve in-memory state, WARN once.
             if self._last_whitelist_mtime is not None and not self._whitelist_missing_warned:
                 log.warning(
-                    "Recovery-firmware state file %s is no longer readable (%s). "
-                    "Keeping in-memory whitelist active; call set_recovery_firmware "
-                    "or restart the server to fully disarm auto-recovery.",
+                    "Recovery-firmware state file %s is unreadable (%s). "
+                    "Keeping in-memory whitelist active; if you intended to "
+                    "disarm, remove the file with rm (which the loader treats "
+                    "as a deliberate disarm) — a generic I/O error is treated "
+                    "as transient so a permission flap or NFS unmount doesn't "
+                    "silently disarm auto-recovery.",
                     path,
                     exc,
                 )
                 self._whitelist_missing_warned = True
             return
         # File came back after a missing-warning — reset the latch so a
-        # second disappearance gets logged again.
+        # second unreadable case gets logged again.
         self._whitelist_missing_warned = False
         if self._last_whitelist_mtime is not None and mtime == self._last_whitelist_mtime:
             return
         self._last_whitelist_mtime = mtime
         persisted = self._load_recovery_firmware()
         if persisted is None:
+            # Malformed file. ``_load_recovery_firmware`` already
+            # cleared the file via ``_clear_recovery_state_file`` (so
+            # the rejection log doesn't repeat on every cycle). Treat
+            # like a deliberate disarm: clear in-memory state so a
+            # corrupt JSON doesn't leave the OLD whitelist active.
+            if self._recovery_firmware_path is not None or self._recovery_device_ids:
+                log.warning(
+                    "Recovery-firmware state was malformed; disarming "
+                    "auto-recovery in memory to match the cleared file"
+                )
+                self._recovery_firmware_path = None
+                self._recovery_device_ids = set()
             return
         firmware_path, device_ids = persisted
         if firmware_path != self._recovery_firmware_path or device_ids != self._recovery_device_ids:
