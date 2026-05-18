@@ -550,10 +550,22 @@ class FleetBroadcaster:
         async with self._lock:
             # Drop back to a no-op packet (type=0x00). The firmware's
             # BleScanner routes by packet type and falls through to
-            # packetsDropped++ for anything outside SETTINGS/SCENE/COMMAND.
-            # Using a fresh sequence ensures the firmware re-processes
-            # (and drops) the new packet rather than dedup'ing it against
-            # the previous command's (source, seq).
+            # packetsDropped++ for anything outside SETTINGS/SCENE/COMMAND/
+            # COMMAND_V2. Using a fresh sequence ensures the firmware
+            # re-processes (and drops) the new packet rather than dedup'ing
+            # it against the previous command's (source, seq).
+            #
+            # IMPORTANT: the noop MUST carry a non-zero payload byte. The
+            # firmware rejects ``payloadLen == 0`` as malformed BEFORE it
+            # records the (src, seq) in its seen-ring (see BleScanner.cpp
+            # comment: "Validate payload bounds BEFORE recording in the
+            # seen ring"). Without a payload byte, BlueZ's continuous
+            # retransmission of the on-air noop would loop through
+            # firmware's drop path on every retransmit, inflating
+            # ``packetsDropped`` and wasting SoftDevice-callback CPU on
+            # every device in range. With a 1-byte payload, the noop
+            # passes the bounds check, gets recorded in the seen-ring,
+            # and subsequent retransmissions are correctly deduped.
             if self._adv is None:
                 return  # stop() raced us
             # Gate on the sequence number captured at the LAST emit:
@@ -562,7 +574,9 @@ class FleetBroadcaster:
             if self._sequence != last_emit_seq:
                 return
             noop_seq = self._next_sequence()
-            noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE))
+            noop = bytes(
+                (_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE, 0x00)
+            )
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)
 
     def _next_sequence(self) -> int:

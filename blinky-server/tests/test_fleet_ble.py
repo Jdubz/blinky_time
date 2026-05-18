@@ -598,6 +598,19 @@ async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
     # And the noop's seq is fresh (advanced past all command emits).
     assert noop_emits[0] > max(seqs)
 
+    # The noop MUST carry at least one payload byte. The firmware
+    # rejects ``payloadLen == 0`` packets BEFORE recording in its
+    # (src, seq) dedup ring, so a payload-less noop loops through the
+    # firmware's drop path on every BlueZ on-air retransmit (and on
+    # every device in range). Verified empirically 2026-05-19: a
+    # malformed noop produced ``dropped=234`` on the test chip in <2 min
+    # uptime. Any noop encoding that strips this byte regresses that bug.
+    noop_payload_len = len(payloads_emitted[-1]) - 4  # subtract 4-byte header
+    assert noop_payload_len >= 1, (
+        f"noop terminator must have a non-empty payload, got "
+        f"{noop_payload_len}-byte payload (header-only = malformed)"
+    )
+
 
 async def test_broadcaster_assigns_distinct_command_ids_across_calls() -> None:
     """Each call to ``broadcast_command`` MUST get its own command_id

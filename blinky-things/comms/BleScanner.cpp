@@ -164,9 +164,24 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
             return;
         }
 
-        // Validate payload bounds BEFORE recording in the seen ring.
-        // Otherwise a malformed-size packet would consume a slot and
-        // could displace a legitimate older (src, seq) on FIFO eviction.
+        // Record FIRST, before any payload-size or content checks. A
+        // malformed-payload packet that we reject without recording would
+        // be re-processed (and re-rejected) on every BlueZ retransmission
+        // of the same on-air payload — BlueZ holds a payload on-air at
+        // 50-100 ms intervals until the AD slot is replaced, so a single
+        // malformed broadcast generates DOZENS of rejected packets and
+        // burns SoftDevice-callback CPU on every device in range. Verified
+        // 2026-05-19 against the test chip's `dropped=234` counter after
+        // ~2 min uptime, vs. an expected ~3 (one per fleet broadcast's
+        // no-op terminator). Earlier comment worried about a malformed
+        // packet displacing a legitimate older (src, seq) via FIFO
+        // eviction — that risk is moot because once any payload's adv
+        // slot ends, BlueZ stops retransmitting it on-air, so an evicted
+        // legitimate entry has nothing to reprocess anyway.
+        recordSeen(srcAddr, hdr.sequence);
+        lastSequence_ = hdr.sequence;
+        lastRssi_ = report->rssi;
+
         size_t payloadOffset = 2 + BleProtocol::HEADER_SIZE;  // company ID + header
         size_t payloadLen = msdLen - payloadOffset;
         if (payloadLen == 0 || payloadLen > SLOT_PAYLOAD_MAX) {
@@ -181,10 +196,7 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
         // logical command and we drop it; (2) prefix strip — the
         // downstream consumer (CommandRouter etc.) expects only the
         // command string, so we advance payloadOffset past the token
-        // and shrink payloadLen accordingly. Done BEFORE recordSeen()
-        // so that an idempotency-rejected packet still consumes a
-        // (src, seq) slot — a re-broadcast of the same seq should also
-        // get caught by the seq-dedup path on the next emission.
+        // and shrink payloadLen accordingly.
         if (hdr.type == BleProtocol::COMMAND_V2) {
             if (payloadLen < BleProtocol::COMMAND_V2_TOKEN_SIZE + 1) {
                 // Need at least the 2-byte token plus 1 byte of command.
@@ -193,19 +205,12 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
             }
             uint16_t cmdId = msd[payloadOffset] |
                              (static_cast<uint16_t>(msd[payloadOffset + 1]) << 8);
-            recordSeen(srcAddr, hdr.sequence);
-            lastSequence_ = hdr.sequence;
-            lastRssi_ = report->rssi;
             if (checkAndRecordCommandId(srcAddr, cmdId)) {
                 ++packetsIdempotent_;
                 return;
             }
             payloadOffset += BleProtocol::COMMAND_V2_TOKEN_SIZE;
             payloadLen    -= BleProtocol::COMMAND_V2_TOKEN_SIZE;
-        } else {
-            recordSeen(srcAddr, hdr.sequence);
-            lastSequence_ = hdr.sequence;
-            lastRssi_ = report->rssi;
         }
 
         // Enqueue into the rx ring with drop-oldest on overrun. The
