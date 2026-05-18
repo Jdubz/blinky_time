@@ -148,114 +148,6 @@ void haltWithError(const __FlashStringHelper* msg) {
   while(1) { delay(10000); }
 }
 
-// ─── Boot-phase crash trace ──────────────────────────────────────────────
-// Records the source-line number of the last BOOT_PHASE marker executed,
-// in noinit RAM that survives system reset (cleared only on power-on).
-// On the boot AFTER a crash, captureAtStartup() snapshots the prior
-// value into regular RAM BEFORE the current boot overwrites it, so the
-// trace remains queryable for the lifetime of the boot.
-//
-// Why query-after-boot instead of just print-at-startup:
-// USB CDC output during the early-boot USB re-enumeration is unreliable
-// (the kernel/tty buffer can drop bytes between enumeration cycles).
-// Even when a host has the tty open across a reboot, the bytes printed
-// in the first ~1 s after Serial.begin can be lost. So we ALSO expose
-// the prior-boot trace through ``json info`` (asked-for from a stable
-// post-setup loop), which we know works.
-namespace BootTrace {
-  // Magic indicates the slot contains a valid trace. Survives system
-  // reset (NVIC_SystemReset, hardfault auto-reset) but a hard power-on
-  // clears RAM, so the magic test correctly returns "cold start" on a
-  // true power-on boot.
-  static const uint32_t MAGIC = 0xB007BACEul;  // sentinel for valid trace
-  static const uint32_t COMPLETED_SENTINEL = 0xFFFFFFFFul;
-
-  // Why fixed-address pointers instead of __attribute__((section(".noinit")))?
-  // The Adafruit nRF52 BSP linker script has no explicit .noinit section,
-  // so GCC emits the variables into a default section between .data and
-  // .bss. The startup code's data-copy loop (gcc_startup_nrf52840.S)
-  // memcpy's from flash to RAM for the ENTIRE range [__data_start__,
-  // __bss_start__) — which includes our orphaned .noinit. The flash
-  // image is zeros (uninitialized variables → BSS-like zeros in image),
-  // so every boot wipes our "preserved" data. Confirmed empirically:
-  // four crash cycles in a row and prevBoot still reported "cold".
-  //
-  // Fix: place data at a fixed RAM address OUTSIDE the linker-managed
-  // .data/.bss regions. 0x2003F000 is 2 KB below __StackLimit (= 0x2003F800,
-  // which is 2 KB below __StackTop = 0x20040000 = end of 256 KB RAM).
-  // That gives plenty of clearance from stack-overflow risk and is way
-  // above __bss_end__ (~0x2000D6AC). The linker doesn't touch this RAM,
-  // so the data is truly preserved across system reset and only cleared
-  // on power-on (which zeroes ALL of RAM at the hardware level).
-  //
-  // 16 bytes reserved (magic + line + 2 spare for future fields).
-  static volatile uint32_t* const slot_ = reinterpret_cast<volatile uint32_t*>(0x2003F000ul);
-  // slot_[0] = magic, slot_[1] = lastPhaseLine, slot_[2..3] = spare
-
-  #define MAGIC_SLOT (slot_[0])
-  #define LINE_SLOT  (slot_[1])
-
-  // Snapshot of the PREVIOUS boot's state, captured at startup before
-  // the current boot starts overwriting noinit. Regular RAM
-  // (initialized on boot) so it persists for the lifetime of THIS
-  // boot's setup() + loop() and can be queried via json info.
-  static bool prevValid_ = false;
-  static uint32_t prevLine_ = 0;
-
-  inline bool wasValid() { return MAGIC_SLOT == MAGIC; }
-  inline uint32_t prevLine() { return LINE_SLOT; }
-
-  inline void captureAtStartup() {
-    prevValid_ = wasValid();
-    prevLine_ = LINE_SLOT;
-  }
-
-  inline bool prevBootValid() { return prevValid_; }
-  inline uint32_t prevBootLine() { return prevLine_; }
-  inline bool prevBootCompleted() {
-    return prevValid_ && prevLine_ == COMPLETED_SENTINEL;
-  }
-
-  // recordPhase tracks the MAX line number reached across all boots
-  // since the last power-on. Why max instead of latest: an early boot
-  // in a crash cycle might reach deep into setup (e.g., LED init) then
-  // crash. Subsequent boots in the same cycle might crash earlier (in
-  // RebootFrequencyCounter or similar) once the counter is high. If we
-  // recorded the LATEST line, the deeper-reaching first crash would be
-  // overwritten by the shallower last crash. Recording MAX preserves
-  // the deepest phase ever reached — which is the most diagnostic
-  // value for "what was setup() doing the FIRST time it crashed."
-  //
-  // The COMPLETED_SENTINEL (0xFFFFFFFF) is special-cased so a
-  // successful boot's marker doesn't "stick" the MAX at infinity.
-  // After a clean completion, the NEXT boot's first recordPhase()
-  // resets the MAX to the new line. captureAtStartup() handles this
-  // by treating COMPLETED as "previous boot is fine; start fresh."
-  inline void recordPhase(uint32_t line) {
-    if (MAGIC_SLOT != MAGIC || LINE_SLOT == COMPLETED_SENTINEL) {
-      // First record this boot, or previous boot completed cleanly —
-      // start MAX fresh from this phase.
-      MAGIC_SLOT = MAGIC;
-      LINE_SLOT = line;
-    } else if (line > LINE_SLOT) {
-      LINE_SLOT = line;
-    }
-  }
-
-  inline void markCompletedSetup() {
-    MAGIC_SLOT = MAGIC;
-    LINE_SLOT = COMPLETED_SENTINEL;
-  }
-}
-
-// Globals exposed to SerialConsole's json info handler. Mirror
-// BootTrace's snapshot at captureAtStartup() time so the handler can
-// read them without including BootTrace's namespace definitions in
-// the SerialConsole compilation unit.
-bool g_bootTracePrevValid = false;
-uint32_t g_bootTracePrevLine = 0;
-uint32_t g_bootTraceCompletedSentinel = BootTrace::COMPLETED_SENTINEL;
-
 void setup() {
   // CRITICAL: Hardware watchdog + boot counter — catches HardFaults, heap
   // exhaustion, infinite loops. After 3 consecutive failed boots, automatically
@@ -263,33 +155,14 @@ void setup() {
   // persists across all reset types (WDT, soft reset, HardFault).
   SafeBootWatchdog::begin();
 
-  // ─── BOOT PHASE INSTRUMENTATION ──────────────────────────────────────
-  // The hardware WDT is now running with a 15 s timeout. Every major
-  // phase below feeds the WDT and prints a "[BOOT <ms>] <line> <phase>"
-  // marker, AND records the source line into BootTrace's noinit RAM so
-  // a crash leaves the line number behind for the next boot to print.
-  //
-  // Two diagnostic channels — Serial (live) AND noinit RAM (survives
-  // crash + reset) — because USB CDC output during USB re-enumeration is
-  // unreliable. The noinit-RAM channel is the source of truth for
-  // root-causing crashes that defeat the live serial stream.
-  //
-  // Use BOOT_PHASE() at every boundary; it's a single macro so the
-  // pattern is uniform and easy to grep. Do NOT call feed() without a
-  // marker — the diagnostic value of consistent markers outweighs the
-  // ~50 byte cost per call site.
-#define BOOT_PHASE(name) do { \
-    BootTrace::recordPhase(__LINE__); \
-    SafeBootWatchdog::feed(); \
-    Serial.print(F("[BOOT ")); Serial.print(millis()); Serial.print(F("ms] L")); \
-    Serial.print(__LINE__); Serial.print(F(" ")); Serial.println(F(name)); \
-  } while (0)
-
-  // Capture previous-boot trace BEFORE we touch any noinit state below.
-  // Stashes into regular RAM so it remains queryable later via json info.
-  BootTrace::captureAtStartup();
-  g_bootTracePrevValid = BootTrace::prevBootValid();
-  g_bootTracePrevLine = BootTrace::prevBootLine();
+  // The hardware WDT is now armed with a 15 s timeout. setup() must
+  // either complete within 15 s OR feed the WDT at any phase that
+  // could exceed 15 s on its own. The bare SafeBootWatchdog::feed()
+  // calls below are at known-slow phase boundaries (LED test 3 s
+  // delay, Bluefruit BLE stack init, etc.). 2026-05-18 postmortem
+  // (docs/POSTMORTEM_2026_05_18_LEDTYPE.md) confirmed bare setup()
+  // without these feeds could approach the WDT limit; the feeds are
+  // defensive, not a workaround for a known bug.
 
   // Initialize serial with default baud rate (config not loaded yet)
   // Increase RX buffer to handle large device config JSON commands (default 256 is too small)
@@ -298,21 +171,7 @@ void setup() {
 #endif
   Serial.begin(115200);
   delay(1000);  // Give serial time to initialize
-
-  // Print the previous-boot trace summary FIRST so a host that opens
-  // the port after the boot output started still sees this critical
-  // diagnostic. Also queryable via `json info` once setup() completes.
-  if (BootTrace::prevBootValid()) {
-    if (BootTrace::prevBootCompleted()) {
-      Serial.println(F("[BOOT-TRACE] previous boot: setup() completed cleanly"));
-    } else {
-      Serial.print(F("[BOOT-TRACE] previous boot CRASHED at source line "));
-      Serial.println(BootTrace::prevBootLine());
-    }
-  } else {
-    Serial.println(F("[BOOT-TRACE] cold start (no prior trace)"));
-  }
-  BOOT_PHASE("serial up");
+  SafeBootWatchdog::feed();
 
   // Display version information (always show on boot)
   Serial.println(F("\n=== BLINKY TIME STARTUP ==="));
@@ -331,8 +190,6 @@ void setup() {
   // Falls back to TEST_CHIP_CONFIG if no config stored — avoids safe mode
   // on bare chips so audio analysis and serial commands still work.
   configStorage.begin();
-  BOOT_PHASE("configStorage.begin");
-
   // Wire the crash-loop quarantine hook BEFORE checkAndIncrement so that if
   // the threshold is tripped on this boot, the stored device config is
   // invalidated before we hand off to BLE DFU recovery. Without this, a
@@ -350,8 +207,6 @@ void setup() {
   // recovery before any potentially-crashing component runs).
   // See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F4).
   RebootFrequencyCounter::checkAndIncrement();
-  BOOT_PHASE("rebootFreqCounter.checkAndIncrement");
-
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
   if (!validDeviceConfig) {
     config = TEST_CHIP_CONFIG;
@@ -410,12 +265,10 @@ void setup() {
   // iteration (see line ~761) for a charging-state that can never
   // change. The downstream call sites all null-check `battery` already,
   // so leaving it null is the cleanest "fully disabled" state.
-  BOOT_PHASE("audioController alloc start");
   audioController = new(std::nothrow) AudioTracker(DefaultHal::pdm(), DefaultHal::time());
   if (!audioController) {
     haltWithError(F("ERROR: AudioController allocation failed"));
   }
-  BOOT_PHASE("audioController alloc done");
   battery = nullptr;
   if (validDeviceConfig && config.charging.battery) {
     battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
@@ -425,16 +278,15 @@ void setup() {
   }
 
   // Initialize audio controller (uses default or configured sample rate)
+  // Slow: PDM mic init + FFT setup + TFLite tensor arena allocation.
   uint16_t audioSampleRate = validDeviceConfig ? config.microphone.sampleRate : 16000;
-  BOOT_PHASE("audioController.begin start");
   bool audioOk = audioController->begin(audioSampleRate);
   if (!audioOk) {
     SerialConsole::logError(F("Audio controller failed to start"));
   } else {
     SerialConsole::logDebug(F("Audio controller initialized"));
   }
-  BOOT_PHASE("audioController.begin done");
-
+  SafeBootWatchdog::feed();
   // === LED SYSTEM INITIALIZATION (only if valid device config) ===
   if (validDeviceConfig) {
     Serial.println(F("\n=== Initializing LED System ==="));
@@ -545,13 +397,9 @@ void setup() {
       haltWithError(F("ERROR: LED strip wrapper allocation failed"));
     }
 #endif
-
-    BOOT_PHASE("leds->begin start");
     leds->begin();
     leds->setBrightness(min((int)config.matrix.brightness, 255));
     leds->show();
-    BOOT_PHASE("leds->begin done");
-
     // Basic LED test - light up first few LEDs to verify hardware
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
       Serial.print(F("[DEBUG] LED Test at brightness "));
@@ -561,7 +409,6 @@ void setup() {
     leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
     leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
     leds->show();
-    BOOT_PHASE("LED test colors lit");
     // Hold for 3 seconds to verify colors are correct. Break the wait
     // into 1-second chunks so the WDT is fed and the boot trace shows
     // the wait completing (otherwise a crash during the delay looks
@@ -570,8 +417,6 @@ void setup() {
       delay(1000);
       SafeBootWatchdog::feed();
     }
-    BOOT_PHASE("LED test 3s delay done");
-
     // Clear test LEDs
     leds->setPixelColor(0, 0);
     leds->setPixelColor(1, 0);
@@ -581,8 +426,6 @@ void setup() {
     if (!ledMapper.begin(config)) {
       haltWithError(F("ERROR: LED mapper initialization failed"));
     }
-    BOOT_PHASE("ledMapper.begin done");
-
     // Debug: detailed config info
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
       Serial.print(F("[DEBUG] Layout: "));
@@ -602,14 +445,13 @@ void setup() {
     }
 
     // Initialize RenderPipeline (manages generators, effects, and rendering)
-    BOOT_PHASE("RenderPipeline alloc + begin start");
+    // Slow: allocates and runs begin() for all 4 generators + 2 effects.
     pipeline = new(std::nothrow) RenderPipeline();
     if (!pipeline || !pipeline->begin(config, *leds, ledMapper)) {
       haltWithError(F("ERROR: RenderPipeline initialization failed"));
     }
-    BOOT_PHASE("RenderPipeline begin done");
-
     SerialConsole::logDebug(F("RenderPipeline initialized"));
+    SafeBootWatchdog::feed();
 
     // Per-device "cycle generator" button. No-op when buttonPin == 0.
     // Logs the pin assignment at INFO so it's visible during deployment
@@ -627,8 +469,6 @@ void setup() {
       Serial.print(F("[INFO] Generator-cycle button on pin D"));
       Serial.println(config.input.buttonPin);
     }
-    BOOT_PHASE("generatorButton.begin done");
-
     // Load effect parameters from flash
     if (configStorage.isValid()) {
       // Load parameters directly into generators' internal storage
@@ -657,8 +497,6 @@ void setup() {
     } else {
       SerialConsole::logDebug(F("Using default effect params"));
     }
-    BOOT_PHASE("loadConfiguration done");
-
     Serial.println(F("=== LED System Ready ===\n"));
   }
   // End of LED system initialization
@@ -694,15 +532,12 @@ void setup() {
   console->setFakeAudio(&fakeAudio);
   console->begin();
   SerialConsole::logDebug(F("Serial console initialized"));
-  BOOT_PHASE("SerialConsole.begin done");
-
   // Initialize BLE (nRF52840 only)
 #ifdef BLINKY_PLATFORM_NRF52840
   // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
-  BOOT_PHASE("Bluefruit.begin start");
+  // Slow: SoftDevice + Bluefruit + GAP/GATT setup, ~500 ms typical.
   Bluefruit.begin(1, 0);
-  BOOT_PHASE("Bluefruit.begin done");
-
+  SafeBootWatchdog::feed();
   // Per-device BLE name — "Blinky-<deviceId>-<snSuffix2>" when the chip has a
   // stored device config, or "Blinky-<snSuffix4>" for unconfigured chips.
   // snSuffix comes from FICR DEVICEID[0] lower bits (hardware-unique, same
@@ -733,7 +568,6 @@ void setup() {
   // Failure is not fatal (NUS-based `bootloader ble` still works), but it
   // removes a recovery path on sealed sculpture devices, so log loudly per
   // no-silent-fallbacks rule. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F6).
-  BOOT_PHASE("bleDfu.begin start");
   {
     err_t bleDfuErr = bleDfu.begin();
     if (bleDfuErr != ERROR_NONE) {
@@ -743,11 +577,9 @@ void setup() {
       Serial.println(F("[FALLBACK] App-mode `bootloader ble` command still works via NUS."));
     }
   }
-  BOOT_PHASE("bleDfu.begin done");
-
+  SafeBootWatchdog::feed();
   // NUS peripheral — bidirectional serial-over-BLE for fleet server
   bleNus.begin();
-  BOOT_PHASE("bleNus.begin done");
   bleNus.setLineCallback([](const char* line) {
       if (console) {
           console->handleCommand(line);
@@ -765,7 +597,6 @@ void setup() {
   });
   console->setBleScanner(&bleScanner);
   SerialConsole::logDebug(F("BLE scanner initialized"));
-  BOOT_PHASE("bleScanner.begin done");
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   // BLE on ESP32-S3 requires external NimBLE-Arduino v2.3.8+ (installed 2.4.0)
   // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
@@ -815,9 +646,6 @@ void setup() {
   lastMs = 0;
 
   Serial.println(F("Ready."));
-  BOOT_PHASE("setup() complete");
-  BootTrace::markCompletedSetup();
-
   // NOTE: SafeBootWatchdog::markStable() is intentionally NOT called here.
   // Deferred to loop() once millis() >= 60000 — a runtime crash that happens
   // after setup() completes but before that point should still count toward
@@ -826,8 +654,6 @@ void setup() {
 
   Serial.print(F("[BOOT] Watchdog active, boot attempt #"));
   Serial.println(SafeBootWatchdog::getBootCount());
-
-#undef BOOT_PHASE
 }
 
 void loop() {

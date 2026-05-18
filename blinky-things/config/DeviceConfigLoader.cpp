@@ -206,6 +206,49 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         }
     }
 
+    // Validate ledType: the lower byte encodes 2-bit fields for R/G/B byte
+    // offsets in the on-wire pixel stream. Nrf52PwmLedStrip's constructor
+    // (per the PR 142 buffer-overflow fix) only allocates 3 bytes per pixel,
+    // so:
+    //   - each offset must be 0-2 (no NEO_RGBW types)
+    //   - r, g, b offsets must be DISTINCT (no two channels writing to the
+    //     same byte; otherwise one channel silently overwrites the other)
+    //
+    // Catching this here means a bad ledType is rejected at upload time
+    // (uploadDeviceConfig → validate → reject; nothing persisted) and at
+    // boot from flash (loadFromFlash → validate → returns false; device
+    // enters safe mode instead of haltWithError-looping into BLE-DFU).
+    //
+    // 2026-05-18: cart_inner / cart_outer shipped with ledType=12390
+    // (0x3066), lower byte 0x66 → r=2, g=1, b=2 — duplicate r/b offset.
+    // Pre-PR-142 the driver silently corrupted colors (R and B both wrote
+    // byte slot 2); post-PR-142 it correctly refused to construct, and
+    // setup()'s haltWithError put the device into a 3-strikes-out
+    // BLE-DFU recovery cycle. See docs/POSTMORTEM_2026_05_18_LEDTYPE.md.
+    {
+        uint8_t order = static_cast<uint8_t>(stored.ledType & 0xFF);
+        uint8_t bOff = (order >> 0) & 0x3;
+        uint8_t gOff = (order >> 2) & 0x3;
+        uint8_t rOff = (order >> 4) & 0x3;
+        bool inRange = (rOff <= 2) && (gOff <= 2) && (bOff <= 2);
+        bool distinct = (rOff != gOff) && (rOff != bOff) && (gOff != bOff);
+        if (!inRange || !distinct) {
+            Serial.print(F("[WARN] Invalid ledType 0x"));
+            Serial.print(stored.ledType, HEX);
+            Serial.print(F(" (decoded r="));
+            Serial.print(rOff);
+            Serial.print(F(" g="));
+            Serial.print(gOff);
+            Serial.print(F(" b="));
+            Serial.print(bOff);
+            Serial.print(F("): "));
+            Serial.println(inRange ? F("offsets must be distinct")
+                                   : F("offsets must be 0-2 (no RGBW)"));
+            Serial.println(F("[WARN] Valid examples: 82 (NEO_GRB), 6 (NEO_RGB)"));
+            return false;
+        }
+    }
+
     // Validate brightness (0-255)
     // Note: 0 is valid (LEDs off)
     if (stored.brightness > 255) {
