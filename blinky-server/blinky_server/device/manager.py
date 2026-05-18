@@ -11,6 +11,11 @@ from typing import Any
 
 from .. import systemd_notify
 from ..ble.advertiser import FleetBroadcaster
+from ..firmware import ble_dfu as _ble_dfu_mod
+from ..firmware._guard import (
+    enter_orchestrator_context,
+    reset_orchestrator_context,
+)
 from ..firmware.anomalies import SignalHistory
 from ..firmware.anomalies import check_all as check_anomalies
 from ..firmware.flash_job import (
@@ -485,11 +490,6 @@ class FleetManager:
         # Setting it here gates ALL paths reachable from this function
         # — the lockdown's "single entry point" invariant. Reset in
         # the finally block so cross-task contamination is impossible.
-        from ..firmware._guard import (
-            enter_orchestrator_context,
-            reset_orchestrator_context,
-        )
-
         _orch_token = enter_orchestrator_context()
         try:
             job.transition(FlashJobState.SELECTING_TRANSPORT)
@@ -657,16 +657,16 @@ class FleetManager:
         ``pause_discovery`` / ``hold_reconnect`` / ``broadcaster.stop()``
         + verification guard + restart in ``finally``. BCM43455's single
         radio cannot register an advertisement while we hold the GATT
-        central channel that ``upload_ble_dfu`` needs — flashing under
-        radio contention is what bricked cart_inner on 2026-05-16, so
-        the broadcaster check is fail-loud (refuses to enter DFU if the
-        broadcaster didn't stop cleanly).
+        central channel that ``_ble_dfu_write_impl`` needs — flashing
+        under radio contention is what bricked cart_inner on 2026-05-16,
+        so the broadcaster check is fail-loud (refuses to enter DFU if
+        the broadcaster didn't stop cleanly).
 
-        The ``upload_ble_dfu`` call retains its built-in post-DFU verify
-        (scan + NUS+RSSI fallback for random-static-address-change). The
-        plan is to migrate that into a BLE-aware ``run_verify`` branch
-        later; for now, success of the legacy verify maps directly to
-        ``FlashJobState.COMPLETED``.
+        The ``_ble_dfu_write_impl`` call retains its built-in post-DFU
+        verify (scan + NUS+RSSI fallback for random-static-address-
+        change). The plan is to migrate that into a BLE-aware
+        ``run_verify`` branch later; for now, success of the legacy
+        verify maps directly to ``FlashJobState.COMPLETED``.
         """
         # L2: call the guarded impl directly. The orchestrator's
         # ContextVar (set in `_run_flash_job`) is in scope, so the
@@ -676,7 +676,6 @@ class FleetManager:
         # binds us to the wrapper's existence — after L3d when the
         # wrapper is deleted, this import would break. Wire to the
         # impl directly so L3d's deletion is a pure remove, no edits.
-        from ..firmware.ble_dfu import _ble_dfu_write_impl
         from ..firmware.compile import ensure_dfu_zip
 
         device = self._devices.get(job.device_id)
@@ -713,8 +712,8 @@ class FleetManager:
             elif device.transport.transport_type == "ble":
                 # PRESENT BLE devices don't hold a persistent GATT
                 # connection; we bring up NUS just-in-time to issue the
-                # command, then drop it before upload_ble_dfu opens its
-                # own connection to the bootloader address. Idempotent
+                # command, then drop it before _ble_dfu_write_impl opens
+                # its own connection to the bootloader address. Idempotent
                 # connect (no-op if already connected) handles the rare
                 # path where something previously left a CONNECTED
                 # transport in place.
@@ -780,8 +779,15 @@ class FleetManager:
             job.transition(FlashJobState.WRITING)
 
             try:
+                # Call via the module attribute (not a from-imported name)
+                # so ``monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl",
+                # ...)`` in tests reaches this call site. A direct
+                # ``from .ble_dfu import _ble_dfu_write_impl`` at module top
+                # would capture the original function reference at import
+                # time, bypassing later patches and silently running real
+                # BLE code under test.
                 result = await asyncio.wait_for(
-                    _ble_dfu_write_impl(
+                    _ble_dfu_mod._ble_dfu_write_impl(
                         app_ble_address=device.ble_address,
                         dfu_zip_path=dfu_zip,
                         enter_bootloader_via_serial=enter_via_serial,
@@ -802,9 +808,9 @@ class FleetManager:
                 job.transition(FlashJobState.FAILED)
                 return
 
-            # ``upload_ble_dfu`` returned ok — its own post-DFU verify
-            # already scanned for the rebooted device (with the random-
-            # static-address-change fallback). Map directly to
+            # ``_ble_dfu_write_impl`` returned ok — its own post-DFU
+            # verify already scanned for the rebooted device (with the
+            # random-static-address-change fallback). Map directly to
             # COMPLETED. The lockdown plan calls for migrating this
             # verify into a BLE-aware ``run_verify`` branch later;
             # until that lands, the legacy verify is what we trust.

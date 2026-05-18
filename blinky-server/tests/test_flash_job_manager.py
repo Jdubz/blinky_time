@@ -927,3 +927,108 @@ async def test_orchestrator_context_does_not_leak_across_tasks() -> None:
 
     sibling_check = asyncio.Event()
     await asyncio.gather(in_context(), sibling_check_task())
+
+
+@pytest.mark.asyncio
+async def test_legacy_wrappers_reset_context_on_return() -> None:
+    """Beyond setting the context on entry, the legacy wrappers MUST
+    reset it on return. Without this, a wrapper call would leak the
+    ContextVar=True back to the caller's task — and any subsequent
+    direct call to an impl in that same task would slip past the guard.
+    Verifies both the success path (impl returns) and the failure path
+    (impl raises) properly restore the prior context value."""
+    from blinky_server.firmware import ble_dfu as ble_dfu_mod
+    from blinky_server.firmware import uf2_upload as uf2_mod
+    from blinky_server.firmware._guard import (
+        OutsideFlashJobContextError,
+        _inside_flash_job_orchestrator,
+    )
+
+    async def ok_impl(**kwargs: Any) -> dict[str, Any]:
+        return {"status": "ok", "elapsed_s": 0.1}
+
+    async def raising_impl(**kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("simulated impl failure")
+
+    # ── UF2 wrapper, success path ─────────────────────────────────────
+    orig_uf2 = uf2_mod._uf2_write_impl
+    uf2_mod._uf2_write_impl = ok_impl  # type: ignore[assignment]
+    try:
+        assert _inside_flash_job_orchestrator.get() is False
+        await uf2_mod.upload_uf2(
+            serial_port="/dev/null", firmware_path="/tmp/x.hex", transport=None
+        )
+        assert _inside_flash_job_orchestrator.get() is False, (
+            "upload_uf2 leaked ContextVar=True after successful return"
+        )
+        # Confirm the leak would matter: a direct call now must still raise.
+        with pytest.raises(OutsideFlashJobContextError):
+            await uf2_mod._uf2_write_impl_for_job(
+                job=None,  # type: ignore[arg-type]
+                serial_port="/dev/null",
+                firmware_path="/tmp/x.hex",
+                transport=None,
+            )
+    finally:
+        uf2_mod._uf2_write_impl = orig_uf2  # type: ignore[assignment]
+
+    # ── UF2 wrapper, failure path ─────────────────────────────────────
+    uf2_mod._uf2_write_impl = raising_impl  # type: ignore[assignment]
+    try:
+        with pytest.raises(RuntimeError, match="simulated impl failure"):
+            await uf2_mod.upload_uf2(
+                serial_port="/dev/null", firmware_path="/tmp/x.hex", transport=None
+            )
+        assert _inside_flash_job_orchestrator.get() is False, (
+            "upload_uf2 leaked ContextVar=True after impl raised"
+        )
+    finally:
+        uf2_mod._uf2_write_impl = orig_uf2  # type: ignore[assignment]
+
+    # ── BLE-DFU wrapper, success path ─────────────────────────────────
+    orig_ble = ble_dfu_mod._ble_dfu_write_impl
+    ble_dfu_mod._ble_dfu_write_impl = ok_impl  # type: ignore[assignment]
+    try:
+        await ble_dfu_mod.upload_ble_dfu(
+            app_ble_address="AA:BB:CC:DD:EE:FF", dfu_zip_path="/tmp/x.zip"
+        )
+        assert _inside_flash_job_orchestrator.get() is False, (
+            "upload_ble_dfu leaked ContextVar=True after successful return"
+        )
+    finally:
+        ble_dfu_mod._ble_dfu_write_impl = orig_ble  # type: ignore[assignment]
+
+    # ── BLE-DFU wrapper, failure path ─────────────────────────────────
+    ble_dfu_mod._ble_dfu_write_impl = raising_impl  # type: ignore[assignment]
+    try:
+        with pytest.raises(RuntimeError, match="simulated impl failure"):
+            await ble_dfu_mod.upload_ble_dfu(
+                app_ble_address="AA:BB:CC:DD:EE:FF", dfu_zip_path="/tmp/x.zip"
+            )
+        assert _inside_flash_job_orchestrator.get() is False, (
+            "upload_ble_dfu leaked ContextVar=True after impl raised"
+        )
+    finally:
+        ble_dfu_mod._ble_dfu_write_impl = orig_ble  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_test_task_context_unaffected_by_orchestrator_task(
+    fleet: FleetManager,
+) -> None:
+    """``_run_flash_job`` runs in its own asyncio task (created by
+    ``flash_device`` via ``asyncio.create_task``), so its ContextVar
+    mutations are isolated by the standard asyncio task-context-copy
+    rule and CANNOT leak back into the caller's task. This is the
+    structural invariant that lets multiple flashes run concurrently
+    on different devices without their guards interfering. We verify
+    by running a flash to completion and confirming the test task
+    still sees the default value."""
+    from blinky_server.firmware._guard import _inside_flash_job_orchestrator
+
+    assert _inside_flash_job_orchestrator.get() is False, "test precondition"
+
+    job = await fleet.flash_device("nonexistent-device", Path("/tmp/x.hex"))
+    await job.wait_until_terminal(timeout=5.0)
+    # Whatever the orchestrator did with its context-copy is invisible here.
+    assert _inside_flash_job_orchestrator.get() is False

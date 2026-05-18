@@ -31,7 +31,7 @@ recursively for some reason — the outer True).
 
 from __future__ import annotations
 
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 
 # True iff we're inside _run_flash_job → _run_*_flash → _impl. The
 # orchestrator sets this; the impls assert it. Default False so a
@@ -74,7 +74,7 @@ def assert_inside_orchestrator(impl_name: str) -> None:
         )
 
 
-def enter_orchestrator_context() -> object:
+def enter_orchestrator_context() -> Token[bool]:
     """Set the ContextVar to True; return a token to reset with.
 
     Use::
@@ -92,8 +92,8 @@ def enter_orchestrator_context() -> object:
     return _inside_flash_job_orchestrator.set(True)
 
 
-def reset_orchestrator_context(token: object) -> None:
+def reset_orchestrator_context(token: Token[bool]) -> None:
     """Restore the ContextVar to whatever it was before
     ``enter_orchestrator_context()`` was called. Pass the token
     that ``enter_orchestrator_context()`` returned."""
-    _inside_flash_job_orchestrator.reset(token)  # type: ignore[arg-type]
+    _inside_flash_job_orchestrator.reset(token)
