@@ -155,6 +155,28 @@ void setup() {
   // persists across all reset types (WDT, soft reset, HardFault).
   SafeBootWatchdog::begin();
 
+  // ─── BOOT PHASE INSTRUMENTATION ──────────────────────────────────────
+  // The hardware WDT is now running with a 15 s timeout. Every major
+  // phase below feeds the WDT and prints a "[BOOT <ms>] <phase>" marker
+  // so that:
+  //   1. A WDT-triggered reset during setup() leaves a clear trail —
+  //      the LAST [BOOT] line printed tells us which phase ran long.
+  //   2. Configured-mode setup (LED test 3 s delay + RenderPipeline +
+  //      BLE init) consistently approaches the 15 s WDT boundary; the
+  //      feeds make us resilient to slow-init regressions instead of
+  //      letting them silently brick devices on 3-strikes-out
+  //      (SafeBootWatchdog → BLE DFU recovery).
+  //
+  // Use BOOT_PHASE() at every boundary; it's a single macro so the
+  // pattern is uniform and easy to grep. Do NOT call feed() without a
+  // marker — the diagnostic value of consistent markers outweighs the
+  // ~50 byte cost per call site.
+#define BOOT_PHASE(name) do { \
+    Serial.print(F("[BOOT ")); Serial.print(millis()); Serial.print(F("ms] ")); \
+    Serial.println(F(name)); \
+    SafeBootWatchdog::feed(); \
+  } while (0)
+
   // Initialize serial with default baud rate (config not loaded yet)
   // Increase RX buffer to handle large device config JSON commands (default 256 is too small)
 #ifdef BLINKY_PLATFORM_ESP32S3
@@ -162,6 +184,7 @@ void setup() {
 #endif
   Serial.begin(115200);
   delay(1000);  // Give serial time to initialize
+  BOOT_PHASE("serial up");
 
   // Display version information (always show on boot)
   Serial.println(F("\n=== BLINKY TIME STARTUP ==="));
@@ -180,6 +203,7 @@ void setup() {
   // Falls back to TEST_CHIP_CONFIG if no config stored — avoids safe mode
   // on bare chips so audio analysis and serial commands still work.
   configStorage.begin();
+  BOOT_PHASE("configStorage.begin");
 
   // Wire the crash-loop quarantine hook BEFORE checkAndIncrement so that if
   // the threshold is tripped on this boot, the stored device config is
@@ -198,6 +222,7 @@ void setup() {
   // recovery before any potentially-crashing component runs).
   // See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F4).
   RebootFrequencyCounter::checkAndIncrement();
+  BOOT_PHASE("rebootFreqCounter.checkAndIncrement");
 
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
   if (!validDeviceConfig) {
@@ -257,10 +282,12 @@ void setup() {
   // iteration (see line ~761) for a charging-state that can never
   // change. The downstream call sites all null-check `battery` already,
   // so leaving it null is the cleanest "fully disabled" state.
+  BOOT_PHASE("audioController alloc start");
   audioController = new(std::nothrow) AudioTracker(DefaultHal::pdm(), DefaultHal::time());
   if (!audioController) {
     haltWithError(F("ERROR: AudioController allocation failed"));
   }
+  BOOT_PHASE("audioController alloc done");
   battery = nullptr;
   if (validDeviceConfig && config.charging.battery) {
     battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
@@ -271,12 +298,14 @@ void setup() {
 
   // Initialize audio controller (uses default or configured sample rate)
   uint16_t audioSampleRate = validDeviceConfig ? config.microphone.sampleRate : 16000;
+  BOOT_PHASE("audioController.begin start");
   bool audioOk = audioController->begin(audioSampleRate);
   if (!audioOk) {
     SerialConsole::logError(F("Audio controller failed to start"));
   } else {
     SerialConsole::logDebug(F("Audio controller initialized"));
   }
+  BOOT_PHASE("audioController.begin done");
 
   // === LED SYSTEM INITIALIZATION (only if valid device config) ===
   if (validDeviceConfig) {
@@ -389,9 +418,11 @@ void setup() {
     }
 #endif
 
+    BOOT_PHASE("leds->begin start");
     leds->begin();
     leds->setBrightness(min((int)config.matrix.brightness, 255));
     leds->show();
+    BOOT_PHASE("leds->begin done");
 
     // Basic LED test - light up first few LEDs to verify hardware
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
@@ -402,7 +433,16 @@ void setup() {
     leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
     leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
     leds->show();
-    delay(3000);  // Hold for 3 seconds to verify colors are correct
+    BOOT_PHASE("LED test colors lit");
+    // Hold for 3 seconds to verify colors are correct. Break the wait
+    // into 1-second chunks so the WDT is fed and the boot trace shows
+    // the wait completing (otherwise a crash during the delay looks
+    // identical to a crash before the delay).
+    for (int i = 0; i < 3; ++i) {
+      delay(1000);
+      SafeBootWatchdog::feed();
+    }
+    BOOT_PHASE("LED test 3s delay done");
 
     // Clear test LEDs
     leds->setPixelColor(0, 0);
@@ -413,6 +453,7 @@ void setup() {
     if (!ledMapper.begin(config)) {
       haltWithError(F("ERROR: LED mapper initialization failed"));
     }
+    BOOT_PHASE("ledMapper.begin done");
 
     // Debug: detailed config info
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
@@ -433,10 +474,12 @@ void setup() {
     }
 
     // Initialize RenderPipeline (manages generators, effects, and rendering)
+    BOOT_PHASE("RenderPipeline alloc + begin start");
     pipeline = new(std::nothrow) RenderPipeline();
     if (!pipeline || !pipeline->begin(config, *leds, ledMapper)) {
       haltWithError(F("ERROR: RenderPipeline initialization failed"));
     }
+    BOOT_PHASE("RenderPipeline begin done");
 
     SerialConsole::logDebug(F("RenderPipeline initialized"));
 
@@ -456,6 +499,7 @@ void setup() {
       Serial.print(F("[INFO] Generator-cycle button on pin D"));
       Serial.println(config.input.buttonPin);
     }
+    BOOT_PHASE("generatorButton.begin done");
 
     // Load effect parameters from flash
     if (configStorage.isValid()) {
@@ -485,6 +529,7 @@ void setup() {
     } else {
       SerialConsole::logDebug(F("Using default effect params"));
     }
+    BOOT_PHASE("loadConfiguration done");
 
     Serial.println(F("=== LED System Ready ===\n"));
   }
@@ -521,11 +566,14 @@ void setup() {
   console->setFakeAudio(&fakeAudio);
   console->begin();
   SerialConsole::logDebug(F("Serial console initialized"));
+  BOOT_PHASE("SerialConsole.begin done");
 
   // Initialize BLE (nRF52840 only)
 #ifdef BLINKY_PLATFORM_NRF52840
   // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
+  BOOT_PHASE("Bluefruit.begin start");
   Bluefruit.begin(1, 0);
+  BOOT_PHASE("Bluefruit.begin done");
 
   // Per-device BLE name — "Blinky-<deviceId>-<snSuffix2>" when the chip has a
   // stored device config, or "Blinky-<snSuffix4>" for unconfigured chips.
@@ -557,6 +605,7 @@ void setup() {
   // Failure is not fatal (NUS-based `bootloader ble` still works), but it
   // removes a recovery path on sealed sculpture devices, so log loudly per
   // no-silent-fallbacks rule. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F6).
+  BOOT_PHASE("bleDfu.begin start");
   {
     err_t bleDfuErr = bleDfu.begin();
     if (bleDfuErr != ERROR_NONE) {
@@ -566,9 +615,11 @@ void setup() {
       Serial.println(F("[FALLBACK] App-mode `bootloader ble` command still works via NUS."));
     }
   }
+  BOOT_PHASE("bleDfu.begin done");
 
   // NUS peripheral — bidirectional serial-over-BLE for fleet server
   bleNus.begin();
+  BOOT_PHASE("bleNus.begin done");
   bleNus.setLineCallback([](const char* line) {
       if (console) {
           console->handleCommand(line);
@@ -586,6 +637,7 @@ void setup() {
   });
   console->setBleScanner(&bleScanner);
   SerialConsole::logDebug(F("BLE scanner initialized"));
+  BOOT_PHASE("bleScanner.begin done");
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   // BLE on ESP32-S3 requires external NimBLE-Arduino v2.3.8+ (installed 2.4.0)
   // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
@@ -635,6 +687,7 @@ void setup() {
   lastMs = 0;
 
   Serial.println(F("Ready."));
+  BOOT_PHASE("setup() complete");
 
   // NOTE: SafeBootWatchdog::markStable() is intentionally NOT called here.
   // Deferred to loop() once millis() >= 60000 — a runtime crash that happens
@@ -644,6 +697,8 @@ void setup() {
 
   Serial.print(F("[BOOT] Watchdog active, boot attempt #"));
   Serial.println(SafeBootWatchdog::getBootCount());
+
+#undef BOOT_PHASE
 }
 
 void loop() {
