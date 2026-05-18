@@ -546,6 +546,28 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(F(",\"maxFrameMs\":"));
         out_.print(LoopMetrics::getMaxFrameMs());
 
+        // Previous-boot crash trace. Captured from noinit RAM at the
+        // very start of setup(); persists across system reset, cleared
+        // on power-on. ``prevBoot`` carries the line number of the last
+        // BOOT_PHASE marker the previous boot reached (or "completed"
+        // / "cold" sentinels). Critical for diagnosing crashes that
+        // defeat USB-CDC early-boot output capture — query json info
+        // any time AFTER the current boot completes setup() to learn
+        // what the PREVIOUS boot did. See the BootTrace namespace.
+        extern bool g_bootTracePrevValid;
+        extern uint32_t g_bootTracePrevLine;
+        extern uint32_t g_bootTraceCompletedSentinel;
+        out_.print(F(",\"prevBoot\":\""));
+        if (!g_bootTracePrevValid) {
+            out_.print(F("cold"));
+        } else if (g_bootTracePrevLine == g_bootTraceCompletedSentinel) {
+            out_.print(F("completed"));
+        } else {
+            out_.print(F("crash-line:"));
+            out_.print(g_bootTracePrevLine);
+        }
+        out_.print(F("\""));
+
         out_.println(F("}"));
         return true;
     }

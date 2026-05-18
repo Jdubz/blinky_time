@@ -78,9 +78,10 @@ The lower 8 bits encode the R/G/B byte ordering. The driver only
 allocates 3 bytes per pixel, so NEO_RGBW-style values (any offset > 2)
 are rejected at construction with an `[ERROR]` log.
 
-- `12390` = `NEO_GRB + NEO_KHZ800` — standard WS2812B (fleet default for new configs)
-- `82` = same NEO_GRB byte ordering, no speed-flag bits — functionally identical to 12390 on this firmware (the driver masks to lower 8 bits)
+- `82` = `NEO_GRB + NEO_KHZ800` — standard WS2812B (fleet default for new configs)
 - `6` = `NEO_RGB` — used by big_bucket_v1 because that panel's LED part is wired in native RGB order
+
+**Do NOT use `12390` (0x3066).** Earlier revisions of this doc claimed `12390 = NEO_GRB + NEO_KHZ800`. That's incorrect — `NEO_GRB + NEO_KHZ800` is `0x52 = 82`. The lower byte of 12390 is `0x66 = 0b01100110`, which the firmware decodes as `rOffset=2, gOffset=1, bOffset=2`. With R and B both at byte-offset 2, every pixel write puts R and B at the same byte slot (visible as blue-channel-missing colors on pre-`752ebc16` builds). Post-`752ebc16` the driver validates and refuses to construct, the `if (!asyncStrip->isValid())` check in setup hits `haltWithError`, the WDT trips, and after 3 boot failures the device falls into BLE-DFU recovery — exactly the configured-boot crash observed 2026-05-18 on cart_inner and cart_outer.
 
 ### Orientation values
 
