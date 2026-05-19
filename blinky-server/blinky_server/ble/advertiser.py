@@ -460,7 +460,7 @@ class FleetBroadcaster:
     # once regardless of how many emits land.
     #
     # Bench-measured per-emit BLE reception ~42% (75-80% delivery at
-    # 5× redundancy). RF misses are correlated (bursty), so independence
+    # 5x redundancy). RF misses are correlated (bursty), so independence
     # math underestimates the marginal benefit of more emits in
     # practice. Bumping count 5→10 doubles air time per command
     # (1.25s → 2.5s) but pushes delivery probability into the >99%
@@ -469,7 +469,7 @@ class FleetBroadcaster:
     # re-emits free at the application layer — they're identified as
     # the same logical command and silently short-circuited.
     #
-    # 10 × 250ms = 2.5s total air time per command. Concurrent
+    # 10 x 250ms = 2.5s total air time per command. Concurrent
     # commands within 2.5s clobber the prior cycle, which is the same
     # behavior as the 5-emit version — operators don't fire commands
     # faster than that in practice.
