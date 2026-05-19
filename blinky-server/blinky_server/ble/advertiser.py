@@ -16,7 +16,9 @@ Implementation note: instead of unregister/re-register on every command
 (which would briefly stop advertising mid-cycle), we keep the
 advertisement registered and emit ``PropertiesChanged`` on
 ``ManufacturerData``. BlueZ picks up the new payload on its next
-advertising interval (~100 ms default).
+advertising interval — see ``_Advertisement.MinInterval`` /
+``MaxInterval`` below for the values we declare (50-100 ms) and the
+rationale.
 """
 
 from __future__ import annotations
@@ -154,6 +156,50 @@ class _Advertisement(ServiceInterface):
         # BlueZ wants a Variant per value — wrap bytes as 'ay'.
         return {k: Variant("ay", v) for k, v in self._manufacturer_data.items()}
 
+    # ── Advertising interval (PR #143 follow-up, May 18 research) ───────
+    #
+    # Units: BlueZ's ``LEAdvertisement1.MinInterval`` and ``MaxInterval``
+    # are in MILLISECONDS per its D-Bus API spec. The numbers we return
+    # below (50 and 100) are therefore 50 ms and 100 ms.
+    #
+    # Why we declare these explicitly:
+    # The documented BlueZ default for ``LEAdvertisement1.MinInterval``
+    # / ``MaxInterval`` is ~1280 ms — at that rate, an entire
+    # ``COMMAND_REEMIT_HOLD_MS`` (250 ms) re-emit slot can elapse without
+    # a single on-air packet, and a fresh-seq command can be missed
+    # entirely. The empirical "~50 ms intervals" observation referenced
+    # elsewhere in this module (older comment block in
+    # ``FleetBroadcaster.broadcast_command``) was measured on a single
+    # adapter / kernel combination; some kernels honour the documented
+    # default, others clamp to the request, and a few ignore the property
+    # altogether and emit at ~50 ms. Declaring the property is defensive
+    # — it removes the kernel-dependent variability and pins us to a
+    # known-good range.
+    #
+    # 20 ms is the BLE spec minimum for legacy non-connectable
+    # broadcast. We don't go that low because (a) it eats radio time
+    # the BCM43455 also needs for scan + GATT central, and (b) some
+    # BlueZ kernels clamp the value silently. 50/100 ms gives us:
+    #   - ~10-20 emissions per re-emit slot (we want ≥ 2 per slot to
+    #     beat firmware single-slot rxBuffer drops)
+    #   - Within nRF52840 firmware scan window: 50 ms interval / 50 ms
+    #     window = >= one on-air landing per window every time
+    #   - Modest power impact (broadcaster is always plugged in)
+    #
+    # **Caveat:** declaring the property is no guarantee BlueZ honours
+    # it. Some kernel / mgmt-api versions silently clamp the value (see
+    # bluez#314, bluez#833). When that happens we fall back to the
+    # kernel's own default. Empirical verification on a new adapter is
+    # the only ground truth; on the BCM43455 (May 2026) BlueZ honoured
+    # the request and emissions landed inside the 50-100 ms window.
+    @dbus_property(access=PropertyAccess.READ)
+    def MinInterval(self) -> "u":  # type: ignore[name-defined]  # noqa: F821, UP037
+        return 50
+
+    @dbus_property(access=PropertyAccess.READ)
+    def MaxInterval(self) -> "u":  # type: ignore[name-defined]  # noqa: F821, UP037
+        return 100
+
     # Internal helper used by FleetBroadcaster to swap the bytes BlueZ
     # serializes on its next interval. Emits PropertiesChanged so BlueZ
     # picks up the new payload without re-registration.
@@ -184,6 +230,14 @@ class FleetBroadcaster:
         self._bus: MessageBus | None = None
         self._adv: _Advertisement | None = None
         self._sequence: int = 0
+        # Monotonic per-broadcaster command_id. Incremented ONCE per
+        # call to ``broadcast_command()``; the same value rides every
+        # one of the N re-emits of that logical command. Firmware uses
+        # this to identify re-emits as "same logical command, apply
+        # once" (BLE_FLEET_RELIABILITY_PLAN item #2). Starts at 0; the
+        # first command bumps it to 1 before emit, so the value on the
+        # wire is never 0 for a real command.
+        self._command_id: int = 0
         self._broadcasts_sent: int = 0
         self._last_command: str | None = None
         # Serializes broadcast() calls; rapid back-to-back PropertiesChanged
@@ -377,8 +431,9 @@ class FleetBroadcaster:
     def last_command(self) -> str | None:
         return self._last_command
 
-    # How long to keep a real command on-air after broadcast_command(). After
-    # this window, we replace the AD payload with a no-op packet (type=0x00,
+    # How long to keep each individual emit on-air before replacing it
+    # with the next emit (or the no-op terminator). After the full
+    # re-emit cycle, the AD payload becomes a no-op packet (type=0x00,
     # which the firmware's BleScanner::update() drops at its packet-type
     # switch). The no-op stays on-air until the next command. Two reasons
     # we don't want the real command lingering:
@@ -387,88 +442,179 @@ class FleetBroadcaster:
     #      one that crashed the device in the first place.
     #   2. Devices coming into range later would pick up an old command.
     #
-    # Sized for reliable single-packet delivery. The firmware scanner runs
-    # at 100ms interval / 50ms window (50% duty); BlueZ on hci0 emits at
-    # ~50ms intervals empirically (measured 2026-05-17: ~20 retransmits/sec
-    # observed on both cart devices). 800ms gives ~16 retransmits per
-    # broadcast, of which the scanner can catch ~8 — overwhelmingly enough
-    # for one to land.
+    # Lower bound is the BlueZ advertising interval declared on
+    # ``_Advertisement.MaxInterval`` (100 ms) — the slot needs at least
+    # one advertising cycle to actually transmit on-air. 250 ms gives
+    # ~2-5 advertising cycles per emit (within the 50-100 ms range BlueZ
+    # is configured to use), which is enough for the firmware's
+    # 100 ms scan interval / 50 ms window to catch each emit at least
+    # once in expectation.
+    COMMAND_REEMIT_HOLD_MS = 250
+
+    # How many times to re-emit each command with a fresh sequence.
+    # Rationale (PR #143 + 2026-05-19 measurement on b177 carts):
+    # The firmware's BleScanner accepts at most one unique-seq packet
+    # per emit slot (the seen-ring dedups identical-(src, seq)
+    # retransmissions). With COMMAND_V2 idempotency the firmware also
+    # dedups by command_id, so the same logical command applies exactly
+    # once regardless of how many emits land.
     #
-    # The previous 3000ms value compensated for scene-apply firing 4
-    # separate broadcasts back-to-back (gen / effect / huespeed / hueshift)
-    # which had a measured ~37% per-packet capture rate. Scene apply is
-    # now a single `scene` broadcast (server scene_to_commands +
-    # firmware handleSceneCommand, b164), so the long window is no longer
-    # needed and was hurting feel: a 4-command scene took ~12s end-to-end.
-    # At 800ms the single scene packet lands in <1s.
+    # Bench-measured per-emit BLE reception ~42% (75-80% delivery at
+    # 5x redundancy). RF misses are correlated (bursty), so independence
+    # math underestimates the marginal benefit of more emits in
+    # practice. Bumping count 5→10 doubles air time per command
+    # (1.25s → 2.5s) but pushes delivery probability into the >99%
+    # range, where it should be for a 100%-reliability target. The
+    # COMMAND_V2 idempotency ring on each device makes the extra
+    # re-emits free at the application layer — they're identified as
+    # the same logical command and silently short-circuited.
     #
-    # Firmware dedups subsequent same-(source, seq) packets, so reception
-    # of multiple retransmits within the window cannot cause re-execution.
-    COMMAND_ONAIR_MS = 800
+    # 10 x 250ms = 2.5s total air time per command. Concurrent
+    # commands within 2.5s clobber the prior cycle, which is the same
+    # behavior as the 5-emit version — operators don't fire commands
+    # faster than that in practice.
+    COMMAND_REEMIT_COUNT = 10
 
     async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.
 
-        Sets the BLE advertisement's manufacturer-data to a COMMAND packet
-        carrying ``command``, holds it on-air for ``COMMAND_ONAIR_MS``,
-        then replaces it with a no-op packet so the air falls silent
-        (broadcast-wise) until the next call.
+        Emits the command as a manufacturer-data BLE advertisement
+        ``COMMAND_REEMIT_COUNT`` times in succession with FRESH sequence
+        numbers per emit, each held on-air for ``COMMAND_REEMIT_HOLD_MS``.
+        After the last emit, replaces the advertisement with a no-op
+        packet so the air falls silent.
 
-        Each call advances the sequence number, so a same-text command
-        sent twice still triggers the firmware (different (source, seq)
-        tuple) — but holding the same packet on-air for 300 ms with one
-        emit is reliable on its own; we don't re-emit during the window.
-        Same-source duplicates while the packet is on-air are dropped by
-        firmware dedup on (source BD addr, sequence).
+        Re-emit redundancy + idempotency:
+        Every re-emit of a single logical command carries the SAME
+        ``command_id`` (assigned once at the top of this method) but a
+        FRESH ``sequence``. The firmware uses ``sequence`` to dedup
+        bus-level retransmissions of identical packets and
+        ``command_id`` to short-circuit re-emits of the same logical
+        command after the first one is applied. Without command_id the
+        firmware would re-execute every fresh-seq emit
+        (``COMMAND_REEMIT_COUNT`` times for every fleet command),
+        which works for the idempotent gen/effect/save/load/set
+        commands we have today but is fragile — any future command
+        with side effects would multi-apply. See
+        BLE_FLEET_RELIABILITY_PLAN item #2.
 
-        Concurrency model: the lock is held only while mutating the
-        advertisement payload (a ~1 ms PropertiesChanged emit). The 3 s
-        on-air sleep happens OUTSIDE the lock so a concurrent stop()
-        or another broadcast doesn't have to wait the full window
-        (PR #140 review). Same-payload re-aim from a second concurrent
-        broadcast is fine — the firmware dedups by (source, seq).
+        Concurrency: the lock is held only while mutating the payload
+        (~1 ms PropertiesChanged emit). The per-emit hold happens
+        OUTSIDE the lock so a concurrent ``stop()`` or another
+        broadcast can interleave. A concurrent broadcast of a different
+        command WILL clobber the in-flight re-emit cycle (this is
+        deliberate — the operator's most recent command takes
+        priority); the firmware will receive whichever payload was on
+        the air during its scan window.
         """
         if self._adv is None:
             raise RuntimeError("FleetBroadcaster not started")
 
-        async with self._lock:
-            my_seq = self._next_sequence()
-            packet = _proto.build_packet(_proto.PacketType.COMMAND, command, my_seq)
-            self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
-            self._last_command = command
-            self._broadcasts_sent += 1
-            log.info("Broadcast cmd seq=%d: %r", my_seq, command)
+        # Assign the command_id ONCE per logical command, before the
+        # re-emit loop. Every re-emit below carries this same value;
+        # the firmware uses it to identify them as one logical command.
+        #
+        # Done outside the lock. ``_next_command_id`` is safe to read/
+        # write without the lock here because asyncio is single-threaded
+        # and we don't ``await`` between the bump and the next use of
+        # the captured value — no other coroutine can interleave a
+        # mutation of ``_command_id`` between this line and where
+        # ``my_command_id`` is consumed in the re-emit loop. (The lock
+        # is held inside the loop for the on-air payload swap, not for
+        # ``_command_id`` mutation ordering.) If this were ever ported
+        # to a true thread-pool context, the bump would need to be
+        # inside the lock.
+        my_command_id = self._next_command_id()
 
-        # Hold on-air OUTSIDE the lock. Concurrent broadcasts will
-        # acquire the lock and re-aim the payload; this caller's
-        # on-air timer just expires and falls through to the no-op
-        # re-arm below.
-        await asyncio.sleep(self.COMMAND_ONAIR_MS / 1000.0)
+        last_emit_seq = -1
+        for emit_idx in range(self.COMMAND_REEMIT_COUNT):
+            async with self._lock:
+                if self._adv is None:
+                    return  # stop() raced us
+                my_seq = self._next_sequence()
+                packet = _proto.build_command_v2_packet(
+                    command, sequence=my_seq, command_id=my_command_id
+                )
+                self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
+                self._last_command = command
+                self._broadcasts_sent += 1
+                last_emit_seq = my_seq
+                log.info(
+                    "Broadcast cmd seq=%d cmd_id=%d (emit %d/%d): %r",
+                    my_seq,
+                    my_command_id,
+                    emit_idx + 1,
+                    self.COMMAND_REEMIT_COUNT,
+                    command,
+                )
+            # Hold on-air OUTSIDE the lock. Concurrent broadcasts can
+            # acquire the lock during this sleep and clobber the payload;
+            # the next iteration's lock re-acquire + sequence check
+            # detects the clobber and stops re-emitting (let the newer
+            # broadcast's re-emit cycle run instead).
+            await asyncio.sleep(self.COMMAND_REEMIT_HOLD_MS / 1000.0)
+            # If a concurrent broadcast advanced the sequence past our
+            # last emit, abandon the rest of OUR re-emit cycle so we
+            # don't fight the newer command.
+            if self._sequence != last_emit_seq:
+                return
 
         async with self._lock:
             # Drop back to a no-op packet (type=0x00). The firmware's
             # BleScanner routes by packet type and falls through to
-            # packetsDropped++ for anything outside SETTINGS/SCENE/COMMAND.
-            # Using a fresh sequence ensures the firmware re-processes
-            # (and drops) the new packet rather than dedup'ing it against
-            # the previous command's (source, seq).
+            # packetsDropped++ for anything outside SETTINGS/SCENE/COMMAND/
+            # COMMAND_V2. Using a fresh sequence ensures the firmware
+            # re-processes (and drops) the new packet rather than dedup'ing
+            # it against the previous command's (source, seq).
+            #
+            # IMPORTANT: the noop MUST carry a non-zero payload byte. The
+            # firmware rejects ``payloadLen == 0`` as malformed BEFORE it
+            # records the (src, seq) in its seen-ring (see BleScanner.cpp
+            # comment: "Validate payload bounds BEFORE recording in the
+            # seen ring"). Without a payload byte, BlueZ's continuous
+            # retransmission of the on-air noop would loop through
+            # firmware's drop path on every retransmit, inflating
+            # ``packetsDropped`` and wasting SoftDevice-callback CPU on
+            # every device in range. With a 1-byte payload, the noop
+            # passes the bounds check, gets recorded in the seen-ring,
+            # and subsequent retransmissions are correctly deduped.
             if self._adv is None:
                 return  # stop() raced us
-            # Gate on the sequence number captured at broadcast time, NOT
-            # on the command string. Two back-to-back identical commands
-            # advance the sequence to different values; comparing strings
-            # would let the FIRST wake-up kill the SECOND broadcast's
-            # still-live on-air window (PR #140 review — verified would
-            # bite scenes that send `set foo X` then `set foo Y`).
-            if self._sequence != my_seq:
+            # Gate on the sequence number captured at the LAST emit:
+            # if a concurrent broadcast advanced the sequence past us,
+            # let its own no-op terminator run instead of stomping it.
+            if self._sequence != last_emit_seq:
                 return
             noop_seq = self._next_sequence()
-            noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE))
+            noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE, 0x00))
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)
 
     def _next_sequence(self) -> int:
+        # Intentionally allows seq=0 on wrap. Sequence 0 is a valid
+        # on-wire value in the COMMAND / COMMAND_V2 packet format — it
+        # carries no reserved meaning, and the firmware's seen-ring
+        # dedup treats it identically to any other value. This is
+        # asymmetric with ``_next_command_id`` which explicitly skips
+        # 0 (command_id 0 is reserved as "no command applied yet" by
+        # the gossip-ACK adv default value).
         self._sequence = (self._sequence + 1) & 0xFF
         return self._sequence
+
+    def _next_command_id(self) -> int:
+        # uint16 rolling counter. Wraps after ~65k commands; at, say,
+        # 10 cmd/sec that's ~109 minutes — well beyond any realistic
+        # in-flight collision window with the firmware's per-source
+        # last-id memory (the firmware compares for equality with the
+        # PREVIOUS command_id, not membership in a set, so reuse only
+        # collides if the very-previous command happens to share the
+        # value).
+        self._command_id = (self._command_id + 1) & 0xFFFF
+        # Skip 0 on wrap — keep the on-wire value strictly non-zero so
+        # the firmware can't confuse a real command_id with a default-
+        # initialized cell. Cheap defensive guard.
+        if self._command_id == 0:
+            self._command_id = 1
+        return self._command_id
 
     def status(self) -> dict[str, Any]:
         """Health snapshot for /api/fleet/status."""
@@ -476,5 +622,6 @@ class FleetBroadcaster:
             "running": self.is_running,
             "broadcasts_sent": self._broadcasts_sent,
             "sequence": self._sequence,
+            "command_id": self._command_id,
             "last_command": self._last_command,
         }

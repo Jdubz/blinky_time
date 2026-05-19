@@ -6,8 +6,19 @@ enum MatrixOrientation {
   HORIZONTAL = 0,         // Standard horizontal row-major (fire-totem, bucket-totem)
   VERTICAL = 1,           // Vertical column-major zigzag (tube-light)
   PANEL_GRID = 2,         // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
-  HORIZONTAL_ZIGZAG = 3   // Row-major serpentine — data starts top-left, row 0 L→R,
+  HORIZONTAL_ZIGZAG = 3,  // Row-major serpentine — data starts top-left, row 0 L→R,
                           // row 1 R→L, row 2 L→R, ... (big-bucket-style wiring)
+  VERTICAL_FIRST_DOWN = 4 // Vertical column-major, NO zigzag. Column 0 wired
+                          // data-in-at-top (top → bottom). Columns 1..N each
+                          // wired data-in-at-bottom (bottom → top), ALL in
+                          // the same direction — no alternation between
+                          // adjacent columns. Used on cart_umbrella_v1: the
+                          // first spoke's data comes off the controller and
+                          // up the first leg from the canopy down to the
+                          // tip; from there a long jumper runs along the
+                          // rim and EACH subsequent spoke is wired bottom
+                          // (tip) → top (canopy), with the jumper returning
+                          // along the canopy to the next spoke's tip.
 };
 
 enum LayoutType {

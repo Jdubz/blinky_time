@@ -1,4 +1,5 @@
 #include "BleScanner.h"
+#include <string.h>
 
 BleScanner* BleScanner::instance_ = nullptr;
 
@@ -18,9 +19,20 @@ void BleScanner::begin() {
     // Minimizes power and RF interference.
     Bluefruit.Scanner.useActiveScan(false);
 
-    // Scan interval/window: 160/80 (100ms interval, 50ms window = 50% duty)
-    // Good balance of responsiveness vs power. SoftDevice handles timing via ISR.
-    Bluefruit.Scanner.setInterval(160, 80);  // Units of 0.625ms
+    // Scan interval/window: 160/144 (100ms interval, 90ms window = 90% duty).
+    // Bench-measured 2026-05-19: per-emit BLE reception on the carts +
+    // test chip was only ~42% with the previous 50% duty cycle (50ms
+    // window in a 100ms interval), giving only 75-80% per-broadcast
+    // delivery even after the 5× re-emit, multi-slot rx ring, and
+    // command_id idempotency fixes shipped. 90% duty cycle means the
+    // scanner is ON for nearly the full interval, so almost every
+    // BlueZ retransmit lands in a scan window. Cost: more radio time
+    // for scanner, less for NUS advertiser — acceptable because (a)
+    // each device's NUS adv is at 32/244 (20ms/152ms), well within the
+    // remaining 10% of radio time, and (b) reliable broadcast reception
+    // is more load-bearing than NUS-adv emission rate for a fleet
+    // controlled exclusively over BLE broadcast at the event.
+    Bluefruit.Scanner.setInterval(160, 144);  // Units of 0.625ms
 
     // Filter: only report packets containing manufacturer-specific data
     // This reduces callback frequency significantly (ignores iBeacons, etc.)
@@ -44,8 +56,54 @@ void BleScanner::scanCallback(ble_gap_evt_adv_report_t* report) {
     Bluefruit.Scanner.resume();
 }
 
+bool BleScanner::isDuplicateSeen(const uint8_t* srcAddr, uint8_t seq) const {
+    // Linear scan over the seen ring. SEEN_RING_SIZE is small (8) and
+    // this runs from a NORMAL-prio FreeRTOS task — well within budget.
+    for (size_t i = 0; i < seenCount_; ++i) {
+        const SeenKey& k = seenRing_[i];
+        if (k.seq == seq && memcmp(k.addr, srcAddr, 6) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void BleScanner::recordSeen(const uint8_t* srcAddr, uint8_t seq) {
+    // FIFO insert. When count < ring size, append; otherwise overwrite
+    // the oldest entry (at seenHead_) and advance head. After
+    // saturation, seenHead_ marks the oldest entry; entries are stored
+    // in insertion order modulo SEEN_RING_SIZE.
+    SeenKey& slot = seenRing_[seenHead_];
+    memcpy(slot.addr, srcAddr, 6);
+    slot.seq = seq;
+    seenHead_ = (seenHead_ + 1) % SEEN_RING_SIZE;
+    if (seenCount_ < SEEN_RING_SIZE) {
+        ++seenCount_;
+    }
+}
+
+bool BleScanner::checkAndRecordCommandId(uint16_t cmdId) {
+    // Linear scan over the global recent-ids ring. If we've seen this
+    // cmdId in the last CMD_ID_RING_SIZE distinct commands, this is a
+    // re-emit of the same logical command — skip dispatch.
+    for (size_t i = 0; i < cmdIdCount_; ++i) {
+        if (cmdIdRing_[i] == cmdId) {
+            return true;
+        }
+    }
+    // New cmdId. FIFO-insert at cmdIdHead_, evicting the oldest entry
+    // when the ring is full. First emit of a new logical command
+    // always dispatches because there's no matching ring entry.
+    cmdIdRing_[cmdIdHead_] = cmdId;
+    cmdIdHead_ = (cmdIdHead_ + 1) % CMD_ID_RING_SIZE;
+    if (cmdIdCount_ < CMD_ID_RING_SIZE) {
+        ++cmdIdCount_;
+    }
+    return false;
+}
+
 void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
-    // Parse manufacturer-specific data from the advertising packet
+    // Parse manufacturer-specific data from the advertising packet.
     // The raw data blob is in report->data.p_data[0..report->data.len]
     // We need to find the MSD AD structure (type 0xFF).
 
@@ -58,99 +116,206 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
         if (adLen == 0 || offset + adLen >= len) break;
 
         uint8_t adType = data[offset + 1];
-        if (adType == 0xFF && adLen >= 2 + BleProtocol::HEADER_SIZE + 1) {
-            // Manufacturer Specific Data found
-            // adLen includes the type byte, so actual data starts at offset+2
-            uint8_t* msd = &data[offset + 2];
-            uint8_t msdLen = adLen - 1;  // Subtract type byte
+        if (adType != 0xFF || adLen < 2 + BleProtocol::HEADER_SIZE + 1) {
+            offset += adLen + 1;
+            continue;
+        }
 
-            // Check company ID (little-endian)
-            uint16_t companyId = msd[0] | (msd[1] << 8);
-            if (companyId != BleProtocol::COMPANY_ID) {
-                offset += adLen + 1;
-                continue;
-            }
+        // Manufacturer Specific Data found.
+        // adLen includes the type byte, so the MSD body starts at offset+2.
+        uint8_t* msd = &data[offset + 2];
+        uint8_t msdLen = adLen - 1;  // Subtract type byte
 
-            // Parse header (after 2-byte company ID)
-            if (msdLen < 2 + BleProtocol::HEADER_SIZE) {
-                offset += adLen + 1;
-                continue;
-            }
+        // Check company ID (little-endian)
+        uint16_t companyId = msd[0] | (msd[1] << 8);
+        if (companyId != BleProtocol::COMPANY_ID) {
+            offset += adLen + 1;
+            continue;
+        }
 
-            BleProtocol::Header hdr;
-            memcpy(&hdr, &msd[2], sizeof(hdr));
+        // Parse header (after 2-byte company ID)
+        if (msdLen < 2 + BleProtocol::HEADER_SIZE) {
+            offset += adLen + 1;
+            continue;
+        }
 
-            // Version check
-            if (hdr.version != BleProtocol::PROTOCOL_VERSION) {
-                offset += adLen + 1;
-                continue;
-            }
+        BleProtocol::Header hdr;
+        memcpy(&hdr, &msd[2], sizeof(hdr));
 
-            // Dedup: check sequence number against last from this source
-            uint8_t* srcAddr = report->peer_addr.addr;
-            bool sameSource = hasSource_ && memcmp(srcAddr, lastSourceAddr_, 6) == 0;
+        // Version check
+        if (hdr.version != BleProtocol::PROTOCOL_VERSION) {
+            offset += adLen + 1;
+            continue;
+        }
 
-            if (sameSource && hdr.sequence == lastSequence_) {
-                packetsDuped_++;
-                return;  // Duplicate, ignore
-            }
-
-            // Update source tracking
-            memcpy(lastSourceAddr_, srcAddr, 6);
-            lastSequence_ = hdr.sequence;
-            hasSource_ = true;
-            lastRssi_ = report->rssi;
-
-            // Extract payload
-            size_t payloadOffset = 2 + BleProtocol::HEADER_SIZE;  // company ID + header
-            size_t payloadLen = msdLen - payloadOffset;
-
-            if (payloadLen == 0 || payloadLen >= RX_BUF_SIZE) {
-                packetsDropped_++;
-                return;
-            }
-
-            // Only queue if buffer is free (drop if previous not yet consumed)
-            if (rxReady_) {
-                packetsDropped_++;
-                return;
-            }
-
-            memcpy((char*)rxBuffer_, &msd[payloadOffset], payloadLen);
-            rxBuffer_[payloadLen] = '\0';
-            rxLen_ = payloadLen;
-            rxType_ = hdr.type;
-            rxReady_ = true;
-            packetsReceived_++;
+        // Per-(source, seq) dedup against the seen ring. Multiple emits
+        // of the SAME (source, seq) tuple — which BlueZ produces when
+        // its advertising interval retransmits a single payload — get
+        // collapsed to one accepted packet. Re-emits with FRESH seqs
+        // (the server's COMMAND_REEMIT_COUNT path) sail through.
+        const uint8_t* srcAddr = report->peer_addr.addr;
+        if (isDuplicateSeen(srcAddr, hdr.sequence)) {
+            ++packetsDuped_;
             return;
         }
 
-        offset += adLen + 1;
+        // Record FIRST, before any payload-size or content checks. A
+        // malformed-payload packet that we reject without recording would
+        // be re-processed (and re-rejected) on every BlueZ retransmission
+        // of the same on-air payload — BlueZ holds a payload on-air at
+        // 50-100 ms intervals until the AD slot is replaced, so a single
+        // malformed broadcast generates DOZENS of rejected packets and
+        // burns SoftDevice-callback CPU on every device in range. Verified
+        // 2026-05-19 against the test chip's `dropped=234` counter after
+        // ~2 min uptime, vs. an expected ~3 (one per fleet broadcast's
+        // no-op terminator). Earlier comment worried about a malformed
+        // packet displacing a legitimate older (src, seq) via FIFO
+        // eviction — that risk is moot because once any payload's adv
+        // slot ends, BlueZ stops retransmitting it on-air, so an evicted
+        // legitimate entry has nothing to reprocess anyway.
+        recordSeen(srcAddr, hdr.sequence);
+        lastSequence_ = hdr.sequence;
+        lastRssi_ = report->rssi;
+
+        size_t payloadOffset = 2 + BleProtocol::HEADER_SIZE;  // company ID + header
+        size_t payloadLen = msdLen - payloadOffset;
+        if (payloadLen == 0 || payloadLen > SLOT_PAYLOAD_MAX) {
+            ++packetsDropped_;
+            return;
+        }
+
+        // COMMAND_V2 carries a 16-bit command_id immediately after the
+        // header and before the actual command string. Two things happen
+        // here: (1) idempotency check — if this source's last accepted
+        // command_id matches, this is a re-emit of an already-applied
+        // logical command and we drop it; (2) prefix strip — the
+        // downstream consumer (CommandRouter etc.) expects only the
+        // command string, so we advance payloadOffset past the token
+        // and shrink payloadLen accordingly.
+        if (hdr.type == BleProtocol::COMMAND_V2) {
+            if (payloadLen < BleProtocol::COMMAND_V2_TOKEN_SIZE + 1) {
+                // Need at least the 2-byte token plus 1 byte of command.
+                ++packetsDropped_;
+                return;
+            }
+            uint16_t cmdId = msd[payloadOffset] |
+                             (static_cast<uint16_t>(msd[payloadOffset + 1]) << 8);
+            if (checkAndRecordCommandId(cmdId)) {
+                ++packetsIdempotent_;
+                return;
+            }
+            // New logical command — this is the "applied" event. Record
+            // the command_id for gossip-ACK (item #5): the device's own
+            // BLE adv exposes this so the server can detect laggards.
+            lastAcceptedCmdId_ = cmdId;
+            payloadOffset += BleProtocol::COMMAND_V2_TOKEN_SIZE;
+            payloadLen    -= BleProtocol::COMMAND_V2_TOKEN_SIZE;
+        }
+
+        // Enqueue into the rx ring with drop-oldest on overrun. The
+        // index updates + slot write share a brief noInterrupts()
+        // window with the consumer's slot-copy + tail-advance in
+        // update(), so a partial overwrite can never race a slot read.
+        //
+        // PRIMASK budget: the SoftDevice S140 nominal hard limit for
+        // PRIMASK-on is ~100 µs (NRF52 SDK SDS table 5.7); practical
+        // BLE-stack robustness budget is ~15-20 µs. The memcpy below
+        // is at most SLOT_PAYLOAD_MAX (240) bytes. On nRF52840 Cortex-
+        // M4 at 64 MHz with the optimised memcpy in newlib, 240 bytes
+        // runs at ~3-5 cycles/byte word-aligned = ~12-19 µs. That's
+        // comfortably under the 100 µs hard limit and at the edge of
+        // the ~15-20 µs robustness budget — acceptable for an
+        // already-rare path (drop-oldest only fires on overrun), but
+        // worth keeping under static_assert so a future
+        // SLOT_PAYLOAD_MAX bump doesn't silently push us past the
+        // hard limit. Bump policy: if SLOT_PAYLOAD_MAX grows, also
+        // bump RX_RING_SIZE and consider the snapshot-then-copy
+        // split (slot ownership flag, memcpy with interrupts on)
+        // documented in PR #144 review.
+        static_assert(SLOT_PAYLOAD_MAX <= 240,
+                      "PRIMASK-on memcpy budget — re-evaluate vs SoftDevice S140 SDS 5.7 if raised");
+        noInterrupts();
+        uint8_t head = rxHead_;
+        uint8_t tail = rxTail_;
+        uint8_t nextHead = (head + 1) % RX_RING_SIZE;
+        bool full = (nextHead == tail);
+        if (full) {
+            // Drop oldest — preserves the newest operator command at the
+            // cost of one already-queued packet. Idempotency at the
+            // command level (gen / effect / set / save / load) means a
+            // dropped intermediate is safe to replay if it ever matters.
+            rxTail_ = (tail + 1) % RX_RING_SIZE;
+            ++packetsDropped_;
+        }
+        RxSlot& slot = rxRing_[head];
+        slot.type = hdr.type;
+        slot.len = static_cast<uint16_t>(payloadLen);
+        memcpy(slot.data, &msd[payloadOffset], payloadLen);
+        slot.data[payloadLen] = '\0';
+        rxHead_ = nextHead;
+        ++packetsReceived_;
+        interrupts();
+
+        return;
     }
 }
 
 void BleScanner::update() {
-    if (!rxReady_) return;
+    // Drain every ready slot per call. Without this, a back-to-back
+    // command burst (5× re-emit + queued follow-on) leaves slots
+    // stranded until the next main-loop tick, defeating the ring's
+    // purpose. Bounded to RX_RING_SIZE * 2 iterations so a producer
+    // that keeps refilling during drain can't starve the main loop;
+    // any leftover slots get picked up on the next loop tick.
+    for (size_t iter = 0; iter < RX_RING_SIZE * 2; ++iter) {
+        char payload[SLOT_PAYLOAD_MAX + 1];
+        uint8_t type;
+        size_t len;
 
-    // Copy from volatile buffer
-    char payload[RX_BUF_SIZE];
-    size_t len = rxLen_;
-    uint8_t type = rxType_;
-    memcpy(payload, (const char*)rxBuffer_, len);
-    payload[len] = '\0';
-    rxReady_ = false;  // Free buffer for next packet
+        // Snapshot + copy + advance tail under noInterrupts() so the
+        // producer's drop-oldest path cannot overwrite the slot mid-copy.
+        // The copy is at most SLOT_PAYLOAD_MAX bytes (240). On Cortex-M4
+        // at 64 MHz this takes ~12-19 µs — within the SoftDevice S140
+        // ~100 µs hard PRIMASK limit (SDS table 5.7), at the edge of
+        // the ~15-20 µs BLE-stack robustness budget. See producer-side
+        // commentary in handleReport() for the static_assert that
+        // pins this budget against future SLOT_PAYLOAD_MAX changes.
+        noInterrupts();
+        if (rxHead_ == rxTail_) {
+            interrupts();
+            return;
+        }
+        uint8_t tail = rxTail_;
+        const RxSlot& slot = rxRing_[tail];
+        type = slot.type;
+        len = slot.len;
+        // Producer's bounds check in handleReport() guarantees
+        // 0 < len <= SLOT_PAYLOAD_MAX. No re-clamp here.
+        memcpy(payload, slot.data, len);
+        payload[len] = '\0';
+        rxTail_ = (tail + 1) % RX_RING_SIZE;
+        interrupts();
 
-    // Route based on packet type
-    if (callback_) {
-        switch (type) {
-            case BleProtocol::SETTINGS:
-            case BleProtocol::SCENE:
-            case BleProtocol::COMMAND:
-                callback_(payload, len);
-                break;
-            default:
-                packetsDropped_++;
-                break;
+        // Dispatch outside the critical section.
+        if (callback_) {
+            switch (type) {
+                case BleProtocol::SETTINGS:
+                case BleProtocol::SCENE:
+                case BleProtocol::COMMAND:
+                case BleProtocol::COMMAND_V2:
+                    // For COMMAND_V2 the 2-byte command_id prefix was
+                    // stripped in handleReport() before enqueue, so
+                    // the downstream callback sees the same shape as
+                    // a legacy COMMAND packet (command string only).
+                    callback_(payload, len);
+                    break;
+                default:
+                    // Unknown packet type (e.g. the server's 0x00 no-op
+                    // terminator). Count as a drop so it's visible in
+                    // diagnostics rather than silently absorbed.
+                    ++packetsDropped_;
+                    break;
+            }
         }
     }
 }
@@ -163,6 +328,8 @@ void BleScanner::printDiagnostics(Print& out) const {
     out.print(packetsReceived_);
     out.print(F(" duped="));
     out.print(packetsDuped_);
+    out.print(F(" idempotent="));
+    out.print(packetsIdempotent_);
     out.print(F(" dropped="));
     out.print(packetsDropped_);
     if (packetsReceived_ > 0) {
@@ -172,8 +339,24 @@ void BleScanner::printDiagnostics(Print& out) const {
     }
     out.println();
 
+    // Ring depth at print time — useful for spotting a stalled consumer
+    // (main loop hanging in NN inference while packets queue up).
+    uint8_t head = rxHead_;
+    uint8_t tail = rxTail_;
+    uint8_t depth = (head + RX_RING_SIZE - tail) % RX_RING_SIZE;
+    out.print(F("[BLE] rx_ring="));
+    out.print(depth);
+    out.print(F("/"));
+    out.print(RX_RING_SIZE);
+    out.print(F(" seen_ring="));
+    out.print(seenCount_);
+    out.print(F("/"));
+    out.println(SEEN_RING_SIZE);
+
     out.print(F("[BLE] last_seq="));
     out.print(lastSequence_);
+    out.print(F(" last_cmd_id="));
+    out.print(lastAcceptedCmdId_);
     out.print(F(" uptime="));
     out.print(getUptimeMs() / 1000);
     out.println(F("s"));

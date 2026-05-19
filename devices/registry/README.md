@@ -78,9 +78,10 @@ The lower 8 bits encode the R/G/B byte ordering. The driver only
 allocates 3 bytes per pixel, so NEO_RGBW-style values (any offset > 2)
 are rejected at construction with an `[ERROR]` log.
 
-- `12390` = `NEO_GRB + NEO_KHZ800` — standard WS2812B (fleet default for new configs)
-- `82` = same NEO_GRB byte ordering, no speed-flag bits — functionally identical to 12390 on this firmware (the driver masks to lower 8 bits)
+- `82` = `NEO_GRB + NEO_KHZ800` — standard WS2812B (fleet default for new configs)
 - `6` = `NEO_RGB` — used by big_bucket_v1 because that panel's LED part is wired in native RGB order
+
+**Do NOT use `12390` (0x3066).** Earlier revisions of this doc claimed `12390 = NEO_GRB + NEO_KHZ800`. That's incorrect — `NEO_GRB + NEO_KHZ800` is `0x52 = 82`. The lower byte of 12390 is `0x66 = 0b01100110`, which the firmware decodes as `rOffset=2, gOffset=1, bOffset=2`. With R and B both at byte-offset 2, every pixel write puts R and B at the same byte slot (visible as blue-channel-missing colors on pre-`752ebc16` builds). Post-`752ebc16` the driver validates and refuses to construct, the `if (!asyncStrip->isValid())` check in setup hits `haltWithError`, the WDT trips, and after 3 boot failures the device falls into BLE-DFU recovery — exactly the configured-boot crash observed 2026-05-18 on cart_inner and cart_outer.
 
 ### Orientation values
 
@@ -88,6 +89,7 @@ are rejected at construction with an `[ERROR]` log.
 - `1` = VERTICAL — column-major zigzag (data snakes column-by-column, common for vertical tube fixtures)
 - `2` = PANEL_GRID — 2×2 of equal sub-panels chained TL→TR→BL→BR, each sub-panel row serpentine
 - `3` = HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R, row 1 R→L, row 2 L→R, … (single strip snaked back and forth, big-bucket-style hand-wired panels)
+- `4` = VERTICAL_FIRST_DOWN — column-major, NO zigzag. Column 0 data enters at the TOP and flows down. Columns 1..N each have data entering at the BOTTOM, flowing up — ALL in the same direction (no alternation between adjacent columns). Used on `cart_umbrella_v1`: the first spoke's data comes off the controller down the canopy-to-tip leg; from the tip a long jumper runs to each subsequent spoke's tip, so every other spoke is wired bottom→top.
 
 ### Battery support
 

@@ -1,0 +1,4 @@
+[submodule "bootloader/src"]
+	path = bootloader/src
+	url = https://github.com/Jdubz/Adafruit_nRF52_Bootloader.git
+	branch = blinky-local-patches

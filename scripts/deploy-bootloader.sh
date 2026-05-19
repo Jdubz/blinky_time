@@ -32,28 +32,27 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_BL_UF2="$REPO/bootloader/update-bootloader-qspi-ota-default.uf2"
 
-# BL_REPO defaults to a sibling checkout of Adafruit_nRF52_Bootloader.
-# Override with env BL_REPO=/path/... for other layouts. We fail loud
-# (rather than silently noop'ing verify_bootloader.py) if the directory
-# isn't there — PR #140 review: the previous hardcoded $HOME path was
-# author-machine-specific and would silently do nothing on CI / other
-# operators' boxes.
-BL_REPO="${BL_REPO:-$REPO/../Adafruit_nRF52_Bootloader}"
-if [ ! -d "$BL_REPO" ]; then
+# BL_REPO defaults to the bootloader/src submodule (fork of
+# adafruit/Adafruit_nRF52_Bootloader on the blinky-local-patches branch,
+# pinned at the commit that built the staged .uf2). Override with env
+# BL_REPO=/path/... for other layouts. We fail loud (rather than silently
+# noop'ing verify_bootloader.py) if the directory isn't populated —
+# PR #140 review: the previous hardcoded $HOME path was author-machine-
+# specific and would silently do nothing on CI / other operators' boxes.
+BL_REPO="${BL_REPO:-$REPO/bootloader/src}"
+if [ ! -d "$BL_REPO" ] || [ ! -d "$BL_REPO/src" ]; then
     cat >&2 <<EOF
-ERROR: BL_REPO is not a directory: $BL_REPO
+ERROR: BL_REPO is missing or not populated: $BL_REPO
 
 The bootloader-source verifier (scripts/verify_bootloader.py) needs the
 Adafruit_nRF52_Bootloader source tree to run its source-level invariant
-checks. Either:
+checks. The blinky_time repo ships this source as a submodule at
+bootloader/src; if the directory is empty you probably need to init it:
 
-  * clone it as a sibling to this repo:
-      cd "$(dirname "$REPO")"
-      git clone https://github.com/adafruit/Adafruit_nRF52_Bootloader.git
-      (then git checkout the blinky-local-patches branch, or whichever
-       branch this fleet's BL is built from)
+      git -C "$REPO" submodule update --init --recursive bootloader/src
 
-  * or set BL_REPO to wherever you have it:
+Or, if you maintain the source tree somewhere else, point BL_REPO at it:
+
       BL_REPO=/your/path ./scripts/deploy-bootloader.sh ...
 
 EOF

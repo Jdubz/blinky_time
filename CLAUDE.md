@@ -46,7 +46,7 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 **Test bootloaders on a SACRIFICIAL device.** Do not flash an experimental BL to the only available test device. If only one device is on the bench, build the BL change against the known-good (`git log blinky-local-patches` to find the last-stable BL commit) and verify with `scripts/verify_bootloader.py` BEFORE flashing. The verifier catches the specific bug class that bricked the hat; pass it before committing to a flash.
 
-**Current fleet BL: 0.8.0-7-gc79626c** (staged in `bootloader/update-bootloader-qspi-ota-default.uf2`). On top of 0.8.0-4's dual-transport baseline, 0.8.0-7 adds:
+**Current fleet BL: 0.8.0-7-gc79626c** (staged in `bootloader/update-bootloader-qspi-ota-default.uf2`; source is pinned at this commit via the `bootloader/src` submodule → `github.com/Jdubz/Adafruit_nRF52_Bootloader` `blinky-local-patches`. Fresh workstation: `git submodule update --init --recursive bootloader/src`). On top of 0.8.0-4's dual-transport baseline, 0.8.0-7 adds:
 - `bootloader_settings_save` SD-aware (no more silent fail on UF2 path → was 80% hiccup pre-fix)
 - BLE adv paused during USB MSC transfer + ADV_SET_TERMINATED auto-restart guard (eliminates 5-90s slow-completion tail)
 - `msc_uf2_check_stuck()` self-recovery (8s idle + incomplete → DFU_RESET → boot to app; converts permanent stuck into ~13s recovery)
@@ -201,6 +201,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
+| `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |

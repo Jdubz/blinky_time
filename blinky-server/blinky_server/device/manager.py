@@ -1244,17 +1244,48 @@ class FleetManager:
                 job.transition(FlashJobState.FAILED)
                 return
 
-            if result.get("status") != "ok":
-                job.set_error(f"BLE DFU failed: {result.get('message', 'unknown error')}")
+            # Two conditions must BOTH hold for the BLE-DFU job to be
+            # treated as successful:
+            #   1. ``status == "ok"`` — the DFU transfer itself
+            #      completed at the protocol level (all bytes acked,
+            #      activate command sent).
+            #   2. ``verified is True`` — the device re-appeared as the
+            #      app over BLE within the post-reboot verify window.
+            #
+            # Checking BOTH (defense in depth) means that if a future
+            # regression in ``_ble_dfu_write_impl`` re-introduces the
+            # 2026-05-18 false-success pattern (status=ok + verified=
+            # False — transfer done, device never seen advertising as
+            # app), the orchestrator still routes to FAILED. The
+            # device may be left in DFU after a failed verify and the
+            # operator must know — silently calling it completed
+            # opened a 10-min auto-recovery dedup window over a stuck
+            # device, which is exactly what the BLE-only fleet
+            # cannot tolerate. See docs/BLE_FLEET_RELIABILITY_PLAN.md
+            # item A.
+            if result.get("status") != "ok" or not result.get("verified", False):
+                msg = result.get("message", "unknown error")
+                if result.get("status") == "ok" and not result.get("verified", False):
+                    # Defensive log: this branch only fires if the
+                    # downstream impl regressed. Surface loudly so the
+                    # cause is obvious in postmortems.
+                    log.error(
+                        "BLE DFU job %s: impl returned status=ok but verified=False "
+                        "— treating as FAILED to prevent silent stuck-in-DFU. msg=%s",
+                        job.job_id,
+                        msg,
+                    )
+                job.set_error(f"BLE DFU failed: {msg}")
                 job.transition(FlashJobState.FAILED)
                 return
 
-            # ``_ble_dfu_write_impl`` returned ok — its own post-DFU
-            # verify already scanned for the rebooted device (with the
-            # random-static-address-change fallback). Map directly to
-            # COMPLETED. The lockdown plan calls for migrating this
-            # verify into a BLE-aware ``run_verify`` branch later;
-            # until that lands, the legacy verify is what we trust.
+            # ``_ble_dfu_write_impl`` returned ok AND verified — its
+            # own post-DFU verify already scanned for the rebooted
+            # device (with the random-static-address-change fallback).
+            # Map directly to COMPLETED. The lockdown plan calls for
+            # migrating this verify into a BLE-aware ``run_verify``
+            # branch later; until that lands, the legacy verify is
+            # what we trust.
             job.transition(FlashJobState.VERIFYING)
             job.transition(FlashJobState.COMPLETED)
         finally:
@@ -1664,6 +1695,67 @@ class FleetManager:
                         disc.address,
                     )
                     existing.port = disc.address
+                # Refresh the cached discovery snapshot for every known
+                # device that re-appears, regardless of current state.
+                # A CONNECTED device that USB-re-enumerates (port change,
+                # bus change) needs its cache updated too, otherwise a
+                # subsequent disconnect → reconnect would use stale
+                # discovery metadata (PR #144 review — gemini).
+                self._device_discovery[device_id] = disc
+                # The device is on the USB bus again. Reset transient
+                # post-flash states so the reconnect loop picks it up
+                # next cycle (DFU_RECOVERY: returned from BLE-DFU
+                # bootloader; DISCONNECTED/ERROR: prior connect dropped).
+                # Mirror the BLE branch's analogous transition above.
+                # Without this, a device that recovered from BLE-DFU
+                # stays in dfu_recovery state forever even though it's
+                # back on serial — exactly the bug observed live after
+                # PR #143's BLE-DFU hardware test.
+                if existing.state in (
+                    DeviceState.DFU_RECOVERY,
+                    DeviceState.DISCONNECTED,
+                    DeviceState.ERROR,
+                ):
+                    prior_state = existing.state.value
+                    # Rebuild the SerialTransport against the freshly-
+                    # discovered port — the old transport might be bound
+                    # to a stale device path if USB renumbered during
+                    # the DFU cycle. ``_reconnect_disconnected`` reads
+                    # ``device.transport`` on its next pass to call
+                    # ``connect()``, so the transport must be current.
+                    #
+                    # If the rebuild fails, DO NOT transition state to
+                    # DISCONNECTED. The reconnect loop would then call
+                    # ``connect()`` on the STALE pre-recovery transport
+                    # and either fail loudly or (worse) succeed against
+                    # the old USB path that's no longer the right
+                    # device. Leaving state at its prior value means
+                    # the next discovery cycle will try again — which
+                    # is the behavior we want for a transient
+                    # _create_transport hiccup. PR #144 review.
+                    try:
+                        existing.transport = _create_transport(disc)
+                    except Exception:
+                        log.exception(
+                            "Failed to rebuild transport for %s on re-discovery; "
+                            "leaving state=%s for next discovery retry",
+                            device_id[:12],
+                            existing.state,
+                        )
+                        continue
+                    existing.state = DeviceState.DISCONNECTED
+                    # Reset the reconnect-backoff counter so the first
+                    # post-recovery reconnect attempt fires immediately
+                    # rather than waiting through whatever backoff the
+                    # prior failures accumulated.
+                    self._reconnect_failures.pop(device_id, None)
+                    self._reconnect_blackout.pop(device_id, None)
+                    log.info(
+                        "Device %s re-appeared on serial after %s; "
+                        "transitioning to DISCONNECTED for reconnect",
+                        device_id[:12],
+                        prior_state,
+                    )
                 continue
 
             # Skip devices previously deduped (e.g. shared BLE+serial identity).

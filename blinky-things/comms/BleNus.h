@@ -41,6 +41,17 @@ public:
     /// Send a line to the connected central (appends \n).
     void writeLine(const char* line);
 
+    /// Re-encode the advertising payload with a new last-applied
+    /// command_id (per BLE_FLEET_RELIABILITY_PLAN.md item #5 gossip
+    /// ACK). The mfg-data block carries [company=0xFFFF][marker=0xA0
+    /// ACK][cmd_id LE] and is embedded in the SCAN RESPONSE (not
+    /// primary adv) to avoid disrupting NUS service discovery.
+    ///
+    /// Caller is expected to invoke this when ``BleScanner::
+    /// getLastAcceptedCommandId()`` reports a value newer than the
+    /// last advertised one. No-op if ``newId == lastAdvertisedCmdId_``.
+    void setLastAckedCommandId(uint16_t newId);
+
     // --- Print interface (writes go into the ring buffer) ---
     size_t write(uint8_t c) override;
     size_t write(const uint8_t* data, size_t size) override;
@@ -87,4 +98,11 @@ private:
     uint32_t connectTimeMs_ = 0;
     uint32_t linesRx_ = 0;
     uint32_t linesTx_ = 0;
+
+    // Last command_id we've encoded into the scan response. setLastAcked
+    // CommandId() is a no-op when the new id matches this — saves the
+    // (relatively expensive) Bluefruit ScanResponse.setData round-trip
+    // when the main loop polls the scanner more often than commands
+    // actually arrive.
+    uint16_t lastAdvertisedCmdId_ = 0;
 };

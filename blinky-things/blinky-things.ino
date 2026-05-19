@@ -155,6 +155,15 @@ void setup() {
   // persists across all reset types (WDT, soft reset, HardFault).
   SafeBootWatchdog::begin();
 
+  // The hardware WDT is now armed with a 15 s timeout. setup() must
+  // either complete within 15 s OR feed the WDT at any phase that
+  // could exceed 15 s on its own. The bare SafeBootWatchdog::feed()
+  // calls below are at known-slow phase boundaries (LED test 3 s
+  // delay, Bluefruit BLE stack init, etc.). 2026-05-18 postmortem
+  // (docs/POSTMORTEM_2026_05_18_LEDTYPE.md) confirmed bare setup()
+  // without these feeds could approach the WDT limit; the feeds are
+  // defensive, not a workaround for a known bug.
+
   // Initialize serial with default baud rate (config not loaded yet)
   // Increase RX buffer to handle large device config JSON commands (default 256 is too small)
 #ifdef BLINKY_PLATFORM_ESP32S3
@@ -162,6 +171,7 @@ void setup() {
 #endif
   Serial.begin(115200);
   delay(1000);  // Give serial time to initialize
+  SafeBootWatchdog::feed();
 
   // Display version information (always show on boot)
   Serial.println(F("\n=== BLINKY TIME STARTUP ==="));
@@ -180,7 +190,6 @@ void setup() {
   // Falls back to TEST_CHIP_CONFIG if no config stored — avoids safe mode
   // on bare chips so audio analysis and serial commands still work.
   configStorage.begin();
-
   // Wire the crash-loop quarantine hook BEFORE checkAndIncrement so that if
   // the threshold is tripped on this boot, the stored device config is
   // invalidated before we hand off to BLE DFU recovery. Without this, a
@@ -198,7 +207,6 @@ void setup() {
   // recovery before any potentially-crashing component runs).
   // See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F4).
   RebootFrequencyCounter::checkAndIncrement();
-
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
   if (!validDeviceConfig) {
     config = TEST_CHIP_CONFIG;
@@ -270,6 +278,7 @@ void setup() {
   }
 
   // Initialize audio controller (uses default or configured sample rate)
+  // Slow: PDM mic init + FFT setup + TFLite tensor arena allocation.
   uint16_t audioSampleRate = validDeviceConfig ? config.microphone.sampleRate : 16000;
   bool audioOk = audioController->begin(audioSampleRate);
   if (!audioOk) {
@@ -277,7 +286,7 @@ void setup() {
   } else {
     SerialConsole::logDebug(F("Audio controller initialized"));
   }
-
+  SafeBootWatchdog::feed();
   // === LED SYSTEM INITIALIZATION (only if valid device config) ===
   if (validDeviceConfig) {
     Serial.println(F("\n=== Initializing LED System ==="));
@@ -388,11 +397,9 @@ void setup() {
       haltWithError(F("ERROR: LED strip wrapper allocation failed"));
     }
 #endif
-
     leds->begin();
     leds->setBrightness(min((int)config.matrix.brightness, 255));
     leds->show();
-
     // Basic LED test - light up first few LEDs to verify hardware
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
       Serial.print(F("[DEBUG] LED Test at brightness "));
@@ -402,8 +409,14 @@ void setup() {
     leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
     leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
     leds->show();
-    delay(3000);  // Hold for 3 seconds to verify colors are correct
-
+    // Hold for 3 seconds to verify colors are correct. Break the wait
+    // into 1-second chunks so the WDT is fed and the boot trace shows
+    // the wait completing (otherwise a crash during the delay looks
+    // identical to a crash before the delay).
+    for (int i = 0; i < 3; ++i) {
+      delay(1000);
+      SafeBootWatchdog::feed();
+    }
     // Clear test LEDs
     leds->setPixelColor(0, 0);
     leds->setPixelColor(1, 0);
@@ -413,7 +426,6 @@ void setup() {
     if (!ledMapper.begin(config)) {
       haltWithError(F("ERROR: LED mapper initialization failed"));
     }
-
     // Debug: detailed config info
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
       Serial.print(F("[DEBUG] Layout: "));
@@ -433,12 +445,13 @@ void setup() {
     }
 
     // Initialize RenderPipeline (manages generators, effects, and rendering)
+    // Slow: allocates and runs begin() for all 4 generators + 2 effects.
     pipeline = new(std::nothrow) RenderPipeline();
     if (!pipeline || !pipeline->begin(config, *leds, ledMapper)) {
       haltWithError(F("ERROR: RenderPipeline initialization failed"));
     }
-
     SerialConsole::logDebug(F("RenderPipeline initialized"));
+    SafeBootWatchdog::feed();
 
     // Per-device "cycle generator" button. No-op when buttonPin == 0.
     // Logs the pin assignment at INFO so it's visible during deployment
@@ -456,7 +469,6 @@ void setup() {
       Serial.print(F("[INFO] Generator-cycle button on pin D"));
       Serial.println(config.input.buttonPin);
     }
-
     // Load effect parameters from flash
     if (configStorage.isValid()) {
       // Load parameters directly into generators' internal storage
@@ -485,7 +497,6 @@ void setup() {
     } else {
       SerialConsole::logDebug(F("Using default effect params"));
     }
-
     Serial.println(F("=== LED System Ready ===\n"));
   }
   // End of LED system initialization
@@ -521,12 +532,12 @@ void setup() {
   console->setFakeAudio(&fakeAudio);
   console->begin();
   SerialConsole::logDebug(F("Serial console initialized"));
-
   // Initialize BLE (nRF52840 only)
 #ifdef BLINKY_PLATFORM_NRF52840
   // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
+  // Slow: SoftDevice + Bluefruit + GAP/GATT setup, ~500 ms typical.
   Bluefruit.begin(1, 0);
-
+  SafeBootWatchdog::feed();
   // Per-device BLE name — "Blinky-<deviceId>-<snSuffix2>" when the chip has a
   // stored device config, or "Blinky-<snSuffix4>" for unconfigured chips.
   // snSuffix comes from FICR DEVICEID[0] lower bits (hardware-unique, same
@@ -566,7 +577,7 @@ void setup() {
       Serial.println(F("[FALLBACK] App-mode `bootloader ble` command still works via NUS."));
     }
   }
-
+  SafeBootWatchdog::feed();
   // NUS peripheral — bidirectional serial-over-BLE for fleet server
   bleNus.begin();
   bleNus.setLineCallback([](const char* line) {
@@ -635,7 +646,6 @@ void setup() {
   lastMs = 0;
 
   Serial.println(F("Ready."));
-
   // NOTE: SafeBootWatchdog::markStable() is intentionally NOT called here.
   // Deferred to loop() once millis() >= 60000 — a runtime crash that happens
   // after setup() completes but before that point should still count toward
@@ -829,6 +839,14 @@ void loop() {
 #ifdef BLINKY_PLATFORM_NRF52840
   bleNus.update();       // NUS peripheral (serial-over-BLE)
   bleScanner.update();   // Fleet broadcast receiver
+
+  // Gossip-ACK: when the scanner has accepted a NEW command_id (not an
+  // idempotent re-emit), expose it in our own BLE adv's scan-response
+  // manufacturer data so a fleet server can detect lagged devices and
+  // re-broadcast missed commands without us holding a GATT connection.
+  // The setter is a no-op when the value hasn't changed since last
+  // call (cheap polling). See BLE_FLEET_RELIABILITY_PLAN.md item #5.
+  bleNus.setLastAckedCommandId(bleScanner.getLastAcceptedCommandId());
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   esp32BleNus.update();  // Drain BLE NUS TX buffer
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)

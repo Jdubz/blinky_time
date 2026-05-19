@@ -231,6 +231,27 @@ private:
                     setMapping(gx, gy, ledIndex);
                 }
             }
+        } else if (orientation == VERTICAL_FIRST_DOWN) {
+            // Vertical column-major, NO zigzag. Column 0 is wired top→bottom
+            // (data enters at the top). Columns 1..N are wired bottom→top
+            // (data enters at the bottom), all in the same direction —
+            // there is NO alternation between adjacent columns.
+            //
+            // 8×13 cart_umbrella example:
+            //   Col 0:  LEDs   0..12   (y=0 top → y=12 bottom)
+            //   Col 1:  LEDs  25..13   (y=12 bottom → y=0 top)
+            //   Col 2:  LEDs  38..26   (y=12 bottom → y=0 top)
+            //   Col 3:  LEDs  51..39   (y=12 bottom → y=0 top)
+            //   ...
+            //   Col 7:  LEDs 103..91   (y=12 bottom → y=0 top)
+            for (int x = 0; x < width; x++) {
+                for (int y = 0; y < height; y++) {
+                    int ledIndex = (x == 0)
+                        ? (x * height + y)
+                        : (x * height + (height - 1 - y));
+                    setMapping(x, y, ledIndex);
+                }
+            }
         } else if (orientation == HORIZONTAL_ZIGZAG) {
             // Row-major serpentine ("big bucket" wiring). Data starts at
             // top-left, row 0 runs L→R, row 1 R→L, row 2 L→R, ...

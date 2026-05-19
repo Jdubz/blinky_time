@@ -610,7 +610,12 @@ async def test_ble_dfu_flash_calls_upload_ble_dfu_for_dfu_recovery(
 
     async def fake_upload_ble_dfu(**kwargs: Any) -> dict[str, Any]:
         captured_kwargs.update(kwargs)
-        return {"status": "ok", "message": "mocked", "elapsed_s": 0.1}
+        # ``verified=True`` is required for the orchestrator to treat
+        # the result as a success. status=ok alone is not enough — see
+        # the defense-in-depth check added in PR #144 (the 2026-05-18
+        # BLE-DFU silent-stuck postmortem). A regression that drops
+        # the verified field would fail this test.
+        return {"status": "ok", "message": "mocked", "elapsed_s": 0.1, "verified": True}
 
     monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", fake_upload_ble_dfu)
     monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
@@ -665,6 +670,74 @@ async def test_ble_dfu_flash_fails_on_upload_error(
     assert job.state is FlashJobState.FAILED
     assert job.error is not None
     assert "preflight RSSI too weak" in job.error
+
+
+@pytest.mark.asyncio
+async def test_ble_dfu_flash_fails_when_transfer_ok_but_verify_failed(
+    fleet: FleetManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Defense-in-depth: orchestrator must route status=ok+verified=False to FAILED.
+
+    The 2026-05-18 silent-stuck-in-DFU bug: ``_ble_dfu_write_impl``
+    returned ``status="ok"`` even when the post-reboot verify scans
+    failed (device never re-advertised as app). The orchestrator only
+    checked ``status`` and marked the FlashJob COMPLETED, opening the
+    auto-recovery dedup window over a still-stuck device.
+
+    ``_ble_dfu_write_impl`` was fixed to set ``status="error"`` in that
+    path, but the orchestrator must ALSO require ``verified=True`` so
+    a future regression in the impl can't silently re-introduce the
+    false success. This test pins the orchestrator's contract by
+    feeding it the exact pre-fix shape (status=ok + verified=False)
+    and asserting the job ends up FAILED.
+
+    See docs/BLE_FLEET_RELIABILITY_PLAN.md item A.
+    """
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.firmware import ble_dfu as ble_dfu_mod
+    from blinky_server.firmware import compile as compile_mod
+
+    from .mock_transport import MockTransport
+
+    device = Device(
+        device_id="verify-flake",
+        port="dummy",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="ble"),  # type: ignore[arg-type]
+    )
+    device.ble_address = "AA:BB:CC:DD:EE:FF"
+    device.state = DeviceState.DFU_RECOVERY
+    fleet._devices["verify-flake"] = device
+
+    fw_file = tmp_path / "fw.hex"
+    fw_file.write_text(":00000001FF\n")
+
+    async def ok_status_but_not_verified(**kwargs: Any) -> dict[str, Any]:
+        # Exactly the regression shape: transfer completed at the
+        # protocol level, but verify never saw the device come back.
+        return {
+            "status": "ok",
+            "message": "BLE DFU transfer complete (device not yet seen — may still be booting)",
+            "elapsed_s": 33.4,
+            "verified": False,
+        }
+
+    monkeypatch.setattr(ble_dfu_mod, "_ble_dfu_write_impl", ok_status_but_not_verified)
+    monkeypatch.setattr(compile_mod, "ensure_dfu_zip", lambda p: f"{p}.dfu.zip")
+
+    job = await fleet.flash_device("verify-flake", fw_file)
+    await job.wait_until_terminal(timeout=5.0)
+
+    assert job.state is FlashJobState.FAILED, (
+        f"orchestrator must NOT mark a status=ok+verified=False BLE-DFU result as "
+        f"COMPLETED — that's the silent-stuck-in-DFU regression. Got {job.state}."
+    )
+    assert job.error is not None
+    # The orchestrator preserves the impl's message so operators can
+    # tell verify-failed apart from a true transfer-error.
+    assert "device not yet seen" in job.error
 
 
 @pytest.mark.asyncio
@@ -1934,3 +2007,79 @@ async def test_identity_aliases_load_on_start(
 
     assert fleet.resolve_canonical("FA:E6:7D:A9:8B:3A") == "AABBCCDDEEFF0011"
     assert fleet.resolve_canonical("AABBCCDDEEFF0011") == "AABBCCDDEEFF0011"
+
+
+@pytest.mark.asyncio
+async def test_dfu_recovery_to_disconnected_transition_when_serial_reappears(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A device that recovered from BLE-DFU back to USB MUST transition
+    out of DFU_RECOVERY state so the reconnect loop can pick it up.
+    Pre-fix (PR #143 hardware-test follow-up), the discovery loop's
+    serial-known-id branch updated the port but left the state at
+    DFU_RECOVERY forever — the device stayed in dfu_recovery in the
+    fleet API indefinitely even though it was healthy on USB.
+    """
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.transport.discovery import DiscoveredDevice
+
+    from .mock_transport import MockTransport
+
+    # Seed: a device that was previously in app mode (so it exists in
+    # _devices, keyed by SN) and is now in DFU_RECOVERY (we just
+    # finished a BLE-DFU flash). Reconnect backoff state from the prior
+    # liveness drop is also seeded so we can assert the fix clears it.
+    sn = "AABBCCDDEEFF0011"
+    device = Device(
+        device_id=sn,
+        port="/dev/ttyACM-stale",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="serial"),  # type: ignore[arg-type]
+    )
+    device.state = DeviceState.DFU_RECOVERY
+    device.ble_address = "FA:E6:7D:A9:8B:3A"
+    fleet._devices[sn] = device
+    fleet._reconnect_failures[sn] = 7  # accumulated backoff
+    fleet._reconnect_blackout[sn] = 9_999_999_999.0  # active blackout
+
+    # Discovery sees the device back on USB.
+    fresh_disc = DiscoveredDevice(
+        device_id=sn,
+        platform="nrf52840",
+        transport_type="serial",
+        address="/dev/ttyACM-fresh",
+    )
+
+    async def fake_discover_all(**_kwargs: Any) -> list[DiscoveredDevice]:
+        return [fresh_disc]
+
+    monkeypatch.setattr(
+        "blinky_server.device.manager.discover_all",
+        fake_discover_all,
+    )
+    # Skip the dedup-exclusion refresh (also reads from disk).
+    monkeypatch.setattr(fleet, "_refresh_dedup_exclusions", lambda: None)
+    # _create_transport will be called for the transport rebuild; let it
+    # build a real SerialTransport but stub the constructor so we don't
+    # actually open the (fake) port.
+    from blinky_server.device import manager as mgr_mod
+
+    def fake_create_transport(disc: DiscoveredDevice) -> Any:
+        return MockTransport(transport_type="serial")
+
+    monkeypatch.setattr(mgr_mod, "_create_transport", fake_create_transport)
+
+    await fleet._discover_and_connect()
+
+    # State transitioned to DISCONNECTED so the reconnect loop can pick
+    # it up next cycle.
+    assert device.state is DeviceState.DISCONNECTED
+    # Port string updated.
+    assert device.port == "/dev/ttyACM-fresh"
+    # Transport rebuilt (the old one was stale — port may have changed).
+    assert isinstance(device.transport, MockTransport)
+    # Reconnect-backoff state cleared.
+    assert sn not in fleet._reconnect_failures
+    assert sn not in fleet._reconnect_blackout
+    # Discovery snapshot refreshed so reconnect loop sees serial type.
+    assert fleet._device_discovery[sn] is fresh_disc
