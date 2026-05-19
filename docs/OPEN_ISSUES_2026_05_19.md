@@ -42,21 +42,32 @@ within ~60 s of the missed broadcast.
 
 ---
 
-### 1.2 Scene system → generator-only refactor (in flight)
+### 1.2 Scene system → generator-only refactor
+
+**Status: server + console SHIPPED 2026-05-19.** `/api/scenes/*`
+routes, `scene_cursor` module, `scenes` module, and the test suite
+are deleted from `blinky-server`. The `~/.local/share/blinky-server/scenes/`
+directory is orphaned on disk; safe to delete but the server no longer
+manages it. `ScenesPanel.tsx` + tests + ~145 lines of CSS removed
+from `blinky-console`; `SCENE_VISIBLE_SETTINGS` / `isSceneVisible`
+dead code removed from `settingsMetadata.ts`. `PacketType.SCENE = 0x02`
+is kept in `protocol.py` only as a mirror of `BleProtocol.h` (the
+firmware enum is unchanged); no Python code emits SCENE packets.
 
 **Decision 2026-05-19:** eliminate scenes entirely. Direct generator
 selection only; hue rotation managed via Hub UI sliders.
 
-**Shipped tonight (lemon-cart commit `e521e42`):**
-- Light button now cycles `fire/water/plasma/audio` (no more scenes).
-- Cursor moved to client-side `/run/lemoncart/generator-cursor`.
+**Shipped:**
+- Lemon-cart: light button cycles `fire/water/plasma/audio`
+  (commit `e521e42` in the lemon-cart repo). Cursor moved to
+  client-side `/run/lemoncart/generator-cursor`.
+- blinky-server: scene routes + module + library + tests deleted.
+- blinky-console: `ScenesPanel` deleted; CSS + dead settings-metadata
+  helpers removed.
 
-**Not shipped — required follow-up:**
-- Server: remove `/api/scenes/*` routes + `scene_cursor` module +
-  scene library on disk. Currently orphaned but live.
+**Still pending (lemon-cart repo):**
 - Hub UI: scene chip section should be removed; **new** hue rotation
   speed slider + absolute hue position slider added.
-- Console: scene-editor pages can be deleted.
 
 **Why the rush to refactor:** scene commands like
 `scene water static 0.0 0.66` (28 bytes) exceed the 31-byte legacy BLE

@@ -36,15 +36,9 @@ vi.mock('./lib/target', async () => {
   };
 });
 
-// ScenesPanel hits /api/scenes on mount; stub fetch so the test doesn't
-// produce an unhandled rejection log.
 beforeEach(() => {
   mockSetGenerator.mockClear();
   mockUseDevices.mockReset();
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) } as Response)
-  );
 });
 
 function makeConnectedDevice(id = 'dev-1', name = 'Kitchen'): Device {

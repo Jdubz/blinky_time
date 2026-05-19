@@ -2,8 +2,8 @@
 
 State that must survive reboots lives under ``~/.local/share/blinky-server/``
 (XDG_DATA_HOME if set). Anything under ``/tmp`` is lost on reboot — never
-put scene definitions, uploaded firmware, or recovery pointers there if
-the cart needs to come back up unattended.
+put uploaded firmware or recovery pointers there if the cart needs to
+come back up unattended.
 
 Each ``*_dir()`` function caches its result so repeated calls don't issue
 a ``mkdir`` syscall every time — these are called from hot paths
@@ -21,15 +21,13 @@ from pathlib import Path
 # call ``_clear_cache()`` to force re-resolution.
 _data_dir: Path | None = None
 _firmware_dir: Path | None = None
-_scenes_dir: Path | None = None
 
 
 def _clear_cache() -> None:
     """Reset cached paths. Test-only — production code never calls this."""
-    global _data_dir, _firmware_dir, _scenes_dir
+    global _data_dir, _firmware_dir
     _data_dir = None
     _firmware_dir = None
-    _scenes_dir = None
 
 
 def data_dir() -> Path:
@@ -57,13 +55,3 @@ def firmware_dir() -> Path:
         d.mkdir(parents=True, exist_ok=True)
         _firmware_dir = d
     return _firmware_dir
-
-
-def scenes_dir() -> Path:
-    """Named fleet scenes."""
-    global _scenes_dir
-    if _scenes_dir is None:
-        d = data_dir() / "scenes"
-        d.mkdir(parents=True, exist_ok=True)
-        _scenes_dir = d
-    return _scenes_dir

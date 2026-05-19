@@ -11,7 +11,6 @@ import { useDevices } from './hooks/useDevices';
 import { DeviceStrip } from './components/DeviceStrip';
 import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
-import { ScenesPanel, type Scene } from './components/ScenesPanel';
 import { AudioDebugPage } from './pages/AudioDebugPage';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
 import type { DeviceProtocol } from './services/protocol';
@@ -191,23 +190,6 @@ export function MainShell() {
           onHueChange={handleHueChange}
           disabled={!dispatchEnabled}
         />
-
-        {serverUrl && (
-          <ScenesPanel
-            currentGenerator={generator}
-            currentEffectMode={effectMode}
-            currentHueSpeed={hueSpeed}
-            currentHueShift={hueShift}
-            onApplied={(scene: Scene) => {
-              // Resync local state so UI reflects what the server just pushed.
-              setGenerator(scene.generator);
-              setEffectMode(scene.effect_mode);
-              setHueSpeed(scene.effect_speed);
-              setHueShift(scene.effect_hue);
-            }}
-            disabled={!dispatchEnabled}
-          />
-        )}
       </main>
     </div>
   );
