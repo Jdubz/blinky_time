@@ -156,15 +156,26 @@ sacrificial bench chip + `scripts/verify_bootloader.py` re-validation.
 
 ### 3.2 BL prefer UF2 over BLE-DFU when USB cable detected
 
+**Status: SHIPPED in b181+** (commit `ac254194`). The fix lives in
+*firmware* (not the bootloader, as the original entry implied) —
+specifically `SafeBootWatchdog::enterRecoveryBootloader` now reads
+`NRF_POWER->USBREGSTATUS.VBUSDETECT` and writes the UF2 RAM magic
+(0xBEEF0057) instead of the BLE-DFU magic (0xBEEF00A8) when a USB
+cable is providing VBUS. Sealed devices with no USB fall through to
+BLE-DFU as before, so the autonomous-recovery contract for
+installed sculptures is unchanged.
+
+Bench-validated 2026-05-19 on `659C8DD3ADF84A33`: device flashes
+cleanly, boots through the §3.4 fresh-build path, healthy fps. The
+functional change is dormant in normal operation (only fires on
+the 5-strike `RebootFrequencyCounter` quarantine path); field
+validation happens whenever the next auto-recovery actually fires.
+
 **Reference:** [[project-bl-prefer-uf2-when-usb]].
 
-**Today:** auto-fallback always picks BLE-DFU (~5.5 min). When a USB
-cable is connected at fallback time, UF2 mass-storage path would
-recover in ~30 seconds.
-
-**Fix:** in BL `check_dfu_mode()`, when entering DFU on app crash,
-check `NRF_POWER->USBREGSTATUS.VBUSDETECT`. If USB is present, call
-`enterUf2Dfu()` instead of `enterBleDfu()`. Few-line change.
+**Original symptom:** auto-fallback always picked BLE-DFU (~5.5 min).
+When a USB cable was connected at fallback time, UF2 mass-storage
+path would have recovered in ~30 seconds.
 
 **Caveat:** doesn't help **sealed devices** [[feedback-enclosed-devices-no-physical]]
 where USB isn't accessible. But improves bench recovery dramatically.
