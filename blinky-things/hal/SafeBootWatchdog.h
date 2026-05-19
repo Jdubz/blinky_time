@@ -141,22 +141,42 @@ namespace SafeBootWatchdog {
     }
 
     /**
-     * Enter BLE DFU recovery bootloader (never returns).
+     * Enter recovery bootloader (never returns).
      *
-     * Always uses BLE DFU so the fleet server can recover the device
-     * wirelessly — even if USB is dead. UF2 (USB) recovery is still
-     * available via physical double-tap reset as a manual fallback.
+     * Prefer UF2 (USB mass-storage, ~30 s host-side recovery) when a
+     * USB cable is currently attached — VBUSDETECT high means a host
+     * machine is plugged in, so a UF2 drop will be visible AND applied
+     * in seconds instead of waiting through the ~5.5-minute BLE-DFU
+     * transfer. Sealed sculpture devices with no USB access fall
+     * through to BLE-DFU as before.
      *
-     * Known limitation: if a device crash-loops AND BLE is unavailable
-     * (out of range, interference, fleet server down), there is no
-     * automatic recovery path. Installed devices with inaccessible
-     * reset buttons would require physical access or SWD in this case.
-     * A hybrid approach (track failed DFU boot cycles in RAM, fall
-     * back to UF2 after N failures) could address this if it becomes
-     * a problem in practice.
+     * OPEN_ISSUES §3.2 / [[project-bl-prefer-uf2-when-usb]]. UF2 path
+     * remains valid for sealed devices via physical double-tap reset
+     * as a manual fallback when neither this auto-trigger nor the
+     * fleet server can reach them.
+     *
+     * Known limitation: if a device crash-loops AND neither USB nor
+     * BLE is reachable (out of range, interference, fleet server
+     * down, USB cable unplugged), there is no automatic recovery
+     * path. Sealed devices with inaccessible reset buttons would
+     * require physical access or SWD in that case.
      */
     inline void enterRecoveryBootloader() {
-        enterBleDfuBootloader();
+        // USBREGSTATUS.VBUSDETECT is a real-time hardware bit: 1 iff
+        // a USB cable is currently providing VBUS. The bit reflects
+        // physical electrical state, not enumeration — so an
+        // unenumerated cable (e.g. a wall charger) still counts.
+        // That's the right behaviour here: any host capable of
+        // accepting a UF2 mass-storage device will hold VBUS up.
+        // The fall-through to BLE for sealed devices (no VBUS) keeps
+        // the autonomous-recovery contract for installed sculptures.
+        const bool usb_present =
+            (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
+        if (usb_present) {
+            enterUf2Bootloader();
+        } else {
+            enterBleDfuBootloader();
+        }
     }
 
     /**
