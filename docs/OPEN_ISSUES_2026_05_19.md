@@ -301,13 +301,36 @@ The 21-byte effective payload ceiling for legacy BLE adv constrains:
 - Set commands with long names (Section 5)
 - Future protocol extensions
 
-**Fix:** enable Bluefruit's extended-adv scanner mode. One-line
-firmware change (research the exact API — `Bluefruit.Scanner.
-useExtendedAdv()` or similar). Lifts the per-command ceiling from
-21 bytes → ~240 bytes.
+**Status: research complete, NOT a one-liner.** Investigation
+2026-05-19: Adafruit Bluefruit (`Bluefruit52Lib/src/BLEScanner.{h,cpp}`)
+does not expose a `useExtendedAdv()` method. The `start()` path
+fixes `_param.extended = 0` in the constructor (with a literal
+`// TODO Extended Adv on secondary channels`) and allocates the scan
+buffer at `_scan_data[BLE_GAP_SCAN_BUFFER_MAX = 31]`. To enable
+extended adv:
 
-**Cost:** BLE-DFU all 10 fleet devices (~55 min if cascade hits each).
-But it unblocks Section 5 cleanly and future-proofs the protocol.
+1. **BSP-level patch** of `BLEScanner.cpp`: resize `_scan_data` from
+   31 → ≥255 (`BLE_GAP_SCAN_BUFFER_EXTENDED_MIN`), add a public
+   `useExtendedAdv(bool)` that flips `_param.extended` and toggles
+   `_report_data.len` between the two sizes. New `patches/` file
+   + re-apply on BSP update (precedent: `patches/tinyusb-cdc-no-overwritable-fifo.patch`).
+2. **Firmware-side** `Bluefruit.Scanner.useExtendedAdv(true)` in
+   `BleScanner::begin` BEFORE `start(0)`.
+3. **handleReport** path needs to tolerate the larger frame layout
+   (SoftDevice may deliver fragments via `report_incomplete_evts`
+   if a single extended adv exceeds the 255-byte buffer; we'd need
+   to either ignore those or accumulate them).
+4. **Verify with bench chip + signal generator** before fleet rollout.
+
+**Cost:** ~half-day investigation + patch + firmware + BSP-patch
+install/CI hook + bench validation. Plus the ~55 min BLE-DFU rollout
+to fleet (eased by Section 1.1 gossip-ACK re-broadcast which makes
+delivery more reliable).
+
+**Workaround in the meantime:** keep fleet commands under 21 bytes
+on-wire. `gen <name>`, `effect <mode>`, `set <short> <value>` all
+fit. Long-named settings (`effectRotationSpeed = 28 bytes`) need
+either a shorter name or this extended-adv work.
 
 ---
 
