@@ -140,17 +140,76 @@ the WS2812B data line, or a flaky physical button.
 
 ### 3.1 BL doesn't auto-DFU on app-crashes-pre-BLE-init
 
+**Status: design surveyed 2026-05-19, NOT a small change.**
+The OPEN_ISSUES one-liner "BL gets a hardware-watchdog-with-handshake
+pattern" understates the work. Investigation surfaced these
+constraints (parking them here so the next attempt starts informed):
+
+* **RAM layout for the handshake marker.** The existing `dbl_reset_mem`
+  at `0x20007F7C` is a 4-byte word with exact-match magic semantics
+  (`DFU_RAM_MAGIC_UF2` / `_BLE` / `_QSPI`). Adding a boot-attempt
+  counter requires either (a) carving a new region from the
+  SoftDevice-reserved zone immediately below `0x20007F7C`, (b)
+  packing the counter into the existing word via a non-conflicting
+  encoding, or (c) placing it in the bootloader's `NOINIT` region at
+  `0x20007F80+` (currently holds `m_peer_data` / `m_peer_data_crc` —
+  variable offset depends on link order). Option (a) requires
+  changes to `bootloader/src/linker/nrf52840.ld`. The firmware's
+  linker (`nrf52840_s140_v7.ld`) does NOT reserve any of these
+  addresses — the existing `dbl_reset_mem` works because the
+  firmware's BSS/heap empirically don't land at `0x20007F7C`, AND
+  because magic writes happen immediately before `NVIC_SystemReset`
+  with `__DSB(); __ISB()` (so the BL reads fresh RAM before the next
+  firmware run touches it). Any new shared address inherits the same
+  "this works by collision avoidance" property.
+
+* **Increment timing.** BL must increment the counter on every
+  "about to jump to app" path (line `main.c:236`,
+  `bootloader_app_start()`). Includes the post-DFU-completion path.
+  Does NOT include DFU-mode entry (no app jump).
+
+* **Clear timing.** Firmware should clear the counter at the same
+  point `SafeBootWatchdog::markStable()` fires (60 s uptime) — that's
+  the existing "I successfully booted" milestone. Earlier than
+  60 s and legitimate-but-slow boots false-positive into DFU.
+
+* **`verify_bootloader.py` invariant.** The new path that forces
+  `dfu_start = 1` from the counter check still reaches
+  `bootloader_dfu_start()` via the existing dual-transport block,
+  which calls `usb_init()` unconditionally. Invariant preserved IF
+  the new code lives outside any `if (_ota_dfu)` branch. The
+  verifier's static check should still pass without modification.
+
+* **§3.2 interaction.** §3.2 (prefer-UF2-when-USB) is **firmware-side**
+  (writes RAM magic). When the BL forces DFU via this §3.1 mechanism,
+  there's no firmware involvement — the BL must do its own
+  VBUSDETECT check to pick UF2 hint vs BLE hint. With the existing
+  dual-transport design, both transports come up anyway; the
+  `_ota_dfu` flag only affects the LED hint.
+
+**Scope estimate:** ~1 day of focused work: BL change + verifier
+update if needed + BL build + SWD-flash bench chip via
+`swd-flash.local` + multi-cycle bench test (intentionally
+crash-loop the firmware to confirm the BL kicks into DFU). Brick
+risk for the bench chip's BL; SWD recovery is available but adds
+friction. Not a quick win.
+
 **Reference:** [[project-bl-no-app-crash-fallback]].
 
-`check_dfu_mode()`'s `DEFAULT_TO_OTA_DFU` only fires when the app slot
-is **invalid by CRC**. A crashy-but-valid app boots, HardFaults
-pre-BLE-init, BL re-runs, sees valid app, jumps, crashes again. No
-auto-DFU fallback. Cost a controller 2026-05-19.
+**Original symptom:** `check_dfu_mode()`'s `DEFAULT_TO_OTA_DFU` only
+fires when the app slot is **invalid by CRC**. A crashy-but-valid
+app boots, HardFaults pre-BLE-init, BL re-runs, sees valid app,
+jumps, crashes again. No auto-DFU fallback. Cost a controller
+2026-05-19.
 
-**Fix:** BL gets a hardware-watchdog-with-handshake pattern: if app
-doesn't ping a known address within N seconds of boot, BL forces DFU
-mode on next reset. Higher-stakes than firmware change; needs a
-sacrificial bench chip + `scripts/verify_bootloader.py` re-validation.
+**Mitigation in the meantime:** the existing
+`RebootFrequencyCounter` (flash-backed, LittleFS counter) catches
+crashes that survive past `configStorage.begin()` + the
+`checkAndIncrement()` call at `.ino:209`. The §3.1 gap is for
+crashes BEFORE that call (very early `setup()` or even static-init
+fiasco). The §3.4 fresh-build reformat shipped this session reduces
+the static-init / LittleFS-corruption surface, indirectly shrinking
+the §3.1 surface too.
 
 ---
 
