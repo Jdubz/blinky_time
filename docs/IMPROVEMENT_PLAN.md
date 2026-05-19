@@ -1,6 +1,8 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: April 29, 2026*
+*Last Updated: April 29, 2026 — snapshot through b153/v33*
+
+> **2026-05-19 status:** This document is a frozen snapshot through firmware b153 / model v33. Current state (b179+, OPEN_ISSUES_2026_05_19.md, ML_IMPROVEMENT_PLAN.md's 2026-05-02 literature reframe) supersedes the "Active Priorities" sections below. Retained as the trail of how the ACF+PLP architecture and the NN-primary pulse path were built; **do not** treat the firmware/model versions cited below as current.
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 

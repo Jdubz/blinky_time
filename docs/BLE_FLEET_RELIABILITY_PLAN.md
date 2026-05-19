@@ -212,5 +212,7 @@ Each item should be measured against the bench setup before/after:
 
 The user-visible success criterion is that every fleet command
 applies to every device within a single 5-command burst, with no
-device missing any of the 5 generators. Today (post-shipped fixes)
-we're close but not 100% there; item 1 should close the gap.
+device missing any of the 5 generators. Items 1–3 have shipped (PR
+#144, May 18 2026); items 4 + 5 remain as optional experiments to
+push toward 100% in noisy RF environments if remaining miss-rate
+warrants it.

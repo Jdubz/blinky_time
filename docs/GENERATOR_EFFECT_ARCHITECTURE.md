@@ -29,47 +29,31 @@ FireGenerator -> HueRotationEffect -> EffectRenderer -> LEDs
 
 ## 📁 File Organization
 
-### Directory Structure
-
-**Clean Organized Structure:**
+### Directory Structure (current layout — 2026-05-19)
 
 ```text
 blinky-things/
 ├── BlinkyArchitecture.h           # Main include for Arduino IDE
-├── Generator.h                    # Base generator interface
-├── Effect.h                       # Base effect interface
-├── EffectMatrix.h/cpp             # Shared matrix buffer
-├── generators/                    # Pattern generators
-│   └── fire/                      # Fire generator
-│       ├── FireGenerator.h/cpp    # Implementation
-│       └── tests/                 # Co-located tests
-│           ├── FireGeneratorTest.h/cpp
-│           └── FireTestRunner.h/cpp
+├── generators/                    # Pattern generators (flat — no per-generator subdirs)
+│   ├── Generator.h                # Base interface
+│   ├── Fire.{h,cpp}
+│   ├── Water.{h,cpp}
+│   ├── PlasmaGlobe.{h,cpp}
+│   └── Audio.{h,cpp}
 ├── effects/                       # Visual effects
-│   └── hue-rotation/              # Hue rotation effect
-│       ├── HueRotationEffect.h/cpp
-│       └── tests/                 # Co-located tests
-│           └── HueRotationEffectTest.h/cpp
-├── renderers/                     # Hardware renderers
-│   └── EffectRenderer.h/cpp       # LED output
-└── tests/                         # Main test coordination
-    └── GeneratorTestRunner.h/cpp  # Overall test runner
+│   ├── Effect.h                   # Base interface
+│   ├── HueRotationEffect.{h,cpp}
+│   ├── NoOpEffect.h
+│   └── tests/
+├── render/                        # Rendering pipeline (was renderers/)
+│   ├── EffectRenderer.{h,cpp}
+│   ├── LEDMapper.h
+│   ├── RenderPipeline.{h,cpp}
+│   └── tests/
+└── tests/                         # Cross-cutting tests
 ```
 
-**Benefits**:
-
-- Tests co-located with components they test
-- Clear separation of generators, effects, and renderers
-- Arduino IDE compatible via single `BlinkyArchitecture.h` include
-- Scalable structure for adding new components
-
-### File Migrations
-
-- `FireVisualEffect.h/cpp` → `generators/fire/FireGenerator.h/cpp`
-- `FireEffectTest.h/cpp` → `generators/fire/tests/FireGeneratorTest.h/cpp`
-- `EffectTestRunner.h/cpp` → `tests/GeneratorTestRunner.h/cpp`
-- Added: `effects/hue-rotation/HueRotationEffect.h/cpp`
-- Added: `BlinkyArchitecture.h` for unified Arduino IDE inclusion
+The earlier per-generator subdirectory layout (`generators/fire/FireGenerator.{h,cpp}`) was flattened; generator class names dropped the `Generator` suffix (`FireGenerator` → `Fire`). The conceptual three-stage pipeline (Generator → Effect → Renderer) below is unchanged.
 
 ## 🔧 Base Interfaces
 

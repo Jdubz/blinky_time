@@ -2,6 +2,8 @@
 
 *Created: March 29, 2026. Rewritten: March 30, 2026.*
 
+**Status (2026-05-19):** Phase 3a (custom `Nrf52PwmLedStrip` with async DMA + persistent PWM buffer) has shipped — see `blinky-things/hal/hardware/Nrf52PwmLedStrip.{h,cpp}`. Phase 1/2 micro-optimizations are not all verified landed (EffectRenderer still uses `leds_.Color()` packing per `render/EffectRenderer.cpp`). Treat the remaining items as outstanding work; the headline 1024-LED feasibility unlock from Phase 3a is in place.
+
 Target hardware: nRF52840 (Cortex-M4F, 64 MHz, 256 KB RAM). 32x32 = 1024 WS2812B LEDs.
 Goal: determine if 1024-pixel display is feasible on nRF52840 and optimize accordingly.
 

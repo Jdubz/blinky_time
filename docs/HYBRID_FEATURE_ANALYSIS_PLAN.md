@@ -1,6 +1,6 @@
 # Hybrid Feature Analysis Plan
 
-**Status:** In progress (Apr 2026)
+**Status:** Historical (2026-05-19). The five-gate methodology and the v27-hybrid retroactive regression findings (flatness R²=0.85, gate-b null result, kick_weighted_drums label contamination) are still actionable lessons referenced from `IMPROVEMENT_PLAN.md` and `ML_IMPROVEMENT_PLAN.md`. The specific experiment queue described here is closed — see `ML_IMPROVEMENT_PLAN.md`'s 2026-05-02 literature-review reframe for the current direction.
 **Owner:** Audio/ML
 **Supersedes:** ad-hoc `flat`/`rflux` streaming (b132)
 

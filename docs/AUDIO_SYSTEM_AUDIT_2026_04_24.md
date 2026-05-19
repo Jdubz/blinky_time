@@ -1,5 +1,7 @@
 # Audio System Audit — 2026-04-24
 
+**Status (2026-05-19):** Historical. All Tier 1 + Tier 2 items landed (see §"Implementation status — 2026-04-24 evening"). v31 post-mortem + v32 plan addendum are also landed. Subsequent firmware has moved through v33 (50 mel bands), and the latest staged frame_onset model is v15/v16. Retained as the diagnostic narrative for the v30 collapse + the Tier-1 instrumentation that prevents recurrence; not a roadmap.
+
 Point-in-time deep audit of the entire audio analysis stack (training data prep, training loop, TFLite export, firmware audio path, validation framework) triggered by v30's on-device failure mode. Goal: surface bugs, gaps, and observability holes so the next model iteration is guided by data instead of guesswork.
 
 ## Context

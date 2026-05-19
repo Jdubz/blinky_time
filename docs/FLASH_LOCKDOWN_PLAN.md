@@ -1,7 +1,8 @@
 # Flash Lockdown Plan
 
-**Status:** open. Pre-requisite for any further live flash testing.
-**Owner:** blinky-server.
+**Status:** **CLOSED — migration complete.** All L0–L6 phases landed; `_uf2_write_impl_for_job` / `_ble_dfu_write_impl` are guarded by `assert_inside_orchestrator`, every legacy public entry point (`upload_uf2`, `upload_ble_dfu`, `upload_firmware`, `upload_via_uf2`, `_dfu_locks`) is deleted from `blinky_server/`, and `FleetManager.flash_fleet()` is the canonical multi-device entry point. `MAX_AUTO_RECOVERY_ATTEMPTS = 3` is in `manager.py:55`. This document is retained as the architectural rationale referenced from CLAUDE.md "Single Flash Entry Point"; the migration sequencing below is historical.
+
+**Owner:** blinky-server (no active work; closed 2026-05-19).
 **Driven by:** 2026-05-17 session — flash-job-rewrite Phases 1-6 landed
 cleanly, Phase 7 live test surfaced both a real 0.8.0-4 bootloader bug
 AND structural safety holes in our existing flash code.
@@ -79,7 +80,7 @@ still exist as a fallback" is explicitly NOT the target state. Every
 protection currently in the legacy paths MUST be migrated to the
 canonical path before the legacy code is deleted — no regressions,
 no orphan wrappers, no `# deprecated` stubs that linger past the
-migration commit. See `docs/FLASH_LOCKDOWN_AUDIT.md` for the
+migration commit. See `docs/archive/FLASH_LOCKDOWN_AUDIT.md` for the
 complete protection-by-protection inventory; the four operator-
 confirmed design decisions from that audit are:
 

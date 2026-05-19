@@ -1,6 +1,8 @@
 # Server Consolidation Plan
 
-*Created: April 1, 2026*
+*Created: April 1, 2026.*
+
+**Status (2026-05-19):** Phases 1–6 largely executed. The 14 CJS test scripts (`ab_test_*.cjs`, `param_sweep_multidev.cjs`, etc.) are deleted. The MCP server's direct-serial internals (`scoring.ts`, `serial-logger.py`, etc.) are deleted. Standalone Python serial tools (`audio_tuner.py`, `run_ble_dfu.py`, etc.) are deleted. `blinky-server` is the sole serial owner. **Exception:** `tools/uf2_upload.py` was NOT moved into `blinky-server/blinky_server/firmware/` as planned — the server still invokes it from `tools/` via subprocess (the proven pattern works; the byte-for-byte move is no-value-add work). Treat the migration section about `uf2_upload_cli.py` as not happening.
 
 ## Problem
 

@@ -202,6 +202,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
+| `docs/OPEN_ISSUES_2026_05_19.md` | Snapshot of all unresolved work at the end of the 2026-05-19 marathon session — operational bugs, PR review remainders, BL recovery gaps, service hardening gaps, Hub UI follow-ups |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |

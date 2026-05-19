@@ -38,19 +38,15 @@ arduino-cli core install Seeeduino:nrf52
 
 **Important**: Use `Seeeduino:nrf52` (non-mbed). The mbed core (`Seeeduino:mbed`) has header conflicts with Adafruit NeoPixel.
 
-### 3. Install ESP32 Core
-```bash
-arduino-cli config add board_manager.additional_urls \
-  https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-arduino-cli core update-index
-arduino-cli core install esp32:esp32
-```
-
-### 4. Install Required Libraries
+### 3. Install Required Libraries
 ```bash
 arduino-cli lib install "Adafruit NeoPixel"
 arduino-cli lib install "Seeed Arduino LSM6DS3"
+arduino-cli lib install "ArduinoJson"
+arduino-cli lib install "arduinoFFT"
 ```
+
+> ESP32-S3 build instructions were removed when ESP32-S3 became unsupported (March 2026). The HAL abstraction (`hal/PlatformDetect.h`) and Makefile `esp32-*` targets still exist for the BLE bridge role, but are not exercised by active development.
 
 ---
 
@@ -69,7 +65,7 @@ Firmware uses a simple auto-incrementing build number. **Not tied to git** — g
 ```bash
 ./scripts/build.sh                          # nRF52840 compile only
 ./scripts/build.sh --upload /dev/ttyACM0    # compile + UF2 upload
-./scripts/build.sh --esp32                  # ESP32-S3 compile (deprecated)
+./scripts/build.sh --esp32                  # ESP32-S3 (deprecated — BLE bridge role only)
 ./scripts/build.sh --no-bump                # recompile without incrementing
 ```
 
@@ -158,15 +154,7 @@ Device configs are JSON files uploaded via the serial console at runtime — not
 device upload <json-string>
 ```
 
-Config files live in `devices/registry/`:
-
-| File | Device | LEDs | Layout |
-|------|--------|------|--------|
-| `hat.json` | Hat | 89 | LINEAR |
-| `tube_light.json` | Tube Light | 60 | MATRIX 4×15 |
-| `long_tube.json` | Long Tube | 120 | MATRIX |
-| `bucket_totem.json` | Bucket Totem | 128 | MATRIX 16×8 |
-| `display_v1.json` | Display (ESP32-S3) | 1024 | MATRIX 32×32 |
+Config files live in `devices/registry/`. See `docs/HARDWARE.md` for the current device list; filenames follow `<deviceId>.json` (`hat_v1.json`, `tube_v2.json`, `long_tube_v1.json`, `bucket_v3.json`, `big_bucket_v1.json`, `cart_inner.json`, `cart_outer.json`, `cart_umbrella_v1.json`, `display_v1.json`).
 
 ---
 

@@ -1,6 +1,8 @@
-_Created: 2026-05-13_
+_Created: 2026-05-13. Status updated 2026-05-19._
 
 # Sculpture BLE-Recovery Plan
+
+**Status:** F1–F6 all landed (bootloader rebuilt with `DEFAULT_TO_OTA_DFU`; `tests/SafeMode.h` deleted; `markStable()` deferred to 60 s uptime in `.ino:649-668`; `RebootFrequencyCounter` shipped; GPREGRET=0xA8 fallback in `SafeBootWatchdog.h:110`; `bleDfu.begin()` return checked with `[FALLBACK]` log at `.ino:572-574`). Verification tests T1–T8 are run per-unit at install time. Retained as architectural rationale + risk surface for the BL gap captured in `project_bl_no_app_crash_fallback` (BL DEFAULT_TO_OTA_DFU only fires on invalid-app-CRC, not on crashy-but-valid app).
 
 ## Goal
 

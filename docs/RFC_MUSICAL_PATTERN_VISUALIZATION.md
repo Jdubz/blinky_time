@@ -1,7 +1,7 @@
 # RFC: Musical Pattern Visualization — Beyond Phase Tracking
 
 **Date:** 2026-03-20
-**Status:** Proposed
+**Status:** **IMPLEMENTED** — the PLP-replaces-PLL core proposal shipped as AudioTracker v8 (multi-source ACF + epoch-fold PLP). The `pllPhase_`/`odfGateThreshold` parameters listed under "Removed" below are gone from firmware. Secondary proposals (multi-band envelopes, nPVI rhythm complexity) are partial/deferred — see `AUDIO_ARCHITECTURE.md` for the current implementation surface. Retained as the design rationale for the PLL→PLP transition.
 **Author:** jdubz + Claude
 
 ## Problem Statement

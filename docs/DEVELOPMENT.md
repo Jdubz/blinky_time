@@ -1,5 +1,17 @@
 # Development Guide - Blinky Time
 
+## First-time setup
+
+After cloning the repo, install the git pre-push hook so blinky-server ruff (lint + format) and mypy run before every push. Without this, format-only failures only get caught on CI, costing a round-trip.
+
+```bash
+./scripts/install-hooks.sh
+```
+
+The hook source is in `hooks/pre-push`; the script copies it into `.git/hooks/`. It also runs cppcheck on firmware if installed, and warns when the `.git` pack exceeds 500 MB. Bypass for a single push with `git push --no-verify` (use sparingly — every CI failure that the hook would have caught is a wasted round-trip).
+
+The console has a separate husky setup; `cd blinky-console && npm install` installs its hooks. See `README.md`.
+
 ## 🚨 Critical Safety Rules
 
 ### Upload Method (nRF52840)
@@ -23,58 +35,45 @@ The ESP32-S3 does not have the nRF52840 bootloader fragility. Both UF2 upload an
 
 ### Recovery (nRF52840 bricked by DFU upload)
 
-If the bootloader was corrupted:
-1. Requires external SWD programmer (Raspberry Pi Pico ~$5, or J-Link $15-50)
-2. Requires Seeed XIAO expansion board OR direct soldering to SWD pads
-3. Recovery process: https://www.pavelp.cz/posts/eng-xiao-nrf52840-bootloader-recovery/
+A Raspberry Pi Zero W at `swd-flash.local` is provisioned for SWD recovery (see CLAUDE.md for invocation). It has the known-good fleet bootloader, MBR, and SoftDevice S140 7.3.0 hex files staged. Use this as the recovery of last resort when a device drops off USB and isn't reachable via BLE.
 
 ### Unresponsive Device Runbook
 
-Installed nRF52840 devices are physically enclosed — reset buttons are **not** accessible. If a device stops responding to serial commands, follow this ordered runbook before escalating to physical access:
+Installed nRF52840 devices are physically enclosed — reset buttons are **not** accessible. If a device stops responding to serial commands:
 
-1. **Power-cycle the USB port via hub control:**
+1. **Power-cycle the USB port via hub control** *(bus-powered devices only)*:
    ```bash
    uhubctl -a cycle -p <port>
    ```
-   Covers the common "USB stack wedged" case. `uhubctl` requires the sudoers rule configured in `UPLOAD_RELIABILITY_PLAN.md`.
+   Does NOT work on `cart_inner` / `cart_outer` — those are externally powered, so toggling the host USB hub only affects data lines. For those, use the firmware `bootloader` serial command, SWD via `swd-flash.local`, or the physical reset button.
 
-2. **Re-flash via blinky-server** (forces a known-good firmware state):
+2. **Re-flash via deploy.sh** (forces a known-good firmware state):
    ```bash
-   curl -X POST http://blinkyhost.local:8420/api/devices/{id}/flash \
-     -H "X-API-Key: $(cat ~/.blinky-api-key)" \
-     -H 'Content-Type: application/json' \
-     -d '{"firmware_path": "/tmp/blinky-build/blinky-things.ino.hex"}'
+   ./scripts/deploy.sh --devices=<device_id>
    ```
+   Direct `curl` against `/api/devices/{id}/flash` is forbidden — the server enforces an `X-Deploy-Tool` header that only `deploy.sh` sets (returns 403 otherwise). See CLAUDE.md's upload-safety section.
 
 3. **If the serial port disappeared entirely:** wait 10 seconds and check `ls /dev/ttyACM*`. USB re-enumeration after DFU or crash recovery is not instantaneous.
 
-4. **Last resort:** physically access the device and double-tap reset to enter the bootloader. Requires disassembly for enclosed units — always exhaust steps 1–3 first.
+4. **Last resort:** SWD via `swd-flash.local`, or physical access if available. Most production fleet is sealed — exhaust the SWD path first.
 
-> **Test chips (unenclosed bare chips attached to blinkyhost):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible, so there's no emergency disassembly path in the worst case.
+> **Test chips (unenclosed bare chips on bench):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible. See `feedback_test_chip_first` in memory.
 
-> **Post-BLE-DFU quirk:** After a BLE DFU flash, USB serial does not re-enumerate without a physical power cycle (uhubctl on Pi is insufficient). BLE reconnection works fine. See `BLUETOOTH_IMPLEMENTATION_PLAN.md`.
+> **Post-BLE-DFU quirk:** After a BLE DFU flash, USB serial does not re-enumerate without a physical power cycle. BLE reconnection works fine. See `BLUETOOTH_IMPLEMENTATION_PLAN.md`.
 
 ---
 
-## 📋 Pre-Upload Checklist
+## 📋 Pre-Deploy Workflow
 
-**Run BEFORE EVERY firmware upload:**
+For any firmware deployment to fleet devices, the canonical workflow is:
 
 ```bash
-# 1. Run safety checks
-python scripts/check_config_safety.py
-
-# 2. Verify all tests pass (if applicable)
-# Run in Arduino IDE with ENABLE_TESTING defined
-
-# 3. Build in Arduino IDE (NOT arduino-cli)
-# Verify -> Compile
-
-# 4. Upload using Arduino IDE
-# Upload -> Upload
+./scripts/deploy.sh --devices=<id|all|list>   # compile + upload + flash + verify
 ```
 
----
+This wraps `build.sh` (which auto-increments `BUILD_NUMBER`) and performs version-verify after flash. `scripts/pre_compile_safety.py` runs as a dependency of the `make compile-out` target (see Makefile `safety-check`); `build.sh`/`deploy.sh` invoke `arduino-cli` directly and do **not** currently call it. Run `make safety-check` explicitly if you want the safety pass before a `deploy.sh` run. Direct `arduino-cli compile` / `make compile` (no `-out`) skips the version bump and is fine for local iteration only.
+
+For bare-chip recovery (device not enrolled in fleet), `make uf2-upload UPLOAD_PORT=/dev/ttyACM0`.
 
 ---
 
@@ -194,7 +193,7 @@ Or via Makefile: `make compile-out` and `make esp32-compile`.
 
 ## ⚙️ Config Version Management
 
-### When to Increment CONFIG_VERSION
+### When to Increment SETTINGS_VERSION
 
 **ALWAYS increment** when you:
 - Add new fields to `StoredFireParams` or `StoredMicParams`
@@ -202,21 +201,23 @@ Or via Makefile: `make compile-out` and `make esp32-compile`.
 - Change field types (e.g., `float` → `double`)
 - Reorder struct fields
 
-### How to Increment CONFIG_VERSION
+### How to Increment SETTINGS_VERSION
 
-**File: `blinky-things/config/ConfigStorage.h`**
+**File: `blinky-things/config/ConfigStorage.h`** (currently at SETTINGS_VERSION = 95)
 
 ```cpp
 // Before:
-static const uint8_t CONFIG_VERSION = 18;
+static const uint8_t SETTINGS_VERSION = 95;
 
 // After:
-static const uint8_t CONFIG_VERSION = 19;  // v19: describe your changes here
+static const uint8_t SETTINGS_VERSION = 96;  // v96: describe your changes here
 ```
+
+Note: `SETTINGS_VERSION` bumps PRESERVE device config (LED layout, device name, etc.) via migration. The legacy `CONFIG_VERSION` field discarded all config on bump — that path is gone.
 
 ### Required Steps After Struct Changes
 
-1. **Increment CONFIG_VERSION** in ConfigStorage.h
+1. **Increment SETTINGS_VERSION** in ConfigStorage.h
 2. **Update comment** with description of changes
 3. **Add validation** for new parameters in ConfigStorage.cpp `loadConfiguration()`
 4. **Update static_assert** for struct size in ConfigStorage.h
@@ -233,12 +234,13 @@ struct StoredMicParams {
     float newParameter;  // NEW: describe purpose
 };
 
-// 2. Increment version
-static const uint8_t CONFIG_VERSION = 19;  // v19: added newParameter for XYZ
+// 2. Increment version (current = 95; bump to next)
+static const uint8_t SETTINGS_VERSION = 96;  // v96: added newParameter for XYZ
 
-// 3. Update static_assert
-static_assert(sizeof(StoredMicParams) == 38,  // Updated from 34
-    "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion.");
+// 3. Update static_assert (StoredMicParams is currently 8 bytes; sizes for
+//    other structs are in ConfigStorage.h ~lines 388-398)
+static_assert(sizeof(StoredMicParams) == 12,  // Updated from 8
+    "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion.");
 
 // 4. Add default (ConfigStorage.cpp loadDefaults())
 data_.mic.newParameter = 1.0f;  // Reasonable default
@@ -259,21 +261,21 @@ data_.mic.newParameter = mic.newParameter;
 
 ### Compile-Time Checks
 
-**Static Assertions** (ConfigStorage.h):
+**Static Assertions** (ConfigStorage.h) — one per stored struct, e.g.:
 ```cpp
-static_assert(sizeof(StoredMicParams) == 34,
-    "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion.");
+static_assert(sizeof(StoredMicParams) == 8,
+    "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion.");
 ```
 
 **Purpose**: Catches struct size changes at compile time
 
-**If this fails**: You forgot to increment CONFIG_VERSION or update the assertion
+**If this fails**: You forgot to increment SETTINGS_VERSION or update the assertion
 
 ### Runtime Checks
 
 **Struct Size Logging** (prints at boot):
 ```
-[CONFIG] ConfigData size: 72 bytes (StoredMicParams: 34 bytes)
+[CONFIG] ConfigData size: ... bytes (per-struct sizes shown alongside)
 ```
 
 **Purpose**: Helps debug padding issues across platforms
@@ -301,16 +303,7 @@ validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
 
 ### Test Before Upload
 
-Always test critical changes:
-```cpp
-#define ENABLE_TESTING
-#include "BlinkyArchitecture.h"
-
-void setup() {
-    Serial.begin(115200);
-    SafetyTest::runAllTests();  // MUST PASS
-}
-```
+`scripts/pre_compile_safety.py` runs automatically as part of `make compile-out` and `deploy.sh`. The `SafetyTest::runAllTests()` runtime harness in `blinky-things/tests/SafetyTest.h` is no longer wired into the standard build — invoke it from a dedicated test sketch if needed.
 
 ### Use Serial Console for Tuning
 
@@ -325,13 +318,13 @@ save                # Persist to flash
 
 ## 🔍 Common Pitfalls
 
-### ❌ Forgot to Increment CONFIG_VERSION
+### ❌ Forgot to Increment SETTINGS_VERSION
 
 **Symptom**: Device crashes in boot loop after upload
 
 **Cause**: Old flash data read with new struct layout
 
-**Fix**: Increment CONFIG_VERSION, add validation, re-upload
+**Fix**: Increment SETTINGS_VERSION, add validation, re-upload
 
 ### ❌ Missing Parameter Validation
 
@@ -363,14 +356,14 @@ save                # Persist to flash
 
 Before merging config changes:
 
-- [ ] CONFIG_VERSION incremented if struct changed
+- [ ] SETTINGS_VERSION incremented if struct changed
 - [ ] Version comment describes changes
 - [ ] Static assertions updated
 - [ ] New parameters have validation
 - [ ] Defaults set in `loadDefaults()`
 - [ ] Load/save methods updated
 - [ ] Safety script passes: `python scripts/check_config_safety.py`
-- [ ] Compiled for **both** platforms: `make compile-out` and `make esp32-compile`
+- [ ] Compiled cleanly: `make compile-out` (ESP32 path optional — `esp32-compile` only if touching `BLINKY_PLATFORM_ESP32S3`-guarded code)
 - [ ] No `arduino-cli upload` usage on nRF52840 in commit history
 
 Before merging platform-specific code:
