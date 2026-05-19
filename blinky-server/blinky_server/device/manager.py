@@ -956,10 +956,7 @@ class FleetManager:
                 # this branch correctly doesn't fire.
                 # See ``should_attempt_auto_recovery`` and
                 # [[project-deploy-flash-cascade-bug]].
-                if (
-                    job.transport is FlashTransport.UF2
-                    and job.write_completed_at is not None
-                ):
+                if job.transport is FlashTransport.UF2 and job.write_completed_at is not None:
                     self._recent_uf2_writes[canonical] = job.write_completed_at
                 # Update the auto-recovery retry counter so the next
                 # ``flash_device(force=False)`` for this device honors
