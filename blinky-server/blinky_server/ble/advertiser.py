@@ -578,9 +578,7 @@ class FleetBroadcaster:
             if self._sequence != last_emit_seq:
                 return
             noop_seq = self._next_sequence()
-            noop = bytes(
-                (_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE, 0x00)
-            )
+            noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE, 0x00))
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)
 
     def _next_sequence(self) -> int:
