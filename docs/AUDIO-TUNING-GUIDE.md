@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** April 29, 2026
-**Firmware Version:** b153 / SETTINGS_VERSION 94. AudioTracker: ACF + PLP with multi-source ACF + pattern slot cache. Conv1D W16 **v33** onset model deployed (50 mel, 30-8000 Hz, ~20 KB) — F1=0.570 on edm/ (hand-curated onset GT). v34d (clean-label retrain) is training as of 2026-04-29; v34 family with target_rms_db tuning was rolled back after eval shifted to onset-GT and showed v33 remained the best deployed model. Local-maxima peak-picking on NN activation (b127+) with bass-band energy gate. **PLP beat-grid AND-gate `beatGridPatternMin` defaulted to 0.0 since b149** (was 0.4 in b142–b148; persist_raw analysis showed it was suppressing 65–84% of true onsets — runtime tunable preserved for opt-in).
+**Last Updated:** April 29, 2026 (parameter snapshot through b153 / SETTINGS_VERSION 94)
+**Current firmware:** b179 / SETTINGS_VERSION 95 — this guide is a parameter snapshot at b153; verify specific defaults against `audio/AudioTracker.h` and `config/ConfigStorage.cpp` before tuning. AudioTracker pipeline (multi-source ACF + epoch-fold PLP, NN-primary pulse, AGC removed) is unchanged. Onset model has moved on from v33 (frame_onset_model_data_v15.h / _v16.h are the latest staged variants — see ml-training for active experiment).
 
 > **NOTE:** Parameter categories marked ~~strikethrough~~ below were removed in v67-v82 (EnsembleDetector, CBSS, Bayesian fusion, AGC). See `docs/IMPROVEMENT_PLAN.md` for removal history. Current tunable parameters are in the AudioTracker section.
 
@@ -93,7 +93,7 @@ curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
   -d '{"device_ids": ["D1","D2","D3"], "param_name": "onsetthresh", "values": [1,2,3,4,5,6,7,8,9], "track_dir": "/path/to/music/edm"}'
 
-# Via MCP tools
+# Via MCP tools (poll results with check_test_result(job_id))
 run_test(port: "/dev/ttyACM0")
 run_validation_suite(ports: ["/dev/ttyACM0", "/dev/ttyACM1"])
 

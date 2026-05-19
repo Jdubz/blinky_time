@@ -1,13 +1,24 @@
 # Hardware Documentation
 
-This directory contains hardware-specific documentation for Blinky Time LED fire effect controllers.
+Hardware reference for Blinky Time controllers. The canonical, authoritative list of supported devices is in `devices/registry/*.json` — this doc summarises the recurring patterns.
 
-## Device Configurations
+## Device Configurations (nRF52840 XIAO Sense)
 
-### nRF52840 XIAO Sense
-- **Tube Light Setup** - 4x15 zigzag matrix installation guide
-- **Hat Installation** - Wearable 89-LED string configuration  
-- **Bucket Totem** - 16x8 matrix display setup
+Current registered devices (see `devices/registry/`):
+
+| Device | Layout | Notes |
+|--------|--------|-------|
+| `hat_v1` | 89×1 string | Wearable |
+| `tube_v2` | 4×15 zigzag matrix | Standalone tube |
+| `long_tube_v1` | 4×60 zigzag matrix | Sealed sculpture |
+| `bucket_v3` | 16×8 matrix | Standalone bucket |
+| `big_bucket_v1` | 14×8 matrix | `ledPin=0`, sealed |
+| `cart_inner` | 104×1 string | Lemon-cart, two channels (`ledPin=10`, `ledPin2=9`) |
+| `cart_outer` | 96×1 string | Lemon-cart |
+| `cart_umbrella_v1` | 8×13 matrix | Lemon-cart umbrella |
+| `display_v1` | 32×32 matrix | Bench display |
+
+Default LED data pin is **D10** for everything except `big_bucket_v1` (D0). `cart_inner` adds a second channel on D9 for its split topology.
 
 ## Wiring Diagrams
 

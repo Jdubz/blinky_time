@@ -1,5 +1,7 @@
 # Audio-Reactive Architecture (AudioTracker)
 
+> **2026-05-19 snapshot warning:** this doc was last comprehensively updated through v32/b149. Current build (b179+) has moved on — notably **NUM_MEL_BANDS is now 50** (30–8000 Hz, v33) not 30×4kHz; `pulseOnsetFloor` default is **0.20** (v33 sweep) not 0.30; and the `odfGateThreshold` / `odfgate` references below describe a parameter that has been removed from firmware. The architectural pipeline (multi-source ACF → epoch-fold PLP → NN onset, AudioControl 6-field output) is still accurate. Verify specific numbers against `audio/AudioTracker.{h,cpp}` and `audio/SharedSpectralAnalysis.h` before quoting.
+
 > **2026-04-27 note on F1 numbers:** older F1 quotes in this doc reference an `edm_holdout` corpus that has been deleted (it was adversarial GiantSteps LOFI content used as a headline metric, which kept producing misleadingly low scores). The only validation corpus going forward is `blinky-test-player/music/edm/`. See CLAUDE.md "CRITICAL: Validation Corpus".
 
 ## Overview
@@ -219,7 +221,7 @@ PLP uses multi-source ACF at beat-level lags (20-80) across 3 mean-subtracted so
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
 | `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Soft gate: quadratic falloff below this threshold (no hard cutoff) |
-| `odfGateThreshold` | `odfgate` | 0.25 | 0.0-0.5 | NN output floor gate (suppress noise) |
+| ~~`odfGateThreshold`~~ | ~~`odfgate`~~ | — | — | **REMOVED**; the firmware no longer has a separate NN-output floor gate. Pulse-detection floor lives in `pulseOnsetFloor` (default 0.20). |
 
 ### Pulse/Energy Modulation — PLP phase-driven
 

@@ -83,7 +83,7 @@ REST API: http://blinkyhost.local:8420/api/
 
 ### Known Limitations
 
-- **GPREGRET race condition (RESOLVED)**: Replaced GPREGRET with RAM magic at 0x20007F7C via custom bootloader (Apr 2026). Bootloader entry now succeeds on first attempt. See `UPLOAD_OVERHAUL_PLAN.md`.
+- **GPREGRET race condition (RESOLVED)**: Replaced GPREGRET with RAM magic at 0x20007F7C via custom bootloader (Apr 2026). Bootloader entry now succeeds on first attempt. See `docs/archive/UPLOAD_OVERHAUL_PLAN.md` for the original analysis; live invariants enforced by `scripts/verify_bootloader.py`.
 - **BLE DFU transfer speed**: ~1.7 KB/s (20-byte BLE packets), ~5.5 min per device for 510 KB firmware. Sequential only (Pi's BLE adapter handles one DFU at a time).
 - **Post-DFU USB**: After BLE DFU boot, USB serial doesn't re-enumerate without physical power cycle. uhubctl on Pi doesn't fully cut power. BLE reconnection works fine.
 - **BlueZ stale connections**: Server restart leaves stale BLE connections in BlueZ. Auto-cleanup runs on startup. Per-device `bluetoothctl disconnect` runs before each BLE connect to prevent notification stacking.

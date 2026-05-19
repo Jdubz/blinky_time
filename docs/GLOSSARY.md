@@ -24,10 +24,10 @@ Terminology is a recurring source of design confusion in this project. This glos
 | **Visual trigger** | A discrete visual event fired when ODF exceeds the baseline threshold. What the firmware currently calls `pulse` in `AudioControl.pulse`. | `AudioControl::pulse`, `lastPulseStrength_` |
 | **Energy** | Continuous audio level (0-1) blending mic level, bass mel energy, and ODF peak-hold. Drives background animation intensity. | `AudioControl::energy` |
 | **rhythmStrength** | Confidence that the audio has a periodic beat structure (0-1). Blend of ACF periodicity and comb bank confidence. Gates the confidence modulator. | `AudioControl::rhythmStrength` |
-| **Phase ramp** | Free-running sawtooth (0-1) at the estimated BPM. Phase 0.0 = predicted beat position. | `AudioTracker::pllPhase_` |
-| **Confidence modulator** | Scales visual trigger strength based on where the onset falls on the beat grid. On-grid onsets get boosted; off-grid get attenuated (but not zeroed — `confFloor` = 0.4). | `synthesizeOutputs()` cosine proximity curve |
-| **ODF gate** | Threshold below which NN activations are suppressed to prevent noise-driven false triggers. | `odfGateThreshold` (default 0.20) |
-| **Baseline tracking** | Floor-tracking algorithm that adapts to the ODF noise floor. Visual triggers fire when ODF exceeds baseline × threshold multiplier. | `odfBaseline_`, `pulseThresholdMult` |
+| **Phase ramp** | Free-running 0→1 phase derived from PLP pattern position, with accent phase subtracted so 0.0 = predicted accent. | `AudioTracker::plpPhase_` |
+| **plpPulse** | Repeating pattern shape at detected tempo (cosine fallback when no rhythm detected). What generators consume as the "breathing curve". | `AudioControl::plpPulse`, `plpPulseValue_` |
+| **Pulse signal threshold** | Hardcoded `0.4f` floor in `synthesizeOutputs()` below which the NN-smoothed activation is not allowed to trigger a fresh pulse envelope. | `synthesizeOutputs()` `pulseSignal > 0.4f` |
+| **Baseline tracking** | Floor-tracking algorithm that adapts to the ODF noise floor; used internally for the discrete-onset path. Visual triggers fire when ODF exceeds baseline × `pulseThresholdMult`. | `odfBaseline_`, `pulseThresholdMult` |
 
 ## Model Terms
 

@@ -141,7 +141,7 @@ PR-sized, roughly ordered. Each milestone should leave the app in a shippable st
 
 Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 115 server tests pass; the legacy `serialService` singleton continues to work unmodified.
 
-### Phase 3 — Server-backed transport — ⏳ not started
+### Phase 3 — Server-backed transport — ✅ M8+M9 shipped; M10 pending
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
@@ -149,7 +149,7 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 | M9 | ✅ | `BlinkyServerSource(baseUrl)` — lists via `GET /api/devices`, creates transports on demand. Auto-instantiated for same-origin when a server responds at `/api/devices`. | `blinky-console/src/services/sources/` |
 | M10 | ⏳ | Server URL management UI (localStorage-backed list of additional servers, add/remove) — deferred, same-origin auto-detection covers primary use case | `blinky-console/src/components/Settings/` |
 
-### Phase 4 — Multi-device UI — ⏳ not started
+### Phase 4 — Multi-device UI — ✅ shipped (M11–M13)
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
@@ -157,7 +157,7 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 | M12 | ✅ | Device-registry binding: DeviceDetail looks up Device by route param, binds its protocol to serialService. SerialService proxies events across protocol swaps. | `serial.ts`, `DeviceDetail.tsx` |
 | M13 | ✅ | Real-time device list updates via polling. BlinkyServerSource polls every 10s, registry notifies subscribers, useDevices re-renders DeviceList. WebSocket push deferred. | Already implemented in M9 |
 
-### Phase 5 — Fleet operations — ⏳ not started
+### Phase 5 — Fleet operations — ✅ M14 shipped; M15 pending
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|

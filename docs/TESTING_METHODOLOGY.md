@@ -48,7 +48,7 @@ Tier 4: Full Validation (50 min)
 **When:** After every compile+flash. Verify firmware boots and feature activates.
 
 ```
-run_music_test(track, ground_truth, port, duration_ms=30000, commands=["set hmm 1"])
+run_test(track, port, duration_ms=30000, commands=["set hmm 1"])   # poll with check_test_result(job_id)
 ```
 
 - **1 track, 1 run, 1 device**
@@ -60,7 +60,7 @@ run_music_test(track, ground_truth, port, duration_ms=30000, commands=["set hmm 
 **When:** Proof-of-concept testing. Does a code change show any signal at all?
 
 ```
-run_music_test_multi(ports, audio_file, ground_truth, port_commands, duration_ms=30000)
+run_test(track, ports=[...], port_commands={...}, duration_ms=30000)   # multi-port form; poll with check_test_result
 ```
 
 - **3 tracks, 1 run each, 2 devices** (A/B simultaneous)
@@ -80,7 +80,7 @@ run_music_test_multi(ports, audio_file, ground_truth, port_commands, duration_ms
 **When:** Feature validation before committing. Statistically meaningful comparison.
 
 ```
-run_music_test_multi(ports, audio_file, ground_truth, port_commands, runs=3, duration_ms=45000)
+run_test(track, ports=[...], port_commands={...}, runs=3, duration_ms=45000)   # poll with check_test_result
 ```
 
 - **4 tracks, 3 runs each, 2 devices**
@@ -119,12 +119,12 @@ run_validation_suite(ports, runs=3, duration_ms=45000)
 
 - Proof-of-concept testing (use Tier 2)
 - Parameter sweeps (use Tier 2 on individual tracks)
-- Debugging a specific track (use single `run_music_test` with `runs=3-5`)
+- Debugging a specific track (use single `run_test` with `runs=3-5`)
 - Checking if firmware compiles/boots (use Tier 1)
 
 ## Multi-Device A/B Best Practices
 
-- Always use `run_music_test_multi` or `run_validation_suite` with `port_commands` for A/B
+- Use the multi-port form of `run_test` (or `run_validation_suite` for the full corpus) with `port_commands` for A/B; poll results with `check_test_result(job_id)`.
 - Both devices hear identical audio → no acoustic confounding
 - Set baseline on port 0, variant on port 1
 - Use `duration_ms` parameter, not full track length, for consistent test windows
