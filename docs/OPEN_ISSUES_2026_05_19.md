@@ -303,13 +303,20 @@ it would need to happen on the bench before sealing.
 
 ## 8. Documentation drift
 
-- `docs/SAFETY.md` — last updated pre-PR #144; doesn't yet cover the
-  COMMAND_V2 path or the global cmd_id ring.
-- `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` — predates the scenes →
-  generators decision in Section 1.2. Should reflect that the
-  protocol now uses generator names only.
+- `docs/SAFETY.md` — ✅ rewritten 2026-05-19 as a tight 4-invariant
+  index pointing at current code paths. The COMMAND_V2 / cmd_id-ring
+  details live in `docs/BLE_FLEET_RELIABILITY_PLAN.md` and the
+  `BleProtocol.h` / `advertiser.py` docstrings; out of scope for the
+  flashing-safety doc.
+- `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` — ✅ scene→generator
+  framing updated (sole "scene" mention in the use-case bullet).
+  Body otherwise covers NUS / BLE DFU / fleet discovery — not
+  scene-specific.
 - This document — itself should get rolled into a successor at the
-  start of the next session.
+  start of the next session. Multiple §1-§3 items have been closed
+  in-place with status notes; once the file's "remaining-work
+  density" drops below ~30%, succession is cleaner than further
+  in-place edits.
 
 ---
 

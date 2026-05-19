@@ -30,7 +30,7 @@ REST API: http://blinkyhost.local:8420/api/
   └── --no-serial flag            — BLE-only fleet management mode
 ```
 
-**Use case**: Fleet management — settings changes, mode/scene selection, device configuration, status monitoring, OTA firmware updates.
+**Use case**: Fleet management — settings changes, generator/effect selection (the scene system was retired 2026-05-19; see `OPEN_ISSUES_2026_05_19.md` §1.2), device configuration, status monitoring, OTA firmware updates.
 
 ## Current Status (March 31, 2026)
 
