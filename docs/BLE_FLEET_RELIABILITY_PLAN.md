@@ -47,7 +47,9 @@ uptime + the May 18 test run:
 
 ### 1. Multi-slot drop-oldest rxBuffer (firmware)
 
-**Status:** definite improvement, biggest remaining win.
+**Status:** ✅ SHIPPED in PR #144 (commit `9469b376`). Implemented in
+`BleScanner.cpp/h` with 8-slot ring + per-(source, seq) dedup. The
+notes below are kept as design rationale; the code lives in firmware.
 
 **Scope:** `blinky-things/comms/BleScanner.cpp` + `.h`. Replace the
 single-slot `rxBuffer_` / `rxReady_` flag with a small ring buffer (4-8
@@ -73,7 +75,13 @@ because dedup happens at insert, not at consume.
 
 ### 2. Command-id idempotency token (protocol)
 
-**Status:** definite improvement, replaces the 5× re-emit hack with
+**Status:** ✅ SHIPPED in PR #144 (commits `f40ecd7d`, `c1e073fc`,
+`fe56629e`). Implemented as `COMMAND_V2` packet type (0x04) with a
+2-byte LE command_id token after the header. Firmware uses a global
+ring of recent cmd_ids (not per-source — see [[project-bluez-addr-rotation]]
+for why). Design rationale below kept as historical context.
+
+**Original design notes:** definite improvement, replaces the 5x re-emit hack with
 a cleaner contract.
 
 **Scope:** `blinky_server/ble/protocol.py` +
@@ -106,7 +114,9 @@ idempotency token, fall back to seq-only dedup."
 
 ### 3. Per-source seq ring (firmware)
 
-**Status:** definite improvement, small scope.
+**Status:** ✅ SHIPPED in PR #144 (commit `9469b376`, same change as
+item #1). The seen-ring stores last 8 (src, seq) tuples; design notes
+kept as rationale.
 
 **Scope:** `BleScanner.cpp` `lastSequence_` + `lastSourceAddr_`
 become a tiny ring of the last 4-8 `(source, seq)` tuples. Looking

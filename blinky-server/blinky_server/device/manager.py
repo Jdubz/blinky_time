@@ -1723,13 +1723,26 @@ class FleetManager:
                     # the DFU cycle. ``_reconnect_disconnected`` reads
                     # ``device.transport`` on its next pass to call
                     # ``connect()``, so the transport must be current.
+                    #
+                    # If the rebuild fails, DO NOT transition state to
+                    # DISCONNECTED. The reconnect loop would then call
+                    # ``connect()`` on the STALE pre-recovery transport
+                    # and either fail loudly or (worse) succeed against
+                    # the old USB path that's no longer the right
+                    # device. Leaving state at its prior value means
+                    # the next discovery cycle will try again — which
+                    # is the behavior we want for a transient
+                    # _create_transport hiccup. PR #144 review.
                     try:
                         existing.transport = _create_transport(disc)
                     except Exception:
                         log.exception(
-                            "Failed to rebuild transport for %s on re-discovery",
+                            "Failed to rebuild transport for %s on re-discovery; "
+                            "leaving state=%s for next discovery retry",
                             device_id[:12],
+                            existing.state,
                         )
+                        continue
                     existing.state = DeviceState.DISCONNECTED
                     # Reset the reconnect-backoff counter so the first
                     # post-recovery reconnect attempt fires immediately

@@ -513,9 +513,17 @@ class FleetBroadcaster:
         # Assign the command_id ONCE per logical command, before the
         # re-emit loop. Every re-emit below carries this same value;
         # the firmware uses it to identify them as one logical command.
-        # Done outside the lock — the bump itself is atomic and we don't
-        # care if a concurrent broadcaster bumps next; sequence-clobber
-        # detection inside the loop handles the inter-command race.
+        #
+        # Done outside the lock. ``_next_command_id`` is safe to read/
+        # write without the lock here because asyncio is single-threaded
+        # and we don't ``await`` between the bump and the next use of
+        # the captured value — no other coroutine can interleave a
+        # mutation of ``_command_id`` between this line and where
+        # ``my_command_id`` is consumed in the re-emit loop. (The lock
+        # is held inside the loop for the on-air payload swap, not for
+        # ``_command_id`` mutation ordering.) If this were ever ported
+        # to a true thread-pool context, the bump would need to be
+        # inside the lock.
         my_command_id = self._next_command_id()
 
         last_emit_seq = -1
@@ -582,6 +590,13 @@ class FleetBroadcaster:
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)
 
     def _next_sequence(self) -> int:
+        # Intentionally allows seq=0 on wrap. Sequence 0 is a valid
+        # on-wire value in the COMMAND / COMMAND_V2 packet format — it
+        # carries no reserved meaning, and the firmware's seen-ring
+        # dedup treats it identically to any other value. This is
+        # asymmetric with ``_next_command_id`` which explicitly skips
+        # 0 (command_id 0 is reserved as "no command applied yet" by
+        # the gossip-ACK adv default value).
         self._sequence = (self._sequence + 1) & 0xFF
         return self._sequence
 

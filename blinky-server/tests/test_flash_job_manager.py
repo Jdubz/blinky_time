@@ -612,7 +612,7 @@ async def test_ble_dfu_flash_calls_upload_ble_dfu_for_dfu_recovery(
         captured_kwargs.update(kwargs)
         # ``verified=True`` is required for the orchestrator to treat
         # the result as a success. status=ok alone is not enough — see
-        # the defense-in-depth check added in PR #145 (the 2026-05-18
+        # the defense-in-depth check added in PR #144 (the 2026-05-18
         # BLE-DFU silent-stuck postmortem). A regression that drops
         # the verified field would fail this test.
         return {"status": "ok", "message": "mocked", "elapsed_s": 0.1, "verified": True}

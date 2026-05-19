@@ -71,6 +71,14 @@ void BleNus::setLastAckedCommandId(uint16_t newId) {
     // emission picks up the new bytes. We do NOT stop/restart the
     // primary adv — only the scan response is rebuilt, so connected
     // NUS clients are unaffected.
+    //
+    // IMPORTANT: the rebuild list below MUST stay in sync with
+    // startAdvertising()'s ScanResponse contents. clearData() drops
+    // EVERY AD structure in the scan response; anything added in
+    // startAdvertising() that isn't re-added here will be silently
+    // missing from subsequent ad cycles. Today the scan response has
+    // just two entries (Name + ACK manufacturer data); if more are
+    // added in startAdvertising(), mirror them here.
     uint8_t ackData[5] = {0xFF, 0xFF, 0xA0,
                           static_cast<uint8_t>(newId & 0xFF),
                           static_cast<uint8_t>((newId >> 8) & 0xFF)};

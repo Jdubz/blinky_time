@@ -85,7 +85,19 @@ async def _scan_with_retry(
         try:
             return await make_coro()
         except BleakDBusError as exc:
-            if "InProgress" not in str(exc):
+            # Match by D-Bus error name first (canonical), fall back to
+            # message substring (covers older BleakDBusError shapes that
+            # didn't preserve .dbus_error_name). The canonical name is
+            # immune to locale + BlueZ-version changes to the human-
+            # readable text; the substring fallback widens the net for
+            # older Bleak versions where ``exc.dbus_error`` may not be
+            # populated. PR #144 review.
+            dbus_name = getattr(exc, "dbus_error", None) or ""
+            msg = str(exc)
+            is_in_progress = dbus_name == "org.bluez.Error.InProgress" or (
+                "InProgress" in msg or "org.bluez.Error.InProgress" in msg
+            )
+            if not is_in_progress:
                 # Not the race we know about; propagate as-is.
                 raise
             last_exc = exc

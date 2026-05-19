@@ -216,6 +216,24 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
         // index updates + slot write share a brief noInterrupts()
         // window with the consumer's slot-copy + tail-advance in
         // update(), so a partial overwrite can never race a slot read.
+        //
+        // PRIMASK budget: the SoftDevice S140 nominal hard limit for
+        // PRIMASK-on is ~100 µs (NRF52 SDK SDS table 5.7); practical
+        // BLE-stack robustness budget is ~15-20 µs. The memcpy below
+        // is at most SLOT_PAYLOAD_MAX (240) bytes. On nRF52840 Cortex-
+        // M4 at 64 MHz with the optimised memcpy in newlib, 240 bytes
+        // runs at ~3-5 cycles/byte word-aligned = ~12-19 µs. That's
+        // comfortably under the 100 µs hard limit and at the edge of
+        // the ~15-20 µs robustness budget — acceptable for an
+        // already-rare path (drop-oldest only fires on overrun), but
+        // worth keeping under static_assert so a future
+        // SLOT_PAYLOAD_MAX bump doesn't silently push us past the
+        // hard limit. Bump policy: if SLOT_PAYLOAD_MAX grows, also
+        // bump RX_RING_SIZE and consider the snapshot-then-copy
+        // split (slot ownership flag, memcpy with interrupts on)
+        // documented in PR #144 review.
+        static_assert(SLOT_PAYLOAD_MAX <= 240,
+                      "PRIMASK-on memcpy budget — re-evaluate vs SoftDevice S140 SDS 5.7 if raised");
         noInterrupts();
         uint8_t head = rxHead_;
         uint8_t tail = rxTail_;
@@ -256,8 +274,12 @@ void BleScanner::update() {
 
         // Snapshot + copy + advance tail under noInterrupts() so the
         // producer's drop-oldest path cannot overwrite the slot mid-copy.
-        // The copy is at most SLOT_PAYLOAD_MAX bytes (~240) — well
-        // under the SoftDevice's tolerated PRIMASK window.
+        // The copy is at most SLOT_PAYLOAD_MAX bytes (240). On Cortex-M4
+        // at 64 MHz this takes ~12-19 µs — within the SoftDevice S140
+        // ~100 µs hard PRIMASK limit (SDS table 5.7), at the edge of
+        // the ~15-20 µs BLE-stack robustness budget. See producer-side
+        // commentary in handleReport() for the static_assert that
+        // pins this budget against future SLOT_PAYLOAD_MAX changes.
         noInterrupts();
         if (rxHead_ == rxTail_) {
             interrupts();
