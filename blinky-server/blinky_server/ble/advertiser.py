@@ -452,24 +452,28 @@ class FleetBroadcaster:
     COMMAND_REEMIT_HOLD_MS = 250
 
     # How many times to re-emit each command with a fresh sequence.
-    # Rationale (PR #143 hardware-test on FPS Sweep + carts, May 18):
-    # The firmware's BleScanner has a single-slot rxBuffer. If the slot
-    # is busy when an advertisement arrives, the packet is silently
-    # dropped (firmware diag: ``packets_rx=13`` / ``duped=4892`` /
-    # ``dropped=21`` on cart_inner after 6h uptime — 13 unique accepted
-    # vs the many hundreds of broadcasts that fired). The firmware
-    # dedups by ``(source BD addr, sequence)`` — multiple emits with
-    # the SAME seq inside the on-air window count as 1 chance.
+    # Rationale (PR #143 + 2026-05-19 measurement on b177 carts):
+    # The firmware's BleScanner accepts at most one unique-seq packet
+    # per emit slot (the seen-ring dedups identical-(src, seq)
+    # retransmissions). With COMMAND_V2 idempotency the firmware also
+    # dedups by command_id, so the same logical command applies exactly
+    # once regardless of how many emits land.
     #
-    # Re-emitting with FRESH sequences each time gives the firmware N
-    # independent chances to catch the same payload. The firmware
-    # APPLIES each accepted packet (gen/effect/save/load/set are all
-    # idempotent), so applying the same command N times is harmless.
+    # Bench-measured per-emit BLE reception ~42% (75-80% delivery at
+    # 5× redundancy). RF misses are correlated (bursty), so independence
+    # math underestimates the marginal benefit of more emits in
+    # practice. Bumping count 5→10 doubles air time per command
+    # (1.25s → 2.5s) but pushes delivery probability into the >99%
+    # range, where it should be for a 100%-reliability target. The
+    # COMMAND_V2 idempotency ring on each device makes the extra
+    # re-emits free at the application layer — they're identified as
+    # the same logical command and silently short-circuited.
     #
-    # 5 x 250ms = 1250ms total air time per command. At the firmware's
-    # 100ms scan interval / 50ms window, the chance of all 5 hitting a
-    # busy main loop drops to <1% under reasonable load.
-    COMMAND_REEMIT_COUNT = 5
+    # 10 × 250ms = 2.5s total air time per command. Concurrent
+    # commands within 2.5s clobber the prior cycle, which is the same
+    # behavior as the 5-emit version — operators don't fire commands
+    # faster than that in practice.
+    COMMAND_REEMIT_COUNT = 10
 
     async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.

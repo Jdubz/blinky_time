@@ -19,9 +19,20 @@ void BleScanner::begin() {
     // Minimizes power and RF interference.
     Bluefruit.Scanner.useActiveScan(false);
 
-    // Scan interval/window: 160/80 (100ms interval, 50ms window = 50% duty)
-    // Good balance of responsiveness vs power. SoftDevice handles timing via ISR.
-    Bluefruit.Scanner.setInterval(160, 80);  // Units of 0.625ms
+    // Scan interval/window: 160/144 (100ms interval, 90ms window = 90% duty).
+    // Bench-measured 2026-05-19: per-emit BLE reception on the carts +
+    // test chip was only ~42% with the previous 50% duty cycle (50ms
+    // window in a 100ms interval), giving only 75-80% per-broadcast
+    // delivery even after the 5× re-emit, multi-slot rx ring, and
+    // command_id idempotency fixes shipped. 90% duty cycle means the
+    // scanner is ON for nearly the full interval, so almost every
+    // BlueZ retransmit lands in a scan window. Cost: more radio time
+    // for scanner, less for NUS advertiser — acceptable because (a)
+    // each device's NUS adv is at 32/244 (20ms/152ms), well within the
+    // remaining 10% of radio time, and (b) reliable broadcast reception
+    // is more load-bearing than NUS-adv emission rate for a fleet
+    // controlled exclusively over BLE broadcast at the event.
+    Bluefruit.Scanner.setInterval(160, 144);  // Units of 0.625ms
 
     // Filter: only report packets containing manufacturer-specific data
     // This reduces callback frequency significantly (ignores iBeacons, etc.)
