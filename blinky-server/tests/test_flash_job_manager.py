@@ -335,8 +335,12 @@ async def test_uf2_write_cascade_guard_allows_force_true(
     cascade guard. The operator has accepted the cost; the guard is
     only there to keep the auto-recovery loop from firing under us."""
     fleet._recent_uf2_writes["dev-1"] = time.time()
-    # Operator path — force=True (the default for routes_flash_jobs).
-    job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
+    # Operator path — force=True explicit. The bypass test would
+    # silently lose its meaning if the default ever flipped, so pin
+    # the keyword. The contrapositive (force=False returning None) is
+    # covered by ``test_uf2_write_cascade_guard_blocks_auto_recovery``
+    # via the direct ``should_attempt_auto_recovery`` check.
+    job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"), force=True)
     assert job is not None
     await job.wait_until_terminal(timeout=2.0)
 

@@ -466,8 +466,12 @@ class FleetManager:
         existing = self._flash_jobs.get(canonical)
         if existing is not None and existing.is_active:
             return False
+        # Capture once so every age comparison below sees the same
+        # reference time. Avoids subtle test-flakiness if anything in
+        # this method ever does I/O or sleeps between checks.
+        now = _time.time()
         last = self._recent_flash_attempts.get(canonical)
-        if last is not None and (_time.time() - last) < self.FLASH_DEDUP_WINDOW_S:
+        if last is not None and (now - last) < self.FLASH_DEDUP_WINDOW_S:
             return False
         # Cascade-bug guard: if a UF2 write recently put bytes on flash
         # (regardless of whether verify converged), refuse BLE-DFU
@@ -476,16 +480,13 @@ class FleetManager:
         # UF2 writes during the 2026-05-19 session. Operators retain
         # the escape hatch via ``flash_device(force=True)``.
         last_uf2 = self._recent_uf2_writes.get(canonical)
-        if (
-            last_uf2 is not None
-            and (_time.time() - last_uf2) < self.UF2_WRITE_AUTO_RECOVERY_BLOCK_S
-        ):
+        if last_uf2 is not None and (now - last_uf2) < self.UF2_WRITE_AUTO_RECOVERY_BLOCK_S:
             log.info(
                 "should_attempt_auto_recovery(%s): blocked by recent UF2 "
                 "write at %.0f (age %.0fs < %.0fs cascade-guard window)",
                 canonical[:12],
                 last_uf2,
-                _time.time() - last_uf2,
+                now - last_uf2,
                 self.UF2_WRITE_AUTO_RECOVERY_BLOCK_S,
             )
             return False
@@ -503,7 +504,7 @@ class FleetManager:
                 # ceiling indefinitely until max-attempts kicks in).
                 idx = min(retry.fails - 1, len(RECOVERY_BACKOFF_SECONDS) - 1)
                 backoff_s = RECOVERY_BACKOFF_SECONDS[idx]
-                if (_time.time() - retry.last_failure_at) < backoff_s:
+                if (now - retry.last_failure_at) < backoff_s:
                     return False
         return True
 
@@ -2487,10 +2488,21 @@ class FleetManager:
         """Repopulate ``_recent_flash_attempts`` from the JSONL audit log.
 
         Called at server start. Reads every entry in the file and
-        keeps those with a ``finished_at`` within
-        ``FLASH_DEDUP_WINDOW_S`` of now. Older entries are skipped
-        (they're outside the window so they wouldn't dedup anyway,
-        and we don't want stale data lingering in memory).
+        repopulates two in-memory trackers:
+
+        * ``_recent_flash_attempts`` (standard dedup) — entries whose
+          ``finished_at`` is within ``FLASH_DEDUP_WINDOW_S`` of now.
+        * ``_recent_uf2_writes`` (cascade guard) — UF2 entries whose
+          ``write_completed_at`` is within
+          ``UF2_WRITE_AUTO_RECOVERY_BLOCK_S`` of now. See
+          [[project-deploy-flash-cascade-bug]].
+
+        The outer age cutoff uses ``max(FLASH_DEDUP_WINDOW_S,
+        UF2_WRITE_AUTO_RECOVERY_BLOCK_S)`` so a cascade-guard-eligible
+        entry that's outside the standard dedup window (e.g. 15 min
+        old) isn't dropped before the cascade branch can see it. Each
+        tracker is then gated individually by its own window inside
+        the loop.
 
         Tolerant of partial / corrupt lines: a line that can't be
         parsed as JSON is skipped with a WARN, the rest of the file
@@ -2498,18 +2510,26 @@ class FleetManager:
         so corruption should be exceedingly rare — but a power-cut
         mid-write could in theory leave a truncated final line.
 
-        Without this method, ``_recent_flash_attempts`` starts empty
-        at boot — auto-recovery's first cycle could re-fire on a
-        device that just failed pre-restart (the cascade pattern the
-        plan §L4 closes).
+        Without this method, both trackers start empty at boot —
+        auto-recovery's first cycle could re-fire on a device that
+        just failed pre-restart (the cascade pattern §L4 closes).
         """
         path = self._flash_audit_log_path()
         if not path.is_file():
             return
         now = _time.time()
+        # Hoist out of the loop — these are class constants and don't
+        # change per entry. Audit logs can grow to hundreds of lines
+        # over a long-lived deploy; per-entry max() + attribute access
+        # is wasted work.
+        max_window = max(
+            self.FLASH_DEDUP_WINDOW_S,
+            self.UF2_WRITE_AUTO_RECOVERY_BLOCK_S,
+        )
         loaded = 0
         skipped_old = 0
         skipped_bad = 0
+        skipped_in_window_no_tracker = 0
         try:
             with path.open("r", encoding="utf-8") as fh:
                 for line_num, raw in enumerate(fh, start=1):
@@ -2527,20 +2547,18 @@ class FleetManager:
                     if not isinstance(canonical, str) or not isinstance(finished_at, (int, float)):
                         skipped_bad += 1
                         continue
-                    # An entry must be loaded if it could feed EITHER tracker
-                    # (the standard dedup window OR the longer UF2-write
-                    # cascade-guard window). Use the max of both windows as
-                    # the outer cutoff, then gate each tracker individually
-                    # below. Otherwise a 15-min-old UF2 verify-timeout entry
-                    # (worth tracking for cascade-guard purposes) gets
-                    # silently dropped here.
-                    max_window = max(
-                        self.FLASH_DEDUP_WINDOW_S,
-                        self.UF2_WRITE_AUTO_RECOVERY_BLOCK_S,
-                    )
                     if (now - finished_at) >= max_window:
                         skipped_old += 1
                         continue
+                    # Track whether THIS entry actually contributed to a
+                    # tracker, so the loaded-vs-skipped counters in the
+                    # post-load log line are accurate. An entry between
+                    # FLASH_DEDUP_WINDOW_S and UF2_WRITE_AUTO_RECOVERY_BLOCK_S
+                    # for a non-UF2 transport (or for a UF2 transport
+                    # missing write_completed_at) is "loaded" in the sense
+                    # of "we considered it" but doesn't update state — count
+                    # it as such rather than inflating the loaded counter.
+                    contributed = False
                     # Standard dedup-window tracker (FAILED-or-COMPLETED
                     # within FLASH_DEDUP_WINDOW_S). Take the MAX of the
                     # existing in-memory value and the audit value — multiple
@@ -2550,11 +2568,11 @@ class FleetManager:
                         existing = self._recent_flash_attempts.get(canonical)
                         if existing is None or finished_at > existing:
                             self._recent_flash_attempts[canonical] = finished_at
+                        contributed = True
                     # UF2-write cascade-guard tracker. A FAILED-but-written
                     # job (verify-timeout case) must survive restart;
                     # otherwise the next auto-recovery cycle post-restart
-                    # re-runs the cascade. See
-                    # [[project-deploy-flash-cascade-bug]].
+                    # re-runs the cascade.
                     transport = entry.get("transport")
                     wca = entry.get("write_completed_at")
                     if (
@@ -2565,17 +2583,23 @@ class FleetManager:
                         existing_uf2 = self._recent_uf2_writes.get(canonical)
                         if existing_uf2 is None or wca > existing_uf2:
                             self._recent_uf2_writes[canonical] = wca
-                    loaded += 1
+                        contributed = True
+                    if contributed:
+                        loaded += 1
+                    else:
+                        skipped_in_window_no_tracker += 1
         except OSError as exc:
             log.warning("Failed to read flash-audit log %s: %s", path, exc)
             return
-        if loaded or skipped_bad:
+        if loaded or skipped_bad or skipped_in_window_no_tracker:
             log.info(
                 "Flash-audit log: rebuilt dedup window from %d entries "
-                "(%d skipped as stale, %d skipped as malformed)",
+                "(%d skipped as stale, %d skipped as malformed, "
+                "%d in-window but contributed to no tracker)",
                 loaded,
                 skipped_old,
                 skipped_bad,
+                skipped_in_window_no_tracker,
             )
 
     def set_recovery_firmware(self, firmware_path: str, device_ids: list[str]) -> None:

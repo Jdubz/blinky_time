@@ -59,7 +59,7 @@ For any firmware deployment to fleet devices, the canonical workflow is:
 ./scripts/deploy.sh --devices=<id|all|list>   # compile + upload + flash + verify
 ```
 
-This wraps `build.sh` (which auto-increments `BUILD_NUMBER`), runs pre-compile safety checks (`scripts/pre_compile_safety.py`), and performs version-verify after flash. Direct `make compile` / `arduino-cli compile` skip the version bump and are fine for local iteration only.
+This wraps `build.sh` (which auto-increments `BUILD_NUMBER`) and performs version-verify after flash. `scripts/pre_compile_safety.py` runs as a dependency of the `make compile-out` target (see Makefile `safety-check`); `build.sh`/`deploy.sh` invoke `arduino-cli` directly and do **not** currently call it. Run `make safety-check` explicitly if you want the safety pass before a `deploy.sh` run. Direct `arduino-cli compile` / `make compile` (no `-out`) skips the version bump and is fine for local iteration only.
 
 For bare-chip recovery (device not enrolled in fleet), `make uf2-upload UPLOAD_PORT=/dev/ttyACM0`.
 

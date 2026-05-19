@@ -58,19 +58,22 @@ fits comfortably.
 
 ### 1.3 Cascade bug — UF2 verify timeout → BLE-DFU auto-recovery
 
+**Status: FIXED in PR #145** (commit `c31ba4e2`). `FleetManager` now
+tracks `_recent_uf2_writes` separately from `_recent_flash_attempts`;
+a successful UF2 byte-write (job reached VERIFYING with
+`write_completed_at` set) blocks BLE-DFU auto-recovery on the same
+canonical device for `UF2_WRITE_AUTO_RECOVERY_BLOCK_S = 1800 s` (30
+min) regardless of whether the verify phase converged. Operator path
+(`force=True`) bypasses. Audit log rebuilds the tracker on restart so
+the guard survives server bounces.
+
 **Reference:** [[project-deploy-flash-cascade-bug]] (memory).
 
-**Symptom:** UF2 write succeeds, post-flash version-verify times out
-at 5 minutes (some path is slow), server marks the flash FAILED, the
-auto-recovery loop then BLE-DFU's the device — which overwrites the
-working UF2 write. Audit log on 2026-05-19 shows ~5 cascade events
-during this session alone, costing ~30 min total.
-
-**Not yet fixed.** Mitigation today: deploy.sh's strict expected-state
-assertion at end is set up to catch but doesn't gate the auto-recovery
-trigger. The right fix lives in `_run_flash_job` orchestrator: when
-a UF2 write completes successfully (`bytes_written == bytes_total`),
-the verify-timeout shouldn't trigger auto-recovery.
+**Original symptom:** UF2 write succeeded, post-flash version-verify
+timed out at 5 minutes (some path was slow), server marked the flash
+FAILED, the auto-recovery loop then BLE-DFU'd the device — which
+overwrote the working UF2 write. Audit log on 2026-05-19 showed ~5
+cascade events during one session, costing ~30 min total.
 
 ---
 

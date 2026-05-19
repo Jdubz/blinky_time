@@ -48,7 +48,8 @@ Tier 4: Full Validation (50 min)
 **When:** After every compile+flash. Verify firmware boots and feature activates.
 
 ```
-run_test(track, port, duration_ms=30000, commands=["set hmm 1"])   # poll with check_test_result(job_id)
+run_test(port="/dev/ttyACM0", tracks=["techno-minimal-01"], duration_ms=30000, commands=["set hmm 1"])
+# returns job_id — poll with check_test_result(job_id)
 ```
 
 - **1 track, 1 run, 1 device**
@@ -60,7 +61,15 @@ run_test(track, port, duration_ms=30000, commands=["set hmm 1"])   # poll with c
 **When:** Proof-of-concept testing. Does a code change show any signal at all?
 
 ```
-run_test(track, ports=[...], port_commands={...}, duration_ms=30000)   # multi-port form; poll with check_test_result
+# Multi-device A/B uses run_validation_suite (run_test is single-port).
+run_validation_suite(
+    ports=["/dev/ttyACM0", "/dev/ttyACM1"],
+    tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background"],
+    runs=1,
+    duration_ms=30000,
+    per_device_commands={"/dev/ttyACM0": ["set hmm 0"], "/dev/ttyACM1": ["set hmm 1"]},
+)
+# returns job_id — poll with check_test_result(job_id)
 ```
 
 - **3 tracks, 1 run each, 2 devices** (A/B simultaneous)
@@ -80,7 +89,14 @@ run_test(track, ports=[...], port_commands={...}, duration_ms=30000)   # multi-p
 **When:** Feature validation before committing. Statistically meaningful comparison.
 
 ```
-run_test(track, ports=[...], port_commands={...}, runs=3, duration_ms=45000)   # poll with check_test_result
+run_validation_suite(
+    ports=["/dev/ttyACM0", "/dev/ttyACM1"],
+    tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background", "garage-uk-2step"],
+    runs=3,
+    duration_ms=45000,
+    per_device_commands={"/dev/ttyACM0": ["set hmm 0"], "/dev/ttyACM1": ["set hmm 1"]},
+)
+# returns job_id — poll with check_test_result(job_id)
 ```
 
 - **4 tracks, 3 runs each, 2 devices**
@@ -101,7 +117,8 @@ run_test(track, ports=[...], port_commands={...}, runs=3, duration_ms=45000)   #
 **When:** Before merging to master. Final regression check.
 
 ```
-run_validation_suite(ports, runs=3, duration_ms=45000)
+run_validation_suite(ports=[...], runs=3, duration_ms=45000)
+# returns job_id — poll with check_test_result(job_id)
 ```
 
 - **18 tracks, 3 runs, 1-2 devices**
@@ -119,12 +136,12 @@ run_validation_suite(ports, runs=3, duration_ms=45000)
 
 - Proof-of-concept testing (use Tier 2)
 - Parameter sweeps (use Tier 2 on individual tracks)
-- Debugging a specific track (use single `run_test` with `runs=3-5`)
+- Debugging a specific track (use single-port `run_test(port=..., tracks=[name], runs=3-5)`)
 - Checking if firmware compiles/boots (use Tier 1)
 
 ## Multi-Device A/B Best Practices
 
-- Use the multi-port form of `run_test` (or `run_validation_suite` for the full corpus) with `port_commands` for A/B; poll results with `check_test_result(job_id)`.
+- `run_test` is **single-port only** (`port` is a required scalar). For A/B across multiple devices, use `run_validation_suite(ports=[...], per_device_commands={...})`. Poll results with `check_test_result(job_id)`.
 - Both devices hear identical audio → no acoustic confounding
-- Set baseline on port 0, variant on port 1
+- Set baseline on port 0, variant on port 1 via `per_device_commands`
 - Use `duration_ms` parameter, not full track length, for consistent test windows
