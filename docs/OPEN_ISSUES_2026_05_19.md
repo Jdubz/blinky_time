@@ -245,11 +245,32 @@ where USB isn't accessible. But improves bench recovery dramatically.
 
 ---
 
-### 3.3 BLE-DFU MTU bump — 10× transfer speedup opportunity
+### 3.3 BLE-DFU MTU bump — 10x transfer speedup opportunity
 
-BLE-DFU service uses legacy 20-byte DFU packet MTU regardless of the
-negotiated link MTU. Modern BLE 4.2+ centrals support up to 247-byte
-MTU. Bumping would take a ~510KB firmware transfer from 5.5 min → ~30s.
+**Status: SHIPPED 2026-05-19** (BL submodule commit `2cbe16d`,
+staged at `bootloader/update-bootloader-qspi-ota-default.uf2`
+sha256 `aa50445e…`). The Legacy DFU's hardcoded 20-byte payload
+came from the SoftDevice default ATT_MTU=23 (23 minus 3-byte ATT
+overhead). Three coordinated changes lift the ceiling:
+
+* `bootloader/src/src/main.c` and
+  `bootloader/src/lib/sdk11/components/libraries/bootloader_dfu/dfu_transport_ble.c`:
+  `BLEGATT_ATT_MTU_MAX` 23 → 247. SD config + client MTU exchange
+  both now honour up to 247.
+* `.../hci_mem_pool_internal.h`: `RX_BUF_SIZE` 32 → 256 to hold the
+  larger DFU data writes (~244 bytes at MTU=247). +1.8 KB RAM cost,
+  well within the BL's 224 KB headroom.
+* `blinky-server/blinky_server/firmware/ble_dfu.py`: removed
+  hardcoded `mtu = 20`; the inner transfer now reads
+  `client.mtu_size - 3` clamped to `[20, 244]`. Old bootloaders
+  still work transparently (negotiated MTU stays ≤23 → chunk 20).
+
+Verify-bootloader.py invariants still pass. Bench-validated on
+`659C8DD3ADF84A33` 2026-05-19: new BL `0.8.0-7-gc79626c-dirty`
+self-update via `deploy-bootloader.sh` succeeded; device booted
+firmware b181 cleanly post-update. Actual transfer-time speedup
+not yet measured (would need to BLE-DFU something with the new BL
+running and time it; deferred to a future session).
 
 Important for [[feedback-enclosed-devices-no-physical]]: sealed
 devices can't shortcut to UF2 via cable. BLE-DFU is their only
