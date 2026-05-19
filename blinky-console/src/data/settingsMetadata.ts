@@ -644,9 +644,3 @@ export const batteryMetricsMetadata: Record<string, SettingMetadata> = {
     unit: '%',
   },
 };
-
-// Note: ``SCENE_VISIBLE_SETTINGS`` / ``isSceneVisible`` were removed
-// when the scene system was retired 2026-05-19 (OPEN_ISSUES §1.2).
-// The Hub UI now exposes the generator chips + future hue-rotation
-// sliders directly; per-generator filtered settings panels are out
-// of scope for the festival-UI surface.

@@ -59,19 +59,39 @@ static bool readFwBuildMarker(uint32_t* outBuild) {
     return true;
 }
 
-// Write the firmware-freshness marker. The remove+open dance forces a
-// fresh write (LittleFS appends otherwise, growing the journal). MUST be
-// the LAST step of the format-and-restore sequence — if a power-cut
-// interrupts before this write completes, the next boot finds the
+// Write the firmware-freshness marker atomically: write a temp file
+// first, then rename to the canonical path. If anything fails before
+// the rename, the old marker (if any) is preserved — so a transient
+// LittleFS open/write failure does not cause a spurious reformat on
+// the next boot. PR #146 review item (claude bot).
+//
+// MUST still be the LAST step of the format-and-restore sequence —
+// the rename effectively commits the freshness state. If a power-cut
+// interrupts before the rename completes, the next boot finds the
 // marker still missing (or stale) and retries the format, which is
 // idempotent against the just-saved /config.bin.
 static bool writeFwBuildMarker(uint32_t build) {
-    InternalFS.remove(FW_BUILD_MARKER_FILE);
+    static const char* FW_BUILD_MARKER_TMP = "/.fw_build.tmp";
+    // Clean up any leftover temp from a previously-interrupted attempt.
+    // Safe: the canonical marker is what callers read; the temp only
+    // matters during this function.
+    InternalFS.remove(FW_BUILD_MARKER_TMP);
     File f(InternalFS);
-    if (!f.open(FW_BUILD_MARKER_FILE, FILE_O_WRITE)) return false;
+    if (!f.open(FW_BUILD_MARKER_TMP, FILE_O_WRITE)) return false;
     size_t n = f.write(reinterpret_cast<const uint8_t*>(&build), sizeof(build));
     f.close();
-    return n == sizeof(build);
+    if (n != sizeof(build)) {
+        InternalFS.remove(FW_BUILD_MARKER_TMP);
+        return false;
+    }
+    // ``rename`` overwrites the destination if it exists; the
+    // pre-existing marker (if any) is replaced atomically with the
+    // new content. Adafruit_LittleFS::rename returns true on success.
+    if (!InternalFS.rename(FW_BUILD_MARKER_TMP, FW_BUILD_MARKER_FILE)) {
+        InternalFS.remove(FW_BUILD_MARKER_TMP);
+        return false;
+    }
+    return true;
 }
 #endif
 
@@ -146,6 +166,23 @@ void ConfigStorage::begin() {
             //    a local ConfigData rather than into data_ because data_
             //    will be (re-)populated by loadFromFlash below if the
             //    restore path succeeds, OR by loadDefaults if it doesn't.
+            //
+            //    Snapshot validity bar mirrors ``loadFromFlash``: the
+            //    file must contain at least the header (magic + the two
+            //    version bytes) plus the entire StoredDeviceConfig — a
+            //    shorter read means the device-identity bytes are
+            //    incomplete and writing them back would corrupt
+            //    /config.bin with zero-filled trailers. PR #146 review
+            //    item (Copilot). Settings-section bytes past the
+            //    device-config block are allowed to be short (matching
+            //    ``loadFromFlash``'s tolerance of struct growth across
+            //    SETTINGS_VERSION bumps — those trailing bytes just
+            //    reset to defaults).
+            constexpr size_t MIN_SNAPSHOT_BYTES =
+                sizeof(uint16_t) +              // magic
+                sizeof(uint8_t) +               // deviceVersion
+                sizeof(uint8_t) +               // settingsVersion
+                sizeof(StoredDeviceConfig);
             ConfigData snapshot;
             memset(&snapshot, 0, sizeof(snapshot));
             bool haveSnapshot = false;
@@ -155,7 +192,7 @@ void ConfigStorage::begin() {
                     size_t bytesRead = configFile->read(
                         reinterpret_cast<uint8_t*>(&snapshot), sizeof(snapshot));
                     configFile->close();
-                    if (bytesRead >= sizeof(uint16_t) && snapshot.magic == MAGIC_NUMBER) {
+                    if (bytesRead >= MIN_SNAPSHOT_BYTES && snapshot.magic == MAGIC_NUMBER) {
                         haveSnapshot = true;
                     }
                 }
@@ -171,6 +208,17 @@ void ConfigStorage::begin() {
                 Serial.println(F("[FRESH-BUILD] LittleFS reformatted"));
             }
 
+            // Refresh configFile pointer's mount association after
+            // format. Adafruit_LittleFS::format remounts internally,
+            // but the cached File pointer may have stale handles —
+            // delete + recreate to be safe. Done UNCONDITIONALLY (not
+            // only in the haveSnapshot branch) because subsequent
+            // operations — including ``loadFromFlash`` below and any
+            // ``saveToFlash`` from the calling sketch — also use the
+            // configFile pointer. PR #146 review item (Copilot).
+            delete configFile;
+            configFile = new File(InternalFS);
+
             // 3. Restore /config.bin from snapshot if we have it. Even on
             //    format failure we still re-write the snapshot — the
             //    existing /config.bin may have been erased mid-format.
@@ -178,12 +226,6 @@ void ConfigStorage::begin() {
             //    prior config: nothing to restore, the loadDefaults
             //    path below will handle it).
             if (haveSnapshot) {
-                // Refresh configFile pointer's mount association after
-                // format. Adafruit_LittleFS::format remounts internally,
-                // but the cached File pointer may have stale handles —
-                // delete + recreate to be safe.
-                delete configFile;
-                configFile = new File(InternalFS);
                 configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
                 if (*configFile) {
                     size_t wrote = configFile->write(

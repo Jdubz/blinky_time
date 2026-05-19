@@ -286,22 +286,39 @@ logs loud + reboot-once on any failure. Catches the
 
 ## 5. Hub UI work (depends on Section 1.2 refactor)
 
-Once scene system is removed:
+Section 1.2's server + console cleanup landed 2026-05-19. The
+remaining work is in the lemon-cart repo (`~/lemon-cart/`).
 
-- **Hue rotation speed slider** — fleet-wide setting via
-  `set effectRotationSpeed <value>` broadcast. (Note: command is 28
-  bytes, hits the same legacy-adv ceiling as scenes — need shorter
-  setting name OR firmware extended-adv scanning before this is
-  reliable.)
-- **Absolute hue position slider** — `set effectHueShift <value>`.
-  Same length concern.
-- **Generator chip row** — replaces scene chips. Already deployable
-  (4 chips: fire/water/plasma/audio) → POST `/api/fleet/generator/{name}`.
+**Deployable today (no protocol changes):**
+- **Generator chip row** — replaces scene chips. Routes to
+  `POST /api/fleet/generator/{name}`; 4 chips fire/water/plasma/audio,
+  each command is `gen <name>` (≤10 bytes on wire). Fits the
+  legacy-adv ceiling comfortably.
 
-The settings-name length issue (28-byte `effectRotationSpeed`) is the
-same root cause as the scene size overflow. **Either firmware
-extended-adv scanning OR firmware setting-rename** is the blocker for
-these sliders.
+**BLOCKED on protocol-length resolution:**
+- **Hue rotation speed slider** — fleet-wide via
+  `set effectRotationSpeed <value>` (28 bytes on wire).
+- **Absolute hue position slider** — `set effectHueShift <value>`
+  (same length range).
+
+Both slider commands exceed the firmware scanner's 21-byte
+legacy-adv effective ceiling — BlueZ silently promotes them to
+extended adv, which the firmware doesn't watch (the same root cause
+as the scene-system command overflow). **Two paths to unblock:**
+
+1. **Short-name aliases** in firmware: rename the broadcast paths to
+   use `huespeed` / `hueshift` (existing short names, already
+   recognised by the firmware's `set` command). Server-side change:
+   emit `set huespeed <v>` (16 bytes) instead of
+   `set effectRotationSpeed <v>` (28 bytes). No firmware change
+   required because the short names already work. **This is the
+   cheaper option and should be tried first.**
+2. **Firmware extended-adv scanning** (Section 6) — lifts the ceiling
+   for everything. Not a one-liner (BSP patch + ~half-day of work);
+   see Section 6 for actual scope.
+
+Until ONE of these lands, don't ship the slider Hub UI work — the
+broadcast would silently no-op. The generator chip row CAN ship now.
 
 ---
 
