@@ -1,5 +1,17 @@
 # Development Guide - Blinky Time
 
+## First-time setup
+
+After cloning the repo, install the git pre-push hook so blinky-server ruff (lint + format) and mypy run before every push. Without this, format-only failures only get caught on CI, costing a round-trip.
+
+```bash
+./scripts/install-hooks.sh
+```
+
+The hook source is in `hooks/pre-push`; the script copies it into `.git/hooks/`. It also runs cppcheck on firmware if installed, and warns when the `.git` pack exceeds 500 MB. Bypass for a single push with `git push --no-verify` (use sparingly — every CI failure that the hook would have caught is a wasted round-trip).
+
+The console has a separate husky setup; `cd blinky-console && npm install` installs its hooks. See `README.md`.
+
 ## 🚨 Critical Safety Rules
 
 ### Upload Method (nRF52840)
