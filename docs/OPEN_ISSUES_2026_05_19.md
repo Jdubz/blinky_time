@@ -11,42 +11,63 @@ once items get addressed.
 
 ### 1.1 BLE broadcast delivery ceiling ~80% per-broadcast
 
-**Symptom:** 4 of 20 broadcasts hit zero devices on the bench measurement
-(2026-05-19 evening). Systemic misses are **broadcaster-side**, not
-random per-emit RF — all devices missed the *same* broadcasts.
+**Status: Phase 2 SHIPPED (server side).** Discovery extracts
+`last_cmd_id` from each BLE device's scan-response manufacturer data
+and stores it on the `Device`. After every discovery cycle the
+FleetManager hands the snapshot to `FleetBroadcaster.rebroadcast_to_laggards()`,
+which re-emits the cached `_last_command` with the SAME `_command_id`
+for any device whose ACK lags. Capped at `REBROADCAST_MAX_ATTEMPTS = 3`
+per (device, command_id) to bound radio time on a permanently-out-of-
+range device; the per-device counter clears on each fresh
+`broadcast_command` (new logical command resets the budget). Field
+validation pending — bench measurement of per-broadcast delivery rate
+after Phase 2 vs. pre-Phase-2 baseline.
 
-**State today:**
+**Symptom (original, pre-fix):** 4 of 20 broadcasts hit zero devices
+on the bench measurement (2026-05-19 evening). Systemic misses were
+**broadcaster-side**, not random per-emit RF — all devices missed the
+*same* broadcasts.
+
+**Prior state (shipped earlier):**
 - Items #1 (multi-slot rxBuffer), #2 (command_id idempotency), #3
   (per-source seq ring), and scan-duty-cycle 50%→90% all SHIPPED.
 - Reception per-emit improved 42% → ~70% within successful broadcasts.
-- Per-broadcast delivery still 80%. Adding more emits / wider duty
-  cycle doesn't help the 20% all-emits-missed case.
+- Per-broadcast delivery 80%. Adding more emits / wider duty cycle
+  didn't help the 20% all-emits-missed case — that's what gossip-ACK
+  re-broadcast targets.
 
-**Next step:** [Phase 2 of BLE_FLEET_RELIABILITY_PLAN item #5] — server
-extracts `last_cmd_id` from device gossip-ACK adv (phase 1 firmware
-shipped, commit `699c3025`), re-broadcasts laggards. Closes the
-systemic-miss gap by design.
-
-**Workaround:** none. The light button + Hub UI silently fail one in
-five times. Operators learn to repeat the action.
+**Workaround (no longer needed):** the operator's "tap it again"
+habit is now redundant on the second pass — the server will retry
+within ~60 s of the missed broadcast.
 
 ---
 
-### 1.2 Scene system → generator-only refactor (in flight)
+### 1.2 Scene system → generator-only refactor
+
+**Status: server + console SHIPPED 2026-05-19.** `/api/scenes/*`
+routes, `scene_cursor` module, `scenes` module, and the test suite
+are deleted from `blinky-server`. The `~/.local/share/blinky-server/scenes/`
+directory is orphaned on disk; safe to delete but the server no longer
+manages it. `ScenesPanel.tsx` + tests + ~145 lines of CSS removed
+from `blinky-console`; `SCENE_VISIBLE_SETTINGS` / `isSceneVisible`
+dead code removed from `settingsMetadata.ts`. `PacketType.SCENE = 0x02`
+is kept in `protocol.py` only as a mirror of `BleProtocol.h` (the
+firmware enum is unchanged); no Python code emits SCENE packets.
 
 **Decision 2026-05-19:** eliminate scenes entirely. Direct generator
 selection only; hue rotation managed via Hub UI sliders.
 
-**Shipped tonight (lemon-cart commit `e521e42`):**
-- Light button now cycles `fire/water/plasma/audio` (no more scenes).
-- Cursor moved to client-side `/run/lemoncart/generator-cursor`.
+**Shipped:**
+- Lemon-cart: light button cycles `fire/water/plasma/audio`
+  (commit `e521e42` in the lemon-cart repo). Cursor moved to
+  client-side `/run/lemoncart/generator-cursor`.
+- blinky-server: scene routes + module + library + tests deleted.
+- blinky-console: `ScenesPanel` deleted; CSS + dead settings-metadata
+  helpers removed.
 
-**Not shipped — required follow-up:**
-- Server: remove `/api/scenes/*` routes + `scene_cursor` module +
-  scene library on disk. Currently orphaned but live.
+**Still pending (lemon-cart repo):**
 - Hub UI: scene chip section should be removed; **new** hue rotation
   speed slider + absolute hue position slider added.
-- Console: scene-editor pages can be deleted.
 
 **Why the rush to refactor:** scene commands like
 `scene water static 0.0 0.66` (28 bytes) exceed the 31-byte legacy BLE
@@ -77,36 +98,41 @@ cascade events during one session, costing ~30 min total.
 
 ---
 
-### 1.4 Big_bucket phantom button presses (uninvestigated)
+### 1.4 Big_bucket phantom button presses
 
-**Symptom:** big_bucket's generator changes unprompted, suspected
-phantom presses on the firmware-side GPIO button (D1).
+**Status: firmware mitigation SHIPPED (pending flash).**
+`GeneratorButton::poll()` now does two-layer debounce: (a) a
+sustained-level filter requiring `STABLE_SAMPLE_COUNT = 3` consecutive
+agreeing samples before recognizing a level change (≈50 ms at 60 Hz
+poll cadence, absorbs short EMI pulses); (b) `DEBOUNCE_MS` bumped
+200 → 500 ms (absorbs longer ones). Combined, the chain rejects
+sub-50 ms EMI spikes outright and bounds the accepted press rate to
+≤2 Hz, which is well above any operator-press cadence. Effective
+after the next deploy.sh that touches big_bucket. If phantom presses
+persist after the flash, fall back to registry option #1.
 
-**Hardware:** internal pull-up + 200 ms debounce already in place.
-Suspected cause: long unshielded wire picking up EMI from the
-WS2812B data line, or a flaky physical button. No diagnostic
-performed (user pivoted to other issues).
+**Symptom (original):** big_bucket's generator changes unprompted,
+suspected phantom presses on the firmware-side GPIO button (D1).
 
-**Workarounds:**
+**Hardware:** internal pull-up + 200 ms debounce was in place
+pre-fix. Suspected cause: long unshielded wire picking up EMI from
+the WS2812B data line, or a flaky physical button.
+
+**Remaining workarounds (if the firmware fix is insufficient):**
 1. Disable the firmware button via registry: set `buttonPin: 0` in
    `big_bucket_v1.json`, push config + reboot. Instant fix.
-2. Increase firmware debounce window from 200 ms to 500 ms or 1 s
-   (needs `GeneratorButton.h` edit + flash).
-3. Add hardware filtering (100 nF cap GPIO→GND).
+2. Add hardware filtering (100 nF cap GPIO→GND).
 
 ---
 
 ## 2. PR #144 review items still open
 
-Lower-priority items from the round-2 bot reviews that weren't
-addressed in `cc6d8096`:
-
-| Item | File | Issue | Severity |
+| Item | File | Issue | Status |
 |---|---|---|---|
-| 7 | `tests/test_fleet_ble.py` | `bc.COMMAND_REEMIT_HOLD_MS = 0.0` instance-attribute override is fragile — silently breaks if `broadcast_command` ever reads via class. | Test pattern |
-| 8 | `tests/test_registry_jsons.py` | Only checks `ledType` validity; doesn't catch other firmware-required fields (numLeds, platform). | Test scope |
-| 11 | `blinky_server/ble/protocol.py` | `build_command_v2_packet` docstring claims 238-byte ceiling (EXTENDED_PAYLOAD_MAX - token); should be re-checked since the firmware scanner only sees legacy ads (21-byte effective ceiling — see Section 1.2). | Doc accuracy |
-| (n/a) | `BleScanner.cpp` `RxSlot` struct | `uint16_t len` at byte offset 1 is misaligned — Cortex-M4 handles it in hardware but each access costs an extra cycle. Not a crash; not worth packing now. | Perf nit |
+| 7 | `tests/test_fleet_ble.py` | `bc.COMMAND_REEMIT_HOLD_MS = 0.0` instance-attribute override is fragile. | ✅ Replaced with `_fast_broadcaster(monkeypatch)` helper that patches the class attribute. |
+| 8 | `tests/test_registry_jsons.py` | Only checked `ledType` validity. | ✅ Added per-file checks for required-field presence, deviceId↔filename match, ledWidth/ledHeight positive (with 2048 sanity cap), and orientation/layoutType enum-range. |
+| 11 | `blinky_server/ble/protocol.py` | Docstring claimed 238-byte ceiling without flagging the firmware's 21-byte legacy-adv effective limit. | ✅ Docstring now documents both ceilings and the silent-on-air failure mode. |
+| (n/a) | `BleScanner.cpp` `RxSlot` struct | `uint16_t len` misaligned at byte offset 1. | ⏸ Perf nit; not worth packing now per the original review. |
 
 ---
 
@@ -130,15 +156,26 @@ sacrificial bench chip + `scripts/verify_bootloader.py` re-validation.
 
 ### 3.2 BL prefer UF2 over BLE-DFU when USB cable detected
 
+**Status: SHIPPED in b181+** (commit `ac254194`). The fix lives in
+*firmware* (not the bootloader, as the original entry implied) —
+specifically `SafeBootWatchdog::enterRecoveryBootloader` now reads
+`NRF_POWER->USBREGSTATUS.VBUSDETECT` and writes the UF2 RAM magic
+(0xBEEF0057) instead of the BLE-DFU magic (0xBEEF00A8) when a USB
+cable is providing VBUS. Sealed devices with no USB fall through to
+BLE-DFU as before, so the autonomous-recovery contract for
+installed sculptures is unchanged.
+
+Bench-validated 2026-05-19 on `659C8DD3ADF84A33`: device flashes
+cleanly, boots through the §3.4 fresh-build path, healthy fps. The
+functional change is dormant in normal operation (only fires on
+the 5-strike `RebootFrequencyCounter` quarantine path); field
+validation happens whenever the next auto-recovery actually fires.
+
 **Reference:** [[project-bl-prefer-uf2-when-usb]].
 
-**Today:** auto-fallback always picks BLE-DFU (~5.5 min). When a USB
-cable is connected at fallback time, UF2 mass-storage path would
-recover in ~30 seconds.
-
-**Fix:** in BL `check_dfu_mode()`, when entering DFU on app crash,
-check `NRF_POWER->USBREGSTATUS.VBUSDETECT`. If USB is present, call
-`enterUf2Dfu()` instead of `enterBleDfu()`. Few-line change.
+**Original symptom:** auto-fallback always picked BLE-DFU (~5.5 min).
+When a USB cable was connected at fallback time, UF2 mass-storage
+path would have recovered in ~30 seconds.
 
 **Caveat:** doesn't help **sealed devices** [[feedback-enclosed-devices-no-physical]]
 where USB isn't accessible. But improves bench recovery dramatically.
@@ -159,16 +196,33 @@ recovery path; making it faster is high-value.
 
 ### 3.4 Stale-flash crash on big version upgrades
 
+**Status: firmware mitigation SHIPPED in b180+** (commit `116090d9`).
+`ConfigStorage::begin` (nRF52 branch) now does a freshness check:
+the `/.fw_build` marker file records the FIRMWARE_BUILD that last
+successfully booted. On a marker mismatch (first boot of any new
+build), the firmware:
+
+  1. Snapshots `/config.bin` (preserves device identity)
+  2. `InternalFS.format()` — clears all accumulated LittleFS state
+  3. Re-writes `/config.bin` from snapshot
+  4. Writes the marker LAST (idempotent on power-cut between steps 1–3)
+
+Bench-tested 2026-05-19 on `659C8DD3ADF84A33`: deploy of b180 to a
+safeMode chip booted cleanly through the fresh-build path; subsequent
+`save` and `json info` commands work normally. Field validation
+against the original symptom (chip with stale b162-era LittleFS
+state) pending; the design is defensive enough that breakage falls
+through to existing safeMode → re-upload recovery rather than a brick.
+
 **Reference:** [[project-stale-flash-state-after-upgrade]].
 
-Fresh chips upgraded across many versions (e.g. b162 → b179) crash
-during first configured boot due to residual non-app flash regions.
-Self-heals via `RebootFrequencyCounter` quarantine → safeMode →
-re-upload, but eats ~30s of crash-recovery time per device.
-
-**Fix candidate:** firmware first-boot-of-new-version cleanup of
-LittleFS journal regions. Avoid the crash entirely instead of
-relying on recovery. Needs experimentation + sacrificial chip.
+**Original symptom:** Fresh chips upgraded across many versions
+(e.g. b162 → b179) crashed during first configured boot due to
+residual non-app flash regions. Self-healed via
+`RebootFrequencyCounter` quarantine → safeMode → re-upload, but ate
+~30 s of crash-recovery time per device. The operator workaround
+was "bench-burn a cycle before installing"; the marker-driven
+reformat eliminates the need for that.
 
 ---
 
@@ -232,22 +286,39 @@ logs loud + reboot-once on any failure. Catches the
 
 ## 5. Hub UI work (depends on Section 1.2 refactor)
 
-Once scene system is removed:
+Section 1.2's server + console cleanup landed 2026-05-19. The
+remaining work is in the lemon-cart repo (`~/lemon-cart/`).
 
-- **Hue rotation speed slider** — fleet-wide setting via
-  `set effectRotationSpeed <value>` broadcast. (Note: command is 28
-  bytes, hits the same legacy-adv ceiling as scenes — need shorter
-  setting name OR firmware extended-adv scanning before this is
-  reliable.)
-- **Absolute hue position slider** — `set effectHueShift <value>`.
-  Same length concern.
-- **Generator chip row** — replaces scene chips. Already deployable
-  (4 chips: fire/water/plasma/audio) → POST `/api/fleet/generator/{name}`.
+**Deployable today (no protocol changes):**
+- **Generator chip row** — replaces scene chips. Routes to
+  `POST /api/fleet/generator/{name}`; 4 chips fire/water/plasma/audio,
+  each command is `gen <name>` (≤10 bytes on wire). Fits the
+  legacy-adv ceiling comfortably.
 
-The settings-name length issue (28-byte `effectRotationSpeed`) is the
-same root cause as the scene size overflow. **Either firmware
-extended-adv scanning OR firmware setting-rename** is the blocker for
-these sliders.
+**BLOCKED on protocol-length resolution:**
+- **Hue rotation speed slider** — fleet-wide via
+  `set effectRotationSpeed <value>` (28 bytes on wire).
+- **Absolute hue position slider** — `set effectHueShift <value>`
+  (same length range).
+
+Both slider commands exceed the firmware scanner's 21-byte
+legacy-adv effective ceiling — BlueZ silently promotes them to
+extended adv, which the firmware doesn't watch (the same root cause
+as the scene-system command overflow). **Two paths to unblock:**
+
+1. **Short-name aliases** in firmware: rename the broadcast paths to
+   use `huespeed` / `hueshift` (existing short names, already
+   recognised by the firmware's `set` command). Server-side change:
+   emit `set huespeed <v>` (16 bytes) instead of
+   `set effectRotationSpeed <v>` (28 bytes). No firmware change
+   required because the short names already work. **This is the
+   cheaper option and should be tried first.**
+2. **Firmware extended-adv scanning** (Section 6) — lifts the ceiling
+   for everything. Not a one-liner (BSP patch + ~half-day of work);
+   see Section 6 for actual scope.
+
+Until ONE of these lands, don't ship the slider Hub UI work — the
+broadcast would silently no-op. The generator chip row CAN ship now.
 
 ---
 
@@ -258,13 +329,36 @@ The 21-byte effective payload ceiling for legacy BLE adv constrains:
 - Set commands with long names (Section 5)
 - Future protocol extensions
 
-**Fix:** enable Bluefruit's extended-adv scanner mode. One-line
-firmware change (research the exact API — `Bluefruit.Scanner.
-useExtendedAdv()` or similar). Lifts the per-command ceiling from
-21 bytes → ~240 bytes.
+**Status: research complete, NOT a one-liner.** Investigation
+2026-05-19: Adafruit Bluefruit (`Bluefruit52Lib/src/BLEScanner.{h,cpp}`)
+does not expose a `useExtendedAdv()` method. The `start()` path
+fixes `_param.extended = 0` in the constructor (with a literal
+`// TODO Extended Adv on secondary channels`) and allocates the scan
+buffer at `_scan_data[BLE_GAP_SCAN_BUFFER_MAX = 31]`. To enable
+extended adv:
 
-**Cost:** BLE-DFU all 10 fleet devices (~55 min if cascade hits each).
-But it unblocks Section 5 cleanly and future-proofs the protocol.
+1. **BSP-level patch** of `BLEScanner.cpp`: resize `_scan_data` from
+   31 → ≥255 (`BLE_GAP_SCAN_BUFFER_EXTENDED_MIN`), add a public
+   `useExtendedAdv(bool)` that flips `_param.extended` and toggles
+   `_report_data.len` between the two sizes. New `patches/` file
+   + re-apply on BSP update (precedent: `patches/tinyusb-cdc-no-overwritable-fifo.patch`).
+2. **Firmware-side** `Bluefruit.Scanner.useExtendedAdv(true)` in
+   `BleScanner::begin` BEFORE `start(0)`.
+3. **handleReport** path needs to tolerate the larger frame layout
+   (SoftDevice may deliver fragments via `report_incomplete_evts`
+   if a single extended adv exceeds the 255-byte buffer; we'd need
+   to either ignore those or accumulate them).
+4. **Verify with bench chip + signal generator** before fleet rollout.
+
+**Cost:** ~half-day investigation + patch + firmware + BSP-patch
+install/CI hook + bench validation. Plus the ~55 min BLE-DFU rollout
+to fleet (eased by Section 1.1 gossip-ACK re-broadcast which makes
+delivery more reliable).
+
+**Workaround in the meantime:** keep fleet commands under 21 bytes
+on-wire. `gen <name>`, `effect <mode>`, `set <short> <value>` all
+fit. Long-named settings (`effectRotationSpeed = 28 bytes`) need
+either a shorter name or this extended-adv work.
 
 ---
 
@@ -288,13 +382,20 @@ it would need to happen on the bench before sealing.
 
 ## 8. Documentation drift
 
-- `docs/SAFETY.md` — last updated pre-PR #144; doesn't yet cover the
-  COMMAND_V2 path or the global cmd_id ring.
-- `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` — predates the scenes →
-  generators decision in Section 1.2. Should reflect that the
-  protocol now uses generator names only.
+- `docs/SAFETY.md` — ✅ rewritten 2026-05-19 as a tight 4-invariant
+  index pointing at current code paths. The COMMAND_V2 / cmd_id-ring
+  details live in `docs/BLE_FLEET_RELIABILITY_PLAN.md` and the
+  `BleProtocol.h` / `advertiser.py` docstrings; out of scope for the
+  flashing-safety doc.
+- `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` — ✅ scene→generator
+  framing updated (sole "scene" mention in the use-case bullet).
+  Body otherwise covers NUS / BLE DFU / fleet discovery — not
+  scene-specific.
 - This document — itself should get rolled into a successor at the
-  start of the next session.
+  start of the next session. Multiple §1-§3 items have been closed
+  in-place with status notes; once the file's "remaining-work
+  density" drops below ~30%, succession is cleaner than further
+  in-place edits.
 
 ---
 

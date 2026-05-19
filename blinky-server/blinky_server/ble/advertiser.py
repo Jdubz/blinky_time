@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from collections.abc import Iterable
 from typing import Any
 
 from dbus_fast import BusType, DBusError, Variant
@@ -240,6 +241,16 @@ class FleetBroadcaster:
         self._command_id: int = 0
         self._broadcasts_sent: int = 0
         self._last_command: str | None = None
+        # Gossip-ACK re-broadcast tracking (BLE_FLEET_RELIABILITY_PLAN
+        # item #5). Per-device count of how many times we've already
+        # re-broadcast ``self._command_id`` for that device — capped at
+        # ``REBROADCAST_MAX_ATTEMPTS`` so a permanently-out-of-range
+        # device doesn't soak the radio forever. Cleared on every fresh
+        # ``broadcast_command`` (new command_id resets all counters).
+        # Key is the device_id as the FleetManager sees it (BLE address
+        # for BLE-only fleet members today; canonical-id resolution
+        # happens at the caller).
+        self._rebroadcast_attempts: dict[str, int] = {}
         # Serializes broadcast() calls; rapid back-to-back PropertiesChanged
         # emits can confuse BlueZ if they arrive mid-advertising-cycle.
         self._lock = asyncio.Lock()
@@ -475,6 +486,24 @@ class FleetBroadcaster:
     # faster than that in practice.
     COMMAND_REEMIT_COUNT = 10
 
+    # Re-broadcast (gossip-ACK driven) parameters
+    # (BLE_FLEET_RELIABILITY_PLAN item #5).
+    #
+    # ``REBROADCAST_EMIT_COUNT`` — number of on-air emits per re-broadcast
+    # cycle for a single laggard. Shorter than COMMAND_REEMIT_COUNT
+    # because the re-broadcast cycle runs from the discovery loop (every
+    # ~60 s) and a single missed cycle just means we'll try again next
+    # discovery tick. Want at least 2 so a short LE-rotated source-addr
+    # window doesn't strand it.
+    #
+    # ``REBROADCAST_MAX_ATTEMPTS`` — cap re-broadcasts per (device,
+    # command_id) so a permanently-out-of-range or crashed device
+    # doesn't soak the radio indefinitely. Empirically 3 cycles ≈ 3 min
+    # of grace before the laggard is "given up on" for this command;
+    # the next operator command resets the counter.
+    REBROADCAST_EMIT_COUNT = 3
+    REBROADCAST_MAX_ATTEMPTS = 3
+
     async def broadcast_command(self, command: str) -> None:
         """Broadcast a serial command string to all listening devices.
 
@@ -525,6 +554,14 @@ class FleetBroadcaster:
         # to a true thread-pool context, the bump would need to be
         # inside the lock.
         my_command_id = self._next_command_id()
+
+        # New logical command — reset the per-device re-broadcast counter.
+        # The gossip-ACK re-broadcast cycle is keyed off ``self._command_id``;
+        # a fresh command means any device that was "given up on" for the
+        # previous one is eligible again for this one. Done OUTSIDE the
+        # lock for the same reason as ``_next_command_id`` above (single-
+        # threaded asyncio, no await between bump and clear).
+        self._rebroadcast_attempts.clear()
 
         last_emit_seq = -1
         for emit_idx in range(self.COMMAND_REEMIT_COUNT):
@@ -588,6 +625,119 @@ class FleetBroadcaster:
             noop_seq = self._next_sequence()
             noop = bytes((_proto.PROTOCOL_VERSION, 0x00, noop_seq, _proto.FRAGMENT_SINGLE, 0x00))
             self._adv._set_manufacturer_payload(_proto.COMPANY_ID, noop)
+
+    async def rebroadcast_to_laggards(self, devices: Iterable[tuple[str, int | None]]) -> int:
+        """Re-emit the most recent command for devices that haven't ACK'd.
+
+        ``devices`` is an iterable of ``(device_id, last_cmd_id)`` tuples
+        from the FleetManager's view of the fleet. ``last_cmd_id == None``
+        means "no ACK observed yet this session" — those devices are
+        skipped (we don't know whether they're truly lagged or just
+        haven't been scanned with a complete scan-response yet).
+
+        Returns the number of devices re-broadcast to (0 if no laggards
+        or no command has been broadcast yet).
+
+        Driven by the FleetManager's discovery loop (every ~60 s). Each
+        cycle: any device whose ``last_cmd_id`` differs from the
+        broadcaster's current ``_command_id`` is a laggard. Re-emit the
+        cached ``_last_command`` ``REBROADCAST_EMIT_COUNT`` times with
+        the SAME ``command_id`` so the firmware's idempotency ring
+        accepts it without double-applying for devices that already
+        have it. Per-device attempt counter capped at
+        ``REBROADCAST_MAX_ATTEMPTS`` to bound radio time on a permanently
+        out-of-range device. Counter clears on each fresh
+        ``broadcast_command`` call (new command_id).
+
+        Implementation note: re-broadcast emits do NOT bump
+        ``_command_id``. They share the original logical command's id
+        (the whole point — the firmware uses cmd_id to short-circuit
+        re-applications; a fresh id would re-execute on devices that
+        already have it).
+
+        Concurrency: holds ``_lock`` for each per-laggard emit cycle.
+        A concurrent ``broadcast_command`` of a NEW logical command will
+        interleave between laggards, which is the right thing — the
+        operator's most recent intent takes priority.
+        """
+        if self._adv is None or self._command_id == 0 or self._last_command is None:
+            # Broadcaster never started, never broadcast a command, or
+            # was stopped mid-cycle. Nothing to re-broadcast.
+            return 0
+
+        # Snapshot under lock-free read; broadcast_command holds the
+        # lock for the on-air payload mutation, not these scalars. Done
+        # before iterating so a concurrent broadcast advancing
+        # _command_id mid-loop doesn't cause us to compare laggards
+        # against a moving target — we either re-broadcast the old
+        # command for them, or the new ``broadcast_command`` reaches
+        # everyone (including these laggards) directly.
+        target_cmd_id = self._command_id
+        target_command = self._last_command
+
+        laggards: list[str] = []
+        for device_id, last_cmd_id in devices:
+            if last_cmd_id is None:
+                continue  # no ACK observed → don't assume lag
+            if last_cmd_id == target_cmd_id:
+                continue  # caught up
+            attempts = self._rebroadcast_attempts.get(device_id, 0)
+            if attempts >= self.REBROADCAST_MAX_ATTEMPTS:
+                continue  # given up on this device for this command_id
+            laggards.append(device_id)
+
+        if not laggards:
+            return 0
+
+        log.info(
+            "Re-broadcasting cmd_id=%d (%r) to %d laggard(s): %s",
+            target_cmd_id,
+            target_command,
+            len(laggards),
+            [d[:12] for d in laggards],
+        )
+
+        # One re-emit cycle covers ALL laggards: a single sequence of
+        # REBROADCAST_EMIT_COUNT BLE adv emissions reaches every device
+        # in range, and the firmware's per-source idempotency ring will
+        # accept it once per device that hadn't seen this cmd_id. So we
+        # only need one airing, not one per laggard. The per-device
+        # attempt counter still bumps once per laggard so we eventually
+        # stop trying for any specific device.
+        for emit_idx in range(self.REBROADCAST_EMIT_COUNT):
+            async with self._lock:
+                if self._adv is None:
+                    return len(laggards)  # stop() raced us
+                # If a concurrent broadcast_command bumped _command_id
+                # mid-cycle, the new command takes priority — bail.
+                if self._command_id != target_cmd_id:
+                    return len(laggards)
+                my_seq = self._next_sequence()
+                packet = _proto.build_command_v2_packet(
+                    target_command,
+                    sequence=my_seq,
+                    command_id=target_cmd_id,
+                )
+                self._adv._set_manufacturer_payload(_proto.COMPANY_ID, packet)
+                self._broadcasts_sent += 1
+                log.debug(
+                    "Re-broadcast emit %d/%d seq=%d cmd_id=%d",
+                    emit_idx + 1,
+                    self.REBROADCAST_EMIT_COUNT,
+                    my_seq,
+                    target_cmd_id,
+                )
+            await asyncio.sleep(self.COMMAND_REEMIT_HOLD_MS / 1000.0)
+
+        # Bump per-device attempt counters AFTER the emit cycle. Doing
+        # it before would prevent a concurrent ``broadcast_command``
+        # clobber-and-stop from being recorded; doing it after means
+        # each completed cycle counts even if a fresh command arrived
+        # right after — which is correct, since we DID air this attempt.
+        for device_id in laggards:
+            self._rebroadcast_attempts[device_id] = self._rebroadcast_attempts.get(device_id, 0) + 1
+
+        return len(laggards)
 
     def _next_sequence(self) -> int:
         # Intentionally allows seq=0 on wrap. Sequence 0 is a valid

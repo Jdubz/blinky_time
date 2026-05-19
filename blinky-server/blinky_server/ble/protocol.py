@@ -119,10 +119,35 @@ def build_command_v2_packet(
       bytes[4:6]  command_id (little-endian uint16)
       bytes[6:]   command string
 
-    Raises ``ValueError`` for out-of-range arguments. The total bytes
-    must still fit in ``EXTENDED_PAYLOAD_MAX``; the token counts toward
-    that budget, so the effective command-string ceiling is
-    ``EXTENDED_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE = 238`` bytes.
+    Raises ``ValueError`` for out-of-range arguments.
+
+    Two relevant size ceilings — the docstring of the older version
+    quoted only the looser one and that was misleading:
+
+      * **API limit (loose):** ``build_packet`` rejects payloads longer
+        than ``EXTENDED_PAYLOAD_MAX = 240``. The command_id token is
+        part of the payload from ``build_packet``'s perspective, so
+        the API ceiling on the command STRING is
+        ``EXTENDED_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE = 238`` bytes.
+
+      * **On-wire effective limit (tight):** the firmware scanner
+        (``BleScanner`` on nRF52840) today watches only legacy BLE
+        adv (31-byte total adv payload). After BlueZ's manufacturer-
+        data AD wrapper (2 B), company ID (2 B), our 4-byte header,
+        and the COMMAND_V2 2-byte token, the on-air command-string
+        budget shrinks to ``LEGACY_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE
+        = 21`` bytes. Anything longer rides extended-adv on the air
+        (BlueZ silently promotes it) and the firmware scanner will
+        NEVER see it. Until the firmware scanner gains extended-adv
+        support (OPEN_ISSUES §6), commands MUST stay ≤21 bytes to
+        actually reach devices.
+
+    The hard ``ValueError`` is only thrown at the loose limit (238 B);
+    payloads in 22..238 B build successfully and even reach BlueZ
+    successfully, but are dropped on the firmware scanner side. That
+    silent-on-air-but-no-effect failure mode is the reason the scene
+    system was retired in favour of short ``gen <name>`` commands;
+    see OPEN_ISSUES §1.2 / §6.
     """
     if not (0 <= command_id <= 0xFFFF):
         raise ValueError(f"command_id must fit in a uint16, got {command_id}")
@@ -135,3 +160,49 @@ def build_command_v2_packet(
         sequence=sequence,
         fragment=fragment,
     )
+
+
+# ─── Gossip-ACK (firmware → server, BLE_FLEET_RELIABILITY_PLAN item #5) ─────
+#
+# Each device exposes the last COMMAND_V2 command_id it accepted in its own
+# BLE adv's scan-response manufacturer data so the server can detect lagged
+# devices (missed every emit of a broadcast) and re-broadcast.
+#
+# Layout (after BlueZ has stripped its 2-byte company-ID prefix, which is
+# what bleak hands us via ``AdvertisementData.manufacturer_data[0xFFFF]``):
+#   bytes[0]   marker = GOSSIP_ACK_MARKER (0xA0)
+#   bytes[1:3] command_id (little-endian uint16)
+#
+# 3 bytes total. The marker disambiguates this block from the broadcaster's
+# COMMAND_V2 manufacturer data (which the firmware emits and we also see in
+# scan results); both use COMPANY_ID = 0xFFFF but the broadcaster's payload
+# starts with PROTOCOL_VERSION = 0x01, never 0xA0, so the marker distinguishes.
+GOSSIP_ACK_MARKER = 0xA0
+GOSSIP_ACK_SIZE = 3  # marker (1B) + command_id LE (2B)
+
+
+def parse_gossip_ack(mfg_payload: bytes | bytearray | memoryview | None) -> int | None:
+    """Extract the last-accepted ``command_id`` from a scan-response ACK block.
+
+    ``mfg_payload`` is the bytes bleak returns from
+    ``AdvertisementData.manufacturer_data.get(COMPANY_ID)`` — i.e. the
+    manufacturer data with the company-ID prefix already stripped.
+
+    Returns the device's last accepted ``command_id`` if the payload is
+    a valid gossip-ACK block, otherwise ``None``. ``None`` covers every
+    not-an-ACK case (missing payload, wrong marker, wrong size, the
+    broadcaster's own COMMAND_V2 manufacturer data echoed in someone
+    else's scan) — callers should treat ``None`` as "this device's ACK
+    is unknown right now," not "this device is at command_id 0."
+
+    A return value of 0 specifically means "device boot default — no
+    command applied yet." The broadcaster reserves command_id 0 (see
+    ``_next_command_id``) so a real command's ACK can never be 0.
+    """
+    if mfg_payload is None:
+        return None
+    if len(mfg_payload) != GOSSIP_ACK_SIZE:
+        return None
+    if mfg_payload[0] != GOSSIP_ACK_MARKER:
+        return None
+    return mfg_payload[1] | (mfg_payload[2] << 8)

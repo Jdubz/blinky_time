@@ -86,6 +86,110 @@ def test_registry_json_ledtype_is_buildable(registry_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+def test_registry_json_required_fields_present(registry_path: Path) -> None:
+    """Every registry JSON must declare the fields the firmware's
+    ``SerialConsole::handleDeviceUpload`` reads. Missing fields fall
+    through to default values (ledWidth=0, ledPin=10, etc.), which
+    produces a silently-broken device (no LEDs, or LEDs on the wrong
+    pin). The firmware does NOT log a warning when keys are absent
+    from the JSON; the only signal is the device behaving wrong
+    post-flash. Catch the omission at lint time instead.
+
+    PR #144 review item 8. The ``ledType``-only check that preceded
+    this test caught the 2026-05-18 incident-shape; this widens to
+    the rest of the firmware-required surface so a new field-omission
+    typo can't escape the test gate the way ``ledType: 12390`` did.
+    """
+    cfg = json.loads(registry_path.read_text())
+
+    # These keys are read at upload time. Their default-fallback values
+    # are functional but silently wrong for a real device — e.g. ledWidth
+    # default is 0 (no LEDs), ledPin default is 10 (wrong for big_bucket
+    # which is on D0). Require explicit declaration.
+    required_keys = ("deviceId", "deviceName", "ledWidth", "ledHeight", "ledPin", "ledType")
+    for key in required_keys:
+        assert key in cfg, (
+            f"{registry_path.name}: missing required field '{key}'. "
+            f"The firmware's JSON parser defaults this silently, which "
+            f"produces a broken-but-not-erroring device post-flash."
+        )
+
+
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+def test_registry_json_device_id_matches_filename(registry_path: Path) -> None:
+    """The fleet manager + deploy.sh both key off the filename stem,
+    while the firmware reads ``deviceId`` from the JSON body. If the
+    two disagree, a device flashed with this config reports a different
+    identity to the server than the server thinks it deployed — which
+    breaks dedup, deploy whitelisting (``--devices=<id>``), and the
+    recovery whitelist's canonical-id resolver. Catch the drift here."""
+    cfg = json.loads(registry_path.read_text())
+    declared_id = cfg.get("deviceId")
+    filename_stem = registry_path.stem
+    assert declared_id == filename_stem, (
+        f"{registry_path.name}: deviceId={declared_id!r} disagrees with "
+        f"filename stem {filename_stem!r}. The fleet manager and "
+        f"deploy.sh key off the filename; the firmware reports the JSON "
+        f"value. They MUST match."
+    )
+
+
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+def test_registry_json_led_dimensions_are_positive(registry_path: Path) -> None:
+    """``ledWidth * ledHeight`` is the total LED count. Zero in either
+    dimension defaults the renderer to a no-op pixel matrix — the
+    device boots into apparent normality but the LEDs never light up.
+    PR #144 review item 8."""
+    cfg = json.loads(registry_path.read_text())
+    w = cfg.get("ledWidth", 0)
+    h = cfg.get("ledHeight", 0)
+    assert isinstance(w, int) and isinstance(h, int), (
+        f"{registry_path.name}: ledWidth/ledHeight must be ints, "
+        f"got {type(w).__name__}/{type(h).__name__}"
+    )
+    assert w >= 1 and h >= 1, (
+        f"{registry_path.name}: ledWidth={w} x ledHeight={h} = "
+        f"{w * h} LEDs. Both dimensions must be ≥1."
+    )
+    # Sanity cap. The largest device in the fleet today is display_v1
+    # (32x32 = 1024). A 4-digit total likely indicates a typo (the
+    # earlier ``ledType: 12390`` bug pattern in 4-digit territory was
+    # already silently flashed and bricked two carts). 2048 leaves
+    # comfortable headroom and would catch e.g. an off-by-orders-of-
+    # magnitude typo.
+    assert w * h <= 2048, (
+        f"{registry_path.name}: {w}x{h} = {w * h} LEDs exceeds the 2048 "
+        f"sanity cap. If this is intentional (new device class), raise "
+        f"the cap here AND add a firmware test for the larger size."
+    )
+
+
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> None:
+    """``orientation`` and ``layoutType`` are firmware enums. Out-of-
+    range values silently cast and dispatch to a default branch, which
+    is again the silent-failure surface we want to close at lint
+    time. Mirror the enum ranges in
+    ``blinky-things/devices/DeviceConfig.h`` (MatrixOrientation +
+    LayoutType): 0..4 and 0..2 respectively. PR #144 review item 8."""
+    cfg = json.loads(registry_path.read_text())
+    orientation = cfg.get("orientation")
+    layout = cfg.get("layoutType")
+    if orientation is not None:
+        assert isinstance(orientation, int) and 0 <= orientation <= 4, (
+            f"{registry_path.name}: orientation={orientation} "
+            f"outside the MatrixOrientation enum range 0..4. See "
+            f"blinky-things/devices/DeviceConfig.h."
+        )
+    if layout is not None:
+        assert isinstance(layout, int) and 0 <= layout <= 2, (
+            f"{registry_path.name}: layoutType={layout} "
+            f"outside the LayoutType enum range 0..2. See "
+            f"blinky-things/devices/DeviceConfig.h."
+        )
+
+
 def test_decoder_matches_firmware_examples() -> None:
     """Pin the decode helper against the firmware's known-good examples.
 

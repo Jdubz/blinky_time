@@ -1706,6 +1706,16 @@ class FleetManager:
                         existing.rssi = disc.rssi
                     if disc.description and not existing.device_name:
                         existing.device_name = disc.description
+                    # Gossip-ACK update (BLE_FLEET_RELIABILITY_PLAN #5).
+                    # Only overwrite when we actually saw an ACK block this
+                    # cycle — ``last_cmd_id`` may be absent from extra if
+                    # the device's scan-response wasn't captured (active
+                    # scan miss, weak signal). Treating missing as
+                    # "unknown" rather than "0" prevents flapping with
+                    # the broadcaster's re-broadcast guard.
+                    discovered_ack = disc.extra.get("last_cmd_id")
+                    if isinstance(discovered_ack, int):
+                        existing.last_cmd_id = discovered_ack
                     # The device is advertising NUS again, so it's back in
                     # app mode. Reset transient post-op states (after a
                     # flash leaves state=DISCONNECTED; after a previous
@@ -1736,6 +1746,10 @@ class FleetManager:
                         device.rssi = disc.rssi
                     if disc.address:
                         device.ble_address = disc.address
+                    # Initial gossip-ACK (BLE_FLEET_RELIABILITY_PLAN #5).
+                    discovered_ack = disc.extra.get("last_cmd_id")
+                    if isinstance(discovered_ack, int):
+                        device.last_cmd_id = discovered_ack
                     self._devices[device_id] = device
                     self._device_discovery[device_id] = disc
                     log.info(
@@ -1852,6 +1866,27 @@ class FleetManager:
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
         # prefer serial (faster, more reliable) and disconnect the wireless one.
         await self._deduplicate_transports()
+
+        # Gossip-ACK re-broadcast (BLE_FLEET_RELIABILITY_PLAN #5). After
+        # discovery has refreshed every BLE device's ``last_cmd_id`` for
+        # this cycle, ask the broadcaster to re-air the most recent
+        # command for any laggards. Bounded by REBROADCAST_MAX_ATTEMPTS
+        # per (device, command_id) so a permanently-out-of-range device
+        # doesn't soak the radio. Safe no-op if the broadcaster isn't
+        # running or no command has ever been broadcast.
+        if self.broadcaster is not None and self.broadcaster.is_running:
+            try:
+                ack_view = [
+                    (d.id, d.last_cmd_id)
+                    for d in self._devices.values()
+                    if d.transport.transport_type == "ble"
+                ]
+                await self.broadcaster.rebroadcast_to_laggards(ack_view)
+            except Exception:
+                # Re-broadcast is best-effort. A failure here must not
+                # break discovery (the operator still gets a fleet view
+                # even if gossip-ACK re-emit silently drops a cycle).
+                log.exception("rebroadcast_to_laggards failed; ignoring")
 
     async def broadcast(self, command: str) -> dict[str, str]:
         """Send a command to every device in range.

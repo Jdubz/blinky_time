@@ -161,9 +161,15 @@ emissions.
 **Risk:** another bit of hardware to provision + ship-with. Don't
 land this without measuring the win first.
 
-### 5. Inverse-ACK gossip via NUS advertising (experiment)
+### 5. Inverse-ACK gossip via NUS advertising
 
-**Status:** would-experiment.
+**Status:** ✅ SHIPPED. Phase 1 (firmware: each device exposes its
+last accepted COMMAND_V2 `command_id` in scan-response manufacturer
+data) landed in commit `699c3025`. Phase 2 (server: discovery
+extracts the ACK, FleetBroadcaster re-emits the cached last command
+for any laggard) lands in this PR. Per-device retry capped at
+`REBROADCAST_MAX_ATTEMPTS = 3` and resets on every fresh
+`broadcast_command`. Field validation pending.
 
 **Scope:** each device's BLE advertisement already carries
 manufacturer-data via NUS. Piggyback `last_applied_command_id` as a
@@ -212,7 +218,7 @@ Each item should be measured against the bench setup before/after:
 
 The user-visible success criterion is that every fleet command
 applies to every device within a single 5-command burst, with no
-device missing any of the 5 generators. Items 1–3 have shipped (PR
-#144, May 18 2026); items 4 + 5 remain as optional experiments to
-push toward 100% in noisy RF environments if remaining miss-rate
-warrants it.
+device missing any of the 5 generators. Items 1–3 shipped in PR #144
+(May 18 2026); item 5 (gossip-ACK + re-broadcast) shipped 2026-05-19.
+Item 4 (dedicated broadcaster dongle) remains an optional experiment
+should remaining miss-rate after item 5 warrant it.
