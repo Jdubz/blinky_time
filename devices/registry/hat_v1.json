@@ -3,7 +3,7 @@
   "deviceName": "Hat Display",
   "ledWidth": 89,
   "ledHeight": 1,
-  "ledPin": 0,
+  "ledPin": 10,
   "ledType": 82,
   "orientation": 0,
   "layoutType": 1,
