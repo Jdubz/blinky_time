@@ -230,6 +230,117 @@ async def test_recent_flash_attempts_stamped_on_terminal(
     assert before <= stamped <= after
 
 
+# --- cascade-bug guard: recent UF2 write blocks BLE-DFU auto-recovery ------
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_cascade_guard_blocks_auto_recovery(
+    fleet: FleetManager,
+) -> None:
+    """A recent UF2 write (bytes-on-flash) blocks BLE-DFU auto-recovery
+    on the same canonical device even after FLASH_DEDUP_WINDOW_S, until
+    UF2_WRITE_AUTO_RECOVERY_BLOCK_S elapses. Closes the cascade bug
+    where verify-timeout → FAILED → auto-recovery → BLE-DFU on top of
+    a working UF2 write. See [[project-deploy-flash-cascade-bug]]."""
+    fleet._recent_uf2_writes["dev-1"] = time.time()
+    assert fleet.should_attempt_auto_recovery("dev-1") is False
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_cascade_guard_expires(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once UF2_WRITE_AUTO_RECOVERY_BLOCK_S elapses, auto-recovery is
+    allowed again. Long-running fleet must still recover from a genuine
+    later brick; the guard is temporary, not permanent."""
+    monkeypatch.setattr(FleetManager, "UF2_WRITE_AUTO_RECOVERY_BLOCK_S", 0.05)
+    fleet._recent_uf2_writes["dev-1"] = time.time()
+    assert fleet.should_attempt_auto_recovery("dev-1") is False
+    await asyncio.sleep(0.1)
+    assert fleet.should_attempt_auto_recovery("dev-1") is True
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_cascade_guard_uses_canonical_resolver(
+    fleet: FleetManager,
+) -> None:
+    """The cascade guard must dedupe across transport aliases for the
+    same physical device. A UF2 write under USB SN must block BLE-DFU
+    auto-recovery under the BLE bootloader address (the 2026-05-19
+    failure mode)."""
+    # USB SN (no colons, ≥12 chars) is preferred as canonical over the
+    # BLE address. After registration, both IDs resolve to the SN.
+    canonical = fleet.register_identity_alias("ABCD1234EF5678", "AA:BB:CC:DD:EE:FF")
+    fleet._recent_uf2_writes[canonical] = time.time()
+    assert fleet.should_attempt_auto_recovery("AA:BB:CC:DD:EE:FF") is False
+    assert fleet.should_attempt_auto_recovery("ABCD1234EF5678") is False
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_tracker_stamped_when_job_reached_verifying(
+    fleet: FleetManager,
+) -> None:
+    """A FlashJob that transitions WRITING → VERIFYING stamps
+    ``write_completed_at``; the finally block in ``_run_flash_job`` must
+    propagate that into ``_recent_uf2_writes`` so the cascade guard
+    kicks in even when verify then fails. Constructed manually here —
+    the bare FleetManager fixture can't drive a real UF2 transition."""
+    from blinky_server.firmware.flash_job import FlashJob
+
+    job = FlashJob(device_id="dev-1", firmware_path=Path("/tmp/fw.hex"))
+    job.transport = FlashTransport.UF2
+    job.transition(FlashJobState.SELECTING_TRANSPORT)
+    job.transition(FlashJobState.WRITING)
+    job.transition(FlashJobState.VERIFYING)  # stamps write_completed_at
+    write_ts = job.write_completed_at
+    job.transition(FlashJobState.FAILED)
+    assert write_ts is not None
+
+    # Simulate the finally-block stamp directly. (The orchestrator does
+    # this under the per-device lock; here we just verify the stamp
+    # semantics work as documented.)
+    canonical = fleet.resolve_canonical(job.device_id)
+    fleet._recent_uf2_writes[canonical] = write_ts
+    assert fleet.should_attempt_auto_recovery("dev-1") is False
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_tracker_not_stamped_when_write_failed(
+    fleet: FleetManager,
+) -> None:
+    """A job that goes FAILED without reaching VERIFYING (write itself
+    failed) leaves ``write_completed_at`` as None. The orchestrator
+    finally-block guard checks for None and does not stamp the cascade
+    guard — a never-written device must still be eligible for normal
+    auto-recovery."""
+    from blinky_server.firmware.flash_job import FlashJob
+
+    job = FlashJob(device_id="dev-1", firmware_path=Path("/tmp/fw.hex"))
+    job.transport = FlashTransport.UF2
+    job.transition(FlashJobState.SELECTING_TRANSPORT)
+    job.transition(FlashJobState.WRITING)
+    job.transition(FlashJobState.FAILED)  # write_ok=False path
+    assert job.write_completed_at is None
+    # No stamp should occur — the should_attempt_auto_recovery cascade
+    # branch must NOT fire (the standard dedup branch may still block
+    # depending on FLASH_DEDUP_WINDOW_S, which is orthogonal).
+    assert "dev-1" not in fleet._recent_uf2_writes
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_cascade_guard_allows_force_true(
+    fleet: FleetManager,
+) -> None:
+    """``flash_device(force=True)`` (operator-driven) must bypass the
+    cascade guard. The operator has accepted the cost; the guard is
+    only there to keep the auto-recovery loop from firing under us."""
+    fleet._recent_uf2_writes["dev-1"] = time.time()
+    # Operator path — force=True (the default for routes_flash_jobs).
+    job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
+    assert job is not None
+    await job.wait_until_terminal(timeout=2.0)
+
+
 # --- list_flash_jobs --------------------------------------------------------
 
 
@@ -1785,6 +1896,106 @@ async def test_audit_log_rebuilds_recent_flash_attempts_on_start(
     # Dedup check honors the rebuild: a fresh force=False call for
     # dev-X is blocked (just-flashed window).
     assert fleet.should_attempt_auto_recovery("dev-X") is False
+
+
+@pytest.mark.asyncio
+async def test_audit_log_rebuilds_uf2_write_cascade_guard(
+    fleet: FleetManager,
+) -> None:
+    """An audit-log entry for a FAILED UF2 job whose write succeeded
+    (``write_completed_at`` set, ``state == "failed"`` from verify
+    timeout) must repopulate ``_recent_uf2_writes`` on restart. Without
+    this, the post-restart auto-recovery cycle runs the very cascade
+    we're trying to suppress. See [[project-deploy-flash-cascade-bug]].
+
+    Critical edge: the entry's ``finished_at`` is 15 minutes ago —
+    OUTSIDE ``FLASH_DEDUP_WINDOW_S`` (10 min) but INSIDE
+    ``UF2_WRITE_AUTO_RECOVERY_BLOCK_S`` (30 min). The loader's outer
+    age cutoff must use the larger of the two windows, otherwise
+    cascade-guard entries get silently dropped at the gate.
+    """
+    import json as _json
+    import time as _t
+
+    now = _t.time()
+    audit_path = fleet._flash_audit_log_path()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    # FAILED UF2 job 15 minutes ago. Write completed (bytes on flash);
+    # verify timed out at 5 min so state ended FAILED.
+    fifteen_min = 15 * 60
+    entry = {
+        "job_id": "j-verify-timeout",
+        "device_id": "dev-cascade",
+        "canonical_id": "dev-cascade",
+        "is_auto_recovery": False,
+        "firmware_path": "/tmp/x.hex",
+        "expected_version": "b179",
+        "transport": "uf2",
+        "created_at": now - fifteen_min - 60,
+        "started_at": now - fifteen_min - 50,
+        "write_completed_at": now - fifteen_min - 30,  # bytes on flash
+        "verified_at": None,
+        "finished_at": now - fifteen_min,
+        "state": "failed",
+        "error": "verify did not converge within 5 minutes",
+        "anomalies": [],
+    }
+    with audit_path.open("w", encoding="utf-8") as fh:
+        fh.write(_json.dumps(entry) + "\n")
+
+    fleet._recent_flash_attempts.clear()
+    fleet._recent_uf2_writes.clear()
+    fleet._load_recent_flash_attempts_from_audit_log()
+
+    # Outside FLASH_DEDUP_WINDOW_S (10 min); standard tracker stays clear.
+    assert "dev-cascade" not in fleet._recent_flash_attempts
+    # Inside UF2_WRITE_AUTO_RECOVERY_BLOCK_S (30 min); cascade guard set.
+    assert "dev-cascade" in fleet._recent_uf2_writes
+    # And it does its job: BLE-DFU auto-recovery refuses to run.
+    assert fleet.should_attempt_auto_recovery("dev-cascade") is False
+
+
+@pytest.mark.asyncio
+async def test_audit_log_skips_uf2_write_outside_cascade_window(
+    fleet: FleetManager,
+) -> None:
+    """Once the cascade-guard window elapses (>30 min ago), the loader
+    must NOT repopulate ``_recent_uf2_writes``. The guard is temporary;
+    a device that genuinely needs auto-recovery hours later must be
+    eligible again."""
+    import json as _json
+    import time as _t
+
+    now = _t.time()
+    audit_path = fleet._flash_audit_log_path()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    # 45 min ago — outside UF2_WRITE_AUTO_RECOVERY_BLOCK_S (30 min).
+    forty_five_min = 45 * 60
+    entry = {
+        "job_id": "j-old",
+        "device_id": "dev-old",
+        "canonical_id": "dev-old",
+        "is_auto_recovery": False,
+        "firmware_path": "/tmp/x.hex",
+        "expected_version": "b179",
+        "transport": "uf2",
+        "created_at": now - forty_five_min - 60,
+        "started_at": now - forty_five_min - 50,
+        "write_completed_at": now - forty_five_min - 30,
+        "verified_at": None,
+        "finished_at": now - forty_five_min,
+        "state": "failed",
+        "error": "verify did not converge within 5 minutes",
+        "anomalies": [],
+    }
+    with audit_path.open("w", encoding="utf-8") as fh:
+        fh.write(_json.dumps(entry) + "\n")
+
+    fleet._recent_uf2_writes.clear()
+    fleet._load_recent_flash_attempts_from_audit_log()
+
+    assert "dev-old" not in fleet._recent_uf2_writes
+    assert fleet.should_attempt_auto_recovery("dev-old") is True
 
 
 @pytest.mark.asyncio
