@@ -174,16 +174,33 @@ recovery path; making it faster is high-value.
 
 ### 3.4 Stale-flash crash on big version upgrades
 
+**Status: firmware mitigation SHIPPED in b180+** (commit `116090d9`).
+`ConfigStorage::begin` (nRF52 branch) now does a freshness check:
+the `/.fw_build` marker file records the FIRMWARE_BUILD that last
+successfully booted. On a marker mismatch (first boot of any new
+build), the firmware:
+
+  1. Snapshots `/config.bin` (preserves device identity)
+  2. `InternalFS.format()` — clears all accumulated LittleFS state
+  3. Re-writes `/config.bin` from snapshot
+  4. Writes the marker LAST (idempotent on power-cut between steps 1–3)
+
+Bench-tested 2026-05-19 on `659C8DD3ADF84A33`: deploy of b180 to a
+safeMode chip booted cleanly through the fresh-build path; subsequent
+`save` and `json info` commands work normally. Field validation
+against the original symptom (chip with stale b162-era LittleFS
+state) pending; the design is defensive enough that breakage falls
+through to existing safeMode → re-upload recovery rather than a brick.
+
 **Reference:** [[project-stale-flash-state-after-upgrade]].
 
-Fresh chips upgraded across many versions (e.g. b162 → b179) crash
-during first configured boot due to residual non-app flash regions.
-Self-heals via `RebootFrequencyCounter` quarantine → safeMode →
-re-upload, but eats ~30s of crash-recovery time per device.
-
-**Fix candidate:** firmware first-boot-of-new-version cleanup of
-LittleFS journal regions. Avoid the crash entirely instead of
-relying on recovery. Needs experimentation + sacrificial chip.
+**Original symptom:** Fresh chips upgraded across many versions
+(e.g. b162 → b179) crashed during first configured boot due to
+residual non-app flash regions. Self-healed via
+`RebootFrequencyCounter` quarantine → safeMode → re-upload, but ate
+~30 s of crash-recovery time per device. The operator workaround
+was "bench-burn a cycle before installing"; the marker-driven
+reformat eliminates the need for that.
 
 ---
 
