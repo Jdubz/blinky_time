@@ -119,10 +119,35 @@ def build_command_v2_packet(
       bytes[4:6]  command_id (little-endian uint16)
       bytes[6:]   command string
 
-    Raises ``ValueError`` for out-of-range arguments. The total bytes
-    must still fit in ``EXTENDED_PAYLOAD_MAX``; the token counts toward
-    that budget, so the effective command-string ceiling is
-    ``EXTENDED_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE = 238`` bytes.
+    Raises ``ValueError`` for out-of-range arguments.
+
+    Two relevant size ceilings — the docstring of the older version
+    quoted only the looser one and that was misleading:
+
+      * **API limit (loose):** ``build_packet`` rejects payloads longer
+        than ``EXTENDED_PAYLOAD_MAX = 240``. The command_id token is
+        part of the payload from ``build_packet``'s perspective, so
+        the API ceiling on the command STRING is
+        ``EXTENDED_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE = 238`` bytes.
+
+      * **On-wire effective limit (tight):** the firmware scanner
+        (``BleScanner`` on nRF52840) today watches only legacy BLE
+        adv (31-byte total adv payload). After BlueZ's manufacturer-
+        data AD wrapper (2 B), company ID (2 B), our 4-byte header,
+        and the COMMAND_V2 2-byte token, the on-air command-string
+        budget shrinks to ``LEGACY_PAYLOAD_MAX - COMMAND_V2_TOKEN_SIZE
+        = 21`` bytes. Anything longer rides extended-adv on the air
+        (BlueZ silently promotes it) and the firmware scanner will
+        NEVER see it. Until the firmware scanner gains extended-adv
+        support (OPEN_ISSUES §6), commands MUST stay ≤21 bytes to
+        actually reach devices.
+
+    The hard ``ValueError`` is only thrown at the loose limit (238 B);
+    payloads in 22..238 B build successfully and even reach BlueZ
+    successfully, but are dropped on the firmware scanner side. That
+    silent-on-air-but-no-effect failure mode is the reason the scene
+    system was retired in favour of short ``gen <name>`` commands;
+    see OPEN_ISSUES §1.2 / §6.
     """
     if not (0 <= command_id <= 0xFFFF):
         raise ValueError(f"command_id must fit in a uint16, got {command_id}")

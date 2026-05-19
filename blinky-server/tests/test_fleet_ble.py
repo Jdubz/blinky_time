@@ -17,6 +17,25 @@ from .mock_transport import MockTransport
 # ── Helpers ──
 
 
+def _fast_broadcaster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero the broadcaster's per-emit hold so tests finish in ms, not s.
+
+    Patches the CLASS attribute via ``monkeypatch.setattr`` (PR #144
+    review item 7). The earlier pattern of mutating the instance
+    attribute (``bc.COMMAND_REEMIT_HOLD_MS = 0.0``) worked but was
+    fragile: ``broadcast_command`` reads via ``self.`` which today
+    resolves to the class attribute (so the instance shadow took
+    effect), but a refactor to read via ``FleetBroadcaster.<attr>``
+    would silently revert each test to the production 250 ms — adding
+    ~7 s per call and quietly breaking the test contract. Patching the
+    class survives that refactor, and ``monkeypatch`` undoes the
+    change at end-of-test automatically.
+    """
+    from blinky_server.ble.advertiser import FleetBroadcaster
+
+    monkeypatch.setattr(FleetBroadcaster, "COMMAND_REEMIT_HOLD_MS", 0.0)
+
+
 async def _make_fleet_with_sn() -> FleetManager:
     """Create a fleet with devices that have hardware_sn set (for dedup tests)."""
     fleet = FleetManager(enable_ble=False, enable_serial=False)
@@ -522,7 +541,9 @@ async def test_pause_resume_discovery() -> None:
 # ── PR #143 follow-up: broadcaster re-emit reliability ──
 
 
-async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences() -> None:
+async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A single broadcast_command call MUST emit the command payload
     multiple times with FRESH sequence numbers (per
     ``COMMAND_REEMIT_COUNT``). This is the fix for the cart-side BLE
@@ -555,7 +576,7 @@ async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
     bc._adv = fake_adv
 
     # Speed up the test: emit hold-time → ~zero
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     await bc.broadcast_command("gen plasma")
 
@@ -612,7 +633,9 @@ async def test_broadcaster_emits_command_multiple_times_with_distinct_sequences(
     )
 
 
-async def test_broadcaster_assigns_distinct_command_ids_across_calls() -> None:
+async def test_broadcaster_assigns_distinct_command_ids_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Each call to ``broadcast_command`` MUST get its own command_id
     so the firmware treats consecutive calls as different logical
     commands (i.e. the second one isn't short-circuited as a re-emit
@@ -628,7 +651,7 @@ async def test_broadcaster_assigns_distinct_command_ids_across_calls() -> None:
     payloads: list[bytes] = []
     fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
     bc._adv = fake_adv
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     await bc.broadcast_command("gen plasma")
     await bc.broadcast_command("effect hue")
@@ -749,7 +772,9 @@ async def test_discovery_plumbs_last_cmd_id_to_known_ble_device(
     assert existing.last_cmd_id == 8  # preserved, NOT overwritten with None
 
 
-async def test_rebroadcast_to_laggards_noop_before_first_broadcast() -> None:
+async def test_rebroadcast_to_laggards_noop_before_first_broadcast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """No command has ever been broadcast → re-broadcast must be a no-op
     even with laggards in the device list. The cached _command_id starts
     at 0 (reserved for "no command applied yet"); refusing to re-emit
@@ -760,14 +785,16 @@ async def test_rebroadcast_to_laggards_noop_before_first_broadcast() -> None:
 
     bc = FleetBroadcaster()
     bc._adv = MagicMock()
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     n = await bc.rebroadcast_to_laggards([("dev-a", 0), ("dev-b", None)])
     assert n == 0
     bc._adv._set_manufacturer_payload.assert_not_called()
 
 
-async def test_rebroadcast_to_laggards_skips_caught_up_and_unknown() -> None:
+async def test_rebroadcast_to_laggards_skips_caught_up_and_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Devices whose ``last_cmd_id`` matches ``_command_id`` are caught
     up; ``None`` means the device's ACK wasn't observed this cycle
     (treated as unknown, NOT 0). Both are skipped."""
@@ -781,7 +808,7 @@ async def test_rebroadcast_to_laggards_skips_caught_up_and_unknown() -> None:
     fake_adv = MagicMock()
     fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
     bc._adv = fake_adv
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     # Run a real broadcast so _command_id + _last_command get populated.
     await bc.broadcast_command("gen fire")
@@ -804,7 +831,9 @@ async def test_rebroadcast_to_laggards_skips_caught_up_and_unknown() -> None:
     assert COMMAND_V2_TOKEN_SIZE == 2
 
 
-async def test_rebroadcast_to_laggards_re_emits_for_lagged_device() -> None:
+async def test_rebroadcast_to_laggards_re_emits_for_lagged_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A device whose last_cmd_id < broadcaster's _command_id is a
     laggard. Re-emit the cached _last_command REBROADCAST_EMIT_COUNT
     times with the SAME _command_id (so other devices that already have
@@ -819,7 +848,7 @@ async def test_rebroadcast_to_laggards_re_emits_for_lagged_device() -> None:
     fake_adv = MagicMock()
     fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
     bc._adv = fake_adv
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     await bc.broadcast_command("gen plasma")
     original_cmd_id = bc._command_id
@@ -846,7 +875,9 @@ async def test_rebroadcast_to_laggards_re_emits_for_lagged_device() -> None:
     assert bc._command_id == original_cmd_id
 
 
-async def test_rebroadcast_to_laggards_caps_at_max_attempts() -> None:
+async def test_rebroadcast_to_laggards_caps_at_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """After REBROADCAST_MAX_ATTEMPTS cycles for a permanently-out-of-range
     device, the broadcaster gives up. The next cycle for the same
     (device, command_id) is a no-op so the radio isn't soaked."""
@@ -860,7 +891,7 @@ async def test_rebroadcast_to_laggards_caps_at_max_attempts() -> None:
     fake_adv = MagicMock()
     fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
     bc._adv = fake_adv
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     await bc.broadcast_command("gen fire")
     cmd_id = bc._command_id
@@ -880,7 +911,9 @@ async def test_rebroadcast_to_laggards_caps_at_max_attempts() -> None:
     assert cmd_emits == []
 
 
-async def test_rebroadcast_to_laggards_counter_resets_on_new_command() -> None:
+async def test_rebroadcast_to_laggards_counter_resets_on_new_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When the operator fires a fresh command, the per-device attempt
     counter resets — a device that was given up on for command_id=N is
     eligible again for command_id=N+1. Otherwise the cap would persist
@@ -894,7 +927,7 @@ async def test_rebroadcast_to_laggards_counter_resets_on_new_command() -> None:
     fake_adv = MagicMock()
     fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
     bc._adv = fake_adv
-    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+    _fast_broadcaster(monkeypatch)
 
     # First command + max-out the attempts for one device.
     await bc.broadcast_command("gen fire")

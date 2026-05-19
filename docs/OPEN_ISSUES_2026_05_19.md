@@ -116,15 +116,12 @@ the WS2812B data line, or a flaky physical button.
 
 ## 2. PR #144 review items still open
 
-Lower-priority items from the round-2 bot reviews that weren't
-addressed in `cc6d8096`:
-
-| Item | File | Issue | Severity |
+| Item | File | Issue | Status |
 |---|---|---|---|
-| 7 | `tests/test_fleet_ble.py` | `bc.COMMAND_REEMIT_HOLD_MS = 0.0` instance-attribute override is fragile — silently breaks if `broadcast_command` ever reads via class. | Test pattern |
-| 8 | `tests/test_registry_jsons.py` | Only checks `ledType` validity; doesn't catch other firmware-required fields (numLeds, platform). | Test scope |
-| 11 | `blinky_server/ble/protocol.py` | `build_command_v2_packet` docstring claims 238-byte ceiling (EXTENDED_PAYLOAD_MAX - token); should be re-checked since the firmware scanner only sees legacy ads (21-byte effective ceiling — see Section 1.2). | Doc accuracy |
-| (n/a) | `BleScanner.cpp` `RxSlot` struct | `uint16_t len` at byte offset 1 is misaligned — Cortex-M4 handles it in hardware but each access costs an extra cycle. Not a crash; not worth packing now. | Perf nit |
+| 7 | `tests/test_fleet_ble.py` | `bc.COMMAND_REEMIT_HOLD_MS = 0.0` instance-attribute override is fragile. | ✅ Replaced with `_fast_broadcaster(monkeypatch)` helper that patches the class attribute. |
+| 8 | `tests/test_registry_jsons.py` | Only checked `ledType` validity. | ✅ Added per-file checks for required-field presence, deviceId↔filename match, ledWidth/ledHeight positive (with 2048 sanity cap), and orientation/layoutType enum-range. |
+| 11 | `blinky_server/ble/protocol.py` | Docstring claimed 238-byte ceiling without flagging the firmware's 21-byte legacy-adv effective limit. | ✅ Docstring now documents both ceilings and the silent-on-air failure mode. |
+| (n/a) | `BleScanner.cpp` `RxSlot` struct | `uint16_t len` misaligned at byte offset 1. | ⏸ Perf nit; not worth packing now per the original review. |
 
 ---
 
