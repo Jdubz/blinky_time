@@ -994,7 +994,15 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     newConfig.ledPin = doc["ledPin"] | 10;
     newConfig.ledPin2 = doc["ledPin2"] | 0;   // 0 = single-strand (default)
     newConfig.brightness = doc["brightness"] | 100;
-    newConfig.ledType = doc["ledType"] | 12390;  // Default: NEO_GRB + NEO_KHZ800
+    // Default 82 (NEO_GRB + NEO_KHZ800). The earlier default of 12390 was a
+    // long-standing bug — its lower byte 0x66 decodes to r=2, g=1, b=2
+    // (duplicate r/b offsets), which the validator now rejects. Pre-PR-142
+    // builds silently corrupted colors; post-PR-142 the validator catches
+    // it and the device boot-loops into BLE-DFU recovery. See
+    // docs/POSTMORTEM_2026_05_18_LEDTYPE.md. Default-fallback is only used
+    // when a JSON upload omits ``ledType``; correctness-written registry
+    // files (devices/registry/*.json) all set it explicitly to 82 or 6.
+    newConfig.ledType = doc["ledType"] | 82;
     newConfig.orientation = doc["orientation"] | 0;
     newConfig.layoutType = doc["layoutType"] | 0;
 
