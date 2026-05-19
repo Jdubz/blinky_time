@@ -237,6 +237,37 @@ namespace SafeBootWatchdog {
     }
 
     /**
+     * Clear the bootloader's boot-attempt watchdog counter
+     * (OPEN_ISSUES §3.1 / [[project-bl-no-app-crash-fallback]]).
+     *
+     * The BL bumps a RAM-backed counter at 0x20007F78 immediately
+     * before jumping to the app on every boot. If the app crashes
+     * before reaching THIS clear, the next BL boot sees the
+     * incremented count; after ``BOOT_ATTEMPT_THRESHOLD`` consecutive
+     * misses, the BL forces DFU mode so the operator can re-flash.
+     *
+     * Word layout (matches ``bootloader/src/src/main.c``):
+     *   upper 24 bits = sentinel ``0xCAFE00``,
+     *   lower 8 bits  = count (we write 0 here).
+     *
+     * The clear MUST happen at the same "boot is good" milestone the
+     * existing markStable() uses — too early and slow-but-valid
+     * boots false-positive; too late and we widen the unprotected
+     * window. The current 60 s ``markStable`` milestone is exactly
+     * the right contract; that's why this lives here next to
+     * markStable.
+     *
+     * Older bootloaders (pre §3.1) don't read this address, so
+     * clearing it is a harmless no-op on those. Forward compatible.
+     */
+    inline void clearBootAttemptCounter() {
+        volatile uint32_t* p = (volatile uint32_t*)0x20007F78;
+        *p = 0xCAFE0000u;  // sentinel | count=0
+        __DSB();
+        __ISB();
+    }
+
+    /**
      * Get the boot attempt counter at startup (for diagnostics).
      */
     inline uint8_t getBootCount() { return bootCount_; }

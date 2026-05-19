@@ -140,10 +140,46 @@ the WS2812B data line, or a flaky physical button.
 
 ### 3.1 BL doesn't auto-DFU on app-crashes-pre-BLE-init
 
-**Status: design surveyed 2026-05-19, NOT a small change.**
-The OPEN_ISSUES one-liner "BL gets a hardware-watchdog-with-handshake
-pattern" understates the work. Investigation surfaced these
-constraints (parking them here so the next attempt starts informed):
+**Status: SHIPPED in b183 + BL `0a2b140` (2026-05-19).** Bench-verified
+on `659C8DD3ADF84A33`: BL flash via `deploy-bootloader.sh` succeeded,
+b183 firmware booted to steady state (uptime >60s, fps ~629), then
+power-cycled cleanly back to app mode (no false DFU). The
+`verify_bootloader.py` invariant still passes — the new force-DFU path
+lives outside any `if (_ota_dfu)` branch and reaches
+`bootloader_dfu_start()` through the existing dual-transport block.
+
+**Implementation summary:**
+* **RAM layout chosen:** option (b) — packed into a new 4-byte word at
+  `0x20007F78`, immediately below the existing `dbl_reset_mem`
+  (`0x20007F7C`). Sentinel `0xCAFE00` in the upper 24 bits gates against
+  RAM garbage on cold boot; the low byte is the count. Same
+  "collision avoidance" property as the existing magic — both linkers
+  empirically don't reserve this address.
+* **BL change** (`bootloader/src/src/main.c`, commit `0a2b140`):
+  counter check after `APP_ASKS_FOR_SINGLE_TAP_RESET`; if
+  `attempts >= BOOT_ATTEMPT_THRESHOLD` (3) and sentinel valid, force
+  `dfu_start = 1` and set `_ota_dfu` iff `!VBUSDETECT` (so cabled
+  devices favor UF2 LED hint, sealed devices favor BLE). Increment
+  happens between `(*dbl_reset_mem) = 0;` and `bootloader_app_start()`.
+* **Firmware-side clear:** new `SafeBootWatchdog::clearBootAttemptCounter()`
+  writes `0xCAFE0000` (sentinel | count=0) with `__DSB()/__ISB()`,
+  called from the existing 60 s `markStable()` block in
+  `blinky-things.ino`.
+* **Forward compatibility:** older fleet BLs ignore the address, so
+  the firmware clear is a harmless no-op on devices that haven't
+  picked up the new BL yet. New BL is also backward compatible — a
+  pre-§3.1 firmware just never clears, and the counter still won't
+  trip on legitimate boots because the counter resets to garbage
+  (sentinel mismatch) on every cold-boot RAM init.
+
+**Deferred validation:** intentional crash-loop test to confirm the
+3-strikes-forces-DFU path. Not run on the bench because the only
+SWD-recoverable chip is in active use; the path is exercised by the
+existing increment logic (verified by inspecting steady-state behavior
+across power cycles) but not yet end-to-end on a real crash.
+
+**Design constraints captured during 2026-05-19 survey** (kept for
+reference; the chosen implementation resolves each):
 
 * **RAM layout for the handshake marker.** The existing `dbl_reset_mem`
   at `0x20007F7C` is a 4-byte word with exact-match magic semantics
@@ -186,17 +222,6 @@ constraints (parking them here so the next attempt starts informed):
   VBUSDETECT check to pick UF2 hint vs BLE hint. With the existing
   dual-transport design, both transports come up anyway; the
   `_ota_dfu` flag only affects the LED hint.
-
-**Scope estimate:** ~1 day of focused work: BL change + verifier
-update if needed + BL build (toolchain at
-`/home/blinkytime/.arduino15/packages/Seeeduino/tools/arm-none-eabi-gcc/9-2019q4/bin/`)
-+ UF2 self-update via `deploy-bootloader.sh` on the bench chip
-(NOT SWD — the script uses the BL's UF2 mass-storage self-update
-path; same blast radius as a firmware flash) + multi-cycle bench
-test (intentionally crash-loop the firmware to confirm the BL
-kicks into DFU). `swd-flash.local` is the recovery path if the
-new BL leaves the device in a bad state, but the routine deploy
-doesn't touch SWD.
 
 **Reference:** [[project-bl-no-app-crash-fallback]].
 

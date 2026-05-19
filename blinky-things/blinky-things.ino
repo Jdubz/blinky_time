@@ -666,6 +666,12 @@ void loop() {
   static bool stableMarked = false;
   if (!stableMarked && millis() >= 60000) {
     SafeBootWatchdog::markStable();
+    // Also clear the BL's app-handshake watchdog (OPEN_ISSUES §3.1). The BL
+    // bumps a RAM counter at app-jump; we clear it here to signal "the app
+    // reached steady state, no need to force DFU on the next reset." Older
+    // bootloaders ignore the address, so this is a forward-compatible no-op
+    // for fleet devices that haven't picked up the new BL yet.
+    SafeBootWatchdog::clearBootAttemptCounter();
     stableMarked = true;
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
       Serial.println(F("[BOOT] Marked stable (60s uptime) — boot-fail counter cleared"));

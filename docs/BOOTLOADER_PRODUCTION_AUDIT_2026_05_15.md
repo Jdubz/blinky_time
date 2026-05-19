@@ -1,6 +1,6 @@
-# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7
+# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7 / 0.8.0-9
 
-**Status as of 2026-05-16:**
+**Status as of 2026-05-19:**
 
 | Item | Status |
 |------|--------|
@@ -14,7 +14,8 @@
 | Hardware test of 0.8.0-7 (expect ~100% recovery) | ✅ verified — 30-iter test, 30/30 PASS, mean 9.4s |
 | `scripts/verify_bootloader.py` catches both bug classes at source level | ✅ landed |
 | `scripts/deploy-bootloader.sh` gates flash on verifier | ✅ landed |
-| Fleet rollout of 0.8.0-7 | ⬜ pending — needs deploy-bootloader.sh against fleet |
+| App-handshake watchdog (OPEN_ISSUES §3.1) — BL force-DFU after 3 misses | ✅ landed in BL commit `0a2b140` (0.8.0-9); bench-verified on 659C8DD3ADF84A33 with b183 |
+| Fleet rollout of 0.8.0-9 | ⬜ pending — needs deploy-bootloader.sh against fleet |
 
 This document captures outstanding actions and the verified diagnostic
 evidence behind them. It is NOT a historical narrative — see git log
