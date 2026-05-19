@@ -11,24 +11,34 @@ once items get addressed.
 
 ### 1.1 BLE broadcast delivery ceiling ~80% per-broadcast
 
-**Symptom:** 4 of 20 broadcasts hit zero devices on the bench measurement
-(2026-05-19 evening). Systemic misses are **broadcaster-side**, not
-random per-emit RF — all devices missed the *same* broadcasts.
+**Status: Phase 2 SHIPPED (server side).** Discovery extracts
+`last_cmd_id` from each BLE device's scan-response manufacturer data
+and stores it on the `Device`. After every discovery cycle the
+FleetManager hands the snapshot to `FleetBroadcaster.rebroadcast_to_laggards()`,
+which re-emits the cached `_last_command` with the SAME `_command_id`
+for any device whose ACK lags. Capped at `REBROADCAST_MAX_ATTEMPTS = 3`
+per (device, command_id) to bound radio time on a permanently-out-of-
+range device; the per-device counter clears on each fresh
+`broadcast_command` (new logical command resets the budget). Field
+validation pending — bench measurement of per-broadcast delivery rate
+after Phase 2 vs. pre-Phase-2 baseline.
 
-**State today:**
+**Symptom (original, pre-fix):** 4 of 20 broadcasts hit zero devices
+on the bench measurement (2026-05-19 evening). Systemic misses were
+**broadcaster-side**, not random per-emit RF — all devices missed the
+*same* broadcasts.
+
+**Prior state (shipped earlier):**
 - Items #1 (multi-slot rxBuffer), #2 (command_id idempotency), #3
   (per-source seq ring), and scan-duty-cycle 50%→90% all SHIPPED.
 - Reception per-emit improved 42% → ~70% within successful broadcasts.
-- Per-broadcast delivery still 80%. Adding more emits / wider duty
-  cycle doesn't help the 20% all-emits-missed case.
+- Per-broadcast delivery 80%. Adding more emits / wider duty cycle
+  didn't help the 20% all-emits-missed case — that's what gossip-ACK
+  re-broadcast targets.
 
-**Next step:** [Phase 2 of BLE_FLEET_RELIABILITY_PLAN item #5] — server
-extracts `last_cmd_id` from device gossip-ACK adv (phase 1 firmware
-shipped, commit `699c3025`), re-broadcasts laggards. Closes the
-systemic-miss gap by design.
-
-**Workaround:** none. The light button + Hub UI silently fail one in
-five times. Operators learn to repeat the action.
+**Workaround (no longer needed):** the operator's "tap it again"
+habit is now redundant on the second pass — the server will retry
+within ~60 s of the missed broadcast.
 
 ---
 

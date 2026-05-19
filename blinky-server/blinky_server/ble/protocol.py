@@ -135,3 +135,49 @@ def build_command_v2_packet(
         sequence=sequence,
         fragment=fragment,
     )
+
+
+# ─── Gossip-ACK (firmware → server, BLE_FLEET_RELIABILITY_PLAN item #5) ─────
+#
+# Each device exposes the last COMMAND_V2 command_id it accepted in its own
+# BLE adv's scan-response manufacturer data so the server can detect lagged
+# devices (missed every emit of a broadcast) and re-broadcast.
+#
+# Layout (after BlueZ has stripped its 2-byte company-ID prefix, which is
+# what bleak hands us via ``AdvertisementData.manufacturer_data[0xFFFF]``):
+#   bytes[0]   marker = GOSSIP_ACK_MARKER (0xA0)
+#   bytes[1:3] command_id (little-endian uint16)
+#
+# 3 bytes total. The marker disambiguates this block from the broadcaster's
+# COMMAND_V2 manufacturer data (which the firmware emits and we also see in
+# scan results); both use COMPANY_ID = 0xFFFF but the broadcaster's payload
+# starts with PROTOCOL_VERSION = 0x01, never 0xA0, so the marker distinguishes.
+GOSSIP_ACK_MARKER = 0xA0
+GOSSIP_ACK_SIZE = 3  # marker (1B) + command_id LE (2B)
+
+
+def parse_gossip_ack(mfg_payload: bytes | bytearray | memoryview | None) -> int | None:
+    """Extract the last-accepted ``command_id`` from a scan-response ACK block.
+
+    ``mfg_payload`` is the bytes bleak returns from
+    ``AdvertisementData.manufacturer_data.get(COMPANY_ID)`` — i.e. the
+    manufacturer data with the company-ID prefix already stripped.
+
+    Returns the device's last accepted ``command_id`` if the payload is
+    a valid gossip-ACK block, otherwise ``None``. ``None`` covers every
+    not-an-ACK case (missing payload, wrong marker, wrong size, the
+    broadcaster's own COMMAND_V2 manufacturer data echoed in someone
+    else's scan) — callers should treat ``None`` as "this device's ACK
+    is unknown right now," not "this device is at command_id 0."
+
+    A return value of 0 specifically means "device boot default — no
+    command applied yet." The broadcaster reserves command_id 0 (see
+    ``_next_command_id``) so a real command's ACK can never be 0.
+    """
+    if mfg_payload is None:
+        return None
+    if len(mfg_payload) != GOSSIP_ACK_SIZE:
+        return None
+    if mfg_payload[0] != GOSSIP_ACK_MARKER:
+        return None
+    return mfg_payload[1] | (mfg_payload[2] << 8)

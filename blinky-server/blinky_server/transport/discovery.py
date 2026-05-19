@@ -114,6 +114,7 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
     try:
         from bleak import BleakScanner
 
+        from ..ble.protocol import COMPANY_ID, parse_gossip_ack
         from .ble_transport import NUS_SERVICE_UUID
     except ImportError:
         log.debug("bleak not installed, skipping BLE discovery")
@@ -170,6 +171,19 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
                 # peripheral entirely (no current support).
                 name = dev.name or ""
                 platform = "nrf52840" if name.startswith("Blinky") else "unknown"
+                # Extract gossip-ACK (last accepted COMMAND_V2 command_id)
+                # from the device's scan-response manufacturer data. Firmware
+                # phase 1 (commit 699c3025) emits this; the server uses it
+                # to detect lagged devices and re-broadcast laggards.
+                # ``None`` means the device's scan response didn't carry an
+                # ACK block this cycle — could be the broadcaster's own
+                # COMMAND_V2 payload echoed back, a non-blinky peripheral
+                # under the same company-ID, or the firmware running pre-
+                # gossip-ACK. Callers must NOT default missing ACKs to 0.
+                extra: dict[str, Any] = {}
+                last_cmd_id = parse_gossip_ack((adv.manufacturer_data or {}).get(COMPANY_ID))
+                if last_cmd_id is not None:
+                    extra["last_cmd_id"] = last_cmd_id
                 devices.append(
                     DiscoveredDevice(
                         device_id=addr,
@@ -178,9 +192,16 @@ async def discover_ble_devices(timeout: float = 5.0) -> list[DiscoveredDevice]:
                         address=addr,
                         description=name or "BLE device",
                         rssi=adv.rssi,
+                        extra=extra,
                     )
                 )
-                log.info("Discovered BLE %s (%s) RSSI=%d", dev.name, addr, adv.rssi)
+                log.info(
+                    "Discovered BLE %s (%s) RSSI=%d last_cmd_id=%s",
+                    dev.name,
+                    addr,
+                    adv.rssi,
+                    last_cmd_id if last_cmd_id is not None else "—",
+                )
     except Exception as e:
         log.warning("BLE scan failed: %s", e)
 

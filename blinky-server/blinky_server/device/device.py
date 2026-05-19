@@ -67,6 +67,14 @@ class Device:
         # Connection health
         self.last_seen: float | None = None  # monotonic timestamp of last successful comms
         self.rssi: int | None = None  # BLE signal strength (dBm, from discovery)
+        # Gossip-ACK: last COMMAND_V2 command_id this device's firmware
+        # has accepted, as observed in its BLE scan-response manufacturer
+        # data. Stays ``None`` until the discovery scanner sees an ACK
+        # block (firmware phase 1: commit 699c3025). The
+        # ``FleetBroadcaster.rebroadcast_to_laggards()`` cycle compares
+        # this against the broadcaster's latest command_id; mismatches
+        # → re-broadcast (BLE_FLEET_RELIABILITY_PLAN item #5).
+        self.last_cmd_id: int | None = None
 
         # Cached settings
         self.settings: list[dict[str, Any]] = []

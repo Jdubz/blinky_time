@@ -648,6 +648,274 @@ async def test_broadcaster_assigns_distinct_command_ids_across_calls() -> None:
     assert plasma_ids != hue_ids, "consecutive broadcasts must use different command_ids"
 
 
+async def test_discovery_plumbs_last_cmd_id_to_new_ble_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When discovery surfaces a previously-unseen BLE device whose adv
+    carried a gossip-ACK block, the freshly-created Device must have
+    last_cmd_id populated from disc.extra. Without this, the first cycle
+    would compare against None and never trigger re-broadcast — the
+    invariant we depend on for cascade #5."""
+    from typing import Any
+
+    from blinky_server.transport.discovery import DiscoveredDevice
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+
+    disc = DiscoveredDevice(
+        device_id="AA:BB:CC:DD:EE:01",
+        platform="nrf52840",
+        transport_type="ble",
+        address="AA:BB:CC:DD:EE:01",
+        description="Blinky-tube_v2-01",
+        rssi=-55,
+        extra={"last_cmd_id": 42},
+    )
+
+    async def fake_discover_all(**_kwargs: Any) -> list[DiscoveredDevice]:
+        return [disc]
+
+    monkeypatch.setattr("blinky_server.device.manager.discover_all", fake_discover_all)
+    monkeypatch.setattr(fleet, "_refresh_dedup_exclusions", lambda: None)
+
+    await fleet._discover_and_connect()
+
+    dev = fleet._devices["AA:BB:CC:DD:EE:01"]
+    assert dev.last_cmd_id == 42
+
+
+async def test_discovery_plumbs_last_cmd_id_to_known_ble_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When discovery re-sees a known BLE device, last_cmd_id MUST be
+    updated each cycle — that's how the broadcaster watches catch-up
+    progress. Setting it once at create-time wouldn't be enough.
+
+    Negative: when the adv didn't carry an ACK block this cycle
+    (``last_cmd_id`` absent from extra), the previous value is preserved
+    rather than overwritten with None — the device is still on whatever
+    command_id it last reported, and assuming "unknown" would mask
+    legitimately-caught-up devices and cause spurious re-broadcast."""
+    from typing import Any
+
+    from blinky_server.transport.discovery import DiscoveredDevice
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+
+    # Seed an existing device with last_cmd_id=7.
+    transport = MockTransport(transport_type="ble")
+    existing = Device(
+        device_id="AA:BB:CC:DD:EE:02",
+        port="AA:BB:CC:DD:EE:02",
+        platform="nrf52840",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    existing.state = DeviceState.PRESENT
+    existing.last_cmd_id = 7
+    fleet._devices["AA:BB:CC:DD:EE:02"] = existing
+
+    # Cycle 1: ACK advances to 8.
+    disc_with_ack = DiscoveredDevice(
+        device_id="AA:BB:CC:DD:EE:02",
+        platform="nrf52840",
+        transport_type="ble",
+        address="AA:BB:CC:DD:EE:02",
+        extra={"last_cmd_id": 8},
+    )
+
+    async def discover_ack(**_kwargs: Any) -> list[DiscoveredDevice]:
+        return [disc_with_ack]
+
+    monkeypatch.setattr("blinky_server.device.manager.discover_all", discover_ack)
+    monkeypatch.setattr(fleet, "_refresh_dedup_exclusions", lambda: None)
+    await fleet._discover_and_connect()
+    assert existing.last_cmd_id == 8
+
+    # Cycle 2: ACK missing from adv (scan miss, weak signal, etc.).
+    # Previous value MUST be preserved.
+    disc_no_ack = DiscoveredDevice(
+        device_id="AA:BB:CC:DD:EE:02",
+        platform="nrf52840",
+        transport_type="ble",
+        address="AA:BB:CC:DD:EE:02",
+        extra={},  # no last_cmd_id key
+    )
+
+    async def discover_no_ack(**_kwargs: Any) -> list[DiscoveredDevice]:
+        return [disc_no_ack]
+
+    monkeypatch.setattr("blinky_server.device.manager.discover_all", discover_no_ack)
+    await fleet._discover_and_connect()
+    assert existing.last_cmd_id == 8  # preserved, NOT overwritten with None
+
+
+async def test_rebroadcast_to_laggards_noop_before_first_broadcast() -> None:
+    """No command has ever been broadcast → re-broadcast must be a no-op
+    even with laggards in the device list. The cached _command_id starts
+    at 0 (reserved for "no command applied yet"); refusing to re-emit
+    here prevents firmware confusion."""
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+
+    bc = FleetBroadcaster()
+    bc._adv = MagicMock()
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    n = await bc.rebroadcast_to_laggards([("dev-a", 0), ("dev-b", None)])
+    assert n == 0
+    bc._adv._set_manufacturer_payload.assert_not_called()
+
+
+async def test_rebroadcast_to_laggards_skips_caught_up_and_unknown() -> None:
+    """Devices whose ``last_cmd_id`` matches ``_command_id`` are caught
+    up; ``None`` means the device's ACK wasn't observed this cycle
+    (treated as unknown, NOT 0). Both are skipped."""
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+    from blinky_server.ble.protocol import COMMAND_V2_TOKEN_SIZE, PacketType
+
+    bc = FleetBroadcaster()
+    payloads: list[bytes] = []
+    fake_adv = MagicMock()
+    fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
+    bc._adv = fake_adv
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    # Run a real broadcast so _command_id + _last_command get populated.
+    await bc.broadcast_command("gen fire")
+    payloads.clear()  # drop the initial broadcast's emits
+
+    current = bc._command_id
+    n = await bc.rebroadcast_to_laggards(
+        [
+            ("dev-caught-up", current),
+            ("dev-unknown", None),
+        ]
+    )
+    assert n == 0
+    # Nothing aired.
+    cmd_emits = [p for p in payloads if len(p) >= 4 and p[1] == PacketType.COMMAND_V2.value]
+    assert cmd_emits == []
+    # Sanity: COMMAND_V2_TOKEN_SIZE is a stable wire constant the firmware
+    # still depends on; touch the import so a rename here triggers a test
+    # failure rather than silent drift.
+    assert COMMAND_V2_TOKEN_SIZE == 2
+
+
+async def test_rebroadcast_to_laggards_re_emits_for_lagged_device() -> None:
+    """A device whose last_cmd_id < broadcaster's _command_id is a
+    laggard. Re-emit the cached _last_command REBROADCAST_EMIT_COUNT
+    times with the SAME _command_id (so other devices that already have
+    it idempotency-skip)."""
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+    from blinky_server.ble.protocol import COMMAND_V2_TOKEN_SIZE, PacketType
+
+    bc = FleetBroadcaster()
+    payloads: list[bytes] = []
+    fake_adv = MagicMock()
+    fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
+    bc._adv = fake_adv
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    await bc.broadcast_command("gen plasma")
+    original_cmd_id = bc._command_id
+    payloads.clear()
+
+    n = await bc.rebroadcast_to_laggards(
+        [
+            ("dev-caught-up", original_cmd_id),
+            ("dev-lagged", original_cmd_id - 1),  # one behind
+        ]
+    )
+    assert n == 1
+
+    cmd_emits = [p for p in payloads if len(p) >= 4 and p[1] == PacketType.COMMAND_V2.value]
+    assert len(cmd_emits) == FleetBroadcaster.REBROADCAST_EMIT_COUNT
+    # All emits share the original command_id (idempotency invariant).
+    for p in cmd_emits:
+        cmd_id = p[4] | (p[5] << 8)
+        cmd_str = p[4 + COMMAND_V2_TOKEN_SIZE :].decode()
+        assert cmd_id == original_cmd_id
+        assert cmd_str == "gen plasma"
+    # _command_id MUST NOT advance — re-broadcast is the SAME logical
+    # command, just retried.
+    assert bc._command_id == original_cmd_id
+
+
+async def test_rebroadcast_to_laggards_caps_at_max_attempts() -> None:
+    """After REBROADCAST_MAX_ATTEMPTS cycles for a permanently-out-of-range
+    device, the broadcaster gives up. The next cycle for the same
+    (device, command_id) is a no-op so the radio isn't soaked."""
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+    from blinky_server.ble.protocol import PacketType
+
+    bc = FleetBroadcaster()
+    payloads: list[bytes] = []
+    fake_adv = MagicMock()
+    fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
+    bc._adv = fake_adv
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    await bc.broadcast_command("gen fire")
+    cmd_id = bc._command_id
+    payloads.clear()
+
+    # Cycle MAX_ATTEMPTS times — all should re-emit.
+    for cycle in range(FleetBroadcaster.REBROADCAST_MAX_ATTEMPTS):
+        n = await bc.rebroadcast_to_laggards([("dev-stuck", cmd_id - 1)])
+        assert n == 1, f"cycle {cycle + 1} should re-broadcast"
+
+    # The next cycle MUST give up (no on-air emit) even though the
+    # device is still lagged.
+    payloads.clear()
+    n = await bc.rebroadcast_to_laggards([("dev-stuck", cmd_id - 1)])
+    assert n == 0
+    cmd_emits = [p for p in payloads if len(p) >= 4 and p[1] == PacketType.COMMAND_V2.value]
+    assert cmd_emits == []
+
+
+async def test_rebroadcast_to_laggards_counter_resets_on_new_command() -> None:
+    """When the operator fires a fresh command, the per-device attempt
+    counter resets — a device that was given up on for command_id=N is
+    eligible again for command_id=N+1. Otherwise the cap would persist
+    forever, defeating recovery."""
+    from unittest.mock import MagicMock
+
+    from blinky_server.ble.advertiser import FleetBroadcaster
+
+    bc = FleetBroadcaster()
+    payloads: list[bytes] = []
+    fake_adv = MagicMock()
+    fake_adv._set_manufacturer_payload = lambda _c, p: payloads.append(p)
+    bc._adv = fake_adv
+    bc.COMMAND_REEMIT_HOLD_MS = 0.0  # type: ignore[misc]
+
+    # First command + max-out the attempts for one device.
+    await bc.broadcast_command("gen fire")
+    cmd_id_1 = bc._command_id
+    for _ in range(FleetBroadcaster.REBROADCAST_MAX_ATTEMPTS):
+        await bc.rebroadcast_to_laggards([("dev-stuck", cmd_id_1 - 1)])
+    # Cap reached.
+    assert bc._rebroadcast_attempts["dev-stuck"] == FleetBroadcaster.REBROADCAST_MAX_ATTEMPTS
+
+    # Fresh command — counter should clear.
+    await bc.broadcast_command("effect hue")
+    cmd_id_2 = bc._command_id
+    assert cmd_id_2 != cmd_id_1
+    assert bc._rebroadcast_attempts == {}, "fresh command must clear per-device counters"
+
+    # Same device is now eligible for cmd_id_2.
+    payloads.clear()
+    n = await bc.rebroadcast_to_laggards([("dev-stuck", cmd_id_2 - 1)])
+    assert n == 1
+
+
 async def test_build_command_v2_packet_layout() -> None:
     """Wire-format pin for COMMAND_V2 — the firmware-side decoder relies on
     the exact byte order. Any change here MUST match
@@ -670,6 +938,83 @@ async def test_build_command_v2_packet_layout() -> None:
     assert pkt[4] == 0xEF
     assert pkt[5] == 0xBE
     assert pkt[6:] == b"gen fire"
+
+
+# ── Gossip-ACK parser (BLE_FLEET_RELIABILITY_PLAN #5 phase 2) ──────────
+
+
+async def test_parse_gossip_ack_valid() -> None:
+    """Wire-format pin for the firmware → server ACK block. The
+    firmware encodes ``[marker=0xA0][cmd_id LE 2B]`` in scan-response
+    manufacturer data; the parser returns the cmd_id."""
+    from blinky_server.ble.protocol import GOSSIP_ACK_MARKER, parse_gossip_ack
+
+    # cmd_id = 0xBEEF (little-endian on the wire)
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER, 0xEF, 0xBE))) == 0xBEEF
+    # cmd_id = 0 (firmware boot default — no command applied yet)
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER, 0, 0))) == 0
+    # cmd_id = 1 (first broadcaster command)
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER, 0x01, 0x00))) == 1
+    # Max uint16
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER, 0xFF, 0xFF))) == 0xFFFF
+
+
+async def test_parse_gossip_ack_rejects_wrong_marker() -> None:
+    """Marker byte 0x01 means COMMAND_V2 (broadcaster's own payload echoed
+    in scan), not an ACK. Return None so the caller doesn't confuse this
+    for a real ACK at cmd_id=(seq<<8 | fragment) garbage."""
+    from blinky_server.ble.protocol import parse_gossip_ack
+
+    # PROTOCOL_VERSION (0x01) — would happen if we accidentally scanned
+    # our own broadcaster echo / a misconfigured peer using the same
+    # company ID.
+    assert parse_gossip_ack(bytes((0x01, 0xEF, 0xBE))) is None
+    # 0x00 — uninitialized manufacturer data
+    assert parse_gossip_ack(bytes((0x00, 0x00, 0x00))) is None
+    # Any non-0xA0 first byte
+    assert parse_gossip_ack(bytes((0x42, 0xEF, 0xBE))) is None
+
+
+async def test_parse_gossip_ack_rejects_wrong_size() -> None:
+    """Only 3-byte payloads parse. Shorter = malformed; longer = some
+    other manufacturer-data block (e.g., a COMMAND_V2 packet with the
+    same company ID)."""
+    from blinky_server.ble.protocol import GOSSIP_ACK_MARKER, parse_gossip_ack
+
+    # Empty
+    assert parse_gossip_ack(b"") is None
+    # 1 byte (marker only)
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER,))) is None
+    # 2 bytes (marker + 1 byte of cmd_id) — would silently parse as
+    # cmd_id=byte if we didn't check size.
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER, 0x42))) is None
+    # 4 bytes (marker + LE16 + trailing byte) — looks like a corrupted
+    # extension or someone else's manufacturer data; refuse.
+    assert parse_gossip_ack(bytes((GOSSIP_ACK_MARKER, 0xEF, 0xBE, 0x00))) is None
+    # Full COMMAND_V2 packet (10+ bytes) — broadcaster's own emission
+    # echoed in some unrelated peer's scan response with COMPANY_ID
+    # collision. Don't misinterpret.
+    assert parse_gossip_ack(b"\x01\x04\x07\x10\xef\xbegen fire") is None
+
+
+async def test_parse_gossip_ack_handles_none() -> None:
+    """``None`` is what bleak returns when the requested company ID is
+    absent from manufacturer_data. Must not raise."""
+    from blinky_server.ble.protocol import parse_gossip_ack
+
+    assert parse_gossip_ack(None) is None
+
+
+async def test_parse_gossip_ack_accepts_bytearray_and_memoryview() -> None:
+    """bleak sometimes hands manufacturer_data values as bytes, sometimes
+    as bytearray (depends on platform backend). Parser must accept both
+    plus memoryview without conversion overhead at the call site."""
+    from blinky_server.ble.protocol import GOSSIP_ACK_MARKER, parse_gossip_ack
+
+    raw = bytes((GOSSIP_ACK_MARKER, 0xEF, 0xBE))
+    assert parse_gossip_ack(raw) == 0xBEEF
+    assert parse_gossip_ack(bytearray(raw)) == 0xBEEF
+    assert parse_gossip_ack(memoryview(raw)) == 0xBEEF
 
 
 # ── _scan_with_retry input validation (PR #144 review) ─────────────────
