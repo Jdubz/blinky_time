@@ -87,6 +87,15 @@ public:
     bool isActive() const { return active_; }
     uint32_t getUptimeMs() const { return active_ ? (millis() - startMs_) : 0; }
 
+    // Most-recent NEW COMMAND_V2 command_id accepted (the value that
+    // caused a dispatch, not idempotent-rejection). Initial value 0 = no
+    // command yet applied. Used by BLE_FLEET_RELIABILITY_PLAN.md item #5
+    // (gossip ACK): the device piggybacks this on its own BLE adv so the
+    // server's scanner can detect lagged devices and re-broadcast any
+    // command they missed. Returned by value (uint16_t read is atomic on
+    // Cortex-M4 byte-aligned access).
+    uint16_t getLastAcceptedCommandId() const { return lastAcceptedCmdId_; }
+
     void printDiagnostics(Print& out) const;
 
 private:
@@ -151,6 +160,7 @@ private:
     uint32_t packetsDuped_ = 0;
     uint32_t packetsDropped_ = 0;
     uint32_t packetsIdempotent_ = 0;  // COMMAND_V2 re-emits skipped via command_id match
+    uint16_t lastAcceptedCmdId_ = 0;  // Most-recent NEW cmd_id accepted (per item #5 gossip ACK)
     uint32_t startMs_ = 0;
     bool active_ = false;
 };

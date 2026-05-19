@@ -32,12 +32,51 @@ void BleNus::startAdvertising() {
     Bluefruit.Advertising.addService(uart_);
     Bluefruit.ScanResponse.addName();
 
+    // Initial gossip-ACK manufacturer data block in the scan response
+    // (BLE_FLEET_RELIABILITY_PLAN.md item #5). Encodes the last accepted
+    // COMMAND_V2 command_id so a scanning server can detect lagged
+    // devices and re-broadcast the missed command. Format (5 bytes):
+    //   [company_id LE = 0xFFFF (2B)] [marker = 0xA0 ACK (1B)]
+    //   [command_id LE (2B)]
+    //
+    // Placed in scan response (not primary adv) because the primary
+    // adv is near-full with flags + tx-power + NUS UUID; the scan
+    // response has the 24-char device name (~26 bytes) plus comfortable
+    // headroom. Server-side scanner must use active scanning to read
+    // it (already the case for fleet discovery).
+    //
+    // Initial command_id = 0 (no command yet applied; matches the
+    // broadcaster's starting state). setLastAckedCommandId() updates
+    // this block when a new COMMAND_V2 is dispatched.
+    uint8_t ackData[5] = {0xFF, 0xFF, 0xA0, 0x00, 0x00};
+    Bluefruit.ScanResponse.addManufacturerData(ackData, sizeof(ackData));
+
     // Auto-restart advertising when disconnected
     Bluefruit.Advertising.restartOnDisconnect(true);
     // Fast: 20ms (32 * 0.625), Slow: 152.5ms (244 * 0.625)
     Bluefruit.Advertising.setInterval(32, 244);
     Bluefruit.Advertising.setFastTimeout(30);  // 30s in fast mode
     Bluefruit.Advertising.start(0);            // Advertise forever
+}
+
+void BleNus::setLastAckedCommandId(uint16_t newId) {
+    if (newId == lastAdvertisedCmdId_) {
+        return;  // No change — skip the expensive scan-response rebuild.
+    }
+    lastAdvertisedCmdId_ = newId;
+
+    // Rebuild the scan response payload. Bluefruit's ScanResponse data
+    // is mutable: clearData() drops the cached AD blob, addName() +
+    // addManufacturerData() rebuild it, and the next advertising
+    // emission picks up the new bytes. We do NOT stop/restart the
+    // primary adv — only the scan response is rebuilt, so connected
+    // NUS clients are unaffected.
+    uint8_t ackData[5] = {0xFF, 0xFF, 0xA0,
+                          static_cast<uint8_t>(newId & 0xFF),
+                          static_cast<uint8_t>((newId >> 8) & 0xFF)};
+    Bluefruit.ScanResponse.clearData();
+    Bluefruit.ScanResponse.addName();
+    Bluefruit.ScanResponse.addManufacturerData(ackData, sizeof(ackData));
 }
 
 // --- Print interface: write into ring buffer ---

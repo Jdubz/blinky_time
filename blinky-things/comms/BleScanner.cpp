@@ -204,6 +204,10 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
                 ++packetsIdempotent_;
                 return;
             }
+            // New logical command — this is the "applied" event. Record
+            // the command_id for gossip-ACK (item #5): the device's own
+            // BLE adv exposes this so the server can detect laggards.
+            lastAcceptedCmdId_ = cmdId;
             payloadOffset += BleProtocol::COMMAND_V2_TOKEN_SIZE;
             payloadLen    -= BleProtocol::COMMAND_V2_TOKEN_SIZE;
         }
@@ -329,6 +333,8 @@ void BleScanner::printDiagnostics(Print& out) const {
 
     out.print(F("[BLE] last_seq="));
     out.print(lastSequence_);
+    out.print(F(" last_cmd_id="));
+    out.print(lastAcceptedCmdId_);
     out.print(F(" uptime="));
     out.print(getUptimeMs() / 1000);
     out.println(F("s"));

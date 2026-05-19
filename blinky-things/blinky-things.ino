@@ -839,6 +839,14 @@ void loop() {
 #ifdef BLINKY_PLATFORM_NRF52840
   bleNus.update();       // NUS peripheral (serial-over-BLE)
   bleScanner.update();   // Fleet broadcast receiver
+
+  // Gossip-ACK: when the scanner has accepted a NEW command_id (not an
+  // idempotent re-emit), expose it in our own BLE adv's scan-response
+  // manufacturer data so a fleet server can detect lagged devices and
+  // re-broadcast missed commands without us holding a GATT connection.
+  // The setter is a no-op when the value hasn't changed since last
+  // call (cheap polling). See BLE_FLEET_RELIABILITY_PLAN.md item #5.
+  bleNus.setLastAckedCommandId(bleScanner.getLastAcceptedCommandId());
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   esp32BleNus.update();  // Drain BLE NUS TX buffer
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
