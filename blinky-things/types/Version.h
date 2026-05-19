@@ -5,9 +5,9 @@
 // See blinky-things/BUILD_NUMBER for the current value.
 
 #define FIRMWARE_BUILD 179
-#define FIRMWARE_GIT_SHA "d2fd6a6f-dirty"
+#define FIRMWARE_GIT_SHA "2a15f53c-dirty"
 // FIRMWARE_VERSION embeds both the build number AND the git SHA so a
 // reused build number (--no-bump) can't disguise different code on a
 // running device.
-#define FIRMWARE_VERSION "b179-d2fd6a6f-dirty"
+#define FIRMWARE_VERSION "b179-2a15f53c-dirty"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__

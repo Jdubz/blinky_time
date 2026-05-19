@@ -3,6 +3,7 @@
 #include "../inputs/SerialConsole.h"
 #include "../audio/AudioTracker.h"
 #include "../types/BlinkyAssert.h"
+#include "../types/Version.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -20,6 +21,15 @@ using namespace Adafruit_LittleFS_Namespace;
 static File* configFile = nullptr;
 static bool flashOk = false;
 static const char* CONFIG_FILENAME = "/config.bin";
+// Flash-freshness marker (OPEN_ISSUES §3.4 / [[project-stale-flash-state-after-upgrade]]).
+// Records the FIRMWARE_BUILD value that last successfully booted on this
+// device. A mismatch on boot signals "first boot of a new build" and
+// triggers a LittleFS reformat-and-restore — clearing accumulated journal-
+// region cruft from older builds before the firmware tries to USE that
+// flash. Self-contained byte layout (uint32 LE) — no version/magic; the
+// presence of the file is the marker, and a corrupted/short read falls
+// through to "missing" → triggers the same reformat path.
+static const char* FW_BUILD_MARKER_FILE = "/.fw_build";
 // Flash storage for ESP32-S3 via NVS (Non-Volatile Storage) Preferences API
 #elif defined(ESP32)
 #include <Preferences.h>
@@ -32,6 +42,38 @@ static const char* NVS_KEY       = "cfg";
 ConfigStorage::ConfigStorage() : valid_(false), dirty_(false), lastSaveMs_(0) {
     memset(&data_, 0, sizeof(data_));
 }
+
+#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+// Read the firmware-freshness marker. Returns true if the marker file
+// exists and contains a complete uint32_t; sets *outBuild on success.
+// A missing/short/unreadable marker is "first boot ever" semantically,
+// which triggers the same reformat path as a build-number mismatch.
+static bool readFwBuildMarker(uint32_t* outBuild) {
+    File f(InternalFS);
+    if (!f.open(FW_BUILD_MARKER_FILE, FILE_O_READ)) return false;
+    uint32_t value = 0;
+    size_t n = f.read(reinterpret_cast<uint8_t*>(&value), sizeof(value));
+    f.close();
+    if (n != sizeof(value)) return false;
+    *outBuild = value;
+    return true;
+}
+
+// Write the firmware-freshness marker. The remove+open dance forces a
+// fresh write (LittleFS appends otherwise, growing the journal). MUST be
+// the LAST step of the format-and-restore sequence — if a power-cut
+// interrupts before this write completes, the next boot finds the
+// marker still missing (or stale) and retries the format, which is
+// idempotent against the just-saved /config.bin.
+static bool writeFwBuildMarker(uint32_t build) {
+    InternalFS.remove(FW_BUILD_MARKER_FILE);
+    File f(InternalFS);
+    if (!f.open(FW_BUILD_MARKER_FILE, FILE_O_WRITE)) return false;
+    size_t n = f.write(reinterpret_cast<const uint8_t*>(&build), sizeof(build));
+    f.close();
+    return n == sizeof(build);
+}
+#endif
 
 void ConfigStorage::begin() {
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -76,6 +118,98 @@ void ConfigStorage::begin() {
         Serial.print(F("[DEBUG] ConfigData: ")); Serial.print(sizeof(ConfigData));
         Serial.print(F("B (MicParams: ")); Serial.print(sizeof(StoredMicParams));
         Serial.println(F("B)"));
+    }
+
+    // ── Flash-freshness check (OPEN_ISSUES §3.4) ───────────────────────
+    // Fresh chips upgraded across many firmware builds were crashing on
+    // first configured boot due to accumulated LittleFS journal-region
+    // cruft from older builds — the residual "non-app flash regions"
+    // captured in [[project-stale-flash-state-after-upgrade]]. The
+    // mitigation: on first boot of a new FIRMWARE_BUILD, snapshot the
+    // existing /config.bin, reformat LittleFS to clear ALL accumulated
+    // state, then re-write /config.bin so the operator-visible config
+    // survives. Marker file is written LAST so a power-cut leaves the
+    // next boot still in "fresh firmware" mode, retrying the reformat
+    // (idempotent against the saved config).
+    {
+        uint32_t recordedBuild = 0;
+        bool haveMarker = readFwBuildMarker(&recordedBuild);
+        if (!haveMarker || recordedBuild != FIRMWARE_BUILD) {
+            Serial.print(F("[FRESH-BUILD] firmware build "));
+            Serial.print(FIRMWARE_BUILD);
+            Serial.print(F(" first boot (prev marker="));
+            if (haveMarker) Serial.print(recordedBuild); else Serial.print(F("none"));
+            Serial.println(F(") — reformatting LittleFS"));
+
+            // 1. Snapshot the current /config.bin (if any) so we can
+            //    restore device identity after the format. We read into
+            //    a local ConfigData rather than into data_ because data_
+            //    will be (re-)populated by loadFromFlash below if the
+            //    restore path succeeds, OR by loadDefaults if it doesn't.
+            ConfigData snapshot;
+            memset(&snapshot, 0, sizeof(snapshot));
+            bool haveSnapshot = false;
+            if (InternalFS.exists(CONFIG_FILENAME)) {
+                configFile->open(CONFIG_FILENAME, FILE_O_READ);
+                if (*configFile) {
+                    size_t bytesRead = configFile->read(
+                        reinterpret_cast<uint8_t*>(&snapshot), sizeof(snapshot));
+                    configFile->close();
+                    if (bytesRead >= sizeof(uint16_t) && snapshot.magic == MAGIC_NUMBER) {
+                        haveSnapshot = true;
+                    }
+                }
+            }
+
+            // 2. Reformat. LittleFS's format() unmounts → lfs_format →
+            //    remounts; on failure the FS is left in an undefined state
+            //    but the next reboot retries (marker unwritten).
+            bool formatOk = InternalFS.format();
+            if (!formatOk) {
+                Serial.println(F("[FRESH-BUILD] InternalFS.format() FAILED — proceeding without reformat"));
+            } else {
+                Serial.println(F("[FRESH-BUILD] LittleFS reformatted"));
+            }
+
+            // 3. Restore /config.bin from snapshot if we have it. Even on
+            //    format failure we still re-write the snapshot — the
+            //    existing /config.bin may have been erased mid-format.
+            //    Skip if no usable snapshot existed (fresh chip with no
+            //    prior config: nothing to restore, the loadDefaults
+            //    path below will handle it).
+            if (haveSnapshot) {
+                // Refresh configFile pointer's mount association after
+                // format. Adafruit_LittleFS::format remounts internally,
+                // but the cached File pointer may have stale handles —
+                // delete + recreate to be safe.
+                delete configFile;
+                configFile = new File(InternalFS);
+                configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
+                if (*configFile) {
+                    size_t wrote = configFile->write(
+                        reinterpret_cast<const uint8_t*>(&snapshot), sizeof(snapshot));
+                    configFile->close();
+                    if (wrote == sizeof(snapshot)) {
+                        Serial.println(F("[FRESH-BUILD] /config.bin restored from snapshot"));
+                    } else {
+                        Serial.println(F("[FRESH-BUILD] /config.bin restore short-write; device will boot to safe mode"));
+                    }
+                } else {
+                    Serial.println(F("[FRESH-BUILD] /config.bin restore open failed; device will boot to safe mode"));
+                }
+            }
+
+            // 4. Write the freshness marker LAST. Until this lands, the
+            //    next boot still sees stale-or-missing marker and runs
+            //    the same path — idempotent against the just-restored
+            //    /config.bin, so we never lose state if interrupted
+            //    between steps 1-3 and now.
+            if (writeFwBuildMarker(FIRMWARE_BUILD)) {
+                Serial.println(F("[FRESH-BUILD] marker updated; fresh-build path complete"));
+            } else {
+                Serial.println(F("[FRESH-BUILD] marker write FAILED — next boot will repeat the fresh-build path"));
+            }
+        }
     }
 
     if (loadFromFlash()) {
