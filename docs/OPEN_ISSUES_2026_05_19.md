@@ -87,22 +87,30 @@ cascade events during one session, costing ~30 min total.
 
 ---
 
-### 1.4 Big_bucket phantom button presses (uninvestigated)
+### 1.4 Big_bucket phantom button presses
 
-**Symptom:** big_bucket's generator changes unprompted, suspected
-phantom presses on the firmware-side GPIO button (D1).
+**Status: firmware mitigation SHIPPED (pending flash).**
+`GeneratorButton::poll()` now does two-layer debounce: (a) a
+sustained-level filter requiring `STABLE_SAMPLE_COUNT = 3` consecutive
+agreeing samples before recognizing a level change (≈50 ms at 60 Hz
+poll cadence, absorbs short EMI pulses); (b) `DEBOUNCE_MS` bumped
+200 → 500 ms (absorbs longer ones). Combined, the chain rejects
+sub-50 ms EMI spikes outright and bounds the accepted press rate to
+≤2 Hz, which is well above any operator-press cadence. Effective
+after the next deploy.sh that touches big_bucket. If phantom presses
+persist after the flash, fall back to registry option #1.
 
-**Hardware:** internal pull-up + 200 ms debounce already in place.
-Suspected cause: long unshielded wire picking up EMI from the
-WS2812B data line, or a flaky physical button. No diagnostic
-performed (user pivoted to other issues).
+**Symptom (original):** big_bucket's generator changes unprompted,
+suspected phantom presses on the firmware-side GPIO button (D1).
 
-**Workarounds:**
+**Hardware:** internal pull-up + 200 ms debounce was in place
+pre-fix. Suspected cause: long unshielded wire picking up EMI from
+the WS2812B data line, or a flaky physical button.
+
+**Remaining workarounds (if the firmware fix is insufficient):**
 1. Disable the firmware button via registry: set `buttonPin: 0` in
    `big_bucket_v1.json`, push config + reboot. Instant fix.
-2. Increase firmware debounce window from 200 ms to 500 ms or 1 s
-   (needs `GeneratorButton.h` edit + flash).
-3. Add hardware filtering (100 nF cap GPIO→GND).
+2. Add hardware filtering (100 nF cap GPIO→GND).
 
 ---
 
