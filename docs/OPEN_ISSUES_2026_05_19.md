@@ -188,11 +188,15 @@ constraints (parking them here so the next attempt starts informed):
   `_ota_dfu` flag only affects the LED hint.
 
 **Scope estimate:** ~1 day of focused work: BL change + verifier
-update if needed + BL build + SWD-flash bench chip via
-`swd-flash.local` + multi-cycle bench test (intentionally
-crash-loop the firmware to confirm the BL kicks into DFU). Brick
-risk for the bench chip's BL; SWD recovery is available but adds
-friction. Not a quick win.
+update if needed + BL build (toolchain at
+`/home/blinkytime/.arduino15/packages/Seeeduino/tools/arm-none-eabi-gcc/9-2019q4/bin/`)
++ UF2 self-update via `deploy-bootloader.sh` on the bench chip
+(NOT SWD — the script uses the BL's UF2 mass-storage self-update
+path; same blast radius as a firmware flash) + multi-cycle bench
+test (intentionally crash-loop the firmware to confirm the BL
+kicks into DFU). `swd-flash.local` is the recovery path if the
+new BL leaves the device in a bad state, but the routine deploy
+doesn't touch SWD.
 
 **Reference:** [[project-bl-no-app-crash-fallback]].
 
