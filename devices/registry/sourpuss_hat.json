@@ -1,0 +1,11 @@
+{
+  "deviceId": "sourpuss_hat",
+  "deviceName": "Sourpuss Hat",
+  "ledWidth": 70,
+  "ledHeight": 1,
+  "ledPin": 10,
+  "ledType": 82,
+  "orientation": 0,
+  "layoutType": 1,
+  "battery": true
+}
