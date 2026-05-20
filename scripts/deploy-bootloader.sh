@@ -121,9 +121,43 @@ fi
 echo
 echo "[2/3] locating XIAO UF2 drive..."
 DFU_DRIVE=""
-for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE /run/media/$USER/XIAO-SENSE; do
-    [ -d "$d" ] && DFU_DRIVE="$d" && break
-done
+WE_MOUNTED=""   # set to a temp mountpoint if WE mounted it (so we unmount after)
+
+# Desktop case: udisks auto-mounts the DFU volume under /media. Detect by
+# the presence of INFO_UF2.TXT, NOT bare directory existence — udisks leaves
+# stale empty mountpoints behind after a DFU session unmounts, and `[ -d ]`
+# false-positives on them (the script would then cp into a non-drive).
+find_automount() {
+    local d
+    for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE /run/media/$USER/XIAO-SENSE; do
+        [ -f "$d/INFO_UF2.TXT" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+# Headless case (e.g. blinkyhost): no desktop session, so udisks never
+# auto-mounts. Find the DFU block device by label and mount it ourselves
+# with the invoking uid (mirrors tools/uf2_upload.py). Echoes the mountpoint
+# on success; the caller records it in WE_MOUNTED so it gets unmounted later.
+mount_by_label() {
+    local bylabel="/dev/disk/by-label/XIAO-SENSE" dev mp
+    [ -e "$bylabel" ] || return 1
+    dev="$(readlink -f "$bylabel")"
+    mp="$(mktemp -d)"
+    if sudo mount -t vfat -o uid="$(id -u)",gid="$(id -g)" "$dev" "$mp" 2>/dev/null \
+        && [ -f "$mp/INFO_UF2.TXT" ]; then
+        echo "$mp"; return 0
+    fi
+    sudo umount "$mp" 2>/dev/null || true
+    rmdir "$mp" 2>/dev/null || true
+    return 1
+}
+
+DFU_DRIVE="$(find_automount || true)"
+if [ -z "$DFU_DRIVE" ]; then
+    # Maybe already in DFU but not auto-mounted (headless).
+    if DFU_DRIVE="$(mount_by_label)"; then WE_MOUNTED="$DFU_DRIVE"; else DFU_DRIVE=""; fi
+fi
 
 if [ -z "$DFU_DRIVE" ]; then
     echo "  no XIAO-SENSE drive mounted; trying to enter DFU via serial..."
@@ -140,19 +174,18 @@ s.write(b'bootloader\n')
 time.sleep(0.3)
 s.close()
 " 2>/dev/null || true
-    for w in $(seq 1 12); do
+    for w in $(seq 1 15); do
         sleep 1
-        for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE /run/media/$USER/XIAO-SENSE; do
-            [ -d "$d" ] && DFU_DRIVE="$d" && break
-        done
+        DFU_DRIVE="$(find_automount || true)"
         [ -n "$DFU_DRIVE" ] && break
+        if DFU_DRIVE="$(mount_by_label)"; then WE_MOUNTED="$DFU_DRIVE"; break; else DFU_DRIVE=""; fi
     done
     if [ -z "$DFU_DRIVE" ]; then
-        echo "ERROR: device didn't enter DFU mode within 12s." >&2
+        echo "ERROR: device didn't enter DFU mode within 15s." >&2
         exit 3
     fi
 fi
-echo "  DFU drive: $DFU_DRIVE"
+echo "  DFU drive: $DFU_DRIVE${WE_MOUNTED:+ (explicit mount)}"
 
 # --- Safety 2: log the current BL version ---
 PRE_BL=""
@@ -166,8 +199,18 @@ fi
 # --- Flash ---
 echo
 echo "[3/3] flashing $(basename "$BL_UF2")..."
-cp -v "$BL_UF2" "$DFU_DRIVE/"
-sync
+# The BL applies the UF2 and reboots, which yanks the USB volume — so cp /
+# sync may report an error as the device disappears mid-write. That's the
+# expected success path, not a failure, hence the `|| true`.
+cp -v "$BL_UF2" "$DFU_DRIVE/" || true
+sync || true
+# If WE explicitly mounted the volume (headless path), unmount it now. The
+# device is rebooting so the umount usually races the disappearing device —
+# tolerate failure and just clean up the temp mountpoint.
+if [ -n "$WE_MOUNTED" ]; then
+    sudo umount "$WE_MOUNTED" 2>/dev/null || true
+    rmdir "$WE_MOUNTED" 2>/dev/null || true
+fi
 
 # --- Wait for re-enumeration ---
 echo "  waiting for device to reboot..."
@@ -207,16 +250,25 @@ s.write(b'bootloader\n')
 time.sleep(0.3)
 s.close()
 " 2>/dev/null || true
+        VERIFY_DRIVE=""; VERIFY_MOUNTED=""
         for w in $(seq 1 10); do
             sleep 1
-            for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE; do
-                [ -d "$d" ] && DFU_DRIVE="$d" && break
-            done
-            [ -f "$DFU_DRIVE/INFO_UF2.TXT" ] && break
+            VERIFY_DRIVE="$(find_automount || true)"
+            [ -n "$VERIFY_DRIVE" ] && break
+            if VERIFY_DRIVE="$(mount_by_label)"; then VERIFY_MOUNTED="$VERIFY_DRIVE"; break; else VERIFY_DRIVE=""; fi
         done
-        if [ -f "$DFU_DRIVE/INFO_UF2.TXT" ]; then
-            POST_BL="$(head -1 "$DFU_DRIVE/INFO_UF2.TXT")"
+        if [ -n "$VERIFY_DRIVE" ] && [ -f "$VERIFY_DRIVE/INFO_UF2.TXT" ]; then
+            POST_BL="$(head -1 "$VERIFY_DRIVE/INFO_UF2.TXT")"
             echo "  post-flash BL: $POST_BL"
+        fi
+        # Leave the device in the bootloader's DFU after this read — the
+        # caller flashed firmware separately. Unmount our temp mount if we
+        # made one; the operator re-enters app via a normal reset / firmware
+        # deploy. (We don't auto-reboot to app here to avoid masking a
+        # genuinely-stuck BL.)
+        if [ -n "$VERIFY_MOUNTED" ]; then
+            sudo umount "$VERIFY_MOUNTED" 2>/dev/null || true
+            rmdir "$VERIFY_MOUNTED" 2>/dev/null || true
         fi
     fi
 elif [ -n "${POST_BL:-}" ]; then
