@@ -331,11 +331,19 @@ run_fleet_command() {
     }
 
     # Parse the per-device dict, print one row per device, and exit non-zero
-    # if any device's response doesn't start with "OK". Per PR 138 review:
-    # the previous "fail only on skipped/error prefixes" was too permissive
-    # — a firmware error string that didn't start with those prefixes would
-    # silently pass. Firmware command handlers all respond with "OK..." on
-    # success (see SerialConsole.cpp), so anchor on that.
+    # if any device's response is a real failure. Accept two success shapes:
+    #   - "OK..."      — a connected device executed the command.
+    #   - "skipped: ..." — the server did NOT directly command this device
+    #     because it isn't connected (BLE devices sit at state=present, no
+    #     persistent GATT link). For the FLEET-BROADCAST commands this helper
+    #     runs (restore_runtime_settings, save), the command still reaches
+    #     those devices over the air via the broadcaster — the "broadcast"
+    #     key (itself an "OK"/non-OK entry) is the real delivery signal. The
+    #     server's own API docs call skipped: informational, not an error
+    #     (routes_commands.fleet_restore_defaults). Anything ELSE (a firmware
+    #     error string) is still a hard failure — we only widen the
+    #     allowlist to the server-generated "skipped:" prefix, not arbitrary
+    #     non-OK strings (the PR 138 anchor-on-OK concern stands).
     if ! echo "$resp_json" | python3 -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -346,6 +354,9 @@ for dev_id, resp in data.items():
     first_line = resp_str.split(chr(10))[0][:60]
     if resp_str.startswith('OK'):
         print(f'  {short} OK ({first_line})')
+    elif resp_str.startswith('skipped:'):
+        # Not connected — broadcast still reached it. Informational.
+        print(f'  {short} skipped (not connected; broadcast still sent): {first_line}')
     else:
         print(f'  {short} FAIL: {first_line}')
         fails += 1
@@ -415,9 +426,10 @@ def version_matches(v):
 
 
 def get_json_info(dev_id):
-    # 'json info' over the device API. For BLE devices (state='present')
-    # the server connects on-demand; one retry absorbs transient BLE
-    # connect flakiness. Returns (info_dict | None, err | None).
+    # 'json info' over the device API. Only valid for CONNECTED devices —
+    # the server 409s a non-connected (BLE 'present') device. One retry
+    # absorbs transient flakiness on a connected device.
+    # Returns (info_dict | None, err | None).
     req = urllib.request.Request(
         f'{SERVER}/api/devices/{dev_id}/command',
         data=json.dumps({'command': 'json info'}).encode(),
@@ -445,13 +457,24 @@ for dev_id in targets:
         print(f'  {short} FAIL: not in /api/devices (disappeared post-flash)')
         continue
     state = d.get('state', '?')
-    # 'present' (BLE advertising) and 'connected' (serial / active GATT)
-    # are both healthy — BLE fleet devices normally sit at 'present'.
     # 'error' / 'dfu_recovery' are bad terminal post-flash states.
-    # 'connecting' is transient; the json-info call resolves it.
     if state in ('error', 'dfu_recovery'):
         fails.append(f'{short} state={state}')
         print(f'  {short} FAIL: state={state}')
+        continue
+
+    # Sealed BLE devices sit at 'present' (advertising in APP mode, no
+    # persistent GATT link) and 409 on per-device commands — so we can't
+    # json-info them. But 'present' in app mode IS the health signal: the
+    # app booted and is advertising NUS (a bricked / bootlooping device
+    # would be dfu_recovery or absent, not present). Their FIRMWARE VERSION
+    # was already verified by the flash job, which deploy.sh gated on at the
+    # 'Waiting for flash to complete' step (a flash=error there aborts before
+    # this assertion ever runs). So accept a non-connected present device
+    # without json-info. Only 'connected' devices (serial / active GATT) get
+    # the full version/fps/overruns re-check below.
+    if state != 'connected':
+        print(f'  {short} OK (state={state}; app advertising — version verified by flash job; no GATT for json info)')
         continue
 
     info, err = get_json_info(dev_id)
