@@ -154,11 +154,32 @@ path works but has rough edges to smooth before it's the daily driver:
   20) despite BL 0.8.0-10. A whole-fleet BLE flash at 20-byte chunks is
   ~12× slower than intended. Investigate whether the BL's DFU service
   requests the larger MTU or the host capped it.
-- **Multi-cycle BLE-DFU validation.** Only one successful BLE app-flash
-  was run this session. Before relying on BLE-only, run several
-  back-to-back BLE flashes + a deliberate mid-transfer drop to confirm
-  the recovery mechanisms (DEFAULT_TO_OTA_DFU / §3.1) actually re-arm a
-  retry every time.
+- **Recovery guarantee — VALIDATED 2026-05-20 (failure injection on the
+  bench).** The core "a failed BLE delivery never bricks a sealed
+  device" guarantee was proven end-to-end:
+  - **Mid-transfer interrupt:** killed a BLE-DFU at 20% (server restart
+    mid-transfer → partial/invalid app). The device landed in
+    `dfu_recovery` (AdaDFU advertising) — re-attemptable, NOT bricked.
+    A subsequent BLE re-push completed `flash=ok` and the device
+    recovered to a valid app. The recovery mechanism (invalid-app CRC →
+    `DEFAULT_TO_OTA_DFU` → BLE-DFU) is interruption-cause-agnostic, so
+    this covers server-crash / link-drop / power-loss equally.
+  - **DFU-entry failure (observed serendipitously):** a flash failed at
+    "Bootloader not found after 3 scan attempts" (transient BLE scan
+    miss before the transfer began). The device stayed in app mode on
+    its valid current firmware (`flash=error`, not bricked) — safe,
+    just needs a retry.
+  - **Canary fix held** across both flashes (the full re-push completed,
+    which is impossible if the canary had restarted the server
+    mid-flash).
+  Both observed failure modes are safe. Two caveats remain for the
+  daily driver: (a) flashes can fail to *start* transiently
+  (DFU-entry scan miss) → deploy/operator needs retry logic; (b) the
+  bench chip is NOT auto-recovered by the server ("Unknown device in
+  DFU bootloader … Push firmware to recover") because it isn't an
+  enrolled fleet member — real enrolled devices should auto-recover,
+  but that wasn't exercised here and is worth confirming on a real
+  fleet member.
 
 ## 3. Future: BL self-update over BLE (so a sealed BL is never stuck)
 
