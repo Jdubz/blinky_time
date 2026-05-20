@@ -425,15 +425,26 @@ real deadlock is observed.
 
 ### 4.4 No boot-time service verification
 
-After a power cycle (real risk at festivals on UPS), no service
-checks "did everything come back up?" The canary catches steady-state
-failures but not boot-time start-failures of services it doesn't
-probe yet.
+**Status: DONE (lean, no-reboot variant)** — lemon-cart commit
+`b1e9795`. `lemoncart-boot-verify.timer` (OnBootSec=60s) fires a
+one-shot that checks the critical unit set (hostapd, dnsmasq,
+bluetooth, blinky-server, station-api, lemoncart-buttons,
+lemoncart-canary), logs LOUD on any that didn't come up, and
+attempts a SINGLE `systemctl start`. Still-down units are flagged
+for operator attention.
 
-**Proposed:** `lemoncart-boot-verify.service` — `After=multi-user.target`,
-runs once 60s after boot, checks every critical unit is `active`,
-logs loud + reboot-once on any failure. Catches the
-"comes-back-from-power-loss-but-X-never-started" class.
+**Deliberately NOT auto-rebooting** (the doc's original "reboot-once"
+proposal was rejected): a reboot loop mid-event is far worse than one
+dead service — it drops the AP / audio / fleet every 60 s. We accept
+"one service down + a loud log" over "box stuck cycling". A reboot
+also doesn't fix genuine breakage (bad config, missing file); the
+single `systemctl start` covers the transient-boot-race case that a
+reboot would otherwise "fix".
+
+Most of this was already covered by the canary's steady-state
+auto-restart; boot-verify's real marginal value is the boot-START
+gap for the **canary itself** (nothing else watches the watcher) and
+**bluetooth** (canary alerts but doesn't restart it).
 
 ---
 
