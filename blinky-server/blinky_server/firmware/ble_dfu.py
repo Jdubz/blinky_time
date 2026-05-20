@@ -31,6 +31,7 @@ import logging
 import struct
 import subprocess
 import time
+import warnings
 import zipfile
 from collections.abc import Callable
 from typing import Any
@@ -344,9 +345,18 @@ async def _dfu_transfer_inner(
     # — BLs with the §3.3 MTU change accept up to 244 bytes per packet
     # for ~12x faster transfers; older BLs cap at 20 and we honour that
     # via the floor. ``client.mtu_size`` reflects what bleak/BlueZ
-    # actually negotiated with this peer.
-    mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, client.mtu_size - 3))
-    progress("connect", f"Connected, MTU={client.mtu_size}, DFU chunk={mtu}", 30)
+    # actually negotiated with this peer. Bleak 3.x may warn or raise
+    # if MTU exchange hasn't completed — mirror the transport-layer
+    # pattern (catch + conservative-20 fallback) so a transient read
+    # failure can't kill the whole DFU attempt.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            negotiated_mtu = client.mtu_size
+        except Exception:
+            negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
+    mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
+    progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
 
     # Verify bootloader mode
     try:

@@ -309,11 +309,11 @@ overhead). Three coordinated changes lift the ceiling:
   still work transparently (negotiated MTU stays ≤23 → chunk 20).
 
 Verify-bootloader.py invariants still pass. Bench-validated on
-`659C8DD3ADF84A33` 2026-05-19: new BL `0.8.0-7-gc79626c-dirty`
-self-update via `deploy-bootloader.sh` succeeded; device booted
-firmware b181 cleanly post-update. Actual transfer-time speedup
-not yet measured (would need to BLE-DFU something with the new BL
-running and time it; deferred to a future session).
+`659C8DD3ADF84A33` 2026-05-19/20: BL self-update via UF2 drop
+succeeded through 0.8.0-7 → 0.8.0-10; firmware b186 boots cleanly
+post-update. Actual transfer-time speedup not yet measured (would
+need to BLE-DFU something with the new BL running and time it;
+deferred to a future session).
 
 Important for [[feedback-enclosed-devices-no-physical]]: sealed
 devices can't shortcut to UF2 via cable. BLE-DFU is their only

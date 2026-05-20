@@ -308,6 +308,7 @@ namespace SafeBootWatchdog {
     inline void begin() {}
     inline void feed() {}
     inline void markStable() {}
+    inline void clearBootAttemptCounter() {}
     inline uint8_t getBootCount() { return 0; }
     inline bool isWdtActive() { return false; }
 }
