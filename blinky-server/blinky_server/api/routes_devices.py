@@ -180,6 +180,14 @@ async def fleet_status() -> dict[str, Any]:
         )
 
     broadcaster_status = fleet.broadcaster.status() if fleet.broadcaster is not None else None
+    # In-flight flash count. The orchestrator pauses the broadcaster for the
+    # duration of a flash (BLE-DFU shares the radio), so broadcaster.running
+    # is legitimately False mid-flash. External health checks (the canary)
+    # must NOT treat that as a broadcaster failure — they key off this count
+    # to distinguish "paused for a flash" from "broadcaster crashed". This
+    # field lives on the UNauthenticated fleet-status (same as the rest) so
+    # the canary can read it without holding the API key.
+    active_flashes = len(fleet.list_flash_jobs(active_only=True))
     return {
         "total": len(devices),
         "connected": by_state.get("connected", 0),
@@ -190,6 +198,7 @@ async def fleet_status() -> dict[str, Any]:
         "by_transport": by_transport,
         "loop": fleet.loop_health(),
         "broadcaster": broadcaster_status,
+        "active_flashes": active_flashes,
         "devices": device_health,
     }
 
