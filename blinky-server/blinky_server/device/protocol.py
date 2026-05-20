@@ -17,6 +17,17 @@ RESPONSE_LINE_TIMEOUT_S = 0.1  # Gap between lines to finalize response
 BLE_COMMAND_TIMEOUT_S = 15.0
 BLE_RESPONSE_LINE_TIMEOUT_S = 0.5
 
+# Flash-persisting commands do a LittleFS erase+write that can take several
+# seconds — longer than the normal 2 s serial command timeout. Observed on
+# deploy.sh's post-flash `save` step: the device completes the save but the
+# server times out waiting for "OK", so the whole deploy reports FAILURE on
+# a successful flash. Give these commands a longer ceiling. (BLE already
+# uses 15 s, so this only bites the serial path, but the rule lives in one
+# place and applies uniformly.) Keyed on the first whitespace token so
+# `save`, `load`, and any future `save <arg>` form all match.
+SLOW_FLASH_COMMANDS = frozenset({"save", "load"})
+SLOW_FLASH_COMMAND_TIMEOUT_S = 10.0
+
 
 class DeviceProtocol:
     """Stateful command/response protocol handler for a single device.
@@ -70,7 +81,13 @@ class DeviceProtocol:
         Automatically pauses/resumes streaming if active.
         """
         if timeout is None:
-            timeout = self._cmd_timeout
+            base = command.split()[0] if command.strip() else ""
+            if base in SLOW_FLASH_COMMANDS:
+                # Don't shorten a transport that's already more generous
+                # (BLE = 15 s); only raise the floor for the slow flash op.
+                timeout = max(self._cmd_timeout, SLOW_FLASH_COMMAND_TIMEOUT_S)
+            else:
+                timeout = self._cmd_timeout
 
         is_stream_enable = command.startswith("stream ") and command.split()[1] in (
             "on",
