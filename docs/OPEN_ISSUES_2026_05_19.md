@@ -315,6 +315,17 @@ post-update. Actual transfer-time speedup not yet measured (would
 need to BLE-DFU something with the new BL running and time it;
 deferred to a future session).
 
+**Known follow-up gap — BL OTA `.zip` bundle stale.** The Makefile's
+`adafruit-nrfutil dfu genpkg` step fails on the workstation (post-0.5.3
+`adafruit-nrfutil` dropped that subcommand — see
+[[project-bsp-nrfutil-patch]]). The shipped `.uf2` is current
+(0.8.0-10); the `.zip` bundle for BLE-OTA BL self-update is NOT
+regenerated and would still carry an older BL if used. `deploy-bootloader.sh`
+uses the `.uf2` path so fleet rollout is fine, but the BLE-OTA path
+for sealed-device BL updates needs the `.zip` regenerated against a
+compatible nrfutil before sealed devices can receive BL updates over
+the air. Roadmap-only; not blocking §3.1/§3.3.
+
 Important for [[feedback-enclosed-devices-no-physical]]: sealed
 devices can't shortcut to UF2 via cable. BLE-DFU is their only
 recovery path; making it faster is high-value.

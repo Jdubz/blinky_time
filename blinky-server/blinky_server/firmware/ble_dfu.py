@@ -348,12 +348,16 @@ async def _dfu_transfer_inner(
     # actually negotiated with this peer. Bleak 3.x may warn or raise
     # if MTU exchange hasn't completed — mirror the transport-layer
     # pattern (catch + conservative-20 fallback) so a transient read
-    # failure can't kill the whole DFU attempt.
+    # failure can't kill the whole DFU attempt. The exception IS
+    # logged at WARN (not swallowed silently — CLAUDE.md §"No Silent
+    # Fallbacks") so the operator can distinguish "MTU read failed,
+    # using floor" from "old BL, capped at 20 anyway".
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
             negotiated_mtu = client.mtu_size
-        except Exception:
+        except Exception as exc:
+            log.warning("BLE-DFU mtu_size read failed (%r); falling back to ATT minimum", exc)
             negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
     mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
     progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
