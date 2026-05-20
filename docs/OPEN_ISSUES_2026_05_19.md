@@ -140,43 +140,61 @@ the WS2812B data line, or a flaky physical button.
 
 ### 3.1 BL doesn't auto-DFU on app-crashes-pre-BLE-init
 
-**Status: SHIPPED in b183 + BL `0a2b140` (2026-05-19).** Bench-verified
-on `659C8DD3ADF84A33`: BL flash via `deploy-bootloader.sh` succeeded,
-b183 firmware booted to steady state (uptime >60s, fps ~629), then
-power-cycled cleanly back to app mode (no false DFU). The
-`verify_bootloader.py` invariant still passes — the new force-DFU path
-lives outside any `if (_ota_dfu)` branch and reaches
-`bootloader_dfu_start()` through the existing dual-transport block.
+**Status: SHIPPED in b186 + BL `0.8.0-10-g4c5faae` (2026-05-19/20).**
+End-to-end bench-validated on `659C8DD3ADF84A33` via SWD-driven
+artificial counter test (no crash-loop required, eliminating the
+NVMC-corruption risk that bricked the first attempt).
 
-**Implementation summary:**
-* **RAM layout chosen:** option (b) — packed into a new 4-byte word at
-  `0x20007F78`, immediately below the existing `dbl_reset_mem`
-  (`0x20007F7C`). Sentinel `0xCAFE00` in the upper 24 bits gates against
-  RAM garbage on cold boot; the low byte is the count. Same
-  "collision avoidance" property as the existing magic — both linkers
-  empirically don't reserve this address.
-* **BL change** (`bootloader/src/src/main.c`, commit `0a2b140`):
+**Implementation summary (v2 — GPREGRET-based):**
+* **Storage:** GPREGRET hardware register (8-bit, persists across
+  `NVIC_SystemReset`, only cleared by power-on reset). Encoded as
+  pattern `0x1N` where N=count (0..15). No conflict with existing
+  BL magic values (`0x57`=UF2, `0xA8`=OTA, `0x4E`=skipCRC, `0xB1`=enterApp)
+  which never start with `0x1`. NOT in firmware RAM, so the C
+  startup's BSS-zero cannot touch it.
+* **BL change** (`bootloader/src/src/main.c`, commit `4c5faae`):
   counter check after `APP_ASKS_FOR_SINGLE_TAP_RESET`; if
-  `attempts >= BOOT_ATTEMPT_THRESHOLD` (3) and sentinel valid, force
-  `dfu_start = 1` and set `_ota_dfu` iff `!VBUSDETECT` (so cabled
-  devices favor UF2 LED hint, sealed devices favor BLE). Increment
-  happens between `(*dbl_reset_mem) = 0;` and `bootloader_app_start()`.
-* **Firmware-side clear:** new `SafeBootWatchdog::clearBootAttemptCounter()`
-  writes `0xCAFE0000` (sentinel | count=0) with `__DSB()/__ISB()`,
-  called from the existing 60 s `markStable()` block in
-  `blinky-things.ino`.
-* **Forward compatibility:** older fleet BLs ignore the address, so
-  the firmware clear is a harmless no-op on devices that haven't
-  picked up the new BL yet. New BL is also backward compatible — a
-  pre-§3.1 firmware just never clears, and the counter still won't
-  trip on legitimate boots because the counter resets to garbage
-  (sentinel mismatch) on every cold-boot RAM init.
+  `(NRF_POWER->GPREGRET & 0xF0) == 0x10` and `count >= 3`, force
+  `dfu_start = 1`, set `_ota_dfu` iff `!VBUSDETECT`, and clear GPREGRET
+  to 0 so the post-DFU reboot doesn't immediately re-trigger force-DFU.
+  Increment happens between `(*dbl_reset_mem) = 0;` and
+  `bootloader_app_start()`.
+* **Firmware-side clear:** `SafeBootWatchdog::clearBootAttemptCounter()`
+  reads GPREGRET; if pattern is `0x1N`, writes 0. Called from
+  `SafeBootWatchdog::begin()` (early, load-bearing — without this
+  clear, post-`begin()` crashes would prematurely force-DFU) and
+  from `markStable()` at 60 s uptime (defense in depth).
+* **Forward compatibility:** older fleet BLs never write the `0x1N`
+  pattern, so the firmware clear's pattern check returns false and
+  the call is a harmless no-op on pre-§3.1 BLs. Newer BLs running
+  pre-§3.1 firmware still get the right behavior — old firmware
+  doesn't clear, BL counter accumulates on crash-loops, force-DFU
+  fires correctly.
 
-**Deferred validation:** intentional crash-loop test to confirm the
-3-strikes-forces-DFU path. Not run on the bench because the only
-SWD-recoverable chip is in active use; the path is exercised by the
-existing increment logic (verified by inspecting steady-state behavior
-across power cycles) but not yet end-to-end on a real crash.
+**v1 attempt (BL commit `0a2b140`, RAM `0x20007F78`) — abandoned.**
+The address fell inside the firmware's `.bss` section. Firmware
+Reset_Handler zeros BSS *before* static constructors run, silently
+erasing the BL's increment on every boot. The mechanism could never
+fire. Discovered bench-side during the crash-loop validation attempt;
+the rapid `NVIC_SystemReset` storm during the broken test damaged
+the chip's NVMC (mass-erase works via CTRL-AP but flash writes via
+NVMC fail mid-sector). Lesson: any BL/firmware shared state stored
+in firmware RAM is BSS-zero-vulnerable. Use GPREGRET / GPREGRET2 /
+linker-reserved NOLOAD regions instead. `dbl_reset_mem` at
+`0x20007F7C` happens to work because firmware writes it just before
+reset (BL reads before BSS-zero on next boot); the inverse direction
+(BL writes, firmware preserves) needs hardware-backed storage.
+
+**Validation (SWD artificial counter test, no crash-loop):**
+1. Set `GPREGRET = 0x12` (count=2) via SWD, soft reset.
+   Expected/observed: BL reads 0x12, increments to 0x13, jumps to
+   app. App boots, `begin()` clears GPREGRET to 0. ✅
+2. Set `GPREGRET = 0x13` (count=3) via SWD, soft reset.
+   Expected/observed: BL reads 0x13, detects `count >= THRESHOLD`,
+   forces DFU. Chip enumerates as XIAO-SENSE UF2 mass storage.
+   GPREGRET cleared to 0 by the force-DFU branch. ✅
+3. Drop b186 UF2 → BL applies firmware, boots into app, runs steady.
+   No perpetual DFU loop. ✅
 
 **Design constraints captured during 2026-05-19 survey** (kept for
 reference; the chosen implementation resolves each):

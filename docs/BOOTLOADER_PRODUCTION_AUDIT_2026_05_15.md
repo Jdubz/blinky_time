@@ -1,4 +1,4 @@
-# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7 / 0.8.0-9
+# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7 / 0.8.0-10
 
 **Status as of 2026-05-19:**
 
@@ -14,8 +14,8 @@
 | Hardware test of 0.8.0-7 (expect ~100% recovery) | ✅ verified — 30-iter test, 30/30 PASS, mean 9.4s |
 | `scripts/verify_bootloader.py` catches both bug classes at source level | ✅ landed |
 | `scripts/deploy-bootloader.sh` gates flash on verifier | ✅ landed |
-| App-handshake watchdog (OPEN_ISSUES §3.1) — BL force-DFU after 3 misses | ✅ landed in BL commit `0a2b140` (0.8.0-9); bench-verified on 659C8DD3ADF84A33 with b183 |
-| Fleet rollout of 0.8.0-9 | ⬜ pending — needs deploy-bootloader.sh against fleet |
+| App-handshake watchdog (OPEN_ISSUES §3.1) — BL force-DFU after 3 misses | ✅ landed in BL commit `4c5faae` (0.8.0-10); bench-verified on 659C8DD3ADF84A33 via SWD artificial counter test with b186. v1 (RAM-based at 0x20007F78, commit `0a2b140`) was abandoned — address fell in firmware .bss, silently zeroed every boot |
+| Fleet rollout of 0.8.0-10 | ⬜ pending — needs deploy-bootloader.sh against fleet |
 
 This document captures outstanding actions and the verified diagnostic
 evidence behind them. It is NOT a historical narrative — see git log

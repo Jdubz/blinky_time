@@ -209,7 +209,19 @@ namespace SafeBootWatchdog {
      * If too many consecutive boot failures detected, enters UF2 bootloader
      * automatically — the user just needs to copy new firmware.
      */
+    // Forward declaration — definition further down.
+    inline void clearBootAttemptCounter();
+
     inline void begin() {
+        // §3.1: clear the BL's pre-begin watchdog counter (GPREGRET 0x1N
+        // pattern). Reaching begin() means the firmware booted past
+        // static init and Reset_Handler, so any "app crashes pre-BLE-init"
+        // worry has passed. Without this clear, the BL counter would
+        // accumulate across post-begin crashes and force-DFU too
+        // aggressively (the firmware's own GPREGRET2-based mechanism
+        // below handles post-begin crashes).
+        clearBootAttemptCounter();
+
         bootCount_ = readBootCounter();
 
         if (bootCount_ >= BOOT_FAIL_THRESHOLD) {
@@ -240,31 +252,41 @@ namespace SafeBootWatchdog {
      * Clear the bootloader's boot-attempt watchdog counter
      * (OPEN_ISSUES §3.1 / [[project-bl-no-app-crash-fallback]]).
      *
-     * The BL bumps a RAM-backed counter at 0x20007F78 immediately
-     * before jumping to the app on every boot. If the app crashes
-     * before reaching THIS clear, the next BL boot sees the
-     * incremented count; after ``BOOT_ATTEMPT_THRESHOLD`` consecutive
-     * misses, the BL forces DFU mode so the operator can re-flash.
+     * The BL encodes a boot-attempt counter into GPREGRET as the
+     * pattern ``0x1N`` (N = count 0..15), bumped immediately before
+     * each app jump. If the app crashes before reaching this clear,
+     * the next BL boot sees the incremented count; after
+     * BOOT_ATTEMPT_THRESHOLD (3) consecutive misses, the BL forces
+     * DFU so the operator can re-flash.
      *
-     * Word layout (matches ``bootloader/src/src/main.c``):
-     *   upper 24 bits = sentinel ``0xCAFE00``,
-     *   lower 8 bits  = count (we write 0 here).
+     * Encoding (matches bootloader/src/src/main.c):
+     *   GPREGRET == 0x10 | count    → counter active
+     *   GPREGRET == 0 or other      → no counter (or magic value)
      *
-     * The clear MUST happen at the same "boot is good" milestone the
-     * existing markStable() uses — too early and slow-but-valid
-     * boots false-positive; too late and we widen the unprotected
-     * window. The current 60 s ``markStable`` milestone is exactly
-     * the right contract; that's why this lives here next to
-     * markStable.
+     * The clear writes GPREGRET=0 ONLY if it currently looks like
+     * our counter pattern, so we don't stomp on a firmware-initiated
+     * magic value (e.g. 0x57 / 0xA8) that may be momentarily present
+     * when the firmware is about to NVIC_SystemReset into the BL.
      *
-     * Older bootloaders (pre §3.1) don't read this address, so
-     * clearing it is a harmless no-op on those. Forward compatible.
+     * Called from two sites:
+     *   1) SafeBootWatchdog::begin() — early boot, "we reached the
+     *      app, the BL's worry is no longer relevant" — this is the
+     *      LOAD-BEARING clear for the §3.1 contract. Without it, any
+     *      post-begin crash storm would never force-DFU.
+     *   2) markStable() at 60 s — defense in depth.
+     *
+     * Older bootloaders (pre §3.1) don't encode anything in this
+     * GPREGRET pattern, so clearing it is a harmless no-op there
+     * (they leave GPREGRET at 0 between magic writes). Forward
+     * compatible in both directions.
      */
     inline void clearBootAttemptCounter() {
-        volatile uint32_t* p = (volatile uint32_t*)0x20007F78;
-        *p = 0xCAFE0000u;  // sentinel | count=0
-        __DSB();
-        __ISB();
+        uint8_t const cur = NRF_POWER->GPREGRET;
+        if ((cur & 0xF0) == 0x10) {
+            NRF_POWER->GPREGRET = 0;
+            __DSB();
+            __ISB();
+        }
     }
 
     /**
