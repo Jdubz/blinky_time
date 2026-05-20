@@ -1,6 +1,6 @@
-# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7
+# Bootloader Production Audit & Outstanding Actions — 0.8.0-5 / 0.8.0-6 / 0.8.0-7 / 0.8.0-10
 
-**Status as of 2026-05-16:**
+**Status as of 2026-05-19:**
 
 | Item | Status |
 |------|--------|
@@ -14,7 +14,8 @@
 | Hardware test of 0.8.0-7 (expect ~100% recovery) | ✅ verified — 30-iter test, 30/30 PASS, mean 9.4s |
 | `scripts/verify_bootloader.py` catches both bug classes at source level | ✅ landed |
 | `scripts/deploy-bootloader.sh` gates flash on verifier | ✅ landed |
-| Fleet rollout of 0.8.0-7 | ⬜ pending — needs deploy-bootloader.sh against fleet |
+| App-handshake watchdog (OPEN_ISSUES §3.1) — BL force-DFU after 3 misses | ✅ landed in BL commit `4c5faae` (0.8.0-10); bench-verified on 659C8DD3ADF84A33 via SWD artificial counter test with b186. v1 (RAM-based at 0x20007F78, commit `0a2b140`) was abandoned — address fell in firmware .bss, silently zeroed every boot |
+| Fleet rollout of 0.8.0-10 | ⬜ pending — needs deploy-bootloader.sh against fleet |
 
 This document captures outstanding actions and the verified diagnostic
 evidence behind them. It is NOT a historical narrative — see git log
@@ -354,11 +355,21 @@ SD init (line 561).
 - BL source: `blinky-local-patches` commit `c79626c` (local-only branch;
   not pushed to origin/Adafruit upstream by design — this is fleet-specific
   hardening)
-- Built artifacts staged in this repo at:
+- Originally staged at:
   - `bootloader/update-bootloader-qspi-ota-default.uf2` (BL self-update UF2)
     - sha256: `cf6a0679a977876d811062fa06193f225e9180def45a6d36afdc3469d6e8e966`
   - `bootloader/update-bootloader-qspi-ota-default_s140_7.3.0.zip` (OTA bundle)
     - sha256: `46c9ebab838fd2d598350012f529c9cbfa75252c75ab01699c12a6d428d60526`
+- **2026-05-19 update:** the staged `.uf2` has been replaced with the
+  BLE-DFU MTU-247 bump on top of `c79626c` (OPEN_ISSUES §3.3 fix,
+  BL submodule commit `2cbe16d`). New SHAs:
+  - `bootloader/update-bootloader-qspi-ota-default.uf2`
+    - sha256: `aa50445eaa821b587998704e6949798acf2076d9b8e4e5c373f3d01ae233e5e1`
+  - The `.zip` (OTA bundle) was NOT regenerated this session because
+    the BL Makefile's `dfu genpkg` step requires an older
+    `adafruit-nrfutil` than what is installed. The `.uf2` is what
+    `deploy-bootloader.sh` actually flashes; the `.zip` is for OTA
+    BL updates (different code path).
 - If either binary is replaced, re-run `sha256sum bootloader/update-bootloader-qspi-ota-default*` and update these hashes — they're the source of truth for the integrity chain since the BL source branch is intentionally local-only.
 - Source-level invariants: ✅ `scripts/verify_bootloader.py` PASSes both
   the dual-transport USB-init check and the SD-state-aware `settings_save`

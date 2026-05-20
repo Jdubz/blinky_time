@@ -31,6 +31,7 @@ import logging
 import struct
 import subprocess
 import time
+import warnings
 import zipfile
 from collections.abc import Callable
 from typing import Any
@@ -270,7 +271,6 @@ async def _dfu_transfer(
     Caller handles retry logic. On failure, caller should send SYSTEM_RESET.
     """
     result: dict[str, Any] = {"status": "error", "message": ""}
-    mtu = 20  # Legacy DFU caps at 20 bytes regardless of negotiated MTU
 
     try:
         async with asyncio.timeout(DFU_TRANSFER_TIMEOUT):
@@ -281,12 +281,20 @@ async def _dfu_transfer(
                 image_type,
                 progress,
                 result,
-                mtu,
             )
     except TimeoutError:
         result["message"] = f"DFU transfer timed out after {DFU_TRANSFER_TIMEOUT}s"
         log.error(result["message"])
         return result
+
+
+# DFU data-packet payload limits, derived from ATT_MTU. The BL's MTU
+# ceiling is set in ``bootloader/src/src/main.c::BLEGATT_ATT_MTU_MAX``.
+# Pre OPEN_ISSUES §3.3: BL=23 → payload=20. Post §3.3: BL=247 →
+# payload=244. We negotiate via BleakClient and clamp to this range so
+# both old and new bootloaders work transparently.
+DFU_CHUNK_MIN = 20  # Floor: pre-§3.3 BLs and any client that can't go larger.
+DFU_CHUNK_MAX = 244  # Ceiling: BLE-spec MTU 247 minus 3-byte ATT overhead.
 
 
 async def _dfu_transfer_inner(
@@ -296,7 +304,6 @@ async def _dfu_transfer_inner(
     image_type: int,
     progress: Callable[..., None],
     result: dict[str, Any],
-    mtu: int,
 ) -> dict[str, Any]:
     """Inner DFU transfer logic, wrapped by _dfu_transfer's timeout."""
 
@@ -333,7 +340,27 @@ async def _dfu_transfer_inner(
         result["message"] = f"Failed to connect to bootloader: {e}"
         return result
 
-    progress("connect", f"Connected, MTU={client.mtu_size}, DFU chunk={mtu}", 30)
+    # DFU chunk size from the connection's negotiated ATT MTU minus the
+    # 3-byte ATT overhead. Bumped from a hardcoded 20 (OPEN_ISSUES §3.3)
+    # — BLs with the §3.3 MTU change accept up to 244 bytes per packet
+    # for ~12x faster transfers; older BLs cap at 20 and we honour that
+    # via the floor. ``client.mtu_size`` reflects what bleak/BlueZ
+    # actually negotiated with this peer. Bleak 3.x may warn or raise
+    # if MTU exchange hasn't completed — mirror the transport-layer
+    # pattern (catch + conservative-20 fallback) so a transient read
+    # failure can't kill the whole DFU attempt. The exception IS
+    # logged at WARN (not swallowed silently — CLAUDE.md §"No Silent
+    # Fallbacks") so the operator can distinguish "MTU read failed,
+    # using floor" from "old BL, capped at 20 anyway".
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            negotiated_mtu = client.mtu_size
+        except Exception as exc:
+            log.warning("BLE-DFU mtu_size read failed (%r); falling back to ATT minimum", exc)
+            negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
+    mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
+    progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
 
     # Verify bootloader mode
     try:

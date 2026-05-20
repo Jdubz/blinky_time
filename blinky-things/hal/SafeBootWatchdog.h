@@ -204,12 +204,72 @@ namespace SafeBootWatchdog {
     }
 
     /**
+     * Clear the bootloader's boot-attempt watchdog counter
+     * (OPEN_ISSUES §3.1 / [[project-bl-no-app-crash-fallback]]).
+     *
+     * The BL encodes a boot-attempt counter into GPREGRET as the
+     * pattern ``0x1N`` (N = count 0..15), bumped immediately before
+     * each app jump. If the app crashes before reaching this clear,
+     * the next BL boot sees the incremented count; after
+     * BOOT_ATTEMPT_THRESHOLD (3) consecutive misses, the BL forces
+     * DFU so the operator can re-flash.
+     *
+     * Encoding (matches bootloader/src/src/main.c):
+     *   GPREGRET == 0x10 | count    → counter active
+     *   GPREGRET == 0 or other      → no counter (or magic value)
+     *
+     * The clear writes GPREGRET=0 ONLY if it currently looks like
+     * our counter pattern, so we don't stomp on a firmware-initiated
+     * magic value (e.g. 0x57 / 0xA8) that may be momentarily present
+     * when the firmware is about to NVIC_SystemReset into the BL.
+     *
+     * Called from two sites:
+     *   1) SafeBootWatchdog::begin() — early boot, "we reached the
+     *      app, the BL's worry is no longer relevant" — this is the
+     *      LOAD-BEARING clear for the §3.1 contract. Without it, any
+     *      post-begin crash storm would never force-DFU.
+     *   2) blinky-things.ino loop() at 60 s uptime, immediately after
+     *      markStable() — defense in depth (NOT inside markStable() itself).
+     *
+     * Older bootloaders (pre §3.1) don't encode anything in this
+     * GPREGRET pattern, so clearing it is a harmless no-op there
+     * (they leave GPREGRET at 0 between magic writes). Forward
+     * compatible in both directions.
+     *
+     * Forensic log: if the pattern matched (i.e. we actually cleared
+     * a non-zero count), log it once. This is how an operator can
+     * tell post-mortem that the device was N misses away from a
+     * BL force-DFU. begin() runs before Serial is up, so the log
+     * there is a no-op; markStable's 60 s site is where it shows up.
+     */
+    inline void clearBootAttemptCounter() {
+        uint8_t const cur = NRF_POWER->GPREGRET;
+        if ((cur & 0xF0) == 0x10) {
+            NRF_POWER->GPREGRET = 0;
+            __DSB();
+            __ISB();
+            Serial.print(F("[BOOT] Cleared BL boot-attempt counter (was 0x"));
+            Serial.print(cur, HEX);
+            Serial.println(F(")"));
+        }
+    }
+
+    /**
      * Check boot counter and start WDT. MUST be the first call in setup().
      *
      * If too many consecutive boot failures detected, enters UF2 bootloader
      * automatically — the user just needs to copy new firmware.
      */
     inline void begin() {
+        // §3.1: clear the BL's pre-begin watchdog counter (GPREGRET 0x1N
+        // pattern). Reaching begin() means the firmware booted past
+        // static init and Reset_Handler, so any "app crashes pre-BLE-init"
+        // worry has passed. Without this clear, the BL counter would
+        // accumulate across post-begin crashes and force-DFU too
+        // aggressively (the firmware's own GPREGRET2-based mechanism
+        // below handles post-begin crashes).
+        clearBootAttemptCounter();
+
         bootCount_ = readBootCounter();
 
         if (bootCount_ >= BOOT_FAIL_THRESHOLD) {
@@ -236,6 +296,9 @@ namespace SafeBootWatchdog {
         feed();
     }
 
+    // clearBootAttemptCounter() is defined above (before begin()) since
+    // begin() calls it. See the docstring there for the full contract.
+
     /**
      * Get the boot attempt counter at startup (for diagnostics).
      */
@@ -255,6 +318,7 @@ namespace SafeBootWatchdog {
     inline void begin() {}
     inline void feed() {}
     inline void markStable() {}
+    inline void clearBootAttemptCounter() {}
     inline uint8_t getBootCount() { return 0; }
     inline bool isWdtActive() { return false; }
 }

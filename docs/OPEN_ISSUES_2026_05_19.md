@@ -140,17 +140,123 @@ the WS2812B data line, or a flaky physical button.
 
 ### 3.1 BL doesn't auto-DFU on app-crashes-pre-BLE-init
 
+**Status: SHIPPED in b186 + BL `0.8.0-10-g4c5faae` (2026-05-19/20).**
+End-to-end bench-validated on `659C8DD3ADF84A33` via SWD-driven
+artificial counter test (no crash-loop required, eliminating the
+NVMC-corruption risk that bricked the first attempt).
+
+**Implementation summary (v2 — GPREGRET-based):**
+* **Storage:** GPREGRET hardware register (8-bit, persists across
+  `NVIC_SystemReset`, only cleared by power-on reset). Encoded as
+  pattern `0x1N` where N=count (0..15). No conflict with existing
+  BL magic values (`0x57`=UF2, `0xA8`=OTA, `0x4E`=skipCRC, `0xB1`=enterApp)
+  which never start with `0x1`. NOT in firmware RAM, so the C
+  startup's BSS-zero cannot touch it.
+* **BL change** (`bootloader/src/src/main.c`, commit `4c5faae`):
+  counter check after `APP_ASKS_FOR_SINGLE_TAP_RESET`; if
+  `(NRF_POWER->GPREGRET & 0xF0) == 0x10` and `count >= 3`, force
+  `dfu_start = 1`, set `_ota_dfu` iff `!VBUSDETECT`, and clear GPREGRET
+  to 0 so the post-DFU reboot doesn't immediately re-trigger force-DFU.
+  Increment happens between `(*dbl_reset_mem) = 0;` and
+  `bootloader_app_start()`.
+* **Firmware-side clear:** `SafeBootWatchdog::clearBootAttemptCounter()`
+  reads GPREGRET; if pattern is `0x1N`, writes 0. Called from
+  `SafeBootWatchdog::begin()` (early, load-bearing — without this
+  clear, post-`begin()` crashes would prematurely force-DFU) and
+  from `markStable()` at 60 s uptime (defense in depth).
+* **Forward compatibility:** older fleet BLs never write the `0x1N`
+  pattern, so the firmware clear's pattern check returns false and
+  the call is a harmless no-op on pre-§3.1 BLs. Newer BLs running
+  pre-§3.1 firmware still get the right behavior — old firmware
+  doesn't clear, BL counter accumulates on crash-loops, force-DFU
+  fires correctly.
+
+**v1 attempt (BL commit `0a2b140`, RAM `0x20007F78`) — abandoned.**
+The address fell inside the firmware's `.bss` section. Firmware
+Reset_Handler zeros BSS *before* static constructors run, silently
+erasing the BL's increment on every boot. The mechanism could never
+fire. Discovered bench-side during the crash-loop validation attempt;
+the rapid `NVIC_SystemReset` storm during the broken test damaged
+the chip's NVMC (mass-erase works via CTRL-AP but flash writes via
+NVMC fail mid-sector). Lesson: any BL/firmware shared state stored
+in firmware RAM is BSS-zero-vulnerable. Use GPREGRET / GPREGRET2 /
+linker-reserved NOLOAD regions instead. `dbl_reset_mem` at
+`0x20007F7C` happens to work because firmware writes it just before
+reset (BL reads before BSS-zero on next boot); the inverse direction
+(BL writes, firmware preserves) needs hardware-backed storage.
+
+**Validation (SWD artificial counter test, no crash-loop):**
+1. Set `GPREGRET = 0x12` (count=2) via SWD, soft reset.
+   Expected/observed: BL reads 0x12, increments to 0x13, jumps to
+   app. App boots, `begin()` clears GPREGRET to 0. ✅
+2. Set `GPREGRET = 0x13` (count=3) via SWD, soft reset.
+   Expected/observed: BL reads 0x13, detects `count >= THRESHOLD`,
+   forces DFU. Chip enumerates as XIAO-SENSE UF2 mass storage.
+   GPREGRET cleared to 0 by the force-DFU branch. ✅
+3. Drop b186 UF2 → BL applies firmware, boots into app, runs steady.
+   No perpetual DFU loop. ✅
+
+**Design constraints captured during 2026-05-19 survey** (kept for
+reference; the chosen implementation resolves each):
+
+* **RAM layout for the handshake marker.** The existing `dbl_reset_mem`
+  at `0x20007F7C` is a 4-byte word with exact-match magic semantics
+  (`DFU_RAM_MAGIC_UF2` / `_BLE` / `_QSPI`). Adding a boot-attempt
+  counter requires either (a) carving a new region from the
+  SoftDevice-reserved zone immediately below `0x20007F7C`, (b)
+  packing the counter into the existing word via a non-conflicting
+  encoding, or (c) placing it in the bootloader's `NOINIT` region at
+  `0x20007F80+` (currently holds `m_peer_data` / `m_peer_data_crc` —
+  variable offset depends on link order). Option (a) requires
+  changes to `bootloader/src/linker/nrf52840.ld`. The firmware's
+  linker (`nrf52840_s140_v7.ld`) does NOT reserve any of these
+  addresses — the existing `dbl_reset_mem` works because the
+  firmware's BSS/heap empirically don't land at `0x20007F7C`, AND
+  because magic writes happen immediately before `NVIC_SystemReset`
+  with `__DSB(); __ISB()` (so the BL reads fresh RAM before the next
+  firmware run touches it). Any new shared address inherits the same
+  "this works by collision avoidance" property.
+
+* **Increment timing.** BL must increment the counter on every
+  "about to jump to app" path (line `main.c:236`,
+  `bootloader_app_start()`). Includes the post-DFU-completion path.
+  Does NOT include DFU-mode entry (no app jump).
+
+* **Clear timing.** Firmware should clear the counter at the same
+  point `SafeBootWatchdog::markStable()` fires (60 s uptime) — that's
+  the existing "I successfully booted" milestone. Earlier than
+  60 s and legitimate-but-slow boots false-positive into DFU.
+
+* **`verify_bootloader.py` invariant.** The new path that forces
+  `dfu_start = 1` from the counter check still reaches
+  `bootloader_dfu_start()` via the existing dual-transport block,
+  which calls `usb_init()` unconditionally. Invariant preserved IF
+  the new code lives outside any `if (_ota_dfu)` branch. The
+  verifier's static check should still pass without modification.
+
+* **§3.2 interaction.** §3.2 (prefer-UF2-when-USB) is **firmware-side**
+  (writes RAM magic). When the BL forces DFU via this §3.1 mechanism,
+  there's no firmware involvement — the BL must do its own
+  VBUSDETECT check to pick UF2 hint vs BLE hint. With the existing
+  dual-transport design, both transports come up anyway; the
+  `_ota_dfu` flag only affects the LED hint.
+
 **Reference:** [[project-bl-no-app-crash-fallback]].
 
-`check_dfu_mode()`'s `DEFAULT_TO_OTA_DFU` only fires when the app slot
-is **invalid by CRC**. A crashy-but-valid app boots, HardFaults
-pre-BLE-init, BL re-runs, sees valid app, jumps, crashes again. No
-auto-DFU fallback. Cost a controller 2026-05-19.
+**Original symptom:** `check_dfu_mode()`'s `DEFAULT_TO_OTA_DFU` only
+fires when the app slot is **invalid by CRC**. A crashy-but-valid
+app boots, HardFaults pre-BLE-init, BL re-runs, sees valid app,
+jumps, crashes again. No auto-DFU fallback. Cost a controller
+2026-05-19.
 
-**Fix:** BL gets a hardware-watchdog-with-handshake pattern: if app
-doesn't ping a known address within N seconds of boot, BL forces DFU
-mode on next reset. Higher-stakes than firmware change; needs a
-sacrificial bench chip + `scripts/verify_bootloader.py` re-validation.
+**Mitigation in the meantime:** the existing
+`RebootFrequencyCounter` (flash-backed, LittleFS counter) catches
+crashes that survive past `configStorage.begin()` + the
+`checkAndIncrement()` call at `.ino:209`. The §3.1 gap is for
+crashes BEFORE that call (very early `setup()` or even static-init
+fiasco). The §3.4 fresh-build reformat shipped this session reduces
+the static-init / LittleFS-corruption surface, indirectly shrinking
+the §3.1 surface too.
 
 ---
 
@@ -182,11 +288,43 @@ where USB isn't accessible. But improves bench recovery dramatically.
 
 ---
 
-### 3.3 BLE-DFU MTU bump — 10× transfer speedup opportunity
+### 3.3 BLE-DFU MTU bump — 10x transfer speedup opportunity
 
-BLE-DFU service uses legacy 20-byte DFU packet MTU regardless of the
-negotiated link MTU. Modern BLE 4.2+ centrals support up to 247-byte
-MTU. Bumping would take a ~510KB firmware transfer from 5.5 min → ~30s.
+**Status: SHIPPED 2026-05-19** (BL submodule commit `2cbe16d`,
+staged at `bootloader/update-bootloader-qspi-ota-default.uf2`
+sha256 `aa50445e…`). The Legacy DFU's hardcoded 20-byte payload
+came from the SoftDevice default ATT_MTU=23 (23 minus 3-byte ATT
+overhead). Three coordinated changes lift the ceiling:
+
+* `bootloader/src/src/main.c` and
+  `bootloader/src/lib/sdk11/components/libraries/bootloader_dfu/dfu_transport_ble.c`:
+  `BLEGATT_ATT_MTU_MAX` 23 → 247. SD config + client MTU exchange
+  both now honour up to 247.
+* `.../hci_mem_pool_internal.h`: `RX_BUF_SIZE` 32 → 256 to hold the
+  larger DFU data writes (~244 bytes at MTU=247). +1.8 KB RAM cost,
+  well within the BL's 224 KB headroom.
+* `blinky-server/blinky_server/firmware/ble_dfu.py`: removed
+  hardcoded `mtu = 20`; the inner transfer now reads
+  `client.mtu_size - 3` clamped to `[20, 244]`. Old bootloaders
+  still work transparently (negotiated MTU stays ≤23 → chunk 20).
+
+Verify-bootloader.py invariants still pass. Bench-validated on
+`659C8DD3ADF84A33` 2026-05-19/20: BL self-update via UF2 drop
+succeeded through 0.8.0-7 → 0.8.0-10; firmware b186 boots cleanly
+post-update. Actual transfer-time speedup not yet measured (would
+need to BLE-DFU something with the new BL running and time it;
+deferred to a future session).
+
+**Known follow-up gap — BL OTA `.zip` bundle stale.** The Makefile's
+`adafruit-nrfutil dfu genpkg` step fails on the workstation (post-0.5.3
+`adafruit-nrfutil` dropped that subcommand — see
+[[project-bsp-nrfutil-patch]]). The shipped `.uf2` is current
+(0.8.0-10); the `.zip` bundle for BLE-OTA BL self-update is NOT
+regenerated and would still carry an older BL if used. `deploy-bootloader.sh`
+uses the `.uf2` path so fleet rollout is fine, but the BLE-OTA path
+for sealed-device BL updates needs the `.zip` regenerated against a
+compatible nrfutil before sealed devices can receive BL updates over
+the air. Roadmap-only; not blocking §3.1/§3.3.
 
 Important for [[feedback-enclosed-devices-no-physical]]: sealed
 devices can't shortcut to UF2 via cable. BLE-DFU is their only

@@ -666,6 +666,15 @@ void loop() {
   static bool stableMarked = false;
   if (!stableMarked && millis() >= 60000) {
     SafeBootWatchdog::markStable();
+    // Also clear the BL's app-handshake watchdog (OPEN_ISSUES §3.1). The BL
+    // encodes a boot-attempt counter as GPREGRET=0x1N (N=count); we clear
+    // it here to signal "the app reached steady state, no need to force
+    // DFU on the next reset." Older bootloaders never write the 0x1N
+    // pattern, so the clear's pattern check returns false and this is a
+    // forward-compatible no-op for fleet devices not yet on the new BL.
+    // Note: SafeBootWatchdog::begin() also clears at boot (load-bearing
+    // for the §3.1 contract); this 60 s clear is defense in depth.
+    SafeBootWatchdog::clearBootAttemptCounter();
     stableMarked = true;
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
       Serial.println(F("[BOOT] Marked stable (60s uptime) — boot-fail counter cleared"));
