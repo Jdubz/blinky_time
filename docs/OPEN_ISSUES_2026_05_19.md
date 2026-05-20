@@ -450,39 +450,32 @@ gap for the **canary itself** (nothing else watches the watcher) and
 
 ## 5. Hub UI work (depends on Section 1.2 refactor)
 
-Section 1.2's server + console cleanup landed 2026-05-19. The
-remaining work is in the lemon-cart repo (`~/lemon-cart/`).
+**Status: SHIPPED** (lemon-cart commit `d04efae`).
 
-**Deployable today (no protocol changes):**
-- **Generator chip row** — replaces scene chips. Routes to
-  `POST /api/fleet/generator/{name}`; 4 chips fire/water/plasma/audio,
-  each command is `gen <name>` (≤10 bytes on wire). Fits the
-  legacy-adv ceiling comfortably.
+- **Generator chip row** — done (fire/water/lightning/audio, routes to
+  `POST /api/fleet/generator/{name}`, `gen <name>` ≤10 bytes on wire).
+- **Dead scenes section removed** — `GET /api/scenes` 404s after the
+  §1.2 generator-only refactor; the panel's Scenes block was stuck on
+  "Loading…". Removed it + the `blinkyScenes`/`blinkyApplyScene` API
+  methods + `BlinkyScene` type.
+- **Hue speed + position sliders** — done via the **short-name alias**
+  path (option 1 below). The sliders broadcast `set huespeed <v>`
+  (16 bytes) and `set hueshift <v>` (17 bytes), both comfortably under
+  the 21-byte legacy-adv ceiling. Verified end-to-end: PUT
+  `/api/fleet/settings/huespeed` `{value:0.5}` → bench chip applied
+  `huespeed = 0.500 [effect]`.
 
-**BLOCKED on protocol-length resolution:**
-- **Hue rotation speed slider** — fleet-wide via
-  `set effectRotationSpeed <value>` (28 bytes on wire).
-- **Absolute hue position slider** — `set effectHueShift <value>`
-  (same length range).
+No server change was needed — `PUT /api/fleet/settings/{name}` is a
+generic `set {name} {value}` passthrough. No firmware change was needed
+— `huespeed`/`hueshift` are already registered float settings
+(`SerialConsole.cpp:1544-1546`). The long forms
+(`set effectRotationSpeed <v>` = 27 bytes) would have exceeded the
+ceiling and been silently promoted to extended adv the firmware doesn't
+scan; using the short names sidesteps that entirely.
 
-Both slider commands exceed the firmware scanner's 21-byte
-legacy-adv effective ceiling — BlueZ silently promotes them to
-extended adv, which the firmware doesn't watch (the same root cause
-as the scene-system command overflow). **Two paths to unblock:**
-
-1. **Short-name aliases** in firmware: rename the broadcast paths to
-   use `huespeed` / `hueshift` (existing short names, already
-   recognised by the firmware's `set` command). Server-side change:
-   emit `set huespeed <v>` (16 bytes) instead of
-   `set effectRotationSpeed <v>` (28 bytes). No firmware change
-   required because the short names already work. **This is the
-   cheaper option and should be tried first.**
-2. **Firmware extended-adv scanning** (Section 6) — lifts the ceiling
-   for everything. Not a one-liner (BSP patch + ~half-day of work);
-   see Section 6 for actual scope.
-
-Until ONE of these lands, don't ship the slider Hub UI work — the
-broadcast would silently no-op. The generator chip row CAN ship now.
+This made option 1 (short-name aliases) the whole fix; **Section 6
+(firmware extended-adv scanning) is no longer needed to unblock §5**,
+though it remains valuable for future long-named protocol extensions.
 
 ---
 
