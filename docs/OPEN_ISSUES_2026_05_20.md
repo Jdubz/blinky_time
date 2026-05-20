@@ -91,15 +91,35 @@ BLE devices (see audit above) — confirm `flash=ok` in the job result is
 the real success signal until the post-step BLE gap is closed. Validate
 big_bucket's phantom presses stop after its flash (closes §1.4).
 
-### 1b. Fleet bootloader: 0.8.0-7 → 0.8.0-10 — NOT POSSIBLE on sealed devices
-`deploy-bootloader.sh` is **USB/UF2-only** (enters DFU over serial,
-copies to the mounted UF2 volume — no BLE path). Sealed devices have no
-USB access, so the §3.1 GPREGRET watchdog BL **cannot be deployed to the
-sealed fleet** with current tooling. The BLE-OTA-of-BL alternative needs
-the `.zip` bundle, which is also broken (`adafruit-nrfutil` dropped
-`genpkg`). So the sealed fleet stays on its current BL (0.8.0-7, which is
-fine); 0.8.0-10 only reaches devices given USB access before sealing.
-deploy-bootloader.sh itself is now validated on the bench (headless fix).
+### 1b. Fleet bootloader: 0.8.0-7 → 0.8.0-10 — via "one last USB flash"
+**Strategy (operator decision 2026-05-20):** open each device for a
+single USB pass, flash BL → 0.8.0-10 **and** firmware → b190 together,
+then seal and run **BLE-only forever**. `deploy-bootloader.sh` is
+USB/UF2-only (no BLE path) so the BL leg *must* happen over USB; doing
+it once-and-for-all while we have the devices open avoids ever needing
+BL-over-BLE on a sealed device.
+
+**Why 0.8.0-10 is the right "forever" BL — it guarantees re-attemptable
+firmware-over-BLE delivery.** No single BLE transfer can be guaranteed
+(the link can drop), but 0.8.0-10 guarantees a botched firmware-over-BLE
+attempt never strands a sealed device unrecoverable:
+- **Dual-transport BLE-DFU** (0.8.0-4+): the BL always exposes the
+  BLE-DFU service, so the server can (re-)push firmware over BLE.
+- **DEFAULT_TO_OTA_DFU**: an invalid-CRC app slot auto-enters BLE-DFU →
+  server re-pushes.
+- **§3.1 GPREGRET app-handshake watchdog** (NEW in 0.8.0-10): a
+  *crashy-but-valid* app that never reaches `begin()` is forced into
+  DFU after 3 strikes → BLE-DFU → re-push. This is the gap that cost a
+  controller 2026-05-19 and the reason 0.8.0-10 (not 0.8.0-7) is the
+  forever BL.
+The BLE-DFU app-flash path itself is validated end-to-end on the bench
+(see audit above: full ~6.5-min flash to `flash=ok`).
+
+deploy-bootloader.sh is validated on the bench (headless fix).
+
+**Sequencing per device (USB pass):** BL via `deploy-bootloader.sh`
+first, then firmware via `deploy.sh`, ≥75 s uptime between resets
+(60-second rule), confirm app boots clean before sealing.
 
 ### 1c. lemon-cart deploy (`install.sh`)
 Deploys §4 (canary `pipewire-sinks`/`bluetooth-rfkill` probes +
@@ -114,7 +134,69 @@ All of the above is on `staging`. Merge once the rollout is validated.
 
 ---
 
-## 2. Deferred / won't-fix
+## 2. Firmware-over-BLE reliability follow-ups (the forever path)
+
+After the "one last USB flash" (1b), firmware updates are BLE-only. The
+path works but has rough edges to smooth before it's the daily driver:
+
+- **deploy.sh can't verify BLE devices post-flash.** Per-device commands
+  (`json info`, `restore_runtime_settings`, `save`) require
+  `state==CONNECTED`; sealed BLE devices sit at `present` and 409. So an
+  all-BLE deploy reports failure at the restore step even though the
+  flash JOB's own `flash=ok` is authoritative. Fix options: deploy.sh
+  trusts the flash-job result for non-connected BLE devices and fleet-
+  broadcasts the restore/save (instead of per-device), OR the server
+  connects each BLE device on demand for the post-steps. **Until fixed,
+  the operator's success signal for a BLE firmware update is `flash=ok`
+  in the job result, NOT deploy.sh's exit code.**
+- **BLE-DFU runs at MTU 20 (~6.5 min/device).** The §3.3 MTU-247 bump
+  did not take effect on the DFU connection (negotiated MTU 23 / chunk
+  20) despite BL 0.8.0-10. A whole-fleet BLE flash at 20-byte chunks is
+  ~12× slower than intended. Investigate whether the BL's DFU service
+  requests the larger MTU or the host capped it.
+- **Multi-cycle BLE-DFU validation.** Only one successful BLE app-flash
+  was run this session. Before relying on BLE-only, run several
+  back-to-back BLE flashes + a deliberate mid-transfer drop to confirm
+  the recovery mechanisms (DEFAULT_TO_OTA_DFU / §3.1) actually re-arm a
+  retry every time.
+
+## 3. Future: BL self-update over BLE (so a sealed BL is never stuck)
+
+**Goal:** be able to update the bootloader itself over BLE, eliminating
+the "must open the device for USB" requirement entirely. Not needed for
+the current plan (1b updates the BL during the last USB pass), but it
+would future-proof the fleet against a later BL fix.
+
+**What's already there (no BL-version dependency — true on 0.8.0-4+):**
+- `ble_dfu.py` already extracts + sends the DFU image type, including
+  `bootloader = 0x02` (alongside `application`/`softdevice`).
+- The Adafruit BL self-updates via the MBR (`SD_MBR_COMMAND_COPY_BL`)
+  over whichever DFU transport, and the dual-transport BL runs DFU over
+  BLE.
+
+**The one missing piece (tractable, server-side):**
+- `compile.py:generate_dfu_package` only emits an `"application"`
+  manifest today. Add a `"bootloader"` variant (correct init packet +
+  manifest type). This builder is already **pure-Python** ("avoids
+  broken adafruit-nrfutil on Python 3.13"), so the dropped
+  `adafruit-nrfutil genpkg` does NOT block this path.
+
+**Why it's gated behind careful validation (NOT just code):**
+- A BL update over BLE is riskier than an app update. The slow BLE
+  transfer lands in a staging bank (recoverable if it drops — live BL
+  intact), but the final MBR copy that swaps the new BL into the BL
+  region has a small power-loss window — if interrupted there, a sealed
+  device **bricks with no USB/SWD recovery**.
+- §3.1's watchdog can't help (it lives in the BL; a corrupt BL can't run
+  it).
+- **Untested:** this session validated only *app*-over-BLE-DFU.
+  BL-over-BLE needs its own bench campaign (many cycles + deliberate
+  mid-transfer-drop + power-loss-during-MBR-copy thought experiment)
+  before it's trusted on sealed hardware.
+
+---
+
+## 4. Deferred / won't-fix
 
 - **§1.1 full-fleet delivery measurement** — bench is 20/20; the
   multi-device, festival-range number needs the deployed fleet (rides
@@ -125,7 +207,7 @@ All of the above is on `staging`. Merge once the rollout is validated.
 
 ---
 
-## 3. Housekeeping
+## 5. Housekeeping
 
 - Old doc archived at `docs/archive/OPEN_ISSUES_2026_05_19.md`.
 - `docs/SAFETY.md`, `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` — already
