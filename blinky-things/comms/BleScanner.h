@@ -126,8 +126,14 @@ private:
     // of (rxHead_, rxTail_) happens under noInterrupts() in both
     // producer and consumer.
     struct RxSlot {
-        uint8_t type;
+        // Field order matters for packing: uint16_t len first (offset 0,
+        // naturally aligned), then the uint8_t fields. The previous
+        // {type, len, ...} order forced a padding byte after `type` to
+        // align `len` at offset 2 (PR #144 review nit). All access is by
+        // field name (no whole-struct memcpy / offsetof / serialization),
+        // so reordering is layout-safe and saves 1 byte/slot.
         uint16_t len;
+        uint8_t type;
         uint8_t data[SLOT_PAYLOAD_MAX + 1];  // +1 for nul terminator
     };
     RxSlot rxRing_[RX_RING_SIZE];

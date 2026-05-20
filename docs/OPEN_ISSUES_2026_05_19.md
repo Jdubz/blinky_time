@@ -19,9 +19,17 @@ which re-emits the cached `_last_command` with the SAME `_command_id`
 for any device whose ACK lags. Capped at `REBROADCAST_MAX_ATTEMPTS = 3`
 per (device, command_id) to bound radio time on a permanently-out-of-
 range device; the per-device counter clears on each fresh
-`broadcast_command` (new logical command resets the budget). Field
-validation pending — bench measurement of per-broadcast delivery rate
-after Phase 2 vs. pre-Phase-2 baseline.
+`broadcast_command` (new logical command resets the budget).
+
+**Bench-validated 2026-05-20: 20/20 broadcasts delivered** (100% per-
+broadcast delivery to the bench chip `659C8DD3ADF84A33` over BLE —
+`last_cmd_id` advanced on every one of 20 distinct commands spaced 2.5 s
+apart). Confirms the reception path (multi-slot rxBuffer + 90% scan
+duty + gossip-ACK re-broadcast) at the per-broadcast level. **Caveat:**
+single device at strong signal (-39 to -46 dBm). The original ~80%
+ceiling was a full-fleet-at-distance measurement; multi-device,
+festival-range validation still ideally wanted but requires the
+deployed fleet, so it rides on the fleet rollout (§7).
 
 **Symptom (original, pre-fix):** 4 of 20 broadcasts hit zero devices
 on the bench measurement (2026-05-19 evening). Systemic misses were
@@ -132,7 +140,7 @@ the WS2812B data line, or a flaky physical button.
 | 7 | `tests/test_fleet_ble.py` | `bc.COMMAND_REEMIT_HOLD_MS = 0.0` instance-attribute override is fragile. | ✅ Replaced with `_fast_broadcaster(monkeypatch)` helper that patches the class attribute. |
 | 8 | `tests/test_registry_jsons.py` | Only checked `ledType` validity. | ✅ Added per-file checks for required-field presence, deviceId↔filename match, ledWidth/ledHeight positive (with 2048 sanity cap), and orientation/layoutType enum-range. |
 | 11 | `blinky_server/ble/protocol.py` | Docstring claimed 238-byte ceiling without flagging the firmware's 21-byte legacy-adv effective limit. | ✅ Docstring now documents both ceilings and the silent-on-air failure mode. |
-| (n/a) | `BleScanner.cpp` `RxSlot` struct | `uint16_t len` misaligned at byte offset 1. | ⏸ Perf nit; not worth packing now per the original review. |
+| (n/a) | `BleScanner.h` `RxSlot` struct | `uint16_t len` misaligned at byte offset 1 (compiler padded to offset 2). | ✅ Reordered fields to `{len, type, data}` — `len` now naturally aligned at offset 0, padding byte removed (saves 1 byte/slot). Layout-safe: all access is by field name. |
 
 ---
 
