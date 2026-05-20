@@ -481,41 +481,58 @@ though it remains valuable for future long-named protocol extensions.
 
 ## 6. Firmware extended-adv scanning (cross-cutting)
 
-The 21-byte effective payload ceiling for legacy BLE adv constrains:
-- Scene commands (Section 1.2) — abandoned, going generator-only
-- Set commands with long names (Section 5)
-- Future protocol extensions
+**Status: WON'T-DO on current hardware (closed 2026-05-20).** Attempted
+end-to-end and abandoned after discovering a hard architectural blocker.
+Reverted all changes. §5's short-command-name approach already covers
+the real need, so there is no current consumer for extended adv.
 
-**Status: research complete, NOT a one-liner.** Investigation
-2026-05-19: Adafruit Bluefruit (`Bluefruit52Lib/src/BLEScanner.{h,cpp}`)
-does not expose a `useExtendedAdv()` method. The `start()` path
-fixes `_param.extended = 0` in the constructor (with a literal
-`// TODO Extended Adv on secondary channels`) and allocates the scan
-buffer at `_scan_data[BLE_GAP_SCAN_BUFFER_MAX = 31]`. To enable
-extended adv:
+**Why it was abandoned — the doc's premise was wrong + a hardware wall:**
 
-1. **BSP-level patch** of `BLEScanner.cpp`: resize `_scan_data` from
-   31 → ≥255 (`BLE_GAP_SCAN_BUFFER_EXTENDED_MIN`), add a public
-   `useExtendedAdv(bool)` that flips `_param.extended` and toggles
-   `_report_data.len` between the two sizes. New `patches/` file
-   + re-apply on BSP update (precedent: `patches/tinyusb-cdc-no-overwritable-fifo.patch`).
-2. **Firmware-side** `Bluefruit.Scanner.useExtendedAdv(true)` in
-   `BleScanner::begin` BEFORE `start(0)`.
-3. **handleReport** path needs to tolerate the larger frame layout
-   (SoftDevice may deliver fragments via `report_incomplete_evts`
-   if a single extended adv exceeds the 255-byte buffer; we'd need
-   to either ignore those or accumulate them).
-4. **Verify with bench chip + signal generator** before fleet rollout.
+1. **The firmware half works** and was implemented + bench-validated:
+   a BSP patch (`useExtendedAdv()` + 255-byte scan buffer) plus
+   `BleScanner::begin` calling `useExtendedAdv(true)`. The extended
+   scanner received both legacy and extended adv with NO legacy
+   regression (verified: `last_seq`/`packets_rx` advanced on long
+   broadcasts; short commands still applied). `handleReport` needed
+   no change — it's already length-driven, and with
+   `report_incomplete_evts=0` the SD never delivers fragments.
 
-**Cost:** ~half-day investigation + patch + firmware + BSP-patch
-install/CI hook + bench validation. Plus the ~55 min BLE-DFU rollout
-to fleet (eased by Section 1.1 gossip-ACK re-broadcast which makes
-delivery more reliable).
+2. **The doc's premise — "BlueZ silently promotes [long commands] to
+   extended adv" — is FALSE.** `btmon` shows BlueZ emits LEGACY
+   `ADV_NONCONN_IND` and TRUNCATES anything over 31 bytes. It does not
+   auto-promote. So the firmware scanner had nothing real to receive;
+   `last_cmd_id` never advanced for a long command because what arrived
+   was a truncated, malformed packet.
 
-**Workaround in the meantime:** keep fleet commands under 21 bytes
-on-wire. `gen <name>`, `effect <mode>`, `set <short> <value>` all
-fit. Long-named settings (`effectRotationSpeed = 28 bytes`) need
-either a shorter name or this extended-adv work.
+3. **The hardware wall (the actual blocker):** extended adv requires a
+   capable controller. On this cart:
+   - **hci0** (BCM43455, Pi onboard) — runs the fleet broadcaster +
+     nRF52 GATT/DFU, deliberately LE-only because its A2DP is broken.
+     `LEAdvertisingManager1.SupportedCapabilities` = `MaxAdvLen=31`,
+     `SupportedSecondaryChannels` empty → **no extended adv.**
+   - **hci1** (Realtek 5.1 USB dongle) — the A2DP **audio** controller.
+     `MaxAdvLen=251`, secondary channels `1M/2M/Coded`, hardware
+     offload → **full extended adv** (and natively, NOT gated by
+     BlueZ `Experimental`).
+
+   So the ONLY ext-adv-capable controller is the one streaming festival
+   music. Shipping §6 would mean moving the fleet broadcaster onto the
+   audio controller (radio contention risk on the cart's primary
+   function) and splitting LE roles across both controllers. Not worth
+   it for a capability with no current consumer.
+
+**If revisited in the future**, the path is: broadcaster → hci1 with
+`SecondaryChannel="1M"` on the `LEAdvertisement1`, validate A2DP audio
+is unaffected under broadcast load, plus re-apply the firmware BSP
+patch (recoverable from this session's git history /
+[[project-bsp-nrfutil-patch]] precedent). Or: add a second ext-adv-capable
+LE dongle so broadcast and audio don't share a controller.
+
+**Workaround that makes §6 unnecessary today:** keep fleet commands
+under the 21-byte on-wire ceiling. `gen <name>`, `effect <mode>`,
+`set <short> <value>` all fit. Long-named settings use short aliases
+(`huespeed`/`hueshift` instead of `effectRotationSpeed`/`effectHueShift`)
+— this is exactly how §5's hue sliders shipped.
 
 ---
 
