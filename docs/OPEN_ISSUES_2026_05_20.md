@@ -94,6 +94,43 @@ BLE-DFU, and the session's brick incident is the reason for the caution
 ([[feedback-flash-safety-policy]], [[feedback-no-unauthorized-retries]],
 [[feedback-test-chip-first]]).
 
+### PROGRESS (2026-05-20 PM): §1b USB pass DONE for the connected devices
+
+The "one last USB flash" (BL→0.8.0-10 + firmware b190) is **validated on
+real hardware and complete** for every device that was on USB this session:
+
+| Device | Was | Now |
+|---|---|---|
+| `tube_v2` (75F18FDAF3360545) | b179 / **BL 0.8.0-4** | b190 / BL 0.8.0-10, configured, 60 LEDs |
+| `cart_inner` (062CBD12EB6961C8) | b179 / BL 0.8.0-7 | b190 / BL 0.8.0-10, configured, 104 LEDs |
+| `cart_outer` (D4E1CB84C852EE41) | b179 / BL 0.8.0-7 | b190 / BL 0.8.0-10, configured, 96 LEDs |
+| `scarf` (D63BD31605B36A15) | b162 / **BL 0.8.0-4** | b190 / BL 0.8.0-10, newly configured (see [[project-scarf]]) |
+| `sourpuss_hat` (659C8DD3ADF84A33) | b190 already | b190, newly configured (see [[project-sourpuss-hat]]) |
+
+**Confirmed on real hardware:** the §1b sequence — `deploy-bootloader.sh`
+BL→0.8.0-10, then re-drop the b190 app — works from **both** starting BLs
+(0.8.0-4 and 0.8.0-7). Crucially, **BL 0.8.0-4's UF2 silent-fail is real
+and observed**: a plain app UF2 on a 0.8.0-4 device sticks in DFU, but the
+BL self-update to 0.8.0-10 (via MBR) succeeds and fixes it. Done **surgically**
+(deploy-bootloader.sh + `uf2_upload.py --already-in-bootloader` when already
+in DFU), one device at a time, **no fleet broadcast** — deliberately avoiding
+deploy.sh whose post-flash `restore_runtime_settings`/`save` would reset
+runtime tunables on the whole present fleet.
+
+**Operational notes for the remaining devices:**
+- `deploy-bootloader.sh` reports a **false-negative exit 4** ("did not return
+  to APP mode" / "cannot re-read BL version") on the headless already-in-DFU
+  path — it unmounts the temp drive after the copy, so its re-read finds
+  nothing. The BL update still succeeds; confirm by reading the UF2 drive's
+  `INFO_UF2.TXT` banner during the subsequent app flash. Worth fixing.
+- `make uf2-upload` regenerates `types/Version.h` via the Makefile `version`
+  target, which drops the git-SHA `build.sh` embeds (device then reports plain
+  `b190`). `git checkout` that file; don't commit it.
+
+**STILL ON b179 (remaining §1a/§1b targets):** `big_bucket`, `cart_umbrella`,
+and the 3 `long_tube`s — all sealed / BLE-only, not connected this session.
+They need either a USB pass (open each once) or the BLE-DFU path.
+
 ### Deploy-tooling audit (2026-05-20) — done before trusting the rollout
 
 All on the bench chip `659C8DD3ADF84A33` (the one SWD-recoverable device;
