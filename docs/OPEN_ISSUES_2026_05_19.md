@@ -368,43 +368,58 @@ reformat eliminates the need for that.
 
 ### 4.1 Canary probe coverage incomplete
 
-**Shipped:** `lemoncart-canary.service` with 4 probes — hostapd,
-blinky-server, dnsmasq, lemoncart-buttons.
+**Shipped:** `lemoncart-canary.service` with 6 probes — hostapd,
+blinky-server, dnsmasq, lemoncart-buttons (auto-restart) +
+**pipewire-sinks** and **bluetooth-rfkill** (alert-only, added
+2026-05-20, lemon-cart commit `c7ee885`).
 
-**Probes to add (TODO comment in `lemoncart-canary` script):**
-- **End-to-end fleet ping** — emit synthetic "canary" command,
-  verify `broadcaster.command_id` advances and at least one device's
-  gossip-ACK adv reflects it within N seconds. Catches the
-  Section 1.1 silent-broadcaster-broken state.
-- **pipewire (user service)** — verify audio sinks exist
-  (`pactl list short sinks`). Pipewire crash today shows audio
-  routes silent with no upstream alert.
-- **bluetooth adapter health** — verify `rfkill list` shows
-  `Soft blocked: no` and `hci0` is up. Adapter rfkill events
-  during heavy traffic can mute BLE.
-- **station-api** — HTTP probe with a known query (e.g. mix state).
+**Deliberately NOT added (cost-vs-real-risk):**
+- **End-to-end fleet ping** — emitting a synthetic broadcast + BLE-scan
+  every 30 s cycle pollutes airtime and burns CPU during exactly the
+  festival-traffic windows we can least afford it. blinky-server's
+  `broadcaster.running` check already covers the process-up case.
+  Revisit only if a frozen-but-running broadcaster is observed in the
+  field, and then on a multi-minute interval.
+- **station-api** — operator control plane, not the fleet command path
+  (that's blinky-server, already probed). No observed failure; lower
+  criticality. Add if it ever wedges in the field.
+
+The two new probes are alert-only because their recoveries are
+disruptive (audio-stack bounce kicks every connected phone; bluetooth
+restart drops all BT links; rfkill needs `rfkill unblock` not a unit
+restart). Unit hardening relaxed `ProtectHome=yes` → `read-only` so the
+pipewire probe can reach the per-user `/run/user/<uid>` socket.
 
 ---
 
 ### 4.2 No `sd_notify` watchdogs on critical services
 
-`Restart=on-failure` covers crashes. `WatchdogSec` + service-side
-`sd_notify(WATCHDOG=1)` would catch deadlocks ("running but stuck").
-`blinky-server` and `station-api` are the highest-value targets.
+**Status: DONE for blinky-server (the genuinely-critical target).**
+`blinky-server.service` is `Type=notify` + `NotifyAccess=main` +
+`WatchdogSec=120`; `blinky_server/systemd_notify.py` implements the
+protocol and the fleet manager loop pings `watchdog()` on every cycle
+(`device/manager.py` ~L2987/3023/3050). A wedged BLE scan or asyncio
+deadlock trips the 120 s watchdog → SIGKILL → `Restart=always`. See
+[[feedback-systemd-watchdog-flash-kill]] (the ping MUST fire from every
+loop branch — the paused-loop branch skipping it bricked cart_inner
+2026-05-16).
 
-**Adds:** ~5 lines of Python per service to ping the watchdog from
-the main loop. WatchdogSec in the unit file. No protection against
-the deadlock-class failure today.
+**station-api: deliberately NOT added.** It's a request-driven FastAPI
+control plane with no background work loop, so a watchdog ping would
+only prove "event loop alive" — and a deadlock is unlikely without
+shared locks/background tasks. `Restart=always` covers the crash case.
+Lower criticality (operator control, not fleet path). Revisit if a
+real deadlock is observed.
 
 ---
 
 ### 4.3 No memory caps on services
 
-`MemoryMax=` drop-ins would let systemd OOM-kill a leaked service
-(triggering `Restart=on-failure`) rather than letting it slowly
-consume the box. Reasonable defaults: 256 MB for blinky-server,
-128 MB for station-api, 64 MB for canary. No observed leaks tonight,
-but cheap insurance for an unattended event.
+**Status: DONE.** `blinky-server.service` has `MemoryMax=512M` +
+`CPUQuota=80%`; `station-api.service` has `MemoryMax=256M` +
+`CPUQuota=50%`. systemd OOM-kills a leaked service →
+`Restart=always` brings it back rather than letting it eat the Pi.
+(No leaks observed; cheap insurance for an unattended multi-day event.)
 
 ---
 
