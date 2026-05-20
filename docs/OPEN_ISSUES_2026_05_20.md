@@ -33,20 +33,73 @@ BLE-DFU, and the session's brick incident is the reason for the caution
 ([[feedback-flash-safety-policy]], [[feedback-no-unauthorized-retries]],
 [[feedback-test-chip-first]]).
 
+### Deploy-tooling audit (2026-05-20) — done before trusting the rollout
+
+All on the bench chip `659C8DD3ADF84A33` (the one SWD-recoverable device;
+forced BLE-only by cutting USB while the swd-flash Pi held it on 3V3).
+
+**Fixed + validated (committed):**
+- `protocol.py`: `save`/`load` got a 10 s serial timeout (was 2 s →
+  every deploy false-failed at the post-flash `save`).
+- `deploy.sh` post-deploy assertion: scoped to `--devices` targets,
+  version prefix-match (`b190` vs `b190-<sha>`), BLE-aware state
+  (`present` is healthy), heredoc to kill bash-expansion noise. Full
+  happy path now exits 0 on the serial bench path (first time ever —
+  the save-timeout had always aborted before reaching it).
+- `deploy-bootloader.sh`: headless-compatible (explicit by-label mount,
+  was assuming desktop udisks auto-mount) + stale-mountpoint
+  false-positive fix. Validated end-to-end on blinkyhost.
+- **SHOWSTOPPER — canary killed BLE-DFU flashes.** The orchestrator
+  pauses the broadcaster for a whole flash; the canary saw
+  `broadcaster.running=false`, and after 90 s restarted blinky-server,
+  aborting the transfer (device stuck in BLE-DFU recovery). Fixed:
+  `/api/fleet/status` now exposes `active_flashes`; the canary treats a
+  paused broadcaster during a flash as healthy. **Validated: a full
+  ~6.5-min BLE-DFU flash ran to `flash=ok` with blinky-server
+  NRestarts=0.**
+
+**Remaining gaps (decide before/at rollout):**
+- **deploy.sh post-flash steps don't verify BLE devices.** Per-device
+  commands (`json info`, `restore_runtime_settings`, `save`) require
+  `state==CONNECTED`; sealed BLE devices sit at `present` (advertising,
+  not GATT-connected) and 409 "not connected". The flash JOB's own
+  version-verify (`flash=ok`) is the authoritative check and passed —
+  but deploy.sh's *post-flash* settings-restore + json-info health
+  re-check can't run on a BLE-`present` device. For an all-BLE fleet
+  deploy, deploy.sh will report failure at the restore step even though
+  the flash succeeded. Needs either: deploy.sh skips per-device
+  post-steps for non-connected BLE devices (trust the flash job +
+  fleet-broadcast the restore/save), or the server connects each BLE
+  device on demand for these.
+- **BLE-DFU is slow (~6.5 min, MTU negotiated 23 / chunk 20).** The
+  §3.3 MTU-247 bump did NOT take effect on this BLE-DFU connection
+  despite BL 0.8.0-10. Worth investigating (the BL DFU service may not
+  request the larger MTU, or the host capped it) — a fleet rollout at
+  20-byte chunks is ~12× slower than intended.
+- **Deployed canary unit still has `ProtectHome=yes`** (pipewire probe
+  fails — alert-only). The `read-only` unit fix is committed to
+  lemon-cart but not yet `install.sh`-deployed.
+
 ### 1a. Fleet firmware: b179 → b190
 Picks up §3.1 firmware clear, §3.4 fresh-build reformat, §1.4 button
 debounce, gossip-ACK firmware bits, RxSlot packing. Sealed devices →
-BLE-DFU via `deploy.sh`. One device at a time; test chip first;
-≥75 s uptime between resets (60-second rule). Validate big_bucket's
-phantom presses stop after its flash (closes §1.4).
+BLE-DFU via `deploy.sh`. The BLE-DFU FLASH path is validated end-to-end
+on the bench (with the canary fix). One device at a time; test chip
+first; ≥75 s uptime between resets (60-second rule). **Caveat:** expect
+deploy.sh to report failure at the post-flash restore/verify step for
+BLE devices (see audit above) — confirm `flash=ok` in the job result is
+the real success signal until the post-step BLE gap is closed. Validate
+big_bucket's phantom presses stop after its flash (closes §1.4).
 
-### 1b. Fleet bootloader: 0.8.0-7 → 0.8.0-10
-Adds §3.1 GPREGRET app-handshake watchdog. Higher-stakes than firmware
-— goes through `deploy-bootloader.sh` (verifier-gated). The carts'
-BL is confirmed 0.8.0-7; the 6 other BLE-only members are unconfirmed
-and can't be checked without UF2-mode access (sealed). Decide whether
-the recovery improvement justifies a BL rollout to sealed devices
-before the next install.
+### 1b. Fleet bootloader: 0.8.0-7 → 0.8.0-10 — NOT POSSIBLE on sealed devices
+`deploy-bootloader.sh` is **USB/UF2-only** (enters DFU over serial,
+copies to the mounted UF2 volume — no BLE path). Sealed devices have no
+USB access, so the §3.1 GPREGRET watchdog BL **cannot be deployed to the
+sealed fleet** with current tooling. The BLE-OTA-of-BL alternative needs
+the `.zip` bundle, which is also broken (`adafruit-nrfutil` dropped
+`genpkg`). So the sealed fleet stays on its current BL (0.8.0-7, which is
+fine); 0.8.0-10 only reaches devices given USB access before sealing.
+deploy-bootloader.sh itself is now validated on the bench (headless fix).
 
 ### 1c. lemon-cart deploy (`install.sh`)
 Deploys §4 (canary `pipewire-sinks`/`bluetooth-rfkill` probes +
