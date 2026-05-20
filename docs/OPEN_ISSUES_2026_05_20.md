@@ -71,6 +71,13 @@ With BCM 18 held high the full restore **programmed and Verified OK**.
 - **Caution:** blinky-server + lemoncart-canary were stopped during recovery and
   **restarted at end of session**. If 06ACEB re-enumerates as DFU, server
   auto-recovery could flash it — verify its state before trusting auto-actions.
+- **Identity note (don't confuse the two):** the unconfigured chip the server
+  auto-recovers over BLE-DFU as `Blinky-4A33` / `FA:E6:7D:A9:8B:3A` is the
+  **bench test chip `659C8DD3ADF84A33`** (name = `Blinky-<DEVICEID[0] low16>` =
+  `4A33`), NOT 06ACEB (`…8CB7`). 06ACEB advertises/USB-enumerates separately;
+  as of this writing it is **absent from the fleet** (still not enumerating).
+  When checking "is auto-recovery touching 06ACEB?", match on the BLE address /
+  `Blinky-8CB7`, not on "the unconfigured DFU device."
 - Lesson reinforced: don't attempt a *surgical partial* SWD erase on a
   crash-looping chip (its firmware re-arms the hardware WDT every boot,
   `CONFIG.HALT=1`, which resets a halted core mid-erase) — mass-erase + full
@@ -113,18 +120,18 @@ forced BLE-only by cutting USB while the swd-flash Pi held it on 3V3).
   NRestarts=0.**
 
 **Remaining gaps (decide before/at rollout):**
-- **deploy.sh post-flash steps don't verify BLE devices.** Per-device
-  commands (`json info`, `restore_runtime_settings`, `save`) require
-  `state==CONNECTED`; sealed BLE devices sit at `present` (advertising,
-  not GATT-connected) and 409 "not connected". The flash JOB's own
-  version-verify (`flash=ok`) is the authoritative check and passed —
-  but deploy.sh's *post-flash* settings-restore + json-info health
-  re-check can't run on a BLE-`present` device. For an all-BLE fleet
-  deploy, deploy.sh will report failure at the restore step even though
-  the flash succeeded. Needs either: deploy.sh skips per-device
-  post-steps for non-connected BLE devices (trust the flash job +
-  fleet-broadcast the restore/save), or the server connects each BLE
-  device on demand for these.
+- **deploy.sh post-flash BLE verification — FIXED (commit `4464d94f`).** The
+  earlier gap (deploy.sh false-failed at the restore/verify step for sealed
+  BLE-`present` devices) is closed: `run_fleet_command` (restore/save) now
+  accepts the server's `skipped:` response for non-connected devices (the
+  fleet broadcaster still delivers), and the post-deploy assertion accepts a
+  `present` BLE device without `json info` (its version was already verified
+  by the flash job, which deploy.sh gates on). Connected (serial/GATT) devices
+  still get the full version/fps/overrun re-check. **Outstanding: one clean
+  end-to-end all-BLE happy-path `deploy.sh` run to exit 0** — the code fix is
+  bench-validated on the serial path; the all-BLE happy path hasn't been run to
+  exit-0 yet (the failure-injection runs in §2 exercised the flash, not a clean
+  deploy.sh pass).
 - **BLE-DFU is slow (~6.5 min, MTU negotiated 23 / chunk 20).** The
   §3.3 MTU-247 bump did NOT take effect on this BLE-DFU connection
   despite BL 0.8.0-10. Worth investigating (the BL DFU service may not
@@ -139,10 +146,11 @@ Picks up §3.1 firmware clear, §3.4 fresh-build reformat, §1.4 button
 debounce, gossip-ACK firmware bits, RxSlot packing. Sealed devices →
 BLE-DFU via `deploy.sh`. The BLE-DFU FLASH path is validated end-to-end
 on the bench (with the canary fix). One device at a time; test chip
-first; ≥75 s uptime between resets (60-second rule). **Caveat:** expect
-deploy.sh to report failure at the post-flash restore/verify step for
-BLE devices (see audit above) — confirm `flash=ok` in the job result is
-the real success signal until the post-step BLE gap is closed. Validate
+first; ≥75 s uptime between resets (60-second rule). The post-flash BLE
+false-fail is fixed (`4464d94f`): deploy.sh now treats a `present` BLE
+device as healthy and accepts `skipped:` on the broadcast restore/save,
+so a clean BLE flash should exit 0 — `flash=ok` in the job result
+remains the authoritative version-verify either way. Validate
 big_bucket's phantom presses stop after its flash (closes §1.4).
 
 ### 1b. Fleet bootloader: 0.8.0-7 → 0.8.0-10 — via "one last USB flash"
@@ -193,16 +201,15 @@ All of the above is on `staging`. Merge once the rollout is validated.
 After the "one last USB flash" (1b), firmware updates are BLE-only. The
 path works but has rough edges to smooth before it's the daily driver:
 
-- **deploy.sh can't verify BLE devices post-flash.** Per-device commands
-  (`json info`, `restore_runtime_settings`, `save`) require
-  `state==CONNECTED`; sealed BLE devices sit at `present` and 409. So an
-  all-BLE deploy reports failure at the restore step even though the
-  flash JOB's own `flash=ok` is authoritative. Fix options: deploy.sh
-  trusts the flash-job result for non-connected BLE devices and fleet-
-  broadcasts the restore/save (instead of per-device), OR the server
-  connects each BLE device on demand for the post-steps. **Until fixed,
-  the operator's success signal for a BLE firmware update is `flash=ok`
-  in the job result, NOT deploy.sh's exit code.**
+- **deploy.sh BLE post-flash verification — FIXED (`4464d94f`).** deploy.sh
+  no longer false-fails on sealed BLE-`present` devices: it trusts the
+  flash-job version-verify, accepts the `present` state as healthy without
+  `json info`, and accepts `skipped:` on the broadcast restore/save. So a
+  clean all-BLE deploy should exit 0. Only outstanding piece: run a clean
+  all-BLE happy-path deploy to exit-0 to confirm end-to-end (the code fix is
+  validated on the serial path; the §2 failure-injection runs exercised the
+  flash, not a clean deploy.sh pass). `flash=ok` in the job result remains the
+  authoritative success signal.
 - **BLE-DFU runs at MTU 20 (~6.5 min/device).** The §3.3 MTU-247 bump
   did not take effect on the DFU connection (negotiated MTU 23 / chunk
   20) despite BL 0.8.0-10. A whole-fleet BLE flash at 20-byte chunks is

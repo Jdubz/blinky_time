@@ -87,6 +87,19 @@ async def test_fleet_status(api_client: AsyncClient) -> None:
     assert len(data["devices"]) == 2
 
 
+async def test_fleet_status_includes_active_flashes(api_client: AsyncClient) -> None:
+    """``active_flashes`` is part of the /api/fleet/status contract — the
+    lemon-cart canary reads it to avoid restarting blinky-server mid-BLE-DFU
+    (the SHOWSTOPPER fixed in PR #148). Assert it's present and 0 in the
+    no-flash baseline so a health-check integration doesn't silently regress.
+    """
+    resp = await api_client.get("/api/fleet/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "active_flashes" in data
+    assert data["active_flashes"] == 0
+
+
 async def test_fleet_status_shows_disconnected(api_client: AsyncClient) -> None:
     # Release one device
     await api_client.post("/api/devices/MOCK_DEVICE_000/release")

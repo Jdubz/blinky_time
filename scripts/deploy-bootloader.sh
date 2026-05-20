@@ -153,6 +153,31 @@ mount_by_label() {
     return 1
 }
 
+# Unmount + remove a temp mountpoint that WE created via mount_by_label.
+# Safe to call with an empty/unset arg (no-op), so callers can pass a maybe-unset
+# var without guarding. The device is usually rebooting when we clean up, so the
+# umount races the disappearing volume — tolerate failure and just drop the dir.
+# Centralised here so the three call sites (initial flash, post-DFU poll, verify)
+# can't drift out of sync.
+cleanup_mount() {
+    local mp="${1:-}"
+    [ -n "$mp" ] || return 0
+    sudo umount "$mp" 2>/dev/null || true
+    rmdir "$mp" 2>/dev/null || true
+}
+
+# True (0) when $1 is a non-empty BL version string that differs from PRE_BL.
+# If PRE_BL could not be read (empty — INFO_UF2.TXT was missing pre-flash),
+# any non-empty POST_BL is the best confirmation we can offer. A POST_BL equal
+# to a non-empty PRE_BL means the UF2 copy did NOT take (stale mount, full fs,
+# perms) — that is NOT success.
+bl_changed() {
+    local post="${1:-}"
+    [ -n "$post" ] || return 1
+    [ -z "$PRE_BL" ] && return 0
+    [ "$post" != "$PRE_BL" ]
+}
+
 DFU_DRIVE="$(find_automount || true)"
 if [ -z "$DFU_DRIVE" ]; then
     # Maybe already in DFU but not auto-mounted (headless).
@@ -199,18 +224,29 @@ fi
 # --- Flash ---
 echo
 echo "[3/3] flashing $(basename "$BL_UF2")..."
+# Pre-write sanity, BEFORE we tolerate the expected mid-write disconnect:
+# catch the GENUINE copy failures (missing/unreadable source, stale empty
+# mountpoint) loudly. Without this, the `cp ... || true` below would mask
+# them as success. INFO_UF2.TXT presence confirms $DFU_DRIVE is a LIVE UF2
+# volume rather than a stale automount dir; we deliberately do NOT write a
+# probe file to the UF2 MSC (its fake FAT can mishandle non-.uf2 writes) —
+# the post-flash BL-version-change assertion below is what catches the
+# remaining failure modes (full filesystem / permissions / copy silently
+# dropped) by confirming the BL actually changed.
+[ -r "$BL_UF2" ] || { echo "ERROR: BL UF2 not readable: $BL_UF2" >&2; exit 5; }
+[ -f "$DFU_DRIVE/INFO_UF2.TXT" ] || {
+    echo "ERROR: $DFU_DRIVE has no INFO_UF2.TXT — not a live UF2 drive" >&2
+    echo "       (stale mountpoint?). Refusing to cp into a non-drive." >&2
+    exit 5
+}
 # The BL applies the UF2 and reboots, which yanks the USB volume — so cp /
 # sync may report an error as the device disappears mid-write. That's the
-# expected success path, not a failure, hence the `|| true`.
+# expected success path, not a failure, hence the `|| true`. (Real failures
+# are caught by the pre-write checks above + the version-change gate below.)
 cp -v "$BL_UF2" "$DFU_DRIVE/" || true
 sync || true
-# If WE explicitly mounted the volume (headless path), unmount it now. The
-# device is rebooting so the umount usually races the disappearing device —
-# tolerate failure and just clean up the temp mountpoint.
-if [ -n "$WE_MOUNTED" ]; then
-    sudo umount "$WE_MOUNTED" 2>/dev/null || true
-    rmdir "$WE_MOUNTED" 2>/dev/null || true
-fi
+# If WE explicitly mounted the volume (headless path), unmount it now.
+cleanup_mount "$WE_MOUNTED"
 
 # --- Wait for re-enumeration ---
 echo "  waiting for device to reboot..."
@@ -239,8 +275,11 @@ done
 echo
 echo "Result:"
 if [ "$PID" = "8045" ]; then
-    echo "  device returned to APP mode (pid=8045) — BL self-update succeeded"
-    # Re-enter BL briefly to read INFO_UF2.TXT
+    echo "  device returned to APP mode (pid=8045) — app booted on a working BL"
+    # Returning to APP proves *a* working BL is present, but NOT that OURS
+    # landed — the app could have booted on the OLD BL if the copy silently
+    # failed. Re-enter BL briefly to read INFO_UF2.TXT and CONFIRM the version
+    # actually changed before reporting success.
     PORT="${PORT:-/dev/ttyACM0}"
     if [ -e "$PORT" ]; then
         python3 -c "
@@ -260,19 +299,35 @@ s.close()
         if [ -n "$VERIFY_DRIVE" ] && [ -f "$VERIFY_DRIVE/INFO_UF2.TXT" ]; then
             POST_BL="$(head -1 "$VERIFY_DRIVE/INFO_UF2.TXT")"
             echo "  post-flash BL: $POST_BL"
+            # Leave the device in the bootloader's DFU after this read — the
+            # caller flashed firmware separately. (We don't auto-reboot to app
+            # here to avoid masking a genuinely-stuck BL.)
+            cleanup_mount "$VERIFY_MOUNTED"
+            if bl_changed "$POST_BL"; then
+                echo "  BL version confirmed changed (pre='$PRE_BL' -> post='$POST_BL')"
+            else
+                echo "ERROR: app booted but BL version did NOT change" >&2
+                echo "       (pre='$PRE_BL' post='$POST_BL'). The UF2 copy did not" >&2
+                echo "       take (stale mount / full fs / perms). BL was NOT updated." >&2
+                exit 4
+            fi
+        else
+            cleanup_mount "$VERIFY_MOUNTED"
+            echo "WARNING: app booted (pid=8045) but could not re-read INFO_UF2.TXT" >&2
+            echo "         to confirm the new BL version. Verify manually before sealing." >&2
         fi
-        # Leave the device in the bootloader's DFU after this read — the
-        # caller flashed firmware separately. Unmount our temp mount if we
-        # made one; the operator re-enters app via a normal reset / firmware
-        # deploy. (We don't auto-reboot to app here to avoid masking a
-        # genuinely-stuck BL.)
-        if [ -n "$VERIFY_MOUNTED" ]; then
-            sudo umount "$VERIFY_MOUNTED" 2>/dev/null || true
-            rmdir "$VERIFY_MOUNTED" 2>/dev/null || true
-        fi
+    else
+        echo "WARNING: no serial port at $PORT — cannot re-read the BL version to" >&2
+        echo "         confirm the update. App booted, but verify manually before sealing." >&2
     fi
+elif bl_changed "${POST_BL:-}"; then
+    echo "  device in BL DFU; BL version confirmed changed (pre='$PRE_BL' -> post='$POST_BL')"
 elif [ -n "${POST_BL:-}" ]; then
-    echo "  device in BL DFU; updated BL: $POST_BL"
+    # We read a BL version but it equals the pre-flash one — the copy didn't take.
+    echo "ERROR: device in BL DFU but BL version did NOT change (pre='$PRE_BL'" >&2
+    echo "       post='$POST_BL'). The UF2 copy did not take (stale mount / full" >&2
+    echo "       fs / perms). BL was NOT updated." >&2
+    exit 4
 else
     echo "WARNING: device did not return to APP mode after BL flash. State:" >&2
     for dp in /sys/bus/usb/devices/*; do

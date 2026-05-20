@@ -403,7 +403,13 @@ DEVICES_JSON=$(curl -sf --max-time 15 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVE
 # fragments — `fps: command not found` — on the error path). Inputs come
 # in via the environment.
 set +e
-DEVICES_JSON="$DEVICES_JSON" \
+# Pass the (potentially large) /api/devices payload via a temp FILE, not an
+# env var: a big fleet's JSON can exceed the OS environment-size limit
+# (ARG_MAX / E2BIG), which would make the verifier fail on valid JSON. Small,
+# bounded values (TARGET_IDS, EXPECTED, key, server) stay in the environment.
+DEVICES_JSON_FILE="$(mktemp)"
+printf '%s' "$DEVICES_JSON" > "$DEVICES_JSON_FILE"
+DEVICES_JSON_FILE="$DEVICES_JSON_FILE" \
 TARGET_IDS="$DEVICE_IDS_JSON" \
 EXPECTED_BUILD="b${BUILD}" \
 API_KEY="$API_KEY" \
@@ -415,7 +421,8 @@ API_KEY = os.environ['API_KEY']
 SERVER = os.environ['BLINKY_SERVER']
 EXPECTED = os.environ['EXPECTED_BUILD']
 targets = sorted(set(json.loads(os.environ['TARGET_IDS'])))
-by_id = {d.get('id'): d for d in json.loads(os.environ['DEVICES_JSON'])}
+with open(os.environ['DEVICES_JSON_FILE']) as _f:
+    by_id = {d.get('id'): d for d in json.load(_f)}
 
 
 def version_matches(v):
@@ -522,16 +529,22 @@ if total > 0 and unreachable == total:
 sys.exit(1 if fails else 0)
 PYEOF
 ASSERT_RC=$?
+rm -f "$DEVICES_JSON_FILE"
 set -e
 if [ "$ASSERT_RC" -ne 0 ]; then
     # Re-evaluate whether the failure is host-side (all targets off the bus)
-    # or device-specific. Scope to the TARGET devices, and treat BLE
-    # 'present' as reachable (BLE fleet devices sit at 'present', not
-    # 'connected') so a normal BLE deploy isn't misdiagnosed as host-USB.
-    # Double-quoted -c with no '$' inside is bash-expansion-safe; TARGET_IDS
-    # is passed via the environment.
+    # or device-specific. Scope to the TARGET devices. A device counts as "on
+    # the bus" if the server can SEE it in ANY state — 'present'/'connected'
+    # (healthy), but ALSO 'connecting' and 'dfu_recovery': a device in DFU is
+    # very much present (advertising AdaDFU), and 'connecting' is transient.
+    # Only a device the server can't see at all (missing / disconnected) is
+    # genuinely "off the bus" and points at a stuck host USB stack. Counting
+    # dfu_recovery/connecting as off-bus would mis-route a real device-specific
+    # failure (e.g. one chip stuck in DFU) into the "restart udevd / reboot
+    # host" branch. Double-quoted -c with no '$' inside is bash-expansion-safe;
+    # TARGET_IDS is passed via the environment.
     DIAG=$(curl -sf --max-time 10 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
-        TARGET_IDS="$DEVICE_IDS_JSON" python3 -c "import json,os,sys; ds={d.get('id'):d for d in json.load(sys.stdin)}; t=json.loads(os.environ['TARGET_IDS']); off=sum(1 for x in t if ds.get(x,{}).get('state') not in ('present','connected')); print(off, len(t))" 2>/dev/null)
+        TARGET_IDS="$DEVICE_IDS_JSON" python3 -c "import json,os,sys; ds={d.get('id'):d for d in json.load(sys.stdin)}; t=json.loads(os.environ['TARGET_IDS']); off=sum(1 for x in t if ds.get(x,{}).get('state') not in ('present','connected','connecting','dfu_recovery')); print(off, len(t))" 2>/dev/null)
     OFF=$(echo "$DIAG" | awk '{print $1}')
     TOTAL=$(echo "$DIAG" | awk '{print $2}')
     # Three branches:
