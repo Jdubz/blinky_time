@@ -3,8 +3,10 @@
 #
 # Setup required:
 #   * Target XIAO connected to dev machine via USB
-#   * (Optional) GPIO18 reset wired through swd-flash.local Pi for forcing
-#     resets when serial-cmd 'bootloader' isn't reachable
+#   * GPIO18 (BCM 18 / physical pin 12) reset wired through swd-flash.local Pi
+#     — PERMANENT wiring; used here (optional for this script) to force resets
+#     when serial-cmd 'bootloader' isn't reachable. Same pin is OpenOCD srst in
+#     ~/swd-recovery/nrf52840.cfg.
 #
 # Each iteration:
 #   1. Enter DFU mode via serial 'bootloader' command (if in app mode)

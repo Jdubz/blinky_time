@@ -24,6 +24,60 @@ won't-do rationales — read it for the "why" behind anything below.
 
 ---
 
+## 0. ACTIVE (2026-05-20 PM): SWD reset-line crosstalk fix + 06ACEB recovery (IN PROGRESS)
+
+**Root cause found — high value, affects all SWD recovery.** SWD flashing via
+the `swd-flash.local` Pi was failing on the SoftDevice write with
+`Wrong parity detected` / `Error waiting NVMC_READY` /
+`clearing lockup after double fault` / **`external reset detected`**. It is
+**NOT** power, **NOT** the rig, **NOT** my config changes, and **NOT** a faulty
+chip. The cause: the **reset line (BCM 18 / physical pin 12), left as a floating
+high-impedance input** (held high only by the chip's weak internal pull-up),
+picks up **crosstalk from the adjacent fast-toggling SWDIO/SWCLK** during the
+long ~440 KB algorithm-driven SoftDevice write and **glitches the chip into
+reset mid-flash**. Brief ops (connect, examine, MBR write, CTRL-AP mass-erase)
+always survived; only the long SD write didn't — and it failed at a *different*
+sector each time (the signature of a margin problem, not a bad cell).
+
+**Fix (PROVEN this session):** drive BCM 18 firmly HIGH during the SWD flash so
+it can't glitch low — on a *different* line than SWD, so no conflict:
+```
+sudo timeout <n> gpioset -c gpiochip0 18=1 &   # hold reset deasserted
+sleep 1; sudo ./recover.sh                      # MBR+SD+BL all Verified OK
+```
+With BCM 18 held high the full restore **programmed and Verified OK**.
+(`srst` is NOT usable on nRF52: a pin reset also resets the debug AP, so
+`reset_config srst_only` breaks `reset halt` with `AP write error`.)
+
+**TODO — bake in next session:**
+- [ ] Add the `gpioset 18=1` hold into `~/swd-recovery/recover.sh` (Pi) so SWD
+      restores are reliable by default.
+- [ ] **Gotcha to handle:** a `timeout`-killed `gpioset` leaves BCM 18 as a
+      *stale output*. If left output-LOW it HOLDS THE CHIP IN RESET (no USB
+      enumeration). Always release to input afterward (`gpioget -c gpiochip0 18`).
+
+**06ACEB recovery status (resume next session):**
+- Was on ancient stock **BL 0.6.1** + **corrupt LittleFS** (InternalFS
+  0xED000–0xF3FFF) → crash-looped every ~3 s *before* `RebootFrequencyCounter`
+  self-heal could run (the documented gap, `RebootFrequencyCounter.h:32-34`).
+- CTRL-AP mass-erased; **MBR + S140 7.3.0 + BL 0.8.0-4 restored via SWD with
+  BCM 18 held high — Verified OK**; b190 firmware UF2 then dropped.
+- **Last observed: not enumerating on USB** — most likely the `gpioset`
+  leftover held BCM 18 low (reset) during/after the b190 write. BCM 18 has
+  since been released to input. **Next:** power-cycle → check if b190 boots to
+  safeMode; if not, re-drop b190 (BL is good now) → `deploy-bootloader.sh` to
+  update BL 0.8.0-4 → 0.8.0-10 → push device config → verify. Chip is
+  SWD-accessible with a known-good BL, fully recoverable.
+- **Caution:** blinky-server + lemoncart-canary were stopped during recovery and
+  **restarted at end of session**. If 06ACEB re-enumerates as DFU, server
+  auto-recovery could flash it — verify its state before trusting auto-actions.
+- Lesson reinforced: don't attempt a *surgical partial* SWD erase on a
+  crash-looping chip (its firmware re-arms the hardware WDT every boot,
+  `CONFIG.HALT=1`, which resets a halted core mid-erase) — mass-erase + full
+  restore is the correct, simple path.
+
+---
+
 ## 1. Production rollout (the main remaining lever)
 
 Everything above is on `staging` / committed to the lemon-cart repo but
