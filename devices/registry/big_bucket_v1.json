@@ -1,5 +1,5 @@
 {
-  "_comment": "ledType=6 (NEO_RGB) is INTENTIONAL — this panel's LED part ships in native RGB byte order, NOT the WS2812B GRB default (82). Confirmed visually after a deploy session showed red/green swap (commit aa382f93f8). orientation=3 = HORIZONTAL_ZIGZAG: a single strip snaked L→R / R→L across rows (hand-wired panel). buttonPin=1 = physical generator-cycle button on GPIO D1.",
+  "_comment": "ledType=6 (NEO_RGB) is INTENTIONAL — this panel's LED part ships in native RGB byte order, NOT the WS2812B GRB default (82). Confirmed visually after a deploy session showed red/green swap (commit aa382f93f8). orientation=3 = HORIZONTAL_ZIGZAG: a single strip snaked L→R / R→L across rows (hand-wired panel). buttonPin=0 (DISABLED 2026-05-20): the physical generator-cycle button on D1 was firing ghost presses (random generator changes); debounce (b190 §1.4) did not stop them, so the button is disabled entirely by setting buttonPin=0.",
   "deviceId": "big_bucket_v1",
   "deviceName": "Big Bucket",
   "ledWidth": 14,
@@ -9,5 +9,5 @@
   "orientation": 3,
   "layoutType": 0,
   "brightness": 100,
-  "buttonPin": 1
+  "buttonPin": 0
 }

@@ -14,7 +14,7 @@ won't-do rationales — read it for the "why" behind anything below.
 | §1.1 gossip-ACK re-broadcast | code shipped; **bench-validated 20/20**; full-fleet-at-range validation rides on the rollout below |
 | §1.2 scene→generator | shipped (server + console + Hub) |
 | §1.3 flash cascade bug | fixed (PR #145) |
-| §1.4 big_bucket button debounce | firmware shipped; **pending flash to big_bucket** |
+| §1.4 big_bucket button | b190 flashed to big_bucket; debounce did NOT stop ghost presses, so the **button was DISABLED entirely** (`buttonPin: 0`, 2026-05-20) — operator decision, no time to troubleshoot |
 | §2 PR #144 review items | all closed (incl. RxSlot packing) |
 | §3.1 BL app-handshake watchdog | shipped — BL `0.8.0-10-g4c5faae`, GPREGRET-based, bench-validated |
 | §3.2 / §3.3 / §3.4 BL recovery | shipped |
@@ -85,51 +85,77 @@ With BCM 18 held high the full restore **programmed and Verified OK**.
 
 ---
 
-## 1. Production rollout (the main remaining lever)
+## 1. Production rollout
 
-Everything above is on `staging` / committed to the lemon-cart repo but
-**not yet on the production fleet or carts.** This is a careful,
-authorize-each-step operation — sealed devices recover only via
-BLE-DFU, and the session's brick incident is the reason for the caution
-([[feedback-flash-safety-policy]], [[feedback-no-unauthorized-retries]],
-[[feedback-test-chip-first]]).
+**Firmware + bootloader rollout (§1a/§1b) is ✅ COMPLETE** as of 2026-05-20 PM:
+all 12 fleet devices are on **b190 + BL 0.8.0-10**, done as a careful,
+authorize-each-step, one-device-at-a-time USB pass with no bricks (see the
+PROGRESS table below). Remaining rollout work is **§1c (lemon-cart `install.sh`)**
+and **§1d (merge PR `staging`→`master`)**.
 
-### PROGRESS (2026-05-20 PM): §1b USB pass DONE for the connected devices
+The caution that governed §1a/§1b still applies to any future fleet flash —
+sealed devices recover only via BLE-DFU, and the session's brick incident is
+the reason for it ([[feedback-flash-safety-policy]],
+[[feedback-no-unauthorized-retries]], [[feedback-test-chip-first]]).
 
-The "one last USB flash" (BL→0.8.0-10 + firmware b190) is **validated on
-real hardware and complete** for every device that was on USB this session:
+### ✅ DONE (2026-05-20 PM): §1a/§1b COMPLETE — entire fleet on b190 + BL 0.8.0-10
 
-| Device | Was | Now |
+The "one last USB flash" (BL→0.8.0-10 + firmware b190) is **complete for all
+12 fleet devices.** Every device was opened for a single USB pass over the
+session; none required the BLE-DFU path. `active_flashes: 0`, no bricks.
+
+| Device | Was (BL) | Now |
 |---|---|---|
-| `tube_v2` (75F18FDAF3360545) | b179 / **BL 0.8.0-4** | b190 / BL 0.8.0-10, configured, 60 LEDs |
-| `cart_inner` (062CBD12EB6961C8) | b179 / BL 0.8.0-7 | b190 / BL 0.8.0-10, configured, 104 LEDs |
-| `cart_outer` (D4E1CB84C852EE41) | b179 / BL 0.8.0-7 | b190 / BL 0.8.0-10, configured, 96 LEDs |
-| `scarf` (D63BD31605B36A15) | b162 / **BL 0.8.0-4** | b190 / BL 0.8.0-10, newly configured (see [[project-scarf]]) |
-| `sourpuss_hat` (659C8DD3ADF84A33) | b190 already | b190, newly configured (see [[project-sourpuss-hat]]) |
+| `tube_v2` (75F18FDAF3360545) | b179 / 0.8.0-4 | b190 / 0.8.0-10, configured, 60 LEDs |
+| `cart_inner` (062CBD12EB6961C8) | b179 / 0.8.0-7 | b190 / 0.8.0-10, configured, 104 LEDs |
+| `cart_outer` (D4E1CB84C852EE41) | b179 / 0.8.0-7 | b190 / 0.8.0-10, configured, 96 LEDs |
+| `bucket_v3` (F2BF960B9D0B0A44) | b179 / 0.8.0-4 | b190 / 0.8.0-10, configured, 128 LEDs |
+| `cart_umbrella_v1` (04F2A79622BF8B6F) | b179 / 0.8.0-3 | b190 / 0.8.0-10, configured, **104 LEDs** ⚠ |
+| `long_tube_v1` `-3D` (16237B3B7C5E263D) | b179 / 0.8.0-4 | b190 / 0.8.0-10, configured, 240 LEDs |
+| `long_tube_v1` `-E8` (9BC83B39DB50ECE8) | b179 / 0.8.0-4 | b190 / 0.8.0-10, configured, 240 LEDs |
+| `long_tube_v1` `-09` (3D48A4E295079B09) | b179 / 0.8.0-4 | b190 / 0.8.0-10, configured, 240 LEDs |
+| `hat_v1` (C04C56F9DFC31D84) | b179 / 0.8.0-7 | b190 / 0.8.0-10, configured, 89 LEDs |
+| `big_bucket_v1` (F6751B6842F25C76) | b179 / 0.8.0-7 | b190 / 0.8.0-10, configured, 112 LEDs, **button DISABLED** (§1.4) |
+| `scarf` (D63BD31605B36A15) | b162 / 0.8.0-4 | b190 / 0.8.0-10, newly configured ([[project-scarf]]) |
+| `sourpuss_hat` (659C8DD3ADF84A33) | b190 / — | b190, newly configured ([[project-sourpuss-hat]]) |
 
 **Confirmed on real hardware:** the §1b sequence — `deploy-bootloader.sh`
-BL→0.8.0-10, then re-drop the b190 app — works from **both** starting BLs
-(0.8.0-4 and 0.8.0-7). Crucially, **BL 0.8.0-4's UF2 silent-fail is real
-and observed**: a plain app UF2 on a 0.8.0-4 device sticks in DFU, but the
-BL self-update to 0.8.0-10 (via MBR) succeeds and fixes it. Done **surgically**
-(deploy-bootloader.sh + `uf2_upload.py --already-in-bootloader` when already
-in DFU), one device at a time, **no fleet broadcast** — deliberately avoiding
-deploy.sh whose post-flash `restore_runtime_settings`/`save` would reset
-runtime tunables on the whole present fleet.
+BL→0.8.0-10, then re-drop the b190 app — works from **every** starting BL seen
+(0.8.0-3, 0.8.0-4, 0.8.0-7). **BL 0.8.0-4's UF2 silent-fail is real and
+observed**: a plain app UF2 on a 0.8.0-4 device sticks in DFU, but the BL
+self-update to 0.8.0-10 (via MBR) succeeds and fixes it. Done **surgically**
+(deploy-bootloader.sh + `uf2_upload.py --already-in-bootloader` when already in
+DFU), one device at a time, **no fleet broadcast** — deliberately avoiding
+deploy.sh whose post-flash `restore_runtime_settings`/`save` would reset runtime
+tunables on the whole present fleet.
 
-**Operational notes for the remaining devices:**
-- `deploy-bootloader.sh` reports a **false-negative exit 4** ("did not return
-  to APP mode" / "cannot re-read BL version") on the headless already-in-DFU
-  path — it unmounts the temp drive after the copy, so its re-read finds
-  nothing. The BL update still succeeds; confirm by reading the UF2 drive's
-  `INFO_UF2.TXT` banner during the subsequent app flash. Worth fixing.
+**Per-device flow that worked (record for the next BL bump):**
+release serial+BLE ids → `deploy-bootloader.sh` (BL) → **release again** (the
+server re-grabs the serial port on the post-BL re-enumeration despite the hold)
+→ `uf2_upload.py` (app) → reconnect + verify via the server (authoritative).
+
+**Operational gotchas observed (worth fixing in tooling):**
+- `deploy-bootloader.sh` reports a **false-negative exit 4** / "cannot re-read
+  BL version" on the headless already-in-DFU path — it unmounts the temp drive
+  after the copy, so its re-read finds nothing. The BL update still succeeds;
+  confirm via the UF2 drive's `INFO_UF2.TXT` banner during the app flash.
+- After the BL flash, **blinky-server re-acquires the serial port even with the
+  release hold active** (re-enumeration looks like a fresh device) → the app
+  flash can fail "port not available". Re-release immediately before the app
+  flash. A proper fix: have the orchestrator own these USB passes.
 - `make uf2-upload` regenerates `types/Version.h` via the Makefile `version`
-  target, which drops the git-SHA `build.sh` embeds (device then reports plain
-  `b190`). `git checkout` that file; don't commit it.
+  target, dropping the git-SHA `build.sh` embeds (device reports plain `b190`).
+  `git checkout` that file; don't commit it. The Makefile/`build.sh` Version.h
+  divergence is a latent bug.
 
-**STILL ON b179 (remaining §1a/§1b targets):** `big_bucket`, `cart_umbrella`,
-and the 3 `long_tube`s — all sealed / BLE-only, not connected this session.
-They need either a USB pass (open each once) or the BLE-DFU path.
+**KNOWN DISCREPANCY:** `cart_umbrella_v1` reports `leds=104` but its registry
+entry says 128 (8×16). The firmware update **preserved** the device's stored
+config (as intended); this is the pre-existing "specs unverified against
+hardware" drift the registry README already flags. Reconcile registry-vs-device
+when the real umbrella geometry is confirmed.
+
+**§1a/§1b are now CLOSED.** Remaining rollout work is **§1c (lemon-cart
+`install.sh`)** and **§1d (merge PR `staging`→`master`)** — see below.
 
 ### Deploy-tooling audit (2026-05-20) — done before trusting the rollout
 
@@ -178,7 +204,7 @@ forced BLE-only by cutting USB while the swd-flash Pi held it on 3V3).
   fails — alert-only). The `read-only` unit fix is committed to
   lemon-cart but not yet `install.sh`-deployed.
 
-### 1a. Fleet firmware: b179 → b190
+### 1a. Fleet firmware: b179 → b190 — ✅ DONE (all 12 devices, see PROGRESS above)
 Picks up §3.1 firmware clear, §3.4 fresh-build reformat, §1.4 button
 debounce, gossip-ACK firmware bits, RxSlot packing. Sealed devices →
 BLE-DFU via `deploy.sh`. The BLE-DFU FLASH path is validated end-to-end
@@ -190,7 +216,7 @@ so a clean BLE flash should exit 0 — `flash=ok` in the job result
 remains the authoritative version-verify either way. Validate
 big_bucket's phantom presses stop after its flash (closes §1.4).
 
-### 1b. Fleet bootloader: 0.8.0-7 → 0.8.0-10 — via "one last USB flash"
+### 1b. Fleet bootloader: → 0.8.0-10 via "one last USB flash" — ✅ DONE (all 12, see PROGRESS above)
 **Strategy (operator decision 2026-05-20):** open each device for a
 single USB pass, flash BL → 0.8.0-10 **and** firmware → b190 together,
 then seal and run **BLE-only forever**. `deploy-bootloader.sh` is
