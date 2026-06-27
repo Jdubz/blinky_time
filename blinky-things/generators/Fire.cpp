@@ -268,17 +268,14 @@ void Fire::renderLinear(PixelMatrix& matrix, float dt) {
 }
 
 void Fire::spawnParticles(float dt) {
-    // Silence gate + amplitude envelope are pre-computed once per frame in
-    // generate(), shared with renderParticle so spawn-rate and brightness
-    // breathe together with the music. See generate() for the math.
-    float e = audio_.energy;
-    float overshoot = frameOvershoot_;
-
     // b202: baseline spawn removed — the heightmap IS the always-on
     // ember layer. Particles are now pure event-driven accents.
+    // PR #149 review: dropped the local `overshoot` and `(void)e` —
+    // `overshoot` became unused after removing the hasSignal gate, and
+    // `e` is referenced directly via audio_.energy below.
+    float e = audio_.energy;
     float rs = audio_.rhythmStrength;
     uint16_t totalSparks = 0;
-    (void)e;  // still used in the burst code below for energy-driven sizing
 
     // === EDGE-TRIGGERED AUDIO BURST (b197) ===
     // Hierarchy: direct audio (audio_.pulse, derived from spectral flux of
