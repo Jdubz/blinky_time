@@ -1796,9 +1796,36 @@ void SerialConsole::streamTick() {
             out_.print(F("}"));
         }
 
-        // LED brightness telemetry
-        // Particle-based generators (Fire, PlasmaGlobe) don't expose pool
-        // statistics — each manages its own particle array internally.
+        // Visual-layer metrics: per-frame measurements of the PixelMatrix
+        // computed inside RenderPipeline (after generator + effect, before
+        // LED driver). Lets an agent correlate audio control with the
+        // actual visual response without subjective observation.
+        //
+        // Format: "v":{"l":120.3,"mx":255,"ct":78.2,"act":0.045,"cx":2.34,"cy":7.81,"sat":0.62}
+        //   l   = avg luminance (0-255, Rec. 601)
+        //   mx  = peak luminance in frame (0-255)
+        //   ct  = RMS contrast (std-dev of luminance, 0-255)
+        //   act = frame-to-frame activity (sum |dL| / N / 255, 0-1)
+        //   cx, cy = luminance-weighted centroid (0..W-1, 0..H-1; 0 when dark)
+        //   sat = mean HSV saturation (0-1)
+        if (pipeline_ && pipeline_->isValid()) {
+            const FrameMetrics& fm = pipeline_->getFrameMetrics();
+            out_.print(F(",\"v\":{\"l\":"));
+            out_.print(fm.getAvgL(), 1);
+            out_.print(F(",\"mx\":"));
+            out_.print(fm.getMaxL(), 0);
+            out_.print(F(",\"ct\":"));
+            out_.print(fm.getRmsContrast(), 1);
+            out_.print(F(",\"act\":"));
+            out_.print(fm.getActivity(), 3);
+            out_.print(F(",\"cx\":"));
+            out_.print(fm.getCentroidX(), 2);
+            out_.print(F(",\"cy\":"));
+            out_.print(fm.getCentroidY(), 2);
+            out_.print(F(",\"sat\":"));
+            out_.print(fm.getSatMean(), 2);
+            out_.print(F("}"));
+        }
 
         out_.println(F("}"));
     }
@@ -2245,6 +2272,27 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
         audioCtrl_->getFrameOnsetNN().printDiagnostics(out_);
+        return true;
+    }
+
+    // "show visual" — snapshot of the visual-layer metrics computed in
+    // RenderPipeline. Same fields as the streaming "v" block but emitted
+    // as a single JSON line on demand, for agents that don't want to
+    // spin up a continuous stream.
+    if (strcmp(cmd, "show visual") == 0) {
+        if (!pipeline_ || !pipeline_->isValid()) {
+            out_.println(F("ERROR: render pipeline not initialized"));
+            return true;
+        }
+        const FrameMetrics& fm = pipeline_->getFrameMetrics();
+        out_.print(F("{\"l\":"));     out_.print(fm.getAvgL(), 1);
+        out_.print(F(",\"mx\":"));    out_.print(fm.getMaxL(), 0);
+        out_.print(F(",\"ct\":"));    out_.print(fm.getRmsContrast(), 1);
+        out_.print(F(",\"act\":"));   out_.print(fm.getActivity(), 3);
+        out_.print(F(",\"cx\":"));    out_.print(fm.getCentroidX(), 2);
+        out_.print(F(",\"cy\":"));    out_.print(fm.getCentroidY(), 2);
+        out_.print(F(",\"sat\":"));   out_.print(fm.getSatMean(), 2);
+        out_.println(F("}"));
         return true;
     }
 

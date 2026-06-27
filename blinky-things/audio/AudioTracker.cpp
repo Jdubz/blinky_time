@@ -1224,13 +1224,17 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
     }
 
-    if (pulseSignal > 0.4f) {
-        float trigger = (pulseSignal - 0.4f) / 0.6f;
+    // b193: trigger threshold raised 0.4→0.5, decay shortened 0.24s→0.12s.
+    // Sharper peaks at the source so downstream brightness-modulation in all
+    // generators (Fire/Water/Plasma) gets a cleaner peak:average signal —
+    // measured pulse_corr_R baseline ~0.8, modulation_depth target +20%.
+    if (pulseSignal > 0.5f) {
+        float trigger = (pulseSignal - 0.5f) / 0.5f;
         if (trigger > pulseEnvelope_) {
             pulseEnvelope_ = trigger;
         }
     }
-    pulseEnvelope_ *= expf(-dt / 0.24f);
+    pulseEnvelope_ *= expf(-dt / 0.12f);
     if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 
     control_.pulse = clampf(pulseEnvelope_, 0.0f, 1.0f);
@@ -1243,9 +1247,17 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.plpPulse = plpPulseValue_;
 
     // --- Rhythm Strength ---
-    // Driven by ACF periodicity strength. Enables music-reactive mode in
-    // Water/Lightning generators when periodic rhythm is detected.
-    control_.rhythmStrength = periodicityStrength_;
+    // Driven by ACF periodicity strength. Used by generators (Fire/Water/Plasma)
+    // as the blend weight between organic and music-mode rendering.
+    //
+    // b193: apply sqrt to push mid-range values higher. Fleet rhythm_str
+    // baseline sat at 0.20-0.35 during music, which meant generators were
+    // running 65-80% organic / only 20-35% music-mode — the strong plp_pulse
+    // signal (avg 0.30, max 1.0) barely reached the brightness formula.
+    // sqrt(0.25) = 0.50, sqrt(0.50) = 0.71 — preserves 0 and 1 endpoints
+    // (no false-positive amplification on true silence) while engaging
+    // music-mode more aggressively at partial-detection rhythm strengths.
+    control_.rhythmStrength = sqrtf(periodicityStrength_);
 
     // --- Onset Density ---
     if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {

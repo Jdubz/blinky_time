@@ -12,6 +12,7 @@
 #include "../audio/AudioControl.h"
 #include "../devices/DeviceConfig.h"
 #include "EffectRenderer.h"
+#include "FrameMetrics.h"
 
 /**
  * EffectType - Enumeration of available post-processing effects
@@ -89,6 +90,10 @@ public:
     PixelMatrix* getPixelMatrix() { return pixelMatrix_; }
     bool isValid() const { return initialized_; }
 
+    // Visual-layer observability. Computed per-frame in render() after
+    // generator + effect run. Streamed by SerialConsole as the "v" block.
+    const FrameMetrics& getFrameMetrics() const { return metrics_; }
+
     // List available options (returns count)
     static constexpr int NUM_GENERATORS = 4;
     static constexpr int NUM_EFFECTS = 2;  // Including NONE
@@ -115,6 +120,7 @@ private:
     // Rendering
     PixelMatrix* pixelMatrix_;
     EffectRenderer* renderer_;
+    FrameMetrics    metrics_;     // updated each render() pass
 
     // State
     bool initialized_;

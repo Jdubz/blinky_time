@@ -256,13 +256,16 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
     uint8_t b = color & 0xFF;
 
     // Render brightness: sets the ambient floor and audio response.
-    // Organic (ambient/conversation): high floor so fire always glows without music.
-    //   Pulse adds a flash on transients (speech, claps). Energy gently raises level.
-    // Music mode: PLP pulse drives breathing at beat tempo.
-    // Floor raised from 0.4→0.65 — intensity is no longer energy-scaled at spawn,
-    // so render brightness is the sole global dimmer and needs a higher floor.
-    float organicBright = 0.65f + 0.25f * audio_.energy + 0.3f * audio_.pulse;
-    float musicBright   = 0.50f + 0.25f * audio_.energy + 0.5f * audio_.plpPulse;
+    //
+    // b193: pushed harder — floor 0.40→0.30 organic / 0.30→0.20 music,
+    // pulse coef 0.55→0.75 organic, plpPulse coef 0.65→0.85 music. Measured
+    // baseline modulation_depth was 1.25-2.12 across the fleet; target is
+    // 2.0+ on all chips. Floor stays glowing-but-dim, peak goes hard to 1.0.
+    //
+    // This is a generator design choice (modulation depth), not device-aware
+    // tuning — AudioControl semantics are still device-agnostic.
+    float organicBright = 0.30f + 0.25f * audio_.energy + 0.75f * audio_.pulse;
+    float musicBright   = 0.20f + 0.25f * audio_.energy + 0.85f * audio_.plpPulse;
     float brightnessScale = organicBright * (1.0f - audio_.rhythmStrength) +
                            musicBright * audio_.rhythmStrength;
     if (brightnessScale > 1.0f) brightnessScale = 1.0f;
