@@ -69,6 +69,62 @@ async def test_restore_defaults(protocol: DeviceProtocol) -> None:
     assert "OK" in resp
 
 
+async def test_slow_flash_commands_get_longer_timeout_floor(
+    transport: MockTransport,
+) -> None:
+    """save/load get the 10 s floor on the 2 s serial path; other commands keep
+    the base timeout. Regression guard for the deploy-critical fix (PR #148):
+    a successful `save` was being timed out at 2 s, so deploy.sh reported
+    FAILURE on a successful flash. Keyed on the first whitespace token.
+    """
+    from blinky_server.device import protocol as proto_mod
+
+    proto = DeviceProtocol(transport)  # type: ignore[arg-type]
+    captured: list[float] = []
+
+    async def _capture(command: str, timeout: float) -> str:
+        captured.append(timeout)
+        return "OK"
+
+    proto._send_and_collect = _capture  # type: ignore[method-assign]
+
+    # Serial base is 2 s (COMMAND_TIMEOUT_S); the slow-flash floor is 10 s.
+    await proto.send_command("save")
+    assert captured[-1] == proto_mod.SLOW_FLASH_COMMAND_TIMEOUT_S
+    await proto.send_command("load")
+    assert captured[-1] == proto_mod.SLOW_FLASH_COMMAND_TIMEOUT_S
+    # First-token keying: `save <arg>` still gets the floor.
+    await proto.send_command("save foo")
+    assert captured[-1] == proto_mod.SLOW_FLASH_COMMAND_TIMEOUT_S
+    # A non-flash command keeps the base serial timeout.
+    await proto.send_command("ble")
+    assert captured[-1] == proto_mod.COMMAND_TIMEOUT_S
+    # An explicit timeout argument always wins over the floor.
+    await proto.send_command("save", timeout=1.5)
+    assert captured[-1] == 1.5
+
+
+async def test_slow_flash_floor_never_shortens_ble_timeout() -> None:
+    """On BLE (15 s base) the 10 s floor must NOT shorten the timeout —
+    ``max(base, floor)`` keeps the more generous ceiling.
+    """
+    from blinky_server.device import protocol as proto_mod
+
+    ble_transport = MockTransport(transport_type="ble")
+    await ble_transport.connect()
+    proto = DeviceProtocol(ble_transport)  # type: ignore[arg-type]
+    captured: list[float] = []
+
+    async def _capture(command: str, timeout: float) -> str:
+        captured.append(timeout)
+        return "OK"
+
+    proto._send_and_collect = _capture  # type: ignore[method-assign]
+
+    await proto.send_command("save")
+    assert captured[-1] == proto_mod.BLE_COMMAND_TIMEOUT_S
+
+
 async def test_stream_start_stop(protocol: DeviceProtocol) -> None:
     assert not protocol.streaming
 

@@ -121,9 +121,79 @@ fi
 echo
 echo "[2/3] locating XIAO UF2 drive..."
 DFU_DRIVE=""
-for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE /run/media/$USER/XIAO-SENSE; do
-    [ -d "$d" ] && DFU_DRIVE="$d" && break
-done
+WE_MOUNTED=""   # set to a temp mountpoint if WE mounted it (so we unmount after)
+
+# Desktop case: udisks auto-mounts the DFU volume under /media. Detect by
+# the presence of INFO_UF2.TXT, NOT bare directory existence — udisks leaves
+# stale empty mountpoints behind after a DFU session unmounts, and `[ -d ]`
+# false-positives on them (the script would then cp into a non-drive).
+find_automount() {
+    local d
+    for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE /run/media/$USER/XIAO-SENSE; do
+        [ -f "$d/INFO_UF2.TXT" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+# Headless case (e.g. blinkyhost): no desktop session, so udisks never
+# auto-mounts. Find the DFU block device by label and mount it ourselves
+# with the invoking uid (mirrors tools/uf2_upload.py). Echoes the mountpoint
+# on success; the caller records it in WE_MOUNTED so it gets unmounted later.
+#
+# Uses `sudo -n` so we never hang on an interactive password prompt. If
+# passwordless sudo for `mount` isn't configured, surface that exactly once
+# (the function is called in a poll loop) so the headless failure mode is
+# not silent — the script will fall through to "no DFU drive found" otherwise.
+MOUNT_BY_LABEL_SUDO_WARNED=0
+mount_by_label() {
+    local bylabel="/dev/disk/by-label/XIAO-SENSE" dev mp err rc
+    [ -e "$bylabel" ] || return 1
+    dev="$(readlink -f "$bylabel")"
+    mp="$(mktemp -d)"
+    err="$(sudo -n mount -t vfat -o uid="$(id -u)",gid="$(id -g)" "$dev" "$mp" 2>&1)" && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ] && [ -f "$mp/INFO_UF2.TXT" ]; then
+        echo "$mp"; return 0
+    fi
+    if [ "$MOUNT_BY_LABEL_SUDO_WARNED" -eq 0 ] && printf '%s' "$err" | grep -qE 'password is required|sudo: a password|may not run sudo'; then
+        echo "ERROR: headless mount requires passwordless sudo for mount." >&2
+        echo "       add to /etc/sudoers.d/blinky:  $(whoami) ALL=(root) NOPASSWD: /bin/mount, /bin/umount" >&2
+        MOUNT_BY_LABEL_SUDO_WARNED=1
+    fi
+    sudo -n umount "$mp" 2>/dev/null || true
+    rmdir "$mp" 2>/dev/null || true
+    return 1
+}
+
+# Unmount + remove a temp mountpoint that WE created via mount_by_label.
+# Safe to call with an empty/unset arg (no-op), so callers can pass a maybe-unset
+# var without guarding. The device is usually rebooting when we clean up, so the
+# umount races the disappearing volume — tolerate failure and just drop the dir.
+# Centralised here so the three call sites (initial flash, post-DFU poll, verify)
+# can't drift out of sync.
+cleanup_mount() {
+    local mp="${1:-}"
+    [ -n "$mp" ] || return 0
+    sudo umount "$mp" 2>/dev/null || true
+    rmdir "$mp" 2>/dev/null || true
+}
+
+# True (0) when $1 is a non-empty BL version string that differs from PRE_BL.
+# If PRE_BL could not be read (empty — INFO_UF2.TXT was missing pre-flash),
+# any non-empty POST_BL is the best confirmation we can offer. A POST_BL equal
+# to a non-empty PRE_BL means the UF2 copy did NOT take (stale mount, full fs,
+# perms) — that is NOT success.
+bl_changed() {
+    local post="${1:-}"
+    [ -n "$post" ] || return 1            # no post → cannot confirm → fail
+    [ -z "$PRE_BL" ] && return 0          # no pre baseline → accept any non-empty post (best-effort)
+    [ "$post" != "$PRE_BL" ]              # both present → must differ
+}
+
+DFU_DRIVE="$(find_automount || true)"
+if [ -z "$DFU_DRIVE" ]; then
+    # Maybe already in DFU but not auto-mounted (headless).
+    if DFU_DRIVE="$(mount_by_label)"; then WE_MOUNTED="$DFU_DRIVE"; else DFU_DRIVE=""; fi
+fi
 
 if [ -z "$DFU_DRIVE" ]; then
     echo "  no XIAO-SENSE drive mounted; trying to enter DFU via serial..."
@@ -140,19 +210,18 @@ s.write(b'bootloader\n')
 time.sleep(0.3)
 s.close()
 " 2>/dev/null || true
-    for w in $(seq 1 12); do
+    for w in $(seq 1 15); do
         sleep 1
-        for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE /run/media/$USER/XIAO-SENSE; do
-            [ -d "$d" ] && DFU_DRIVE="$d" && break
-        done
+        DFU_DRIVE="$(find_automount || true)"
         [ -n "$DFU_DRIVE" ] && break
+        if DFU_DRIVE="$(mount_by_label)"; then WE_MOUNTED="$DFU_DRIVE"; break; else DFU_DRIVE=""; fi
     done
     if [ -z "$DFU_DRIVE" ]; then
-        echo "ERROR: device didn't enter DFU mode within 12s." >&2
+        echo "ERROR: device didn't enter DFU mode within 15s." >&2
         exit 3
     fi
 fi
-echo "  DFU drive: $DFU_DRIVE"
+echo "  DFU drive: $DFU_DRIVE${WE_MOUNTED:+ (explicit mount)}"
 
 # --- Safety 2: log the current BL version ---
 PRE_BL=""
@@ -166,8 +235,29 @@ fi
 # --- Flash ---
 echo
 echo "[3/3] flashing $(basename "$BL_UF2")..."
-cp -v "$BL_UF2" "$DFU_DRIVE/"
-sync
+# Pre-write sanity, BEFORE we tolerate the expected mid-write disconnect:
+# catch the GENUINE copy failures (missing/unreadable source, stale empty
+# mountpoint) loudly. Without this, the `cp ... || true` below would mask
+# them as success. INFO_UF2.TXT presence confirms $DFU_DRIVE is a LIVE UF2
+# volume rather than a stale automount dir; we deliberately do NOT write a
+# probe file to the UF2 MSC (its fake FAT can mishandle non-.uf2 writes) —
+# the post-flash BL-version-change assertion below is what catches the
+# remaining failure modes (full filesystem / permissions / copy silently
+# dropped) by confirming the BL actually changed.
+[ -r "$BL_UF2" ] || { echo "ERROR: BL UF2 not readable: $BL_UF2" >&2; exit 5; }
+[ -f "$DFU_DRIVE/INFO_UF2.TXT" ] || {
+    echo "ERROR: $DFU_DRIVE has no INFO_UF2.TXT — not a live UF2 drive" >&2
+    echo "       (stale mountpoint?). Refusing to cp into a non-drive." >&2
+    exit 5
+}
+# The BL applies the UF2 and reboots, which yanks the USB volume — so cp /
+# sync may report an error as the device disappears mid-write. That's the
+# expected success path, not a failure, hence the `|| true`. (Real failures
+# are caught by the pre-write checks above + the version-change gate below.)
+cp -v "$BL_UF2" "$DFU_DRIVE/" || true
+sync || true
+# If WE explicitly mounted the volume (headless path), unmount it now.
+cleanup_mount "$WE_MOUNTED"
 
 # --- Wait for re-enumeration ---
 echo "  waiting for device to reboot..."
@@ -196,8 +286,11 @@ done
 echo
 echo "Result:"
 if [ "$PID" = "8045" ]; then
-    echo "  device returned to APP mode (pid=8045) — BL self-update succeeded"
-    # Re-enter BL briefly to read INFO_UF2.TXT
+    echo "  device returned to APP mode (pid=8045) — app booted on a working BL"
+    # Returning to APP proves *a* working BL is present, but NOT that OURS
+    # landed — the app could have booted on the OLD BL if the copy silently
+    # failed. Re-enter BL briefly to read INFO_UF2.TXT and CONFIRM the version
+    # actually changed before reporting success.
     PORT="${PORT:-/dev/ttyACM0}"
     if [ -e "$PORT" ]; then
         python3 -c "
@@ -207,20 +300,45 @@ s.write(b'bootloader\n')
 time.sleep(0.3)
 s.close()
 " 2>/dev/null || true
+        VERIFY_DRIVE=""; VERIFY_MOUNTED=""
         for w in $(seq 1 10); do
             sleep 1
-            for d in /media/$USER/XIAO-SENSE /media/$USER/XIAO_SENSE; do
-                [ -d "$d" ] && DFU_DRIVE="$d" && break
-            done
-            [ -f "$DFU_DRIVE/INFO_UF2.TXT" ] && break
+            VERIFY_DRIVE="$(find_automount || true)"
+            [ -n "$VERIFY_DRIVE" ] && break
+            if VERIFY_DRIVE="$(mount_by_label)"; then VERIFY_MOUNTED="$VERIFY_DRIVE"; break; else VERIFY_DRIVE=""; fi
         done
-        if [ -f "$DFU_DRIVE/INFO_UF2.TXT" ]; then
-            POST_BL="$(head -1 "$DFU_DRIVE/INFO_UF2.TXT")"
+        if [ -n "$VERIFY_DRIVE" ] && [ -f "$VERIFY_DRIVE/INFO_UF2.TXT" ]; then
+            POST_BL="$(head -1 "$VERIFY_DRIVE/INFO_UF2.TXT")"
             echo "  post-flash BL: $POST_BL"
+            # Leave the device in the bootloader's DFU after this read — the
+            # caller flashed firmware separately. (We don't auto-reboot to app
+            # here to avoid masking a genuinely-stuck BL.)
+            cleanup_mount "$VERIFY_MOUNTED"
+            if bl_changed "$POST_BL"; then
+                echo "  BL version confirmed changed (pre='$PRE_BL' -> post='$POST_BL')"
+            else
+                echo "ERROR: app booted but BL version did NOT change" >&2
+                echo "       (pre='$PRE_BL' post='$POST_BL'). The UF2 copy did not" >&2
+                echo "       take (stale mount / full fs / perms). BL was NOT updated." >&2
+                exit 4
+            fi
+        else
+            cleanup_mount "$VERIFY_MOUNTED"
+            echo "WARNING: app booted (pid=8045) but could not re-read INFO_UF2.TXT" >&2
+            echo "         to confirm the new BL version. Verify manually before sealing." >&2
         fi
+    else
+        echo "WARNING: no serial port at $PORT — cannot re-read the BL version to" >&2
+        echo "         confirm the update. App booted, but verify manually before sealing." >&2
     fi
+elif bl_changed "${POST_BL:-}"; then
+    echo "  device in BL DFU; BL version confirmed changed (pre='$PRE_BL' -> post='$POST_BL')"
 elif [ -n "${POST_BL:-}" ]; then
-    echo "  device in BL DFU; updated BL: $POST_BL"
+    # We read a BL version but it equals the pre-flash one — the copy didn't take.
+    echo "ERROR: device in BL DFU but BL version did NOT change (pre='$PRE_BL'" >&2
+    echo "       post='$POST_BL'). The UF2 copy did not take (stale mount / full" >&2
+    echo "       fs / perms). BL was NOT updated." >&2
+    exit 4
 else
     echo "WARNING: device did not return to APP mode after BL flash. State:" >&2
     for dp in /sys/bus/usb/devices/*; do

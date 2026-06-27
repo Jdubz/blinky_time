@@ -19,9 +19,17 @@ which re-emits the cached `_last_command` with the SAME `_command_id`
 for any device whose ACK lags. Capped at `REBROADCAST_MAX_ATTEMPTS = 3`
 per (device, command_id) to bound radio time on a permanently-out-of-
 range device; the per-device counter clears on each fresh
-`broadcast_command` (new logical command resets the budget). Field
-validation pending — bench measurement of per-broadcast delivery rate
-after Phase 2 vs. pre-Phase-2 baseline.
+`broadcast_command` (new logical command resets the budget).
+
+**Bench-validated 2026-05-20: 20/20 broadcasts delivered** (100% per-
+broadcast delivery to the bench chip `659C8DD3ADF84A33` over BLE —
+`last_cmd_id` advanced on every one of 20 distinct commands spaced 2.5 s
+apart). Confirms the reception path (multi-slot rxBuffer + 90% scan
+duty + gossip-ACK re-broadcast) at the per-broadcast level. **Caveat:**
+single device at strong signal (-39 to -46 dBm). The original ~80%
+ceiling was a full-fleet-at-distance measurement; multi-device,
+festival-range validation still ideally wanted but requires the
+deployed fleet, so it rides on the fleet rollout (§7).
 
 **Symptom (original, pre-fix):** 4 of 20 broadcasts hit zero devices
 on the bench measurement (2026-05-19 evening). Systemic misses were
@@ -132,7 +140,7 @@ the WS2812B data line, or a flaky physical button.
 | 7 | `tests/test_fleet_ble.py` | `bc.COMMAND_REEMIT_HOLD_MS = 0.0` instance-attribute override is fragile. | ✅ Replaced with `_fast_broadcaster(monkeypatch)` helper that patches the class attribute. |
 | 8 | `tests/test_registry_jsons.py` | Only checked `ledType` validity. | ✅ Added per-file checks for required-field presence, deviceId↔filename match, ledWidth/ledHeight positive (with 2048 sanity cap), and orientation/layoutType enum-range. |
 | 11 | `blinky_server/ble/protocol.py` | Docstring claimed 238-byte ceiling without flagging the firmware's 21-byte legacy-adv effective limit. | ✅ Docstring now documents both ceilings and the silent-on-air failure mode. |
-| (n/a) | `BleScanner.cpp` `RxSlot` struct | `uint16_t len` misaligned at byte offset 1. | ⏸ Perf nit; not worth packing now per the original review. |
+| (n/a) | `BleScanner.h` `RxSlot` struct | `uint16_t len` misaligned at byte offset 1 (compiler padded to offset 2). | ✅ Reordered fields to `{len, type, data}` — `len` now naturally aligned at offset 0, padding byte removed (saves 1 byte/slot). Layout-safe: all access is by field name. |
 
 ---
 
@@ -368,135 +376,171 @@ reformat eliminates the need for that.
 
 ### 4.1 Canary probe coverage incomplete
 
-**Shipped:** `lemoncart-canary.service` with 4 probes — hostapd,
-blinky-server, dnsmasq, lemoncart-buttons.
+**Shipped:** `lemoncart-canary.service` with 6 probes — hostapd,
+blinky-server, dnsmasq, lemoncart-buttons (auto-restart) +
+**pipewire-sinks** and **bluetooth-rfkill** (alert-only, added
+2026-05-20, lemon-cart commit `c7ee885`).
 
-**Probes to add (TODO comment in `lemoncart-canary` script):**
-- **End-to-end fleet ping** — emit synthetic "canary" command,
-  verify `broadcaster.command_id` advances and at least one device's
-  gossip-ACK adv reflects it within N seconds. Catches the
-  Section 1.1 silent-broadcaster-broken state.
-- **pipewire (user service)** — verify audio sinks exist
-  (`pactl list short sinks`). Pipewire crash today shows audio
-  routes silent with no upstream alert.
-- **bluetooth adapter health** — verify `rfkill list` shows
-  `Soft blocked: no` and `hci0` is up. Adapter rfkill events
-  during heavy traffic can mute BLE.
-- **station-api** — HTTP probe with a known query (e.g. mix state).
+**Deliberately NOT added (cost-vs-real-risk):**
+- **End-to-end fleet ping** — emitting a synthetic broadcast + BLE-scan
+  every 30 s cycle pollutes airtime and burns CPU during exactly the
+  festival-traffic windows we can least afford it. blinky-server's
+  `broadcaster.running` check already covers the process-up case.
+  Revisit only if a frozen-but-running broadcaster is observed in the
+  field, and then on a multi-minute interval.
+- **station-api** — operator control plane, not the fleet command path
+  (that's blinky-server, already probed). No observed failure; lower
+  criticality. Add if it ever wedges in the field.
+
+The two new probes are alert-only because their recoveries are
+disruptive (audio-stack bounce kicks every connected phone; bluetooth
+restart drops all BT links; rfkill needs `rfkill unblock` not a unit
+restart). Unit hardening relaxed `ProtectHome=yes` → `read-only` so the
+pipewire probe can reach the per-user `/run/user/<uid>` socket.
 
 ---
 
 ### 4.2 No `sd_notify` watchdogs on critical services
 
-`Restart=on-failure` covers crashes. `WatchdogSec` + service-side
-`sd_notify(WATCHDOG=1)` would catch deadlocks ("running but stuck").
-`blinky-server` and `station-api` are the highest-value targets.
+**Status: DONE for blinky-server (the genuinely-critical target).**
+`blinky-server.service` is `Type=notify` + `NotifyAccess=main` +
+`WatchdogSec=120`; `blinky_server/systemd_notify.py` implements the
+protocol and the fleet manager loop pings `watchdog()` on every cycle
+(`device/manager.py` ~L2987/3023/3050). A wedged BLE scan or asyncio
+deadlock trips the 120 s watchdog → SIGKILL → `Restart=always`. See
+[[feedback-systemd-watchdog-flash-kill]] (the ping MUST fire from every
+loop branch — the paused-loop branch skipping it bricked cart_inner
+2026-05-16).
 
-**Adds:** ~5 lines of Python per service to ping the watchdog from
-the main loop. WatchdogSec in the unit file. No protection against
-the deadlock-class failure today.
+**station-api: deliberately NOT added.** It's a request-driven FastAPI
+control plane with no background work loop, so a watchdog ping would
+only prove "event loop alive" — and a deadlock is unlikely without
+shared locks/background tasks. `Restart=always` covers the crash case.
+Lower criticality (operator control, not fleet path). Revisit if a
+real deadlock is observed.
 
 ---
 
 ### 4.3 No memory caps on services
 
-`MemoryMax=` drop-ins would let systemd OOM-kill a leaked service
-(triggering `Restart=on-failure`) rather than letting it slowly
-consume the box. Reasonable defaults: 256 MB for blinky-server,
-128 MB for station-api, 64 MB for canary. No observed leaks tonight,
-but cheap insurance for an unattended event.
+**Status: DONE.** `blinky-server.service` has `MemoryMax=512M` +
+`CPUQuota=80%`; `station-api.service` has `MemoryMax=256M` +
+`CPUQuota=50%`. systemd OOM-kills a leaked service →
+`Restart=always` brings it back rather than letting it eat the Pi.
+(No leaks observed; cheap insurance for an unattended multi-day event.)
 
 ---
 
 ### 4.4 No boot-time service verification
 
-After a power cycle (real risk at festivals on UPS), no service
-checks "did everything come back up?" The canary catches steady-state
-failures but not boot-time start-failures of services it doesn't
-probe yet.
+**Status: DONE (lean, no-reboot variant)** — lemon-cart commit
+`b1e9795`. `lemoncart-boot-verify.timer` (OnBootSec=60s) fires a
+one-shot that checks the critical unit set (hostapd, dnsmasq,
+bluetooth, blinky-server, station-api, lemoncart-buttons,
+lemoncart-canary), logs LOUD on any that didn't come up, and
+attempts a SINGLE `systemctl start`. Still-down units are flagged
+for operator attention.
 
-**Proposed:** `lemoncart-boot-verify.service` — `After=multi-user.target`,
-runs once 60s after boot, checks every critical unit is `active`,
-logs loud + reboot-once on any failure. Catches the
-"comes-back-from-power-loss-but-X-never-started" class.
+**Deliberately NOT auto-rebooting** (the doc's original "reboot-once"
+proposal was rejected): a reboot loop mid-event is far worse than one
+dead service — it drops the AP / audio / fleet every 60 s. We accept
+"one service down + a loud log" over "box stuck cycling". A reboot
+also doesn't fix genuine breakage (bad config, missing file); the
+single `systemctl start` covers the transient-boot-race case that a
+reboot would otherwise "fix".
+
+Most of this was already covered by the canary's steady-state
+auto-restart; boot-verify's real marginal value is the boot-START
+gap for the **canary itself** (nothing else watches the watcher) and
+**bluetooth** (canary alerts but doesn't restart it).
 
 ---
 
 ## 5. Hub UI work (depends on Section 1.2 refactor)
 
-Section 1.2's server + console cleanup landed 2026-05-19. The
-remaining work is in the lemon-cart repo (`~/lemon-cart/`).
+**Status: SHIPPED** (lemon-cart commit `d04efae`).
 
-**Deployable today (no protocol changes):**
-- **Generator chip row** — replaces scene chips. Routes to
-  `POST /api/fleet/generator/{name}`; 4 chips fire/water/plasma/audio,
-  each command is `gen <name>` (≤10 bytes on wire). Fits the
-  legacy-adv ceiling comfortably.
+- **Generator chip row** — done (fire/water/lightning/audio, routes to
+  `POST /api/fleet/generator/{name}`, `gen <name>` ≤10 bytes on wire).
+- **Dead scenes section removed** — `GET /api/scenes` 404s after the
+  §1.2 generator-only refactor; the panel's Scenes block was stuck on
+  "Loading…". Removed it + the `blinkyScenes`/`blinkyApplyScene` API
+  methods + `BlinkyScene` type.
+- **Hue speed + position sliders** — done via the **short-name alias**
+  path (option 1 below). The sliders broadcast `set huespeed <v>`
+  (16 bytes) and `set hueshift <v>` (17 bytes), both comfortably under
+  the 21-byte legacy-adv ceiling. Verified end-to-end: PUT
+  `/api/fleet/settings/huespeed` `{value:0.5}` → bench chip applied
+  `huespeed = 0.500 [effect]`.
 
-**BLOCKED on protocol-length resolution:**
-- **Hue rotation speed slider** — fleet-wide via
-  `set effectRotationSpeed <value>` (28 bytes on wire).
-- **Absolute hue position slider** — `set effectHueShift <value>`
-  (same length range).
+No server change was needed — `PUT /api/fleet/settings/{name}` is a
+generic `set {name} {value}` passthrough. No firmware change was needed
+— `huespeed`/`hueshift` are already registered float settings
+(`SerialConsole.cpp:1544-1546`). The long forms
+(`set effectRotationSpeed <v>` = 27 bytes) would have exceeded the
+ceiling and been silently promoted to extended adv the firmware doesn't
+scan; using the short names sidesteps that entirely.
 
-Both slider commands exceed the firmware scanner's 21-byte
-legacy-adv effective ceiling — BlueZ silently promotes them to
-extended adv, which the firmware doesn't watch (the same root cause
-as the scene-system command overflow). **Two paths to unblock:**
-
-1. **Short-name aliases** in firmware: rename the broadcast paths to
-   use `huespeed` / `hueshift` (existing short names, already
-   recognised by the firmware's `set` command). Server-side change:
-   emit `set huespeed <v>` (16 bytes) instead of
-   `set effectRotationSpeed <v>` (28 bytes). No firmware change
-   required because the short names already work. **This is the
-   cheaper option and should be tried first.**
-2. **Firmware extended-adv scanning** (Section 6) — lifts the ceiling
-   for everything. Not a one-liner (BSP patch + ~half-day of work);
-   see Section 6 for actual scope.
-
-Until ONE of these lands, don't ship the slider Hub UI work — the
-broadcast would silently no-op. The generator chip row CAN ship now.
+This made option 1 (short-name aliases) the whole fix; **Section 6
+(firmware extended-adv scanning) is no longer needed to unblock §5**,
+though it remains valuable for future long-named protocol extensions.
 
 ---
 
 ## 6. Firmware extended-adv scanning (cross-cutting)
 
-The 21-byte effective payload ceiling for legacy BLE adv constrains:
-- Scene commands (Section 1.2) — abandoned, going generator-only
-- Set commands with long names (Section 5)
-- Future protocol extensions
+**Status: WON'T-DO on current hardware (closed 2026-05-20).** Attempted
+end-to-end and abandoned after discovering a hard architectural blocker.
+Reverted all changes. §5's short-command-name approach already covers
+the real need, so there is no current consumer for extended adv.
 
-**Status: research complete, NOT a one-liner.** Investigation
-2026-05-19: Adafruit Bluefruit (`Bluefruit52Lib/src/BLEScanner.{h,cpp}`)
-does not expose a `useExtendedAdv()` method. The `start()` path
-fixes `_param.extended = 0` in the constructor (with a literal
-`// TODO Extended Adv on secondary channels`) and allocates the scan
-buffer at `_scan_data[BLE_GAP_SCAN_BUFFER_MAX = 31]`. To enable
-extended adv:
+**Why it was abandoned — the doc's premise was wrong + a hardware wall:**
 
-1. **BSP-level patch** of `BLEScanner.cpp`: resize `_scan_data` from
-   31 → ≥255 (`BLE_GAP_SCAN_BUFFER_EXTENDED_MIN`), add a public
-   `useExtendedAdv(bool)` that flips `_param.extended` and toggles
-   `_report_data.len` between the two sizes. New `patches/` file
-   + re-apply on BSP update (precedent: `patches/tinyusb-cdc-no-overwritable-fifo.patch`).
-2. **Firmware-side** `Bluefruit.Scanner.useExtendedAdv(true)` in
-   `BleScanner::begin` BEFORE `start(0)`.
-3. **handleReport** path needs to tolerate the larger frame layout
-   (SoftDevice may deliver fragments via `report_incomplete_evts`
-   if a single extended adv exceeds the 255-byte buffer; we'd need
-   to either ignore those or accumulate them).
-4. **Verify with bench chip + signal generator** before fleet rollout.
+1. **The firmware half works** and was implemented + bench-validated:
+   a BSP patch (`useExtendedAdv()` + 255-byte scan buffer) plus
+   `BleScanner::begin` calling `useExtendedAdv(true)`. The extended
+   scanner received both legacy and extended adv with NO legacy
+   regression (verified: `last_seq`/`packets_rx` advanced on long
+   broadcasts; short commands still applied). `handleReport` needed
+   no change — it's already length-driven, and with
+   `report_incomplete_evts=0` the SD never delivers fragments.
 
-**Cost:** ~half-day investigation + patch + firmware + BSP-patch
-install/CI hook + bench validation. Plus the ~55 min BLE-DFU rollout
-to fleet (eased by Section 1.1 gossip-ACK re-broadcast which makes
-delivery more reliable).
+2. **The doc's premise — "BlueZ silently promotes [long commands] to
+   extended adv" — is FALSE.** `btmon` shows BlueZ emits LEGACY
+   `ADV_NONCONN_IND` and TRUNCATES anything over 31 bytes. It does not
+   auto-promote. So the firmware scanner had nothing real to receive;
+   `last_cmd_id` never advanced for a long command because what arrived
+   was a truncated, malformed packet.
 
-**Workaround in the meantime:** keep fleet commands under 21 bytes
-on-wire. `gen <name>`, `effect <mode>`, `set <short> <value>` all
-fit. Long-named settings (`effectRotationSpeed = 28 bytes`) need
-either a shorter name or this extended-adv work.
+3. **The hardware wall (the actual blocker):** extended adv requires a
+   capable controller. On this cart:
+   - **hci0** (BCM43455, Pi onboard) — runs the fleet broadcaster +
+     nRF52 GATT/DFU, deliberately LE-only because its A2DP is broken.
+     `LEAdvertisingManager1.SupportedCapabilities` = `MaxAdvLen=31`,
+     `SupportedSecondaryChannels` empty → **no extended adv.**
+   - **hci1** (Realtek 5.1 USB dongle) — the A2DP **audio** controller.
+     `MaxAdvLen=251`, secondary channels `1M/2M/Coded`, hardware
+     offload → **full extended adv** (and natively, NOT gated by
+     BlueZ `Experimental`).
+
+   So the ONLY ext-adv-capable controller is the one streaming festival
+   music. Shipping §6 would mean moving the fleet broadcaster onto the
+   audio controller (radio contention risk on the cart's primary
+   function) and splitting LE roles across both controllers. Not worth
+   it for a capability with no current consumer.
+
+**If revisited in the future**, the path is: broadcaster → hci1 with
+`SecondaryChannel="1M"` on the `LEAdvertisement1`, validate A2DP audio
+is unaffected under broadcast load, plus re-apply the firmware BSP
+patch (recoverable from this session's git history /
+[[project-bsp-nrfutil-patch]] precedent). Or: add a second ext-adv-capable
+LE dongle so broadcast and audio don't share a controller.
+
+**Workaround that makes §6 unnecessary today:** keep fleet commands
+under the 21-byte on-wire ceiling. `gen <name>`, `effect <mode>`,
+`set <short> <value>` all fit. Long-named settings use short aliases
+(`huespeed`/`hueshift` instead of `effectRotationSpeed`/`effectHueShift`)
+— this is exactly how §5's hue sliders shipped.
 
 ---
 

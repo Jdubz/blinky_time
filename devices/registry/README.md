@@ -17,6 +17,8 @@ other.
 | Device ID | Description | LEDs | Layout | File |
 |-----------|-------------|------|--------|------|
 | `hat_v1` | Festival Hat v1 | 89 (linear string) | LINEAR, single strand on D0. Battery-powered. | `hat_v1.json` |
+| `sourpuss_hat` | Sourpuss Hat | 70 (linear string) | LINEAR, single strand on D10. Battery-powered. New hat, distinct from `hat_v1`. | `sourpuss_hat.json` |
+| `scarf` | Scarf | 141 (linear string) | LINEAR, single strand on D0. Battery-powered. | `scarf.json` |
 | `tube_v2` | Tube Light v2 | 60 (4×15 matrix) | MATRIX, vertical zigzag on D10. Battery-powered. | `tube_v2.json` |
 | `bucket_v3` | Bucket Totem v3 | 128 (16×8 matrix) | MATRIX, horizontal row-major on D10. Z-inverted. | `bucket_v3.json` |
 | `big_bucket_v1` | Big Bucket | 112 (14×8 matrix) | MATRIX, horizontal zigzag (serpentine) on D0; button on D1 cycles generator. **Outlier:** `ledType=6` (NEO_RGB) because the LED part is wired native RGB, not the fleet-standard GRB. | `big_bucket_v1.json` |

@@ -331,11 +331,19 @@ run_fleet_command() {
     }
 
     # Parse the per-device dict, print one row per device, and exit non-zero
-    # if any device's response doesn't start with "OK". Per PR 138 review:
-    # the previous "fail only on skipped/error prefixes" was too permissive
-    # — a firmware error string that didn't start with those prefixes would
-    # silently pass. Firmware command handlers all respond with "OK..." on
-    # success (see SerialConsole.cpp), so anchor on that.
+    # if any device's response is a real failure. Accept two success shapes:
+    #   - "OK..."      — a connected device executed the command.
+    #   - "skipped: ..." — the server did NOT directly command this device
+    #     because it isn't connected (BLE devices sit at state=present, no
+    #     persistent GATT link). For the FLEET-BROADCAST commands this helper
+    #     runs (restore_runtime_settings, save), the command still reaches
+    #     those devices over the air via the broadcaster — the "broadcast"
+    #     key (itself an "OK"/non-OK entry) is the real delivery signal. The
+    #     server's own API docs call skipped: informational, not an error
+    #     (routes_commands.fleet_restore_defaults). Anything ELSE (a firmware
+    #     error string) is still a hard failure — we only widen the
+    #     allowlist to the server-generated "skipped:" prefix, not arbitrary
+    #     non-OK strings (the PR 138 anchor-on-OK concern stands).
     if ! echo "$resp_json" | python3 -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -346,6 +354,9 @@ for dev_id, resp in data.items():
     first_line = resp_str.split(chr(10))[0][:60]
     if resp_str.startswith('OK'):
         print(f'  {short} OK ({first_line})')
+    elif resp_str.startswith('skipped:'):
+        # Not connected — broadcast still reached it. Informational.
+        print(f'  {short} skipped (not connected; broadcast still sent): {first_line}')
     else:
         print(f'  {short} FAIL: {first_line}')
         fails += 1
@@ -385,40 +396,106 @@ DEVICES_JSON=$(curl -sf --max-time 15 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVE
     fail "Failed to list devices for post-deploy verification: ${DEVICES_JSON}" 4
 }
 
-echo "$DEVICES_JSON" | python3 -c "
-import json, sys, urllib.request, os
+# Verify ONLY the devices we targeted (DEVICE_IDS_JSON), not the whole
+# fleet — a subset deploy must not fail on devices it never touched.
+# Uses a quoted-delimiter heredoc so bash does NO expansion of the body
+# (the previous `python3 -c "..."` form let bash try to execute f-string
+# fragments — `fps: command not found` — on the error path). Inputs come
+# in via the environment.
+set +e
+# Pass the (potentially large) /api/devices payload via a temp FILE, not an
+# env var: a big fleet's JSON can exceed the OS environment-size limit
+# (ARG_MAX / E2BIG), which would make the verifier fail on valid JSON. Small,
+# bounded values (TARGET_IDS, EXPECTED, key, server) stay in the environment.
+DEVICES_JSON_FILE="$(mktemp)"
+# Guarantee cleanup even if the script exits on a signal (SIGINT, SIGTERM)
+# or `set -e` between here and the explicit rm below.
+trap 'rm -f "${DEVICES_JSON_FILE:-}"' EXIT
+printf '%s' "$DEVICES_JSON" > "$DEVICES_JSON_FILE"
+DEVICES_JSON_FILE="$DEVICES_JSON_FILE" \
+TARGET_IDS="$DEVICE_IDS_JSON" \
+EXPECTED_BUILD="b${BUILD}" \
+API_KEY="$API_KEY" \
+BLINKY_SERVER="$BLINKY_SERVER" \
+python3 - <<'PYEOF'
+import json, os, sys, time, urllib.request
 
 API_KEY = os.environ['API_KEY']
 SERVER = os.environ['BLINKY_SERVER']
 EXPECTED = os.environ['EXPECTED_BUILD']
+targets = sorted(set(json.loads(os.environ['TARGET_IDS'])))
+with open(os.environ['DEVICES_JSON_FILE']) as _f:
+    by_id = {d.get('id'): d for d in json.load(_f)}
 
-devices = json.loads(sys.stdin.read())
-fails = []
-for d in devices:
-    dev_id = d.get('id', '?')
-    short = dev_id[:12]
-    state = d.get('state', '?')
-    if state != 'connected':
-        fails.append(f'{short} state={state}')
-        print(f'  {short} FAIL: state={state}')
-        continue
-    # Build body via json.dumps for consistency with run_fleet_command's
-    # safe-quoting pattern. 'json info' has no special chars so the inline
-    # literal worked, but copy-paste reuse on a different command could
-    # break — per PR 138 round-3 review.
+
+def version_matches(v):
+    # Firmware version is "b<num>-<sha>[-dirty]"; EXPECTED is "b<num>".
+    # Prefix-match on the build token + dash so the SHA suffix doesn't
+    # spuriously fail, while "b1900" still won't match "b190".
+    return v == EXPECTED or v.startswith(EXPECTED + '-')
+
+
+def get_json_info(dev_id):
+    # 'json info' over the device API. Only valid for CONNECTED devices —
+    # the server 409s a non-connected (BLE 'present') device. One retry
+    # absorbs transient flakiness on a connected device.
+    # Returns (info_dict | None, err | None).
     req = urllib.request.Request(
         f'{SERVER}/api/devices/{dev_id}/command',
         data=json.dumps({'command': 'json info'}).encode(),
         headers={'X-API-Key': API_KEY, 'Content-Type': 'application/json'},
         method='POST',
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            wrap = json.loads(r.read())
-        info = json.loads(wrap['response'])
-    except Exception as e:
-        fails.append(f'{short} json info failed: {e}')
-        print(f'  {short} FAIL: json info: {e}')
+    last_err = None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                wrap = json.loads(r.read())
+            return json.loads(wrap['response']), None
+        except Exception as e:  # noqa: BLE001 — report, then retry/fail
+            last_err = e
+            # Brief pause before retry so back-to-back attempts don't hit the
+            # same transient state window (BLE GATT teardown, server connect race).
+            if attempt == 0:
+                time.sleep(2)
+    return None, last_err
+
+
+fails = []
+unreachable = 0
+for dev_id in targets:
+    short = dev_id[:12]
+    d = by_id.get(dev_id)
+    if d is None:
+        fails.append(f'{short} missing')
+        print(f'  {short} FAIL: not in /api/devices (disappeared post-flash)')
+        continue
+    state = d.get('state', '?')
+    # 'error' / 'dfu_recovery' are bad terminal post-flash states.
+    if state in ('error', 'dfu_recovery'):
+        fails.append(f'{short} state={state}')
+        print(f'  {short} FAIL: state={state}')
+        continue
+
+    # Sealed BLE devices sit at 'present' (advertising in APP mode, no
+    # persistent GATT link) and 409 on per-device commands — so we can't
+    # json-info them. But 'present' in app mode IS the health signal: the
+    # app booted and is advertising NUS (a bricked / bootlooping device
+    # would be dfu_recovery or absent, not present). Their FIRMWARE VERSION
+    # was already verified by the flash job, which deploy.sh gated on at the
+    # 'Waiting for flash to complete' step (a flash=error there aborts before
+    # this assertion ever runs). So accept a non-connected present device
+    # without json-info. Only 'connected' devices (serial / active GATT) get
+    # the full version/fps/overruns re-check below.
+    if state != 'connected':
+        print(f'  {short} OK (state={state}; app advertising — version verified by flash job; no GATT for json info)')
+        continue
+
+    info, err = get_json_info(dev_id)
+    if info is None:
+        unreachable += 1
+        fails.append(f'{short} unreachable')
+        print(f'  {short} FAIL: json info unreachable after retry: {err}')
         continue
 
     version = info.get('version', '?')
@@ -426,10 +503,9 @@ for d in devices:
     overruns = info.get('audioOverruns', -1)
     samples_lost = info.get('audioSamplesLost', -1)
 
-    # Hard checks: version, basic counters present.
-    if version != EXPECTED:
-        fails.append(f'{short} version={version} expected={EXPECTED}')
-        print(f'  {short} FAIL: version={version} expected={EXPECTED} fps={fps} overruns={overruns}')
+    if not version_matches(version):
+        fails.append(f'{short} version={version}')
+        print(f'  {short} FAIL: version={version} expected={EXPECTED}* fps={fps} overruns={overruns}')
         continue
     if overruns < 0 or samples_lost < 0:
         # New firmware should always expose these; if missing, instrumentation regressed.
@@ -439,60 +515,49 @@ for d in devices:
 
     # Soft warnings: fps low / overruns high. Don't fail deploy on these
     # (boot-time stalls produce a few overruns expectedly), but surface them.
-    # TODO(v36-fmax #136): once v36 firmware ships with NN re-enabled, fps
-    # < 30 must become a HARD FAIL (the v36 merge gate per ML_IMPROVEMENT_PLAN).
-    # ALSO: fps == 0.0 means LoopMetrics' first 5s window hasn't closed yet
-    # (slow USB re-enumeration ate the sleep margin) — currently silently
-    # skipped by `fps > 0` guard. At v36 promotion, this needs to become
-    # either a hard fail OR a polled retry until the window closes. Don't
-    # ship the hard-fail without closing this hole.
     warn = []
     if fps == 0.0:
-        # LoopMetrics window hasn't closed yet — slow USB re-enumeration
-        # eating into the 6s sleep margin. Surface so operator sees it
-        # rather than the check silently passing on no-data. Per PR 138
-        # round-7 review.
         warn.append('fps=0.0(window-unclosed)')
     elif fps < 30:
         warn.append(f'fps={fps:.1f}<30')
     if overruns > 5:
         warn.append(f'overruns={overruns}')
-    # Space after WARN: improves readability when scanning the deploy
-    # output — `WARN: fps=0.0` is more visible than `WARN:fps=0.0`. Per
-    # PR 138 round-9 review.
     warn_str = '  WARN: ' + ', '.join(warn) if warn else ''
     print(f'  {short} OK version={version} fps={fps:.1f} overruns={overruns}{warn_str}')
 
-# Failure-class taxonomy (#142): if EVERY device is unreachable, the cause is
-# almost certainly upstream (host USB stack, server, network) rather than
-# coincident firmware bricks on N devices. Surface that distinction so the
-# operator knows whether to investigate firmware or restart blinkyhost.
-# 2026-05-01 incident: I diagnosed '4 bricked devices' from 'all 4 unreachable'
-# when actually blinkyhost's USB stack was stale. Reboot fixed it; firmware
-# was fine. Saved as memory: feedback_brick_diagnosis_first_rule.md.
-total = len(devices)
-unreachable = sum(1 for d in devices if d.get('state') != 'connected')
-all_unreachable = total > 0 and unreachable == total
-print(f'pass={total-len(fails)}/{total}', file=sys.stderr)
-if all_unreachable:
-    print(f'all_unreachable=1', file=sys.stderr)
+# Failure-class taxonomy (#142): if EVERY targeted device is unreachable,
+# the cause is almost certainly upstream (host USB stack, server, network)
+# rather than coincident firmware bricks. Surface that distinction.
+# (feedback_brick_diagnosis_first_rule.md.)
+total = len(targets)
+print(f'pass={total - len(fails)}/{total}', file=sys.stderr)
+if total > 0 and unreachable == total:
+    print('all_unreachable=1', file=sys.stderr)
 sys.exit(1 if fails else 0)
-" || {
-    # Re-evaluate whether the failure is host-side (all unreachable) or
-    # device-specific. If host-side, advise reboot rather than implying
-    # bricks; if device-specific, the per-row FAIL output above tells
-    # the operator which devices to investigate.
-    UNREACHABLE_COUNT=$(curl -sf --max-time 10 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
-        python3 -c "import json,sys; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('state')!='connected'), len(ds))" 2>/dev/null)
-    UNREACH=$(echo "$UNREACHABLE_COUNT" | awk '{print $1}')
-    TOTAL=$(echo "$UNREACHABLE_COUNT" | awk '{print $2}')
+PYEOF
+ASSERT_RC=$?
+rm -f "$DEVICES_JSON_FILE"
+set -e
+if [ "$ASSERT_RC" -ne 0 ]; then
+    # Re-evaluate whether the failure is host-side (all targets off the bus)
+    # or device-specific. Scope to the TARGET devices. A device counts as "on
+    # the bus" if the server can SEE it in ANY state — 'present'/'connected'
+    # (healthy), but ALSO 'connecting' and 'dfu_recovery': a device in DFU is
+    # very much present (advertising AdaDFU), and 'connecting' is transient.
+    # Only a device the server can't see at all (missing / disconnected) is
+    # genuinely "off the bus" and points at a stuck host USB stack. Counting
+    # dfu_recovery/connecting as off-bus would mis-route a real device-specific
+    # failure (e.g. one chip stuck in DFU) into the "restart udevd / reboot
+    # host" branch. Double-quoted -c with no '$' inside is bash-expansion-safe;
+    # TARGET_IDS is passed via the environment.
+    DIAG=$(curl -sf --max-time 10 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>/dev/null | \
+        TARGET_IDS="$DEVICE_IDS_JSON" python3 -c "import json,os,sys; ds={d.get('id'):d for d in json.load(sys.stdin)}; t=json.loads(os.environ['TARGET_IDS']); off=sum(1 for x in t if ds.get(x,{}).get('state') not in ('present','connected','connecting','dfu_recovery')); print(off, len(t))" 2>/dev/null)
+    OFF=$(echo "$DIAG" | awk '{print $1}')
+    TOTAL=$(echo "$DIAG" | awk '{print $2}')
     # Three branches:
-    #   (a) TOTAL is empty → server itself unreachable (curl failed); diagnose accordingly
-    #   (b) TOTAL > 0 AND UNREACH == TOTAL → all devices unreachable, likely host USB
+    #   (a) TOTAL empty → server itself unreachable (curl failed)
+    #   (b) TOTAL > 0 AND OFF == TOTAL → all targets off the bus, likely host USB
     #   (c) Otherwise → specific device(s) failed, deploy state diverged
-    # Pre-fix (PR 138 round-11 review): branch (a) silently fell through to (c)
-    # with a misleading "investigate per-device" message — server-down case looked
-    # like a device failure.
     if [[ -z "$TOTAL" ]]; then
         echo ""
         echo "  Could not reach blinky-server to diagnose post-deploy state."
@@ -501,20 +566,20 @@ sys.exit(1 if fails else 0)
         echo "    1. ssh blinkyhost.local sudo systemctl status blinky-server"
         echo "    2. ssh blinkyhost.local sudo journalctl -u blinky-server -n 50"
         fail "Could not reach server to diagnose post-deploy state — server may be down." 5
-    elif [[ "$TOTAL" -gt 0 && "$UNREACH" == "$TOTAL" ]]; then
+    elif [[ "$TOTAL" -gt 0 && "$OFF" == "$TOTAL" ]]; then
         echo ""
-        echo "  All $TOTAL device(s) unreachable simultaneously — this pattern almost"
-        echo "  always means the HOST USB stack is stuck (kernel/udev), not firmware"
-        echo "  bricks. Try:"
+        echo "  All $TOTAL targeted device(s) off the bus simultaneously — this pattern"
+        echo "  almost always means the HOST USB stack is stuck (kernel/udev), not"
+        echo "  firmware bricks. Try:"
         echo "    1. ssh blinkyhost.local sudo systemctl restart systemd-udevd"
         echo "    2. If that doesn't help, ssh blinkyhost.local sudo reboot"
         echo "    3. Then re-run this deploy with --skip-compile"
         echo "  See memory: feedback_brick_diagnosis_first_rule.md"
-        fail "All devices unreachable — likely host USB stack, not firmware. Recovery steps printed above." 5
+        fail "All targeted devices off the bus — likely host USB stack, not firmware. Recovery steps printed above." 5
     else
-        fail "Post-deploy state assertion failed (see rows above). $UNREACH/$TOTAL device(s) in unexpected state — investigate per-device causes." 4
+        fail "Post-deploy state assertion failed (see rows above). $OFF/$TOTAL targeted device(s) in unexpected state — investigate per-device causes." 4
     fi
-}
+fi
 
 echo ""
 echo "============================================================"
