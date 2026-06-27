@@ -139,16 +139,27 @@ find_automount() {
 # auto-mounts. Find the DFU block device by label and mount it ourselves
 # with the invoking uid (mirrors tools/uf2_upload.py). Echoes the mountpoint
 # on success; the caller records it in WE_MOUNTED so it gets unmounted later.
+#
+# Uses `sudo -n` so we never hang on an interactive password prompt. If
+# passwordless sudo for `mount` isn't configured, surface that exactly once
+# (the function is called in a poll loop) so the headless failure mode is
+# not silent — the script will fall through to "no DFU drive found" otherwise.
+MOUNT_BY_LABEL_SUDO_WARNED=0
 mount_by_label() {
-    local bylabel="/dev/disk/by-label/XIAO-SENSE" dev mp
+    local bylabel="/dev/disk/by-label/XIAO-SENSE" dev mp err rc
     [ -e "$bylabel" ] || return 1
     dev="$(readlink -f "$bylabel")"
     mp="$(mktemp -d)"
-    if sudo mount -t vfat -o uid="$(id -u)",gid="$(id -g)" "$dev" "$mp" 2>/dev/null \
-        && [ -f "$mp/INFO_UF2.TXT" ]; then
+    err="$(sudo -n mount -t vfat -o uid="$(id -u)",gid="$(id -g)" "$dev" "$mp" 2>&1)" && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ] && [ -f "$mp/INFO_UF2.TXT" ]; then
         echo "$mp"; return 0
     fi
-    sudo umount "$mp" 2>/dev/null || true
+    if [ "$MOUNT_BY_LABEL_SUDO_WARNED" -eq 0 ] && printf '%s' "$err" | grep -qE 'password is required|sudo: a password|may not run sudo'; then
+        echo "ERROR: headless mount requires passwordless sudo for mount." >&2
+        echo "       add to /etc/sudoers.d/blinky:  $(whoami) ALL=(root) NOPASSWD: /bin/mount, /bin/umount" >&2
+        MOUNT_BY_LABEL_SUDO_WARNED=1
+    fi
+    sudo -n umount "$mp" 2>/dev/null || true
     rmdir "$mp" 2>/dev/null || true
     return 1
 }
@@ -173,9 +184,9 @@ cleanup_mount() {
 # perms) — that is NOT success.
 bl_changed() {
     local post="${1:-}"
-    [ -n "$post" ] || return 1
-    [ -z "$PRE_BL" ] && return 0
-    [ "$post" != "$PRE_BL" ]
+    [ -n "$post" ] || return 1            # no post → cannot confirm → fail
+    [ -z "$PRE_BL" ] && return 0          # no pre baseline → accept any non-empty post (best-effort)
+    [ "$post" != "$PRE_BL" ]              # both present → must differ
 }
 
 DFU_DRIVE="$(find_automount || true)"

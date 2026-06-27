@@ -408,6 +408,9 @@ set +e
 # (ARG_MAX / E2BIG), which would make the verifier fail on valid JSON. Small,
 # bounded values (TARGET_IDS, EXPECTED, key, server) stay in the environment.
 DEVICES_JSON_FILE="$(mktemp)"
+# Guarantee cleanup even if the script exits on a signal (SIGINT, SIGTERM)
+# or `set -e` between here and the explicit rm below.
+trap 'rm -f "${DEVICES_JSON_FILE:-}"' EXIT
 printf '%s' "$DEVICES_JSON" > "$DEVICES_JSON_FILE"
 DEVICES_JSON_FILE="$DEVICES_JSON_FILE" \
 TARGET_IDS="$DEVICE_IDS_JSON" \
@@ -415,7 +418,7 @@ EXPECTED_BUILD="b${BUILD}" \
 API_KEY="$API_KEY" \
 BLINKY_SERVER="$BLINKY_SERVER" \
 python3 - <<'PYEOF'
-import json, os, sys, urllib.request
+import json, os, sys, time, urllib.request
 
 API_KEY = os.environ['API_KEY']
 SERVER = os.environ['BLINKY_SERVER']
@@ -444,13 +447,17 @@ def get_json_info(dev_id):
         method='POST',
     )
     last_err = None
-    for _ in range(2):
+    for attempt in range(2):
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 wrap = json.loads(r.read())
             return json.loads(wrap['response']), None
         except Exception as e:  # noqa: BLE001 — report, then retry/fail
             last_err = e
+            # Brief pause before retry so back-to-back attempts don't hit the
+            # same transient state window (BLE GATT teardown, server connect race).
+            if attempt == 0:
+                time.sleep(2)
     return None, last_err
 
 
