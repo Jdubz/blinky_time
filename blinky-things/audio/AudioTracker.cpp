@@ -1196,17 +1196,37 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // --- Energy: weighted blend of mic, bass mel, and ODF peak-hold ---
     // Three complementary signals: broadband mic level (overall loudness),
     // bass mel energy (low-frequency punch), ODF peak-hold (transient accent).
-    // Smolder floor: deterministic noise in silence for baseline ember activity.
     float micEnergy = mic_.getLevel();
     float bassEnergy = clampf(cachedBassEnergy_, 0.0f, 1.0f);
     float odfEnergy = clampf(odfPeakHold_, 0.0f, 1.0f);
     float weightedEnergy = micEnergy * energyMicWeight
                          + bassEnergy * energyMelWeight
                          + odfEnergy * energyOdfWeight;
-    // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity
+
+    // === NOISE-GATE PROPAGATION (b201) ===
+    // mic_.getLevel() returns 0 when AdaptiveMic's noise gate is engaged
+    // (raw mic below threshold). Without the gate below, bassEnergy and
+    // odfEnergy (both computed from the spectral pipeline on raw ISR
+    // samples) would still produce apparent activity from amplified mic
+    // thermal noise. The architectural fix: treat AdaptiveMic's mic-gate
+    // as authoritative — if it says we're in silence, the entire downstream
+    // signal chain agrees.
+    //
+    // Soft gate: at mic.level near 0, weightedEnergy attenuates to ~0;
+    // at mic.level above 0.05, full pass-through. S-curve avoids a hard
+    // edge that would cause snap-on/snap-off artifacts at threshold.
+    float micGate = micEnergy / (micEnergy + 0.02f);  // 0→0, 0.02→0.5, 0.1→0.83
+    weightedEnergy *= micGate;
+
+    // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity.
+    // PR #149 review: also gate by micGate so the smolder doesn't float
+    // control_.energy back up to 0.12-0.20 during silence (which would
+    // bypass the noise-gate goal of "entire downstream signal chain
+    // agrees on silence" — and would let a user-lowered silenceFloor
+    // unlock the heightmap/burst path on pure noise).
     uint32_t h = nowMs;
     h ^= h >> 16; h *= 0x45d9f3bU; h ^= h >> 16;
-    float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
+    float smolder = (0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f)) * micGate;
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
     // --- Continuous pulse envelope (visual generators) ---
@@ -1223,6 +1243,11 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
         pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
     }
+    // Noise-gate propagation (b201): same micGate as above. Spectral
+    // flux fires on amplified mic noise during silence — gate it on
+    // the authoritative mic.level signal so pulse can't trigger when
+    // the noise gate says we're silent.
+    pulseSignal *= micGate;
 
     if (pulseSignal > 0.4f) {
         float trigger = (pulseSignal - 0.4f) / 0.6f;
@@ -1239,13 +1264,19 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // Free-running phase at detected or default tempo.
     // plpPulseValue_ is set by updatePlpPhase() — cosine fallback when
     // no rhythm pattern is available.
+    //
+    // b201 noise-gate propagation: PLP epoch-fold and ACF periodicity
+    // both run on the spectral pipeline regardless of mic.level state,
+    // so they can produce strong pulse values during silence when noise
+    // gets amplified by the spectral side. Gate them on micGate so the
+    // entire downstream chain respects AdaptiveMic's authoritative
+    // silence decision.
     control_.phase = plpPhase_;
-    control_.plpPulse = plpPulseValue_;
+    control_.plpPulse = plpPulseValue_ * micGate;
 
     // --- Rhythm Strength ---
-    // Driven by ACF periodicity strength. Enables music-reactive mode in
-    // Water/Lightning generators when periodic rhythm is detected.
-    control_.rhythmStrength = periodicityStrength_;
+    // Driven by ACF periodicity strength. Gated by micGate (see above).
+    control_.rhythmStrength = periodicityStrength_ * micGate;
 
     // --- Onset Density ---
     if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {
@@ -1259,4 +1290,16 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         onsetDensityWindowStart_ = nowMs;
     }
     control_.onsetDensity = onsetDensity_;
+
+    // Diagnostic amplification: scale and clamp all downstream signals.
+    // When audioAmp=1 this is a no-op. When audioAmp=100 any tiny non-zero
+    // input clamps to 1.0, so a correctly-wired chain shows fully saturated
+    // visual response on any audio activity — distinguishes "wired but
+    // subtle" from "not wired" without ambiguity.
+    if (audioAmp != 1.0f) {
+        control_.energy        = clampf(control_.energy        * audioAmp, 0.0f, 1.0f);
+        control_.pulse         = clampf(control_.pulse         * audioAmp, 0.0f, 1.0f);
+        control_.plpPulse      = clampf(control_.plpPulse      * audioAmp, 0.0f, 1.0f);
+        control_.rhythmStrength= clampf(control_.rhythmStrength* audioAmp, 0.0f, 1.0f);
+    }
 }

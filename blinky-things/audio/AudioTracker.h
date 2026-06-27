@@ -124,6 +124,15 @@ public:
     void resetSlots();
 
     // === Tunable parameters ===
+    // Diagnostic: scale all downstream AudioControl values (energy, pulse,
+    // plpPulse, rhythmStrength) by this multiplier before generators see
+    // them. Default 1.0 = no change. Set to a large value (e.g. 100) to
+    // saturate the audio chain and visually distinguish "wired correctly
+    // but subtle" from "not wired at all" — every non-zero input clamps
+    // to 1.0, so generators should show fully-saturated response on any
+    // audio activity. Set to 0 to verify ambient-only baseline.
+    float audioAmp = 1.0f;
+
     // Core tempo
     float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;

@@ -13,12 +13,25 @@ namespace MicConstants {
     // Exponential tracking limits (prevent division by zero)
     constexpr float MIN_TAU_RANGE = 0.005f;     // Minimum tau for range tracking (5ms)
 
-    // Window/range normalization — minimum range to prevent divide-by-zero
-    // and control noise amplification at very low signal levels
-    constexpr float MIN_NORMALIZATION_RANGE = 0.01f;
+    // Window/range normalization — divide-by-zero protection only.
+    //
+    // b192: removed the 0.01 floor that capped how far the normalizer could
+    // scale at low-SNR sites. The old floor meant that when the actual
+    // peak-valley span was smaller than 0.01 (mic raw peaks ~0.010 = -50 dBFS),
+    // `mapped` was pinned low and `level` averaged ~0.03 even with audio
+    // present. Now the only floor is a tiny epsilon to keep `peak == valley`
+    // (true silence) from dividing by zero. The normalizer auto-scales to
+    // whatever signal range exists — at noisy install sites this also
+    // amplifies the mic's own thermal-noise floor into apparent activity,
+    // which is the intentional trade for full responsiveness at any SNR.
+    // Generator-side AudioControl semantics remain device-agnostic — all
+    // per-site compensation is contained inside AdaptiveMic.
+    constexpr float MIN_NORMALIZATION_RANGE = 1e-6f;
 
-    // Valley tracking
-    constexpr float VALLEY_FLOOR = 0.001f;                    // Minimum valley (0.1% of full scale)
+    // Valley tracking — no floor. The valley tracks the true envelope minimum,
+    // wherever it is. Combined with the epsilon above this lets peak-valley
+    // shrink arbitrarily on quiet input.
+    constexpr float VALLEY_FLOOR = 0.0f;                      // No floor: valley free to track to 0
     constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f;         // How much slower valley rises vs peak
     constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f;           // Jump peak if signal exceeds by 30%
 
@@ -45,6 +58,17 @@ public:
   // ---- Tunables (window/range normalization) ----
   float peakTau        = 2.0f;      // Peak adaptation speed (attack time, seconds)
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
+
+  // Absolute noise gate (raw ADC scale, 0-1). When the instantaneous
+  // raw mic level is below this, output level = 0 AND peak/valley
+  // trackers are frozen. Prevents the b191-uncapped normalizer from
+  // amplifying mic thermal noise into apparent signal after extended
+  // silence (operator feedback: "always on after a few seconds of quiet").
+  //
+  // Tune via `set noisegate <N>`. Default 0.002 matches measured mic
+  // noise floor (~-54 dBFS). Raise to be more conservative on quiet;
+  // lower to allow even fainter audio through.
+  float noiseGate      = 0.002f;
 
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)

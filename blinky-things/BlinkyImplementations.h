@@ -28,6 +28,10 @@
 // Physics implementations
 #include "physics/PhysicsContext.cpp"
 
+// Particle implementations (one file at present — holds the runtime-tunable
+// MAX_PARTICLE_VELOCITY definition that Particle.h externs)
+#include "particles/Particle.cpp"
+
 // Generator implementations
 #include "generators/Fire.cpp"
 #include "generators/Water.cpp"

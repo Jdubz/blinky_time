@@ -4,10 +4,10 @@
 // Build number is auto-incremented on each compile.
 // See blinky-things/BUILD_NUMBER for the current value.
 
-#define FIRMWARE_BUILD 190
-#define FIRMWARE_GIT_SHA "b2f14e60-dirty"
+#define FIRMWARE_BUILD 202
+#define FIRMWARE_GIT_SHA "7efb29a8-dirty"
 // FIRMWARE_VERSION embeds both the build number AND the git SHA so a
 // reused build number (--no-bump) can't disguise different code on a
 // running device.
-#define FIRMWARE_VERSION "b190-b2f14e60-dirty"
+#define FIRMWARE_VERSION "b202-7efb29a8-dirty"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__

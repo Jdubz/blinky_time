@@ -1,5 +1,7 @@
 #include "Fire.h"
+#include "../math/SimplexNoise.h"
 #include "../physics/PhysicsContext.h"
+#include <new>           // std::nothrow
 #include "../physics/EdgeSpawnRegion.h"
 #include "../physics/RandomSpawnRegion.h"
 #include "../physics/KillBoundary.h"
@@ -17,6 +19,10 @@ Fire::Fire()
 
 Fire::~Fire() {
     // Physics components use placement new, no delete needed
+    if (linearHeat_) {
+        delete[] linearHeat_;
+        linearHeat_ = nullptr;
+    }
 }
 
 bool Fire::begin(const DeviceConfig& config) {
@@ -43,78 +49,314 @@ void Fire::initPhysicsContext() {
 }
 
 void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    audio_ = audio;
+    uint32_t currentMs = millis();
+    float dt = (currentMs - lastUpdateMs_) / 1000.0f;
+    lastUpdateMs_ = currentMs;
+    if (dt > 0.1f) dt = 0.1f;  // clamp on first frame / long stalls
+
+    // PR #149 review: removed Fire's internal matrix.clear() — the pipeline
+    // already clears at RenderPipeline.cpp before calling generate(), so
+    // this was a double-clear that violated the generator contract (other
+    // generators don't self-clear). Harmless today but breaks compositing
+    // if Fire is ever used as a layer.
+
+    // === Per-frame amplitude envelope (b200) ===
+    float es = audio.energy - params_.silenceFloor;
+    float range = max(0.05f, 1.0f - params_.silenceFloor);
+    frameOvershoot_ = es < 0.0f ? 0.0f : (es > range ? 1.0f : es / range);
+
     // Palette bias driven by energy
     float targetBias = audio.energy;
     paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f / 60.0f);
 
-    // Wind: baseline turbulence + transient gusts
-    // Music mode: stronger, beat-synced gusts. Organic mode: pulse-driven gusts.
-    if (forceAdapter_) {
-        float organicGust = 1.0f + 2.0f * audio.pulse;
-        float musicGust = 1.0f + 3.0f * audio.plpPulse;
-        float gust = organicGust * (1.0f - audio.rhythmStrength) +
-                     musicGust * audio.rhythmStrength;
-        forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
+    // === Audio envelope for heightmap (b202) ===
+    // Use audio.pulse (already has attack-decay envelope from AudioTracker
+    // and now gated by AdaptiveMic noise gate). Additional smoothing here
+    // for the height response — fast attack so impulses register, slower
+    // decay so the launch is visible and "settles back down quickly."
+    float impulseTarget = max((float)audio.pulse, frameOvershoot_);
+    if (impulseTarget > audioEnvelope_) {
+        audioEnvelope_ = impulseTarget;       // instant attack
+    } else {
+        // Exponential decay: ~250ms time constant for "settles back down quickly"
+        float decay = expf(-dt / 0.25f);
+        audioEnvelope_ *= decay;
     }
 
-    updateHeatGrid();
+    // === Noise time advancement ===
+    // Noise animates faster during loud audio so the smolder visibly
+    // "wiggles harder" when there's music — per operator spec.
+    float noiseSpeed = params_.noiseBaseSpeed *
+                       (1.0f + params_.noiseAudioSpeedMult * frameOvershoot_);
+    noiseTime_ += dt * noiseSpeed;
 
-    ParticleGenerator::generate(matrix, audio);
+    // === Heightmap render ===
+    // Per-column flame height = smolder + noise + audio-boost (capped).
+    //   smolder: idle base height (10-15% by default)
+    //   noise:   adds wiggly variation per column, animated with audio
+    //   boost:   audio impulse adds height up to +30%
+    //   cap:     never exceeds maxFlameHeight (default 50%)
+    // Brightness gradient along each column: bright at base, fades toward tip.
+    const int W = matrix.getWidth();
+    const int H = matrix.getHeight();
+    const bool isLinear = (H <= 1);
+
+    if (isLinear) {
+        // 1D heat-propagation fire (DOOM-style). Each LED has a heat value
+        // that cools each frame and propagates toward the tip; the base
+        // receives heat injection from the audio envelope. Visual result:
+        // dim glow at base during silence, flame waves rising up the strip
+        // on audio impulses, fading toward the tip. See renderLinear().
+        renderLinear(matrix, dt);
+    } else {
+        // Matrix: per-column heightmap. Each column draws a flame from the
+        // bottom up with a bright-to-dim gradient. Heights wiggle from
+        // noise; audio impulses launch all columns higher.
+        const float audioBright = 0.40f + 0.60f * frameOvershoot_;
+        for (int x = 0; x < W; x++) {
+            float n01 = (SimplexNoise::noise2D(x * params_.noiseSpatialScale,
+                                               noiseTime_) + 1.0f) * 0.5f;
+            float smolderRange = params_.smolderHeight * params_.noiseAmplitude;
+            float heightFrac = params_.smolderHeight + (n01 - 0.5f) * smolderRange * 2.0f;
+            heightFrac += audioEnvelope_ * params_.audioHeightBoost;
+            if (heightFrac < 0.02f) heightFrac = 0.02f;
+            if (heightFrac > params_.maxFlameHeight) heightFrac = params_.maxFlameHeight;
+
+            int heightLEDs = (int)(heightFrac * H + 0.5f);
+            if (heightLEDs < 1) heightLEDs = 1;
+            for (int y = 0; y < heightLEDs && y < H; y++) {
+                float gradT = 1.0f - (float)y / (float)heightLEDs;
+                uint8_t intensity = (uint8_t)(255.0f * gradT * audioBright);
+                uint32_t color = particleColor(intensity);
+                matrix.setPixel(x, H - 1 - y,
+                                (color >> 16) & 0xFF,
+                                (color >> 8) & 0xFF,
+                                color & 0xFF);
+            }
+        }
+    }
+
+    // === Particle burst layer (b202) — matrix only ===
+    // Heightmap renders the always-on ember floor. Particles spawn on
+    // audio impulses, surge upward, fade. Layered ON TOP of heightmap
+    // to provide the "launch spike" accent.
+    //
+    // Skipped on linear layouts because particles have no vertical
+    // dimension to travel in. The heat-propagation fire on linear
+    // already provides the dramatic event response via heat injection
+    // that visibly travels up the strip.
+    if (!isLinear) {
+        if (forceAdapter_) {
+            forceAdapter_->update(dt);
+            // PR #149 review: restore audio-reactive wind gust amplitude.
+            // The old generate() modulated wind by (1 + 2-3 × pulse/plpPulse)
+            // so curl-noise turbulence visibly intensified on beats; the
+            // initial heightmap rewrite removed that, leaving wind fixed
+            // at scaledWindVar(). audioEnvelope_ provides the same beat-
+            // tracking envelope used by the heightmap height-boost, so
+            // wind now breathes with the same envelope.
+            float gust = 1.0f + 2.5f * audioEnvelope_;
+            forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
+        }
+        updateHeatGrid();
+        spawnParticles(dt);
+        updateParticles(dt);
+        renderParticles(matrix);
+    }
+    prevPhase_ = audio_.phase;
 }
 
 void Fire::reset() {
     ParticleGenerator::reset();
     paletteBias_ = 0.0f;
     memset(heatGrid_, 0, sizeof(heatGrid_));
+    if (linearHeat_) {
+        for (int i = 0; i < linearHeatCapacity_; i++) linearHeat_[i] = 0.0f;
+    }
+}
+
+// === 1D heat-propagation fire for LINEAR layouts (b203) ===
+// Classic DOOM-style fire on a strip. Each LED has a heat value (0-1).
+// Each frame:
+//   1. Cool: heat[i] *= coolRate
+//   2. Propagate toward tip: heat[i] = blend(heat[i], heat[i-1]) for i > 0
+//      so heat moves from base (i=0) toward tip (i=N-1) over multiple frames.
+//   3. Inject at base from audio:
+//        baseHeat = smolderHeight + audioEnvelope * audioHeightBoost (capped)
+//      With per-frame noise variation so the base isn't perfectly steady.
+// Then render: each LED color = warm-palette lookup on its heat value.
+//
+// Result on a strip:
+//   - silence:   gentle glow at the base, mostly dark toward tip (smolder)
+//   - music:     heat injected continuously, rises up the strip as glowing
+//                wave that fades toward the tip
+//   - impulses:  big heat spike at base, propagates up and decays — visible
+//                "flame wave" travelling along the strip per beat
+//
+// No "vertical dimension" needed because the strip IS the vertical axis,
+// with position along the strip representing "height" in the fire.
+void Fire::renderLinear(PixelMatrix& matrix, float dt) {
+    const int N = matrix.getWidth();
+    if (N <= 0) return;
+
+    // Lazy-allocate heat buffer
+    if (!linearHeat_ || linearHeatCapacity_ < N) {
+        if (linearHeat_) delete[] linearHeat_;
+        linearHeat_ = new(std::nothrow) float[N];
+        if (!linearHeat_) {
+            // PR #149 review: log OOM so the symptom isn't a silently dark
+            // linear flame. nRF52840 heap is shared with the SoftDevice
+            // and BLE, so this is a plausible failure on tight memory.
+            static bool oomLogged = false;
+            if (!oomLogged) {
+                Serial.print(F("[Fire::renderLinear] OOM: linearHeat_[")); Serial.print(N);
+                Serial.println(F("] alloc failed — linear fire disabled."));
+                oomLogged = true;
+            }
+            linearHeatCapacity_ = 0;
+            return;
+        }
+        linearHeatCapacity_ = N;
+        for (int i = 0; i < N; i++) linearHeat_[i] = 0.0f;
+    }
+
+    // Frame-rate-independent cool & propagate rates. params_.linearCoolRate
+    // and params_.linearPropRate are expressed in 60fps-frame units, scaled
+    // to actual dt so the visual is consistent across frame rates.
+    float dt60 = dt * 60.0f;
+    if (dt60 > 4.0f) dt60 = 4.0f;
+    float coolPerFrame = powf(params_.linearCoolRate, dt60);
+    float propMix = 1.0f - powf(1.0f - params_.linearPropRate, dt60);
+
+    // 1. Cool every position
+    for (int i = 0; i < N; i++) {
+        linearHeat_[i] *= coolPerFrame;
+    }
+
+    // 2. Propagate from base toward tip — iterate from tip DOWN to avoid
+    //    same-pass clobbering. heat[i] absorbs some heat from heat[i-1].
+    for (int i = N - 1; i > 0; i--) {
+        linearHeat_[i] = linearHeat_[i] * (1.0f - propMix) +
+                         linearHeat_[i - 1] * propMix;
+    }
+
+    // 3. Inject at base from smolder + audio envelope, with noise variation.
+    //    noise gives ±50% wiggle on the smolder injection so the base
+    //    looks alive even in silence.
+    float baseSmolder = params_.smolderHeight;
+    float n = SimplexNoise::noise2D(0.0f, noiseTime_);    // -1..1
+    baseSmolder *= 1.0f + 0.5f * n;
+    float injection = baseSmolder + audioEnvelope_ * params_.audioHeightBoost;
+    if (injection > 1.0f) injection = 1.0f;
+    if (injection > linearHeat_[0]) {
+        linearHeat_[0] = injection;     // monotonic on rising (don't undercut existing heat)
+    }
+
+    // 4. Render heat → warm palette
+    for (int i = 0; i < N; i++) {
+        float h = linearHeat_[i];
+        if (h < 0.0f) h = 0.0f;
+        if (h > 1.0f) h = 1.0f;
+        uint8_t intensity = (uint8_t)(255.0f * h);
+        uint32_t color = particleColor(intensity);
+        matrix.setPixel(i, 0,
+                        (color >> 16) & 0xFF,
+                        (color >> 8) & 0xFF,
+                        color & 0xFF);
+    }
 }
 
 void Fire::spawnParticles(float dt) {
-    // Energy is the PRIMARY driver. Ambient (energy ~0.1) = small embers.
-    // Full music (energy ~0.9) = roaring flames filling 100% of height.
+    // b202: baseline spawn removed — the heightmap IS the always-on
+    // ember layer. Particles are now pure event-driven accents.
+    // PR #149 review: dropped the local `overshoot` and `(void)e` —
+    // `overshoot` became unused after removing the hasSignal gate, and
+    // `e` is referenced directly via audio_.energy below.
     float e = audio_.energy;
-
-    // Spawn rate scales dramatically with energy: 3x at full vs ambient
-    // Music mode: plpPulse modulates spawn rate for breathing flame at beat tempo
     float rs = audio_.rhythmStrength;
-    float spawnMod = 0.5f + 2.5f * e;
-    if (rs > 0.0f) {
-        float breathe = 0.5f + 0.5f * audio_.plpPulse;  // 0.5-1.0 at beat rate
-        spawnMod *= (1.0f - rs) + breathe * rs;
-    }
-    float spawnProb = params_.baseSpawnChance * spawnMod;
-    float expectedSparks = spawnProb * crossDim_;
-    uint16_t totalSparks = (uint16_t)min(expectedSparks, 255.0f);
-    float frac = expectedSparks - totalSparks;
-    if (frac > 0.0f && random(1000) < (int)(frac * 1000)) totalSparks++;
+    uint16_t totalSparks = 0;
 
-    // Transient burst: single lerp between organic and music intensity.
-    // Organic: full burst at rs=0, fades out. Music: scales up with rs.
-    // Onset density scales burst magnitude: dance (4-6/s) = full bursts,
-    // ambient (0-1/s) = gentler bursts. Normalized to 0-1 range.
-    if (audio_.pulse > params_.organicTransientMin) {
-        float strength = (audio_.pulse - params_.organicTransientMin)
-                       / (1.0f - params_.organicTransientMin);
-        float densityScale = 0.5f + 0.5f * min(audio_.onsetDensity / 6.0f, 1.0f);
-        float organicBurst = strength;
-        float musicBurst = strength * (0.5f + 0.5f * rs) * densityScale;
-        float burstBlend = organicBurst * (1.0f - rs) + musicBurst * rs;
-        totalSparks += (uint16_t)(scaledBurstSparks() * burstBlend);
+    // === EDGE-TRIGGERED AUDIO BURST (b197) ===
+    // Hierarchy: direct audio (audio_.pulse, derived from spectral flux of
+    // raw mic input) is the PRIMARY trigger because it's the most reliable
+    // signal we have — always available regardless of rhythm-lock state or
+    // NN model performance. plpPulse and rhythmStrength REFINE the burst
+    // strength when they're available, but never gate it. NN onset, when
+    // it fires, also amplifies. This means the visual always reacts to
+    // actual audio events, with extra punch when the rhythm tracker agrees.
+    //
+    // Earlier designs gated the trigger on rhythm-lock, which silenced
+    // bursts entirely whenever rhythmStrength was low — at low-SNR sites
+    // that meant bursts almost never fired. Operator feedback: "you're only
+    // using nn and plpPulse outputs; direct audio is the most reliable."
+    // PR #149 review: removed the `hasSignal = overshoot > 0` gate. It
+    // was over-strict — `overshoot` requires audio.energy > silenceFloor
+    // (0.25), but audio.pulse has a 240ms envelope that can persist above
+    // burstThreshold long after energy noise-gates back to the smolder
+    // floor. Result: sparse-kick tracks (one drum every second of quiet)
+    // were having bursts suppressed on every kick. The upstream micGate
+    // now zeroes audio.pulse during true silence (b201 + smolder gate
+    // fix), so a redundant overshoot check here just blocks legitimate
+    // sub-floor kicks.
+    bool isBeat = (audio_.pulse > params_.burstThreshold) ||
+                  (audio_.plpPulse > params_.burstThreshold + 0.10f);
+    if (isBeat && !lastBeat_) {
+        // Combined strength: direct audio is the floor, refinements stack.
+        float strength = audio_.pulse;
+        if (rs > 0.1f && audio_.plpPulse > strength) {
+            strength = audio_.plpPulse;
+        }
+        if (strength > 1.0f) strength = 1.0f;
+        if (strength < params_.burstThreshold) strength = params_.burstThreshold;
+
+        // Burst size = crossDim * (base + gain * strength) — all tunable.
+        // PR #149 review: compute in uint16_t then clamp. Previously cast
+        // straight to uint8_t which silently wrapped to 0 on wider devices
+        // when operators tuned burstsizegain up (e.g. crossDim=16 *
+        // (2 + 14×1.0) = 256 → wrapped to 0, bursts silently stopped).
+        // burstParticles_ stays uint8_t (the spawn loop iterates uint8_t)
+        // so cap at 255.
+        float rawCount = crossDim_ *
+                         (params_.burstSizeBase + params_.burstSizeGain * strength);
+        if (rawCount < 0.0f) rawCount = 0.0f;
+        if (rawCount > 255.0f) rawCount = 255.0f;
+        uint8_t burstAdd = (uint8_t)rawCount;
+        burstParticles_ = burstAdd;
+        burstStrength_  = strength;
+        totalSparks    += burstAdd;
     }
+    lastBeat_ = isBeat;
 
     uint8_t sparkCount = (uint8_t)min((int)totalSparks, 255);
     uint16_t maxParts = scaledMaxParticles();
+    // Burst particles are spawned FIRST so their dramatic params don't get
+    // crowded out if the pool is near capacity.
+    uint8_t burstRemaining = burstParticles_;
+    burstParticles_ = 0;  // consumed
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
+        const bool isBurst = (i < burstRemaining);
         float x, y;
         getSpawnPosition(x, y);
 
         // Per-particle random vigor adds organic variation (±20%)
         float vigor = 0.8f + random(400) * 0.001f;  // 0.8-1.2
 
-        // Velocity: energy scales 50-100% of full speed. Vigor adds variation.
-        // Floor raised from 0.3→0.5 so ambient sparks rise far enough to form tongues.
+        // Velocity: baseline particles use energy-driven speed; BURST
+        // particles get a major velocity multiplier so they visibly
+        // surge up the tube and arrive at the top before fading. That
+        // visible rise IS the "movement" half of the user's mental model.
         float baseSpeed = scaledVelMin() +
                          random(100) * (scaledVelMax() - scaledVelMin()) / 100.0f;
-        float velMult = (0.5f + 0.5f * e) * vigor;
+        float velMult;
+        if (isBurst) {
+            // Burst velocity is params_.burstVelMult × vigor, scaled by
+            // strength so weak pulses produce gentle bursts, strong pulses
+            // produce dramatic ones. Tunable via `set burstvelmult <N>`.
+            velMult = params_.burstVelMult * (0.5f + 0.5f * burstStrength_) * vigor;
+        } else {
+            velMult = (0.5f + 0.5f * e) * vigor;
+        }
         baseSpeed *= velMult;
 
         float vx, vy;
@@ -128,18 +370,23 @@ void Fire::spawnParticles(float dt) {
             vy += spreadAmount * 0.3f;
         }
 
-        // Intensity: full range regardless of energy — energy controls COUNT and
-        // VELOCITY, not brightness. Sparks must spawn orange-to-yellow so the
-        // fade reveals the fire color ramp (yellow → orange → red → dark red → gone).
-        // Scaling by energy here double-penalizes with the render brightness and
-        // causes sparks to appear dark red in ambient (no yellow tongues).
+        // Intensity: baseline sparks orange-to-yellow per params; BURST
+        // sparks slam to full white-hot so they're visually distinct from
+        // ambient embers — that's the "heat + brightness" half of the
+        // user's mental model of a musical pulse.
         int lo = min((int)params_.intensityMin, (int)params_.intensityMax);
         int hi = max((int)params_.intensityMin, (int)params_.intensityMax) + 1;
-        uint8_t intensity = (uint8_t)min(255.0f, random(lo, hi) * vigor);
+        uint8_t intensity;
+        if (isBurst) {
+            intensity = (uint8_t)(220 + random(36));  // 220-255, full bright
+        } else {
+            intensity = (uint8_t)min(255.0f, random(lo, hi) * vigor);
+        }
 
-        // Lifespan: energy-driven. Low energy = short embers, high = tall flames.
-        // Floor raised from 0.4→0.6 so ambient sparks live long enough to rise.
-        float lifeMult = 0.6f + 0.6f * e;  // 0.6x at ambient, 1.2x at max
+        // Lifespan: burst-mode uses params_.burstLifeMult (tunable). Shorter
+        // life makes pulses pop and disappear; longer life makes them linger.
+        float lifeMult = isBurst ? (params_.burstLifeMult * (0.7f + 0.5f * burstStrength_))
+                                 : (0.6f + 0.6f * e);
         uint8_t lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * lifeMult * vigor);
 
         // Store vigor in mass field (used by updateParticle for sustained buoyancy)
@@ -151,15 +398,13 @@ void Fire::spawnParticles(float dt) {
 }
 
 void Fire::updateParticle(Particle* p, float dt) {
-    // No per-frame intensity modification — fade handles brightness decay,
-    // spawn handles initial brightness. Energy modulation happens at render time.
-
+    // No per-frame audio coupling here — that produces a uniform wash.
+    // Audio events express themselves through SPAWN (count, velocity,
+    // intensity at birth), then particles execute their own trajectory.
     // Extend lifespan when energy is high (all particles get more life = taller flame)
     if (audio_.energy > 0.5f && p->maxAge < 250) {
         p->maxAge += 1;
     }
-
-    // Fluid grid forces
     applyGridForce(p, dt);
 }
 
@@ -255,17 +500,25 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
     uint8_t g = (color >> 8) & 0xFF;
     uint8_t b = color & 0xFF;
 
-    // Render brightness: sets the ambient floor and audio response.
-    // Organic (ambient/conversation): high floor so fire always glows without music.
-    //   Pulse adds a flash on transients (speech, claps). Energy gently raises level.
-    // Music mode: PLP pulse drives breathing at beat tempo.
-    // Floor raised from 0.4→0.65 — intensity is no longer energy-scaled at spawn,
-    // so render brightness is the sole global dimmer and needs a higher floor.
-    float organicBright = 0.65f + 0.25f * audio_.energy + 0.3f * audio_.pulse;
-    float musicBright   = 0.50f + 0.25f * audio_.energy + 0.5f * audio_.plpPulse;
-    float brightnessScale = organicBright * (1.0f - audio_.rhythmStrength) +
-                           musicBright * audio_.rhythmStrength;
-    if (brightnessScale > 1.0f) brightnessScale = 1.0f;
+    // === CONTINUOUS AMPLITUDE GATE (b200) ===
+    // Brightness smoothly tracks the per-frame amplitude envelope
+    // (frameOvershoot_, computed once in generate() and shared with the
+    // spawn-rate gate). This is the "Ruben's-tube feel" layer:
+    //   silence  → gate near 0 → particles invisible (matches no-spawn state)
+    //   quiet    → gate low    → flame dim
+    //   loud     → gate ≈ 1    → particles render at near-full intensity
+    //
+    // Independent of the event-burst layer in spawnParticles: bursts spawn
+    // bright/fast particles at musical events; this gate makes the whole
+    // flame breathe with the audio envelope between bursts. Tunable via
+    // `set audiobright <0..1>` — 0 disables the gate (constant brightness),
+    // 1 makes brightness fully amplitude-driven.
+    //
+    // Uses the SMOOTH audio.energy envelope (not the noisy pulse signal)
+    // so the gate doesn't flicker on amplified mic noise.
+    float amount = params_.audioBrightAmount;
+    float continuousGate = (1.0f - amount) + amount * frameOvershoot_;
+    float brightnessScale = continuousGate * 0.95f;  // 0.95 ceiling for headroom
     r = (uint8_t)(r * brightnessScale);
     g = (uint8_t)(g * brightnessScale);
     b = (uint8_t)(b * brightnessScale);

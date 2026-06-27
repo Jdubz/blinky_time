@@ -2,9 +2,18 @@
 
 #include <stdint.h>
 
-// Maximum particle velocity to prevent tunneling through walls
-// 50 LEDs/sec = ~0.83 LEDs/frame @ 60 Hz
-static const float MAX_PARTICLE_VELOCITY = 50.0f;
+// Maximum particle velocity to prevent tunneling through walls.
+// b199: changed from `const` → mutable, default raised 50 → 400 LEDs/sec.
+// Previous cap silently clamped every burst-velocity tweak on tall layouts
+// (long_tube_v1 = 60 LEDs; `scaledVelMax = 2.0 * 60 = 120` already hit cap).
+// Mutable so it can be tuned at runtime via `set maxvel <N>` without a
+// rebuild — boundary checks only use integer pixel positions so even
+// large values (1000+) are safe; tunneling isn't a real concern here.
+//
+// Declared extern here, defined once in Particle.cpp (avoids the C++17
+// `inline` variable extension which gcc only accepts as a non-portable
+// extension under -std=c++14).
+extern float MAX_PARTICLE_VELOCITY;
 
 // Beat detection phase wrap thresholds
 // Detect beat when phase wraps from >0.8 to <0.2 (rhythmStrength-dependent)

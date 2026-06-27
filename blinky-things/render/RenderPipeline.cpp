@@ -77,6 +77,9 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
     currentEffect_ = noOp_;
     effectType_ = EffectType::NONE;
 
+    // Allocate frame-metrics buffers sized to the final matrix.
+    metrics_.reset(width_ * height_);
+
     initialized_ = true;
     return true;
 }
@@ -90,6 +93,10 @@ void RenderPipeline::render(const AudioControl& audio) {
     if (effectType_ != EffectType::NONE) {
         currentEffect_->apply(pixelMatrix_);
     }
+    // Compute visual metrics on the post-effect matrix — what the
+    // generator + effect chain is producing. Done before renderer_ so
+    // the measurement is independent of LED-mapper layout decisions.
+    metrics_.processFrame(*pixelMatrix_);
     renderer_->render(*pixelMatrix_);
 }
 
