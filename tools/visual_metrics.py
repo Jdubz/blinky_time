@@ -260,19 +260,29 @@ def analyze(samples: List[SamplePoint]) -> Dict:
     }
 
     if has_v:
-        vL  = [s.vis_l   for s in samples]
-        vmx = [s.vis_mx  for s in samples]
-        vct = [s.vis_ct  for s in samples]
-        vac = [s.vis_act for s in samples]
-        pulse = [s.pulse for s in samples]
-        result["stats"]["vis_l"]   = _stats(vL)
-        result["stats"]["vis_mx"]  = _stats(vmx)
-        result["stats"]["vis_ct"]  = _stats(vct)
-        result["stats"]["vis_act"] = _stats(vac)
+        # PR #149 review: only include samples that actually contain a
+        # "v" block when computing visual-side stats and coupling. If the
+        # firmware is mid-flash, mid-boot, or briefly mixed-version, some
+        # samples lack the v block and would otherwise contribute zeros
+        # that bias pulse_corr_R and modulation_depth low.
+        v_samples = [s for s in samples if s.has_v]
+        vL    = [s.vis_l   for s in v_samples]
+        vmx   = [s.vis_mx  for s in v_samples]
+        vct   = [s.vis_ct  for s in v_samples]
+        vac   = [s.vis_act for s in v_samples]
+        pulse = [s.pulse   for s in v_samples]
+        result["stats"]["vis_l"]      = _stats(vL)
+        result["stats"]["vis_mx"]     = _stats(vmx)
+        result["stats"]["vis_ct"]     = _stats(vct)
+        result["stats"]["vis_act"]    = _stats(vac)
+        result["visual_sample_count"] = len(v_samples)
 
         # Cross-correlation pulse → vis_L. Stream period ~50 ms so lag in
         # samples * 50 ≈ ms.
-        sample_period_ms = duration_s * 1000.0 / max(1, len(samples) - 1)
+        v_duration_s = (v_samples[-1].t_ms - v_samples[0].t_ms) / 1000.0 \
+            if len(v_samples) > 1 else 0.0
+        sample_period_ms = v_duration_s * 1000.0 / max(1, len(v_samples) - 1) \
+            if v_duration_s > 0 else 50.0
         max_lag_samples = int(round(250.0 / sample_period_ms))  # search up to 250 ms
         r, lag = _xcorr_peak(pulse, vL, max_lag_samples)
         result["coupling"] = {

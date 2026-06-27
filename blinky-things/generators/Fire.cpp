@@ -55,7 +55,11 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     lastUpdateMs_ = currentMs;
     if (dt > 0.1f) dt = 0.1f;  // clamp on first frame / long stalls
 
-    matrix.clear();
+    // PR #149 review: removed Fire's internal matrix.clear() — the pipeline
+    // already clears at RenderPipeline.cpp before calling generate(), so
+    // this was a double-clear that violated the generator contract (other
+    // generators don't self-clear). Harmless today but breaks compositing
+    // if Fire is ever used as a layer.
 
     // === Per-frame amplitude envelope (b200) ===
     float es = audio.energy - params_.silenceFloor;
@@ -143,7 +147,18 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // already provides the dramatic event response via heat injection
     // that visibly travels up the strip.
     if (!isLinear) {
-        if (forceAdapter_) forceAdapter_->update(dt);
+        if (forceAdapter_) {
+            forceAdapter_->update(dt);
+            // PR #149 review: restore audio-reactive wind gust amplitude.
+            // The old generate() modulated wind by (1 + 2-3 × pulse/plpPulse)
+            // so curl-noise turbulence visibly intensified on beats; the
+            // initial heightmap rewrite removed that, leaving wind fixed
+            // at scaledWindVar(). audioEnvelope_ provides the same beat-
+            // tracking envelope used by the heightmap height-boost, so
+            // wind now breathes with the same envelope.
+            float gust = 1.0f + 2.5f * audioEnvelope_;
+            forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
+        }
         updateHeatGrid();
         spawnParticles(dt);
         updateParticles(dt);
@@ -189,12 +204,22 @@ void Fire::renderLinear(PixelMatrix& matrix, float dt) {
     if (!linearHeat_ || linearHeatCapacity_ < N) {
         if (linearHeat_) delete[] linearHeat_;
         linearHeat_ = new(std::nothrow) float[N];
-        linearHeatCapacity_ = linearHeat_ ? N : 0;
-        if (linearHeat_) {
-            for (int i = 0; i < N; i++) linearHeat_[i] = 0.0f;
+        if (!linearHeat_) {
+            // PR #149 review: log OOM so the symptom isn't a silently dark
+            // linear flame. nRF52840 heap is shared with the SoftDevice
+            // and BLE, so this is a plausible failure on tight memory.
+            static bool oomLogged = false;
+            if (!oomLogged) {
+                Serial.print(F("[Fire::renderLinear] OOM: linearHeat_[")); Serial.print(N);
+                Serial.println(F("] alloc failed — linear fire disabled."));
+                oomLogged = true;
+            }
+            linearHeatCapacity_ = 0;
+            return;
         }
+        linearHeatCapacity_ = N;
+        for (int i = 0; i < N; i++) linearHeat_[i] = 0.0f;
     }
-    if (!linearHeat_) return;
 
     // Frame-rate-independent cool & propagate rates. params_.linearCoolRate
     // and params_.linearPropRate are expressed in 60fps-frame units, scaled
@@ -268,11 +293,17 @@ void Fire::spawnParticles(float dt) {
     // bursts entirely whenever rhythmStrength was low — at low-SNR sites
     // that meant bursts almost never fired. Operator feedback: "you're only
     // using nn and plpPulse outputs; direct audio is the most reliable."
-    // Bursts ALSO gated by silence — phantom transients on amplified mic
-    // noise would otherwise fire bursts during true quiet.
-    bool hasSignal = (overshoot > 0.0f);
-    bool isBeat = hasSignal && ((audio_.pulse > params_.burstThreshold) ||
-                                (audio_.plpPulse > params_.burstThreshold + 0.10f));
+    // PR #149 review: removed the `hasSignal = overshoot > 0` gate. It
+    // was over-strict — `overshoot` requires audio.energy > silenceFloor
+    // (0.25), but audio.pulse has a 240ms envelope that can persist above
+    // burstThreshold long after energy noise-gates back to the smolder
+    // floor. Result: sparse-kick tracks (one drum every second of quiet)
+    // were having bursts suppressed on every kick. The upstream micGate
+    // now zeroes audio.pulse during true silence (b201 + smolder gate
+    // fix), so a redundant overshoot check here just blocks legitimate
+    // sub-floor kicks.
+    bool isBeat = (audio_.pulse > params_.burstThreshold) ||
+                  (audio_.plpPulse > params_.burstThreshold + 0.10f);
     if (isBeat && !lastBeat_) {
         // Combined strength: direct audio is the floor, refinements stack.
         float strength = audio_.pulse;
@@ -283,8 +314,17 @@ void Fire::spawnParticles(float dt) {
         if (strength < params_.burstThreshold) strength = params_.burstThreshold;
 
         // Burst size = crossDim * (base + gain * strength) — all tunable.
-        uint8_t burstAdd = (uint8_t)(crossDim_ *
-                                    (params_.burstSizeBase + params_.burstSizeGain * strength));
+        // PR #149 review: compute in uint16_t then clamp. Previously cast
+        // straight to uint8_t which silently wrapped to 0 on wider devices
+        // when operators tuned burstsizegain up (e.g. crossDim=16 *
+        // (2 + 14×1.0) = 256 → wrapped to 0, bursts silently stopped).
+        // burstParticles_ stays uint8_t (the spawn loop iterates uint8_t)
+        // so cap at 255.
+        float rawCount = crossDim_ *
+                         (params_.burstSizeBase + params_.burstSizeGain * strength);
+        if (rawCount < 0.0f) rawCount = 0.0f;
+        if (rawCount > 255.0f) rawCount = 255.0f;
+        uint8_t burstAdd = (uint8_t)rawCount;
         burstParticles_ = burstAdd;
         burstStrength_  = strength;
         totalSparks    += burstAdd;

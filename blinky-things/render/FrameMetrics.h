@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <new>           // std::nothrow
+#include <Arduino.h>     // Serial (OOM logging)
 
 /**
  * FrameMetrics — per-frame visual measurements over the PixelMatrix.
@@ -49,7 +50,17 @@ public:
         if (numPixels > prevLumCapacity_) {
             if (prevLum_) delete[] prevLum_;
             prevLum_ = new(std::nothrow) uint8_t[numPixels];
-            prevLumCapacity_ = prevLum_ ? numPixels : 0;
+            if (!prevLum_) {
+                // PR #149 review: log OOM so the symptom isn't a silently
+                // all-zero "v":{} stream. Caller streams these as if real
+                // — without a log it looks like the LED frame is dark.
+                Serial.print(F("[FrameMetrics] OOM: prevLum_["));
+                Serial.print(numPixels);
+                Serial.println(F("] alloc failed — visual metrics disabled."));
+                prevLumCapacity_ = 0;
+            } else {
+                prevLumCapacity_ = numPixels;
+            }
         }
         if (prevLum_) {
             for (int i = 0; i < prevLumCapacity_; i++) prevLum_[i] = 0;
@@ -68,8 +79,9 @@ public:
         if (n <= 0) return;
 
         // Lazy-allocate on first call if reset() wasn't called yet.
+        // reset() logs OOM if it fails, so no extra log needed here.
         if (!prevLum_ || prevLumCapacity_ < n) reset(n);
-        if (!prevLum_) return;  // alloc failed — metrics stay zero
+        if (!prevLum_) return;
 
         uint32_t sumL = 0;
         uint32_t sumLsq = 0;       // for variance (RMS contrast)

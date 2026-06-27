@@ -88,7 +88,13 @@ struct FireParams {
         burstSizeBase  = 2.0f;        // base burst size = 2.0 × crossDim particles
         burstSizeGain  = 6.0f;        // strength bonus = 6.0 × crossDim × strength particles
         silenceFloor   = 0.25f;       // audio.energy below this = silence (no fire activity)
-        audioBrightAmount = 0.7f;     // continuous brightness tracks audio amplitude strongly
+        // PR #149 review: default 0 so renderParticle doesn't dim burst
+        // particles to ~29% between beats (regression on sparse tracks).
+        // The heightmap layer already handles continuous amplitude tracking
+        // — particles are pure impulse accents and should render at their
+        // own intensity. Operators wanting per-particle audio dim can opt
+        // in with `set audiobright 0.7`.
+        audioBrightAmount = 0.0f;
         // Heightmap defaults
         smolderHeight   = 0.15f;      // idle 15% of tube
         maxFlameHeight  = 0.50f;      // hard cap at 50%

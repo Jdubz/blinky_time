@@ -1218,10 +1218,15 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     float micGate = micEnergy / (micEnergy + 0.02f);  // 0→0, 0.02→0.5, 0.1→0.83
     weightedEnergy *= micGate;
 
-    // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity
+    // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity.
+    // PR #149 review: also gate by micGate so the smolder doesn't float
+    // control_.energy back up to 0.12-0.20 during silence (which would
+    // bypass the noise-gate goal of "entire downstream signal chain
+    // agrees on silence" — and would let a user-lowered silenceFloor
+    // unlock the heightmap/burst path on pure noise).
     uint32_t h = nowMs;
     h ^= h >> 16; h *= 0x45d9f3bU; h ^= h >> 16;
-    float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
+    float smolder = (0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f)) * micGate;
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
     // --- Continuous pulse envelope (visual generators) ---
