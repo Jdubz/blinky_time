@@ -13,12 +13,25 @@ namespace MicConstants {
     // Exponential tracking limits (prevent division by zero)
     constexpr float MIN_TAU_RANGE = 0.005f;     // Minimum tau for range tracking (5ms)
 
-    // Window/range normalization — minimum range to prevent divide-by-zero
-    // and control noise amplification at very low signal levels
-    constexpr float MIN_NORMALIZATION_RANGE = 0.01f;
+    // Window/range normalization — divide-by-zero protection only.
+    //
+    // b192: removed the 0.01 floor that capped how far the normalizer could
+    // scale at low-SNR sites. The old floor meant that when the actual
+    // peak-valley span was smaller than 0.01 (mic raw peaks ~0.010 = -50 dBFS),
+    // `mapped` was pinned low and `level` averaged ~0.03 even with audio
+    // present. Now the only floor is a tiny epsilon to keep `peak == valley`
+    // (true silence) from dividing by zero. The normalizer auto-scales to
+    // whatever signal range exists — at noisy install sites this also
+    // amplifies the mic's own thermal-noise floor into apparent activity,
+    // which is the intentional trade for full responsiveness at any SNR.
+    // Generator-side AudioControl semantics remain device-agnostic — all
+    // per-site compensation is contained inside AdaptiveMic.
+    constexpr float MIN_NORMALIZATION_RANGE = 1e-6f;
 
-    // Valley tracking
-    constexpr float VALLEY_FLOOR = 0.001f;                    // Minimum valley (0.1% of full scale)
+    // Valley tracking — no floor. The valley tracks the true envelope minimum,
+    // wherever it is. Combined with the epsilon above this lets peak-valley
+    // shrink arbitrarily on quiet input.
+    constexpr float VALLEY_FLOOR = 0.0f;                      // No floor: valley free to track to 0
     constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f;         // How much slower valley rises vs peak
     constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f;           // Jump peak if signal exceeds by 30%
 
