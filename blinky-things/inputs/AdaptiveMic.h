@@ -59,6 +59,17 @@ public:
   float peakTau        = 2.0f;      // Peak adaptation speed (attack time, seconds)
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
+  // Absolute noise gate (raw ADC scale, 0-1). When the instantaneous
+  // raw mic level is below this, output level = 0 AND peak/valley
+  // trackers are frozen. Prevents the b191-uncapped normalizer from
+  // amplifying mic thermal noise into apparent signal after extended
+  // silence (operator feedback: "always on after a few seconds of quiet").
+  //
+  // Tune via `set noisegate <N>`. Default 0.002 matches measured mic
+  // noise floor (~-54 dBFS). Raise to be more conservative on quiet;
+  // lower to allow even fainter audio through.
+  float noiseGate      = 0.002f;
+
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // Fixed PDM hardware gain

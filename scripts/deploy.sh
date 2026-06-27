@@ -132,10 +132,19 @@ echo "  Firmware: b${BUILD} (${HEX_SIZE} bytes)"
 echo ""
 echo "=== Uploading firmware to blinkyhost ==="
 
+# Path translation for Windows: mingw64 curl can't resolve /tmp/... unix
+# paths because it's a native Windows binary. cygpath -w converts to the
+# Windows-style path it actually understands. No-op on Linux/macOS where
+# cygpath doesn't exist.
+HEX_FOR_CURL="$HEX"
+if command -v cygpath >/dev/null 2>&1; then
+    HEX_FOR_CURL="$(cygpath -w "$HEX")"
+fi
+
 UPLOAD_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/upload" \
     -H "X-API-Key: ${API_KEY}" \
     -H "${DEPLOY_TOOL_HEADER}" \
-    -F "firmware=@${HEX};filename=blinky-things.ino.hex" \
+    -F "firmware=@${HEX_FOR_CURL};filename=blinky-things.ino.hex" \
     -F "version=b${BUILD}" \
     --max-time 30 \
     2>/dev/null) || fail "Upload failed (server unreachable or rejected)" 2

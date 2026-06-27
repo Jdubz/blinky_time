@@ -102,6 +102,21 @@ void AdaptiveMic::update(float dt) {
     float normalized = avgAbs / 32768.0f;
     rawInstantLevel = normalized;
 
+    // === ABSOLUTE NOISE GATE (b200) ===
+    // Below the gate, the audio is considered silence regardless of
+    // whatever the peak/valley tracker has adapted to. Trackers are
+    // frozen so they don't drift down to noise during quiet — when
+    // signal returns, normalization is still calibrated to the music
+    // level we were at. Output level = 0.
+    //
+    // Fixes the "always on after a few seconds of silence" creep that
+    // was caused by uncapped normalization (b191) amplifying mic
+    // thermal noise into apparent signal between songs.
+    if (normalized < noiseGate) {
+      level = 0.0f;
+      return;  // freeze peakLevel/valleyLevel by skipping their updates
+    }
+
     // Peak tracking with attack/release envelope
     float tau = (normalized > peakLevel) ? peakTau : releaseTau;
     float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MicConstants::MIN_TAU_RANGE));

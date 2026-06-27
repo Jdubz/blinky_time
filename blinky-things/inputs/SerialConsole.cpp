@@ -186,7 +186,49 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Audio reactivity
     settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fire",
-        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+        "Min transient to trigger burst (legacy)", 0.0f, 1.0f, onParamChanged);
+
+    // b199 event-driven burst params — all runtime-tunable so no rebuild loop
+    settings_.registerFloat("burstthreshold", &fp->burstThreshold, "fire",
+        "audio.pulse threshold to fire a burst (lower=more frequent)", 0.05f, 1.0f, onParamChanged);
+    settings_.registerFloat("burstvelmult", &fp->burstVelMult, "fire",
+        "Burst-particle velocity multiplier vs base", 0.5f, 12.0f, onParamChanged);
+    settings_.registerFloat("burstlifemult", &fp->burstLifeMult, "fire",
+        "Burst-particle lifespan multiplier vs base (lower=quicker fade)", 0.05f, 3.0f, onParamChanged);
+    settings_.registerFloat("burstsizebase", &fp->burstSizeBase, "fire",
+        "Burst size base (x crossDim particles)", 0.0f, 20.0f, onParamChanged);
+    settings_.registerFloat("burstsizegain", &fp->burstSizeGain, "fire",
+        "Burst size gain (x crossDim x strength)", 0.0f, 30.0f, onParamChanged);
+    settings_.registerFloat("silencefloor", &fp->silenceFloor, "fire",
+        "audio.energy below this = silence (no spawn, no bursts). Raise to suppress noise.", 0.0f, 0.8f, onParamChanged);
+    settings_.registerFloat("audiobright", &fp->audioBrightAmount, "fire",
+        "How much brightness tracks audio amplitude (0=constant, 1=fully amplitude-driven).", 0.0f, 1.0f, onParamChanged);
+
+    // b202 heightmap-flame params (the actual smolder/launch behavior)
+    settings_.registerFloat("smolderheight", &fp->smolderHeight, "fire",
+        "Idle flame height (fraction of tube). Default 0.15 = 15% smolder.", 0.0f, 0.5f, onParamChanged);
+    settings_.registerFloat("maxflameheight", &fp->maxFlameHeight, "fire",
+        "Hard cap on peak flame height (fraction of tube). Default 0.50.", 0.1f, 1.0f, onParamChanged);
+    settings_.registerFloat("audioheightboost", &fp->audioHeightBoost, "fire",
+        "Max additional height from audio impulse (fraction of tube). Default 0.30.", 0.0f, 0.8f, onParamChanged);
+    settings_.registerFloat("noiseamplitude", &fp->noiseAmplitude, "fire",
+        "Noise variation in smolder shape (0=flat, 1=full smolderHeight wiggle). Default 0.50.", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("noisespatialscale", &fp->noiseSpatialScale, "fire",
+        "Noise spatial frequency (low=wide patterns, high=tight). Default 0.30.", 0.05f, 2.0f, onParamChanged);
+    settings_.registerFloat("noisebasespeed", &fp->noiseBaseSpeed, "fire",
+        "Base noise animation speed when quiet. Default 0.8.", 0.05f, 5.0f, onParamChanged);
+    settings_.registerFloat("noiseaudiospeedmult", &fp->noiseAudioSpeedMult, "fire",
+        "How much louder audio speeds up the noise. Default 3.0.", 0.0f, 10.0f, onParamChanged);
+
+    // b203 1D heat-propagation fire (linear layouts only)
+    settings_.registerFloat("linearcoolrate", &fp->linearCoolRate, "fire",
+        "Linear-fire heat decay per 60fps frame (higher=flame extends further). Default 0.97.", 0.5f, 0.999f, onParamChanged);
+    settings_.registerFloat("linearproprate", &fp->linearPropRate, "fire",
+        "Linear-fire propagation rate per 60fps frame (higher=faster waves). Default 0.7.", 0.05f, 1.0f, onParamChanged);
+
+    // Global particle velocity cap (declared in particles/Particle.h)
+    settings_.registerFloat("maxvel", &MAX_PARTICLE_VELOCITY, "fire",
+        "Global particle velocity cap (LEDs/sec) — was hardcoded 50, raised to 400", 10.0f, 2000.0f, onParamChanged);
 
     // Thermal physics
     settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
@@ -210,6 +252,9 @@ void SerialConsole::registerAudioSettings() {
         "Peak adaptation speed (s)", 0.5f, 10.0f);
     settings_.registerFloat("releasetau", &mic_->releaseTau, "audio",
         "Peak release speed (s)", 1.0f, 30.0f);
+    settings_.registerFloat("noisegate", &mic_->noiseGate, "audio",
+        "Absolute raw-mic noise gate (0-1). Below this, level=0 and trackers freeze. Stops the 'always on after silence' creep.",
+        0.0f, 0.05f);
 }
 
 // === GAIN SETTINGS (v72: AGC removed, hardware gain fixed at platform default) ===
@@ -225,6 +270,14 @@ void SerialConsole::registerAgcSettings() {
 // === TRACKER SETTINGS (AudioTracker — ACF+PLP, v80) ===
 void SerialConsole::registerTrackerSettings() {
     if (!audioCtrl_) return;
+
+    // Diagnostic: saturate-all-audio multiplier (default 1.0 = no change).
+    // `set audio_amp 100` clamps every AudioControl signal to its max so
+    // the visual chain shows fully-saturated response on any input —
+    // distinguishes wiring bugs from "too subtle to see" tuning issues.
+    settings_.registerFloat("audio_amp", &audioCtrl_->audioAmp, "tracker",
+        "Diagnostic: scale all audio control signals (1.0=normal, 100=saturate, 0=mute)",
+        0.0f, 1000.0f, onParamChanged);
 
     // Tempo range
     settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "tracker",

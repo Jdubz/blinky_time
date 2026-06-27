@@ -27,9 +27,35 @@ struct FireParams {
     float sparkVelocityMax;       // × traversalDim → maximum upward velocity (LEDs/sec)
     float sparkSpread;            // × crossDim → horizontal velocity variation (LEDs/sec)
 
-    // Audio reactivity
-    float organicTransientMin;    // Minimum transient to trigger burst (0-1)
-    float burstSparks;            // × crossDim → sparks per burst
+    // Audio reactivity (b196+ event-driven burst)
+    float organicTransientMin;    // (legacy) Minimum transient to trigger burst (0-1)
+    float burstSparks;            // (legacy) × crossDim → sparks per burst
+    float burstThreshold;         // audio.pulse threshold to fire a burst (0-1, default 0.45)
+    float burstVelMult;           // Burst-particle initial velocity multiplier (1-8, default 3.0)
+    float burstLifeMult;          // Burst-particle lifespan multiplier vs base (0.1-2.0, default 0.6)
+    float burstSizeBase;          // crossDim multiplier — base burst-particle count (default 2.0)
+    float burstSizeGain;          // crossDim multiplier × strength → additional burst particles (default 6.0)
+    float silenceFloor;           // audio.energy below this = silence (no bursts, no baseline spawn). Default 0.25.
+    float audioBrightAmount;      // How much continuous amplitude tracks brightness (0-1). Default 0.7.
+
+    // === Heightmap-flame params (b202 redesign) ===
+    // Fire is now a per-column heightmap: each column has a flame whose
+    // height + brightness respond to audio. Replaces particle spawning
+    // for the smolder/baseline; particle bursts still fire on impulses.
+    float smolderHeight;          // Idle flame height (fraction of tube). Default 0.15.
+    float maxFlameHeight;         // Hard cap on peak flame height. Default 0.50.
+    float audioHeightBoost;       // Max additional height from audio impulse. Default 0.30.
+    float noiseAmplitude;         // Amount of noise variation in smolder shape (0-1). Default 0.50.
+    float noiseSpatialScale;      // Spatial frequency of noise. Default 0.30 (low = wide patterns).
+    float noiseBaseSpeed;         // Base noise time evolution (Hz-ish). Default 0.8.
+    float noiseAudioSpeedMult;    // How much louder audio speeds the noise. Default 3.0.
+
+    // Linear-fire (1D heat propagation) tunables. Defaults derived for
+    // strips up to ~100 LEDs so flame is visible across roughly the bottom
+    // half. Raise coolRate to extend flame further; raise propRate to make
+    // waves travel faster.
+    float linearCoolRate;         // heat decay per 60fps frame. 0.97 = 3% loss/frame. Higher = flame extends further. Default 0.97.
+    float linearPropRate;         // amount of "shift toward base" per 60fps frame, 0-1. Higher = faster wave propagation, less smearing. Default 0.7.
 
     // Thermal physics
     float thermalForce;           // × traversalDim → thermal buoyancy (LEDs/sec^2)
@@ -55,6 +81,26 @@ struct FireParams {
         drag = 0.985f;            // Gentle deceleration (thermal removed, no acceleration to fight)
         organicTransientMin = 0.25f;
         burstSparks = 0.8f;           // × crossDim → sparks per burst
+        // b199 event-driven burst defaults (all runtime-tunable):
+        burstThreshold = 0.45f;       // audio.pulse > this fires a burst
+        burstVelMult   = 3.0f;        // burst particles spawn at 3x base velocity
+        burstLifeMult  = 0.6f;        // burst particles live 0.6x base lifespan (short + bright)
+        burstSizeBase  = 2.0f;        // base burst size = 2.0 × crossDim particles
+        burstSizeGain  = 6.0f;        // strength bonus = 6.0 × crossDim × strength particles
+        silenceFloor   = 0.25f;       // audio.energy below this = silence (no fire activity)
+        audioBrightAmount = 0.7f;     // continuous brightness tracks audio amplitude strongly
+        // Heightmap defaults
+        smolderHeight   = 0.15f;      // idle 15% of tube
+        maxFlameHeight  = 0.50f;      // hard cap at 50%
+        audioHeightBoost = 0.30f;     // up to +30% on big impulse
+        noiseAmplitude  = 0.50f;      // smolder height varies ±50% of smolderHeight
+        noiseSpatialScale = 0.30f;    // wide noise patterns
+        noiseBaseSpeed  = 0.8f;       // slow noise animation when quiet
+        noiseAudioSpeedMult = 3.0f;   // loud audio makes noise animate 4x base
+        // 1D linear-fire defaults: c=0.97 gives heat[i]/heat[i-1] ≈ 0.94 with p=0.7,
+        // so heat[50] ≈ 0.05*heat[0] (5% remaining) — flame visibly fades over ~50 LEDs.
+        linearCoolRate = 0.97f;
+        linearPropRate = 0.7f;
         sparkVelocityMin = 1.0f;      // × traversalDim → min upward velocity (3x original)
         sparkVelocityMax = 2.0f;      // × traversalDim → max upward velocity (3x original)
         sparkSpread = 1.0f;           // × crossDim → horizontal scatter
@@ -132,6 +178,24 @@ private:
 
     FireParams params_;
 
+    // === Edge-triggered musical burst state (b196) ===
+    // Each rising edge of a strong rhythmic pulse triggers a burst of
+    // high-velocity, full-intensity particles that visibly rise + fade.
+    // Carried across the inter-loop boundary because the burst is
+    // requested in spawnParticles() pre-loop and consumed inside it.
+    bool   lastBeat_ = false;        // for rising-edge detection
+    uint8_t burstParticles_ = 0;     // count of burst-mode particles for this frame
+    float  burstStrength_ = 0.0f;    // 0.55-1.0, drives burst velocity/lifespan
+    float  frameOvershoot_ = 0.0f;   // per-frame normalized amplitude (0-1) above silenceFloor; shared between spawn-rate gating and render-brightness modulation
+    float  noiseTime_ = 0.0f;        // heightmap noise time (advances per frame, audio-scaled)
+    float  audioEnvelope_ = 0.0f;    // smoothed audio envelope for heightmap audio-boost (attack fast, decay slower)
+
+    // 1D heat-propagation buffer for LINEAR layouts (b203).
+    // Allocated lazily in renderLinear() based on actual LED count.
+    // Each entry is a 0..1 heat value; rendered via the warm palette.
+    float* linearHeat_ = nullptr;
+    int    linearHeatCapacity_ = 0;
+
     // Palette blending state (low-pass filtered to avoid jarring shifts)
     float paletteBias_;          // 0.0 = warm/cool, 1.0 = hot (smoothed energy*rhythm)
 
@@ -148,4 +212,7 @@ private:
     void initGrid();
     void updateHeatGrid();
     void applyGridForce(Particle* p, float dt);
+
+    // b203: 1D heat-propagation fire for linear layouts (hat, strips).
+    void renderLinear(PixelMatrix& matrix, float dt);
 };
