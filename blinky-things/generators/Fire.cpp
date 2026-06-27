@@ -1,7 +1,6 @@
 #include "Fire.h"
 #include "../math/SimplexNoise.h"
 #include "../physics/PhysicsContext.h"
-#include <new>           // std::nothrow
 #include "../physics/EdgeSpawnRegion.h"
 #include "../physics/RandomSpawnRegion.h"
 #include "../physics/KillBoundary.h"
@@ -18,11 +17,7 @@ Fire::Fire()
 }
 
 Fire::~Fire() {
-    // Physics components use placement new, no delete needed
-    if (linearHeat_) {
-        delete[] linearHeat_;
-        linearHeat_ = nullptr;
-    }
+    // Physics components use placement new, no delete needed.
 }
 
 bool Fire::begin(const DeviceConfig& config) {
@@ -91,79 +86,46 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
                        (1.0f + params_.noiseAudioSpeedMult * frameOvershoot_);
     noiseTime_ += dt * noiseSpeed;
 
-    // === Heightmap render ===
-    // Per-column flame height = smolder + noise + audio-boost (capped).
-    //   smolder: idle base height (10-15% by default)
-    //   noise:   adds wiggly variation per column, animated with audio
-    //   boost:   audio impulse adds height up to +30%
-    //   cap:     never exceeds maxFlameHeight (default 50%)
-    // Brightness gradient along each column: bright at base, fades toward tip.
-    const int W = matrix.getWidth();
-    const int H = matrix.getHeight();
-    const bool isLinear = (H <= 1);
-
+    // === Ember-floor render ===
+    // Both layouts derive their ember floor from the SAME audio-driven flame
+    // amount (audioFlameAmount()); only the visual mapping differs:
+    //   matrix → per-column flame HEIGHT (bright base, dim tip)
+    //   linear → "floating noise" COVERAGE along the strip (louder = more)
+    const bool isLinear = (matrix.getHeight() <= 1);
     if (isLinear) {
-        // 1D heat-propagation fire (DOOM-style). Each LED has a heat value
-        // that cools each frame and propagates toward the tip; the base
-        // receives heat injection from the audio envelope. Visual result:
-        // dim glow at base during silence, flame waves rising up the strip
-        // on audio impulses, fading toward the tip. See renderLinear().
-        renderLinear(matrix, dt);
+        renderLinearEmber(matrix);
     } else {
-        // Matrix: per-column heightmap. Each column draws a flame from the
-        // bottom up with a bright-to-dim gradient. Heights wiggle from
-        // noise; audio impulses launch all columns higher.
-        const float audioBright = 0.40f + 0.60f * frameOvershoot_;
-        for (int x = 0; x < W; x++) {
-            float n01 = (SimplexNoise::noise2D(x * params_.noiseSpatialScale,
-                                               noiseTime_) + 1.0f) * 0.5f;
-            float smolderRange = params_.smolderHeight * params_.noiseAmplitude;
-            float heightFrac = params_.smolderHeight + (n01 - 0.5f) * smolderRange * 2.0f;
-            heightFrac += audioEnvelope_ * params_.audioHeightBoost;
-            if (heightFrac < 0.02f) heightFrac = 0.02f;
-            if (heightFrac > params_.maxFlameHeight) heightFrac = params_.maxFlameHeight;
-
-            int heightLEDs = (int)(heightFrac * H + 0.5f);
-            if (heightLEDs < 1) heightLEDs = 1;
-            for (int y = 0; y < heightLEDs && y < H; y++) {
-                float gradT = 1.0f - (float)y / (float)heightLEDs;
-                uint8_t intensity = (uint8_t)(255.0f * gradT * audioBright);
-                uint32_t color = particleColor(intensity);
-                matrix.setPixel(x, H - 1 - y,
-                                (color >> 16) & 0xFF,
-                                (color >> 8) & 0xFF,
-                                color & 0xFF);
-            }
-        }
+        renderMatrixHeightmap(matrix);
     }
 
-    // === Particle burst layer (b202) — matrix only ===
-    // Heightmap renders the always-on ember floor. Particles spawn on
-    // audio impulses, surge upward, fade. Layered ON TOP of heightmap
-    // to provide the "launch spike" accent.
-    //
-    // Skipped on linear layouts because particles have no vertical
-    // dimension to travel in. The heat-propagation fire on linear
-    // already provides the dramatic event response via heat injection
-    // that visibly travels up the strip.
-    if (!isLinear) {
-        if (forceAdapter_) {
-            forceAdapter_->update(dt);
-            // PR #149 review: restore audio-reactive wind gust amplitude.
-            // The old generate() modulated wind by (1 + 2-3 × pulse/plpPulse)
-            // so curl-noise turbulence visibly intensified on beats; the
-            // initial heightmap rewrite removed that, leaving wind fixed
-            // at scaledWindVar(). audioEnvelope_ provides the same beat-
-            // tracking envelope used by the heightmap height-boost, so
-            // wind now breathes with the same envelope.
-            float gust = 1.0f + 2.5f * audioEnvelope_;
-            forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
-        }
-        updateHeatGrid();
-        spawnParticles(dt);
-        updateParticles(dt);
-        renderParticles(matrix);
+    // === Particle accent layer — BOTH layouts ===
+    // Same edge-triggered burst logic (spawnParticles) for every layout. The
+    // layout-appropriate spawn region + force adapter (chosen in
+    // initPhysicsContext) make the bursts read correctly per layout:
+    //   matrix → sparks launch upward from the bottom edge and fade
+    //   linear → "splashes" spawn at random points and travel outward, fade
+    // Layered ON TOP of the ember floor as the "launch spike" accent.
+    if (forceAdapter_) {
+        forceAdapter_->update(dt);
+        // PR #149 review: restore audio-reactive wind gust amplitude.
+        // The old generate() modulated wind by (1 + 2-3 × pulse/plpPulse)
+        // so curl-noise turbulence visibly intensified on beats; the
+        // initial heightmap rewrite removed that, leaving wind fixed
+        // at scaledWindVar(). audioEnvelope_ provides the same beat-
+        // tracking envelope used by the heightmap height-boost, so
+        // wind now breathes with the same envelope.
+        float gust = 1.0f + 2.5f * audioEnvelope_;
+        forceAdapter_->setWind(0.0f, scaledWindVar() * gust);
     }
+    // The heat grid is a 2D Eulerian buoyancy field (sparks → hot columns →
+    // upward reinforcement). It has no meaning on a 1D strip where splashes
+    // travel outward rather than rising, so it's matrix-only. With the grid
+    // left cool on linear, applyGridForce() reads zeros and is a no-op.
+    if (!isLinear) updateHeatGrid();
+    spawnParticles(dt);
+    updateParticles(dt);
+    renderParticles(matrix);
+
     prevPhase_ = audio_.phase;
 }
 
@@ -171,99 +133,92 @@ void Fire::reset() {
     ParticleGenerator::reset();
     paletteBias_ = 0.0f;
     memset(heatGrid_, 0, sizeof(heatGrid_));
-    if (linearHeat_) {
-        for (int i = 0; i < linearHeatCapacity_; i++) linearHeat_[i] = 0.0f;
+}
+
+// === MATRIX ember floor: per-column heightmap (b202 visual, UNCHANGED) ===
+// Extracted verbatim from generate() so the linear layout can be a peer
+// renderer rather than a slice. Each column draws a flame from the bottom up
+// with a bright-base → dim-tip gradient; heights wiggle from spatial noise and
+// audio impulses launch all columns higher. The arithmetic here is identical
+// to the pre-b204 inline loop — do NOT "DRY" it through audioFlameAmount(),
+// which would reorder the float adds and risk perturbing the matrix output.
+void Fire::renderMatrixHeightmap(PixelMatrix& matrix) {
+    const int W = matrix.getWidth();
+    const int H = matrix.getHeight();
+    const float audioBright = 0.40f + 0.60f * frameOvershoot_;
+    for (int x = 0; x < W; x++) {
+        float n01 = (SimplexNoise::noise2D(x * params_.noiseSpatialScale,
+                                           noiseTime_) + 1.0f) * 0.5f;
+        float smolderRange = params_.smolderHeight * params_.noiseAmplitude;
+        float heightFrac = params_.smolderHeight + (n01 - 0.5f) * smolderRange * 2.0f;
+        heightFrac += audioEnvelope_ * params_.audioHeightBoost;
+        if (heightFrac < 0.02f) heightFrac = 0.02f;
+        if (heightFrac > params_.maxFlameHeight) heightFrac = params_.maxFlameHeight;
+
+        int heightLEDs = (int)(heightFrac * H + 0.5f);
+        if (heightLEDs < 1) heightLEDs = 1;
+        for (int y = 0; y < heightLEDs && y < H; y++) {
+            float gradT = 1.0f - (float)y / (float)heightLEDs;
+            uint8_t intensity = (uint8_t)(255.0f * gradT * audioBright);
+            uint32_t color = particleColor(intensity);
+            matrix.setPixel(x, H - 1 - y,
+                            (color >> 16) & 0xFF,
+                            (color >> 8) & 0xFF,
+                            color & 0xFF);
+        }
     }
 }
 
-// === 1D heat-propagation fire for LINEAR layouts (b203) ===
-// Classic DOOM-style fire on a strip. Each LED has a heat value (0-1).
-// Each frame:
-//   1. Cool: heat[i] *= coolRate
-//   2. Propagate toward tip: heat[i] = blend(heat[i], heat[i-1]) for i > 0
-//      so heat moves from base (i=0) toward tip (i=N-1) over multiple frames.
-//   3. Inject at base from audio:
-//        baseHeat = smolderHeight + audioEnvelope * audioHeightBoost (capped)
-//      With per-frame noise variation so the base isn't perfectly steady.
-// Then render: each LED color = warm-palette lookup on its heat value.
+// === LINEAR ember floor: "floating noise" sized by audio (b204) ===
+// Same fire LOGIC as the matrix (audioFlameAmount() = smolder lifted by the
+// shared audio envelope, animated by the shared noiseTime_), only the visual
+// MAPPING differs: instead of becoming a column HEIGHT, the audio amount sets
+// how much of the strip the glowing embers COVER. A spatial noise field
+// selects which LEDs are "inside" the embers; because noiseTime_ advances
+// (faster when loud), the lit blobs drift along the strip — "floating noise".
 //
-// Result on a strip:
-//   - silence:   gentle glow at the base, mostly dark toward tip (smolder)
-//   - music:     heat injected continuously, rises up the strip as glowing
-//                wave that fades toward the tip
-//   - impulses:  big heat spike at base, propagates up and decays — visible
-//                "flame wave" travelling along the strip per beat
+//   silence  → low coverage → a few dim, slowly-drifting embers
+//   music     → coverage grows → more/larger embers, brighter
+//   impulse   → coverage spikes toward the whole strip on each hit
 //
-// No "vertical dimension" needed because the strip IS the vertical axis,
-// with position along the strip representing "height" in the fire.
-void Fire::renderLinear(PixelMatrix& matrix, float dt) {
+// No vertical dimension is invented (the strip has none); coverage replaces
+// height as the audio-reactive dimension. The pipeline pre-clears the matrix,
+// so LEDs outside the embers stay dark.
+void Fire::renderLinearEmber(PixelMatrix& matrix) {
     const int N = matrix.getWidth();
     if (N <= 0) return;
 
-    // Lazy-allocate heat buffer
-    if (!linearHeat_ || linearHeatCapacity_ < N) {
-        if (linearHeat_) delete[] linearHeat_;
-        linearHeat_ = new(std::nothrow) float[N];
-        if (!linearHeat_) {
-            // PR #149 review: log OOM so the symptom isn't a silently dark
-            // linear flame. nRF52840 heap is shared with the SoftDevice
-            // and BLE, so this is a plausible failure on tight memory.
-            static bool oomLogged = false;
-            if (!oomLogged) {
-                Serial.print(F("[Fire::renderLinear] OOM: linearHeat_[")); Serial.print(N);
-                Serial.println(F("] alloc failed — linear fire disabled."));
-                oomLogged = true;
-            }
-            linearHeatCapacity_ = 0;
-            return;
+    // Coverage = the SAME audio-driven flame amount the matrix uses for
+    // height, normalized by maxFlameHeight so a peak impulse can light the
+    // whole strip while idle smolder lights only scattered embers.
+    float amount = audioFlameAmount();
+    if (amount > params_.maxFlameHeight) amount = params_.maxFlameHeight;
+    float coverage = (params_.maxFlameHeight > 0.0f)
+                     ? amount / params_.maxFlameHeight : 0.0f;   // 0..1
+    if (coverage < 0.0f) coverage = 0.0f;
+    if (coverage > 1.0f) coverage = 1.0f;
+
+    // Brightness breathes with the audio envelope — same per-frame term the
+    // matrix heightmap uses (frameOvershoot_), so both layouts dim/brighten
+    // together.
+    const float audioBright = 0.40f + 0.60f * frameOvershoot_;
+
+    for (int i = 0; i < N; i++) {
+        // Spatial noise (animated by the shared, audio-sped noiseTime_)
+        // selects which LEDs fall "inside" the floating embers.
+        float n01 = (SimplexNoise::noise2D(i * params_.noiseSpatialScale,
+                                           noiseTime_) + 1.0f) * 0.5f;
+        if (n01 < coverage) {
+            // Depth below the coverage threshold → brighter toward blob center,
+            // fading to nothing at the blob edge for soft, organic embers.
+            float depth = (coverage > 0.0f) ? (coverage - n01) / coverage : 0.0f;
+            uint8_t intensity = (uint8_t)(255.0f * depth * audioBright);
+            uint32_t color = particleColor(intensity);
+            matrix.setPixel(i, 0,
+                            (color >> 16) & 0xFF,
+                            (color >> 8) & 0xFF,
+                            color & 0xFF);
         }
-        linearHeatCapacity_ = N;
-        for (int i = 0; i < N; i++) linearHeat_[i] = 0.0f;
-    }
-
-    // Frame-rate-independent cool & propagate rates. params_.linearCoolRate
-    // and params_.linearPropRate are expressed in 60fps-frame units, scaled
-    // to actual dt so the visual is consistent across frame rates.
-    float dt60 = dt * 60.0f;
-    if (dt60 > 4.0f) dt60 = 4.0f;
-    float coolPerFrame = powf(params_.linearCoolRate, dt60);
-    float propMix = 1.0f - powf(1.0f - params_.linearPropRate, dt60);
-
-    // 1. Cool every position
-    for (int i = 0; i < N; i++) {
-        linearHeat_[i] *= coolPerFrame;
-    }
-
-    // 2. Propagate from base toward tip — iterate from tip DOWN to avoid
-    //    same-pass clobbering. heat[i] absorbs some heat from heat[i-1].
-    for (int i = N - 1; i > 0; i--) {
-        linearHeat_[i] = linearHeat_[i] * (1.0f - propMix) +
-                         linearHeat_[i - 1] * propMix;
-    }
-
-    // 3. Inject at base from smolder + audio envelope, with noise variation.
-    //    noise gives ±50% wiggle on the smolder injection so the base
-    //    looks alive even in silence.
-    float baseSmolder = params_.smolderHeight;
-    float n = SimplexNoise::noise2D(0.0f, noiseTime_);    // -1..1
-    baseSmolder *= 1.0f + 0.5f * n;
-    float injection = baseSmolder + audioEnvelope_ * params_.audioHeightBoost;
-    if (injection > 1.0f) injection = 1.0f;
-    if (injection > linearHeat_[0]) {
-        linearHeat_[0] = injection;     // monotonic on rising (don't undercut existing heat)
-    }
-
-    // 4. Render heat → warm palette
-    for (int i = 0; i < N; i++) {
-        float h = linearHeat_[i];
-        if (h < 0.0f) h = 0.0f;
-        if (h > 1.0f) h = 1.0f;
-        uint8_t intensity = (uint8_t)(255.0f * h);
-        uint32_t color = particleColor(intensity);
-        matrix.setPixel(i, 0,
-                        (color >> 16) & 0xFF,
-                        (color >> 8) & 0xFF,
-                        color & 0xFF);
     }
 }
 
@@ -368,6 +323,23 @@ void Fire::spawnParticles(float dt) {
             vx += spreadAmount;
         } else {
             vy += spreadAmount * 0.3f;
+        }
+
+        // === LINEAR "splash" mapping (b204) ===
+        // On a strip the matrix's upward spark becomes a splash: spawned at a
+        // random point (x already random from the spawn region) that travels
+        // OUTWARD along the strip. The strip is a single row, so we pin the
+        // particle to the row center and put all velocity on the strip axis —
+        // otherwise the spawn region's vertical velocity component carries the
+        // particle off the 1-LED-tall row and it vanishes within a frame, and
+        // a random spawn-y would dim it through the bilinear splat. Direction
+        // is randomized per particle so a burst sprays both ways from its
+        // origin = "splashes travelling outward at random locations".
+        if (height_ <= 1) {
+            y = 0.5f;
+            float dir = (random(2) == 0) ? -1.0f : 1.0f;
+            vx = dir * baseSpeed;
+            vy = 0.0f;
         }
 
         // Intensity: baseline sparks orange-to-yellow per params; BURST

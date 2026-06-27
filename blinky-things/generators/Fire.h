@@ -50,13 +50,6 @@ struct FireParams {
     float noiseBaseSpeed;         // Base noise time evolution (Hz-ish). Default 0.8.
     float noiseAudioSpeedMult;    // How much louder audio speeds the noise. Default 3.0.
 
-    // Linear-fire (1D heat propagation) tunables. Defaults derived for
-    // strips up to ~100 LEDs so flame is visible across roughly the bottom
-    // half. Raise coolRate to extend flame further; raise propRate to make
-    // waves travel faster.
-    float linearCoolRate;         // heat decay per 60fps frame. 0.97 = 3% loss/frame. Higher = flame extends further. Default 0.97.
-    float linearPropRate;         // amount of "shift toward base" per 60fps frame, 0-1. Higher = faster wave propagation, less smearing. Default 0.7.
-
     // Thermal physics
     float thermalForce;           // × traversalDim → thermal buoyancy (LEDs/sec^2)
 
@@ -103,10 +96,6 @@ struct FireParams {
         noiseSpatialScale = 0.30f;    // wide noise patterns
         noiseBaseSpeed  = 0.8f;       // slow noise animation when quiet
         noiseAudioSpeedMult = 3.0f;   // loud audio makes noise animate 4x base
-        // 1D linear-fire defaults: c=0.97 gives heat[i]/heat[i-1] ≈ 0.94 with p=0.7,
-        // so heat[50] ≈ 0.05*heat[0] (5% remaining) — flame visibly fades over ~50 LEDs.
-        linearCoolRate = 0.97f;
-        linearPropRate = 0.7f;
         sparkVelocityMin = 1.0f;      // × traversalDim → min upward velocity (3x original)
         sparkVelocityMax = 2.0f;      // × traversalDim → max upward velocity (3x original)
         sparkSpread = 1.0f;           // × crossDim → horizontal scatter
@@ -196,12 +185,6 @@ private:
     float  noiseTime_ = 0.0f;        // heightmap noise time (advances per frame, audio-scaled)
     float  audioEnvelope_ = 0.0f;    // smoothed audio envelope for heightmap audio-boost (attack fast, decay slower)
 
-    // 1D heat-propagation buffer for LINEAR layouts (b203).
-    // Allocated lazily in renderLinear() based on actual LED count.
-    // Each entry is a 0..1 heat value; rendered via the warm palette.
-    float* linearHeat_ = nullptr;
-    int    linearHeatCapacity_ = 0;
-
     // Palette blending state (low-pass filtered to avoid jarring shifts)
     float paletteBias_;          // 0.0 = warm/cool, 1.0 = hot (smoothed energy*rhythm)
 
@@ -219,6 +202,19 @@ private:
     void updateHeatGrid();
     void applyGridForce(Particle* p, float dt);
 
-    // b203: 1D heat-propagation fire for linear layouts (hat, strips).
-    void renderLinear(PixelMatrix& matrix, float dt);
+    // === Shared fire simulation (layout-agnostic) ===
+    // Audio-driven flame "amount": idle smolder lifted by the audio envelope,
+    // UNCLAMPED. This is the single quantity that both layouts derive their
+    // visual from — MATRIX maps it to per-column flame HEIGHT, LINEAR maps it
+    // to ember-noise COVERAGE along the strip. Same logic, different render.
+    float audioFlameAmount() const {
+        return params_.smolderHeight + audioEnvelope_ * params_.audioHeightBoost;
+    }
+
+    // === Layout-specific ember-floor renderers ===
+    // Matrix: per-column heightmap flame, bright base → dim tip (b202 visual,
+    //         unchanged — extracted verbatim so linear can be a peer, not a slice).
+    void renderMatrixHeightmap(PixelMatrix& matrix);
+    // Linear: "floating noise" embers whose coverage tracks audioFlameAmount().
+    void renderLinearEmber(PixelMatrix& matrix);
 };
