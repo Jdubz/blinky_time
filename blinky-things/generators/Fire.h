@@ -198,6 +198,19 @@ private:
     float cellW_;    // LED width of each grid cell
     float cellH_;    // LED height of each grid cell
 
+    // === Linear ember persistence (b205) ===
+    // Per-LED smoothed brightness for the linear ember floor. The b204 linear
+    // renderer recomputed every LED from scratch each frame, so the global
+    // audio-driven coverage threshold + audioBright made the whole strip
+    // blink in lockstep (the "strobe"). This buffer eases each LED toward its
+    // per-frame target with an asymmetric attack/decay, so embers glow up and
+    // cool down instead of hard-switching. Sized like Water's ripple buffer;
+    // physical strips never exceed this (largest is the 141-LED scarf).
+    static constexpr int   MAX_LINEAR_LEDS = 256;
+    static constexpr float kEmberAttackTau = 0.09f;  // ~90 ms swell on onsets
+    static constexpr float kEmberDecayTau  = 0.40f;  // ~400 ms ember cool-down
+    float emberLevel_[MAX_LINEAR_LEDS];              // 0..1 smoothed brightness
+
     void initGrid();
     void updateHeatGrid();
     void applyGridForce(Particle* p, float dt);
@@ -215,6 +228,7 @@ private:
     // Matrix: per-column heightmap flame, bright base → dim tip (b202 visual,
     //         unchanged — extracted verbatim so linear can be a peer, not a slice).
     void renderMatrixHeightmap(PixelMatrix& matrix);
-    // Linear: "floating noise" embers whose coverage tracks audioFlameAmount().
-    void renderLinearEmber(PixelMatrix& matrix);
+    // Linear: "floating noise" embers whose coverage tracks audioFlameAmount(),
+    // temporally smoothed per-LED (dt) so they fade rather than strobe.
+    void renderLinearEmber(PixelMatrix& matrix, float dt);
 };

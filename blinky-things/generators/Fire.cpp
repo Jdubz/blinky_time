@@ -14,6 +14,7 @@ Fire::Fire()
       gridW_(FIRE_GRID_W), gridH_(FIRE_GRID_H),
       cellW_(1.0f), cellH_(1.0f) {
     memset(heatGrid_, 0, sizeof(heatGrid_));
+    memset(emberLevel_, 0, sizeof(emberLevel_));
 }
 
 Fire::~Fire() {
@@ -93,7 +94,7 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     //   linear → "floating noise" COVERAGE along the strip (louder = more)
     const bool isLinear = (matrix.getHeight() <= 1);
     if (isLinear) {
-        renderLinearEmber(matrix);
+        renderLinearEmber(matrix, dt);
     } else {
         renderMatrixHeightmap(matrix);
     }
@@ -133,6 +134,7 @@ void Fire::reset() {
     ParticleGenerator::reset();
     paletteBias_ = 0.0f;
     memset(heatGrid_, 0, sizeof(heatGrid_));
+    memset(emberLevel_, 0, sizeof(emberLevel_));
 }
 
 // === MATRIX ember floor: per-column heightmap (b202 visual, UNCHANGED) ===
@@ -184,9 +186,20 @@ void Fire::renderMatrixHeightmap(PixelMatrix& matrix) {
 // No vertical dimension is invented (the strip has none); coverage replaces
 // height as the audio-reactive dimension. The pipeline pre-clears the matrix,
 // so LEDs outside the embers stay dark.
-void Fire::renderLinearEmber(PixelMatrix& matrix) {
+//
+// === Anti-strobe (b205) ===
+// The b204 version wrote each LED's instantaneous target straight to the
+// matrix. Because both audio terms below (coverage AND audioBright) move every
+// frame and the coverage test is a hard on/off, whole bands of the strip
+// blinked in lockstep — the "entire line strobes" report. Fix: each LED keeps
+// a persistent brightness (emberLevel_) that eases toward its per-frame target
+// with a moderate attack and a slow decay. Onsets still register as a swell;
+// the strip cools instead of snapping dark. Audio drives the TARGET; the
+// per-LED low-pass removes the lockstep flicker.
+void Fire::renderLinearEmber(PixelMatrix& matrix, float dt) {
     const int N = matrix.getWidth();
     if (N <= 0) return;
+    const int lit = (N < MAX_LINEAR_LEDS) ? N : MAX_LINEAR_LEDS;
 
     // Coverage = the SAME audio-driven flame amount the matrix uses for
     // height, normalized by maxFlameHeight so a peak impulse can light the
@@ -199,20 +212,35 @@ void Fire::renderLinearEmber(PixelMatrix& matrix) {
     if (coverage > 1.0f) coverage = 1.0f;
 
     // Brightness breathes with the audio envelope — same per-frame term the
-    // matrix heightmap uses (frameOvershoot_), so both layouts dim/brighten
-    // together.
+    // matrix heightmap uses (frameOvershoot_). On linear it is folded into the
+    // smoothed target rather than applied raw, so its per-frame jitter is
+    // low-passed along with everything else.
     const float audioBright = 0.40f + 0.60f * frameOvershoot_;
 
-    for (int i = 0; i < N; i++) {
+    // Asymmetric per-LED smoothing rates (frame-rate independent via dt).
+    const float attack = 1.0f - expf(-dt / kEmberAttackTau);
+    const float decay  = 1.0f - expf(-dt / kEmberDecayTau);
+
+    for (int i = 0; i < lit; i++) {
         // Spatial noise (animated by the shared, audio-sped noiseTime_)
         // selects which LEDs fall "inside" the floating embers.
         float n01 = (SimplexNoise::noise2D(i * params_.noiseSpatialScale,
                                            noiseTime_) + 1.0f) * 0.5f;
+        float target = 0.0f;
         if (n01 < coverage) {
             // Depth below the coverage threshold → brighter toward blob center,
             // fading to nothing at the blob edge for soft, organic embers.
             float depth = (coverage > 0.0f) ? (coverage - n01) / coverage : 0.0f;
-            uint8_t intensity = (uint8_t)(255.0f * depth * audioBright);
+            target = depth * audioBright;   // 0..1
+        }
+
+        // Ease the stored level toward the target: quick to brighten, slow to
+        // fade. This is what turns the strobe into a glow.
+        float& level = emberLevel_[i];
+        level += (target - level) * (target > level ? attack : decay);
+
+        if (level > 0.004f) {  // ~1/255 — below this it rounds to black anyway
+            uint8_t intensity = (uint8_t)(255.0f * level);
             uint32_t color = particleColor(intensity);
             matrix.setPixel(i, 0,
                             (color >> 16) & 0xFF,
