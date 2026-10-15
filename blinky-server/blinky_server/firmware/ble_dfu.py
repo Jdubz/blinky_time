@@ -168,7 +168,13 @@ def clear_bluez_state(address: str, power_cycle: bool = False) -> None:
     """
     _validate_ble_address(address)
     addr_u = address.replace(":", "_")
-    subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=5)
+    # Best-effort cache clear (like the power-cycle below): a hung or missing
+    # bluetoothctl must not raise out of a DFU attempt's cleanup and abort the
+    # whole flash mid-sequence. Logged, not silent.
+    try:
+        subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("bluetoothctl remove %s failed: %s", address, e)
     import glob as _glob
     import shutil
 
@@ -335,56 +341,71 @@ async def _dfu_transfer_inner(
         return result
     progress("scan", f"Found: {dev.name}", 25)
 
-    # Connect
+    # Connect. From here until the transfer's try/finally below, a timeout or
+    # job cancellation (CancelledError, not an Exception) must not leak the
+    # bootloader connection: it would block the next BLE operation.
     client = BleakClient(dev, timeout=15.0)
     try:
-        await client.connect()
-    except Exception as e:
-        result["message"] = f"Failed to connect to bootloader: {e}"
-        return result
-
-    # DFU chunk size from the connection's negotiated ATT MTU minus the
-    # 3-byte ATT overhead. Bumped from a hardcoded 20 (OPEN_ISSUES §3.3)
-    # — BLs with the §3.3 MTU change accept up to 244 bytes per packet
-    # for ~12x faster transfers; older BLs cap at 20 and we honour that
-    # via the floor. ``client.mtu_size`` reflects what bleak/BlueZ
-    # actually negotiated with this peer. Bleak 3.x may warn or raise
-    # if MTU exchange hasn't completed — mirror the transport-layer
-    # pattern (catch + conservative-20 fallback) so a transient read
-    # failure can't kill the whole DFU attempt. The exception IS
-    # logged at WARN (not swallowed silently — CLAUDE.md §"No Silent
-    # Fallbacks") so the operator can distinguish "MTU read failed,
-    # using floor" from "old BL, capped at 20 anyway".
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
         try:
-            negotiated_mtu = client.mtu_size
-        except Exception as exc:
-            log.warning("BLE-DFU mtu_size read failed (%r); falling back to ATT minimum", exc)
-            negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
-    mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
-    progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
-
-    # Verify bootloader mode
-    try:
-        rev = await client.read_gatt_char(DFU_REVISION_UUID)
-        rev_val = int.from_bytes(rev[:2], "little")
-        if rev_val <= 1:
-            await client.disconnect()
-            result["message"] = f"Device in app mode (revision=0x{rev_val:04x}), not bootloader"
+            await client.connect()
+        except Exception as e:
+            result["message"] = f"Failed to connect to bootloader: {e}"
             return result
-    except Exception:
-        pass
 
-    # Subscribe to notifications
-    await asyncio.sleep(2)
-    notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        # DFU chunk size from the connection's negotiated ATT MTU minus the
+        # 3-byte ATT overhead. Bumped from a hardcoded 20 (OPEN_ISSUES §3.3)
+        # — BLs with the §3.3 MTU change accept up to 244 bytes per packet
+        # for ~12x faster transfers; older BLs cap at 20 and we honour that
+        # via the floor. ``client.mtu_size`` reflects what bleak/BlueZ
+        # actually negotiated with this peer. Bleak 3.x may warn or raise
+        # if MTU exchange hasn't completed — mirror the transport-layer
+        # pattern (catch + conservative-20 fallback) so a transient read
+        # failure can't kill the whole DFU attempt. The exception IS
+        # logged at WARN (not swallowed silently — CLAUDE.md §"No Silent
+        # Fallbacks") so the operator can distinguish "MTU read failed,
+        # using floor" from "old BL, capped at 20 anyway".
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                negotiated_mtu = client.mtu_size
+            except Exception as exc:
+                log.warning("BLE-DFU mtu_size read failed (%r); falling back to ATT minimum", exc)
+                negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
+        mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
+        progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
 
-    def on_notify(sender: BleakGATTCharacteristic, data: bytearray) -> None:
-        notify_queue.put_nowait(bytes(data))
+        # Verify bootloader mode
+        try:
+            rev = await client.read_gatt_char(DFU_REVISION_UUID)
+            rev_val = int.from_bytes(rev[:2], "little")
+            if rev_val <= 1:
+                await client.disconnect()
+                result["message"] = f"Device in app mode (revision=0x{rev_val:04x}), not bootloader"
+                return result
+        except Exception:
+            pass
 
-    await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
-    await asyncio.sleep(1)
+        # Subscribe to notifications
+        await asyncio.sleep(2)
+        notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+        def on_notify(sender: BleakGATTCharacteristic, data: bytearray) -> None:
+            notify_queue.put_nowait(bytes(data))
+
+        try:
+            await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
+        except Exception as e:
+            # Nothing written to the bootloader yet: safe to disconnect and retry.
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            result["message"] = f"Failed to subscribe to DFU control notifications: {e}"
+            log.error(result["message"])
+            return result
+        await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await asyncio.shield(client.disconnect())
+        raise
 
     async def wait_response(
         name: str, expected_opcode: int | None = None, timeout: float = 30.0
@@ -430,6 +451,11 @@ async def _dfu_transfer_inner(
 
     try:
         # START_DFU
+        # Latch erase_started BEFORE the writes: if a write reaches the
+        # bootloader but its await raises or times out, erasing may already
+        # have begun. Only an explicit INVALID_STATE clears it below. The retry
+        # loop uses this to stop re-sending the bootloader-entry command (#218).
+        result["erase_started"] = True
         progress("dfu", f"START_DFU (type=0x{image_type:02x})...", 35)
         await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x01, image_type]), response=True)
         if image_type == 0x04:
@@ -443,10 +469,14 @@ async def _dfu_transfer_inner(
         ok, code, msg = await wait_response("START_DFU", expected_opcode=0x01, timeout=60.0)
         if not ok:
             if code == 0x02:  # INVALID_STATE
+                # Explicit rejection: the bootloader didn't start the erase, so
+                # the app is intact and the device may come back up in it.
+                # Record that BEFORE the reset, whose cleanup can raise.
+                result["erase_started"] = False
+                result["needs_retry"] = True
+                result["message"] = "INVALID_STATE (bootloader reset, retry needed)"
                 log.warning("START_DFU returned INVALID_STATE — sending SYSTEM_RESET")
                 await _reset_bootloader(client)
-                result["message"] = "INVALID_STATE (bootloader reset, retry needed)"
-                result["needs_retry"] = True
             else:
                 result["message"] = msg
             return result
@@ -710,26 +740,30 @@ async def _ble_dfu_write_impl(
         # before the bootloader entry creates a new one.
         await asyncio.sleep(2)
 
-    async def enter_bootloader(label: str) -> None:
+    async def enter_bootloader(label: str, reentry: bool = False) -> None:
+        # On attempt 0 an exception is normal (the device drops the link as it
+        # reboots). On a re-entry it may mean the command never went out, so
+        # say so at WARNING rather than leave only "re-sending" in the log.
+        log_exc = log.warning if reentry else log.debug
         if enter_bootloader_via_serial:
             progress("bootloader", f"Entering BLE DFU via serial command{label}...", 10)
             try:
                 await enter_bootloader_via_serial("bootloader ble")
             except Exception as e:
-                log.debug("Bootloader command result (may disconnect): %s", e)
+                log_exc("Bootloader command result (may disconnect): %s", e)
             await asyncio.sleep(2)
         elif enter_bootloader_via_ble:
             progress("bootloader", f"Entering BLE DFU via BLE NUS command{label}...", 10)
             try:
                 await enter_bootloader_via_ble("bootloader ble")
             except Exception as e:
-                log.debug("BLE bootloader command result (expected disconnect): %s", e)
+                log_exc("BLE bootloader command result (expected disconnect): %s", e)
             await asyncio.sleep(3)
 
     last_result: dict[str, Any] = {"status": "error", "message": "No attempts made"}
-    # Once any attempt gets past the bootloader scan, the device has been in
-    # its bootloader with a transfer under way: never re-send the entry
-    # command for the rest of this invocation, even after a later scan miss.
+    # Once any attempt may have started erasing the app (START_DFU written and
+    # not explicitly rejected), never re-send the entry command for the rest
+    # of this invocation, even after a later scan miss.
     transfer_started = False
 
     for attempt in range(MAX_DFU_ATTEMPTS):
@@ -743,18 +777,22 @@ async def _ble_dfu_write_impl(
             await asyncio.sleep(20)
 
         # Enter bootloader on the first attempt. Retries normally assume the
-        # device is already in its bootloader — except when the previous attempt
-        # never found the bootloader and the device is still advertising as its
-        # app: the entry command didn't take (transient BLE miss), so send it
-        # again (#218). Nothing was transferred in that case, so this is the
-        # same operation as attempt 0.
+        # device is already in its bootloader — except when nothing has been
+        # erased yet (scan miss, or INVALID_STATE reset) and the device is
+        # still / again advertising as its app: send the entry command again
+        # (#218). Nothing was transferred, so this is the same as attempt 0.
         if attempt == 0:
             await enter_bootloader("")
         elif (
             not transfer_started
-            and last_result.get("bootloader_not_found")
+            # A scan miss, or an INVALID_STATE reset (the device may come back
+            # up in its intact app), can both leave the device out of DFU.
+            and (last_result.get("bootloader_not_found") or last_result.get("needs_retry"))
             and (enter_bootloader_via_serial or enter_bootloader_via_ble)
         ):
+            # Drop any cached BlueZ object first so only a live advertisement
+            # counts as "still in the app".
+            await asyncio.to_thread(clear_bluez_state, app_ble_address)
             still_app = await _scan_with_retry(
                 lambda: BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
             )
@@ -765,7 +803,7 @@ async def _ble_dfu_write_impl(
                     attempt + 1,
                     app_ble_address,
                 )
-                await enter_bootloader(f" (re-entry, attempt {attempt + 1})")
+                await enter_bootloader(f" (re-entry, attempt {attempt + 1})", reentry=True)
                 await asyncio.to_thread(clear_bluez_state, boot_addr)
                 await asyncio.sleep(3)
 
@@ -787,7 +825,7 @@ async def _ble_dfu_write_impl(
             progress=progress,
         )
 
-        if not last_result.get("bootloader_not_found"):
+        if last_result.get("erase_started"):
             transfer_started = True
 
         if last_result.get("status") == "ok":

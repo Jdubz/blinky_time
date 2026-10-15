@@ -10,6 +10,7 @@ device is still advertising as its app — and only then.
 from __future__ import annotations
 
 import asyncio
+import types
 from typing import Any
 
 import pytest
@@ -19,7 +20,16 @@ from blinky_server.firmware import ble_dfu as mod
 
 APP = "AA:BB:CC:DD:EE:10"
 NOT_FOUND = {"status": "error", "message": "not found", "bootloader_not_found": True}
-OK = {"status": "ok", "message": "transfer ok"}
+OK = {"status": "ok", "message": "transfer ok", "erase_started": True}
+# START_DFU written, then a later stage failed: the app may be partly erased.
+ERASED_FAIL = {"status": "error", "message": "write failed", "erase_started": True}
+# START_DFU explicitly rejected: bootloader reset, app intact (no erase).
+INVALID_STATE = {
+    "status": "error",
+    "message": "INVALID_STATE",
+    "needs_retry": True,
+    "erase_started": False,
+}
 
 
 @pytest.fixture
@@ -60,13 +70,19 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return state
 
 
-async def _run(state: dict[str, Any]) -> dict[str, Any]:
+async def _run(state: dict[str, Any], via: str = "ble") -> dict[str, Any]:
     async def enter(cmd: str) -> None:
         state["entries"].append(cmd)
 
+    kwargs: dict[str, Any] = {}
+    if via == "ble":
+        kwargs["enter_bootloader_via_ble"] = enter
+    elif via == "serial":
+        kwargs["enter_bootloader_via_serial"] = enter
+    # via == "none": DFU-recovery path, device already in its bootloader.
     token = _guard._inside_flash_job_orchestrator.set(True)
     try:
-        return await mod._ble_dfu_write_impl(APP, "fw.zip", enter_bootloader_via_ble=enter)
+        return await mod._ble_dfu_write_impl(APP, "fw.zip", **kwargs)
     finally:
         _guard._inside_flash_job_orchestrator.reset(token)
 
@@ -90,9 +106,9 @@ async def test_no_reentry_when_app_gone(harness: dict[str, Any]) -> None:
 
 
 async def test_no_reentry_after_transfer_failure(harness: dict[str, Any]) -> None:
-    # A failure after the bootloader was found (transfer started) must not
+    # A failure after START_DFU was written (erase may have begun) must not
     # trigger re-entry: the device is in the bootloader.
-    harness["transfers"] = [{"status": "error", "message": "write failed"}, OK]
+    harness["transfers"] = [ERASED_FAIL, OK]
     result = await _run(harness)
     assert result["status"] == "ok"
     assert harness["entries"] == ["bootloader ble"]
@@ -102,11 +118,53 @@ async def test_no_reentry_after_transfer_failure(harness: dict[str, Any]) -> Non
 async def test_no_reentry_once_any_transfer_started(harness: dict[str, Any]) -> None:
     # Copilot review: a transfer-stage failure followed by a scan miss must
     # not re-enable re-entry, even with the app advertising.
-    harness["transfers"] = [{"status": "error", "message": "write failed"}, NOT_FOUND, OK]
+    harness["transfers"] = [ERASED_FAIL, NOT_FOUND, OK]
     harness["app_visible"] = [True, True]
     result = await _run(harness)
     assert result["status"] == "ok"
     assert harness["entries"] == ["bootloader ble"]
+
+
+async def test_reentry_after_invalid_state(harness: dict[str, Any]) -> None:
+    # INVALID_STATE resets the bootloader without erasing; the device can come
+    # back up in its (intact) app. A following scan miss with the app
+    # advertising must re-send the entry command, or #218 recurs.
+    harness["transfers"] = [INVALID_STATE, NOT_FOUND, OK]
+    # Probe after INVALID_STATE: device still in its bootloader. Probe after
+    # the scan miss: the app is back up.
+    harness["app_visible"] = [False, True]
+    result = await _run(harness)
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble", "bootloader ble"]
+
+
+async def test_reentry_when_invalid_state_is_the_last_failure(harness: dict[str, Any]) -> None:
+    # Copilot review: scan miss, then INVALID_STATE on attempt 2 (device can
+    # reboot into its intact app), then the final attempt must probe and
+    # re-enter rather than only rescan for the bootloader.
+    harness["transfers"] = [NOT_FOUND, INVALID_STATE, OK]
+    harness["app_visible"] = [False, True]
+    result = await _run(harness)
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble", "bootloader ble"]
+
+
+async def test_reentry_via_serial(harness: dict[str, Any]) -> None:
+    harness["transfers"] = [NOT_FOUND, OK]
+    harness["app_visible"] = [True]
+    result = await _run(harness, via="serial")
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble", "bootloader ble"]
+
+
+async def test_recovery_path_never_probes_or_enters(harness: dict[str, Any]) -> None:
+    # No entry callables (device already in DFU recovery): no app probe and no
+    # entry command, even after a scan miss.
+    harness["transfers"] = [NOT_FOUND, OK]
+    result = await _run(harness, via="none")
+    assert result["status"] == "ok"
+    assert harness["entries"] == []
+    assert harness["scans"] == [APP]  # only the post-DFU verification scan
 
 
 async def test_attempts_stay_bounded(harness: dict[str, Any]) -> None:
@@ -116,3 +174,68 @@ async def test_attempts_stay_bounded(harness: dict[str, Any]) -> None:
     assert result["status"] == "error"
     assert len(harness["entries"]) == mod.MAX_DFU_ATTEMPTS
     assert harness["transfers"] == []
+
+
+def test_clear_bluez_state_survives_bluetoothctl_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Copilot review: cleanup after an INVALID_STATE reset calls
+    # clear_bluez_state; a hung bluetoothctl must not raise out of it.
+    import subprocess
+
+    def hang(*a: Any, **k: Any) -> None:
+        raise subprocess.TimeoutExpired(cmd="bluetoothctl", timeout=5)
+
+    monkeypatch.setattr(mod.subprocess, "run", hang)
+    mod.clear_bluez_state(APP)  # must not raise
+
+
+async def test_cancel_during_subscription_disconnects_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Copilot review: a timeout/cancellation while start_notify is pending
+    # (CancelledError, not an Exception) must not leak the bootloader link.
+    hang = asyncio.Event()
+    subscribing = asyncio.Event()
+    state = {"disconnects": 0}
+
+    class Client:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            pass
+
+        async def connect(self) -> None:
+            return None
+
+        @property
+        def mtu_size(self) -> int:
+            return 247
+
+        async def read_gatt_char(self, uuid: str) -> bytes:
+            return b"\x08\x00"  # bootloader DFU revision
+
+        async def start_notify(self, *a: Any, **k: Any) -> None:
+            subscribing.set()
+            await hang.wait()  # never set: blocks until cancelled
+
+        async def disconnect(self) -> None:
+            state["disconnects"] += 1
+
+    class Scanner:
+        @staticmethod
+        async def find_device_by_address(addr: str, timeout: float = 0) -> object:
+            return types.SimpleNamespace(name="AdaDFU", address=addr)
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(mod.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(mod, "clear_bluez_state", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "BleakClient", Client)
+    monkeypatch.setattr(mod, "BleakScanner", Scanner)
+
+    task = asyncio.ensure_future(
+        mod._dfu_transfer_inner(APP, b"init", b"fw", 0x04, lambda *a: None, {"status": "error"})
+    )
+    # Wait until the transfer is actually inside start_notify (the preceding
+    # to_thread step may take a while), then cancel.
+    await asyncio.wait_for(subscribing.wait(), timeout=5.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert state["disconnects"] == 1

@@ -11,6 +11,7 @@ import logging
 import struct
 import subprocess
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,49 @@ def find_project_root() -> Path:
     raise FileNotFoundError("Cannot find blinky_time project root")
 
 
+# Version.h and the sketch are shared by every compile: gen_version.sh
+# truncates Version.h before writing, so a concurrent compile could read a
+# partial header. Regeneration and compilation run under one lock (concurrent
+# /fleet/deploy requests compile in separate worker threads).
+_COMPILE_LOCK = threading.Lock()
+
+
+def _regenerate_version_header(root: Path) -> str | None:
+    """Run scripts/gen_version.sh with the current BUILD_NUMBER.
+
+    Returns an error message, or None on success. Fails loudly rather than
+    compiling with a stale Version.h.
+    """
+    build_file = root / SKETCH_DIR / "BUILD_NUMBER"
+    try:
+        build = build_file.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        return f"Cannot read {build_file}: {e}"
+    if not build.isdigit():
+        return f"{build_file} is not an integer: {build!r}"
+    try:
+        gen = subprocess.run(
+            ["bash", "scripts/gen_version.sh", build],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"scripts/gen_version.sh failed to run: {e}"
+    if gen.returncode != 0:
+        return f"scripts/gen_version.sh exited {gen.returncode}: {gen.stderr.strip()[-500:]}"
+    log.info("Version.h regenerated: %s", gen.stdout.strip())
+    return None
+
+
 def compile_firmware(platform: str = "nrf52840", ble_dfu_recovery: bool = True) -> dict[str, Any]:
+    """Compile firmware (see _compile_firmware_locked); one compile at a time."""
+    with _COMPILE_LOCK:
+        return _compile_firmware_locked(platform, ble_dfu_recovery)
+
+
+def _compile_firmware_locked(platform: str, ble_dfu_recovery: bool) -> dict[str, Any]:
     """Compile firmware for the given platform.
 
     Args:
@@ -72,6 +115,14 @@ def compile_firmware(platform: str = "nrf52840", ble_dfu_recovery: bool = True) 
         return {"status": "error", "message": "arduino-cli not found"}
 
     root = find_project_root()
+
+    # Regenerate types/Version.h from BUILD_NUMBER with the shared generator,
+    # so server-built firmware reports the real build number and git SHA
+    # instead of whatever Version.h was last committed (#213). No bump here:
+    # scripts/build.sh owns build-number increments.
+    version_err = _regenerate_version_header(Path(root))
+    if version_err:
+        return {"status": "error", "message": version_err}
 
     if platform == "nrf52840":
         fqbn = FQBN_NRF52840
