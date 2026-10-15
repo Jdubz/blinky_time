@@ -33,7 +33,7 @@ PDM Microphone (16kHz, mono)
         |
    SharedSpectralAnalysis (FFT-256)
    ├── Soft-knee compressor (Giannoulis 2012)
-   ├── Per-bin adaptive whitening (Stowell & Plumbley 2007)
+   ├── Mel bands + per-band adaptive whitening (Stowell & Plumbley 2007)
    └── Spectral flux (HWR: sum of positive magnitude changes, NN-independent)
         |
         ├── [BPM PATH]
@@ -197,12 +197,11 @@ monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 
 **CRITICAL interaction warning:** Setting `cbssthresh` below 0.8 while `bayesft` or `bayesioi` are above 0.5 causes catastrophic beat tracking failure (F1 drops to 0.049). The FT/IOI sub-harmonic bias floods CBSS with phantom beats that the low threshold can't reject. Both are disabled by default (v28). If re-enabled: `cbssthresh >= 1.0` with any FT/IOI weight, or `bayesft/bayesioi <= 0.5` with any cbssthresh.
 
-### Category: `spectral` (10 parameters) - Spectral Processing (v23+)
+### Category: `spectral` - Spectral Processing (v23+)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `whitenfloor` | 0.001 | 0.0001-0.1 | Noise floor for whitening |
-| `compenabled` | true | bool | Soft-knee compressor before whitening |
+| `compenabled` | true | bool | Soft-knee compressor (before mel whitening) |
 | `compthresh` | -30.0 | -60.0 to 0.0 dB | Compressor threshold |
 | `compratio` | 3.0 | 1.0-20.0 | Compression ratio (3:1) |
 | `compknee` | 15.0 | 0.0-30.0 dB | Soft knee width |
@@ -330,7 +329,7 @@ PLL parameters (`pll`, `pllkp`, `pllki`, `onsetSnapWindow`) removed. PLP Fourier
 | Component | Parameters | Purpose |
 |-----------|-----------|---------|
 | **Compressor** | thresh=-30dB, ratio=3:1, knee=15dB, makeup=+6dB | Normalize gross signal level |
-| **Whitening** | decay=0.997, floor=0.001 | Per-bin adaptive normalization |
+| **Mel whitening** | decay=0.97, floor=0.01 (fixed) | Per-band adaptive normalization |
 
 ### Known Limitations
 

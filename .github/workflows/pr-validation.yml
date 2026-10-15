@@ -331,7 +331,10 @@ jobs:
           blinky-things/types/BlinkyAssert.cpp"
         FLAGS="-std=c++17 -DBLINKY_HOST_HARNESS -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 \
           -Iblinky-simulator/include -Iblinky-things"
-        g++ $FLAGS -O1 -g -fsanitize=undefined -fno-sanitize-recover=undefined $SRCS -o build/tracker_harness_ubsan
+        # GCC's -fsanitize=undefined omits the float checks; the tracker casts
+        # floats to int (lags, pattern bins), so add them explicitly.
+        g++ $FLAGS -O1 -g -fsanitize=undefined,float-cast-overflow,float-divide-by-zero \
+          -fno-sanitize-recover=all $SRCS -o build/tracker_harness_ubsan
         g++ $FLAGS -O2 $SRCS -o build/tracker_harness
 
     - name: UBSan stress (silence, gap, clip, noise, hum, clicks at 15/60/250 fps)

@@ -438,8 +438,6 @@ private:
     // - 26 bands vs 128 bins = less memory, more perceptually meaningful
     float melRunningMax_[SpectralConstants::NUM_MEL_BANDS];
 
-    // Per-bin spectral whitening state (128 bins)
-
     // Noise estimation state (Martin 2001 minimum statistics, simplified)
     float smoothedPower_[SpectralConstants::NUM_BINS];  // Smoothed power spectral density
     float noiseFloorEst_[SpectralConstants::NUM_BINS];  // Estimated noise floor per bin

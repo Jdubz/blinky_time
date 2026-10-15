@@ -155,12 +155,12 @@ private:
     Print* b_;
 };
 
-// Collects stream output and hands it to the sink in one write (#171).
+// Collects stream output and hands it to the sink one line per write (#171).
 // Print's float/int formatting emits a few bytes per call; through TeeStream
 // each call reaches both the BLE NUS ring and TinyUSB CDC, so one NN line
-// (~55 floats) cost hundreds of tiny writes. Bytes and order are unchanged:
-// a full buffer is committed before more is added, and the destructor
-// commits the rest.
+// (~55 floats) cost hundreds of tiny writes. Each '\n' commits the line; a
+// line longer than the buffer is committed in buffer-sized pieces, and the
+// destructor commits any tail. Bytes and order are unchanged.
 class LineBuffer : public Print {
 public:
     explicit LineBuffer(Print& sink) : sink_(sink) {}
@@ -171,6 +171,7 @@ public:
     size_t write(uint8_t c) override {
         if (len_ == sizeof(buf_)) commit();
         buf_[len_++] = c;
+        if (c == '\n') commit();
         return 1;
     }
     size_t write(const uint8_t* data, size_t size) override {
@@ -186,7 +187,10 @@ public:
 
 private:
     Print& sink_;
-    uint8_t buf_[512];  // one NN line (~500 B) per write; on the loop task's stack
+    // A 50-band NN line is ~530 B and grows a little as ts/fc gain digits;
+    // 768 B keeps it to one write. Lives on the loop task's stack (4 KB):
+    // check json info loopStackFree on the bench.
+    uint8_t buf_[768];
     size_t len_ = 0;
 };
 
