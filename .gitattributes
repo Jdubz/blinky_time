@@ -1,0 +1,16 @@
+# Line endings. The index is LF everywhere; these rules pin the working-copy
+# endings that tools depend on, regardless of core.autocrlf (#199).
+
+* text=auto
+
+# Shell scripts and git hooks must be LF or sh/bash fails on `\r`.
+*.sh text eol=lf
+
+# Console: Prettier (endOfLine: lf) checks the working copy in the pre-push
+# hook, and the husky hooks are sh scripts. CRLF here fails format:check on
+# every untouched file.
+blinky-console/** text=auto eol=lf
+
+# cmd.exe mis-parses labels/goto in LF-only batch files.
+*.bat text eol=crlf
+*.cmd text eol=crlf

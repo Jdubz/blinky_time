@@ -134,6 +134,9 @@ def main() -> int:
     ap.add_argument("--jitter", type=float, default=0.25)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--ffmpeg")
+    ap.add_argument("--min-excess", type=float, help="fail if the new build's mean excess is below this")
+    ap.add_argument("--min-tempo", type=float, help="fail if the new build's mean tempo score is below this")
+    ap.add_argument("--min-recall", type=float, help="fail if the new build's mean recall is below this")
     args = ap.parse_args()
 
     ffmpeg = find_ffmpeg(args.ffmpeg)
@@ -160,6 +163,8 @@ def main() -> int:
                     rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed)
                     r = evaluate(rows, onsets)
                     r["tempo"] = tempo_score(rows, gt_bpm)
+                    r["has_gt_bpm"] = bool(gt_bpm)
+                    r["label"] = f"{stem}@{fps:.0f}fps"
                     summary[b].append(r)
                     cells.append(f"{r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} {r['bpm']:8.1f}")
                 print(f"{stem:32s} {fps:5.0f} " + "  ".join(cells), flush=True)
@@ -169,7 +174,25 @@ def main() -> int:
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
               f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
               f"mean recall {arr('recall'):.3f}")
-    return 0
+
+    # Regression gate (CI): floors apply to the new build's corpus means. Any
+    # non-finite per-run value fails outright, so a broken run can't hide inside
+    # the mean. The one legitimate NaN is tempo on a track with no annotated BPM.
+    failed = []
+    for key, floor in (("excess", args.min_excess), ("tempo", args.min_tempo), ("recall", args.min_recall)):
+        if floor is None:
+            continue
+        runs = [r for r in summary["new"] if key != "tempo" or r["has_gt_bpm"]]
+        bad = [r["label"] for r in runs if not np.isfinite(r[key])]
+        if bad:
+            failed.append(f"non-finite {key} in {len(bad)} run(s): {', '.join(bad)}")
+            continue
+        mean = float(np.mean([r[key] for r in runs])) if runs else float("nan")
+        if not np.isfinite(mean) or mean < floor:
+            failed.append(f"mean {key} {mean:.3f} < floor {floor:.3f}")
+    for msg in failed:
+        print(f"[GATE FAIL] {msg}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
