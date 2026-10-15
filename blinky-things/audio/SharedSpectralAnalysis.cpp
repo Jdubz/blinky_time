@@ -122,13 +122,11 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , linearMelBands_{}
     , linearMelInvWeightSum_{}
     , melRunningMax_{}
-    , binRunningMax_{}
     , smoothedGainDb_(0.0f)
     , frameRmsDb_(-200.0f)
     , totalEnergy_(0.0f)
     , spectralCentroid_(0.0f)
     , spectralFlux_(0.0f)
-    , spectralFlatness_(0.0f)
     , bassFlux_(0.0f)
     , rawSpectralFlux_(0.0f)
     , rawCentroid_(0.0f)
@@ -194,9 +192,6 @@ void SharedSpectralAnalysis::reset() {
         melBands_[i] = 0.0f;
         rawMelBands_[i] = 0.0f;
         melRunningMax_[i] = 0.0f;
-    }
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        binRunningMax_[i] = 0.0f;
     }
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         smoothedPower_[i] = 0.0f;
@@ -278,7 +273,7 @@ void SharedSpectralAnalysis::process() {
 
     // Compute derived features (energy, centroid) from compressed magnitudes
     // NOTE: totalEnergy_ and spectralCentroid_ reflect compressed-but-not-whitened
-    // magnitudes. getMagnitudes() returns whitened values after whitenMagnitudes() below.
+    // magnitudes, which getMagnitudes() also returns (no per-bin whitening, #182).
     computeDerivedFeatures();
 
     // Compute band-weighted spectral flux from compressed-but-not-whitened magnitudes.
@@ -325,7 +320,7 @@ void SharedSpectralAnalysis::process() {
     }
 
     // Save compressed magnitudes for next frame's flux computation.
-    // Must happen AFTER flux computation, BEFORE whitenMagnitudes().
+    // Must happen AFTER flux computation.
     savePrevCompressedMagnitudes();
 
     // --- Pipeline ordering rationale ---
@@ -339,10 +334,10 @@ void SharedSpectralAnalysis::process() {
     // would lose the relative energy information between bins within a band.
     // Instead, each domain gets its own whitening tuned to its resolution:
     //   - 26 mel bands: per-band running max (coarse, perceptual)
-    //   - 128 FFT bins: per-bin running max (fine, for BandFlux transient detection)
+    // (Per-bin whitening of the 128 FFT bins was removed in #182: its output
+    // was never read.)
     computeMelBands();
     whitenMelBands();
-    whitenMagnitudes();
 
     // Mark frame as ready
     frameReady_ = true;
@@ -675,30 +670,6 @@ void SharedSpectralAnalysis::applyCompressor() {
     }
 }
 
-void SharedSpectralAnalysis::whitenMagnitudes() {
-    // NOTE: Whitening modifies magnitudes_ in-place. Detectors requiring
-    // absolute energy levels (HFC, ComplexDomain) must retune thresholds
-    // if re-enabled after whitening is active.
-    if (!whitenEnabled) return;
-
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        float current = magnitudes_[i];
-
-        // Update running max: max(current, decayed previous)
-        float decayedMax = binRunningMax_[i] * whitenDecay;
-        binRunningMax_[i] = (current > decayedMax) ? current : decayedMax;
-
-        // Bass bypass: skip whitening for bins 1-6 (62-375 Hz) to preserve kick contrast
-        if (whitenBassBypass && i >= SpectralConstants::BASS_MIN_BIN && i <= SpectralConstants::BASS_MAX_BIN) {
-            continue;  // Keep compressed-only magnitude for bass bins
-        }
-
-        // Normalize by running max (with floor to avoid amplifying noise)
-        float maxVal = (binRunningMax_[i] > whitenFloor) ? binRunningMax_[i] : whitenFloor;
-        magnitudes_[i] = current / maxVal;
-    }
-}
-
 void SharedSpectralAnalysis::computeDerivedFeatures() {
     // Total spectral energy
     float energy = 0.0f;
@@ -732,33 +703,6 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
         spectralCentroid_ = centroidBin * SpectralConstants::BIN_FREQ_HZ;
     } else {
         spectralCentroid_ = 0.0f;
-    }
-
-    // Spectral flatness (Wiener entropy): geometric_mean / arithmetic_mean.
-    // Range 0-1: 0 = pure tone (energy in one bin), 1 = white noise (equal energy).
-    // Drums are noise-like (broadband transient), pitched instruments are tonal.
-    // Used as a deterministic NN input feature for drum-vs-harmonic discrimination.
-    // Both means use the same set of bins (mag > 1e-10, skipping DC) for consistency.
-    // Uses logf/expf instead of log10f/powf — same result (log base cancels in
-    // geo/ari ratio) but ~2-3× faster on Cortex-M4F (no hardware power instruction).
-    float logSum = 0.0f;
-    float flatMagSum = 0.0f;
-    int validBins = 0;
-    for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
-        float mag = magnitudes_[i];
-        if (mag > 1e-10f) {
-            logSum += logf(mag);
-            flatMagSum += mag;
-            validBins++;
-        }
-    }
-    if (validBins > 0 && flatMagSum > 1e-10f) {
-        float geoMean = expf(logSum / validBins);
-        float ariMean = flatMagSum / validBins;
-        float flat = geoMean / ariMean;
-        spectralFlatness_ = (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
-    } else {
-        spectralFlatness_ = 0.0f;
     }
 }
 
@@ -821,7 +765,7 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     //
     // Flatness is computed HERE (on raw/pre-compressor mags) to match the
     // Python training pipeline's `append_hybrid_features`, which uses raw
-    // STFT magnitudes. The separate `spectralFlatness_` computed in
+    // STFT magnitudes. The separate compressed-mag flatness computed in
     // `computeDerivedFeatures` on post-compressor magnitudes is retained for
     // backwards compatibility with the serial debug stream's "flat" field
     // but is NOT what the NN consumes — AudioTracker routes getRawFlatness()
@@ -914,9 +858,39 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     }
 }
 
+float SharedSpectralAnalysis::getSpectralFlatness() const {
+    // On demand from magnitudes_, which after process() hold the compressed
+    // spectrum this was previously computed from every frame (#182).
+    // Spectral flatness (Wiener entropy): geometric_mean / arithmetic_mean.
+    // Range 0-1: 0 = pure tone (energy in one bin), 1 = white noise (equal energy).
+    // Drums are noise-like (broadband transient), pitched instruments are tonal.
+    // Debug/stream only; the NN consumes getRawFlatness() (pre-compressor).
+    // Both means use the same set of bins (mag > 1e-10, skipping DC) for consistency.
+    // Uses logf/expf instead of log10f/powf — same result (log base cancels in
+    // geo/ari ratio) but ~2-3× faster on Cortex-M4F (no hardware power instruction).
+    float logSum = 0.0f;
+    float flatMagSum = 0.0f;
+    int validBins = 0;
+    for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+        float mag = magnitudes_[i];
+        if (mag > 1e-10f) {
+            logSum += logf(mag);
+            flatMagSum += mag;
+            validBins++;
+        }
+    }
+    if (validBins > 0 && flatMagSum > 1e-10f) {
+        float geoMean = expf(logSum / validBins);
+        float ariMean = flatMagSum / validBins;
+        float flat = geoMean / ariMean;
+        return (flat < 0.0f) ? 0.0f : (flat > 1.0f) ? 1.0f : flat;
+    }
+    return 0.0f;  // no energy: flatness undefined, 0 = silence sentinel
+}
+
 void SharedSpectralAnalysis::savePrevCompressedMagnitudes() {
     // Save compressed-but-not-whitened magnitudes for spectral flux computation.
-    // Called AFTER applyCompressor(), BEFORE whitenMagnitudes().
+    // Called AFTER applyCompressor().
     // Flux = current_compressed - prev_compressed, so both frames are in the
     // same domain (compressor-normalized but not whitened). This preserves
     // absolute transient contrast that per-bin whitening would remove.

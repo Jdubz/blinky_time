@@ -57,7 +57,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 2.5 ([#179](https://github.com/Jdubz/blinky_time/issues/179)) | Compressor makes `bassFlux` ∝ level^(1/3); `bassContrast` may clamp at 1 on loud kicks | `applyCompressor`, `processFrame` | OPEN | Unverified: add telemetry before changing. |
 | 2.6 ([#180](https://github.com/Jdubz/blinky_time/issues/180)) | Mel whitening gives little contrast (log-domain ÷ running max) | `whitenMelBands` | OPEN | Low priority; comment corrected in #152. |
 | 2.7 ([#181](https://github.com/Jdubz/blinky_time/issues/181)) | Noise estimator creeps in steady music (leaky minimum) | `estimateAndSubtractNoise` | OPEN | Off by default and not persisted. Keep off, or switch to windowed min-statistics. |
-| 2.8 ([#182](https://github.com/Jdubz/blinky_time/issues/182)) | Unused per-frame work: whitening (backs user settings), debug-only compressed flatness (127 `logf`) | `SharedSpectralAnalysis` | OPEN | `atan2f` phases removed in #152. Compute flatness lazily when streaming. |
 | 2.9 ([#183](https://github.com/Jdubz/blinky_time/issues/183)) | `noiseGate` setting not persisted across reboots | `SerialConsole.cpp:250`, `ConfigStorage` | DECIDE | Persisting changes the stored settings layout (settings reset fleet-wide). Bundle with the next intentional `SETTINGS_VERSION` bump. |
 | 2.10 ([#184](https://github.com/Jdubz/blinky_time/issues/184)) | Mic ring overrun splices a window → spurious flux spike | `AdaptiveMic`, `SharedSpectralAnalysis` | IN-PR #152 | `markDiscontinuity()`. |
 
@@ -118,7 +117,6 @@ The still-open items of `docs/archive/OPEN_ISSUES_2026_05_20.md` (fleet rollout,
 | 8.2 ([#210](https://github.com/Jdubz/blinky_time/issues/210)) | 06ACEB recovery unfinished | OPEN |
 | 8.3 ([#211](https://github.com/Jdubz/blinky_time/issues/211)) | false-negative exit 4 after a successful BL flash | OPEN |
 | 8.4 ([#212](https://github.com/Jdubz/blinky_time/issues/212)) | server re-grabs the port between BL and app flash | OPEN |
-| 8.5 ([#213](https://github.com/Jdubz/blinky_time/issues/213)) | two Version.h generators diverge | OPEN |
 | 8.6 ([#214](https://github.com/Jdubz/blinky_time/issues/214)) | device vs registry LED count mismatch | OPEN |
 | 8.7 ([#215](https://github.com/Jdubz/blinky_time/issues/215)) | all-BLE deploy.sh happy path never run to exit 0 | OPEN |
 | 8.8 ([#216](https://github.com/Jdubz/blinky_time/issues/216)) | BLE-DFU stuck at MTU 23 | OPEN |
