@@ -36,6 +36,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Surface the API/CLI error text in the job log (the action hides it
+          # by default; failures showed only `is_error: true` after ~250 ms).
+          show_full_output: true
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
