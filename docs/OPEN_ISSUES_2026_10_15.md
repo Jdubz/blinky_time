@@ -118,7 +118,6 @@ The still-open items of `docs/archive/OPEN_ISSUES_2026_05_20.md` (fleet rollout,
 | 8.2 ([#210](https://github.com/Jdubz/blinky_time/issues/210)) | 06ACEB recovery unfinished | OPEN |
 | 8.3 ([#211](https://github.com/Jdubz/blinky_time/issues/211)) | false-negative exit 4 after a successful BL flash | OPEN |
 | 8.4 ([#212](https://github.com/Jdubz/blinky_time/issues/212)) | server re-grabs the port between BL and app flash | OPEN |
-| 8.5 ([#213](https://github.com/Jdubz/blinky_time/issues/213)) | two Version.h generators diverge | OPEN |
 | 8.6 ([#214](https://github.com/Jdubz/blinky_time/issues/214)) | device vs registry LED count mismatch | OPEN |
 | 8.7 ([#215](https://github.com/Jdubz/blinky_time/issues/215)) | all-BLE deploy.sh happy path never run to exit 0 | OPEN |
 | 8.8 ([#216](https://github.com/Jdubz/blinky_time/issues/216)) | BLE-DFU stuck at MTU 23 | OPEN |
