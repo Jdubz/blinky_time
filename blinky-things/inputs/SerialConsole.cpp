@@ -18,6 +18,7 @@
 #include "../comms/BleScanner.h"
 #include "../comms/BleNus.h"
 #include "../comms/RecordStream.h"
+#include "../hal/MemTelemetry.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -609,6 +610,42 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(LoopMetrics::getMinFrameMs());
         out_.print(F(",\"maxFrameMs\":"));
         out_.print(LoopMetrics::getMaxFrameMs());
+
+#ifdef BLINKY_PLATFORM_NRF52840
+        // Stack / heap headroom (#186, #187). Stack values are the minimum
+        // free bytes ever seen per task. cmdStackFree is whichever task runs
+        // this command (loop for USB serial, the Bluefruit callback task for
+        // BLE NUS).
+        {
+            TaskHandle_t loopTask = MemTelemetry::loopTaskSlot();
+            if (loopTask) {
+                out_.print(F(",\"loopStackFree\":"));
+                out_.print(MemTelemetry::stackFreeBytes(loopTask));
+            } else {
+                // setup() didn't capture it: a real init-order bug, not a
+                // runtime case. Report it instead of a misleading number.
+                out_.print(F(",\"loopStackFree\":null"));
+            }
+            out_.print(F(",\"cmdStackFree\":"));
+            out_.print(MemTelemetry::stackFreeBytes(nullptr));
+            if (recordStream_ && recordStream_->senderTask()) {
+                out_.print(F(",\"recStackFree\":"));
+                out_.print(MemTelemetry::stackFreeBytes(recordStream_->senderTask()));
+            }
+            // Heap: cached ~1 Hz sample taken on the loop task (MemTelemetry.h).
+            MemTelemetry::HeapInfo h = MemTelemetry::heap();
+            if (h.valid) {
+                out_.print(F(",\"heapTotal\":"));
+                out_.print(h.total);
+                out_.print(F(",\"heapUsed\":"));
+                out_.print(h.used);
+                out_.print(F(",\"heapPeak\":"));
+                out_.print(h.peak);
+            } else {
+                out_.print(F(",\"heapTotal\":null,\"heapUsed\":null,\"heapPeak\":null"));
+            }
+        }
+#endif
 
         out_.println(F("}"));
         return true;

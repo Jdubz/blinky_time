@@ -66,12 +66,11 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
 | 3.1 ([#185](https://github.com/Jdubz/blinky_time/issues/185)) | `configPrphBandwidth(BANDWIDTH_MAX)`: SoftDevice RAM requirement grows | `blinky-things.ino` | IN-PR #152 | Same config as the stock `bleuart` example on this core and linker. On failure: logged, BLE skipped, USB intact. **Verify:** boot log has no `[FALLBACK] Bluefruit.begin() FAILED`; `ble` shows MTU 247. |
-| 3.2 ([#186](https://github.com/Jdubz/blinky_time/issues/186)) | Loop-task stack 4 KB with ~3.8 KB used at HEAD (`updatePlpAnalysis`) | `AudioTracker` | IN-PR #152 | Scratch buffers moved to members: ~1.5 KB deepest path. No runtime high-water telemetry exists; consider logging `uxTaskGetStackHighWaterMark` in `json info`. |
-| 3.3 ([#187](https://github.com/Jdubz/blinky_time/issues/187)) | No runtime free-heap report; boot allocation failure is a halt | firmware | OPEN | Add free heap (`dbgHeapFree` or a mallinfo equivalent) to `json info`. |
 | 3.4 ([#188](https://github.com/Jdubz/blinky_time/issues/188)) | NUS has no pairing; any nearby central can send `bootloader` and config writes | `BleNus`, `SerialConsole` | DECIDE | Exposure grows with phone record sessions in crowds. Options: pairing/bonding, a command allowlist over BLE, or a session PIN. |
 | 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | OPEN | Keep console quiet during sessions; consider a non-blocking notify check. |
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 | 3.7 ([#191](https://github.com/Jdubz/blinky_time/issues/191)) | Settings save still halts the CPU (NVMC erase) long enough to drop audio | `ConfigStorage::saveToFlash` | PARTIAL | Trailing debounce + skip-unchanged in #152. Consider deferring saves while audio energy is high. |
+| 3.8 ([#223](https://github.com/Jdubz/blinky_time/issues/223)) | Heap not task-safe: core has no `__malloc_lock`; loop and BLE callback tasks both allocate (e.g. `record start` allocates 32 KB from the callback task) | core / `RecordStream` | OPEN | Audit post-boot allocations; pre-allocate or confine to the loop task, or lock malloc with `vTaskSuspendAll` after bench validation. |
 
 ## 4. Visual generators
 
@@ -105,7 +104,8 @@ Nothing in PR #152 / #155 has run on hardware yet.
    - fps ≥ 30;
    - `audioOverruns` not climbing;
    - `spectralAccumOverflow` = 0;
-   - `clipSamples` / `melSaturated` plausible.
+   - `clipSamples` / `melSaturated` plausible;
+   - `loopStackFree` and `cmdStackFree` (send `json info` over both USB and BLE) ≥ 512 B, `recStackFree` ≥ 512 B after a record session, `heapPeak` well under `heapTotal`.
 5. Visual: tempo lock holds through a breakdown → drop. Fire bursts continue through dense hats. No particle starvation on the hat's linear layout.
 
 ## 8. Carried over from 2026-05-20

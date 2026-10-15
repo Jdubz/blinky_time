@@ -94,6 +94,7 @@ ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
 #ifdef BLINKY_PLATFORM_NRF52840
 #include <services/BLEDfu.h>
+#include "hal/MemTelemetry.h"
 BLEDfu bleDfu;                     // BLE DFU service (wireless firmware updates)
 BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
 BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
@@ -151,6 +152,11 @@ void haltWithError(const __FlashStringHelper* msg) {
 }
 
 void setup() {
+#ifdef BLINKY_PLATFORM_NRF52840
+  // The core runs setup() inside its "loop" task; record the handle so
+  // `json info` can report that task's stack headroom from any task.
+  MemTelemetry::captureLoopTask();
+#endif
   // CRITICAL: Hardware watchdog + boot counter — catches HardFaults, heap
   // exhaustion, infinite loops. After 3 consecutive failed boots, automatically
   // enters UF2 bootloader for safe firmware upload. Uses GPREGRET2 which
@@ -743,6 +749,15 @@ void loop() {
   // underlying counters are always tracked so any operator can read them.
   // Required for v36-fmax (#136) merge gate: ≥30 fps under typical load.
   LoopMetrics::tick(now);
+#ifdef BLINKY_PLATFORM_NRF52840
+  // Heap stats for `json info`, sampled here because only the loop task can
+  // walk the (unlocked) newlib heap safely. See hal/MemTelemetry.h.
+  static uint32_t lastHeapSampleMs = 0;
+  if (lastHeapSampleMs == 0 || now - lastHeapSampleMs >= 1000) {
+    lastHeapSampleMs = now ? now : 1;
+    MemTelemetry::sampleHeap();
+  }
+#endif
   static uint32_t lastFpsLogMs = 0;
   if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO &&
       LoopMetrics::getLastWindowMs() != lastFpsLogMs &&

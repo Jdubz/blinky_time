@@ -137,6 +137,9 @@ public:
 
     bool isActive() const { return active_; }
 
+    /// Sender task (nullptr until the first start()); never deleted once created.
+    TaskHandle_t senderTask() const { return task_; }
+
     /// Service UUID (for advertising / docs).
     static const uint8_t SERVICE_UUID[16];
     static const uint8_t DATA_UUID[16];
