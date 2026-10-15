@@ -19,6 +19,7 @@
 #include "../comms/BleNus.h"
 #include "../comms/RecordStream.h"
 #include "../hal/MemTelemetry.h"
+#include "../hal/MallocLock.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -646,7 +647,6 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             }
             // Allocations attempted from interrupt context; the heap lock can't
             // protect those (hal/MallocLock.cpp). Must stay 0.
-            extern volatile uint32_t MallocLock_isrAllocCount;
             out_.print(F(",\"mallocIsr\":"));
             out_.print(MallocLock_isrAllocCount);
         }

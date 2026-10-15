@@ -95,6 +95,7 @@ SerialConsole* console = nullptr;  // Serial command interface
 #ifdef BLINKY_PLATFORM_NRF52840
 #include <services/BLEDfu.h>
 #include "hal/MemTelemetry.h"
+#include "hal/MallocLock.h"
 BLEDfu bleDfu;                     // BLE DFU service (wireless firmware updates)
 BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
 BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
@@ -756,6 +757,7 @@ void loop() {
   if (lastHeapSampleMs == 0 || now - lastHeapSampleMs >= 1000) {
     lastHeapSampleMs = now ? now : 1;
     MemTelemetry::sampleHeap();
+    MallocLock::reportIsrAllocs();
   }
 #endif
   static uint32_t lastFpsLogMs = 0;
