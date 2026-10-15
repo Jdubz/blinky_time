@@ -168,7 +168,13 @@ def clear_bluez_state(address: str, power_cycle: bool = False) -> None:
     """
     _validate_ble_address(address)
     addr_u = address.replace(":", "_")
-    subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=5)
+    # Best-effort cache clear (like the power-cycle below): a hung or missing
+    # bluetoothctl must not raise out of a DFU attempt's cleanup and abort the
+    # whole flash mid-sequence. Logged, not silent.
+    try:
+        subprocess.run(["bluetoothctl", "remove", address], capture_output=True, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("bluetoothctl remove %s failed: %s", address, e)
     import glob as _glob
     import shutil
 
@@ -438,6 +444,11 @@ async def _dfu_transfer_inner(
 
     try:
         # START_DFU
+        # Latch erase_started BEFORE the writes: if a write reaches the
+        # bootloader but its await raises or times out, erasing may already
+        # have begun. Only an explicit INVALID_STATE clears it below. The retry
+        # loop uses this to stop re-sending the bootloader-entry command (#218).
+        result["erase_started"] = True
         progress("dfu", f"START_DFU (type=0x{image_type:02x})...", 35)
         await client.write_gatt_char(DFU_CONTROL_UUID, bytes([0x01, image_type]), response=True)
         if image_type == 0x04:
@@ -447,21 +458,18 @@ async def _dfu_transfer_inner(
         else:
             size_pkt = struct.pack("<III", len(firmware), 0, 0)
         await client.write_gatt_char(DFU_PACKET_UUID, size_pkt, response=False)
-        # From here the bootloader may be erasing the app slot, whatever the
-        # response turns out to be. The retry loop uses this to stop re-sending
-        # the bootloader-entry command (#218).
-        result["erase_started"] = True
         # Flash erase takes ~25s for 500KB firmware (85ms per 4KB page)
         ok, code, msg = await wait_response("START_DFU", expected_opcode=0x01, timeout=60.0)
         if not ok:
             if code == 0x02:  # INVALID_STATE
-                log.warning("START_DFU returned INVALID_STATE — sending SYSTEM_RESET")
-                await _reset_bootloader(client)
-                result["message"] = "INVALID_STATE (bootloader reset, retry needed)"
-                result["needs_retry"] = True
                 # Explicit rejection: the bootloader didn't start the erase, so
                 # the app is intact and the device may come back up in it.
+                # Record that BEFORE the reset, whose cleanup can raise.
                 result["erase_started"] = False
+                result["needs_retry"] = True
+                result["message"] = "INVALID_STATE (bootloader reset, retry needed)"
+                log.warning("START_DFU returned INVALID_STATE — sending SYSTEM_RESET")
+                await _reset_bootloader(client)
             else:
                 result["message"] = msg
             return result
@@ -762,16 +770,17 @@ async def _ble_dfu_write_impl(
             await asyncio.sleep(20)
 
         # Enter bootloader on the first attempt. Retries normally assume the
-        # device is already in its bootloader — except when the previous attempt
-        # never found the bootloader and the device is still advertising as its
-        # app: the entry command didn't take (transient BLE miss), so send it
-        # again (#218). Nothing was transferred in that case, so this is the
-        # same operation as attempt 0.
+        # device is already in its bootloader — except when nothing has been
+        # erased yet (scan miss, or INVALID_STATE reset) and the device is
+        # still / again advertising as its app: send the entry command again
+        # (#218). Nothing was transferred, so this is the same as attempt 0.
         if attempt == 0:
             await enter_bootloader("")
         elif (
             not transfer_started
-            and last_result.get("bootloader_not_found")
+            # A scan miss, or an INVALID_STATE reset (the device may come back
+            # up in its intact app), can both leave the device out of DFU.
+            and (last_result.get("bootloader_not_found") or last_result.get("needs_retry"))
             and (enter_bootloader_via_serial or enter_bootloader_via_ble)
         ):
             # Drop any cached BlueZ object first so only a live advertisement

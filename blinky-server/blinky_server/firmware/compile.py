@@ -11,6 +11,7 @@ import logging
 import struct
 import subprocess
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,13 @@ def find_project_root() -> Path:
     raise FileNotFoundError("Cannot find blinky_time project root")
 
 
+# Version.h and the sketch are shared by every compile: gen_version.sh
+# truncates Version.h before writing, so a concurrent compile could read a
+# partial header. Regeneration and compilation run under one lock (concurrent
+# /fleet/deploy requests compile in separate worker threads).
+_COMPILE_LOCK = threading.Lock()
+
+
 def _regenerate_version_header(root: Path) -> str | None:
     """Run scripts/gen_version.sh with the current BUILD_NUMBER.
 
@@ -85,6 +93,12 @@ def _regenerate_version_header(root: Path) -> str | None:
 
 
 def compile_firmware(platform: str = "nrf52840", ble_dfu_recovery: bool = True) -> dict[str, Any]:
+    """Compile firmware (see _compile_firmware_locked); one compile at a time."""
+    with _COMPILE_LOCK:
+        return _compile_firmware_locked(platform, ble_dfu_recovery)
+
+
+def _compile_firmware_locked(platform: str, ble_dfu_recovery: bool) -> dict[str, Any]:
     """Compile firmware for the given platform.
 
     Args:

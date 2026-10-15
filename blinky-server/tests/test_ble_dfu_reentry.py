@@ -129,7 +129,20 @@ async def test_reentry_after_invalid_state(harness: dict[str, Any]) -> None:
     # back up in its (intact) app. A following scan miss with the app
     # advertising must re-send the entry command, or #218 recurs.
     harness["transfers"] = [INVALID_STATE, NOT_FOUND, OK]
-    harness["app_visible"] = [True]
+    # Probe after INVALID_STATE: device still in its bootloader. Probe after
+    # the scan miss: the app is back up.
+    harness["app_visible"] = [False, True]
+    result = await _run(harness)
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble", "bootloader ble"]
+
+
+async def test_reentry_when_invalid_state_is_the_last_failure(harness: dict[str, Any]) -> None:
+    # Copilot review: scan miss, then INVALID_STATE on attempt 2 (device can
+    # reboot into its intact app), then the final attempt must probe and
+    # re-enter rather than only rescan for the bootloader.
+    harness["transfers"] = [NOT_FOUND, INVALID_STATE, OK]
+    harness["app_visible"] = [False, True]
     result = await _run(harness)
     assert result["status"] == "ok"
     assert harness["entries"] == ["bootloader ble", "bootloader ble"]
@@ -160,3 +173,15 @@ async def test_attempts_stay_bounded(harness: dict[str, Any]) -> None:
     assert result["status"] == "error"
     assert len(harness["entries"]) == mod.MAX_DFU_ATTEMPTS
     assert harness["transfers"] == []
+
+
+def test_clear_bluez_state_survives_bluetoothctl_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Copilot review: cleanup after an INVALID_STATE reset calls
+    # clear_bluez_state; a hung bluetoothctl must not raise out of it.
+    import subprocess
+
+    def hang(*a: Any, **k: Any) -> None:
+        raise subprocess.TimeoutExpired(cmd="bluetoothctl", timeout=5)
+
+    monkeypatch.setattr(mod.subprocess, "run", hang)
+    mod.clear_bluez_state(APP)  # must not raise
