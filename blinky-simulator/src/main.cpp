@@ -215,12 +215,9 @@ DeviceConfig createDeviceConfig(const std::string& device) {
         config.matrix.layoutType = MATRIX_LAYOUT;
     }
 
-    // Common defaults
-    config.charging.fastChargeEnabled = false;
-    config.charging.lowBatteryThreshold = 3.5f;
-    config.charging.criticalBatteryThreshold = 3.3f;
-    config.charging.minVoltage = 3.0f;
-    config.charging.maxVoltage = 4.2f;
+    // Charging: ChargingConfig defaults (no battery) — the simulator has no
+    // battery subsystem. (Per-device threshold fields were removed from
+    // ChargingConfig; thresholds are Platform::Battery constants now.)
 
     return config;
 }
@@ -405,6 +402,14 @@ int main(int argc, char* argv[]) {
     metrics.reset();
     std::vector<uint8_t> ledBuffer(numLeds * 3);
 
+    // Derived event fields (AudioControl::onset / beatCount, b208): the
+    // scripted patterns only carry levels, so synthesize the events the
+    // firmware tracker would emit — one onset per pulse rising edge, one
+    // beat per phase wrap.
+    float prevPulse = 0.0f;
+    float prevPhase = 0.0f;
+    uint16_t beatCount = 0;
+
     // Render frames to both outputs
     for (int frame = 0; frame < totalFrames; frame++) {
         uint32_t timeMs = frame * frameIntervalMs;
@@ -414,6 +419,11 @@ int main(int argc, char* argv[]) {
 
         // Get audio state for this time
         AudioControl audio = audioPattern.getAudioAt(timeMs);
+        audio.onset = (audio.pulse >= 0.5f && prevPulse < 0.5f) ? audio.pulse : 0.0f;
+        if (audio.phase < prevPhase - 0.5f) beatCount++;
+        audio.beatCount = beatCount;
+        prevPulse = audio.pulse;
+        prevPhase = audio.phase;
 
         // Render frame through pipeline
         pipeline.render(audio);

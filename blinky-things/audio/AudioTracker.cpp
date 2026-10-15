@@ -71,8 +71,6 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     uint32_t now = time_.millis();
     onsetDensityWindowStart_ = now;
     lastSignificantAudioMs_ = now;   // Prevent premature silence decay on boot
-    lastAcfMs_ = now;                // Prevent immediate ACF fire
-    lastPulseMs_ = now;
     resetSlots();
 
     return true;
@@ -110,188 +108,79 @@ const AudioControl& AudioTracker::update(float dt) {
     // 1. Mic input
     mic_.update(dt);
 
-    // 2-3. Drain audio backlog. Each iteration reads up to FFT_SIZE
-    // samples from the PDM ring and runs one FFT.
+    // Per-update aggregates: update() may process 0..N spectral frames.
+    lastPulseStrength_ = 0.0f;
+    nnSmoothedPeak_ = 0.0f;
+    framesThisUpdate_ = 0;
+
+    // 2. Drain the PDM ring, processing EVERY spectral frame exactly once.
     //
-    // Why a loop: pre-b156 the consumer was capped at 256 samples per
-    // update() call. Producer runs at 16 kHz = 62.5 FFT-windows/sec,
-    // so the consumer needs ≥62.5 fps to keep up. Any dip below that
-    // (LED spike, ACF/PLP burst, BLE ISR jitter) accumulates in the
-    // ring → eventual overrun. Pre-b156 fleet measurement (b154/b155
-    // observability code, ring size 512): 5.7 overruns/sec, 10-17%
-    // audio loss across all 4 devices. Post-fix b156: ~0/sec.
+    // The spectral frame (62.5 Hz) is the only clock for rhythm analysis.
+    // Each frame runs the full chain in processFrame(): NN inference, pulse
+    // detection, OSS/bass/NN buffers, ACF cadence, PLP phase step. The main
+    // loop's rate only decides how many frames are handled per call.
     //
-    // Why bounded (MAX_DRAIN_ITERS = 4): unbounded recovery makes a
-    // slow iteration even slower (compute compounds). Cap at 4
-    // FFTs/iter ≈ 8 ms added worst-case work, covering 64 ms of
-    // backlog. With the 128 ms ring size (#125), a fully-saturated
-    // ring takes ~2 update() calls to fully drain.
+    // History: pre-b208 only the LAST frame of a catch-up burst reached the
+    // NN / OSS / pulse detector, and the PLP phase advanced once per loop
+    // iteration. With the loop at ~43 fps a third of all frames were
+    // invisible to tempo + onset detection, the NN's input window held
+    // frames unevenly spaced in time (unlike training), and phase drifted
+    // at loopFps/62.5 of the true tempo.
     //
-    // KNOWN ONSET COST during catch-up: NN inference (step 4) runs
-    // ONLY on the last drain iteration's spectral frame. If the loop
-    // processes 4 windows in one update() — i.e., the main loop
-    // stalled long enough to back up 64 ms of audio — onsets in the
-    // first 3 windows never reach the NN. They advance the spectral
-    // state (good for ACF/PLP, which only needs the latest frame
-    // anyway) but don't fire onset events. This is a strict
-    // improvement over the pre-b156 alternative (overrun → samples
-    // dropped at the ring entirely), but it does mean during a stall
-    // the onset detector sees roughly 1 of every 4 backlog frames.
-    // The visualizer still fires on the latest frame so the listener
-    // sees a hit, just not for every drum in a fast fill if a stall
-    // happened simultaneously.
-    //
-    // Read-buffer is sized to FFT_SIZE. getSamplesForExternal returns
-    // min(ring_available, maxCount), so a full read fills the accumulator
-    // exactly in one shot; a partial read (ring had < FFT_SIZE samples)
-    // is also fine — addSamples accumulates, !hasSamples() breaks the
-    // loop, and the next update() picks up the rest. The static_assert
-    // pins the buffer-FFT relationship: if the buffer were sized smaller
-    // than FFT_SIZE it would take multiple reads per window and the
-    // !hasSamples() branch would no longer mean "ring is partial," it
-    // would mean "we need another read pass" (different semantics).
+    // Reads are sized with samplesNeeded() so the accumulator never
+    // discards samples (windows stay contiguous).
     static int16_t sampleBuffer[SpectralConstants::FFT_SIZE];  // static: avoid stack churn
-    static_assert(sizeof(sampleBuffer) / sizeof(sampleBuffer[0]) == SpectralConstants::FFT_SIZE,
-                  "drain-loop sampleBuffer must equal FFT_SIZE so one read fills one window");
-    constexpr int MAX_DRAIN_ITERS = 4;
-    bool newSpectralFrame = false;
+    // A full mic ring holds this many frames; draining that many per call
+    // means a stall never leaves backlog that would later overrun.
+    constexpr int MAX_DRAIN_ITERS = 8;
     for (int drainIter = 0; drainIter < MAX_DRAIN_ITERS; drainIter++) {
-        int samplesRead = mic_.getSamplesForExternal(sampleBuffer, SpectralConstants::FFT_SIZE);
+        uint32_t overrunsBefore = AdaptiveMic::getOverrunCount();
+        int samplesRead = mic_.getSamplesForExternal(sampleBuffer, spectral_.samplesNeeded());
+        if (AdaptiveMic::getOverrunCount() != overrunsBefore) {
+            spectral_.markDiscontinuity();  // samples were dropped inside this window
+        }
         if (samplesRead == 0) break;  // ring empty
         spectral_.addSamples(sampleBuffer, samplesRead);
-        if (!spectral_.hasSamples()) break;  // partial window — wait for next update()
+        if (!spectral_.hasSamples()) break;  // partial window — rest arrives next update()
         spectral_.process();
+        // Absolute mic-sample index at which this window ended. Shared
+        // timeline with the record stream (RecordStream).
+        lastFrameEndSampleIdx_ = mic_.getExternalReadIndex();
+        // CPU guard: in a catch-up burst, run the NN only on the newest
+        // frame (no further complete window is already waiting). Every frame
+        // is still pushed into the NN window, so its input stays evenly
+        // spaced; NN cost per update() is bounded at one inference — the
+        // same as pre-b208 — instead of up to MAX_DRAIN_ITERS.
+        bool moreFramesPending =
+            mic_.getPendingSamples() >= static_cast<uint32_t>(SpectralConstants::FFT_SIZE);
+        processFrame(!moreFramesPending || drainIter == MAX_DRAIN_ITERS - 1);
+        framesThisUpdate_++;
     }
 
-    // 4. NN inference → onset activation for pulse detection.
-    //    Only run NN when a new spectral frame is ready. Between frames,
-    //    use last activation. NN drives discrete onset events (primary).
-    //    Spectral flux still drives tempo/PLP/pattern estimation.
-    float odf = 0.0f;
-    uint32_t currentFrameCount = spectral_.getFrameCount();
-    if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
-        lastSpectralFrameCount_ = currentFrameCount;
-        frameOnsetNN_.setProfileEnabled(nnProfile);
-        // Pass raw (pre-compressor) flatness + flux for NN hybrid input —
-        // matches the Python training pipeline's `append_hybrid_features`
-        // exactly. The *compressed* getSpectralFlatness() used to be passed
-        // here (pre-b136); that was a train-inference mismatch documented
-        // as gap 4 in docs/HYBRID_FEATURE_ANALYSIS_PLAN.md. Compressed
-        // spectralFlatness_ / spectralFlux_ are still used for the
-        // debug-stream "flat"/"sflx" fields and for ACF tempo.
-        odf = frameOnsetNN_.infer(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
-                                  spectral_.getRawFlatness(), spectral_.getRawSpectralFlux());
-        odf = clampf(odf, 0.0f, 1.0f);
-        newSpectralFrame = true;
-
-        // Track raw NN activation peaks (before pulse detection threshold/cooldown).
-        // Record timestamp when activation exceeds previous value (rising edge).
-        if (odf > rawNNActivation_ && odf > 0.05f) {
-            rawNNPeakMs_ = nowMs;
-        }
-        prevNNActivation_ = rawNNActivation_;
-        rawNNActivation_ = odf;
-    } else if (!nnActive_) {
-        // Fallback: use mic level as simple energy ODF
-        odf = mic_.getLevel();
-        newSpectralFrame = true;  // mic level updates every frame
-    } else {
-        // NN active but no new spectral frame — skip OSS update
-        // to avoid duplicate samples in the ACF buffer.
-        // Still run PLP phase advance and output synthesis.
-        odf = frameOnsetNN_.getLastOnset();
-    }
-
-    // Track significant audio for silence detection
-    if (mic_.getLevel() > 0.05f) {
+    // 3. Silence tracking on ABSOLUTE level. mic_.getLevel() is relative to
+    // the tracked peak/valley range: in a quiet breakdown it reads 0 for
+    // seconds even though music is playing, which used to wipe all tempo
+    // state 5 s into every breakdown. Raw level vs the noise gate answers
+    // the question actually being asked: is there sound?
+    if (mic_.getRawLevel() > mic_.noiseGate * 2.0f) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 5. Discrete onset detection: NN-primary (b114+).
-    //    NN smoothed activation is the primary signal for onset events.
-    //    Spectral flux is only used as fallback when NN is unavailable.
-    //    3-tap Hamming FIR smoothing reduces INT8 quantization jitter.
-    if (newSpectralFrame && nnActive_) {
-        nnPrev2_ = nnPrev1_;
-        nnPrev1_ = rawNNActivation_;
-        nnSmoothed_ = 0.23f * nnPrev2_ + 0.54f * rawNNActivation_ + 0.23f * nnPrev1_;
-    }
-    float fallbackOdf = newSpectralFrame ? spectral_.getSpectralFlux() : prevSignal_;
-    updatePulseDetection(fallbackOdf, dt, nowMs);
-
-    // 6. Feed DSP components only on new spectral frames.
-    if (newSpectralFrame) {
-        // Bass-only flux for ACF period detection — isolates kick energy.
-        // Hi-hats/snares in the high band create non-periodic ACF peaks that
-        // overwhelm the kick pattern (especially in breakbeat/DnB).
-        float bassFlux = spectral_.getBassFlux();
-        float bassContrast;
-        if (odfContrast == 2.0f) {
-            bassContrast = bassFlux * bassFlux;
-        } else if (odfContrast == 1.0f) {
-            bassContrast = bassFlux;
-        } else if (odfContrast == 0.5f) {
-            bassContrast = sqrtf(bassFlux);
-        } else {
-            bassContrast = powf(bassFlux, odfContrast);
-        }
-        bassContrast = clampf(bassContrast, 0.0f, 1.0f);
-
-        // Track NN activation statistics (used by pulse detection for NN modulation)
-        float odfClamped = clampf(odf, 0.0f, 1.0f);
-        nnActivationMean_ += 0.01f * (odfClamped - nnActivationMean_);
-        float dev = odfClamped - nnActivationMean_;
-        nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
-
-        // Buffer bass-contrast OSS sample for PLP epoch-fold
-        addOssSample(bassContrast);
-
-        // Cache bass energy (used by PLP dual-source AND energy synthesis)
-        cachedBassEnergy_ = 0.0f;
-        const float* mel = spectral_.getMelBands();
-        if (mel) {
-            // Mel bands 0-5 cover the bass region (lowest 6 bands of the filterbank).
-            // These are mel band indices, not FFT bin indices (SpectralConstants::BASS_MIN_BIN).
-            for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];
-            cachedBassEnergy_ /= 6.0f;
-        }
-        addBassSample(cachedBassEnergy_);
-
-        // Buffer raw NN onset activation for PLP source comparison
-        nnOnsetBuffer_[nnWriteIdx_] = odf;
-        nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
-        if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
+    // Smoothed normalized level for PLP confidence gating (~1 s EMA). A
+    // single instantaneous sample often lands in the sidechain dip between
+    // kicks and reads ~0, repeatedly collapsing confidence.
+    {
+        float a = 1.0f - expf(-dt / 1.0f);
+        levelEnv_ += a * (mic_.getLevel() - levelEnv_);
     }
 
-    // 7. ACF period detection + PLP pattern analysis on timer (~4ms per run;
-    // Warmup: 100 frames (~1.6s). Minimum is ACF_MAX_LAG (80) for valid correlation;
-    // 100 gives 1.25x the max lag — tight but sufficient for first ACF.
-    if (newSpectralFrame && (nowMs - lastAcfMs_) >= acfPeriodMs && ossCount_ >= 100) {
-        uint32_t t0 = time_.millis();
-        runAcf();
-        uint32_t t1 = time_.millis();
-        updatePlpAnalysis();
-        uint32_t t2 = time_.millis();
-        lastAcfMs_ = nowMs;
-        lastAcfDurationMs_ = t1 - t0;  // Profile: ACF only
-        lastPlpMs_ = t2 - t1;          // Profile: PLP analysis only
-    }
-
-    // 8. PLP phase update (free-running + pattern-based correction)
-    updatePlpPhase();
-
-    // 11. Decay during silence + reset stale state for clean warm-up
-    if (nowMs - lastSignificantAudioMs_ > 2000) {
-        periodicityStrength_ *= 0.998f;  // ~0.5s half-life at 62.5 Hz
-    }
-    // After 5s of silence, reset analysis state so new music starts clean.
-    // Without this, old OSS/bass/NN buffers, pattern, and phase correction
-    // state contaminate warm-up on the next track.
+    // After 5 s of real silence, reset analysis state so new music starts
+    // clean (old buffers/pattern/phase would contaminate warm-up).
     if (nowMs - lastSignificantAudioMs_ > 5000 && ossCount_ > 0) {
         resetAnalysisState();
     }
 
-    // 12. Pattern slot cache: check every bar (4 beats)
+    // 4. Pattern slot cache: check every bar (4 beats)
     if ((beatCount_ & 3) == 0 && beatCount_ != lastSlotCheckBeat_) {
         lastSlotCheckBeat_ = beatCount_;
         if (plpConfidence_ > 0.1f) {
@@ -299,10 +188,122 @@ const AudioControl& AudioTracker::update(float dt) {
         }
     }
 
-    // 13. Output synthesis
+    // 5. Output synthesis
     synthesizeOutputs(dt, nowMs);
 
     return control_;
+}
+
+// ============================================================================
+// Per-frame processing (the frame clock)
+// ============================================================================
+
+void AudioTracker::processFrame(bool runNN) {
+    frameClock_++;
+
+    // --- Onset activation for this frame ---
+    float odf;
+    bool freshNN = false;
+    if (nnActive_) {
+        frameOnsetNN_.setProfileEnabled(nnProfile);
+        // Raw (pre-compressor) flatness + flux for the NN hybrid input —
+        // matches the Python training pipeline's `append_hybrid_features`
+        // (pre-b136 passed the compressed values: train/inference gap 4).
+        frameOnsetNN_.pushFrame(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
+                                spectral_.getRawFlatness(), spectral_.getRawSpectralFlux());
+    }
+    if (nnActive_ && runNN) {
+        freshNN = true;
+        odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
+
+        // Track raw NN activation peaks (rising edge, before thresholds).
+        if (odf > rawNNActivation_ && odf > 0.05f) {
+            rawNNPeakMs_ = time_.millis();
+        }
+        prevNNActivation_ = rawNNActivation_;
+        rawNNActivation_ = odf;
+
+        nnSmoothed_ = 0.77f * odf + 0.23f * nnPrevRaw_;
+        nnPrevRaw_ = odf;
+        if (nnSmoothed_ > nnSmoothedPeak_) nnSmoothedPeak_ = nnSmoothed_;
+    } else if (nnActive_) {
+        // NN skipped this frame (catch-up burst): hold the last activation
+        // for the rhythm buffers; the NN peak-picker does not step.
+        odf = rawNNActivation_;
+    } else {
+        // Fallback: mic level as a simple energy ODF
+        odf = mic_.getLevel();
+    }
+
+    // --- Discrete onset detection ---
+    float pulse = updatePulseDetection(spectral_.getSpectralFlux(), freshNN);
+    lastFramePulse_ = pulse;
+    if (pulse > lastPulseStrength_) lastPulseStrength_ = pulse;
+
+    // --- Rhythm buffers ---
+    // Bass-only flux for ACF period detection — isolates kick energy.
+    // Hi-hats/snares in the high band create non-periodic ACF peaks that
+    // overwhelm the kick pattern (especially in breakbeat/DnB).
+    float bassFlux = spectral_.getBassFlux();
+    float bassContrast;
+    if (odfContrast == 2.0f) {
+        bassContrast = bassFlux * bassFlux;
+    } else if (odfContrast == 1.0f) {
+        bassContrast = bassFlux;
+    } else if (odfContrast == 0.5f) {
+        bassContrast = sqrtf(bassFlux);
+    } else {
+        bassContrast = powf(bassFlux, odfContrast);
+    }
+    bassContrast = clampf(bassContrast, 0.0f, 1.0f);
+
+    // NN activation statistics
+    float odfClamped = clampf(odf, 0.0f, 1.0f);
+    nnActivationMean_ += 0.01f * (odfClamped - nnActivationMean_);
+    float dev = odfClamped - nnActivationMean_;
+    nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
+
+    addOssSample(bassContrast);
+
+    // Bass energy (PLP dual-source AND energy synthesis). Mel bands 0-5
+    // cover the bass region (mel band indices, not FFT bins).
+    const float* mel = spectral_.getMelBands();  // member array, never null
+    cachedBassEnergy_ = 0.0f;
+    for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];
+    cachedBassEnergy_ /= 6.0f;
+    addBassSample(cachedBassEnergy_);
+
+    nnOnsetBuffer_[nnWriteIdx_] = odf;
+    nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
+    if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
+
+    // --- Phase step for THIS frame (before analysis, so a correction made
+    // below refers to the frame just added — the newest bin of the fold) ---
+    advancePlpPhase();
+
+    // --- ACF period detection + PLP pattern analysis, cadence in frames ---
+    // Warmup: 100 frames (1.6 s); ACF_MAX_LAG (80) is the hard minimum.
+    framesSinceAcf_++;
+    int acfPeriodFrames = static_cast<int>(acfPeriodMs * OSS_FRAME_RATE / 1000.0f + 0.5f);
+    if (acfPeriodFrames < 1) acfPeriodFrames = 1;
+    if (framesSinceAcf_ >= acfPeriodFrames && ossCount_ >= 100) {
+        framesSinceAcf_ = 0;
+        uint32_t t0 = time_.millis();
+        runAcf();
+        uint32_t t1 = time_.millis();
+        updatePlpAnalysis();
+        uint32_t t2 = time_.millis();
+        lastAcfDurationMs_ = t1 - t0;  // Profile: ACF only
+        lastPlpMs_ = t2 - t1;          // Profile: PLP analysis only
+    }
+
+    // --- Decay during silence (per frame: 0.998^62.5 ≈ 0.88/s) ---
+    if (time_.millis() - lastSignificantAudioMs_ > 2000) {
+        periodicityStrength_ *= 0.998f;
+        plpConfidence_ *= 0.998f;
+    }
+
+    if (frameHook_) frameHook_(frameHookCtx_);
 }
 
 // ============================================================================
@@ -317,7 +318,11 @@ void AudioTracker::resetAnalysisState() {
     bassWriteIdx_ = 0; bassCount_ = 0;
     nnWriteIdx_ = 0; nnCount_ = 0;
     memset(plpPattern_, 0, sizeof(plpPattern_));
-    patternPosition_ = 0.0f;
+    phaseLocked_ = false;
+    skipNextWrap_ = false;
+    framesSinceAcf_ = 0;
+    nnPrevRaw_ = 0.0f;
+    nnSmoothed_ = 0.0f;
     odfBaseline_ = 0.0f;
     odfPeakHold_ = 0.0f;
     prevSignal_ = 0.0f;
@@ -325,7 +330,8 @@ void AudioTracker::resetAnalysisState() {
     plpConfidence_ = 0.0f;
     periodicityStrength_ = 0.0f;
     plpPhase_ = 0.0f;
-    beatCount_ = 0;
+    // beatCount_ is NOT reset: AudioControl::beatCount is monotonic and
+    // generators treat any change as "a beat happened".
     nnActivationMean_ = 0.3f;
     nnActivationVar_ = 0.01f;
     resetSlots();
@@ -508,8 +514,9 @@ void AudioTracker::runAcf() {
     float bestScore = -1.0f;
     float bestStrength = 0.0f;
     int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
-    float bestPhase = 0.0f;
+    float bestAccentBin = 0.0f;
     int bestSource = 0;
+    int bestMultiplier = 1;
 
     for (int c = 0; c < numCandidates; c++) {
         int cPeriod = candidates[c].period;
@@ -520,7 +527,8 @@ void AudioTracker::runAcf() {
         if (cCount < cPeriod * 2) continue;
 
         // Recency-weighted epoch fold
-        float fold[MAX_PATTERN_LEN] = {0};
+        float* fold = scratchFold_;
+        memset(fold, 0, cPeriod * sizeof(float));
         float totalWeight = 0.0f;
         int epochs = 0;
         for (int offset = cCount - cPeriod; offset >= 0; offset -= cPeriod) {
@@ -581,34 +589,172 @@ void AudioTracker::runAcf() {
             bestScore = score;
             bestStrength = candidates[c].acfStrength;
             bestPeriod = cPeriod;
-            bestPhase = refinedBin / static_cast<float>(cPeriod);
+            bestAccentBin = refinedBin;
             bestSource = cSource;
+            bestMultiplier = candidates[c].multiplier;
         }
     }
 
     acfPeakStrength_ = bestStrength;
 
-    // Reset pattern position on significant period change (>10% shift)
-    if (abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10) {
-        patternPosition_ = bestPhase;  // Start at accent position
-    }
-
-    plpBestPeriod_ = bestPeriod;
-    plpBestSource_ = static_cast<uint8_t>(bestSource);
-    plpAccentPhase_ = bestPhase;
-
     // Periodicity strength from ACF peak (already normalized 0-1)
     float newStrength = clampf(bestStrength, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.5f + newStrength * 0.5f;
 
-    // BPM from best period (informational — PLP uses plpBestPeriod_ directly)
-    float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(bestPeriod);
-    newBpm = clampf(newBpm, bpmMin, bpmMax);
-    float bpmChange = fabsf(newBpm - bpm_) / bpm_;
-    if (bpmChange > 0.05f) {
-        bpm_ = bpm_ * tempoSmoothing + newBpm * (1.0f - tempoSmoothing);
+    // No candidate (silence / flat buffers): keep the last period and phase
+    // rather than steering toward the default placeholder period.
+    if (bestScore < 0.0f) return;
+
+    // --- Fractional period ---
+    // Candidate periods are integer frames (the fold needs integer bins), but
+    // a real tempo almost never is: 124 BPM = 30.24 frames. Advancing phase
+    // by 1/30 would gain ~1% per beat and rely on corrections to claw it
+    // back. Refine the beat-level lag at FULL resolution (the scan used
+    // step 2) with parabolic interpolation on the winning source, then
+    // scale by the multiplier.
+    float periodF = static_cast<float>(bestPeriod);
+    {
+        const float* buf = sources[bestSource];
+        const int count = sourceCounts[bestSource];
+        int lag = bestPeriod / bestMultiplier;
+        // UNBIASED estimator (divide by overlap). The plain sum shrinks
+        // linearly with lag, which tilts the peak toward shorter lags —
+        // measured ~0.7% short (29.07 vs 29.30 frames at 128 BPM), a steady
+        // phase drift the corrections had to keep fighting.
+        auto acfAt = [&](int L) -> float {
+            float sum = 0.0f;
+            int overlap = count - L;
+            for (int i = 0; i < overlap; i++) sum += buf[i] * buf[i + L];
+            return (overlap > 0) ? sum / static_cast<float>(overlap) : 0.0f;
+        };
+        if (lag > 2 && lag + 1 < count / 2) {
+            float a = acfAt(lag - 1), b = acfAt(lag), c = acfAt(lag + 1);
+            // Hill-climb up to 2 steps if the step-2 scan landed beside the peak.
+            for (int step = 0; step < 2; step++) {
+                if (a > b && lag - 2 > 2) { c = b; b = a; lag--; a = acfAt(lag - 1); }
+                else if (c > b && lag + 2 < count / 2) { a = b; b = c; lag++; c = acfAt(lag + 1); }
+                else break;
+            }
+            float frac = 0.0f;
+            float denom = a - 2.0f * b + c;
+            if (b >= a && b >= c && denom < -1e-12f) {
+                frac = clampf(0.5f * (a - c) / denom, -0.5f, 0.5f);
+            }
+            float lagF = static_cast<float>(lag) + frac;
+
+            // Long-lag refinement. Onsets are quantized to whole frames, so
+            // the ACF around one period is lopsided (e.g. 0 / .7 / .3 at lags
+            // 28/29/30 for a true 29.3) and the parabola lands ~0.15 frame
+            // short — a steady phase drift. The K-th repetition of the
+            // period carries the same quantization error spread over K
+            // periods: refine the peak near K·lagF and divide by K.
+            int K = static_cast<int>((count / 2 - 2) / lagF);
+            if (K > 12) K = 12;
+            if (K >= 3) {
+                int center = static_cast<int>(K * lagF + 0.5f);
+                int halfWin = K / 2 + 1;  // ±0.5 frame/period uncertainty × K
+                int bestL = center;
+                float bestV = -1e30f;
+                for (int L = center - halfWin; L <= center + halfWin; L++) {
+                    if (L < 2 || L + 1 >= count) continue;
+                    float v = acfAt(L);
+                    if (v > bestV) { bestV = v; bestL = L; }
+                }
+                float la = acfAt(bestL - 1), lb = bestV, lc = acfAt(bestL + 1);
+                float ld = la - 2.0f * lb + lc;
+                float lfrac = 0.0f;
+                if (lb >= la && lb >= lc && ld < -1e-12f) {
+                    lfrac = clampf(0.5f * (la - lc) / ld, -0.5f, 0.5f);
+                }
+                float refined = (static_cast<float>(bestL) + lfrac) / static_cast<float>(K);
+                // Accept only if it agrees with the short-lag estimate (a
+                // different peak family at long lag would mean a tempo
+                // change inside the buffer).
+                if (fabsf(refined - lagF) < 0.75f) lagF = refined;
+            }
+            periodF = lagF * static_cast<float>(bestMultiplier);
+            // The fold's integer period must stay the nearest integer.
+            if (fabsf(periodF - static_cast<float>(bestPeriod)) > 1.5f) {
+                periodF = static_cast<float>(bestPeriod);
+            }
+        }
     }
-    beatPeriodFrames_ = OSS_FRAME_RATE * 60.0f / bpm_;
+
+    // --- Accent position from the TRANSIENT source ---
+    // The winning period may come from the bass-energy or NN buffer, but
+    // those are smooth/level-like: with a long (bar-level) period there are
+    // only ~3-4 epochs in the buffer, recency weighting favours the newest,
+    // and any loudness trend puts the fold maximum at the newest frames —
+    // i.e. the "accent" tracked "now" and phase hovered just below 1.0
+    // (measured on techno-dub-groove: 30% of the time in 0.9-1.0). The OSS
+    // buffer is half-wave-rectified bass flux (kick onsets, no trend), so
+    // its fold peak is where the kick actually lands in the cycle.
+    if (ossCount_ >= bestPeriod * 2) {
+        float* fold = scratchFold_;
+        memset(fold, 0, bestPeriod * sizeof(float));
+        float totalWeight = 0.0f;
+        int epochs = 0;
+        for (int offset = ossCount_ - bestPeriod; offset >= 0; offset -= bestPeriod) {
+            float weight = expf(-plpDecayRate * epochs);
+            for (int j = 0; j < bestPeriod; j++) fold[j] += ossLinear_[offset + j] * weight;
+            totalWeight += weight;
+            epochs++;
+        }
+        if (epochs >= 2 && totalWeight > 0.0f) {
+            int peakBin = 0;
+            float peakVal = fold[0];
+            float mean = 0.0f;
+            for (int j = 0; j < bestPeriod; j++) {
+                mean += fold[j];
+                if (fold[j] > peakVal) { peakVal = fold[j]; peakBin = j; }
+            }
+            mean /= bestPeriod;
+            // Only trust a fold with a real peak (flat fold = no kick structure).
+            if (peakVal > mean + 1e-6f) {
+                float refined = static_cast<float>(peakBin);
+                int prev = (peakBin - 1 + bestPeriod) % bestPeriod;
+                int next = (peakBin + 1) % bestPeriod;
+                float denom = fold[prev] - 2.0f * fold[peakBin] + fold[next];
+                if (fabsf(denom) > 1e-9f) {
+                    refined += clampf(0.5f * (fold[prev] - fold[next]) / denom, -0.5f, 0.5f);
+                    if (refined < 0.0f) refined += bestPeriod;
+                }
+                bestAccentBin = refined;
+            }
+        }
+    }
+
+    // A period jump > 10% means a different rhythm interpretation: snap phase.
+    bool periodJump = !phaseLocked_ ||
+                      abs(bestPeriod - plpBestPeriod_) > plpBestPeriod_ / 10;
+
+    plpBestPeriod_ = bestPeriod;
+    plpPeriodF_ = periodF;
+    plpBestSource_ = static_cast<uint8_t>(bestSource);
+    plpAccentBin_ = bestAccentBin;
+    plpAccentPhase_ = bestAccentBin / static_cast<float>(bestPeriod);  // diagnostic
+
+    // --- Phase from the fold ---
+    // The fold is END-ALIGNED: bin P-1 holds the newest frame (the one just
+    // processed). So the time since the accent is (P-1 - accentBin) frames,
+    // which gives the phase of "now" directly. (Pre-b208 the code treated
+    // the accent bin as a fixed offset from a free-running counter, but it
+    // rotates by one bin per frame as the buffer advances — phase ran ~2x
+    // tempo and jumped every analysis.)
+    float framesSinceAccent = static_cast<float>(bestPeriod - 1) - bestAccentBin;
+    if (framesSinceAccent < 0.0f) framesSinceAccent += static_cast<float>(bestPeriod);
+    float targetPhase = framesSinceAccent / periodF;
+    targetPhase -= floorf(targetPhase);
+    correctPlpPhase(targetPhase, periodJump ? 1.0f : plpPhaseGain);
+    phaseLocked_ = true;
+
+    // BPM from the fractional period (informational + pulse cooldown)
+    // Always smoothed toward the estimate. (Was: only updated when the
+    // change exceeded 5%, so the reported BPM could sit up to 5% stale
+    // indefinitely — e.g. 123 BPM displayed for a 128 BPM track.)
+    float newBpm = OSS_FRAMES_PER_MIN / periodF;
+    newBpm = clampf(newBpm, bpmMin, bpmMax);
+    bpm_ = bpm_ * tempoSmoothing + newBpm * (1.0f - tempoSmoothing);
 
     // Invalidate pattern slots on significant BPM change (>15%)
     if (prevBpm_ > 0.0f && fabsf(bpm_ - prevBpm_) / prevBpm_ > 0.15f) {
@@ -660,7 +806,8 @@ void AudioTracker::updatePlpAnalysis() {
         if (numEpochs < 2) return;
 
         // Epoch fold with NN-confidence weighting + collect per-epoch values for Winsorizing
-        float perBinVariance[MAX_PATTERN_LEN] = {0};
+        float* perBinVariance = scratchVar_;
+        memset(perBinVariance, 0, patLen * sizeof(float));
         const float decayFactor = expf(-plpDecayRate);
 
         // Stack buffer for Winsorized mean: store per-epoch values per bin
@@ -690,7 +837,7 @@ void AudioTracker::updatePlpAnalysis() {
         }
 
         // Second pass: Winsorized weighted fold per bin
-        float patternRaw[MAX_PATTERN_LEN];
+        float* patternRaw = scratchRaw_;  // every bin < patLen written below before read
         float foldMean = 0.0f;
 
         for (int j = 0; j < patLen; j++) {
@@ -776,7 +923,8 @@ void AudioTracker::updatePlpAnalysis() {
         // Cross-correlation with NN fold for pattern validation.
         // High agreement = pattern reflects real onsets. Low = noise-driven.
         if (nnCount_ >= patLen * 2) {
-            float nnFold[MAX_PATTERN_LEN] = {0};
+            float* nnFold = scratchNN_;
+            memset(nnFold, 0, patLen * sizeof(float));
             float nnWeight = 0.0f;
             float w = 1.0f;
             for (int offset = nnCount_ - patLen; offset >= 0; offset -= patLen) {
@@ -794,36 +942,77 @@ void AudioTracker::updatePlpAnalysis() {
             // Modulate confidence: low agreement reduces trust in the pattern
             plpNNAgreement_ = plpNNAgreement_ * 0.7f + clampf(agreement, 0.0f, 1.0f) * 0.3f;
         }
+
+        // Rotate to ACCENT-ALIGNED storage: bin 0 = accent. The fold above is
+        // end-aligned (bin P-1 = newest frame), so its rotation changes every
+        // analysis as frames arrive. Reading it by phase, comparing it with
+        // cached slots, or matching it to the seed templates (accent at bin
+        // 0) all require a stable origin. runAcf() measured the accent on
+        // the same end-aligned fold at the same period, so its bin applies.
+        if (patLen == plpBestPeriod_) {
+            int shift = static_cast<int>(plpAccentBin_ + 0.5f) % patLen;
+            if (shift < 0) shift += patLen;
+            if (shift != 0) {
+                // In-place left rotation by `shift` (three reversals): no
+                // temporary buffer on the 4 KB loop stack.
+                auto reverse = [this](int lo, int hi) {  // [lo, hi)
+                    for (--hi; lo < hi; ++lo, --hi) {
+                        float t = plpPattern_[lo]; plpPattern_[lo] = plpPattern_[hi]; plpPattern_[hi] = t;
+                    }
+                };
+                reverse(0, shift);
+                reverse(shift, patLen);
+                reverse(0, patLen);
+            }
+        }
     }
 
     // --- 3. PLP confidence from ACF strength + steep signal gate ---
     float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
-    float micLevel = mic_.getLevel();
-    float signalPresence = clampf((micLevel - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
+    // Smoothed (~1 s) level, not one instantaneous sample — see update().
+    float signalPresence = clampf((levelEnv_ - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
     float targetConf = acfConf * signalPresence * (0.5f + 0.5f * plpNNAgreement_);
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }
 
-void AudioTracker::updatePlpPhase() {
-    // --- Direct pattern interpolation (replaces cosine OLA) ---
-    // Read the epoch-fold pattern at the current cycle position. Phase is
-    // derived from position and accent, not corrected toward a target.
-    // Preserves actual rhythmic shape (kick-hat-snare-hat) instead of
-    // reducing to a sinusoid. No OLA buffer, no cosine fallback.
+void AudioTracker::countBeat() {
+    if (skipNextWrap_) {
+        skipNextWrap_ = false;  // this accent was counted before a backward correction
+        return;
+    }
+    beatCount_++;
+}
 
-    // Advance position within pattern cycle
-    int period = (plpBestPeriod_ > 0) ? plpBestPeriod_ : 33;
-    float posIncrement = 1.0f / static_cast<float>(period);
-    patternPosition_ += posIncrement;
-    if (patternPosition_ >= 1.0f) {
-        patternPosition_ -= 1.0f;
-        beatCount_++;
+void AudioTracker::correctPlpPhase(float targetPhase, float gain) {
+    // Shortest signed error in [-0.5, 0.5)
+    float err = targetPhase - plpPhase_;
+    err -= floorf(err + 0.5f);
+    float p = plpPhase_ + gain * err;
+    if (p >= 1.0f) {
+        p -= 1.0f;
+        countBeat();            // corrected forward across the accent
+    } else if (p < 0.0f) {
+        p += 1.0f;
+        skipNextWrap_ = true;   // stepped back across an accent already counted
+    }
+    plpPhase_ = p;
+}
+
+void AudioTracker::advancePlpPhase() {
+    // One frame of phase at the fractional period. Called exactly once per
+    // spectral frame (processFrame), never per loop iteration.
+    float period = (plpPeriodF_ > 1.0f) ? plpPeriodF_ : 33.0f;
+    plpPhase_ += 1.0f / period;
+    if (plpPhase_ >= 1.0f) {
+        plpPhase_ -= 1.0f;
+        countBeat();
     }
 
-    // Read pattern at current position (linear interpolation)
+    // Pattern value at the current phase. plpPattern_ is accent-aligned
+    // (bin 0 = accent), so phase indexes it directly.
     int patLen = plpPatternLen_;
     if (patLen > 1) {
-        float idx = patternPosition_ * static_cast<float>(patLen);
+        float idx = plpPhase_ * static_cast<float>(patLen);
         int i0 = static_cast<int>(idx) % patLen;
         float frac = idx - floorf(idx);
         int i1 = (i0 + 1) % patLen;
@@ -833,11 +1022,6 @@ void AudioTracker::updatePlpPhase() {
         plpPulseValue_ = 0.5f;
     }
 
-    // Phase for generators: 0 = accent (epoch-fold peak position).
-    // Derived from pattern position offset by accent phase — no oscillator.
-    plpPhase_ = patternPosition_ - plpAccentPhase_;
-    if (plpPhase_ < 0.0f) plpPhase_ += 1.0f;
-
     // Beat stability: pattern amplitude at accent vs running EMA
     if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
         float peakAmp = plpPulseValue_;
@@ -845,18 +1029,19 @@ void AudioTracker::updatePlpPhase() {
         plpPeakEma_ += STABILITY_ALPHA * (peakAmp - plpPeakEma_);
         beatStability_ = (plpPeakEma_ > 0.01f) ? clampf(peakAmp / plpPeakEma_, 0.0f, 1.5f) : 0.0f;
     }
-
-    // Decay confidence during extended silence
-    if (plpConfidence_ > 0.0f && (time_.millis() - lastSignificantAudioMs_ > 2000)) {
-        plpConfidence_ *= 0.998f;
-    }
 }
 
 // ============================================================================
 // Pulse Detection (Floor-Tracking Baseline)
 // ============================================================================
 
-void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
+float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
+    // Runs exactly once per spectral frame (processFrame). Pre-b208 it ran
+    // once per loop iteration on a signal that only changed per frame:
+    // loop passes without a new frame pushed duplicate values through
+    // prevSignal_/prevPrevSignal_, so a real peak failed `prev > prevPrev`
+    // and was silently dropped whenever the loop ran faster than 62.5 Hz.
+    //
     // Dual-mode onset detection:
     //
     // NN path: local-maxima peak-picking on half-wave rectified first-difference.
@@ -875,14 +1060,20 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    // Tempo-adaptive cooldown
+    // Tempo-adaptive cooldown, counted in frames (the frame clock), not ms
     float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
     float cooldownMs = 40.0f + 110.0f * (1.0f - bpmNorm);
-    if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
+    uint32_t cooldownFrames = static_cast<uint32_t>(cooldownMs * OSS_FRAME_RATE / 1000.0f);
 
     float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
     float pulseStrength = 0.0f;
-    bool cooldownOk = (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs);
+    bool cooldownOk = (frameClock_ - lastPulseFrame_) > cooldownFrames;
+
+    if (nnActive_ && !freshNN) {
+        // No new NN sample this frame: stepping the peak-picker history with
+        // a held value would re-create the duplicate-sample peak loss.
+        return 0.0f;
+    }
 
     if (nnActive_) {
         // NN path: local-maxima peak-picking with false positive suppression.
@@ -962,7 +1153,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
         if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk) {
             pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
-            lastPulseMs_ = nowMs - static_cast<uint32_t>(1000.0f / OSS_FRAME_RATE);  // Peak was 1 frame ago
+            lastPulseFrame_ = frameClock_ - 1;  // Peak was the previous frame
 
             // T1.4/T1.5 — snapshot gate state + spectral features at firing
             // time so offline analysis can cluster FPs and attribute
@@ -1012,16 +1203,12 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
 
         if (signalPresence > pulseMinLevel && risingEdge && cooldownOk) {
             pulseStrength = clampf(signal, 0.0f, 1.0f);
-            float framePeriodMs = 1000.0f / OSS_FRAME_RATE;
-            float denom = signal - prevSignal_;
-            float frac = (denom > 1e-6f) ? (pulseThreshold - prevSignal_) / denom : 0.5f;
-            frac = clampf(frac, 0.0f, 1.0f);
-            lastPulseMs_ = nowMs - static_cast<uint32_t>((1.0f - frac) * framePeriodMs);
+            lastPulseFrame_ = frameClock_;
         }
         prevSignal_ = signal;
     }
 
-    lastPulseStrength_ = pulseStrength;
+    return pulseStrength;
 }
 
 // ============================================================================
@@ -1097,7 +1284,7 @@ void AudioTracker::checkPatternSlots() {
         }
         slots_[activeSlot_].age = 0;
         // Blend cached pattern into PLP (slotSeedBlend controls mix ratio)
-        float tempPattern[MAX_PATTERN_LEN];
+        float* tempPattern = scratchFold_;  // member scratch: keeps 1 KB off the loop stack
         resamplePattern(slots_[activeSlot_].bins, SLOT_BINS, tempPattern, plpPatternLen_);
         for (int j = 0; j < plpPatternLen_; j++) {
             plpPattern_[j] = tempPattern[j] * slotSeedBlend + plpPattern_[j] * (1.0f - slotSeedBlend);
@@ -1162,7 +1349,7 @@ void AudioTracker::checkPatternSlots() {
                     (1.0f - seedBlend) * slots_[activeSlot_].bins[i] + seedBlend * SEED_TEMPLATES[bestTemplate][i];
             }
             // Also seed PLP pattern
-            float tempPattern[MAX_PATTERN_LEN];
+            float* tempPattern = scratchFold_;  // member scratch: keeps 1 KB off the loop stack
             resamplePattern(slots_[activeSlot_].bins, SLOT_BINS, tempPattern, plpPatternLen_);
             for (int j = 0; j < plpPatternLen_; j++) {
                 plpPattern_[j] = tempPattern[j] * seedBlend + plpPattern_[j] * (1.0f - seedBlend);
@@ -1212,10 +1399,16 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // as authoritative — if it says we're in silence, the entire downstream
     // signal chain agrees.
     //
-    // Soft gate: at mic.level near 0, weightedEnergy attenuates to ~0;
-    // at mic.level above 0.05, full pass-through. S-curve avoids a hard
-    // edge that would cause snap-on/snap-off artifacts at threshold.
-    float micGate = micEnergy / (micEnergy + 0.02f);  // 0→0, 0.02→0.5, 0.1→0.83
+    // Soft gate on ABSOLUTE level: 0 at/below the noise gate, full at 2x
+    // the gate, linear between (no snap at threshold). Pre-b208 this used
+    // mic.level, which is RELATIVE to the tracked peak/valley range — it
+    // also reads ~0 at the bottom of a quiet breakdown and in the dip
+    // between kicks, so the gate dimmed pulse/plpPulse/rhythm whenever the
+    // music was locally quiet, not only in silence.
+    float gateRaw = mic_.noiseGate;
+    float micGate = (gateRaw > 0.0f)
+        ? clampf((mic_.getRawLevel() - gateRaw) / gateRaw, 0.0f, 1.0f)
+        : 1.0f;
     weightedEnergy *= micGate;
 
     // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity.
@@ -1235,7 +1428,11 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // Falls back to spectral flux when NN is unavailable.
     float pulseSignal;
     if (nnActive_) {
-        pulseSignal = clampf(nnSmoothed_, 0.0f, 1.0f);
+        // Peak over the frames processed this call: with several frames per
+        // update, the latest frame alone can miss the onset frame. No new
+        // frame → no new evidence → no re-trigger (re-feeding a stale value
+        // every loop pass used to hold the envelope up between frames).
+        pulseSignal = (framesThisUpdate_ > 0) ? clampf(nnSmoothedPeak_, 0.0f, 1.0f) : 0.0f;
     } else {
         float flux = spectral_.getSpectralFlux();
         if (flux > fluxPeak_) fluxPeak_ = flux;
@@ -1261,9 +1458,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.pulse = clampf(pulseEnvelope_, 0.0f, 1.0f);
 
     // --- Phase + PLP Pulse: breathing curve ---
-    // Free-running phase at detected or default tempo.
-    // plpPulseValue_ is set by updatePlpPhase() — cosine fallback when
-    // no rhythm pattern is available.
+    // Phase advances once per spectral frame at the fractional period and is
+    // pulled toward the measured accent at each analysis (advancePlpPhase /
+    // correctPlpPhase). plpPulseValue_ is the accent-aligned pattern at it.
     //
     // b201 noise-gate propagation: PLP epoch-fold and ACF periodicity
     // both run on the spectral pipeline regardless of mic.level state,
@@ -1272,7 +1469,10 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // entire downstream chain respects AdaptiveMic's authoritative
     // silence decision.
     control_.phase = plpPhase_;
+    control_.beatCount = beatCount_;
     control_.plpPulse = plpPulseValue_ * micGate;
+    // Onset event, suppressed only in true silence (absolute gate above).
+    control_.onset = (micGate > 0.0f) ? lastPulseStrength_ : 0.0f;
 
     // --- Rhythm Strength ---
     // Driven by ACF periodicity strength. Gated by micGate (see above).
@@ -1299,6 +1499,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     if (audioAmp != 1.0f) {
         control_.energy        = clampf(control_.energy        * audioAmp, 0.0f, 1.0f);
         control_.pulse         = clampf(control_.pulse         * audioAmp, 0.0f, 1.0f);
+        control_.onset         = clampf(control_.onset         * audioAmp, 0.0f, 1.0f);
         control_.plpPulse      = clampf(control_.plpPulse      * audioAmp, 0.0f, 1.0f);
         control_.rhythmStrength= clampf(control_.rhythmStrength* audioAmp, 0.0f, 1.0f);
     }

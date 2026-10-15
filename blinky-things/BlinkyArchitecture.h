@@ -58,6 +58,7 @@
 #ifdef BLINKY_PLATFORM_NRF52840
   #include "comms/BleScanner.h"
   #include "comms/BleNus.h"
+  #include "comms/RecordStream.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   #include "comms/BleAdvertiser.h"
   #include "comms/WifiManager.h"

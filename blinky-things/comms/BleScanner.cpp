@@ -134,6 +134,9 @@ void BleScanner::handleReport(ble_gap_evt_adv_report_t* report) {
         }
 
         // Parse header (after 2-byte company ID)
+        // Defensive re-check; implied by the adLen guard above today, kept so
+        // a future change to that guard can't open an out-of-bounds read.
+        // cppcheck-suppress knownConditionTrueFalse
         if (msdLen < 2 + BleProtocol::HEADER_SIZE) {
             offset += adLen + 1;
             continue;

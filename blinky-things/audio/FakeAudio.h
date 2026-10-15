@@ -57,6 +57,10 @@ public:
         pulse_    = pulse_   > 0.0f ? pulse_   - 10.0f * dt : 0.0f;
         if (pulse_    < 0.0f) pulse_    = 0.0f;
 
+        onset_ = 0.0f;
+        int beatIdx = static_cast<int>(measureTime_ / BEAT_DURATION);
+        if (wrapped || beatIdx != static_cast<int>(prevTime / BEAT_DURATION)) beatCount_++;
+
         // Fire onset events when measure time crosses their scheduled position
         const OnsetEvent* onsets = getOnsets();
         for (int i = 0; i < NUM_ONSETS; i++) {
@@ -79,6 +83,8 @@ public:
         AudioControl ac;
         ac.energy        = energy_;
         ac.pulse         = pulse_;
+        ac.onset         = onset_;
+        ac.beatCount     = beatCount_;
         // Phase: 0.0 on-beat → 1.0 just before next beat
         ac.phase         = fmodf(measureTime_, BEAT_DURATION) / BEAT_DURATION;
         // Cosine pulse: 1.0 at phase=0 (on-beat), 0.0 at phase=0.5 (off-beat)
@@ -116,6 +122,7 @@ private:
     void fireOnset(int idx) {
         const OnsetEvent& e = getOnsets()[idx];
         pulse_  = e.pulseStrength;
+        if (e.pulseStrength > onset_) onset_ = e.pulseStrength;
         float newEnergy = BASE_ENERGY + e.energyBoost;
         if (newEnergy > energy_) energy_ = newEnergy;  // Only boost, never suppress
     }
@@ -124,4 +131,6 @@ private:
     float   measureTime_;
     float   energy_;
     float   pulse_;
+    float   onset_ = 0.0f;
+    uint16_t beatCount_ = 0;
 };

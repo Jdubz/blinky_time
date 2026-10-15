@@ -130,6 +130,10 @@ public:
             useBandFlux_ = false;
             useHybrid_ = true;
         } else if (featuresPerFrame == INPUT_MEL_PLUS_FLUX) {
+            // computeBandFlux() hard-codes the 26-band training split
+            // (bass 0-5 / mid 6-13 / high 14-25). At any other band count it
+            // would produce wrong features silently — refuse the model.
+            if (INPUT_MEL_BANDS != 26) { initError_ = 9; return false; }
             useDelta_ = false;
             useBandFlux_ = true;
             useHybrid_ = false;
@@ -198,6 +202,20 @@ public:
     float infer(const float* melBands, const float* linearMelBands = nullptr,
                 float spectralFlatness = 0.0f, float spectralFlux = 0.0f) {
         if (!ready_) return 0.0f;
+        pushFrame(melBands, linearMelBands, spectralFlatness, spectralFlux);
+        return invoke();
+    }
+
+    /**
+     * Append one frame to the input window WITHOUT running the model (cheap:
+     * feature build + incremental int8 quantize). Every spectral frame must
+     * be pushed so the window holds evenly spaced frames, as in training;
+     * invoke() may then run less often when the CPU can't afford one
+     * inference per frame (AudioTracker catch-up bursts).
+     */
+    void pushFrame(const float* melBands, const float* linearMelBands = nullptr,
+                   float spectralFlatness = 0.0f, float spectralFlux = 0.0f) {
+        if (!ready_) return;
 
         // Apply PCEN if enabled, producing normalized mel values in [0,1]
         float pcenMel[INPUT_MEL_BANDS];
@@ -251,7 +269,14 @@ public:
 
         windowWriteIdx_ = (windowWriteIdx_ + 1) % windowFrames_;
         if (windowFilled_ < windowFrames_) windowFilled_++;
+    }
 
+    /**
+     * Run the model on the current window (newest frame = last pushed).
+     * Returns 0 until the window has filled once.
+     */
+    float invoke() {
+        if (!ready_) return 0.0f;
         if (windowFilled_ < windowFrames_) return 0.0f;
 
         // Copy quantized circular buffer → tensor input in chronological order.
@@ -369,7 +394,9 @@ public:
             out.print(F("\n  onset="));
             out.print(lastOnset_, 4);
             if (input_->type == kTfLiteInt8 && windowFilled_ >= windowFrames_) {
-                int lastFrameStart = (windowFrames_ - 1) * inputFeatures_;
+                // Newest frame = slot just before the write index (circular).
+                int newestSlot = (windowWriteIdx_ + windowFrames_ - 1) % windowFrames_;
+                int lastFrameStart = newestSlot * inputFeatures_;
                 out.print(F("\n  last_mel=["));
                 out.print(windowBuffer_[lastFrameStart], 4);
                 out.print(F(","));
@@ -513,6 +540,8 @@ private:
     int outputOffset_ = 0;
     float lastOnset_ = 0.0f;
     bool ready_ = false;
+    // 0=ok 1=no model 2=schema 3=alloc 4=placeholder 5=unknown input width
+    // 6=window too long 7=output shape 8=frame too wide 9=band-flux needs 26 mel
     int initError_ = 0;
     size_t arenaUsed_ = 0;
     unsigned long lastInferUs_ = 0;

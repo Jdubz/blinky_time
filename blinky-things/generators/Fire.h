@@ -54,7 +54,7 @@ struct FireParams {
     float thermalForce;           // × traversalDim → thermal buoyancy (LEDs/sec^2)
 
     // Fluid dynamics heat grid
-    float gridCoolRate;           // Grid heat decay per frame (0=instant, 1=no decay; default 0.88)
+    float gridCoolRate;           // Grid heat decay per 60 fps frame, applied time-scaled (0=instant, 1=no decay; default 0.88)
     float buoyancyCoupling;       // Grid heat → additional upward force multiplier (default 1.0)
     float pressureCoupling;       // Lateral heat gradient → clustering force multiplier (default 0.5)
 
@@ -178,7 +178,7 @@ private:
     // high-velocity, full-intensity particles that visibly rise + fade.
     // Carried across the inter-loop boundary because the burst is
     // requested in spawnParticles() pre-loop and consumed inside it.
-    bool   lastBeat_ = false;        // for rising-edge detection
+    uint16_t burstBeatCount_ = 0;     // AudioControl::beatCount at the previous frame
     uint8_t burstParticles_ = 0;     // count of burst-mode particles for this frame
     float  burstStrength_ = 0.0f;    // 0.55-1.0, drives burst velocity/lifespan
     float  frameOvershoot_ = 0.0f;   // per-frame normalized amplitude (0-1) above silenceFloor; shared between spawn-rate gating and render-brightness modulation
@@ -212,7 +212,7 @@ private:
     float emberLevel_[MAX_LINEAR_LEDS];              // 0..1 smoothed brightness
 
     void initGrid();
-    void updateHeatGrid();
+    void updateHeatGrid(float dt);
     void applyGridForce(Particle* p, float dt);
 
     // === Shared fire simulation (layout-agnostic) ===

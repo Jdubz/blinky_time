@@ -501,6 +501,15 @@ bool ConfigStorage::loadFromFlash() {
     return true;
 }
 
+static uint32_t crc32Bytes(const uint8_t* p, size_t n) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
 void ConfigStorage::saveToFlash() {
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     if (!flashOk) {
@@ -538,6 +547,18 @@ void ConfigStorage::saveToFlash() {
     data_.deviceVersion = DEVICE_VERSION;
     data_.settingsVersion = SETTINGS_VERSION;
 
+    // Identical to what this boot already wrote: skip the erase/write. A
+    // flash write halts the CPU long enough to drop audio; re-writing the
+    // same bytes (e.g. a `set` back to the old value) buys nothing.
+    uint32_t crc = crc32Bytes(reinterpret_cast<const uint8_t*>(&data_), sizeof(ConfigData));
+    if (lastWrittenValid_ && crc == lastWrittenCrc_) {
+        SerialConsole::logDebug(F("Config unchanged, flash write skipped"));
+        return;
+    }
+    // From here the on-flash copy may be destroyed (remove before write):
+    // until a write succeeds, nothing is known to be on flash.
+    lastWrittenValid_ = false;
+
     // Delete existing file if present
     if (InternalFS.exists(CONFIG_FILENAME)) {
         if (!InternalFS.remove(CONFIG_FILENAME)) {
@@ -558,9 +579,12 @@ void ConfigStorage::saveToFlash() {
 
     if (bytesWritten != sizeof(ConfigData)) {
         SerialConsole::logError(F("Config write failed"));
+        lastWrittenValid_ = false;
         return;
     }
 
+    lastWrittenCrc_ = crc;
+    lastWrittenValid_ = true;
     SerialConsole::logDebug(F("Config saved to flash"));
 #elif defined(ESP32)
     if (!flashOk) {
@@ -1004,7 +1028,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
 
 void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                                 const AdaptiveMic& mic, AudioTracker* tracker) {
-    if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
+    // Trailing debounce (see markDirty): save once changes have been quiet
+    // for 5 s. The old leading-edge form saved on the FIRST change and then
+    // every 5 s during continued changes — a stall per step of a slider.
+    if (dirty_ && (millis() - lastDirtyMs_ > 5000)) {
         saveConfiguration(fireParams, waterParams, plasmaParams, mic, tracker);
     }
 }

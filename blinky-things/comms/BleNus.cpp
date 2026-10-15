@@ -21,8 +21,8 @@ void BleNus::begin() {
     Bluefruit.Periph.setConnectCallback(onConnect);
     Bluefruit.Periph.setDisconnectCallback(onDisconnect);
 
-    startAdvertising();
-
+    // Advertising is started separately (startAdvertising) once the sketch
+    // has registered all services.
     Serial.println(F("[BLE] NUS peripheral started"));
 }
 
@@ -90,22 +90,30 @@ void BleNus::setLastAckedCommandId(uint16_t newId) {
 // --- Print interface: write into ring buffer ---
 
 size_t BleNus::write(uint8_t c) {
-    if (!connected_) return 1;  // Discard silently when not connected
-    size_t nextHead = (txHead_ + 1) % TX_BUF_SIZE;
-    if (nextHead == txTail_) return 1;  // Buffer full, drop byte
-    txBuf_[txHead_] = c;
-    txHead_ = nextHead;
-    return 1;
+    return write(&c, 1);
 }
 
 size_t BleNus::write(const uint8_t* data, size_t size) {
+    // Not connected: no central to deliver to — discarding is correct, not a loss.
     if (!connected_) return size;
     for (size_t i = 0; i < size; i++) {
         size_t nextHead = (txHead_ + 1) % TX_BUF_SIZE;
-        if (nextHead == txTail_) break;  // Buffer full
+        if (nextHead == txTail_) {
+            // Ring full: the central isn't draining fast enough. The rest of
+            // this write is lost (mid-line), so count it and say so once —
+            // a truncated JSON line downstream must be attributable.
+            txBytesDropped_ += (uint32_t)(size - i);
+            if (!txDropLogged_) {
+                txDropLogged_ = true;
+                Serial.println(F("[FALLBACK] BleNus TX ring full — dropping output (see 'ble' tx_dropped)"));
+            }
+            break;
+        }
         txBuf_[txHead_] = data[i];
         txHead_ = nextHead;
     }
+    // Report full size: Print callers don't handle short writes, and the
+    // loss is accounted for above.
     return size;
 }
 
@@ -175,7 +183,12 @@ void BleNus::onConnect(uint16_t conn_hdl) {
     instance_->txHead_ = 0;
     instance_->txTail_ = 0;
 
-    // Request maximum MTU for better throughput (default is 23, max is 247)
+    // Request maximum MTU for better throughput (default is 23, max is 247).
+    // Only effective because setup() calls configPrphBandwidth(BANDWIDTH_MAX)
+    // before Bluefruit.begin() — otherwise the SoftDevice ceiling is 23.
+    // (2M PHY + Data Length Extension are requested only when a record
+    // session starts — RecordStream::start — so the fleet server's link
+    // keeps its existing PHY/data-length behaviour.)
     BLEConnection* conn = Bluefruit.Connection(conn_hdl);
     if (conn) {
         conn->requestMtuExchange(247);
@@ -232,10 +245,18 @@ void BleNus::printDiagnostics(Print& out) const {
         if (conn) {
             out.print(F("[BLE]   MTU="));
             out.print(conn->getMtu());
-            out.print(F(" RSSI="));
+            out.print(F(" PHY="));
+            out.print(conn->getPHY());
+            out.print(F(" DLE="));
+            out.print(conn->getDataLength());
+            out.print(F(" interval="));
+            out.print(conn->getConnectionInterval() * 1.25f, 2);
+            out.print(F("ms RSSI="));
             out.print(conn->getRssi());
             out.println(F("dBm"));
         }
+        out.print(F("[BLE]   tx_dropped="));
+        out.println(txBytesDropped_);
         out.print(F("[BLE]   conn_uptime="));
         out.print((millis() - connectTimeMs_) / 1000);
         out.println(F("s"));

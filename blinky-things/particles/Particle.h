@@ -15,11 +15,6 @@
 // extension under -std=c++14).
 extern float MAX_PARTICLE_VELOCITY;
 
-// Beat detection phase wrap thresholds
-// Detect beat when phase wraps from >0.8 to <0.2 (rhythmStrength-dependent)
-static const float BEAT_PHASE_MIN = 0.2f;  // Phase must drop below this
-static const float BEAT_PHASE_MAX = 0.8f;  // Phase must rise above this
-
 /**
  * Particle - Core particle data structure for unified generator system
  *

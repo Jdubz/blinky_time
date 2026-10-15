@@ -42,6 +42,11 @@ uint32_t AdaptiveMic::s_extFftReadIdx = 0;
 volatile uint32_t AdaptiveMic::s_overrunCount = 0;
 volatile uint32_t AdaptiveMic::s_overrunSamplesLost = 0;
 
+// Clipping telemetry + record tap (see AdaptiveMic.h).
+volatile uint32_t AdaptiveMic::s_clipSamples = 0;
+volatile uint32_t AdaptiveMic::s_totalSamples = 0;
+volatile AdaptiveMic::RecordTap AdaptiveMic::s_recordTap = nullptr;
+
 // ---------- Public ----------
 AdaptiveMic::AdaptiveMic(IPdmMic& pdm, ISystemTime& time)
     : pdm_(pdm), time_(time) {
@@ -51,9 +56,8 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   _sampleRate = sampleRate;
   s_instance  = this;
 
-  // Set hardware gain to platform optimal level and leave it fixed.
-  // nRF52840: gain 40 (hardware PDM, SNR peaks at 25-35, degrades >40)
-  // ESP32-S3: gain 30 (software post-decimation, SNR degrades >30)
+  // Set hardware gain to the platform level and leave it fixed.
+  // nRF52840: Platform::Microphone::DEFAULT_GAIN (32 = -4 dB; 0x28 = 0 dB)
   currentHardwareGain = constrainValue(gainInit, pdm_.getGainMinDb(), pdm_.getGainMaxDb());
 
   pdm_.onReceive(AdaptiveMic::onPDMdata);
@@ -94,6 +98,7 @@ void AdaptiveMic::update(float dt) {
   uint16_t maxAbsVal = 0;
   uint32_t n = 0;
   consumeISR(avgAbs, maxAbsVal, n);
+  if (maxAbsVal > peakAbsSinceTake_) peakAbsSinceTake_ = maxAbsVal;
 
   uint32_t nowMs = time_.millis();
   pdmAlive = !isMicDead(nowMs, 250);
@@ -122,13 +127,32 @@ void AdaptiveMic::update(float dt) {
     float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
     peakLevel += peakAlpha * (normalized - peakLevel);
 
-    // Instant adaptation for loud transients
+    // Instant adaptation for sustained loud jumps (a drop, a new section).
+    // Requires INSTANT_ADAPT_BLOCKS consecutive updates: a single knock or
+    // shout used to set the peak to 5x the music, and the 5 s release then
+    // held level near 0.07 for ~8 s (PLP confidence and visuals collapsed).
     if (normalized > peakLevel * MicConstants::INSTANT_ADAPT_THRESHOLD) {
-      peakLevel = normalized;
+      if (++instantAdaptRun_ >= MicConstants::INSTANT_ADAPT_BLOCKS) {
+        // Big jump after a quiet passage: lift the valley with it.
+        // Otherwise the valley (20 s rise) stayed at breakdown level and
+        // the drop — the loudest, most important moment — was squeezed
+        // into level 0.45..1.0 for ~45 s. A too-high valley corrects
+        // quickly: it follows new minimums with VALLEY_ATTACK_TAU.
+        if (normalized > peakLevel * MicConstants::SECTION_JUMP_RATIO) {
+          float floorV = MicConstants::SECTION_VALLEY_FRACTION * normalized;
+          if (valleyLevel < floorV) valleyLevel = floorV;
+        }
+        peakLevel = normalized;
+        instantAdaptRun_ = 0;
+      }
+    } else {
+      instantAdaptRun_ = 0;
     }
 
-    // Valley tracking: fast attack to new minimums, slow release upward
-    float valleyTau = (normalized < valleyLevel) ? peakTau
+    // Valley tracking: genuinely fast attack to new minimums (was peakTau =
+    // 2 s, so after a 15-20 dB breakdown the input sat below the valley and
+    // level read 0 for >5 s), slow release upward.
+    float valleyTau = (normalized < valleyLevel) ? MicConstants::VALLEY_ATTACK_TAU
                     : releaseTau * MicConstants::VALLEY_RELEASE_MULTIPLIER;
     float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MicConstants::MIN_TAU_RANGE));
     valleyLevel += valleyAlpha * (normalized - valleyLevel);
@@ -139,6 +163,17 @@ void AdaptiveMic::update(float dt) {
     float mapped = (normalized - valleyLevel) / range;
     level = clamp01(mapped);
   }
+}
+
+uint32_t AdaptiveMic::armRecordTap(RecordTap tap, volatile uint32_t& tapWriteIdx) {
+  // Interrupts off for a few instructions so the index snapshot, the
+  // consumer's index init, and the tap install are atomic w.r.t. onPDMdata.
+  noInterrupts();
+  uint32_t idx = s_fftWriteIdx;
+  tapWriteIdx = idx;
+  s_recordTap = tap;
+  interrupts();
+  return idx;
 }
 
 // ---------- ISR data consumption ----------
@@ -171,21 +206,32 @@ void AdaptiveMic::onPDMdata() {
   int samples = bytesRead / (int)sizeof(int16_t);
   uint64_t localSumAbs = 0;
   uint16_t localMaxAbs = 0;
+  uint32_t localClips = 0;
 
   for (int i = 0; i < samples; ++i) {
     int16_t s = buffer[i];
+    // |-32768| = 32768 doesn't fit int16 but fits uint16 via int32.
     uint16_t a = (uint16_t)((s < 0) ? -((int32_t)s) : s);
     localSumAbs += a;
     if (a > localMaxAbs) localMaxAbs = a;
+    if (a >= CLIP_THRESHOLD) localClips++;
   }
 
   s_sumAbs     += localSumAbs;
   s_numSamples += samples;
   if (localMaxAbs > s_maxAbs) s_maxAbs = localMaxAbs;
+  s_clipSamples  += localClips;
+  s_totalSamples += samples;
   s_isrCount++;
 
-  // Copy samples to FFT ring buffer for spectral analysis
+  // Record-mode tap sees exactly the samples the FFT ring gets, indexed on
+  // the same absolute counter, so record audio and spectral frames share
+  // one timeline.
   uint32_t writeIdx = s_fftWriteIdx;
+  RecordTap tap = s_recordTap;
+  if (tap) tap(buffer, samples, writeIdx);
+
+  // Copy samples to FFT ring buffer for spectral analysis
   for (int i = 0; i < samples; ++i) {
     s_fftRing[writeIdx & (FFT_RING_SIZE - 1)] = buffer[i];
     writeIdx++;

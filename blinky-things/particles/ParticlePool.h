@@ -111,6 +111,29 @@ public:
     }
 
     /**
+     * Kill up to `n` of the oldest alive particles (highest age first).
+     * Used to make room for a burst when the pool is full: a new beat must
+     * be visible even if the previous one filled the pool (linear layouts
+     * wrap particles instead of letting them exit, so the pool can stay
+     * full for seconds). Returns the number killed.
+     */
+    uint16_t killOldest(uint16_t n) {
+        if (!particles_) return 0;
+        uint16_t killed = 0;
+        while (killed < n && activeCount_ > 0) {
+            Particle* oldest = nullptr;
+            for (uint16_t i = 0; i < capacity_; i++) {
+                Particle* p = &particles_[i];
+                if (p->isAlive() && (!oldest || p->age > oldest->age)) oldest = p;
+            }
+            if (!oldest) break;
+            kill(oldest);
+            killed++;
+        }
+        return killed;
+    }
+
+    /**
      * Update all active particles
      * Calls provided update function for each alive particle
      * Template parameter allows any callable (lambda, function pointer, functor)

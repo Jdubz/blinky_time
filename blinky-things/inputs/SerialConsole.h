@@ -13,6 +13,7 @@
 class ConfigStorage;
 class BleScanner;
 class BleNus;
+class RecordStream;
 class BleAdvertiser;
 class Esp32BleNus;
 class WifiManager;
@@ -176,6 +177,7 @@ public:
 #ifdef BLINKY_PLATFORM_NRF52840
     void setBleScanner(BleScanner* scanner) { bleScanner_ = scanner; }
     void setBleNus(BleNus* nus);
+    void setRecordStream(RecordStream* rec) { recordStream_ = rec; }
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     void setBleAdvertiser(BleAdvertiser* adv) { bleAdvertiser_ = adv; }
     void setEsp32BleNus(Esp32BleNus* nus);
@@ -245,6 +247,7 @@ private:
     bool handleDebugCommand(const char* cmd);     // Debug channel control
     bool handleFakeAudioCommand(const char* cmd); // Synthetic audio for visual debug
     bool handleBleCommand(const char* cmd);       // BLE diagnostics (all platforms)
+    bool handleRecordCommand(const char* cmd);    // Phone record mode (nRF52840)
     bool handleWifiCommand(const char* cmd);      // WiFi config (ESP32-S3 only)
     // (handleEnsembleCommand removed v67 — BandFlux pipeline removed; show nn moved to handleBeatTrackingCommand)
     bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
@@ -274,6 +277,7 @@ private:
 #ifdef BLINKY_PLATFORM_NRF52840
     BleScanner* bleScanner_ = nullptr;
     BleNus* bleNus_ = nullptr;
+    RecordStream* recordStream_ = nullptr;
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     BleAdvertiser* bleAdvertiser_ = nullptr;
     WifiManager* wifiManager_ = nullptr;

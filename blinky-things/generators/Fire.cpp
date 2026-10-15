@@ -65,7 +65,8 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
     // Palette bias driven by energy
     float targetBias = audio.energy;
-    paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f / 60.0f);
+    // ~0.5 s time constant (what 2/60 per frame was at 60 fps), time-based.
+    paletteBias_ += (targetBias - paletteBias_) * (1.0f - expf(-2.0f * dt));
 
     // === Audio envelope for heightmap (b202) ===
     // Use audio.pulse (already has attack-decay envelope from AudioTracker
@@ -123,12 +124,10 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // upward reinforcement). It has no meaning on a 1D strip where splashes
     // travel outward rather than rising, so it's matrix-only. With the grid
     // left cool on linear, applyGridForce() reads zeros and is a no-op.
-    if (!isLinear) updateHeatGrid();
+    if (!isLinear) updateHeatGrid(dt);
     spawnParticles(dt);
     updateParticles(dt);
     renderParticles(matrix);
-
-    prevPhase_ = audio_.phase;
 }
 
 void Fire::reset() {
@@ -291,13 +290,28 @@ void Fire::spawnParticles(float dt) {
     // now zeroes audio.pulse during true silence (b201 + smolder gate
     // fix), so a redundant overshoot check here just blocks legitimate
     // sub-floor kicks.
-    bool isBeat = (audio_.pulse > params_.burstThreshold) ||
-                  (audio_.plpPulse > params_.burstThreshold + 0.10f);
-    if (isBeat && !lastBeat_) {
+    //
+    // b208: trigger on discrete EVENTS instead of a level crossing.
+    //   - audio_.onset: one non-zero value per detected drum hit. The old
+    //     `pulse > burstThreshold` rising edge needed the 240 ms envelope to
+    //     fall back below threshold to re-arm; with 8th/16th-note hats it
+    //     never did, so bursts stopped for whole dense passages.
+    //   - audio_.beatCount: one tick per rhythm cycle, only used when the
+    //     rhythm is confidently locked (rs > 0.5). The old plpPulse leg was
+    //     a broad level (held isBeat high, masking real onsets) and fired
+    //     at full strength even with no rhythm lock.
+    // Direct audio stays primary: any onset strong enough bursts, lock or
+    // no lock.
+    bool beatTick = (audio_.beatCount != burstBeatCount_);
+    burstBeatCount_ = audio_.beatCount;
+    float onsetStrength = (audio_.onset > audio_.pulse) ? audio_.onset : audio_.pulse;
+    bool onsetBurst = (audio_.onset > 0.0f) && (onsetStrength >= params_.burstThreshold);
+    bool lockedBeat = beatTick && rs > 0.5f;
+    if (onsetBurst || lockedBeat) {
         // Combined strength: direct audio is the floor, refinements stack.
-        float strength = audio_.pulse;
-        if (rs > 0.1f && audio_.plpPulse > strength) {
-            strength = audio_.plpPulse;
+        float strength = onsetBurst ? onsetStrength : audio_.pulse;
+        if (lockedBeat && rs * audio_.plpPulse > strength) {
+            strength = rs * audio_.plpPulse;
         }
         if (strength > 1.0f) strength = 1.0f;
         if (strength < params_.burstThreshold) strength = params_.burstThreshold;
@@ -318,10 +332,21 @@ void Fire::spawnParticles(float dt) {
         burstStrength_  = strength;
         totalSparks    += burstAdd;
     }
-    lastBeat_ = isBeat;
 
     uint8_t sparkCount = (uint8_t)min((int)totalSparks, 255);
     uint16_t maxParts = scaledMaxParticles();
+
+    // A new burst must be visible even when the previous one filled the
+    // pool (linear layouts wrap particles instead of letting them exit, so
+    // the pool can stay full for seconds and later beats spawned nothing).
+    // Retire the oldest particles to make room, up to half the pool.
+    if (burstParticles_ > 0) {
+        uint16_t want = burstParticles_;
+        if (want > maxParts / 2) want = maxParts / 2;
+        uint16_t active = pool_.getActiveCount();
+        uint16_t freeSlots = (active < maxParts) ? (maxParts - active) : 0;
+        if (freeSlots < want) pool_.killOldest(want - freeSlots);
+    }
     // Burst particles are spawned FIRST so their dramatic params don't get
     // crowded out if the pool is near capacity.
     uint8_t burstRemaining = burstParticles_;
@@ -410,9 +435,14 @@ void Fire::updateParticle(Particle* p, float dt) {
     // No per-frame audio coupling here — that produces a uniform wash.
     // Audio events express themselves through SPAWN (count, velocity,
     // intensity at birth), then particles execute their own trajectory.
-    // Extend lifespan when energy is high (all particles get more life = taller flame)
+    // Extend lifespan when energy is high (all particles get more life =
+    // taller flame). 60 cs per second of loud audio — what the old
+    // "+1 per frame" did at 60 fps — but time-based, so flame height no
+    // longer depends on loop speed (at 100 fps it used to fully cancel
+    // aging and particles only died via fade).
     if (audio_.energy > 0.5f && p->maxAge < 250) {
-        p->maxAge += 1;
+        int ext = static_cast<int>(p->maxAge) + stochasticRound(60.0f * dt);
+        p->maxAge = static_cast<uint8_t>(ext > 250 ? 250 : ext);
     }
     applyGridForce(p, dt);
 }
@@ -425,10 +455,14 @@ void Fire::initGrid() {
     memset(heatGrid_, 0, sizeof(heatGrid_));
 }
 
-void Fire::updateHeatGrid() {
-    // Cool all cells (exponential decay each frame)
+void Fire::updateHeatGrid(float dt) {
+    // gridCoolRate and SPLAT_GAIN are defined per 60 fps frame; scale both to
+    // this frame's duration so heat build-up/decay (and the buoyancy it
+    // drives) don't change with loop speed.
+    const float frames60 = dt * 60.0f;
+    const float cool = powf(params_.gridCoolRate, frames60);
     for (int i = 0; i < FIRE_GRID_W * FIRE_GRID_H; i++) {
-        heatGrid_[i] *= params_.gridCoolRate;
+        heatGrid_[i] *= cool;
     }
 
     // Splat heat from alive particles onto nearest grid cell.
@@ -436,11 +470,12 @@ void Fire::updateHeatGrid() {
     // Steady-state: heat_ss = N * gain * intensity / (1 - coolRate)
     // At coolRate=0.88, 3 particles intensity=0.7: 3*0.04*0.7/0.12 = 0.7
     static const float SPLAT_GAIN = 0.04f;
-    pool_.forEach([this](const Particle* p) {
+    const float splat = SPLAT_GAIN * frames60;
+    pool_.forEach([this, splat](const Particle* p) {
         int gx = constrain((int)(p->x / cellW_), 0, gridW_ - 1);
         int gy = constrain((int)(p->y / cellH_), 0, gridH_ - 1);
         float& cell = heatGrid_[gy * FIRE_GRID_W + gx];
-        cell += (p->intensity / 255.0f) * SPLAT_GAIN;
+        cell += (p->intensity / 255.0f) * splat;
         if (cell > 1.0f) cell = 1.0f;
     });
 }
