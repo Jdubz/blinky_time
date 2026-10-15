@@ -75,6 +75,10 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ""
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # TEMPORARY DIAGNOSTIC: the review still ends is_error:true after one turn
+          # with $0 cost; the real reason is only in the hidden result text (cf.
+          # anthropics/claude-code-action#1836). Remove once diagnosed.
+          show_full_output: true
           # Without this the action mints a GitHub App token via OIDC, which 403s.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
