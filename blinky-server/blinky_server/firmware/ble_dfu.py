@@ -727,6 +727,10 @@ async def _ble_dfu_write_impl(
             await asyncio.sleep(3)
 
     last_result: dict[str, Any] = {"status": "error", "message": "No attempts made"}
+    # Once any attempt gets past the bootloader scan, the device has been in
+    # its bootloader with a transfer under way: never re-send the entry
+    # command for the rest of this invocation, even after a later scan miss.
+    transfer_started = False
 
     for attempt in range(MAX_DFU_ATTEMPTS):
         if attempt > 0:
@@ -746,8 +750,10 @@ async def _ble_dfu_write_impl(
         # same operation as attempt 0.
         if attempt == 0:
             await enter_bootloader("")
-        elif last_result.get("bootloader_not_found") and (
-            enter_bootloader_via_serial or enter_bootloader_via_ble
+        elif (
+            not transfer_started
+            and last_result.get("bootloader_not_found")
+            and (enter_bootloader_via_serial or enter_bootloader_via_ble)
         ):
             still_app = await _scan_with_retry(
                 lambda: BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
@@ -780,6 +786,9 @@ async def _ble_dfu_write_impl(
             image_type=image_type,
             progress=progress,
         )
+
+        if not last_result.get("bootloader_not_found"):
+            transfer_started = True
 
         if last_result.get("status") == "ok":
             break

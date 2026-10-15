@@ -99,6 +99,16 @@ async def test_no_reentry_after_transfer_failure(harness: dict[str, Any]) -> Non
     assert APP not in harness["scans"][:-1]  # no app probe before verification
 
 
+async def test_no_reentry_once_any_transfer_started(harness: dict[str, Any]) -> None:
+    # Copilot review: a transfer-stage failure followed by a scan miss must
+    # not re-enable re-entry, even with the app advertising.
+    harness["transfers"] = [{"status": "error", "message": "write failed"}, NOT_FOUND, OK]
+    harness["app_visible"] = [True, True]
+    result = await _run(harness)
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble"]
+
+
 async def test_attempts_stay_bounded(harness: dict[str, Any]) -> None:
     harness["transfers"] = [NOT_FOUND] * mod.MAX_DFU_ATTEMPTS
     harness["app_visible"] = [True] * (mod.MAX_DFU_ATTEMPTS - 1)
