@@ -37,6 +37,9 @@ from scripts.audio import load_config
 from evaluate import load_model
 
 
+SPECTRAL_FPS = 62.5  # firmware spectral frame rate (16 kHz / 256-sample hop)
+
+
 def load_capture(jsonl_path: str) -> dict:
     """Parse JSONL capture file from blinky-server capture-nn endpoint."""
     frames = []
@@ -238,10 +241,13 @@ def main():
     print(f"  Offline mean activation:{offline_onset.mean():.4f}")
 
     # Peak-pick both
-    frame_rate = capture["actual_fps"]
+    # With fc, both peak times and the minimum spacing use the 62.5 Hz spectral
+    # clock; the measured line rate (actual_fps) is only right for legacy
+    # captures, where line index is the only clock.
+    frame_rate = SPECTRAL_FPS if capture["fc"] is not None else capture["actual_fps"]
     # With a frame counter, time each line by its frame index at the nominal
     # 62.5 Hz frame rate, so dropped frames don't shift later peaks.
-    times = (capture["fc"] - capture["fc"][0]) / 62.5 if capture["fc"] is not None else None
+    times = (capture["fc"] - capture["fc"][0]) / SPECTRAL_FPS if capture["fc"] is not None else None
     device_peaks = peak_pick(device_onset, args.threshold, frame_rate, times=times)
     offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate, times=times)
     print(f"  Device onset count:     {len(device_peaks)}")
