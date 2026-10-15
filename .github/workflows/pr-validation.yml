@@ -3,6 +3,10 @@ name: PR Validation
 on:
   pull_request:
     branches: [ master, main ]
+  # Also validate master itself: two PRs that each pass alone can still break
+  # together once both are merged.
+  push:
+    branches: [ master ]
 
 jobs:
   compile:

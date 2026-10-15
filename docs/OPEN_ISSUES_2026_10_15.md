@@ -69,7 +69,7 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | OPEN | Keep console quiet during sessions; consider a non-blocking notify check. |
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 | 3.7 ([#191](https://github.com/Jdubz/blinky_time/issues/191)) | Settings save still halts the CPU (NVMC erase) long enough to drop audio | `ConfigStorage::saveToFlash` | PARTIAL | Trailing debounce + skip-unchanged in #152. Consider deferring saves while audio energy is high. |
-| 3.8 ([#223](https://github.com/Jdubz/blinky_time/issues/223)) | Heap not task-safe: core has no `__malloc_lock`; loop and BLE callback tasks both allocate (e.g. `record start` allocates 32 KB from the callback task) | core / `RecordStream` | OPEN | Audit post-boot allocations; pre-allocate or confine to the loop task, or lock malloc with `vTaskSuspendAll` after bench validation. |
+| 3.8 ([#223](https://github.com/Jdubz/blinky_time/issues/223)) | Heap: newlib `realloc`/`calloc`/`strdup`/`mallinfo` bypass the core's `malloc`/`free` wrap (heap_3) and take a no-op `__malloc_lock`; Arduino `String` reallocs in NUS handlers can interleave with the BLE task's mallocs | core link flags / `String` users | IN-PR #227 (draft) | `__malloc_lock` via scheduler suspend; bench-test String-heavy NUS commands over BLE. |
 
 ## 4. Visual generators
 
