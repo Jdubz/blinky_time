@@ -644,6 +644,11 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             } else {
                 out_.print(F(",\"heapTotal\":null,\"heapUsed\":null,\"heapPeak\":null"));
             }
+            // Allocations attempted from interrupt context; the heap lock can't
+            // protect those (hal/MallocLock.cpp). Must stay 0.
+            extern volatile uint32_t MallocLock_isrAllocCount;
+            out_.print(F(",\"mallocIsr\":"));
+            out_.print(MallocLock_isrAllocCount);
         }
 #endif
 

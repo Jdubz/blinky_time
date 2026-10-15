@@ -11,16 +11,13 @@
  * in the Bluefruit callback task, so "current task" would measure the wrong
  * stack.
  *
- * Heap: newlib mallinfo(). The core wraps malloc/free (-Wl,--wrap) into
- * FreeRTOS heap_3, which suspends the scheduler, but newlib's realloc/calloc/
- * strdup (Arduino String uses realloc) and mallinfo itself call the inner
- * allocator directly, unprotected (#223). The walk therefore runs only on the
- * loop task (sampleHeap(), ~1 Hz from loop()) with the scheduler suspended:
- * no other task can run during the walk, and the loop, the lowest-priority
- * application task, can't have preempted a higher-priority task that is
- * mid-realloc (the equal-priority record sender doesn't allocate, and time
- * slicing is off). `json info` prints the cached sample. The cache is written
- * while the scheduler is suspended, so no task sees a torn update.
+ * Heap: newlib mallinfo(). The core wraps malloc/free into FreeRTOS heap_3;
+ * hal/MallocLock.cpp adds the newlib lock that realloc/calloc/strdup and
+ * mallinfo take, so every heap entry point is now exclusive (#223). The walk
+ * still runs only on the loop task (sampleHeap(), ~1 Hz from loop()) so
+ * `json info` from the BLE callback task never walks the heap; it prints the
+ * cached sample. The cache is written while the scheduler is suspended, so no
+ * task sees a torn update.
  */
 
 #include "PlatformDetect.h"
