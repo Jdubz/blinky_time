@@ -31,7 +31,7 @@ echo "Using compiler: $CXX"
 mkdir -p build
 
 # Compile
-$CXX -std=c++17 -O2 -Wall -Wextra \
+"$CXX" -std=c++17 -O2 -Wall -Wextra \
     -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 \
     -I include \
     -I ../blinky-things \
