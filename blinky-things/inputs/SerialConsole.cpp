@@ -220,12 +220,6 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     settings_.registerFloat("noiseaudiospeedmult", &fp->noiseAudioSpeedMult, "fire",
         "How much louder audio speeds up the noise. Default 3.0.", 0.0f, 10.0f, onParamChanged);
 
-    // b203 1D heat-propagation fire (linear layouts only)
-    settings_.registerFloat("linearcoolrate", &fp->linearCoolRate, "fire",
-        "Linear-fire heat decay per 60fps frame (higher=flame extends further). Default 0.97.", 0.5f, 0.999f, onParamChanged);
-    settings_.registerFloat("linearproprate", &fp->linearPropRate, "fire",
-        "Linear-fire propagation rate per 60fps frame (higher=faster waves). Default 0.7.", 0.05f, 1.0f, onParamChanged);
-
     // Global particle velocity cap (declared in particles/Particle.h)
     settings_.registerFloat("maxvel", &MAX_PARTICLE_VELOCITY, "fire",
         "Global particle velocity cap (LEDs/sec) — was hardcoded 50, raised to 400", 10.0f, 2000.0f, onParamChanged);

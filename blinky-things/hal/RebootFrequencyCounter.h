@@ -20,10 +20,22 @@
  *
  * Behavior:
  *   1. `checkAndIncrement()` runs early in setup (after LittleFS is ready).
- *      Reads counter from flash, increments by 1, writes back.
- *   2. If post-increment counter >= REBOOT_THRESHOLD, enters BLE DFU
+ *      Reads the hardware reset reason (RESETREAS) and the flash counter.
+ *      ONLY a fault reset (watchdog `DOG` or CPU `LOCKUP`) increments the
+ *      counter; a clean power-on, brownout, pin reset, or operator soft-reset
+ *      (`reboot` command, DFU entry) leaves it unchanged. This keeps rapid
+ *      operator power-cycling from being mistaken for a crash loop (the
+ *      2026-10-15 cart blackout, where both carts were manually power-cycled
+ *      >5× in quick succession and quarantined their config into safe mode).
+ *      The counter is not DECREMENTED by a clean reset either, so a genuine
+ *      crash history interleaved with power loss still accumulates across
+ *      power cycles — the cross-power-cycle guarantee this module provides.
+ *      The bootloader deliberately does not clear RESETREAS (main.c: "it
+ *      should be cleared by application upon init()"); we read-and-clear it
+ *      here so each boot sees only its own reset reason.
+ *   2. If a fault boot pushes the counter >= REBOOT_THRESHOLD, enters BLE DFU
  *      bootloader via SafeBootWatchdog. Never returns.
- *   3. `markStable()` is called from loop() once millis() >= STABLE_UPTIME_MS.
+ *   3. `tickStable()` is called from loop() once millis() >= STABLE_UPTIME_MS.
  *      Writes counter=0 to flash.
  *
  * Failure modes (deliberately fail-safe):
@@ -87,6 +99,22 @@ namespace RebootFrequencyCounter {
     static constexpr uint32_t RECORD_MAGIC    = 0xB007FEEDUL;
     static constexpr size_t   RECORD_SIZE     = 10;
 
+    // Reset-reason bits (RESETREAS) that indicate a genuine fault — a crash
+    // the device could not recover from on its own — as opposed to a clean
+    // power cycle, brownout, pin reset, or operator soft-reset. ONLY these
+    // increment the crash-loop counter (see checkAndIncrement). On nRF52840,
+    // DOG = watchdog timeout (set when the WDT fires because the app hung,
+    // hard-faulted, or infinite-looped and stopped feeding it) and LOCKUP =
+    // CPU lockup. A true power-on/brownout reset clears RESETREAS to 0 in
+    // hardware, and SREQ (used by our own `reboot`/DFU-entry) and RESETPIN
+    // are deliberately excluded — operator/power actions must not look like a
+    // crash loop. The accepted trade-off: a crash that resets without setting
+    // DOG/LOCKUP (e.g. a HardFault handler that calls NVIC_SystemReset → SREQ)
+    // won't count here; SafeBootWatchdog's GPREGRET2 counter still catches
+    // setup()-phase faults within a single power session.
+    static constexpr uint32_t RESET_FAULT_MASK =
+        POWER_RESETREAS_DOG_Msk | POWER_RESETREAS_LOCKUP_Msk;
+
     // CRC-protected counter record. The magic alone is a weak integrity check
     // — any 4 random flash bytes matching `0xB007FEED` would pass, and a bit
     // flip from counter=1 → counter=5 would silently trigger DFU recovery on
@@ -119,6 +147,7 @@ namespace RebootFrequencyCounter {
     // .ino includes this header (matches the SafeBootWatchdog pattern).
     static bool stableMarked_ = false;
     static uint8_t bootCount_ = 0;   // for diagnostics
+    static uint32_t lastResetReason_ = 0;  // RESETREAS captured this boot (diagnostics)
 
     /**
      * Read the counter record from flash. Returns 0 if file is missing,
@@ -199,11 +228,60 @@ namespace RebootFrequencyCounter {
     inline void setOnThresholdHook(OnThresholdHook h) { onThresholdHook() = h; }
 
     /**
-     * Increment the boot counter; if threshold reached, enter BLE DFU
-     * recovery and never return. MUST be called after `InternalFS.begin()`.
+     * Read the hardware reset-reason register (SoftDevice-aware) and clear the
+     * bits observed so they do not persist into the next boot. Mirrors the
+     * SD-aware register-access idiom in SafeBootWatchdog. The bootloader leaves
+     * RESETREAS untouched by contract (main.c), so this is the first and only
+     * consumer — a stale bit lingering from before this firmware is read once
+     * and cleared here, self-correcting after the first boot.
+     */
+    inline uint32_t readAndClearResetReason() {
+        uint32_t reason = 0;
+        uint8_t sd_en = 0;
+        sd_softdevice_is_enabled(&sd_en);
+        if (sd_en) {
+            sd_power_reset_reason_get(&reason);
+            sd_power_reset_reason_clr(reason);  // clear exactly the set bits
+        } else {
+            reason = NRF_POWER->RESETREAS;
+            // RESETREAS is write-1-to-clear: writing the read-back value clears
+            // exactly the bits that were set, leaving a clean slate next boot.
+            NRF_POWER->RESETREAS = reason;
+        }
+        return reason;
+    }
+
+    /**
+     * Increment the boot counter on a fault reset; if threshold reached, enter
+     * BLE DFU recovery and never return. MUST be called after
+     * `InternalFS.begin()`.
      */
     inline void checkAndIncrement() {
+        lastResetReason_ = readAndClearResetReason();
         bootCount_ = readCounter();
+
+        // Crash-loop gate: only a genuine fault reset (watchdog / lockup)
+        // counts. A clean power-on, brownout, pin reset, or operator
+        // soft-reset must NOT increment — otherwise rapid operator
+        // power-cycling is indistinguishable from a crash loop and spuriously
+        // quarantines the device config into safe mode (the 2026-10-15 cart
+        // blackout). Leave the counter UNCHANGED (not cleared) on a non-fault
+        // reset so a real crash history interleaved with power loss still
+        // accumulates toward the threshold across power cycles.
+        const bool isFault = (lastResetReason_ & RESET_FAULT_MASK) != 0;
+        if (!isFault) {
+            Serial.print(F("[BOOT] RebootFrequencyCounter: non-fault reset (RESETREAS=0x"));
+            Serial.print(lastResetReason_, HEX);
+            Serial.print(F(") — counter held at "));
+            Serial.print(bootCount_);
+            Serial.print(F("/"));
+            Serial.println(REBOOT_THRESHOLD);
+            return;
+        }
+
+        Serial.print(F("[BOOT] RebootFrequencyCounter: fault reset (RESETREAS=0x"));
+        Serial.print(lastResetReason_, HEX);
+        Serial.println(F(")"));
 
         // Promote to uint16_t before adding 1 to make the comparison unambiguous
         // and immune to any future REBOOT_THRESHOLD change crossing 255.
@@ -288,6 +366,14 @@ namespace RebootFrequencyCounter {
      * directly.
      */
     inline uint8_t getPriorBootCount() { return bootCount_; }
+
+    /**
+     * Diagnostic: the raw RESETREAS value captured (and cleared) at boot by
+     * checkAndIncrement. Zero until checkAndIncrement runs. A value with no
+     * bit in RESET_FAULT_MASK means this boot did not count toward crash-loop
+     * detection (clean power-on / brownout / pin reset / operator reset).
+     */
+    inline uint32_t getLastResetReason() { return lastResetReason_; }
 
 }  // namespace RebootFrequencyCounter
 

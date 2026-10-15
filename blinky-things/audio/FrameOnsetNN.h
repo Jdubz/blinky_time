@@ -42,7 +42,24 @@ public:
     static constexpr int BAND_FLUX_CHANNELS = 3;   // Bass/mid/high HWR mel flux
     static constexpr int INPUT_MEL_PLUS_FLUX = INPUT_MEL_BANDS + BAND_FLUX_CHANNELS;
     static constexpr int INPUT_HYBRID = INPUT_MEL_BANDS + 2;  // Mel + spectral flatness + flux
-    static constexpr int MAX_INPUT_FEATURES = 64;  // Max supported (model auto-detects)
+    // Widest feature vector any supported input mode produces, used to size
+    // every per-frame buffer (frameFeatures, windowBuffer_/quantizedWindow_
+    // strides). The delta mode (mel + per-band delta, detected in begin()) is
+    // the widest at 2*INPUT_MEL_BANDS; hybrid (+2) and band-flux (+3) are
+    // narrower. Must TRACK INPUT_MEL_BANDS — it was previously hard-coded to
+    // 64, which was fine at 26 bands (delta width 52) but silently became a
+    // buffer overflow when NUM_MEL_BANDS went 26 -> 50 (delta width 100 > 64):
+    // the exact "array smaller than the constant it must track" failure class
+    // from CLAUDE.md "No Silent Fallbacks" (the MEL_BANDS incident). The delta
+    // branch in infer() writes frameFeatures[INPUT_MEL_BANDS + i] for
+    // i in [0, INPUT_MEL_BANDS), i.e. up to index 2*INPUT_MEL_BANDS - 1.
+    static constexpr int MAX_INPUT_FEATURES = INPUT_MEL_BANDS * 2;
+    static_assert(MAX_INPUT_FEATURES >= INPUT_MEL_BANDS * 2 &&
+                  MAX_INPUT_FEATURES >= INPUT_MEL_PLUS_FLUX &&
+                  MAX_INPUT_FEATURES >= INPUT_HYBRID &&
+                  MAX_INPUT_FEATURES >= INPUT_MEL_BANDS,
+        "MAX_INPUT_FEATURES must fit the widest FrameOnsetNN input mode "
+        "(mel + delta = 2*NUM_MEL_BANDS) — see the delta branch in infer()");
 
     // PCEN normalization mode: set before begin() to use PCEN instead of
     // log-compressed mel bands. Requires linear mel input from
@@ -124,6 +141,14 @@ public:
             initError_ = 5; return false;
         }
         inputFeatures_ = featuresPerFrame;
+        // Defense in depth: every per-frame buffer (frameFeatures,
+        // windowBuffer_, quantizedWindow_) is sized to MAX_INPUT_FEATURES. The
+        // mode detection above only accepts known widths, all <=
+        // MAX_INPUT_FEATURES by construction (enforced by the static_assert on
+        // its definition), but guard explicitly so a model with an unexpectedly
+        // wide frame fails loudly here instead of overflowing the buffers in
+        // infer(). See CLAUDE.md "No Silent Fallbacks".
+        if (featuresPerFrame > MAX_INPUT_FEATURES) { initError_ = 8; return false; }
         windowFrames_ = inputSize / featuresPerFrame;
         if (windowFrames_ > MAX_WINDOW_FRAMES) { initError_ = 6; return false; }
 
@@ -417,7 +442,9 @@ private:
     static constexpr int MAX_WINDOW_FRAMES = 64;      // Max 64 frames (1.024s) — increase if a wider model is used
 
     alignas(16) uint8_t arena_[ARENA_SIZE];
-    float windowBuffer_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // 13 KB max (64 * 52 * 4)
+    // Sized MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES. At 50 mel bands that is
+    // 64 * 100 * 4 = 25.6 KB (float) + 6.4 KB (int8) worst case (delta mode).
+    float windowBuffer_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];
     int8_t quantizedWindow_[MAX_WINDOW_FRAMES * MAX_INPUT_FEATURES];  // Pre-quantized circular buffer
     float prevMel_[INPUT_MEL_BANDS] = {0};      // Previous frame mel bands (for delta computation)
 
