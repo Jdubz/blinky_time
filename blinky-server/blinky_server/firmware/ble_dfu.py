@@ -383,7 +383,15 @@ async def _dfu_transfer_inner(
     def on_notify(sender: BleakGATTCharacteristic, data: bytearray) -> None:
         notify_queue.put_nowait(bytes(data))
 
-    await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
+    try:
+        await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
+    except Exception as e:
+        # Nothing written to the bootloader yet: safe to disconnect and retry.
+        with contextlib.suppress(Exception):
+            await client.disconnect()
+        result["message"] = f"Failed to subscribe to DFU control notifications: {e}"
+        log.error(result["message"])
+        return result
     await asyncio.sleep(1)
 
     async def wait_response(
@@ -439,6 +447,10 @@ async def _dfu_transfer_inner(
         else:
             size_pkt = struct.pack("<III", len(firmware), 0, 0)
         await client.write_gatt_char(DFU_PACKET_UUID, size_pkt, response=False)
+        # From here the bootloader may be erasing the app slot, whatever the
+        # response turns out to be. The retry loop uses this to stop re-sending
+        # the bootloader-entry command (#218).
+        result["erase_started"] = True
         # Flash erase takes ~25s for 500KB firmware (85ms per 4KB page)
         ok, code, msg = await wait_response("START_DFU", expected_opcode=0x01, timeout=60.0)
         if not ok:
@@ -447,6 +459,9 @@ async def _dfu_transfer_inner(
                 await _reset_bootloader(client)
                 result["message"] = "INVALID_STATE (bootloader reset, retry needed)"
                 result["needs_retry"] = True
+                # Explicit rejection: the bootloader didn't start the erase, so
+                # the app is intact and the device may come back up in it.
+                result["erase_started"] = False
             else:
                 result["message"] = msg
             return result
@@ -710,26 +725,30 @@ async def _ble_dfu_write_impl(
         # before the bootloader entry creates a new one.
         await asyncio.sleep(2)
 
-    async def enter_bootloader(label: str) -> None:
+    async def enter_bootloader(label: str, reentry: bool = False) -> None:
+        # On attempt 0 an exception is normal (the device drops the link as it
+        # reboots). On a re-entry it may mean the command never went out, so
+        # say so at WARNING rather than leave only "re-sending" in the log.
+        log_exc = log.warning if reentry else log.debug
         if enter_bootloader_via_serial:
             progress("bootloader", f"Entering BLE DFU via serial command{label}...", 10)
             try:
                 await enter_bootloader_via_serial("bootloader ble")
             except Exception as e:
-                log.debug("Bootloader command result (may disconnect): %s", e)
+                log_exc("Bootloader command result (may disconnect): %s", e)
             await asyncio.sleep(2)
         elif enter_bootloader_via_ble:
             progress("bootloader", f"Entering BLE DFU via BLE NUS command{label}...", 10)
             try:
                 await enter_bootloader_via_ble("bootloader ble")
             except Exception as e:
-                log.debug("BLE bootloader command result (expected disconnect): %s", e)
+                log_exc("BLE bootloader command result (expected disconnect): %s", e)
             await asyncio.sleep(3)
 
     last_result: dict[str, Any] = {"status": "error", "message": "No attempts made"}
-    # Once any attempt gets past the bootloader scan, the device has been in
-    # its bootloader with a transfer under way: never re-send the entry
-    # command for the rest of this invocation, even after a later scan miss.
+    # Once any attempt may have started erasing the app (START_DFU written and
+    # not explicitly rejected), never re-send the entry command for the rest
+    # of this invocation, even after a later scan miss.
     transfer_started = False
 
     for attempt in range(MAX_DFU_ATTEMPTS):
@@ -755,6 +774,9 @@ async def _ble_dfu_write_impl(
             and last_result.get("bootloader_not_found")
             and (enter_bootloader_via_serial or enter_bootloader_via_ble)
         ):
+            # Drop any cached BlueZ object first so only a live advertisement
+            # counts as "still in the app".
+            await asyncio.to_thread(clear_bluez_state, app_ble_address)
             still_app = await _scan_with_retry(
                 lambda: BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
             )
@@ -765,7 +787,7 @@ async def _ble_dfu_write_impl(
                     attempt + 1,
                     app_ble_address,
                 )
-                await enter_bootloader(f" (re-entry, attempt {attempt + 1})")
+                await enter_bootloader(f" (re-entry, attempt {attempt + 1})", reentry=True)
                 await asyncio.to_thread(clear_bluez_state, boot_addr)
                 await asyncio.sleep(3)
 
@@ -787,7 +809,7 @@ async def _ble_dfu_write_impl(
             progress=progress,
         )
 
-        if not last_result.get("bootloader_not_found"):
+        if last_result.get("erase_started"):
             transfer_started = True
 
         if last_result.get("status") == "ok":

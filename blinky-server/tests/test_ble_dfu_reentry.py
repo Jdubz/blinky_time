@@ -19,7 +19,16 @@ from blinky_server.firmware import ble_dfu as mod
 
 APP = "AA:BB:CC:DD:EE:10"
 NOT_FOUND = {"status": "error", "message": "not found", "bootloader_not_found": True}
-OK = {"status": "ok", "message": "transfer ok"}
+OK = {"status": "ok", "message": "transfer ok", "erase_started": True}
+# START_DFU written, then a later stage failed: the app may be partly erased.
+ERASED_FAIL = {"status": "error", "message": "write failed", "erase_started": True}
+# START_DFU explicitly rejected: bootloader reset, app intact (no erase).
+INVALID_STATE = {
+    "status": "error",
+    "message": "INVALID_STATE",
+    "needs_retry": True,
+    "erase_started": False,
+}
 
 
 @pytest.fixture
@@ -60,13 +69,19 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return state
 
 
-async def _run(state: dict[str, Any]) -> dict[str, Any]:
+async def _run(state: dict[str, Any], via: str = "ble") -> dict[str, Any]:
     async def enter(cmd: str) -> None:
         state["entries"].append(cmd)
 
+    kwargs: dict[str, Any] = {}
+    if via == "ble":
+        kwargs["enter_bootloader_via_ble"] = enter
+    elif via == "serial":
+        kwargs["enter_bootloader_via_serial"] = enter
+    # via == "none": DFU-recovery path, device already in its bootloader.
     token = _guard._inside_flash_job_orchestrator.set(True)
     try:
-        return await mod._ble_dfu_write_impl(APP, "fw.zip", enter_bootloader_via_ble=enter)
+        return await mod._ble_dfu_write_impl(APP, "fw.zip", **kwargs)
     finally:
         _guard._inside_flash_job_orchestrator.reset(token)
 
@@ -90,9 +105,9 @@ async def test_no_reentry_when_app_gone(harness: dict[str, Any]) -> None:
 
 
 async def test_no_reentry_after_transfer_failure(harness: dict[str, Any]) -> None:
-    # A failure after the bootloader was found (transfer started) must not
+    # A failure after START_DFU was written (erase may have begun) must not
     # trigger re-entry: the device is in the bootloader.
-    harness["transfers"] = [{"status": "error", "message": "write failed"}, OK]
+    harness["transfers"] = [ERASED_FAIL, OK]
     result = await _run(harness)
     assert result["status"] == "ok"
     assert harness["entries"] == ["bootloader ble"]
@@ -102,11 +117,40 @@ async def test_no_reentry_after_transfer_failure(harness: dict[str, Any]) -> Non
 async def test_no_reentry_once_any_transfer_started(harness: dict[str, Any]) -> None:
     # Copilot review: a transfer-stage failure followed by a scan miss must
     # not re-enable re-entry, even with the app advertising.
-    harness["transfers"] = [{"status": "error", "message": "write failed"}, NOT_FOUND, OK]
+    harness["transfers"] = [ERASED_FAIL, NOT_FOUND, OK]
     harness["app_visible"] = [True, True]
     result = await _run(harness)
     assert result["status"] == "ok"
     assert harness["entries"] == ["bootloader ble"]
+
+
+async def test_reentry_after_invalid_state(harness: dict[str, Any]) -> None:
+    # INVALID_STATE resets the bootloader without erasing; the device can come
+    # back up in its (intact) app. A following scan miss with the app
+    # advertising must re-send the entry command, or #218 recurs.
+    harness["transfers"] = [INVALID_STATE, NOT_FOUND, OK]
+    harness["app_visible"] = [True]
+    result = await _run(harness)
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble", "bootloader ble"]
+
+
+async def test_reentry_via_serial(harness: dict[str, Any]) -> None:
+    harness["transfers"] = [NOT_FOUND, OK]
+    harness["app_visible"] = [True]
+    result = await _run(harness, via="serial")
+    assert result["status"] == "ok"
+    assert harness["entries"] == ["bootloader ble", "bootloader ble"]
+
+
+async def test_recovery_path_never_probes_or_enters(harness: dict[str, Any]) -> None:
+    # No entry callables (device already in DFU recovery): no app probe and no
+    # entry command, even after a scan miss.
+    harness["transfers"] = [NOT_FOUND, OK]
+    result = await _run(harness, via="none")
+    assert result["status"] == "ok"
+    assert harness["entries"] == []
+    assert harness["scans"] == [APP]  # only the post-DFU verification scan
 
 
 async def test_attempts_stay_bounded(harness: dict[str, Any]) -> None:
