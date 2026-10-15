@@ -329,6 +329,9 @@ async def _dfu_transfer_inner(
         await asyncio.sleep(2)
     if not dev:
         result["message"] = f"Bootloader not found at {boot_addr} after 3 scan attempts"
+        # Nothing was transferred: the caller may check whether the device is
+        # still in its app (entry command didn't take) and re-enter (#218).
+        result["bootloader_not_found"] = True
         return result
     progress("scan", f"Found: {dev.name}", 25)
 
@@ -707,7 +710,27 @@ async def _ble_dfu_write_impl(
         # before the bootloader entry creates a new one.
         await asyncio.sleep(2)
 
+    async def enter_bootloader(label: str) -> None:
+        if enter_bootloader_via_serial:
+            progress("bootloader", f"Entering BLE DFU via serial command{label}...", 10)
+            try:
+                await enter_bootloader_via_serial("bootloader ble")
+            except Exception as e:
+                log.debug("Bootloader command result (may disconnect): %s", e)
+            await asyncio.sleep(2)
+        elif enter_bootloader_via_ble:
+            progress("bootloader", f"Entering BLE DFU via BLE NUS command{label}...", 10)
+            try:
+                await enter_bootloader_via_ble("bootloader ble")
+            except Exception as e:
+                log.debug("BLE bootloader command result (expected disconnect): %s", e)
+            await asyncio.sleep(3)
+
     last_result: dict[str, Any] = {"status": "error", "message": "No attempts made"}
+    # Once any attempt gets past the bootloader scan, the device has been in
+    # its bootloader with a transfer under way: never re-send the entry
+    # command for the rest of this invocation, even after a later scan miss.
+    transfer_started = False
 
     for attempt in range(MAX_DFU_ATTEMPTS):
         if attempt > 0:
@@ -719,23 +742,34 @@ async def _ble_dfu_write_impl(
             # Wait for bootloader to finish resetting + BLE re-advertising.
             await asyncio.sleep(20)
 
-        # Enter bootloader (only on first attempt — retries assume already in bootloader)
+        # Enter bootloader on the first attempt. Retries normally assume the
+        # device is already in its bootloader — except when the previous attempt
+        # never found the bootloader and the device is still advertising as its
+        # app: the entry command didn't take (transient BLE miss), so send it
+        # again (#218). Nothing was transferred in that case, so this is the
+        # same operation as attempt 0.
         if attempt == 0:
-            if enter_bootloader_via_serial:
-                progress("bootloader", "Entering BLE DFU via serial command...", 10)
-                try:
-                    await enter_bootloader_via_serial("bootloader ble")
-                except Exception as e:
-                    log.debug("Bootloader command result (may disconnect): %s", e)
-                await asyncio.sleep(2)
-            elif enter_bootloader_via_ble:
-                progress("bootloader", "Entering BLE DFU via BLE NUS command...", 10)
-                try:
-                    await enter_bootloader_via_ble("bootloader ble")
-                except Exception as e:
-                    log.debug("BLE bootloader command result (expected disconnect): %s", e)
+            await enter_bootloader("")
+        elif (
+            not transfer_started
+            and last_result.get("bootloader_not_found")
+            and (enter_bootloader_via_serial or enter_bootloader_via_ble)
+        ):
+            still_app = await _scan_with_retry(
+                lambda: BleakScanner.find_device_by_address(app_ble_address, timeout=10.0)
+            )
+            if still_app:
+                log.warning(
+                    "DFU attempt %d: bootloader not found but %s still advertises as the "
+                    "app; the entry command didn't take — re-sending it",
+                    attempt + 1,
+                    app_ble_address,
+                )
+                await enter_bootloader(f" (re-entry, attempt {attempt + 1})")
+                await asyncio.to_thread(clear_bluez_state, boot_addr)
                 await asyncio.sleep(3)
 
+        if attempt == 0:
             # Clear BlueZ state for both addresses.  Power-cycle on first
             # attempt to flush in-memory GATT cache (bluetoothctl remove alone
             # doesn't reliably clear it on all BlueZ versions).
@@ -752,6 +786,9 @@ async def _ble_dfu_write_impl(
             image_type=image_type,
             progress=progress,
         )
+
+        if not last_result.get("bootloader_not_found"):
+            transfer_started = True
 
         if last_result.get("status") == "ok":
             break
