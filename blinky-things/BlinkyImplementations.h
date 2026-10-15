@@ -74,6 +74,7 @@
 // Communications implementations
 #include "hal/PlatformDetect.h"
 #ifdef BLINKY_PLATFORM_NRF52840
+  #include "hal/MallocLock.cpp"  // newlib __malloc_lock: task-safe heap (#223)
   #include "comms/BleScanner.cpp"
   #include "comms/BleNus.cpp"
   #include "comms/RecordStream.cpp"
