@@ -76,6 +76,7 @@
 #ifdef BLINKY_PLATFORM_NRF52840
   #include "comms/BleScanner.cpp"
   #include "comms/BleNus.cpp"
+  #include "comms/RecordStream.cpp"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   #include "comms/BleAdvertiser.cpp"
   #include "comms/Esp32BleNus.cpp"

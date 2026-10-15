@@ -36,7 +36,7 @@
 class ParticleGenerator : public Generator {
 public:
     ParticleGenerator()
-        : pool_(), prevPhase_(1.0f), gravity_(0.0f), drag_(0.98f),
+        : pool_(), gravity_(0.0f), drag_(0.98f),
           spawnRegion_(nullptr), boundary_(nullptr), forceAdapter_(nullptr) {}
 
     virtual ~ParticleGenerator() override = default;
@@ -87,11 +87,13 @@ public:
 
     void generate(PixelMatrix& matrix, const AudioControl& audio) override {
         audio_ = audio;
+        observeBeat(audio);
 
-        // Calculate delta time
+        // Calculate delta time (clamped: first frame / long stalls)
         uint32_t currentMs = millis();
         float dt = (currentMs - lastUpdateMs_) / 1000.0f;
         lastUpdateMs_ = currentMs;
+        if (dt > 0.1f) dt = 0.1f;
 
         // Update physics forces
         if (forceAdapter_) {
@@ -107,14 +109,14 @@ public:
         // Render particles to matrix
         renderParticles(matrix);
 
-        // Store previous phase for beat detection
-        prevPhase_ = audio_.phase;
+        beatObserved_ = false;  // next frame re-reads beatCount
     }
 
     void reset() override {
         pool_.reset();
         audio_ = AudioControl();
-        prevPhase_ = 1.0f;
+        beatThisFrame_ = false;
+        beatObserved_ = false;
     }
 
 protected:
@@ -194,11 +196,24 @@ protected:
     // ========================================
 
     /**
-     * Detect beat crossing (phase wraps from high to low)
+     * Latch "a rhythm cycle started" for this frame from the monotonic
+     * AudioControl::beatCount. Idempotent within a frame, so a subclass can
+     * call it before ParticleGenerator::generate() (Water reads it while
+     * drawing ripples) and both see the same answer.
+     *
+     * Replaces phase-threshold wrap detection (phase < 0.2 after > 0.8),
+     * which fired false beats or missed real ones whenever the tracker
+     * corrected phase, and — in Water's pre-generate() call — compared the
+     * previous frame's phase with itself, so it never fired at all.
      */
-    bool beatHappened() const {
-        return audio_.phase < BEAT_PHASE_MIN && prevPhase_ > BEAT_PHASE_MAX;
+    void observeBeat(const AudioControl& audio) {
+        if (beatObserved_) return;
+        beatThisFrame_ = (audio.beatCount != lastBeatCount_);
+        lastBeatCount_ = audio.beatCount;
+        beatObserved_ = true;
     }
+
+    bool beatHappened() const { return beatThisFrame_; }
 
     /**
      * Get spawn position from spawn region
@@ -232,21 +247,25 @@ protected:
      * Age particle and apply fade if flagged
      * @param dt Delta time in seconds
      *
-     * NOTE: age and maxAge are stored in centiseconds (0.01s units) to support
-     * frame-rate-independent timing while maintaining uint8_t range (0-2.55s)
-     * At 60fps (dt=0.0167s): age increments by 1-2 per frame
-     * At 30fps (dt=0.033s): age increments by 3 per frame
+     * NOTE: age and maxAge are stored in centiseconds (0.01s units, uint8_t
+     * range 0-2.55s). Per-frame increments are fractional (1.67 cs at 60 fps),
+     * so they are stochastically rounded: unbiased on average at ANY frame
+     * rate. Plain truncation (pre-b208) aged particles 0% of real time
+     * under 10 ms/frame and 50-100% between 10-19 ms/frame — lifetimes and
+     * pool occupancy depended on loop speed.
      */
+    static uint8_t stochasticRound(float v) {
+        if (v <= 0.0f) return 0;
+        if (v >= 255.0f) return 255;
+        uint8_t whole = static_cast<uint8_t>(v);
+        float frac = v - static_cast<float>(whole);
+        if (whole < 255 && random(1000) < static_cast<long>(frac * 1000.0f)) whole++;
+        return whole;
+    }
+
     void ageParticle(Particle* p, float dt) {
-        // Increment age by dt in centiseconds (dt * 100)
-        // Cap at 255 to prevent uint8_t wraparound
-        float ageIncrement = dt * 100.0f;  // Convert seconds to centiseconds (0.01s units)
-        float newAge = p->age + ageIncrement;  // Add in float space to preserve fractional values
-        if (newAge < 255) {
-            p->age = (uint8_t)newAge;  // Convert after addition to avoid truncation
-        } else {
-            p->age = 255;
-        }
+        int newAge = static_cast<int>(p->age) + stochasticRound(dt * 100.0f);
+        p->age = (newAge < 255) ? static_cast<uint8_t>(newAge) : 255;
 
         if (p->hasFlag(ParticleFlags::FADE) && p->maxAge > 0) {
             // Adaptive linear fade: computes the per-frame loss needed to reach
@@ -256,7 +275,9 @@ protected:
             // Both reach 0 at the same age. Frame-rate independent.
             float remainingSec = (float)(p->maxAge - p->age) * 0.01f;
             if (remainingSec > 0.01f) {
-                int loss = max(1, (int)((float)p->intensity / remainingSec * dt));
+                // Stochastic rounding (not max(1, trunc)): the forced
+                // minimum of 1/frame made fade speed scale with fps.
+                int loss = stochasticRound((float)p->intensity / remainingSec * dt);
                 p->intensity = (loss >= (int)p->intensity) ? 0 : p->intensity - (uint8_t)loss;
             } else {
                 p->intensity = 0;
@@ -321,7 +342,9 @@ protected:
 
     ParticlePool pool_;
     AudioControl audio_;
-    float prevPhase_;
+    uint16_t lastBeatCount_ = 0;
+    bool beatThisFrame_ = false;
+    bool beatObserved_ = false;
 
     // Physics parameters (set by subclasses)
     float gravity_;

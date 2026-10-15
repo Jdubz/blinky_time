@@ -3,17 +3,21 @@
 #include "AudioControl.h"
 #include "../hal/PlatformDetect.h"
 
-#if defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)
+#if (defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)) && !defined(BLINKY_HOST_HARNESS)
 #include "FrameOnsetNN.h"
 #else
+// Host builds (tests/tracker/ harness): no TFLite. The tracker runs its
+// NN-unavailable path (spectral-flux pulses, mic-level NN buffer).
 struct FrameOnsetNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }
     bool isReady() const                            { return false; }
-    float infer(const float*)                       { return 0.0f; }
+    float infer(const float*, const float* = nullptr, float = 0.0f, float = 0.0f) { return 0.0f; }
+    void pushFrame(const float*, const float* = nullptr, float = 0.0f, float = 0.0f) {}
+    float invoke()                                  { return 0.0f; }
     float getLastOnset() const                       { return 0.0f; }
     void setProfileEnabled(bool)                    {}
-    void printDiagnostics(Print&) const              {}
+    template <typename P> void printDiagnostics(P&) const {}
 };
 #endif
 
@@ -83,7 +87,8 @@ public:
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
     const FrameOnsetNN& getFrameOnsetNN() const { return frameOnsetNN_; }
     float getCurrentBpm() const { return bpm_; }
-    int getPlpPeriod() const { return plpBestPeriod_; }  // ACF period in frames (~66Hz)
+    int getPlpPeriod() const { return plpBestPeriod_; }  // ACF period in spectral frames (62.5 Hz), integer
+    float getPlpPeriodF() const { return plpPeriodF_; }  // Fractional period (frames) — drives phase advance
     int getHwGain() const;
 
     // === Debug accessors ===
@@ -117,6 +122,20 @@ public:
     float getRawNNActivation() const { return rawNNActivation_; }
     uint32_t getRawNNPeakMs() const { return rawNNPeakMs_; }
 
+    // Absolute mic-sample index (AdaptiveMic ring counter) at which the most
+    // recent spectral frame's window ended. Same timeline as record-mode audio.
+    uint32_t getLastFrameEndSampleIdx() const { return lastFrameEndSampleIdx_; }
+
+    // Pulse strength fired by the frame most recently processed (0 = none).
+    // getLastOnsetStrength() is the max over all frames of the last update().
+    float getLastFramePulse() const { return lastFramePulse_; }
+
+    // Per-frame observer: called at the end of every processed spectral
+    // frame (loop task, inside update()). Record mode uses it to log every
+    // frame — not just the last one of each update().
+    using FrameHook = void (*)(void* ctx);
+    void setFrameHook(FrameHook hook, void* ctx) { frameHook_ = hook; frameHookCtx_ = ctx; }
+
     // Pattern slot cache (v82)
     int getActiveSlotId() const { return activeSlot_; }
     const struct PatternSlot& getSlot(int i) const { return slots_[i]; }
@@ -137,6 +156,9 @@ public:
     float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
+    float tempoPriorWidth = 0.8f;      // Beat-lag prior width in octaves around 120 BPM (0 = off).
+                                       // tests/tracker sweep: 0.8 lifts valid-tempo time 0.60 -> 0.67
+                                       // and phase alignment 0.079 -> 0.103 vs off.
     uint16_t acfPeriodMs = 100;
 
     // Rhythm activation
@@ -148,6 +170,7 @@ public:
     float plpSignalFloor = 0.10f;      // Mic level for full confidence activation
     float plpVarianceSens = 0.0f;      // Epoch-fold variance suppression (0=disabled, sweep showed best autoCorr)
     float plpDecayRate = 0.2f;         // Epoch-fold recency decay (sweep: 0.2 best plp@T+autoCorr)
+    float plpPhaseGain = 0.3f;         // Fraction of measured phase error removed per analysis (~every 100 ms)
 
     // NN profiling
     bool nnProfile = false;
@@ -231,7 +254,15 @@ private:
     // === OSS buffer (~12 seconds: 792 samples @ ~66 Hz) ===
     // Sized for 3 epochs at MAX_PATTERN_LEN (264 × 3 = 792)
     static constexpr int OSS_BUFFER_SIZE = 792;
-    static constexpr float OSS_FRAME_RATE = 66.0f;
+    // THE clock for all rhythm analysis: one OSS sample, one NN inference,
+    // one pulse-detector step and one phase step per spectral frame.
+    // 16 kHz / 256-sample non-overlapping frames = exactly 62.5 Hz.
+    // (Was 66.0 and per-loop-iteration — see docs/AUDIO_ARCHITECTURE.md
+    // "Frame clock": phase drifted at loopFps/62.5 and skipped frames were
+    // invisible to tempo/NN.)
+    static constexpr float OSS_FRAME_RATE =
+        SpectralConstants::SAMPLE_RATE / static_cast<float>(SpectralConstants::FFT_SIZE);
+    static_assert(OSS_FRAME_RATE > 62.49f && OSS_FRAME_RATE < 62.51f, "frame clock must be 62.5 Hz");
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};       // Ungated spectral flux (NN-independent, for ACF period detection)
     float ossLinear_[OSS_BUFFER_SIZE] = {0};        // Linearized ungated flux (for period detection)
@@ -243,7 +274,6 @@ private:
 
     // === Tempo state ===
     float bpm_ = 120.0f;
-    float beatPeriodFrames_ = OSS_FRAME_RATE * 60.0f / 120.0f;  // ~33 frames
     float periodicityStrength_ = 0.0f;
 
     // === PLP state (Predominant Local Pulse) ===
@@ -259,10 +289,14 @@ private:
     int nnWriteIdx_ = 0;
     int nnCount_ = 0;
 
-    float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period)
+    float plpPattern_[MAX_PATTERN_LEN] = {0};   // Epoch-folded pattern (one period), ACCENT-ALIGNED: bin 0 = accent
     int plpPatternLen_ = 33;                     // Current pattern length (BPM-dependent)
-    float patternPosition_ = 0.0f;              // 0→1 position within pattern cycle (advances each frame)
-    float plpPhase_ = 0.0f;                     // 0→1 phase for generators (0 = accent, derived from position)
+    float plpPhase_ = 0.0f;                     // 0→1 phase since the accent. Advanced 1/plpPeriodF_ per frame,
+                                                // pulled toward the measured accent position at each analysis.
+    float plpPeriodF_ = 33.0f;                  // Fractional period (frames) refined from full-resolution ACF
+    float plpAccentBin_ = 0.0f;                 // Accent position in the end-aligned fold (bin P-1 = newest frame)
+    bool phaseLocked_ = false;                  // First analysis snaps phase; later ones correct gradually
+    bool skipNextWrap_ = false;                 // Phase stepped back across 0 — that beat was already counted
     float plpConfidence_ = 0.0f;                // Pattern confidence (ACF × signal × NN agreement)
     float plpNNAgreement_ = 0.5f;               // Cross-correlation between flux fold and NN fold (0-1)
                                                 // Starts at 0.5 (neutral) so PLP confidence isn't penalized during warmup
@@ -282,8 +316,11 @@ private:
     // Spectral flux is only used when NN is unavailable (model failed to load).
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline for active signal
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
-    float lastPulseStrength_ = 0.0f;
-    uint32_t lastPulseMs_ = 0;
+    float lastPulseStrength_ = 0.0f;  // Max pulse fired by any frame processed in the last update()
+    float lastFramePulse_ = 0.0f;     // Pulse fired by the most recent frame
+    FrameHook frameHook_ = nullptr;
+    void* frameHookCtx_ = nullptr;
+    uint32_t lastPulseFrame_ = 0;     // frameClock_ of the last fired pulse (cooldown is in frames)
     // T1.4/T1.5 — per-firing diagnostics captured at updatePulseDetection
     // when a pulse fires. Consumed by the TRANSIENT JSON emitter in
     // blinky-things.ino for offline FP/TP class clustering.
@@ -298,14 +335,18 @@ private:
     float prevNNActivation_ = 0.0f;   // Previous frame NN output
     float nnActivationMean_ = 0.3f;   // EMA of NN activation (for adaptive gate)
     float nnActivationVar_ = 0.01f;   // EMA of NN activation variance
-    // 3-tap Hamming smoothing (Schlüter/Bock 2014): reduces INT8 quantization jitter
+    // Causal 2-tap smoothing 0.77·x[t] + 0.23·x[t-1] (reduces INT8 jitter).
+    // This is what the old "3-tap Hamming" code actually computed (it
+    // overwrote x[t-1] with x[t] before use); kept bit-identical because
+    // pulseOnsetFloor was sweep-tuned against it.
     float nnSmoothed_ = 0.0f;         // Current smoothed NN activation
-    float nnPrev1_ = 0.0f;            // NN activation t-1 (for Hamming)
-    float nnPrev2_ = 0.0f;            // NN activation t-2 (for Hamming)
+    float nnPrevRaw_ = 0.0f;          // Raw NN activation of the previous frame
+    float nnSmoothedPeak_ = 0.0f;     // Max nnSmoothed_ over frames processed in the last update()
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
     uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
+    uint32_t lastFrameEndSampleIdx_ = 0;  // See getLastFrameEndSampleIdx()
 
     // === Onset density ===
     float onsetDensity_ = 0.0f;
@@ -317,8 +358,15 @@ private:
     float pulseEnvelope_ = 0.0f;     // Decaying envelope triggered by onset events
     float prevPulseOutput_ = 0.0f;   // For onset density counting
 
+    // === Frame clock ===
+    uint32_t frameClock_ = 0;         // Spectral frames processed since boot
+    int framesThisUpdate_ = 0;        // Frames processed by the last update() (0 = no new audio)
+    int framesSinceAcf_ = 0;          // ACF/PLP analysis cadence is counted in frames
+
+    // === Smoothed levels (gating must not sample one instant) ===
+    float levelEnv_ = 0.0f;           // ~1 s EMA of mic normalized level (PLP confidence gate)
+
     // === ACF timing ===
-    uint32_t lastAcfMs_ = 0;
     uint32_t lastAcfDurationMs_ = 0;  // Timing: last runAcf()+updatePlpAnalysis() duration
     uint32_t lastPlpMs_ = 0;       // Timing: last updatePlpAnalysis() duration
 
@@ -332,17 +380,32 @@ private:
     uint16_t lastSlotCheckBeat_ = 0;
     float prevBpm_ = 120.0f;          // For BPM shift detection
 
+    // === Scratch buffers (loop-task only) ===
+    // The Arduino loop task has a 4 KB stack (core LOOP_STACK_SZ = 256*4
+    // words) with FreeRTOS overflow checking on. runAcf/updatePlpAnalysis/
+    // checkPatternSlots used to put up to four 1 KB arrays on it at once —
+    // a stack overflow there is a crash loop on a sealed device. Members
+    // cost static RAM (plenty free) instead of stack. Never used re-entrantly:
+    // all callers run sequentially inside update() on the loop task.
+    float scratchFold_[MAX_PATTERN_LEN];  // runAcf folds, checkPatternSlots resample
+    float scratchRaw_[MAX_PATTERN_LEN];   // updatePlpAnalysis patternRaw
+    float scratchVar_[MAX_PATTERN_LEN];   // updatePlpAnalysis perBinVariance
+    float scratchNN_[MAX_PATTERN_LEN];    // updatePlpAnalysis NN fold
+
     // === Output ===
     AudioControl control_;
 
     // === Internal methods ===
+    void processFrame(bool runNN);  // Everything that must run exactly once per spectral frame
     void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
     void resetAnalysisState();
     void runAcf();
-    void updatePulseDetection(float odf, float dt, uint32_t nowMs);
+    float updatePulseDetection(float spectralFlux, bool freshNN);  // One frame; returns pulse strength (0 = none)
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
-    void updatePlpPhase();          // Advance phase + read pattern value (every frame)
+    void advancePlpPhase();         // Advance phase one frame + read pattern value
+    void correctPlpPhase(float targetPhase, float gain);
+    void countBeat();
     void synthesizeOutputs(float dt, uint32_t nowMs);
 
     // Pattern slot cache methods

@@ -48,6 +48,18 @@ void Water::initPhysicsContext() {
 }
 
 void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    // Frame time. Everything below is scaled to it: the old per-frame
+    // constants (tuned at ~60 fps) made the water run faster/slower and
+    // decay at different rates whenever loop speed changed.
+    uint32_t nowMs = millis();
+    float dt = (lastFrameMs_ == 0) ? (1.0f / 60.0f) : (nowMs - lastFrameMs_) / 1000.0f;
+    lastFrameMs_ = nowMs;
+    if (dt > 0.1f) dt = 0.1f;
+    const float frames60 = dt * 60.0f;  // "how many 60 fps frames elapsed"
+
+    // Beat state for this frame (shared with spawnParticles via the base).
+    observeBeat(audio);
+
     // Advance noise animation time (blend between organic and music-driven)
     float organicSpeed = 0.012f + 0.008f * audio.energy;
     float musicSpeed = 0.03f + 0.02f * audio.energy;
@@ -56,7 +68,7 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // Phase-driven wave speed breathing: water flows faster on-beat
     float phaseBreathing = 0.5f + 0.5f * audio.phaseToPulse();
     float blendedBreathing = 1.0f * (1.0f - audio.rhythmStrength) + phaseBreathing * audio.rhythmStrength;
-    noiseTime_ += timeSpeed * blendedBreathing;
+    noiseTime_ += timeSpeed * blendedBreathing * frames60;
 
     // Render noise background first (tropical sea underlayer)
     if (background_) {
@@ -82,21 +94,36 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // --- Ripple simulation (2-buffer demoscene algorithm) ---
     int rippleSize = min((int)numLeds_, (int)MAX_RIPPLE_LEDS);
     if (rippleSize > 2) {
-        int16_t* curr = rippleFlip_ ? rippleA_ : rippleB_;
-        int16_t* prev = rippleFlip_ ? rippleB_ : rippleA_;
-
-        // Propagate ripples: new[i] = avg(neighbors) - current[i], with damping
-        for (int i = 1; i < rippleSize - 1; i++) {
-            int16_t avg = (prev[i - 1] + prev[i + 1]) >> 1;
-            curr[i] = avg - curr[i];
-            curr[i] -= curr[i] >> 5;  // ~3% damping per frame
+        // Propagate ripples at a FIXED 60 Hz step (the 2-buffer wave
+        // equation is inherently per-step): new[i] = avg(neighbors) -
+        // current[i], ~3% damping per step. Substepping keeps wave speed
+        // and damping independent of loop rate.
+        rippleAccum_ += dt;
+        int steps = 0;
+        while (rippleAccum_ >= RIPPLE_STEP_S && steps < 6) {
+            rippleAccum_ -= RIPPLE_STEP_S;
+            steps++;
+            int16_t* c = rippleFlip_ ? rippleA_ : rippleB_;
+            int16_t* p = rippleFlip_ ? rippleB_ : rippleA_;
+            for (int i = 1; i < rippleSize - 1; i++) {
+                int16_t avg = (p[i - 1] + p[i + 1]) >> 1;
+                c[i] = avg - c[i];
+                c[i] -= c[i] >> 5;
+            }
+            rippleFlip_ = !rippleFlip_;
         }
-        rippleFlip_ = !rippleFlip_;
+        if (rippleAccum_ > RIPPLE_STEP_S) rippleAccum_ = 0.0f;  // long stall: drop backlog
+        // After the last step, the most recently written buffer is the
+        // one the next step reads as `prev`.
+        int16_t* curr = rippleFlip_ ? rippleB_ : rippleA_;
 
-        // Inject ripple impulse on pulse (kick/snare → splash creates ripple)
-        if (audio.pulse > 0.3f) {
+        // Inject one ripple per detected drum hit (edge-triggered). The
+        // old `pulse > 0.3` injected on every frame of the 240 ms envelope —
+        // 10-20 splashes per kick, more at higher fps — smearing onsets.
+        if (audio.onset > 0.0f) {
+            float s = (audio.onset > audio.pulse) ? audio.onset : audio.pulse;
             int pos = random(1, rippleSize - 1);
-            curr[pos] = (int16_t)(audio.pulse * 500);
+            curr[pos] = (int16_t)(s * 500);
         }
         // Stronger impulse on beat
         if (beatHappened() && audio.rhythmStrength > 0.3f) {
@@ -128,18 +155,24 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
     {
         int glowSize = min((int)numLeds_, (int)MAX_RIPPLE_LEDS);
 
-        // Decay existing glow (~5% per frame)
+        // Decay existing glow: 5% per 60 fps frame, time-scaled
+        const float glowDecay = powf(0.95f, frames60);
         for (int i = 0; i < glowSize; i++) {
             if (glowBuffer_[i] > 0) {
-                glowBuffer_[i] = (uint8_t)(glowBuffer_[i] * 0.95f);
+                glowBuffer_[i] = (uint8_t)(glowBuffer_[i] * glowDecay);
                 if (glowBuffer_[i] < 2) glowBuffer_[i] = 0;
             }
         }
 
-        // Spawn glow on pulse
-        if (audio.pulse > 0.4f) {
+        // Spawn glow once per drum hit (edge-triggered, see ripples)
+        if (audio.onset > 0.0f) {
+            float s = (audio.onset > audio.pulse) ? audio.onset : audio.pulse;
             int pos = random(glowSize);
-            uint8_t intensity = (uint8_t)(audio.pulse * audio.energy * 200);
+            // Clamp before the cast: float->uint8 out of range is undefined
+            // behaviour (inputs are 0..1 from AudioTracker, but scripted /
+            // amplified AudioControl can exceed that).
+            float gi = s * audio.energy * 200.0f;
+            uint8_t intensity = (uint8_t)(gi < 0.0f ? 0.0f : (gi > 255.0f ? 255.0f : gi));
             glowBuffer_[pos] = max(glowBuffer_[pos], intensity);
             // Spread to neighbors
             if (pos > 0) glowBuffer_[pos - 1] = max(glowBuffer_[pos - 1], (uint8_t)(intensity >> 1));
@@ -171,6 +204,8 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
 void Water::reset() {
     ParticleGenerator::reset();
     noiseTime_ = 0.0f;
+    rippleAccum_ = 0.0f;
+    lastFrameMs_ = 0;
     memset(rippleA_, 0, sizeof(rippleA_));
     memset(rippleB_, 0, sizeof(rippleB_));
     memset(glowBuffer_, 0, sizeof(glowBuffer_));
@@ -209,8 +244,11 @@ void Water::spawnParticles(float dt) {
     spawnProb = organicSpawnProb * (1.0f - audio_.rhythmStrength) +
                 musicSpawnProb * audio_.rhythmStrength;
 
-    // Random baseline spawning
-    if (random(1000) < spawnProb * 1000) {
+    // Random baseline spawning. spawnProb is per 60 fps frame; convert to
+    // this frame's duration so the drop rate doesn't scale with loop speed.
+    float p = spawnProb;
+    if (p > 0.0f && p < 1.0f) p = 1.0f - powf(1.0f - p, dt * 60.0f);
+    if (random(1000) < p * 1000) {
         dropCount++;
     }
 

@@ -8,12 +8,12 @@
 struct AudioParams {
     // Transient visualization (green gradient from top)
     float transientRowFraction;   // Fraction of height for transient indicator (0-1)
-    float transientDecayRate;     // How fast transient fades (0-1 per frame, higher = faster)
+    float transientDecayRate;     // How fast transient fades (0-1 per 60 fps frame, applied time-scaled)
     uint8_t transientBrightness;  // Maximum brightness of transient indicator (0-255)
 
     // Energy level visualization (yellow row)
     uint8_t levelBrightness;      // Brightness of energy level row (0-255)
-    float levelSmoothing;         // Smoothing factor for level changes (0-1, higher = smoother)
+    float levelSmoothing;         // Smoothing factor per 60 fps frame, applied time-scaled (0-1, higher = smoother)
 
     // Phase visualization (blue row moving bottom to top, full height)
     uint8_t phaseBrightness;      // Maximum brightness of phase row (0-255)
@@ -21,7 +21,7 @@ struct AudioParams {
 
     // Beat pulse (blue band in center on beat)
     uint8_t beatPulseBrightness;  // Maximum brightness of beat pulse band (0-255)
-    float beatPulseDecay;         // How fast beat pulse fades (0-1 per frame, higher = faster)
+    float beatPulseDecay;         // How fast beat pulse fades (0-1 per 60 fps frame, applied time-scaled)
     float beatPulseWidth;         // Fraction of height for beat pulse band (0-1)
 
     // Background
@@ -98,7 +98,8 @@ private:
     float smoothedEnergy_;        // Smoothed energy level (0-1)
     float transientIntensity_;    // Current transient intensity (0-1), decays over time
     float beatPulseIntensity_;    // Current beat pulse intensity (0-1), decays over time
-    float prevPhase_;             // Previous frame's phase for wrap detection
+    uint16_t lastBeatCount_ = 0;  // AudioControl::beatCount at the previous frame
+    uint32_t lastFrameMs_ = 0;    // for frame-rate-independent smoothing
 
     // Helper methods
     void drawTransientRows(PixelMatrix& matrix, float pulse);

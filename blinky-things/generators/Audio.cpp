@@ -7,7 +7,6 @@ Audio::Audio()
     , smoothedEnergy_(0.0f)
     , transientIntensity_(0.0f)
     , beatPulseIntensity_(0.0f)
-    , prevPhase_(-1.0f)
 {}
 
 bool Audio::begin(const DeviceConfig& config) {
@@ -20,33 +19,42 @@ bool Audio::begin(const DeviceConfig& config) {
     smoothedEnergy_ = 0.0f;
     transientIntensity_ = 0.0f;
     beatPulseIntensity_ = 0.0f;
-    prevPhase_ = -1.0f;
+    lastFrameMs_ = 0;
 
     return true;
 }
 
 void Audio::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    // Frame time: the smoothing/decay params are "per 60 fps frame"; apply
+    // them time-scaled so this debug view reads the same at any loop speed.
+    uint32_t nowMs = millis();
+    float dt = (lastFrameMs_ == 0) ? (1.0f / 60.0f) : (nowMs - lastFrameMs_) / 1000.0f;
+    lastFrameMs_ = nowMs;
+    if (dt > 0.1f) dt = 0.1f;
+    const float frames60 = dt * 60.0f;
+
     // Update smoothed energy
-    smoothedEnergy_ = smoothedEnergy_ * params_.levelSmoothing +
-                      audio.energy * (1.0f - params_.levelSmoothing);
+    float keep = powf(params_.levelSmoothing, frames60);
+    smoothedEnergy_ = smoothedEnergy_ * keep + audio.energy * (1.0f - keep);
 
     // Update transient intensity (peak on pulse, then decay)
     if (audio.pulse > transientIntensity_) {
         transientIntensity_ = audio.pulse;
     } else {
-        transientIntensity_ *= (1.0f - params_.transientDecayRate);
+        transientIntensity_ *= powf(1.0f - params_.transientDecayRate, frames60);
         if (transientIntensity_ < 0.01f) transientIntensity_ = 0.0f;
     }
 
-    // Detect beat event via phase wrap (high phase -> low phase)
-    if (prevPhase_ > 0.8f && audio.phase < 0.2f &&
-        audio.rhythmStrength >= params_.musicModeThreshold) {
+    // Beat event from the monotonic beat counter (phase-wrap thresholds
+    // misfire when the tracker corrects phase).
+    bool beatTick = (audio.beatCount != lastBeatCount_);
+    lastBeatCount_ = audio.beatCount;
+    if (beatTick && audio.rhythmStrength >= params_.musicModeThreshold) {
         beatPulseIntensity_ = 1.0f;
     } else {
-        beatPulseIntensity_ *= (1.0f - params_.beatPulseDecay);
+        beatPulseIntensity_ *= powf(1.0f - params_.beatPulseDecay, frames60);
         if (beatPulseIntensity_ < 0.01f) beatPulseIntensity_ = 0.0f;
     }
-    prevPhase_ = audio.phase;
 
     // Clear and draw background
     drawBackground(matrix);
@@ -69,7 +77,7 @@ void Audio::reset() {
     smoothedEnergy_ = 0.0f;
     transientIntensity_ = 0.0f;
     beatPulseIntensity_ = 0.0f;
-    prevPhase_ = -1.0f;
+    lastFrameMs_ = 0;
 }
 
 void Audio::drawBackground(PixelMatrix& matrix) {

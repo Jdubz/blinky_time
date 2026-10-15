@@ -97,6 +97,8 @@ SerialConsole* console = nullptr;  // Serial command interface
 BLEDfu bleDfu;                     // BLE DFU service (wireless firmware updates)
 BleScanner bleScanner;             // BLE passive scanner (receives fleet broadcasts)
 BleNus bleNus;                     // BLE NUS peripheral (serial-over-BLE for fleet server)
+bool bleReady = false;             // Bluefruit.begin() succeeded (SoftDevice enabled)
+RecordStream recordStream;         // Phone record mode: raw PCM + analysis over BLE (docs/PHONE_RECORD_MODE_PLAN.md)
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "comms/Esp32BleNus.h"
 BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
@@ -536,67 +538,102 @@ void setup() {
 #ifdef BLINKY_PLATFORM_NRF52840
   // Initialize BLE stack with 1 peripheral connection (NUS) + observer (scanner)
   // Slow: SoftDevice + Bluefruit + GAP/GATT setup, ~500 ms typical.
-  Bluefruit.begin(1, 0);
-  SafeBootWatchdog::feed();
-  // Per-device BLE name — "Blinky-<deviceId>-<snSuffix2>" when the chip has a
-  // stored device config, or "Blinky-<snSuffix4>" for unconfigured chips.
-  // snSuffix comes from FICR DEVICEID[0] lower bits (hardware-unique, same
-  // source the fleet server uses for the canonical device ID). This gives
-  // every device a distinct name in phone scan lists and fleet-console
-  // discovery output, and the deviceId segment conveys which hardware
-  // variant (hat_v1 / necklace_v2 / etc.) is running.
-  {
-    char bleName[32];
-    const auto& storedDev = configStorage.getDeviceConfig();
-    uint32_t sn = NRF_FICR->DEVICEID[0];
-    if (configStorage.isDeviceConfigValid()
-        && storedDev.deviceId[0] != '\0'
-        && strcmp(storedDev.deviceId, "none") != 0) {
-      snprintf(bleName, sizeof(bleName), "Blinky-%.16s-%02lX",
-               storedDev.deviceId, (unsigned long)(sn & 0xFF));
-    } else {
-      snprintf(bleName, sizeof(bleName), "Blinky-%04lX",
-               (unsigned long)(sn & 0xFFFF));
-    }
-    Bluefruit.setName(bleName);
-    Serial.print(F("BLE name: "));
-    Serial.println(bleName);
-  }
-  Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
-
-  // BLE DFU service — allows wireless firmware updates from fleet server.
-  // Failure is not fatal (NUS-based `bootloader ble` still works), but it
-  // removes a recovery path on sealed sculpture devices, so log loudly per
-  // no-silent-fallbacks rule. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F6).
-  {
-    err_t bleDfuErr = bleDfu.begin();
-    if (bleDfuErr != ERROR_NONE) {
-      Serial.print(F("[FALLBACK] bleDfu.begin() failed err=0x"));
-      Serial.println((unsigned)bleDfuErr, HEX);
-      Serial.println(F("[FALLBACK] Bootloader-mode BLE DFU advertisement may be unavailable."));
-      Serial.println(F("[FALLBACK] App-mode `bootloader ble` command still works via NUS."));
-    }
+  //
+  // Bandwidth MUST be configured before begin(): it sizes the SoftDevice's
+  // per-connection ATT MTU ceiling, event length, and HVN TX queue. Without
+  // this call the ceiling is MTU 23 / 3.75 ms / queue 1 regardless of what
+  // BleNus::onConnect requests — 20-byte notifications, one in flight. That
+  // capped NUS (and app-mode BLE throughput generally) at a few KB/s and
+  // made phone record mode (docs/PHONE_RECORD_MODE_PLAN.md) impossible.
+  // BANDWIDTH_MAX = MTU 247, event len 125 ms, HVN queue 3 — Adafruit's
+  // tested config, fits the stock S140 v7 linker RAM start for 1 periph.
+  Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
+  bleReady = Bluefruit.begin(1, 0);
+  if (!bleReady) {
+    // SoftDevice enable failed (most likely: config needs more SRAM than
+    // the linker reserves). BLE — including BLE-DFU recovery — is dead.
+    // Don't halt: USB CDC/UF2 remain the recovery path. Log loudly.
+    Serial.println(F("[FALLBACK] Bluefruit.begin() FAILED — BLE unavailable (NUS, BLE-DFU, record mode)"));
+    Serial.println(F("[FALLBACK] Likely SoftDevice RAM: check configPrphBandwidth vs linker RAM origin"));
   }
   SafeBootWatchdog::feed();
-  // NUS peripheral — bidirectional serial-over-BLE for fleet server
-  bleNus.begin();
-  bleNus.setLineCallback([](const char* line) {
-      if (console) {
-          console->handleCommand(line);
+  // Every BLE service below needs an enabled SoftDevice; skip them all if
+  // begin() failed rather than poke an uninitialized stack.
+  if (bleReady) {
+    // Per-device BLE name — "Blinky-<deviceId>-<snSuffix2>" when the chip has a
+    // stored device config, or "Blinky-<snSuffix4>" for unconfigured chips.
+    // snSuffix comes from FICR DEVICEID[0] lower bits (hardware-unique, same
+    // source the fleet server uses for the canonical device ID). This gives
+    // every device a distinct name in phone scan lists and fleet-console
+    // discovery output, and the deviceId segment conveys which hardware
+    // variant (hat_v1 / necklace_v2 / etc.) is running.
+    {
+      char bleName[32];
+      const auto& storedDev = configStorage.getDeviceConfig();
+      uint32_t sn = NRF_FICR->DEVICEID[0];
+      if (configStorage.isDeviceConfigValid()
+          && storedDev.deviceId[0] != '\0'
+          && strcmp(storedDev.deviceId, "none") != 0) {
+        snprintf(bleName, sizeof(bleName), "Blinky-%.16s-%02lX",
+                 storedDev.deviceId, (unsigned long)(sn & 0xFF));
+      } else {
+        snprintf(bleName, sizeof(bleName), "Blinky-%04lX",
+                 (unsigned long)(sn & 0xFFFF));
       }
-  });
-  console->setBleNus(&bleNus);
-  SerialConsole::logDebug(F("BLE NUS peripheral initialized"));
+      Bluefruit.setName(bleName);
+      Serial.print(F("BLE name: "));
+      Serial.println(bleName);
+    }
+    Bluefruit.setTxPower(4);  // 4 dBm for peripheral advertising reach
 
-  // Passive scanner — receives fleet broadcasts from ESP32-S3 gateway
-  bleScanner.begin();
-  bleScanner.setCommandCallback([](const char* payload, size_t len) {
-      if (console) {
-          console->handleCommand(payload);
+    // BLE DFU service — allows wireless firmware updates from fleet server.
+    // Failure is not fatal (NUS-based `bootloader ble` still works), but it
+    // removes a recovery path on sealed sculpture devices, so log loudly per
+    // no-silent-fallbacks rule. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F6).
+    {
+      err_t bleDfuErr = bleDfu.begin();
+      if (bleDfuErr != ERROR_NONE) {
+        Serial.print(F("[FALLBACK] bleDfu.begin() failed err=0x"));
+        Serial.println((unsigned)bleDfuErr, HEX);
+        Serial.println(F("[FALLBACK] Bootloader-mode BLE DFU advertisement may be unavailable."));
+        Serial.println(F("[FALLBACK] App-mode `bootloader ble` command still works via NUS."));
       }
-  });
-  console->setBleScanner(&bleScanner);
-  SerialConsole::logDebug(F("BLE scanner initialized"));
+    }
+    SafeBootWatchdog::feed();
+    // NUS peripheral — bidirectional serial-over-BLE for fleet server.
+    // GATT ORDER MATTERS: DFU, DIS, NUS are registered in the same order as
+    // every earlier firmware so their attribute handles are unchanged. A
+    // client with a cached GATT table (BlueZ caches unbonded devices; the
+    // fleet server only clears it on reconnects, best-effort) would
+    // otherwise write commands to shifted handles and lose NUS entirely.
+    bleNus.begin();
+    bleNus.setLineCallback([](const char* line) {
+        if (console) {
+            console->handleCommand(line);
+        }
+    });
+    console->setBleNus(&bleNus);
+    SerialConsole::logDebug(F("BLE NUS peripheral initialized"));
+
+    // Record service — APPENDED after NUS (new handles only; existing ones
+    // untouched), before advertising starts so the table is complete
+    // before any central connects.
+    recordStream.begin(audioController, &audioController->getMicForTuning());
+    console->setRecordStream(&recordStream);
+    SafeBootWatchdog::feed();
+
+    bleNus.startAdvertising();
+
+    // Passive scanner — receives fleet broadcasts from ESP32-S3 gateway
+    bleScanner.begin();
+    bleScanner.setCommandCallback([](const char* payload, size_t len) {
+        if (console) {
+            console->handleCommand(payload);
+        }
+    });
+    console->setBleScanner(&bleScanner);
+    SerialConsole::logDebug(F("BLE scanner initialized"));
+  }  // bleReady
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   // BLE on ESP32-S3 requires external NimBLE-Arduino v2.3.8+ (installed 2.4.0)
   // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
@@ -743,6 +780,10 @@ void loop() {
   if (audioController) {
     audioController->update(dt);
   }
+#ifdef BLINKY_PLATFORM_NRF52840
+  // Record mode: queue this frame's analysis + periodic status (no-op when idle).
+  recordStream.onLoop();
+#endif
 
   // Yield to BLE task after audio processing.
   vTaskDelay(1);
@@ -846,16 +887,18 @@ void loop() {
 
   // Process wireless data
 #ifdef BLINKY_PLATFORM_NRF52840
-  bleNus.update();       // NUS peripheral (serial-over-BLE)
-  bleScanner.update();   // Fleet broadcast receiver
+  if (bleReady) {
+    bleNus.update();       // NUS peripheral (serial-over-BLE)
+    bleScanner.update();   // Fleet broadcast receiver
 
-  // Gossip-ACK: when the scanner has accepted a NEW command_id (not an
-  // idempotent re-emit), expose it in our own BLE adv's scan-response
-  // manufacturer data so a fleet server can detect lagged devices and
-  // re-broadcast missed commands without us holding a GATT connection.
-  // The setter is a no-op when the value hasn't changed since last
-  // call (cheap polling). See BLE_FLEET_RELIABILITY_PLAN.md item #5.
-  bleNus.setLastAckedCommandId(bleScanner.getLastAcceptedCommandId());
+    // Gossip-ACK: when the scanner has accepted a NEW command_id (not an
+    // idempotent re-emit), expose it in our own BLE adv's scan-response
+    // manufacturer data so a fleet server can detect lagged devices and
+    // re-broadcast missed commands without us holding a GATT connection.
+    // The setter is a no-op when the value hasn't changed since last
+    // call (cheap polling). See BLE_FLEET_RELIABILITY_PLAN.md item #5.
+    bleNus.setLastAckedCommandId(bleScanner.getLastAcceptedCommandId());
+  }  // bleReady
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   esp32BleNus.update();  // Drain BLE NUS TX buffer
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)

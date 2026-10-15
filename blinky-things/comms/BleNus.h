@@ -27,9 +27,14 @@ class BleNus : public Print {
 public:
     using LineCallback = void(*)(const char* line);
 
-    /// Initialize NUS service and start advertising.
+    /// Register DIS + NUS services. Does NOT start advertising — call
+    /// startAdvertising() after every other GATT service is registered, so
+    /// the attribute table is complete before any central can connect.
     /// Caller must have already called Bluefruit.begin(1, 0).
     void begin();
+
+    /// Start advertising (NUS UUID, name, gossip-ACK scan response).
+    void startAdvertising();
 
     /// Drain output ring buffer to BLEUart (one chunk per call).
     /// Call from main loop.
@@ -69,7 +74,6 @@ private:
     static void onDisconnect(uint16_t conn_hdl, uint8_t reason);
     static void onRxData(uint16_t conn_hdl);
 
-    void startAdvertising();
     void processRxByte(char c);
 
     /// Send up to one MTU-chunk from the ring buffer to BLEUart.
@@ -77,7 +81,13 @@ private:
 
     static BleNus* instance_;
 
-    BLEUart uart_;
+    // RX FIFO sized for MTU-247 writes. The SoftDevice ceiling is now MTU
+    // 247 (configPrphBandwidth), so the fleet server writes commands in
+    // 244-byte chunks (it chunks at MTU-3). A `device upload` config is ~550
+    // bytes = 3 chunks; the default 256-byte FIFO overflows (bytes dropped,
+    // JSON corrupted) if the deferred RX callback falls one chunk behind.
+    static const uint16_t RX_FIFO_DEPTH = 1024;
+    BLEUart uart_{RX_FIFO_DEPTH};
     BLEDis dis_;
 
     LineCallback lineCallback_ = nullptr;
@@ -98,6 +108,8 @@ private:
     uint32_t connectTimeMs_ = 0;
     uint32_t linesRx_ = 0;
     uint32_t linesTx_ = 0;
+    uint32_t txBytesDropped_ = 0;  // Bytes lost to a full TX ring (monotonic)
+    bool txDropLogged_ = false;
 
     // Last command_id we've encoded into the scan response. setLastAcked
     // CommandId() is a no-op when the new id matches this — saves the

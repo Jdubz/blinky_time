@@ -12,6 +12,8 @@ import { DeviceStrip } from './components/DeviceStrip';
 import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { AudioDebugPage } from './pages/AudioDebugPage';
+import { RecordPage } from './pages/RecordPage';
+import { peekRecordSession, type RecordState } from './services/record/RecordSession';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
 import type { DeviceProtocol } from './services/protocol';
 import type { GeneratorType } from './types';
@@ -26,6 +28,13 @@ export function MainShell() {
   const [hueSpeed, setHueSpeed] = useState(0.5);
   const [hueShift, setHueShift] = useState(0);
   const [showAudioDebug, setShowAudioDebug] = useState(false);
+  // Field recorder lives at #record so a phone can bookmark it directly.
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
@@ -44,6 +53,21 @@ export function MainShell() {
     setProtocol(selectedDevice.ensureProtocol());
     // `selectedDevice` is derived from `selectedId`; keying on id is correct.
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A recording keeps running if the user navigates away from #record (the
+  // session is shared, not owned by the page) — surface it with a way back.
+  const [recState, setRecState] = useState<RecordState>('idle');
+  useEffect(() => {
+    const rec = peekRecordSession();
+    if (!rec) return;
+    return rec.subscribe(st => setRecState(st.state));
+  }, [hash]);
+  const recordingElsewhere =
+    hash !== '#record' && ['starting', 'recording', 'stopping', 'reconnecting'].includes(recState);
+
+  if (hash === '#record') {
+    return <RecordPage onClose={() => (window.location.hash = '')} />;
+  }
 
   if (showAudioDebug) {
     return <AudioDebugPage devices={devices} onClose={() => setShowAudioDebug(false)} />;
@@ -146,6 +170,13 @@ export function MainShell() {
             ? `All · ${devices.filter(d => d.isConnected()).length} connected`
             : (selectedDevice?.displayName ?? 'Device')}
         </span>
+        <a
+          className="btn btn-small shell-record-btn"
+          href="#record"
+          title="Phone field recorder (Web Bluetooth)"
+        >
+          Record
+        </a>
         {import.meta.env.DEV && (
           <button
             className="btn btn-small shell-debug-btn"
@@ -166,6 +197,12 @@ export function MainShell() {
       />
 
       <main className="shell-body">
+        {recordingElsewhere && (
+          <div className="shell-warning">
+            A field recording is still running. <a href="#record">Return to the recorder</a> to
+            monitor or stop it.
+          </div>
+        )}
         {!dispatchEnabled && (
           <div className="shell-warning">
             {deviceUnavailable

@@ -9,6 +9,8 @@
 // so the FFT dependency is stubbed under BLINKY_PARITY_HARNESS.
 #ifdef BLINKY_PARITY_HARNESS
 // No FFT deps; computeFFT() body is also guarded below.
+#elif defined(BLINKY_HOST_HARNESS)
+// Host tracker harness (tests/tracker/): plain DFT below, no CMSIS.
 #elif defined(BLINKY_PLATFORM_NRF52840)
 #include <arm_math.h>
 static arm_rfft_fast_instance_f32 rfftInstance;
@@ -113,7 +115,6 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , vImag_{}
     , magnitudes_{}
     , preWhitenMagnitudes_{}
-    , phases_{}
     , prevMagnitudes_{}
     , prevRawMagnitudes_{}
     , melBands_{}
@@ -186,7 +187,6 @@ void SharedSpectralAnalysis::reset() {
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         magnitudes_[i] = 0.0f;
         preWhitenMagnitudes_[i] = 0.0f;
-        phases_[i] = 0.0f;
         prevMagnitudes_[i] = 0.0f;
         prevRawMagnitudes_[i] = 0.0f;
     }
@@ -210,10 +210,18 @@ void SharedSpectralAnalysis::reset() {
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
-    for (int i = 0; i < count && sampleCount_ < SpectralConstants::FFT_SIZE; i++) {
+    int i = 0;
+    for (; i < count && sampleCount_ < SpectralConstants::FFT_SIZE; i++) {
         sampleBuffer_[writeIndex_] = samples[i];
         writeIndex_ = (writeIndex_ + 1) % SpectralConstants::FFT_SIZE;
         sampleCount_++;
+    }
+    // Samples beyond window capacity are lost — the next window would no
+    // longer be contiguous with this one. Callers must size reads with
+    // samplesNeeded(); a nonzero counter means a caller regressed.
+    if (i < count) {
+        accumulatorOverflowSamples_ += (uint32_t)(count - i);
+        BLINKY_ASSERT_ONCE(false, "SharedSpectralAnalysis::addSamples overflow (read sized past samplesNeeded)");
     }
     return sampleCount_ >= SpectralConstants::FFT_SIZE;
 }
@@ -372,6 +380,25 @@ void SharedSpectralAnalysis::computeFFT() {
     // Parity harness injects magnitudes directly — this path is never hit
     // in harness builds. Assert loudly if it is, to catch test misuse.
     (void)0;
+#elif defined(BLINKY_HOST_HARNESS)
+    // Host tracker harness: direct real DFT (O(N^2), fine off-device).
+    // Same layout the CMSIS branch produces: bins 0..NUM_BINS-1 in
+    // vReal_/vImag_, DC imaginary = 0.
+    {
+        static constexpr int N = SpectralConstants::FFT_SIZE;
+        float re[SpectralConstants::NUM_BINS], im[SpectralConstants::NUM_BINS];
+        for (int k = 0; k < SpectralConstants::NUM_BINS; k++) {
+            double sr = 0.0, si = 0.0;
+            for (int n = 0; n < N; n++) {
+                double ang = -2.0 * 3.14159265358979323846 * k * n / N;
+                sr += vReal_[n] * cos(ang);
+                si += vReal_[n] * sin(ang);
+            }
+            re[k] = (float)sr; im[k] = (float)si;
+        }
+        for (int k = 0; k < SpectralConstants::NUM_BINS; k++) { vReal_[k] = re[k]; vImag_[k] = im[k]; }
+        vImag_[0] = 0.0f;
+    }
 #elif defined(BLINKY_PLATFORM_NRF52840)
     // CMSIS-DSP Radix-4 real FFT — hardware-optimized for Cortex-M4F.
     // arm_rfft_fast_f32 operates in-place: input is real samples in vReal_,
@@ -425,12 +452,8 @@ void SharedSpectralAnalysis::computeMagnitudesAndPhases() {
         const bool magOk = safeIsFinite(mag);
         BLINKY_ASSERT_ONCE(magOk, "FFT magnitude non-finite");
         magnitudes_[i] = magOk ? mag : 0.0f;
-
-        // Phase: atan2(imag, real) -> [-pi, pi]
-        float phase = atan2f(imag, real);
-        const bool phaseOk = safeIsFinite(phase);
-        BLINKY_ASSERT_ONCE(phaseOk, "FFT phase non-finite");
-        phases_[i] = phaseOk ? phase : 0.0f;
+        // (Per-bin phase via atan2f was computed here for every frame but
+        // had no consumer — removed b208, ~128 atan2f/frame.)
     }
 }
 
@@ -526,6 +549,20 @@ void SharedSpectralAnalysis::computeRawMelBands() {
     // Uses preWhitenMagnitudes_ saved before applyCompressor().
     computeMelBandsFrom(preWhitenMagnitudes_, rawMelBands_);
 
+    // Saturation telemetry: raw mels clamp at 1.0 (0 dB re magnitude 1.0).
+    // A loud bass tone pins its band, after which kicks stop changing it —
+    // the NN loses low-band contrast at high SPL. Counted, not corrected:
+    // a fix (digital pre-gain / PCEN) has to be mirrored in training.
+    for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
+        if (rawMelBands_[band] >= 0.99f) rawMelSaturated_++;
+    }
+    rawMelTotal_ += SpectralConstants::NUM_MEL_BANDS;
+    // Keep the ratio, avoid uint32 wrap (~16 days of uptime at 50 bands).
+    if (rawMelTotal_ >= 0x80000000u) {
+        rawMelTotal_ >>= 1;
+        rawMelSaturated_ >>= 1;
+    }
+
     // Also store linear mel energy (before log compression) for PCEN.
     // Uses precomputed invWeightSum_ to avoid per-frame weight sum + division.
     for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
@@ -559,7 +596,7 @@ void SharedSpectralAnalysis::whitenMelBands() {
     // - Mel bands are perceptually meaningful (26 bands vs 128 bins)
     // - Log-compression is already applied, so whitening operates in dB space
 
-    const float decay = 0.97f;   // Running max decay per FFT frame (~1s at 30 fps)
+    const float decay = 0.97f;   // Running max decay per spectral frame (time constant ~0.53 s at 62.5 fps)
     const float floor = 0.01f;   // Floor at -54dB normalized (avoids amplifying noise)
 
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {

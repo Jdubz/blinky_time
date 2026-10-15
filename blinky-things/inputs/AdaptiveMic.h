@@ -33,7 +33,11 @@ namespace MicConstants {
     // shrink arbitrarily on quiet input.
     constexpr float VALLEY_FLOOR = 0.0f;                      // No floor: valley free to track to 0
     constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f;         // How much slower valley rises vs peak
-    constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f;           // Jump peak if signal exceeds by 30%
+    constexpr float VALLEY_ATTACK_TAU = 0.2f;                 // Valley follows new minimums this fast (s)
+    constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f;           // Jump peak if signal exceeds by 30%...
+    constexpr int   INSTANT_ADAPT_BLOCKS = 2;                 // ...for this many consecutive updates
+    constexpr float SECTION_JUMP_RATIO = 2.0f;                // Peak jump this large = new section (drop)
+    constexpr float SECTION_VALLEY_FRACTION = 0.5f;           // On a section jump, valley ≥ this × peak
 
     // Timing
     constexpr float MIN_DT_SECONDS = 0.0005f;                 // Minimum dt clamp (0.5ms)
@@ -44,7 +48,8 @@ namespace MicConstants {
 /**
  * AdaptiveMic — Microphone input with window/range normalization
  *
- * Hardware gain is fixed at the platform's optimal level (nRF52840: 40, ESP32-S3: 30).
+ * Hardware gain is fixed at the platform's level (Platform::Microphone::DEFAULT_GAIN;
+ * nRF52840 = 32, i.e. GAINL register 32 = -4 dB since 0x28 = 0 dB).
  * No AGC — the window/range normalization handles all dynamic range adaptation.
  * This creates identical signal processing on both platforms and eliminates
  * competing adaptation systems that cause visible visual disruption.
@@ -99,6 +104,43 @@ public:
   static uint32_t getOverrunCount() { return s_overrunCount; }
   static uint32_t getOverrunSamplesLost() { return s_overrunSamplesLost; }
 
+  // Clipping telemetry. A sample at |x| >= CLIP_THRESHOLD is at int16 full
+  // scale — the PDM decimator saturated and the waveform is flat-topped.
+  // Monotonic from boot. Note an analog mic can overload BELOW digital full
+  // scale; that only shows in raw audio (record mode), not in this counter.
+  static constexpr uint16_t CLIP_THRESHOLD = 32767;
+  static uint32_t getClipSampleCount() { return s_clipSamples; }
+  static uint32_t getTotalSampleCount() { return s_totalSamples; }
+
+  // Peak |sample| since the last takePeakAbs() call (raw int16 scale).
+  // Single consumer: record-mode status packets.
+  uint16_t takePeakAbs() { uint16_t p = peakAbsSinceTake_; peakAbsSinceTake_ = 0; return p; }
+
+  // Absolute sample index (monotonic, wraps at 2^32) of the next sample the
+  // external FFT consumer will read. After a spectral window completes this
+  // is the index one past the window's last sample.
+  uint32_t getExternalReadIndex() const { return s_extFftReadIdx; }
+
+  // Samples waiting in the FFT ring for the external consumer (may exceed
+  // the ring size after an overrun; getSamplesForExternal handles that).
+  uint32_t getPendingSamples() const {
+    time_.disableInterrupts();
+    uint32_t w = s_fftWriteIdx;
+    time_.enableInterrupts();
+    return w - s_extFftReadIdx;
+  }
+
+  // Record-mode tap: called from the PDM ISR with every block of samples and
+  // the absolute index of block[0]. Must be ISR-safe and O(n). nullptr = off.
+  using RecordTap = void (*)(const int16_t* samples, int count, uint32_t firstIndex);
+  // Atomically install `tap` and return the absolute index the tap's first
+  // block will start at. `tapWriteIdx` (the consumer's producer-position
+  // variable, which the tap advances) is initialized to that index inside
+  // the same critical section, so no ISR block can land between the
+  // snapshot, the init, and the install.
+  static uint32_t armRecordTap(RecordTap tap, volatile uint32_t& tapWriteIdx);
+  static void disarmRecordTap() { s_recordTap = nullptr; }
+
   // ---- Construction / lifecycle ----
   AdaptiveMic(IPdmMic& pdm, ISystemTime& time);
 
@@ -145,12 +187,18 @@ private:
   static volatile uint32_t s_overrunCount;
   static volatile uint32_t s_overrunSamplesLost;
 
+  static volatile uint32_t s_clipSamples;
+  static volatile uint32_t s_totalSamples;
+  static volatile RecordTap s_recordTap;
+  uint16_t peakAbsSinceTake_ = 0;
+
   // Window/Range tracking
   float peakLevel = 0.0f;
   float valleyLevel = 0.0f;
   float rawInstantLevel = 0.0f;
 
   uint32_t _sampleRate = 16000;
+  int instantAdaptRun_ = 0;   // consecutive updates above INSTANT_ADAPT_THRESHOLD × peak
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);

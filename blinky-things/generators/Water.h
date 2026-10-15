@@ -153,6 +153,9 @@ private:
     int16_t rippleA_[MAX_RIPPLE_LEDS] = {0};
     int16_t rippleB_[MAX_RIPPLE_LEDS] = {0};
     bool rippleFlip_ = false;
+    static constexpr float RIPPLE_STEP_S = 1.0f / 60.0f;  // fixed wave-equation step
+    float rippleAccum_ = 0.0f;
+    uint32_t lastFrameMs_ = 0;
 
     // Bioluminescence: blue-green glow triggered by pulse events
     uint8_t glowBuffer_[MAX_RIPPLE_LEDS] = {0};

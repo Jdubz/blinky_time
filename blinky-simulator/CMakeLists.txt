@@ -23,6 +23,7 @@ set(BLINKY_SOURCES
     ../blinky-things/types/PixelMatrix.cpp
     ../blinky-things/types/BlinkyAssert.cpp
     ../blinky-things/physics/PhysicsContext.cpp
+    ../blinky-things/particles/Particle.cpp
     ../blinky-things/math/SimplexNoise.cpp
     ../blinky-things/generators/Fire.cpp
     ../blinky-things/generators/Water.cpp

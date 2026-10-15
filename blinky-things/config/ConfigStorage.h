@@ -446,7 +446,11 @@ public:
     void factoryReset();
 
     // Auto-save support
-    void markDirty() { dirty_ = true; }
+    // Trailing debounce: every change restarts the 5 s quiet window, so a
+    // slider drag or a burst of `set` commands produces ONE flash write
+    // after the changes stop (each write stalls the CPU for tens-hundreds
+    // of ms of NVMC erase — long enough to overrun the 128 ms mic ring).
+    void markDirty() { dirty_ = true; lastDirtyMs_ = millis(); }
     void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                      const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
 
@@ -455,6 +459,9 @@ private:
     bool valid_;
     bool dirty_;
     uint32_t lastSaveMs_;
+    uint32_t lastDirtyMs_ = 0;
+    uint32_t lastWrittenCrc_ = 0;     // CRC32 of the last ConfigData written this boot
+    bool lastWrittenValid_ = false;
 
     bool loadFromFlash();
     void saveToFlash();

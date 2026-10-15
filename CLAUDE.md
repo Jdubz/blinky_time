@@ -203,8 +203,10 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
+| `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open issues from the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, Copilot, CI): blocking actions (CI review secret, hat flash prerequisites, NN model), open/partial/in-PR items, and the device verification checklist for PR #152. |
 | `docs/OPEN_ISSUES_2026_05_20.md` | Current open issues — almost everything from the 2026-05-19/20 work is shipped to staging; what remains is the production rollout (fleet firmware b179→b190, BL 0.8.0-7→0.8.0-10, lemon-cart install.sh, PR #147 merge). Full per-item history in `docs/archive/OPEN_ISSUES_2026_05_19.md`. |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
+| `docs/PHONE_RECORD_MODE_PLAN.md` | Phone field recorder: Android Chrome ⇄ one device over Web Bluetooth, raw mic PCM + analysis for concert-volume tuning; wire format, integrity rules, bench gate |
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |

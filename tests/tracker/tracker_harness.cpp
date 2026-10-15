@@ -1,0 +1,143 @@
+// Host harness: run the firmware's AudioTracker on recorded audio with a
+// simulated main loop, and log what the generators would see.
+//
+// Purpose: verify rhythm tracking (tempo, phase, beat counter, pulses) is
+// independent of main-loop rate and doesn't drift — offline and
+// deterministic, instead of eyeballing LEDs. See tests/tracker/README.md.
+//
+// Input:  raw little-endian int16 mono PCM at 16 kHz (the PDM rate).
+// Output: CSV, one row per simulated loop iteration:
+//   t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames
+//
+// The NN is not available on the host (no TFLite): the tracker runs its
+// NN-unavailable path. Tempo/phase logic (ACF, epoch fold, PLP phase) is the
+// same code either way; onset pulses come from spectral flux instead of NN.
+
+#include "audio/AudioTracker.h"
+
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <random>
+#include <vector>
+
+namespace {
+
+constexpr int SAMPLE_RATE = 16000;
+constexpr int PDM_BLOCK = 256;  // samples per PDM DMA buffer (512 B), as on device
+
+class HostTime : public ISystemTime {
+public:
+    uint64_t us = 0;
+    uint32_t millis() const override { return static_cast<uint32_t>(us / 1000); }
+    uint32_t micros() const override { return static_cast<uint32_t>(us); }
+    void delay(uint32_t) override {}
+    void delayMicroseconds(uint32_t) override {}
+    void disableInterrupts() override {}
+    void enableInterrupts() override {}
+};
+
+class HostPdm : public IPdmMic {
+public:
+    const std::vector<int16_t>* pcm = nullptr;
+    size_t pos = 0;        // next sample to deliver
+    size_t blockEnd = 0;   // end of the block the "ISR" is currently draining
+    ReceiveCallback cb = nullptr;
+
+    bool begin(int, long) override { return true; }
+    void end() override {}
+    void setGain(int) override {}
+    void onReceive(ReceiveCallback c) override { cb = c; }
+    int available() override { return static_cast<int>((blockEnd - pos) * 2); }
+    int read(int16_t* buf, int maxBytes) override {
+        size_t n = std::min<size_t>(blockEnd - pos, static_cast<size_t>(maxBytes / 2));
+        std::memcpy(buf, pcm->data() + pos, n * 2);
+        pos += n;
+        return static_cast<int>(n * 2);
+    }
+    // Deliver one DMA block through the ISR callback, as hardware would.
+    bool deliverBlock() {
+        if (pos + PDM_BLOCK > pcm->size()) return false;
+        blockEnd = pos + PDM_BLOCK;
+        if (cb) cb();
+        pos = blockEnd;  // ISR reads everything available
+        return true;
+    }
+};
+
+int usage() {
+    std::fprintf(stderr,
+        "Usage: tracker_harness <in.pcm16> <out.csv> [loop_fps=60] [jitter=0.25] [seed=1]\n"
+        "  loop_fps  mean simulated main-loop rate (device: ~30-90 depending on load)\n"
+        "  jitter    relative std-dev of each loop period (0 = perfectly periodic)\n");
+    return 2;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 3) return usage();
+    double loopFps = argc > 3 ? std::atof(argv[3]) : 60.0;
+    double jitter = argc > 4 ? std::atof(argv[4]) : 0.25;
+    unsigned seed = argc > 5 ? static_cast<unsigned>(std::atoi(argv[5])) : 1u;
+    if (loopFps <= 0) return usage();
+
+    FILE* f = std::fopen(argv[1], "rb");
+    if (!f) { std::perror(argv[1]); return 1; }
+    std::vector<int16_t> pcm;
+    int16_t buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 2, 4096, f)) > 0) pcm.insert(pcm.end(), buf, buf + n);
+    std::fclose(f);
+    if (pcm.size() < static_cast<size_t>(SAMPLE_RATE)) {
+        std::fprintf(stderr, "input too short (%zu samples)\n", pcm.size());
+        return 1;
+    }
+
+    FILE* out = std::fopen(argv[2], "w");
+    if (!out) { std::perror(argv[2]); return 1; }
+    std::fprintf(out, "t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames\n");
+
+    HostTime time;
+    HostPdm pdm;
+    pdm.pcm = &pcm;
+    AudioTracker tracker(pdm, time);
+    tracker.begin(SAMPLE_RATE);
+    if (argc > 6) tracker.plpPhaseGain = static_cast<float>(std::atof(argv[6]));
+    if (argc > 7) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
+
+    std::mt19937 rng(seed);
+    std::normal_distribution<double> nd(0.0, 1.0);
+    const double meanPeriodUs = 1e6 / loopFps;
+    uint64_t lastUs = 0;
+    uint64_t nextBlockUs = static_cast<uint64_t>(PDM_BLOCK * 1e6 / SAMPLE_RATE);
+    bool more = true;
+    uint32_t prevFrames = 0;
+
+    while (more) {
+        double p = meanPeriodUs * (1.0 + jitter * nd(rng));
+        if (p < 1000.0) p = 1000.0;  // vTaskDelay(1) floor
+        time.us += static_cast<uint64_t>(p);
+        // PDM DMA completes on its own clock regardless of the loop.
+        while (nextBlockUs <= time.us) {
+            if (!pdm.deliverBlock()) { more = false; break; }
+            nextBlockUs += static_cast<uint64_t>(PDM_BLOCK * 1e6 / SAMPLE_RATE);
+        }
+        float dt = static_cast<float>((time.us - lastUs) * 1e-6);
+        lastUs = time.us;
+        if (dt < 0.001f) dt = 0.001f;
+        if (dt > 0.1f) dt = 0.1f;   // same clamp as the firmware loop
+        const AudioControl& c = tracker.update(dt);
+        uint32_t frames = tracker.getSpectral().getFrameCount();
+        std::fprintf(out, "%.3f,%.5f,%.4f,%.4f,%.4f,%u,%.2f,%.3f,%.4f,%u\n",
+                     time.us / 1000.0, c.phase, c.plpPulse, c.pulse,
+                     c.onset, tracker.getBeatCount(),  // delivered (gated) onset, as generators see it
+                     tracker.getCurrentBpm(), tracker.getPlpPeriodF(), c.rhythmStrength,
+                     frames - prevFrames);
+        prevFrames = frames;
+    }
+    std::fclose(out);
+    return 0;
+}

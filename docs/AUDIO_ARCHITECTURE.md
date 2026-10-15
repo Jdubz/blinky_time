@@ -29,13 +29,15 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 
 ## Output: AudioControl Struct
 
-Generators receive a single struct with 6 parameters:
+Generators receive a single struct:
 
 ```cpp
 struct AudioControl {
     float energy;         // Audio energy level (0-1)
-    float pulse;          // Transient intensity (0-1)
-    float phase;          // Beat phase position (0-1)
+    float pulse;          // Transient envelope (0-1, decays ~240 ms)
+    float onset;          // Onset EVENT: strength this update, 0 if none (b208)
+    float phase;          // Rhythm-cycle phase (0-1, 0 = accent)
+    uint16_t beatCount;   // +1 per rhythm cycle, never decrements (b208)
     float plpPulse;       // PLP pattern value at current phase (0-1)
     float rhythmStrength; // Confidence in rhythm (0-1)
     float onsetDensity;   // Smoothed onsets per second (0-10+)
@@ -45,8 +47,10 @@ struct AudioControl {
 | Parameter | Description | Use For |
 |-----------|-------------|---------|
 | `energy` | Smoothed overall level | Baseline intensity, brightness |
-| `pulse` | Transient hits with beat context | Sparks, flashes, bursts |
-| `phase` | Position in beat cycle (0=on-beat) | Pulsing, breathing effects |
+| `pulse` | Transient envelope (level, decays) | Continuous brightness/size modulation |
+| `onset` | One non-zero value per detected drum hit | Edge-triggered bursts/flashes (`onset > 0`) |
+| `phase` | Position in rhythm cycle (0=accent); can be corrected slightly backward | Continuous phase-based modulation |
+| `beatCount` | Monotonic cycle counter | "A beat happened": `beatCount != last` (never threshold `phase`) |
 | `plpPulse` | PLP extracted pattern value (epoch-folded) | Beat-synced pulsing, breathing animations |
 | `rhythmStrength` | Periodicity confidence | Music mode vs organic mode |
 | `onsetDensity` | Smoothed transients/second (EMA) | Content classification (dance=2-6, ambient=0-1) |
@@ -116,6 +120,40 @@ Generators (HeatFire, Water, PlasmaGlobe)
 
 ---
 
+## Frame Clock (b208)
+
+**Every rhythm computation runs exactly once per spectral frame** (16 kHz /
+256 samples = 62.5 Hz, `AudioTracker::OSS_FRAME_RATE`). `update()` drains
+the mic ring and calls `processFrame()` for each completed window: NN
+inference, pulse detection, OSS/bass/NN buffers, ACF cadence (counted in
+frames) and one phase step. The main loop's rate only decides how many
+frames are handled per call.
+
+Before b208, the phase advanced once per *loop iteration*, only the last
+frame of a catch-up burst reached the NN/OSS/pulse detector, the frame rate
+constant was 66 instead of 62.5, and the period was an integer. Phase ran at
+`loopFps / 62.5` of the tempo, about a third of frames were invisible at
+~43 fps, and the NN's input window held unevenly spaced frames.
+
+**Phase model.** The epoch fold is end-aligned: bin `P-1` holds the newest
+frame. So at each analysis, `(P-1 - accentBin) / P_frac` is the phase of
+"now", which `correctPlpPhase()` pulls toward with gain `plpPhaseGain`. A
+period jump snaps instead. Between analyses, `advancePlpPhase()` adds
+`1/P_frac` per frame.
+
+**Accent source.** The accent is always measured on the OSS buffer (half-wave rectified bass flux), folded at the chosen period, whichever source won the period vote. Smooth sources (bass energy, NN level) put the fold maximum at the newest frames whenever loudness trends, so the accent tracked "now" and phase stalled near 1.0.
+
+**Fractional period.** The period is refined by unbiased ACF at the K-th
+repetition of the beat lag (K up to 12), then divided by K. This removes the
+frame-quantization bias a single-period parabola has (~0.15 frame short).
+
+**Pattern storage.** `plpPattern_` is rotated to accent-aligned storage
+(bin 0 = accent), so phase indexes it directly. Cached slots and the seed
+templates also share a stable origin.
+
+Verify with `tests/tracker/` (host harness, real `AudioTracker` code on
+corpus audio at simulated loop rates).
+
 ## Rhythm Tracking Algorithm
 
 ### Multi-Source ACF + PLP (v8 - Currently Deployed)
@@ -129,13 +167,13 @@ Generators (HeatFire, Water, PlasmaGlobe)
 4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
 5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
 6. **Buffer OSS**: Store contrast-enhanced spectral flux in ~5.5s circular buffer (360 samples)
-7. **Phase Advance**: Free-running sawtooth phase at PLP-selected period
+7. **Phase Advance**: `1/P_frac` per frame (see Frame Clock)
 
 **Every 150ms (acfPeriodMs):**
 8. **Linearize OSS**: Copy circular spectral flux buffer to linear array with mean subtraction
 9. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
 10. **Peak Selection**: Best lag -> candidate period
-11. **Smooth Update**: EMA filter on BPM (only when change > 5%)
+11. **Smooth Update**: EMA filter on BPM (every analysis; the old 5% hysteresis left it stale)
 
 **PLP Update (every 150ms):**
 12. **Mean-subtract sources**: Spectral flux, bass energy, NN onset buffers each mean-subtracted
@@ -144,8 +182,8 @@ Generators (HeatFire, Water, PlasmaGlobe)
 15. **Epoch-fold Pattern**: Fold ungated spectral flux (ossLinear_) at selected period
 16. **Robust epoch-fold (b119+)**: NN-confidence-weighted epochs (higher-confidence epochs contribute more), per-bin reliability (CV-based, suppresses noisy bins), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation
 17. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
-18. **Confidence**: ACF peak strength x signal presence (steep mic level gate)
-19. **Phase**: Derived from pattern position offset by accent phase (no oscillator)
+18. **Confidence**: ACF peak strength x signal presence (~1 s smoothed mic level, not one sample)
+19. **Phase**: Measured from the end-aligned fold, corrected gradually (see Frame Clock)
 
 ### Evolution: Why ACF+Comb, and Why PLL Failed
 
@@ -186,8 +224,14 @@ void Generator::update(float dt, const AudioControl& audio) {
 // PLP extracted pattern pulse (actual repeating energy shape)
 float breathe = audio.phaseToPulse();  // == audio.plpPulse
 
-// Raw phase (0.0 -> 1.0 over one beat cycle)
+// Raw phase (0.0 -> 1.0 over one rhythm cycle)
 float sawPhase = audio.phase;
+
+// Beat-synced event: use the monotonic counter, not phase thresholds
+if (audio.beatCount != lastBeatCount_) { lastBeatCount_ = audio.beatCount; /* beat */ }
+
+// One event per drum hit
+if (audio.onset > 0.0f) { /* burst with strength audio.onset */ }
 ```
 
 ### Hybrid Mode

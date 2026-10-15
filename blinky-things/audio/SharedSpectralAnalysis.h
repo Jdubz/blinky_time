@@ -177,6 +177,16 @@ public:
     bool hasSamples() const { return sampleCount_ >= SpectralConstants::FFT_SIZE; }
 
     /**
+     * Samples still needed to complete the current window. Callers MUST read
+     * at most this many from the mic ring: addSamples() cannot hold more, and
+     * anything past capacity would be lost (see addSamples overflow counter).
+     */
+    int samplesNeeded() const { return SpectralConstants::FFT_SIZE - sampleCount_; }
+
+    /** Samples discarded by addSamples() because the window was already full (monotonic). */
+    uint32_t getAccumulatorOverflowSamples() const { return accumulatorOverflowSamples_; }
+
+    /**
      * Clear the frame ready flag (call after all detectors have processed)
      */
     void resetFrameReady() { frameReady_ = false; }
@@ -199,12 +209,6 @@ public:
      * (SuperFlux, BTrack) feed their ODF: raw FFT magnitudes only.
      */
     const float* getPreWhitenMagnitudes() const { return preWhitenMagnitudes_; }
-
-    /**
-     * Get phase spectrum (128 bins, in radians [-pi, pi])
-     * Valid after process() returns, until next process() call
-     */
-    const float* getPhases() const { return phases_; }
 
     /**
      * Get previous frame magnitudes (compressed-but-not-whitened).
@@ -233,6 +237,11 @@ public:
      */
     const float* getRawMelBands() const { return rawMelBands_; }
 
+    /** Raw mel values >= 0.99 (pinned at full scale) and total values. Both are
+     *  halved together before overflowing, so read them as a ratio. */
+    uint32_t getRawMelSaturatedCount() const { return rawMelSaturated_; }
+    uint32_t getRawMelTotalCount() const { return rawMelTotal_; }
+
     /** Linear mel energy (before log compression). Used by FrameOnsetNN
      *  for PCEN normalization — PCEN needs linear input, not log. */
     const float* getLinearMelBands() const { return linearMelBands_; }
@@ -251,6 +260,15 @@ public:
      * Check if we have a previous frame (for flux calculations)
      */
     bool hasPreviousFrame() const { return hasPrevFrame_; }
+
+    /**
+     * The next window is not contiguous with the previous one (mic ring
+     * overrun discarded samples). The next frame's flux is computed as if
+     * there were no previous frame (0) instead of differencing across the
+     * gap — a spliced window otherwise produces a spurious flux spike that
+     * lands in the tempo buffer and can fire a false onset.
+     */
+    void markDiscontinuity() { hasPrevFrame_ = false; }
 
     /**
      * Get total spectral energy (sum of magnitudes)
@@ -410,7 +428,6 @@ private:
     // Output buffers
     float magnitudes_[SpectralConstants::NUM_BINS];      // Compressed + whitened magnitudes (all detectors see this state)
     float preWhitenMagnitudes_[SpectralConstants::NUM_BINS]; // Post-FFT, post-noise-subtraction, PRE-compressor AND pre-whitening. Snapshot taken in process() before applyCompressor() runs. Used by raw flux + raw mel bands for the NN hybrid input (must match training pipeline's STFT magnitudes).
-    float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float prevRawMagnitudes_[SpectralConstants::NUM_BINS]; // Previous frame pre-compressor mags (for raw flux)
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
@@ -455,6 +472,9 @@ private:
     bool frameReady_;
     bool hasPrevFrame_;
     uint32_t frameCount_;  // Monotonic counter for NN stream (survives resetFrameReady)
+    uint32_t accumulatorOverflowSamples_ = 0;  // addSamples() overflow (caller bug if nonzero)
+    uint32_t rawMelSaturated_ = 0;             // see getRawMelSaturatedCount()
+    uint32_t rawMelTotal_ = 0;
 
     // Helper methods
     void applyHammingWindow();

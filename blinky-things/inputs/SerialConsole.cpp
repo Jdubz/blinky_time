@@ -17,6 +17,7 @@
 #ifdef BLINKY_PLATFORM_NRF52840
 #include "../comms/BleScanner.h"
 #include "../comms/BleNus.h"
+#include "../comms/RecordStream.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -451,6 +452,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleGeneratorCommand(cmd)) return true;
     if (handleEffectCommand(cmd)) return true;
     if (handleBatteryCommand(cmd)) return true;
+    if (handleRecordCommand(cmd)) return true;   // Phone record mode (BLE)
     if (handleStreamCommand(cmd)) return true;
     // cppcheck-suppress knownConditionTrueFalse -- stub for future test commands
     if (handleTestCommand(cmd)) return true;
@@ -581,6 +583,21 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(AdaptiveMic::getOverrunCount());
         out_.print(F(",\"audioSamplesLost\":"));
         out_.print(AdaptiveMic::getOverrunSamplesLost());
+        // Clipping telemetry: samples at int16 full scale since boot, and
+        // total samples for the denominator. A nonzero clip rate means the
+        // PDM path saturated (loud venue / too much hw gain).
+        out_.print(F(",\"clipSamples\":"));
+        out_.print(AdaptiveMic::getClipSampleCount());
+        out_.print(F(",\"totalSamples\":"));
+        out_.print(AdaptiveMic::getTotalSampleCount());
+        if (audioCtrl_) {
+            out_.print(F(",\"spectralAccumOverflow\":"));
+            out_.print(audioCtrl_->getSpectral().getAccumulatorOverflowSamples());
+            out_.print(F(",\"melSaturated\":"));
+            out_.print(audioCtrl_->getSpectral().getRawMelSaturatedCount());
+            out_.print(F(",\"melTotal\":"));
+            out_.print(audioCtrl_->getSpectral().getRawMelTotalCount());
+        }
 
         // Main-loop fps + frame-time range (#137). The publicly-readable
         // values are the LAST CLOSED 5 s window — stable from one read to
@@ -675,8 +692,54 @@ bool SerialConsole::handleBatteryCommand(const char* cmd) {
     return false;
 }
 
+// === RECORD COMMANDS (phone record mode, docs/PHONE_RECORD_MODE_PLAN.md) ===
+bool SerialConsole::handleRecordCommand(const char* cmd) {
+    if (strncmp(cmd, "record", 6) != 0 || (cmd[6] != '\0' && cmd[6] != ' ')) return false;
+    const char* arg = cmd + 6;
+    while (*arg == ' ') arg++;
+
+#ifdef BLINKY_PLATFORM_NRF52840
+    if (!recordStream_) {
+        out_.println(F("{\"error\":\"record mode not initialized\"}"));
+        return true;
+    }
+    if (strcmp(arg, "start") == 0 || strcmp(arg, "start mel") == 0) {
+        bool withMel = (strcmp(arg, "start mel") == 0);
+        // JSON streams share the BLE link with record packets and would eat
+        // the audio budget — turn them off for the session, and say so.
+        if (streamEnabled_ || streamNN_) {
+            streamEnabled_ = false;
+            streamNN_ = false;
+            out_.println(F("{\"info\":\"stream disabled for record session\"}"));
+        }
+        recordStream_->start(withMel, out_);
+        return true;
+    }
+    if (strcmp(arg, "stop") == 0) {
+        recordStream_->stop(out_);
+        return true;
+    }
+    if (strcmp(arg, "status") == 0 || *arg == '\0') {
+        recordStream_->printStatus(out_);
+        return true;
+    }
+    out_.println(F("{\"error\":\"usage: record start [mel] | record stop | record status\"}"));
+#else
+    out_.println(F("{\"error\":\"record mode is nRF52840-only\"}"));
+#endif
+    return true;
+}
+
 // === STREAM COMMANDS ===
 bool SerialConsole::handleStreamCommand(const char* cmd) {
+#ifdef BLINKY_PLATFORM_NRF52840
+    // Refuse JSON streaming during a record session (shares the BLE link).
+    if (strncmp(cmd, "stream", 6) == 0 && strcmp(cmd, "stream off") != 0 &&
+        recordStream_ && recordStream_->isActive()) {
+        out_.println(F("{\"error\":\"stream unavailable while recording (record stop first)\"}"));
+        return true;
+    }
+#endif
     if (strcmp(cmd, "stream on") == 0) {
         streamEnabled_ = true;
         out_.println(F("OK"));

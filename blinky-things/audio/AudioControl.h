@@ -5,14 +5,14 @@
 /**
  * AudioControl - Unified audio control signal for visual generators
  *
- * Synthesizes all audio analysis into 6 parameters.
+ * Synthesizes all audio analysis into a handful of parameters.
  * Generators receive this struct and don't need to know about:
  * - Microphone processing
  * - FFT/spectral analysis
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 24 bytes (6 floats)
+ * Memory: 32 bytes
  */
 struct AudioControl {
     // === ENERGY ===
@@ -30,12 +30,28 @@ struct AudioControl {
     // Use for: Sparks, flashes, bursts, event triggers
     float pulse = 0.0f;
 
+    // === ONSET ===
+    // Discrete onset event: strength (0-1) of the onset fired during this
+    // update, 0 when none fired. Exactly one non-zero value per detected
+    // percussive event (the detector has its own cooldown), so generators
+    // can edge-trigger on `onset > 0` without thresholding the decaying
+    // `pulse` envelope (which never re-arms during dense hi-hat passages).
+    // Use for: Bursts, flashes — one visual event per drum hit
+    float onset = 0.0f;
+
     // === PHASE ===
-    // Beat phase position (0.0 - 1.0)
-    // PLP-driven: free-running at detected tempo, corrected by pattern cross-correlation
-    // 0.0 = start of pattern cycle, 1.0 = next cycle (wraps to 0)
-    // Use for: Beat wrap detection, direct phase-based calculations
+    // Rhythm-cycle phase (0.0 - 1.0), 0 = accent. Advances once per audio
+    // frame at the detected (fractional) period and is pulled toward the
+    // measured accent position; small corrections can move it backward.
+    // Use for: Continuous phase-based modulation. For "a beat happened",
+    // use beatCount — phase thresholds misfire when phase is corrected.
     float phase = 0.0f;
+
+    // === BEAT COUNT ===
+    // Increments exactly once per rhythm cycle (phase wrap), never
+    // decrements, even across backward phase corrections.
+    // Use for: Beat-synced events: `if (audio.beatCount != lastBeatCount)`
+    uint16_t beatCount = 0;
 
     // === PLP PULSE ===
     // Extracted dominant energy pattern value at current phase position (0.0 - 1.0)
