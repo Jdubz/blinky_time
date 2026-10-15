@@ -749,6 +749,15 @@ void loop() {
   // underlying counters are always tracked so any operator can read them.
   // Required for v36-fmax (#136) merge gate: ≥30 fps under typical load.
   LoopMetrics::tick(now);
+#ifdef BLINKY_PLATFORM_NRF52840
+  // Heap stats for `json info`, sampled here because only the loop task can
+  // walk the (unlocked) newlib heap safely. See hal/MemTelemetry.h.
+  static uint32_t lastHeapSampleMs = 0;
+  if (lastHeapSampleMs == 0 || now - lastHeapSampleMs >= 1000) {
+    lastHeapSampleMs = now ? now : 1;
+    MemTelemetry::sampleHeap();
+  }
+#endif
   static uint32_t lastFpsLogMs = 0;
   if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO &&
       LoopMetrics::getLastWindowMs() != lastFpsLogMs &&

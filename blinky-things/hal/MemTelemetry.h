@@ -11,10 +11,16 @@
  * in the Bluefruit callback task, so "current task" would measure the wrong
  * stack.
  *
- * Heap: newlib malloc via mallinfo(). The core defines no __malloc_lock, so a
- * free-list walk racing another task's malloc could follow a stale pointer;
- * the scheduler is suspended for the walk (as FreeRTOS heap_3 does around
- * malloc). ISRs keep running and never allocate.
+ * Heap: newlib malloc via mallinfo(). The core defines no __malloc_lock
+ * (#223), so the free-list walk must not overlap another task's malloc/free.
+ * Suspending the scheduler alone isn't enough: a command handler in the
+ * higher-priority Bluefruit callback task can preempt the loop task in the
+ * middle of malloc. So the walk runs only on the loop task (sampleHeap(),
+ * ~1 Hz from loop()): the loop can't be mid-malloc while it runs this code,
+ * it can't preempt the higher-priority callback task, and the scheduler is
+ * suspended for the walk so the equal-priority record sender (which doesn't
+ * allocate) can't run either. `json info` prints the cached sample. The cache
+ * is written while the scheduler is suspended, so no task sees a torn update.
  */
 
 #include "PlatformDetect.h"
@@ -45,16 +51,41 @@ struct HeapInfo {
     uint32_t total;  // heap region size
     uint32_t used;   // bytes currently allocated
     uint32_t peak;   // bytes ever claimed from sbrk (newlib-nano never returns them)
+    bool valid;      // false until the loop task has sampled once
 };
 
-inline HeapInfo heap() {
+inline HeapInfo& heapCache() {
+    static HeapInfo cache = {0, 0, 0, false};  // POD, constant-initialized
+    return cache;
+}
+
+// Loop task only (see header comment). Refuses, loudly, on any other task.
+inline void sampleHeap() {
+    TaskHandle_t loopTask = loopTaskSlot();
+    if (!loopTask || xTaskGetCurrentTaskHandle() != loopTask) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Serial.println(F("[ERROR] MemTelemetry::sampleHeap called off the loop task; heap stats not sampled"));
+        }
+        return;
+    }
+    const uint32_t total = static_cast<uint32_t>(dbgHeapTotal());
     vTaskSuspendAll();
     struct mallinfo mi = mallinfo();
+    HeapInfo& cache = heapCache();
+    cache.total = total;
+    cache.used = static_cast<uint32_t>(mi.uordblks);
+    cache.peak = static_cast<uint32_t>(mi.arena);
+    cache.valid = true;
     xTaskResumeAll();
-    HeapInfo h;
-    h.total = static_cast<uint32_t>(dbgHeapTotal());
-    h.used = static_cast<uint32_t>(mi.uordblks);
-    h.peak = static_cast<uint32_t>(mi.arena);
+}
+
+// Last loop-task sample; safe from any task.
+inline HeapInfo heap() {
+    vTaskSuspendAll();
+    HeapInfo h = heapCache();
+    xTaskResumeAll();
     return h;
 }
 

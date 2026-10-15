@@ -632,13 +632,18 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
                 out_.print(F(",\"recStackFree\":"));
                 out_.print(MemTelemetry::stackFreeBytes(recordStream_->senderTask()));
             }
+            // Heap: cached ~1 Hz sample taken on the loop task (MemTelemetry.h).
             MemTelemetry::HeapInfo h = MemTelemetry::heap();
-            out_.print(F(",\"heapTotal\":"));
-            out_.print(h.total);
-            out_.print(F(",\"heapUsed\":"));
-            out_.print(h.used);
-            out_.print(F(",\"heapPeak\":"));
-            out_.print(h.peak);
+            if (h.valid) {
+                out_.print(F(",\"heapTotal\":"));
+                out_.print(h.total);
+                out_.print(F(",\"heapUsed\":"));
+                out_.print(h.used);
+                out_.print(F(",\"heapPeak\":"));
+                out_.print(h.peak);
+            } else {
+                out_.print(F(",\"heapTotal\":null,\"heapUsed\":null,\"heapPeak\":null"));
+            }
         }
 #endif
 
