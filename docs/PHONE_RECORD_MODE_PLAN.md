@@ -40,7 +40,7 @@ The hosted Firebase build was also broken: `build:firebase` inherited `base: '/d
 
 ## Phase 1: firmware prerequisites (bug fixes)
 
-1. **BLE bandwidth was never configured.** `BleNus::onConnect` requests MTU 247, but the SoftDevice ceiling defaults to MTU 23, event length 3.75 ms and HVN queue depth 1, because `configPrphBandwidth()` is never called before `Bluefruit.begin()`. This caps app-mode NUS too (the fleet server's serial-over-BLE). It does *not* explain the "BLE-DFU negotiates MTU 23" item in `OPEN_ISSUES_2026_05_20.md`: DFU runs in the bootloader, which has its own SoftDevice config.
+1. **BLE bandwidth was never configured.** `BleNus::onConnect` requests MTU 247, but the SoftDevice ceiling defaults to MTU 23, event length 3.75 ms and HVN queue depth 1, because `configPrphBandwidth()` is never called before `Bluefruit.begin()`. This caps app-mode NUS too (the fleet server's serial-over-BLE). It does *not* explain the "BLE-DFU negotiates MTU 23" item ([#216](https://github.com/Jdubz/blinky_time/issues/216)): DFU runs in the bootloader, which has its own SoftDevice config.
    - Fix: `Bluefruit.configPrphBandwidth(BANDWIDTH_MAX)`, which is Adafruit's tested config (MTU 247, event length 125 ms, HVN queue 3) and fits the stock linker RAM start for 1 peripheral.
    - On connect, also request the 2M PHY, Data Length Extension and a 15 ms connection interval.
 2. **The `Bluefruit.begin()` return value is ignored.** If SoftDevice enable failed, BLE would silently be dead, including the BLE-DFU recovery path. Log `[FALLBACK]` loudly.

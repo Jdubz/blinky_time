@@ -94,12 +94,7 @@ Nothing in PR #152 / #155 has run on hardware yet.
 
 | # | Issue | Status | Notes |
 |---|---|---|---|
-| 6.1 ([#199](https://github.com/Jdubz/blinky_time/issues/199)) | Windows checkout (`core.autocrlf=true`) yields CRLF working files; the console pre-push Prettier check fails on 60+ untouched files | OPEN | Add `.gitattributes` (`* text=auto eol=lf` for the console) or set Prettier `endOfLine: auto`. |
-| 6.2 ([#200](https://github.com/Jdubz/blinky_time/issues/200)) | `blinky-simulator/build_vs.cmd` / `build.bat` still list removed `Lightning.cpp` and lack `Particle.cpp` | OPEN | CMake list fixed in #152; scripts not. |
-| 6.3 ([#201](https://github.com/Jdubz/blinky_time/issues/201)) | cppcheck failed at HEAD (2 findings) — CI said pass | OPEN | Check why CI's cppcheck (Ubuntu version) didn't flag them, or pin the version. Fixed in #152 for now. |
-| 6.4 ([#202](https://github.com/Jdubz/blinky_time/issues/202)) | `tests/tracker` harness not in CI | OPEN | Needs a host C++ compiler + ffmpeg in CI; at minimum the UBSan stress set. |
 | 6.5 ([#203](https://github.com/Jdubz/blinky_time/issues/203)) | No host test runs the NN path (no TFLite on host) | OPEN | TFLite Micro host build, or a recorded-activation replay. |
-| 6.6 ([#204](https://github.com/Jdubz/blinky_time/issues/204)) | `docs/OPEN_ISSUES_2026_05_20.md` still listed as "current" in CLAUDE.md | OPEN | Fold its still-open items here or keep both indexed. |
 
 ## 7. Device verification checklist for PR #152 (hat)
 
@@ -113,3 +108,24 @@ Nothing in PR #152 / #155 has run on hardware yet.
    - `clipSamples` / `melSaturated` plausible;
    - `loopStackFree` and `cmdStackFree` (send `json info` over both USB and BLE) ≥ 512 B, `recStackFree` ≥ 512 B after a record session, `heapPeak` well under `heapTotal`.
 5. Visual: tempo lock holds through a breakdown → drop. Fire bursts continue through dense hats. No particle starvation on the hat's linear layout.
+
+## 8. Carried over from 2026-05-20
+
+The still-open items of `docs/archive/OPEN_ISSUES_2026_05_20.md` (fleet rollout, SWD recovery, BLE-DFU tooling), filed by #204. That doc was five months old at filing, so confirm each item is still open before starting on it.
+
+| # | Item | Status |
+|---|---|---|
+| 8.1 ([#209](https://github.com/Jdubz/blinky_time/issues/209)) | Pi `recover.sh` still needs the manual BCM 18 hold + release | OPEN |
+| 8.2 ([#210](https://github.com/Jdubz/blinky_time/issues/210)) | 06ACEB recovery unfinished | OPEN |
+| 8.3 ([#211](https://github.com/Jdubz/blinky_time/issues/211)) | false-negative exit 4 after a successful BL flash | OPEN |
+| 8.4 ([#212](https://github.com/Jdubz/blinky_time/issues/212)) | server re-grabs the port between BL and app flash | OPEN |
+| 8.5 ([#213](https://github.com/Jdubz/blinky_time/issues/213)) | two Version.h generators diverge | OPEN |
+| 8.6 ([#214](https://github.com/Jdubz/blinky_time/issues/214)) | device vs registry LED count mismatch | OPEN |
+| 8.7 ([#215](https://github.com/Jdubz/blinky_time/issues/215)) | all-BLE deploy.sh happy path never run to exit 0 | OPEN |
+| 8.8 ([#216](https://github.com/Jdubz/blinky_time/issues/216)) | BLE-DFU stuck at MTU 23 | OPEN |
+| 8.9 ([#217](https://github.com/Jdubz/blinky_time/issues/217)) | lemon-cart install.sh not run | OPEN |
+| 8.10 ([#218](https://github.com/Jdubz/blinky_time/issues/218)) | no retry on DFU-entry scan miss | OPEN |
+| 8.11 ([#219](https://github.com/Jdubz/blinky_time/issues/219)) | auto-recovery untested on an enrolled device | OPEN |
+| 8.12 ([#220](https://github.com/Jdubz/blinky_time/issues/220)) | no BL-over-BLE path (future) | OPEN |
+| 8.13 ([#221](https://github.com/Jdubz/blinky_time/issues/221)) | full-fleet gossip-ACK delivery unmeasured | OPEN |
+| 8.14 ([#222](https://github.com/Jdubz/blinky_time/issues/222)) | button disabled (ghost presses) | OPEN |

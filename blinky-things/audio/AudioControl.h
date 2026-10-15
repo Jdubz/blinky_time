@@ -1,6 +1,7 @@
 #pragma once
 
 #include <math.h>
+#include <stdint.h>
 
 /**
  * AudioControl - Unified audio control signal for visual generators
