@@ -70,6 +70,10 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ""
           ANTHROPIC_AUTH_TOKEN: ""
+          # Claude Code caps Bash output at ~30 KB and diverts the rest to a side
+          # file. On PR #152 four directory-level diffs (31-75 KB) overflowed and one
+          # was never read back. Raise the cap so per-file diffs come back inline.
+          BASH_MAX_OUTPUT_LENGTH: "200000"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Without this the action mints a GitHub App token via OIDC, which 403s.
@@ -99,15 +103,22 @@ jobs:
             ${{ steps.diff.outputs.files }}
 
             THE DIFF. Every entry above that is not a deletion (D) must be read. Read the
-            diff per file or per directory with
+            diff ONE FILE AT A TIME with
               `git diff ${{ steps.diff.outputs.base }} HEAD -- <path>`
-            Do NOT rely on `gh pr diff`: it truncates at the API's 20,000-line limit.
+            (not whole directories: large outputs get diverted to a file). If a tool
+            result says "Output too large ... saved to <file>", Read that file to the END
+            (offset/limit until no lines remain) before moving on. For a newly added
+            file (A), Read the file itself. Do NOT rely on `gh pr diff`: it truncates at
+            the API's 20,000-line limit.
 
             Run ONE plain command per Bash call. Pipes, `&&`, `;` and `$(...)` do not match
             the allowlist and are DENIED.
 
             COVERAGE. Read the diff of EVERY non-deleted entry: docs, config, tests and
-            scripts included. Report `coverage: "full"` only if you did; `"partial"` when
+            scripts included. There is NO time or turn budget — do not stop early, do not
+            sample, and never cite "time" as a reason to skip. List every path whose diff
+            you actually read in `files_reviewed`; the workflow checks that list against
+            the changed files and reports any gap. Report `coverage: "full"` only if you did; `"partial"` when
             something prevented a read (name what and why in the summary).
 
             Report ONLY high-signal issues, validated against the actual code. A false
@@ -122,10 +133,11 @@ jobs:
 
             Do not post a top-level comment. Return the verdict as structured output —
             `verdict` ("no-issues" or "issues"), `coverage` ("full" or "partial"),
-            `issue_count`, and a short markdown `summary` — and the workflow posts it,
+            `issue_count`, `files_reviewed` (array of paths), and a short markdown
+            `summary` — and the workflow posts it,
             stamped with the sha above.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(git show:*)" --json-schema '{"type":"object","required":["verdict","coverage","issue_count","summary"],"additionalProperties":false,"properties":{"verdict":{"type":"string","enum":["no-issues","issues"]},"coverage":{"type":"string","enum":["full","partial"]},"issue_count":{"type":"integer","minimum":0},"summary":{"type":"string"}}}'
+            --model claude-opus-5-5 --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(git show:*)" --json-schema '{"type":"object","required":["verdict","coverage","issue_count","files_reviewed","summary"],"additionalProperties":false,"properties":{"verdict":{"type":"string","enum":["no-issues","issues"]},"coverage":{"type":"string","enum":["full","partial"]},"issue_count":{"type":"integer","minimum":0},"files_reviewed":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}}}'
 
       # Posts ONLY a verdict actually received; malformed output is refused, never
       # papered over. Recovery for a crashed run: `gh run rerun <id>`.
@@ -137,4 +149,5 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ steps.rev.outputs.sha }}
           STRUCTURED: ${{ steps.claude-review.outputs.structured_output }}
+          CHANGED_FILES: ${{ steps.diff.outputs.files }}
         run: bash scripts/post-review-verdict.sh
