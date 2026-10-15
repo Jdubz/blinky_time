@@ -67,6 +67,18 @@ if [ "$verdict" = "no-issues" ] && jq -e '.issue_count != 0' >/dev/null <<<"$STR
     warn "Structured output for $SHA says 'no-issues' but issue_count is '$count'."
 fi
 
+# Verify coverage against the real change list instead of trusting the model's
+# self-report: every non-deleted changed path must appear in files_reviewed.
+missing=""
+if [ -n "${CHANGED_FILES:-}" ]; then
+    expected=$(printf '%s\n' "$CHANGED_FILES" | awk -F'\t' 'NF && $1 !~ /^D/ {print $NF}' | sort -u)
+    reviewed=$(jq -r '(.files_reviewed // [])[]' <<<"$STRUCTURED" | sort -u)
+    missing=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$reviewed"))
+    if [ -n "$missing" ]; then
+        coverage="partial"
+    fi
+fi
+
 if [ "$verdict" = "no-issues" ] && [ "$coverage" = "partial" ]; then
     # Never let a partial read pass for a clean review: the headline says what actually happened.
     headline="Incomplete review: no issues found, but not every changed file was read."
@@ -81,6 +93,11 @@ else
 fi
 
 body=$(printf '## Claude review — %s\n\n%s\n\n%s\n' "$SHA" "$headline" "$summary")
+if [ -n "$missing" ]; then
+    n_missing=$(printf '%s\n' "$missing" | grep -c .)
+    body=$(printf '%s\n\n**Not reviewed (%s changed file(s) missing from files_reviewed):**\n%s\n' \
+        "$body" "$n_missing" "$(printf '%s\n' "$missing" | sed 's/^/- `/; s/$/`/')")
+fi
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
     printf '%s\n' "$body"
