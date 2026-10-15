@@ -9,7 +9,15 @@
 # really on a device (2026-05-14, cart-inner).
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+# Outside a git checkout there is no SHA to embed; say so and still write
+# Version.h relative to this script (repo layout is fixed).
+if TOP=$(git rev-parse --show-toplevel 2>/dev/null); then
+    cd "$TOP"
+    IN_GIT=true
+else
+    cd "$(dirname "$0")/.."
+    IN_GIT=false
+fi
 
 BUILD="${1:-}"
 if ! [[ "$BUILD" =~ ^[0-9]+$ ]]; then
@@ -18,12 +26,19 @@ if ! [[ "$BUILD" =~ ^[0-9]+$ ]]; then
 fi
 
 # Commit SHA + dirty flag identify the source tree even when a build number
-# is reused (--no-bump, branch hopping). Version.h itself is excluded from
-# the dirty check: it is regenerated on every build.
-GIT_SHA=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "nogit")
-if ! git diff --quiet -- . ':!blinky-things/types/Version.h' 2>/dev/null \
-   || ! git diff --cached --quiet -- . ':!blinky-things/types/Version.h' 2>/dev/null; then
-    GIT_SHA="${GIT_SHA}-dirty"
+# is reused (--no-bump, branch hopping). Build outputs are excluded from the
+# dirty check: Version.h is regenerated here and build.sh rewrites
+# BUILD_NUMBER after every bumped build, so neither means "sources changed".
+if $IN_GIT; then
+    GIT_SHA=$(git rev-parse --short=8 HEAD)
+    EXCLUDE=(':!blinky-things/types/Version.h' ':!blinky-things/BUILD_NUMBER')
+    if ! git diff --quiet -- . "${EXCLUDE[@]}" \
+       || ! git diff --cached --quiet -- . "${EXCLUDE[@]}"; then
+        GIT_SHA="${GIT_SHA}-dirty"
+    fi
+else
+    echo "WARNING: not a git checkout; Version.h gets SHA 'nogit'" >&2
+    GIT_SHA="nogit"
 fi
 
 cat > blinky-things/types/Version.h << EOF

@@ -5,6 +5,9 @@
 
 # Shell scripts and git hooks must be LF or sh/bash fails on `\r`.
 *.sh text eol=lf
+# Hooks have no extension (hooks/pre-push is a bash script copied into
+# .git/hooks by scripts/install-hooks.sh).
+hooks/** text eol=lf
 
 # Console: Prettier (endOfLine: lf) checks the working copy in the pre-push
 # hook, and the husky hooks are sh scripts. CRLF here fails format:check on

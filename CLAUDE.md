@@ -209,4 +209,3 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |
-| `blinky-test-player/NEXT_TESTS.md` | Priority testing tasks |
