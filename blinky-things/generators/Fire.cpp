@@ -7,6 +7,7 @@
 #include "../physics/WrapBoundary.h"
 #include "../physics/MatrixForceAdapter.h"
 #include "../physics/LinearForceAdapter.h"
+#include "../types/BlinkyAssert.h"
 #include <Arduino.h>
 
 Fire::Fire()
@@ -206,8 +207,16 @@ void Fire::renderLinearEmber(PixelMatrix& matrix, float dt) {
     // whole strip while idle smolder lights only scattered embers.
     float amount = audioFlameAmount();
     if (amount > params_.maxFlameHeight) amount = params_.maxFlameHeight;
-    float coverage = (params_.maxFlameHeight > 0.0f)
-                     ? amount / params_.maxFlameHeight : 0.0f;   // 0..1
+    // maxFlameHeight is range-enforced to [0.1, 1.0] by the settings registry
+    // ("maxflameheight", SerialConsole.cpp), so a non-positive or NaN value is a
+    // config/corruption bug, not a runtime case. Surface it loudly (visible via
+    // "show errors") and stop rendering rather than silently dividing to zero
+    // coverage and fading the strip dark — CLAUDE.md "No Silent Fallbacks".
+    // ASSERT_ONCE keeps this per-frame render path from flooding Serial.
+    BLINKY_ASSERT_ONCE(params_.maxFlameHeight > 0.0f,
+                       "Fire::renderLinearEmber: maxFlameHeight <= 0 or NaN (config corrupt)");
+    if (!(params_.maxFlameHeight > 0.0f)) return;  // invalid config — don't mask it
+    float coverage = amount / params_.maxFlameHeight;   // 0..1
     if (coverage < 0.0f) coverage = 0.0f;
     if (coverage > 1.0f) coverage = 1.0f;
 
