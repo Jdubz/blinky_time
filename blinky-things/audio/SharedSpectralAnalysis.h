@@ -110,12 +110,6 @@ public:
 
     // --- Tuning parameters (public, persisted via ConfigStorage) ---
 
-    // Per-bin spectral whitening (Stowell & Plumbley, ICMC 2007)
-    bool whitenEnabled = true;
-    float whitenDecay = 0.997f;    // Per-frame peak decay (~5s memory at 60fps)
-    float whitenFloor = 0.001f;    // Floor to avoid amplifying noise
-    bool whitenBassBypass = false;  // Skip whitening for bass bins 1-6 (preserve kick contrast)
-
     // Minimum statistics noise estimation + spectral subtraction (Martin 2001)
     // Per-bin noise floor tracking with oversubtraction. Inserted after FFT,
     // before preWhitenMagnitudes — benefits both BandFlux and NN paths.
@@ -194,9 +188,9 @@ public:
     // --- Accessors for spectral data ---
 
     /**
-     * Get magnitude spectrum (128 bins) — compressed + whitened
-     * After process(): magnitudes are soft-knee compressed then per-bin whitened.
-     * totalEnergy_ and spectralCentroid_ reflect the pre-whitened (compressed-only) state.
+     * Get magnitude spectrum (128 bins) — soft-knee compressed.
+     * Per-bin whitening was removed (#182): nothing read its output, and mel
+     * bands have their own whitening (whitenMelBands).
      * Valid after process() returns, until next process() call
      */
     const float* getMagnitudes() const { return magnitudes_; }
@@ -212,7 +206,7 @@ public:
 
     /**
      * Get previous frame magnitudes (compressed-but-not-whitened).
-     * Saved after applyCompressor(), before whitenMagnitudes().
+     * Saved after applyCompressor().
      * Used internally for spectral flux computation.
      */
     const float* getPrevMagnitudes() const { return prevMagnitudes_; }
@@ -304,8 +298,10 @@ public:
      * Drums are noise-like (~0.5-0.8), pitched instruments are tonal (~0.1-0.3).
      * Computed from compressed magnitudes. Scale-invariant, so value matches
      * training regardless of compressor gain.
+     * Computed on demand (127 logf): only debug streams read it, so it is not
+     * paid every frame (#182). The NN uses getRawFlatness().
      */
-    float getSpectralFlatness() const { return spectralFlatness_; }
+    float getSpectralFlatness() const;
 
     /**
      * Get raw SuperFlux spectral flux from PRE-COMPRESSOR magnitudes.
@@ -354,7 +350,7 @@ public:
      * Range [0, 1]: 0 = pure tone, 1 = white noise.
      *
      * THIS is what the NN consumes — AudioTracker routes this value into
-     * FrameOnsetNN::infer. The separate `spectralFlatness_` (compressed-mag
+     * FrameOnsetNN::infer. The separate compressed-mag flatness (
      * version, via `getSpectralFlatness`) is kept for stream continuity but
      * is NOT used by the NN; it was the result of an historical oversight
      * where the model trained on raw-mag flatness while firmware streamed
@@ -443,7 +439,6 @@ private:
     float melRunningMax_[SpectralConstants::NUM_MEL_BANDS];
 
     // Per-bin spectral whitening state (128 bins)
-    float binRunningMax_[SpectralConstants::NUM_BINS];
 
     // Noise estimation state (Martin 2001 minimum statistics, simplified)
     float smoothedPower_[SpectralConstants::NUM_BINS];  // Smoothed power spectral density
@@ -457,7 +452,6 @@ private:
     float totalEnergy_;
     float spectralCentroid_;
     float spectralFlux_;
-    float spectralFlatness_;          // Wiener entropy: 0=tone, 1=noise (drum discriminator)
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
     float rawSpectralFlux_;    // SuperFlux from pre-compressor mags (for NN hybrid input)
     // Phase 2a shape features — computed from preWhitenMagnitudes_ (pre-compressor)
@@ -482,7 +476,6 @@ private:
     void computeMagnitudesAndPhases();
     void estimateAndSubtractNoise();
     void applyCompressor();
-    void whitenMagnitudes();
     void computeMelBands();
     void computeMelBandsFrom(const float* inputMagnitudes, float* outputMelBands);
     void computeRawMelBands();

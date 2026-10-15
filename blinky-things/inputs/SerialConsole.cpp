@@ -1302,11 +1302,7 @@ void SerialConsole::restoreDefaults() {
 
         // Restore spectral processing defaults
         SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-        spectral.whitenEnabled = true;
         spectral.compressorEnabled = true;
-        spectral.whitenDecay = 0.997f;
-        spectral.whitenFloor = 0.001f;
-        spectral.whitenBassBypass = false;
         spectral.compThresholdDb = -30.0f;
         spectral.compRatio = 3.0f;
         spectral.compKneeDb = 15.0f;
@@ -2592,10 +2588,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         out_.print(F("  Release: ")); out_.print(spectral.compReleaseTau, 2); out_.println(F(" s"));
         out_.print(F("  Frame RMS: ")); out_.print(spectral.getFrameRmsDb(), 1); out_.println(F(" dB"));
         out_.print(F("  Smoothed Gain: ")); out_.print(spectral.getSmoothedGainDb(), 2); out_.println(F(" dB"));
-        out_.println(F("-- Whitening --"));
-        out_.print(F("  Enabled: ")); out_.println(spectral.whitenEnabled ? "yes" : "no");
-        out_.print(F("  Decay: ")); out_.println(spectral.whitenDecay, 4);
-        out_.print(F("  Floor: ")); out_.println(spectral.whitenFloor, 4);
         out_.println();
         return true;
     }
@@ -2621,12 +2613,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         out_.print(spectral.getFrameRmsDb(), 1);
         out_.print(F(",\"gainDb\":"));
         out_.print(spectral.getSmoothedGainDb(), 2);
-        out_.print(F(",\"whitenEnabled\":"));
-        out_.print(spectral.whitenEnabled ? 1 : 0);
-        out_.print(F(",\"whitenDecay\":"));
-        out_.print(spectral.whitenDecay, 4);
-        out_.print(F(",\"whitenFloor\":"));
-        out_.print(spectral.whitenFloor, 4);
         out_.println(F("}"));
         return true;
     }
