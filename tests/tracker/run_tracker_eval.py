@@ -134,6 +134,9 @@ def main() -> int:
     ap.add_argument("--jitter", type=float, default=0.25)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--ffmpeg")
+    ap.add_argument("--min-excess", type=float, help="fail if the new build's mean excess is below this")
+    ap.add_argument("--min-tempo", type=float, help="fail if the new build's mean tempo score is below this")
+    ap.add_argument("--min-recall", type=float, help="fail if the new build's mean recall is below this")
     args = ap.parse_args()
 
     ffmpeg = find_ffmpeg(args.ffmpeg)
@@ -169,7 +172,19 @@ def main() -> int:
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
               f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
               f"mean recall {arr('recall'):.3f}")
-    return 0
+
+    # Regression gate (CI): floors apply to the new build's corpus means. A NaN
+    # mean means no track produced the metric, which is itself a failure.
+    failed = []
+    for key, floor in (("excess", args.min_excess), ("tempo", args.min_tempo), ("recall", args.min_recall)):
+        if floor is None:
+            continue
+        mean = float(np.nanmean([r[key] for r in summary["new"]]))
+        if not np.isfinite(mean) or mean < floor:
+            failed.append(f"mean {key} {mean:.3f} < floor {floor:.3f}")
+    for msg in failed:
+        print(f"[GATE FAIL] {msg}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

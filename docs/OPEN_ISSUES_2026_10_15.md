@@ -95,10 +95,7 @@ Nothing in PR #152 / #155 has run on hardware yet.
 
 | # | Issue | Status | Notes |
 |---|---|---|---|
-| 6.1 ([#199](https://github.com/Jdubz/blinky_time/issues/199)) | Windows checkout (`core.autocrlf=true`) yields CRLF working files; the console pre-push Prettier check fails on 60+ untouched files | OPEN | Add `.gitattributes` (`* text=auto eol=lf` for the console) or set Prettier `endOfLine: auto`. |
-| 6.2 ([#200](https://github.com/Jdubz/blinky_time/issues/200)) | `blinky-simulator/build_vs.cmd` / `build.bat` still list removed `Lightning.cpp` and lack `Particle.cpp` | OPEN | CMake list fixed in #152; scripts not. |
 | 6.3 ([#201](https://github.com/Jdubz/blinky_time/issues/201)) | cppcheck failed at HEAD (2 findings) — CI said pass | OPEN | Check why CI's cppcheck (Ubuntu version) didn't flag them, or pin the version. Fixed in #152 for now. |
-| 6.4 ([#202](https://github.com/Jdubz/blinky_time/issues/202)) | `tests/tracker` harness not in CI | OPEN | Needs a host C++ compiler + ffmpeg in CI; at minimum the UBSan stress set. |
 | 6.5 ([#203](https://github.com/Jdubz/blinky_time/issues/203)) | No host test runs the NN path (no TFLite on host) | OPEN | TFLite Micro host build, or a recorded-activation replay. |
 | 6.6 ([#204](https://github.com/Jdubz/blinky_time/issues/204)) | `docs/OPEN_ISSUES_2026_05_20.md` still listed as "current" in CLAUDE.md | OPEN | Fold its still-open items here or keep both indexed. |
 

@@ -286,3 +286,41 @@ jobs:
 
     - name: Build
       run: npm run build
+
+  tracker-harness:
+    name: Tracker Harness (UBSan stress + corpus gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python deps
+      run: pip install numpy imageio-ffmpeg
+
+    - name: Build harness (UBSan and release)
+      run: |
+        mkdir -p build
+        SRCS="tests/tracker/tracker_harness.cpp blinky-things/audio/AudioTracker.cpp \
+          blinky-things/audio/SharedSpectralAnalysis.cpp blinky-things/inputs/AdaptiveMic.cpp \
+          blinky-things/types/BlinkyAssert.cpp"
+        FLAGS="-std=c++17 -DBLINKY_HOST_HARNESS -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 \
+          -Iblinky-simulator/include -Iblinky-things"
+        g++ $FLAGS -O1 -g -fsanitize=undefined -fno-sanitize-recover=undefined $SRCS -o build/tracker_harness_ubsan
+        g++ $FLAGS -O2 $SRCS -o build/tracker_harness
+
+    - name: UBSan stress (silence, gap, clip, noise, hum, clicks at 15/60/250 fps)
+      run: python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
+
+    # Floors sit just under the b208 baseline (excess 0.096, tempo 0.667,
+    # recall 0.283 on edm/ at 35/60/90 fps). Raise them as the tracker improves.
+    - name: Corpus regression gate (edm/, 35/60/90 fps)
+      run: |
+        python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
+          --min-excess 0.07 --min-tempo 0.60 --min-recall 0.25

@@ -24,14 +24,19 @@ echo Using MSVC (cl.exe)
 if not exist build mkdir build
 
 cl /EHsc /std:c++17 /O2 /Fe:build\blinky-simulator.exe ^
+    /DARDUINO_ARCH_NRF52 /DBLINKY_PLATFORM_NRF52840 /D_CRT_SECURE_NO_WARNINGS ^
     /I include ^
     /I ..\blinky-things ^
     src\main.cpp ^
     ..\blinky-things\types\PixelMatrix.cpp ^
+    ..\blinky-things\types\BlinkyAssert.cpp ^
+    ..\blinky-things\physics\PhysicsContext.cpp ^
+    ..\blinky-things\particles\Particle.cpp ^
     ..\blinky-things\math\SimplexNoise.cpp ^
     ..\blinky-things\generators\Fire.cpp ^
     ..\blinky-things\generators\Water.cpp ^
-    ..\blinky-things\generators\Lightning.cpp ^
+    ..\blinky-things\generators\PlasmaGlobe.cpp ^
+    ..\blinky-things\generators\Audio.cpp ^
     ..\blinky-things\effects\HueRotationEffect.cpp ^
     ..\blinky-things\render\EffectRenderer.cpp ^
     ..\blinky-things\render\RenderPipeline.cpp ^
@@ -51,15 +56,20 @@ echo Using MinGW (g++)
 if not exist build mkdir build
 
 g++ -std=c++17 -O2 -Wall -Wextra ^
+    -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 ^
     -I include ^
     -I ../blinky-things ^
     -o build/blinky-simulator.exe ^
     src/main.cpp ^
     ../blinky-things/types/PixelMatrix.cpp ^
+    ../blinky-things/types/BlinkyAssert.cpp ^
+    ../blinky-things/physics/PhysicsContext.cpp ^
+    ../blinky-things/particles/Particle.cpp ^
     ../blinky-things/math/SimplexNoise.cpp ^
     ../blinky-things/generators/Fire.cpp ^
     ../blinky-things/generators/Water.cpp ^
-    ../blinky-things/generators/Lightning.cpp ^
+    ../blinky-things/generators/PlasmaGlobe.cpp ^
+    ../blinky-things/generators/Audio.cpp ^
     ../blinky-things/effects/HueRotationEffect.cpp ^
     ../blinky-things/render/EffectRenderer.cpp ^
     ../blinky-things/render/RenderPipeline.cpp
