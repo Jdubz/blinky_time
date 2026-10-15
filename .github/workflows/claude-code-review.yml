@@ -2,9 +2,9 @@ name: Claude Code Review
 
 # Ported from Josh-Wentworth/imagineer's working review workflow.
 #
-# Auth: ANTHROPIC_API_KEY. The WORKFLOW posts a sha-stamped verdict from the
-# model's structured output, rather than trusting the model to post its own
-# comment.
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (Max subscription), as in imagineer/my-spark.
+# The WORKFLOW posts a sha-stamped verdict from the model's structured output,
+# rather than trusting the model to post its own comment.
 #
 # NOTE: claude-code-action refuses to run a workflow whose content differs from
 # the default branch's copy, so a change to this file only takes effect after it
@@ -64,16 +64,17 @@ jobs:
         # Advisory: a failed review must never red-X the PR; a failure simply
         # posts no verdict.
         continue-on-error: true
-        # Blank the higher-precedence credential so nothing in the runner env can
-        # override the API key (precedence: ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY).
+        # Subscription-only billing: blank higher-precedence Anthropic creds so a
+        # stray key can't override the OAuth token (precedence:
+        # ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN).
         env:
+          ANTHROPIC_API_KEY: ""
           ANTHROPIC_AUTH_TOKEN: ""
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # TEMPORARY DIAGNOSTIC: earlier ANTHROPIC_API_KEY runs ended
-          # is_error:true after one turn at $0 with the reason hidden (cf.
-          # anthropics/claude-code-action#1836). Remove after the first
-          # successful review on this auth.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # TEMPORARY DIAGNOSTIC: confirm the refreshed OAuth token works (earlier
+          # failures hid their reason: revoked token, invalid API key). Remove
+          # after the first successful review.
           show_full_output: true
           # Without this the action mints a GitHub App token via OIDC, which 403s.
           github_token: ${{ secrets.GITHUB_TOKEN }}
