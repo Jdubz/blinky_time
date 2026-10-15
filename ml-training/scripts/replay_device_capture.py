@@ -74,7 +74,7 @@ def load_capture(jsonl_path: str) -> dict:
 
     # Frame counter (b2xx+, #170): the device emits one NN line per loop update,
     # so frames processed in a catch-up update are missing. "fc" exposes them.
-    has_fc = "fc" in frames[0]
+    has_fc = any("fc" in f for f in frames)
     if has_fc:
         if not all("fc" in f for f in frames):
             print("ERROR: some NN lines lack 'fc' (mixed firmware in one capture?)", file=sys.stderr)
@@ -86,6 +86,7 @@ def load_capture(jsonl_path: str) -> dict:
                   "(device reboot or merged captures?)", file=sys.stderr)
             sys.exit(1)
         missing = int(np.sum(steps - 1))
+        n_missing = missing
         total = int(fc[-1] - fc[0] + 1)
         if missing:
             print(f"  WARNING: {missing}/{total} frames ({100.0 * missing / total:.1f}%) missing "
@@ -93,6 +94,7 @@ def load_capture(jsonl_path: str) -> dict:
                   file=sys.stderr)
     else:
         fc = None
+        n_missing = None
         print("  WARNING: no 'fc' field (pre-#170 capture): dropped frames cannot be detected; "
               "windows spanning a gap will corrupt parity silently.", file=sys.stderr)
 
@@ -112,6 +114,7 @@ def load_capture(jsonl_path: str) -> dict:
         "n_frames": len(frames),
         "onset_field": "nna" if has_nna else "onset",
         "fc": fc,
+        "n_missing": n_missing,  # None = unknown (pre-#170 capture)
     }
 
 
@@ -150,16 +153,22 @@ def peak_pick(activations: np.ndarray, threshold: float,
     times: per-line time in seconds (from the frame counter) when the capture
     has gaps; otherwise line index / frame_rate.
     """
-    min_frames = int(min_interval_s * frame_rate)
+    if times is None:
+        times = np.arange(len(activations)) / frame_rate
+    # Same quantization as evaluate.py's frame-count check (int(0.05*62.5) = 3
+    # frames = 48 ms), expressed in seconds.
+    min_gap_s = int(min_interval_s * frame_rate) / frame_rate
     peaks = []
-    last_peak = -min_frames
+    last_t = -np.inf
     for i in range(1, len(activations) - 1):
+        # Spacing is measured in time, so a dropped frame between two peaks
+        # can't make them look closer than they are.
         if (activations[i] > threshold and
                 activations[i] >= activations[i - 1] and
                 activations[i] >= activations[i + 1] and
-                i - last_peak >= min_frames):
-            peaks.append(times[i] if times is not None else i / frame_rate)
-            last_peak = i
+                times[i] - last_t >= min_gap_s - 1e-9):
+            peaks.append(times[i])
+            last_t = times[i]
     return np.array(peaks)
 
 
@@ -238,7 +247,14 @@ def main():
     print(f"  Device onset count:     {len(device_peaks)}")
     print(f"  Offline onset count:    {len(offline_peaks)}")
 
-    # Score against ground truth if provided
+    # Score against ground truth if provided. Not with dropped frames: offline
+    # predictions near a gap saw different input than the device did, so F1
+    # differences would mix capture loss with model differences.
+    if args.labels and capture["n_missing"]:
+        print(f"ERROR: --labels scoring refused: capture is missing {capture['n_missing']} "
+              "frame(s). Re-capture without catch-up frames (or score a gap-free span).",
+              file=sys.stderr)
+        sys.exit(1)
     if args.labels:
         print(f"\n--- Ground Truth Scoring ---")
         with open(args.labels) as f:
