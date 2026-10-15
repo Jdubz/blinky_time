@@ -348,6 +348,28 @@ jobs:
         python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
           --min-excess 0.07 --min-tempo 0.70 --min-recall 0.25
 
+  model-input-check:
+    name: Onset Model Input Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install tflite schema parser
+      run: pip install tflite
+
+    # Mirrors FrameOnsetNN::begin()'s static checks on the embedded model so a
+    # model the firmware would refuse fails the PR instead of silently running
+    # devices without the onset NN (the 80-mel v36 export did that, initError 5).
+    - name: Check embedded model against the firmware's limits
+      run: python tools/check_model_input.py
+
   tracker-harness-nn:
     name: Tracker Harness with real onset NN (host TFLite Micro)
     runs-on: ubuntu-latest
