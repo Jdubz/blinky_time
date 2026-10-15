@@ -72,10 +72,6 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ""
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # TEMPORARY DIAGNOSTIC: confirm the refreshed OAuth token works (earlier
-          # failures hid their reason: revoked token, invalid API key). Remove
-          # after the first successful review.
-          show_full_output: true
           # Without this the action mints a GitHub App token via OIDC, which 403s.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
