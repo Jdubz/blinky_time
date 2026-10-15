@@ -26,7 +26,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 
 | # | Item | Status | Action |
 |---|---|---|---|
-| 0.2 ([#159](https://github.com/Jdubz/blinky_time/issues/159)) | **Temporary `show_full_output: true`** is on `master` in `.github/workflows/claude-code-review.yml` (public logs). | OPEN | Remove after the first successful review. Like any change to that file, the removal only takes effect once merged to `master`. |
 | 0.3 ([#160](https://github.com/Jdubz/blinky_time/issues/160)) | **Hat flash prerequisites unknown.** Is the hat's link USB or BLE-only? Which bootloader (0.8.0-10 or 0.8.0-7)? | DECIDE | Answer before `./scripts/deploy.sh --devices=<hat>`. A BLE-only link makes the BLE-stack change (§3.1) the one change that could cost reachability. |
 | 0.4 ([#161](https://github.com/Jdubz/blinky_time/issues/161)) | **PR #152 needs device verification.** See the checklist in §7. | IN-PR | Flash, observe the 60 s rule, verify. |
 | 0.5 ([#162](https://github.com/Jdubz/blinky_time/issues/162)) | **The onset NN has been disabled on every device since 2026-05-13.** `frame_onset_model_data.h` = v36 (80 mel) vs 50-mel firmware → `FrameOnsetNN` initError 5. | IN-PR #155 | Merge #155 (restores v33) after #152 is flashed and verified, then flash separately and check `show nn` and fps. |
