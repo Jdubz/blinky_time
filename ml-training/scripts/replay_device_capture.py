@@ -72,6 +72,30 @@ def load_capture(jsonl_path: str) -> dict:
     timestamps = np.array([f["ts"] for f in frames], dtype=np.float64)
     nn_active = all(f.get("nn", 0) == 1 for f in frames)
 
+    # Frame counter (b2xx+, #170): the device emits one NN line per loop update,
+    # so frames processed in a catch-up update are missing. "fc" exposes them.
+    has_fc = "fc" in frames[0]
+    if has_fc:
+        if not all("fc" in f for f in frames):
+            print("ERROR: some NN lines lack 'fc' (mixed firmware in one capture?)", file=sys.stderr)
+            sys.exit(1)
+        fc = np.array([f["fc"] for f in frames], dtype=np.int64)
+        steps = np.diff(fc)
+        if np.any(steps <= 0):
+            print(f"ERROR: frame counter not increasing at {int(np.sum(steps <= 0))} line(s) "
+                  "(device reboot or merged captures?)", file=sys.stderr)
+            sys.exit(1)
+        missing = int(np.sum(steps - 1))
+        total = int(fc[-1] - fc[0] + 1)
+        if missing:
+            print(f"  WARNING: {missing}/{total} frames ({100.0 * missing / total:.1f}%) missing "
+                  f"across {int(np.sum(steps > 1))} gap(s); parity uses gap-free windows only.",
+                  file=sys.stderr)
+    else:
+        fc = None
+        print("  WARNING: no 'fc' field (pre-#170 capture): dropped frames cannot be detected; "
+              "windows spanning a gap will corrupt parity silently.", file=sys.stderr)
+
     # Compute actual frame rate from timestamps
     if len(timestamps) > 1:
         dt_ms = np.median(np.diff(timestamps))
@@ -87,7 +111,19 @@ def load_capture(jsonl_path: str) -> dict:
         "actual_fps": actual_fps,
         "n_frames": len(frames),
         "onset_field": "nna" if has_nna else "onset",
+        "fc": fc,
     }
+
+
+def gap_free_mask(fc: np.ndarray | None, window: int) -> np.ndarray | None:
+    """True where the frame and the window-1 frames before it are consecutive."""
+    if fc is None:
+        return None
+    gap_before = np.concatenate([[False], np.diff(fc) != 1])  # line i follows a gap
+    # Lines since the most recent gap (inclusive of the current line).
+    last_gap = np.maximum.accumulate(np.where(gap_before, np.arange(len(fc)), 0))
+    since = np.arange(len(fc)) - last_gap + 1
+    return since >= window
 
 
 def append_features_from_cfg(mel: np.ndarray, cfg: dict) -> np.ndarray:
@@ -107,8 +143,13 @@ def run_inference(mel_features: np.ndarray, model, cfg: dict,
 
 
 def peak_pick(activations: np.ndarray, threshold: float,
-              frame_rate: float, min_interval_s: float = 0.05) -> np.ndarray:
-    """Simple peak-picking (same as evaluate.py)."""
+              frame_rate: float, min_interval_s: float = 0.05,
+              times: np.ndarray | None = None) -> np.ndarray:
+    """Simple peak-picking (same as evaluate.py).
+
+    times: per-line time in seconds (from the frame counter) when the capture
+    has gaps; otherwise line index / frame_rate.
+    """
     min_frames = int(min_interval_s * frame_rate)
     peaks = []
     last_peak = -min_frames
@@ -117,7 +158,7 @@ def peak_pick(activations: np.ndarray, threshold: float,
                 activations[i] >= activations[i - 1] and
                 activations[i] >= activations[i + 1] and
                 i - last_peak >= min_frames):
-            peaks.append(i / frame_rate)
+            peaks.append(times[i] if times is not None else i / frame_rate)
             last_peak = i
     return np.array(peaks)
 
@@ -167,10 +208,20 @@ def main():
     print("Running offline inference on captured mel data...")
     offline_onset = run_inference(mel_features, model, cfg, device)
 
-    # Compare device vs offline activations
+    # Compare device vs offline activations, only where the model window is
+    # gap-free (offline windows spanning a dropped frame see different input).
     device_onset = capture["device_onset"]
-    correlation = np.corrcoef(device_onset, offline_onset)[0, 1]
-    mae = np.mean(np.abs(device_onset - offline_onset))
+    mask = gap_free_mask(capture["fc"], cfg["model"]["window_frames"])
+    if mask is not None:
+        if not mask.any():
+            print("ERROR: no gap-free model windows in this capture", file=sys.stderr)
+            sys.exit(1)
+        print(f"  Parity frames (gap-free windows): {int(mask.sum())}/{len(mask)}")
+        dev_cmp, off_cmp = device_onset[mask], offline_onset[mask]
+    else:
+        dev_cmp, off_cmp = device_onset, offline_onset
+    correlation = np.corrcoef(dev_cmp, off_cmp)[0, 1]
+    mae = np.mean(np.abs(dev_cmp - off_cmp))
     print(f"\n--- Parity Analysis ---")
     print(f"  Activation correlation: {correlation:.4f}")
     print(f"  Activation MAE:         {mae:.4f}")
@@ -179,8 +230,11 @@ def main():
 
     # Peak-pick both
     frame_rate = capture["actual_fps"]
-    device_peaks = peak_pick(device_onset, args.threshold, frame_rate)
-    offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate)
+    # With a frame counter, time each line by its frame index at the nominal
+    # 62.5 Hz frame rate, so dropped frames don't shift later peaks.
+    times = (capture["fc"] - capture["fc"][0]) / 62.5 if capture["fc"] is not None else None
+    device_peaks = peak_pick(device_onset, args.threshold, frame_rate, times=times)
+    offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate, times=times)
     print(f"  Device onset count:     {len(device_peaks)}")
     print(f"  Offline onset count:    {len(offline_peaks)}")
 
