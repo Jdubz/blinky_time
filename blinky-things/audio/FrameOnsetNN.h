@@ -284,14 +284,6 @@ public:
 
         unsigned long t0 = micros();
         if (interpreter_->Invoke() != kTfLiteOk) {
-            // TFLite invoke failure in the 62.5 Hz hot path. Counter is logged
-            // by the debug printer, but a continuous failure mode would
-            // otherwise look like quiet content. Log first occurrence so the
-            // failure shows up in serial without spamming.
-            if (invokeErrors_ == 0) {
-                Serial.println(F("[ERROR] FrameOnsetNN: TFLite Invoke() failed (first occurrence)"));
-            }
-            invokeErrors_++;
             return 0.0f;
         }
         lastInferUs_ = micros() - t0;

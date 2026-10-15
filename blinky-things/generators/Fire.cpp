@@ -312,7 +312,6 @@ void Fire::spawnParticles(float dt) {
         float rawCount = crossDim_ *
                          (params_.burstSizeBase + params_.burstSizeGain * strength);
         if (rawCount < 0.0f) rawCount = 0.0f;
-        if (rawCount > 255.0f) rawCount = 255.0f;
         uint8_t burstAdd = (uint8_t)rawCount;
         burstParticles_ = burstAdd;
         burstStrength_  = strength;

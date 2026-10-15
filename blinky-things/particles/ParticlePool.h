@@ -97,7 +97,7 @@ public:
      */
     void kill(Particle* p) {
         // Validate pointer is within pool bounds
-        if (!particles_ || !p || p < particles_ || p >= particles_ + capacity_) {
+        if (!particles_ || !p || p < particles_ || p > particles_ + capacity_) {
             return;  // Invalid pointer, ignore
         }
 

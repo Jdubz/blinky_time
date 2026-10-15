@@ -187,7 +187,7 @@ void AdaptiveMic::onPDMdata() {
   // Copy samples to FFT ring buffer for spectral analysis
   uint32_t writeIdx = s_fftWriteIdx;
   for (int i = 0; i < samples; ++i) {
-    s_fftRing[writeIdx & (FFT_RING_SIZE - 1)] = buffer[i];
+    s_fftRing[writeIdx & FFT_RING_SIZE] = buffer[i];
     writeIdx++;
   }
   s_fftWriteIdx = writeIdx;
