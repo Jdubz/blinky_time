@@ -14,6 +14,7 @@
 // same code either way; onset pulses come from spectral flux instead of NN.
 
 #include "audio/AudioTracker.h"
+#include "types/BlinkyAssert.h"
 
 #include <cmath>
 #include <cstdint>
@@ -105,6 +106,11 @@ int main(int argc, char** argv) {
     pdm.pcm = &pcm;
     AudioTracker tracker(pdm, time);
     tracker.begin(SAMPLE_RATE);
+    // begin() trips the expected "NN unavailable" assert on the host (no
+    // TFLite). Any firmware assert after this point is a real failure: the
+    // firmware's fallback keeps outputs finite, so without this check a
+    // tripped BLINKY_ASSERT would pass silently.
+    const uint16_t assertsAfterBegin = BlinkyAssert::failCount;
     if (argc > 6) tracker.plpPhaseGain = static_cast<float>(std::atof(argv[6]));
     if (argc > 7) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
 
@@ -139,5 +145,10 @@ int main(int argc, char** argv) {
         prevFrames = frames;
     }
     std::fclose(out);
+    const unsigned fired = static_cast<unsigned>(BlinkyAssert::failCount - assertsAfterBegin);
+    if (fired) {
+        std::fprintf(stderr, "[HARNESS] %u firmware assert(s) fired during the run (see [ASSERT] lines on stdout)\n", fired);
+        return 3;
+    }
     return 0;
 }

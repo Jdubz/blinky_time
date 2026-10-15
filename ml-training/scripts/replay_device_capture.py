@@ -20,7 +20,7 @@ Usage:
         --capture capture.jsonl \\
         --model outputs/v16-no-delta/best_model.pt \\
         --config configs/conv1d_w16_onset_v16.yaml \\
-        --labels ../blinky-test-player/music/edm/techno-minimal-01.beats.json
+        --labels ../blinky-test-player/music/edm/techno-minimal-01.onsets_consensus.json
 """
 
 import argparse
@@ -38,6 +38,11 @@ from evaluate import load_model
 
 
 SPECTRAL_FPS = 62.5  # firmware spectral frame rate (16 kHz / 256-sample hop)
+# Architectures whose output at frame t uses only frames <= t (frame_fc pads
+# window-1 zero frames on the left; frame_conv1d uses causal convolutions), so
+# overlapping-window averaging adds no look-ahead. Anything else is masked
+# conservatively on both sides.
+CAUSAL_MODEL_TYPES = {"frame_fc", "frame_conv1d"}
 
 
 def load_capture(jsonl_path: str) -> dict:
@@ -95,9 +100,20 @@ def load_capture(jsonl_path: str) -> dict:
             print(f"  WARNING: {missing}/{total} frames ({100.0 * missing / total:.1f}%) missing "
                   f"across {int(np.sum(steps > 1))} gap(s); parity uses gap-free windows only.",
                   file=sys.stderr)
+        # Mic-ring overruns (b2xx+): frames still count up by one, but audio was
+        # lost, so the timeline drifts from wall clock. Needed for --labels.
+        if "ovr" in frames[0]:
+            ovr = np.array([f["ovr"] for f in frames], dtype=np.int64)
+            n_overruns = int(ovr[-1] - ovr[0])
+            if n_overruns:
+                print(f"  WARNING: {n_overruns} mic-ring overrun(s) during the capture; "
+                      "audio timeline is not continuous.", file=sys.stderr)
+        else:
+            n_overruns = None
     else:
         fc = None
         n_missing = None
+        n_overruns = None
         print("  WARNING: no 'fc' field (pre-#170 capture): dropped frames cannot be detected; "
               "windows spanning a gap will corrupt parity silently.", file=sys.stderr)
 
@@ -118,18 +134,32 @@ def load_capture(jsonl_path: str) -> dict:
         "onset_field": "nna" if has_nna else "onset",
         "fc": fc,
         "n_missing": n_missing,  # None = unknown (pre-#170 capture)
+        "n_overruns": n_overruns,  # None = unknown (capture predates the ovr field)
     }
 
 
-def gap_free_mask(fc: np.ndarray | None, window: int) -> np.ndarray | None:
-    """True where the frame and the window-1 frames before it are consecutive."""
+def gap_free_mask(fc: np.ndarray | None, before: int, after: int) -> np.ndarray | None:
+    """True where lines [i-before, i+after] all exist and are consecutive frames.
+
+    Offline sliding_window_inference averages 50%-overlapping chunks. For a
+    causal model (CAUSAL_MODEL_TYPES) output i still depends only on the
+    window-1 lines before it, so after=0. For any other architecture output i
+    can depend on lines up to window-1 AFTER i, so after=window-1.
+    Delta/band-flux features need one more line before.
+    """
     if fc is None:
         return None
-    gap_before = np.concatenate([[False], np.diff(fc) != 1])  # line i follows a gap
-    # Lines since the most recent gap (inclusive of the current line).
-    last_gap = np.maximum.accumulate(np.where(gap_before, np.arange(len(fc)), 0))
-    since = np.arange(len(fc)) - last_gap + 1
-    return since >= window
+    n = len(fc)
+    # gap[j] = True when line j does not follow line j-1 by exactly one frame.
+    gap = np.concatenate([[False], np.diff(fc) != 1]).astype(np.int64)
+    csum = np.concatenate([[0], np.cumsum(gap)])  # csum[k] = gaps among lines < k
+    idx = np.arange(n)
+    lo, hi = idx - before, idx + after
+    inside = (lo >= 0) & (hi <= n - 1)
+    lo_c, hi_c = np.clip(lo, 0, n - 1), np.clip(hi, 0, n - 1)
+    # Gaps strictly inside (lo, hi]: a gap at line j breaks the pair (j-1, j).
+    gaps_in = csum[hi_c + 1] - csum[lo_c + 1]
+    return inside & (gaps_in == 0)
 
 
 def append_features_from_cfg(mel: np.ndarray, cfg: dict) -> np.ndarray:
@@ -150,11 +180,17 @@ def run_inference(mel_features: np.ndarray, model, cfg: dict,
 
 def peak_pick(activations: np.ndarray, threshold: float,
               frame_rate: float, min_interval_s: float = 0.05,
-              times: np.ndarray | None = None) -> np.ndarray:
+              times: np.ndarray | None = None,
+              fc: np.ndarray | None = None,
+              valid: np.ndarray | None = None) -> np.ndarray:
     """Simple peak-picking (same as evaluate.py).
 
     times: per-line time in seconds (from the frame counter) when the capture
     has gaps; otherwise line index / frame_rate.
+    fc: frame counter; a line whose neighbour is across a gap can't be a peak
+    (its neighbours aren't adjacent frames).
+    valid: optional mask; a peak needs the line and both neighbours valid
+    (the neighbours feed the local-max test).
     """
     if times is None:
         times = np.arange(len(activations)) / frame_rate
@@ -166,6 +202,10 @@ def peak_pick(activations: np.ndarray, threshold: float,
     for i in range(1, len(activations) - 1):
         # Spacing is measured in time, so a dropped frame between two peaks
         # can't make them look closer than they are.
+        if fc is not None and (fc[i] - fc[i - 1] != 1 or fc[i + 1] - fc[i] != 1):
+            continue
+        if valid is not None and not (valid[i - 1] and valid[i] and valid[i + 1]):
+            continue
         if (activations[i] > threshold and
                 activations[i] >= activations[i - 1] and
                 activations[i] >= activations[i + 1] and
@@ -180,7 +220,9 @@ def main():
     parser.add_argument("--capture", required=True, help="JSONL capture file from capture-nn endpoint")
     parser.add_argument("--model", required=True, help="Trained model checkpoint (.pt)")
     parser.add_argument("--config", required=True, help="Model config YAML")
-    parser.add_argument("--labels", default=None, help="Ground truth onset labels (.beats.json)")
+    parser.add_argument("--labels", default=None,
+                        help="Ground-truth onsets (.onsets_consensus.json). Beat files are "
+                             "refused: the task is onset detection (CLAUDE.md).")
     parser.add_argument("--threshold", type=float, default=0.5, help="Onset detection threshold")
     parser.add_argument("--device", default="cpu", help="Torch device (cpu/cuda)")
     args = parser.parse_args()
@@ -223,7 +265,11 @@ def main():
     # Compare device vs offline activations, only where the model window is
     # gap-free (offline windows spanning a dropped frame see different input).
     device_onset = capture["device_onset"]
-    mask = gap_free_mask(capture["fc"], cfg["model"]["window_frames"])
+    window = cfg["model"]["window_frames"]
+    extra = 1 if (use_delta or use_band_flux) else 0
+    causal = cfg["model"].get("type", "causal_cnn") in CAUSAL_MODEL_TYPES
+    mask = gap_free_mask(capture["fc"], before=window - 1 + extra,
+                         after=0 if causal else window - 1)
     if mask is not None:
         if not mask.any():
             print("ERROR: no gap-free model windows in this capture", file=sys.stderr)
@@ -237,8 +283,8 @@ def main():
     print(f"\n--- Parity Analysis ---")
     print(f"  Activation correlation: {correlation:.4f}")
     print(f"  Activation MAE:         {mae:.4f}")
-    print(f"  Device mean activation: {device_onset.mean():.4f}")
-    print(f"  Offline mean activation:{offline_onset.mean():.4f}")
+    print(f"  Device mean activation: {dev_cmp.mean():.4f}")
+    print(f"  Offline mean activation:{off_cmp.mean():.4f}")
 
     # Peak-pick both
     # With fc, both peak times and the minimum spacing use the 62.5 Hz spectral
@@ -248,8 +294,10 @@ def main():
     # With a frame counter, time each line by its frame index at the nominal
     # 62.5 Hz frame rate, so dropped frames don't shift later peaks.
     times = (capture["fc"] - capture["fc"][0]) / SPECTRAL_FPS if capture["fc"] is not None else None
-    device_peaks = peak_pick(device_onset, args.threshold, frame_rate, times=times)
-    offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate, times=times)
+    device_peaks = peak_pick(device_onset, args.threshold, frame_rate, times=times,
+                             fc=capture["fc"], valid=mask)
+    offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate, times=times,
+                              fc=capture["fc"], valid=mask)
     print(f"  Device onset count:     {len(device_peaks)}")
     print(f"  Offline onset count:    {len(offline_peaks)}")
 
@@ -261,11 +309,38 @@ def main():
               "frame(s). Re-capture without catch-up frames (or score a gap-free span).",
               file=sys.stderr)
         sys.exit(1)
+    if args.labels and capture["n_overruns"]:
+        print(f"ERROR: --labels scoring refused: {capture['n_overruns']} mic-ring overrun(s) "
+              "during the capture, so frame times no longer match the labels' timeline.",
+              file=sys.stderr)
+        sys.exit(1)
     if args.labels:
         print(f"\n--- Ground Truth Scoring ---")
-        with open(args.labels) as f:
+        with open(args.labels, encoding="utf-8") as f:
             label_data = json.load(f)
-        ref_times = np.array(label_data.get("beats", label_data.get("onsets", [])))
+        # Onset detection, not beat detection (CLAUDE.md): only onset ground
+        # truth is valid here. onsets_consensus stores {"time", "strength"}.
+        if "onsets" not in label_data:
+            print(f"ERROR: {args.labels} has no 'onsets' list (keys: {sorted(label_data)}). "
+                  "Use the track's .onsets_consensus.json; beat files are not onset ground truth.",
+                  file=sys.stderr)
+            sys.exit(1)
+        ref_times = np.array([o["time"] if isinstance(o, dict) else o
+                              for o in label_data["onsets"]], dtype=np.float64)
+        # Score only where a peak could have been detected: the mask excludes
+        # lines without full model context (capture edges), and an onset there
+        # would count as a miss for both arms.
+        if mask is not None:
+            idx = np.arange(len(mask))
+            eligible = idx[1:-1][mask[:-2] & mask[1:-1] & mask[2:]]
+            if len(eligible) == 0:
+                print("ERROR: no lines eligible for peak detection", file=sys.stderr)
+                sys.exit(1)
+            t_lo, t_hi = times[eligible[0]], times[eligible[-1]]
+            n_all = len(ref_times)
+            ref_times = ref_times[(ref_times >= t_lo) & (ref_times <= t_hi)]
+            print(f"  Reference onsets in the scorable span "
+                  f"[{t_lo:.2f}, {t_hi:.2f}] s: {len(ref_times)}/{n_all}")
         if len(ref_times) == 0:
             print("  No reference onsets found in labels file")
         else:
