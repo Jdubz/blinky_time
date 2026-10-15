@@ -286,3 +286,25 @@ jobs:
 
     - name: Build
       run: npm run build
+
+  model-input-check:
+    name: Onset Model Input Width
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install tflite schema parser
+      run: pip install tflite
+
+    # Fails if frame_onset_model_data.h's per-frame input width doesn't match
+    # NUM_MEL_BANDS: the 80-mel v36 model shipped against 50-mel firmware and
+    # silently disabled the onset NN fleet-wide (initError 5).
+    - name: Check embedded model against NUM_MEL_BANDS
+      run: python tools/check_model_input.py
