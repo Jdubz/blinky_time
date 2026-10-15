@@ -3282,35 +3282,29 @@ def _make_serial_bootloader_entry(
 
     A retry's re-entry (#218) can run after an INVALID_STATE reset rebooted
     the device into its app and USB re-enumerated: the bound serial transport
-    is then dead, and reconnection is held during the flash. The app is then
+    is then dead (reconnection is held during the flash). Only in that case,
+    when the transport is ALREADY disconnected before sending, the app is
     reached over a one-shot BLE NUS connection instead (the BLE address is
-    required for BLE-DFU). A send that merely times out is normal on attempt 0
-    (the device reboots) and is not a reason to fall back.
+    required for BLE-DFU). An error during the send itself is the normal
+    attempt-0 outcome: `bootloader ble` resets the device at once, USB drops
+    and the pending command is cancelled with ConnectionError. That must not
+    trigger a BLE connect to the app address, which the device has already
+    left for its bootloader.
     """
 
     async def _enter_via_serial(cmd: str) -> None:
         from ..transport.ble_transport import BleTransport
 
         if serial_transport.is_connected:
-            try:
-                await protocol.send_command(cmd)
-                await asyncio.sleep(2)
-                return
-            except TimeoutError:
-                # TimeoutError subclasses OSError: no reply is expected while
-                # the device reboots into its bootloader, so don't fall back.
-                raise
-            except (ConnectionError, OSError) as e:
-                log.warning(
-                    "Bootloader entry over serial failed (%s); trying BLE NUS %s", e, ble_addr
-                )
-        else:
-            log.warning(
-                "Serial transport for %s is disconnected; entering the bootloader "
-                "over BLE NUS %s instead",
-                device_id[:12],
-                ble_addr,
-            )
+            await protocol.send_command(cmd)
+            await asyncio.sleep(2)
+            return
+        log.warning(
+            "Serial transport for %s is disconnected; entering the bootloader "
+            "over BLE NUS %s instead",
+            device_id[:12],
+            ble_addr,
+        )
         one_shot = BleTransport(ble_addr)
         try:
             await one_shot.connect()

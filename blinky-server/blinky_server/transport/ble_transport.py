@@ -62,16 +62,21 @@ class BleTransport(Transport):
         # timeout can hang on BlueZ when the HCI layer gets stuck.
         try:
             await asyncio.wait_for(self._connect_inner(), timeout=CONNECT_TIMEOUT_S + 10)
-        except TimeoutError:
-            # Clean up partial state
+        except BaseException as e:
+            # Clean up partial state on ANY failure, not just a timeout: GATT
+            # can connect and then start_notify (or the startup writes) fail,
+            # and disconnect() is a no-op while _connected is False, which
+            # would leave the BleakClient connected.
             if self._client:
                 with contextlib.suppress(Exception):
                     await self._client.disconnect()
             self._client = None
             self._connected = False
-            raise ConnectionError(
-                f"BLE connect to {self._address} timed out after {CONNECT_TIMEOUT_S + 10}s"
-            ) from None
+            if isinstance(e, TimeoutError):
+                raise ConnectionError(
+                    f"BLE connect to {self._address} timed out after {CONNECT_TIMEOUT_S + 10}s"
+                ) from None
+            raise
 
     async def _connect_inner(self) -> None:
         log.info("BLE connecting to %s...", self._address)

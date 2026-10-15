@@ -74,17 +74,21 @@ async def test_disconnected_serial_falls_back_to_ble(ble_log: list[tuple[str, st
     assert ble_log == [("connect", BLE), ("write", "bootloader ble"), ("disconnect", BLE)]
 
 
-async def test_stale_serial_error_falls_back_to_ble(ble_log: list[tuple[str, str]]) -> None:
-    proto = FakeProtocol(exc=ConnectionError("port gone"))
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionError("Command cancelled: transport disconnected"),
+        TimeoutError(),
+    ],
+)
+async def test_send_error_does_not_fall_back(
+    ble_log: list[tuple[str, str]], exc: BaseException
+) -> None:
+    # Attempt 0: `bootloader ble` resets the device at once, so the pending
+    # command is cancelled (ConnectionError) or times out. The device is
+    # heading for its bootloader; a BLE connect to the app address would fail.
+    proto = FakeProtocol(exc=exc)
     enter = manager_mod._make_serial_bootloader_entry(proto, FakeSerial(True), BLE, "dev")
-    await enter("bootloader ble")
-    assert ble_log == [("connect", BLE), ("write", "bootloader ble"), ("disconnect", BLE)]
-
-
-async def test_serial_timeout_does_not_fall_back(ble_log: list[tuple[str, str]]) -> None:
-    # Attempt 0: the device reboots on the command, so no reply is normal.
-    proto = FakeProtocol(exc=TimeoutError())
-    enter = manager_mod._make_serial_bootloader_entry(proto, FakeSerial(True), BLE, "dev")
-    with pytest.raises(TimeoutError):
+    with pytest.raises(type(exc)):
         await enter("bootloader ble")
     assert ble_log == []
