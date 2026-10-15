@@ -11,8 +11,9 @@
  * in the Bluefruit callback task, so "current task" would measure the wrong
  * stack.
  *
- * Heap: newlib malloc via mallinfo(). hal/MallocLock.cpp makes the heap
- * task-safe (#223): malloc/free/mallinfo all take the newlib lock. The walk
+ * Heap: newlib mallinfo(). The core wraps malloc/free into FreeRTOS heap_3;
+ * hal/MallocLock.cpp adds the newlib lock that realloc/calloc/strdup and
+ * mallinfo take, so every heap entry point is now exclusive (#223). The walk
  * still runs only on the loop task (sampleHeap(), ~1 Hz from loop()) so
  * `json info` from the BLE callback task never walks the heap; it prints the
  * cached sample. The cache is written while the scheduler is suspended, so no

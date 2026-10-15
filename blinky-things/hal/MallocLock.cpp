@@ -1,16 +1,21 @@
 /**
- * MallocLock - make newlib's heap task-safe on the nRF52 core (#223).
+ * MallocLock - close the unlocked newlib heap paths on the nRF52 core (#223).
  *
- * The Seeed nRF52 core (1.1.10) never implements newlib's __malloc_lock /
- * __malloc_unlock, so libc_nano's no-op versions (lib_a-mlock.o) are linked
- * and malloc/free/mallinfo are unprotected. Several tasks allocate after
- * boot: the loop task (config save, LittleFS file buffers), the Bluefruit
- * callback task (NUS command handlers: ArduinoJson, String, OTA staging,
- * `record start`'s 32 KB ring and sender task), and the BLE task (the core's
- * ada_callback queue mallocs per deferred event). Two of those overlapping in
- * time can corrupt the free list.
+ * The Seeed nRF52 core (1.1.10) links with -Wl,--wrap=malloc,--wrap=free and
+ * routes both into FreeRTOS heap_3 (pvPortMalloc / vPortFree), which suspend
+ * the scheduler around the call. So plain malloc/free/new/delete are already
+ * task-safe. What is NOT covered: newlib's own realloc / calloc / strdup /
+ * mallinfo call the inner allocator (_malloc_r / _free_r) directly, bypassing
+ * the wrap, and the core never implements newlib's __malloc_lock, so
+ * libc_nano's no-op lib_a-mlock.o is linked. Arduino String grows with
+ * realloc; NUS command handlers (e.g. `device show`) build Strings in the
+ * Bluefruit callback task while the higher-priority BLE task can preempt and
+ * malloc (ada_callback_invoke), so a realloc mid-update can be interleaved
+ * with another task's malloc/free and corrupt the free list.
  *
- * Defining both symbols here replaces mlock.o (it holds only these two).
+ * nano _malloc_r / _free_r / mallinfo all take __malloc_lock, so defining
+ * both symbols here (replacing mlock.o, which holds only these two) makes
+ * every heap entry point mutually exclusive.
  *
  * Lock = suspend the scheduler, the standard FreeRTOS + newlib approach:
  *  - recursive (vTaskSuspendAll nests), which newlib requires;
@@ -18,15 +23,18 @@
  *    keep running, so BLE timing is untouched;
  *  - before the scheduler starts everything is single-threaded: no-op.
  *
- * ISRs: suspending the scheduler from an ISR is illegal and cannot exclude a
- * task that is already mid-malloc, so an ISR allocation can't be made safe
- * here. The only ISR allocator in the core is WInterrupts.c's ISR_DEFERRED
- * path (attachInterrupt), which this firmware doesn't use. An ISR allocation
- * is counted (MallocLock_isrAllocCount, reported in `json info`) rather than
- * asserted: a halt inside malloc would be worse on a sealed device.
+ * ISRs: suspending the scheduler from an ISR is illegal and can't exclude a
+ * task already mid-allocation. Plain malloc/free from an ISR already assert
+ * in heap_3 (xTaskResumeAll -> vPortEnterCritical asserts VECTACTIVE == 0)
+ * before reaching this lock; only an ISR realloc/calloc/strdup gets here.
+ * Those are counted (MallocLock_isrAllocCount) rather than asserted inside
+ * the allocator, and loop() logs the first one at ERROR (MallocLock::
+ * reportIsrAllocs) - `json info` reports the count as mallocIsr. The only ISR
+ * allocator in the core is WInterrupts.c's ISR_DEFERRED path
+ * (attachInterrupt), which this firmware doesn't use.
  */
 
-#include "PlatformDetect.h"
+#include "MallocLock.h"
 
 #ifdef BLINKY_PLATFORM_NRF52840
 
@@ -57,5 +65,19 @@ void __malloc_unlock(struct _reent* r) {
 }
 
 }  // extern "C"
+
+namespace MallocLock {
+
+void reportIsrAllocs() {
+    static bool logged = false;
+    if (!logged && MallocLock_isrAllocCount != 0) {
+        logged = true;
+        Serial.print(F("[ERROR] MallocLock: heap allocation from an ISR ("));
+        Serial.print(MallocLock_isrAllocCount);
+        Serial.println(F(" so far) - not protected by the heap lock; see json info mallocIsr"));
+    }
+}
+
+}  // namespace MallocLock
 
 #endif  // BLINKY_PLATFORM_NRF52840
