@@ -72,7 +72,10 @@ fi
 missing=""
 if [ -n "${CHANGED_FILES:-}" ]; then
     expected=$(printf '%s\n' "$CHANGED_FILES" | awk -F'\t' 'NF && $1 !~ /^D/ {print $NF}' | sort -u)
-    reviewed=$(jq -r '(.files_reviewed // [])[]' <<<"$STRUCTURED" | sort -u)
+    # Normalise to repo-relative: the Read tool works in absolute paths, and
+    # a model may report ./x or $GITHUB_WORKSPACE/x for a file it did read.
+    reviewed=$(jq -r '(.files_reviewed // [])[]' <<<"$STRUCTURED" \
+        | sed -e "s#^${GITHUB_WORKSPACE:-/nonexistent}/##" -e 's#^\./##' | sort -u)
     missing=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$reviewed"))
     if [ -n "$missing" ]; then
         coverage="partial"
