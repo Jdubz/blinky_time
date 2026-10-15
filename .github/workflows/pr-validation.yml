@@ -59,13 +59,28 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install cppcheck
+    # Pinned: Ubuntu's apt cppcheck (2.13 on 24.04) misses findings that 2.16
+    # reports, so CI passed code that failed locally (#201). Built from source
+    # once and cached by version.
+    - name: Cache cppcheck
+      id: cppcheck-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/cppcheck
+        key: cppcheck-2.16.0-${{ runner.os }}
+
+    - name: Build cppcheck 2.16.0
+      if: steps.cppcheck-cache.outputs.cache-hit != 'true'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cppcheck
+        git clone --depth 1 --branch 2.16.0 https://github.com/danmar/cppcheck.git /tmp/cppcheck-src
+        cmake -S /tmp/cppcheck-src -B /tmp/cppcheck-build -DCMAKE_BUILD_TYPE=Release           -DUSE_MATCHCOMPILER=ON -DCMAKE_INSTALL_PREFIX=$HOME/cppcheck
+        cmake --build /tmp/cppcheck-build -j"$(nproc)"
+        cmake --install /tmp/cppcheck-build
 
     - name: Run cppcheck
       run: |
+        export PATH="$HOME/cppcheck/bin:$PATH"
+        cppcheck --version | grep -qx 'Cppcheck 2.16.0' || { cppcheck --version; echo "wrong cppcheck version"; exit 1; }
         cppcheck \
           --enable=warning,style,performance,portability \
           --error-exitcode=1 \
@@ -287,8 +302,46 @@ jobs:
     - name: Build
       run: npm run build
 
+  tracker-harness:
+    name: Tracker Harness (UBSan stress + corpus gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python deps
+      run: pip install numpy imageio-ffmpeg
+
+    - name: Build harness (UBSan and release)
+      run: |
+        mkdir -p build
+        SRCS="tests/tracker/tracker_harness.cpp blinky-things/audio/AudioTracker.cpp \
+          blinky-things/audio/SharedSpectralAnalysis.cpp blinky-things/inputs/AdaptiveMic.cpp \
+          blinky-things/types/BlinkyAssert.cpp"
+        FLAGS="-std=c++17 -DBLINKY_HOST_HARNESS -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 \
+          -Iblinky-simulator/include -Iblinky-things"
+        g++ $FLAGS -O1 -g -fsanitize=undefined -fno-sanitize-recover=undefined $SRCS -o build/tracker_harness_ubsan
+        g++ $FLAGS -O2 $SRCS -o build/tracker_harness
+
+    - name: UBSan stress (silence, gap, clip, noise, hum, clicks at 15/60/250 fps)
+      run: python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
+
+    # Floors sit just under the b208 baseline (excess 0.096, tempo 0.667,
+    # recall 0.283 on edm/ at 35/60/90 fps). Raise them as the tracker improves.
+    - name: Corpus regression gate (edm/, 35/60/90 fps)
+      run: |
+        python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
+          --min-excess 0.07 --min-tempo 0.60 --min-recall 0.25
+
   model-input-check:
-    name: Onset Model Input Width
+    name: Onset Model Input Check
     runs-on: ubuntu-latest
 
     steps:
@@ -303,8 +356,8 @@ jobs:
     - name: Install tflite schema parser
       run: pip install tflite
 
-    # Fails if frame_onset_model_data.h's per-frame input width doesn't match
-    # NUM_MEL_BANDS: the 80-mel v36 model shipped against 50-mel firmware and
-    # silently disabled the onset NN fleet-wide (initError 5).
-    - name: Check embedded model against NUM_MEL_BANDS
+    # Mirrors FrameOnsetNN::begin()'s static checks on the embedded model so a
+    # model the firmware would refuse fails the PR instead of silently running
+    # devices without the onset NN (the 80-mel v36 export did that, initError 5).
+    - name: Check embedded model against the firmware's limits
       run: python tools/check_model_input.py

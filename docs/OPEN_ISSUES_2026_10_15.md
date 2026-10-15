@@ -40,7 +40,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 1.4 ([#167](https://github.com/Jdubz/blinky_time/issues/167)) | Phase lock near the noise floor on dubstep / garage / breakbeat / trap | tracker | OPEN | Tied to 1.3. Measure with `tests/tracker` `excess`. |
 | 1.5 ([#168](https://github.com/Jdubz/blinky_time/issues/168)) | 174 BPM tracked as a 2-beat cycle (octave ambiguity) | `runAcf` | OPEN | Acceptable for visuals but limits `beatCount` meaning; revisit with 1.3. |
 | 1.6 ([#169](https://github.com/Jdubz/blinky_time/issues/169)) | "3-tap Hamming" NN smoothing is actually asymmetric 0.77/0.23 | `processFrame` | DECIDE | Kept on purpose (`pulseOnsetFloor` tuned against it). A symmetric filter needs a retune sweep. |
-| 1.7 ([#170](https://github.com/Jdubz/blinky_time/issues/170)) | `stream nn` debug stream emits only the last frame of each update | `SerialConsole::streamTick` | OPEN | Use a per-frame hook (needs a second hook slot), or note gaps via the `ts` field. |
 | 1.8 ([#171](https://github.com/Jdubz/blinky_time/issues/171)) | JSON stream formatting costs 10–50 ms per emit (loop stall while streaming) | `SerialConsole::streamTick` | OPEN | Rate-limit to a CPU budget or move off the loop task. |
 | 1.9 ([#172](https://github.com/Jdubz/blinky_time/issues/172)) | Silence reset / confidence gating used relative level | `AudioTracker` | IN-PR #152 | Absolute raw level + ~1 s EMA. Verify breakdowns no longer reset tempo. |
 | 1.10 ([#173](https://github.com/Jdubz/blinky_time/issues/173)) | `stream nn` + other `[FPS]`/debug prints share TeeStream with NUS callback task | `SerialConsole`, `BleNus` | OPEN | BLE RX `handleCommand` runs in the Bluefruit callback task, concurrently with loop-task output (pre-existing hazard). Defer NUS commands to the loop task via a queue. |
@@ -57,7 +56,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 2.5 ([#179](https://github.com/Jdubz/blinky_time/issues/179)) | Compressor makes `bassFlux` ∝ level^(1/3); `bassContrast` may clamp at 1 on loud kicks | `applyCompressor`, `processFrame` | OPEN | Unverified: add telemetry before changing. |
 | 2.6 ([#180](https://github.com/Jdubz/blinky_time/issues/180)) | Mel whitening gives little contrast (log-domain ÷ running max) | `whitenMelBands` | OPEN | Low priority; comment corrected in #152. |
 | 2.7 ([#181](https://github.com/Jdubz/blinky_time/issues/181)) | Noise estimator creeps in steady music (leaky minimum) | `estimateAndSubtractNoise` | OPEN | Off by default and not persisted. Keep off, or switch to windowed min-statistics. |
-| 2.8 ([#182](https://github.com/Jdubz/blinky_time/issues/182)) | Unused per-frame work: whitening (backs user settings), debug-only compressed flatness (127 `logf`) | `SharedSpectralAnalysis` | OPEN | `atan2f` phases removed in #152. Compute flatness lazily when streaming. |
 | 2.9 ([#183](https://github.com/Jdubz/blinky_time/issues/183)) | `noiseGate` setting not persisted across reboots | `SerialConsole.cpp:250`, `ConfigStorage` | DECIDE | Persisting changes the stored settings layout (settings reset fleet-wide). Bundle with the next intentional `SETTINGS_VERSION` bump. |
 | 2.10 ([#184](https://github.com/Jdubz/blinky_time/issues/184)) | Mic ring overrun splices a window → spurious flux spike | `AdaptiveMic`, `SharedSpectralAnalysis` | IN-PR #152 | `markDiscontinuity()`. |
 
@@ -66,12 +64,11 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
 | 3.1 ([#185](https://github.com/Jdubz/blinky_time/issues/185)) | `configPrphBandwidth(BANDWIDTH_MAX)`: SoftDevice RAM requirement grows | `blinky-things.ino` | IN-PR #152 | Same config as the stock `bleuart` example on this core and linker. On failure: logged, BLE skipped, USB intact. **Verify:** boot log has no `[FALLBACK] Bluefruit.begin() FAILED`; `ble` shows MTU 247. |
-| 3.2 ([#186](https://github.com/Jdubz/blinky_time/issues/186)) | Loop-task stack 4 KB with ~3.8 KB used at HEAD (`updatePlpAnalysis`) | `AudioTracker` | IN-PR #152 | Scratch buffers moved to members: ~1.5 KB deepest path. No runtime high-water telemetry exists; consider logging `uxTaskGetStackHighWaterMark` in `json info`. |
-| 3.3 ([#187](https://github.com/Jdubz/blinky_time/issues/187)) | No runtime free-heap report; boot allocation failure is a halt | firmware | OPEN | Add free heap (`dbgHeapFree` or a mallinfo equivalent) to `json info`. |
 | 3.4 ([#188](https://github.com/Jdubz/blinky_time/issues/188)) | NUS has no pairing; any nearby central can send `bootloader` and config writes | `BleNus`, `SerialConsole` | DECIDE | Exposure grows with phone record sessions in crowds. Options: pairing/bonding, a command allowlist over BLE, or a session PIN. |
 | 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | OPEN | Keep console quiet during sessions; consider a non-blocking notify check. |
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 | 3.7 ([#191](https://github.com/Jdubz/blinky_time/issues/191)) | Settings save still halts the CPU (NVMC erase) long enough to drop audio | `ConfigStorage::saveToFlash` | PARTIAL | Trailing debounce + skip-unchanged in #152. Consider deferring saves while audio energy is high. |
+| 3.8 ([#223](https://github.com/Jdubz/blinky_time/issues/223)) | Heap not task-safe: core has no `__malloc_lock`; loop and BLE callback tasks both allocate (e.g. `record start` allocates 32 KB from the callback task) | core / `RecordStream` | OPEN | Audit post-boot allocations; pre-allocate or confine to the loop task, or lock malloc with `vTaskSuspendAll` after bench validation. |
 
 ## 4. Visual generators
 
@@ -94,12 +91,7 @@ Nothing in PR #152 / #155 has run on hardware yet.
 
 | # | Issue | Status | Notes |
 |---|---|---|---|
-| 6.1 ([#199](https://github.com/Jdubz/blinky_time/issues/199)) | Windows checkout (`core.autocrlf=true`) yields CRLF working files; the console pre-push Prettier check fails on 60+ untouched files | OPEN | Add `.gitattributes` (`* text=auto eol=lf` for the console) or set Prettier `endOfLine: auto`. |
-| 6.2 ([#200](https://github.com/Jdubz/blinky_time/issues/200)) | `blinky-simulator/build_vs.cmd` / `build.bat` still list removed `Lightning.cpp` and lack `Particle.cpp` | OPEN | CMake list fixed in #152; scripts not. |
-| 6.3 ([#201](https://github.com/Jdubz/blinky_time/issues/201)) | cppcheck failed at HEAD (2 findings) — CI said pass | OPEN | Check why CI's cppcheck (Ubuntu version) didn't flag them, or pin the version. Fixed in #152 for now. |
-| 6.4 ([#202](https://github.com/Jdubz/blinky_time/issues/202)) | `tests/tracker` harness not in CI | OPEN | Needs a host C++ compiler + ffmpeg in CI; at minimum the UBSan stress set. |
 | 6.5 ([#203](https://github.com/Jdubz/blinky_time/issues/203)) | No host test runs the NN path (no TFLite on host) | OPEN | TFLite Micro host build, or a recorded-activation replay. |
-| 6.6 ([#204](https://github.com/Jdubz/blinky_time/issues/204)) | `docs/OPEN_ISSUES_2026_05_20.md` still listed as "current" in CLAUDE.md | OPEN | Fold its still-open items here or keep both indexed. |
 
 ## 7. Device verification checklist for PR #152 (hat)
 
@@ -110,5 +102,25 @@ Nothing in PR #152 / #155 has run on hardware yet.
    - fps ≥ 30;
    - `audioOverruns` not climbing;
    - `spectralAccumOverflow` = 0;
-   - `clipSamples` / `melSaturated` plausible.
+   - `clipSamples` / `melSaturated` plausible;
+   - `loopStackFree` and `cmdStackFree` (send `json info` over both USB and BLE) ≥ 512 B, `recStackFree` ≥ 512 B after a record session, `heapPeak` well under `heapTotal`.
 5. Visual: tempo lock holds through a breakdown → drop. Fire bursts continue through dense hats. No particle starvation on the hat's linear layout.
+
+## 8. Carried over from 2026-05-20
+
+The still-open items of `docs/archive/OPEN_ISSUES_2026_05_20.md` (fleet rollout, SWD recovery, BLE-DFU tooling), filed by #204. That doc was five months old at filing, so confirm each item is still open before starting on it.
+
+| # | Item | Status |
+|---|---|---|
+| 8.1 ([#209](https://github.com/Jdubz/blinky_time/issues/209)) | Pi `recover.sh` still needs the manual BCM 18 hold + release | OPEN |
+| 8.2 ([#210](https://github.com/Jdubz/blinky_time/issues/210)) | 06ACEB recovery unfinished | OPEN |
+| 8.3 ([#211](https://github.com/Jdubz/blinky_time/issues/211)) | false-negative exit 4 after a successful BL flash | OPEN |
+| 8.4 ([#212](https://github.com/Jdubz/blinky_time/issues/212)) | server re-grabs the port between BL and app flash | OPEN |
+| 8.6 ([#214](https://github.com/Jdubz/blinky_time/issues/214)) | device vs registry LED count mismatch | OPEN |
+| 8.7 ([#215](https://github.com/Jdubz/blinky_time/issues/215)) | all-BLE deploy.sh happy path never run to exit 0 | OPEN |
+| 8.8 ([#216](https://github.com/Jdubz/blinky_time/issues/216)) | BLE-DFU stuck at MTU 23 | OPEN |
+| 8.9 ([#217](https://github.com/Jdubz/blinky_time/issues/217)) | lemon-cart install.sh not run | OPEN |
+| 8.11 ([#219](https://github.com/Jdubz/blinky_time/issues/219)) | auto-recovery untested on an enrolled device | OPEN |
+| 8.12 ([#220](https://github.com/Jdubz/blinky_time/issues/220)) | no BL-over-BLE path (future) | OPEN |
+| 8.13 ([#221](https://github.com/Jdubz/blinky_time/issues/221)) | full-fleet gossip-ACK delivery unmeasured | OPEN |
+| 8.14 ([#222](https://github.com/Jdubz/blinky_time/issues/222)) | button disabled (ghost presses) | OPEN |

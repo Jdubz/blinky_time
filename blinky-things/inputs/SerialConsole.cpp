@@ -18,6 +18,7 @@
 #include "../comms/BleScanner.h"
 #include "../comms/BleNus.h"
 #include "../comms/RecordStream.h"
+#include "../hal/MemTelemetry.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -610,6 +611,42 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(F(",\"maxFrameMs\":"));
         out_.print(LoopMetrics::getMaxFrameMs());
 
+#ifdef BLINKY_PLATFORM_NRF52840
+        // Stack / heap headroom (#186, #187). Stack values are the minimum
+        // free bytes ever seen per task. cmdStackFree is whichever task runs
+        // this command (loop for USB serial, the Bluefruit callback task for
+        // BLE NUS).
+        {
+            TaskHandle_t loopTask = MemTelemetry::loopTaskSlot();
+            if (loopTask) {
+                out_.print(F(",\"loopStackFree\":"));
+                out_.print(MemTelemetry::stackFreeBytes(loopTask));
+            } else {
+                // setup() didn't capture it: a real init-order bug, not a
+                // runtime case. Report it instead of a misleading number.
+                out_.print(F(",\"loopStackFree\":null"));
+            }
+            out_.print(F(",\"cmdStackFree\":"));
+            out_.print(MemTelemetry::stackFreeBytes(nullptr));
+            if (recordStream_ && recordStream_->senderTask()) {
+                out_.print(F(",\"recStackFree\":"));
+                out_.print(MemTelemetry::stackFreeBytes(recordStream_->senderTask()));
+            }
+            // Heap: cached ~1 Hz sample taken on the loop task (MemTelemetry.h).
+            MemTelemetry::HeapInfo h = MemTelemetry::heap();
+            if (h.valid) {
+                out_.print(F(",\"heapTotal\":"));
+                out_.print(h.total);
+                out_.print(F(",\"heapUsed\":"));
+                out_.print(h.used);
+                out_.print(F(",\"heapPeak\":"));
+                out_.print(h.peak);
+            } else {
+                out_.print(F(",\"heapTotal\":null,\"heapUsed\":null,\"heapPeak\":null"));
+            }
+        }
+#endif
+
         out_.println(F("}"));
         return true;
     }
@@ -771,6 +808,7 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
     if (strcmp(cmd, "stream nn") == 0) {
         streamEnabled_ = false;  // Disable timer-based stream to avoid TX overflow
         streamNN_ = true;        // NN stream fires independently on isFrameReady()
+        nnStreamFirst_ = true;
         streamFast_ = false;
         out_.println(F("OK nn"));
         return true;
@@ -1264,11 +1302,7 @@ void SerialConsole::restoreDefaults() {
 
         // Restore spectral processing defaults
         SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-        spectral.whitenEnabled = true;
         spectral.compressorEnabled = true;
-        spectral.whitenDecay = 0.997f;
-        spectral.whitenFloor = 0.001f;
-        spectral.whitenBassBypass = false;
         spectral.compThresholdDb = -30.0f;
         spectral.compRatio = 3.0f;
         spectral.compKneeDb = 15.0f;
@@ -1677,11 +1711,19 @@ void SerialConsole::streamTick() {
 #endif
     if (!hasClient) return;
 
+    // Format each line into a buffer, then one write per line (#171).
+    LineBuffer line(out_);
+
     uint32_t now = millis();
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[30 floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
+    // One line per loop update, not per frame: when the loop processes several
+    // frames in one update only the last is emitted. "fc" (spectral frame
+    // count) and "skip" (frames not emitted since the previous NN line) make
+    // those gaps explicit so offline replay can exclude them (#170). Emitting
+    // every frame would add 10-50 ms of formatting per extra frame (#171).
+    // Format: {"type":"NN","ts":<ms>,"fc":<frame>,"skip":<n>,"mel":[NUM_MEL_BANDS floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
     // "onset" = gated pulse strength (nonzero only on rising-edge pulse events)
     // "nna" = raw NN activation (continuous 0-1, pre-gating)
     // "nn" = 1 if NN loaded, 0 if stub/fallback
@@ -1689,35 +1731,41 @@ void SerialConsole::streamTick() {
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
         uint32_t fc = spectral.getFrameCount();
-        if (fc != lastNNFrameCount_) {
+        if (nnStreamFirst_ || fc != lastNNFrameCount_) {
+            uint32_t skip = nnStreamFirst_ ? 0 : fc - lastNNFrameCount_ - 1;
+            nnStreamFirst_ = false;
             lastNNFrameCount_ = fc;
             const float* mel = spectral.getRawMelBands();
 
-            out_.print(F("{\"type\":\"NN\",\"ts\":"));
-            out_.print(now);
-            out_.print(F(",\"mel\":["));
+            line.print(F("{\"type\":\"NN\",\"ts\":"));
+            line.print(now);
+            line.print(F(",\"fc\":"));
+            line.print(fc);
+            line.print(F(",\"skip\":"));
+            line.print(skip);
+            line.print(F(",\"mel\":["));
             for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
-                if (i > 0) out_.print(',');
-                out_.print(mel[i], 4);
+                if (i > 0) line.print(',');
+                line.print(mel[i], 4);
             }
             // onset = last pulse strength (gated — only nonzero on rising-edge pulse events)
-            out_.print(F("],\"onset\":"));
-            out_.print(audioCtrl_->getLastOnsetStrength(), 4);
+            line.print(F("],\"onset\":"));
+            line.print(audioCtrl_->getLastOnsetStrength(), 4);
             // nna = raw NN activation (pre-gating, continuous 0-1)
-            out_.print(F(",\"nna\":"));
-            out_.print(audioCtrl_->getFrameOnsetNN().getLastOnset(), 4);
-            out_.print(F(",\"nn\":"));
-            out_.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
-            out_.print(F(",\"bpm\":"));
-            out_.print(audioCtrl_->getCurrentBpm(), 1);
-            out_.print(F(",\"phase\":"));
-            out_.print(audioCtrl_->getControl().phase, 4);
-            out_.print(F(",\"rstr\":"));
-            out_.print(audioCtrl_->getControl().rhythmStrength, 3);
-            out_.print(F(",\"lvl\":"));
-            out_.print(mic_->getLevel(), 3);
-            out_.print(F(",\"gain\":"));
-            out_.print(mic_->getHwGain());
+            line.print(F(",\"nna\":"));
+            line.print(audioCtrl_->getFrameOnsetNN().getLastOnset(), 4);
+            line.print(F(",\"nn\":"));
+            line.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
+            line.print(F(",\"bpm\":"));
+            line.print(audioCtrl_->getCurrentBpm(), 1);
+            line.print(F(",\"phase\":"));
+            line.print(audioCtrl_->getControl().phase, 4);
+            line.print(F(",\"rstr\":"));
+            line.print(audioCtrl_->getControl().rhythmStrength, 3);
+            line.print(F(",\"lvl\":"));
+            line.print(mic_->getLevel(), 3);
+            line.print(F(",\"gain\":"));
+            line.print(mic_->getHwGain());
             // Hybrid features — the exact values fed into the NN this frame.
             // b136+: "flat" here is the RAW (pre-compressor) flatness the NN
             // actually consumes, which matches the Python training pipeline.
@@ -1725,11 +1773,11 @@ void SerialConsole::streamTick() {
             // here instead — that was a train-inference mismatch (gap 4).
             // Offline replay of old captures via replay_device_capture.py
             // must read the firmware build stamp before trusting these values.
-            out_.print(F(",\"flat\":"));
-            out_.print(spectral.getRawFlatness(), 4);
-            out_.print(F(",\"rflux\":"));
-            out_.print(spectral.getRawSpectralFlux(), 4);
-            out_.println(F("}"));
+            line.print(F(",\"flat\":"));
+            line.print(spectral.getRawFlatness(), 4);
+            line.print(F(",\"rflux\":"));
+            line.print(spectral.getRawSpectralFlux(), 4);
+            line.println(F("}"));
         }
     }
 
@@ -1737,16 +1785,16 @@ void SerialConsole::streamTick() {
     static uint32_t lastStatusMs = 0;
     if (mic_ && (now - lastStatusMs >= 1000)) {
         lastStatusMs = now;
-        out_.print(F("{\"type\":\"STATUS\",\"ts\":"));
-        out_.print(now);
-        out_.print(F(",\"mode\":\"ensemble\""));
-        out_.print(F(",\"hwGain\":"));
-        out_.print(mic_->getHwGain());
-        out_.print(F(",\"level\":"));
-        out_.print(mic_->getLevel(), 2);
-        out_.print(F(",\"peakLevel\":"));
-        out_.print(mic_->getPeakLevel(), 2);
-        out_.println(F("}"));
+        line.print(F("{\"type\":\"STATUS\",\"ts\":"));
+        line.print(now);
+        line.print(F(",\"mode\":\"ensemble\""));
+        line.print(F(",\"hwGain\":"));
+        line.print(mic_->getHwGain());
+        line.print(F(",\"level\":"));
+        line.print(mic_->getLevel(), 2);
+        line.print(F(",\"peakLevel\":"));
+        line.print(mic_->getPeakLevel(), 2);
+        line.println(F("}"));
     }
 
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
@@ -1771,41 +1819,41 @@ void SerialConsole::streamTick() {
         // Debug mode additional fields:
         // agree → detector agreement : 0-7 (how many detectors fired)
         // conf  → ensemble confidence: 0-1 (combined confidence score)
-        out_.print(F("{\"a\":{\"l\":"));
-        out_.print(mic_->getLevel(), 2);
-        out_.print(F(",\"t\":"));
+        line.print(F("{\"a\":{\"l\":"));
+        line.print(mic_->getLevel(), 2);
+        line.print(F(",\"t\":"));
         // Pulse strength from ODF-derived pulse detection (v67)
         float transient = 0.0f;
         if (audioCtrl_) {
             transient = audioCtrl_->getLastPulseStrength();
         }
-        out_.print(transient, 2);
-        out_.print(F(",\"pk\":"));
-        out_.print(mic_->getPeakLevel(), 2);
-        out_.print(F(",\"vl\":"));
-        out_.print(mic_->getValleyLevel(), 2);
-        out_.print(F(",\"raw\":"));
-        out_.print(mic_->getRawLevel(), 2);
-        out_.print(F(",\"h\":"));
-        out_.print(mic_->getHwGain());
-        out_.print(F(",\"alive\":"));
-        out_.print(mic_->isPdmAlive() ? 1 : 0);
+        line.print(transient, 2);
+        line.print(F(",\"pk\":"));
+        line.print(mic_->getPeakLevel(), 2);
+        line.print(F(",\"vl\":"));
+        line.print(mic_->getValleyLevel(), 2);
+        line.print(F(",\"raw\":"));
+        line.print(mic_->getRawLevel(), 2);
+        line.print(F(",\"h\":"));
+        line.print(mic_->getHwGain());
+        line.print(F(",\"alive\":"));
+        line.print(mic_->isPdmAlive() ? 1 : 0);
 
         // Debug mode: add pulse and spectral state
         // (BandFlux per-band flux fields removed v67 — BandFlux pipeline removed)
         if (streamDebug_ && audioCtrl_) {
-            out_.print(F(",\"pulse\":"));
-            out_.print(audioCtrl_->getLastPulseStrength(), 3);
+            line.print(F(",\"pulse\":"));
+            line.print(audioCtrl_->getLastPulseStrength(), 3);
 
             // Spectral processing state (compressor + whitening)
             const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-            out_.print(F(",\"rms\":"));
-            out_.print(spectral.getFrameRmsDb(), 1);
-            out_.print(F(",\"cg\":"));
-            out_.print(spectral.getSmoothedGainDb(), 2);
+            line.print(F(",\"rms\":"));
+            line.print(spectral.getFrameRmsDb(), 1);
+            line.print(F(",\"cg\":"));
+            line.print(spectral.getSmoothedGainDb(), 2);
         }
 
-        out_.print(F("}"));
+        line.print(F("}"));
 
         // AudioTracker music stream (v79 — PLP architecture)
         // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2,"nn":0.123,"per":33}
@@ -1823,30 +1871,30 @@ void SerialConsole::streamTick() {
             int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > audioCtrl_->activationThreshold) ? 1 : 0;
             lastStreamPhase = currentPhase;
 
-            out_.print(F(",\"m\":{\"ts\":"));
-            out_.print(millis());  // firmware millis at frame emission — server uses + clock_offset for signal_frame alignment
-            out_.print(F(",\"a\":"));
-            out_.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
-            out_.print(F(",\"bpm\":"));
-            out_.print(audioCtrl_->getCurrentBpm(), 1);
-            out_.print(F(",\"ph\":"));
-            out_.print(currentPhase, 2);
-            out_.print(F(",\"pp\":"));
-            out_.print(audio.plpPulse, 3);
-            out_.print(F(",\"str\":"));
-            out_.print(audio.rhythmStrength, 2);
-            out_.print(F(",\"q\":"));
-            out_.print(beatEvent);
-            out_.print(F(",\"e\":"));
-            out_.print(audio.energy, 2);
-            out_.print(F(",\"p\":"));
-            out_.print(audio.pulse, 2);
-            out_.print(F(",\"od\":"));
-            out_.print(audioCtrl_->getOnsetDensity(), 1);
-            out_.print(F(",\"nn\":"));
-            out_.print(audioCtrl_->getRawNNActivation(), 3);
-            out_.print(F(",\"per\":"));  // ACF period in ~66Hz analysis frames
-            out_.print(audioCtrl_->getPlpPeriod());
+            line.print(F(",\"m\":{\"ts\":"));
+            line.print(millis());  // firmware millis at frame emission — server uses + clock_offset for signal_frame alignment
+            line.print(F(",\"a\":"));
+            line.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
+            line.print(F(",\"bpm\":"));
+            line.print(audioCtrl_->getCurrentBpm(), 1);
+            line.print(F(",\"ph\":"));
+            line.print(currentPhase, 2);
+            line.print(F(",\"pp\":"));
+            line.print(audio.plpPulse, 3);
+            line.print(F(",\"str\":"));
+            line.print(audio.rhythmStrength, 2);
+            line.print(F(",\"q\":"));
+            line.print(beatEvent);
+            line.print(F(",\"e\":"));
+            line.print(audio.energy, 2);
+            line.print(F(",\"p\":"));
+            line.print(audio.pulse, 2);
+            line.print(F(",\"od\":"));
+            line.print(audioCtrl_->getOnsetDensity(), 1);
+            line.print(F(",\"nn\":"));
+            line.print(audioCtrl_->getRawNNActivation(), 3);
+            line.print(F(",\"per\":"));  // ACF period in ~66Hz analysis frames
+            line.print(audioCtrl_->getPlpPeriod());
 
             // Debug mode: add diagnostics
             if (streamDebug_) {
@@ -1856,33 +1904,33 @@ void SerialConsole::streamTick() {
                 // NN actually consumes and what the Python training pipeline
                 // produces. Gap 4 fix in b136. Keep `flat` around so older
                 // Phase 1-3 analysis captures can still be re-read.
-                out_.print(F(",\"flat\":"));
-                out_.print(spectral.getSpectralFlatness(), 4);
-                out_.print(F(",\"rflat\":"));
-                out_.print(spectral.getRawFlatness(), 4);
-                out_.print(F(",\"rflux\":"));
-                out_.print(spectral.getRawSpectralFlux(), 4);
+                line.print(F(",\"flat\":"));
+                line.print(spectral.getSpectralFlatness(), 4);
+                line.print(F(",\"rflat\":"));
+                line.print(spectral.getRawFlatness(), 4);
+                line.print(F(",\"rflux\":"));
+                line.print(spectral.getRawSpectralFlux(), 4);
                 // Phase 2a shape features (pre-compressor mags, match Python ref).
-                out_.print(F(",\"cent\":"));
-                out_.print(spectral.getRawCentroid(), 2);
-                out_.print(F(",\"crest\":"));
-                out_.print(spectral.getRawCrest(), 3);
-                out_.print(F(",\"roll\":"));
-                out_.print(spectral.getRawRolloff(), 1);
-                out_.print(F(",\"hfc\":"));
-                out_.print(spectral.getRawHFC(), 4);
-                out_.print(F(",\"conf\":"));
-                out_.print(audioCtrl_->getPeriodicityStrength(), 3);
-                out_.print(F(",\"plpc\":"));
-                out_.print(audioCtrl_->getPlpConfidence(), 3);
-                out_.print(F(",\"aph\":"));
-                out_.print(audioCtrl_->getPlpAccentPhase(), 3);
-                out_.print(F(",\"src\":"));
-                out_.print(audioCtrl_->getPlpBestSource());
-                out_.print(F(",\"nna\":"));
-                out_.print(audioCtrl_->getPlpNNAgreement(), 3);
-                out_.print(F(",\"rel\":"));
-                out_.print(audioCtrl_->getPlpReliability(), 3);
+                line.print(F(",\"cent\":"));
+                line.print(spectral.getRawCentroid(), 2);
+                line.print(F(",\"crest\":"));
+                line.print(spectral.getRawCrest(), 3);
+                line.print(F(",\"roll\":"));
+                line.print(spectral.getRawRolloff(), 1);
+                line.print(F(",\"hfc\":"));
+                line.print(spectral.getRawHFC(), 4);
+                line.print(F(",\"conf\":"));
+                line.print(audioCtrl_->getPeriodicityStrength(), 3);
+                line.print(F(",\"plpc\":"));
+                line.print(audioCtrl_->getPlpConfidence(), 3);
+                line.print(F(",\"aph\":"));
+                line.print(audioCtrl_->getPlpAccentPhase(), 3);
+                line.print(F(",\"src\":"));
+                line.print(audioCtrl_->getPlpBestSource());
+                line.print(F(",\"nna\":"));
+                line.print(audioCtrl_->getPlpNNAgreement(), 3);
+                line.print(F(",\"rel\":"));
+                line.print(audioCtrl_->getPlpReliability(), 3);
                 // beatStability: rolling stability of inter-beat intervals.
                 // Audit D10 (T1.4-rollup completion 2026-04-25) — already
                 // computed by AudioTracker, was previously only visible via
@@ -1890,20 +1938,20 @@ void SerialConsole::streamTick() {
                 // other PLP diagnostics so validation captures it for
                 // offline analysis (e.g. correlate per-beat confidence
                 // against beatStability).
-                out_.print(F(",\"bs\":"));
-                out_.print(audioCtrl_->getBeatStability(), 3);
-                out_.print(F(",\"sl\":{\"id\":"));
-                out_.print(audioCtrl_->getActiveSlotId());
-                out_.print(F(",\"conf\":["));
+                line.print(F(",\"bs\":"));
+                line.print(audioCtrl_->getBeatStability(), 3);
+                line.print(F(",\"sl\":{\"id\":"));
+                line.print(audioCtrl_->getActiveSlotId());
+                line.print(F(",\"conf\":["));
                 for (int si = 0; si < audioCtrl_->getSlotCount(); si++) {
-                    if (si > 0) out_.print(F(","));
+                    if (si > 0) line.print(F(","));
                     const PatternSlot& slot = audioCtrl_->getSlot(si);
-                    out_.print(slot.valid ? slot.confidence : 0.0f, 2);
+                    line.print(slot.valid ? slot.confidence : 0.0f, 2);
                 }
-                out_.print(F("]}"));
+                line.print(F("]}"));
             }
 
-            out_.print(F("}"));
+            line.print(F("}"));
         }
 
         // Visual-layer metrics: per-frame measurements of the PixelMatrix
@@ -1920,24 +1968,24 @@ void SerialConsole::streamTick() {
         //   sat = mean HSV saturation (0-1)
         if (pipeline_ && pipeline_->isValid()) {
             const FrameMetrics& fm = pipeline_->getFrameMetrics();
-            out_.print(F(",\"v\":{\"l\":"));
-            out_.print(fm.getAvgL(), 1);
-            out_.print(F(",\"mx\":"));
-            out_.print(fm.getMaxL(), 0);
-            out_.print(F(",\"ct\":"));
-            out_.print(fm.getRmsContrast(), 1);
-            out_.print(F(",\"act\":"));
-            out_.print(fm.getActivity(), 3);
-            out_.print(F(",\"cx\":"));
-            out_.print(fm.getCentroidX(), 2);
-            out_.print(F(",\"cy\":"));
-            out_.print(fm.getCentroidY(), 2);
-            out_.print(F(",\"sat\":"));
-            out_.print(fm.getSatMean(), 2);
-            out_.print(F("}"));
+            line.print(F(",\"v\":{\"l\":"));
+            line.print(fm.getAvgL(), 1);
+            line.print(F(",\"mx\":"));
+            line.print(fm.getMaxL(), 0);
+            line.print(F(",\"ct\":"));
+            line.print(fm.getRmsContrast(), 1);
+            line.print(F(",\"act\":"));
+            line.print(fm.getActivity(), 3);
+            line.print(F(",\"cx\":"));
+            line.print(fm.getCentroidX(), 2);
+            line.print(F(",\"cy\":"));
+            line.print(fm.getCentroidY(), 2);
+            line.print(F(",\"sat\":"));
+            line.print(fm.getSatMean(), 2);
+            line.print(F("}"));
         }
 
-        out_.println(F("}"));
+        line.println(F("}"));
     }
 
     // Battery streaming at ~1Hz
@@ -1950,15 +1998,15 @@ void SerialConsole::streamTick() {
         // c = charging (true if charging)
         // v = voltage (in volts)
         // p = percent (0-100)
-        out_.print(F("{\"b\":{\"n\":"));
-        out_.print(battery_->isBatteryConnected() ? F("true") : F("false"));
-        out_.print(F(",\"c\":"));
-        out_.print(battery_->isCharging() ? F("true") : F("false"));
-        out_.print(F(",\"v\":"));
-        out_.print(battery_->getVoltage(), 2);
-        out_.print(F(",\"p\":"));
-        out_.print(battery_->getPercent());
-        out_.println(F("}}"));
+        line.print(F("{\"b\":{\"n\":"));
+        line.print(battery_->isBatteryConnected() ? F("true") : F("false"));
+        line.print(F(",\"c\":"));
+        line.print(battery_->isCharging() ? F("true") : F("false"));
+        line.print(F(",\"v\":"));
+        line.print(battery_->getVoltage(), 2);
+        line.print(F(",\"p\":"));
+        line.print(battery_->getPercent());
+        line.println(F("}}"));
     }
 }
 
@@ -2543,10 +2591,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         out_.print(F("  Release: ")); out_.print(spectral.compReleaseTau, 2); out_.println(F(" s"));
         out_.print(F("  Frame RMS: ")); out_.print(spectral.getFrameRmsDb(), 1); out_.println(F(" dB"));
         out_.print(F("  Smoothed Gain: ")); out_.print(spectral.getSmoothedGainDb(), 2); out_.println(F(" dB"));
-        out_.println(F("-- Whitening --"));
-        out_.print(F("  Enabled: ")); out_.println(spectral.whitenEnabled ? "yes" : "no");
-        out_.print(F("  Decay: ")); out_.println(spectral.whitenDecay, 4);
-        out_.print(F("  Floor: ")); out_.println(spectral.whitenFloor, 4);
         out_.println();
         return true;
     }
@@ -2572,12 +2616,6 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         out_.print(spectral.getFrameRmsDb(), 1);
         out_.print(F(",\"gainDb\":"));
         out_.print(spectral.getSmoothedGainDb(), 2);
-        out_.print(F(",\"whitenEnabled\":"));
-        out_.print(spectral.whitenEnabled ? 1 : 0);
-        out_.print(F(",\"whitenDecay\":"));
-        out_.print(spectral.whitenDecay, 4);
-        out_.print(F(",\"whitenFloor\":"));
-        out_.print(spectral.whitenFloor, 4);
         out_.println(F("}"));
         return true;
     }
