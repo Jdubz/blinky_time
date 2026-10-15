@@ -10,6 +10,7 @@ device is still advertising as its app — and only then.
 from __future__ import annotations
 
 import asyncio
+import types
 from typing import Any
 
 import pytest
@@ -185,3 +186,53 @@ def test_clear_bluez_state_survives_bluetoothctl_timeout(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(mod.subprocess, "run", hang)
     mod.clear_bluez_state(APP)  # must not raise
+
+
+async def test_cancel_during_subscription_disconnects_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Copilot review: a timeout/cancellation while start_notify is pending
+    # (CancelledError, not an Exception) must not leak the bootloader link.
+    hang = asyncio.Event()
+    state = {"disconnects": 0}
+
+    class Client:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            pass
+
+        async def connect(self) -> None:
+            return None
+
+        @property
+        def mtu_size(self) -> int:
+            return 247
+
+        async def read_gatt_char(self, uuid: str) -> bytes:
+            return b"\x08\x00"  # bootloader DFU revision
+
+        async def start_notify(self, *a: Any, **k: Any) -> None:
+            await hang.wait()  # never set: blocks until cancelled
+
+        async def disconnect(self) -> None:
+            state["disconnects"] += 1
+
+    class Scanner:
+        @staticmethod
+        async def find_device_by_address(addr: str, timeout: float = 0) -> object:
+            return types.SimpleNamespace(name="AdaDFU", address=addr)
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(mod.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(mod, "clear_bluez_state", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "BleakClient", Client)
+    monkeypatch.setattr(mod, "BleakScanner", Scanner)
+
+    task = asyncio.ensure_future(
+        mod._dfu_transfer_inner(APP, b"init", b"fw", 0x04, lambda *a: None, {"status": "error"})
+    )
+    for _ in range(50):  # let it reach start_notify
+        await real_sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert state["disconnects"] == 1

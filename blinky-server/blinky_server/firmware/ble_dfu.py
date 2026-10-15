@@ -341,64 +341,71 @@ async def _dfu_transfer_inner(
         return result
     progress("scan", f"Found: {dev.name}", 25)
 
-    # Connect
+    # Connect. From here until the transfer's try/finally below, a timeout or
+    # job cancellation (CancelledError, not an Exception) must not leak the
+    # bootloader connection: it would block the next BLE operation.
     client = BleakClient(dev, timeout=15.0)
     try:
-        await client.connect()
-    except Exception as e:
-        result["message"] = f"Failed to connect to bootloader: {e}"
-        return result
-
-    # DFU chunk size from the connection's negotiated ATT MTU minus the
-    # 3-byte ATT overhead. Bumped from a hardcoded 20 (OPEN_ISSUES §3.3)
-    # — BLs with the §3.3 MTU change accept up to 244 bytes per packet
-    # for ~12x faster transfers; older BLs cap at 20 and we honour that
-    # via the floor. ``client.mtu_size`` reflects what bleak/BlueZ
-    # actually negotiated with this peer. Bleak 3.x may warn or raise
-    # if MTU exchange hasn't completed — mirror the transport-layer
-    # pattern (catch + conservative-20 fallback) so a transient read
-    # failure can't kill the whole DFU attempt. The exception IS
-    # logged at WARN (not swallowed silently — CLAUDE.md §"No Silent
-    # Fallbacks") so the operator can distinguish "MTU read failed,
-    # using floor" from "old BL, capped at 20 anyway".
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
         try:
-            negotiated_mtu = client.mtu_size
-        except Exception as exc:
-            log.warning("BLE-DFU mtu_size read failed (%r); falling back to ATT minimum", exc)
-            negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
-    mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
-    progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
-
-    # Verify bootloader mode
-    try:
-        rev = await client.read_gatt_char(DFU_REVISION_UUID)
-        rev_val = int.from_bytes(rev[:2], "little")
-        if rev_val <= 1:
-            await client.disconnect()
-            result["message"] = f"Device in app mode (revision=0x{rev_val:04x}), not bootloader"
+            await client.connect()
+        except Exception as e:
+            result["message"] = f"Failed to connect to bootloader: {e}"
             return result
-    except Exception:
-        pass
 
-    # Subscribe to notifications
-    await asyncio.sleep(2)
-    notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        # DFU chunk size from the connection's negotiated ATT MTU minus the
+        # 3-byte ATT overhead. Bumped from a hardcoded 20 (OPEN_ISSUES §3.3)
+        # — BLs with the §3.3 MTU change accept up to 244 bytes per packet
+        # for ~12x faster transfers; older BLs cap at 20 and we honour that
+        # via the floor. ``client.mtu_size`` reflects what bleak/BlueZ
+        # actually negotiated with this peer. Bleak 3.x may warn or raise
+        # if MTU exchange hasn't completed — mirror the transport-layer
+        # pattern (catch + conservative-20 fallback) so a transient read
+        # failure can't kill the whole DFU attempt. The exception IS
+        # logged at WARN (not swallowed silently — CLAUDE.md §"No Silent
+        # Fallbacks") so the operator can distinguish "MTU read failed,
+        # using floor" from "old BL, capped at 20 anyway".
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                negotiated_mtu = client.mtu_size
+            except Exception as exc:
+                log.warning("BLE-DFU mtu_size read failed (%r); falling back to ATT minimum", exc)
+                negotiated_mtu = 23  # ATT minimum → DFU_CHUNK_MIN after the -3 below
+        mtu = max(DFU_CHUNK_MIN, min(DFU_CHUNK_MAX, negotiated_mtu - 3))
+        progress("connect", f"Connected, MTU={negotiated_mtu}, DFU chunk={mtu}", 30)
 
-    def on_notify(sender: BleakGATTCharacteristic, data: bytearray) -> None:
-        notify_queue.put_nowait(bytes(data))
+        # Verify bootloader mode
+        try:
+            rev = await client.read_gatt_char(DFU_REVISION_UUID)
+            rev_val = int.from_bytes(rev[:2], "little")
+            if rev_val <= 1:
+                await client.disconnect()
+                result["message"] = f"Device in app mode (revision=0x{rev_val:04x}), not bootloader"
+                return result
+        except Exception:
+            pass
 
-    try:
-        await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
-    except Exception as e:
-        # Nothing written to the bootloader yet: safe to disconnect and retry.
+        # Subscribe to notifications
+        await asyncio.sleep(2)
+        notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+        def on_notify(sender: BleakGATTCharacteristic, data: bytearray) -> None:
+            notify_queue.put_nowait(bytes(data))
+
+        try:
+            await client.start_notify(DFU_CONTROL_UUID, on_notify, bluez={"use_start_notify": True})
+        except Exception as e:
+            # Nothing written to the bootloader yet: safe to disconnect and retry.
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            result["message"] = f"Failed to subscribe to DFU control notifications: {e}"
+            log.error(result["message"])
+            return result
+        await asyncio.sleep(1)
+    except asyncio.CancelledError:
         with contextlib.suppress(Exception):
-            await client.disconnect()
-        result["message"] = f"Failed to subscribe to DFU control notifications: {e}"
-        log.error(result["message"])
-        return result
-    await asyncio.sleep(1)
+            await asyncio.shield(client.disconnect())
+        raise
 
     async def wait_response(
         name: str, expected_opcode: int | None = None, timeout: float = 30.0
