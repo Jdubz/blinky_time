@@ -807,8 +807,11 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
 
     if (strcmp(cmd, "stream nn") == 0) {
         streamEnabled_ = false;  // Disable timer-based stream to avoid TX overflow
+        // Only a fresh start emits unconditionally (skip = 0). Re-sending
+        // `stream nn` while it's on must not re-emit the last frame: replay
+        // treats a repeated fc as a fatal counter reset.
+        if (!streamNN_) nnStreamFirst_ = true;
         streamNN_ = true;        // NN stream fires independently on isFrameReady()
-        nnStreamFirst_ = true;
         streamFast_ = false;
         out_.println(F("OK nn"));
         return true;
@@ -1711,7 +1714,8 @@ void SerialConsole::streamTick() {
 #endif
     if (!hasClient) return;
 
-    // Format each line into a buffer, then one write per line (#171).
+    // Buffer each line and write it once, instead of a write per formatted
+    // field (#171). LineBuffer commits at every newline.
     LineBuffer line(out_);
 
     uint32_t now = millis();
@@ -1723,7 +1727,7 @@ void SerialConsole::streamTick() {
     // count) and "skip" (frames not emitted since the previous NN line) make
     // those gaps explicit so offline replay can exclude them (#170). Emitting
     // every frame would add 10-50 ms of formatting per extra frame (#171).
-    // Format: {"type":"NN","ts":<ms>,"fc":<frame>,"skip":<n>,"mel":[NUM_MEL_BANDS floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
+    // Format: {"type":"NN","ts":<ms>,"fc":<frame>,"skip":<n>,"ovr":<n>,"mel":[NUM_MEL_BANDS floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
     // "onset" = gated pulse strength (nonzero only on rising-edge pulse events)
     // "nna" = raw NN activation (continuous 0-1, pre-gating)
     // "nn" = 1 if NN loaded, 0 if stub/fallback
@@ -1743,6 +1747,11 @@ void SerialConsole::streamTick() {
             line.print(fc);
             line.print(F(",\"skip\":"));
             line.print(skip);
+            // Mic-ring overruns since boot: fc still counts up by one per
+            // frame, but audio was lost, so the timeline drifts. Replay
+            // refuses label scoring when this rises during a capture.
+            line.print(F(",\"ovr\":"));
+            line.print(AdaptiveMic::getOverrunCount());
             line.print(F(",\"mel\":["));
             for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
                 if (i > 0) line.print(',');

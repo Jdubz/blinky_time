@@ -95,9 +95,20 @@ def load_capture(jsonl_path: str) -> dict:
             print(f"  WARNING: {missing}/{total} frames ({100.0 * missing / total:.1f}%) missing "
                   f"across {int(np.sum(steps > 1))} gap(s); parity uses gap-free windows only.",
                   file=sys.stderr)
+        # Mic-ring overruns (b2xx+): frames still count up by one, but audio was
+        # lost, so the timeline drifts from wall clock. Needed for --labels.
+        if "ovr" in frames[0]:
+            ovr = np.array([f["ovr"] for f in frames], dtype=np.int64)
+            n_overruns = int(ovr[-1] - ovr[0])
+            if n_overruns:
+                print(f"  WARNING: {n_overruns} mic-ring overrun(s) during the capture; "
+                      "audio timeline is not continuous.", file=sys.stderr)
+        else:
+            n_overruns = None
     else:
         fc = None
         n_missing = None
+        n_overruns = None
         print("  WARNING: no 'fc' field (pre-#170 capture): dropped frames cannot be detected; "
               "windows spanning a gap will corrupt parity silently.", file=sys.stderr)
 
@@ -118,18 +129,30 @@ def load_capture(jsonl_path: str) -> dict:
         "onset_field": "nna" if has_nna else "onset",
         "fc": fc,
         "n_missing": n_missing,  # None = unknown (pre-#170 capture)
+        "n_overruns": n_overruns,  # None = unknown (capture predates the ovr field)
     }
 
 
-def gap_free_mask(fc: np.ndarray | None, window: int) -> np.ndarray | None:
-    """True where the frame and the window-1 frames before it are consecutive."""
+def gap_free_mask(fc: np.ndarray | None, before: int, after: int) -> np.ndarray | None:
+    """True where lines [i-before, i+after] all exist and are consecutive frames.
+
+    Offline sliding_window_inference averages 50%-overlapping chunks, so its
+    output for line i depends on lines up to window-1 AFTER i as well as
+    window-1 before; delta/band-flux features need one more line before.
+    """
     if fc is None:
         return None
-    gap_before = np.concatenate([[False], np.diff(fc) != 1])  # line i follows a gap
-    # Lines since the most recent gap (inclusive of the current line).
-    last_gap = np.maximum.accumulate(np.where(gap_before, np.arange(len(fc)), 0))
-    since = np.arange(len(fc)) - last_gap + 1
-    return since >= window
+    n = len(fc)
+    # gap[j] = True when line j does not follow line j-1 by exactly one frame.
+    gap = np.concatenate([[False], np.diff(fc) != 1]).astype(np.int64)
+    csum = np.concatenate([[0], np.cumsum(gap)])  # csum[k] = gaps among lines < k
+    idx = np.arange(n)
+    lo, hi = idx - before, idx + after
+    inside = (lo >= 0) & (hi <= n - 1)
+    lo_c, hi_c = np.clip(lo, 0, n - 1), np.clip(hi, 0, n - 1)
+    # Gaps strictly inside (lo, hi]: a gap at line j breaks the pair (j-1, j).
+    gaps_in = csum[hi_c + 1] - csum[lo_c + 1]
+    return inside & (gaps_in == 0)
 
 
 def append_features_from_cfg(mel: np.ndarray, cfg: dict) -> np.ndarray:
@@ -150,11 +173,16 @@ def run_inference(mel_features: np.ndarray, model, cfg: dict,
 
 def peak_pick(activations: np.ndarray, threshold: float,
               frame_rate: float, min_interval_s: float = 0.05,
-              times: np.ndarray | None = None) -> np.ndarray:
+              times: np.ndarray | None = None,
+              fc: np.ndarray | None = None,
+              valid: np.ndarray | None = None) -> np.ndarray:
     """Simple peak-picking (same as evaluate.py).
 
     times: per-line time in seconds (from the frame counter) when the capture
     has gaps; otherwise line index / frame_rate.
+    fc: frame counter; a line whose neighbour is across a gap can't be a peak
+    (its neighbours aren't adjacent frames).
+    valid: optional mask; peaks only on lines where it is True.
     """
     if times is None:
         times = np.arange(len(activations)) / frame_rate
@@ -166,6 +194,10 @@ def peak_pick(activations: np.ndarray, threshold: float,
     for i in range(1, len(activations) - 1):
         # Spacing is measured in time, so a dropped frame between two peaks
         # can't make them look closer than they are.
+        if fc is not None and (fc[i] - fc[i - 1] != 1 or fc[i + 1] - fc[i] != 1):
+            continue
+        if valid is not None and not valid[i]:
+            continue
         if (activations[i] > threshold and
                 activations[i] >= activations[i - 1] and
                 activations[i] >= activations[i + 1] and
@@ -223,7 +255,9 @@ def main():
     # Compare device vs offline activations, only where the model window is
     # gap-free (offline windows spanning a dropped frame see different input).
     device_onset = capture["device_onset"]
-    mask = gap_free_mask(capture["fc"], cfg["model"]["window_frames"])
+    window = cfg["model"]["window_frames"]
+    extra = 1 if (use_delta or use_band_flux) else 0
+    mask = gap_free_mask(capture["fc"], before=window - 1 + extra, after=window - 1)
     if mask is not None:
         if not mask.any():
             print("ERROR: no gap-free model windows in this capture", file=sys.stderr)
@@ -237,8 +271,8 @@ def main():
     print(f"\n--- Parity Analysis ---")
     print(f"  Activation correlation: {correlation:.4f}")
     print(f"  Activation MAE:         {mae:.4f}")
-    print(f"  Device mean activation: {device_onset.mean():.4f}")
-    print(f"  Offline mean activation:{offline_onset.mean():.4f}")
+    print(f"  Device mean activation: {dev_cmp.mean():.4f}")
+    print(f"  Offline mean activation:{off_cmp.mean():.4f}")
 
     # Peak-pick both
     # With fc, both peak times and the minimum spacing use the 62.5 Hz spectral
@@ -248,8 +282,10 @@ def main():
     # With a frame counter, time each line by its frame index at the nominal
     # 62.5 Hz frame rate, so dropped frames don't shift later peaks.
     times = (capture["fc"] - capture["fc"][0]) / SPECTRAL_FPS if capture["fc"] is not None else None
-    device_peaks = peak_pick(device_onset, args.threshold, frame_rate, times=times)
-    offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate, times=times)
+    device_peaks = peak_pick(device_onset, args.threshold, frame_rate, times=times,
+                             fc=capture["fc"], valid=mask)
+    offline_peaks = peak_pick(offline_onset, args.threshold, frame_rate, times=times,
+                              fc=capture["fc"], valid=mask)
     print(f"  Device onset count:     {len(device_peaks)}")
     print(f"  Offline onset count:    {len(offline_peaks)}")
 
@@ -259,6 +295,11 @@ def main():
     if args.labels and capture["n_missing"]:
         print(f"ERROR: --labels scoring refused: capture is missing {capture['n_missing']} "
               "frame(s). Re-capture without catch-up frames (or score a gap-free span).",
+              file=sys.stderr)
+        sys.exit(1)
+    if args.labels and capture["n_overruns"]:
+        print(f"ERROR: --labels scoring refused: {capture['n_overruns']} mic-ring overrun(s) "
+              "during the capture, so frame times no longer match the labels' timeline.",
               file=sys.stderr)
         sys.exit(1)
     if args.labels:

@@ -4,9 +4,11 @@
 Signals are synthesized here (no fixtures): digital silence, a mid-track gap,
 full-scale clipping, white noise, a 50 Hz hum, and 128 BPM clicks. Each runs at
 15, 60 and 250 loop fps. Build the harness with
-`-fsanitize=undefined -fno-sanitize-recover=undefined` so any UB aborts it.
+`-fsanitize=undefined,float-cast-overflow,float-divide-by-zero
+-fno-sanitize-recover=all` so any UB aborts it.
 
-Fails (exit 1) if the harness exits non-zero, writes no rows, or emits a
+Fails (exit 1) if the harness exits non-zero (UB abort, or exit 3 when a
+firmware BLINKY_ASSERT fired after begin()), writes no rows, or emits a
 non-finite phase / bpm / period.
 
     python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
@@ -63,7 +65,12 @@ def main() -> int:
                                       capture_output=True, text=True)
                 label = f"{name}@{fps:.0f}fps"
                 if proc.returncode != 0:
-                    failures.append(f"{label}: exit {proc.returncode}\n{proc.stderr[-2000:]}")
+                    # Exit 3 = a firmware BLINKY_ASSERT fired after begin(); its
+                    # [ASSERT] text goes to stdout via the Serial stub.
+                    asserts = "\n".join(l for l in proc.stdout.splitlines()
+                                        if "[ASSERT]" in l or "[FALLBACK]" in l)
+                    failures.append(f"{label}: exit {proc.returncode}\n"
+                                    f"{proc.stderr[-2000:]}{asserts[-2000:]}")
                     continue
                 if "runtime error" in proc.stderr:
                     failures.append(f"{label}: sanitizer report\n{proc.stderr[-2000:]}")

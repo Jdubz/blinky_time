@@ -323,19 +323,12 @@ void SharedSpectralAnalysis::process() {
     // Must happen AFTER flux computation.
     savePrevCompressedMagnitudes();
 
-    // --- Pipeline ordering rationale ---
-    // Mel bands are computed BEFORE per-bin whitening, intentionally:
-    //   1. Mel bands use compressed-but-not-whitened magnitudes as input
-    //   2. Mel bands then get their own whitening (whitenMelBands)
-    //   3. Per-bin whitening runs last, modifying magnitudes_ in-place
-    //
-    // Why: Mel bands aggregate multiple FFT bins into perceptual bands.
-    // Whitening the 128 bins first, then computing mel bands from whitened values,
-    // would lose the relative energy information between bins within a band.
-    // Instead, each domain gets its own whitening tuned to its resolution:
-    //   - 26 mel bands: per-band running max (coarse, perceptual)
-    // (Per-bin whitening of the 128 FFT bins was removed in #182: its output
-    // was never read.)
+    // --- Mel bands ---
+    // Computed from the compressed (un-whitened) bin magnitudes, then
+    // whitened per band (whitenMelBands: running max, coarse and perceptual).
+    // Whitening bins before aggregating would lose the relative energy between
+    // bins within a band. (Per-bin whitening of the FFT bins was removed in
+    // #182: its output was never read.)
     computeMelBands();
     whitenMelBands();
 
@@ -765,8 +758,8 @@ void SharedSpectralAnalysis::computeShapeFeaturesRaw() {
     //
     // Flatness is computed HERE (on raw/pre-compressor mags) to match the
     // Python training pipeline's `append_hybrid_features`, which uses raw
-    // STFT magnitudes. The separate compressed-mag flatness computed in
-    // `computeDerivedFeatures` on post-compressor magnitudes is retained for
+    // STFT magnitudes. The separate compressed-mag flatness (computed on
+    // demand by getSpectralFlatness() from post-compressor magnitudes) is retained for
     // backwards compatibility with the serial debug stream's "flat" field
     // but is NOT what the NN consumes — AudioTracker routes getRawFlatness()
     // into FrameOnsetNN::infer. See the train-inference alignment audit in
