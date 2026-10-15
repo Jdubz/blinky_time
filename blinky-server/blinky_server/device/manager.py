@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time as _time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, overload
@@ -1164,13 +1164,9 @@ class FleetManager:
                 # Bind the protocol/transport at closure-build time so a
                 # late device-table mutation can't redirect the
                 # bootloader-entry command to a different device.
-                _protocol = device.protocol
-
-                async def _enter_via_serial(cmd: str) -> None:
-                    await _protocol.send_command(cmd)
-                    await asyncio.sleep(2)
-
-                enter_via_serial = _enter_via_serial
+                enter_via_serial = _make_serial_bootloader_entry(
+                    device.protocol, device.transport, device.ble_address, job.device_id
+                )
             elif device.transport.transport_type == "ble":
                 # PRESENT BLE devices don't hold a persistent GATT
                 # connection; we bring up NUS just-in-time to issue the
@@ -3274,3 +3270,54 @@ class _FleetVerifySignals:
         except Exception as exc:
             log.debug("_read_devnum_for_device(%s) raised %s", self._device_id, exc)
             return None
+
+
+def _make_serial_bootloader_entry(
+    protocol: Any, serial_transport: Any, ble_addr: str, device_id: str
+) -> Callable[[str], Awaitable[None]]:
+    """Bootloader-entry callable for a serial-connected device (BLE-DFU path).
+
+    Protocol/transport are bound at build time so a late device-table
+    mutation can't redirect the command to a different device.
+
+    A retry's re-entry (#218) can run after an INVALID_STATE reset rebooted
+    the device into its app and USB re-enumerated: the bound serial transport
+    is then dead, and reconnection is held during the flash. The app is then
+    reached over a one-shot BLE NUS connection instead (the BLE address is
+    required for BLE-DFU). A send that merely times out is normal on attempt 0
+    (the device reboots) and is not a reason to fall back.
+    """
+
+    async def _enter_via_serial(cmd: str) -> None:
+        from ..transport.ble_transport import BleTransport
+
+        if serial_transport.is_connected:
+            try:
+                await protocol.send_command(cmd)
+                await asyncio.sleep(2)
+                return
+            except TimeoutError:
+                # TimeoutError subclasses OSError: no reply is expected while
+                # the device reboots into its bootloader, so don't fall back.
+                raise
+            except (ConnectionError, OSError) as e:
+                log.warning(
+                    "Bootloader entry over serial failed (%s); trying BLE NUS %s", e, ble_addr
+                )
+        else:
+            log.warning(
+                "Serial transport for %s is disconnected; entering the bootloader "
+                "over BLE NUS %s instead",
+                device_id[:12],
+                ble_addr,
+            )
+        one_shot = BleTransport(ble_addr)
+        try:
+            await one_shot.connect()
+            await one_shot.write_line(cmd)
+            await asyncio.sleep(0.5)
+        finally:
+            with contextlib.suppress(Exception):
+                await one_shot.disconnect()
+
+    return _enter_via_serial
