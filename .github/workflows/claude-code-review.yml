@@ -2,12 +2,9 @@ name: Claude Code Review
 
 # Ported from Josh-Wentworth/imagineer's working review workflow.
 #
-# Why this replaced the previous version: every real run since the switch to
-# ANTHROPIC_API_KEY ended `is_error: true` after ~250 ms with zero model usage
-# (the API key path was failing before any model call), and runs that "passed"
-# had silently skipped. This uses the Max-subscription OAuth token instead, and
-# the WORKFLOW posts a sha-stamped verdict from the model's structured output,
-# rather than trusting the model to post its own comment.
+# Auth: ANTHROPIC_API_KEY. The WORKFLOW posts a sha-stamped verdict from the
+# model's structured output, rather than trusting the model to post its own
+# comment.
 #
 # NOTE: claude-code-action refuses to run a workflow whose content differs from
 # the default branch's copy, so a change to this file only takes effect after it
@@ -67,17 +64,16 @@ jobs:
         # Advisory: a failed review must never red-X the PR; a failure simply
         # posts no verdict.
         continue-on-error: true
-        # Subscription-only billing: blank higher-precedence Anthropic creds so a
-        # stray key can't override the OAuth token (precedence:
-        # ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN).
+        # Blank the higher-precedence credential so nothing in the runner env can
+        # override the API key (precedence: ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY).
         env:
-          ANTHROPIC_API_KEY: ""
           ANTHROPIC_AUTH_TOKEN: ""
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # TEMPORARY DIAGNOSTIC: the review still ends is_error:true after one turn
-          # with $0 cost; the real reason is only in the hidden result text (cf.
-          # anthropics/claude-code-action#1836). Remove once diagnosed.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # TEMPORARY DIAGNOSTIC: earlier ANTHROPIC_API_KEY runs ended
+          # is_error:true after one turn at $0 with the reason hidden (cf.
+          # anthropics/claude-code-action#1836). Remove after the first
+          # successful review on this auth.
           show_full_output: true
           # Without this the action mints a GitHub App token via OIDC, which 403s.
           github_token: ${{ secrets.GITHUB_TOKEN }}
