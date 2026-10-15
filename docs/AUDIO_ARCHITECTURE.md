@@ -306,7 +306,7 @@ The NN onset activation passes through an information gate before use in PLP sou
 
 ### Spectral Flux (BPM Signal)
 
-BPM estimation uses band-weighted half-wave rectified spectral flux from `SharedSpectralAnalysis::getSpectralFlux()`. Computed from **compressed-but-not-whitened** magnitudes (after soft-knee compressor, before per-bin whitening) to preserve absolute transient contrast. Band weighting emphasizes rhythmically important frequencies:
+BPM estimation uses band-weighted half-wave rectified spectral flux from `SharedSpectralAnalysis::getSpectralFlux()`. Computed from **compressed-but-not-whitened** magnitudes (after the soft-knee compressor) to preserve absolute transient contrast. Band weighting emphasizes rhythmically important frequencies:
 - **Bass (bins 1-6, 62-375 Hz):** 50% weight — kicks, strongest periodic signal
 - **Mid (bins 7-32, 437-2000 Hz):** 20% weight — vocals, pads, less rhythmic
 - **High (bins 33-127, 2-8 kHz):** 30% weight — snares, hi-hats, transient markers

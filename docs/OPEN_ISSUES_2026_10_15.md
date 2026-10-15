@@ -57,7 +57,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 2.5 ([#179](https://github.com/Jdubz/blinky_time/issues/179)) | Compressor makes `bassFlux` ∝ level^(1/3); `bassContrast` may clamp at 1 on loud kicks | `applyCompressor`, `processFrame` | OPEN | Unverified: add telemetry before changing. |
 | 2.6 ([#180](https://github.com/Jdubz/blinky_time/issues/180)) | Mel whitening gives little contrast (log-domain ÷ running max) | `whitenMelBands` | OPEN | Low priority; comment corrected in #152. |
 | 2.7 ([#181](https://github.com/Jdubz/blinky_time/issues/181)) | Noise estimator creeps in steady music (leaky minimum) | `estimateAndSubtractNoise` | OPEN | Off by default and not persisted. Keep off, or switch to windowed min-statistics. |
-| 2.8 ([#182](https://github.com/Jdubz/blinky_time/issues/182)) | Unused per-frame work: whitening (backs user settings), debug-only compressed flatness (127 `logf`) | `SharedSpectralAnalysis` | OPEN | `atan2f` phases removed in #152. Compute flatness lazily when streaming. |
 | 2.9 ([#183](https://github.com/Jdubz/blinky_time/issues/183)) | `noiseGate` setting not persisted across reboots | `SerialConsole.cpp:250`, `ConfigStorage` | DECIDE | Persisting changes the stored settings layout (settings reset fleet-wide). Bundle with the next intentional `SETTINGS_VERSION` bump. |
 | 2.10 ([#184](https://github.com/Jdubz/blinky_time/issues/184)) | Mic ring overrun splices a window → spurious flux spike | `AdaptiveMic`, `SharedSpectralAnalysis` | IN-PR #152 | `markDiscontinuity()`. |
 

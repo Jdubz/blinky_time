@@ -62,7 +62,7 @@ PDM Microphone (16kHz, mono)
 
 1. **Decoupled BPM and onset paths**: BPM estimation uses spectral flux (NN-independent). The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat — syncopated transients would corrupt ACF periodicity. Spectral flux preserves periodic structure.
 2. **NN-primary pulse** (b117+): `updatePulseDetection()` uses local-maxima peak-picking directly on NN activation. Bass-band energy gate (50% threshold boost when bass ratio low) and PLP pattern bias (30% threshold boost at off-beat positions) shape sensitivity. PLP beat-grid AND-gate disabled by default (b149+). Active model: Conv1D W16 v33 (50 mel, 30-8000 Hz). Non-NN fallback: mic level.
-3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
+3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; mel bands get per-band whitening (per-bin FFT whitening was removed, #182). AGC removed v72 — hardware gain fixed at platform optimal.
 4. **PLP phase/pattern extraction** (v93): Multi-source ACF across 3 mean-subtracted sources selects period. Epoch-fold extracts repeating energy pattern at detected period → direct pattern interpolation for visual output.
 5. **Pattern slot cache** (v82): 4-slot LRU of 16-bin PLP pattern digests. Every bar, current PLP pattern compared via cosine similarity. Match > 0.70 triggers instant recall from cache. Enables rapid verse/chorus switching.
 6. **Onset information gate**: Suppresses low-confidence NN output before PLP source input and pulse detection, preventing noise-driven false patterns during silence/breakdowns.
@@ -201,8 +201,6 @@ monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `whitenenabled` | true | bool | Per-bin spectral whitening (adaptive normalization) |
-| `whitendecay` | 0.997 | 0.9-0.9999 | Per-frame peak decay (~5s memory at 0.997) |
 | `whitenfloor` | 0.001 | 0.0001-0.1 | Noise floor for whitening |
 | `compenabled` | true | bool | Soft-knee compressor before whitening |
 | `compthresh` | -30.0 | -60.0 to 0.0 dB | Compressor threshold |
