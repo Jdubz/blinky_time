@@ -155,6 +155,41 @@ private:
     Print* b_;
 };
 
+// Collects stream output and hands it to the sink in one write (#171).
+// Print's float/int formatting emits a few bytes per call; through TeeStream
+// each call reaches both the BLE NUS ring and TinyUSB CDC, so one NN line
+// (~55 floats) cost hundreds of tiny writes. Bytes and order are unchanged:
+// a full buffer is committed before more is added, and the destructor
+// commits the rest.
+class LineBuffer : public Print {
+public:
+    explicit LineBuffer(Print& sink) : sink_(sink) {}
+    ~LineBuffer() { commit(); }
+    LineBuffer(const LineBuffer&) = delete;
+    LineBuffer& operator=(const LineBuffer&) = delete;
+
+    size_t write(uint8_t c) override {
+        if (len_ == sizeof(buf_)) commit();
+        buf_[len_++] = c;
+        return 1;
+    }
+    size_t write(const uint8_t* data, size_t size) override {
+        for (size_t i = 0; i < size; i++) write(data[i]);
+        return size;
+    }
+    void commit() {
+        if (len_) {
+            sink_.write(buf_, len_);
+            len_ = 0;
+        }
+    }
+
+private:
+    Print& sink_;
+    uint8_t buf_[512];  // one NN line (~500 B) per write; on the loop task's stack
+    size_t len_ = 0;
+};
+
 class SerialConsole {
 public:
     SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic);
