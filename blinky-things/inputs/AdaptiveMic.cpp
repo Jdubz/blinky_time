@@ -119,6 +119,7 @@ void AdaptiveMic::update(float dt) {
     // thermal noise into apparent signal between songs.
     if (normalized < noiseGate) {
       level = 0.0f;
+      instantAdaptRun_ = 0;  // silence breaks the "consecutive loud updates" run
       return;  // freeze peakLevel/valleyLevel by skipping their updates
     }
 

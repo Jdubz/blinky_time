@@ -81,7 +81,7 @@ namespace RecordProto {
         uint16_t rawLevel;     // mean |x|/32768 over the loop window, 0..1 → 0..65535
         uint16_t bpm10;        // BPM × 10
         uint8_t  phase;        // PLP phase 0..1 → 0..255
-        uint8_t  rstr;         // rhythm strength 0..1 → 0..255
+        uint8_t  rstr;         // periodicity (ACF) strength at this frame, ungated, 0..1 → 0..255
         uint8_t  skipped;      // spectral frames not reported since last FRAME (0 since b208: every frame is reported)
         uint8_t  reserved;
         // uint8_t mel[NUM_MEL] follows iff FRAME_HAS_MEL (raw mel 0..1 → 0..255)

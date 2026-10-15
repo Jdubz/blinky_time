@@ -5,7 +5,7 @@
  * (ml-training/scripts/convert_blrec.py). See docs/PHONE_RECORD_MODE_PLAN.md.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RecordSession, RecordStats } from '../services/record/RecordSession';
+import { getRecordSession, RecordStats } from '../services/record/RecordSession';
 import { buildBlrec } from '../services/record/blrecFormat';
 import {
   deleteSession,
@@ -82,9 +82,9 @@ function useWakeLock(active: boolean): void {
 }
 
 export function RecordPage({ onClose }: RecordPageProps) {
-  const sessionRef = useRef<RecordSession | null>(null);
-  if (!sessionRef.current) sessionRef.current = new RecordSession();
-  const session = sessionRef.current;
+  // Shared, page-independent session: leaving #record (browser Back) must not
+  // orphan an active recording — returning shows it again with Stop.
+  const session = getRecordSession();
 
   const [stats, setStats] = useState<RecordStats | null>(null);
   const [withMel, setWithMel] = useState(false);
@@ -323,6 +323,60 @@ export function RecordPage({ onClose }: RecordPageProps) {
           Data loss detected — gaps are recorded exactly and the converter will split around them,
           but check signal strength / keep the phone closer.
         </div>
+      )}
+
+      {s && s.unsavedSessionIds.length > 0 && (
+        <section className="rec-unsaved">
+          {s.unsavedSessionIds.map(id => (
+            <div key={id} className="rec-error">
+              <strong>{id}</strong>: the end of this recording could not be saved to browser storage
+              and exists only in memory. Export it before closing this page.
+              <div className="rec-session-actions">
+                <button
+                  className="btn btn-small btn-primary"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      const blob = await session.exportUnsaved(id);
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `${id}.blrec`;
+                      a.click();
+                      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                    })
+                  }
+                >
+                  Export now
+                </button>
+                <button
+                  className="btn btn-small"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      if (await session.retryUnsaved(id)) await refreshSessions();
+                    })
+                  }
+                >
+                  Retry save
+                </button>
+                <button
+                  className="btn btn-small btn-danger"
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      window.confirm(`Discard the unsaved tail of ${id}? This cannot be undone.`)
+                    ) {
+                      session.discardUnsaved(id);
+                    }
+                  }}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          ))}
+        </section>
       )}
 
       <section className="rec-sessions">

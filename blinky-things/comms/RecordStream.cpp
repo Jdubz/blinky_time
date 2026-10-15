@@ -347,7 +347,10 @@ void RecordStream::onFrame() {
     float bpm10 = audio_->getCurrentBpm() * 10.0f;
     p.bpm10 = (bpm10 > 0.0f && bpm10 < 65535.0f) ? (uint16_t)(bpm10 + 0.5f) : 0;
     p.phase = q8(audio_->getPlpPhase());
-    p.rstr = q8(audio_->getControl().rhythmStrength);
+    // Frame-current periodicity (ACF strength), not control_.rhythmStrength:
+    // control_ is only synthesized after the whole drain loop, so inside the
+    // frame hook it still holds the previous update's value.
+    p.rstr = q8(audio_->getPeriodicityStrength());
     p.skipped = (skipped > 255) ? 255 : (uint8_t)skipped;
 
     uint16_t len = sizeof(h) + sizeof(p);

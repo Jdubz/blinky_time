@@ -562,6 +562,17 @@ void AudioTracker::runAcf() {
         float multiplierPenalty = sqrtf(static_cast<float>(candidates[c].multiplier));
         float score = candidates[c].acfStrength * sqrtf(variance) / multiplierPenalty;
 
+        // Tempo prior on the BEAT lag (Ellis 2007-style log-Gaussian around
+        // 120 BPM). ACF peaks at 1.5x / 2x the true beat lag are often as
+        // strong as the beat itself on syncopated material; multiplied up to
+        // bar length they produced 6-8-beat "cycles". The prior breaks those
+        // ties toward musically common tempi without forbidding any.
+        if (tempoPriorWidth > 0.0f) {
+            float beatLag = static_cast<float>(cPeriod) / static_cast<float>(candidates[c].multiplier);
+            float oct = log2f(beatLag / (OSS_FRAMES_PER_MIN / 120.0f)) / tempoPriorWidth;
+            score *= expf(-0.5f * oct * oct);
+        }
+
         if (score > bestScore) {
             // Phase from epoch-fold peak position (where the main accent falls).
             // Parabolic interpolation on the 3 bins around the peak gives sub-frame
@@ -778,8 +789,9 @@ void AudioTracker::updatePlpAnalysis() {
     int patLen = plpBestPeriod_;
     if (patLen < 2) patLen = 2;
     if (patLen > MAX_PATTERN_LEN) patLen = MAX_PATTERN_LEN;
-    plpPatternLen_ = patLen;
-
+    // plpPatternLen_ is committed only once plpPattern_ holds a pattern of
+    // that length (below) — an early return here used to leave the new
+    // length paired with the old pattern's contents.
     if (ossCount_ < patLen * 2) return;
 
     // --- 2. Epoch fold for pattern extraction ---
@@ -919,6 +931,7 @@ void AudioTracker::updatePlpAnalysis() {
         } else {
             for (int j = 0; j < patLen; j++) plpPattern_[j] = 0.0f;
         }
+        plpPatternLen_ = patLen;
 
         // Cross-correlation with NN fold for pattern validation.
         // High agreement = pattern reflects real onsets. Low = noise-driven.

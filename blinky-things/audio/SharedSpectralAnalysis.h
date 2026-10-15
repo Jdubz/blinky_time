@@ -237,7 +237,8 @@ public:
      */
     const float* getRawMelBands() const { return rawMelBands_; }
 
-    /** Raw mel values >= 0.99 (pinned at full scale) and total values, since boot. */
+    /** Raw mel values >= 0.99 (pinned at full scale) and total values. Both are
+     *  halved together before overflowing, so read them as a ratio. */
     uint32_t getRawMelSaturatedCount() const { return rawMelSaturated_; }
     uint32_t getRawMelTotalCount() const { return rawMelTotal_; }
 

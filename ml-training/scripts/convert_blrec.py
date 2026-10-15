@@ -10,6 +10,8 @@ Wire formats mirrored here (keep in sync):
 Outputs (in --out, default <input stem>/):
   seg{S}_run{R}.wav   16 kHz mono int16 — one file per CONTIGUOUS run of
                       device samples. Gaps are never zero-filled.
+  frames_segNN.jsonl  per-segment analysis frames (segments are not contiguous —
+                      consume these individually). frames.jsonl has all segments.
   frames.jsonl        device analysis per spectral frame. capture-nn-style
                       field names (ts, nna, lvl, gain, onset, bpm, phase,
                       rstr, mel) plus sample_index (relative to the segment
@@ -151,6 +153,7 @@ def main() -> int:
     header: dict | None = None
     protocol_errors: list[str] = []
     frames_f = open(out / "frames.jsonl", "w", encoding="utf-8")
+    seg_frame_files: dict = {}
     status_f = open(out / "status.jsonl", "w", encoding="utf-8")
     text_f = open(out / "text.jsonl", "w", encoding="utf-8")
 
@@ -186,10 +189,12 @@ def main() -> int:
                 protocol_errors.append(f"seg {segi}: short packet ({len(payload)} B)")
                 continue
             ptype, flags, seq = HDR.unpack_from(payload, 0)
-            if ptype in seg.seq_expect:
-                gap = (seq - seg.seq_expect[ptype]) & 0xFFFF
-                if gap:
-                    seg.seq_gaps[ptype] = seg.seq_gaps.get(ptype, 0) + gap
+            # Firmware resets every per-type sequence to 0 at session start,
+            # so the first packet of a type is expected to be seq 0 — a first
+            # FRAME with seq 3 means 3 FRAMEs were lost.
+            gap = (seq - seg.seq_expect.get(ptype, 0)) & 0xFFFF
+            if gap:
+                seg.seq_gaps[ptype] = seg.seq_gaps.get(ptype, 0) + gap
             seg.seq_expect[ptype] = (seq + 1) & 0xFFFF
             body = payload[HDR.size:]
 
@@ -218,11 +223,18 @@ def main() -> int:
                     protocol_errors.append(f"seg {segi}: bad FRAME length {len(payload)}")
                     continue
                 (sidx, ms, nna, pulse, lvl, raw, bpm10, phase, rstr, skipped, _r) = FRAME_FIXED.unpack_from(body, 0)
+                rel = seg.rel(sidx)
                 rec = {
                     "type": "NN",
                     "seg": segi,
-                    "sample_index": seg.rel(sidx),
-                    "ts": ms,
+                    "sample_index": rel,
+                    # `ts` on the 16 kHz sample clock (ms since segment start),
+                    # so frame spacing is the true 16 ms hop even for catch-up
+                    # frames processed back-to-back. Device processing time is
+                    # kept separately. Segments are NOT contiguous with each
+                    # other: consume frames_segNN.jsonl per segment.
+                    "ts": round(rel / (SAMPLE_RATE / 1000.0), 3),
+                    "proc_ms": ms,
                     "nna": nna / 65535,
                     "onset": pulse / 65535,
                     "lvl": lvl / 65535,
@@ -244,7 +256,11 @@ def main() -> int:
                 seg.frames += 1
                 seg.frames_skipped_nn += skipped
                 seg.fft_overrun_frames += rec["fft_overrun"]
-                frames_f.write(json.dumps(rec) + "\n")
+                line = json.dumps(rec) + "\n"
+                frames_f.write(line)
+                if segi not in seg_frame_files:
+                    seg_frame_files[segi] = open(out / f"frames_seg{segi:02d}.jsonl", "w", encoding="utf-8")
+                seg_frame_files[segi].write(line)
 
             elif ptype in (PKT_STATUS, PKT_END):
                 if len(body) < STATUS.size:
@@ -265,6 +281,8 @@ def main() -> int:
                 protocol_errors.append(f"seg {segi}: unknown packet type {ptype}")
     finally:
         frames_f.close()
+        for fh in seg_frame_files.values():
+            fh.close()
         status_f.close()
         text_f.close()
 
@@ -310,6 +328,17 @@ def main() -> int:
             warnings.append(f"segment {i}: device dropped {dev['framesDropped']} analysis/status packets")
         if seg.end is None:
             warnings.append(f"segment {i}: no END packet (link lost or app closed) — tail may be missing")
+        else:
+            # Index/sequence checks can't see a missing TAIL (no later packet
+            # to reveal the gap). END carries the device's own totals.
+            recovered = sum(len(c) for run in seg.runs for c in run.chunks)
+            sent = seg.end.get("audioSamplesSent", 0)
+            if recovered != sent:
+                warnings.append(f"segment {i}: recovered {recovered} audio samples but device reports {sent} sent")
+            dev_dropped = seg.end.get("audioSamplesDropped", 0)
+            if dev_dropped > gap_samples:
+                warnings.append(
+                    f"segment {i}: device dropped {dev_dropped} samples but only {gap_samples} are located as gaps")
         if seg.fft_overrun_frames:
             warnings.append(f"segment {i}: {seg.fft_overrun_frames} frames flagged FFT overrun (device analysis corrupted there)")
         manifest_segments.append({

@@ -18,6 +18,10 @@ reports, per run:
             not raw `lock`, to compare builds.
   worst20s  Minimum `lock` over 20 s windows — catches drift that a
             whole-track average hides.
+  tempo     Fraction of post-warm-up time where the tracked rhythm period is
+            a musically valid multiple (1/2, 1, 2 or 4 beats, +-4%) of the
+            track's tempo from `.pattern_gt.json`. Used only to judge the
+            visualizer's period choice — never as an onset target.
   recall    Fraction of strong GT onsets with a fired onset within +-50 ms.
   bpm       Median BPM after warm-up (look for loop-rate dependence).
 
@@ -78,6 +82,18 @@ def lock_score(phases: np.ndarray) -> float:
     return max(abs(np.exp(2j * np.pi * m * phases).mean()) for m in (1, 2, 4))
 
 
+def tempo_score(rows: np.ndarray, gt_bpm: float | None) -> float:
+    if not gt_bpm:
+        return float("nan")
+    t = rows["t_ms"] / 1000.0
+    p = rows["period_f"][t >= WARMUP_S]
+    beat = 62.5 * 60.0 / gt_bpm
+    ok = np.zeros(len(p), dtype=bool)
+    for m in (0.5, 1.0, 2.0, 4.0):
+        ok |= np.abs(p / (beat * m) - 1.0) <= 0.04
+    return float(ok.mean()) if len(p) else float("nan")
+
+
 def evaluate(rows: np.ndarray, onsets: np.ndarray) -> dict:
     t = rows["t_ms"] / 1000.0
     strong = onsets[onsets >= WARMUP_S]
@@ -129,11 +145,13 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
         print(f"{'track':32s} {'fps':>5s} " + "  ".join(
-            f"{b+':lock':>9s} {b+':exc':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':bpm':>8s}" for b, _ in builds))
+            f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':bpm':>8s}" for b, _ in builds))
         for stem in stems:
             mp3 = CORPUS / f"{stem}.mp3"
             gt = json.loads((CORPUS / f"{stem}.onsets_consensus.json").read_text())
             onsets = np.array(sorted(o["time"] for o in gt["onsets"] if o["strength"] >= STRONG))
+            pgt = CORPUS / f"{stem}.pattern_gt.json"
+            gt_bpm = json.loads(pgt.read_text()).get("groundTruthBpm") if pgt.exists() else None
             pcm = tmpd / f"{stem}.pcm"
             decode(ffmpeg, mp3, pcm)
             for fps in args.fps:
@@ -141,14 +159,16 @@ def main() -> int:
                 for b, exe in builds:
                     rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed)
                     r = evaluate(rows, onsets)
+                    r["tempo"] = tempo_score(rows, gt_bpm)
                     summary[b].append(r)
-                    cells.append(f"{r['lock']:9.2f} {r['excess']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} {r['bpm']:8.1f}")
+                    cells.append(f"{r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} {r['bpm']:8.1f}")
                 print(f"{stem:32s} {fps:5.0f} " + "  ".join(cells), flush=True)
     print()
     for b, rs in summary.items():
         arr = lambda k: np.nanmean([r[k] for r in rs])
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
-              f"mean worst20s {arr('worst20s'):.3f}  mean recall {arr('recall'):.3f}")
+              f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
+              f"mean recall {arr('recall'):.3f}")
     return 0
 
 

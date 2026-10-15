@@ -13,6 +13,7 @@ import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { AudioDebugPage } from './pages/AudioDebugPage';
 import { RecordPage } from './pages/RecordPage';
+import { peekRecordSession, type RecordState } from './services/record/RecordSession';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
 import type { DeviceProtocol } from './services/protocol';
 import type { GeneratorType } from './types';
@@ -52,6 +53,17 @@ export function MainShell() {
     setProtocol(selectedDevice.ensureProtocol());
     // `selectedDevice` is derived from `selectedId`; keying on id is correct.
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A recording keeps running if the user navigates away from #record (the
+  // session is shared, not owned by the page) — surface it with a way back.
+  const [recState, setRecState] = useState<RecordState>('idle');
+  useEffect(() => {
+    const rec = peekRecordSession();
+    if (!rec) return;
+    return rec.subscribe(st => setRecState(st.state));
+  }, [hash]);
+  const recordingElsewhere =
+    hash !== '#record' && ['starting', 'recording', 'stopping', 'reconnecting'].includes(recState);
 
   if (hash === '#record') {
     return <RecordPage onClose={() => (window.location.hash = '')} />;
@@ -185,6 +197,12 @@ export function MainShell() {
       />
 
       <main className="shell-body">
+        {recordingElsewhere && (
+          <div className="shell-warning">
+            A field recording is still running. <a href="#record">Return to the recorder</a> to
+            monitor or stop it.
+          </div>
+        )}
         {!dispatchEnabled && (
           <div className="shell-warning">
             {deviceUnavailable

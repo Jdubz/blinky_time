@@ -18,7 +18,7 @@
 import { logger } from '../../lib/logger';
 import { TransportEvent } from '../transport/types';
 import { WebBluetoothTransport } from '../transport/WebBluetoothTransport';
-import { concatChunks, encodeRecord, RecordKind } from './blrecFormat';
+import { buildBlrec, concatChunks, encodeRecord, RecordKind } from './blrecFormat';
 import {
   FramePacket,
   isStartReply,
@@ -37,6 +37,7 @@ import {
   appendChunk,
   deleteSession,
   putSession,
+  readChunks,
   requestPersistence,
   SessionMeta,
 } from './recordStore';
@@ -66,6 +67,8 @@ export interface RecordStats {
   protocolErrors: number;
   /** Bytes waiting in memory because IndexedDB writes are failing. */
   unsavedBytes: number;
+  /** Closed sessions whose tail could not be written to IndexedDB. */
+  unsavedSessionIds: string[];
   lastStatus: StatusPacket | null;
   lastFrame: FramePacket | null;
   peakDbfs: number;
@@ -77,6 +80,26 @@ const FLUSH_INTERVAL_MS = 1000;
 const START_TIMEOUT_MS = 4000;
 const END_TIMEOUT_MS = 6000;
 const RECONNECT_DELAY_MS = 1500;
+const CLOSE_FLUSH_ATTEMPTS = 3;
+const CLOSE_FLUSH_RETRY_MS = 500;
+
+/**
+ * `record start` got no reply in time. The device may nevertheless be
+ * recording (it arms the tap and starts notifying before its NUS reply), so
+ * this is NOT "nothing happened": the caller must keep any captured data, and
+ * a best-effort `record stop` has already been sent.
+ */
+export class StartAmbiguousError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StartAmbiguousError';
+  }
+}
+
+interface UnsavedSession {
+  meta: SessionMeta;
+  pending: Uint8Array[];
+}
 
 type Listener = (stats: RecordStats) => void;
 
@@ -96,6 +119,8 @@ export class RecordSession {
   private startPromise: Promise<void> | null = null;
   private reconnectLoopRunning = false;
   private lineWaiters: ((obj: Record<string, unknown>) => boolean)[] = [];
+  /** Closed sessions holding records IndexedDB refused; kept until export/save/discard. */
+  private unsaved = new Map<string, UnsavedSession>();
   private endWaiter: (() => void) | null = null;
 
   // Per-segment integrity tracking
@@ -121,6 +146,7 @@ export class RecordSession {
     statusSeqGaps: 0,
     protocolErrors: 0,
     unsavedBytes: 0,
+    unsavedSessionIds: [],
     lastStatus: null,
     lastFrame: null,
     peakDbfs: -Infinity,
@@ -214,11 +240,19 @@ export class RecordSession {
     try {
       await this.runStartSegment();
     } catch (err) {
-      // Nothing was recorded — don't leave an empty session behind.
       this.wantRecording = false;
+      const captured =
+        (this.meta?.bytes ?? 0) > 0 ||
+        this.pending.some(p => p.length > 0 && p[2] === RecordKind.PACKET);
       await this.closeSession();
-      await deleteSession(sessionId).catch(() => undefined);
-      this.update({ sessionId: null });
+      if (err instanceof StartAmbiguousError || captured) {
+        // The device may have recorded; keep whatever arrived.
+        this.update({ message: `${String(err)} — partial capture kept` });
+      } else {
+        // Definitively refused before anything was captured: no empty session.
+        await deleteSession(sessionId).catch(() => undefined);
+        this.update({ sessionId: null });
+      }
       throw err;
     }
   }
@@ -311,19 +345,63 @@ export class RecordSession {
     this.closing = (async () => {
       if (this.flushTimer) clearInterval(this.flushTimer);
       this.flushTimer = null;
-      await this.flush();
+      for (let attempt = 0; attempt < CLOSE_FLUSH_ATTEMPTS; attempt++) {
+        await this.flush();
+        if (this.pending.length === 0) break;
+        await new Promise(res => setTimeout(res, CLOSE_FLUSH_RETRY_MS));
+      }
       if (this.meta) {
+        await putSession({ ...this.meta }).catch(err => this.reportStorageError(err));
         if (this.pending.length > 0) {
+          // Never drop records that were reported as "held in memory": keep
+          // them with the session until export/retry succeeds or the user
+          // explicitly discards them.
+          this.unsaved.set(this.meta.id, { meta: { ...this.meta }, pending: this.pending });
           this.update({
-            message: `STORAGE: ${this.stats.unsavedBytes} bytes could not be saved before closing`,
+            unsavedSessionIds: [...this.unsaved.keys()],
+            message: `STORAGE: ${this.stats.unsavedBytes} bytes could not be saved — export or retry before closing the page`,
           });
         }
-        await putSession({ ...this.meta }).catch(err => this.reportStorageError(err));
       }
       this.meta = null;
       this.pending = [];
     })();
     return this.closing;
+  }
+
+  /** Export a closed session whose tail is only in memory: stored chunks + held records. */
+  async exportUnsaved(sessionId: string): Promise<Blob> {
+    const u = this.unsaved.get(sessionId);
+    if (!u) throw new Error(`no unsaved data for ${sessionId}`);
+    let stored: ArrayBuffer[] = [];
+    try {
+      stored = await readChunks(sessionId);
+    } catch (err) {
+      logger.error('reading stored chunks for unsaved export failed', { err: String(err) });
+    }
+    return buildBlrec(u.meta, [...stored, concatChunks(u.pending)]);
+  }
+
+  /** Try again to write held records; returns true when nothing is left in memory. */
+  async retryUnsaved(sessionId: string): Promise<boolean> {
+    const u = this.unsaved.get(sessionId);
+    if (!u) return true;
+    try {
+      await appendChunk(u.meta, concatChunks(u.pending));
+      await putSession({ ...u.meta });
+      this.unsaved.delete(sessionId);
+      this.update({ unsavedSessionIds: [...this.unsaved.keys()], message: 'Unsaved data written' });
+      return true;
+    } catch (err) {
+      this.reportStorageError(err);
+      return false;
+    }
+  }
+
+  /** Explicitly drop held records (user confirmed). */
+  discardUnsaved(sessionId: string): void {
+    this.unsaved.delete(sessionId);
+    this.update({ unsavedSessionIds: [...this.unsaved.keys()] });
   }
 
   private runStartSegment(): Promise<void> {
@@ -360,14 +438,24 @@ export class RecordSession {
     try {
       obj = await reply;
     } catch (err) {
+      // No reply in time. The device may be recording anyway (reply lost or
+      // late): stop it so it can't keep streaming into a session we consider
+      // failed, and so the next start isn't refused as "already recording".
+      await this.transport.send('record stop').catch(() => undefined);
       this.update({
         state: this.transport.isConnected() ? 'connected' : 'reconnecting',
         message: String(err),
       });
-      throw err;
+      throw new StartAmbiguousError(`record start not confirmed: ${String(err)}`);
     }
     if (!isStartReply(obj)) {
-      const msg = `record start refused: ${String(obj.error ?? JSON.stringify(obj))}`;
+      const reason = String(obj.error ?? JSON.stringify(obj));
+      if (/already recording/i.test(reason)) {
+        // A previous (ambiguous) start left the device recording: end it so
+        // the next attempt can start cleanly.
+        await this.transport.send('record stop').catch(() => undefined);
+      }
+      const msg = `record start refused: ${reason}`;
       this.update({ state: 'connected', message: msg });
       throw new Error(msg);
     }
@@ -474,7 +562,12 @@ export class RecordSession {
         try {
           if (!this.transport.isConnected()) await this.transport.reconnect();
           if (!this.dataChar) await this.attachDataChar();
-          if (!this.wantRecording || !this.meta) break;
+          if (!this.wantRecording || !this.meta) {
+            // Stop arrived while GATT was connecting: keep the link, but show
+            // it (Start/Disconnect) instead of leaving the UI on the picker.
+            this.update({ state: this.transport.isConnected() ? 'connected' : 'idle' });
+            break;
+          }
           await this.runStartSegment();
           this.update({ message: 'Reconnected — recording new segment' });
           return;
@@ -509,8 +602,9 @@ export class RecordSession {
       return;
     }
 
-    const prevSeq = this.expectedSeq[pkt.type];
-    const seqGap = prevSeq === undefined ? 0 : u16Diff(pkt.seq, prevSeq);
+    // Firmware resets every per-type sequence to 0 at session start, so a
+    // first FRAME with seq 3 means three FRAMEs were lost.
+    const seqGap = u16Diff(pkt.seq, this.expectedSeq[pkt.type] ?? 0);
     this.expectedSeq[pkt.type] = (pkt.seq + 1) & 0xffff;
 
     switch (pkt.type) {
@@ -594,4 +688,21 @@ export class RecordSession {
       });
     return this.flushing;
   }
+}
+
+let sharedSession: RecordSession | null = null;
+
+/**
+ * The page-independent session. Leaving `#record` (e.g. browser Back) must not
+ * orphan an active recording: the session outlives the page, and returning
+ * shows the same session with its Stop control.
+ */
+export function getRecordSession(): RecordSession {
+  if (!sharedSession) sharedSession = new RecordSession();
+  return sharedSession;
+}
+
+/** The shared session if one exists (doesn't create it). */
+export function peekRecordSession(): RecordSession | null {
+  return sharedSession;
 }

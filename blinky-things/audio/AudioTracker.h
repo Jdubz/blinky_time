@@ -156,6 +156,9 @@ public:
     float bpmMin = 15.0f;              // Captures full-bar patterns (4 beats at 60 BPM = 264 frames)
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
+    float tempoPriorWidth = 0.8f;      // Beat-lag prior width in octaves around 120 BPM (0 = off).
+                                       // tests/tracker sweep: 0.8 lifts valid-tempo time 0.60 -> 0.67
+                                       // and phase alignment 0.079 -> 0.103 vs off.
     uint16_t acfPeriodMs = 100;
 
     // Rhythm activation

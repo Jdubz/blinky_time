@@ -557,6 +557,11 @@ void SharedSpectralAnalysis::computeRawMelBands() {
         if (rawMelBands_[band] >= 0.99f) rawMelSaturated_++;
     }
     rawMelTotal_ += SpectralConstants::NUM_MEL_BANDS;
+    // Keep the ratio, avoid uint32 wrap (~16 days of uptime at 50 bands).
+    if (rawMelTotal_ >= 0x80000000u) {
+        rawMelTotal_ >>= 1;
+        rawMelSaturated_ >>= 1;
+    }
 
     // Also store linear mel energy (before log compression) for PCEN.
     // Uses precomputed invWeightSum_ to avoid per-frame weight sum + division.
@@ -591,7 +596,7 @@ void SharedSpectralAnalysis::whitenMelBands() {
     // - Mel bands are perceptually meaningful (26 bands vs 128 bins)
     // - Log-compression is already applied, so whitening operates in dB space
 
-    const float decay = 0.97f;   // Running max decay per FFT frame (~1s at 30 fps)
+    const float decay = 0.97f;   // Running max decay per spectral frame (time constant ~0.53 s at 62.5 fps)
     const float floor = 0.01f;   // Floor at -54dB normalized (avoids amplifying noise)
 
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {

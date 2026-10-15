@@ -106,6 +106,7 @@ int main(int argc, char** argv) {
     AudioTracker tracker(pdm, time);
     tracker.begin(SAMPLE_RATE);
     if (argc > 6) tracker.plpPhaseGain = static_cast<float>(std::atof(argv[6]));
+    if (argc > 7) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);
@@ -132,7 +133,7 @@ int main(int argc, char** argv) {
         uint32_t frames = tracker.getSpectral().getFrameCount();
         std::fprintf(out, "%.3f,%.5f,%.4f,%.4f,%.4f,%u,%.2f,%.3f,%.4f,%u\n",
                      time.us / 1000.0, c.phase, c.plpPulse, c.pulse,
-                     tracker.getLastOnsetStrength(), tracker.getBeatCount(),
+                     c.onset, tracker.getBeatCount(),  // delivered (gated) onset, as generators see it
                      tracker.getCurrentBpm(), tracker.getPlpPeriodF(), c.rhythmStrength,
                      frames - prevFrames);
         prevFrames = frames;
