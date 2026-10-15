@@ -808,6 +808,7 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
     if (strcmp(cmd, "stream nn") == 0) {
         streamEnabled_ = false;  // Disable timer-based stream to avoid TX overflow
         streamNN_ = true;        // NN stream fires independently on isFrameReady()
+        nnStreamFirst_ = true;
         streamFast_ = false;
         out_.println(F("OK nn"));
         return true;
@@ -1718,7 +1719,12 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[30 floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
+    // One line per loop update, not per frame: when the loop processes several
+    // frames in one update only the last is emitted. "fc" (spectral frame
+    // count) and "skip" (frames not emitted since the previous NN line) make
+    // those gaps explicit so offline replay can exclude them (#170). Emitting
+    // every frame would add 10-50 ms of formatting per extra frame (#171).
+    // Format: {"type":"NN","ts":<ms>,"fc":<frame>,"skip":<n>,"mel":[NUM_MEL_BANDS floats],"onset":<float>,"nna":<float>,"nn":<0|1>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>,"flat":<float>,"rflux":<float>}
     // "onset" = gated pulse strength (nonzero only on rising-edge pulse events)
     // "nna" = raw NN activation (continuous 0-1, pre-gating)
     // "nn" = 1 if NN loaded, 0 if stub/fallback
@@ -1726,12 +1732,18 @@ void SerialConsole::streamTick() {
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
         uint32_t fc = spectral.getFrameCount();
-        if (fc != lastNNFrameCount_) {
+        if (nnStreamFirst_ || fc != lastNNFrameCount_) {
+            uint32_t skip = nnStreamFirst_ ? 0 : fc - lastNNFrameCount_ - 1;
+            nnStreamFirst_ = false;
             lastNNFrameCount_ = fc;
             const float* mel = spectral.getRawMelBands();
 
             out_.print(F("{\"type\":\"NN\",\"ts\":"));
             out_.print(now);
+            out_.print(F(",\"fc\":"));
+            out_.print(fc);
+            out_.print(F(",\"skip\":"));
+            out_.print(skip);
             out_.print(F(",\"mel\":["));
             for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
                 if (i > 0) out_.print(',');
