@@ -194,6 +194,7 @@ async def test_cancel_during_subscription_disconnects_client(
     # Copilot review: a timeout/cancellation while start_notify is pending
     # (CancelledError, not an Exception) must not leak the bootloader link.
     hang = asyncio.Event()
+    subscribing = asyncio.Event()
     state = {"disconnects": 0}
 
     class Client:
@@ -211,6 +212,7 @@ async def test_cancel_during_subscription_disconnects_client(
             return b"\x08\x00"  # bootloader DFU revision
 
         async def start_notify(self, *a: Any, **k: Any) -> None:
+            subscribing.set()
             await hang.wait()  # never set: blocks until cancelled
 
         async def disconnect(self) -> None:
@@ -230,8 +232,9 @@ async def test_cancel_during_subscription_disconnects_client(
     task = asyncio.ensure_future(
         mod._dfu_transfer_inner(APP, b"init", b"fw", 0x04, lambda *a: None, {"status": "error"})
     )
-    for _ in range(50):  # let it reach start_notify
-        await real_sleep(0)
+    # Wait until the transfer is actually inside start_notify (the preceding
+    # to_thread step may take a while), then cancel.
+    await asyncio.wait_for(subscribing.wait(), timeout=5.0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
