@@ -4,9 +4,20 @@ Runs the firmware's real `AudioTracker`, `SharedSpectralAnalysis` and `AdaptiveM
 
 Use it to check that tempo, phase and beat count don't depend on loop rate and don't drift. Phase drift that depends on loop rate is the failure mode the b208 frame-clock rework fixed.
 
-**Limitation:** there's no TFLite on the host, so the tracker runs its NN-unavailable path.
-- Tempo and phase use the same code either way.
+**Default build:** no TFLite, so the tracker runs its NN-unavailable path. That is also what devices do whenever the embedded model is refused (#162).
 - Onset pulses come from spectral flux, not the NN, so `recall` isn't the device's onset F1.
+
+**With the real onset NN (#203):** `tests/tracker/build_host_nn.sh` compiles the Arduino TFLite Micro library for the host and links the harness with `BLINKY_HOST_NN`, so `FrameOnsetNN` runs the embedded model exactly as the device does.
+- The kernels are TFLite reference kernels, plus CMSIS-NN's portable C paths (no ARM intrinsics on the host).
+- It finds the library installed by `tools/setup_tflite_lib.sh`, or you can pass `--lib <dir>/src`.
+- Use `CXX`/`AR` to pick a toolchain.
+
+```bash
+tests/tracker/build_host_nn.sh --out build/host_nn
+python tests/tracker/run_tracker_eval.py --harness build/host_nn/tracker_harness_nn --compare build/tracker_harness
+```
+
+CI's `tracker-harness-nn` job builds it, stress-tests it, and warns while the embedded model is refused.
 
 ## Build
 
