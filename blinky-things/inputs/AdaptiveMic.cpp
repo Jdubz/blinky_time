@@ -157,9 +157,18 @@ void AdaptiveMic::update(float dt) {
         // Sustained rise (#176): lead the rise instead of trailing it, so
         // level stops clamping at 1.0 through a build-up. Target the
         // riser's running max so within-riser dips don't drag the peak.
-        float riserAlpha = 1.0f - expf(-audioDt / MicConstants::RISER_TAU);
         float target = MicConstants::RISER_HEADROOM * riserMax_;
-        if (target > peakLevel) peakLevel += riserAlpha * (target - peakLevel);
+        if (target > peakLevel) {
+            float riserAlpha = 1.0f - expf(-audioDt / MicConstants::RISER_TAU);
+            peakLevel += riserAlpha * (target - peakLevel);
+        } else {
+            // Peak above the riser target (e.g. instant adaptation fired on a
+            // burst inside the build): release normally toward the larger of
+            // target and input instead of freezing it there.
+            float floorV = (normalized > target) ? normalized : target;
+            float releaseAlpha = 1.0f - expf(-audioDt / maxValue(releaseTau, MicConstants::MIN_TAU_RANGE));
+            peakLevel += releaseAlpha * (floorV - peakLevel);
+        }
     } else {
         float tau = (normalized > peakLevel) ? peakTau : releaseTau;
         float peakAlpha = 1.0f - expf(-audioDt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
