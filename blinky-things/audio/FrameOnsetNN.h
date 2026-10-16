@@ -23,6 +23,7 @@
 //
 // ============================================================================
 
+#include <Arduino.h>  // Serial, F(), micros(): self-contained, also for host NN builds (#203)
 #include <TensorFlowLite.h>
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
@@ -358,8 +359,10 @@ public:
     uint32_t getInferCount() const { return inferCount_; }
     uint32_t getInvokeErrors() const { return invokeErrors_; }
 
-    /** Print diagnostic info to the given output stream. */
-    void printDiagnostics(Print& out) const {
+    /** Print diagnostic info to the given output stream (any Print-like:
+     *  Arduino Print on device, the simulator's Serial stub on host). */
+    template <typename P>
+    void printDiagnostics(P& out) const {
         out.print(F("[NN] ready="));
         out.print(ready_ ? F("yes") : F("no"));
         if (ready_) {

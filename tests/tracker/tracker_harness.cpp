@@ -146,6 +146,22 @@ int main(int argc, char** argv) {
         prevFrames = frames;
     }
     std::fclose(out);
+#ifdef BLINKY_HOST_NN
+    // With the real NN linked, a model that initialized must actually have
+    // inferred, and every Invoke() must have succeeded: FrameOnsetNN logs a
+    // failed Invoke once and returns 0, which would otherwise pass silently.
+    // A model refused at begin() (e.g. width mismatch) is reported separately
+    // by the BLINKY_ASSERT in AudioTracker::begin and is not an error here.
+    {
+        const FrameOnsetNN& nn = tracker.getFrameOnsetNN();
+        if (nn.isReady() && (nn.getInvokeErrors() != 0 || nn.getInferCount() == 0)) {
+            std::fprintf(stderr, "[HARNESS] onset NN ready but invokeErrors=%u inferCount=%u\n",
+                         static_cast<unsigned>(nn.getInvokeErrors()),
+                         static_cast<unsigned>(nn.getInferCount()));
+            return 4;
+        }
+    }
+#endif
     const unsigned fired = static_cast<unsigned>(BlinkyAssert::failCount - assertsAfterBegin);
     if (fired) {
         std::fprintf(stderr, "[HARNESS] %u firmware assert(s) fired during the run (see [ASSERT] lines on stdout)\n", fired);

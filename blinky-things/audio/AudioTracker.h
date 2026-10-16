@@ -3,11 +3,13 @@
 #include "AudioControl.h"
 #include "../hal/PlatformDetect.h"
 
-#if (defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)) && !defined(BLINKY_HOST_HARNESS)
+#if ((defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)) && !defined(BLINKY_HOST_HARNESS))     || defined(BLINKY_HOST_NN)
+// Device builds, and host harness builds linked against a host-compiled
+// TFLite Micro (BLINKY_HOST_NN, see tests/tracker/README.md, #203).
 #include "FrameOnsetNN.h"
 #else
-// Host builds (tests/tracker/ harness): no TFLite. The tracker runs its
-// NN-unavailable path (spectral-flux pulses, mic-level NN buffer).
+// Host builds without TFLite (default tests/tracker/ harness): the tracker
+// runs its NN-unavailable path (spectral-flux pulses, mic-level NN buffer).
 struct FrameOnsetNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }

@@ -347,3 +347,48 @@ jobs:
       run: |
         python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
           --min-excess 0.07 --min-tempo 0.70 --min-recall 0.25
+
+  tracker-harness-nn:
+    name: Tracker Harness with real onset NN (host TFLite Micro)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v2
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python deps
+      run: pip install numpy
+
+    - name: Install TFLite Micro library
+      run: |
+        arduino-cli config init
+        bash tools/setup_tflite_lib.sh --ci
+
+    # Builds TFLite Micro for the host and links the harness with
+    # BLINKY_HOST_NN, so FrameOnsetNN runs the embedded model (#203).
+    - name: Build harness with the real onset NN
+      run: bash tests/tracker/build_host_nn.sh --out build/host_nn
+
+    - name: Stress run with the NN path
+      run: python tests/tracker/run_stress.py --harness build/host_nn/tracker_harness_nn
+
+    # Informational until a model the firmware accepts is on master (#155):
+    # the v36 export is refused (initError 5) and the tracker falls back.
+    - name: Report whether the embedded model initializes
+      run: |
+        head -c $((16000*2*20)) /dev/urandom > /tmp/noise.pcm
+        build/host_nn/tracker_harness_nn /tmp/noise.pcm /tmp/out.csv 60 > /tmp/nn.log 2>&1 || true
+        if grep -q "FrameOnsetNN failed to initialize" /tmp/nn.log; then
+          echo "::warning title=Onset NN::Embedded model is refused by FrameOnsetNN (devices run without the onset NN; see #155/#162)"
+        else
+          echo "Embedded onset model initializes on the host."
+        fi
