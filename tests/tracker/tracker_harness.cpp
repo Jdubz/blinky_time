@@ -113,6 +113,7 @@ int main(int argc, char** argv) {
     const uint16_t assertsAfterBegin = BlinkyAssert::failCount;
     if (argc > 6) tracker.plpPhaseGain = static_cast<float>(std::atof(argv[6]));
     if (argc > 7) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
+    if (argc > 8) tracker.syncopatedCandidateScale = static_cast<float>(std::atof(argv[8]));
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);

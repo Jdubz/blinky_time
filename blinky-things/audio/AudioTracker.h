@@ -157,6 +157,7 @@ public:
     float bpmMax = 200.0f;
     float tempoSmoothing = 0.85f;
     float tempoPriorWidth = 0.8f;      // Beat-lag prior width in octaves around 120 BPM (0 = off).
+    float syncopatedCandidateScale = 1.0f;  // Bar candidates derived from 1.5/2.5-beat peaks; score scale (0 = off) (#166)
                                        // tests/tracker sweep: 0.8 lifts valid-tempo time 0.60 -> 0.67
                                        // and phase alignment 0.079 -> 0.103 vs off.
     uint16_t acfPeriodMs = 100;

@@ -71,8 +71,10 @@ def decode(ffmpeg: str, src: Path, dst: Path) -> None:
                     "-f", "s16le", str(dst)], check=True)
 
 
-def run_harness(exe: str, pcm: Path, out: Path, fps: float, jitter: float, seed: int) -> np.ndarray:
-    subprocess.run([exe, str(pcm), str(out), str(fps), str(jitter), str(seed)], check=True)
+def run_harness(exe: str, pcm: Path, out: Path, fps: float, jitter: float, seed: int,
+                extra: list[str] | None = None) -> np.ndarray:
+    subprocess.run([exe, str(pcm), str(out), str(fps), str(jitter), str(seed), *(extra or [])],
+                   check=True)
     return np.genfromtxt(out, delimiter=",", names=True)
 
 
@@ -134,6 +136,9 @@ def main() -> int:
     ap.add_argument("--jitter", type=float, default=0.25)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--ffmpeg")
+    ap.add_argument("--harness-args", nargs="*", default=[],
+                    help="extra positional args after the seed: plpPhaseGain tempoPriorWidth "
+                         "syncopatedCandidateScale (tuning sweeps; the new build only)")
     ap.add_argument("--min-excess", type=float, help="fail if the new build's mean excess is below this")
     ap.add_argument("--min-tempo", type=float, help="fail if the new build's mean tempo score is below this")
     ap.add_argument("--min-recall", type=float, help="fail if the new build's mean recall is below this")
@@ -160,7 +165,8 @@ def main() -> int:
             for fps in args.fps:
                 cells = []
                 for b, exe in builds:
-                    rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed)
+                    rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed,
+                                       args.harness_args if b == "new" else None)
                     r = evaluate(rows, onsets)
                     r["tempo"] = tempo_score(rows, gt_bpm)
                     r["has_gt_bpm"] = bool(gt_bpm)

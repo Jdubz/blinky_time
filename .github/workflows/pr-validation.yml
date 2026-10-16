@@ -340,9 +340,10 @@ jobs:
     - name: UBSan stress (silence, gap, clip, noise, hum, clicks at 15/60/250 fps)
       run: python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
 
-    # Floors sit just under the b208 baseline (excess 0.096, tempo 0.667,
-    # recall 0.283 on edm/ at 35/60/90 fps). Raise them as the tracker improves.
+    # Floors sit just under the current baseline on edm/ at 35/60/90 fps:
+    # excess 0.094, tempo 0.729 (syncopation-derived bar candidates, #166),
+    # recall 0.282. Raise them as the tracker improves.
     - name: Corpus regression gate (edm/, 35/60/90 fps)
       run: |
         python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
-          --min-excess 0.07 --min-tempo 0.60 --min-recall 0.25
+          --min-excess 0.07 --min-tempo 0.70 --min-recall 0.25
