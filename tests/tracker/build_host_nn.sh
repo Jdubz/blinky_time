@@ -37,6 +37,9 @@ if [ -z "$LIB" ] || [ ! -f "$LIB/TensorFlowLite.h" ]; then
 fi
 echo "TFLite Micro: $LIB"
 
+# Fresh object dir every run: objects from sources that were removed or
+# renamed must not end up in the archive.
+rm -rf "$OUT/obj"
 mkdir -p "$OUT/obj"
 INC=(-I"$LIB" -I"$LIB/third_party/flatbuffers/include" -I"$LIB/third_party/gemmlowp"
      -I"$LIB/third_party/ruy" -I"$LIB/third_party/cmsis" -I"$LIB/third_party/cmsis/CMSIS/NN/Include"
