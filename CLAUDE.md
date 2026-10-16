@@ -2,7 +2,7 @@
 
 This file contains **critical behavior rules only**. Architecture, status, and historical context live in `docs/` (see the index at the bottom).
 
-> ESP32-S3 support was cut March 2026. All active development targets **nRF52840**.
+> ESP32-S3 support was cut March 2026. All active development targets **nRF52840** (the deployed fleet). The **next generation** of fixtures will be built on the XIAO ESP32-S3 Sense, dual-core (renderer on one core, audio listener on the other): see `docs/NEXTGEN_ESP32S3_PLAN.md`. Don't change deployed-fleet code for it.
 
 ## CRITICAL: Upload Safety (nRF52840)
 
@@ -198,6 +198,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
+| `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
