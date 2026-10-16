@@ -475,15 +475,21 @@ void AudioTracker::runAcf() {
     // (e.g., kick-snare-kick-snare has higher variance at 4× than at 1×).
     static constexpr int MULTIPLIERS[] = { 1, 2, 3, 4 };
     static constexpr int NUM_MULTIPLIERS = 4;
-    static constexpr int MAX_CANDIDATES = TOP_N * NUM_MULTIPLIERS;
+    // Syncopation-derived candidates (#166): per beat peak, 2 beat hypotheses
+    // (L*2/3, L*2/5) x 2 bar multipliers (2x, 4x).
+    static constexpr int SYNC_FRACS = 2;
+    static constexpr int SYNC_MULTS = 2;
+    static constexpr int MAX_CANDIDATES = TOP_N * (NUM_MULTIPLIERS + SYNC_FRACS * SYNC_MULTS);
 
     struct ScoredCandidate {
         float acfStrength;
         int period;
         int source;
         int multiplier;   // 1=beat, 2/3/4=bar-level
+        bool derived;     // syncopation-derived (#166): score scaled by syncopatedCandidateScale
     };
-    static_assert(MAX_CANDIDATES == TOP_N * NUM_MULTIPLIERS, "MAX_CANDIDATES invariant");
+    static_assert(MAX_CANDIDATES == TOP_N * (NUM_MULTIPLIERS + SYNC_FRACS * SYNC_MULTS),
+                  "MAX_CANDIDATES invariant");
     ScoredCandidate candidates[MAX_CANDIDATES] = {};
     int numCandidates = 0;
 
@@ -502,7 +508,58 @@ void AudioTracker::runAcf() {
             if (dup) continue;
 
             if (numCandidates < MAX_CANDIDATES) {
-                candidates[numCandidates++] = { beatPeaks[k].strength, cPeriod, beatPeaks[k].source, MULTIPLIERS[m] };
+                candidates[numCandidates++] = { beatPeaks[k].strength, cPeriod, beatPeaks[k].source, MULTIPLIERS[m], false };
+            }
+        }
+    }
+
+    // --- Syncopation-derived bar candidates (#166) ---
+    // Breakbeat / DnB / 2-step accent patterns (kick on 1 and the "and" of 3,
+    // snare on 2 and 4) put the strongest beat-range ACF peaks at 1.5 and 2.5
+    // beats, while the true beat lag barely shows up in any source. The bar
+    // (4 beats) still correlates strongly. So from each beat peak L derive the
+    // beat hypotheses b = 2L/3 (L was 1.5 beats) and 2L/5 (L was 2.5 beats), and
+    // add bar-level candidates at 2b and 4b scored with the ACTUAL ACF at that
+    // lag, not the parent peak's. Wrong hypotheses get a weak ACF and lose in
+    // Pass 2 on their own; nothing is forced. Cost: <= TOP_N*4 single-lag ACFs.
+    if (syncopatedCandidateScale > 0.0f) {
+        static constexpr int FRAC_NUM[SYNC_FRACS] = { 2, 2 };
+        static constexpr int FRAC_DEN[SYNC_FRACS] = { 3, 5 };
+        static constexpr int SYNC_MULT[SYNC_MULTS] = { 2, 4 };
+        for (int k = 0; k < TOP_N; k++) {
+            if (beatPeaks[k].strength < 0.01f) continue;
+            const int src = beatPeaks[k].source;
+            const float* buf = sources[src];
+            const int count = sourceCounts[src];
+            float zero = 0.0f;
+            for (int i = 0; i < count; i++) zero += buf[i] * buf[i];
+            if (zero < 1e-10f) continue;
+            const float zeroMean = zero / static_cast<float>(count);
+            for (int f = 0; f < SYNC_FRACS; f++) {
+                const int b = (beatPeaks[k].period * FRAC_NUM[f] + FRAC_DEN[f] / 2) / FRAC_DEN[f];
+                if (b < ACF_MIN_LAG) continue;
+                for (int m = 0; m < SYNC_MULTS; m++) {
+                    const int cPeriod = b * SYNC_MULT[m];
+                    if (cPeriod > MAX_PATTERN_LEN || cPeriod >= count / 2) continue;
+                    // Dedupe within this source only: the same period from a
+                    // weak source (e.g. a flat bass ACF) must not hide the
+                    // strong-source version, which is the whole point here.
+                    bool dup = false;
+                    for (int c = 0; c < numCandidates; c++) {
+                        if (candidates[c].source == src &&
+                            abs(cPeriod - candidates[c].period) <= cPeriod / 10) { dup = true; break; }
+                    }
+                    if (dup) continue;
+                    // Unbiased normalized ACF at the bar lag.
+                    const int overlap = count - cPeriod;
+                    float sum = 0.0f;
+                    for (int i = 0; i < overlap; i++) sum += buf[i] * buf[i + cPeriod];
+                    const float acf = sum / static_cast<float>(overlap) / zeroMean;
+                    if (acf < 0.05f) continue;
+                    if (numCandidates < MAX_CANDIDATES) {
+                        candidates[numCandidates++] = { clampf(acf, 0.0f, 1.0f), cPeriod, src, SYNC_MULT[m], true };
+                    }
+                }
             }
         }
     }
@@ -561,6 +618,7 @@ void AudioTracker::runAcf() {
         // 4× needs 2× more contrast to win over the beat-level period.
         float multiplierPenalty = sqrtf(static_cast<float>(candidates[c].multiplier));
         float score = candidates[c].acfStrength * sqrtf(variance) / multiplierPenalty;
+        if (candidates[c].derived) score *= syncopatedCandidateScale;
 
         // Tempo prior on the BEAT lag (Ellis 2007-style log-Gaussian around
         // 120 BPM). ACF peaks at 1.5x / 2x the true beat lag are often as
