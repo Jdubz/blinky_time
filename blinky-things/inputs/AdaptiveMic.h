@@ -65,10 +65,23 @@ namespace MicConstants {
 #ifndef BLINKY_RISER_STALL_S
 #define BLINKY_RISER_STALL_S 1.0f
 #endif
+#ifndef BLINKY_RISER_SMOOTH_TAU
+#define BLINKY_RISER_SMOOTH_TAU 0.15f
+#endif
+#ifndef BLINKY_RISER_MAX_GROWTH
+#define BLINKY_RISER_MAX_GROWTH 1.5f
+#endif
     constexpr float RISER_HOLD_S = BLINKY_RISER_HOLD_S;       // continuous time above peak before riser mode (s)
     constexpr float RISER_HEADROOM = BLINKY_RISER_HEADROOM;   // riser-mode peak target = this × input
     constexpr float RISER_TAU = BLINKY_RISER_TAU;             // riser-mode peak attack time constant (s)
     constexpr float RISER_STALL_S = BLINKY_RISER_STALL_S;     // exit riser mode this long after the last new high (s)
+    // The riser max follows a smoothed input so a single loud block (a hit
+    // inside the build) can't become the target and suppress level after it.
+    constexpr float RISER_SMOOTH_TAU = BLINKY_RISER_SMOOTH_TAU;  // smoothing for the riser max (s)
+    // Real risers grow ~1-2 dB/s; a hit is a step. Cap how fast the riser
+    // max may grow (factor per second, 1.5 = ~3.5 dB/s) so a hit inside the
+    // build can only nudge the target.
+    constexpr float RISER_MAX_GROWTH = BLINKY_RISER_MAX_GROWTH;  // max riser-max growth factor per second
 
     // Timing
     constexpr float MIN_DT_SECONDS = 0.0005f;                 // Minimum dt clamp (0.5ms)
@@ -234,6 +247,7 @@ private:
   bool  riserMode_ = false;   // sustained-rise peak tracking active (#176)
   float riserMax_ = 0.0f;     // highest input seen in the current riser
   float riserStallS_ = 0.0f;  // time since riserMax_ last increased
+  float riserSmooth_ = 0.0f;  // input smoothed with RISER_SMOOTH_TAU (riser max source)
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);
