@@ -7,7 +7,7 @@
 //
 // Input:  raw little-endian int16 mono PCM at 16 kHz (the PDM rate).
 // Output: CSV, one row per simulated loop iteration:
-//   t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames
+//   t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames,level,energy
 //
 // The NN is not available on the host (no TFLite): the tracker runs its
 // NN-unavailable path. Tempo/phase logic (ACF, epoch fold, PLP phase) is the
@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
 
     FILE* out = std::fopen(argv[2], "w");
     if (!out) { std::perror(argv[2]); return 1; }
-    std::fprintf(out, "t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames\n");
+    std::fprintf(out, "t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames,level,energy\n");
 
     HostTime time;
     HostPdm pdm;
@@ -138,11 +138,11 @@ int main(int argc, char** argv) {
         if (dt > 0.1f) dt = 0.1f;   // same clamp as the firmware loop
         const AudioControl& c = tracker.update(dt);
         uint32_t frames = tracker.getSpectral().getFrameCount();
-        std::fprintf(out, "%.3f,%.5f,%.4f,%.4f,%.4f,%u,%.2f,%.3f,%.4f,%u\n",
+        std::fprintf(out, "%.3f,%.5f,%.4f,%.4f,%.4f,%u,%.2f,%.3f,%.4f,%u,%.4f,%.4f\n",
                      time.us / 1000.0, c.phase, c.plpPulse, c.pulse,
                      c.onset, tracker.getBeatCount(),  // delivered (gated) onset, as generators see it
                      tracker.getCurrentBpm(), tracker.getPlpPeriodF(), c.rhythmStrength,
-                     frames - prevFrames);
+                     frames - prevFrames, tracker.getMicForTuning().getLevel(), c.energy);
         prevFrames = frames;
     }
     std::fclose(out);

@@ -86,8 +86,9 @@ void AdaptiveMic::end() {
 }
 
 void AdaptiveMic::update(float dt) {
-  if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
-  if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
+  // Loop dt is not used for envelopes: they advance by the audio actually
+  // consumed (audioDt below), so they behave the same at any loop rate.
+  (void)dt;
 
   // On ESP32, poll() drains the I2S DMA buffer synchronously.
   // On nRF52 this is a no-op — the hardware interrupt already fired.
@@ -106,6 +107,14 @@ void AdaptiveMic::update(float dt) {
   if (n > 0) {
     float normalized = avgAbs / 32768.0f;
     rawInstantLevel = normalized;
+    // Envelope time = audio consumed, not loop time. update() runs every
+    // loop, but samples arrive in PDM blocks: above the block rate most
+    // updates consume nothing and return early, so stepping the followers
+    // by loop dt slowed every attack/release (and the riser timers) by up
+    // to 4x at 250 fps. Same clamp as dt.
+    float audioDt = static_cast<float>(n) / static_cast<float>(_sampleRate);
+    if (audioDt < MicConstants::MIN_DT_SECONDS) audioDt = MicConstants::MIN_DT_SECONDS;
+    if (audioDt > MicConstants::MAX_DT_SECONDS) audioDt = MicConstants::MAX_DT_SECONDS;
 
     // === ABSOLUTE NOISE GATE (b200) ===
     // Below the gate, the audio is considered silence regardless of
@@ -120,13 +129,51 @@ void AdaptiveMic::update(float dt) {
     if (normalized < noiseGate) {
       level = 0.0f;
       instantAdaptRun_ = 0;  // silence breaks the "consecutive loud updates" run
+      aboveRunS_ = 0.0f;
+      riserMode_ = false;    // silence ends any build-up
       return;  // freeze peakLevel/valleyLevel by skipping their updates
     }
 
     // Peak tracking with attack/release envelope
-    float tau = (normalized > peakLevel) ? peakTau : releaseTau;
-    float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
-    peakLevel += peakAlpha * (normalized - peakLevel);
+    riserSmooth_ += (1.0f - expf(-audioDt / MicConstants::RISER_SMOOTH_TAU)) * (normalized - riserSmooth_);
+    aboveRunS_ = (normalized > peakLevel) ? aboveRunS_ + audioDt : 0.0f;
+    if (!riserMode_ && aboveRunS_ >= MicConstants::RISER_HOLD_S) {
+        riserMode_ = true;
+        riserMax_ = riserSmooth_;
+        riserStallS_ = 0.0f;
+    }
+    if (riserMode_) {
+        if (riserSmooth_ > riserMax_) {
+            // Rate-limited: a step (a hit) can't jump the target.
+            const float cap = riserMax_ * powf(MicConstants::RISER_MAX_GROWTH, audioDt);
+            riserMax_ = (riserSmooth_ < cap) ? riserSmooth_ : cap;
+            riserStallS_ = 0.0f;
+        } else {
+            riserStallS_ += audioDt;
+        }
+        if (riserStallS_ >= MicConstants::RISER_STALL_S) riserMode_ = false;
+    }
+    if (riserMode_) {
+        // Sustained rise (#176): lead the rise instead of trailing it, so
+        // level stops clamping at 1.0 through a build-up. Target the
+        // riser's running max so within-riser dips don't drag the peak.
+        float target = MicConstants::RISER_HEADROOM * riserMax_;
+        if (target > peakLevel) {
+            float riserAlpha = 1.0f - expf(-audioDt / MicConstants::RISER_TAU);
+            peakLevel += riserAlpha * (target - peakLevel);
+        } else {
+            // Peak above the riser target (e.g. instant adaptation fired on a
+            // burst inside the build): release normally toward the larger of
+            // target and input instead of freezing it there.
+            float floorV = (normalized > target) ? normalized : target;
+            float releaseAlpha = 1.0f - expf(-audioDt / maxValue(releaseTau, MicConstants::MIN_TAU_RANGE));
+            peakLevel += releaseAlpha * (floorV - peakLevel);
+        }
+    } else {
+        float tau = (normalized > peakLevel) ? peakTau : releaseTau;
+        float peakAlpha = 1.0f - expf(-audioDt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
+        peakLevel += peakAlpha * (normalized - peakLevel);
+    }
 
     // Instant adaptation for sustained loud jumps (a drop, a new section).
     // Requires INSTANT_ADAPT_BLOCKS consecutive updates: a single knock or
@@ -155,7 +202,7 @@ void AdaptiveMic::update(float dt) {
     // level read 0 for >5 s), slow release upward.
     float valleyTau = (normalized < valleyLevel) ? MicConstants::VALLEY_ATTACK_TAU
                     : releaseTau * MicConstants::VALLEY_RELEASE_MULTIPLIER;
-    float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MicConstants::MIN_TAU_RANGE));
+    float valleyAlpha = 1.0f - expf(-audioDt / maxValue(valleyTau, MicConstants::MIN_TAU_RANGE));
     valleyLevel += valleyAlpha * (normalized - valleyLevel);
     valleyLevel = maxValue(valleyLevel, MicConstants::VALLEY_FLOOR);
 
