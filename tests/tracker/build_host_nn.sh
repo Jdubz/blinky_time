@@ -45,11 +45,19 @@ INC=(-I"$LIB" -I"$LIB/third_party/flatbuffers/include" -I"$LIB/third_party/gemml
 # variants, e.g. FULLY_CONNECTED_INT8). No ARM intrinsics are defined, so
 # CMSIS-NN compiles its portable C paths.
 DEFS=(-DARDUINO=10819 -DTF_LITE_STATIC_MEMORY -DCMSIS_NN -DNDEBUG)
+# Same as the device build: no exceptions / RTTI. With exceptions enabled GCC
+# rejects TFLite's placement-new of classes with a private operator delete
+# (TF_LITE_REMOVE_VIRTUAL_DELETE, active under ARDUINO).
+CXXFLAGS_DEV=(-fno-exceptions -fno-rtti)
 
 # Library sources, minus tests/examples, NPU glue and the Arduino-Serial
 # system_setup.cpp (replaced by a host stub below).
-find "$LIB/tensorflow" "$LIB/third_party/cmsis/CMSIS/NN/Source" \( -name "*.cpp" -o -name "*.cc" -o -name "*.c" \) \
-    | grep -vE "_test\.|/examples/|ethosu|/arduino/|micro/system_setup\.cpp" | sort > "$OUT/srcs.txt"
+# Filter on paths RELATIVE to the library, so a parent directory named
+# arduino/ or examples/ can't drop every source.
+( cd "$LIB" && find tensorflow third_party/cmsis/CMSIS/NN/Source \( -name "*.cpp" -o -name "*.cc" -o -name "*.c" \) \
+    | grep -vE "_test\.|(^|/)examples/|ethosu|(^|/)arduino/|^tensorflow/lite/micro/system_setup\.cpp$" \
+    | sort | sed "s|^|$LIB/|" ) > "$OUT/srcs.txt"
+[ -s "$OUT/srcs.txt" ] || { echo "ERROR: no TFLite sources found under $LIB" >&2; exit 1; }
 
 cat > "$OUT/host_system_setup.cpp" <<'EOF'
 // Host stand-in for TFLite Micro's micro/system_setup.cpp (Arduino Serial).
@@ -62,8 +70,8 @@ EOF
 compile_one() {
     local src="$1" obj lang
     obj="$OUT/obj/$(echo "$src" | sed 's|.*/src/||; s|[/.]|_|g').o"
-    case "$src" in *.c) lang=(-x c -std=c11) ;; *) lang=(-std=c++17) ;; esac
-    [ "$obj" -nt "$src" ] && return 0
+    case "$src" in *.c) lang=(-x c -std=c11) ;; *) lang=(-std=c++17 "${CXXFLAGS_DEV[@]}") ;; esac
+    # Always rebuilt: a timestamp cache can't see header, --lib or CXX changes.
     $CXX "${lang[@]}" -O2 -c "${DEFS[@]}" "${INC[@]}" "$src" -o "$obj" || { echo "FAILED: $src" >&2; return 1; }
 }
 FAIL=0
@@ -72,7 +80,7 @@ while read -r src; do compile_one "$src" || FAIL=1; done < "$OUT/srcs.txt"
 
 ( cd "$OUT/obj" && ls ./*.o > ../objs.rsp && rm -f ../libtflm_host.a && $AR rcs ../libtflm_host.a @../objs.rsp )
 
-$CXX -std=c++17 -O2 -DBLINKY_HOST_HARNESS -DBLINKY_HOST_NN -DARDUINO_ARCH_NRF52 \
+$CXX -std=c++17 "${CXXFLAGS_DEV[@]}" -O2 -DBLINKY_HOST_HARNESS -DBLINKY_HOST_NN -DARDUINO_ARCH_NRF52 \
     -DBLINKY_PLATFORM_NRF52840 "${DEFS[@]}" -Iblinky-simulator/include -Iblinky-things "${INC[@]}" \
     tests/tracker/tracker_harness.cpp blinky-things/audio/AudioTracker.cpp \
     blinky-things/audio/SharedSpectralAnalysis.cpp blinky-things/inputs/AdaptiveMic.cpp \
