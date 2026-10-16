@@ -11,6 +11,10 @@ Fails (exit 1) if the harness exits non-zero (UB abort, or exit 3 when a
 firmware BLINKY_ASSERT fired after begin()), writes no rows, or emits a
 non-finite phase / bpm / period.
 
+Also checks the level normalizer on a smooth, transient-free noise riser
+(#176): `level` must not stay pinned at 1.0 for RISER_MAX_PIN_S or longer
+during the rise (it used to sit at 1.0 for ~9 s of a 20 dB / 20 s sweep).
+
     python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
 """
 from __future__ import annotations
@@ -26,6 +30,11 @@ import numpy as np
 SR = 16000
 DUR_S = 40.0
 FPS = (15.0, 60.0, 250.0)
+RISER_MAX_PIN_S = 2.0
+RISER_HIT_MAX_DROP = 0.15
+# One loud block: shorter than one 16 ms PDM block, so the instant-adapt path
+# (which needs 2 consecutive loud blocks) ignores it by design.
+HIT_S = 0.010
 
 
 def signals() -> dict[str, np.ndarray]:
@@ -84,11 +93,94 @@ def main() -> int:
                     failures.append(f"{label}: non-finite {', '.join(bad)}")
                     continue
                 print(f"ok  {label:18s} rows={rows.size:6d} bpm_end={rows['bpm'][-1]:7.2f}")
+        for fps in FPS:
+            for check in (check_riser, check_riser_hit):
+                fail = check(args.harness, tmpd, fps)
+                if fail:
+                    failures.append(fail)
+                else:
+                    print(f"ok  {check.__name__}@{fps:.0f}fps")
+    total = len(signals()) * len(FPS) + 2 * len(FPS)
     for f in failures:
         print(f"FAIL {f}")
-    print(f"{len(signals()) * len(FPS) - len(failures)}/{len(signals()) * len(FPS)} passed")
+    print(f"{total - len(failures)}/{total} passed")
     return 1 if failures else 0
 
+
+RISE = (10.0, 30.0)  # rise window in the riser signal (s)
+
+
+def riser_signal(hit_at: float | None = None) -> np.ndarray:
+    """10 s steady noise, a 20 dB / 20 s noise sweep, 10 s at the top.
+
+    hit_at: optionally add one loud burst (HIT_S long, under one PDM block) at that time (s)."""
+    rng = np.random.default_rng(5)
+    n = int(20 * SR)
+    sig = np.concatenate([rng.uniform(-1, 1, 10 * SR) * 0.15,
+                          rng.uniform(-1, 1, n) * np.geomspace(0.03, 0.3, n),
+                          rng.uniform(-1, 1, 10 * SR) * 0.3])
+    if hit_at is not None:
+        i = int(hit_at * SR)
+        sig[i:i + int(HIT_S * SR)] = rng.uniform(-1, 1, int(HIT_S * SR)) * 0.95
+    return sig
+
+
+def run_level(harness: str, tmpd: Path, sig: np.ndarray, fps: float, tag: str):
+    """Returns (t, level) or an error string. Rejects missing / non-finite output."""
+    pcm, out = tmpd / f"{tag}.pcm", tmpd / f"{tag}.csv"
+    (np.clip(sig, -1, 1) * 32767).astype("<i2").tofile(pcm)
+    proc = subprocess.run([harness, str(pcm), str(out), str(fps)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        return f"{tag}: harness exit {proc.returncode}\n{proc.stderr[-1000:]}"
+    rows = np.genfromtxt(out, delimiter=",", names=True)
+    if rows.size == 0 or "level" not in rows.dtype.names:
+        return f"{tag}: no level output"
+    t, lv = rows["t_ms"] / 1000.0, rows["level"]
+    sel = (t >= RISE[0]) & (t < RISE[1])
+    if sel.sum() < 10:
+        return f"{tag}: only {int(sel.sum())} rows in the rise window"
+    if not np.all(np.isfinite(lv)):
+        return f"{tag}: non-finite level ({int((~np.isfinite(lv)).sum())} rows)"
+    return t, lv
+
+
+def check_riser(harness: str, tmpd: Path, fps: float) -> str | None:
+    """level must not stay pinned at 1.0 for RISER_MAX_PIN_S during a smooth rise (#176)."""
+    tag = f"riser@{fps:.0f}fps"
+    res = run_level(harness, tmpd, riser_signal(), fps, tag)
+    if isinstance(res, str):
+        return res
+    t, lv = res
+    sel = (t >= RISE[0]) & (t < RISE[1])
+    tt, pinned = t[sel], lv[sel] >= 0.999
+    longest = cur = 0.0
+    for i in range(1, len(tt)):
+        cur = cur + (tt[i] - tt[i - 1]) if (pinned[i] and pinned[i - 1]) else 0.0
+        longest = max(longest, cur)
+    if longest >= RISER_MAX_PIN_S:
+        return (f"{tag}: level pinned at 1.0 for {longest:.1f} s during the rise "
+                f"(limit {RISER_MAX_PIN_S:.0f} s, #176)")
+    return None
+
+
+def check_riser_hit(harness: str, tmpd: Path, fps: float) -> str | None:
+    """A single loud hit mid-rise must not hijack the riser target (#176 review).
+
+    Compares level 0.5-3 s after the hit with the same riser without it."""
+    tag = f"riser_hit@{fps:.0f}fps"
+    hit = 20.0
+    base = run_level(harness, tmpd, riser_signal(), fps, tag + "_base")
+    with_hit = run_level(harness, tmpd, riser_signal(hit_at=hit), fps, tag)
+    for res in (base, with_hit):
+        if isinstance(res, str):
+            return res
+    (tb, lb), (th, lh) = base, with_hit
+    win = np.linspace(hit + 0.5, hit + 3.0, 50)
+    drop = float(np.mean(np.interp(win, tb, lb) - np.interp(win, th, lh)))
+    if drop > RISER_HIT_MAX_DROP:
+        return (f"{tag}: level after a single mid-rise hit is {drop:.2f} below the no-hit run "
+                f"(limit {RISER_HIT_MAX_DROP:.2f}); the hit hijacked the riser peak")
+    return None
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -62,7 +62,7 @@ Compare the same track across `--fps` values: the numbers should barely move.
 
 The `tracker-harness` job in `.github/workflows/pr-validation.yml` runs on every PR. It does two things:
 
-- **UBSan stress:** builds the harness with `-fsanitize=undefined,float-cast-overflow,float-divide-by-zero -fno-sanitize-recover=all` and runs `run_stress.py`. That covers synthetic silence, an 8 s gap, clipping, white noise, 50 Hz hum and 128 BPM clicks, each at 15, 60 and 250 loop fps. Any UB, crash, firmware `BLINKY_ASSERT` after `begin()` (the harness exits 3), empty output or non-finite phase/bpm fails the job. The corpus gate uses the same harness, so a tripped assert fails it too.
+- **UBSan stress:** builds the harness with `-fsanitize=undefined,float-cast-overflow,float-divide-by-zero -fno-sanitize-recover=all` and runs `run_stress.py`. That covers synthetic silence, an 8 s gap, clipping, white noise, 50 Hz hum and 128 BPM clicks, each at 15, 60 and 250 loop fps. Any UB, crash, firmware `BLINKY_ASSERT` after `begin()` (the harness exits 3), empty output or non-finite phase/bpm fails the job. The corpus gate uses the same harness, so a tripped assert fails it too. It also checks the level normalizer on a smooth noise riser: `level` must not stay pinned at 1.0 for 2 s or more (#176).
 - **Corpus gate:** runs `run_tracker_eval.py` with `--min-excess`, `--min-tempo` and `--min-recall` floors set just under the current baseline. Raise the floors in the workflow when the tracker improves.
 
 To run the stress set locally:
