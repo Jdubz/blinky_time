@@ -544,6 +544,13 @@ void AudioTracker::runAcf() {
                     // Dedupe within this source only: the same period from a
                     // weak source (e.g. a flat bass ACF) must not hide the
                     // strong-source version, which is the whole point here.
+                    //
+                    // Same-source ordinary candidates DO suppress a derived one
+                    // at the same period, deliberately. Letting derived bar
+                    // candidates bypass them was measured on edm/: tempo
+                    // 0.729 -> 0.748 but phase lock (excess) 0.094 -> 0.087,
+                    // because more tracks then lock to bar-length cycles.
+                    // Phase lock is what the visuals animate on, so it wins.
                     bool dup = false;
                     for (int c = 0; c < numCandidates; c++) {
                         if (candidates[c].source == src &&
@@ -574,6 +581,7 @@ void AudioTracker::runAcf() {
     float bestAccentBin = 0.0f;
     int bestSource = 0;
     int bestMultiplier = 1;
+    bool bestDerived = false;
 
     for (int c = 0; c < numCandidates; c++) {
         int cPeriod = candidates[c].period;
@@ -661,6 +669,7 @@ void AudioTracker::runAcf() {
             bestAccentBin = refinedBin;
             bestSource = cSource;
             bestMultiplier = candidates[c].multiplier;
+            bestDerived = candidates[c].derived;
         }
     }
 
@@ -681,11 +690,18 @@ void AudioTracker::runAcf() {
     // back. Refine the beat-level lag at FULL resolution (the scan used
     // step 2) with parabolic interpolation on the winning source, then
     // scale by the multiplier.
+    //
+    // Syncopation-derived winners (#166) are refined at their BAR lag instead
+    // and not rescaled: they exist precisely because the beat-lag ACF peak is
+    // weak or absent, so refining at bestPeriod / bestMultiplier would chase
+    // an unrelated peak (or keep the rounded integer) and leave period error
+    // in the phase advance.
     float periodF = static_cast<float>(bestPeriod);
     {
         const float* buf = sources[bestSource];
         const int count = sourceCounts[bestSource];
-        int lag = bestPeriod / bestMultiplier;
+        const int refineMultiplier = bestDerived ? 1 : bestMultiplier;
+        int lag = bestPeriod / refineMultiplier;
         // UNBIASED estimator (divide by overlap). The plain sum shrinks
         // linearly with lag, which tilts the peak toward shorter lags —
         // measured ~0.7% short (29.07 vs 29.30 frames at 128 BPM), a steady
@@ -741,7 +757,7 @@ void AudioTracker::runAcf() {
                 // change inside the buffer).
                 if (fabsf(refined - lagF) < 0.75f) lagF = refined;
             }
-            periodF = lagF * static_cast<float>(bestMultiplier);
+            periodF = lagF * static_cast<float>(refineMultiplier);
             // The fold's integer period must stay the nearest integer.
             if (fabsf(periodF - static_cast<float>(bestPeriod)) > 1.5f) {
                 periodF = static_cast<float>(bestPeriod);
