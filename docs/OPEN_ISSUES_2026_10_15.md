@@ -51,7 +51,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
 | 2.1 ([#175](https://github.com/Jdubz/blinky_time/issues/175)) | Raw mel saturates (band pinned at 1.0) above ~−37 dBFS bass; NN loses low-band contrast at high SPL | `SharedSpectralAnalysis::computeMelBandsFrom` | PARTIAL | Telemetry added (`melSaturated`/`melTotal` in `json info`). Fix needs digital pre-gain or PCEN **mirrored in training**; use field recordings. |
-| 2.2 ([#176](https://github.com/Jdubz/blinky_time/issues/176)) | Level normalizer pins at 1.0 for the whole of a slow build-up | `AdaptiveMic::update` | OPEN | Peak attack tau 2 s lags a riser. Consider a faster attack when input > peak continuously. |
 | 2.3 ([#177](https://github.com/Jdubz/blinky_time/issues/177)) | Breakdown/drop valley behaviour; single-transient suppression | `AdaptiveMic` | IN-PR #152 | 0.2 s valley attack, debounce, valley snap-up. Verify on device. |
 | 2.4 ([#178](https://github.com/Jdubz/blinky_time/issues/178)) | Non-overlapping Hamming frames → onset-strength wobble with hit position | FFT framing | OPEN (ML) | 50 % overlap requires a retrain. |
 | 2.5 ([#179](https://github.com/Jdubz/blinky_time/issues/179)) | Compressor makes `bassFlux` ∝ level^(1/3); `bassContrast` may clamp at 1 on loud kicks | `applyCompressor`, `processFrame` | OPEN | Unverified: add telemetry before changing. |

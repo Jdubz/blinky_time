@@ -39,6 +39,37 @@ namespace MicConstants {
     constexpr float SECTION_JUMP_RATIO = 2.0f;                // Peak jump this large = new section (drop)
     constexpr float SECTION_VALLEY_FRACTION = 0.5f;           // On a section jump, valley ≥ this × peak
 
+    // Sustained-rise (riser / build-up) peak tracking (#176). A smooth rise
+    // keeps the input above a first-order peak follower indefinitely
+    // (input/peak settles at ~1 + rate*tau, below INSTANT_ADAPT_THRESHOLD),
+    // so level = (x - valley)/(peak - valley) clamps at 1.0 for the whole
+    // build: a 20 dB / 20 s noise riser read 1.0 for 58 % of it, 9 s in a
+    // row. A faster attack alone can't help while x > peak; once the input
+    // has stayed above the peak for RISER_HOLD_S, drive the peak toward
+    // RISER_HEADROOM * x so level rides below 1 with room for transients.
+    // Single hits never qualify (they don't stay above the peak that long).
+    // Riser mode lasts while the rise continues (new input highs) and ends
+    // RISER_STALL_S after the last new high; the raised peak then relaxes
+    // through the normal release, so level eases back instead of jumping.
+    // (Exiting as soon as the peak overtook the input re-pinned every ~1 s:
+    // a brightness sawtooth through the build.)
+#ifndef BLINKY_RISER_HOLD_S
+#define BLINKY_RISER_HOLD_S 0.5f
+#endif
+#ifndef BLINKY_RISER_HEADROOM
+#define BLINKY_RISER_HEADROOM 1.2f
+#endif
+#ifndef BLINKY_RISER_TAU
+#define BLINKY_RISER_TAU 0.5f
+#endif
+#ifndef BLINKY_RISER_STALL_S
+#define BLINKY_RISER_STALL_S 1.0f
+#endif
+    constexpr float RISER_HOLD_S = BLINKY_RISER_HOLD_S;       // continuous time above peak before riser mode (s)
+    constexpr float RISER_HEADROOM = BLINKY_RISER_HEADROOM;   // riser-mode peak target = this × input
+    constexpr float RISER_TAU = BLINKY_RISER_TAU;             // riser-mode peak attack time constant (s)
+    constexpr float RISER_STALL_S = BLINKY_RISER_STALL_S;     // exit riser mode this long after the last new high (s)
+
     // Timing
     constexpr float MIN_DT_SECONDS = 0.0005f;                 // Minimum dt clamp (0.5ms)
     constexpr float MAX_DT_SECONDS = 0.1000f;                 // Maximum dt clamp (100ms)
@@ -199,6 +230,10 @@ private:
 
   uint32_t _sampleRate = 16000;
   int instantAdaptRun_ = 0;   // consecutive updates above INSTANT_ADAPT_THRESHOLD × peak
+  float aboveRunS_ = 0.0f;    // continuous time the input has stayed above peakLevel (#176)
+  bool  riserMode_ = false;   // sustained-rise peak tracking active (#176)
+  float riserMax_ = 0.0f;     // highest input seen in the current riser
+  float riserStallS_ = 0.0f;  // time since riserMax_ last increased
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);

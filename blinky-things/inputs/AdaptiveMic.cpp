@@ -120,13 +120,39 @@ void AdaptiveMic::update(float dt) {
     if (normalized < noiseGate) {
       level = 0.0f;
       instantAdaptRun_ = 0;  // silence breaks the "consecutive loud updates" run
+      aboveRunS_ = 0.0f;
+      riserMode_ = false;    // silence ends any build-up
       return;  // freeze peakLevel/valleyLevel by skipping their updates
     }
 
     // Peak tracking with attack/release envelope
-    float tau = (normalized > peakLevel) ? peakTau : releaseTau;
-    float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
-    peakLevel += peakAlpha * (normalized - peakLevel);
+    aboveRunS_ = (normalized > peakLevel) ? aboveRunS_ + dt : 0.0f;
+    if (!riserMode_ && aboveRunS_ >= MicConstants::RISER_HOLD_S) {
+        riserMode_ = true;
+        riserMax_ = normalized;
+        riserStallS_ = 0.0f;
+    }
+    if (riserMode_) {
+        if (normalized > riserMax_) {
+            riserMax_ = normalized;
+            riserStallS_ = 0.0f;
+        } else {
+            riserStallS_ += dt;
+        }
+        if (riserStallS_ >= MicConstants::RISER_STALL_S) riserMode_ = false;
+    }
+    if (riserMode_) {
+        // Sustained rise (#176): lead the rise instead of trailing it, so
+        // level stops clamping at 1.0 through a build-up. Target the
+        // riser's running max so within-riser dips don't drag the peak.
+        float riserAlpha = 1.0f - expf(-dt / MicConstants::RISER_TAU);
+        float target = MicConstants::RISER_HEADROOM * riserMax_;
+        if (target > peakLevel) peakLevel += riserAlpha * (target - peakLevel);
+    } else {
+        float tau = (normalized > peakLevel) ? peakTau : releaseTau;
+        float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
+        peakLevel += peakAlpha * (normalized - peakLevel);
+    }
 
     // Instant adaptation for sustained loud jumps (a drop, a new section).
     // Requires INSTANT_ADAPT_BLOCKS consecutive updates: a single knock or
