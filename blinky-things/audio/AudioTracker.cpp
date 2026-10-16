@@ -536,6 +536,14 @@ void AudioTracker::runAcf() {
             if (zero < 1e-10f) continue;
             const float zeroMean = zero / static_cast<float>(count);
             for (int f = 0; f < SYNC_FRACS; f++) {
+                // b is rounded BEFORE the bar multiplier, so 4-beat candidates
+                // sit on multiples of 4 frames and can miss the exact bar peak
+                // by up to 2 frames (L=56, 2/5 -> 88, true 90). Rounding once
+                // after both factors was measured on edm/: tempo 0.729 ->
+                // 0.735 but phase lock (excess) 0.094 -> 0.091 (more tracks
+                // lock to bar cycles, which phase-lock worse). Phase lock drives
+                // the visuals, so the coarser rounding stays until bar-level
+                // phase alignment itself improves.
                 const int b = (beatPeaks[k].period * FRAC_NUM[f] + FRAC_DEN[f] / 2) / FRAC_DEN[f];
                 if (b < ACF_MIN_LAG) continue;
                 for (int m = 0; m < SYNC_MULTS; m++) {
