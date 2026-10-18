@@ -1,0 +1,11 @@
+{
+  "deviceId": "shannon_hat",
+  "deviceName": "Shannon Hat",
+  "ledWidth": 79,
+  "ledHeight": 1,
+  "ledPin": 0,
+  "ledType": 82,
+  "orientation": 0,
+  "layoutType": 1,
+  "battery": true
+}
