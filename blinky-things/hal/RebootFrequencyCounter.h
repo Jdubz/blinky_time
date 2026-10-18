@@ -31,8 +31,9 @@
  *      crash history interleaved with power loss still accumulates across
  *      power cycles — the cross-power-cycle guarantee this module provides.
  *      The bootloader deliberately does not clear RESETREAS (main.c: "it
- *      should be cleared by application upon init()"); we read-and-clear it
- *      here so each boot sees only its own reset reason.
+ *      should be cleared by application upon init()"); the core's init()
+ *      captures and clears it before setup(), and we read the captured value
+ *      via readResetReason() so each boot sees only its own reset reason.
  *   2. If a fault boot pushes the counter >= REBOOT_THRESHOLD, enters BLE DFU
  *      bootloader via SafeBootWatchdog. Never returns.
  *   3. `tickStable()` is called from loop() once millis() >= STABLE_UPTIME_MS.
@@ -228,27 +229,19 @@ namespace RebootFrequencyCounter {
     inline void setOnThresholdHook(OnThresholdHook h) { onThresholdHook() = h; }
 
     /**
-     * Read the hardware reset-reason register (SoftDevice-aware) and clear the
-     * bits observed so they do not persist into the next boot. Mirrors the
-     * SD-aware register-access idiom in SafeBootWatchdog. The bootloader leaves
-     * RESETREAS untouched by contract (main.c), so this is the first and only
-     * consumer — a stale bit lingering from before this firmware is read once
-     * and cleared here, self-correcting after the first boot.
+     * This boot's reset reason, as captured by the core.
+     *
+     * Do NOT read NRF_POWER->RESETREAS here: the core's init() (wiring.c,
+     * called from main() before setup()) copies RESETREAS into a private
+     * variable and clears the register, so by the time setup() runs it always
+     * reads 0. Reading the register made every boot look like a clean reset,
+     * so the counter never incremented and the crash-loop quarantine could
+     * never fire. readResetReason() returns the value init() captured. The
+     * bootloader leaves RESETREAS for the app (main.c), and init() clears it,
+     * so each boot sees only its own reason.
      */
-    inline uint32_t readAndClearResetReason() {
-        uint32_t reason = 0;
-        uint8_t sd_en = 0;
-        sd_softdevice_is_enabled(&sd_en);
-        if (sd_en) {
-            sd_power_reset_reason_get(&reason);
-            sd_power_reset_reason_clr(reason);  // clear exactly the set bits
-        } else {
-            reason = NRF_POWER->RESETREAS;
-            // RESETREAS is write-1-to-clear: writing the read-back value clears
-            // exactly the bits that were set, leaving a clean slate next boot.
-            NRF_POWER->RESETREAS = reason;
-        }
-        return reason;
+    inline uint32_t bootResetReason() {
+        return readResetReason();
     }
 
     /**
@@ -257,7 +250,7 @@ namespace RebootFrequencyCounter {
      * `InternalFS.begin()`.
      */
     inline void checkAndIncrement() {
-        lastResetReason_ = readAndClearResetReason();
+        lastResetReason_ = bootResetReason();
         bootCount_ = readCounter();
 
         // Crash-loop gate: only a genuine fault reset (watchdog / lockup)
