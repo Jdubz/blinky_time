@@ -202,7 +202,9 @@ void AudioTracker::processFrame(bool runNN) {
     frameClock_++;
 
     // --- Onset activation for this frame ---
-    float odf;
+    // The NN activation only feeds onset detection (via nnSmoothed_ and
+    // freshNN); a skipped or NN-less frame has nothing to record. The rhythm
+    // buffers take mic level below in every mode (#155).
     bool freshNN = false;
     if (nnActive_) {
         frameOnsetNN_.setProfileEnabled(nnProfile);
@@ -214,7 +216,7 @@ void AudioTracker::processFrame(bool runNN) {
     }
     if (nnActive_ && runNN) {
         freshNN = true;
-        odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
+        const float odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
 
         // Track raw NN activation peaks (rising edge, before thresholds).
         if (odf > rawNNActivation_ && odf > 0.05f) {
@@ -226,14 +228,9 @@ void AudioTracker::processFrame(bool runNN) {
         nnSmoothed_ = 0.77f * odf + 0.23f * nnPrevRaw_;
         nnPrevRaw_ = odf;
         if (nnSmoothed_ > nnSmoothedPeak_) nnSmoothedPeak_ = nnSmoothed_;
-    } else if (nnActive_) {
-        // NN skipped this frame (catch-up burst): hold the last activation
-        // for the rhythm buffers; the NN peak-picker does not step.
-        odf = rawNNActivation_;
-    } else {
-        // Fallback: mic level as a simple energy ODF
-        odf = mic_.getLevel();
     }
+    // NN skipped this frame (catch-up burst): the NN peak-picker does not
+    // step. No NN: onset detection uses spectral flux (updatePulseDetection).
 
     // --- Discrete onset detection ---
     float pulse = updatePulseDetection(spectral_.getSpectralFlux(), freshNN);
