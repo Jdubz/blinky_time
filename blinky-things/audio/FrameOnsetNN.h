@@ -11,12 +11,12 @@
 // Current model: Conv1D W16, single output channel (onset activation).
 // Supports up to 4 output channels for future multi-task models.
 //
-// Output is used for:
-//   - Visual pulse detection (sparks, flashes on kicks/snares)
-//   - PLP source comparison (ACF evaluates NN onset alongside flux/bass)
-//   - Energy synthesis (ODF peak-hold blend)
+// Output is used for onset / visual pulse detection only (sparks, flashes on
+// kicks and snares; AudioTracker::updatePulseDetection).
 //
-// NOT used for BPM estimation — spectral flux drives ACF tempo instead.
+// NOT used for tempo or phase: AudioTracker's rhythm sources (ACF, PLP fold)
+// are bass flux, bass energy and mic level. The NN fires on off-beat hats
+// too, and as an ACF source it pulled straight 4/4 to 2/3 tempo (#155).
 //
 // Consumes raw mel bands from SharedSpectralAnalysis::getRawMelBands().
 // Falls back to mic energy if model fails to load.

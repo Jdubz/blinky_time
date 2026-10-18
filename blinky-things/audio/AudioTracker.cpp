@@ -202,7 +202,9 @@ void AudioTracker::processFrame(bool runNN) {
     frameClock_++;
 
     // --- Onset activation for this frame ---
-    float odf;
+    // The NN activation only feeds onset detection (via nnSmoothed_ and
+    // freshNN); a skipped or NN-less frame has nothing to record. The rhythm
+    // buffers take mic level below in every mode (#155).
     bool freshNN = false;
     if (nnActive_) {
         frameOnsetNN_.setProfileEnabled(nnProfile);
@@ -214,7 +216,7 @@ void AudioTracker::processFrame(bool runNN) {
     }
     if (nnActive_ && runNN) {
         freshNN = true;
-        odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
+        const float odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
 
         // Track raw NN activation peaks (rising edge, before thresholds).
         if (odf > rawNNActivation_ && odf > 0.05f) {
@@ -226,14 +228,9 @@ void AudioTracker::processFrame(bool runNN) {
         nnSmoothed_ = 0.77f * odf + 0.23f * nnPrevRaw_;
         nnPrevRaw_ = odf;
         if (nnSmoothed_ > nnSmoothedPeak_) nnSmoothedPeak_ = nnSmoothed_;
-    } else if (nnActive_) {
-        // NN skipped this frame (catch-up burst): hold the last activation
-        // for the rhythm buffers; the NN peak-picker does not step.
-        odf = rawNNActivation_;
-    } else {
-        // Fallback: mic level as a simple energy ODF
-        odf = mic_.getLevel();
     }
+    // NN skipped this frame (catch-up burst): the NN peak-picker does not
+    // step. No NN: onset detection uses spectral flux (updatePulseDetection).
 
     // --- Discrete onset detection ---
     float pulse = updatePulseDetection(spectral_.getSpectralFlux(), freshNN);
@@ -257,12 +254,6 @@ void AudioTracker::processFrame(bool runNN) {
     }
     bassContrast = clampf(bassContrast, 0.0f, 1.0f);
 
-    // NN activation statistics
-    float odfClamped = clampf(odf, 0.0f, 1.0f);
-    nnActivationMean_ += 0.01f * (odfClamped - nnActivationMean_);
-    float dev = odfClamped - nnActivationMean_;
-    nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
-
     addOssSample(bassContrast);
 
     // Bass energy (PLP dual-source AND energy synthesis). Mel bands 0-5
@@ -273,7 +264,13 @@ void AudioTracker::processFrame(bool runNN) {
     cachedBassEnergy_ /= 6.0f;
     addBassSample(cachedBassEnergy_);
 
-    nnOnsetBuffer_[nnWriteIdx_] = odf;
+    // Tempo/phase source 2 is the mic level in BOTH modes, never the NN
+    // activation. The NN fires on every percussive hit, off-beat hats
+    // included, so as an ACF source it locked straight 4/4 to 2/3 tempo
+    // and broke DnB (#155: corpus tempo 0.726 -> 0.621). The NN still drives
+    // onset detection (updatePulseDetection); tempo tracking stays on the
+    // signals it was tuned on.
+    nnOnsetBuffer_[nnWriteIdx_] = mic_.getLevel();
     nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
     if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
 
@@ -332,8 +329,6 @@ void AudioTracker::resetAnalysisState() {
     plpPhase_ = 0.0f;
     // beatCount_ is NOT reset: AudioControl::beatCount is monotonic and
     // generators treat any change as "a beat happened".
-    nnActivationMean_ = 0.3f;
-    nnActivationVar_ = 0.01f;
     resetSlots();
 }
 
@@ -911,12 +906,14 @@ void AudioTracker::updatePlpAnalysis() {
         float epochWeights[MAX_EPOCHS];
         int actualEpochs = (numEpochs < MAX_EPOCHS) ? numEpochs : MAX_EPOCHS;
 
-        // First pass: compute weights (recency × NN confidence)
+        // First pass: compute weights (recency × level "confidence"). Source 2
+        // holds mic level since #155; mean-subtracted above, so this term is
+        // ~0 and the weight is ~0.5 x recency in both modes.
         {
             float w = 1.0f;
             int ep = 0;
             for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
-                // NN confidence for this epoch: mean NN activation
+                // Mean source-2 (mic level) value for this epoch
                 float nnMean = 0.0f;
                 if (nnCount_ >= count) {
                     for (int j = 0; j < patLen; j++) {
@@ -1015,8 +1012,9 @@ void AudioTracker::updatePlpAnalysis() {
         }
         plpPatternLen_ = patLen;
 
-        // Cross-correlation with NN fold for pattern validation.
-        // High agreement = pattern reflects real onsets. Low = noise-driven.
+        // Cross-correlation with the source-2 fold (mic level since #155, not
+        // the NN) for pattern validation. High agreement = the flux pattern
+        // matches the energy envelope. Low = noise-driven.
         if (nnCount_ >= patLen * 2) {
             float* nnFold = scratchNN_;
             memset(nnFold, 0, patLen * sizeof(float));

@@ -150,10 +150,16 @@ int main(int argc, char** argv) {
     // With the real NN linked, a model that initialized must actually have
     // inferred, and every Invoke() must have succeeded: FrameOnsetNN logs a
     // failed Invoke once and returns 0, which would otherwise pass silently.
-    // A model refused at begin() (e.g. width mismatch) is reported separately
-    // by the BLINKY_ASSERT in AudioTracker::begin and is not an error here.
+    // This build exists to run the real model, so a model refused at begin()
+    // (e.g. width mismatch, initError 5) is a hard failure too: otherwise the
+    // run silently measures the fallback ODF.
     {
         const FrameOnsetNN& nn = tracker.getFrameOnsetNN();
+        if (!nn.isReady()) {
+            std::fprintf(stderr, "[HARNESS] onset NN refused at begin(): the embedded model did not "
+                                 "initialize (see the [ASSERT] line on stdout)\n");
+            return 5;
+        }
         if (nn.isReady() && (nn.getInvokeErrors() != 0 || nn.getInferCount() == 0)) {
             std::fprintf(stderr, "[HARNESS] onset NN ready but invokeErrors=%u inferCount=%u\n",
                          static_cast<unsigned>(nn.getInvokeErrors()),
