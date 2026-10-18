@@ -86,11 +86,13 @@ compile_one() {
 }
 # Parallel: the compiles are independent, and with a wrapper compiler such as
 # `python -m ziglang c++` process start-up dominates a serial build. Arrays
-# can't cross the export, so they travel as strings (no element has spaces).
+# can't be exported, so each worker re-creates them from `declare -p`, which
+# keeps element boundaries: -I paths may contain spaces (e.g. a Windows user
+# directory like C:/Users/Jane Doe/Documents/Arduino).
 export -f compile_one
-export OUT CXX DEFS_S="${DEFS[*]}" INC_S="${INC[*]}" CXXFLAGS_S="${CXXFLAGS_DEV[*]}"
+export OUT CXX ARRAYS_DECL="$(declare -p DEFS INC CXXFLAGS_DEV)"
 tr '\n' '\0' < "$OUT/srcs.txt" | xargs -0 -P "$JOBS" -n 1 bash -c \
-    'DEFS=($DEFS_S); INC=($INC_S); CXXFLAGS_DEV=($CXXFLAGS_S); compile_one "$1"' _ \
+    'eval "$ARRAYS_DECL"; compile_one "$1"' _ \
     || { echo "ERROR: TFLite Micro host build failed" >&2; exit 1; }
 
 ( cd "$OUT/obj" && ls ./*.o > ../objs.rsp && rm -f ../libtflm_host.a && $AR rcs ../libtflm_host.a @../objs.rsp )
