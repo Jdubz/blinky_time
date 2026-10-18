@@ -24,9 +24,16 @@ while [ $# -gt 0 ]; do
     esac
 done
 CXX="${CXX:-c++}"; AR="${AR:-ar}"
+# Windows toolchains (MinGW, zig's windows-gnu target) don't add .exe to -o.
+EXE=""; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;; esac
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 if [ -z "$LIB" ]; then
-    LIBROOT=$(arduino-cli config get directories.user 2>/dev/null || echo "$HOME/Arduino")/libraries
+    LIBROOT=$(arduino-cli config get directories.user 2>/dev/null | tr -d '\r') || true
+    [ -n "$LIBROOT" ] || LIBROOT="$HOME/Arduino"
+    # Git Bash: arduino-cli reports C:\..., which the -I flags below can't use.
+    if command -v cygpath >/dev/null 2>&1; then LIBROOT=$(cygpath -m "$LIBROOT"); fi
+    LIBROOT="$LIBROOT/libraries"
     for cand in "$LIBROOT"/Arduino_TensorFlowLite "$LIBROOT"/tflite-micro-arduino-examples*; do
         if [ -f "$cand/src/TensorFlowLite.h" ]; then LIB="$cand/src"; break; fi
     done
@@ -77,9 +84,16 @@ compile_one() {
     # Always rebuilt: a timestamp cache can't see header, --lib or CXX changes.
     $CXX "${lang[@]}" -O2 -c "${DEFS[@]}" "${INC[@]}" "$src" -o "$obj" || { echo "FAILED: $src" >&2; return 1; }
 }
-FAIL=0
-while read -r src; do compile_one "$src" || FAIL=1; done < "$OUT/srcs.txt"
-[ $FAIL -eq 0 ] || { echo "ERROR: TFLite Micro host build failed" >&2; exit 1; }
+# Parallel: the compiles are independent, and with a wrapper compiler such as
+# `python -m ziglang c++` process start-up dominates a serial build. Arrays
+# can't be exported, so each worker re-creates them from `declare -p`, which
+# keeps element boundaries: -I paths may contain spaces (e.g. a Windows user
+# directory like C:/Users/Jane Doe/Documents/Arduino).
+export -f compile_one
+export OUT CXX ARRAYS_DECL="$(declare -p DEFS INC CXXFLAGS_DEV)"
+tr '\n' '\0' < "$OUT/srcs.txt" | xargs -0 -P "$JOBS" -n 1 bash -c \
+    'eval "$ARRAYS_DECL"; compile_one "$1"' _ \
+    || { echo "ERROR: TFLite Micro host build failed" >&2; exit 1; }
 
 ( cd "$OUT/obj" && ls ./*.o > ../objs.rsp && rm -f ../libtflm_host.a && $AR rcs ../libtflm_host.a @../objs.rsp )
 
@@ -88,5 +102,5 @@ $CXX -std=c++17 "${CXXFLAGS_DEV[@]}" -O2 -DBLINKY_HOST_HARNESS -DBLINKY_HOST_NN 
     tests/tracker/tracker_harness.cpp blinky-things/audio/AudioTracker.cpp \
     blinky-things/audio/SharedSpectralAnalysis.cpp blinky-things/inputs/AdaptiveMic.cpp \
     blinky-things/types/BlinkyAssert.cpp "$OUT/host_system_setup.cpp" "$OUT/libtflm_host.a" \
-    -o "$OUT/tracker_harness_nn"
-echo "Built $OUT/tracker_harness_nn"
+    -o "$OUT/tracker_harness_nn$EXE"
+echo "Built $OUT/tracker_harness_nn$EXE"

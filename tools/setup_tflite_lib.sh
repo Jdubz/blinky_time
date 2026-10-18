@@ -28,6 +28,16 @@ TMP_DIR=$(mktemp -d)
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
+# arduino-cli's user directory. On Windows (Git Bash) it comes back with
+# backslashes, which break the embedded Python below; cygpath -m gives C:/...
+arduino_user_dir() {
+    local d
+    d=$(arduino-cli config get directories.user 2>/dev/null | tr -d '') || true
+    [ -n "$d" ] || d="$HOME/Arduino"
+    if command -v cygpath &>/dev/null; then d=$(cygpath -m "$d"); fi
+    echo "$d"
+}
+
 # Check arduino-cli
 if ! command -v arduino-cli &>/dev/null; then
     echo "ERROR: arduino-cli not found. Install it first:"
@@ -47,7 +57,7 @@ if arduino-cli lib list 2>/dev/null | grep -qi "tflite\|tensorflowlite\|tensorfl
         [[ "$reply" =~ ^[Yy]$ ]] || { echo "Skipped."; exit 0; }
     fi
     # Remove old installation
-    LIB_DIR=$(arduino-cli config get directories.user 2>/dev/null || echo "$HOME/Arduino")/libraries
+    LIB_DIR=$(arduino_user_dir)/libraries
     rm -rf "$LIB_DIR/tflite-micro-arduino-examples-main" "$LIB_DIR/Arduino_TensorFlowLite" 2>/dev/null || true
 fi
 
@@ -67,7 +77,7 @@ echo "Installing via arduino-cli..."
 arduino-cli lib install --zip-path "$TMP_DIR/$LIB_NAME.zip"
 
 # Find installed library path
-LIB_DIR=$(arduino-cli config get directories.user 2>/dev/null || echo "$HOME/Arduino")/libraries
+LIB_DIR=$(arduino_user_dir)/libraries
 TFLITE_DIR=$(find "$LIB_DIR" -maxdepth 1 -name "*tflite*" -o -name "*TensorFlowLite*" | head -1)
 
 if [ -z "$TFLITE_DIR" ]; then
