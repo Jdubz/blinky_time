@@ -34,7 +34,10 @@ arduino-cli config add board_manager.additional_urls \
   https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json
 arduino-cli core update-index
 arduino-cli core install Seeeduino:nrf52
+bash scripts/apply_core_patches.sh   # required: build.sh refuses an unpatched core
 ```
+
+Re-run `scripts/apply_core_patches.sh` after every core install or upgrade. It patches TinyUSB CDC so serial output survives the host closing the port (`patches/tinyusb-cdc-no-overwritable-fifo.patch`). Run `core update-index` first: a stale index hides newer core versions, and CI always installs the latest.
 
 **Important**: Use `Seeeduino:nrf52` (non-mbed). The mbed core (`Seeeduino:mbed`) has header conflicts with Adafruit NeoPixel.
 

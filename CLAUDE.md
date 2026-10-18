@@ -26,6 +26,16 @@ deploy.sh runs the full pipeline (compile → upload → flash → version-verif
 
 **Bare-chip recovery only:** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 
+**Device on THIS machine's USB (not blinkyhost's):** `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
+- **Explicit target:** `json info` `device.id` must match `--device-id`.
+- **Pre-flight:** the device must be configured, with ≥ 5 min 15 s uptime (b190-era reboot counter).
+- **Compile and validate:** `build.sh`, then the server's hex/UF2 validators.
+- **Bootloader identity before writing:** the drive's USB serial must equal the chip's, and the bootloader must be 0.8.0-10.
+- **Post-deploy:** version, identity, config and BLE are checked *before* `save`, then `restore_runtime_settings` + `save` and a 75 s stability wait.
+- **Audit:** every attempt is logged to `~/.local/share/blinky/local_flash_attempts.jsonl`.
+
+Use `--dry-run` first. If an identity check refuses the drive, the bootloader times out back to the old app on its own.
+
 blinky-server owns all serial/BLE connections — no port contention. See `docs/SAFETY.md` for the full safety model, `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for BLE DFU details.
 
 **Risky firmware:** always test on unenclosed bare chips first (reset button + SWD pads accessible). Installed devices have no physical access.

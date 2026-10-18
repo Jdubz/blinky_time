@@ -80,7 +80,8 @@ if ! $ESP32; then
         if ! grep -Eq 'tu_fifo_set_overwritable\(&p_cdc->tx_ff,[[:space:]]*false\)' "$CDC_FILE"; then
             echo "ERROR: TinyUSB CDC patch not applied!" >&2
             echo "Stock TinyUSB drops all serial output when DTR is deasserted." >&2
-            echo "Apply: patches/tinyusb-cdc-no-overwritable-fifo.patch" >&2
+            echo "Fix:   bash scripts/apply_core_patches.sh" >&2
+            echo "       (applies patches/tinyusb-cdc-no-overwritable-fifo.patch)" >&2
             echo "  File: $CDC_FILE" >&2
             echo "  Change: tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr)" >&2
             echo "      To: tu_fifo_set_overwritable(&p_cdc->tx_ff, false)" >&2
