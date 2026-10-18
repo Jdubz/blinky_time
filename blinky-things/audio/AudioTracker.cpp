@@ -273,7 +273,13 @@ void AudioTracker::processFrame(bool runNN) {
     cachedBassEnergy_ /= 6.0f;
     addBassSample(cachedBassEnergy_);
 
-    nnOnsetBuffer_[nnWriteIdx_] = odf;
+    // Tempo/phase source 2 is the mic level in BOTH modes, never the NN
+    // activation. The NN fires on every percussive hit, off-beat hats
+    // included, so as an ACF source it locked straight 4/4 to 2/3 tempo
+    // and broke DnB (#155: corpus tempo 0.726 -> 0.621). The NN still drives
+    // onset detection (updatePulseDetection); tempo tracking stays on the
+    // signals it was tuned on.
+    nnOnsetBuffer_[nnWriteIdx_] = mic_.getLevel();
     nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
     if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
 

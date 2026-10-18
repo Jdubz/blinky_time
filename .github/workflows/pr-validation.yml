@@ -362,7 +362,7 @@ jobs:
         python-version: '3.11'
 
     - name: Install tflite schema parser
-      run: pip install tflite
+      run: pip install tflite==2.18.0
 
     # Mirrors FrameOnsetNN::begin()'s static checks on the embedded model so a
     # model the firmware would refuse fails the PR instead of silently running
@@ -388,7 +388,7 @@ jobs:
         python-version: '3.11'
 
     - name: Install Python deps
-      run: pip install numpy
+      run: pip install numpy imageio-ffmpeg
 
     - name: Install TFLite Micro library
       run: |
@@ -403,14 +403,25 @@ jobs:
     - name: Stress run with the NN path
       run: python tests/tracker/run_stress.py --harness build/host_nn/tracker_harness_nn
 
-    # Informational until a model the firmware accepts is on master (#155):
-    # the v36 export is refused (initError 5) and the tracker falls back.
-    - name: Report whether the embedded model initializes
+    # The embedded model must initialize: a refused model (e.g. the 80-mel
+    # v36 export, initError 5) silently runs every device on the fallback
+    # ODF. model-input-check catches width mismatches statically; this
+    # catches everything else (ops, arena, quantization) on the real
+    # interpreter.
+    - name: Embedded model must initialize
       run: |
         head -c $((16000*2*20)) /dev/urandom > /tmp/noise.pcm
         build/host_nn/tracker_harness_nn /tmp/noise.pcm /tmp/out.csv 60 > /tmp/nn.log 2>&1 || true
         if grep -q "FrameOnsetNN failed to initialize" /tmp/nn.log; then
-          echo "::warning title=Onset NN::Embedded model is refused by FrameOnsetNN (devices run without the onset NN; see #155/#162)"
-        else
-          echo "Embedded onset model initializes on the host."
+          cat /tmp/nn.log
+          echo "::error title=Onset NN::Embedded model is refused by FrameOnsetNN (devices would run without the onset NN)"
+          exit 1
         fi
+        echo "Embedded onset model initializes on the host."
+
+    # Same corpus floors as the fallback gate, on the build devices actually
+    # run. The fallback gate can't see NN-path regressions (#155: the NN as
+    # a tempo source dropped corpus tempo 0.726 -> 0.621 unnoticed).
+    - name: Corpus regression gate with the NN (edm/, 35/60/90 fps)
+      run: |
+        python tests/tracker/run_tracker_eval.py --harness build/host_nn/tracker_harness_nn           --min-excess 0.07 --min-tempo 0.70 --min-recall 0.25
