@@ -183,12 +183,18 @@ def list_uf2_drives():
         if not line:
             continue
         letter, path, sn = (line.split("|") + ["", ""])[:3]
-        serial_no = None
-        parts = path.split("#")
-        if len(parts) >= 3:
-            serial_no = parts[2].split("&")[0].upper() or None
-        if not serial_no and sn.strip():
-            serial_no = sn.strip().upper()
+        # Get-Disk's SerialNumber is the USB iSerial (the chip sn). Fall back to
+        # the disk path, whose instance segment is e.g.
+        # "8&16d7b5ad&0&d63bd31605b36a15&0": take the 16-hex-digit token, never
+        # a positional guess (the first token is a hub-instance prefix).
+        serial_no = sn.strip().upper() or None
+        if not serial_no:
+            parts = path.split("#")
+            if len(parts) >= 3:
+                toks = [t for t in parts[2].split("&")
+                        if len(t) == 16 and all(c in "0123456789abcdefABCDEF" for c in t)]
+                if len(toks) == 1:
+                    serial_no = toks[0].upper()
         drives.append((f"{letter}:\\", serial_no))
     return drives
 
