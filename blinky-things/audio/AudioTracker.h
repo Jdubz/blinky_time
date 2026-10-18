@@ -287,8 +287,10 @@ private:
     float bassLinear_[BASS_BUFFER_SIZE] = {0};    // Linearized bass (shared by ACF + PLP)
     int bassWriteIdx_ = 0;
     int bassCount_ = 0;
-    float nnOnsetBuffer_[NN_BUFFER_SIZE] = {0};   // Raw NN activation per frame
-    float nnLinear_[NN_BUFFER_SIZE] = {0};        // Linearized NN onset (shared by ACF + PLP)
+    // Rhythm source 2. Holds MIC LEVEL per frame in both modes (#155), not the
+    // NN activation, despite the nn* names: the NN drives onsets only.
+    float nnOnsetBuffer_[NN_BUFFER_SIZE] = {0};   // Mic level per frame (source 2)
+    float nnLinear_[NN_BUFFER_SIZE] = {0};        // Linearized source 2 (shared by ACF + PLP)
     int nnWriteIdx_ = 0;
     int nnCount_ = 0;
 
@@ -301,7 +303,7 @@ private:
     bool phaseLocked_ = false;                  // First analysis snaps phase; later ones correct gradually
     bool skipNextWrap_ = false;                 // Phase stepped back across 0 — that beat was already counted
     float plpConfidence_ = 0.0f;                // Pattern confidence (ACF × signal × NN agreement)
-    float plpNNAgreement_ = 0.5f;               // Cross-correlation between flux fold and NN fold (0-1)
+    float plpNNAgreement_ = 0.5f;               // Cross-correlation between flux fold and source-2 (mic level) fold (0-1)
                                                 // Starts at 0.5 (neutral) so PLP confidence isn't penalized during warmup
     float plpMeanReliability_ = 0.0f;           // Mean per-bin reliability (low CV = consistent events)
     float plpPulseValue_ = 0.5f;               // Current pulse value (pattern at phase position)
@@ -336,8 +338,6 @@ private:
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
     float prevNNActivation_ = 0.0f;   // Previous frame NN output
-    float nnActivationMean_ = 0.3f;   // EMA of NN activation (for adaptive gate)
-    float nnActivationVar_ = 0.01f;   // EMA of NN activation variance
     // Causal 2-tap smoothing 0.77·x[t] + 0.23·x[t-1] (reduces INT8 jitter).
     // This is what the old "3-tap Hamming" code actually computed (it
     // overwrote x[t-1] with x[t] before use); kept bit-identical because

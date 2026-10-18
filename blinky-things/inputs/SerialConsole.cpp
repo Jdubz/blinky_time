@@ -1941,6 +1941,8 @@ void SerialConsole::streamTick() {
                 line.print(audioCtrl_->getPlpAccentPhase(), 3);
                 line.print(F(",\"src\":"));
                 line.print(audioCtrl_->getPlpBestSource());
+                // "nna": flux-fold vs source-2 fold agreement. Source 2 is mic
+                // level since #155, so this is NOT an NN signal.
                 line.print(F(",\"nna\":"));
                 line.print(audioCtrl_->getPlpNNAgreement(), 3);
                 line.print(F(",\"rel\":"));

@@ -257,12 +257,6 @@ void AudioTracker::processFrame(bool runNN) {
     }
     bassContrast = clampf(bassContrast, 0.0f, 1.0f);
 
-    // NN activation statistics
-    float odfClamped = clampf(odf, 0.0f, 1.0f);
-    nnActivationMean_ += 0.01f * (odfClamped - nnActivationMean_);
-    float dev = odfClamped - nnActivationMean_;
-    nnActivationVar_ += 0.01f * (dev * dev - nnActivationVar_);
-
     addOssSample(bassContrast);
 
     // Bass energy (PLP dual-source AND energy synthesis). Mel bands 0-5
@@ -338,8 +332,6 @@ void AudioTracker::resetAnalysisState() {
     plpPhase_ = 0.0f;
     // beatCount_ is NOT reset: AudioControl::beatCount is monotonic and
     // generators treat any change as "a beat happened".
-    nnActivationMean_ = 0.3f;
-    nnActivationVar_ = 0.01f;
     resetSlots();
 }
 
@@ -917,12 +909,14 @@ void AudioTracker::updatePlpAnalysis() {
         float epochWeights[MAX_EPOCHS];
         int actualEpochs = (numEpochs < MAX_EPOCHS) ? numEpochs : MAX_EPOCHS;
 
-        // First pass: compute weights (recency × NN confidence)
+        // First pass: compute weights (recency × level "confidence"). Source 2
+        // holds mic level since #155; mean-subtracted above, so this term is
+        // ~0 and the weight is ~0.5 x recency in both modes.
         {
             float w = 1.0f;
             int ep = 0;
             for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
-                // NN confidence for this epoch: mean NN activation
+                // Mean source-2 (mic level) value for this epoch
                 float nnMean = 0.0f;
                 if (nnCount_ >= count) {
                     for (int j = 0; j < patLen; j++) {
@@ -1021,8 +1015,9 @@ void AudioTracker::updatePlpAnalysis() {
         }
         plpPatternLen_ = patLen;
 
-        // Cross-correlation with NN fold for pattern validation.
-        // High agreement = pattern reflects real onsets. Low = noise-driven.
+        // Cross-correlation with the source-2 fold (mic level since #155, not
+        // the NN) for pattern validation. High agreement = the flux pattern
+        // matches the energy envelope. Low = noise-driven.
         if (nnCount_ >= patLen * 2) {
             float* nnFold = scratchNN_;
             memset(nnFold, 0, patLen * sizeof(float));

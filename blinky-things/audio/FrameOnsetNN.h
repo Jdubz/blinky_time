@@ -12,8 +12,7 @@
 // Supports up to 4 output channels for future multi-task models.
 //
 // Output is used for onset / visual pulse detection only (sparks, flashes on
-// kicks and snares; AudioTracker::updatePulseDetection), plus activation
-// statistics.
+// kicks and snares; AudioTracker::updatePulseDetection).
 //
 // NOT used for tempo or phase: AudioTracker's rhythm sources (ACF, PLP fold)
 // are bass flux, bass energy and mic level. The NN fires on off-beat hats
