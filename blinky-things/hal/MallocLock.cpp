@@ -14,8 +14,12 @@
  * with another task's malloc/free and corrupt the free list.
  *
  * nano _malloc_r / _free_r / mallinfo all take __malloc_lock, so defining
- * both symbols here (replacing mlock.o, which holds only these two) makes
- * every heap entry point mutually exclusive.
+ * both symbols here makes every heap entry point mutually exclusive. The
+ * sketch objects link before libc_nano, so lib_a-mlock.o is never pulled in
+ * (verified in the link map: no references). Its gcc 9-2019q4 build also
+ * references the __retarget_lock_* / __lock___malloc_recursive_mutex
+ * symbols; a toolchain that started needing it would show up as a link
+ * error, not a silent second lock.
  *
  * Lock = suspend the scheduler, the standard FreeRTOS + newlib approach:
  *  - recursive (vTaskSuspendAll nests), which newlib requires;
@@ -24,14 +28,17 @@
  *  - before the scheduler starts everything is single-threaded: no-op.
  *
  * ISRs: suspending the scheduler from an ISR is illegal and can't exclude a
- * task already mid-allocation. Plain malloc/free from an ISR already assert
- * in heap_3 (xTaskResumeAll -> vPortEnterCritical asserts VECTACTIVE == 0)
- * before reaching this lock; only an ISR realloc/calloc/strdup gets here.
- * Those are counted (MallocLock_isrAllocCount) rather than asserted inside
- * the allocator, and loop() logs the first one at ERROR (MallocLock::
- * reportIsrAllocs) - `json info` reports the count as mallocIsr. The only ISR
- * allocator in the core is WInterrupts.c's ISR_DEFERRED path
- * (attachInterrupt), which this firmware doesn't use.
+ * task already mid-allocation. Do NOT count on heap_3 catching ISR
+ * allocations: configASSERT is compiled in only under DEBUG_NRF /
+ * DEBUG_NRF_USER (FreeRTOSConfig.h), which release builds don't set, so a
+ * plain malloc/free from an ISR also reaches this lock. Every ISR heap call
+ * (malloc, free, realloc, calloc, strdup, mallinfo) is therefore counted here
+ * (MallocLock_isrAllocCount) rather than asserted inside the allocator, and
+ * loop() logs the first one at ERROR (MallocLock::reportIsrAllocs) - `json
+ * info` reports the count as mallocIsr. The only ISR allocator in the core
+ * is WInterrupts.c's ISR_DEFERRED path (attachInterrupt), which this
+ * firmware doesn't use. The count is a diagnostic: a nested-ISR increment
+ * can be lost, but any non-zero value is the signal.
  */
 
 #include "MallocLock.h"
