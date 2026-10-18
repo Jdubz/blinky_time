@@ -10,7 +10,13 @@ Use it to check that tempo, phase and beat count don't depend on loop rate and d
 **With the real onset NN (#203):** `tests/tracker/build_host_nn.sh` compiles the Arduino TFLite Micro library for the host and links the harness with `BLINKY_HOST_NN`, so `FrameOnsetNN` runs the embedded model exactly as the device does.
 - The kernels are TFLite reference kernels, plus CMSIS-NN's portable C paths (no ARM intrinsics on the host).
 - It finds the library installed by `tools/setup_tflite_lib.sh`, or you can pass `--lib <dir>/src`.
-- Use `CXX`/`AR` to pick a toolchain.
+- Use `CXX`/`AR` to pick a toolchain, and `JOBS` to set compile parallelism (default: `nproc`).
+- With zig, pin `pip install ziglang==0.13.0` (clang 18). Clang 19 and later reject the library's bundled flatbuffers (`stl_emulation.h`), which GCC accepts.
+- On Windows (Git Bash), the output is `tracker_harness_nn.exe`, and `run_tracker_eval.py` needs absolute harness paths (`$(cygpath -w ...)`).
+
+```bash
+CXX="python -m ziglang c++" AR="python -m ziglang ar" tests/tracker/build_host_nn.sh --out build/host_nn
+```
 
 ```bash
 tests/tracker/build_host_nn.sh --out build/host_nn
