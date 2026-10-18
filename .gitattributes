@@ -17,3 +17,7 @@ blinky-console/** text=auto eol=lf
 # cmd.exe mis-parses labels/goto in LF-only batch files.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Patches: keep LF and never flag/strip their whitespace. A blank context
+# line is " " and context mirrors the patched source's trailing whitespace.
+*.patch text eol=lf -whitespace
