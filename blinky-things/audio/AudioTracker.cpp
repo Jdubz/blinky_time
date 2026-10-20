@@ -1217,9 +1217,12 @@ float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
 
         float effectiveFloor = pulseOnsetFloor * bassGate * patternBias;
 
-        // Local maximum: prev frame was higher than both neighbors AND above floor
+        // Local maximum: prev frame rose above t-2, is not exceeded by t, and
+        // is above floor. `>=` on the right fires a flat top (INT8 output
+        // often repeats a value) on its FIRST frame; the strict `>` on the
+        // left stops the plateau's second frame from firing again.
         bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
-                          (prevSignal_ > nn) &&
+                          (prevSignal_ >= nn) &&
                           (prevSignal_ > effectiveFloor);
 
         // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;

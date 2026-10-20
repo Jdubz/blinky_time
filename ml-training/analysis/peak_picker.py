@@ -33,7 +33,7 @@ The NN activation is used raw. The firmware has no smoothing since #169.
 Decision: `fires` == True iff
   - signal_presence > pulse_min_level
   - prev_signal > prev_prev_signal  (local max on NN activation)
-  - prev_signal > nn_activation
+  - prev_signal >= nn_activation (a flat top fires on its first frame)
   - prev_signal > effective_floor (pulseOnsetFloor · bass_gate · plp_bias)
   - (now_ms - lastPulseMs_) > cooldown_ms
 
@@ -113,7 +113,7 @@ def on_frame(
     # Local-max on NN activation (peak was prev frame if now decreasing).
     is_local_max = (
         state.prev_signal > state.prev_prev_signal
-        and state.prev_signal > nn
+        and state.prev_signal >= nn  # flat top fires on its first frame
         and state.prev_signal > effective_floor
     )
 
