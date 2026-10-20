@@ -32,7 +32,7 @@ The PR Validation `Compile Firmware` job installs the same pinned toolchain, so 
 
 ## The pinned toolchain (every machine)
 
-Every build (CI, the release workflow, a workstation, blinkyhost) uses the same isolated toolchain. `bash scripts/setup_toolchain.sh` installs it into `<repo>/.arduino` (gitignored):
+Every build (CI, the release workflow, a workstation, blinkyhost) uses the same isolated toolchain. **arduino-cli itself is pinned too** (`arduino_cli` in `tools/firmware_toolchain.json`); a different version is refused, because versions order the build and link steps differently (CI on 1.5.2-rc.1 vs 1.3.1 locally produced the same source 48 bytes apart). `bash scripts/setup_toolchain.sh` installs the rest into `<repo>/.arduino` (gitignored):
 - the core pinned in `tools/firmware_toolchain.json`;
 - exactly the libraries pinned there, plus TFLite at the commit in `tools/setup_tflite_lib.sh`;
 - the core patches from `scripts/apply_core_patches.sh`.

@@ -18,6 +18,7 @@ if ! command -v arduino-cli >/dev/null 2>&1; then
     echo "ERROR: arduino-cli not found on PATH" >&2
     exit 1
 fi
+blinky_require_cli_version
 
 mkdir -p "$BLINKY_ARDUINO_DIR/data" "$BLINKY_ARDUINO_DIR/user/libraries" "$BLINKY_ARDUINO_DIR/staging"
 # Directories and URLs come from the environment (arduino_env.sh); the config
