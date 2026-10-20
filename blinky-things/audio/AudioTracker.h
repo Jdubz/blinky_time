@@ -3,6 +3,20 @@
 #include "AudioControl.h"
 #include "../hal/PlatformDetect.h"
 
+// Onset NN build switch. OFF on devices: on the edm/ corpus with the hat's
+// CPU cost model (tests/tracker), tuned spectral flux scores F1 0.542 at
+// 178 fps; the v33 NN scores 0.480 and costs ~12 ms/inference, holding the
+// loop at 48 fps. Visual smoothness comes first, so a model is enabled only
+// when it beats flux under that same measurement (cheaper export: #174).
+// The host NN harness (BLINKY_HOST_NN) keeps the NN path tested in CI.
+#ifndef BLINKY_ONSET_NN_ENABLED
+#  ifdef BLINKY_HOST_NN
+#    define BLINKY_ONSET_NN_ENABLED 1
+#  else
+#    define BLINKY_ONSET_NN_ENABLED 0
+#  endif
+#endif
+
 #if ((defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)) && !defined(BLINKY_HOST_HARNESS))     || defined(BLINKY_HOST_NN)
 // Device builds, and host harness builds linked against a host-compiled
 // TFLite Micro (BLINKY_HOST_NN, see tests/tracker/README.md, #203).
@@ -184,8 +198,14 @@ public:
     // Pulse detection thresholds
     float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
+    // edm/ host sweep with the CPU cost model (v97): F1 plateaus at ~0.54 for
+    // floors 0-0.03; 0.01 is best (F1 0.542, R 0.682, mean offset -0.1 ms).
+    static constexpr float FLUX_ONSET_FLOOR_DEFAULT = 0.01f;
     float pulseOnsetFloor = 0.20f;     // NN activation threshold for peak-picking (v33 sweep: 0.20 lifts F1 0.398→0.442 vs 0.30; raising threshold doesn't improve P, just drops R)
     // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
+    // Spectral-flux path's own floor (v97). It used to share pulseOnsetFloor,
+    // whose 0.20 was tuned for NN activations and left flux recall at ~0.24.
+    float fluxOnsetFloor = FLUX_ONSET_FLOOR_DEFAULT;
 
     // Phase 2a crest-factor gate (Phase 4 Path A experiment).
     // Suppresses NN-triggered pulses when the current-frame crest factor

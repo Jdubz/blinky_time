@@ -126,7 +126,9 @@ public:
     // Version 95: crestGateMin added to StoredTrackerParams (124-byte struct, see static_assert).
     // Version 96: noiseGate added to StoredMicParams. It was serial-tunable since b200
     //   but silently reverted on reboot (#183).
-    static const uint8_t SETTINGS_VERSION = 96;
+    // Version 97: StoredTrackerParams.pulseNNGate (dead since b114) becomes
+    //   fluxOnsetFloor, the spectral-flux path's own pulse floor. Same size.
+    static const uint8_t SETTINGS_VERSION = 97;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -332,7 +334,7 @@ public:
         float pulseThresholdMult;
         float pulseMinLevel;
         float pulseOnsetFloor;
-        float pulseNNGate;
+        float fluxOnsetFloor;     // v97: was pulseNNGate (dead since b114); spectral-flux pulse floor
         // v95: crest-factor gate threshold (Phase 2a). Default 0 is intentional —
         // the production config leaves the gate disabled because the b137
         // sweep showed no F1 improvement on held-out data. Set >0 manually to
