@@ -97,9 +97,16 @@ public:
         if (nrfx_qspi_init(&cfg, NULL, NULL) != NRFX_SUCCESS) {
             return false;
         }
+        if (!ensureQuadEnable()) {
+            nrfx_qspi_uninit();
+            return false;
+        }
         ready_ = true;
         return true;
     }
+
+    /** Status register 2 as last read by ensureQuadEnable() (QE = bit 1). */
+    uint8_t statusReg2() const { return sr2_; }
 
     void end() {
         if (ready_) {
@@ -525,6 +532,8 @@ public:
         out.print(bleMtu);
         out.print(F(",\"qspi\":"));
         out.print(ready_ ? F("true") : F("false"));
+        out.print(F(",\"qe\":"));
+        out.print((sr2_ & 0x02) ? F("true") : F("false"));
         out.println(F("}}"));
     }
 
@@ -553,9 +562,71 @@ private:
     crypto_sha512_ctx sha_;
     uint32_t next_ = 0;
 
+    uint8_t sr2_ = 0;
+
     void reset() {
         state_ = State::IDLE;
         next_ = 0;
+    }
+
+    /**
+     * Custom instruction with IO2/IO3 driven HIGH. nrfx's default holds them
+     * low, which on this flash asserts WP# / HOLD# and the chip ignores the
+     * command. `len` counts the opcode byte.
+     */
+    static bool cinstr(uint8_t opcode, nrf_qspi_cinstr_len_t len, const void* tx, void* rx,
+                       bool wren = false) {
+        nrf_qspi_cinstr_conf_t c = NRFX_QSPI_DEFAULT_CINSTR(opcode, len);
+        c.io2_level = true;
+        c.io3_level = true;
+        c.wren = wren;
+        c.wipwait = wren;
+        return nrfx_qspi_cinstr_xfer(&c, tx, rx) == NRFX_SUCCESS;
+    }
+
+    /**
+     * The QSPI config reads and programs in quad mode (READ4O / PP4O), and so
+     * does the bootloader when it applies a staged image. Quad mode only works
+     * with the flash's non-volatile Quad Enable bit set (P25Q16H: status
+     * register 2, bit 1), and it ships cleared: with QE=0 every staged image
+     * read back differently from what was written (measured on hat_v1,
+     * 2026-10-20: `ota selftest` CRC mismatch, `ota commit` readback-mismatch).
+     * Set it once (it persists in the flash), then verify; fail loudly.
+     */
+    bool ensureQuadEnable() {
+        uint8_t sr1 = 0, sr2 = 0;
+        if (!cinstr(0x05, NRF_QSPI_CINSTR_LEN_2B, nullptr, &sr1) ||
+            !cinstr(0x35, NRF_QSPI_CINSTR_LEN_2B, nullptr, &sr2)) {
+            Serial.println(F("[ERROR] QSPI: cannot read the flash status registers"));
+            return false;
+        }
+        if (!(sr2 & 0x02)) {
+            // WRSR (01h) writes SR1 then SR2; SR1 is written back unchanged.
+            uint8_t tx[2] = {sr1, (uint8_t)(sr2 | 0x02)};
+            if (!cinstr(0x01, NRF_QSPI_CINSTR_LEN_3B, tx, nullptr, true)) {
+                Serial.println(F("[ERROR] QSPI: write-status command failed"));
+                return false;
+            }
+            // Status writes take up to ~15 ms; wipwait covers it, this is a backstop.
+            for (int i = 0; i < 50 && nrfx_qspi_mem_busy_check() != NRFX_SUCCESS; i++) delay(1);
+            uint8_t after = 0;
+            if (!cinstr(0x35, NRF_QSPI_CINSTR_LEN_2B, nullptr, &after) || !(after & 0x02)) {
+                Serial.print(F("[ERROR] QSPI: could not set Quad Enable (SR2 0x"));
+                Serial.print(sr2, HEX);
+                Serial.print(F(" -> 0x"));
+                Serial.print(after, HEX);
+                Serial.println(F(")"));
+                return false;
+            }
+            Serial.print(F("[OTA] QSPI Quad Enable set (SR2 0x"));
+            Serial.print(sr2, HEX);
+            Serial.print(F(" -> 0x"));
+            Serial.print(after, HEX);
+            Serial.println(F(")"));
+            sr2 = after;
+        }
+        sr2_ = sr2;
+        return true;
     }
 
     void printNext(Print& out) {
