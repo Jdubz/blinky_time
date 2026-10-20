@@ -132,7 +132,8 @@ type 4 END   : u32 ms, final counters
 - **The fleet scanner gets less radio time while a phone is connected.** Long connection events cut into it, so fleet broadcasts may be missed during a session.
 - **The accumulator fix changes spectral timing.** `OSS_FRAME_RATE = 66` in `AudioTracker.h` assumes one OSS sample per loop update with a new frame. That cadence is unchanged, but windows are now contiguous. Compare BPM lock and onset feel before and after.
 
-## Open questions
+## Decided (2026-10-19)
 
-- **Record-scoped hardware-gain override (not persisted).** Recording at a lower hw gain gives clipping headroom, and offline digital gain can recreate any higher setting. It's not built yet because it changes device behavior during the capture; decide after the first field recording shows whether gain 32 clips digitally.
-- **NUS has no pairing.** A crowd could connect and send `bootloader`. That's out of scope here, but record sessions make the exposure more likely.
+- **Re-scope pending ([#243](https://github.com/Jdubz/blinky_time/issues/243)).** Record mode captures *calibration data* from the live visualizer, not audio. This plan's raw-PCM-first priority is to be reworked so the analysis frames are the primary payload.
+- **No record-scoped gain override (#197, rejected).** A capture must run on exactly the settings and code path the visualizer uses, or the data doesn't represent what the device does.
+- **No BLE pairing (#188, won't fix).** There are no external bad actors. The risk is careless use of risky commands, which is handled by process, not authentication.
