@@ -337,6 +337,7 @@ private:
     uint32_t streamLastMs_ = 0;
     uint32_t batteryLastMs_ = 0;
     static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio
+    static const uint8_t MIC_RAW_DECIMALS = 5;          // raw/peak/valley mic levels: 1e-5 resolution (this mic sits below 0.005)
     static const uint16_t STREAM_FAST_PERIOD_MS = 10;   // Fast: ~100Hz for testing
     static const uint16_t BATTERY_PERIOD_MS = 1000;     // 1Hz for battery
 

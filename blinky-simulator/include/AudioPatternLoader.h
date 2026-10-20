@@ -97,6 +97,9 @@ public:
             audio.rhythmStrength = prev->rhythmStrength + t * (next->rhythmStrength - prev->rhythmStrength);
         }
 
+        // Patterns describe loudness with their energy envelope; Fire's
+        // continuous layer reads AudioControl::level.
+        audio.level = audio.energy;
         return audio;
     }
 

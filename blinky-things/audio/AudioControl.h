@@ -13,7 +13,7 @@
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 32 bytes
+ * Memory: 36 bytes
  */
 struct AudioControl {
     // === ENERGY ===
@@ -21,6 +21,15 @@ struct AudioControl {
     // Combines: mic level, bass mel energy, ODF peak-hold
     // Use for: Baseline intensity, brightness, activity level
     float energy = 0.0f;
+
+    // === LEVEL ===
+    // Loudness of whatever the mic hears, auto-ranged to 0.0 - 1.0 by
+    // AdaptiveMic's window/range normalizer (no gate, no smoothing beyond
+    // the normalizer's own peak/valley tracking). Swings the full range with
+    // the music; room sound also registers, since nothing gates it.
+    // Use for: continuous "breathing with the music" response (height,
+    // brightness) where energy's built-in floor would compress the swing.
+    float level = 0.0f;
 
     // === PULSE ===
     // Transient/hit intensity (0.0 - 1.0)
