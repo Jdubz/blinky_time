@@ -22,6 +22,9 @@ if [[ "${1:-}" == "--ci" ]]; then
 fi
 
 REPO_URL="https://github.com/lakshanthad/tflite-micro-arduino-examples"
+# Pinned commit (the fork's main, unchanged since 2022-02-23). Release builds
+# must be reproducible (docs/RELEASE_PROCESS.md); override with TFLITE_REF.
+TFLITE_REF="${TFLITE_REF:-48a62b6e75862ceca82924e48618f197750b1299}"
 LIB_NAME="tflite-micro-arduino-examples"
 TMP_DIR=$(mktemp -d)
 
@@ -67,10 +70,10 @@ arduino-cli config set library.enable_unsafe_install true 2>/dev/null || true
 echo "Downloading TFLite Micro Arduino library..."
 if $CI_MODE; then
     wget -q -O "$TMP_DIR/$LIB_NAME.zip" \
-        "$REPO_URL/archive/refs/heads/main.zip"
+        "$REPO_URL/archive/$TFLITE_REF.zip"
 else
     wget -q --show-progress -O "$TMP_DIR/$LIB_NAME.zip" \
-        "$REPO_URL/archive/refs/heads/main.zip"
+        "$REPO_URL/archive/$TFLITE_REF.zip"
 fi
 
 echo "Installing via arduino-cli..."

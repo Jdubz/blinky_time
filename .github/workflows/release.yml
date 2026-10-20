@@ -1,0 +1,139 @@
+# Cut a firmware release CANDIDATE (docs/RELEASE_PROCESS.md).
+#
+# Run by hand from the Actions tab (or `gh workflow run release.yml`) on
+# master. Builds the master commit with the pinned toolchain, validates it
+# with the same checks the deploy paths run, and publishes a GitHub
+# PRE-release `b<N>` with hex, UF2 and manifest.json. A candidate reaches no
+# device except listed test devices until it passes the bench gate
+# (tools/release_gate.py) and is promoted (tools/release_promote.py).
+name: Release candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: firmware-release
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Build and publish candidate
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+    - name: Only from master
+      run: |
+        if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+          echo "::error title=Release::candidates are cut from master only (got $GITHUB_REF)"
+          exit 1
+        fi
+
+    - name: Checkout (with tags)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # The commit must already have passed PR Validation on master: a release
+    # is never the first time a commit is built and tested.
+    - name: Require green CI on this commit
+      run: |
+        ok=$(gh run list --workflow pr-validation.yml --branch master --commit "$GITHUB_SHA" \
+               --json status,conclusion --jq '[.[] | select(.status=="completed" and .conclusion=="success")] | length')
+        if [ "${ok:-0}" -lt 1 ]; then
+          echo "::error title=Release::no successful PR Validation run on master for $GITHUB_SHA - wait for CI or fix it first"
+          exit 1
+        fi
+        echo "CI passed for $GITHUB_SHA"
+
+    - name: Build number
+      id: num
+      run: |
+        file=$(tr -d '[:space:]' < blinky-things/BUILD_NUMBER)
+        tags=$(git tag -l 'b[0-9]*' | sed 's/^b//' | grep -E '^[0-9]+$' | sort -n | tail -1)
+        n=$(( ${file:-0} > ${tags:-0} ? ${file:-0} : ${tags:-0} ))
+        n=$((n + 1))
+        # Notes compare against the STABLE release devices actually run
+        # (GitHub's Latest, promoted with stable-b<N>), not the newest bN
+        # tag, which may be a candidate that failed its gate.
+        prev=$(gh release list --json tagName,isLatest --jq '.[] | select(.isLatest) | .tagName' | head -1)
+        if [ -n "$prev" ] && ! git rev-parse -q --verify "refs/tags/stable-$prev" >/dev/null; then
+          echo "::error title=Release::Latest release $prev has no stable-$prev tag; fix the release state first"
+          exit 1
+        fi
+        echo "build=$n" >> "$GITHUB_OUTPUT"
+        echo "prev=$prev" >> "$GITHUB_OUTPUT"
+        echo "Release build b$n (BUILD_NUMBER file $file, highest tag ${tags:-none})"
+
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v2
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install pinned toolchain
+      run: |
+        pip install adafruit-nrfutil pyserial
+        TC=tools/firmware_toolchain.json
+        arduino-cli config init
+        arduino-cli config add board_manager.additional_urls "$(jq -r .board_index_url $TC)"
+        arduino-cli core update-index
+        arduino-cli core install "$(jq -r .core $TC)"
+        jq -r '.libraries[]' $TC | while read -r lib; do arduino-cli lib install "$lib"; done
+        bash tools/setup_tflite_lib.sh --ci
+        bash scripts/apply_core_patches.sh
+        arduino-cli core list
+        arduino-cli lib list
+
+    - name: Build firmware
+      run: bash scripts/build.sh --build ${{ steps.num.outputs.build }}
+
+    - name: Package and validate
+      run: |
+        TFLITE_REF=$(sed -n 's/^TFLITE_REF="${TFLITE_REF:-\([0-9a-f]*\)}"$/\1/p' tools/setup_tflite_lib.sh)
+        [ -n "$TFLITE_REF" ] || { echo "::error::TFLITE_REF pin not found in setup_tflite_lib.sh"; exit 1; }
+        TC=$(jq -c --arg tflite "$TFLITE_REF" --arg cli "$(arduino-cli version | head -1)" \
+               '{core: .core, libraries: .libraries, fqbn: .fqbn, tflite_ref: $tflite, arduino_cli: $cli}' \
+               tools/firmware_toolchain.json)
+        python tools/firmware_release.py package \
+          --hex /tmp/blinky-build/blinky-things.ino.hex \
+          --build ${{ steps.num.outputs.build }} --sha "$GITHUB_SHA" \
+          --out dist --toolchain-json "$TC"
+        ls -la dist
+
+    - name: Release notes
+      run: |
+        N=${{ steps.num.outputs.build }}
+        PREV=${{ steps.num.outputs.prev }}
+        {
+          echo "**Candidate** - not for fleet or new devices until it passes the bench gate and is promoted (docs/RELEASE_PROCESS.md)."
+          echo
+          echo "Commit: \`$GITHUB_SHA\`"
+          echo
+          if [ -n "$PREV" ]; then
+            old=$(git show "$PREV:blinky-things/config/ConfigStorage.h" | grep -oE 'SETTINGS_VERSION = [0-9]+' | grep -oE '[0-9]+')
+            new=$(grep -oE 'SETTINGS_VERSION = [0-9]+' blinky-things/config/ConfigStorage.h | grep -oE '[0-9]+')
+            if [ "$old" != "$new" ]; then
+              echo "> **SETTINGS_VERSION $old -> $new:** saved tuning resets to defaults on every device that installs this."
+              echo
+            fi
+            echo "### Changes since $PREV (current stable)"
+            git log --first-parent --format='- %s (%h)' "$PREV..$GITHUB_SHA"
+          else
+            echo "First release (no stable release yet)."
+          fi
+        } > notes.md
+        cat notes.md
+
+    - name: Publish pre-release
+      run: |
+        N=${{ steps.num.outputs.build }}
+        gh release create "b$N" dist/* --prerelease --target "$GITHUB_SHA" \
+          --title "b$N (candidate)" --notes-file notes.md

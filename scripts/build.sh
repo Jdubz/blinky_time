@@ -6,6 +6,11 @@
 #   ./scripts/build.sh --upload PORT      # compile + upload via UF2
 #   ./scripts/build.sh --esp32 [--upload PORT]  # ESP32-S3 target
 #   ./scripts/build.sh --no-bump          # compile without incrementing
+#   ./scripts/build.sh --dev              # local dev build: no bump, version b<N>-dev-<sha>
+#   ./scripts/build.sh --build N          # exact build number, no bump (release CI)
+#
+# Releases are built by .github/workflows/release.yml, not locally; see
+# docs/RELEASE_PROCESS.md. Local builds are for one test device only.
 #
 # The build number in blinky-things/BUILD_NUMBER is incremented on each
 # compile and baked into the firmware via types/Version.h. This is the
@@ -18,6 +23,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 BUMP=true
+DEV=false
+FORCE_BUILD=""
 ESP32=false
 UPLOAD=false
 UPLOAD_PORT=""
@@ -27,6 +34,12 @@ ARDUINO_CLI="${ARDUINO_CLI:-$(command -v arduino-cli 2>/dev/null || echo "$HOME/
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-bump)   BUMP=false; shift ;;
+        --dev)       DEV=true; BUMP=false; shift ;;
+        --build)
+            if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "Error: --build requires a build number" >&2; exit 1
+            fi
+            FORCE_BUILD="$2"; BUMP=false; shift 2 ;;
         --esp32)     ESP32=true; shift ;;
         --upload)
             UPLOAD=true
@@ -107,9 +120,16 @@ fi
 if $BUMP; then
     BUILD=$((BUILD + 1))
 fi
+if [[ -n "$FORCE_BUILD" ]]; then
+    BUILD="$FORCE_BUILD"
+fi
 
 # --- Generate Version.h (single generator shared with the Makefile, #213) ---
-bash scripts/gen_version.sh "$BUILD"
+if $DEV; then
+    bash scripts/gen_version.sh "$BUILD" --dev
+else
+    bash scripts/gen_version.sh "$BUILD"
+fi
 
 # --- Select FQBN ---
 if $ESP32; then

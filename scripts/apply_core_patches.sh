@@ -65,9 +65,19 @@ for core in "${CORES[@]}"; do
         continue
     fi
     [[ -f "$f.orig" ]] || cp "$f" "$f.orig"
+    # The core ships CRLF sources. Git Bash's patch strips CRs on read, but
+    # GNU patch on Linux does not, and --ignore-whitespace only covers
+    # spaces/tabs, so every CRLF line failed to match there (CI, blinkyhost).
+    # Normalize to LF first; compilers don't care, and .orig keeps the original.
+    tr -d '\r' < "$f" > "$f.lf" && mv "$f.lf" "$f"
     if ! ( cd "$core" && patch -p1 --ignore-whitespace --forward --no-backup-if-mismatch --quiet < "$PATCH" ); then
         echo "ERROR: $ver: patch did not apply. The core's cdc_device.c changed; regenerate" >&2
         echo "       $PATCH against it (original kept at $f.orig)." >&2
+        if [[ -f "$f.rej" ]]; then
+            echo "--- reject ($f.rej):" >&2; cat "$f.rej" >&2
+        fi
+        echo "--- target around the hunk (cat -A):" >&2
+        sed -n '385,400p' "$f" | cat -A >&2
         exit 1
     fi
     grep -Eq "$GUARD" "$f" || { echo "ERROR: $ver: patched, but the build.sh guard still fails" >&2; exit 1; }
