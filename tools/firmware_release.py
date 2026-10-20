@@ -7,10 +7,13 @@ tools/release_promote.py, tools/deploy_local.py and scripts/deploy.sh
 (download a verified release), so every path agrees on what a release is.
 
 A release is a GitHub Release tagged `b<N>` whose assets are:
-  blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and (from
-  the first signed release) blinky-things-b<N>.bin + blinky-things-b<N>.otam:
-  the raw application image and its Ed25519-signed OTA manifest
-  (tools/ota_manifest.py), which the web updater sends to the device
+  blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and, once
+  signed, blinky-things-b<N>.bin + blinky-things-b<N>.otam: the raw
+  application image and its Ed25519-signed OTA manifest (tools/ota_manifest.py)
+  that the web updater sends to the device. Signing happens ONLY after a
+  passing bench gate (sign-release.yml, dispatched by release_promote.py):
+  every device accepts a validly signed newer build, so an ungated candidate
+  must never carry a signature.
 plus, once bench-gated, gate-<device_id>.json. Channels:
   candidate  pre-release `b<N>` (CI-built, not yet gated)
   stable     full release `b<N>` + tag `stable-b<N>`; the latest stable is
@@ -21,6 +24,8 @@ CLI:
   firmware_release.py download [--tag bN] [--out DIR]   (default: latest stable)
   firmware_release.py latest-stable
   firmware_release.py mirror --out DIR [--keep N]   (stable releases for the web flasher)
+  firmware_release.py sign --tag bN --key-env VAR    (gated release -> signed OTA pair; CI only)
+  firmware_release.py verify-signed --tag bN         (signature check, no key needed)
   firmware_release.py is-test-device <device_id>
 
 Every failure exits non-zero with a message; nothing falls back silently.
@@ -140,19 +145,15 @@ def release_pubkey_from_firmware():
     return m.group(1)
 
 
-def package(hex_path, build, sha, out_dir, toolchain, libraries=None, sign_key_env=None):
+def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
     """Validate a compiled hex and write release assets + manifest into out_dir.
 
     Same validators the deploy paths run (tools/uf2_upload.py), but strict:
     the hex safety check must actually run (uf2_upload.validate_hex skips it
     with a warning when pre_upload_check can't be imported).
 
-    Every release is also signed for OTA: the raw image (.bin) and its signed
-    manifest (.otam), with the key in env var `sign_key_env`. The key must be
-    the one the firmware trusts, or devices would refuse every update.
+    A candidate is NOT signed for OTA here: see sign_release().
     """
-    if not sign_key_env:
-        raise ReleaseError("package needs --sign-key-env: every release is signed for OTA")
     sys.path.insert(0, str(REPO / "tools"))
     import pre_upload_check  # noqa: F401  (must import: no skipped safety check)
     import uf2_upload
@@ -171,31 +172,11 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None, sign_key_e
         shutil.copyfile(hex_path, hex_out)
         shutil.copyfile(uf2_tmp, uf2_out)
 
-    import ota_manifest
-    try:
-        key = ota_manifest.load_key(key_env=sign_key_env)
-        trusted = release_pubkey_from_firmware()
-        if ota_manifest.public_hex(key) != trusted:
-            raise ReleaseError(f"signing key {ota_manifest.public_hex(key)[:16]}... is not the release key the "
-                               f"firmware trusts ({trusted[:16]}..., blinky-things/ota/OtaKeys.h)")
-        start, image = ota_manifest.hex_to_image(hex_path.read_text(encoding="ascii"))
-        if start != ota_manifest.APP_LOAD_ADDR:
-            raise ReleaseError(f"hex starts at 0x{start:X}, expected 0x{ota_manifest.APP_LOAD_ADDR:X}")
-        otam = ota_manifest.sign(ota_manifest.unsigned_manifest(image, int(build)), key)
-        ota_manifest.verify(otam, bytes.fromhex(trusted), image)
-    except ota_manifest.OtaError as e:
-        raise ReleaseError(f"OTA signing failed: {e}")
-    bin_out = out_dir / f"blinky-things-b{build}.bin"
-    otam_out = out_dir / f"blinky-things-b{build}.otam"
-    bin_out.write_bytes(image)
-    otam_out.write_bytes(otam)
-
     manifest = {
         "build": int(build),
         "version": f"b{build}-{sha[:8]}",
         "git_sha": sha,
-        "files": {p.name: sha256(p) for p in (hex_out, uf2_out, bin_out, otam_out)},
-        "ota_pubkey": trusted,
+        "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
         "toolchain": toolchain,
         # Libraries the compile actually resolved (tools/check_build_libs.py, #252).
         "libraries": libraries,
@@ -299,6 +280,91 @@ def download(tag, out_dir):
     }
 
 
+# ------------------------------------------------------------- gate + sign ---
+
+def gate_records(tag, manifest):
+    """Names of the passing gate-<device>.json records for exactly this version."""
+    info = release_info(tag)
+    names = [a["name"] for a in info["assets"] if a["name"].startswith("gate-") and a["name"].endswith(".json")]
+    if not names:
+        raise ReleaseError(f"{tag} has no gate record: run tools/release_gate.py {tag} on a test device first")
+    tmp = Path(tempfile.mkdtemp(prefix="blinky-gate-"))
+    records = []
+    for n in names:
+        gh("release", "download", tag, "--dir", str(tmp), "--pattern", n)
+        rec = json.loads((tmp / n).read_text(encoding="utf-8"))
+        if rec.get("version") != manifest["version"]:
+            raise ReleaseError(f"{n}: gated version {rec.get('version')} != release {manifest['version']}")
+        records.append((n, rec))
+    passing = [n for n, r in records if r.get("passed") is True]
+    if not passing:
+        raise ReleaseError(f"{tag}: no passing gate record ({', '.join(names)} all failed)")
+    return passing
+
+
+def verify_signed(tag, out_dir=None):
+    """The release's OTA pair, checked against the key the firmware trusts. No secret needed."""
+    import ota_manifest
+    rel = download(tag, out_dir or Path(tempfile.mkdtemp(prefix="blinky-verify-")))
+    if not rel["bin"]:
+        raise ReleaseError(f"{tag} is not signed for OTA (no .bin/.otam)")
+    try:
+        f = ota_manifest.verify(rel["otam"].read_bytes(), bytes.fromhex(release_pubkey_from_firmware()),
+                                rel["bin"].read_bytes())
+    except ota_manifest.OtaError as e:
+        raise ReleaseError(f"{tag}: OTA signature check failed: {e}")
+    if f["build"] != rel["manifest"]["build"]:
+        raise ReleaseError(f"{tag}: signed build {f['build']} != release build {rel['manifest']['build']}")
+    return f
+
+
+def sign_release(tag, key_env):
+    """Sign a GATED release for OTA and attach the pair (CI: sign-release.yml).
+
+    Refuses without a passing gate record for exactly this version: every
+    device accepts a validly signed newer build, so signing is what makes a
+    build installable everywhere. Idempotent: an already correctly signed
+    release is left as is.
+    """
+    import ota_manifest
+    sys.path.insert(0, str(REPO / "tools"))
+    work = Path(tempfile.mkdtemp(prefix="blinky-sign-"))
+    rel = download(tag, work)
+    manifest = rel["manifest"]
+    passing = gate_records(tag, manifest)
+    if rel["bin"]:
+        f = verify_signed(tag)
+        print(f"{tag} is already signed (build {f['build']}); nothing to do")
+        return manifest
+    try:
+        key = ota_manifest.load_key(key_env=key_env)
+        trusted = release_pubkey_from_firmware()
+        if ota_manifest.public_hex(key) != trusted:
+            raise ReleaseError(f"signing key {ota_manifest.public_hex(key)[:16]}... is not the release key the "
+                               f"firmware trusts ({trusted[:16]}..., blinky-things/ota/OtaKeys.h)")
+        start, image = ota_manifest.hex_to_image(rel["hex"].read_text(encoding="ascii"))
+        if start != ota_manifest.APP_LOAD_ADDR:
+            raise ReleaseError(f"hex starts at 0x{start:X}, expected 0x{ota_manifest.APP_LOAD_ADDR:X}")
+        otam = ota_manifest.sign(ota_manifest.unsigned_manifest(image, int(manifest["build"])), key)
+        ota_manifest.verify(otam, bytes.fromhex(trusted), image)
+    except ota_manifest.OtaError as e:
+        raise ReleaseError(f"OTA signing failed: {e}")
+    n = manifest["build"]
+    bin_out = work / f"blinky-things-b{n}.bin"
+    otam_out = work / f"blinky-things-b{n}.otam"
+    bin_out.write_bytes(image)
+    otam_out.write_bytes(otam)
+    manifest["files"][bin_out.name] = sha256(bin_out)
+    manifest["files"][otam_out.name] = sha256(otam_out)
+    manifest["ota_pubkey"] = trusted
+    manifest["ota_signed_after_gate"] = passing
+    (work / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    gh("release", "upload", tag, str(bin_out), str(otam_out), str(work / "manifest.json"), "--clobber")
+    f = verify_signed(tag)
+    print(f"signed {tag}: build {f['build']}, {f['size']} bytes, gate {', '.join(passing)}")
+    return manifest
+
+
 # ----------------------------------------------------------------- mirror ---
 
 MIRROR_INDEX_SCHEMA = 1
@@ -382,12 +448,15 @@ def main():
     p.add_argument("--toolchain-json", default="{}", help="toolchain versions as JSON")
     p.add_argument("--libraries-json", required=True,
                    help="libraries.json written by scripts/build.sh (resolved library set)")
-    p.add_argument("--sign-key-env", required=True,
-                   help="env var holding the Ed25519 release signing key (PEM)")
     d = sub.add_parser("download")
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
     sub.add_parser("latest-stable")
+    sg = sub.add_parser("sign")
+    sg.add_argument("--tag", required=True)
+    sg.add_argument("--key-env", required=True, help="env var holding the Ed25519 release signing key (PEM)")
+    vs = sub.add_parser("verify-signed")
+    vs.add_argument("--tag", required=True)
     mi = sub.add_parser("mirror")
     mi.add_argument("--out", required=True, help="directory to (re)create; served as /firmware/")
     mi.add_argument("--keep", type=int, default=5, help="newest stable releases to mirror")
@@ -398,8 +467,7 @@ def main():
     try:
         if args.cmd == "package":
             libs = json.loads(Path(args.libraries_json).read_text(encoding="utf-8"))
-            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs,
-                        sign_key_env=args.sign_key_env)
+            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs)
             print(json.dumps(m, indent=2))
         elif args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)
@@ -407,6 +475,13 @@ def main():
                               "uf2": str(r["uf2"]), "version": r["manifest"]["version"]}))
         elif args.cmd == "latest-stable":
             print(latest_stable_tag())
+        elif args.cmd == "sign":
+            if not TAG_RE.match(args.tag):
+                raise ReleaseError(f"not a release tag: {args.tag!r}")
+            sign_release(args.tag, args.key_env)
+        elif args.cmd == "verify-signed":
+            f = verify_signed(args.tag)
+            print(f"OK: {args.tag} signed, build {f['build']}, {f['size']} bytes")
         elif args.cmd == "mirror":
             index = mirror(args.out, args.keep)
             if index["latest"] is None:

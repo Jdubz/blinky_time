@@ -3,9 +3,9 @@
 # Run by hand from the Actions tab (or `gh workflow run release.yml`) on
 # master. Builds the master commit with the pinned toolchain, validates it
 # with the same checks the deploy paths run, and publishes a GitHub
-# PRE-release `b<N>` with hex, UF2, manifest.json and the signed OTA pair
-# (raw image .bin + Ed25519-signed manifest .otam; key: the
-# BLINKY_RELEASE_SIGNING_KEY secret, used only in the packaging step). A candidate reaches no
+# PRE-release `b<N>` with hex, UF2 and manifest.json. Candidates are never
+# signed for OTA: sign-release.yml signs a release only after its bench gate
+# passes (dispatched by release_promote.py). A candidate reaches no
 # device except listed test devices until it passes the bench gate
 # (tools/release_gate.py) and is promoted (tools/release_promote.py).
 name: Release candidate
@@ -84,17 +84,13 @@ jobs:
 
     - name: Install pinned toolchain
       run: |
-        pip install adafruit-nrfutil pyserial cryptography
+        pip install adafruit-nrfutil pyserial
         bash scripts/setup_toolchain.sh
 
     - name: Build firmware
       run: bash scripts/build.sh --build ${{ steps.num.outputs.build }}
 
-    - name: Package, validate and sign
-      env:
-        # Only this step sees the signing key. package refuses a key whose
-        # public half isn't the release key in blinky-things/ota/OtaKeys.h.
-        BLINKY_RELEASE_SIGNING_KEY: ${{ secrets.BLINKY_RELEASE_SIGNING_KEY }}
+    - name: Package and validate
       run: |
         TFLITE_REF=$(sed -n 's/^TFLITE_REF="${TFLITE_REF:-\([0-9a-f]*\)}"$/\1/p' tools/setup_tflite_lib.sh)
         [ -n "$TFLITE_REF" ] || { echo "::error::TFLITE_REF pin not found in setup_tflite_lib.sh"; exit 1; }
@@ -105,7 +101,7 @@ jobs:
           --hex /tmp/blinky-build/blinky-things.ino.hex \
           --build ${{ steps.num.outputs.build }} --sha "$GITHUB_SHA" \
           --out dist --toolchain-json "$TC" \
-          --libraries-json /tmp/blinky-build/libraries.json           --sign-key-env BLINKY_RELEASE_SIGNING_KEY
+          --libraries-json /tmp/blinky-build/libraries.json
         ls -la dist
 
     - name: Release notes

@@ -44,9 +44,9 @@ Before any public page or nearby Bluetooth central could reach that path, it had
 
 ### Signing
 
-- **Release key.** The private key is the GitHub Actions secret `BLINKY_RELEASE_SIGNING_KEY`, used only in `release.yml`'s packaging step. The maintainer keeps an offline backup; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py package` refuses to sign with any key whose public half differs from it.
+- **Release key.** The private key is the GitHub Actions secret `BLINKY_RELEASE_SIGNING_KEY`, used only by `sign-release.yml`. The maintainer keeps an offline backup; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py sign` refuses any key whose public half differs from it.
 - **Owners need no key.** Their devices carry only the public key.
-- **Every release is signed** (`.bin` + `.otam` next to the hex/UF2). The page only offers stable releases, and the device enforces "newer than mine", so a signed candidate can't be used to downgrade anyone.
+- **Only gated releases are signed.** Every device installs a validly signed newer build, so the signature is what makes a build installable everywhere. Candidates are never signed. `release_promote.py` dispatches `sign-release.yml`, which refuses without a passing bench-gate record for exactly that version. It attaches `.bin` + `.otam` and updates `manifest.json`. Promotion then re-verifies the signature itself before tagging the release stable.
 - **Rotation.** Ship, signed with the old key, a firmware whose `OtaKeys.h` carries the new public key.
 - **Bench key.** `scripts/build.sh --dev --ota-bench-key` builds firmware that trusts the bench key (private half in `~/.blinky/ota-bench-key.pem` on the bench machine). Release builds can't carry it: `OtaKeys.h` `static_assert`s a `-dev-` version. It's for testing the path on a test device without ever signing a dev build with the release key.
 
@@ -58,8 +58,8 @@ Before any public page or nearby Bluetooth central could reach that path, it had
 ## Where the firmware comes from
 
 ```
-release.yml (candidate bN: hex, uf2, bin, otam, signed in CI)
-release_promote.py bN ──► GitHub Release bN (stable, tag stable-bN) ──► console redeploy
+release.yml (candidate bN: hex, uf2; unsigned) ──► release_gate.py (bench gate on a test device)
+release_promote.py bN ──► sign-release.yml (gate passed? sign: bin, otam) ──► verify ──► stable-bN, Latest ──► console redeploy
 .github/workflows/blinky-console-deploy.yml
    tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
 Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam}
@@ -122,7 +122,7 @@ With 0.8.0-11 the drive also no longer times out back to the app when nothing is
 
 Turn `FIRMWARE_UPDATES_ENABLED` on when all of these are done:
 
-1. Merge; cut a candidate (`release.yml` signs it); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`). The mirror then carries the first signed release.
+1. Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
 2. Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
 3. Bluetooth: fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Until then, hide the Bluetooth option.
 4. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows, and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.

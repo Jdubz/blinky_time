@@ -1,0 +1,57 @@
+# Sign a GATED release for signed OTA (docs/WEB_FLASHER.md, docs/RELEASE_PROCESS.md).
+#
+# The only place the release signing key (secret BLINKY_RELEASE_SIGNING_KEY)
+# is used. Every device installs a validly signed newer build, so signing is
+# what makes a build installable everywhere: `firmware_release.py sign`
+# refuses unless the release carries a passing bench-gate record for exactly
+# its version, and refuses any key that isn't the one the firmware trusts
+# (blinky-things/ota/OtaKeys.h). Candidates are never signed.
+#
+# Dispatched by tools/release_promote.py (which waits for it and re-verifies
+# the signature itself), or by hand:  gh workflow run sign-release.yml -f tag=bN
+name: Sign release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag b<N>; it must carry a passing gate-<device>.json"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firmware-release
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: Sign gated release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+
+    steps:
+    - name: Only from master
+      run: |
+        if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+          echo "::error title=Sign::signing runs from master only (got $GITHUB_REF)"
+          exit 1
+        fi
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Sign
+      env:
+        BLINKY_RELEASE_SIGNING_KEY: ${{ secrets.BLINKY_RELEASE_SIGNING_KEY }}
+      run: |
+        pip install cryptography
+        python tools/firmware_release.py sign --tag "$TAG" --key-env BLINKY_RELEASE_SIGNING_KEY

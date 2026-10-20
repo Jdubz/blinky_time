@@ -402,12 +402,12 @@ public:
             out.println(next_);
             return false;
         }
-        uint32_t end = offset + (uint32_t)len;
-        if (end > manifest_.size) {
+        uint32_t chunkEnd = offset + (uint32_t)len;
+        if (chunkEnd > manifest_.size) {
             out.println(F("ERR ota overflow"));
             return false;
         }
-        if ((len & 3) != 0 && end != manifest_.size) {
+        if ((len & 3) != 0 && chunkEnd != manifest_.size) {
             out.println(F("ERR ota unaligned-chunk"));
             return false;
         }
@@ -419,7 +419,7 @@ public:
             return false;
         }
         crypto_sha512_update(&sha_, buf, (size_t)len);
-        next_ = end;
+        next_ = chunkEnd;
         if (next_ < manifest_.size) {
             printNext(out);
             return true;
