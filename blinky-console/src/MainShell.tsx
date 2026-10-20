@@ -202,7 +202,7 @@ export function MainShell() {
         <a
           className="btn btn-small shell-firmware-btn"
           href="#firmware"
-          title="Update one device's firmware over USB or Bluetooth"
+          title="Update one device's firmware over USB"
         >
           Firmware
         </a>

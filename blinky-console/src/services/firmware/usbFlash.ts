@@ -109,17 +109,22 @@ async function writeUf2(
 ): Promise<void> {
   const file = await dir.getFileHandle(UF2_NAME, { create: true });
   const out = await file.createWritable();
-  await out.write(data);
   try {
+    await out.write(data);
     await out.close();
   } catch (err) {
+    // A refused write never reached the device: nothing was written.
+    if (
+      err instanceof DOMException &&
+      (err.name === 'NotAllowedError' || err.name === 'SecurityError')
+    ) {
+      throw new FirmwareError(`The browser refused to write to the drive: ${err.message}`);
+    }
     // The bootloader resets as soon as the last block lands, which can tear
-    // the drive down before the browser finishes. Only the version check
-    // after the device comes back says whether it took (deploy_local.py).
-    ui.log(
-      `The drive went away while closing the file (${String(err)}); checking the device…`,
-      'warn'
-    );
+    // the drive down before the browser finishes writing or closing. Only the
+    // version check after the device comes back says whether it took
+    // (deploy_local.py does the same).
+    ui.log(`The drive went away during the write (${String(err)}); checking the device…`, 'warn');
   }
 }
 

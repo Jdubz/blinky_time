@@ -66,10 +66,16 @@ def main():
 
         rel = firmware_release.download(args.tag, Path(tempfile.gettempdir()) / "blinky-promote-assets")
         passing = gate_records(args.tag, rel["manifest"])
-        gh("release", "edit", args.tag, "--prerelease=false", "--latest", "--title", f"{args.tag} (stable)")
+        # Tag first, then mark stable + Latest. Each step fires a console
+        # redeploy whose firmware mirror re-reads "stable" (firmware_release.py);
+        # in this order no run ever sees a Latest release without its stable
+        # tag, which would publish `latest: null` to the web flasher. The tag
+        # alone changes nothing for deploys: is_stable() also needs the
+        # release to be a full release.
         if not tag_exists(stable_tag):
             gh("api", f"repos/{repo_slug()}/git/refs", "-f", f"ref=refs/tags/{stable_tag}",
                "-f", f"sha={rel['manifest']['git_sha']}")
+        gh("release", "edit", args.tag, "--prerelease=false", "--latest", "--title", f"{args.tag} (stable)")
         print(f"PROMOTED: {args.tag} ({rel['manifest']['version']}) is stable and Latest; "
               f"gate: {', '.join(passing)}; tag {stable_tag}")
         return 0

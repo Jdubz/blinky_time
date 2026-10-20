@@ -3,9 +3,10 @@ name: Deploy Blinky Console
 # The console also serves the web flasher's firmware: every build mirrors the
 # newest stable GitHub releases into public/firmware/ (tools/firmware_release.py
 # mirror). So the site redeploys when the set of stable releases changes too:
-#   - promotion: release_promote.py un-marks the pre-release (`released`) and
-#     then pushes the stable-b<N> tag (push: tags). The tag push is the one
-#     that sees the release as stable; `released` may run before the tag exists.
+#   - promotion: release_promote.py pushes the stable-b<N> tag (push: tags),
+#     then un-marks the pre-release and marks it Latest (`released`/`edited`).
+#     That second run sees the release as stable; the tag-push run still
+#     mirrors the previous stable as Latest, so `latest` is never null.
 #   - rollback: release_promote.py --rollback re-marks Latest (`edited`).
 #   - deletion of a release (`deleted`).
 on:

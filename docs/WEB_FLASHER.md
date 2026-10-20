@@ -25,7 +25,7 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2}
 
 - **Only stable releases are mirrored.** "Stable" has one definition, `firmware_release.py` (not a pre-release, `stable-bN` tag present). Candidates and dev builds never reach this page.
 - **The newest 5 stable releases** are offered, with the release GitHub marks *Latest* as the default. A rollback (`release_promote.py --rollback`) changes the default on the next deploy.
-- **The redeploy triggers** are a `stable-b*` tag push (promotion), `release: released/edited/deleted` (rollback, deletion) and console changes. Release and tag events build the live site from `master`, not from the tagged commit.
+- **The redeploy triggers** are a `stable-b*` tag push and the release edit that follows it (promotion; `release_promote.py` tags first, so no deploy ever sees a Latest release without its stable tag), `release: edited/deleted` (rollback, deletion) and console changes. Release and tag events build the live site from `master`, not from the tagged commit.
 - **No stable release yet** means `latest: null`, and the page refuses to update anything.
 - **Why a mirror:** GitHub release assets can't be fetched from a browser (no CORS).
 - **The page installs only the `.uf2`.** The mirror also carries the `.hex`, because it's part of the release contract the deploy tools use.
@@ -80,9 +80,24 @@ An update in progress keeps `#firmware` mounted through hash navigation (Back), 
 
 ## Bench gate: outstanding before announcing the page
 
-The page's checks are unit-tested, and the real `b214` release passes them. No browser-to-hardware run has completed yet. Run on a test device listed in `devices/test_devices.json` (USB attached, so `deploy_local.py --already-in-bootloader` stays available as a fallback):
+The page's checks are unit-tested, and the real `b214` release passes them.
+
+**Done, 2026-10-20, on hat_v1 (`b213` → `b214-7a4664d6`, 97 s end to end).** The page's own `flashOverUsb` ran against the device, with Node stand-ins (`serialport`, and the mounted `XIAO-SENSE` volume) for the two browser pickers. It covered:
+- the gates, including the settings-reset confirmation for an unpublished running version;
+- the `bootloader` entry;
+- the real `INFO_UF2.TXT` check;
+- the UF2 write;
+- finding the device again by serial number (19 s);
+- the exact-version and BLE checks;
+- `restore_runtime_settings` + `save`;
+- the 75 s hold.
+
+The device came back configured, with BLE up.
+
+That run doesn't cover the browser APIs themselves; the items below still need a real browser. Run them on a test device listed in `devices/test_devices.json`, with USB attached so `deploy_local.py --already-in-bootloader` stays available as a fallback. A device's uptime must be ≥ 5 min 15 s between runs.
 
 - [ ] **File System Access:** Chrome/Edge on Windows, macOS and ChromeOS let `showDirectoryPicker` open the `XIAO-SENSE` drive root. Chrome writes via a `.crswap` swap file and renames on `close()`; confirm the bootloader flashes from the swap-file blocks and that the torn `close()` is reported as expected.
+- [ ] **DTR:** the page asserts DTR/RTS after opening the port. The firmware's CDC layer drops all output while DTR is low, on every build. Confirm `json info` answers in Chrome and Edge.
 - [ ] **Re-enumeration:** after the update, `navigator.serial.getPorts()` returns the app port without a second picker. Otherwise the page falls back to asking; note which happens.
 - [ ] **Manual copy:** the `INFO_UF2.TXT` check, then download + drag, completes and verifies.
 - [ ] **Interruption:** unplug mid-write. Confirm that the device ends up back in its bootloader (stuck-transfer timeout, or the handshake watchdog after 3 boots) and that *stuck in update mode* completes the update.

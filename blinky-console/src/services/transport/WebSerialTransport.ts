@@ -88,6 +88,12 @@ export class WebSerialTransport implements Transport {
         port ??
         (await navigator.serial.requestPort(this.filters ? { filters: this.filters } : undefined));
       await this.port.open({ baudRate: this.baudRate });
+      // Assert DTR/RTS explicitly rather than trusting the browser's default.
+      // Firmware built with stock TinyUSB (b209-b213) silently drops all
+      // serial output while DTR is low, so a port left with DTR low would
+      // look like a dead device. (DTR doesn't reset an nRF52; only the
+      // 1200-baud touch does.)
+      await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
 
       if (!this.port.readable) {
         throw new TransportError('Port is not readable', TransportErrorCode.CONNECTION_FAILED);

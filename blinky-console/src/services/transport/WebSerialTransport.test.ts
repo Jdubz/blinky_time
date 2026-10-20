@@ -8,7 +8,11 @@ import type { TransportEvent } from '.';
  * each test can shape the byte stream / error timing it cares about.
  */
 function setupMockSerial(readQueue: ReadResult[]): {
-  port: { open: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
+  port: {
+    open: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+    setSignals: ReturnType<typeof vi.fn>;
+  };
   reader: {
     read: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
@@ -39,6 +43,7 @@ function setupMockSerial(readQueue: ReadResult[]): {
   const port = {
     open: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
+    setSignals: vi.fn().mockResolvedValue(undefined),
     readable: { getReader: () => reader } as unknown as ReadableStream<Uint8Array>,
     writable: { getWriter: () => writer } as unknown as WritableStream<Uint8Array>,
     getInfo: vi.fn().mockReturnValue({}),
@@ -135,5 +140,21 @@ describe('WebSerialTransport.startReading auto-disconnect', () => {
     // Exactly one disconnected from disconnect() — not a stray error.
     const errorCount = events.filter(e => e.type === 'error').length;
     expect(errorCount).toBe(0);
+  });
+});
+
+describe('WebSerialTransport.connect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('asserts DTR and RTS after opening (stock TinyUSB drops output while DTR is low)', async () => {
+    const { port } = setupMockSerial([]);
+    const transport = new WebSerialTransport();
+    await transport.connect();
+    expect(port.setSignals).toHaveBeenCalledWith({ dataTerminalReady: true, requestToSend: true });
+    expect(port.open.mock.invocationCallOrder[0]).toBeLessThan(
+      port.setSignals.mock.invocationCallOrder[0]
+    );
   });
 });

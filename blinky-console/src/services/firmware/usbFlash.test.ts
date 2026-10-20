@@ -98,3 +98,41 @@ describe('reconnectApp', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('deliverUf2, drive write', () => {
+  function driveWith(write: () => Promise<void>, close: () => Promise<void> = async () => {}) {
+    const info = { getFile: async () => ({ text: async () => INFO_OK }) };
+    const uf2 = { createWritable: async () => ({ write, close }) };
+    return {
+      name: 'XIAO-SENSE',
+      getFileHandle: async (name: string) => (name === 'INFO_UF2.TXT' ? info : uf2),
+    } as unknown as FileSystemDirectoryHandle;
+  }
+
+  it('treats a write torn by the bootloader reset as "check the device", not a failure', async () => {
+    window.showDirectoryPicker = async () =>
+      driveWith(async () => {
+        throw new DOMException('device gone', 'NotFoundError');
+      });
+    const u = ui(() => 'Choose the XIAO-SENSE drive');
+    await expect(deliverUf2(release, u)).resolves.toBeUndefined();
+    expect(u.events).toContain('committed');
+    expect(u.events.some(e => e.startsWith('log:warn:The drive went away'))).toBe(true);
+    delete window.showDirectoryPicker;
+  });
+
+  it('fails at once when the browser refuses the write', async () => {
+    window.showDirectoryPicker = async () =>
+      driveWith(async () => {
+        throw new DOMException('no', 'NotAllowedError');
+      });
+    let round = 0;
+    const u = ui(() => {
+      if (++round > 1) throw new Error('stop');
+      return 'Choose the XIAO-SENSE drive';
+    });
+    await expect(deliverUf2(release, u)).rejects.toThrow('stop');
+    expect(u.events.some(e => e.includes('refused to write'))).toBe(true);
+    delete window.showDirectoryPicker;
+  });
+});

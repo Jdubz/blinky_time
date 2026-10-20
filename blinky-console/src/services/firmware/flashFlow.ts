@@ -117,6 +117,7 @@ export async function finishAfterFlash(
   await link.command('save');
   ui.log('Runtime settings restored to the release defaults and saved');
 
+  let latest = after;
   for (let up = after.millis; up < STABLE_UPTIME_MS; ) {
     ui.progress(
       `Letting the new firmware settle (${Math.ceil((STABLE_UPTIME_MS - up) / 1000)}s)`,
@@ -131,6 +132,7 @@ export async function finishAfterFlash(
       );
     }
     up = now.millis;
+    latest = now;
   }
-  return after;
+  return latest;
 }
