@@ -9,6 +9,11 @@ name: Deploy Blinky Console
 #     mirrors the previous stable as Latest, so `latest` is never null.
 #   - rollback: release_promote.py --rollback re-marks Latest (`edited`).
 #   - deletion of a release (`deleted`).
+# GitHub runs tag/release events with the workflow file of the TAGGED commit,
+# which for an older release may predate these triggers. So release_promote.py
+# also dispatches this workflow (workflow_dispatch always runs master's file)
+# after every promotion and rollback; after deleting a release, run
+# `gh workflow run blinky-console-deploy.yml --ref master`.
 on:
   push:
     branches: [master]

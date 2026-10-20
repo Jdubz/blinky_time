@@ -25,7 +25,7 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2}
 
 - **Only stable releases are mirrored.** "Stable" has one definition, `firmware_release.py` (not a pre-release, `stable-bN` tag present). Candidates and dev builds never reach this page.
 - **The newest 5 stable releases** are offered, with the release GitHub marks *Latest* as the default. A rollback (`release_promote.py --rollback`) changes the default on the next deploy.
-- **The redeploy triggers** are a `stable-b*` tag push and the release edit that follows it (promotion; `release_promote.py` tags first, so no deploy ever sees a Latest release without its stable tag), `release: edited/deleted` (rollback, deletion) and console changes. Release and tag events build the live site from `master`, not from the tagged commit.
+- **Redeploys:** `release_promote.py` dispatches a console redeploy (`workflow_dispatch`, which always runs `master`'s workflow) after every promotion and rollback. It also tags before marking Latest, so no deploy ever sees a Latest release without its stable tag. The workflow also listens for `stable-b*` tag pushes and `release` events, but GitHub runs those with the *tagged* commit's workflow file, which for an older release may predate the triggers. After deleting a release by hand, run `gh workflow run blinky-console-deploy.yml --ref master`.
 - **No stable release yet** means `latest: null`, and the page refuses to update anything.
 - **Why a mirror:** GitHub release assets can't be fetched from a browser (no CORS).
 - **The page installs only the `.uf2`.** The mirror also carries the `.hex`, because it's part of the release contract the deploy tools use.

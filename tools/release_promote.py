@@ -44,6 +44,25 @@ def gate_records(tag, manifest):
     return passing
 
 
+def redeploy_console(what):
+    """Re-mirror stable releases for the web flasher (docs/WEB_FLASHER.md).
+
+    The console deploy also listens for tag and release events, but GitHub
+    runs those with the workflow file of the *tagged* commit, which for an
+    older release may predate the trigger. workflow_dispatch always runs
+    master's workflow, so dispatch it explicitly. The release change above
+    has already happened; a failed dispatch is reported loudly with the
+    manual command.
+    """
+    try:
+        gh("workflow", "run", "blinky-console-deploy.yml", "--ref", "master")
+    except ReleaseError as e:
+        raise ReleaseError(f"{what} succeeded, but the console redeploy could not be dispatched ({e}). "
+                           "The web flasher still offers the old default: run "
+                           "`gh workflow run blinky-console-deploy.yml --ref master`")
+    print("  console redeploy dispatched (web flasher mirror)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("tag", help="release tag, e.g. b214")
@@ -62,6 +81,7 @@ def main():
                 raise ReleaseError(f"{args.tag} was never promoted; rollback only targets stable releases")
             gh("release", "edit", args.tag, "--latest")
             print(f"ROLLED BACK: {args.tag} is the latest stable again (deploy tools install it by default)")
+            redeploy_console("Rollback")
             return 0
 
         rel = firmware_release.download(args.tag, Path(tempfile.gettempdir()) / "blinky-promote-assets")
@@ -78,6 +98,7 @@ def main():
         gh("release", "edit", args.tag, "--prerelease=false", "--latest", "--title", f"{args.tag} (stable)")
         print(f"PROMOTED: {args.tag} ({rel['manifest']['version']}) is stable and Latest; "
               f"gate: {', '.join(passing)}; tag {stable_tag}")
+        redeploy_console("Promotion")
         return 0
     except ReleaseError as e:
         print(f"ERROR: {e}", file=sys.stderr)
