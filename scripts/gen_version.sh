@@ -1,7 +1,10 @@
 #!/bin/bash
 # Single generator for blinky-things/types/Version.h (#213).
 #
-# Usage: scripts/gen_version.sh <build-number>
+# Usage: scripts/gen_version.sh <build-number> [--dev]
+#
+# --dev stamps the version "b<N>-dev-<sha>": a local build for one test
+# device (docs/RELEASE_PROCESS.md), never mistakable for release b<N>.
 #
 # Called by scripts/build.sh (after it bumps BUILD_NUMBER) and by the
 # Makefile `version` target, so every build path embeds the same fields,
@@ -20,6 +23,8 @@ else
 fi
 
 BUILD="${1:-}"
+DEV=false
+[[ "${2:-}" == "--dev" ]] && DEV=true
 if ! [[ "$BUILD" =~ ^[0-9]+$ ]]; then
     echo "Error: build number must be a non-negative integer, got '$BUILD'" >&2
     exit 1
@@ -41,6 +46,9 @@ else
     GIT_SHA="nogit"
 fi
 
+CHANNEL_TAG=""
+$DEV && CHANNEL_TAG="dev-"
+
 cat > blinky-things/types/Version.h << EOF
 #pragma once
 
@@ -52,7 +60,7 @@ cat > blinky-things/types/Version.h << EOF
 // FIRMWARE_VERSION embeds both the build number AND the git SHA so a
 // reused build number (--no-bump) can't disguise different code on a
 // running device.
-#define FIRMWARE_VERSION "b$BUILD-$GIT_SHA"
+#define FIRMWARE_VERSION "b$BUILD-${CHANNEL_TAG}$GIT_SHA"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 EOF
 

@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""
+firmware_release.py - shared firmware release logic (docs/RELEASE_PROCESS.md).
+
+Used by .github/workflows/release.yml (package), tools/release_gate.py,
+tools/release_promote.py, tools/deploy_local.py and scripts/deploy.sh
+(download a verified release), so every path agrees on what a release is.
+
+A release is a GitHub Release tagged `b<N>` whose assets are:
+  blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json
+plus, once bench-gated, gate-<device_id>.json. Channels:
+  candidate  pre-release `b<N>` (CI-built, not yet gated)
+  stable     full release `b<N>` + tag `stable-b<N>`; the latest stable is
+             the release GitHub marks "Latest" (rollback = re-mark an older one)
+
+CLI:
+  firmware_release.py package --hex H --build N --sha SHA --out DIR
+  firmware_release.py download [--tag bN] [--out DIR]   (default: latest stable)
+  firmware_release.py latest-stable
+  firmware_release.py is-test-device <device_id>
+
+Every failure exits non-zero with a message; nothing falls back silently.
+"""
+
+import argparse
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+TEST_DEVICES = REPO / "devices" / "test_devices.json"
+TAG_RE = re.compile(r"^b(\d+)$")
+
+
+class ReleaseError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- helpers ---
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def gh(*args, capture=True):
+    """Run the GitHub CLI; raise with its stderr on failure."""
+    if not shutil.which("gh"):
+        raise ReleaseError("GitHub CLI `gh` not found on PATH (needed for releases)")
+    r = subprocess.run(["gh", *args], cwd=REPO, capture_output=capture, text=True)
+    if r.returncode != 0:
+        raise ReleaseError(f"gh {' '.join(args)} failed: {(r.stderr or '').strip()[:500]}")
+    return r.stdout if capture else ""
+
+
+def storage_versions():
+    """SETTINGS_VERSION / DEVICE_VERSION from ConfigStorage.h (fail loud if missing)."""
+    text = (REPO / "blinky-things/config/ConfigStorage.h").read_text(encoding="utf-8")
+    out = {}
+    for key in ("SETTINGS_VERSION", "DEVICE_VERSION"):
+        m = re.search(rf"\b{key}\s*=\s*(\d+)", text)
+        if not m:
+            raise ReleaseError(f"{key} not found in ConfigStorage.h")
+        out[key.lower()] = int(m.group(1))
+    return out
+
+
+# ------------------------------------------------------------ test devices ---
+
+def load_test_devices():
+    """Device ids allowed to take candidate and --dev builds."""
+    if not TEST_DEVICES.exists():
+        raise ReleaseError(f"{TEST_DEVICES} missing: no device may take non-stable firmware")
+    data = json.loads(TEST_DEVICES.read_text(encoding="utf-8"))
+    ids = data.get("test_devices")
+    if not isinstance(ids, list) or not all(isinstance(i, str) and i for i in ids):
+        raise ReleaseError(f"{TEST_DEVICES}: 'test_devices' must be a list of device ids")
+    return set(ids)
+
+
+def require_test_device(device_id, what):
+    if device_id not in load_test_devices():
+        raise ReleaseError(f"{what} refused: '{device_id}' is not in {TEST_DEVICES.relative_to(REPO)}. "
+                           "Only listed test devices take non-stable firmware.")
+
+
+# ---------------------------------------------------------------- package ---
+
+def package(hex_path, build, sha, out_dir, toolchain):
+    """Validate a compiled hex and write release assets + manifest into out_dir.
+
+    Same validators the deploy paths run (tools/uf2_upload.py), but strict:
+    the hex safety check must actually run (uf2_upload.validate_hex skips it
+    with a warning when pre_upload_check can't be imported).
+    """
+    sys.path.insert(0, str(REPO / "tools"))
+    import pre_upload_check  # noqa: F401  (must import: no skipped safety check)
+    import uf2_upload
+
+    hex_path = Path(hex_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not uf2_upload.validate_hex(hex_path):
+        raise ReleaseError("hex failed safety validation")
+    with tempfile.TemporaryDirectory() as tmp:
+        uf2_tmp = uf2_upload.convert_to_uf2(hex_path, Path(tmp))
+        if not uf2_upload.validate_uf2(uf2_tmp):
+            raise ReleaseError("UF2 failed safety validation")
+        hex_out = out_dir / f"blinky-things-b{build}.hex"
+        uf2_out = out_dir / f"blinky-things-b{build}.uf2"
+        shutil.copyfile(hex_path, hex_out)
+        shutil.copyfile(uf2_tmp, uf2_out)
+
+    manifest = {
+        "build": int(build),
+        "version": f"b{build}-{sha[:8]}",
+        "git_sha": sha,
+        "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
+        "toolchain": toolchain,
+        **storage_versions(),
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
+# --------------------------------------------------------------- download ---
+
+def list_releases():
+    rows = json.loads(gh("release", "list", "--limit", "200",
+                         "--json", "tagName,isPrerelease,isLatest,isDraft"))
+    return [r for r in rows if TAG_RE.match(r["tagName"]) and not r["isDraft"]]
+
+
+def latest_stable_tag():
+    stable = [r for r in list_releases() if r["isLatest"] and not r["isPrerelease"]]
+    if not stable:
+        raise ReleaseError("no stable release yet (none marked Latest). Cut a candidate, gate it, "
+                           "and promote it: docs/RELEASE_PROCESS.md")
+    return stable[0]["tagName"]
+
+
+def release_info(tag):
+    return json.loads(gh("release", "view", tag, "--json", "tagName,isPrerelease,assets,url"))
+
+
+def is_stable(tag):
+    return not release_info(tag)["isPrerelease"]
+
+
+def download(tag, out_dir):
+    """Download a release's hex/uf2/manifest and verify every sha256."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    m = TAG_RE.match(tag)
+    if not m:
+        raise ReleaseError(f"not a release tag: {tag!r} (expected b<N>)")
+    n = m.group(1)
+    for f in out_dir.glob("*"):
+        f.unlink()
+    gh("release", "download", tag, "--dir", str(out_dir),
+       "--pattern", "manifest.json", "--pattern", f"blinky-things-b{n}.hex",
+       "--pattern", f"blinky-things-b{n}.uf2")
+    manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("build") != int(n):
+        raise ReleaseError(f"{tag}: manifest build {manifest.get('build')} != {n}")
+    for name, digest in manifest["files"].items():
+        p = out_dir / name
+        if not p.exists():
+            raise ReleaseError(f"{tag}: asset {name} missing")
+        if sha256(p) != digest:
+            raise ReleaseError(f"{tag}: {name} sha256 mismatch - refusing to use it")
+    return {
+        "tag": tag,
+        "hex": out_dir / f"blinky-things-b{n}.hex",
+        "uf2": out_dir / f"blinky-things-b{n}.uf2",
+        "manifest": manifest,
+        "stable": is_stable(tag),
+    }
+
+
+# -------------------------------------------------------------------- cli ---
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("package")
+    p.add_argument("--hex", required=True)
+    p.add_argument("--build", required=True, type=int)
+    p.add_argument("--sha", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--toolchain-json", default="{}", help="toolchain versions as JSON")
+    d = sub.add_parser("download")
+    d.add_argument("--tag", help="b<N> (default: latest stable)")
+    d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
+    sub.add_parser("latest-stable")
+    t = sub.add_parser("is-test-device")
+    t.add_argument("device_id")
+    args = ap.parse_args()
+    try:
+        if args.cmd == "package":
+            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json))
+            print(json.dumps(m, indent=2))
+        elif args.cmd == "download":
+            r = download(args.tag or latest_stable_tag(), args.out)
+            print(json.dumps({"tag": r["tag"], "stable": r["stable"], "hex": str(r["hex"]),
+                              "uf2": str(r["uf2"]), "version": r["manifest"]["version"]}))
+        elif args.cmd == "latest-stable":
+            print(latest_stable_tag())
+        elif args.cmd == "is-test-device":
+            require_test_device(args.device_id, "check")
+            print("yes")
+    except ReleaseError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

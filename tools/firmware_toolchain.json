@@ -1,0 +1,11 @@
+{
+  "_comment": "Pinned toolchain for release builds (.github/workflows/release.yml). Must match what scripts/build.sh uses on the workstations, or a release is not the firmware that was tested. TFLite is pinned in tools/setup_tflite_lib.sh (TFLITE_REF).",
+  "board_index_url": "https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json",
+  "core": "Seeeduino:nrf52@1.1.10",
+  "libraries": [
+    "Adafruit NeoPixel@1.15.1",
+    "arduinoFFT@2.0.4",
+    "ArduinoJson@7.4.2"
+  ],
+  "fqbn": "Seeeduino:nrf52:xiaonRF52840Sense"
+}

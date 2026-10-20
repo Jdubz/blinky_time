@@ -1,0 +1,6 @@
+{
+  "_comment": "Devices allowed to take non-stable firmware (release candidates and --dev builds); see docs/RELEASE_PROCESS.md. Being a test device is a deliberate property of the device, not where it happens to be plugged in. Every other device only ever gets the latest stable release.",
+  "test_devices": [
+    "hat_v1"
+  ]
+}

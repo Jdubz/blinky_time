@@ -13,14 +13,24 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 `./scripts/deploy.sh` requires an explicit `--devices` target — passing `all`, an explicit comma-separated list of device IDs, or `list` to enumerate candidates. Unscoped fleet flashes were removed in PR #140 after the cart_inner brick incident.
 
 ```bash
-./scripts/deploy.sh --devices=all                   # compile + upload + flash all devices + verify
+./scripts/deploy.sh --devices=all                   # latest STABLE release → all devices + verify
 ./scripts/deploy.sh --devices=cart_inner,cart_outer # scope to a subset
 ./scripts/deploy.sh --devices=list                  # show candidates and exit
-./scripts/deploy.sh --devices=all --skip-compile    # deploy already-compiled hex
-./scripts/deploy.sh --devices=all --no-bump         # recompile without bumping build number
+./scripts/deploy.sh --devices=ID --release b214     # a specific release (candidate: test device only)
+./scripts/deploy.sh --devices=hat_v1 --dev          # local build of a clean tree, test device only
 ```
 
-deploy.sh runs the full pipeline (compile → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
+deploy.sh runs the full pipeline (select firmware → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
+
+## CRITICAL: Only stable releases reach fleet and new devices
+
+**Fleet and new devices get the latest *stable* GitHub release, never a local build.** See `docs/RELEASE_PROCESS.md`. The flow:
+1. Merge to master.
+2. `gh workflow run release.yml` builds a **candidate** (a pre-release `bN`) with the pinned toolchain.
+3. `tools/release_gate.py bN` bench-gates it on a test device: version, fps, 5 min stability, asserts, music, operator confirmation.
+4. `tools/release_promote.py bN` makes it **stable**.
+
+**Firmware that isn't stable** (candidates, and `--dev` builds of a clean tree, versioned `bN-dev-<sha>`) goes to exactly one device listed in `devices/test_devices.json`. The deploy tools refuse every other device. Never flash an uncommitted or unreleased build to any other device "just to try it": that is how b210 (12 fps) and b211 (silent mic) reached the hat.
 
 **The deploy.sh-only rule is broader than firmware flashing.** It also covers any sequence of API calls that mutates persistent device state or device lifecycle: `device upload` (writes config to flash), `reboot`, `wipe_device_identity` (and its deprecated aliases `factory` / `reset`), fleet-wide config sweeps that loop over multiple settings, etc. Even though those go through `/api/devices/{id}/command` (not `/api/fleet/upload`), running them in an ad-hoc loop without a tested workflow leaves devices in `error`/`connecting` states and requires manual recovery. The server enforces this for the destructive subset (`device upload`, `reboot`, `wipe_device_identity`, `factory`, `reset` — see `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST` for the canonical list); for everything else the discipline is on the operator. **If a real test needs different device configurations, build firmware variants with each config baked in and deploy each via `deploy.sh` — do NOT script API config flips on running fleet devices.**
 
@@ -29,7 +39,7 @@ deploy.sh runs the full pipeline (compile → upload → flash → version-verif
 **Device on THIS machine's USB (not blinkyhost's):** `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
 - **Explicit target:** `json info` `device.id` must match `--device-id`.
 - **Pre-flight:** the device must be configured, with ≥ 5 min 15 s uptime (b190-era reboot counter).
-- **Compile and validate:** `build.sh`, then the server's hex/UF2 validators.
+- **Firmware:** the latest stable release by default (downloaded, sha256-verified). `--release bN` selects a specific release, and `--dev` a local build of a clean tree (test devices only). Then the server's hex/UF2 validators run.
 - **Bootloader identity before writing:** the drive's USB serial must equal the chip's, and the bootloader must be 0.8.0-10.
 - **Post-deploy:** version, identity, config and BLE are checked *before* `save`, then `restore_runtime_settings` + `save` and a 75 s stability wait.
 - **Audit:** every attempt is logged to `~/.local/share/blinky/local_flash_attempts.jsonl`.
@@ -166,15 +176,16 @@ tmux new-session -d -s training "cd ml-training && source venv/bin/activate && P
 
 ## Build Workflow
 
-**Always use `scripts/build.sh` to compile.** It auto-increments `blinky-things/BUILD_NUMBER` and regenerates `types/Version.h`. Build numbers are the source of truth for deployed firmware — git is for collaboration, not deployment.
+**Always use `scripts/build.sh` to compile.** It regenerates `types/Version.h` (build number + git SHA). Release build numbers are assigned by the release workflow (`docs/RELEASE_PROCESS.md`); local builds are for compile checks and `--dev` test-device flashes only.
 
 ```bash
-./scripts/build.sh                          # nRF52840 compile only
-./scripts/build.sh --upload /dev/ttyACM0    # compile + UF2 upload
-./scripts/build.sh --no-bump                # recompile without incrementing (e.g. after failed upload)
+./scripts/build.sh                          # nRF52840 compile check (bumps BUILD_NUMBER)
+./scripts/build.sh --no-bump                # recompile without incrementing
+./scripts/build.sh --dev                    # dev build: no bump, version b<N>-dev-<sha>
+./scripts/build.sh --build N                # exact build number (release CI)
 ```
 
-Use `./scripts/deploy.sh` for full compile → upload → fleet flash → verify.
+Use `./scripts/deploy.sh` (stable by default) to flash devices.
 
 ## Device Workflow Discipline
 
@@ -212,6 +223,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
+| `docs/RELEASE_PROCESS.md` | Firmware release channels (stable / candidate / dev), cutting, gating, promoting and rolling back releases |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
 | `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open-issues index; GitHub issues are the system of record. Covers the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, CI), the PR #152 device checklist, and (§8) the items carried over from the archived `docs/archive/OPEN_ISSUES_2026_05_20.md` (SWD recovery, BLE-DFU tooling, fleet ops). |

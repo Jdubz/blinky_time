@@ -1,14 +1,21 @@
 #!/bin/bash
 # Deploy firmware to blinkyhost devices.
 #
-# Single command: compile → upload → flash → verify.
+# Single command: select firmware → upload → flash → verify.
 # The server handles everything after receiving the binary.
 # Fails loudly on ANY problem.
 #
+# Firmware selection (docs/RELEASE_PROCESS.md):
+#   default         latest STABLE GitHub release, downloaded + sha256-verified
+#   --release bN    that release; a candidate (pre-release) only for ONE test device
+#   --dev           local build of a clean tree, ONE test device, version b<N>-dev-<sha>
+# Test devices: devices/test_devices.json. Nothing is compiled for fleet deploys.
+#
 # Usage:
-#   ./scripts/deploy.sh                    # compile + deploy to all devices
-#   ./scripts/deploy.sh --no-bump          # recompile without incrementing build number
-#   ./scripts/deploy.sh --skip-compile     # deploy already-compiled hex
+#   ./scripts/deploy.sh --devices=all                  # latest stable to every device
+#   ./scripts/deploy.sh --devices=ID --release b214    # a specific release
+#   ./scripts/deploy.sh --devices=hat_v1 --dev         # local build, test device only
+#   ./scripts/deploy.sh --devices=hat_v1 --dev --skip-compile  # reuse the last dev build
 #
 # Requires: blinky-server running on blinkyhost.local:8420
 # API key: reads from ~/.blinky-api-key or BLINKY_API_KEY env var
@@ -31,7 +38,8 @@ cd "$(git rev-parse --show-toplevel)"
 BLINKY_SERVER="http://blinkyhost.local:8420"
 HEX="/tmp/blinky-build/blinky-things.ino.hex"
 SKIP_COMPILE=false
-NO_BUMP=false
+DEV=false
+RELEASE=""
 # How long to wait after flashing before reading back fps via json info.
 # LoopMetrics publishes a fresh fps reading every WINDOW_MS (5 s) — we add
 # a 1 s margin so the first window has unambiguously closed before the
@@ -43,13 +51,19 @@ LOOP_METRICS_SETTLE_S=6
 DEVICES_ARG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --no-bump)       NO_BUMP=true; shift ;;
+        --dev)           DEV=true; shift ;;
+        --release)       RELEASE="$2"; shift 2 ;;
+        --release=*)     RELEASE="${1#--release=}"; shift ;;
         --skip-compile)  SKIP_COMPILE=true; shift ;;
         --devices)       DEVICES_ARG="$2"; shift 2 ;;
         --devices=*)     DEVICES_ARG="${1#--devices=}"; shift ;;
         -h|--help)
             cat <<EOF
-Usage: ./scripts/deploy.sh --devices <list> [--no-bump] [--skip-compile]
+Usage: ./scripts/deploy.sh --devices <list> [--release bN | --dev [--skip-compile]]
+
+  (default)          latest stable release (docs/RELEASE_PROCESS.md)
+  --release bN       a specific release; a candidate only for one test device
+  --dev              local build of a clean tree; one test device only
 
   --devices <list>   Comma-separated device IDs OR the literal 'all' to
                      deploy to every flashable device in range. Required.
@@ -109,23 +123,52 @@ fi
 GIT_SHA=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 DEPLOY_TOOL_HEADER="X-Deploy-Tool: deploy.sh-${GIT_SHA}"
 
-# ─── Step 1: Compile ─────────────────────────────────────────────────
+# ─── Step 1: Select firmware ─────────────────────────────────────────
 
-if $SKIP_COMPILE; then
-    [[ -f "$HEX" ]] || fail "No hex at $HEX (run without --skip-compile)" 1
-    BUILD=$(cat blinky-things/BUILD_NUMBER | tr -d '[:space:]')
-    echo "=== Skipping compile, using b${BUILD} ==="
-else
-    BUILD_ARGS=()
-    if $NO_BUMP; then BUILD_ARGS+=(--no-bump); fi
-    if ! ./scripts/build.sh "${BUILD_ARGS[@]}"; then
+# Non-stable firmware (candidate or dev) may go to exactly one listed test
+# device: never 'all', never a list.
+require_single_test_device() {
+    if [[ "$DEVICES_ARG" == "all" || "$DEVICES_ARG" == *,* ]]; then
+        fail "$1 goes to exactly one test device (--devices=<id>), not '$DEVICES_ARG'" 6
+    fi
+    python3 tools/firmware_release.py is-test-device "$DEVICES_ARG" >/dev/null \
+        || fail "$1 refused: '$DEVICES_ARG' is not in devices/test_devices.json" 6
+}
+
+REL_DIR="/tmp/blinky-release"
+if $DEV; then
+    [[ -z "$RELEASE" ]] || fail "--dev and --release are mutually exclusive" 6
+    require_single_test_device "--dev build"
+    DIRTY=$(git status --porcelain -- blinky-things scripts | grep -v 'types/Version.h' || true)
+    [[ -z "$DIRTY" ]] || fail "--dev needs a clean tree (commit or stash first): $DIRTY" 6
+    if $SKIP_COMPILE; then
+        [[ -f "$HEX" ]] || fail "No hex at $HEX (run without --skip-compile)" 1
+    elif ! ./scripts/build.sh --dev; then
         fail "Compilation failed" 1
     fi
     BUILD=$(cat blinky-things/BUILD_NUMBER | tr -d '[:space:]')
+    EXPECTED_VERSION="b${BUILD}-dev-$(git rev-parse --short=8 HEAD)"
+    CHANNEL=dev
+else
+    $SKIP_COMPILE && fail "--skip-compile only applies to --dev (releases are downloaded, never compiled)" 6
+    REL_ARGS=(download --out "$REL_DIR")
+    [[ -n "$RELEASE" ]] && REL_ARGS+=(--tag "$RELEASE")
+    REL_JSON=$(python3 tools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
+    rel() { python3 -c "import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])" "$REL_JSON" "$1"; }
+    HEX=$(rel hex)
+    if command -v cygpath >/dev/null 2>&1; then HEX=$(cygpath -u "$HEX"); fi
+    EXPECTED_VERSION=$(rel version)
+    BUILD=${EXPECTED_VERSION%%-*}; BUILD=${BUILD#b}
+    if [[ "$(rel stable)" == "True" ]]; then
+        CHANNEL=stable
+    else
+        CHANNEL=candidate
+        require_single_test_device "candidate $(rel tag)"
+    fi
 fi
 
 HEX_SIZE=$(stat -c%s "$HEX" 2>/dev/null || stat -f%z "$HEX")
-echo "  Firmware: b${BUILD} (${HEX_SIZE} bytes)"
+echo "  Firmware: ${EXPECTED_VERSION} [${CHANNEL}] (${HEX_SIZE} bytes)"
 
 # ─── Step 2: Upload firmware ─────────────────────────────────────────
 
@@ -285,7 +328,7 @@ for dev_id, info in r.get('per_device', {}).items():
         if [[ "$FLASH_STATUS" != "ok" ]]; then
             # Compute partial-success message
             PARTIAL_MSG=$(echo "$JOB_STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('result',{}).get('message','?'))" 2>/dev/null)
-            fail "Flash completed with errors: ${PARTIAL_MSG}. Re-run './scripts/deploy.sh --skip-compile' to retry the failed devices." 2
+            fail "Flash completed with errors: ${PARTIAL_MSG}. Re-run the same deploy.sh command (with --devices=<failed ids>) to retry the failed devices." 2
         fi
         break
     elif [[ "$STATUS" == "error" ]]; then
@@ -297,7 +340,7 @@ done
 if [[ "$STATUS" != "complete" ]]; then
     # Surface what we last saw so the operator knows where it stalled,
     # not just "timed out".
-    fail "Flash polling timed out after $((MAX_POLLS * POLL_INTERVAL_S))s. Last server status: '${PROGRESS}'. Re-run './scripts/deploy.sh --skip-compile' to retry, or check 'sudo journalctl -u blinky-server' for the full per-device log." 2
+    fail "Flash polling timed out after $((MAX_POLLS * POLL_INTERVAL_S))s. Last server status: '${PROGRESS}'. Re-run the same deploy.sh command to retry, or check 'sudo journalctl -u blinky-server' for the full per-device log." 2
 fi
 
 # ─── Step 6: Restore runtime settings (defaults) ────────────────────────
@@ -399,7 +442,7 @@ echo ""
 echo "=== Verifying post-deploy state ==="
 sleep "$LOOP_METRICS_SETTLE_S"  # let the LoopMetrics 5s window close so fps reads are non-zero
 
-export EXPECTED_BUILD="b${BUILD}"
+export EXPECTED_BUILD="${EXPECTED_VERSION}"
 export API_KEY BLINKY_SERVER
 DEVICES_JSON=$(curl -sf --max-time 15 -H "X-API-Key: ${API_KEY}" "${BLINKY_SERVER}/api/devices" 2>&1) || {
     fail "Failed to list devices for post-deploy verification: ${DEVICES_JSON}" 4
@@ -423,7 +466,7 @@ trap 'rm -f "${DEVICES_JSON_FILE:-}"' EXIT
 printf '%s' "$DEVICES_JSON" > "$DEVICES_JSON_FILE"
 DEVICES_JSON_FILE="$DEVICES_JSON_FILE" \
 TARGET_IDS="$DEVICE_IDS_JSON" \
-EXPECTED_BUILD="b${BUILD}" \
+EXPECTED_BUILD="${EXPECTED_VERSION}" \
 API_KEY="$API_KEY" \
 BLINKY_SERVER="$BLINKY_SERVER" \
 python3 - <<'PYEOF'
@@ -438,10 +481,10 @@ with open(os.environ['DEVICES_JSON_FILE']) as _f:
 
 
 def version_matches(v):
-    # Firmware version is "b<num>-<sha>[-dirty]"; EXPECTED is "b<num>".
-    # Prefix-match on the build token + dash so the SHA suffix doesn't
-    # spuriously fail, while "b1900" still won't match "b190".
-    return v == EXPECTED or v.startswith(EXPECTED + '-')
+    # EXPECTED is the full version the selected firmware reports:
+    # "b<num>-<sha8>" for a release, "b<num>-dev-<sha8>" for a dev build of
+    # a clean tree. Anything else is the wrong firmware.
+    return v == EXPECTED
 
 
 def get_json_info(dev_id):
@@ -592,5 +635,5 @@ fi
 
 echo ""
 echo "============================================================"
-echo "  DEPLOY SUCCESSFUL: b${BUILD}"
+echo "  DEPLOY SUCCESSFUL: ${EXPECTED_VERSION} [${CHANNEL}]"
 echo "============================================================"
