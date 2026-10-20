@@ -2,9 +2,11 @@
 /**
  * Public keys the app trusts for signed QSPI OTA (ota/OtaManifest.h).
  *
- * RELEASE key: the private half is the GitHub Actions secret
- * BLINKY_RELEASE_SIGNING_KEY (plus the maintainer's offline backup); the
- * release workflow signs every build with it (tools/ota_manifest.py).
+ * RELEASE key: the private half is the secret BLINKY_RELEASE_SIGNING_KEY of
+ * the GitHub environment `release-signing` (master only), plus the
+ * maintainer's offline backup. sign-release.yml signs a release with it only
+ * after its bench gate passes (tools/release_promote.py); candidates are never
+ * signed.
  * Rotating it means shipping, signed with the OLD key, a firmware that
  * carries the new public key here.
  *

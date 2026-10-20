@@ -130,7 +130,7 @@ Turn `FIRMWARE_UPDATES_ENABLED` on when all of these are done:
 
 ## Open items
 
-- **Bluetooth from Windows Chrome:** slow GATT operations, a failed write, a self-restart (bench results). Reproduce on Android first; check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events, and the restart cause.
+- **Bluetooth from Windows Chrome:** slow GATT operations, a failed write, a self-restart (bench results). Reproduce on Android first; check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events, the restart cause, and the stack depth of commands received over BLE (`ota manifest` runs Ed25519 verification, and `ota chunk` uses a 515-byte buffer, on the Bluefruit callback task's stack).
 - **Authenticated console commands:** `bootloader ble`, `device upload`, `wipe_device_identity` etc. are accepted from any NUS central or broadcaster. Signing the update path doesn't cover them.
 - **Power loss during the bootloader's copy:** the apply request is one-shot (RAM/`GPREGRET`). A power cut mid-copy leaves the device in its bootloader, which is recoverable but not self-healing. Fix: a persistent "copy pending" marker in the bootloader.
 - **Hub-driven updates** (blinkyhost offering the stable release to personal devices in range) are deferred by decision.
