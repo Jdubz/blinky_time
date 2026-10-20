@@ -1,6 +1,7 @@
 /**
  * FirmwarePage (#firmware) — update ONE device to a stable release, straight
- * from the browser over USB (no blinky-server). Releases come
+ * from the browser over USB or Bluetooth (no blinky-server), through the
+ * device's own signed-OTA path (services/firmware/otaFlash.ts). Releases come
  * from the stable-release mirror the console deploy publishes; every check
  * lives in services/firmware. See docs/WEB_FLASHER.md.
  */
@@ -9,15 +10,24 @@ import { useWakeLock } from '../hooks/useWakeLock';
 import type { Confirmation, FlashInfo } from '../services/firmware/deviceGates';
 import { FirmwareError } from '../services/firmware/errors';
 import type { FlashUi } from '../services/firmware/flashFlow';
+import { bleUpdateSupported, updateDevice, type UpdateMethod } from '../services/firmware/otaFlash';
 import {
   fetchReleaseIndex,
+  isOtaRelease,
+  loadOtaRelease,
   loadVerifiedRelease,
+  type ReleaseEntry,
   type ReleaseIndex,
-  type VerifiedRelease,
 } from '../services/firmware/releases';
-import { flashOverUsb, recoverOverUsb, usbFlashSupported } from '../services/firmware/usbFlash';
+import { recoverOverUsb, usbFlashSupported } from '../services/firmware/usbFlash';
 
 type Mode = 'update' | 'recover';
+
+/** Releases offered for a mode: updates need the signed OTA pair; recovery uses the UF2. */
+function selectable(index: ReleaseIndex | null, mode: Mode): ReleaseEntry[] {
+  if (!index) return [];
+  return mode === 'update' ? index.releases.filter(isOtaRelease) : index.releases;
+}
 
 interface LogLine {
   t: number;
@@ -56,7 +66,9 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
   const [indexError, setIndexError] = useState<string | null>(null);
   const [tag, setTag] = useState<string>('');
   const usbOk = usbFlashSupported();
+  const bleOk = bleUpdateSupported();
   const [mode, setMode] = useState<Mode>('update');
+  const [method, setMethod] = useState<UpdateMethod>(usbOk ? 'usb' : 'ble');
 
   const [running, setRunning] = useState(false);
   const [committed, setCommitted] = useState(false);
@@ -75,7 +87,9 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
     fetchReleaseIndex()
       .then(idx => {
         setIndex(idx);
-        if (idx.latest) setTag(idx.latest);
+        const offered = selectable(idx, 'update');
+        const latest = offered.find(r => r.tag === idx.latest);
+        setTag(latest?.tag ?? offered[0]?.tag ?? '');
       })
       .catch(err => setIndexError(err instanceof Error ? err.message : String(err)));
   }, []);
@@ -159,26 +173,34 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
         }),
     };
 
+    const filesFailed = (err: unknown) =>
+      new FirmwareError(
+        `The firmware files did not pass their checks, so nothing was sent to the device: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     try {
       ui.progress(`Downloading and checking ${entry.tag}`, null);
-      let release: VerifiedRelease;
-      try {
-        release = await loadVerifiedRelease(entry);
-      } catch (err) {
-        throw new FirmwareError(
-          `The firmware files did not pass their checks, so nothing was sent to the device: ${
-            err instanceof Error ? err.message : String(err)
-          }`
+      let info: FlashInfo;
+      if (mode === 'recover') {
+        const release = await loadVerifiedRelease(entry).catch(err => {
+          throw filesFailed(err);
+        });
+        addLog(`${entry.version}: checksum and image layout verified`);
+        // Cancel pressed during the download: stop before any device interaction.
+        if (abort.signal.aborted) throw new FirmwareError('Cancelled');
+        info = await recoverOverUsb(release, ui);
+      } else {
+        const release = await loadOtaRelease(entry).catch(err => {
+          throw filesFailed(err);
+        });
+        addLog(
+          `${entry.version}: checksums and signed manifest verified (${release.image.length} bytes)`
         );
+        if (abort.signal.aborted) throw new FirmwareError('Cancelled');
+        info = await updateDevice(method, release, index, ui);
       }
-      addLog(`${entry.version}: checksum and image layout verified`);
-      // Cancel pressed during the download: stop before any device interaction.
-      if (abort.signal.aborted) throw new FirmwareError('Cancelled');
-      const info =
-        mode === 'recover'
-          ? await recoverOverUsb(release, ui)
-          : await flashOverUsb(release, index, ui);
-      addLog(`Done: ${info.device.name ?? info.device.id} is running ${release.entry.version}`);
+      addLog(`Done: ${info.device.name ?? info.device.id} is running ${entry.version}`);
       setOutcome({ ok: true, info });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -201,7 +223,9 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
     void navigator.clipboard?.writeText(text);
   };
 
-  const selected = index?.releases.find(r => r.tag === tag) ?? null;
+  const offered = selectable(index, mode);
+  const selected = offered.find(r => r.tag === tag) ?? null;
+  const methodOk = mode === 'recover' ? usbOk : method === 'usb' ? usbOk : bleOk;
 
   return (
     <div className="rec-page fw-page">
@@ -214,10 +238,11 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
         <h1 className="rec-title">Firmware Update</h1>
       </header>
 
-      {!usbOk && (
+      {!usbOk && !bleOk && (
         <div className="shell-warning">
-          Updating needs Chrome or Edge on a computer, with the device plugged in by USB. Phones,
-          tablets, Safari and Firefox are not supported.
+          This browser can&apos;t talk to devices. Use Chrome or Edge on a computer (USB or
+          Bluetooth), or Chrome on Android (Bluetooth). On an iPhone or iPad, open this page in the
+          free Bluefy browser (Bluetooth).
         </div>
       )}
       {indexError && (
@@ -227,12 +252,19 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
         <div className="shell-warning">No stable firmware release has been published yet.</div>
       )}
 
+      {index?.latest && mode === 'update' && offered.length === 0 && (
+        <div className="shell-warning">
+          None of the published releases can be installed from the browser yet: they were released
+          before signed updates.
+        </div>
+      )}
+
       {index?.latest && (
         <section className="fw-setup">
           <label className="fw-field">
             <span>Release</span>
             <select value={tag} onChange={e => setTag(e.target.value)} disabled={running}>
-              {index.releases.map(r => (
+              {offered.map(r => (
                 <option key={r.tag} value={r.tag}>
                   {r.tag}
                   {r.tag === index.latest ? ' — latest stable' : ''} ({fmtDate(r.published_at)})
@@ -246,12 +278,45 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
             </a>
           )}
 
+          {mode === 'update' && (
+            <div className="fw-field" role="radiogroup" aria-label="Connection">
+              <span>Connection</span>
+              <div className="fw-choices">
+                <label>
+                  <input
+                    type="radio"
+                    checked={method === 'usb'}
+                    disabled={running || !usbOk}
+                    onChange={() => setMethod('usb')}
+                  />
+                  USB cable{!usbOk && ' (Chrome or Edge on a computer)'}
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    checked={method === 'ble'}
+                    disabled={running || !bleOk}
+                    onChange={() => setMethod('ble')}
+                  />
+                  Bluetooth{!bleOk && ' (not available in this browser)'}
+                </label>
+              </div>
+            </div>
+          )}
+
           <label className="rec-toggle">
             <input
               type="checkbox"
               checked={mode === 'recover'}
               disabled={running}
-              onChange={e => setMode(e.target.checked ? 'recover' : 'update')}
+              onChange={e => {
+                const next: Mode = e.target.checked ? 'recover' : 'update';
+                setMode(next);
+                const list = selectable(index, next);
+                if (!list.some(r => r.tag === tag)) {
+                  setTag(list.find(r => r.tag === index.latest)?.tag ?? list[0]?.tag ?? '');
+                }
+              }}
             />
             Device stuck in update mode (it shows up as a USB drive named XIAO-SENSE)
           </label>
@@ -259,7 +324,7 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
           {!running && (
             <button
               className="btn btn-primary rec-big"
-              disabled={!usbOk || !selected}
+              disabled={!methodOk || !selected}
               onClick={() => void start()}
             >
               {mode === 'recover' ? `Install ${tag}` : `Update to ${tag}`}

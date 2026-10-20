@@ -22,13 +22,12 @@ import type { GeneratorType } from './types';
 const GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
 
 /**
- * The browser updater (#firmware) is switched off. Its USB route copies a
- * UF2 onto the bootloader's XIAO-SENSE drive, but on Windows the system
- * writes its own metadata to that drive as it mounts, and the bootloader's
- * stuck-transfer check then drops the drive 8.5 s later: no person can pick
- * it in time (measured on hat_v1, 2026-10-20). See docs/WEB_FLASHER.md.
+ * The browser updater (#firmware) ships hidden until its rollout checklist
+ * in docs/WEB_FLASHER.md is done (a promoted signed release; devices on
+ * firmware with signed OTA). Until then it is on only in builds made with
+ * VITE_FIRMWARE_UPDATES=on (bench testing with `npm run dev`).
  */
-export const FIRMWARE_UPDATES_ENABLED = false;
+export const FIRMWARE_UPDATES_ENABLED = import.meta.env.VITE_FIRMWARE_UPDATES === 'on';
 
 export function MainShell() {
   const { devices, serverUrl } = useDevices();

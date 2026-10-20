@@ -9,7 +9,7 @@ import {
 } from './deviceGates';
 import type { DeviceLink } from './deviceLink';
 import { FirmwareError } from './errors';
-import type { ReleaseIndex, VerifiedRelease } from './releases';
+import type { ReleaseEntry, ReleaseIndex } from './releases';
 
 /**
  * The page-facing side of a flash. Browsers only open device pickers (USB
@@ -46,13 +46,31 @@ export function checkAborted(ui: FlashUi): void {
 }
 
 /**
+ * Open a connection inside a prompt's action. Cancel can land while the
+ * browser's picker or the open is still pending; the prompt has already
+ * rejected by then, so a connection that opens afterwards is closed here,
+ * not leaked.
+ */
+export async function openUnlessCancelled(
+  open: () => Promise<void>,
+  close: () => Promise<void>,
+  ui: FlashUi
+): Promise<void> {
+  await open();
+  if (ui.signal.aborted) {
+    await close();
+    throw new FirmwareError('Cancelled');
+  }
+}
+
+/**
  * Everything before the device is touched: identity and config gates,
  * operator confirmations, and the reboot-counter uptime window. Returns the
  * `json info` snapshot the post-flash checks compare against.
  */
 export async function preflight(
   link: DeviceLink,
-  release: VerifiedRelease,
+  release: { entry: ReleaseEntry },
   index: ReleaseIndex,
   ui: FlashUi
 ): Promise<FlashInfo> {

@@ -2,22 +2,30 @@ import { WebSerialTransport } from '../transport/WebSerialTransport';
 import type { FlashInfo } from './deviceGates';
 import { DeviceLink } from './deviceLink';
 import { FirmwareError } from './errors';
-import { checkAborted, finishAfterFlash, preflight, sleep, type FlashUi } from './flashFlow';
-import { REQUIRED_BOARD_ID, REQUIRED_BOOTLOADER_PREFIX } from './flashLayout';
-import type { ReleaseIndex, VerifiedRelease } from './releases';
+import {
+  checkAborted,
+  finishAfterFlash,
+  openUnlessCancelled,
+  sleep,
+  type FlashUi,
+} from './flashFlow';
+import { ACCEPTED_BOOTLOADER_PREFIXES, REQUIRED_BOARD_ID } from './flashLayout';
+import type { VerifiedRelease } from './releases';
 
 /**
- * USB update of one device, the browser version of tools/deploy_local.py:
- * Web Serial for the gates and the bootloader entry, then the UF2 written to
- * the bootloader's XIAO-SENSE drive (File System Access API, or copied by
- * hand), then Web Serial again to verify. Chrome / Edge on desktop only.
+ * USB pieces the updater shares: finding the device's serial port again
+ * after it restarts, and RECOVERY of a device stuck in its bootloader (no
+ * app to talk to): the release UF2 written to the XIAO-SENSE drive (File
+ * System Access API, or copied by hand). Normal updates don't use the drive
+ * at all; they go through the running app (otaFlash.ts).
+ *
+ * The drive route needs the 0.8.0-11 bootloader on Windows: earlier ones
+ * drop the drive 8.5 s after Windows' own metadata write (docs/WEB_FLASHER.md).
  *
  * Identity: a browser can't read the drive's USB serial, so the drive can't
  * be pinned to the chip before writing as deploy_local.py does. Instead the
  * drive's INFO_UF2.TXT must be the fleet bootloader on a XIAO nRF52840 Sense,
- * and the device that comes back must be the same chip (sn) on the new
- * version. Writing to another XIAO would install the same stable release on
- * it and fail verification loudly.
+ * and the device that comes back must run the release.
  */
 
 const VID = 0x2886;
@@ -52,10 +60,10 @@ function checkInfoUf2(text: string): void {
       `That drive is a "${boardId ?? 'unknown'}" board, not a blinky device (${REQUIRED_BOARD_ID}).`
     );
   }
-  if (!bootloader?.startsWith(REQUIRED_BOOTLOADER_PREFIX)) {
+  if (!bootloader || !ACCEPTED_BOOTLOADER_PREFIXES.some(p => bootloader.startsWith(p))) {
     throw new FirmwareError(
       `The device's bootloader is ${bootloader ?? 'unknown'}; this page only updates devices on ` +
-        `${REQUIRED_BOOTLOADER_PREFIX}. Nothing was written — press the reset button once to return to the old firmware.`
+        `${ACCEPTED_BOOTLOADER_PREFIXES.join(' or ')}. Nothing was written — press the reset button once to return to the old firmware.`
     );
   }
 }
@@ -197,23 +205,6 @@ export async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise
   }
 }
 
-/**
- * Open a port inside a prompt's action. Cancel can land while the browser's
- * picker or the open is still pending; the prompt has already rejected by
- * then, so a port that opens afterwards is closed here, not leaked.
- */
-async function connectUnlessCancelled(
-  transport: WebSerialTransport,
-  ui: FlashUi,
-  port?: SerialPort
-): Promise<void> {
-  await transport.connect(port);
-  if (ui.signal.aborted) {
-    await transport.disconnect();
-    throw new FirmwareError('Cancelled');
-  }
-}
-
 /** Find the device on USB again after the bootloader hands back to the app. Exported for tests. */
 export async function reconnectApp(
   expectSn: string | null,
@@ -221,7 +212,11 @@ export async function reconnectApp(
 ): Promise<{ transport: WebSerialTransport; link: DeviceLink }> {
   const tryPort = async (port?: SerialPort) => {
     const transport = new WebSerialTransport(115200, [{ usbVendorId: VID, usbProductId: APP_PID }]);
-    await connectUnlessCancelled(transport, ui, port);
+    await openUnlessCancelled(
+      () => transport.connect(port),
+      () => transport.disconnect(),
+      ui
+    );
     const link = new DeviceLink(transport);
     try {
       const info = await link.info();
@@ -265,48 +260,6 @@ export async function reconnectApp(
   return ui.ask('The device has restarted. Choose it again so the page can check the update.', [
     { label: 'Choose USB device', action: () => tryPort() },
   ]);
-}
-
-export async function flashOverUsb(
-  release: VerifiedRelease,
-  index: ReleaseIndex,
-  ui: FlashUi
-): Promise<FlashInfo> {
-  const transport = new WebSerialTransport(115200, [{ usbVendorId: VID, usbProductId: APP_PID }]);
-  await ui.ask('Plug the device into this computer with a USB data cable, then choose it.', [
-    { label: 'Choose USB device', action: () => connectUnlessCancelled(transport, ui) },
-  ]);
-  let before: FlashInfo;
-  try {
-    before = await preflight(new DeviceLink(transport), release, index, ui);
-    checkAborted(ui);
-    ui.log(
-      'Restarting the device into its bootloader (its current firmware stays in place until the write)'
-    );
-    await new DeviceLink(transport).fire('bootloader');
-  } finally {
-    await transport.disconnect();
-  }
-  try {
-    await deliverUf2(release, ui);
-  } catch (err) {
-    // Nothing was written yet (cancel is only offered until the write
-    // starts), so say where that leaves the device.
-    if (err instanceof FirmwareError && err.message === 'Cancelled') {
-      throw new FirmwareError(
-        'Cancelled. Nothing was written: the device is waiting in update mode (a XIAO-SENSE drive) ' +
-          'with its current firmware intact. Press its reset button once, or unplug and replug it, ' +
-          'to return to that firmware.'
-      );
-    }
-    throw err;
-  }
-  const back = await reconnectApp(before.sn, ui);
-  try {
-    return await finishAfterFlash(back.link, before, release.entry.version, ui);
-  } finally {
-    await back.transport.disconnect();
-  }
 }
 
 /** A device already showing its XIAO-SENSE drive (deploy_local.py --already-in-bootloader). */

@@ -117,6 +117,12 @@ size_t BleNus::write(const uint8_t* data, size_t size) {
     return size;
 }
 
+uint16_t BleNus::currentMtu() const {
+    if (!connected_) return 0;
+    BLEConnection* conn = Bluefruit.Connection(connHandle_);
+    return conn ? conn->getMtu() : 0;
+}
+
 // --- Drain TX ring buffer: send one chunk per call ---
 
 void BleNus::drainTxBuffer() {

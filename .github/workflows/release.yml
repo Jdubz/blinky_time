@@ -3,7 +3,9 @@
 # Run by hand from the Actions tab (or `gh workflow run release.yml`) on
 # master. Builds the master commit with the pinned toolchain, validates it
 # with the same checks the deploy paths run, and publishes a GitHub
-# PRE-release `b<N>` with hex, UF2 and manifest.json. A candidate reaches no
+# PRE-release `b<N>` with hex, UF2 and manifest.json. Candidates are never
+# signed for OTA: sign-release.yml signs a release only after its bench gate
+# passes (dispatched by release_promote.py). A candidate reaches no
 # device except listed test devices until it passes the bench gate
 # (tools/release_gate.py) and is promoted (tools/release_promote.py).
 name: Release candidate

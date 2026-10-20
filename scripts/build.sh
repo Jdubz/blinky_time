@@ -7,6 +7,7 @@
 #   ./scripts/build.sh --esp32 [--upload PORT]  # ESP32-S3 target
 #   ./scripts/build.sh --no-bump          # compile without incrementing
 #   ./scripts/build.sh --dev              # local dev build: no bump, version b<N>-dev-<sha>
+#   ./scripts/build.sh --dev --ota-bench-key   # dev build trusting the bench OTA key (signed-OTA bench tests)
 #   ./scripts/build.sh --build N          # exact build number, no bump (release CI)
 #
 # Releases are built by .github/workflows/release.yml, not locally; see
@@ -24,6 +25,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 BUMP=true
 DEV=false
+OTA_BENCH_KEY=false
 FORCE_BUILD=""
 ESP32=false
 UPLOAD=false
@@ -35,6 +37,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --no-bump)   BUMP=false; shift ;;
         --dev)       DEV=true; BUMP=false; shift ;;
+        # Trust the bench OTA key instead of the release key (blinky-things/
+        # ota/OtaKeys.h), to test signed OTA on a test device. Dev builds only;
+        # the firmware static_asserts a -dev- version.
+        --ota-bench-key) OTA_BENCH_KEY=true; shift ;;
         --build)
             if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
                 echo "Error: --build requires a build number" >&2; exit 1
@@ -59,6 +65,11 @@ fi
 
 # --- Locate python (python3 on Linux/macOS, python on Windows) ---
 PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo "python3")}"
+
+if $OTA_BENCH_KEY && ! $DEV; then
+    echo "Error: --ota-bench-key is only allowed with --dev" >&2
+    exit 1
+fi
 
 # --- Pinned, isolated toolchain (#252) ---
 # nRF52840 builds use ONLY <repo>/.arduino (scripts/setup_toolchain.sh): the
@@ -110,6 +121,9 @@ COMPILE_ARGS=(
     --fqbn "$FQBN"
     --output-dir "$OUTPUT_DIR"
 )
+if $OTA_BENCH_KEY; then
+    COMPILE_ARGS+=(--build-property "compiler.cpp.extra_flags=-DBLINKY_OTA_BENCH_KEY")
+fi
 
 if $UPLOAD && $ESP32; then
     COMPILE_ARGS=(compile --upload --fqbn "$FQBN" -p "$UPLOAD_PORT")

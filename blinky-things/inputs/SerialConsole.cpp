@@ -2676,6 +2676,8 @@ void SerialConsole::logError(const __FlashStringHelper* msg) {
 }
 
 // === QSPI STAGED OTA COMMANDS ===
+// Signed OTA only (ota/QspiOtaStaging.h, docs/WEB_FLASHER.md): replies are one
+// "OK ota ..." / "ERR ota <reason>" line, or one JSON line for `ota status`.
 bool SerialConsole::handleOtaCommand(const char* cmd) {
     if (strncmp(cmd, "ota ", 4) != 0 && strcmp(cmd, "ota") != 0) return false;
 
@@ -2687,26 +2689,51 @@ bool SerialConsole::handleOtaCommand(const char* cmd) {
         qspiOta_ = new QspiOtaStaging();
         // cppcheck-suppress knownConditionTrueFalse -- stub returns false, real impl uses nrfx
         if (!qspiOta_->begin()) {
-            out_.println(F("ERR QSPI flash init failed"));
+            out_.println(F("ERR ota qspi-init"));
             delete qspiOta_;
             qspiOta_ = nullptr;
             return true;
         }
     }
 
-    if (strcmp(sub, "selftest") == 0) {
-        qspiOta_->selfTest(out_);
+    if (strcmp(sub, "status") == 0) {
+        uint16_t mtu = 0;
+#ifdef BLINKY_PLATFORM_NRF52840
+        if (bleNus_) mtu = bleNus_->currentMtu();
+#endif
+        qspiOta_->printStatusJson(out_, mtu);
         return true;
     }
 
-    if (strcmp(sub, "status") == 0) {
-        qspiOta_->printStatus(out_);
+    if (strncmp(sub, "manifest ", 9) == 0) {
+        const char* hex = sub + 9;
+        while (*hex == ' ') hex++;
+        qspiOta_->beginSigned(hex, out_);
+        return true;
+    }
+
+    // "ota chunk <offset> <crc16_hex> <base64>"
+    if (strncmp(sub, "chunk ", 6) == 0) {
+        const char* p = sub + 6;
+        char* end = nullptr;
+        uint32_t offset = strtoul(p, &end, 10);
+        if (end == p || *end != ' ') {
+            out_.println(F("ERR ota bad-offset"));
+            return true;
+        }
+        p = end + 1;
+        uint32_t crc = strtoul(p, &end, 16);
+        if (end == p || *end != ' ' || crc > 0xFFFF) {
+            out_.println(F("ERR ota bad-crc-field"));
+            return true;
+        }
+        qspiOta_->writeChunkSigned(offset, (uint16_t)crc, end + 1, out_);
         return true;
     }
 
     if (strcmp(sub, "commit") == 0) {
-        qspiOta_->commit(out_);
-        return true;  // Never reached if commit succeeds (device resets)
+        qspiOta_->commitSigned(out_);
+        return true;  // Never reached if the commit succeeds (device resets)
     }
 
     if (strcmp(sub, "abort") == 0) {
@@ -2714,41 +2741,17 @@ bool SerialConsole::handleOtaCommand(const char* cmd) {
         return true;
     }
 
-    // "ota begin <size> <crc16_hex>" — start transfer
-    if (strncmp(sub, "begin ", 6) == 0) {
-        uint32_t size = 0;
-        char crcStr[8] = {0};
-        if (sscanf(sub + 6, "%u %6s", &size, crcStr) == 2) {
-            uint16_t crc = (uint16_t)strtoul(crcStr, nullptr, 16);
-            qspiOta_->beginTransfer(size, crc, out_);
-        } else {
-            out_.println(F("ERR usage: ota begin <size> <crc16_hex>"));
-        }
+    if (strcmp(sub, "selftest") == 0) {
+        qspiOta_->selfTest(out_);
         return true;
     }
 
-    // "ota chunk <offset> <base64_data>" — write chunk
-    if (strncmp(sub, "chunk ", 6) == 0) {
-        const char* rest = sub + 6;
-        char* endptr = nullptr;
-        uint32_t offset = strtoul(rest, &endptr, 10);
-        // Detect parse failure: endptr didn't advance or didn't land on a space
-        if (endptr == rest || (endptr && *endptr != ' ')) {
-            out_.println(F("ERR invalid offset"));
-            return true;
-        }
-        const char* b64 = endptr + 1;  // Skip the space
-        qspiOta_->writeChunk(offset, b64, out_);
-        return true;
-    }
-
-    // Help
-    out_.println(F("OTA commands:"));
-    out_.println(F("  ota selftest  — Copy firmware to QSPI, verify CRC"));
-    out_.println(F("  ota status    — Show staging area state"));
-    out_.println(F("  ota commit    — Apply staged firmware (device resets)"));
-    out_.println(F("  ota abort     — Clear staging area"));
-    out_.println(F("  ota begin <size> <crc16> — Start transfer"));
-    out_.println(F("  ota chunk <offset> <b64> — Write chunk"));
+    out_.println(F("OTA commands (signed images only):"));
+    out_.println(F("  ota status                     JSON state"));
+    out_.println(F("  ota manifest <hex>             signed manifest, prepares staging"));
+    out_.println(F("  ota chunk <off> <crc16> <b64>  in-order image chunk"));
+    out_.println(F("  ota commit                     verify + apply (device resets)"));
+    out_.println(F("  ota abort                      clear staging"));
+    out_.println(F("  ota selftest                   copy running firmware to QSPI, verify"));
     return true;
 }

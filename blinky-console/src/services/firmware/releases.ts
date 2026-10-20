@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FirmwareError } from './errors';
+import { checkImageAgainstManifest, parseOtaManifest, type OtaManifestFields } from './otaManifest';
 import { validateUf2 } from './uf2';
 
 /**
@@ -23,7 +24,16 @@ export const ReleaseEntrySchema = z.object({
   device_version: z.number().int(),
   published_at: z.string(),
   url: z.string().url(),
-  files: z.object({ hex: FileSchema, uf2: FileSchema }),
+  // bin + otam (raw image + signed OTA manifest) exist from the first
+  // signed release on; only those releases can be installed by the updater.
+  files: z
+    .object({
+      hex: FileSchema,
+      uf2: FileSchema,
+      bin: FileSchema.optional(),
+      otam: FileSchema.optional(),
+    })
+    .refine(f => !!f.bin === !!f.otam, 'a release lists bin and otam together or neither'),
 });
 export type ReleaseEntry = z.infer<typeof ReleaseEntrySchema>;
 
@@ -125,6 +135,44 @@ export async function loadVerifiedRelease(
   const uf2 = await fetchVerified(baseUrl, entry.files.uf2);
   validateUf2(uf2);
   return { entry, uf2 };
+}
+
+/** Whether the updater can install this release (it ships a signed OTA pair). */
+export function isOtaRelease(entry: ReleaseEntry): boolean {
+  return !!entry.files.bin && !!entry.files.otam;
+}
+
+/** A release's raw image and signed manifest, checked. Only {@link loadOtaRelease} makes one. */
+export interface OtaRelease {
+  entry: ReleaseEntry;
+  image: Uint8Array<ArrayBuffer>;
+  manifest: Uint8Array<ArrayBuffer>;
+  fields: OtaManifestFields;
+}
+
+/**
+ * Download a release's signed OTA pair and check it before anything touches
+ * a device: sha256 of both files against the index, the manifest's layout,
+ * build and load address, and the image's SHA-512 against the manifest. The
+ * device then verifies the manifest's Ed25519 signature itself.
+ */
+export async function loadOtaRelease(
+  entry: ReleaseEntry,
+  baseUrl: string = firmwareBaseUrl()
+): Promise<OtaRelease> {
+  const { bin, otam } = entry.files;
+  if (!bin || !otam) {
+    throw new FirmwareError(
+      `${entry.tag} was published before signed updates and can't be installed from here`
+    );
+  }
+  const [image, manifest] = await Promise.all([
+    fetchVerified(baseUrl, bin),
+    fetchVerified(baseUrl, otam),
+  ]);
+  const fields = parseOtaManifest(manifest);
+  await checkImageAgainstManifest(image, fields, entry.build);
+  return { entry, image, manifest, fields };
 }
 
 /** Build number of a firmware version string (`b216-1a2b3c4d`, `b216`); null if it has none. */

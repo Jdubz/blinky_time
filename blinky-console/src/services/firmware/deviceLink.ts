@@ -62,6 +62,32 @@ export class DeviceLink {
     return parseFlashInfo(raw);
   }
 
+  /**
+   * A signed-OTA command (ota/QspiOtaStaging.h): resolves with its one-line
+   * reply, "OK ota ..." or "ERR ota ...". Callers decide what an ERR means.
+   */
+  otaReply(cmd: string, timeoutMs: number): Promise<string> {
+    return this.waitFor(cmd, timeoutMs, line =>
+      line.startsWith('OK ota') || line.startsWith('ERR ota') ? line : undefined
+    );
+  }
+
+  /** `ota status`: the JSON object, or a FirmwareError if the firmware has no signed OTA. */
+  async otaStatus(timeoutMs = 5000): Promise<Record<string, unknown>> {
+    const reply = await this.waitFor('ota status', timeoutMs, line => {
+      if (line.startsWith('ERR ota')) return line;
+      if (!line.startsWith('{"ota"')) return undefined;
+      try {
+        return JSON.parse(line) as { ota: Record<string, unknown> };
+      } catch {
+        return undefined;
+      }
+    });
+    if (typeof reply === 'string')
+      throw new FirmwareError(`The device refused \`ota status\`: ${reply}`);
+    return reply.ota;
+  }
+
   /** A console command acknowledged by an `OK` line; an `ERROR` line fails it. */
   async command(cmd: string, timeoutMs = 5000): Promise<void> {
     const reply = await this.waitFor(cmd, timeoutMs, line =>

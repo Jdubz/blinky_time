@@ -25,7 +25,7 @@ gh workflow run release.yml --ref master     # or: Actions → "Release candidat
 2. **Build number:** `N = max(BUILD_NUMBER, highest bN tag) + 1`.
 3. **Pinned toolchain:** `tools/firmware_toolchain.json`, TFLite pinned in `tools/setup_tflite_lib.sh`, and the core patches from `scripts/apply_core_patches.sh`.
 4. **Build:** `scripts/build.sh --build N`.
-5. **Package:** `tools/firmware_release.py package`. It runs the same hex/UF2 validators as the deploy paths, strictly (a skipped safety check is an error), and writes `manifest.json`: version, git sha, sha256 per file, toolchain, `SETTINGS_VERSION` / `DEVICE_VERSION`.
+5. **Package:** `tools/firmware_release.py package`. It runs the same hex/UF2 validators as the deploy paths, strictly (a skipped safety check is an error), and writes `manifest.json`: version, git sha, sha256 per file, toolchain, `SETTINGS_VERSION` / `DEVICE_VERSION`. A candidate is **not** signed for OTA; that happens at promotion, after the gate.
 6. **Publish:** pre-release `bN` with `blinky-things-bN.hex`, `.uf2` and `manifest.json`. The notes list the changes since the previous release and **flag a `SETTINGS_VERSION` change**, because that resets saved tuning on every device.
 
 The PR Validation `Compile Firmware` job installs the same pinned toolchain, so every PR compiles what a release would.
@@ -74,7 +74,7 @@ The result is attached to the release as `gate-<device>.json`, pass or fail.
 ```bash
 python tools/release_promote.py bN
 ```
-Refuses without a passing gate record for this exact version. On success it marks the release stable and *Latest* and tags `stable-bN`.
+Refuses without a passing gate record for this exact version. It then dispatches `sign-release.yml`, which signs the release for signed OTA (the raw image `blinky-things-bN.bin` and its Ed25519-signed manifest `.otam`; the `BLINKY_RELEASE_SIGNING_KEY` secret is used nowhere else, and the workflow re-checks the gate). It waits for the run, and verifies the signature against the key in `blinky-things/ota/OtaKeys.h`. Only then does it tag `stable-bN` and mark the release stable and *Latest*.
 
 Promotion then dispatches a blinky-console redeploy (`gh workflow run blinky-console-deploy.yml`). That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
 

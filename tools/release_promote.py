@@ -7,9 +7,12 @@ release_promote.py - promote a gated candidate to stable, or roll back
   python tools/release_promote.py b212 --rollback # make an older stable the latest again
 
 Promote refuses unless the release carries a passing gate-<device>.json whose
-version matches the release manifest. Promotion marks the release as a full
-(non-pre-) release, makes it GitHub's "Latest" (what deploy tools install by
-default) and tags the commit stable-b<N>. Rollback only re-marks an
+version matches the release manifest. It then has CI sign the release for
+OTA (sign-release.yml: the signing key is a GitHub secret and is only ever
+used after a passing gate), checks the signature itself against the key the
+firmware trusts, tags the commit stable-b<N>, marks the release a full
+(non-pre-) release and GitHub's "Latest" (what deploy tools install by
+default), and redeploys the console's firmware mirror. Rollback only re-marks an
 already-promoted stable release as Latest; nothing is rebuilt.
 """
 
@@ -25,23 +28,31 @@ import firmware_release  # noqa: E402
 from firmware_release import ReleaseError, gh, repo_slug, tag_exists  # noqa: E402
 
 
-def gate_records(tag, manifest):
-    info = firmware_release.release_info(tag)
-    names = [a["name"] for a in info["assets"] if a["name"].startswith("gate-") and a["name"].endswith(".json")]
-    if not names:
-        raise ReleaseError(f"{tag} has no gate record: run tools/release_gate.py {tag} on a test device first")
-    tmp = Path(tempfile.mkdtemp(prefix="blinky-promote-"))
-    records = []
-    for n in names:
-        gh("release", "download", tag, "--dir", str(tmp), "--pattern", n)
-        rec = json.loads((tmp / n).read_text(encoding="utf-8"))
-        if rec.get("version") != manifest["version"]:
-            raise ReleaseError(f"{n}: gated version {rec.get('version')} != release {manifest['version']}")
-        records.append((n, rec))
-    passing = [n for n, r in records if r.get("passed") is True]
-    if not passing:
-        raise ReleaseError(f"{tag}: no passing gate record ({', '.join(names)} all failed)")
-    return passing
+def sign_in_ci(tag):
+    """Dispatch sign-release.yml for `tag`, wait for it, then verify the result locally."""
+    import datetime
+    import subprocess
+    import time
+    started = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=5)
+    gh("workflow", "run", "sign-release.yml", "--ref", "master", "-f", f"tag={tag}")
+    run_id = None
+    for _ in range(30):
+        time.sleep(4)
+        runs = json.loads(gh("run", "list", "--workflow", "sign-release.yml", "--limit", "5",
+                             "--json", "databaseId,createdAt,event"))
+        fresh = [r for r in runs if r["event"] == "workflow_dispatch" and
+                 datetime.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")) >= started]
+        if fresh:
+            run_id = fresh[0]["databaseId"]
+            break
+    if run_id is None:
+        raise ReleaseError("sign-release.yml was dispatched but no run appeared; check the Actions tab")
+    print(f"  signing {tag} in CI (run {run_id})...")
+    if subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"], cwd=REPO,
+                      capture_output=True, text=True).returncode != 0:
+        raise ReleaseError(f"sign-release.yml run {run_id} failed: gh run view {run_id} --log-failed")
+    f = firmware_release.verify_signed(tag)
+    print(f"  signed and verified: build {f['build']}, {f['size']} bytes")
 
 
 def redeploy_console(what):
@@ -85,7 +96,8 @@ def main():
             return 0
 
         rel = firmware_release.download(args.tag, Path(tempfile.gettempdir()) / "blinky-promote-assets")
-        passing = gate_records(args.tag, rel["manifest"])
+        passing = firmware_release.gate_records(args.tag, rel["manifest"])
+        sign_in_ci(args.tag)
         # Tag first, then mark stable + Latest. Each step fires a console
         # redeploy whose firmware mirror re-reads "stable" (firmware_release.py);
         # in this order no run ever sees a Latest release without its stable
