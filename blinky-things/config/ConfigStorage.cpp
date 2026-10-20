@@ -357,7 +357,6 @@ void ConfigStorage::loadSettingsDefaults() {
     // AdaptiveMic.h defaults and were tested on both nRF52840 and ESP32-S3.
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
     data_.mic.releaseTau = 5.0f;     // 5s peak release
-    data_.mic.noiseGate = MicConstants::DEFAULT_NOISE_GATE;  // v96: measured mic noise floor
 
     // (StoredMusicParams removed v76 — 312 bytes, 174 lines of dead AudioController defaults.
     //  See git history for v23-v75 content: CBSS, Bayesian fusion, octave checks,
@@ -758,7 +757,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Validate window/range normalization parameters
     validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
     validateFloat(data_.mic.releaseTau, 1.0f, 30.0f, F("releaseTau"));
-    validateFloat(data_.mic.noiseGate, 0.0f, 0.05f, F("noiseGate"));  // same range as `set noisegate`
 
     // (StoredMusicParams validation removed v76 — 174 lines of dead validation for
     //  CBSS, Bayesian, octave, spectral, noise estimation params. See git history.)
@@ -840,7 +838,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Window/Range normalization parameters (v72: AGC removed, only these remain)
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
-    mic.noiseGate = data_.mic.noiseGate;
 
     // AudioTracker params (v74)
     if (tracker) {
@@ -986,7 +983,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Window/Range normalization (v72: AGC removed)
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
-    data_.mic.noiseGate = mic.noiseGate;
 
     // AudioTracker params (v74)
     if (tracker) {

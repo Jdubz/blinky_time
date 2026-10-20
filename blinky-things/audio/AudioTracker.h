@@ -206,6 +206,10 @@ public:
     // Spectral-flux path's own floor (v97). It used to share pulseOnsetFloor,
     // whose 0.20 was tuned for NN activations and left flux recall at ~0.24.
     float fluxOnsetFloor = FLUX_ONSET_FLOOR_DEFAULT;
+    // Rhythm outputs need recent onsets (see update()): full for
+    // RHYTHM_HOLD_S after the last onset, then fade to 0 over RHYTHM_FADE_S.
+    static constexpr float RHYTHM_HOLD_S = 2.0f;
+    static constexpr float RHYTHM_FADE_S = 2.0f;
 
     // Phase 2a crest-factor gate (Phase 4 Path A experiment).
     // Suppresses NN-triggered pulses when the current-frame crest factor
@@ -389,8 +393,6 @@ private:
     uint32_t lastAcfDurationMs_ = 0;  // Timing: last runAcf()+updatePlpAnalysis() duration
     uint32_t lastPlpMs_ = 0;       // Timing: last updatePlpAnalysis() duration
 
-    // === Silence detection ===
-    uint32_t lastSignificantAudioMs_ = 0;
 
     // === Pattern slot cache (v82) ===
     PatternSlot slots_[SLOT_COUNT] = {};
@@ -418,7 +420,6 @@ private:
     void processFrame(bool runNN);  // Everything that must run exactly once per spectral frame
     void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
-    void resetAnalysisState();
     void runAcf();
     float updatePulseDetection(float spectralFlux, bool freshNN);  // One frame; returns pulse strength (0 = none)
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)

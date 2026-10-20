@@ -35,7 +35,6 @@ struct FireParams {
     float burstLifeMult;          // Burst-particle lifespan multiplier vs base (0.1-2.0, default 0.6)
     float burstSizeBase;          // crossDim multiplier — base burst-particle count (default 2.0)
     float burstSizeGain;          // crossDim multiplier × strength → additional burst particles (default 6.0)
-    float silenceFloor;           // audio.energy below this = silence (no bursts, no baseline spawn). Default 0.25.
     float audioBrightAmount;      // How much continuous amplitude tracks brightness (0-1). Default 0.7.
 
     // === Heightmap-flame params (b202 redesign) ===
@@ -80,7 +79,6 @@ struct FireParams {
         burstLifeMult  = 0.6f;        // burst particles live 0.6x base lifespan (short + bright)
         burstSizeBase  = 2.0f;        // base burst size = 2.0 × crossDim particles
         burstSizeGain  = 6.0f;        // strength bonus = 6.0 × crossDim × strength particles
-        silenceFloor   = 0.25f;       // audio.energy below this = silence (no fire activity)
         // PR #149 review: default 0 so renderParticle doesn't dim burst
         // particles to ~29% between beats (regression on sparse tracks).
         // The heightmap layer already handles continuous amplitude tracking
@@ -181,7 +179,7 @@ private:
     uint16_t burstBeatCount_ = 0;     // AudioControl::beatCount at the previous frame
     uint8_t burstParticles_ = 0;     // count of burst-mode particles for this frame
     float  burstStrength_ = 0.0f;    // 0.55-1.0, drives burst velocity/lifespan
-    float  frameOvershoot_ = 0.0f;   // per-frame normalized amplitude (0-1) above silenceFloor; shared between spawn-rate gating and render-brightness modulation
+    float  frameOvershoot_ = 0.0f;   // per-frame continuous envelope (0-1) = audio.level; drives flame height, brightness and noise speed
     float  noiseTime_ = 0.0f;        // heightmap noise time (advances per frame, audio-scaled)
     float  audioEnvelope_ = 0.0f;    // smoothed audio envelope for heightmap audio-boost (attack fast, decay slower)
 
