@@ -68,7 +68,10 @@ fi
 arduino-cli config set library.enable_unsafe_install true 2>/dev/null || true
 
 echo "Downloading TFLite Micro Arduino library..."
-if $CI_MODE; then
+# curl first (Git Bash on Windows has no wget); wget otherwise.
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$TMP_DIR/$LIB_NAME.zip" "$REPO_URL/archive/$TFLITE_REF.zip"
+elif $CI_MODE; then
     wget -q -O "$TMP_DIR/$LIB_NAME.zip" \
         "$REPO_URL/archive/$TFLITE_REF.zip"
 else
@@ -99,7 +102,7 @@ if [ -f "$SETUP_CPP" ]; then
     echo "  Fixed board define case mismatch in system_setup.cpp"
 
     # Patch 2: Remove test_over_serial code from system_setup.cpp
-    python3 -c "
+    "${PYTHON:-$(command -v python3 || command -v python)}" -c "
 import re
 with open('$SETUP_CPP') as f:
     content = f.read()

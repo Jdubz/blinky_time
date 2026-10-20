@@ -66,3 +66,6 @@ blinky-test-player/tuning-results/
 previews/
 .playwright-mcp/
 scratch/
+
+# Pinned, isolated firmware toolchain (scripts/setup_toolchain.sh, #252)
+.arduino/

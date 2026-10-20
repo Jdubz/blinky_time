@@ -19,29 +19,21 @@ jobs:
 
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v2
+      with:
+        version: 1.3.1   # = tools/firmware_toolchain.json arduino_cli
 
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    # Same pinned toolchain and core patches as release builds
-    # (tools/firmware_toolchain.json, .github/workflows/release.yml), so this
-    # check compiles what devices actually run. It used to install the latest
-    # core without the TinyUSB CDC patch.
+    # The pinned, isolated toolchain (scripts/setup_toolchain.sh, #252), the
+    # same one release builds and every workstation use, so this check
+    # compiles exactly what devices run.
     - name: Install pinned toolchain
       run: |
         pip install adafruit-nrfutil
-        TC=tools/firmware_toolchain.json
-        arduino-cli config init
-        arduino-cli config add board_manager.additional_urls "$(jq -r .board_index_url $TC)"
-        arduino-cli core update-index
-        arduino-cli core install "$(jq -r .core $TC)"
-        jq -r '.libraries[]' $TC | while read -r lib; do arduino-cli lib install "$lib"; done
-        bash tools/setup_tflite_lib.sh --ci
-        bash scripts/apply_core_patches.sh
-        arduino-cli core list
-        arduino-cli lib list
+        bash scripts/setup_toolchain.sh
 
     - name: Compile sketch (scripts/build.sh, as releases do)
       run: bash scripts/build.sh --build 0
@@ -386,6 +378,8 @@ jobs:
 
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v2
+      with:
+        version: 1.3.1   # = tools/firmware_toolchain.json arduino_cli
 
     - name: Setup Python
       uses: actions/setup-python@v5
