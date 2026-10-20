@@ -1,113 +1,141 @@
-# Web Flasher (blinkytime.joshwentworth.com/#firmware)
+# Web Updater (blinkytime.joshwentworth.com/#firmware)
 
-> **Status (2026-10-20): switched off** (`FIRMWARE_UPDATES_ENABLED = false` in `blinky-console/src/MainShell.tsx`). The USB route below can't work for a person on Windows. The system writes `System Volume Information` to the `XIAO-SENSE` drive as it mounts. The bootloader's stuck-transfer check (`msc_uf2_check_stuck`, mode b) counts that as an abandoned transfer and drops the drive 8.5 s later, before anyone can pick it or drag a file. Measured on hat_v1: mount 1.4 s after `bootloader`, gone 8.5 s after mount. The scripted tools (`deploy_local.py`, the fleet server) copy within a second, so they never hit it. macOS's own metadata writes very likely do the same. It fails safe: no block is written, and the device returns to its old firmware. A replacement route is being researched; the checks and gates below carry over.
+Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
-Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout. One device per update, **over USB**. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
+> **Status (2026-10-20): built, hidden in production.** The page ships with `FIRMWARE_UPDATES_ENABLED` off (`blinky-console/src/MainShell.tsx`). Only builds made with `VITE_FIRMWARE_UPDATES=on` show it. Turn it on when the [rollout checklist](#rollout-checklist) is done.
 
-Code: `blinky-console/src/services/firmware/` (all checks) and `blinky-console/src/pages/FirmwarePage.tsx` (UI).
+Code:
+- **Page:** `blinky-console/src/pages/FirmwarePage.tsx`.
+- **Checks and protocol:** `blinky-console/src/services/firmware/` (`otaFlash.ts`, `otaClient.ts`).
+- **Firmware:** `blinky-things/ota/` (`QspiOtaStaging.h`, `OtaManifest.h`, `OtaKeys.h`).
+- **Signing:** `tools/ota_manifest.py`.
 
-**Supported:** Chrome or Edge on a computer, with the device plugged in by USB. That needs Web Serial, plus the File System Access API for the automatic drive write.
+## How an update works: signed OTA through the running app
 
-**Not supported:**
-- **Phones and tablets, Safari, Firefox.** The page says so.
-- **Bluetooth updates, by decision.** The bootloader's only BLE update service is Nordic legacy DFU (`00001530-1212-efde-1523-785feabcd123`), and Chrome's [Web Bluetooth GATT blocklist](https://github.com/WebBluetoothCG/registries/blob/master/gatt_blocklist.txt) blocks it outright ("firmware update services that don't check the update's signature"). A browser can never open it. The fleet's BLE DFU (`ble_dfu.py`, a native BlueZ client) is unaffected.
+The update never goes through the bootloader's UF2 drive or its BLE DFU service; the page talks to the running firmware instead.
+
+1. **Connect.** The page connects over **USB** (Web Serial) or **Bluetooth** (Web Bluetooth to the app's Nordic UART service).
+2. **Signed manifest.** The page sends `ota manifest <hex>`. The device refuses unless all of these hold:
+   - the Ed25519 signature verifies against the release key compiled into it;
+   - the board is ours;
+   - the load address is the application start;
+   - the size fits;
+   - the build is **newer** than its own (a separately signed emergency-rollback flag is the only exception).
+3. **Image.** It sends the image as `ota chunk <offset> <crc16> <base64>` lines of 512 bytes. They go in order, each with its own CRC, and the device hashes them (SHA-512) as they arrive into its 2 MB QSPI flash. Throughout, the old firmware keeps running, and an interrupted transfer resumes from the device's count.
+4. **Commit.** `ota commit` makes the device re-read the staged image from QSPI and re-check its SHA-512. Only then does it arm the bootloader (RAM magic and `GPREGRET`) and reset.
+5. **Install.** The bootloader checks the image's CRC and copies it into internal flash (about 10–15 s).
+6. **Verify.** The page finds the device again by chip serial number, checks it, restores runtime settings, saves, and holds until 75 s of uptime.
+
+Why this route:
+- **The UF2 drive can't work for a person on Windows** with bootloader 0.8.0-10. Windows writes `System Volume Information` as the drive mounts, and the bootloader's stuck-transfer check drops the drive 8.5 s later (measured on hat_v1). Bootloader 0.8.0-11 fixes the check; see [Recovery](#recovery).
+- **Chrome can't use the bootloader's BLE DFU.** Its Web Bluetooth GATT blocklist bans Nordic legacy DFU (`00001530-…`).
+- **This route avoids both,** and it doesn't erase anything until a verified image is waiting.
+
+Before any public page or nearby Bluetooth central could reach that path, it had to be signed. The old unsigned `ota begin/chunk/commit` are gone.
+
+**Platforms:**
+
+| Platform | Connection |
+|---|---|
+| Desktop Chrome/Edge | USB or Bluetooth |
+| Android Chrome | Bluetooth |
+| iPhone/iPad | The free Bluefy browser (Bluetooth); Safari has no Web Bluetooth |
+| Firefox desktop (151+) | Web Serial behind an extra prompt (not tested) |
+
+### Signing
+
+- **Release key.** The private key is the GitHub Actions secret `BLINKY_RELEASE_SIGNING_KEY`, used only in `release.yml`'s packaging step. The maintainer keeps an offline backup; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py package` refuses to sign with any key whose public half differs from it.
+- **Owners need no key.** Their devices carry only the public key.
+- **Every release is signed** (`.bin` + `.otam` next to the hex/UF2). The page only offers stable releases, and the device enforces "newer than mine", so a signed candidate can't be used to downgrade anyone.
+- **Rotation.** Ship, signed with the old key, a firmware whose `OtaKeys.h` carries the new public key.
+- **Bench key.** `scripts/build.sh --dev --ota-bench-key` builds firmware that trusts the bench key (private half in `~/.blinky/ota-bench-key.pem` on the bench machine). Release builds can't carry it: `OtaKeys.h` `static_assert`s a `-dev-` version. It's for testing the path on a test device without ever signing a dev build with the release key.
+
+### What still bypasses signing
+
+- **USB physical access.** UF2 drag-and-drop and SWD are unsigned. That's acceptable: whoever holds the device can reflash it.
+- **`bootloader ble` over NUS, then legacy BLE DFU with a native tool** (not a browser). This is pre-existing: the fleet's sealed-device recovery depends on it. Closing it needs authenticated console commands; see [Open items](#open-items).
 
 ## Where the firmware comes from
 
 ```
-release_promote.py bN ──► GitHub Release bN (stable, tag stable-bN)
-                              │  release / tag events
-                              ▼
+release.yml (candidate bN: hex, uf2, bin, otam, signed in CI)
+release_promote.py bN ──► GitHub Release bN (stable, tag stable-bN) ──► console redeploy
 .github/workflows/blinky-console-deploy.yml
    tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
-                              │  same download() + sha256 checks deploy.sh uses
-                              ▼
-Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2}
+Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam}
 ```
 
-- **Only stable releases are mirrored.** "Stable" has one definition, `firmware_release.py` (not a pre-release, `stable-bN` tag present). Candidates and dev builds never reach this page.
-- **The newest 5 stable releases** are offered, with the release GitHub marks *Latest* as the default. A rollback (`release_promote.py --rollback`) changes the default on the next deploy.
-- **Redeploys:** `release_promote.py` dispatches a console redeploy (`workflow_dispatch`, which always runs `master`'s workflow) after every promotion and rollback. It also tags before marking Latest, so no deploy ever sees a Latest release without its stable tag. The workflow also listens for `stable-b*` tag pushes and `release` events, but GitHub runs those with the *tagged* commit's workflow file, which for an older release may predate the triggers. After deleting a release by hand, run `gh workflow run blinky-console-deploy.yml --ref master`.
-- **No stable release yet** means `latest: null`, and the page refuses to update anything.
+- **Only stable releases are mirrored.** "Stable" has one definition, in `firmware_release.py`. The page offers updates only from releases that carry the signed pair; older releases appear only for recovery.
+- **Redeploys.** `release_promote.py` dispatches the console deploy after every promotion and rollback. `workflow_dispatch` runs `master`'s workflow, and tag/release events would run the tagged commit's.
 - **Why a mirror:** GitHub release assets can't be fetched from a browser (no CORS).
-- **The page installs only the `.uf2`.** The mirror also carries the `.hex`, because it's part of the release contract the deploy tools use.
-- **Content types:** Firebase labels compressed responses for unknown extensions (`.uf2`, `.hex`) `text/html`, even though the bytes are correct. `firebase.json` sets explicit types, and the page judges firmware files by their sha256 alone. Only `index.json` is checked for "the host served the app page instead".
+- **Content types.** Firebase labels compressed `.uf2`/`.hex` responses `text/html`. `firebase.json` sets explicit types, and the page judges every firmware file by its sha256 alone.
 
 ## What the page checks (all fail loudly; nothing falls back)
 
-**Before touching the device** (`releases.ts`, `uf2.ts`):
-- sha256 of the `.uf2` against the release manifest, as copied into `index.json`.
-- Every UF2 block:
-  - nRF52840 *application* family (`0xADA52840`);
-  - consecutive block numbers;
-  - every write inside `[0x27000, 0xE6000)`, so never the MBR, SoftDevice, InternalFS `/config.bin`, bootloader or UICR. This is stricter than `uf2_upload.validate_uf2`, and tested against a real `uf2conv.py` image (`__fixtures__/make_fixtures.py`).
+**Before touching the device:**
+- sha256 of the `.bin` and `.otam` against the index.
+- The manifest's layout, build (= the release's), board and load address.
+- The image's SHA-512 against the manifest.
+- The device then verifies the signature itself.
 
 **Pre-flight** (`deviceGates.ts`, `flashFlow.ts`, ported from `tools/deploy_local.py`):
-- `json info`: platform nrf52840, a hardware serial, and **configured** (an unconfigured device is refused; a firmware update doesn't fix that).
-- The operator must confirm a reinstall, a downgrade, or a `SETTINGS_VERSION` change. The last one resets saved tuning; it is also assumed when the running version isn't a published release.
-- **Uptime ≥ 5 min 15 s before the bootloader reset.** The page waits and polls, and refuses if the device restarts meanwhile. This covers the b190-era reboot counter and the 60-second rule.
+- `json info`: an nRF52840 with a hardware serial, and **configured**.
+- Confirmations for a reinstall, a downgrade, or a `SETTINGS_VERSION` change.
+- **Uptime ≥ 5 min 15 s** before anything that ends in a reset. The device itself also refuses `ota commit` before 75 s.
+- `ota status` must answer. Firmware older than signed OTA gets a clear "update it once another way" message.
 
-**Before writing:** the drive's `INFO_UF2.TXT` must say `Board-ID: nRF52840-SeeedXiaoSense-v1` and bootloader `0.8.0-10*`, or nothing is written. The manual-copy path asks for that file through a file picker and checks it before the `.uf2` is handed out.
-
-**After the update** (deploy_local.py steps 7–9):
-- The same chip (sn) and the same device id come back, configured, on **exactly** the release version, with audio counters present and the firmware's BLE stack up (an empty `ble` means the next flash write would hang). All of this is checked before `save`.
+**After the update:**
+- The same chip (sn) and device id come back, configured, on **exactly** the release version, with audio counters and the BLE stack up, all checked before `save`.
 - Then `restore_runtime_settings` + `save`.
-- Then a hold until 75 s of uptime with no restart (markStable).
+- Then a 75 s hold with no restart.
 
-## The USB flow
+**Cancel** works until `commit`. A cancelled or failed transfer leaves the old firmware running and a half-filled staging area, which the next manifest erases. While an update runs, `#firmware` stays mounted through Back and warns before the tab is closed.
 
-1. **Talk to the app.** Web Serial, with the picker filtered to `2886:8045`.
-2. **Enter the bootloader.** The `bootloader` command switches the device to UF2 mass storage.
-3. **Write.** The page writes the UF2 onto the `XIAO-SENSE` drive through the File System Access API. Or the user copies the downloaded file there; the page first checks `INFO_UF2.TXT`, then hands out the file.
-4. **Find the device again.**
-   - On an update, the page reopens an already-permitted app port, but only one that answers with the same serial number.
-   - On a recovery there is no serial to compare against, so the user always picks the device.
+## Recovery
 
-**Cancel** is honoured until the write starts. Each irreversible step re-checks it with no `await` in between.
+*Device stuck in update mode* (the XIAO-SENSE drive is showing, no app to talk to) writes the release UF2 to the drive. The drive is picked through the File System Access API, or the user copies the downloaded file after the page has checked `INFO_UF2.TXT`. On Windows this needs **bootloader 0.8.0-11**, whose stuck-transfer timer starts only after the first real UF2 block. 0.8.0-10 drops the drive 8.5 s after Windows' metadata write.
 
-**The old app is intact until the first UF2 block lands**, because the bootloader writes each block as it arrives.
+The 0.8.0-11 change is built and passes `verify_bootloader.py`. It's on branch `fix/uf2-stuck-check-valid-blocks-only` in the bootloader fork and is **not flashed anywhere yet**. It goes to a sacrificial device first, through `deploy-bootloader.sh`.
 
-**If the write is interrupted**, the app may be partial. The bootloader's stuck-transfer timeout (`msc_uf2_check_stuck`) resets the device. If the partial app can't boot, the app-handshake watchdog sends it back to the bootloader after 3 tries. Then *stuck in update mode* finishes the job.
+With 0.8.0-11 the drive also no longer times out back to the app when nothing is copied. It waits for a file, a reset or an unplug, as upstream Adafruit does. CLAUDE.md and `deploy_local.py`'s messages must change with that rollout.
 
-An update in progress keeps `#firmware` mounted through hash navigation (Back), and warns before the tab is closed once the write is committed.
+## Bench results (hat_v1, 2026-10-20)
 
-### Known limits (vs. deploy_local.py)
+- **Root cause found and fixed:** the QSPI flash's Quad Enable bit was off. The app and the bootloader both use quad reads and writes, and with QE=0 every staged image read back wrong:
+  - `ota selftest`: CRC mismatch;
+  - the first signed update: `ota commit` → `readback-mismatch`. The device refused, and its old firmware kept running, as designed.
 
-- **Drive identity:** a browser can't read the drive's USB serial, so the drive isn't pinned to the chip before writing. Mitigations:
-  - the `INFO_UF2.TXT` board/bootloader check;
-  - the post-flash serial-number check.
+  `QspiOtaStaging::begin()` now sets QE once (`SR2 0x0 → 0x2`, non-volatile) and fails loudly if it can't. The self-test then passed.
+- **Firmware refusals on hardware:** release-signed manifest on a bench-key build → `bad-signature`; older build → `not-newer`; garbage → `bad-magic`; commit with nothing staged → `not-complete`.
+- **Full USB update in a real browser (Chromium, Web Serial):** `b211-dev` → `b212-dev-f10c4772`.
+  - The 484,764-byte image transferred in ~20 s (~24 KB/s).
+  - The device verified it, the bootloader installed it, and the app was back in ~8 s.
+  - Exact-version, identity, config and BLE checks passed, then restore + save and the 75 s hold. Confirmed afterwards over serial.
+  - The only automation stand-in: Chrome's serial-port chooser was answered with the already-permitted port.
+- **Bluetooth: not working from Windows Chrome yet.**
+  - The hat connected, but every GATT operation took ~5 s and a 10-byte write failed after ~10 s (`GATT operation failed for unknown reason`).
+  - A native client (`bleak`) on the same PC saw an incomplete service table.
+  - The hat restarted on its own shortly afterwards; the cause isn't known yet.
+  - This is the app's existing BLE/NUS stack, not the update protocol, which stays safe over a bad link because nothing is installed until a verified image is complete. See [Open items](#open-items).
 
-  Writing to another XIAO installs the same stable release there and fails verification; the user's own device stays in its bootloader with the old app.
-- **No server-side audit log:** the page shows a copyable log instead.
+## Rollout checklist
 
-## Bench gate: outstanding before announcing the page
+Turn `FIRMWARE_UPDATES_ENABLED` on when all of these are done:
 
-The page's checks are unit-tested, and the real `b214` release passes them.
+1. Merge; cut a candidate (`release.yml` signs it); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`). The mirror then carries the first signed release.
+2. Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
+3. Bluetooth: fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Until then, hide the Bluetooth option.
+4. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows, and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
+5. iPhone: one full update in Bluefy.
 
-**Done, 2026-10-20, on hat_v1 (`b213` → `b214-7a4664d6`, 97 s end to end).** The page's own `flashOverUsb` ran against the device, with Node stand-ins (`serialport`, and the mounted `XIAO-SENSE` volume) for the two browser pickers. It covered:
-- the gates, including the settings-reset confirmation for an unpublished running version;
-- the `bootloader` entry;
-- the real `INFO_UF2.TXT` check;
-- the UF2 write;
-- finding the device again by serial number (19 s);
-- the exact-version and BLE checks;
-- `restore_runtime_settings` + `save`;
-- the 75 s hold.
+## Open items
 
-The device came back configured, with BLE up.
-
-That run doesn't cover the browser APIs themselves; the items below still need a real browser. Run them on a test device listed in `devices/test_devices.json`, with USB attached so `deploy_local.py --already-in-bootloader` stays available as a fallback. A device's uptime must be ≥ 5 min 15 s between runs.
-
-- [ ] **File System Access:** Chrome/Edge on Windows, macOS and ChromeOS let `showDirectoryPicker` open the `XIAO-SENSE` drive root. Chrome writes via a `.crswap` swap file and renames on `close()`; confirm the bootloader flashes from the swap-file blocks and that the torn `close()` is reported as expected.
-- [ ] **DTR:** the page asserts DTR/RTS after opening the port. The firmware's CDC layer drops all output while DTR is low, on every build. Confirm `json info` answers in Chrome and Edge.
-- [ ] **Re-enumeration:** after the update, `navigator.serial.getPorts()` returns the app port without a second picker. Otherwise the page falls back to asking; note which happens.
-- [ ] **Manual copy:** the `INFO_UF2.TXT` check, then download + drag, completes and verifies.
-- [ ] **Interruption:** unplug mid-write. Confirm that the device ends up back in its bootloader (stuck-transfer timeout, or the handshake watchdog after 3 boots) and that *stuck in update mode* completes the update.
-- [ ] **Refusals on hardware:** an unconfigured device; a device up less than 5 min (the page waits); a downgrade and a settings change (the page asks).
-- [ ] **Mirror:** promote a release and check that the console redeploys with it as the default; roll back and check that the default follows.
+- **Bluetooth from Windows Chrome:** slow GATT operations, a failed write, a self-restart (bench results). Reproduce on Android first; check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events, and the restart cause.
+- **Authenticated console commands:** `bootloader ble`, `device upload`, `wipe_device_identity` etc. are accepted from any NUS central or broadcaster. Signing the update path doesn't cover them.
+- **Power loss during the bootloader's copy:** the apply request is one-shot (RAM/`GPREGRET`). A power cut mid-copy leaves the device in its bootloader, which is recoverable but not self-healing. Fix: a persistent "copy pending" marker in the bootloader.
+- **Hub-driven updates** (blinkyhost offering the stable release to personal devices in range) are deferred by decision.
 
 ## Fleet interplay
 
 - **A personal device joins on its own.** There is no enrollment or network ID: the firmware obeys any in-range broadcaster, and blinky-server adopts any `Blinky-*` advertiser as `PRESENT`.
-- **Fleet deploys reach personal devices.** `./scripts/deploy.sh --devices=all` includes every in-range nRF52840, personal ones too. Fleet and the web flasher both install only stable releases, so the worst case is a personal device being moved to the latest stable.
-- **Pinned personal devices get moved.** A personal device pinned to an older stable release on purpose is moved to the latest stable by the next fleet-wide deploy while it's in range.
+- **Fleet deploys reach personal devices.** `./scripts/deploy.sh --devices=all` includes every in-range nRF52840, personal ones too. Both routes install only stable releases.
