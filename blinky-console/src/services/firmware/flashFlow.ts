@@ -13,7 +13,7 @@ import type { ReleaseIndex, VerifiedRelease } from './releases';
 
 /**
  * The page-facing side of a flash. Browsers only open device pickers (USB
- * port, Bluetooth device, bootloader drive) from a click, so every picker is
+ * port, bootloader drive, INFO_UF2.TXT) from a click, so every picker is
  * behind `ask`: the UI shows the prompt and runs the chosen option's action
  * inside the click handler.
  */

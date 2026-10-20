@@ -1,7 +1,5 @@
 import { z } from 'zod';
 import { FirmwareError } from './errors';
-import { parseIntelHex, type HexImage } from './intelHex';
-import { assertUf2MatchesHex, buildLegacyDfuImage, type LegacyDfuImage } from './legacyDfuPackage';
 import { validateUf2 } from './uf2';
 
 /**
@@ -112,28 +110,21 @@ async function fetchVerified(
 export interface VerifiedRelease {
   entry: ReleaseEntry;
   uf2: Uint8Array<ArrayBuffer>;
-  hex: HexImage;
-  dfu: LegacyDfuImage;
 }
 
 /**
- * Download one release and run every validator before anything touches a
- * device: sha256 of both files, strict hex parse, UF2 family/region/numbering,
- * UF2 == hex byte-for-byte, and the legacy DFU image build.
+ * Download one release's UF2 and check it before anything touches a device:
+ * sha256 against the release manifest, then family / region / numbering of
+ * every block. (The mirror also carries the release .hex for the deploy
+ * tools; the web flasher only installs the UF2.)
  */
 export async function loadVerifiedRelease(
   entry: ReleaseEntry,
   baseUrl: string = firmwareBaseUrl()
 ): Promise<VerifiedRelease> {
-  const [uf2, hexBytes] = await Promise.all([
-    fetchVerified(baseUrl, entry.files.uf2),
-    fetchVerified(baseUrl, entry.files.hex),
-  ]);
-  const hex = parseIntelHex(new TextDecoder().decode(hexBytes));
-  const blocks = validateUf2(uf2);
-  assertUf2MatchesHex(blocks, hex);
-  const dfu = buildLegacyDfuImage(hex);
-  return { entry, uf2, hex, dfu };
+  const uf2 = await fetchVerified(baseUrl, entry.files.uf2);
+  validateUf2(uf2);
+  return { entry, uf2 };
 }
 
 /** Build number of a firmware version string (`b216-1a2b3c4d`, `b216`); null if it has none. */

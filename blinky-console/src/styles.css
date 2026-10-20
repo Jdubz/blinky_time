@@ -1669,21 +1669,6 @@ body {
   font-size: 1rem;
 }
 
-.fw-choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1.25rem;
-  color: var(--text-primary);
-  font-size: 1rem;
-}
-
-.fw-choices label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 44px;
-}
-
 .fw-notes {
   color: var(--accent-secondary);
   font-size: 0.875rem;

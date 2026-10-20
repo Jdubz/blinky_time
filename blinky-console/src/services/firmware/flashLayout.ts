@@ -4,7 +4,7 @@
  * validators the fleet tools run; keep them in sync:
  *
  *   APP_START   tools/uf2_upload.py validate_uf2 SD_END_S140_730 (end of the
- *               SoftDevice; the legacy-DFU bootloader writes the image here)
+ *               SoftDevice, where the application starts)
  *   APP_END     tools/uf2_upload.py validate_uf2 docstring: an app UF2 "may
  *               write [0x27000, 0xE6000)". Above it sit InternalFS (/config.bin,
  *               0xED000) and the bootloader (0xF4000), neither of which a

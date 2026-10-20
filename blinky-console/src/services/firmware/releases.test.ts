@@ -8,7 +8,6 @@ import {
   type ReleaseEntry,
 } from './releases';
 
-const hexBytes = new TextEncoder().encode(golden.appHex);
 const uf2Bytes = Uint8Array.from(atob(golden.appUf2Base64), c => c.charCodeAt(0));
 const BASE = 'https://blinky.example/firmware/';
 
@@ -23,7 +22,7 @@ async function entry(overrides: Partial<ReleaseEntry> = {}): Promise<ReleaseEntr
     published_at: '2026-10-10T00:00:00Z',
     url: 'https://github.com/Jdubz/blinky_time/releases/tag/b216',
     files: {
-      hex: { path: 'b216/blinky-things-b216.hex', sha256: await sha256Hex(hexBytes) },
+      hex: { path: 'b216/blinky-things-b216.hex', sha256: 'f'.repeat(64) },
       uf2: { path: 'b216/blinky-things-b216.uf2', sha256: await sha256Hex(uf2Bytes) },
     },
     ...overrides,
@@ -92,29 +91,23 @@ describe('fetchReleaseIndex', () => {
 });
 
 describe('loadVerifiedRelease', () => {
-  it('verifies and builds both transport images', async () => {
+  it('downloads and checks only the UF2', async () => {
     const e = await entry();
-    serve({
-      [BASE + e.files.hex.path]: { body: hexBytes },
-      [BASE + e.files.uf2.path]: { body: uf2Bytes },
-    });
+    const fetchMock = serve({ [BASE + e.files.uf2.path]: { body: uf2Bytes } });
     const rel = await loadVerifiedRelease(e, BASE);
     expect(rel.uf2.length).toBe(uf2Bytes.length);
-    expect(rel.dfu.initPacket.length).toBe(14);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts firmware the host labels text/html (Firebase, compressed .uf2/.hex)', async () => {
+  it('accepts a UF2 the host labels text/html (Firebase, compressed .uf2)', async () => {
     const e = await entry();
-    serve({
-      [BASE + e.files.hex.path]: { body: hexBytes, type: 'text/html; charset=UTF-8' },
-      [BASE + e.files.uf2.path]: { body: uf2Bytes, type: 'text/html; charset=UTF-8' },
-    });
+    serve({ [BASE + e.files.uf2.path]: { body: uf2Bytes, type: 'text/html; charset=UTF-8' } });
     await expect(loadVerifiedRelease(e, BASE)).resolves.toBeDefined();
   });
 
-  it('refuses the SPA page served in place of a missing firmware file', async () => {
+  it('refuses the SPA page served in place of a missing UF2', async () => {
     const e = await entry();
-    serve({ [BASE + e.files.hex.path]: { body: hexBytes } });
+    serve({});
     await expect(loadVerifiedRelease(e, BASE)).rejects.toThrow(/integrity check/);
   });
 
@@ -122,19 +115,22 @@ describe('loadVerifiedRelease', () => {
     const e = await entry();
     const tampered = uf2Bytes.slice();
     tampered[40] ^= 1;
-    serve({
-      [BASE + e.files.hex.path]: { body: hexBytes },
-      [BASE + e.files.uf2.path]: { body: tampered },
-    });
+    serve({ [BASE + e.files.uf2.path]: { body: tampered } });
     await expect(loadVerifiedRelease(e, BASE)).rejects.toThrow(/integrity check/);
+  });
+
+  it('refuses a UF2 that passes sha256 but writes outside the application region', async () => {
+    const bad = uf2Bytes.slice();
+    new DataView(bad.buffer).setUint32(12, 0xf4000, true); // bootloader
+    const e = await entry();
+    e.files.uf2.sha256 = await sha256Hex(bad);
+    serve({ [BASE + e.files.uf2.path]: { body: bad } });
+    await expect(loadVerifiedRelease(e, BASE)).rejects.toThrow(/outside the application region/);
   });
 
   it('refuses a download error', async () => {
     const e = await entry();
-    serve({
-      [BASE + e.files.hex.path]: { body: hexBytes },
-      [BASE + e.files.uf2.path]: { body: '', status: 404 },
-    });
+    serve({ [BASE + e.files.uf2.path]: { body: '', status: 404 } });
     await expect(loadVerifiedRelease(e, BASE)).rejects.toThrow(/HTTP 404/);
   });
 });

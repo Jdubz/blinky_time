@@ -3,7 +3,7 @@ import { parseFlashInfo, type FlashInfo } from './deviceGates';
 import { FirmwareError } from './errors';
 
 /**
- * Strict request/response over a connected transport (USB serial or BLE NUS)
+ * Strict request/response over a connected transport (USB serial)
  * for the flasher. Unlike DeviceProtocol.sendAndReceiveJson it matches the
  * reply by shape, so a stray stream line can't be mistaken for it, and every
  * failure throws.
