@@ -54,11 +54,13 @@ python tools/release_promote.py bN
 ```
 Refuses without a passing gate record for this exact version. On success it marks the release stable and *Latest* and tags `stable-bN`.
 
+Pushing the `stable-bN` tag redeploys blinky-console. That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
+
 ### Rollback
 ```bash
 python tools/release_promote.py bM --rollback    # bM: an earlier stable release
 ```
-Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`.
+Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`. The edit also redeploys blinky-console, so the web flasher's default follows.
 
 ## Deploying
 

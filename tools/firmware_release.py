@@ -17,6 +17,7 @@ CLI:
   firmware_release.py package --hex H --build N --sha SHA --out DIR
   firmware_release.py download [--tag bN] [--out DIR]   (default: latest stable)
   firmware_release.py latest-stable
+  firmware_release.py mirror --out DIR [--keep N]   (stable releases for the web flasher)
   firmware_release.py is-test-device <device_id>
 
 Every failure exits non-zero with a message; nothing falls back silently.
@@ -246,6 +247,74 @@ def download(tag, out_dir):
     }
 
 
+# ----------------------------------------------------------------- mirror ---
+
+MIRROR_INDEX_SCHEMA = 1
+
+
+def mirror_entry(tag, manifest, published_at, url):
+    """One index.json entry. Paths are relative to the index (the web flasher
+    resolves them against the index URL) and every file carries the sha256 the
+    release manifest gave it, so the browser re-verifies what it downloads."""
+    n = TAG_RE.match(tag).group(1)
+    files = manifest["files"]
+    entry = {
+        "tag": tag,
+        "build": manifest["build"],
+        "version": manifest["version"],
+        "git_sha": manifest["git_sha"],
+        "settings_version": manifest["settings_version"],
+        "device_version": manifest["device_version"],
+        "published_at": published_at,
+        "url": url,
+        "files": {},
+    }
+    for kind in ("hex", "uf2"):
+        name = f"blinky-things-b{n}.{kind}"
+        entry["files"][kind] = {"path": f"{tag}/{name}", "sha256": files[name]}
+    return entry
+
+
+def mirror(out_dir, keep):
+    """Download the newest `keep` stable releases into out_dir/<tag>/ and write
+    out_dir/index.json for the web flasher (blinky-console #firmware).
+
+    Only stable releases are mirrored: the web flasher installs firmware on
+    devices nobody bench-gated, which is exactly what stable is for. "No
+    stable release yet" is written as latest=null, which the flasher shows as
+    a refusal; any other failure (download, sha256) aborts the mirror.
+    """
+    if keep < 1:
+        raise ReleaseError(f"--keep must be >= 1, got {keep}")
+    out_dir = Path(out_dir)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)  # never serve a release that is no longer stable
+    out_dir.mkdir(parents=True)
+    rows = json.loads(gh("release", "list", "--limit", "200",
+                         "--json", "tagName,isPrerelease,isLatest,isDraft,publishedAt"))
+    rows = [r for r in rows if TAG_RE.match(r["tagName"]) and not r["isDraft"] and not r["isPrerelease"]]
+    rows.sort(key=lambda r: int(TAG_RE.match(r["tagName"]).group(1)), reverse=True)
+    stable = [r for r in rows if tag_exists(f"stable-{r['tagName']}")]
+    latest = [r["tagName"] for r in stable if r["isLatest"]]
+
+    releases = []
+    for r in stable[:keep]:
+        tag = r["tagName"]
+        got = download(tag, out_dir / tag)
+        # download() leaves only this release's three assets in the directory.
+        releases.append(mirror_entry(tag, got["manifest"], r["publishedAt"], release_info(tag)["url"]))
+    if latest and latest[0] not in [e["tag"] for e in releases]:
+        raise ReleaseError(f"latest stable {latest[0]} is older than the newest {keep} stable "
+                           "releases; raise --keep so the flasher's default is mirrored")
+    index = {
+        "schema": MIRROR_INDEX_SCHEMA,
+        "latest": latest[0] if latest else None,
+        "releases": releases,
+    }
+    (out_dir / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+    return index
+
+
 # -------------------------------------------------------------------- cli ---
 
 def main():
@@ -261,6 +330,9 @@ def main():
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
     sub.add_parser("latest-stable")
+    mi = sub.add_parser("mirror")
+    mi.add_argument("--out", required=True, help="directory to (re)create; served as /firmware/")
+    mi.add_argument("--keep", type=int, default=5, help="newest stable releases to mirror")
     t = sub.add_parser("is-test-device")
     t.add_argument("device_id")
     sub.add_parser("check-clean")
@@ -275,6 +347,13 @@ def main():
                               "uf2": str(r["uf2"]), "version": r["manifest"]["version"]}))
         elif args.cmd == "latest-stable":
             print(latest_stable_tag())
+        elif args.cmd == "mirror":
+            index = mirror(args.out, args.keep)
+            if index["latest"] is None:
+                print("WARNING: no stable release yet; the web flasher will refuse to flash",
+                      file=sys.stderr)
+            print(json.dumps({"latest": index["latest"],
+                              "mirrored": [e["tag"] for e in index["releases"]]}))
         elif args.cmd == "is-test-device":
             require_test_device(args.device_id, "check")
             print("yes")

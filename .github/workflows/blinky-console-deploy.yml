@@ -1,17 +1,36 @@
 name: Deploy Blinky Console
 
+# The console also serves the web flasher's firmware: every build mirrors the
+# newest stable GitHub releases into public/firmware/ (tools/firmware_release.py
+# mirror). So the site redeploys when the set of stable releases changes too:
+#   - promotion: release_promote.py un-marks the pre-release (`released`) and
+#     then pushes the stable-b<N> tag (push: tags). The tag push is the one
+#     that sees the release as stable; `released` may run before the tag exists.
+#   - rollback: release_promote.py --rollback re-marks Latest (`edited`).
+#   - deletion of a release (`deleted`).
 on:
   push:
     branches: [master]
+    tags: ['stable-b*']
     paths:
       - 'blinky-console/**'
+      - 'tools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
   pull_request:
     branches: [master]
     paths:
       - 'blinky-console/**'
+      - 'tools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
+  release:
+    types: [released, edited, deleted]
   workflow_dispatch:
+
+# Deploys must not interleave: an older run finishing last would publish a
+# stale firmware mirror.
+concurrency:
+  group: blinky-console-deploy-${{ github.event_name == 'pull_request' && github.ref || 'live' }}
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -21,15 +40,25 @@ jobs:
   build-and-deploy:
     name: Build and Deploy to Firebase
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
 
     steps:
+      # Release and tag events carry the tagged (possibly old) commit; the live
+      # site is always built from master.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'release' || github.ref_type == 'tag') && 'master' || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Mirror stable firmware releases
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install
@@ -62,6 +91,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Mirror stable firmware releases
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install

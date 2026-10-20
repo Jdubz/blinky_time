@@ -42,7 +42,11 @@ export class WebSerialTransport implements Transport {
   private isReading = false;
   private hasReceivedData = false;
 
-  constructor(public readonly baudRate: number = 115200) {}
+  constructor(
+    public readonly baudRate: number = 115200,
+    /** Restrict the browser's port picker (e.g. to XIAO nRF52840 app-mode ports). */
+    private readonly filters?: SerialPortFilter[]
+  ) {}
 
   isSupported(): boolean {
     return 'serial' in navigator;
@@ -64,7 +68,12 @@ export class WebSerialTransport implements Transport {
     this.listeners.forEach(cb => cb(event));
   }
 
-  async connect(): Promise<void> {
+  /**
+   * Open a port: the one given (already permitted, e.g. from
+   * `navigator.serial.getPorts()` — no picker, no gesture), or one the user
+   * picks.
+   */
+  async connect(port?: SerialPort): Promise<void> {
     logger.info('Opening WebSerial port', { baudRate: this.baudRate });
 
     if (!this.isSupported()) {
@@ -75,7 +84,9 @@ export class WebSerialTransport implements Transport {
     }
 
     try {
-      this.port = await navigator.serial.requestPort();
+      this.port =
+        port ??
+        (await navigator.serial.requestPort(this.filters ? { filters: this.filters } : undefined));
       await this.port.open({ baudRate: this.baudRate });
 
       if (!this.port.readable) {

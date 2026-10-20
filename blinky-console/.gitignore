@@ -30,3 +30,6 @@ coverage/
 
 # Vitest
 *.tsbuildinfo
+
+# Web flasher firmware mirror (CI: tools/firmware_release.py mirror)
+public/firmware/

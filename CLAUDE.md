@@ -47,6 +47,8 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 
 Use `--dry-run` first. If an identity check refuses the drive, the bootloader times out back to the old app on its own.
 
+**A personal device, from a browser (anyone, no repo):** `blinkytime.joshwentworth.com/#firmware` (blinky-console `FirmwarePage`). It flashes **stable releases only**, mirrored by `tools/firmware_release.py mirror` in the console deploy, to one device over Web Serial (UF2) or Web Bluetooth (legacy DFU). It runs deploy_local.py's gates in the browser, plus a UF2 == hex byte-for-byte check. Don't weaken a gate in `blinky-console/src/services/firmware/` without changing the matching Python tool first. It is not a fleet-ops tool; use deploy.sh for the fleet. Safety model, known limits and the outstanding hardware bench gate: `docs/WEB_FLASHER.md`.
+
 blinky-server owns all serial/BLE connections — no port contention. See `docs/SAFETY.md` for the full safety model, `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for BLE DFU details.
 
 **Risky firmware:** always test on unenclosed bare chips first (reset button + SWD pads accessible). Installed devices have no physical access.
@@ -225,6 +227,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/RELEASE_PROCESS.md` | Firmware release channels (stable / candidate / dev), cutting, gating, promoting and rolling back releases |
+| `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`): stable-release mirror, the checks it runs, transports, known limits, outstanding bench gate |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
 | `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open-issues index; GitHub issues are the system of record. Covers the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, CI), the PR #152 device checklist, and (§8) the items carried over from the archived `docs/archive/OPEN_ISSUES_2026_05_20.md` (SWD recovery, BLE-DFU tooling, fleet ops). |

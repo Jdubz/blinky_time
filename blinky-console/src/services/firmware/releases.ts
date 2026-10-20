@@ -1,0 +1,138 @@
+import { z } from 'zod';
+import { FirmwareError } from './errors';
+import { parseIntelHex, type HexImage } from './intelHex';
+import { assertUf2MatchesHex, buildLegacyDfuImage, type LegacyDfuImage } from './legacyDfuPackage';
+import { validateUf2 } from './uf2';
+
+/**
+ * Stable releases mirrored onto the console's own origin by
+ * `tools/firmware_release.py mirror` (run by .github/workflows/
+ * blinky-console-deploy.yml). GitHub release assets can't be fetched from a
+ * browser (no CORS), so the mirror is the only source.
+ */
+const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, 'sha256 must be 64 lowercase hex chars');
+const FileSchema = z.object({
+  path: z.string().regex(/^b\d+\/[\w.-]+$/, 'unexpected mirror path'),
+  sha256: Sha256Schema,
+});
+
+export const ReleaseEntrySchema = z.object({
+  tag: z.string().regex(/^b\d+$/),
+  build: z.number().int().positive(),
+  version: z.string().min(1),
+  git_sha: z.string().min(7),
+  settings_version: z.number().int(),
+  device_version: z.number().int(),
+  published_at: z.string(),
+  url: z.string().url(),
+  files: z.object({ hex: FileSchema, uf2: FileSchema }),
+});
+export type ReleaseEntry = z.infer<typeof ReleaseEntrySchema>;
+
+export const ReleaseIndexSchema = z
+  .object({
+    schema: z.literal(1),
+    latest: z.string().nullable(),
+    releases: z.array(ReleaseEntrySchema),
+  })
+  .superRefine((idx, ctx) => {
+    if (idx.latest !== null && !idx.releases.some(r => r.tag === idx.latest)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `latest ${idx.latest} is not in releases`,
+      });
+    }
+  });
+export type ReleaseIndex = z.infer<typeof ReleaseIndexSchema>;
+
+export function firmwareBaseUrl(): string {
+  return new URL('firmware/', new URL(import.meta.env.BASE_URL, window.location.origin)).toString();
+}
+
+async function fetchOk(url: string, what: string): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: 'no-store' });
+  } catch (err) {
+    throw new FirmwareError(`Could not download ${what}: ${String(err)}`);
+  }
+  if (!res.ok) throw new FirmwareError(`Could not download ${what}: HTTP ${res.status}`);
+  // The hosting rewrite serves index.html (200) for any missing path.
+  if ((res.headers.get('content-type') ?? '').includes('text/html')) {
+    throw new FirmwareError(`${what} is not published on this site (got an HTML page instead)`);
+  }
+  return res;
+}
+
+export async function fetchReleaseIndex(
+  baseUrl: string = firmwareBaseUrl()
+): Promise<ReleaseIndex> {
+  const res = await fetchOk(new URL('index.json', baseUrl).toString(), 'the firmware release list');
+  let raw: unknown;
+  try {
+    raw = await res.json();
+  } catch {
+    throw new FirmwareError('The firmware release list is not valid JSON');
+  }
+  const parsed = ReleaseIndexSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new FirmwareError(
+      `The firmware release list is malformed: ${parsed.error.issues[0]?.message}`
+    );
+  }
+  return parsed.data;
+}
+
+export async function sha256Hex(data: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function fetchVerified(
+  baseUrl: string,
+  file: { path: string; sha256: string }
+): Promise<Uint8Array<ArrayBuffer>> {
+  const res = await fetchOk(new URL(file.path, baseUrl).toString(), file.path);
+  const data = new Uint8Array(await res.arrayBuffer());
+  const got = await sha256Hex(data);
+  if (got !== file.sha256) {
+    throw new FirmwareError(
+      `${file.path} failed its integrity check (sha256 ${got.slice(0, 12)}…, expected ${file.sha256.slice(0, 12)}…)`
+    );
+  }
+  return data;
+}
+
+/** A release whose files passed every check. Only {@link loadVerifiedRelease} makes one. */
+export interface VerifiedRelease {
+  entry: ReleaseEntry;
+  uf2: Uint8Array<ArrayBuffer>;
+  hex: HexImage;
+  dfu: LegacyDfuImage;
+}
+
+/**
+ * Download one release and run every validator before anything touches a
+ * device: sha256 of both files, strict hex parse, UF2 family/region/numbering,
+ * UF2 == hex byte-for-byte, and the legacy DFU image build.
+ */
+export async function loadVerifiedRelease(
+  entry: ReleaseEntry,
+  baseUrl: string = firmwareBaseUrl()
+): Promise<VerifiedRelease> {
+  const [uf2, hexBytes] = await Promise.all([
+    fetchVerified(baseUrl, entry.files.uf2),
+    fetchVerified(baseUrl, entry.files.hex),
+  ]);
+  const hex = parseIntelHex(new TextDecoder().decode(hexBytes));
+  const blocks = validateUf2(uf2);
+  assertUf2MatchesHex(blocks, hex);
+  const dfu = buildLegacyDfuImage(hex);
+  return { entry, uf2, hex, dfu };
+}
+
+/** Build number of a firmware version string (`b216-1a2b3c4d`, `b216`); null if it has none. */
+export function buildOf(version: string): number | null {
+  const m = /^b(\d+)(?:-|$)/.exec(version);
+  return m ? Number(m[1]) : null;
+}
