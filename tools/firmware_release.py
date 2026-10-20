@@ -7,7 +7,10 @@ tools/release_promote.py, tools/deploy_local.py and scripts/deploy.sh
 (download a verified release), so every path agrees on what a release is.
 
 A release is a GitHub Release tagged `b<N>` whose assets are:
-  blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json
+  blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and (from
+  the first signed release) blinky-things-b<N>.bin + blinky-things-b<N>.otam:
+  the raw application image and its Ed25519-signed OTA manifest
+  (tools/ota_manifest.py), which the web updater sends to the device
 plus, once bench-gated, gate-<device_id>.json. Channels:
   candidate  pre-release `b<N>` (CI-built, not yet gated)
   stable     full release `b<N>` + tag `stable-b<N>`; the latest stable is
@@ -128,13 +131,28 @@ def require_test_device(device_id, what):
 
 # ---------------------------------------------------------------- package ---
 
-def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
+def release_pubkey_from_firmware():
+    """The release public key the firmware trusts (blinky-things/ota/OtaKeys.h)."""
+    text = (REPO / "blinky-things/ota/OtaKeys.h").read_text(encoding="utf-8")
+    m = re.search(r"#else\s*\n// ([0-9a-f]{64})\n", text)
+    if not m:
+        raise ReleaseError("release public key not found in blinky-things/ota/OtaKeys.h")
+    return m.group(1)
+
+
+def package(hex_path, build, sha, out_dir, toolchain, libraries=None, sign_key_env=None):
     """Validate a compiled hex and write release assets + manifest into out_dir.
 
     Same validators the deploy paths run (tools/uf2_upload.py), but strict:
     the hex safety check must actually run (uf2_upload.validate_hex skips it
     with a warning when pre_upload_check can't be imported).
+
+    Every release is also signed for OTA: the raw image (.bin) and its signed
+    manifest (.otam), with the key in env var `sign_key_env`. The key must be
+    the one the firmware trusts, or devices would refuse every update.
     """
+    if not sign_key_env:
+        raise ReleaseError("package needs --sign-key-env: every release is signed for OTA")
     sys.path.insert(0, str(REPO / "tools"))
     import pre_upload_check  # noqa: F401  (must import: no skipped safety check)
     import uf2_upload
@@ -153,11 +171,31 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
         shutil.copyfile(hex_path, hex_out)
         shutil.copyfile(uf2_tmp, uf2_out)
 
+    import ota_manifest
+    try:
+        key = ota_manifest.load_key(key_env=sign_key_env)
+        trusted = release_pubkey_from_firmware()
+        if ota_manifest.public_hex(key) != trusted:
+            raise ReleaseError(f"signing key {ota_manifest.public_hex(key)[:16]}... is not the release key the "
+                               f"firmware trusts ({trusted[:16]}..., blinky-things/ota/OtaKeys.h)")
+        start, image = ota_manifest.hex_to_image(hex_path.read_text(encoding="ascii"))
+        if start != ota_manifest.APP_LOAD_ADDR:
+            raise ReleaseError(f"hex starts at 0x{start:X}, expected 0x{ota_manifest.APP_LOAD_ADDR:X}")
+        otam = ota_manifest.sign(ota_manifest.unsigned_manifest(image, int(build)), key)
+        ota_manifest.verify(otam, bytes.fromhex(trusted), image)
+    except ota_manifest.OtaError as e:
+        raise ReleaseError(f"OTA signing failed: {e}")
+    bin_out = out_dir / f"blinky-things-b{build}.bin"
+    otam_out = out_dir / f"blinky-things-b{build}.otam"
+    bin_out.write_bytes(image)
+    otam_out.write_bytes(otam)
+
     manifest = {
         "build": int(build),
         "version": f"b{build}-{sha[:8]}",
         "git_sha": sha,
-        "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
+        "files": {p.name: sha256(p) for p in (hex_out, uf2_out, bin_out, otam_out)},
+        "ota_pubkey": trusted,
         "toolchain": toolchain,
         # Libraries the compile actually resolved (tools/check_build_libs.py, #252).
         "libraries": libraries,
@@ -215,24 +253,34 @@ def latest_stable_tag():
 
 
 def download(tag, out_dir):
-    """Download a release's hex/uf2/manifest and verify both firmware files."""
+    """Download a release's manifest and every file it lists, verifying each.
+
+    hex and uf2 are required. bin + otam (signed OTA) exist from the first
+    signed release on; when present, both must be listed and verified.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     m = TAG_RE.match(tag)
     if not m:
         raise ReleaseError(f"not a release tag: {tag!r} (expected b<N>)")
     n = m.group(1)
-    names = ["manifest.json", f"blinky-things-b{n}.hex", f"blinky-things-b{n}.uf2"]
+    required = [f"blinky-things-b{n}.hex", f"blinky-things-b{n}.uf2"]
+    ota_names = [f"blinky-things-b{n}.bin", f"blinky-things-b{n}.otam"]
     # Replace only this release's own assets; never touch anything else in out_dir.
-    for name in names:
+    for name in ["manifest.json", *required, *ota_names]:
         (out_dir / name).unlink(missing_ok=True)
-    gh("release", "download", tag, "--dir", str(out_dir),
-       *[a for name in names for a in ("--pattern", name)])
+    gh("release", "download", tag, "--dir", str(out_dir), "--pattern", "manifest.json")
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("build") != int(n):
         raise ReleaseError(f"{tag}: manifest build {manifest.get('build')} != {n}")
     files = manifest.get("files") or {}
-    for name in names[1:]:
+    listed_ota = [name for name in ota_names if name in files]
+    if listed_ota and len(listed_ota) != len(ota_names):
+        raise ReleaseError(f"{tag}: manifest lists {listed_ota} but not both OTA files")
+    names = required + listed_ota
+    gh("release", "download", tag, "--dir", str(out_dir),
+       *[a for name in names for a in ("--pattern", name)])
+    for name in names:
         p = out_dir / name
         if name not in files:
             raise ReleaseError(f"{tag}: manifest has no sha256 for {name} - refusing to use it")
@@ -244,6 +292,8 @@ def download(tag, out_dir):
         "tag": tag,
         "hex": out_dir / f"blinky-things-b{n}.hex",
         "uf2": out_dir / f"blinky-things-b{n}.uf2",
+        "bin": out_dir / ota_names[0] if listed_ota else None,
+        "otam": out_dir / ota_names[1] if listed_ota else None,
         "manifest": manifest,
         "stable": is_stable(tag),
     }
@@ -271,8 +321,10 @@ def mirror_entry(tag, manifest, published_at, url):
         "url": url,
         "files": {},
     }
-    for kind in ("hex", "uf2"):
+    for kind in ("hex", "uf2", "bin", "otam"):
         name = f"blinky-things-b{n}.{kind}"
+        if kind in ("bin", "otam") and name not in files:
+            continue  # released before signed OTA: not installable from the web updater
         entry["files"][kind] = {"path": f"{tag}/{name}", "sha256": files[name]}
     return entry
 
@@ -330,6 +382,8 @@ def main():
     p.add_argument("--toolchain-json", default="{}", help="toolchain versions as JSON")
     p.add_argument("--libraries-json", required=True,
                    help="libraries.json written by scripts/build.sh (resolved library set)")
+    p.add_argument("--sign-key-env", required=True,
+                   help="env var holding the Ed25519 release signing key (PEM)")
     d = sub.add_parser("download")
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
@@ -344,7 +398,8 @@ def main():
     try:
         if args.cmd == "package":
             libs = json.loads(Path(args.libraries_json).read_text(encoding="utf-8"))
-            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs)
+            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs,
+                        sign_key_env=args.sign_key_env)
             print(json.dumps(m, indent=2))
         elif args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)

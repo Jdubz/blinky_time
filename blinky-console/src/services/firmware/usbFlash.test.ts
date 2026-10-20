@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlashUi } from './flashFlow';
 import type { VerifiedRelease } from './releases';
-import { deliverUf2, flashOverUsb, parseInfoUf2, reconnectApp } from './usbFlash';
+import { deliverUf2, parseInfoUf2, reconnectApp } from './usbFlash';
 
 const INFO_OK =
   'UF2 Bootloader 0.8.0-10-g4c5faae lib/nrfx (v2.0.0)\r\nModel: Seeed XIAO nRF52840\r\n' +
@@ -137,7 +137,7 @@ describe('deliverUf2, drive write', () => {
   });
 });
 
-describe('flashOverUsb, cancel', () => {
+describe('reconnectApp, cancel', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('closes a port that opens after Cancel instead of leaking it', async () => {
@@ -161,9 +161,7 @@ describe('flashOverUsb, cancel', () => {
       serial: { requestPort: async () => port, getPorts: async () => [] },
     });
     const u = { ...ui(() => 'Choose USB device'), signal: abort.signal };
-    await expect(
-      flashOverUsb(release, { schema: 1, latest: null, releases: [] }, u)
-    ).rejects.toThrow('Cancelled');
+    await expect(reconnectApp(null, u)).rejects.toThrow('Cancelled');
     expect(port.close).toHaveBeenCalled();
   });
 });

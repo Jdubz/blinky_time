@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import golden from './__fixtures__/golden.json';
+import ota from './__fixtures__/ota_vectors.json';
 import {
   buildOf,
   fetchReleaseIndex,
+  loadOtaRelease,
   loadVerifiedRelease,
   sha256Hex,
   type ReleaseEntry,
@@ -142,4 +144,56 @@ describe('buildOf', () => {
     ['b999-dev-abc', 999],
     ['v1.2', null],
   ])('%s -> %s', (v, n) => expect(buildOf(v)).toBe(n));
+});
+
+describe('loadOtaRelease', () => {
+  const image = Uint8Array.from(atob(ota.imageBase64), c => c.charCodeAt(0));
+  const manifest = Uint8Array.from(ota.manifestHex.match(/../g)!, b => parseInt(b, 16));
+
+  async function otaEntry(build = ota.build, img = image): Promise<ReleaseEntry> {
+    const e = await entry({ tag: `b${build}`, build });
+    e.files.bin = { path: `b${build}/blinky-things-b${build}.bin`, sha256: await sha256Hex(img) };
+    e.files.otam = {
+      path: `b${build}/blinky-things-b${build}.otam`,
+      sha256: await sha256Hex(manifest),
+    };
+    return e;
+  }
+
+  it('loads the image and its signed manifest', async () => {
+    const e = await otaEntry();
+    serve({
+      [BASE + e.files.bin!.path]: { body: image },
+      [BASE + e.files.otam!.path]: { body: manifest },
+    });
+    const rel = await loadOtaRelease(e, BASE);
+    expect(rel.fields.build).toBe(ota.build);
+    expect(rel.image.length).toBe(image.length);
+  });
+
+  it('refuses an image that is not the one the manifest hashes', async () => {
+    const other = image.slice();
+    other[100] ^= 1;
+    const e = await otaEntry(ota.build, other); // index sha256 matches the tampered copy
+    serve({
+      [BASE + e.files.bin!.path]: { body: other },
+      [BASE + e.files.otam!.path]: { body: manifest },
+    });
+    await expect(loadOtaRelease(e, BASE)).rejects.toThrow(/does not match its signed manifest/);
+  });
+
+  it('refuses a manifest listed under another release', async () => {
+    const e = await otaEntry(ota.build + 1);
+    serve({
+      [BASE + e.files.bin!.path]: { body: image },
+      [BASE + e.files.otam!.path]: { body: manifest },
+    });
+    await expect(loadOtaRelease(e, BASE)).rejects.toThrow(
+      /manifest is for build 215, but the release is b216/
+    );
+  });
+
+  it('refuses a release published before signed updates', async () => {
+    await expect(loadOtaRelease(await entry(), BASE)).rejects.toThrow(/before signed updates/);
+  });
 });

@@ -72,3 +72,8 @@ badBitmaskCheck:blinky-things/inputs/SerialConsole.cpp
 *:*/tests/*
 *:*/archive/*
 *:*/examples/*
+
+# ============================================
+# Vendored third-party code (unmodified; see blinky-things/ota/monocypher/README.md)
+# ============================================
+*:blinky-things/ota/monocypher/*

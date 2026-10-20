@@ -11,19 +11,31 @@
  *   0x000000: 8-byte header {uint32 size, uint16 crc16, uint16 magic}
  *   0x001000: Firmware binary (4KB-aligned)
  *
- * Serial/BLE commands:
- *   ota selftest   — Copy current firmware from internal flash to QSPI staging,
- *                     read back and verify CRC. Non-destructive test.
- *   ota commit     — Validate staged firmware CRC, write header, set GPREGRET=0xCC,
- *                     reset. Bootloader applies the staged image.
- *   ota status     — Report staging area state (size, CRC, valid).
- *   ota abort      — Clear staging header.
+ * Serial/BLE commands (SerialConsole::handleOtaCommand):
+ *   ota manifest <hex>             — Signed manifest (OtaManifest.h). Nothing
+ *                                    is staged without a valid signature from
+ *                                    the release key, our board, and a newer
+ *                                    build (or a signed emergency rollback).
+ *   ota chunk <off> <crc16> <b64>  — In-order image chunk (<= MAX_CHUNK bytes),
+ *                                    hashed as it lands.
+ *   ota commit                     — Re-read the staged image, check its
+ *                                    SHA-512, write the header, reset into the
+ *                                    bootloader's apply path.
+ *   ota status                     — One JSON line (state, next offset, MTU).
+ *   ota abort                      — Clear the staging header.
+ *   ota selftest                   — Copy the running firmware to QSPI and
+ *                                    verify it (never arms the bootloader).
+ * There is no unsigned way to stage an image: a web page or any nearby BLE
+ * central can reach this console (docs/WEB_FLASHER.md, "Signed OTA").
  */
 
 #ifdef ARDUINO_ARCH_NRF52
 
 #include <Arduino.h>
 #include "../hal/SafeBootWatchdog.h"
+#include "../types/Version.h"
+#include "OtaKeys.h"
+#include "OtaManifest.h"
 
 extern "C" {
   #include <nrf_sdm.h>
@@ -139,36 +151,6 @@ public:
     }
 
     /**
-     * Report staging area status to output.
-     */
-    void printStatus(Print& out) {
-        if (!ready_) {
-            out.println(F("QSPI not initialized"));
-            return;
-        }
-        out.println(F("QSPI flash: P25Q16H 2 MB"));
-
-        StagingHeader hdr;
-        if (!readHeader(hdr)) {
-            out.println(F("QSPI header read failed"));
-            return;
-        }
-
-        out.print(F("Staging: magic=0x"));
-        out.print(hdr.magic, HEX);
-        out.print(F(" size="));
-        out.print(hdr.size);
-        out.print(F(" crc=0x"));
-        out.println(hdr.crc16, HEX);
-
-        if (hdr.magic == HEADER_MAGIC && hdr.size > 0 && hdr.size <= MAX_FW_SIZE) {
-            out.println(F("Staging: VALID header — ready to commit"));
-        } else {
-            out.println(F("Staging: no valid firmware staged"));
-        }
-    }
-
-    /**
      * Self-test: copy current firmware from internal flash to QSPI staging,
      * read back and verify CRC. Non-destructive (doesn't write the header
      * magic, so bootloader won't apply it).
@@ -176,6 +158,7 @@ public:
      * This tests the full QSPI write/read/CRC pipeline.
      */
     bool selfTest(Print& out) {
+        reset();  // the self-test overwrites the staging area
         if (!ready_) {
             out.println(F("ERR QSPI not initialized"));
             return false;
@@ -321,207 +304,275 @@ public:
         return true;
     }
 
-    /**
-     * Commit the staged firmware: validate CRC, write header magic,
-     * set GPREGRET=0xCC, and reset. The bootloader will apply the
-     * staged image on next boot.
-     *
-     * THIS IS THE POINT OF NO RETURN for the current boot — the device
-     * will reset. If the staged firmware is valid, the bootloader applies
-     * it. If invalid (CRC mismatch), the bootloader skips QSPI and boots
-     * the old app.
-     */
-    bool commit(Print& out) {
+    // =====================================================================
+    // Signed OTA (docs/WEB_FLASHER.md). The only way to stage an image:
+    //   ota manifest <304 hex>           signed manifest -> erase staging
+    //   ota chunk <off> <crc16> <b64>    in-order chunk, <= MAX_CHUNK bytes
+    //   ota commit                       read back + SHA-512 -> arm bootloader
+    // Every reply is one line starting "OK ota" or "ERR ota <reason>".
+    // =====================================================================
+
+    static constexpr uint32_t MAX_CHUNK = 512;
+    // CLAUDE.md 60-second rule: markStable() fires at 60 s of uptime; an
+    // apply (a reset) before that counts toward the config quarantine.
+    static constexpr uint32_t MIN_UPTIME_FOR_APPLY_MS = 75000;
+
+    enum class State : uint8_t { IDLE, RECEIVING, COMPLETE };
+
+    /** `ota manifest <hex>`: verify, then prepare the staging area. */
+    bool beginSigned(const char* hex, Print& out) {
+        reset();
         if (!ready_) {
-            out.println(F("ERR QSPI not initialized"));
+            out.println(F("ERR ota qspi-not-ready"));
+            return false;
+        }
+        uint8_t raw[ota::MANIFEST_LEN];
+        if (!ota::hexDecode(hex, strlen(hex), raw, sizeof(raw))) {
+            out.println(F("ERR ota bad-length"));
+            return false;
+        }
+        ota::Manifest m;
+        ota::Verdict v = ota::parseAndVerify(raw, sizeof(raw), ota::TRUSTED_PUBKEY,
+                                             ota::BOARD_XIAO_NRF52840_SENSE, FIRMWARE_BUILD,
+                                             MAX_FW_SIZE, m);
+        if (v != ota::Verdict::OK) {
+            out.print(F("ERR ota "));
+            out.print(ota::verdictName(v));
+            out.print(F(" current="));
+            out.println((uint32_t)FIRMWARE_BUILD);
             return false;
         }
 
-        // Read current header
-        StagingHeader hdr;
-        if (!readHeader(hdr)) {
-            out.println(F("ERR cannot read staging header"));
-            return false;
-        }
-
-        if (hdr.size == 0 || hdr.size > MAX_FW_SIZE) {
-            out.println(F("ERR no valid firmware staged"));
-            return false;
-        }
-
-        // Verify CRC of staged firmware before committing
-        out.print(F("Verifying staged firmware CRC..."));
-        uint8_t buf[256] __attribute__((aligned(4)));
-        uint16_t computedCrc = 0xFFFF;
-        uint32_t remaining = hdr.size;
-        uint32_t addr = FIRMWARE_ADDR;
-
-        while (remaining > 0) {
-            SafeBootWatchdog::feed();
-            uint32_t chunkLen = min(remaining, (uint32_t)sizeof(buf));
-            if (!qspiRead(buf, chunkLen, addr)) {
-                out.println(F(" ERR read failed"));
-                return false;
-            }
-            computedCrc = crc16(buf, chunkLen, computedCrc);
-            addr += chunkLen;
-            remaining -= chunkLen;
-        }
-
-        if (computedCrc != hdr.crc16) {
-            out.print(F(" ERR CRC mismatch: header=0x"));
-            out.print(hdr.crc16, HEX);
-            out.print(F(" computed=0x"));
-            out.println(computedCrc, HEX);
-            return false;
-        }
-        out.println(F(" OK"));
-
-        // Write header with valid magic — this arms the bootloader
-        out.println(F("Writing commit header..."));
-        if (!eraseSector(0)) {
-            out.println(F("ERR sector 0 erase failed"));
-            return false;
-        }
-        SafeBootWatchdog::feed();
-        hdr.magic = HEADER_MAGIC;
-        qspiWrite(&hdr, sizeof(hdr), HEADER_ADDR);
-
-        // Verify header was written correctly
-        StagingHeader verifyHdr;
-        qspiRead(&verifyHdr, sizeof(verifyHdr), HEADER_ADDR);
-        if (verifyHdr.magic != HEADER_MAGIC || verifyHdr.size != hdr.size ||
-            verifyHdr.crc16 != hdr.crc16) {
-            out.println(F("ERR header verify failed — aborting commit"));
-            // Clear the bad header
-            eraseSector(0);
-            return false;
-        }
-
-        out.print(F("Committing: size="));
-        out.print(hdr.size);
-        out.print(F(" crc=0x"));
-        out.println(hdr.crc16, HEX);
-
-        // Write RAM magic and reset. RAM at 0x20007F7C survives system reset
-        // (proven by bootloader double-reset detection at same address).
-        // No Serial.flush() — command may arrive over BLE NUS (no serial).
-        out.println(F("Applying staged firmware..."));
-        volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
-        *bootloader_ram = 0xBEEF00CC;  // DFU_RAM_MAGIC_QSPI
-        __DSB(); __ISB();
-        NVIC_SystemReset();
-
-        return true;  // Never reached
-    }
-
-    /**
-     * Begin a new OTA transfer: erase QSPI staging area and record expected
-     * size + CRC. Called by server before sending chunks.
-     */
-    bool beginTransfer(uint32_t size, uint16_t expectedCrc, Print& out) {
-        if (!ready_) {
-            out.println(F("ERR QSPI not initialized"));
-            return false;
-        }
-        if (size == 0 || size > MAX_FW_SIZE) {
-            out.print(F("ERR invalid size: "));
-            out.println(size);
-            return false;
-        }
-
-        // Erase staging area (header + firmware region)
-        uint32_t eraseBytes = FIRMWARE_ADDR + size;
-        uint32_t eraseSectors = (eraseBytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
+        // Erase header + image area. ~45 ms per 4 KB sector: a few seconds
+        // for a full image, during which the main loop is blocked.
+        uint32_t eraseSectors = (FIRMWARE_ADDR + m.size + SECTOR_SIZE - 1) / SECTOR_SIZE;
         for (uint32_t s = 0; s < eraseSectors; s++) {
             SafeBootWatchdog::feed();
             if (!eraseSector(s)) {
-                out.println(F("ERR erase failed"));
+                out.println(F("ERR ota qspi-erase"));
                 return false;
             }
         }
+        manifest_ = m;
+        crypto_sha512_init(&sha_);
+        next_ = 0;
+        state_ = State::RECEIVING;
+        out.print(F("OK ota ready build="));
+        out.print(m.build);
+        out.print(F(" size="));
+        out.print(m.size);
+        out.print(F(" chunk="));
+        out.println(MAX_CHUNK);
+        return true;
+    }
 
-        // Write header WITHOUT magic (uncommitted)
-        StagingHeader hdr;
-        hdr.size = size;
-        hdr.crc16 = expectedCrc;
-        hdr.magic = 0x0000;
-        qspiWrite(&hdr, sizeof(hdr), HEADER_ADDR);
-
-        transferSize_ = size;
-        transferCrc_ = expectedCrc;
-        transferActive_ = true;
-
-        out.print(F("OK ota begin size="));
-        out.print(size);
-        out.print(F(" crc=0x"));
-        out.println(expectedCrc, HEX);
+    /** `ota chunk <offset> <crc16hex> <base64>`: append one in-order chunk. */
+    bool writeChunkSigned(uint32_t offset, uint16_t crc, const char* b64, Print& out) {
+        if (state_ != State::RECEIVING) {
+            out.println(F("ERR ota not-receiving"));
+            return false;
+        }
+        // +3: room to pad a final odd-length chunk to the 4-byte QSPI unit.
+        uint8_t buf[MAX_CHUNK + 3] __attribute__((aligned(4)));
+        int len = base64Decode(b64, strlen(b64), buf, MAX_CHUNK);
+        if (len <= 0) {
+            out.println(F("ERR ota bad-chunk"));
+            return false;
+        }
+        // A truncated or corrupted line (e.g. a BLE write cut at the MTU)
+        // fails here; the host resends with a smaller write size.
+        if (crc16(buf, (uint32_t)len) != crc) {
+            out.println(F("ERR ota chunk-crc"));
+            return false;
+        }
+        if (offset < next_ && offset + (uint32_t)len <= next_) {
+            // Resend of a chunk whose OK was lost: already written, not re-hashed.
+            printNext(out);
+            return true;
+        }
+        if (offset != next_) {
+            out.print(F("ERR ota offset expected="));
+            out.println(next_);
+            return false;
+        }
+        uint32_t end = offset + (uint32_t)len;
+        if (end > manifest_.size) {
+            out.println(F("ERR ota overflow"));
+            return false;
+        }
+        if ((len & 3) != 0 && end != manifest_.size) {
+            out.println(F("ERR ota unaligned-chunk"));
+            return false;
+        }
+        for (int i = len; i < ((len + 3) & ~3); i++) buf[i] = 0xFF;  // erased-flash padding
+        SafeBootWatchdog::feed();
+        if (!writePaged(FIRMWARE_ADDR + offset, buf, (uint32_t)len)) {
+            reset();
+            out.println(F("ERR ota qspi-write"));
+            return false;
+        }
+        crypto_sha512_update(&sha_, buf, (size_t)len);
+        next_ = end;
+        if (next_ < manifest_.size) {
+            printNext(out);
+            return true;
+        }
+        uint8_t digest[64];
+        crypto_sha512_final(&sha_, digest);
+        if (memcmp(digest, manifest_.sha512, sizeof(digest)) != 0) {
+            reset();
+            out.println(F("ERR ota hash-mismatch"));
+            return false;
+        }
+        state_ = State::COMPLETE;
+        out.print(F("OK ota complete size="));
+        out.println(next_);
         return true;
     }
 
     /**
-     * Write a chunk of firmware data to QSPI at the given offset.
-     * Data is base64-encoded in the command string.
+     * `ota commit`: re-read the staged image from QSPI and check its SHA-512
+     * against the signed manifest (catches a QSPI write that silently
+     * failed), then write the bootloader's header (size + CRC16 of what is
+     * actually in QSPI) and reset into the bootloader's apply path.
      */
-    bool writeChunk(uint32_t offset, const char* base64Data, Print& out) {
-        if (!ready_ || !transferActive_) {
-            out.println(F("ERR no active transfer"));
+    bool commitSigned(Print& out) {
+        if (state_ != State::COMPLETE) {
+            out.println(F("ERR ota not-complete"));
+            return false;
+        }
+        if (millis() < MIN_UPTIME_FOR_APPLY_MS) {
+            out.print(F("ERR ota too-soon wait_ms="));
+            out.println(MIN_UPTIME_FOR_APPLY_MS - millis());
+            return false;
+        }
+        crypto_sha512_ctx sha;
+        crypto_sha512_init(&sha);
+        uint16_t crc = 0xFFFF;
+        uint8_t buf[256] __attribute__((aligned(4)));
+        for (uint32_t done = 0; done < manifest_.size;) {
+            SafeBootWatchdog::feed();
+            uint32_t n = min(manifest_.size - done, (uint32_t)sizeof(buf));
+            if (!qspiRead(buf, n, FIRMWARE_ADDR + done)) {
+                reset();
+                out.println(F("ERR ota qspi-read"));
+                return false;
+            }
+            crypto_sha512_update(&sha, buf, n);
+            crc = crc16(buf, n, crc);
+            done += n;
+        }
+        uint8_t digest[64];
+        crypto_sha512_final(&sha, digest);
+        if (memcmp(digest, manifest_.sha512, sizeof(digest)) != 0) {
+            reset();
+            out.println(F("ERR ota readback-mismatch"));
             return false;
         }
 
-        // Decode base64
-        size_t b64Len = strlen(base64Data);
-        // Base64 output is at most 3/4 of input length
-        size_t maxDecoded = (b64Len * 3) / 4 + 4;
-        if (maxDecoded > 256) {
-            out.println(F("ERR chunk too large"));
+        StagingHeader hdr;
+        hdr.size = manifest_.size;
+        hdr.crc16 = crc;
+        hdr.magic = HEADER_MAGIC;
+        if (!eraseSector(0) || !qspiWrite(&hdr, sizeof(hdr), HEADER_ADDR)) {
+            reset();
+            out.println(F("ERR ota header-write"));
+            return false;
+        }
+        StagingHeader check;
+        if (!readHeader(check) || check.magic != HEADER_MAGIC || check.size != hdr.size ||
+            check.crc16 != hdr.crc16) {
+            eraseSector(0);
+            reset();
+            out.println(F("ERR ota header-verify"));
             return false;
         }
 
-        uint8_t decoded[256] __attribute__((aligned(4)));
-        int decodedLen = base64Decode(base64Data, b64Len, decoded, sizeof(decoded));
-        if (decodedLen <= 0) {
-            out.println(F("ERR base64 decode failed"));
-            return false;
-        }
+        out.print(F("OK ota applying build="));
+        out.println(manifest_.build);
+        delay(100);  // let the reply leave over USB CDC / BLE before the reset
+        // Dual-path apply request, as SerialConsole's `bootloader` command:
+        // RAM at 0x20007F7C survives the reset but a Windows USB hub
+        // power-cycle can clear it; GPREGRET survives that. The bootloader
+        // checks the RAM magic first, then GPREGRET (main.c check_dfu_mode).
+        volatile uint32_t* bootloader_ram = (volatile uint32_t*)0x20007F7C;
+        *bootloader_ram = 0xBEEF00CC;  // DFU_RAM_MAGIC_QSPI
+        NRF_POWER->GPREGRET = GPREGRET_QSPI_APPLY;
+        __DSB(); __ISB();
+        NVIC_SystemReset();
+        return true;  // not reached
+    }
 
-        if (offset + decodedLen > transferSize_) {
-            out.println(F("ERR chunk exceeds firmware size"));
-            return false;
-        }
-
-        SafeBootWatchdog::feed();
-        if (!qspiWrite(decoded, decodedLen, FIRMWARE_ADDR + offset)) {
-            out.println(F("ERR QSPI write failed"));
-            return false;
-        }
-
-        out.print(F("OK ota chunk offset="));
-        out.print(offset);
-        out.print(F(" len="));
-        out.println(decodedLen);
-        return true;
+    /** `ota status`: one JSON line for hosts (the web updater). */
+    void printStatusJson(Print& out, uint16_t bleMtu) {
+        out.print(F("{\"ota\":{\"proto\":1,\"state\":\""));
+        if (state_ == State::IDLE) out.print(F("idle"));
+        else if (state_ == State::RECEIVING) out.print(F("receiving"));
+        else out.print(F("complete"));
+        out.print(F("\",\"next\":"));
+        out.print(next_);
+        out.print(F(",\"size\":"));
+        out.print(state_ == State::IDLE ? 0 : manifest_.size);
+        out.print(F(",\"build\":"));
+        out.print(state_ == State::IDLE ? 0 : manifest_.build);
+        out.print(F(",\"current\":"));
+        out.print((uint32_t)FIRMWARE_BUILD);
+        out.print(F(",\"key\":\""));
+        out.print(ota::TRUSTED_KEY_NAME);
+        out.print(F("\",\"maxChunk\":"));
+        out.print(MAX_CHUNK);
+        out.print(F(",\"mtu\":"));
+        out.print(bleMtu);
+        out.print(F(",\"qspi\":"));
+        out.print(ready_ ? F("true") : F("false"));
+        out.println(F("}}"));
     }
 
     /**
      * Clear the staging header (abort any pending OTA).
      */
     bool abort(Print& out) {
+        reset();
         if (!ready_) {
-            out.println(F("ERR QSPI not initialized"));
+            out.println(F("ERR ota qspi-not-ready"));
             return false;
         }
-        eraseSector(0);
+        if (!eraseSector(0)) {
+            out.println(F("ERR ota qspi-erase"));
+            return false;
+        }
         SafeBootWatchdog::feed();
-        out.println(F("OK staging cleared"));
+        out.println(F("OK ota aborted"));
         return true;
     }
 
 private:
     bool ready_ = false;
-    bool transferActive_ = false;
-    uint32_t transferSize_ = 0;
-    uint16_t transferCrc_ = 0;
+    State state_ = State::IDLE;
+    ota::Manifest manifest_;
+    crypto_sha512_ctx sha_;
+    uint32_t next_ = 0;
+
+    void reset() {
+        state_ = State::IDLE;
+        next_ = 0;
+    }
+
+    void printNext(Print& out) {
+        out.print(F("OK ota next="));
+        out.println(next_);
+    }
+
+    /** QSPI page program is 256 bytes: never let one write cross a page. */
+    bool writePaged(uint32_t addr, const uint8_t* data, uint32_t len) {
+        uint32_t o = 0;
+        while (o < len) {
+            uint32_t n = min(len - o, (uint32_t)(256 - ((addr + o) & 0xFF)));
+            if (!qspiWrite(data + o, n, addr + o)) return false;
+            o += n;
+        }
+        return true;
+    }
 
     /**
      * Minimal base64 decoder. Returns decoded length, or -1 on error.
@@ -563,10 +614,12 @@ class QspiOtaStaging {
 public:
     bool begin() { return false; }
     bool isReady() const { return false; }
-    void printStatus(Print& out) { out.println(F("QSPI OTA not available on this platform")); }
-    bool selfTest(Print& out) { out.println(F("QSPI OTA not available")); return false; }
-    bool commit(Print& out) { out.println(F("QSPI OTA not available")); return false; }
-    bool abort(Print& out) { out.println(F("QSPI OTA not available")); return false; }
+    void printStatusJson(Print& out, uint16_t) { out.println(F("ERR ota not-supported")); }
+    bool selfTest(Print& out) { out.println(F("ERR ota not-supported")); return false; }
+    bool beginSigned(const char*, Print& out) { out.println(F("ERR ota not-supported")); return false; }
+    bool writeChunkSigned(uint32_t, uint16_t, const char*, Print& out) { out.println(F("ERR ota not-supported")); return false; }
+    bool commitSigned(Print& out) { out.println(F("ERR ota not-supported")); return false; }
+    bool abort(Print& out) { out.println(F("ERR ota not-supported")); return false; }
 };
 
 #endif

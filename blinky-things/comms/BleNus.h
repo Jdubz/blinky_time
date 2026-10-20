@@ -67,6 +67,10 @@ public:
     /// Get connection handle.
     uint16_t getConnectionHandle() const { return connHandle_; }
 
+    /// Negotiated ATT MTU of the current link, or 0 with no central connected.
+    /// Reported in `ota status` so a web updater can size its BLE writes.
+    uint16_t currentMtu() const;
+
     void printDiagnostics(Print& out) const;
 
 private:

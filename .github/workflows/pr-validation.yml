@@ -79,6 +79,34 @@ jobs:
           --quiet \
           blinky-things/
 
+  ota-manifest:
+    name: OTA Manifest (firmware verifier vs release signer)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Vectors are current
+      run: |
+        pip install cryptography
+        python tools/ota_manifest.py vectors --out /tmp/vectors.h
+        diff -u tests/ota/vectors.h /tmp/vectors.h || {
+          echo "::error::tests/ota/vectors.h is stale: run python tools/ota_manifest.py vectors --out tests/ota/vectors.h"; exit 1; }
+
+    - name: Build and run (firmware's own Monocypher units, -std=gnu++11 like the core)
+      run: |
+        mkdir -p build
+        gcc -c -O1 -Wall -I blinky-things blinky-things/OtaMonocypher.c -o build/mc.o
+        gcc -c -O1 -Wall -I blinky-things blinky-things/OtaMonocypherEd25519.c -o build/mc_ed.o
+        g++ -std=gnu++11 -Wall -Wextra -Werror -O1 -I blinky-things -I tests/ota           tests/ota/ota_manifest_test.cpp build/mc.o build/mc_ed.o -o build/ota_manifest_test
+        build/ota_manifest_test
+
   static-init-safety:
     name: Static Init Safety Check
     runs-on: ubuntu-latest

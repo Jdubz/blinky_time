@@ -35,6 +35,8 @@ export class WebBluetoothTransport implements Transport {
   private decoder = new TextDecoder();
   private encoder = new TextEncoder();
   private writeChain: Promise<void> = Promise.resolve();
+  private writeChunk = WRITE_CHUNK;
+  private writeWithoutResponse = false;
 
   isSupported(): boolean {
     return typeof navigator !== 'undefined' && 'bluetooth' in navigator;
@@ -104,6 +106,8 @@ export class WebBluetoothTransport implements Transport {
     // link must not be glued onto the first bytes of this one.
     this.buffer = '';
     this.decoder = new TextDecoder();
+    // A new link may negotiate a different MTU: bulk mode must be re-armed.
+    this.defaultWrites();
     try {
       logger.info('Connecting GATT', { name: device.name });
       this.server = await device.gatt!.connect();
@@ -173,6 +177,28 @@ export class WebBluetoothTransport implements Transport {
     }
   };
 
+  /**
+   * Bulk mode for long transfers (signed OTA): split each line into
+   * `chunk`-byte write-without-response packets instead of 20-byte acked
+   * writes. Size `chunk` from the link's ATT MTU minus 3, which only the
+   * device can report (Web Bluetooth doesn't expose it); the OTA protocol
+   * CRC-checks every line, so a packet the OS truncates is detected and the
+   * caller drops back to defaultWrites().
+   */
+  bulkWrites(chunk: number): void {
+    if (!Number.isInteger(chunk) || chunk < WRITE_CHUNK || chunk > 512) {
+      throw new TransportError(`bad BLE write size ${chunk}`, TransportErrorCode.IO_ERROR);
+    }
+    this.writeChunk = chunk;
+    this.writeWithoutResponse = true;
+  }
+
+  /** Back to 20-byte acknowledged writes (fits any MTU). */
+  defaultWrites(): void {
+    this.writeChunk = WRITE_CHUNK;
+    this.writeWithoutResponse = false;
+  }
+
   /** Send one command line. Writes are serialized and chunked. */
   send(text: string): Promise<void> {
     if (!this.rx) {
@@ -180,10 +206,14 @@ export class WebBluetoothTransport implements Transport {
     }
     const rx = this.rx;
     const bytes = this.encoder.encode(text + '\n');
+    const chunk = this.writeChunk;
+    const noResponse = this.writeWithoutResponse;
     const job = this.writeChain.then(async () => {
-      for (let i = 0; i < bytes.length; i += WRITE_CHUNK) {
+      for (let i = 0; i < bytes.length; i += chunk) {
         try {
-          await rx.writeValueWithResponse(bytes.slice(i, i + WRITE_CHUNK));
+          const part = bytes.slice(i, i + chunk);
+          if (noResponse) await rx.writeValueWithoutResponse(part);
+          else await rx.writeValueWithResponse(part);
         } catch (err) {
           throw new TransportError(`NUS write failed: ${String(err)}`, TransportErrorCode.IO_ERROR);
         }
