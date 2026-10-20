@@ -44,7 +44,7 @@ Before any public page or nearby Bluetooth central could reach that path, it had
 
 ### Signing
 
-- **Release key.** The private key is the GitHub Actions secret `BLINKY_RELEASE_SIGNING_KEY`, used only by `sign-release.yml`. The maintainer keeps an offline backup; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py sign` refuses any key whose public half differs from it.
+- **Release key.** The private key is the secret `BLINKY_RELEASE_SIGNING_KEY` of the GitHub **environment** `release-signing`, whose branch policy allows only `master`. A repository secret would be readable from any pushed branch. It is used only by `sign-release.yml`. The maintainer keeps an offline backup; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py sign` refuses any key whose public half differs from it.
 - **Owners need no key.** Their devices carry only the public key.
 - **Only gated releases are signed.** Every device installs a validly signed newer build, so the signature is what makes a build installable everywhere. Candidates are never signed. `release_promote.py` dispatches `sign-release.yml`, which refuses without a passing bench-gate record for exactly that version. It attaches `.bin` + `.otam` and updates `manifest.json`. Promotion then re-verifies the signature itself before tagging the release stable.
 - **Rotation.** Ship, signed with the old key, a firmware whose `OtaKeys.h` carries the new public key.
@@ -125,7 +125,7 @@ Turn `FIRMWARE_UPDATES_ENABLED` on when all of these are done:
 1. Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
 2. Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
 3. Bluetooth: fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Until then, hide the Bluetooth option.
-4. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows, and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
+4. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
 5. iPhone: one full update in Bluefy.
 
 ## Open items

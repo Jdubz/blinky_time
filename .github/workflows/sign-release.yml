@@ -1,7 +1,9 @@
 # Sign a GATED release for signed OTA (docs/WEB_FLASHER.md, docs/RELEASE_PROCESS.md).
 #
-# The only place the release signing key (secret BLINKY_RELEASE_SIGNING_KEY)
-# is used. Every device installs a validly signed newer build, so signing is
+# The only place the release signing key is used. It is a secret of the
+# `release-signing` ENVIRONMENT, whose deployment branch policy allows only
+# master: a workflow on any other branch can't read it (a repository-level
+# secret would be readable from any pushed branch). Every device installs a validly signed newer build, so signing is
 # what makes a build installable everywhere: `firmware_release.py sign`
 # refuses unless the release carries a passing bench-gate record for exactly
 # its version, and refuses any key that isn't the one the firmware trusts
@@ -29,6 +31,7 @@ jobs:
   sign:
     name: Sign gated release
     runs-on: ubuntu-latest
+    environment: release-signing
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.tag }}

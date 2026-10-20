@@ -21,9 +21,11 @@ export const UF2_FAMILY_NRF52840_APP = 0xada52840;
 
 /**
  * Bootloaders the recovery path writes to (INFO_UF2.TXT "UF2 Bootloader
- * <ver>"), as deploy_local.py --expect-bl: the fleet bootloader 0.8.0-10 and
- * 0.8.0-11 (UF2 stuck-transfer check armed only by real UF2 blocks).
+ * <ver>"): exactly what deploy_local.py --expect-bl accepts, the fleet
+ * bootloader 0.8.0-10. 0.8.0-11 (UF2 stuck-transfer check armed only by real
+ * UF2 blocks) is added here and in deploy_local.py together when it rolls
+ * out (docs/WEB_FLASHER.md, rollout checklist).
  */
-export const ACCEPTED_BOOTLOADER_PREFIXES = ['0.8.0-10', '0.8.0-11'] as const;
+export const ACCEPTED_BOOTLOADER_PREFIXES = ['0.8.0-10'] as const;
 /** INFO_UF2.TXT Board-ID of the XIAO nRF52840 Sense bootloader build. */
 export const REQUIRED_BOARD_ID = 'nRF52840-SeeedXiaoSense-v1';
