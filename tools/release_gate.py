@@ -10,7 +10,8 @@ promote a candidate without a passing gate record.
 Checks (each one must pass):
   version      `json info` reports exactly the release's manifest version
   configured   device.configured is true and device.id is unchanged
-  fps          loop fps >= --min-fps (default 150, hat_v1 class)
+  fps          loop fps >= --min-fps (default 60: a disaster floor, not a
+               quality bar; timing checks are #258)
   stability    no reboot for --stable-minutes (uptime keeps rising) and
                audioOverruns grows by at most --max-overrun-growth
   asserts      no [ASSERT] / [FALLBACK] line seen on the console
@@ -100,7 +101,7 @@ def main():
     ap.add_argument("--port", required=True)
     ap.add_argument("--device-id", required=True)
     ap.add_argument("--skip-flash", action="store_true", help="device already runs this release")
-    ap.add_argument("--min-fps", type=float, default=150.0)
+    ap.add_argument("--min-fps", type=float, default=60.0)
     ap.add_argument("--stable-minutes", type=float, default=5.0)
     ap.add_argument("--max-overrun-growth", type=int, default=5)
     ap.add_argument("--music-seconds", type=float, default=15.0)
