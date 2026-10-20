@@ -82,6 +82,9 @@ public:
     AudioControl getControl() const {
         AudioControl ac;
         ac.energy        = energy_;
+        // Synthetic loudness: the fake signal models loudness with its energy
+        // envelope (base + hits), which is what Fire's continuous layer reads.
+        ac.level         = energy_;
         ac.pulse         = pulse_;
         ac.onset         = onset_;
         ac.beatCount     = beatCount_;

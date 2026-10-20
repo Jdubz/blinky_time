@@ -1549,6 +1549,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // subtle" from "not wired" without ambiguity.
     if (audioAmp != 1.0f) {
         control_.energy        = clampf(control_.energy        * audioAmp, 0.0f, 1.0f);
+        control_.level         = clampf(control_.level         * audioAmp, 0.0f, 1.0f);
         control_.pulse         = clampf(control_.pulse         * audioAmp, 0.0f, 1.0f);
         control_.onset         = clampf(control_.onset         * audioAmp, 0.0f, 1.0f);
         control_.plpPulse      = clampf(control_.plpPulse      * audioAmp, 0.0f, 1.0f);
