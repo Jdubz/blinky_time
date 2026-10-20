@@ -231,6 +231,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
 | `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
+| `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, I2S speaker, camera, test chips with SWD via Pi Zero W; enclosure construction, calibration, acceptance gates |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
