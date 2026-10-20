@@ -128,7 +128,9 @@ public:
     //   but silently reverted on reboot (#183).
     // Version 97: StoredTrackerParams.pulseNNGate (dead since b114) becomes
     //   fluxOnsetFloor, the spectral-flux path's own pulse floor. Same size.
-    static const uint8_t SETTINGS_VERSION = 97;
+    // Version 98: noiseGate removed from StoredMicParams again (the absolute gate
+    //   is gone: a fixed threshold swallows quiet music on this mic).
+    static const uint8_t SETTINGS_VERSION = 98;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -200,7 +202,6 @@ public:
         // Window/Range normalization parameters (v72: AGC removed, only these remain)
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
-        float noiseGate;          // Absolute raw-mic silence threshold (0-1), v96
     };
 
     // StoredMusicParams REMOVED v76.
@@ -396,8 +397,8 @@ public:
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 15 floats + 4 uint8 + padding)");
     static_assert(sizeof(StoredPlasmaParams) == 28,
         "StoredPlasmaParams size changed! Increment SETTINGS_VERSION and update assertion. (28 bytes = 7 floats)");
-    static_assert(sizeof(StoredMicParams) == 12,
-        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (12 bytes = 3 floats — v96 adds noiseGate)");
+    static_assert(sizeof(StoredMicParams) == 8,
+        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats — v98 removes noiseGate)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
     static_assert(sizeof(StoredTrackerParams) == 124,
         "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (124 bytes = 28 floats + 1 uint16 + padding — v95 adds crestGateMin)");

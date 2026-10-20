@@ -42,7 +42,7 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 1.5 ([#168](https://github.com/Jdubz/blinky_time/issues/168)) | 174 BPM tracked as a 2-beat cycle (octave ambiguity) | `runAcf` | OPEN | Acceptable for visuals but limits `beatCount` meaning; revisit with 1.3. |
 | 1.6 ([#169](https://github.com/Jdubz/blinky_time/issues/169)) | NN activation smoothing (0.77/0.23) dulled every hit | `processFrame` | IN-PR | Decided: no smoothing in the reaction path. Removed; `pulseOnsetFloor` re-swept on the host NN harness. |
 | 1.8 ([#171](https://github.com/Jdubz/blinky_time/issues/171)) | JSON stream formatting costs 10–50 ms per emit (loop stall while streaming) | `SerialConsole::streamTick` | OPEN | Rate-limit to a CPU budget or move off the loop task. |
-| 1.9 ([#172](https://github.com/Jdubz/blinky_time/issues/172)) | Silence reset / confidence gating used relative level | `AudioTracker` | IN-PR #152 | Absolute raw level + ~1 s EMA. Verify breakdowns no longer reset tempo. |
+| 1.9 ([#172](https://github.com/Jdubz/blinky_time/issues/172)) | Silence reset / confidence gating used relative level | `AudioTracker` | IN-PR | Silence detection removed with the noise gate. At device-like levels on edm/, an adaptive noise floor falsely reset tempo 487-2159 times in music; never resetting gave 0 false resets and re-locked on a new song as fast or faster. Breakdowns can no longer reset tempo. |
 | 1.10 ([#173](https://github.com/Jdubz/blinky_time/issues/173)) | `stream nn` + other `[FPS]`/debug prints share TeeStream with NUS callback task | `SerialConsole`, `BleNus` | OPEN | BLE RX `handleCommand` runs in the Bluefruit callback task, concurrently with loop-task output (pre-existing hazard). Defer NUS commands to the loop task via a queue. |
 | 1.11 ([#174](https://github.com/Jdubz/blinky_time/issues/174)) | NN computes 16 output frames to use 1 (receptive field 9) | model export | OPEN (ML) | Re-export with W=9 or streaming conv state → ~½ inference cost. Prerequisite for turning the NN back on: it must beat flux (F1 0.542) at a frame rate the renderer accepts, in the harness cost model. |
 
@@ -56,7 +56,6 @@ Nothing in PR #152 / #155 has run on hardware yet.
 | 2.5 ([#179](https://github.com/Jdubz/blinky_time/issues/179)) | Compressor makes `bassFlux` ∝ level^(1/3); `bassContrast` may clamp at 1 on loud kicks | `applyCompressor`, `processFrame` | OPEN | Unverified: add telemetry before changing. |
 | 2.6 ([#180](https://github.com/Jdubz/blinky_time/issues/180)) | Mel whitening gives little contrast (log-domain ÷ running max) | `whitenMelBands` | OPEN | Low priority; comment corrected in #152. |
 | 2.7 ([#181](https://github.com/Jdubz/blinky_time/issues/181)) | Noise estimator creeps in steady music (leaky minimum) | `estimateAndSubtractNoise` | OPEN | Off by default and not persisted. Keep off, or switch to windowed min-statistics. |
-| 2.9 ([#183](https://github.com/Jdubz/blinky_time/issues/183)) | `noiseGate` setting not persisted across reboots | `SerialConsole.cpp:250`, `ConfigStorage` | IN-PR | Added to `StoredMicParams`, `SETTINGS_VERSION` 95→96 (saved tuning resets to defaults once). |
 | 2.10 ([#184](https://github.com/Jdubz/blinky_time/issues/184)) | Mic ring overrun splices a window → spurious flux spike | `AdaptiveMic`, `SharedSpectralAnalysis` | IN-PR #152 | `markDiscontinuity()`. |
 
 ## 3. Device safety / BLE

@@ -299,6 +299,10 @@ Re-enable a model only when it beats flux under this same measurement (a cheaper
 
 **Drain-loop livelock (b208-b210, fixed):** `update()` used to keep processing samples that arrived *during* a ~12 ms inference. Every frame looked like the newest, so the NN ran on every frame and starved the renderer: hat_v1 b210 ran at 12 fps with 62.4 inferences/s. `update()` now drains only what was waiting at entry and runs at most one inference. CI gates on simulated fps with and without the NN.
 
+**No noise gate, no level-based silence detection (2026-10-20).** This MEMS mic is so weak that music sits at the level a fixed gate calls silence: the b200 gate (0.002) equalled the measured average music level of a mic with enclosure holes, and on hat_v1 it silenced music entirely. It was removed once before (2025-12-26) for the same reason. With the hardware gain fixed at its SNR optimum, the normalizer adapts to whatever is there.
+
+Silence detection went with it. At device-like levels on edm/, an adaptive noise floor falsely reset tempo 487–2159 times in music. Never resetting gave 0 false resets and re-locked on a new song as fast or faster. Instead, **rhythm needs hits**: `rhythmStrength` and `plpPulse` fade out 2–4 s after the last onset, and the next onset restores them instantly. Room noise fires no flux onsets, so the rhythm outputs drop to 0 within 5 s after music stops (they read 0.45–0.77 without this). In music the fade engages 2.1% of the time, mostly in percussion-free breakdowns.
+
 ## FrameOnsetNN (Conv1D W16) — off on devices, see above
 
 ### Current: Single Conv1D Onset Model

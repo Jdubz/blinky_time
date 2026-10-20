@@ -249,9 +249,6 @@ void SerialConsole::registerAudioSettings() {
         "Peak adaptation speed (s)", 0.5f, 10.0f);
     settings_.registerFloat("releasetau", &mic_->releaseTau, "audio",
         "Peak release speed (s)", 1.0f, 30.0f);
-    settings_.registerFloat("noisegate", &mic_->noiseGate, "audio",
-        "Absolute raw-mic noise gate (0-1). Below this, level=0 and trackers freeze. Stops the 'always on after silence' creep.",
-        0.0f, 0.05f);
 }
 
 // === GAIN SETTINGS (v72: AGC removed, hardware gain fixed at platform default) ===
