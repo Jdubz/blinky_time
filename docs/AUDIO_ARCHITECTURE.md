@@ -286,7 +286,20 @@ PLP uses multi-source ACF at beat-level lags (20-80) across 3 mean-subtracted so
 
 ---
 
-## Onset Detection: FrameOnsetNN (Conv1D W16, Deployed)
+## Onset Detection: spectral flux on devices; FrameOnsetNN off
+
+**Status (2026-10-19): the NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0`, `AudioTracker.h`). Onset pulses come from spectral flux, which wins on both accuracy and frame rate. Measured on edm/ (onsets_consensus, ±50 ms) with the host harness CPU cost model calibrated to hat_v1 (`tests/tracker/README.md`):
+
+| Detector | F1 | Precision | Recall | LED fps |
+|---|---|---|---|---|
+| Spectral flux, `fluxOnsetFloor` 0.01 | 0.542 | 0.449 | 0.682 | 178 |
+| v33 NN (50 mel, 19.6 KB, **12 ms/inference** on device) | 0.480 | 0.394 | 0.613 | 48 |
+
+Re-enable a model only when it beats flux under this same measurement (a cheaper export is #174). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
+
+**Drain-loop livelock (b208-b210, fixed):** `update()` used to keep processing samples that arrived *during* a ~12 ms inference. Every frame looked like the newest, so the NN ran on every frame and starved the renderer: hat_v1 b210 ran at 12 fps with 62.4 inferences/s. `update()` now drains only what was waiting at entry and runs at most one inference. CI gates on simulated fps with and without the NN.
+
+## FrameOnsetNN (Conv1D W16) — off on devices, see above
 
 ### Current: Single Conv1D Onset Model
 
@@ -296,7 +309,7 @@ The model processes a sliding window of raw mel frames (16 frames x 26 bands = 2
 
 **Architecture:** Conv1D onset-only model. 13.4 KB INT8 (per-tensor quantization). Single output channel (onset activation). Arena: 3404 bytes of 32768 allocated.
 
-**Performance:** 6.8ms inference on Cortex-M4F @ 64 MHz (nRF52840), 5.8ms on ESP32-S3.
+**Performance:** 6.8 ms inference on Cortex-M4F @ 64 MHz (nRF52840) for the 26-band v25-class model; 5.8 ms on ESP32-S3. The 50-band v33 model measures **12 ms** on hat_v1.
 
 **Fallback:** If the model fails to load, `mic_.getLevel()` serves as a simple energy-based onset signal.
 

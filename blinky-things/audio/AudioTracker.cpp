@@ -1,5 +1,6 @@
 #include "AudioTracker.h"
 #include "../types/BlinkyAssert.h"
+#include "HostCostHook.h"
 #include <math.h>
 #include <string.h>
 
@@ -51,6 +52,7 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     if (!mic_.begin(sampleRate)) return false;
     spectral_.begin();
 
+#if BLINKY_ONSET_NN_ENABLED
     bool nnOk = frameOnsetNN_.begin();
     nnActive_ = nnOk && frameOnsetNN_.isReady();
     // NN init failure is a build-time / model-export bug, not a runtime
@@ -59,6 +61,11 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     // Assert loudly so the failure shows up in serial / error counter.
     BLINKY_ASSERT(nnActive_,
         "FrameOnsetNN failed to initialize — check getInitError(); falling back to mic energy");
+#else
+    // Disabled by design (see BLINKY_ONSET_NN_ENABLED in AudioTracker.h):
+    // onsets come from spectral flux. Not a fallback; `show nn` says so.
+    nnActive_ = false;
+#endif
 
 #ifdef ONSET_MODEL_USE_PCEN
     if (nnActive_) {
@@ -133,9 +140,19 @@ const AudioControl& AudioTracker::update(float dt) {
     // A full mic ring holds this many frames; draining that many per call
     // means a stall never leaves backlog that would later overrun.
     constexpr int MAX_DRAIN_ITERS = 8;
-    for (int drainIter = 0; drainIter < MAX_DRAIN_ITERS; drainIter++) {
+    // Drain only the samples already waiting when update() starts. Samples
+    // that arrive while we process (one NN inference is ~12 ms, close to the
+    // 16 ms frame period) wait for the next update(). Chasing them was the
+    // b208-b210 livelock: every frame looked like the newest, every frame
+    // ran the NN, and update() returned only after MAX_DRAIN_ITERS frames,
+    // starving the renderer (hat_v1 b210: 12 fps, 62.4 inferences/s).
+    uint32_t samplesBudget = mic_.getPendingSamples();
+    for (int drainIter = 0; drainIter < MAX_DRAIN_ITERS && samplesBudget > 0; drainIter++) {
         uint32_t overrunsBefore = AdaptiveMic::getOverrunCount();
-        int samplesRead = mic_.getSamplesForExternal(sampleBuffer, spectral_.samplesNeeded());
+        uint32_t want = static_cast<uint32_t>(spectral_.samplesNeeded());
+        if (want > samplesBudget) want = samplesBudget;
+        int samplesRead = mic_.getSamplesForExternal(sampleBuffer, static_cast<int>(want));
+        samplesBudget -= static_cast<uint32_t>(samplesRead);
         if (AdaptiveMic::getOverrunCount() != overrunsBefore) {
             spectral_.markDiscontinuity();  // samples were dropped inside this window
         }
@@ -143,16 +160,17 @@ const AudioControl& AudioTracker::update(float dt) {
         spectral_.addSamples(sampleBuffer, samplesRead);
         if (!spectral_.hasSamples()) break;  // partial window — rest arrives next update()
         spectral_.process();
+        BLINKY_HOST_COST(HostCost::FRAME);
         // Absolute mic-sample index at which this window ended. Shared
         // timeline with the record stream (RecordStream).
         lastFrameEndSampleIdx_ = mic_.getExternalReadIndex();
-        // CPU guard: in a catch-up burst, run the NN only on the newest
-        // frame (no further complete window is already waiting). Every frame
-        // is still pushed into the NN window, so its input stays evenly
-        // spaced; NN cost per update() is bounded at one inference — the
-        // same as pre-b208 — instead of up to MAX_DRAIN_ITERS.
+        // CPU guard: run the NN only on the last complete frame of this
+        // update's budget. Every frame is still pushed into the NN window, so
+        // its input stays evenly spaced; NN cost per update() is at most one
+        // inference. The budget is fixed at entry, so arrivals during the
+        // inference can't turn the next frame into "the newest" again.
         bool moreFramesPending =
-            mic_.getPendingSamples() >= static_cast<uint32_t>(SpectralConstants::FFT_SIZE);
+            samplesBudget >= static_cast<uint32_t>(SpectralConstants::FFT_SIZE);
         processFrame(!moreFramesPending || drainIter == MAX_DRAIN_ITERS - 1);
         framesThisUpdate_++;
     }
@@ -217,6 +235,7 @@ void AudioTracker::processFrame(bool runNN) {
     if (nnActive_ && runNN) {
         freshNN = true;
         const float odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
+        BLINKY_HOST_COST(HostCost::NN_INFER);
 
         // Track raw NN activation peaks (rising edge, before thresholds).
         if (odf > rawNNActivation_ && odf > 0.05f) {
@@ -1291,7 +1310,7 @@ float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
         }
 
         float pulseThreshold = odfBaseline_ * pulseThresholdMult;
-        if (pulseThreshold < pulseOnsetFloor) pulseThreshold = pulseOnsetFloor;
+        if (pulseThreshold < fluxOnsetFloor) pulseThreshold = fluxOnsetFloor;
 
         bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
 

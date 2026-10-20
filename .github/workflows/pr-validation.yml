@@ -340,13 +340,27 @@ jobs:
     - name: UBSan stress (silence, gap, clip, noise, hum, clicks at 15/60/250 fps)
       run: python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
 
+    # CPU cost model calibrated to hat_v1 (tests/tracker/README.md). The
+    # device build (NN off) must leave the renderer its frame rate: 177 fps
+    # simulated, matching the hat's measured 179 fps.
+    - name: Frame-rate gate (device build, hat CPU cost model)
+      run: |
+        head -c $((16000*2*20)) /dev/urandom > /tmp/noise.pcm
+        build/tracker_harness /tmp/noise.pcm /tmp/out.csv 60 0.25 1 --nn-cost-us=12000 --frame-cost-us=3200 --render-cost-us=4500 2> /tmp/cost.log
+        cat /tmp/cost.log
+        fps=$(grep -o ' fps=[0-9.]*' /tmp/cost.log | cut -d= -f2)
+        if [ -z "$fps" ] || awk "BEGIN{exit !($fps < 150)}"; then
+          echo "::error title=Frame rate::simulated device fps '$fps' < 150: audio work is starving the renderer"
+          exit 1
+        fi
+
     # Floors sit just under the current baseline on edm/ at 35/60/90 fps:
     # excess 0.094, tempo 0.729 (syncopation-derived bar candidates, #166),
-    # recall 0.282. Raise them as the tracker improves.
+    # recall 0.697 (flux with its own fluxOnsetFloor; was 0.282 on the shared NN floor). Raise them as the tracker improves.
     - name: Corpus regression gate (edm/, 35/60/90 fps)
       run: |
         python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
-          --min-excess 0.07 --min-tempo 0.70 --min-recall 0.25
+          --min-excess 0.07 --min-tempo 0.70 --min-recall 0.65
 
   model-input-check:
     name: Onset Model Input Check
@@ -416,14 +430,28 @@ jobs:
         rc=0; build/host_nn/tracker_harness_nn /tmp/noise.pcm /tmp/out.csv 60 > /tmp/nn.log 2>&1 || rc=$?
         if [ "$rc" -ne 0 ]; then
           cat /tmp/nn.log
-          echo "::error title=Onset NN::NN harness exited $rc - the embedded model is refused (5) or the run failed; devices would run without the onset NN"
+          echo "::error title=Onset NN::NN harness exited $rc - the embedded model is refused (5) or the run failed"
           exit 1
         fi
         echo "Embedded onset model initializes on the host."
 
-    # Same corpus floors as the fallback gate, on the build devices actually
-    # run. The fallback gate can't see NN-path regressions (#155: the NN as
-    # a tempo source dropped corpus tempo 0.726 -> 0.621 unnoticed).
+    # Livelock guard: with the NN on, update() must run at most one inference
+    # per call and must not chase samples that arrive during it. b208-b210
+    # did, and the hat fell to 12 fps (simulated 11.5; fixed loop 48.7).
+    - name: Frame-rate gate with the NN (hat CPU cost model)
+      run: |
+        build/host_nn/tracker_harness_nn /tmp/noise.pcm /tmp/out.csv 60 0.25 1 --nn-cost-us=12000 --frame-cost-us=3200 --render-cost-us=4500 2> /tmp/cost.log
+        cat /tmp/cost.log
+        fps=$(grep -o ' fps=[0-9.]*' /tmp/cost.log | cut -d= -f2)
+        if [ -z "$fps" ] || awk "BEGIN{exit !($fps < 35)}"; then
+          echo "::error title=Frame rate::simulated fps with the NN '$fps' < 35: the drain loop is running the NN on every frame (livelock)"
+          exit 1
+        fi
+
+    # Devices ship with the NN off (BLINKY_ONSET_NN_ENABLED=0), but the NN
+    # path must stay correct for the day a model beats flux: same tempo /
+    # phase floors as the device gate (#155: the NN as a tempo source dropped
+    # corpus tempo 0.726 -> 0.621 unnoticed).
     - name: Corpus regression gate with the NN (edm/, 35/60/90 fps)
       run: |
         python tests/tracker/run_tracker_eval.py --harness build/host_nn/tracker_harness_nn           --min-excess 0.07 --min-tempo 0.70 --min-recall 0.25

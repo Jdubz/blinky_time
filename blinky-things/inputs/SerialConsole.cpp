@@ -322,7 +322,8 @@ void SerialConsole::registerTrackerSettings() {
     // Pulse detection tuning
     settings_.registerFloat("pulseonsetfloor", &audioCtrl_->pulseOnsetFloor, "tracker",
         "NN activation threshold for peak-picking", 0.0f, 1.0f, onParamChanged);
-    // pulseNNGate removed — NN is now the primary signal, not a gate
+    settings_.registerFloat("fluxonsetfloor", &audioCtrl_->fluxOnsetFloor, "tracker",
+        "Spectral-flux pulse floor (used when the NN is off)", 0.0f, 0.5f, onParamChanged);
 
     // Crest-factor gate (Phase 2a / Phase 4 Path A).
     // Suppresses NN pulses when per-frame crest factor is below this value.
@@ -1294,6 +1295,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->pulseThresholdMult = 2.0f;
         audioCtrl_->pulseMinLevel = 0.03f;
         audioCtrl_->pulseOnsetFloor = 0.2f;
+        audioCtrl_->fluxOnsetFloor = AudioTracker::FLUX_ONSET_FLOOR_DEFAULT;
         audioCtrl_->baselineFastDrop = 0.05f;
         audioCtrl_->baselineSlowRise = 0.005f;
         audioCtrl_->odfPeakHoldDecay = 0.85f;
@@ -2445,6 +2447,9 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
+#if !BLINKY_ONSET_NN_ENABLED
+        out_.println(F("NN disabled by build (BLINKY_ONSET_NN_ENABLED=0): onsets from spectral flux"));
+#endif
         audioCtrl_->getFrameOnsetNN().printDiagnostics(out_);
         return true;
     }

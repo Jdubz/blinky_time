@@ -373,7 +373,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.odfContrast = 1.25f;
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
-    data_.tracker.pulseNNGate = 0.3f;
+    data_.tracker.fluxOnsetFloor = AudioTracker::FLUX_ONSET_FLOOR_DEFAULT;  // v97
     data_.tracker.crestGateMin = 0.0f;  // v95: disabled by default; sweep to tune
     data_.tracker.baselineFastDrop = 0.05f;
     data_.tracker.baselineSlowRise = 0.005f;
@@ -859,7 +859,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.odfContrast, 0.1f, 4.0f, F("tracker.odfContrast"));
         validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
         validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
-        validateFloat(data_.tracker.pulseNNGate, 0.0f, 1.0f, F("tracker.pulseNNGate"));
+        validateFloat(data_.tracker.fluxOnsetFloor, 0.0f, 0.5f, F("tracker.fluxOnsetFloor"));
         validateFloat(data_.tracker.crestGateMin, 0.0f, 20.0f, F("tracker.crestGateMin"));
         validateFloat(data_.tracker.baselineFastDrop, 0.01f, 0.2f, F("tracker.blFastDrop"));
         validateFloat(data_.tracker.baselineSlowRise, 0.001f, 0.05f, F("tracker.blSlowRise"));
@@ -895,7 +895,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->odfContrast = data_.tracker.odfContrast;
         tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
         tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
-        // pulseNNGate removed — NN is now primary signal, not gate. Field kept for binary compat.
+        tracker->fluxOnsetFloor = data_.tracker.fluxOnsetFloor;  // v97
         tracker->crestGateMin = data_.tracker.crestGateMin;  // v95
         tracker->baselineFastDrop = data_.tracker.baselineFastDrop;
         tracker->baselineSlowRise = data_.tracker.baselineSlowRise;
@@ -999,7 +999,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.odfContrast = tracker->odfContrast;
         data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
         data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
-        // pulseNNGate: field kept for binary compat, no longer written from tracker
+        data_.tracker.fluxOnsetFloor = tracker->fluxOnsetFloor;  // v97
         data_.tracker.crestGateMin = tracker->crestGateMin;  // v95
         data_.tracker.baselineFastDrop = tracker->baselineFastDrop;
         data_.tracker.baselineSlowRise = tracker->baselineSlowRise;
