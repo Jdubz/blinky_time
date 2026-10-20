@@ -36,6 +36,18 @@ vi.mock('./lib/target', async () => {
   };
 });
 
+// The firmware page stand-in reports an update in progress as soon as it
+// mounts, like the real page does while flashing.
+vi.mock('./pages/FirmwarePage', async () => {
+  const { useEffect } = await import('react');
+  return {
+    FirmwarePage: ({ onActiveChange }: { onActiveChange?: (a: boolean) => void }) => {
+      useEffect(() => onActiveChange?.(true), [onActiveChange]);
+      return <div>firmware page</div>;
+    },
+  };
+});
+
 beforeEach(() => {
   mockSetGenerator.mockClear();
   mockUseDevices.mockReset();
@@ -102,5 +114,20 @@ describe('MainShell target shapes', () => {
     await vi.waitFor(() => expect(mockSetGenerator).toHaveBeenCalled());
     const [target] = mockSetGenerator.mock.calls[0];
     expect((target as { kind: string }).kind).toBe('device');
+  });
+});
+
+describe('MainShell firmware page', () => {
+  it('stays mounted through hash navigation while an update runs', async () => {
+    mockUseDevices.mockReturnValue({ devices: [], serverUrl: null });
+    window.history.replaceState(null, '', '#firmware');
+    render(<MainShell />);
+    expect(screen.getByText('firmware page')).toBeInTheDocument();
+    // Browser Back to the main view mid-update.
+    window.history.replaceState(null, '', '#');
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    expect(await screen.findByText('firmware page')).toBeInTheDocument();
+    expect(window.location.hash).toBe('#firmware');
+    window.history.replaceState(null, '', '#');
   });
 });

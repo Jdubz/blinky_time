@@ -76,11 +76,13 @@ python tools/release_promote.py bN
 ```
 Refuses without a passing gate record for this exact version. On success it marks the release stable and *Latest* and tags `stable-bN`.
 
+Promotion then dispatches a blinky-console redeploy (`gh workflow run blinky-console-deploy.yml`). That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
+
 ### Rollback
 ```bash
 python tools/release_promote.py bM --rollback    # bM: an earlier stable release
 ```
-Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`.
+Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`. It also dispatches a blinky-console redeploy, so the web flasher's default follows. **After deleting a release by hand**, run `gh workflow run blinky-console-deploy.yml --ref master` yourself: tag and release events run the *tagged* commit's workflow file, which for an older release may not have the trigger.
 
 ## Deploying
 

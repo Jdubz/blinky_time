@@ -12,6 +12,7 @@ import { DeviceStrip } from './components/DeviceStrip';
 import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { AudioDebugPage } from './pages/AudioDebugPage';
+import { FirmwarePage } from './pages/FirmwarePage';
 import { RecordPage } from './pages/RecordPage';
 import { peekRecordSession, type RecordState } from './services/record/RecordSession';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
@@ -28,13 +29,25 @@ export function MainShell() {
   const [hueSpeed, setHueSpeed] = useState(0.5);
   const [hueShift, setHueShift] = useState(0);
   const [showAudioDebug, setShowAudioDebug] = useState(false);
-  // Field recorder lives at #record so a phone can bookmark it directly.
+  // Field recorder (#record) and firmware updater (#firmware) are hash pages
+  // so a phone can bookmark them directly.
   const [hash, setHash] = useState(() => window.location.hash);
   useEffect(() => {
     const onHash = () => setHash(window.location.hash);
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // An update in progress keeps #firmware mounted whatever the hash says:
+  // unmounting it would drop its prompts, log, wake lock and unload guard
+  // while the device is being written.
+  const [firmwareActive, setFirmwareActive] = useState(false);
+  useEffect(() => {
+    if (firmwareActive && hash !== '#firmware') {
+      window.history.replaceState(null, '', '#firmware');
+      setHash('#firmware');
+    }
+  }, [firmwareActive, hash]);
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
@@ -64,6 +77,15 @@ export function MainShell() {
   }, [hash]);
   const recordingElsewhere =
     hash !== '#record' && ['starting', 'recording', 'stopping', 'reconnecting'].includes(recState);
+
+  if (hash === '#firmware' || firmwareActive) {
+    return (
+      <FirmwarePage
+        onClose={() => (window.location.hash = '')}
+        onActiveChange={setFirmwareActive}
+      />
+    );
+  }
 
   if (hash === '#record') {
     return <RecordPage onClose={() => (window.location.hash = '')} />;
@@ -176,6 +198,13 @@ export function MainShell() {
           title="Phone field recorder (Web Bluetooth)"
         >
           Record
+        </a>
+        <a
+          className="btn btn-small shell-firmware-btn"
+          href="#firmware"
+          title="Update one device's firmware over USB"
+        >
+          Firmware
         </a>
         {import.meta.env.DEV && (
           <button
