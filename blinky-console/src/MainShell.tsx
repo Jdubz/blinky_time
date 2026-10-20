@@ -21,6 +21,15 @@ import type { GeneratorType } from './types';
 
 const GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
 
+/**
+ * The browser updater (#firmware) is switched off. Its USB route copies a
+ * UF2 onto the bootloader's XIAO-SENSE drive, but on Windows the system
+ * writes its own metadata to that drive as it mounts, and the bootloader's
+ * stuck-transfer check then drops the drive 8.5 s later: no person can pick
+ * it in time (measured on hat_v1, 2026-10-20). See docs/WEB_FLASHER.md.
+ */
+export const FIRMWARE_UPDATES_ENABLED = false;
+
 export function MainShell() {
   const { devices, serverUrl } = useDevices();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -78,12 +87,29 @@ export function MainShell() {
   const recordingElsewhere =
     hash !== '#record' && ['starting', 'recording', 'stopping', 'reconnecting'].includes(recState);
 
-  if (hash === '#firmware' || firmwareActive) {
+  if (FIRMWARE_UPDATES_ENABLED && (hash === '#firmware' || firmwareActive)) {
     return (
       <FirmwarePage
         onClose={() => (window.location.hash = '')}
         onActiveChange={setFirmwareActive}
       />
+    );
+  }
+
+  if (hash === '#firmware') {
+    return (
+      <div className="rec-page fw-page">
+        <header className="rec-header">
+          <button className="btn btn-small" onClick={() => (window.location.hash = '')}>
+            ← Back
+          </button>
+          <h1 className="rec-title">Firmware Update</h1>
+        </header>
+        <div className="shell-warning">
+          Updating devices from the browser is not available yet. Your device keeps working on its
+          current firmware.
+        </div>
+      </div>
     );
   }
 
@@ -199,13 +225,15 @@ export function MainShell() {
         >
           Record
         </a>
-        <a
-          className="btn btn-small shell-firmware-btn"
-          href="#firmware"
-          title="Update one device's firmware over USB"
-        >
-          Firmware
-        </a>
+        {FIRMWARE_UPDATES_ENABLED && (
+          <a
+            className="btn btn-small shell-firmware-btn"
+            href="#firmware"
+            title="Update one device's firmware over USB"
+          >
+            Firmware
+          </a>
+        )}
         {import.meta.env.DEV && (
           <button
             className="btn btn-small shell-debug-btn"
