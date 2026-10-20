@@ -124,7 +124,9 @@ public:
     // v89: pulseNNGate. v91: PLP OLA removed (direct pattern interpolation).
     // v92: plpVarianceSens. v93: plpDecayRate. v94: PlasmaGlobe replaces Lightning.
     // Version 95: crestGateMin added to StoredTrackerParams (124-byte struct, see static_assert).
-    static const uint8_t SETTINGS_VERSION = 95;
+    // Version 96: noiseGate added to StoredMicParams. It was serial-tunable since b200
+    //   but silently reverted on reboot (#183).
+    static const uint8_t SETTINGS_VERSION = 96;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -196,6 +198,7 @@ public:
         // Window/Range normalization parameters (v72: AGC removed, only these remain)
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
+        float noiseGate;          // Absolute raw-mic silence threshold (0-1), v96
     };
 
     // StoredMusicParams REMOVED v76.
@@ -391,8 +394,8 @@ public:
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 15 floats + 4 uint8 + padding)");
     static_assert(sizeof(StoredPlasmaParams) == 28,
         "StoredPlasmaParams size changed! Increment SETTINGS_VERSION and update assertion. (28 bytes = 7 floats)");
-    static_assert(sizeof(StoredMicParams) == 8,
-        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
+    static_assert(sizeof(StoredMicParams) == 12,
+        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (12 bytes = 3 floats — v96 adds noiseGate)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
     static_assert(sizeof(StoredTrackerParams) == 124,
         "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (124 bytes = 28 floats + 1 uint16 + padding — v95 adds crestGateMin)");

@@ -400,6 +400,12 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'How slowly the peak tracker releases when audio gets quieter (1-30s). Higher = sustains peaks longer.',
     unit: 's',
   },
+  noisegate: {
+    displayName: 'Silence Threshold',
+    tooltip:
+      'Raw mic level (0-0.05) below which input counts as silence: LEDs go idle and the volume tracker freezes instead of amplifying mic hiss. Default 0.002 = measured mic noise floor. Raise if LEDs react in a quiet room.',
+    unit: '',
+  },
 
   // ============================================================
   // TRACKER SETTINGS (AudioTracker — ACF+Comb+PLL, v74-v76)
