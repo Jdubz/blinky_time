@@ -68,6 +68,10 @@ describe('parseIntelHex', () => {
     ).toThrow(/overlaps/);
   });
 
+  it('rejects a byte that parseInt would half-accept ("0G")', () => {
+    expect(() => parseIntelHex([':017000000G8F', EOF].join('\n'))).toThrow(/non-hex character/);
+  });
+
   it('rejects unknown record types', () => {
     expect(() => parseIntelHex([rec(0, 0x07, [1]), EOF].join('\n'))).toThrow(/record type/);
   });
@@ -90,6 +94,7 @@ describe('buildLegacyDfuImage', () => {
       start: APP_START,
       end: APP_END + 4,
       bin: new Uint8Array(APP_END + 4 - APP_START),
+      recorded: new Uint8Array(APP_END + 4 - APP_START),
     };
     expect(() => buildLegacyDfuImage(img)).toThrow(/past the application region/);
   });
@@ -154,6 +159,29 @@ describe('assertUf2MatchesHex', () => {
     expect(() => assertUf2MatchesHex(validateUf2(copy), parseIntelHex(hexText))).toThrow(
       FirmwareError
     );
+  });
+
+  it('refuses a uf2 missing an explicit zero-valued record', () => {
+    // 16 data bytes at 0x27000, then 16 explicit zero bytes at 0x27100 (a new page).
+    const hex = parseIntelHex(
+      [ELA_0002, rec(0x7000, 0, Array(16).fill(0xab)), rec(0x7100, 0, Array(16).fill(0)), EOF].join(
+        '\n'
+      )
+    );
+    const page = new Uint8Array(256);
+    page.fill(0xab, 0, 16);
+    expect(() => assertUf2MatchesHex([{ addr: 0x27000, payload: page }], hex)).toThrow(
+      /hex data at 0x00027100 is missing from the UF2/
+    );
+    expect(() =>
+      assertUf2MatchesHex(
+        [
+          { addr: 0x27000, payload: page },
+          { addr: 0x27100, payload: new Uint8Array(256) },
+        ],
+        hex
+      )
+    ).not.toThrow();
   });
 
   it('refuses a uf2 missing part of the hex', () => {

@@ -22,6 +22,7 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2}
 - **The redeploy triggers** are a `stable-b*` tag push (promotion), `release: released/edited/deleted` (rollback, deletion) and console changes. Release and tag events build the live site from `master`, not from the tagged commit.
 - **No stable release yet** means `latest: null`, and the page refuses to update anything.
 - **Why a mirror:** GitHub release assets can't be fetched from a browser (no CORS).
+- **Content types:** Firebase labels compressed responses for unknown extensions (`.uf2`, `.hex`) `text/html`, even though the bytes are correct. `firebase.json` sets explicit types, and the page judges firmware files by their sha256 alone. Only `index.json` is checked for "the host served the app page instead".
 
 ## What the page checks (all fail loudly; nothing falls back)
 
@@ -40,7 +41,7 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2}
 - The operator must confirm a reinstall, a downgrade, or a `SETTINGS_VERSION` change. The last one resets saved tuning; it is also assumed when the running version isn't a published release.
 - **Uptime ≥ 5 min 15 s before the bootloader reset.** The page waits and polls, and refuses if the device restarts meanwhile. This covers the b190-era reboot counter and the 60-second rule.
 
-**USB only:** the drive's `INFO_UF2.TXT` must say `Board-ID: nRF52840-SeeedXiaoSense-v1` and bootloader `0.8.0-10*`, or nothing is written.
+**USB only:** the drive's `INFO_UF2.TXT` must say `Board-ID: nRF52840-SeeedXiaoSense-v1` and bootloader `0.8.0-10*`, or nothing is written. The manual-copy path asks for that file through a file picker and checks it before the `.uf2` is handed out.
 
 **After the update** (deploy_local.py steps 7–9):
 - The same chip (sn) and the same device id come back, configured, on **exactly** the release version, with audio counters present and **BLE up**. All of this is checked before `save`.
@@ -54,6 +55,8 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2}
 | Talk to the app | Web Serial, picker filtered to `2886:8045` | Web Bluetooth NUS (`Blinky*`) |
 | Enter bootloader | `bootloader` (UF2 mass storage) | `bootloader ble` (legacy OTA DFU) |
 | Write | UF2 onto the `XIAO-SENSE` drive via the File System Access API, or the user copies the downloaded file | Nordic legacy DFU to `AdaDFU`; 20-byte packets, PRN every 8 with the received-byte count checked |
+| Cancel | Honoured until the write starts | Honoured until START_DFU (checked with no `await` before the write) |
+| Bootloader rejects START (`INVALID_STATE`) | n/a | Nothing erased; the reset bootloader boots the old app. The page **stops** ("wait 5 minutes and retry"). `ble_dfu.py` re-sends `bootloader ble` here, but that would be a third reset within seconds (60-second rule). |
 | Old app intact until | the first UF2 block lands (each block is written as it arrives) | START_DFU (erases it) |
 | Interrupted mid-write | Partial app. The bootloader's stuck-transfer timeout (`msc_uf2_check_stuck`) resets it; if the partial app can't boot, the app-handshake watchdog sends it back to the bootloader after 3 tries. Then use *stuck in update mode*. | Device stays in its bootloader (`AdaDFU`): use *stuck in update mode*, over Bluetooth or USB |
 

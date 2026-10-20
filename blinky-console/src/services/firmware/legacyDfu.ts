@@ -123,7 +123,9 @@ export async function transferLegacyDfu(
   gatt: DfuGatt,
   image: LegacyDfuImage,
   onProgress: (p: DfuProgress) => void = () => {},
-  timing = { settleMs: 2000, prnTimeoutMs: 15_000, receiveTimeoutMs: 120_000 }
+  timing = { settleMs: 2000, prnTimeoutMs: 15_000, receiveTimeoutMs: 120_000 },
+  /** Cancellation; honoured up to START_DFU, the point of no return. */
+  signal?: AbortSignal
 ): Promise<void> {
   const { firmware, initPacket } = image;
   const total = firmware.length;
@@ -160,6 +162,9 @@ export async function transferLegacyDfu(
     gatt.setNotifyHandler(queue.push);
     await sleep(timing.settleMs);
 
+    // Last chance to cancel: no await between this check and the START_DFU
+    // write. The catch below resets the bootloader, which boots the intact app.
+    if (signal?.aborted) throw fail('Cancelled');
     // START_DFU. Latch eraseStarted BEFORE the write: once it may have
     // reached the bootloader, the app may be gone (ble_dfu.py #218).
     eraseStarted = true;

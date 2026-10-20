@@ -41,6 +41,46 @@ export function parseInfoUf2(text: string): { bootloader: string | null; boardId
   return { bootloader: bl?.[1] ?? null, boardId: board?.[1] ?? null };
 }
 
+/**
+ * Refuse anything but the fleet bootloader on a XIAO nRF52840 Sense. Runs
+ * before a UF2 is written or offered for manual copying.
+ */
+function checkInfoUf2(text: string): void {
+  const { bootloader, boardId } = parseInfoUf2(text);
+  if (boardId !== REQUIRED_BOARD_ID) {
+    throw new FirmwareError(
+      `That drive is a "${boardId ?? 'unknown'}" board, not a blinky device (${REQUIRED_BOARD_ID}).`
+    );
+  }
+  if (!bootloader?.startsWith(REQUIRED_BOOTLOADER_PREFIX)) {
+    throw new FirmwareError(
+      `The device's bootloader is ${bootloader ?? 'unknown'}; this page only updates devices on ` +
+        `${REQUIRED_BOOTLOADER_PREFIX}. Nothing was written — press the reset button once to return to the old firmware.`
+    );
+  }
+}
+
+/** Let the user pick INFO_UF2.TXT from the drive with a plain file input (every browser has one). */
+function pickInfoUf2File(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.txt,.TXT';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return reject(new FirmwareError('No file chosen'));
+      if (file.name.toUpperCase() !== 'INFO_UF2.TXT') {
+        return reject(
+          new FirmwareError(`Choose INFO_UF2.TXT on the XIAO-SENSE drive, not ${file.name}`)
+        );
+      }
+      file.text().then(resolve, reject);
+    });
+    input.addEventListener('cancel', () => reject(new FirmwareError('No file chosen')));
+    input.click();
+  });
+}
+
 async function pickBootloaderDrive(): Promise<FileSystemDirectoryHandle> {
   let dir: FileSystemDirectoryHandle;
   try {
@@ -58,18 +98,7 @@ async function pickBootloaderDrive(): Promise<FileSystemDirectoryHandle> {
       `"${dir.name}" is not a XIAO bootloader drive (no INFO_UF2.TXT). Choose XIAO-SENSE.`
     );
   }
-  const { bootloader, boardId } = parseInfoUf2(text);
-  if (boardId !== REQUIRED_BOARD_ID) {
-    throw new FirmwareError(
-      `That drive is a "${boardId ?? 'unknown'}" board, not a blinky device (${REQUIRED_BOARD_ID}).`
-    );
-  }
-  if (!bootloader?.startsWith(REQUIRED_BOOTLOADER_PREFIX)) {
-    throw new FirmwareError(
-      `The device's bootloader is ${bootloader ?? 'unknown'}; this page only updates devices on ` +
-        `${REQUIRED_BOOTLOADER_PREFIX}. Nothing was written — press the reset button once to return to the old firmware.`
-    );
-  }
+  checkInfoUf2(text);
   return dir;
 }
 
@@ -103,7 +132,8 @@ function downloadUf2(release: VerifiedRelease): void {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise<void> {
+/** Exported for tests. */
+export async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise<void> {
   type Choice = 'written' | 'manual';
   for (;;) {
     const options: { label: string; action: () => Promise<Choice> }[] = [];
@@ -112,6 +142,8 @@ async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise<void> 
         label: 'Choose the XIAO-SENSE drive',
         action: async () => {
           const dir = await pickBootloaderDrive();
+          // No await between this check and the write starting.
+          checkAborted(ui);
           ui.committed();
           ui.progress('Writing the firmware', null);
           await writeUf2(dir, release.uf2, ui);
@@ -119,12 +151,22 @@ async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise<void> 
         },
       });
     }
-    options.push({ label: 'Copy the file myself', action: async () => 'manual' });
+    options.push({
+      label: 'Copy the file myself',
+      action: async () => {
+        // Same bootloader gate as the drive path, before the file is handed out.
+        checkInfoUf2(await pickInfoUf2File());
+        checkAborted(ui);
+        ui.committed();
+        return 'manual';
+      },
+    });
     let choice: Choice;
     try {
       choice = await ui.ask(
         'A drive named XIAO-SENSE should appear (the device LED pulses). Choose it so the page can ' +
-          'write the update — or copy the file yourself.',
+          'write the update — or copy the file yourself (the page first asks for INFO_UF2.TXT from ' +
+          'that drive, to check the bootloader).',
         options
       );
     } catch (err) {
@@ -144,19 +186,14 @@ async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise<void> 
       ]
     );
     await ui.ask('When the XIAO-SENSE drive has disappeared:', [
-      {
-        label: "I've copied it",
-        action: async () => {
-          ui.committed();
-        },
-      },
+      { label: "I've copied it", action: async () => {} },
     ]);
     return;
   }
 }
 
-/** Find the device on USB again after the bootloader hands back to the app. */
-async function reconnectApp(
+/** Find the device on USB again after the bootloader hands back to the app. Exported for tests. */
+export async function reconnectApp(
   expectSn: string | null,
   ui: FlashUi
 ): Promise<{ transport: WebSerialTransport; link: DeviceLink }> {
@@ -176,6 +213,13 @@ async function reconnectApp(
     }
   };
 
+  // Without an expected serial (recovery) a permitted port can't be told
+  // apart from another XIAO on this computer: the user must choose it.
+  if (!expectSn) {
+    return ui.ask('When the device has restarted, choose it so the page can check the update.', [
+      { label: 'Choose USB device', action: () => tryPort() },
+    ]);
+  }
   ui.progress('Waiting for the device to restart on the new firmware', null);
   const deadline = Date.now() + RETURN_TIMEOUT_MS;
   while (Date.now() < deadline) {

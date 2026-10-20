@@ -9,6 +9,7 @@ import {
   DFU_SERVICE,
   DfuTransferError,
   transferLegacyDfu,
+  type DfuGatt,
 } from './legacyDfu';
 import type { ReleaseIndex, VerifiedRelease } from './releases';
 
@@ -41,41 +42,75 @@ async function pickBootloader(): Promise<BluetoothDevice> {
   }
 }
 
-async function dfuWithRetries(
+/** Exported for tests; `connect` is injectable so a simulated bootloader can stand in. */
+export async function dfuWithRetries(
   bootloader: BluetoothDevice,
   release: VerifiedRelease,
-  ui: FlashUi
+  ui: FlashUi,
+  connect: (device: BluetoothDevice) => Promise<DfuGatt> = connectWebBluetoothDfu
 ): Promise<void> {
   const total = release.dfu.firmware.length;
+  // Sticky across attempts (ble_dfu.py transfer_started, #218): once any
+  // attempt may have erased the app, the device can only be finished, never
+  // reported as unchanged.
+  let erased = false;
   for (let attempt = 1; ; attempt++) {
     try {
+      checkAborted(ui);
       ui.progress(`Connecting to the bootloader (attempt ${attempt}/${MAX_ATTEMPTS})`, null);
-      const gatt = await connectWebBluetoothDfu(bootloader);
-      await transferLegacyDfu(gatt, release.dfu, p => {
-        if (p.phase === 'start') {
-          ui.committed();
-          ui.progress('Erasing the old firmware', null);
-        } else if (p.phase === 'transfer') {
-          ui.progress(`Sending firmware (${Math.round((p.sent / total) * 100)}%)`, p.sent / total);
-        } else {
-          ui.progress(p.phase === 'validate' ? 'Validating' : 'Restarting the device', null);
-        }
-      });
+      const gatt = await connect(bootloader);
+      await transferLegacyDfu(
+        gatt,
+        release.dfu,
+        p => {
+          if (p.phase === 'start') {
+            ui.committed();
+            ui.progress('Erasing the old firmware', null);
+          } else if (p.phase === 'transfer') {
+            ui.progress(
+              `Sending firmware (${Math.round((p.sent / total) * 100)}%)`,
+              p.sent / total
+            );
+          } else {
+            ui.progress(p.phase === 'validate' ? 'Validating' : 'Restarting the device', null);
+          }
+        },
+        undefined,
+        ui.signal
+      );
       return;
     } catch (err) {
       const e = err instanceof DfuTransferError ? err : new DfuTransferError(String(err), false);
+      erased ||= e.eraseStarted;
       ui.log(`Attempt ${attempt} failed: ${e.message}`, 'error');
-      if (attempt >= MAX_ATTEMPTS) {
+      if (erased) {
+        if (attempt >= MAX_ATTEMPTS) {
+          throw new FirmwareError(
+            'The update could not be completed. The device is waiting in its bootloader (it may look ' +
+              'dark) and is safe. Keep it powered, reload this page and choose "Device stuck in update ' +
+              'mode", or connect it by USB.'
+          );
+        }
+      } else if (ui.signal.aborted || e.invalidState) {
+        // Nothing was erased and the bootloader was reset, so the device is
+        // back on its current firmware. ble_dfu.py re-sends `bootloader ble`
+        // here; that would be a third reset within seconds (CLAUDE.md
+        // 60-second rule), so stop and let the operator retry later.
         throw new FirmwareError(
-          e.eraseStarted
-            ? 'The update could not be completed. The device is waiting in its bootloader (it may look ' +
-                'dark) and is safe. Keep it powered, reload this page and choose "Device stuck in update ' +
-                'mode", or connect it by USB.'
-            : `The update could not start: ${e.message}. The device's firmware was not changed.`
+          ui.signal.aborted
+            ? 'Cancelled before anything was erased. The device is returning to its current firmware.'
+            : 'The update did not start and the device returned to its current firmware; nothing was ' +
+                'changed. Wait 5 minutes, then try again.'
+        );
+      } else if (attempt >= MAX_ATTEMPTS) {
+        throw new FirmwareError(
+          `The update could not start: ${e.message}. Nothing was erased: the device is in update ` +
+            'mode with its current firmware intact. Press its reset button, or unplug and replug its ' +
+            'power, to return to it.'
         );
       }
       // Let the bootloader finish resetting and re-advertise (ble_dfu.py).
-      await sleep(e.invalidState ? 15_000 : 20_000);
+      await sleep(20_000, erased ? undefined : ui.signal);
     }
   }
 }

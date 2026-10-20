@@ -58,9 +58,13 @@ export function buildLegacyDfuImage(hex: HexImage): LegacyDfuImage {
  * The release's .uf2 and .hex are produced from the same build; both are
  * sha256-verified, but the USB path flashes one and the BLE path the other.
  * Require them to describe byte-identical flash contents, so a packaging bug
- * can't make the two transports install different firmware. uf2conv pads the
- * tail of a 256-byte page with 0x00; padding beyond the hex is allowed only
- * if it is zero.
+ * can't make the two transports install different firmware:
+ *   - every byte a hex data record wrote (zeros included) must be in the UF2
+ *     with the same value;
+ *   - anything else the UF2 writes (uf2conv pads each 256-byte page, and
+ *     zero-fills short gaps inside a page) must be 0x00.
+ * Addresses neither file covers are never written by USB; BLE writes the
+ * objcopy zero fill there. No code lives in such gaps.
  */
 export function assertUf2MatchesHex(blocks: Uf2Block[], hex: HexImage): void {
   const covered = new Uint8Array(hex.bin.length);
@@ -68,20 +72,18 @@ export function assertUf2MatchesHex(blocks: Uf2Block[], hex: HexImage): void {
     for (let i = 0; i < payload.length; i++) {
       const a = addr + i;
       const b = payload[i];
-      if (a < hex.start || a >= hex.end) {
-        if (b !== 0)
-          throw new FirmwareError(`UF2 writes data at ${hex32(a)}, which the hex does not`);
-        continue;
+      const k = a - hex.start;
+      if (a >= hex.start && a < hex.end && hex.recorded[k]) {
+        if (hex.bin[k] !== b) throw new FirmwareError(`UF2 and hex differ at ${hex32(a)}`);
+        covered[k] = 1;
+      } else if (b !== 0) {
+        throw new FirmwareError(`UF2 writes data at ${hex32(a)}, which the hex does not`);
       }
-      if (hex.bin[a - hex.start] !== b) {
-        throw new FirmwareError(`UF2 and hex differ at ${hex32(a)}`);
-      }
-      covered[a - hex.start] = 1;
     }
   }
-  for (let i = 0; i < covered.length; i++) {
-    if (!covered[i] && hex.bin[i] !== 0) {
-      throw new FirmwareError(`hex data at ${hex32(hex.start + i)} is missing from the UF2`);
+  for (let k = 0; k < covered.length; k++) {
+    if (hex.recorded[k] && !covered[k]) {
+      throw new FirmwareError(`hex data at ${hex32(hex.start + k)} is missing from the UF2`);
     }
   }
 }

@@ -65,7 +65,7 @@ describe('fetchReleaseIndex', () => {
 
   it('fails loudly when the host serves the SPA page instead of the index', async () => {
     serve({});
-    await expect(fetchReleaseIndex(BASE)).rejects.toThrow(/not published on this site/);
+    await expect(fetchReleaseIndex(BASE)).rejects.toThrow(/No firmware releases are published/);
   });
 
   it('rejects an index whose latest is not listed', async () => {
@@ -101,6 +101,21 @@ describe('loadVerifiedRelease', () => {
     const rel = await loadVerifiedRelease(e, BASE);
     expect(rel.uf2.length).toBe(uf2Bytes.length);
     expect(rel.dfu.initPacket.length).toBe(14);
+  });
+
+  it('accepts firmware the host labels text/html (Firebase, compressed .uf2/.hex)', async () => {
+    const e = await entry();
+    serve({
+      [BASE + e.files.hex.path]: { body: hexBytes, type: 'text/html; charset=UTF-8' },
+      [BASE + e.files.uf2.path]: { body: uf2Bytes, type: 'text/html; charset=UTF-8' },
+    });
+    await expect(loadVerifiedRelease(e, BASE)).resolves.toBeDefined();
+  });
+
+  it('refuses the SPA page served in place of a missing firmware file', async () => {
+    const e = await entry();
+    serve({ [BASE + e.files.hex.path]: { body: hexBytes } });
+    await expect(loadVerifiedRelease(e, BASE)).rejects.toThrow(/integrity check/);
   });
 
   it('refuses a file whose sha256 does not match the release manifest', async () => {

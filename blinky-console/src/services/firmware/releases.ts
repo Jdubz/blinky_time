@@ -57,10 +57,6 @@ async function fetchOk(url: string, what: string): Promise<Response> {
     throw new FirmwareError(`Could not download ${what}: ${String(err)}`);
   }
   if (!res.ok) throw new FirmwareError(`Could not download ${what}: HTTP ${res.status}`);
-  // The hosting rewrite serves index.html (200) for any missing path.
-  if ((res.headers.get('content-type') ?? '').includes('text/html')) {
-    throw new FirmwareError(`${what} is not published on this site (got an HTML page instead)`);
-  }
   return res;
 }
 
@@ -68,6 +64,15 @@ export async function fetchReleaseIndex(
   baseUrl: string = firmwareBaseUrl()
 ): Promise<ReleaseIndex> {
   const res = await fetchOk(new URL('index.json', baseUrl).toString(), 'the firmware release list');
+  // The hosting rewrite serves index.html (200) for any missing path. Only
+  // the index is judged by its content type: Firebase labels compressed
+  // responses for unknown extensions (.uf2, .hex) text/html, so firmware
+  // files are judged by their sha256 alone.
+  if ((res.headers.get('content-type') ?? '').includes('text/html')) {
+    throw new FirmwareError(
+      'No firmware releases are published on this site (got an HTML page instead)'
+    );
+  }
   let raw: unknown;
   try {
     raw = await res.json();

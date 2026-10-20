@@ -11,6 +11,11 @@ export interface HexImage {
    * fleet's BLE DFU package carries (blinky_server/firmware/compile.py).
    */
   bin: Uint8Array<ArrayBuffer>;
+  /**
+   * 1 for every byte a data record wrote, 0 for zero-filled gaps — so an
+   * explicit 0x00 byte is never mistaken for a gap (assertUf2MatchesHex).
+   */
+  recorded: Uint8Array<ArrayBuffer>;
 }
 
 /**
@@ -32,11 +37,13 @@ export function parseIntelHex(text: string): HexImage {
     if (line[0] !== ':' || line.length < 11 || line.length % 2 !== 1) {
       throw new FirmwareError(`${where}: not an Intel HEX record`);
     }
+    // parseInt accepts a valid prefix ("0G" -> 0), so check the digits first.
+    if (!/^[0-9A-Fa-f]+$/.test(line.slice(1))) {
+      throw new FirmwareError(`${where}: non-hex character`);
+    }
     const bytes = new Uint8Array((line.length - 1) / 2);
     for (let j = 0; j < bytes.length; j++) {
-      const b = parseInt(line.substr(1 + j * 2, 2), 16);
-      if (Number.isNaN(b)) throw new FirmwareError(`${where}: non-hex character`);
-      bytes[j] = b;
+      bytes[j] = parseInt(line.slice(1 + j * 2, 3 + j * 2), 16);
     }
     const count = bytes[0];
     if (bytes.length !== count + 5) {
@@ -82,6 +89,10 @@ export function parseIntelHex(text: string): HexImage {
     end = c.addr + c.data.length;
   }
   const bin = new Uint8Array(end - start);
-  for (const c of chunks) bin.set(c.data, c.addr - start);
-  return { start, end, bin };
+  const recorded = new Uint8Array(end - start);
+  for (const c of chunks) {
+    bin.set(c.data, c.addr - start);
+    recorded.fill(1, c.addr - start, c.addr - start + c.data.length);
+  }
+  return { start, end, bin, recorded };
 }

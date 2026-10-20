@@ -38,6 +38,17 @@ export function MainShell() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // An update in progress keeps #firmware mounted whatever the hash says:
+  // unmounting it would drop its prompts, log, wake lock and unload guard
+  // while the device is being written.
+  const [firmwareActive, setFirmwareActive] = useState(false);
+  useEffect(() => {
+    if (firmwareActive && hash !== '#firmware') {
+      window.history.replaceState(null, '', '#firmware');
+      setHash('#firmware');
+    }
+  }, [firmwareActive, hash]);
+
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
   // Track the protocol in React state so target/dispatch logic re-runs when
@@ -67,12 +78,17 @@ export function MainShell() {
   const recordingElsewhere =
     hash !== '#record' && ['starting', 'recording', 'stopping', 'reconnecting'].includes(recState);
 
-  if (hash === '#record') {
-    return <RecordPage onClose={() => (window.location.hash = '')} />;
+  if (hash === '#firmware' || firmwareActive) {
+    return (
+      <FirmwarePage
+        onClose={() => (window.location.hash = '')}
+        onActiveChange={setFirmwareActive}
+      />
+    );
   }
 
-  if (hash === '#firmware') {
-    return <FirmwarePage onClose={() => (window.location.hash = '')} />;
+  if (hash === '#record') {
+    return <RecordPage onClose={() => (window.location.hash = '')} />;
   }
 
   if (showAudioDebug) {

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FirmwarePage } from './FirmwarePage';
 import * as releases from '../services/firmware/releases';
 import * as usb from '../services/firmware/usbFlash';
-import type { ReleaseEntry, ReleaseIndex } from '../services/firmware/releases';
+import type { ReleaseEntry, ReleaseIndex, VerifiedRelease } from '../services/firmware/releases';
 
 vi.mock('../services/firmware/releases', async importOriginal => ({
   ...(await importOriginal<typeof releases>()),
@@ -76,6 +76,22 @@ describe('FirmwarePage', () => {
         screen.getAllByText(/did not pass their checks.*sha256 mismatch/).length
       ).toBeGreaterThan(0)
     );
+    expect(usb.flashOverUsb).not.toHaveBeenCalled();
+  });
+
+  it('Cancel during the download stops before any device interaction', async () => {
+    vi.mocked(releases.fetchReleaseIndex).mockResolvedValue(index);
+    let finishDownload: (r: VerifiedRelease) => void = () => {};
+    vi.mocked(releases.loadVerifiedRelease).mockReturnValue(
+      new Promise(resolve => {
+        finishDownload = resolve;
+      })
+    );
+    render(<FirmwarePage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to b216' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    finishDownload({ entry: release('b216') } as VerifiedRelease);
+    await waitFor(() => expect(screen.getAllByText('Cancelled').length).toBeGreaterThan(0));
     expect(usb.flashOverUsb).not.toHaveBeenCalled();
   });
 });

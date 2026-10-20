@@ -46,9 +46,14 @@ function fmtDate(iso: string): string {
 
 interface FirmwarePageProps {
   onClose?: () => void;
+  /**
+   * Reports whether an update is running, so the shell keeps this page
+   * mounted through hash navigation (Back) until it finishes.
+   */
+  onActiveChange?: (active: boolean) => void;
 }
 
-export function FirmwarePage({ onClose }: FirmwarePageProps) {
+export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
   const [index, setIndex] = useState<ReleaseIndex | null>(null);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [tag, setTag] = useState<string>('');
@@ -68,6 +73,7 @@ export function FirmwarePage({ onClose }: FirmwarePageProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   useWakeLock(running);
+  useEffect(() => onActiveChange?.(running), [running, onActiveChange]);
 
   useEffect(() => {
     fetchReleaseIndex()
@@ -123,9 +129,20 @@ export function FirmwarePage({ onClose }: FirmwarePageProps) {
         }),
       ask: <T,>(prompt: string, options: { label: string; action: () => Promise<T> }[]) =>
         new Promise<T>((resolve, reject) => {
+          if (abort.signal.aborted) return reject(new FirmwareError('Cancelled'));
+          let settled = false;
+          const settle = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
+            abort.signal.removeEventListener('abort', onAbort);
+            fn();
+          };
+          // Cancel stays live while an option's action runs (a picker, a
+          // connect). The action may still finish in the background, so each
+          // one re-checks the signal right before anything irreversible.
           const onAbort = () => {
             setAsk(null);
-            reject(new FirmwareError('Cancelled'));
+            settle(() => reject(new FirmwareError('Cancelled')));
           };
           abort.signal.addEventListener('abort', onAbort, { once: true });
           setProgress(null);
@@ -136,8 +153,10 @@ export function FirmwarePage({ onClose }: FirmwarePageProps) {
               // Runs inside the click: device pickers need the user gesture.
               run: () => {
                 setAsk(null);
-                abort.signal.removeEventListener('abort', onAbort);
-                o.action().then(resolve, reject);
+                o.action().then(
+                  v => settle(() => resolve(v)),
+                  e => settle(() => reject(e))
+                );
               },
             })),
           });
@@ -157,6 +176,8 @@ export function FirmwarePage({ onClose }: FirmwarePageProps) {
         );
       }
       addLog(`${entry.version}: checksums, image layout and Bluetooth package verified`);
+      // Cancel pressed during the download: stop before any device interaction.
+      if (abort.signal.aborted) throw new FirmwareError('Cancelled');
       const info =
         mode === 'recover'
           ? method === 'usb'
