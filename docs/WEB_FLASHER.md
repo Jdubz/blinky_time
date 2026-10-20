@@ -1,5 +1,7 @@
 # Web Flasher (blinkytime.joshwentworth.com/#firmware)
 
+> **Status (2026-10-20): switched off** (`FIRMWARE_UPDATES_ENABLED = false` in `blinky-console/src/MainShell.tsx`). The USB route below can't work for a person on Windows. The system writes `System Volume Information` to the `XIAO-SENSE` drive as it mounts. The bootloader's stuck-transfer check (`msc_uf2_check_stuck`, mode b) counts that as an abandoned transfer and drops the drive 8.5 s later, before anyone can pick it or drag a file. Measured on hat_v1: mount 1.4 s after `bootloader`, gone 8.5 s after mount. The scripted tools (`deploy_local.py`, the fleet server) copy within a second, so they never hit it. macOS's own metadata writes very likely do the same. It fails safe: no block is written, and the device returns to its old firmware. A replacement route is being researched; the checks and gates below carry over.
+
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout. One device per update, **over USB**. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
 Code: `blinky-console/src/services/firmware/` (all checks) and `blinky-console/src/pages/FirmwarePage.tsx` (UI).

@@ -118,16 +118,16 @@ describe('MainShell target shapes', () => {
 });
 
 describe('MainShell firmware page', () => {
-  it('stays mounted through hash navigation while an update runs', async () => {
+  it('is switched off: no Firmware button, and #firmware shows a notice instead of the updater', () => {
     mockUseDevices.mockReturnValue({ devices: [], serverUrl: null });
+    window.history.replaceState(null, '', '#');
+    const { unmount } = render(<MainShell />);
+    expect(screen.queryByRole('link', { name: 'Firmware' })).not.toBeInTheDocument();
+    unmount();
     window.history.replaceState(null, '', '#firmware');
     render(<MainShell />);
-    expect(screen.getByText('firmware page')).toBeInTheDocument();
-    // Browser Back to the main view mid-update.
-    window.history.replaceState(null, '', '#');
-    window.dispatchEvent(new HashChangeEvent('hashchange'));
-    expect(await screen.findByText('firmware page')).toBeInTheDocument();
-    expect(window.location.hash).toBe('#firmware');
+    expect(screen.getByText(/not available yet/)).toBeInTheDocument();
+    expect(screen.queryByText('firmware page')).not.toBeInTheDocument();
     window.history.replaceState(null, '', '#');
   });
 });
