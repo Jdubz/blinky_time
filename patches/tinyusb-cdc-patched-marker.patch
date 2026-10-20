@@ -1,0 +1,15 @@
+--- a/libraries/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.h
++++ b/libraries/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.h
+@@ -30,6 +30,12 @@
+ #include "common/tusb_common.h"
+ #include "cdc.h"
+ 
++// PATCHED (blinky_time, patches/tinyusb-cdc-patched-marker.patch): marker
++// the firmware checks at compile time (#error if missing), so a build that
++// links an unpatched TinyUSB fails instead of shipping the DTR-drop serial
++// bug fixed by patches/tinyusb-cdc-no-overwritable-fifo.patch.
++#define BLINKY_TINYUSB_CDC_PATCHED 1
++
+ //--------------------------------------------------------------------+
+ // Class Driver Configuration
+ //--------------------------------------------------------------------+

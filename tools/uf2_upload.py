@@ -102,7 +102,10 @@ def _find_uf2conv():
     the nRF52 package copy can be reused for ESP32-S3 conversion too.
     """
     search_bases = [
-        # Seeeduino nRF52 package (primary — ships uf2conv.py)
+        # The pinned, isolated toolchain (scripts/setup_toolchain.sh, #252)
+        # comes first: it's what scripts/build.sh compiles with.
+        Path(__file__).resolve().parent.parent / ".arduino/data/packages/Seeeduino/hardware/nrf52",
+        # Seeeduino nRF52 package in the machine's own Arduino folders
         Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52",
         # Windows: arduino-cli stores packages in AppData/Local/Arduino15
         Path.home() / "AppData/Local/Arduino15/packages/Seeeduino/hardware/nrf52",

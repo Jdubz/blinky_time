@@ -115,7 +115,7 @@ compile: check-arduino-cli update-device-type version
 	@echo "========================================"
 	@echo "Sketch: $(SKETCH_DIR)"
 	@echo "Board: $(FQBN)"
-	@cd $(SKETCH_DIR) && $(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") .
+	@cd $(SKETCH_DIR) && bash ../scripts/in_toolchain.sh $(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") .
 	@echo "Compilation successful!"
 
 # Upload sketch
@@ -194,7 +194,7 @@ compile-out: safety-check check-arduino-cli update-device-type version
 	@echo "========================================"
 	@echo "Sketch: $(SKETCH_DIR)"
 	@echo "Board: $(FQBN)"
-	@$(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") --output-dir $(BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
+	@bash scripts/in_toolchain.sh $(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") --output-dir $(BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
 	@echo "Compilation successful!"
 
 # UF2 upload: compile + validate + convert + upload
@@ -254,6 +254,11 @@ bootloader-update-all:
 
 # Install TFLite Micro Arduino library (required for NN=1 builds)
 .PHONY: setup-tflite
+# Pinned, isolated firmware toolchain in .arduino/ (#252): run once per machine.
+.PHONY: setup-toolchain
+setup-toolchain:
+	@bash scripts/setup_toolchain.sh
+
 setup-tflite:
 	@echo "Installing TFLite Micro Arduino library..."
 	@bash tools/setup_tflite_lib.sh

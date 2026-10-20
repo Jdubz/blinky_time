@@ -30,6 +30,28 @@ gh workflow run release.yml --ref master     # or: Actions → "Release candidat
 
 The PR Validation `Compile Firmware` job installs the same pinned toolchain, so every PR compiles what a release would.
 
+## The pinned toolchain (every machine)
+
+Every build (CI, the release workflow, a workstation, blinkyhost) uses the same isolated toolchain. **arduino-cli itself is pinned too** (`arduino_cli` in `tools/firmware_toolchain.json`); a different version is refused (CI's setup-arduino-cli used to install the newest release, even a release candidate). Note: Windows and Linux builds of the same commit with identical toolchain versions and libraries differ by ~48 bytes of flash (RAM identical), most likely path-dependent strings. Shipped firmware is unaffected because releases are only ever built by CI. `bash scripts/setup_toolchain.sh` installs the rest into `<repo>/.arduino` (gitignored):
+- the core pinned in `tools/firmware_toolchain.json`;
+- exactly the libraries pinned there, plus TFLite at the commit in `tools/setup_tflite_lib.sh`;
+- the core patches from `scripts/apply_core_patches.sh`.
+
+`scripts/arduino_env.sh` points arduino-cli at that directory through `ARDUINO_DIRECTORIES_*`. `build.sh` and the Makefile (`scripts/in_toolchain.sh`) build only inside it.
+
+Three layers make the wrong USB library impossible to ship (#252):
+1. **Isolation:** a machine's own Arduino folders are never read, so nothing can shadow a pinned library.
+2. **Library check:** `tools/check_build_libs.py` parses the verbose compile log and fails the build if:
+   - a library resolves outside `.arduino/`;
+   - arduino-cli had to choose between multiple copies of a library;
+   - a pinned version drifts;
+   - TinyUSB is not the core's.
+
+   The resolved set is recorded in each release's `manifest.json`.
+3. **Compile-time guard:** the patch set defines `BLINKY_TINYUSB_CDC_PATCHED` in TinyUSB's `cdc_device.h`, and `blinky-things.ino` `#error`s without it. Any build that links another TinyUSB fails, whatever the build path.
+
+Changing the toolchain means editing the pin files, re-running `setup_toolchain.sh`, and checking that CI and a local build produce the same sizes.
+
 ### 2. Bench gate (test device)
 ```bash
 python tools/release_gate.py bN --port COM3 --device-id hat_v1

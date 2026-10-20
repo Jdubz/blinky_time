@@ -21,6 +21,20 @@
 // NOTE: Adafruit_NeoPixel must be first. PDM.h is included separately in
 // Nrf52PdmMic.cpp to avoid pinDefinitions.h redefinition (Seeeduino mbed platform bug)
 #include <Adafruit_NeoPixel.h>
+
+// Pinned-toolchain guard (#252). The TinyUSB this build links must carry the
+// CDC patch (TX FIFO never overwritable; stock TinyUSB silently drops all
+// serial output once DTR drops). The patch set also defines
+// BLINKY_TINYUSB_CDC_PATCHED in cdc_device.h, so any other TinyUSB (a
+// user-installed copy shadowed the core's in b209-b213) fails right here
+// instead of shipping.
+#if defined(ARDUINO_ARCH_NRF52)
+#include <Adafruit_TinyUSB.h>
+#ifndef BLINKY_TINYUSB_CDC_PATCHED
+#error "Unpatched TinyUSB: build with scripts/build.sh after scripts/setup_toolchain.sh (pinned toolchain, #252)"
+#endif
+#endif
+
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
 #include "render/RenderPipeline.h"  // Generator/Effect/Renderer management

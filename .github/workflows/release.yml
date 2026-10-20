@@ -72,6 +72,8 @@ jobs:
 
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v2
+      with:
+        version: 1.3.1   # = tools/firmware_toolchain.json arduino_cli
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -81,16 +83,7 @@ jobs:
     - name: Install pinned toolchain
       run: |
         pip install adafruit-nrfutil pyserial
-        TC=tools/firmware_toolchain.json
-        arduino-cli config init
-        arduino-cli config add board_manager.additional_urls "$(jq -r .board_index_url $TC)"
-        arduino-cli core update-index
-        arduino-cli core install "$(jq -r .core $TC)"
-        jq -r '.libraries[]' $TC | while read -r lib; do arduino-cli lib install "$lib"; done
-        bash tools/setup_tflite_lib.sh --ci
-        bash scripts/apply_core_patches.sh
-        arduino-cli core list
-        arduino-cli lib list
+        bash scripts/setup_toolchain.sh
 
     - name: Build firmware
       run: bash scripts/build.sh --build ${{ steps.num.outputs.build }}
@@ -105,7 +98,8 @@ jobs:
         python tools/firmware_release.py package \
           --hex /tmp/blinky-build/blinky-things.ino.hex \
           --build ${{ steps.num.outputs.build }} --sha "$GITHUB_SHA" \
-          --out dist --toolchain-json "$TC"
+          --out dist --toolchain-json "$TC" \
+          --libraries-json /tmp/blinky-build/libraries.json
         ls -la dist
 
     - name: Release notes

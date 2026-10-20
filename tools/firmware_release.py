@@ -128,7 +128,7 @@ def require_test_device(device_id, what):
 
 # ---------------------------------------------------------------- package ---
 
-def package(hex_path, build, sha, out_dir, toolchain):
+def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
     """Validate a compiled hex and write release assets + manifest into out_dir.
 
     Same validators the deploy paths run (tools/uf2_upload.py), but strict:
@@ -159,6 +159,8 @@ def package(hex_path, build, sha, out_dir, toolchain):
         "git_sha": sha,
         "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
         "toolchain": toolchain,
+        # Libraries the compile actually resolved (tools/check_build_libs.py, #252).
+        "libraries": libraries,
         **storage_versions(),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -326,6 +328,8 @@ def main():
     p.add_argument("--sha", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--toolchain-json", default="{}", help="toolchain versions as JSON")
+    p.add_argument("--libraries-json", required=True,
+                   help="libraries.json written by scripts/build.sh (resolved library set)")
     d = sub.add_parser("download")
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
@@ -339,7 +343,8 @@ def main():
     args = ap.parse_args()
     try:
         if args.cmd == "package":
-            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json))
+            libs = json.loads(Path(args.libraries_json).read_text(encoding="utf-8"))
+            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs)
             print(json.dumps(m, indent=2))
         elif args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)
