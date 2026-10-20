@@ -1,4 +1,4 @@
-# Web Updater (blinkytime.joshwentworth.com/#firmware)
+# Web Updater (blinky-time.joshwentworth.com/#firmware)
 
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
