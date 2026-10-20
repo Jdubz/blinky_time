@@ -77,7 +77,6 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     // instant triggers on first update (nowMs >> 0 would fire immediately)
     uint32_t now = time_.millis();
     onsetDensityWindowStart_ = now;
-    lastSignificantAudioMs_ = now;   // Prevent premature silence decay on boot
     resetSlots();
 
     return true;
@@ -175,14 +174,13 @@ const AudioControl& AudioTracker::update(float dt) {
         framesThisUpdate_++;
     }
 
-    // 3. Silence tracking on ABSOLUTE level. mic_.getLevel() is relative to
-    // the tracked peak/valley range: in a quiet breakdown it reads 0 for
-    // seconds even though music is playing, which used to wipe all tempo
-    // state 5 s into every breakdown. Raw level vs the noise gate answers
-    // the question actually being asked: is there sound?
-    if (mic_.getRawLevel() > mic_.noiseGate * 2.0f) {
-        lastSignificantAudioMs_ = nowMs;
-    }
+    // 3. No silence detection. Every detector tried (relative level, a
+    // fixed absolute gate, an adaptive noise floor) either reset tempo in
+    // breakdowns / dense music or swallowed quiet music on this weak mic.
+    // On edm/ at device-like levels the adaptive floor reset 487-2159 times
+    // in music; never resetting gave 0 false resets and re-locked on a new
+    // song as fast or faster (2.1-12.0 s vs 2.7-12.3 s). When music stops,
+    // rhythm confidence falls as the analysis buffers fill with room noise.
 
     // Smoothed normalized level for PLP confidence gating (~1 s EMA). A
     // single instantaneous sample often lands in the sidechain dip between
@@ -190,12 +188,6 @@ const AudioControl& AudioTracker::update(float dt) {
     {
         float a = 1.0f - expf(-dt / 1.0f);
         levelEnv_ += a * (mic_.getLevel() - levelEnv_);
-    }
-
-    // After 5 s of real silence, reset analysis state so new music starts
-    // clean (old buffers/pattern/phase would contaminate warm-up).
-    if (nowMs - lastSignificantAudioMs_ > 5000 && ossCount_ > 0) {
-        resetAnalysisState();
     }
 
     // 4. Pattern slot cache: check every bar (4 beats)
@@ -313,40 +305,7 @@ void AudioTracker::processFrame(bool runNN) {
         lastPlpMs_ = t2 - t1;          // Profile: PLP analysis only
     }
 
-    // --- Decay during silence (per frame: 0.998^62.5 ≈ 0.88/s) ---
-    if (time_.millis() - lastSignificantAudioMs_ > 2000) {
-        periodicityStrength_ *= 0.998f;
-        plpConfidence_ *= 0.998f;
-    }
-
     if (frameHook_) frameHook_(frameHookCtx_);
-}
-
-// ============================================================================
-// State Reset
-// ============================================================================
-
-void AudioTracker::resetAnalysisState() {
-    memset(ossBuffer_, 0, sizeof(ossBuffer_));
-    memset(bassBuffer_, 0, sizeof(bassBuffer_));
-    memset(nnOnsetBuffer_, 0, sizeof(nnOnsetBuffer_));
-    ossWriteIdx_ = 0; ossCount_ = 0;
-    bassWriteIdx_ = 0; bassCount_ = 0;
-    nnWriteIdx_ = 0; nnCount_ = 0;
-    memset(plpPattern_, 0, sizeof(plpPattern_));
-    phaseLocked_ = false;
-    skipNextWrap_ = false;
-    framesSinceAcf_ = 0;
-    odfBaseline_ = 0.0f;
-    odfPeakHold_ = 0.0f;
-    prevSignal_ = 0.0f;
-    prevPrevSignal_ = 0.0f;
-    plpConfidence_ = 0.0f;
-    periodicityStrength_ = 0.0f;
-    plpPhase_ = 0.0f;
-    // beatCount_ is NOT reset: AudioControl::beatCount is monotonic and
-    // generators treat any change as "a beat happened".
-    resetSlots();
 }
 
 // ============================================================================
@@ -1503,36 +1462,15 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
                          + bassEnergy * energyMelWeight
                          + odfEnergy * energyOdfWeight;
 
-    // === NOISE-GATE PROPAGATION (b201) ===
-    // mic_.getLevel() returns 0 when AdaptiveMic's noise gate is engaged
-    // (raw mic below threshold). Without the gate below, bassEnergy and
-    // odfEnergy (both computed from the spectral pipeline on raw ISR
-    // samples) would still produce apparent activity from amplified mic
-    // thermal noise. The architectural fix: treat AdaptiveMic's mic-gate
-    // as authoritative — if it says we're in silence, the entire downstream
-    // signal chain agrees.
-    //
-    // Soft gate on ABSOLUTE level: 0 at/below the noise gate, full at 2x
-    // the gate, linear between (no snap at threshold). Pre-b208 this used
-    // mic.level, which is RELATIVE to the tracked peak/valley range — it
-    // also reads ~0 at the bottom of a quiet breakdown and in the dip
-    // between kicks, so the gate dimmed pulse/plpPulse/rhythm whenever the
-    // music was locally quiet, not only in silence.
-    float gateRaw = mic_.noiseGate;
-    float micGate = (gateRaw > 0.0f)
-        ? clampf((mic_.getRawLevel() - gateRaw) / gateRaw, 0.0f, 1.0f)
-        : 1.0f;
-    weightedEnergy *= micGate;
+    // No noise-gate propagation: the absolute gate was removed (AdaptiveMic),
+    // so energy, pulse, plpPulse, onset and rhythm are never zeroed by a
+    // fixed level threshold. On this mic that threshold sat at quiet-music
+    // level and silenced real music.
 
     // Smolder: hash-based deterministic noise (0.12-0.20) for baseline activity.
-    // PR #149 review: also gate by micGate so the smolder doesn't float
-    // control_.energy back up to 0.12-0.20 during silence (which would
-    // bypass the noise-gate goal of "entire downstream signal chain
-    // agrees on silence" — and would let a user-lowered silenceFloor
-    // unlock the heightmap/burst path on pure noise).
     uint32_t h = nowMs;
     h ^= h >> 16; h *= 0x45d9f3bU; h ^= h >> 16;
-    float smolder = (0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f)) * micGate;
+    float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
 
     // --- Continuous pulse envelope (visual generators) ---
@@ -1553,11 +1491,6 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
         pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
     }
-    // Noise-gate propagation (b201): same micGate as above. Spectral
-    // flux fires on amplified mic noise during silence — gate it on
-    // the authoritative mic.level signal so pulse can't trigger when
-    // the noise gate says we're silent.
-    pulseSignal *= micGate;
 
     if (pulseSignal > 0.4f) {
         float trigger = (pulseSignal - 0.4f) / 0.6f;
@@ -1574,22 +1507,26 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // Phase advances once per spectral frame at the fractional period and is
     // pulled toward the measured accent at each analysis (advancePlpPhase /
     // correctPlpPhase). plpPulseValue_ is the accent-aligned pattern at it.
-    //
-    // b201 noise-gate propagation: PLP epoch-fold and ACF periodicity
-    // both run on the spectral pipeline regardless of mic.level state,
-    // so they can produce strong pulse values during silence when noise
-    // gets amplified by the spectral side. Gate them on micGate so the
-    // entire downstream chain respects AdaptiveMic's authoritative
-    // silence decision.
+    // Rhythm needs hits. In room noise the ACF still finds "periodicity"
+    // (the slowly varying inputs self-correlate at beat lags: rhythm read
+    // 0.45-0.77 after music stopped), and there is no level threshold to
+    // tell noise from music on this mic. Onsets are the evidence: the flux
+    // detector fires ~6.5/s in music and not at all on room noise. After
+    // RHYTHM_HOLD_S without an onset the rhythm outputs fade over
+    // RHYTHM_FADE_S; the next onset restores them at once (no added delay).
+    // Tempo/phase state is kept, so a breakdown can't wipe it (#172).
+    const float sinceOnsetS = static_cast<float>(frameClock_ - lastPulseFrame_) / OSS_FRAME_RATE;
+    const float rhythmPresence =
+        clampf(1.0f - (sinceOnsetS - RHYTHM_HOLD_S) / RHYTHM_FADE_S, 0.0f, 1.0f);
+
     control_.phase = plpPhase_;
     control_.beatCount = beatCount_;
-    control_.plpPulse = plpPulseValue_ * micGate;
-    // Onset event, suppressed only in true silence (absolute gate above).
-    control_.onset = (micGate > 0.0f) ? lastPulseStrength_ : 0.0f;
+    control_.plpPulse = plpPulseValue_ * rhythmPresence;
+    control_.onset = lastPulseStrength_;
 
     // --- Rhythm Strength ---
-    // Driven by ACF periodicity strength. Gated by micGate (see above).
-    control_.rhythmStrength = periodicityStrength_ * micGate;
+    // Driven by ACF periodicity strength, present only while hits are.
+    control_.rhythmStrength = periodicityStrength_ * rhythmPresence;
 
     // --- Onset Density ---
     if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {

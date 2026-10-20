@@ -116,23 +116,13 @@ void AdaptiveMic::update(float dt) {
     if (audioDt < MicConstants::MIN_DT_SECONDS) audioDt = MicConstants::MIN_DT_SECONDS;
     if (audioDt > MicConstants::MAX_DT_SECONDS) audioDt = MicConstants::MAX_DT_SECONDS;
 
-    // === ABSOLUTE NOISE GATE (b200) ===
-    // Below the gate, the audio is considered silence regardless of
-    // whatever the peak/valley tracker has adapted to. Trackers are
-    // frozen so they don't drift down to noise during quiet — when
-    // signal returns, normalization is still calibrated to the music
-    // level we were at. Output level = 0.
-    //
-    // Fixes the "always on after a few seconds of silence" creep that
-    // was caused by uncapped normalization (b191) amplifying mic
-    // thermal noise into apparent signal between songs.
-    if (normalized < noiseGate) {
-      level = 0.0f;
-      instantAdaptRun_ = 0;  // silence breaks the "consecutive loud updates" run
-      aboveRunS_ = 0.0f;
-      riserMode_ = false;    // silence ends any build-up
-      return;  // freeze peakLevel/valleyLevel by skipping their updates
-    }
+    // No absolute noise gate. This MEMS mic's signal is so weak that music
+    // sits at the level a fixed gate would call silence (the b200 gate at
+    // 0.002 equalled the measured average music level of a mic with
+    // enclosure holes), so any fixed threshold also swallows quiet music.
+    // Removed 2025-12-26 for that reason, re-added in b200, removed again.
+    // With the hardware gain fixed at its SNR optimum, the window/range
+    // normalizer adapts to whatever range exists, room noise included.
 
     // Peak tracking with attack/release envelope
     riserSmooth_ += (1.0f - expf(-audioDt / MicConstants::RISER_SMOOTH_TAU)) * (normalized - riserSmooth_);
