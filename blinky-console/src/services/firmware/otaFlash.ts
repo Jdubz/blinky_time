@@ -199,6 +199,8 @@ export async function updateDevice(
           throw err;
         ui.log(`Connection lost (${err.message}); reconnecting…`, 'warn');
         await session.reconnect();
+        // The link may have dropped mid-line; close any fragment first.
+        await session.client.resync();
         status = await session.client.status();
         session.tune(status, ui);
         if (status.state !== 'receiving' || status.build !== release.fields.build) {

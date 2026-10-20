@@ -86,12 +86,25 @@ export class OtaClient {
     try {
       raw = await this.link.otaStatus();
     } catch (err) {
+      // An `ERR ota ...` answer comes from firmware that HAS signed OTA (e.g.
+      // a line glued to a lost fragment): report it as it is, not as "too old".
+      if (err instanceof FirmwareError && err.message.includes('refused `ota status`')) throw err;
       throw new FirmwareError(
         "This device's firmware is too old to update from the browser (it doesn't answer `ota status`). " +
           `It needs one update another way first. (${err instanceof Error ? err.message : String(err)})`
       );
     }
     return parseOtaStatus(raw);
+  }
+
+  /**
+   * End a line the device may have half-received (a lost BLE packet can
+   * carry its newline; the device would glue the next command onto it), then
+   * let whatever it answers to that fragment pass unread.
+   */
+  async resync(): Promise<void> {
+    await this.link.fire('');
+    await new Promise(r => setTimeout(r, RESYNC_DRAIN_MS));
   }
 
   /** Send the signed manifest; the device verifies it and erases its staging area (a few seconds). */
@@ -109,14 +122,42 @@ export class OtaClient {
     const chunkTimeoutMs = opts.chunkTimeoutMs ?? 10_000;
     let off = from;
     let crcFailures = 0;
+    let timeouts = 0;
     while (off < total) {
       if (opts.signal?.aborted) throw new FirmwareError('Cancelled');
       const piece = image.subarray(off, Math.min(off + CHUNK, total));
       const crc = crc16(piece).toString(16).toUpperCase();
-      const reply = await this.link.otaReply(
-        `ota chunk ${off} ${crc} ${toBase64(piece)}`,
-        chunkTimeoutMs
-      );
+      let reply: string;
+      try {
+        reply = await this.link.otaReply(
+          `ota chunk ${off} ${crc} ${toBase64(piece)}`,
+          chunkTimeoutMs
+        );
+      } catch (err) {
+        // No reply: the line never ended on the device (e.g. its newline was
+        // lost). Close it, ask where the device is, carry on from there. A
+        // disconnect (or repeated silence) goes up to the caller.
+        if (
+          !(err instanceof FirmwareError) ||
+          !err.message.startsWith('No reply') ||
+          ++timeouts > 3
+        )
+          throw err;
+        opts.log?.('No reply to a chunk; resynchronising with the device', 'warn');
+        await this.resync();
+        const st = await this.status();
+        if (st.state === 'complete' && st.build === release.fields.build) {
+          off = total;
+        } else if (st.state === 'receiving' && st.build === release.fields.build) {
+          off = st.next;
+        } else {
+          throw new FirmwareError(
+            'The device lost the transfer; start the update again (nothing was installed)'
+          );
+        }
+        opts.onProgress?.(off, total);
+        continue;
+      }
       const next = /^OK ota next=(\d+)/.exec(reply);
       const expected = /^ERR ota offset expected=(\d+)/.exec(reply);
       if (next) {
@@ -129,7 +170,8 @@ export class OtaClient {
       } else if (expected) {
         opts.log?.(`Resynchronising at byte ${expected[1]}`, 'warn');
         off = Number(expected[1]);
-      } else if (reply.startsWith('ERR ota chunk-crc')) {
+      } else if (reply.startsWith('ERR ota chunk-crc') || reply.startsWith('ERR ota bad-chunk')) {
+        // Damaged on the way (cut, or glued to a lost fragment): resend.
         crcFailures++;
         if (this.bulk && crcFailures === 2) {
           // Packets are being cut on the way: drop to small acknowledged writes.
@@ -158,6 +200,9 @@ export class OtaClient {
     await this.link.otaReply('ota abort', 10_000);
   }
 }
+
+/** How long resync() lets the device's answer to a stray fragment pass. */
+const RESYNC_DRAIN_MS = 1000;
 
 /** Image bytes per chunk line: the firmware's MAX_CHUNK (QspiOtaStaging.h). */
 export const CHUNK = 512;

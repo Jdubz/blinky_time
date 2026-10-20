@@ -28,6 +28,11 @@ class SimDevice implements Transport {
   corruptNext = 0;
   /** Answer `ota status` like firmware without signed OTA. */
   legacy = false;
+  /** Lose the newline of the next N chunk lines (BleNus keeps the fragment). */
+  dropNewline = 0;
+  /** Answer the next N chunk lines with `ERR ota bad-chunk`. */
+  badChunk = 0;
+  private fragment = '';
   lines: string[] = [];
   private listeners: TransportEventCallback[] = [];
 
@@ -49,7 +54,17 @@ class SimDevice implements Transport {
     queueMicrotask(() => this.listeners.forEach(l => l({ type: 'line', line } as TransportEvent)));
   }
 
-  async send(cmd: string) {
+  async send(raw: string) {
+    // BleNus semantics: a line whose newline was lost stays buffered, and the
+    // next bytes are appended to it; an empty line with nothing buffered is ignored.
+    const cmd = this.fragment + raw;
+    this.fragment = '';
+    if (!cmd) return;
+    if (this.dropNewline > 0 && raw.startsWith('ota chunk')) {
+      this.dropNewline--;
+      this.fragment = cmd;
+      return;
+    }
     this.lines.push(cmd);
     if (cmd === 'ota status') {
       if (this.legacy) return this.reply('Staging: no valid firmware staged');
@@ -78,6 +93,11 @@ class SimDevice implements Transport {
       return this.reply(this.manifestReply);
     }
     const m = /^ota chunk (\d+) ([0-9A-F]+) (\S+)$/.exec(cmd);
+    if (cmd.startsWith('ota chunk') && !m) return this.reply('ERR ota bad-chunk');
+    if (m && this.badChunk > 0) {
+      this.badChunk--;
+      return this.reply('ERR ota bad-chunk');
+    }
     if (m) {
       const off = Number(m[1]);
       let data = Uint8Array.from(atob(m[3]), c => c.charCodeAt(0));
@@ -169,6 +189,44 @@ describe('OtaClient', () => {
     await client.transfer(release, 0, { log: () => {} });
     expect(bulk.disable).toHaveBeenCalledTimes(1);
     expect(dev.staged).toEqual(image);
+  });
+
+  it('recovers when a lost packet carried the newline (no reply, fragment buffered)', async () => {
+    const dev = new SimDevice();
+    const client = new OtaClient(new DeviceLink(dev));
+    await client.begin(release);
+    dev.dropNewline = 1;
+    const log = vi.fn();
+    await client.transfer(release, 0, { log, chunkTimeoutMs: 50 });
+    expect(dev.staged).toEqual(image);
+    expect(log).toHaveBeenCalledWith(
+      'No reply to a chunk; resynchronising with the device',
+      'warn'
+    );
+  });
+
+  it('resends a chunk the device reports as bad (e.g. glued to a fragment)', async () => {
+    const dev = new SimDevice();
+    const client = new OtaClient(new DeviceLink(dev));
+    await client.begin(release);
+    dev.badChunk = 1;
+    await client.transfer(release, 0);
+    expect(dev.staged).toEqual(image);
+  });
+
+  it('reports a refused status as it is, not as old firmware', async () => {
+    const dev = new SimDevice();
+    dev.send = async (cmd: string) => {
+      if (cmd === 'ota status')
+        queueMicrotask(() =>
+          dev['listeners'].forEach(l =>
+            l({ type: 'line', line: 'ERR ota chunk-crc' } as TransportEvent)
+          )
+        );
+    };
+    const err = await new OtaClient(new DeviceLink(dev)).status().catch(e => e);
+    expect(err.message).toMatch(/refused `ota status`: ERR ota chunk-crc/);
+    expect(err.message).not.toMatch(/too old/);
   });
 
   it('gives up on a link that keeps damaging chunks', async () => {
