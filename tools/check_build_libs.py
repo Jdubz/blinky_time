@@ -35,7 +35,7 @@ def main():
     args = ap.parse_args()
 
     text = Path(args.log).read_text(encoding="utf-8", errors="replace")
-    root = norm(REPO / ".arduino")
+    root = norm(REPO / ".arduino") + "/"   # separator: .arduino-backup/ is outside
     pinned = {}
     for spec in json.loads((REPO / "tools/firmware_toolchain.json").read_text(encoding="utf-8"))["libraries"]:
         name, ver = spec.rsplit("@", 1)

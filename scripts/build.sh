@@ -69,7 +69,7 @@ PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/n
 # the machine's own arduino-cli setup.
 if ! $ESP32; then
     source scripts/arduino_env.sh
-    blinky_require_toolchain || exit 1
+    blinky_require_toolchain "$ARDUINO_CLI" || exit 1
     # Both core patches present (the firmware also #errors without the
     # marker, so this is a fast, explicit first check).
     bash scripts/apply_core_patches.sh --check || exit 1

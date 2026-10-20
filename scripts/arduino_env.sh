@@ -43,14 +43,15 @@ BLINKY_CORE_VERSION="${BLINKY_CORE##*@}"
 BLINKY_CORE_DIR="$BLINKY_ARDUINO_PACKAGES/Seeeduino/hardware/nrf52/$BLINKY_CORE_VERSION"
 BLINKY_ARDUINO_CLI_VERSION="$(_blinky_tc arduino_cli)"
 
-# The arduino-cli version itself is part of the toolchain: different
-# versions order the build/link steps differently (CI on 1.5.2-rc.1 and a
-# workstation on 1.3.1 built the same source 48 bytes apart).
+# The arduino-cli version is part of the toolchain too (CI's
+# setup-arduino-cli used to install the newest release, even a release
+# candidate). Validate the executable that will actually compile:
+#   blinky_require_cli_version [cli]   (default: $ARDUINO_CLI or arduino-cli)
 blinky_require_cli_version() {
-    local have
-    have="$(arduino-cli version 2>/dev/null | sed -n 's/.*Version: *\([^ ]*\).*/\1/p')"
+    local cli="${1:-${ARDUINO_CLI:-arduino-cli}}" have
+    have="$("$cli" version 2>/dev/null | sed -n 's/.*Version: *\([^ ]*\).*/\1/p')"
     if [[ "$have" != "$BLINKY_ARDUINO_CLI_VERSION" ]]; then
-        echo "ERROR: arduino-cli $have, pinned $BLINKY_ARDUINO_CLI_VERSION (tools/firmware_toolchain.json)." >&2
+        echo "ERROR: $cli is arduino-cli '$have', pinned $BLINKY_ARDUINO_CLI_VERSION (tools/firmware_toolchain.json)." >&2
         echo "       Install arduino-cli $BLINKY_ARDUINO_CLI_VERSION: https://arduino.github.io/arduino-cli/" >&2
         return 1
     fi
@@ -59,7 +60,7 @@ blinky_require_cli_version() {
 # Fail loudly if the isolated toolchain isn't installed (don't fall back to
 # whatever the machine has).
 blinky_require_toolchain() {
-    blinky_require_cli_version || return 1
+    blinky_require_cli_version "${1:-}" || return 1
     if [[ ! -d "$BLINKY_CORE_DIR" || ! -f "$BLINKY_ARDUINO_DIR/arduino-cli.yaml" ]]; then
         echo "ERROR: pinned toolchain not installed in $BLINKY_ARDUINO_DIR." >&2
         echo "       Run: bash scripts/setup_toolchain.sh   (see docs/RELEASE_PROCESS.md)" >&2

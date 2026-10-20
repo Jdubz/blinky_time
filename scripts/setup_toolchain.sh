@@ -29,11 +29,13 @@ echo "=== Pinned toolchain -> $BLINKY_ARDUINO_DIR ==="
 arduino-cli core update-index
 arduino-cli core install "$BLINKY_CORE"
 
-mapfile -t LIBS < <("$BLINKY_PYTHON" -c "import json,sys; print('\n'.join(json.load(open(sys.argv[1]))['libraries']))" \
-                    "$(_blinky_native "$BLINKY_TOOLCHAIN_JSON")" | tr -d '\r')
-for lib in "${LIBS[@]}"; do
-    arduino-cli lib install "$lib"
-done
+# Plain read loop (macOS ships bash 3.2, which has no mapfile).
+"$BLINKY_PYTHON" -c "import json,sys; print('\n'.join(json.load(open(sys.argv[1]))['libraries']))" \
+    "$(_blinky_native "$BLINKY_TOOLCHAIN_JSON")" | tr -d '\r' > "$BLINKY_ARDUINO_DIR/.libs"
+while IFS= read -r lib; do
+    [[ -n "$lib" ]] && arduino-cli lib install "$lib"
+done < "$BLINKY_ARDUINO_DIR/.libs"
+rm -f "$BLINKY_ARDUINO_DIR/.libs"
 
 bash tools/setup_tflite_lib.sh --ci
 bash scripts/apply_core_patches.sh
