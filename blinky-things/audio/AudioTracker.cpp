@@ -1472,6 +1472,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     h ^= h >> 16; h *= 0x45d9f3bU; h ^= h >> 16;
     float smolder = 0.12f + 0.08f * (h & 0xFF) * (1.0f / 255.0f);
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
+    control_.level = clampf(mic_.getLevel(), 0.0f, 1.0f);
 
     // --- Continuous pulse envelope (visual generators) ---
     // NN-primary: same signal as discrete onset events. NN activation is

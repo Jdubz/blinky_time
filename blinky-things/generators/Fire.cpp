@@ -58,10 +58,13 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // generators don't self-clear). Harmless today but breaks compositing
     // if Fire is ever used as a layer.
 
-    // === Per-frame amplitude envelope (b200) ===
-    float es = audio.energy - params_.silenceFloor;
-    float range = max(0.05f, 1.0f - params_.silenceFloor);
-    frameOvershoot_ = es < 0.0f ? 0.0f : (es > range ? 1.0f : es / range);
+    // === Per-frame amplitude envelope ===
+    // Follows the normalized mic level directly. It used to be
+    // (energy - silenceFloor) / range (b200), but energy never drops below
+    // the 0.12-0.20 smolder baseline and barely swings above it, so after
+    // the 0.25 floor the continuous response averaged ~0.18 and only
+    // transients showed. Level swings 0-1 with the audio; no floor.
+    frameOvershoot_ = audio.level;
 
     // Palette bias driven by energy
     float targetBias = audio.energy;
@@ -282,8 +285,8 @@ void Fire::spawnParticles(float dt) {
     // that meant bursts almost never fired. Operator feedback: "you're only
     // using nn and plpPulse outputs; direct audio is the most reliable."
     // PR #149 review: removed the `hasSignal = overshoot > 0` gate. It
-    // was over-strict — `overshoot` requires audio.energy > silenceFloor
-    // (0.25), but audio.pulse has a 240ms envelope that can persist above
+    // was over-strict — `overshoot` required audio.energy > silenceFloor
+    // (0.25, removed since), but audio.pulse has a 240ms envelope that can persist above
     // burstThreshold long after energy noise-gates back to the smolder
     // floor. Result: sparse-kick tracks (one drum every second of quiet)
     // were having bursts suppressed on every kick. The upstream micGate
@@ -558,8 +561,8 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
     // `set audiobright <0..1>` — 0 disables the gate (constant brightness),
     // 1 makes brightness fully amplitude-driven.
     //
-    // Uses the SMOOTH audio.energy envelope (not the noisy pulse signal)
-    // so the gate doesn't flicker on amplified mic noise.
+    // Uses the continuous level envelope (frameOvershoot_), not the
+    // event-like pulse signal.
     float amount = params_.audioBrightAmount;
     float continuousGate = (1.0f - amount) + amount * frameOvershoot_;
     float brightnessScale = continuousGate * 0.95f;  // 0.95 ceiling for headroom
