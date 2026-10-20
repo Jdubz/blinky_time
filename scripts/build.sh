@@ -60,53 +60,19 @@ fi
 # --- Locate python (python3 on Linux/macOS, python on Windows) ---
 PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo "python3")}"
 
-# --- Locate Arduino15 packages directory (Linux: ~/.arduino15, Windows: %LOCALAPPDATA%/Arduino15) ---
-if [[ -d "$HOME/.arduino15/packages" ]]; then
-    ARDUINO15_PACKAGES="$HOME/.arduino15/packages"
-elif [[ -n "${LOCALAPPDATA:-}" ]]; then
-    # Windows (Git Bash / Cygwin): convert Windows path to Unix path
-    if command -v cygpath >/dev/null 2>&1; then
-        ARDUINO15_PACKAGES="$(cygpath -u "$LOCALAPPDATA")/Arduino15/packages"
-    else
-        # WSL or other: replace backslashes
-        ARDUINO15_PACKAGES="${LOCALAPPDATA//\\//}/Arduino15/packages"
-    fi
-else
-    ARDUINO15_PACKAGES=""
-fi
-
-# --- Verify TinyUSB CDC patch ---
-# Critical: stock TinyUSB sets TX FIFO overwritable when DTR drops, which
-# silently kills all serial output. The patch keeps FIFO non-overwritable.
-# Without this patch, devices become unresponsive after any DTR transition
-# (host serial port close, USB bus reset, server reconnection).
+# --- Pinned, isolated toolchain (#252) ---
+# nRF52840 builds use ONLY <repo>/.arduino (scripts/setup_toolchain.sh): the
+# pinned core with its patched TinyUSB and exactly the pinned libraries.
+# Nothing in this machine's own Arduino folders can shadow a library (a
+# user-installed, unpatched TinyUSB 3.4.5 got into b209-b213 that way).
+# ESP32-S3 (next gen) is not under the pinned toolchain yet and builds with
+# the machine's own arduino-cli setup.
 if ! $ESP32; then
-    # Find CDC source across any installed core version (not hardcoded to 1.1.12)
-    CDC_FILE=""
-    if [[ -d "$ARDUINO15_PACKAGES/Seeeduino/hardware/nrf52" ]]; then
-        CDC_FILE=$(find "$ARDUINO15_PACKAGES/Seeeduino/hardware/nrf52" \
-            -path "*/Adafruit_TinyUSB_Arduino/src/class/cdc/cdc_device.c" \
-            -print -quit 2>/dev/null || true)
-    fi
-    if [ -n "$CDC_FILE" ]; then
-        # Assert the PATCHED line exists (fail-closed: if formatting changes, we catch it)
-        if ! grep -Eq 'tu_fifo_set_overwritable\(&p_cdc->tx_ff,[[:space:]]*false\)' "$CDC_FILE"; then
-            echo "ERROR: TinyUSB CDC patch not applied!" >&2
-            echo "Stock TinyUSB drops all serial output when DTR is deasserted." >&2
-            echo "Fix:   bash scripts/apply_core_patches.sh" >&2
-            echo "       (applies patches/tinyusb-cdc-no-overwritable-fifo.patch)" >&2
-            echo "  File: $CDC_FILE" >&2
-            echo "  Change: tu_fifo_set_overwritable(&p_cdc->tx_ff, !dtr)" >&2
-            echo "      To: tu_fifo_set_overwritable(&p_cdc->tx_ff, false)" >&2
-            exit 1
-        fi
-    else
-        # Warn-only when file not found: allows compilation in CI environments
-        # without the Arduino toolchain installed. On a dev machine with the
-        # Seeeduino core, the file WILL be found and the patch WILL be enforced.
-        echo "WARNING: TinyUSB CDC source not found — cannot verify patch." >&2
-        echo "  Expected in: $ARDUINO15_PACKAGES/Seeeduino/hardware/nrf52/*/libraries/" >&2
-    fi
+    source scripts/arduino_env.sh
+    blinky_require_toolchain || exit 1
+    # Both core patches present (the firmware also #errors without the
+    # marker, so this is a fast, explicit first check).
+    bash scripts/apply_core_patches.sh --check || exit 1
 fi
 
 # --- Read build number ---
@@ -149,7 +115,21 @@ if $UPLOAD && $ESP32; then
     COMPILE_ARGS=(compile --upload --fqbn "$FQBN" -p "$UPLOAD_PORT")
 fi
 
-"$ARDUINO_CLI" "${COMPILE_ARGS[@]}" blinky-things
+if $ESP32; then
+    "$ARDUINO_CLI" "${COMPILE_ARGS[@]}" blinky-things
+else
+    # --verbose so the library resolution can be checked; the full log is
+    # kept, only the summary is shown.
+    mkdir -p "$OUTPUT_DIR"
+    COMPILE_LOG="$OUTPUT_DIR/compile.log"
+    if ! "$ARDUINO_CLI" "${COMPILE_ARGS[@]}" --verbose blinky-things > "$COMPILE_LOG" 2>&1; then
+        grep -E "error|Error" "$COMPILE_LOG" | head -40 >&2
+        echo "Compilation failed (full log: $COMPILE_LOG)" >&2
+        exit 1
+    fi
+    grep -E "^Sketch uses|^Global variables" "$COMPILE_LOG" || true
+    "$PYTHON" tools/check_build_libs.py "$COMPILE_LOG" --out "$OUTPUT_DIR/libraries.json" || exit 1
+fi
 
 # Save build number only AFTER successful compile (no gaps on failure)
 if $BUMP; then

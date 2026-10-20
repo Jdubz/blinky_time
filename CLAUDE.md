@@ -179,6 +179,12 @@ tmux new-session -d -s training "cd ml-training && source venv/bin/activate && P
 
 **Always use `scripts/build.sh` to compile.** It regenerates `types/Version.h` (build number + git SHA). Release build numbers are assigned by the release workflow (`docs/RELEASE_PROCESS.md`); local builds are for compile checks and `--dev` test-device flashes only.
 
+**Pinned, isolated toolchain (#252): once per machine, run `bash scripts/setup_toolchain.sh`** (or `make setup-toolchain`). It installs the pinned core, the libraries from `tools/firmware_toolchain.json`, TFLite and the core patches into `.arduino/` (gitignored).
+- **Isolated:** `build.sh` and the Makefile compile only inside it, so nothing in a machine's own Arduino folders can shadow a library. That's how an unpatched user-installed TinyUSB 3.4.5 got into b209–b213.
+- **Checked:** `tools/check_build_libs.py` fails the build if any library resolves outside `.arduino/`, or if versions drift from `tools/firmware_toolchain.json`.
+- **Guarded:** the sketch `#error`s if the TinyUSB it links lacks the CDC patch (`BLINKY_TINYUSB_CDC_PATCHED`).
+- **Fixing it:** never "fix" a build by installing libraries elsewhere. Fix the pin, then re-run setup.
+
 ```bash
 ./scripts/build.sh                          # nRF52840 compile check (bumps BUILD_NUMBER)
 ./scripts/build.sh --no-bump                # recompile without incrementing
