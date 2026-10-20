@@ -1636,3 +1636,112 @@ body {
 .shell-record-btn + .shell-debug-btn {
   margin-left: 0;
 }
+
+/* Firmware update page (#firmware) — layout from .rec-page */
+.shell-firmware-btn {
+  text-decoration: none;
+}
+
+.fw-setup,
+.fw-confirm,
+.fw-ask,
+.fw-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.fw-field select {
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.fw-notes {
+  color: var(--accent-secondary);
+  font-size: 0.875rem;
+}
+
+.fw-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--text-primary);
+}
+
+.fw-progress progress {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--accent-primary);
+}
+
+.fw-ask,
+.fw-confirm {
+  padding: 1rem;
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--border-radius);
+  background: var(--bg-card);
+}
+
+.fw-confirm h2,
+.fw-log h2 {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.fw-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.fw-result {
+  padding: 0.75rem 1rem;
+  border-radius: var(--border-radius);
+  color: var(--text-primary);
+}
+
+.fw-result-ok {
+  border: 1px solid var(--accent-success);
+  background: color-mix(in srgb, var(--accent-success) 12%, transparent);
+}
+
+.fw-result-bad {
+  border: 1px solid var(--accent-danger);
+  background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+}
+
+.fw-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fw-log ol {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.fw-log-warn {
+  color: var(--accent-warning);
+}
+
+.fw-log-error {
+  color: var(--accent-danger);
+}

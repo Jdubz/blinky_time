@@ -36,6 +36,18 @@ vi.mock('./lib/target', async () => {
   };
 });
 
+// The firmware page stand-in reports an update in progress as soon as it
+// mounts, like the real page does while flashing.
+vi.mock('./pages/FirmwarePage', async () => {
+  const { useEffect } = await import('react');
+  return {
+    FirmwarePage: ({ onActiveChange }: { onActiveChange?: (a: boolean) => void }) => {
+      useEffect(() => onActiveChange?.(true), [onActiveChange]);
+      return <div>firmware page</div>;
+    },
+  };
+});
+
 beforeEach(() => {
   mockSetGenerator.mockClear();
   mockUseDevices.mockReset();
@@ -102,5 +114,20 @@ describe('MainShell target shapes', () => {
     await vi.waitFor(() => expect(mockSetGenerator).toHaveBeenCalled());
     const [target] = mockSetGenerator.mock.calls[0];
     expect((target as { kind: string }).kind).toBe('device');
+  });
+});
+
+describe('MainShell firmware page', () => {
+  it('is switched off: no Firmware button, and #firmware shows a notice instead of the updater', () => {
+    mockUseDevices.mockReturnValue({ devices: [], serverUrl: null });
+    window.history.replaceState(null, '', '#');
+    const { unmount } = render(<MainShell />);
+    expect(screen.queryByRole('link', { name: 'Firmware' })).not.toBeInTheDocument();
+    unmount();
+    window.history.replaceState(null, '', '#firmware');
+    render(<MainShell />);
+    expect(screen.getByText(/not available yet/)).toBeInTheDocument();
+    expect(screen.queryByText('firmware page')).not.toBeInTheDocument();
+    window.history.replaceState(null, '', '#');
   });
 });

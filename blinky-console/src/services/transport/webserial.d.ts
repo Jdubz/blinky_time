@@ -26,6 +26,12 @@ declare global {
     readable: ReadableStream<Uint8Array> | null;
     writable: WritableStream<Uint8Array> | null;
     getInfo(): SerialPortInfo;
+    setSignals(signals: SerialOutputSignals): Promise<void>;
+  }
+  interface SerialOutputSignals {
+    dataTerminalReady?: boolean;
+    requestToSend?: boolean;
+    break?: boolean;
   }
   interface SerialOptions {
     baudRate: number;

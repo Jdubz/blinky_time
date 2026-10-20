@@ -67,6 +67,42 @@
             "value": "no-cache, no-store, must-revalidate"
           }
         ]
+      },
+      {
+        "source": "/firmware/index.json",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/firmware/b*/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=86400"
+          }
+        ]
+      },
+      {
+        "source": "/firmware/**/*.uf2",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/octet-stream"
+          }
+        ]
+      },
+      {
+        "source": "/firmware/**/*.hex",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "text/plain; charset=utf-8"
+          }
+        ]
       }
     ]
   }

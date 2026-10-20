@@ -12,6 +12,7 @@ import { DeviceStrip } from './components/DeviceStrip';
 import { GeneratorSelector } from './components/GeneratorSelector';
 import { EffectSelector, type EffectMode } from './components/EffectSelector';
 import { AudioDebugPage } from './pages/AudioDebugPage';
+import { FirmwarePage } from './pages/FirmwarePage';
 import { RecordPage } from './pages/RecordPage';
 import { peekRecordSession, type RecordState } from './services/record/RecordSession';
 import { type Target, targetSetGenerator, targetSetEffect, targetSetSetting } from './lib/target';
@@ -19,6 +20,15 @@ import type { DeviceProtocol } from './services/protocol';
 import type { GeneratorType } from './types';
 
 const GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
+
+/**
+ * The browser updater (#firmware) is switched off. Its USB route copies a
+ * UF2 onto the bootloader's XIAO-SENSE drive, but on Windows the system
+ * writes its own metadata to that drive as it mounts, and the bootloader's
+ * stuck-transfer check then drops the drive 8.5 s later: no person can pick
+ * it in time (measured on hat_v1, 2026-10-20). See docs/WEB_FLASHER.md.
+ */
+export const FIRMWARE_UPDATES_ENABLED = false;
 
 export function MainShell() {
   const { devices, serverUrl } = useDevices();
@@ -28,13 +38,25 @@ export function MainShell() {
   const [hueSpeed, setHueSpeed] = useState(0.5);
   const [hueShift, setHueShift] = useState(0);
   const [showAudioDebug, setShowAudioDebug] = useState(false);
-  // Field recorder lives at #record so a phone can bookmark it directly.
+  // Field recorder (#record) and firmware updater (#firmware) are hash pages
+  // so a phone can bookmark them directly.
   const [hash, setHash] = useState(() => window.location.hash);
   useEffect(() => {
     const onHash = () => setHash(window.location.hash);
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // An update in progress keeps #firmware mounted whatever the hash says:
+  // unmounting it would drop its prompts, log, wake lock and unload guard
+  // while the device is being written.
+  const [firmwareActive, setFirmwareActive] = useState(false);
+  useEffect(() => {
+    if (firmwareActive && hash !== '#firmware') {
+      window.history.replaceState(null, '', '#firmware');
+      setHash('#firmware');
+    }
+  }, [firmwareActive, hash]);
 
   const selectedDevice = selectedId ? (devices.find(d => d.id === selectedId) ?? null) : null;
 
@@ -64,6 +86,32 @@ export function MainShell() {
   }, [hash]);
   const recordingElsewhere =
     hash !== '#record' && ['starting', 'recording', 'stopping', 'reconnecting'].includes(recState);
+
+  if (FIRMWARE_UPDATES_ENABLED && (hash === '#firmware' || firmwareActive)) {
+    return (
+      <FirmwarePage
+        onClose={() => (window.location.hash = '')}
+        onActiveChange={setFirmwareActive}
+      />
+    );
+  }
+
+  if (hash === '#firmware') {
+    return (
+      <div className="rec-page fw-page">
+        <header className="rec-header">
+          <button className="btn btn-small" onClick={() => (window.location.hash = '')}>
+            ← Back
+          </button>
+          <h1 className="rec-title">Firmware Update</h1>
+        </header>
+        <div className="shell-warning">
+          Updating devices from the browser is not available yet. Your device keeps working on its
+          current firmware.
+        </div>
+      </div>
+    );
+  }
 
   if (hash === '#record') {
     return <RecordPage onClose={() => (window.location.hash = '')} />;
@@ -177,6 +225,15 @@ export function MainShell() {
         >
           Record
         </a>
+        {FIRMWARE_UPDATES_ENABLED && (
+          <a
+            className="btn btn-small shell-firmware-btn"
+            href="#firmware"
+            title="Update one device's firmware over USB"
+          >
+            Firmware
+          </a>
+        )}
         {import.meta.env.DEV && (
           <button
             className="btn btn-small shell-debug-btn"

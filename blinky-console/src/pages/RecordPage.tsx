@@ -15,6 +15,7 @@ import {
   SessionMeta,
 } from '../services/record/recordStore';
 import { SAMPLE_RATE } from '../services/record/recordProtocol';
+import { useWakeLock } from '../hooks/useWakeLock';
 
 interface RecordPageProps {
   onClose?: () => void;
@@ -53,32 +54,6 @@ function Tile({
       <div className="rec-tile-label">{label}</div>
     </div>
   );
-}
-
-/** Keep the screen awake while recording — Chrome may throttle a hidden page. */
-function useWakeLock(active: boolean): void {
-  useEffect(() => {
-    if (!active || !('wakeLock' in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    let cancelled = false;
-    const acquire = async () => {
-      try {
-        lock = await navigator.wakeLock.request('screen');
-      } catch {
-        // Denied (e.g. battery saver). The page still records while visible.
-      }
-    };
-    const onVisible = () => {
-      if (document.visibilityState === 'visible' && !cancelled) void acquire();
-    };
-    void acquire();
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      document.removeEventListener('visibilitychange', onVisible);
-      void lock?.release();
-    };
-  }, [active]);
 }
 
 export function RecordPage({ onClose }: RecordPageProps) {

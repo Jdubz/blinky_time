@@ -42,7 +42,11 @@ export class WebSerialTransport implements Transport {
   private isReading = false;
   private hasReceivedData = false;
 
-  constructor(public readonly baudRate: number = 115200) {}
+  constructor(
+    public readonly baudRate: number = 115200,
+    /** Restrict the browser's port picker (e.g. to XIAO nRF52840 app-mode ports). */
+    private readonly filters?: SerialPortFilter[]
+  ) {}
 
   isSupported(): boolean {
     return 'serial' in navigator;
@@ -64,7 +68,12 @@ export class WebSerialTransport implements Transport {
     this.listeners.forEach(cb => cb(event));
   }
 
-  async connect(): Promise<void> {
+  /**
+   * Open a port: the one given (already permitted, e.g. from
+   * `navigator.serial.getPorts()` — no picker, no gesture), or one the user
+   * picks.
+   */
+  async connect(port?: SerialPort): Promise<void> {
     logger.info('Opening WebSerial port', { baudRate: this.baudRate });
 
     if (!this.isSupported()) {
@@ -75,8 +84,16 @@ export class WebSerialTransport implements Transport {
     }
 
     try {
-      this.port = await navigator.serial.requestPort();
+      this.port =
+        port ??
+        (await navigator.serial.requestPort(this.filters ? { filters: this.filters } : undefined));
       await this.port.open({ baudRate: this.baudRate });
+      // Assert DTR/RTS explicitly rather than trusting the browser's default.
+      // Firmware built with stock TinyUSB (b209-b213) silently drops all
+      // serial output while DTR is low, so a port left with DTR low would
+      // look like a dead device. (DTR doesn't reset an nRF52; only the
+      // 1200-baud touch does.)
+      await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
 
       if (!this.port.readable) {
         throw new TransportError('Port is not readable', TransportErrorCode.CONNECTION_FAILED);
