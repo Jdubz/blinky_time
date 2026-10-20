@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlashUi } from './flashFlow';
 import type { VerifiedRelease } from './releases';
-import { deliverUf2, parseInfoUf2, reconnectApp } from './usbFlash';
+import { deliverUf2, flashOverUsb, parseInfoUf2, reconnectApp } from './usbFlash';
 
 const INFO_OK =
   'UF2 Bootloader 0.8.0-10-g4c5faae lib/nrfx (v2.0.0)\r\nModel: Seeed XIAO nRF52840\r\n' +
@@ -134,5 +134,36 @@ describe('deliverUf2, drive write', () => {
     await expect(deliverUf2(release, u)).rejects.toThrow('stop');
     expect(u.events.some(e => e.includes('refused to write'))).toBe(true);
     delete window.showDirectoryPicker;
+  });
+});
+
+describe('flashOverUsb, cancel', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('closes a port that opens after Cancel instead of leaking it', async () => {
+    const abort = new AbortController();
+    const port = {
+      open: vi.fn(async () => abort.abort()), // Cancel lands while the port opens
+      close: vi.fn(async () => {}),
+      setSignals: vi.fn(async () => {}),
+      readable: {
+        getReader: () => ({
+          read: () => new Promise(() => {}),
+          cancel: async () => {},
+          releaseLock: () => {},
+        }),
+      },
+      writable: { getWriter: () => ({ write: async () => {}, releaseLock: () => {} }) },
+      getInfo: () => ({ usbVendorId: 0x2886, usbProductId: 0x8045 }),
+    };
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      serial: { requestPort: async () => port, getPorts: async () => [] },
+    });
+    const u = { ...ui(() => 'Choose USB device'), signal: abort.signal };
+    await expect(
+      flashOverUsb(release, { schema: 1, latest: null, releases: [] }, u)
+    ).rejects.toThrow('Cancelled');
+    expect(port.close).toHaveBeenCalled();
   });
 });

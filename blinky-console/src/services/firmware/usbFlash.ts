@@ -197,6 +197,23 @@ export async function deliverUf2(release: VerifiedRelease, ui: FlashUi): Promise
   }
 }
 
+/**
+ * Open a port inside a prompt's action. Cancel can land while the browser's
+ * picker or the open is still pending; the prompt has already rejected by
+ * then, so a port that opens afterwards is closed here, not leaked.
+ */
+async function connectUnlessCancelled(
+  transport: WebSerialTransport,
+  ui: FlashUi,
+  port?: SerialPort
+): Promise<void> {
+  await transport.connect(port);
+  if (ui.signal.aborted) {
+    await transport.disconnect();
+    throw new FirmwareError('Cancelled');
+  }
+}
+
 /** Find the device on USB again after the bootloader hands back to the app. Exported for tests. */
 export async function reconnectApp(
   expectSn: string | null,
@@ -204,7 +221,7 @@ export async function reconnectApp(
 ): Promise<{ transport: WebSerialTransport; link: DeviceLink }> {
   const tryPort = async (port?: SerialPort) => {
     const transport = new WebSerialTransport(115200, [{ usbVendorId: VID, usbProductId: APP_PID }]);
-    await transport.connect(port);
+    await connectUnlessCancelled(transport, ui, port);
     const link = new DeviceLink(transport);
     try {
       const info = await link.info();
@@ -257,7 +274,7 @@ export async function flashOverUsb(
 ): Promise<FlashInfo> {
   const transport = new WebSerialTransport(115200, [{ usbVendorId: VID, usbProductId: APP_PID }]);
   await ui.ask('Plug the device into this computer with a USB data cable, then choose it.', [
-    { label: 'Choose USB device', action: () => transport.connect() },
+    { label: 'Choose USB device', action: () => connectUnlessCancelled(transport, ui) },
   ]);
   let before: FlashInfo;
   try {
@@ -270,7 +287,20 @@ export async function flashOverUsb(
   } finally {
     await transport.disconnect();
   }
-  await deliverUf2(release, ui);
+  try {
+    await deliverUf2(release, ui);
+  } catch (err) {
+    // Nothing was written yet (cancel is only offered until the write
+    // starts), so say where that leaves the device.
+    if (err instanceof FirmwareError && err.message === 'Cancelled') {
+      throw new FirmwareError(
+        'Cancelled. Nothing was written: the device is waiting in update mode (a XIAO-SENSE drive) ' +
+          'with its current firmware intact. Press its reset button once, or unplug and replug it, ' +
+          'to return to that firmware.'
+      );
+    }
+    throw err;
+  }
   const back = await reconnectApp(before.sn, ui);
   try {
     return await finishAfterFlash(back.link, before, release.entry.version, ui);
