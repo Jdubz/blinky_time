@@ -65,9 +65,14 @@ Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`.
 | Command | Installs |
 |---|---|
 | `./scripts/deploy.sh --devices=all` | latest stable, downloaded and sha256-verified |
-| `./scripts/deploy.sh --devices=ID --release bN` | release `bN` (a candidate only if `ID` is a test device) |
-| `./scripts/deploy.sh --devices=hat_v1 --dev` | local build of a clean tree (test device only) |
-| `python tools/deploy_local.py --port COMx --device-id ID [--release bN \| --dev]` | same rules, for a device on this machine's USB |
+| `./scripts/deploy.sh --devices=ID --release bN` | a specific **stable** release (pin or roll back a subset) |
+| `python tools/deploy_local.py --port COMx --device-id ID` | latest stable, for a device on this machine's USB |
+| `python tools/deploy_local.py ... --release bN` | release `bN`; a candidate only if `ID` is a test device |
+| `python tools/deploy_local.py ... --dev` | local build of a clean tree (test device only) |
+
+**`deploy.sh` (via blinky-server) is stable-only.** The server keeps the last uploaded image for auto-recovery and could re-flash it to production devices (#251). So candidates and dev builds go only through `deploy_local.py`, to a test device on this machine's USB, until the server binds recovery to an immutable, stable-only image.
+
+A clean tree means no tracked change anywhere in the repo (except the generated `Version.h` / `BUILD_NUMBER`) and no untracked file under `blinky-things/`. That's the same rule `gen_version.sh` uses for `-dirty`, and it's checked *before* building. `--already-in-bootloader` resumes only accept stable firmware, because they can't read the board's device id.
 
 Releases are never compiled at deploy time. Both tools verify that the device reports **exactly** the expected version. `deploy_local.py` records the channel and release in its audit log.
 

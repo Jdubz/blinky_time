@@ -22,19 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 import firmware_release  # noqa: E402
-from firmware_release import ReleaseError, gh  # noqa: E402
-
-
-def repo_slug():
-    return json.loads(gh("repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
-
-
-def tag_exists(tag):
-    try:
-        gh("api", f"repos/{repo_slug()}/git/ref/tags/{tag}")
-        return True
-    except ReleaseError:
-        return False
+from firmware_release import ReleaseError, gh, repo_slug, tag_exists  # noqa: E402
 
 
 def gate_records(tag, manifest):

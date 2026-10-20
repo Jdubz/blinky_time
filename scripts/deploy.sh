@@ -5,17 +5,16 @@
 # The server handles everything after receiving the binary.
 # Fails loudly on ANY problem.
 #
-# Firmware selection (docs/RELEASE_PROCESS.md):
-#   default         latest STABLE GitHub release, downloaded + sha256-verified
-#   --release bN    that release; a candidate (pre-release) only for ONE test device
-#   --dev           local build of a clean tree, ONE test device, version b<N>-dev-<sha>
-# Test devices: devices/test_devices.json. Nothing is compiled for fleet deploys.
+# Firmware selection (docs/RELEASE_PROCESS.md): STABLE RELEASES ONLY.
+#   default         latest stable GitHub release, downloaded + sha256-verified
+#   --release bN    a specific STABLE release (e.g. to pin or roll back a subset)
+# Candidates and dev builds never go through blinky-server: it keeps the last
+# uploaded image for auto-recovery and could re-flash it to production devices
+# (#251). Put a test device on this machine's USB and use tools/deploy_local.py.
 #
 # Usage:
 #   ./scripts/deploy.sh --devices=all                  # latest stable to every device
-#   ./scripts/deploy.sh --devices=ID --release b214    # a specific release
-#   ./scripts/deploy.sh --devices=hat_v1 --dev         # local build, test device only
-#   ./scripts/deploy.sh --devices=hat_v1 --dev --skip-compile  # reuse the last dev build
+#   ./scripts/deploy.sh --devices=ID --release b214    # a specific stable release
 #
 # Requires: blinky-server running on blinkyhost.local:8420
 # API key: reads from ~/.blinky-api-key or BLINKY_API_KEY env var
@@ -37,8 +36,6 @@ cd "$(git rev-parse --show-toplevel)"
 
 BLINKY_SERVER="http://blinkyhost.local:8420"
 HEX="/tmp/blinky-build/blinky-things.ino.hex"
-SKIP_COMPILE=false
-DEV=false
 RELEASE=""
 # How long to wait after flashing before reading back fps via json info.
 # LoopMetrics publishes a fresh fps reading every WINDOW_MS (5 s) — we add
@@ -51,19 +48,21 @@ LOOP_METRICS_SETTLE_S=6
 DEVICES_ARG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --dev)           DEV=true; shift ;;
         --release)       RELEASE="$2"; shift 2 ;;
         --release=*)     RELEASE="${1#--release=}"; shift ;;
-        --skip-compile)  SKIP_COMPILE=true; shift ;;
+        --dev|--skip-compile|--no-bump)
+            echo "deploy.sh flashes stable releases only ($1 removed). For a test device use" >&2
+            echo "tools/deploy_local.py --dev / --release bN (docs/RELEASE_PROCESS.md)." >&2
+            exit 6 ;;
         --devices)       DEVICES_ARG="$2"; shift 2 ;;
         --devices=*)     DEVICES_ARG="${1#--devices=}"; shift ;;
         -h|--help)
             cat <<EOF
-Usage: ./scripts/deploy.sh --devices <list> [--release bN | --dev [--skip-compile]]
+Usage: ./scripts/deploy.sh --devices <list> [--release bN]
 
   (default)          latest stable release (docs/RELEASE_PROCESS.md)
-  --release bN       a specific release; a candidate only for one test device
-  --dev              local build of a clean tree; one test device only
+  --release bN       a specific STABLE release. Candidates and dev builds go
+                     through tools/deploy_local.py on a test device only.
 
   --devices <list>   Comma-separated device IDs OR the literal 'all' to
                      deploy to every flashable device in range. Required.
@@ -125,47 +124,19 @@ DEPLOY_TOOL_HEADER="X-Deploy-Tool: deploy.sh-${GIT_SHA}"
 
 # ─── Step 1: Select firmware ─────────────────────────────────────────
 
-# Non-stable firmware (candidate or dev) may go to exactly one listed test
-# device: never 'all', never a list.
-require_single_test_device() {
-    if [[ "$DEVICES_ARG" == "all" || "$DEVICES_ARG" == *,* ]]; then
-        fail "$1 goes to exactly one test device (--devices=<id>), not '$DEVICES_ARG'" 6
-    fi
-    python3 tools/firmware_release.py is-test-device "$DEVICES_ARG" >/dev/null \
-        || fail "$1 refused: '$DEVICES_ARG' is not in devices/test_devices.json" 6
-}
-
 REL_DIR="/tmp/blinky-release"
-if $DEV; then
-    [[ -z "$RELEASE" ]] || fail "--dev and --release are mutually exclusive" 6
-    require_single_test_device "--dev build"
-    DIRTY=$(git status --porcelain -- blinky-things scripts | grep -v 'types/Version.h' || true)
-    [[ -z "$DIRTY" ]] || fail "--dev needs a clean tree (commit or stash first): $DIRTY" 6
-    if $SKIP_COMPILE; then
-        [[ -f "$HEX" ]] || fail "No hex at $HEX (run without --skip-compile)" 1
-    elif ! ./scripts/build.sh --dev; then
-        fail "Compilation failed" 1
-    fi
-    BUILD=$(cat blinky-things/BUILD_NUMBER | tr -d '[:space:]')
-    EXPECTED_VERSION="b${BUILD}-dev-$(git rev-parse --short=8 HEAD)"
-    CHANNEL=dev
-else
-    $SKIP_COMPILE && fail "--skip-compile only applies to --dev (releases are downloaded, never compiled)" 6
-    REL_ARGS=(download --out "$REL_DIR")
-    [[ -n "$RELEASE" ]] && REL_ARGS+=(--tag "$RELEASE")
-    REL_JSON=$(python3 tools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
-    rel() { python3 -c "import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])" "$REL_JSON" "$1"; }
-    HEX=$(rel hex)
-    if command -v cygpath >/dev/null 2>&1; then HEX=$(cygpath -u "$HEX"); fi
-    EXPECTED_VERSION=$(rel version)
-    BUILD=${EXPECTED_VERSION%%-*}; BUILD=${BUILD#b}
-    if [[ "$(rel stable)" == "True" ]]; then
-        CHANNEL=stable
-    else
-        CHANNEL=candidate
-        require_single_test_device "candidate $(rel tag)"
-    fi
+REL_ARGS=(download --out "$REL_DIR")
+[[ -n "$RELEASE" ]] && REL_ARGS+=(--tag "$RELEASE")
+REL_JSON=$(python3 tools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
+rel() { python3 -c "import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])" "$REL_JSON" "$1"; }
+if [[ "$(rel stable)" != "True" ]]; then
+    fail "$(rel tag) is not a stable release. deploy.sh flashes stable releases only; gate a candidate with tools/release_gate.py on a test device (docs/RELEASE_PROCESS.md)" 6
 fi
+HEX=$(rel hex)
+if command -v cygpath >/dev/null 2>&1; then HEX=$(cygpath -u "$HEX"); fi
+EXPECTED_VERSION=$(rel version)
+BUILD=${EXPECTED_VERSION%%-*}; BUILD=${BUILD#b}
+CHANNEL=stable
 
 HEX_SIZE=$(stat -c%s "$HEX" 2>/dev/null || stat -f%z "$HEX")
 echo "  Firmware: ${EXPECTED_VERSION} [${CHANNEL}] (${HEX_SIZE} bytes)"

@@ -16,9 +16,10 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 ./scripts/deploy.sh --devices=all                   # latest STABLE release → all devices + verify
 ./scripts/deploy.sh --devices=cart_inner,cart_outer # scope to a subset
 ./scripts/deploy.sh --devices=list                  # show candidates and exit
-./scripts/deploy.sh --devices=ID --release b214     # a specific release (candidate: test device only)
-./scripts/deploy.sh --devices=hat_v1 --dev          # local build of a clean tree, test device only
+./scripts/deploy.sh --devices=ID --release b214     # a specific STABLE release (deploy.sh is stable-only, #251)
 ```
+
+Candidates and `--dev` builds go only through `tools/deploy_local.py` to a test device on this machine's USB.
 
 deploy.sh runs the full pipeline (select firmware → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
 

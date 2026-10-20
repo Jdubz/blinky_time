@@ -173,8 +173,11 @@ def main():
             ans = input("  Do the visuals look right with music (smooth, reactive)? [y/N] ").strip().lower()
             note = "confirmed at prompt" if ans == "y" else None
         checks["operator"] = {"pass": note is not None, "note": note}
-    except (firmware_release.ReleaseError, deploy_local.DeployError) as e:
-        checks["error"] = {"pass": False, "detail": str(e)}
+    except (firmware_release.ReleaseError, deploy_local.DeployError,
+            serial.SerialException, OSError) as e:
+        # A reset or USB drop mid-gate is a gate FAILURE: record and upload it
+        # so an earlier passing record can't be the one promote finds alone.
+        checks["error"] = {"pass": False, "detail": f"{type(e).__name__}: {e}"}
     except KeyboardInterrupt:
         checks["error"] = {"pass": False, "detail": "interrupted"}
 
