@@ -59,3 +59,10 @@ Thumbs.db
 # Editor scratch logs
 excalidraw.log
 .claude/
+
+# Local run artifacts (never source)
+test-results/
+blinky-test-player/tuning-results/
+previews/
+.playwright-mcp/
+scratch/
