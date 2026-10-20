@@ -27,13 +27,13 @@ the NN-driven path. Inputs per frame:
   signal_presence — max(odfPeakHold_, cachedBassEnergy_) or a simple proxy
   now_ms          — monotonic ms for cooldown
 
-State carried frame-to-frame: nnSmoothed_ (EMA), prevSignal_, prevPrevSignal_,
-lastPulseMs_.
+State carried frame-to-frame: prevSignal_, prevPrevSignal_, lastPulseMs_.
+The NN activation is used raw. The firmware has no smoothing since #169.
 
 Decision: `fires` == True iff
   - signal_presence > pulse_min_level
   - prev_signal > prev_prev_signal  (local max on NN activation)
-  - prev_signal > nn_activation
+  - prev_signal >= nn_activation (a flat top fires on its first frame)
   - prev_signal > effective_floor (pulseOnsetFloor · bass_gate · plp_bias)
   - (now_ms - lastPulseMs_) > cooldown_ms
 
@@ -53,18 +53,16 @@ from dataclasses import dataclass
 
 @dataclass
 class PeakPickerConfig:
-    pulse_onset_floor: float = 0.30
+    pulse_onset_floor: float = 0.20  # firmware AudioTracker.h default
     pulse_min_level: float = 0.03
     bass_gate_max_boost: float = 0.5
     bass_gate_min_ratio: float = 1.0 / 3.0
     plp_bias_max_suppression: float = 0.3
     plp_bias_min_confidence: float = 0.3
-    nn_smoothing_alpha: float = 0.3  # EMA on NN activation (TODO: verify vs firmware)
 
 
 @dataclass
 class PeakPickerState:
-    nn_smoothed: float = 0.0
     prev_signal: float = 0.0
     prev_prev_signal: float = 0.0
     last_pulse_ms: int = 0
@@ -88,14 +86,8 @@ def on_frame(
     Mutates `state` in place — caller must persist it across calls for
     temporal continuity.
     """
-    # EMA smoothing of NN activation. AudioTracker's exact smoothing factor
-    # is not exposed; using a conservative default. TODO: confirm against
-    # firmware `nnSmoothed_` update formula when porting to C++.
-    state.nn_smoothed = (
-        cfg.nn_smoothing_alpha * nn_activation
-        + (1.0 - cfg.nn_smoothing_alpha) * state.nn_smoothed
-    )
-    nn = state.nn_smoothed
+    # Raw activation, no smoothing (matches firmware since #169).
+    nn = nn_activation
 
     # Bass gate: inverse-bass-ratio threshold boost.
     bass_ratio = bass_flux / broadband_flux if broadband_flux > 0.001 else 0.5
@@ -121,7 +113,7 @@ def on_frame(
     # Local-max on NN activation (peak was prev frame if now decreasing).
     is_local_max = (
         state.prev_signal > state.prev_prev_signal
-        and state.prev_signal > nn
+        and state.prev_signal >= nn  # flat top fires on its first frame
         and state.prev_signal > effective_floor
     )
 

@@ -13,6 +13,10 @@ namespace MicConstants {
     // Exponential tracking limits (prevent division by zero)
     constexpr float MIN_TAU_RANGE = 0.005f;     // Minimum tau for range tracking (5ms)
 
+    // Absolute noise gate default (raw ADC scale, 0-1): the measured mic
+    // noise floor, ~-54 dBFS. Shared by AdaptiveMic and ConfigStorage defaults.
+    constexpr float DEFAULT_NOISE_GATE = 0.002f;
+
     // Window/range normalization — divide-by-zero protection only.
     //
     // b192: removed the 0.01 floor that capped how far the normalizer could
@@ -114,10 +118,11 @@ public:
   // amplifying mic thermal noise into apparent signal after extended
   // silence (operator feedback: "always on after a few seconds of quiet").
   //
-  // Tune via `set noisegate <N>`. Default 0.002 matches measured mic
+  // Tune via `set noisegate <N>` (persisted since SETTINGS_VERSION 96).
+  // Default 0.002 matches measured mic
   // noise floor (~-54 dBFS). Raise to be more conservative on quiet;
   // lower to allow even fainter audio through.
-  float noiseGate      = 0.002f;
+  float noiseGate      = MicConstants::DEFAULT_NOISE_GATE;
 
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)

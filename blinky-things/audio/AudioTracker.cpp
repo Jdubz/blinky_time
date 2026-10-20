@@ -110,7 +110,7 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // Per-update aggregates: update() may process 0..N spectral frames.
     lastPulseStrength_ = 0.0f;
-    nnSmoothedPeak_ = 0.0f;
+    nnPeak_ = 0.0f;
     framesThisUpdate_ = 0;
 
     // 2. Drain the PDM ring, processing EVERY spectral frame exactly once.
@@ -202,7 +202,7 @@ void AudioTracker::processFrame(bool runNN) {
     frameClock_++;
 
     // --- Onset activation for this frame ---
-    // The NN activation only feeds onset detection (via nnSmoothed_ and
+    // The NN activation only feeds onset detection (via rawNNActivation_ and
     // freshNN); a skipped or NN-less frame has nothing to record. The rhythm
     // buffers take mic level below in every mode (#155).
     bool freshNN = false;
@@ -225,9 +225,9 @@ void AudioTracker::processFrame(bool runNN) {
         prevNNActivation_ = rawNNActivation_;
         rawNNActivation_ = odf;
 
-        nnSmoothed_ = 0.77f * odf + 0.23f * nnPrevRaw_;
-        nnPrevRaw_ = odf;
-        if (nnSmoothed_ > nnSmoothedPeak_) nnSmoothedPeak_ = nnSmoothed_;
+        // No smoothing: responsiveness is the priority, so peak-picking
+        // and pulseSignal read the raw activation (#169).
+        if (odf > nnPeak_) nnPeak_ = odf;
     }
     // NN skipped this frame (catch-up burst): the NN peak-picker does not
     // step. No NN: onset detection uses spectral flux (updatePulseDetection).
@@ -318,8 +318,6 @@ void AudioTracker::resetAnalysisState() {
     phaseLocked_ = false;
     skipNextWrap_ = false;
     framesSinceAcf_ = 0;
-    nnPrevRaw_ = 0.0f;
-    nnSmoothed_ = 0.0f;
     odfBaseline_ = 0.0f;
     odfPeakHold_ = 0.0f;
     prevSignal_ = 0.0f;
@@ -1184,7 +1182,7 @@ float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
         //    not a hard gate — section changes and new patterns still trigger.
         //    Only active when pattern confidence is high.
 
-        float nn = nnSmoothed_;
+        float nn = rawNNActivation_;
 
         // Bass-band energy gate: require bass presence for easy detections.
         // High bass ratio → threshold stays at floor.
@@ -1219,9 +1217,12 @@ float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
 
         float effectiveFloor = pulseOnsetFloor * bassGate * patternBias;
 
-        // Local maximum: prev frame was higher than both neighbors AND above floor
+        // Local maximum: prev frame rose above t-2, is not exceeded by t, and
+        // is above floor. `>=` on the right fires a flat top (INT8 output
+        // often repeats a value) on its FIRST frame; the strict `>` on the
+        // left stops the plateau's second frame from firing again.
         bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
-                          (prevSignal_ > nn) &&
+                          (prevSignal_ >= nn) &&
                           (prevSignal_ > effectiveFloor);
 
         // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
@@ -1525,7 +1526,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         // update, the latest frame alone can miss the onset frame. No new
         // frame → no new evidence → no re-trigger (re-feeding a stale value
         // every loop pass used to hold the envelope up between frames).
-        pulseSignal = (framesThisUpdate_ > 0) ? clampf(nnSmoothedPeak_, 0.0f, 1.0f) : 0.0f;
+        pulseSignal = (framesThisUpdate_ > 0) ? clampf(nnPeak_, 0.0f, 1.0f) : 0.0f;
     } else {
         float flux = spectral_.getSpectralFlux();
         if (flux > fluxPeak_) fluxPeak_ = flux;

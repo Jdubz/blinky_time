@@ -72,7 +72,9 @@ int usage() {
     std::fprintf(stderr,
         "Usage: tracker_harness <in.pcm16> <out.csv> [loop_fps=60] [jitter=0.25] [seed=1]\n"
         "  loop_fps  mean simulated main-loop rate (device: ~30-90 depending on load)\n"
-        "  jitter    relative std-dev of each loop period (0 = perfectly periodic)\n");
+        "  jitter    relative std-dev of each loop period (0 = perfectly periodic)\n"
+        "  then optional overrides: [plpPhaseGain] [tempoPriorWidth] [syncopatedCandidateScale]\n"
+        "  [pulseOnsetFloor]; \"-\" keeps the firmware default for that slot\n");
     return 2;
 }
 
@@ -111,9 +113,12 @@ int main(int argc, char** argv) {
     // firmware's fallback keeps outputs finite, so without this check a
     // tripped BLINKY_ASSERT would pass silently.
     const uint16_t assertsAfterBegin = BlinkyAssert::failCount;
-    if (argc > 6) tracker.plpPhaseGain = static_cast<float>(std::atof(argv[6]));
-    if (argc > 7) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
-    if (argc > 8) tracker.syncopatedCandidateScale = static_cast<float>(std::atof(argv[8]));
+    // Optional tuning overrides; "-" keeps the firmware default for that slot.
+    auto given = [&](int i) { return argc > i && std::strcmp(argv[i], "-") != 0; };
+    if (given(6)) tracker.plpPhaseGain = static_cast<float>(std::atof(argv[6]));
+    if (given(7)) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
+    if (given(8)) tracker.syncopatedCandidateScale = static_cast<float>(std::atof(argv[8]));
+    if (given(9)) tracker.pulseOnsetFloor = static_cast<float>(std::atof(argv[9]));
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);

@@ -338,13 +338,9 @@ private:
     // === NN activation state ===
     float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
     float prevNNActivation_ = 0.0f;   // Previous frame NN output
-    // Causal 2-tap smoothing 0.77·x[t] + 0.23·x[t-1] (reduces INT8 jitter).
-    // This is what the old "3-tap Hamming" code actually computed (it
-    // overwrote x[t-1] with x[t] before use); kept bit-identical because
-    // pulseOnsetFloor was sweep-tuned against it.
-    float nnSmoothed_ = 0.0f;         // Current smoothed NN activation
-    float nnPrevRaw_ = 0.0f;          // Raw NN activation of the previous frame
-    float nnSmoothedPeak_ = 0.0f;     // Max nnSmoothed_ over frames processed in the last update()
+    // No smoothing on the NN activation (#169): peak-picking reads it raw.
+    // The 0.77/0.23 blend removed here dulled every hit by 23%.
+    float nnPeak_ = 0.0f;             // Max raw NN activation over frames processed in the last update()
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
