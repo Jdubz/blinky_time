@@ -2,17 +2,22 @@
 # Cross-platform Arduino build automation
 #
 # Usage:
-#   make upload DEVICE=2            # Upload device type 2 (Tube Light)
-#   make compile DEVICE=1           # Compile device type 1 (Hat)
+#   make compile                    # Compile (pinned toolchain; scripts/build.sh is preferred)
 #   make monitor PORT=COM3          # Open serial monitor
 #   make clean                      # Clean build artifacts
 #   make list-boards                # List connected boards
 #
-# UF2 Upload (Linux/headless - safe CLI upload):
-#   make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # Compile + upload single device
-#   make uf2-upload-all                         # Compile + upload ALL connected devices
-#   make uf2-check UPLOAD_PORT=/dev/ttyACM0    # Compile + validate (dry run)
-#   make uf2-test                               # Verify upload infrastructure
+# Flashing is NOT done from here (#270). Every flash must run a hardened path
+# (CLAUDE.md "Upload Safety"):
+#   fleet devices         ./scripts/deploy.sh --devices=...   (or POST /api/fleet/deploy)
+#   a device on this USB  python tools/deploy_local.py --port ... --device-id ...
+#   bootloader            ./scripts/deploy-bootloader.sh      (sacrificial device first)
+# The old upload / flash / uf2-upload-all / bootloader-update targets refuse
+# with that pointer. The one exception, per CLAUDE.md, is bare-chip recovery
+# of a bricked device that isn't enrolled yet:
+#   make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # bare-chip recovery ONLY
+#   make uf2-check UPLOAD_PORT=/dev/ttyACM0    # compile + validate (dry run)
+#   make uf2-test                               # verify upload infrastructure
 #
 # Author: Blinky Time Project Contributors
 
@@ -27,7 +32,6 @@ ESP32_FQBN = esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=
 BAUD_RATE = 115200
 
 # Default values
-DEVICE ?= 2
 PORT ?= COM3
 
 # UF2 upload settings (Linux)
@@ -43,6 +47,18 @@ else
     ARDUINO_CLI = arduino-cli
 endif
 
+# Flashing targets that skip a hardened path refuse, and say which one to use
+# (#270). Upload safety is the mechanisms, not a tool's name (CLAUDE.md):
+# stable-only or test-device-only firmware, identity and bootloader checks,
+# the single flash path, version verify, settings restore + save.
+define REFUSE_FLASH
+@echo "REFUSED: make does not flash devices (CLAUDE.md 'Upload Safety', issue 270)." >&2
+@echo "  fleet:              ./scripts/deploy.sh --devices=<ids|all>   (or POST /api/fleet/deploy)" >&2
+@echo "  device on this USB: python tools/deploy_local.py --port <port> --device-id <id> [--dev]" >&2
+@echo "  bootloader:         ./scripts/deploy-bootloader.sh  (sacrificial device first)" >&2
+@exit 1
+endef
+
 # Default target
 .PHONY: help
 help:
@@ -52,40 +68,37 @@ help:
 	@echo "========================================"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  upload       - Compile and upload sketch (Windows/Arduino IDE)"
-	@echo "  compile      - Compile sketch only"
+	@echo "  compile      - Compile sketch only (scripts/build.sh is preferred)"
 	@echo "  monitor      - Open serial monitor"
 	@echo "  clean        - Clean build artifacts"
 	@echo "  list-boards  - List connected Arduino boards"
-	@echo "  version      - Update version from VERSION file"
+	@echo "  version      - Regenerate Version.h from BUILD_NUMBER"
 	@echo ""
-	@echo "UF2 Upload (Linux/headless - SAFE):"
-	@echo "  uf2-upload       - Compile + upload to single nRF52840 device"
-	@echo "  uf2-upload-all   - Compile + upload to ALL connected nRF52840 devices"
+	@echo "Flashing: not from make. Use scripts/deploy.sh (fleet), tools/deploy_local.py"
+	@echo "(a device on this USB) or scripts/deploy-bootloader.sh (bootloader)."
+	@echo ""
+	@echo "Bare-chip recovery only (a bricked device not yet enrolled):"
+	@echo "  uf2-upload       - Compile + UF2 upload to one nRF52840 (UPLOAD_PORT)"
 	@echo "  uf2-check        - Compile + validate + convert (dry run)"
 	@echo "  uf2-test         - Verify upload infrastructure is ready"
 	@echo "  safety-check     - Run pre-compile safety checks only"
 	@echo ""
-	@echo "ESP32-S3 (Display board):"
+	@echo "ESP32-S3 (next-gen; not on the pinned toolchain):"
 	@echo "  esp32-compile    - Compile for XIAO ESP32-S3"
 	@echo "  esp32-uf2-upload - Compile + upload to ESP32-S3 via UF2"
 	@echo "  esp32-uf2-check  - Compile + validate UF2 (dry run)"
 	@echo ""
 	@echo "Setup:"
-	@echo "  setup-tflite     - Install TFLite Micro Arduino library (required)"
+	@echo "  setup-toolchain  - Pinned, isolated firmware toolchain in .arduino/ (once per machine)"
+	@echo "  setup-tflite     - Install TFLite Micro Arduino library"
 	@echo ""
 	@echo "Parameters:"
-	@echo "  DEVICE       - Device type (1=Hat, 2=TubeLight, 3=BucketTotem)"
-	@echo "  PORT         - Serial port for Windows (default: COM3)"
-	@echo "  UPLOAD_PORT  - Serial port for single UF2 upload (default: /dev/ttyACM0)"
-	@echo "  UPLOAD_PORTS - Space-separated ports for uf2-upload-all"
+	@echo "  PORT         - Serial port for monitor (default: COM3)"
+	@echo "  UPLOAD_PORT  - Serial port for bare-chip uf2-upload (default: /dev/ttyACM0)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make compile DEVICE=3"
-	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0"
-	@echo "  make uf2-upload-all"
-	@echo "  make uf2-upload-all UPLOAD_PORTS=\"/dev/ttyACM0 /dev/ttyACM1\""
-	@echo "  make esp32-uf2-upload UPLOAD_PORT=/dev/ttyACM0"
+	@echo "  make compile"
+	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # bare-chip recovery only"
 	@echo "  make monitor PORT=/dev/ttyACM0"
 
 # Check if Arduino CLI is installed
@@ -95,48 +108,25 @@ check-arduino-cli:
 	@$(ARDUINO_CLI) version || (echo "Arduino CLI not found! Please install it." && exit 1)
 	@echo "Arduino CLI found"
 
-# Update device type in sketch
-.PHONY: update-device-type
-update-device-type:
-	@echo "Setting device type to $(DEVICE)"
-ifeq ($(OS),Windows_NT)
-	@powershell -Command "(Get-Content '$(SKETCH_DIR)/blinky-things.ino') -replace '#define DEVICE_TYPE [0-9]+', '#define DEVICE_TYPE $(DEVICE)' | Set-Content '$(SKETCH_DIR)/blinky-things.ino'"
-else
-	@sed -i 's/#define DEVICE_TYPE [0-9]\+/#define DEVICE_TYPE $(DEVICE)/' $(SKETCH_DIR)/blinky-things.ino
-endif
-	@echo "Device type updated to $(DEVICE)"
-
 # Compile sketch
 .PHONY: compile
-compile: check-arduino-cli update-device-type version
+compile: check-arduino-cli version
 	@echo ""
 	@echo "========================================"
-	@echo "Compiling Device Type $(DEVICE)"
+	@echo "Compiling"
 	@echo "========================================"
 	@echo "Sketch: $(SKETCH_DIR)"
 	@echo "Board: $(FQBN)"
 	@cd $(SKETCH_DIR) && bash ../scripts/in_toolchain.sh $(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") .
 	@echo "Compilation successful!"
 
-# Upload sketch
+# Upload sketch: arduino-cli upload uses the DFU serial protocol, whose race
+# conditions can brick an nRF52840 (SWD needed to recover). Refused.
 .PHONY: upload
-upload: compile
-	@echo ""
-	@echo "========================================"
-	@echo "Uploading to $(PORT)"
-	@echo "========================================"
-	@echo "This may take 10-30 seconds..."
-	@cd $(SKETCH_DIR) && $(ARDUINO_CLI) upload --fqbn $(FQBN) --port $(PORT) .
-	@echo ""
-	@echo "========================================"
-	@echo "Upload Complete!"
-	@echo "========================================"
-	@echo "Successfully uploaded Device Type $(DEVICE) to $(PORT)"
-	@echo ""
-	@echo "To view serial output:"
-	@echo "   make monitor PORT=$(PORT)"
+upload:
+	$(REFUSE_FLASH)
 
-# Open serial monitor  
+# Open serial monitor
 .PHONY: monitor
 monitor: check-arduino-cli
 	@echo ""
@@ -178,7 +168,7 @@ endif
 version:
 	@bash scripts/gen_version.sh "$$(cat $(SKETCH_DIR)/BUILD_NUMBER | tr -d '[:space:]')"
 
-# --- UF2 Upload (Linux/headless - safe CLI upload) ---
+# --- UF2 (bare-chip recovery only) ---
 
 # Pre-compile safety checks (blocks build on critical failures)
 .PHONY: safety-check
@@ -187,33 +177,33 @@ safety-check:
 
 # Compile to external output directory
 .PHONY: compile-out
-compile-out: safety-check check-arduino-cli update-device-type version
+compile-out: safety-check check-arduino-cli version
 	@echo ""
 	@echo "========================================"
-	@echo "Compiling Device Type $(DEVICE) to $(BUILD_OUTPUT_DIR)"
+	@echo "Compiling to $(BUILD_OUTPUT_DIR)"
 	@echo "========================================"
 	@echo "Sketch: $(SKETCH_DIR)"
 	@echo "Board: $(FQBN)"
 	@bash scripts/in_toolchain.sh $(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") --output-dir $(BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
 	@echo "Compilation successful!"
 
-# UF2 upload: compile + validate + convert + upload
+# UF2 upload: compile + validate + convert + upload. BARE-CHIP RECOVERY ONLY
+# (CLAUDE.md): a bricked device that isn't enrolled yet. It flashes a local
+# build with none of deploy_local.py's gates, so never use it on a configured
+# device.
 .PHONY: uf2-upload
 uf2-upload: compile-out
 	@echo ""
 	@echo "========================================"
-	@echo "UF2 Upload to $(UPLOAD_PORT)"
+	@echo "UF2 Upload to $(UPLOAD_PORT) (bare-chip recovery)"
 	@echo "========================================"
 	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
 
-# UF2 upload all: compile + upload to all connected XIAO devices
+# A local build to every connected device: skips the test-device rule,
+# identity checks and post-flash checks. Refused.
 .PHONY: uf2-upload-all
-uf2-upload-all: compile-out
-	@echo ""
-	@echo "========================================"
-	@echo "UF2 Upload to ALL connected devices"
-	@echo "========================================"
-	python3 $(UF2_UPLOAD_TOOL) $(if $(UPLOAD_PORTS),$(UPLOAD_PORTS),--all) --parallel --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
+uf2-upload-all:
+	$(REFUSE_FLASH)
 
 # UF2 dry run: compile + validate + convert only
 .PHONY: uf2-check
@@ -225,40 +215,20 @@ uf2-check: compile-out
 uf2-test:
 	python3 $(UF2_UPLOAD_TOOL) --self-test
 
-# --- Bootloader update (BLE DFU recovery mode) ---
+# --- Bootloader: only through scripts/deploy-bootloader.sh ---
+# Its three safety layers (source invariant check, pre-flash version log,
+# post-flash verify) exist because of the 2026-05-15 hat brick. Refused here.
+.PHONY: bootloader-update bootloader-update-all
+bootloader-update bootloader-update-all:
+	$(REFUSE_FLASH)
 
-BOOTLOADER_UF2 = bootloader/update-bootloader-qspi-ota-default.uf2
-
-# Update bootloader on a single device (enters UF2, copies bootloader update UF2)
-# The MBR performs a power-fail-safe copy into the bootloader region.
-.PHONY: bootloader-update
-bootloader-update:
-	@echo ""
-	@echo "========================================"
-	@echo "Bootloader Update: $(UPLOAD_PORT)"
-	@echo "  UF2: $(BOOTLOADER_UF2)"
-	@echo "  This updates the bootloader to default to BLE DFU"
-	@echo "  mode when no valid app exists (wireless recovery)."
-	@echo "========================================"
-	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --uf2 $(BOOTLOADER_UF2) $(if $(VERBOSE),--verbose)
-
-# Update bootloader on all connected nRF52840 devices
-.PHONY: bootloader-update-all
-bootloader-update-all:
-	@echo ""
-	@echo "========================================"
-	@echo "Bootloader Update: ALL connected devices"
-	@echo "  UF2: $(BOOTLOADER_UF2)"
-	@echo "========================================"
-	python3 $(UF2_UPLOAD_TOOL) $(if $(UPLOAD_PORTS),$(UPLOAD_PORTS),--all) --uf2 $(BOOTLOADER_UF2) $(if $(VERBOSE),--verbose)
-
-# Install TFLite Micro Arduino library (required for NN=1 builds)
-.PHONY: setup-tflite
 # Pinned, isolated firmware toolchain in .arduino/ (#252): run once per machine.
 .PHONY: setup-toolchain
 setup-toolchain:
 	@bash scripts/setup_toolchain.sh
 
+# Install TFLite Micro Arduino library (required for NN=1 builds)
+.PHONY: setup-tflite
 setup-tflite:
 	@echo "Installing TFLite Micro Arduino library..."
 	@bash tools/setup_tflite_lib.sh
@@ -292,7 +262,7 @@ esp32-uf2-upload: esp32-compile
 esp32-uf2-check: esp32-compile
 	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --board esp32s3 --build-dir $(ESP32_BUILD_OUTPUT_DIR) --dry-run
 
-# Quick aliases
+# Quick aliases (flash is refused, like upload)
 .PHONY: build flash serial boards
 build: compile
 flash: upload

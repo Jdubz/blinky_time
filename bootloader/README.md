@@ -179,8 +179,8 @@ after the reboot.
 ./scripts/deploy-bootloader.sh --target /dev/ttyACM0 --bootloader path/to/bl.uf2
 ```
 
-Don't use `tools/uf2_upload.py --uf2` or `make bootloader-update` /
-`bootloader-update-all` directly: they skip all three safety layers.
+Don't use `tools/uf2_upload.py --uf2` directly: it skips all three safety
+layers. (`make bootloader-update` / `bootloader-update-all` now refuse, #270.)
 
 **Always test on a sacrificial bench device first** (reset button and SWD
 pads reachable; `swd-flash.local` for recovery). Verify the new bootloader
