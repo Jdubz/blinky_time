@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWakeLock } from '../hooks/useWakeLock';
 import type { Confirmation, FlashInfo } from '../services/firmware/deviceGates';
 import { FirmwareError } from '../services/firmware/errors';
-import type { FlashUi } from '../services/firmware/flashFlow';
+import type { FlashUi, SettleWatch } from '../services/firmware/flashFlow';
 import { bleUpdateSupported, updateDevice, type UpdateMethod } from '../services/firmware/otaFlash';
 import {
   fetchReleaseIndex,
@@ -88,9 +88,13 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
   const [outcome, setOutcome] = useState<Outcome>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // The last update's first-minute watch, which still holds the device link.
+  const settleRef = useRef<SettleWatch | null>(null);
 
   useWakeLock(running);
   useEffect(() => onActiveChange?.(running), [running, onActiveChange]);
+  // Leaving the page ends the watch and releases the port.
+  useEffect(() => () => settleRef.current?.stop(), []);
 
   useEffect(() => {
     fetchReleaseIndex()
@@ -122,6 +126,13 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
     if (!index) return;
     const entry = index.releases.find(r => r.tag === tag);
     if (!entry) return;
+    // A new run needs the port: end the previous update's watch first.
+    const previous = settleRef.current;
+    settleRef.current = null;
+    if (previous) {
+      previous.stop();
+      await previous.done;
+    }
     const abort = new AbortController();
     abortRef.current = abort;
     setRunning(true);
@@ -134,6 +145,12 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
       log: addLog,
       progress: (label, fraction) => setProgress({ label, fraction }),
       committed: () => setCommitted(true),
+      settling: watch => {
+        settleRef.current = watch;
+        void watch.done.then(() => {
+          if (settleRef.current === watch) settleRef.current = null;
+        });
+      },
       confirm: items =>
         new Promise<boolean>(resolve => {
           const finish = (ok: boolean) => {

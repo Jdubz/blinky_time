@@ -130,6 +130,42 @@ describe('FirmwarePage', () => {
     expect(vi.mocked(ota.updateDevice).mock.calls[0][0]).toBe('usb');
   });
 
+  it("ends the last update's first-minute watch before a new run and when leaving", async () => {
+    vi.mocked(releases.fetchReleaseIndex).mockResolvedValue(index);
+    const rel = { entry: release('b216'), image: new Uint8Array(4) } as unknown as OtaRelease;
+    vi.mocked(releases.loadOtaRelease).mockResolvedValue(rel);
+    const watches: { stop: ReturnType<typeof vi.fn>; done: Promise<void> }[] = [];
+    const order: string[] = [];
+    vi.mocked(ota.updateDevice).mockImplementation(async (_m, _r, _i, u) => {
+      order.push('update');
+      // Running until stopped, like the real watch.
+      let finish = () => {};
+      const done = new Promise<void>(r => (finish = r));
+      const w = {
+        stop: vi.fn(() => {
+          order.push('stop');
+          finish();
+        }),
+        done,
+      };
+      watches.push(w);
+      u.settling?.(w);
+      return {
+        version: 'b216-aaaaaaaa',
+        device: { configured: true, id: 'hat_v1', name: 'Hat' },
+      } as never;
+    });
+    const { unmount } = render(<FirmwarePage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to b216' }));
+    await screen.findByText(/Updated: Hat is running b216-aaaaaaaa/);
+    fireEvent.click(screen.getByRole('button', { name: 'Update to b216' }));
+    await waitFor(() => expect(watches).toHaveLength(2));
+    expect(order).toEqual(['update', 'stop', 'update']);
+    await screen.findByText(/Updated: Hat is running b216-aaaaaaaa/);
+    unmount();
+    expect(watches[1].stop).toHaveBeenCalled();
+  });
+
   it('Cancel during the download stops before any device interaction', async () => {
     vi.mocked(releases.fetchReleaseIndex).mockResolvedValue(index);
     let finishDownload: (r: OtaRelease) => void = () => {};

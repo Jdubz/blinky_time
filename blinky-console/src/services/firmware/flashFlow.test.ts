@@ -168,6 +168,26 @@ describe('finishAfterFlash', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('hands the page a watch it can stop quietly, which closes the link', async () => {
+    const dev = new FakeDevice();
+    const before = await infoOf(dev);
+    dev.reboot();
+    dev.version = b216.version;
+    const close = vi.fn(async () => {});
+    const u = { ...ui(), settling: vi.fn() };
+    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, u, close);
+    await vi.advanceTimersByTimeAsync(100);
+    await p;
+    expect(u.settling).toHaveBeenCalledTimes(1);
+    const watch = u.settling.mock.calls[0][0];
+    const logged = u.logs.length;
+    watch.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    await watch.done;
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(u.logs.length).toBe(logged); // stopping says nothing
+  });
+
   it('reports a restart during the first minute after success', async () => {
     const dev = new FakeDevice();
     const before = await infoOf(dev);

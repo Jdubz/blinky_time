@@ -29,7 +29,21 @@ export interface FlashUi {
    * (wake lock, unload warning) and cancel is no longer offered.
    */
   committed(): void;
+  /**
+   * The update is done and reported, but the first minute is still being
+   * watched on the still-open link. The page must stop() it (and await
+   * done, which closes the link) before another run opens the port, and
+   * when it unmounts.
+   */
+  settling?(watch: SettleWatch): void;
   readonly signal: AbortSignal;
+}
+
+export interface SettleWatch {
+  /** Settles when the watch ends and its link is closed; never rejects. */
+  readonly done: Promise<void>;
+  /** End the watch early, quietly (a new run, or the page closing). */
+  stop(): void;
 }
 
 export const sleep = (ms: number, signal?: AbortSignal) =>
@@ -132,7 +146,9 @@ export async function finishAfterFlash(
     await close();
     throw err;
   }
-  void watchFirstMinute(link, after.millis, ui, close);
+  const stopper = new AbortController();
+  const done = watchFirstMinute(link, after.millis, ui, close, stopper.signal);
+  ui.settling?.({ done, stop: () => stopper.abort() });
   return after;
 }
 
@@ -168,14 +184,16 @@ export async function watchFirstMinute(
   link: DeviceLink,
   startMillis: number,
   ui: Pick<FlashUi, 'log'>,
-  close: () => Promise<void>
+  close: () => Promise<void>,
+  signal?: AbortSignal
 ): Promise<void> {
   const left = Math.ceil((STABLE_UPTIME_MS - startMillis) / 1000);
   if (left > 0) ui.log(`Leave it powered for about ${left}s more while the new firmware settles`);
   try {
     for (let up = startMillis; up < STABLE_UPTIME_MS; ) {
-      await sleep(Math.min(STABLE_UPTIME_MS - up + 1000, 5000));
+      await sleep(Math.min(STABLE_UPTIME_MS - up + 1000, 5000), signal);
       const now = await link.info();
+      if (signal?.aborted) return;
       if (now.millis < up) {
         ui.log(
           `The device restarted ${Math.round(now.millis / 1000)}s ago, during its first minute on the ` +
@@ -188,7 +206,8 @@ export async function watchFirstMinute(
     }
     ui.log('The new firmware passed its first minute');
   } catch (err) {
-    // Unplugged or the page let go of the port: the update itself is done.
+    if (signal?.aborted) return; // stopped by the page: say nothing
+    // Unplugged, or the port went away: the update itself is done.
     ui.log(
       `Stopped watching the first minute (${err instanceof Error ? err.message : String(err)})`,
       'warn'
