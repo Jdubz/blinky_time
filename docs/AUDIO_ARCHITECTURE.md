@@ -129,6 +129,10 @@ inference, pulse detection, OSS/bass/NN buffers, ACF cadence (counted in
 frames) and one phase step. The main loop's rate only decides how many
 frames are handled per call.
 
+**The phase keeps absolute time on the sample clock** (`audio/PhaseClock.h`).
+- **Overruns (#261):** each phase step covers the samples that actually elapsed, measured by the mic's absolute read index, which counts dropped samples too. Normally that's one frame. When an overrun dropped samples inside a window, the step covers them, so lost audio doesn't put the beat behind real time. Every accent crossed is counted.
+- **At output (#260):** `control_.phase` (and `plpPulse`) are extrapolated from the last processed frame to the moment of drawing: `AdaptiveMic::samplesHeardSince()`, which counts samples in the ring plus the PDM block being captured. It's capped at 4 frames, so a stalled audio path waits instead of spinning. It's held just below 1.0, so it never crosses an accent the tracker hasn't counted yet.
+
 Before b208, the phase advanced once per *loop iteration*, only the last
 frame of a catch-up burst reached the NN/OSS/pulse detector, the frame rate
 constant was 66 instead of 62.5, and the period was an integer. Phase ran at

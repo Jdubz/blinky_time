@@ -19,7 +19,7 @@ bool Audio::begin(const DeviceConfig& config) {
     smoothedEnergy_ = 0.0f;
     transientIntensity_ = 0.0f;
     beatPulseIntensity_ = 0.0f;
-    lastFrameMs_ = 0;
+    audioClock_.restart();
 
     return true;
 }
@@ -27,10 +27,9 @@ bool Audio::begin(const DeviceConfig& config) {
 void Audio::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // Frame time: the smoothing/decay params are "per 60 fps frame"; apply
     // them time-scaled so this debug view reads the same at any loop speed.
-    uint32_t nowMs = millis();
-    float dt = (lastFrameMs_ == 0) ? (1.0f / 60.0f) : (nowMs - lastFrameMs_) / 1000.0f;
-    lastFrameMs_ = nowMs;
-    if (dt > 0.1f) dt = 0.1f;
+    // Real frame time, never clamped (#259); every decay below is
+    // closed-form (powf(rate, frames60)), so any gap is exact.
+    const float dt = audioClock_.tick(millis());
     const float frames60 = dt * 60.0f;
 
     // Update smoothed energy
@@ -77,7 +76,7 @@ void Audio::reset() {
     smoothedEnergy_ = 0.0f;
     transientIntensity_ = 0.0f;
     beatPulseIntensity_ = 0.0f;
-    lastFrameMs_ = 0;
+    audioClock_.restart();
 }
 
 void Audio::drawBackground(PixelMatrix& matrix) {

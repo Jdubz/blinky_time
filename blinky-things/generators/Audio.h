@@ -99,7 +99,7 @@ private:
     float transientIntensity_;    // Current transient intensity (0-1), decays over time
     float beatPulseIntensity_;    // Current beat pulse intensity (0-1), decays over time
     uint16_t lastBeatCount_ = 0;  // AudioControl::beatCount at the previous frame
-    uint32_t lastFrameMs_ = 0;    // for frame-rate-independent smoothing
+    FrameClock audioClock_;       // real frame time for the closed-form decays
 
     // Helper methods
     void drawTransientRows(PixelMatrix& matrix, float pulse);

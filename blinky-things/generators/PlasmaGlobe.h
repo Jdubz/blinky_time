@@ -58,6 +58,7 @@ public:
     PlasmaGlobeParams& getParamsMutable() { return params_; }
 
 private:
+    void stepOrbs(float dt, float noiseTime);  // one bounded physics step of orb drift
     // Map intensity [0,1] to purple/violet RGB
     void purplePalette(float intensity, uint8_t& r, uint8_t& g, uint8_t& b) const;
 

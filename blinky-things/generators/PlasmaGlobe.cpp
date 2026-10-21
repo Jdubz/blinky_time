@@ -32,7 +32,7 @@ bool PlasmaGlobe::begin(const DeviceConfig& config) {
     noiseTime_ = 0.0f;
     pulseEnvelope_ = 0.0f;
     pulseRadiusEnv_ = 0.0f;
-    lastUpdateMs_ = millis();
+    frameClock_.restart();
     return true;
 }
 
@@ -40,18 +40,46 @@ void PlasmaGlobe::reset() {
     noiseTime_ = 0.0f;
     pulseEnvelope_ = 0.0f;
     pulseRadiusEnv_ = 0.0f;
-    lastUpdateMs_ = millis();
+    frameClock_.restart();
+}
+
+// One explicit integration step of the orbs' noise-driven drift (dt <=
+// FrameTiming::MAX_PHYSICS_STEP_S; generate() substeps longer frames),
+// sampling the noise field at `noiseTime`, the step's own time.
+void PlasmaGlobe::stepOrbs(float dt, float noiseTime) {
+    for (int i = 0; i < numOrbs_; i++) {
+        float phase = orbPhaseOffset_[i];
+        // Noise-driven velocity (different noise seed per orb)
+        float vx = SimplexNoise::noise3D_01(orbX_[i] * 0.15f, orbY_[i] * 0.15f,
+                                             noiseTime * 3.0f + phase) - 0.5f;
+        float vy = SimplexNoise::noise3D_01(orbX_[i] * 0.15f + 10.0f, orbY_[i] * 0.15f + 10.0f,
+                                             noiseTime * 3.0f + phase) - 0.5f;
+
+        // Gentle pull toward center (prevents orbs from drifting off-screen)
+        float cx = width_ * 0.5f;
+        float cy = height_ * 0.5f;
+        float pullX = (cx - orbX_[i]) * 0.02f;
+        float pullY = (cy - orbY_[i]) * 0.02f;
+
+        orbX_[i] += (vx * width_ * 0.3f + pullX) * dt;
+        orbY_[i] += (vy * height_ * 0.3f + pullY) * dt;
+
+        // Soft clamp to bounds
+        orbX_[i] = constrain(orbX_[i], 0.0f, (float)(width_ - 1));
+        orbY_[i] = constrain(orbY_[i], 0.0f, (float)(height_ - 1));
+    }
 }
 
 void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    uint32_t now = millis();
-    float dt = (now - lastUpdateMs_) * 0.001f;
-    if (dt <= 0.0f || dt > 0.5f) dt = 0.016f;
-    lastUpdateMs_ = now;
+    // Real frame time, never clamped (#259). It used to treat any gap over
+    // 0.5 s as 16 ms, which dropped the whole gap. Drift and the closed-form
+    // decays take the whole gap; orb motion integrates it in substeps.
+    const float dt = frameClock_.tick(millis());
 
     // --- Time advancement (dt-based for frame-rate independence) ---
     float speedMod = 0.7f + 0.3f * audio.energy;
-    noiseTime_ += params_.driftSpeed * speedMod * dt;
+    const float noiseRate = params_.driftSpeed * speedMod;  // noise time per second
+    noiseTime_ += noiseRate * dt;
 
     // --- Beat pulse envelope (dt-based decay) ---
     if (audio.pulse > 0.4f && audio.pulse > pulseEnvelope_) {
@@ -66,26 +94,13 @@ void PlasmaGlobe::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
     // --- Update orb positions via noise field ---
     float diagonal = sqrtf((float)(width_ * width_ + height_ * height_));
-    for (int i = 0; i < numOrbs_; i++) {
-        float phase = orbPhaseOffset_[i];
-        // Noise-driven velocity (different noise seed per orb)
-        float vx = SimplexNoise::noise3D_01(orbX_[i] * 0.15f, orbY_[i] * 0.15f,
-                                             noiseTime_ * 3.0f + phase) - 0.5f;
-        float vy = SimplexNoise::noise3D_01(orbX_[i] * 0.15f + 10.0f, orbY_[i] * 0.15f + 10.0f,
-                                             noiseTime_ * 3.0f + phase) - 0.5f;
-
-        // Gentle pull toward center (prevents orbs from drifting off-screen)
-        float cx = width_ * 0.5f;
-        float cy = height_ * 0.5f;
-        float pullX = (cx - orbX_[i]) * 0.02f;
-        float pullY = (cy - orbY_[i]) * 0.02f;
-
-        orbX_[i] += (vx * width_ * 0.3f + pullX) * dt;
-        orbY_[i] += (vy * height_ * 0.3f + pullY) * dt;
-
-        // Soft clamp to bounds
-        orbX_[i] = constrain(orbX_[i], 0.0f, (float)(width_ - 1));
-        orbY_[i] = constrain(orbY_[i], 0.0f, (float)(height_ - 1));
+    const FrameTiming::Steps steps = FrameTiming::physicsSteps(dt);
+    // Substep s ends at noise time noiseTime_ - noiseRate * (time still to
+    // come in this frame), so a long frame drifts through the field it
+    // would have seen frame by frame.
+    for (int s = 0; s < steps.count; s++) {
+        const float remaining = static_cast<float>(steps.count - 1 - s) * steps.dt;
+        stepOrbs(steps.dt, noiseTime_ - noiseRate * remaining);
     }
 
     // --- Phase-driven orb breathing ---

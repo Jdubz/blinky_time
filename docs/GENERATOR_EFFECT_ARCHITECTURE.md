@@ -78,6 +78,14 @@ public:
 };
 ```
 
+### Timing: animations keep absolute time (#259)
+
+A late frame must land where it belongs in time, not stretch the animation. A generator gets its frame time from `frameClock_.tick(millis())` (`types/FrameClock.h`). That's the real elapsed time, never clamped, and 0 on the first frame after `begin()`/`reset()`.
+- **Clocks and decays** take the whole frame: noise time, drift, hue, palette bias, and envelopes written in closed form (`expf(-dt / tau)`, `powf(rate, dt * 60)`).
+- **Explicit physics** (forces, velocities, heat diffusion, orb drift, ripples) runs the same time in bounded substeps, `FrameTiming::physicsSteps(dt)`: at most 50 ms each, over at most the last 1 s of a long gap (particles live ≤ 2.55 s).
+- **Spawning** is edge-triggered on onsets and beats, so it runs once per frame over `FrameTiming::physicsSpan(dt)`.
+- Never add a `dt` clamp or a "gap too long, assume 16 ms" fallback. `tests/timing/timing_test.cpp` checks that one 2 s frame ends with the same time-driven state as two hundred 10 ms frames.
+
 ## 🔥 Fire Generator
 
 ### Key Changes from FireVisualEffect
