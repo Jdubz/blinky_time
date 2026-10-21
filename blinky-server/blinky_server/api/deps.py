@@ -56,10 +56,12 @@ async def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> No
         raise HTTPException(401, "Invalid API key")
 
 
-# Flash endpoints (/api/fleet/upload, /api/fleet/flash) must be reached only
-# via scripts/deploy.sh. The API key alone is not sufficient — direct curl
-# (even with the right key) bypasses the compile/upload/verify pipeline that
-# deploy.sh runs end-to-end. The v33 onset-model regression (2026-04-27) wasn't
+# The low-level flash endpoints (/api/fleet/upload, /api/fleet/flash) are
+# steps of the hardened deploy pipeline, not a way to deploy: direct curl
+# (even with the right key) skips the rest of it (stable-only release,
+# verify, restore + save, post-deploy assertion). scripts/deploy.sh drives
+# them end-to-end; POST /api/fleet/deploy runs the same pipeline server-side
+# (firmware/deploy_pipeline.py) and so doesn't need this header. The v33 onset-model regression (2026-04-27) wasn't
 # caused by a bypassed deploy.sh, but during diagnosis we discovered Claude
 # was bypassing it routinely; this gate makes that fail loudly. The header
 # value is intentionally not a secret — the goal is to stop accidental

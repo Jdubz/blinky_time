@@ -8,7 +8,18 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 
 **NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on nRF52840.** The DFU serial protocol has race conditions that can brick devices, requiring SWD hardware to recover.
 
-**Flashing connected devices: `./scripts/deploy.sh` is REQUIRED.** Direct `curl` against `/api/fleet/upload`, `/api/fleet/flash`, or `/api/devices/{id}/command` with a device-mutating command body (`device upload`, `reboot`) is forbidden — the server enforces this via an `X-Deploy-Tool` header check that only `deploy.sh` sets, so manual curl returns 403. The API key alone is not sufficient. Use:
+**Flashing connected devices: every deploy must run deploy.sh's hardened pipeline.** What's required is the mechanisms, not the script's name:
+- a **stable release only**, downloaded and sha256-verified (`tools/firmware_release.py download`);
+- an **explicit target list** (or `all`), with every ID validated;
+- the **single flash path** (`FleetManager.flash_device` / `flash_fleet`), with auto-recovery armed for exactly the targets;
+- `restore_runtime_settings` + `save`;
+- the **post-deploy assertion** (exact version, audio counters, no error/DFU state).
+
+Dropping any of these is what's forbidden. Two entry points run all of them:
+- `./scripts/deploy.sh` from a workstation;
+- `POST /api/fleet/deploy` on blinky-server (`blinky_server/firmware/deploy_pipeline.py`, the same modules; #269). It never compiles, and never flashes a local build.
+
+Direct `curl` against the low-level `/api/fleet/upload`, `/api/fleet/flash`, or `/api/devices/{id}/command` with a device-mutating command (`device upload`, `reboot`) skips the pipeline, so it's forbidden. The server enforces this with an `X-Deploy-Tool` header that only `deploy.sh` sets: manual curl gets 403, and the API key alone isn't enough. When adding a new deploy path, build it on the same modules rather than reimplementing or skipping a step. From a workstation, use:
 
 `./scripts/deploy.sh` requires an explicit `--devices` target — passing `all`, an explicit comma-separated list of device IDs, or `list` to enumerate candidates. Unscoped fleet flashes were removed in PR #140 after the cart_inner brick incident.
 

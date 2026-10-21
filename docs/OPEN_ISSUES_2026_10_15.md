@@ -68,7 +68,7 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 | 3.7 ([#191](https://github.com/Jdubz/blinky_time/issues/191)) | Settings save still halts the CPU (NVMC erase) long enough to drop audio | `ConfigStorage::saveToFlash` | PARTIAL | Trailing debounce + skip-unchanged in #152. Consider deferring saves while audio energy is high. |
 | 3.9 ([#251](https://github.com/Jdubz/blinky_time/issues/251)) | Auto-recovery reuses the last uploaded `firmware.hex` and device whitelist, so a non-stable image left by an aborted deploy could reach a production device | `routes_firmware.py`, `FleetManager` auto-recovery | PARTIAL | `deploy.sh` accepts stable releases only (#250). Fix: store uploads immutably, keyed by release, and let recovery use only the stable image. |
-| 3.10 ([#269](https://github.com/Jdubz/blinky_time/issues/269)) | `POST /api/fleet/deploy` compiles a local build and flashes the fleet with only the API key (skips the `X-Deploy-Tool` gate and the stable-only rule) | `blinky-server` `routes_firmware.py` | OPEN | Remove the route, or gate it and make it stable-only. |
+| 3.10 ([#269](https://github.com/Jdubz/blinky_time/issues/269)) | `POST /api/fleet/deploy` compiled a local build and flashed the fleet with only the API key | `blinky-server` `routes_firmware.py` | FIXED (fix/fleet-deploy-pipeline) | Now runs deploy.sh's pipeline server-side (`deploy_pipeline.py`). Remove this row when #269 closes. |
 
 ## 4. Visual generators
 

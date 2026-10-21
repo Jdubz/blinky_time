@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # ── Request Models ──
@@ -17,6 +19,22 @@ class SettingValueRequest(BaseModel):
 
 class ReleaseRequest(BaseModel):
     hold_seconds: int | None = Field(None, ge=0, description="Don't auto-reconnect for N seconds")
+
+
+class DeployRequest(BaseModel):
+    device_ids: list[str] | Literal["all"] = Field(
+        ...,
+        description=(
+            'Required: explicit device IDs, or "all" (every connected or present '
+            "nRF52840, as deploy.sh --devices=all). No default: a fleet deploy "
+            "always names its scope."
+        ),
+    )
+    release: str | None = Field(
+        default=None,
+        pattern=r"^b\d+$",
+        description="A specific STABLE release (b<N>); default: the latest stable.",
+    )
 
 
 class FlashRequest(BaseModel):
