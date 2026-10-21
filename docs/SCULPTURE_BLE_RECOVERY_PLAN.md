@@ -67,7 +67,7 @@ The recovery system today has three layers:
 - `update-bootloader-qspi-ota-default.uf2` (75 KB) — UF2 mass-storage update
 - `update-bootloader-qspi-ota-default_s140_7.3.0.zip` (193 KB) — DFU.zip for OTA update via fleet
 
-**Deploy:** `./scripts/deploy-bootloader.sh --target <port>`, on a sacrificial device first (CLAUDE.md). The Makefile `bootloader-update` targets skip its safety checks; don't use them.
+**Deploy:** `./scripts/deploy-bootloader.sh --target <port>`, on a sacrificial device first (CLAUDE.md). The Makefile `bootloader-update` targets skipped its safety checks, so they now refuse (#270).
 
 **Verify:** SWD-erase the app region on a bench unit, power-cycle, confirm device enters BLE DFU and fleet server can connect to bootloader address and reflash. (Test T1.)
 

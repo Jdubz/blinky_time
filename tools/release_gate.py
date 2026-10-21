@@ -11,7 +11,11 @@ Checks (each one must pass):
   version      `json info` reports exactly the release's manifest version
   configured   device.configured is true and device.id is unchanged
   fps          loop fps >= --min-fps (default 60: a disaster floor, not a
-               quality bar; timing checks are #258)
+               quality bar)
+  frametime    every 5 s loop-metrics window's longest frame (json info
+               maxFrameMs) <= --max-frame-ms (default 100; hat_v1 with music
+               peaks at 24-31 ms). A long frame freezes the visuals: settings
+               saves, blocking output, stalls (#258, #275)
   stability    no reboot for --stable-minutes (uptime keeps rising) and
                audioOverruns grows by at most --max-overrun-growth
   asserts      no [ASSERT] / [FALLBACK] line seen on the console
@@ -104,6 +108,8 @@ def main():
     ap.add_argument("--min-fps", type=float, default=60.0)
     ap.add_argument("--stable-minutes", type=float, default=5.0)
     ap.add_argument("--max-overrun-growth", type=int, default=5)
+    ap.add_argument("--max-frame-ms", type=int, default=100,
+                    help="longest single loop frame allowed in any 5 s window (json info maxFrameMs)")
     ap.add_argument("--music-seconds", type=float, default=15.0)
     ap.add_argument("--min-level", type=float, default=0.05)
     ap.add_argument("--min-onsets-per-s", type=float, default=1.0)
@@ -141,9 +147,12 @@ def main():
         log(f"=== Stability: {args.stable_minutes} min (do not reset the device) ===")
         first = info
         fps_seen, last_ms, rebooted = [], int(first.get("millis", 0)), False
+        frame_ms_seen = []
         end = time.monotonic() + args.stable_minutes * 60
         while time.monotonic() < end:
-            watch_console(args.port, 10, lambda l: asserts.append(l)
+            # 2 s of console + ~2.5 s for json info: one read per < 5 s, so
+            # every 5 s loop-metrics window's maxFrameMs is read at least once.
+            watch_console(args.port, 2, lambda l: asserts.append(l)
                           if ("[ASSERT]" in l or "[FALLBACK]" in l) else None)
             cur = deploy_local.json_info(args.port)
             ms = int(cur.get("millis", 0))
@@ -151,11 +160,18 @@ def main():
                 rebooted = True
             last_ms = ms
             fps_seen.append(float(cur.get("fps") or 0.0))
-            log(f"  uptime {ms // 1000}s fps {cur.get('fps')} overruns {cur.get('audioOverruns')}")
+            if cur.get("maxFrameMs") is not None:
+                frame_ms_seen.append(int(cur["maxFrameMs"]))
+            log(f"  uptime {ms // 1000}s fps {cur.get('fps')} maxFrameMs {cur.get('maxFrameMs')} overruns {cur.get('audioOverruns')}")
             info = cur
         growth = int(info.get("audioOverruns") or 0) - int(first.get("audioOverruns") or 0)
         fps_min = min(fps_seen) if fps_seen else 0.0
         checks["fps"] = {"pass": fps_min >= args.min_fps, "min": fps_min, "floor": args.min_fps}
+        # Missing maxFrameMs is an instrumentation regression, not a pass.
+        frame_max = max(frame_ms_seen) if frame_ms_seen else None
+        checks["frametime"] = {"pass": frame_max is not None and frame_max <= args.max_frame_ms,
+                               "max_ms": frame_max, "limit_ms": args.max_frame_ms,
+                               "windows": len(frame_ms_seen)}
         checks["stability"] = {"pass": not rebooted and growth <= args.max_overrun_growth,
                                "rebooted": rebooted, "overrun_growth": growth}
 

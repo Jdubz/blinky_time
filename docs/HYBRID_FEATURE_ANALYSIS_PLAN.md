@@ -1,7 +1,7 @@
 # Hybrid Feature Analysis Plan
 
 **Status:** **Closed; kept for its method (checked 2026-10-21).** The five-gate method and the lessons from the v27 hybrids still apply: flatness is 85% predictable from mel (R² = 0.85), gate (b) found nothing, and the kick_weighted_drums labels were contaminated. The experiment queue below is closed. For the current direction, see `ML_IMPROVEMENT_PLAN.md` (its 2026-05-02 literature review). What changed since this was written:
-- **The onset NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0` in `audio/AudioTracker.h`). Onsets come from spectral flux, which scores higher on edm/ (F1 0.542 vs 0.480 for the v33 NN) and costs far less CPU. "NN input feature" work therefore has no deployed consumer until a model beats flux (see `AUDIO_ARCHITECTURE.md`).
+- **The onset NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0` in `audio/AudioTracker.h`). Onsets come from spectral flux, which scores higher on edm/ (F1 0.546 vs 0.480 for the v33 NN) and costs far less CPU. "NN input feature" work therefore has no deployed consumer until a model beats flux (see `AUDIO_ARCHITECTURE.md`).
 - **`edm_holdout/` was deleted** (2026-04-27). Every held-out number below was measured on it. The only validation corpus is `blinky-test-player/music/edm/` (CLAUDE.md).
 - **Phase 2b was never built.** There is no `SignalRegistry` and no `stream signal` command. The shape features (crest, centroid, rolloff, HFC, raw flatness, raw flux) are computed in `SharedSpectralAnalysis` and logged per onset (`PulseFeatureSnapshot` in `AudioTracker.h`).
 - **`crestGateMin` remains** (serial `crestgatemin`, default 0 = off, persisted since v95) and is only used on the NN path.

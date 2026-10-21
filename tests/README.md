@@ -60,7 +60,6 @@ Before pushing:
 These files predate the runtime device config and the current flashing rules:
 
 - `test_runner.ino`, `BlinkyTest.h/.cpp`, `unit/`, `integration/` - an on-device test sketch
-- `run_tests.py`, `test.bat` - **upload with `arduino-cli upload`, which can brick the nRF52840.** They also rewrite a `#define DEVICE_TYPE` that no longer exists. Do not run them.
 - `validate_configs.py` - checks the old compiled-in `blinky-things/devices/*.h` configs. Devices now use the JSON configs in `devices/registry/`.
 
 To test on hardware, flash a test device (`devices/test_devices.json`) with `python tools/deploy_local.py --port <port> --device-id <id> --dev` and use the on-device tests in [TESTING.md](../TESTING.md).

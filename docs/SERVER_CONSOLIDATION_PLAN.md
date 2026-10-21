@@ -371,7 +371,7 @@ After all phases verified end-to-end:
 - `ml-training/tools/derive_pattern_ground_truth.py` — offline analysis, no serial
 - `tools/pre_upload_check.py` — compile-time safety, no serial
 - `tools/validate_syntax.py` — compile-time validation, no serial
-- `tools/deploy_model.sh` — model export pipeline (calls server API for flash)
+- ~~`tools/deploy_model.sh`~~ — deleted (#271): it targeted the old beat-model header and committed/pushed. Export with `ml-training/scripts/export_tflite.py` (writes the config's `output_header`).
 
 **Update docs:** CLAUDE.md, TESTING.md, AUDIO-TUNING-GUIDE.md — reference server API endpoints, remove all beat/BPM terminology.
 

@@ -64,7 +64,8 @@ Flashes the candidate through `deploy_local.py --release bN`, then checks:
 |---|---|
 | version | `json info` reports exactly the manifest version |
 | configured | `device.configured` true, same `device.id` |
-| fps | ≥ 60 for the whole window (`--min-fps`). A disaster floor (b210 shipped at 12 fps), not a quality bar: hat_v1 runs about 100–175 fps with music on both b214 and b215. What matters is timing, which the gate doesn't check yet (#258). |
+| fps | ≥ 60 for the whole window (`--min-fps`). A disaster floor (b210 shipped at 12 fps), not a quality bar: hat_v1 runs about 100–175 fps with music on both b214 and b215. What matters is timing: see frametime below (#258). |
+| frametime | every 5 s window's longest frame (`json info` `maxFrameMs`) ≤ 100 ms (`--max-frame-ms`). hat_v1 with music peaks at 24–31 ms; a long frame is a visible freeze (#258, #275). |
 | stability | no reboot for 5 min (`--stable-minutes`); `audioOverruns` grows ≤ 5 |
 | asserts | no `[ASSERT]` / `[FALLBACK]` on the console |
 | music | with music playing (it prompts): level mean ≥ 0.05, ≥ 1 pulse onset/s |
