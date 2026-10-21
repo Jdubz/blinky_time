@@ -647,6 +647,10 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(MallocLock_isrAllocCount);
         }
 #endif
+        // Hardware reset reason of this boot (nRF52 RESETREAS bits: 0x1 pin,
+        // 0x2 watchdog, 0x4 soft reset, 0x8 CPU lockup; 0 = power-on).
+        out_.print(F(",\"resetReason\":"));
+        out_.print(resetReason_);
 
         out_.println(F("}"));
         return true;

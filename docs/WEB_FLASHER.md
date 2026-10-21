@@ -118,7 +118,7 @@ With 0.8.0-11 the drive would also stop timing out back to the app when nothing 
 - **Bluetooth: not working from Windows Chrome yet.**
   - The hat connected, but every GATT operation took ~5 s and a 10-byte write failed after ~10 s (`GATT operation failed for unknown reason`).
   - A native client (`bleak`) on the same PC saw an incomplete service table.
-  - The hat restarted on its own shortly afterwards; the cause isn't known yet.
+  - The hat restarted on its own shortly afterwards. **Cause found and fixed (#173):** a Windows central negotiates MTU 527, and the NUS send path copied up to 524 bytes into a 244-byte stack buffer, so any reply longer than ~244 bytes smashed the stack and soft-reset the device.
   - This is the app's existing BLE/NUS stack, not the update protocol, which stays safe over a bad link because nothing is installed until a verified image is complete. See [Open items](#open-items).
 
 ## Rollout checklist
@@ -133,7 +133,7 @@ The page went live (USB) on 2026-10-21 (PR #266), after item 1 and a real end-to
 
 ## Open items
 
-- **Bluetooth from Windows Chrome:** slow GATT operations, a failed write, a self-restart (bench results). Reproduce on Android first; check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events, the restart cause, and the stack depth of commands received over BLE (`ota manifest` runs Ed25519 verification, and `ota chunk` uses a 515-byte buffer, on the Bluefruit callback task's stack).
+- **Bluetooth from Windows Chrome:** slow GATT operations and a failed write (bench results). The self-restart was #173 (fixed: MTU-sized stack overflow on long replies); NUS commands now also run on the loop task. Still to do: reproduce a full update on Android Chrome, and check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events.
 - **Authenticated console commands:** `bootloader ble`, `device upload`, `wipe_device_identity` etc. are accepted from any NUS central or broadcaster. Signing the update path doesn't cover them.
 - **Power loss during the bootloader's copy:** the apply request is one-shot (RAM/`GPREGRET`). A power cut mid-copy leaves the device in its bootloader, which is recoverable but not self-healing. Fix: a persistent "copy pending" marker in the bootloader.
 - **Hub-driven updates** (blinkyhost offering the stable release to personal devices in range) are deferred by decision.

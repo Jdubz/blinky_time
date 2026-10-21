@@ -554,6 +554,9 @@ void setup() {
   console->setAudioController(audioController);
   console->setFakeAudio(&fakeAudio);
   console->begin();
+#ifdef BLINKY_PLATFORM_NRF52840
+  console->setResetReason(RebootFrequencyCounter::getLastResetReason());
+#endif
   SerialConsole::logDebug(F("Serial console initialized"));
   // Initialize BLE (nRF52840 only)
 #ifdef BLINKY_PLATFORM_NRF52840
