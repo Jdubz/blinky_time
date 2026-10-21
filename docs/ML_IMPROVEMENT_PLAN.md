@@ -8,7 +8,7 @@
 
 | onset source | F1 | P | R | loop fps |
 |---|---|---|---|---|
-| spectral flux, `fluxOnsetFloor` 0.01 | **0.542** | 0.449 | 0.682 | 178 |
+| spectral flux, `fluxOnsetFloor` 0.01, `pulseThresholdMult` 2.0 | **0.546** | 0.457 | 0.679 | 178 |
 | v33 NN (~12 ms per inference) | 0.480 | 0.394 | 0.613 | 48 |
 
 The NN path stays tested in CI: the `tracker-harness-nn` job builds the host harness with TFLite Micro (`tests/tracker/build_host_nn.sh`, `BLINKY_HOST_NN`) and gates it on frame rate (≥ 35 fps) and corpus floors.

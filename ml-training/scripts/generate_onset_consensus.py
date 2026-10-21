@@ -39,7 +39,7 @@ import numpy as np
 
 # Defaults
 AUDIO_DIR = Path("/mnt/storage/blinky-ml-data/audio/combined")
-LABELS_DIR = Path("/mnt/storage/blinky-ml-data/labels/consensus_v5")
+LABELS_DIR = None  # optional track filter; default: every audio file in --audio-dir (#271)
 OUTPUT_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_consensus")
 LIBROSA_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_librosa")
 SR = 16000
@@ -309,7 +309,9 @@ def main():
         description="Generate multi-system onset consensus labels"
     )
     parser.add_argument("--audio-dir", type=Path, default=AUDIO_DIR)
-    parser.add_argument("--labels-dir", type=Path, default=LABELS_DIR)
+    parser.add_argument("--labels-dir", type=Path, default=LABELS_DIR,
+                        help="optional: only label stems that have a *.beats.json or *.onsets.json here "
+                             "(a track list, never a label source). Default: every audio file in --audio-dir.")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--librosa-dir", type=Path, default=LIBROSA_DIR)
     parser.add_argument("--test-dir", type=Path, default=None,
@@ -359,10 +361,6 @@ def main():
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect stems from consensus labels (same track set as beat training)
-    label_stems = {f.stem.replace(".beats", "") for f in args.labels_dir.glob("*.beats.json")}
-    print(f"Found {len(label_stems)} consensus labels")
-
     # Build audio index (flat dir, no rglob)
     audio_extensions = {".mp3", ".wav", ".flac", ".ogg"}
     audio_index: dict[str, Path] = {}
@@ -370,6 +368,29 @@ def main():
         if f.suffix.lower() in audio_extensions:
             audio_index[f.stem] = f
     print(f"Found {len(audio_index)} audio files")
+    if not audio_index:
+        sys.exit(f"ERROR: no audio files in {args.audio_dir}")
+
+    # Track set. It used to be the stems of the BEAT consensus dir
+    # (consensus_v5); once that was archived the set was silently empty and
+    # nothing was labelled (#271). Default: every audio file. --labels-dir is
+    # only an optional filter (file NAMES, never label contents), and an empty
+    # or missing filter dir is an error, not "nothing to do".
+    if args.labels_dir is None:
+        label_stems = set(audio_index)
+    else:
+        if not args.labels_dir.is_dir():
+            sys.exit(f"ERROR: --labels-dir {args.labels_dir} does not exist")
+        suffixes = (".beats.json", ".onsets.json", ".onsets_consensus.json", ".onsets_human.json")
+        label_stems = {
+            f.name[: -len(sfx)]
+            for f in args.labels_dir.iterdir()
+            for sfx in suffixes
+            if f.name.endswith(sfx)
+        }
+        if not label_stems:
+            sys.exit(f"ERROR: --labels-dir {args.labels_dir} has no label files to take the track list from")
+    print(f"Labelling {len(label_stems)} tracks")
 
     # Build work items: training labels
     work_items = []

@@ -197,10 +197,18 @@ public:
     float odfContrast = 1.25f;
 
     // Pulse detection thresholds
-    float pulseThresholdMult = 1.5f;   // Baseline multiplier for pulse fire (tuned for NN-primary signal)
+    // Flux onsets fire above odfBaseline * this. One default for the class,
+    // the factory config and restore_runtime_settings (#272: the class said
+    // 1.5 while devices booted with 2.0, so the harness scored a threshold
+    // devices never ran). edm/ host sweep, CPU cost model (2026-10-21):
+    // 1.5 F1 0.542 R 0.682 | 2.0 F1 0.546 R 0.679 | 2.5 F1 0.547 R 0.668 |
+    // 3.0 F1 0.550 R 0.658. Higher trades recall (every hit) for little F1.
+    static constexpr float PULSE_THRESHOLD_MULT_DEFAULT = 2.0f;
+    float pulseThresholdMult = PULSE_THRESHOLD_MULT_DEFAULT;
     float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
     // edm/ host sweep with the CPU cost model (v97): F1 plateaus at ~0.54 for
-    // floors 0-0.03; 0.01 is best (F1 0.542, R 0.682, mean offset -0.1 ms).
+    // floors 0-0.03; 0.01 is best (F1 0.542, R 0.682, mean offset -0.1 ms,
+    // measured at pulseThresholdMult 1.5; at the device's 2.0: F1 0.546).
     static constexpr float FLUX_ONSET_FLOOR_DEFAULT = 0.01f;
     float pulseOnsetFloor = 0.20f;     // NN activation threshold for peak-picking (v33 sweep: 0.20 lifts F1 0.398→0.442 vs 0.30; raising threshold doesn't improve P, just drops R)
     // pulseNNGate removed in b114 — NN is now the primary signal, not a gate

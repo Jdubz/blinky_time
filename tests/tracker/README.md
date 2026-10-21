@@ -5,7 +5,7 @@ Runs the firmware's real `AudioTracker`, `SharedSpectralAnalysis` and `AdaptiveM
 Use it to check that tempo, phase and beat count don't depend on loop rate and don't drift. Phase drift that depends on loop rate is the failure mode the b208 frame-clock rework fixed.
 
 **Default build:** no TFLite, and the onset NN is off (`BLINKY_ONSET_NN_ENABLED=0`), exactly as on devices: onset pulses come from spectral flux.
-- Devices ship with the NN off because tuned flux beats the v33 NN on edm/ (F1 0.542 vs 0.480) at 3.7x the frame rate. See the CPU cost model below.
+- Devices ship with the NN off because tuned flux beats the v33 NN on edm/ (F1 0.546 vs 0.480) at 3.7x the frame rate. See the CPU cost model below.
 
 **With the real onset NN (#203):** `tests/tracker/build_host_nn.sh` compiles the Arduino TFLite Micro library for the host and links the harness with `BLINKY_HOST_NN`, so `FrameOnsetNN` runs the embedded model exactly as the device does.
 - The kernels are TFLite reference kernels, plus CMSIS-NN's portable C paths (no ARM intrinsics on the host).

@@ -132,15 +132,13 @@ echo ""
 if [ "$SKIP_LABELS" = false ]; then
     ONSET_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('onset_consensus_dir',''))" "$CONFIG" 2>/dev/null)
     if [ -n "$ONSET_DIR" ]; then
+        # Always run it: it skips tracks already labelled, so a complete set
+        # costs a directory scan. (The old gate compared against the count of
+        # BEAT labels in consensus_v5; once that was archived the expected
+        # count was 0 and labels were silently never generated, #271.)
         COUNT=$(find "$ONSET_DIR" -name '*.onsets.json' -maxdepth 1 2>/dev/null | wc -l)
-        EXPECTED=$(find "$ONSET_DIR"/.. -path '*/consensus_v5/*.beats.json' -maxdepth 2 2>/dev/null | wc -l)
-        EXPECTED=${EXPECTED:-6750}
-        if [ "$COUNT" -lt "$EXPECTED" ]; then
-            echo "=== Phase 1: Generating onset labels ($COUNT/$EXPECTED exist) ==="
-            python scripts/generate_onset_consensus.py --output-dir "$ONSET_DIR" --workers 4
-        else
-            echo "=== Phase 1: Labels exist ($COUNT/$EXPECTED files), skipping ==="
-        fi
+        echo "=== Phase 1: Onset labels ($COUNT exist; labelling any missing tracks) ==="
+        python scripts/generate_onset_consensus.py --output-dir "$ONSET_DIR" --workers 4 || exit 1
     else
         echo "=== Phase 1: No onset_consensus_dir in config, skipping ==="
     fi
@@ -153,7 +151,12 @@ KW_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); prin
 LABELS_TYPE=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_type',''))" "$CONFIG" 2>/dev/null)
 if [ -n "$KW_DIR" ] && [ "$LABELS_TYPE" = "kick_weighted" ]; then
     echo "=== Phase 1b: Validating kick-weighted labels ==="
-    CONSENSUS_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_dir', '/mnt/storage/blinky-ml-data/labels/consensus_v5'))" "$CONFIG" 2>/dev/null)
+    # No default: the old fallback was the BEAT consensus (consensus_v5, #271).
+    CONSENSUS_DIR=$(python3 -c "import sys, yaml; c=yaml.safe_load(open(sys.argv[1])); print(c.get('labels',{}).get('labels_dir',''))" "$CONFIG" 2>/dev/null)
+    if [ -z "$CONSENSUS_DIR" ]; then
+        echo "ERROR: config has no labels.labels_dir (onset labels) to validate kick-weighted labels against" >&2
+        exit 1
+    fi
     python scripts/validate_kick_weighted.py --label-dir "$KW_DIR" --consensus-dir "$CONSENSUS_DIR" --quiet || {
         echo "  Label validation found issues (see above). Continuing with training."
     }

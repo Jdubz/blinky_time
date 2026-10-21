@@ -12,8 +12,8 @@ audio:
   sample_rate: 16000        # PDM mic rate
   n_fft: 256                # FFT-256
   hop_length: 256           # No overlap (hop = FFT size)
-  n_mels: 26                # SharedSpectralAnalysis NUM_MEL_BANDS (deployed v25/v26 model)
-  fmin: 60                  # MEL_MIN_FREQ (SharedSpectralAnalysis)
+  n_mels: 50                # SharedSpectralAnalysis NUM_MEL_BANDS (v33+)
+  fmin: 30                  # MEL_MIN_FREQ (SharedSpectralAnalysis)
   fmax: 8000                # MEL_MAX_FREQ (SharedSpectralAnalysis)
   log_epsilon: 1.0e-7       # Must match firmware SharedSpectralAnalysis (ARM denormal safe)
   mel_db_range: 60          # Log-mel maps [-mel_db_range, 0] dB to [0, 1]. Must match firmware.
@@ -144,8 +144,11 @@ quantization:
 
 # Export defaults (model configs may override)
 export:
-  output_header: "../blinky-things/audio/frame_beat_model_data.h"
-  c_array_name: "frame_beat_model_data"
+  # Not the firmware's active header (frame_onset_model_data.h): a config that
+  # falls back to this default must not overwrite the shipped model. Model
+  # configs set their own versioned header (#271).
+  output_header: "../blinky-things/audio/frame_onset_model_data_unversioned.h"
+  c_array_name: "frame_onset_model_data"
 
 # Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
 #   /mnt/nvme    — 463 GB LVM-linear pool over 2× USB-NVMe. Hot path for prep+train.

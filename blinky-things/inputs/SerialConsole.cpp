@@ -1290,7 +1290,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpVarianceSens = 0.0f;
         audioCtrl_->plpDecayRate = 0.2f;
         // Pulse detection
-        audioCtrl_->pulseThresholdMult = 2.0f;
+        audioCtrl_->pulseThresholdMult = AudioTracker::PULSE_THRESHOLD_MULT_DEFAULT;
         audioCtrl_->pulseMinLevel = 0.03f;
         audioCtrl_->pulseOnsetFloor = 0.2f;
         audioCtrl_->fluxOnsetFloor = AudioTracker::FLUX_ONSET_FLOOR_DEFAULT;

@@ -45,8 +45,7 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 | 1.8 ([#171](https://github.com/Jdubz/blinky_time/issues/171)) | JSON stream formatting costs 10–50 ms per emit (loop stall while streaming) | `SerialConsole::streamTick` | OPEN | Rate-limit to a CPU budget or move off the loop task. |
 | 1.9 ([#172](https://github.com/Jdubz/blinky_time/issues/172)) | Silence reset / confidence gating used relative level | `AudioTracker` | VERIFY | Silence detection removed with the noise gate. At device-like levels on edm/, an adaptive noise floor falsely reset tempo 487-2159 times in music; never resetting gave 0 false resets and re-locked on a new song as fast or faster. Breakdowns can no longer reset tempo. |
 | 1.10 ([#173](https://github.com/Jdubz/blinky_time/issues/173)) | `stream nn` + other `[FPS]`/debug prints share TeeStream with NUS callback task | `SerialConsole`, `BleNus` | OPEN | BLE RX `handleCommand` runs in the Bluefruit callback task, concurrently with loop-task output (pre-existing hazard). Defer NUS commands to the loop task via a queue. |
-| 1.11 ([#174](https://github.com/Jdubz/blinky_time/issues/174)) | NN computes 16 output frames to use 1 (receptive field 9) | model export | OPEN (ML) | Re-export with W=9 or streaming conv state → ~½ inference cost. Prerequisite for turning the NN back on: it must beat flux (F1 0.542) at a frame rate the renderer accepts, in the harness cost model. |
-| 1.15 ([#272](https://github.com/Jdubz/blinky_time/issues/272)) | `pulseThresholdMult` default 1.5 (class) vs 2.0 (factory): harness results measured at a different threshold than devices run; plus dead settings and stale comments | `AudioTracker.h`, `ConfigStorage.cpp` | OPEN | One source of truth for the default, then re-run the harness eval. |
+| 1.11 ([#174](https://github.com/Jdubz/blinky_time/issues/174)) | NN computes 16 output frames to use 1 (receptive field 9) | model export | OPEN (ML) | Re-export with W=9 or streaming conv state → ~½ inference cost. Prerequisite for turning the NN back on: it must beat flux (F1 0.546) at a frame rate the renderer accepts, in the harness cost model. |
 
 ## 2. Spectral / mic / features
 
@@ -67,7 +66,6 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 | 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | OPEN | Keep console quiet during sessions; consider a non-blocking notify check. |
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 | 3.9 ([#251](https://github.com/Jdubz/blinky_time/issues/251)) | Auto-recovery reuses the last uploaded `firmware.hex` and device whitelist, so a non-stable image left by an aborted deploy could reach a production device | `routes_firmware.py`, `FleetManager` auto-recovery | PARTIAL | `deploy.sh` accepts stable releases only (#250). Fix: store uploads immutably, keyed by release, and let recovery use only the stable image. |
-| 3.10 ([#269](https://github.com/Jdubz/blinky_time/issues/269)) | `POST /api/fleet/deploy` compiled a local build and flashed the fleet with only the API key | `blinky-server` `routes_firmware.py` | FIXED (fix/fleet-deploy-pipeline) | Now runs deploy.sh's pipeline server-side (`deploy_pipeline.py`). Remove this row when #269 closes. |
 
 ## 4. Visual generators
 
@@ -89,9 +87,7 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 
 | # | Issue | Status | Notes |
 |---|---|---|---|
-| 6.6 ([#258](https://github.com/Jdubz/blinky_time/issues/258)) | Release gate's fps floor (150) had no measurement behind it; hat_v1 with music: b215 min 103, b214 min 114 | PARTIAL | Floor is 60 since #262. Still to do: gate on timing (longest frame, phase vs wall clock, overruns); needs the firmware to report the longest frame. |
-| 6.7 ([#270](https://github.com/Jdubz/blinky_time/issues/270)) | `make upload` uses `arduino-cli upload`; Makefile bootloader targets skip `deploy-bootloader.sh`; legacy test scripts also upload (`Makefile`, `tests/`) | OPEN | Remove or make them refuse with a pointer to the right tool. |
-| 6.8 ([#271](https://github.com/Jdubz/blinky_time/issues/271)) | `make merge` would overwrite onset labels with beat labels; other ML entry points still default to beat labels (`ml-training/`) | OPEN | Repoint or remove the beat paths. |
+| 6.6 ([#258](https://github.com/Jdubz/blinky_time/issues/258)) | Release gate needs timing checks, not just an fps floor | PARTIAL | Floor 60 (#262); `frametime` check on `maxFrameMs` added. Still to do: phase keeps pace with the wall clock. |
 
 ## 7. Device verification checklist for PR #152 (hat)
 

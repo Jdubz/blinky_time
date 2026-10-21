@@ -4,7 +4,7 @@ Train a small NN that outputs a per-frame **onset** activation (one value per 16
 
 **Current status (October 2026):**
 - The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h`.
-- **Devices ship with the onset NN off** (`BLINKY_ONSET_NN_ENABLED=0` in `blinky-things/audio/AudioTracker.h`). Onsets come from tuned spectral flux. On edm/ with the hat's CPU cost model, flux scores F1 0.542 at 178 fps; v33 scores 0.480 and holds the loop at 48 fps (~12 ms per inference).
+- **Devices ship with the onset NN off** (`BLINKY_ONSET_NN_ENABLED=0` in `blinky-things/audio/AudioTracker.h`). Onsets come from tuned spectral flux. On edm/ with the hat's CPU cost model, flux scores F1 0.546 at 178 fps; v33 scores 0.480 and holds the loop at 48 fps (~12 ms per inference).
 - A new model is enabled only when it beats flux under that same measurement (the host harness in `tests/tracker/`). Roadmap and open experiments: `docs/ML_IMPROVEMENT_PLAN.md`.
 
 ## Quick Start
@@ -27,7 +27,7 @@ Always pass `CONFIG=`. The Makefile's default (`configs/wider_rf.yaml`) is a leg
 
 `./train_pipeline.sh <config> <run-name> [--skip-labels] [--skip-prep]` runs onset labels → prepare → train → eval → export in one go. Launch it in tmux too.
 
-**`make label` and `make merge` produce BEAT labels** (`label_beats.py`, `merge_consensus_labels_v2.py`). Never use them as training targets. Onset labels come from `scripts/generate_onset_consensus.py` (5 onset detectors) and `scripts/generate_kick_weighted_targets.py` / `scripts/clean_kick_weighted.py` (kick/snare weighted labels from drum stems).
+**`make label` generates onset labels** (`scripts/generate_onset_consensus.py`, 5 onset detectors; it resumes). `make merge` refuses: it used to write BEAT consensus into the onset label dir (#271). `make prepare/train/export/eval` require `CONFIG=` (an onset config). Onset labels come from `scripts/generate_onset_consensus.py` and `scripts/generate_kick_weighted_targets.py` / `scripts/clean_kick_weighted.py` (kick/snare weighted labels from drum stems).
 
 ## Configuration
 
