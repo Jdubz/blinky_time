@@ -142,6 +142,9 @@ public:
     // Absolute mic-sample index (AdaptiveMic ring counter) at which the most
     // recent spectral frame's window ended. Same timeline as record-mode audio.
     uint32_t getLastFrameEndSampleIdx() const { return lastFrameEndSampleIdx_; }
+    // Call once at the end of setup(): drops the audio captured while setup
+    // ran, uncounted (AdaptiveMic::discardBacklog, #275). Returns samples dropped.
+    uint32_t discardSetupBacklog();
 
     // Pulse strength fired by the frame most recently processed (0 = none).
     // getLastOnsetStrength() is the max over all frames of the last update().

@@ -105,6 +105,12 @@ void AudioTracker::resetSlots() {
     lastSlotCheckBeat_ = 0;
 }
 
+uint32_t AudioTracker::discardSetupBacklog() {
+    const uint32_t dropped = mic_.discardBacklog();
+    haveFrameEnd_ = false;  // the first frame after this starts the sample clock afresh
+    return dropped;
+}
+
 // ============================================================================
 // Main Update Loop
 // ============================================================================
