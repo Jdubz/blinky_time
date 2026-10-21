@@ -22,7 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
-from ..firmware import deploy_pipeline
+from ..firmware import deploy_pipeline, images
 from ..firmware.flash_job import FlashJob, FlashJobState
 from ..paths import firmware_dir
 from .deps import get_fleet, require_api_key, require_deploy_tool
@@ -37,10 +37,6 @@ router = APIRouter()
 # cycle, leaving any device stuck in DFU bootloader permanently dark.
 def _firmware_meta_path() -> Path:
     return firmware_dir() / "firmware-meta.json"
-
-
-def _firmware_hex_path() -> Path:
-    return firmware_dir() / "firmware.hex"
 
 
 def _save_firmware_meta(meta: dict[str, Any]) -> None:
@@ -85,6 +81,11 @@ async def fleet_upload(
     tracking (flash still works, but version comparison is unavailable).
 
     Returns the stored firmware path for use with POST /api/fleet/flash.
+
+    #251: the image is stored immutably (by sha256). If ``version`` names a
+    stable release and the bytes match that release's hex (verified here,
+    against GitHub), the image is marked stable and may arm auto-recovery.
+    Otherwise it can still be flashed explicitly, but never auto-recovers.
     """
     import re
 
@@ -94,45 +95,93 @@ async def fleet_upload(
         raise HTTPException(400, f"Invalid version format '{version}' (expected: b<number>)")
 
     content = await firmware.read()
-    hex_path = _store_firmware(content, version)
+    _check_size(content)
+    if version:
+        stable, reason = await asyncio.to_thread(
+            images.verify_stable, content, version, firmware_dir() / "release-verify"
+        )
+    else:
+        stable, reason = False, "no version given"
+    if not stable:
+        log.warning(
+            "Uploaded firmware is not a verified stable release (%s): auto-recovery won't use it",
+            reason,
+        )
+    image = _store_firmware(content, version, stable=stable, source="upload")
 
     return {
         "status": "ok",
-        "firmware_path": str(hex_path),
+        "firmware_path": str(image.path),
         "firmware_size": len(content),
         "version": version,
+        "sha256": image.sha256,
+        "stable_verified": image.stable,
+        "stable_reason": reason,
         "message": f"Firmware stored ({len(content)} bytes). Use POST /api/fleet/flash to deploy.",
     }
 
 
-def _store_firmware(content: bytes, version: str | None) -> Path:
-    """Store `content` as the server's current firmware, with its metadata.
-
-    Shared by /api/fleet/upload and /api/fleet/deploy, so both leave the
-    same state behind for auto-recovery and /api/fleet/firmware.
-    """
-    import datetime
-
+def _check_size(content: bytes) -> None:
     if len(content) < 1000:
         raise HTTPException(400, f"Firmware file too small ({len(content)} bytes)")
     if len(content) > 5_000_000:
         raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
 
-    # Use a stable filename (not user-controlled) to avoid path issues.
-    # Overwriting is intentional — only the latest upload matters.
-    hex_path = _firmware_hex_path()
-    hex_path.write_bytes(content)
-    log.info("Fleet firmware stored: firmware.hex (%d bytes, version=%s)", len(content), version)
 
+def _store_firmware(
+    content: bytes, version: str | None, *, stable: bool, source: str
+) -> images.FirmwareImage:
+    """Store `content` immutably (#251) and make it the server's current firmware.
+
+    Shared by /api/fleet/upload and /api/fleet/deploy. The image is never
+    overwritten by a later upload, so what auto-recovery is armed with can't
+    change underneath it; ``stable`` must come from this server's own check.
+    """
+    import datetime
+
+    _check_size(content)
+    image = images.store(
+        content,
+        version=version,
+        stable=stable,
+        source=source,
+        keep=get_fleet().recovery_firmware_path,
+    )
+    log.info(
+        "Fleet firmware stored: %s (%d bytes, version=%s, stable=%s)",
+        image.path.name,
+        len(content),
+        version,
+        image.stable,
+    )
     _save_firmware_meta(
         {
             "version": version,
-            "firmware_path": str(hex_path),
+            "firmware_path": str(image.path),
+            "sha256": image.sha256,
+            "stable": image.stable,
             "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
             "size_bytes": len(content),
         }
     )
-    return hex_path
+    return image
+
+
+def _arm_recovery_if_stable(fleet: Any, firmware: Path, device_ids: list[str]) -> dict[str, Any]:
+    """Arm auto-recovery for ``device_ids`` only if ``firmware`` is a
+    verified stable image (#251). Otherwise leave the previous arming as it
+    is, and say why, loudly."""
+    image = images.load(firmware)
+    if image is None or not image.stable:
+        why = (
+            "not a verified stable-release image"
+            if image is not None
+            else "not an image in the server's store"
+        )
+        log.warning("Auto-recovery NOT re-armed for %s: %s is %s (#251)", device_ids, firmware, why)
+        return {"recovery_armed": False, "recovery_note": f"{firmware.name}: {why} (#251)"}
+    fleet.set_recovery_firmware(str(firmware), device_ids)
+    return {"recovery_armed": True, "recovery_version": image.version}
 
 
 # ── Firmware status ──────────────────────────────────────────────────
@@ -228,11 +277,12 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         raise HTTPException(404, "No flashable nRF52840 devices")
 
     device_ids = [d.id for d in devices]
+    recovery: dict[str, Any] = {"recovery_armed": False}
     if body.device_ids is not None:
-        # Only arm auto-recovery for explicitly-scoped deploys. An unscoped
-        # fleet flash skips arming so we don't auto-flash a dev unit on the
-        # bench during the next cycle.
-        fleet.set_recovery_firmware(str(firmware), device_ids)
+        # Only arm auto-recovery for explicitly-scoped deploys, and only
+        # with a verified stable image (#251). An unscoped fleet flash
+        # skips arming so we don't auto-flash a dev unit on the bench.
+        recovery = _arm_recovery_if_stable(fleet, firmware, device_ids)
     else:
         log.warning(
             "Fleet flash without device_ids whitelist — auto-recovery NOT armed "
@@ -250,6 +300,7 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
         "job_id": job.id,
         "status": "submitted",
         "devices": len(devices),
+        **recovery,
         "message": f"Flashing {len(devices)} device(s) in background",
     }
 
@@ -442,8 +493,10 @@ _deploy_running = False
 
 
 def _store_release_hex(hex_path: Path, tag: str) -> Path:
+    # Stable by construction: fetch_stable_release refused anything that isn't
+    # a promoted stable release, and verified every byte against its manifest.
     try:
-        return _store_firmware(hex_path.read_bytes(), tag)
+        return _store_firmware(hex_path.read_bytes(), tag, stable=True, source="deploy").path
     except (HTTPException, OSError) as e:
         detail = e.detail if isinstance(e, HTTPException) else str(e)
         raise deploy_pipeline.DeployError("store", str(detail)) from e

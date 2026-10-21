@@ -1559,7 +1559,7 @@ async def test_run_flash_job_clears_retry_state_on_completion(
 
 @pytest.mark.asyncio
 async def test_recovery_whitelist_reload_picks_up_disk_change(
-    fleet: FleetManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    fleet: FleetManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stable_image
 ) -> None:
     """L3.1: a direct edit to recovery-firmware.json MUST take effect
     on the next auto-recovery cycle, not after a server restart.
@@ -1569,9 +1569,8 @@ async def test_recovery_whitelist_reload_picks_up_disk_change(
     import blinky_server.device.manager as mgr_mod
 
     monkeypatch.setattr(mgr_mod, "RECOVERY_WHITELIST_RELOAD_TTL_S", 0.0)
-    # Make a real firmware file in tmp_path so the JSON validator passes.
-    fw = tmp_path / "fw.hex"
-    fw.write_text(":00000001FF\n")
+    # A verified stable image, so the arming is accepted (#251).
+    fw = stable_image()
 
     # First arming: device A in whitelist.
     fleet.set_recovery_firmware(str(fw), ["dev-A"])
@@ -1581,7 +1580,9 @@ async def test_recovery_whitelist_reload_picks_up_disk_change(
     state_path = fleet._recovery_state_path()
     import json as _json
 
-    state_path.write_text(_json.dumps({"firmware_path": str(fw), "device_ids": ["dev-B"]}))
+    state_path.write_text(
+        _json.dumps({"firmware_path": str(fw), "sha256": fw.stem, "device_ids": ["dev-B"]})
+    )
     # Bump mtime to ensure the cache sees the change (write_text already
     # updated mtime, but be explicit).
     import os as _os
@@ -1668,6 +1669,7 @@ async def test_whitelist_reload_disarms_on_deliberate_delete(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    stable_image: Any,
 ) -> None:
     """PR #143 Copilot #5: deliberate ``rm`` of recovery-firmware.json
     is the operator's disarm signal. The in-memory whitelist MUST be
@@ -1682,8 +1684,7 @@ async def test_whitelist_reload_disarms_on_deliberate_delete(
 
     caplog.set_level(logging.INFO, logger="blinky_server.device.manager")
     monkeypatch.setattr(mgr_mod, "RECOVERY_WHITELIST_RELOAD_TTL_S", 0.0)
-    fw = tmp_path / "fw.hex"
-    fw.write_text(":00000001FF\n")
+    fw = stable_image()
     fleet.set_recovery_firmware(str(fw), ["dev-A"])
     fleet._maybe_reload_recovery_whitelist()
     assert fleet._last_whitelist_mtime is not None
@@ -1717,6 +1718,7 @@ async def test_whitelist_reload_keeps_state_on_transient_io_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    stable_image: Any,
 ) -> None:
     """PR #143 Copilot #5: a non-ENOENT OSError (PermissionError,
     transient NFS issue, etc.) is NOT a disarm signal. The reloader
@@ -1726,8 +1728,7 @@ async def test_whitelist_reload_keeps_state_on_transient_io_error(
     import blinky_server.device.manager as mgr_mod
 
     monkeypatch.setattr(mgr_mod, "RECOVERY_WHITELIST_RELOAD_TTL_S", 0.0)
-    fw = tmp_path / "fw.hex"
-    fw.write_text(":00000001FF\n")
+    fw = stable_image()
     fleet.set_recovery_firmware(str(fw), ["dev-A"])
     fleet._maybe_reload_recovery_whitelist()
     assert fleet._last_whitelist_mtime is not None

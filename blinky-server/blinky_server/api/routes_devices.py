@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..device.device import Device, DeviceState
+from ..firmware import images
 from ..firmware.flash_job import FlashConflict, FlashJobState
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import (
@@ -336,7 +337,16 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         # keeps a future DFU bounce from auto-flashing unrelated devices.
         # Done AFTER ``flash_device`` returns OK so a conflicting second
         # request can't overwrite the first's whitelist mid-flight.
-        fleet.set_recovery_firmware(str(firmware), [device.id])
+        # #251: only a verified stable image may become the recovery image.
+        recovery_image = images.load(firmware)
+        if recovery_image is not None and recovery_image.stable:
+            fleet.set_recovery_firmware(str(firmware), [device.id])
+        else:
+            log.warning(
+                "Auto-recovery NOT re-armed for %s: %s is not a verified stable image (#251)",
+                device.id[:12],
+                firmware,
+            )
         terminal = await job.wait_until_terminal(timeout=900.0)
         if not terminal:
             # The orchestrator's task is still running in the

@@ -17,6 +17,18 @@ from blinky_server.device.manager import FleetManager
 from .mock_transport import MockTransport
 
 
+@pytest.fixture
+def stable_image():
+    """Factory: store bytes as a verified stable-release image (#251) and
+    return its path. Only such images may arm auto-recovery."""
+    from blinky_server.firmware import images
+
+    def make(content: bytes = b":00000001FF\n" * 200, version: str = "b215") -> Path:
+        return images.store(content, version=version, stable=True, source="test").path
+
+    return make
+
+
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch

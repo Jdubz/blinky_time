@@ -84,14 +84,13 @@ def _make_fleet() -> FleetManager:
     return FleetManager(enable_ble=False, enable_serial=False)
 
 
-def test_set_recovery_firmware_persists(tmp_path, monkeypatch) -> None:
+def test_set_recovery_firmware_persists(tmp_path, monkeypatch, stable_image) -> None:
     """Path + whitelist round-trip through the JSON state file."""
     from blinky_server import paths as paths_mod
 
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     paths_mod._clear_cache()
-    fw = tmp_path / "fw.hex"
-    fw.write_bytes(b"x" * 2000)
+    fw = stable_image()
     fm = _make_fleet()
     fm.set_recovery_firmware(str(fw), ["AA:BB", "CC:DD"])
 
@@ -131,7 +130,7 @@ def test_load_rejects_legacy_plain_string_format(tmp_path, monkeypatch) -> None:
     assert fm._load_recovery_firmware() is None
 
 
-def test_load_rejects_missing_firmware_file(tmp_path, monkeypatch) -> None:
+def test_load_rejects_missing_firmware_file(tmp_path, monkeypatch, stable_image) -> None:
     """If the firmware file pointed to by persisted state no longer exists,
     we must not try to arm recovery — the BLE DFU upload would fail anyway.
 
@@ -144,9 +143,9 @@ def test_load_rejects_missing_firmware_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     paths_mod._clear_cache()
     fm = _make_fleet()
-    hex_path = tmp_path / "ghost.hex"
-    hex_path.write_text("dummy-firmware-blob")  # exists at set time
+    hex_path = stable_image()  # exists at set time
     fm.set_recovery_firmware(str(hex_path), ["X"])
+    hex_path.chmod(0o644)
     hex_path.unlink()  # gone between arm and recovery
     assert fm._load_recovery_firmware() is None
 
@@ -357,3 +356,75 @@ async def test_watchdog_ping_continues_during_inline_blocking_call(monkeypatch) 
         f"Watchdog pinger did not continue while main loop was blocked. "
         f"Got {ping_count} pings. This is the cart_inner SECOND brick bug."
     )
+
+
+# ── #251: only verified stable images may arm auto-recovery ─────────────
+
+
+def test_set_recovery_firmware_refuses_an_unverified_image(stable_image) -> None:
+    from blinky_server.firmware import images
+
+    unverified = images.store(b"y" * 2000, version="b216", stable=False, source="upload").path
+    fm = _make_fleet()
+    with pytest.raises(ValueError, match="not a verified stable-release image"):
+        fm.set_recovery_firmware(str(unverified), ["X"])
+
+
+def test_set_recovery_firmware_refuses_a_file_outside_the_store(tmp_path) -> None:
+    loose = tmp_path / "fw.hex"
+    loose.write_bytes(b"x" * 2000)
+    fm = _make_fleet()
+    with pytest.raises(ValueError, match="not a verified stable-release image"):
+        fm.set_recovery_firmware(str(loose), ["X"])
+
+
+def test_binding_records_the_sha256_and_survives_a_reload(stable_image) -> None:
+    import json
+
+    fw = stable_image()
+    fm = _make_fleet()
+    fm.set_recovery_firmware(str(fw), ["X"])
+    state = json.loads(fm._recovery_state_path().read_text())
+    assert state["sha256"] == fw.stem and state["version"] == "b215"
+    assert fm._load_recovery_firmware() == (str(fw), {"X"})
+
+
+def test_load_refuses_a_tampered_image(stable_image) -> None:
+    fw = stable_image()
+    fm = _make_fleet()
+    fm.set_recovery_firmware(str(fw), ["X"])
+    fw.chmod(0o644)
+    fw.write_bytes(b"tampered" * 300)  # bytes no longer match the sha256 name
+    assert fm._load_recovery_firmware() is None
+
+
+def test_load_refuses_pre_251_state_without_a_sha256(stable_image) -> None:
+    import json
+
+    fw = stable_image()
+    fm = _make_fleet()
+    path = fm._recovery_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"firmware_path": str(fw), "device_ids": ["X"]}))
+    assert fm._load_recovery_firmware() is None
+
+
+def test_an_unverified_upload_never_replaces_the_stable_image(stable_image) -> None:
+    """The old shared firmware.hex let any upload change what recovery would
+    flash. Images are immutable: storing new bytes leaves the armed one alone."""
+    from blinky_server.firmware import images
+
+    fw = stable_image()
+    before = fw.read_bytes()
+    other = images.store(b"candidate" * 300, version="b216", stable=False, source="upload")
+    assert other.path != fw and fw.read_bytes() == before
+    assert images.load(fw).stable and not images.load(other.path).stable
+
+
+def test_a_stable_verification_is_never_undone_by_a_later_unverified_store(stable_image) -> None:
+    from blinky_server.firmware import images
+
+    content = b"release" * 300
+    images.store(content, version="b215", stable=True, source="deploy")
+    again = images.store(content, version=None, stable=False, source="upload")
+    assert again.stable and again.version == "b215"

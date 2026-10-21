@@ -222,6 +222,16 @@ FLASH_RESULT=$(curl -sf -X POST "${BLINKY_SERVER}/api/fleet/flash" \
 JOB_ID=$(echo "$FLASH_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null)
 DEVICE_COUNT=$(echo "$FLASH_RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('devices',0))" 2>/dev/null)
 echo "  Job: ${JOB_ID} (${DEVICE_COUNT} devices)"
+# #251: auto-recovery is armed only with an image the server verified as this
+# stable release's hex. Say plainly if it wasn't (e.g. no gh auth on the server).
+echo "$FLASH_RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('recovery_armed'):
+    print(f\"  Auto-recovery: armed with {d.get('recovery_version')}\")
+else:
+    print(f\"  WARNING: auto-recovery NOT re-armed: {d.get('recovery_note', 'unknown reason')}\")
+" 2>/dev/null || true
 
 if [[ -z "$JOB_ID" ]]; then
     fail "Flash returned no job_id" 2
