@@ -73,6 +73,10 @@ jobs:
         run: npm run test:ci
 
       - name: Build
+        env:
+          # The browser updater (#firmware) is live: docs/WEB_FLASHER.md. Set
+          # anything else here to hide it again (kill switch).
+          VITE_FIRMWARE_UPDATES: 'on'
         run: npm run build:firebase
 
       - name: Deploy to Firebase Hosting
@@ -108,6 +112,10 @@ jobs:
         run: rm -f package-lock.json && npm install
 
       - name: Build
+        env:
+          # The browser updater (#firmware) is live: docs/WEB_FLASHER.md. Set
+          # anything else here to hide it again (kill switch).
+          VITE_FIRMWARE_UPDATES: 'on'
         run: npm run build:firebase
 
       - name: Deploy Preview to Firebase

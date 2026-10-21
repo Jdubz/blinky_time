@@ -2,7 +2,7 @@
 
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
-> **Status (2026-10-20): built, hidden in production.** The page ships with `FIRMWARE_UPDATES_ENABLED` off (`blinky-console/src/MainShell.tsx`). Only builds made with `VITE_FIRMWARE_UPDATES=on` show it. Turn it on when the [rollout checklist](#rollout-checklist) is done.
+> **Status (2026-10-20): live, USB only.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is still hidden (`BLE_UPDATES_ENABLED`). The owner turned it on with checklist items 2 and 4 open; see the [rollout checklist](#rollout-checklist) for what's still missing.
 
 Code:
 - **Page:** `blinky-console/src/pages/FirmwarePage.tsx`.
@@ -123,12 +123,12 @@ With 0.8.0-11 the drive also no longer times out back to the app when nothing is
 
 ## Rollout checklist
 
-Turn `FIRMWARE_UPDATES_ENABLED` on when all of these are done:
+The page went live (USB) on 2026-10-20 after item 1 and a real end-to-end update (bench results). What's still open:
 
-1. Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
-2. Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
+1. ✅ Done (b215). Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
+2. **Open.** Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
 3. Bluetooth (optional for a USB-only launch; it's hidden): fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Then set `BLE_UPDATES_ENABLED`.
-4. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
+4. **Open; it limits recovery on Windows.** The page's recovery option (a device stuck as the `XIAO-SENSE` drive) uses the bootloader's UF2 drive, which 0.8.0-10 drops on Windows (`msc_uf2_check_stuck`). Recovery from macOS, Linux or ChromeOS is unaffected. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
 5. iPhone (after Bluetooth): one full update in Bluefy.
 
 ## Open items
