@@ -339,14 +339,12 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         # request can't overwrite the first's whitelist mid-flight.
         # #251: only a verified stable image may become the recovery image.
         recovery_image = images.load(firmware)
+        recovery_note: str | None = None
         if recovery_image is not None and recovery_image.stable:
             fleet.set_recovery_firmware(str(firmware), [device.id])
         else:
-            log.warning(
-                "Auto-recovery NOT re-armed for %s: %s is not a verified stable image (#251)",
-                device.id[:12],
-                firmware,
-            )
+            recovery_note = f"{firmware.name}: not a verified stable-release image (#251)"
+            log.warning("Auto-recovery NOT re-armed for %s: %s", device.id[:12], recovery_note)
         terminal = await job.wait_until_terminal(timeout=900.0)
         if not terminal:
             # The orchestrator's task is still running in the
@@ -371,6 +369,8 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
                 status="ok",
                 message=f"Firmware uploaded via {transport_name}",
                 elapsed_s=round(job.duration_s, 2),
+                recovery_armed=recovery_note is None,
+                recovery_note=recovery_note,
             )
         # FAILED or ABANDONED — surface the orchestrator's error
         raise HTTPException(

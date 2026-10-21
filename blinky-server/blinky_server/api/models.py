@@ -56,6 +56,9 @@ class FlashResponse(BaseModel):
     status: str
     message: str
     elapsed_s: float = 0
+    # #251: whether this flash (re-)armed auto-recovery, and why not.
+    recovery_armed: bool = False
+    recovery_note: str | None = None
 
 
 # ── Response Models ──
