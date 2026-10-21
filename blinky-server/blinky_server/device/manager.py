@@ -14,6 +14,7 @@ from typing import Any, Literal, overload
 from .. import systemd_notify
 from ..ble.advertiser import FleetBroadcaster
 from ..firmware import ble_dfu as _ble_dfu_mod
+from ..firmware import images
 from ..firmware._guard import (
     enter_orchestrator_context,
     reset_orchestrator_context,
@@ -2633,6 +2634,11 @@ class FleetManager:
                 skipped_in_window_no_tracker,
             )
 
+    @property
+    def recovery_firmware_path(self) -> str | None:
+        """The image auto-recovery is armed with (None = disarmed)."""
+        return self._recovery_firmware_path
+
     def set_recovery_firmware(self, firmware_path: str, device_ids: list[str]) -> None:
         """Arm automatic DFU recovery, scoped to an explicit device whitelist.
 
@@ -2666,9 +2672,24 @@ class FleetManager:
             raise ValueError(
                 f"set_recovery_firmware: firmware file does not exist: {firmware_path}"
             )
+        # #251: recovery flashes unattended, so only an immutable image this
+        # server verified as a stable release's hex may be armed. Anything
+        # else (an unverified upload, a candidate, a dev build) can still be
+        # flashed by an operator, but never becomes the recovery image.
+        image = images.load(firmware_path)
+        if image is None or not image.stable:
+            raise ValueError(
+                "set_recovery_firmware: refusing to arm auto-recovery with "
+                f"{firmware_path}: not a verified stable-release image (#251)"
+            )
         self._recovery_firmware_path = firmware_path
         self._recovery_device_ids = set(device_ids)
-        state = {"firmware_path": firmware_path, "device_ids": sorted(set(device_ids))}
+        state = {
+            "firmware_path": firmware_path,
+            "sha256": image.sha256,
+            "version": image.version,
+            "device_ids": sorted(set(device_ids)),
+        }
         try:
             self._recovery_state_path().write_text(json.dumps(state))
         except OSError:
@@ -2718,6 +2739,17 @@ class FleetManager:
         if not Path(firmware_path).is_file():
             log.warning("Recovery firmware %s no longer exists; not arming", firmware_path)
             self._clear_recovery_state_file(path, reason="firmware-missing")
+            return None
+        # #251: the bound image must still be the verified stable image it
+        # was armed with (pre-#251 state has no sha256: refuse it).
+        image = images.load(firmware_path)
+        if image is None or not image.stable or data.get("sha256") != image.sha256:
+            log.warning(
+                "Recovery firmware %s is not the verified stable image it was armed with; "
+                "not arming (#251)",
+                firmware_path,
+            )
+            self._clear_recovery_state_file(path, reason="not-a-verified-stable-image")
             return None
         return firmware_path, set(device_ids)
 
@@ -2913,6 +2945,16 @@ class FleetManager:
             # hold_reconnect, broadcaster.stop, write, verify, and the
             # finally-block update of `_recovery_retry_state`. We just
             # wait for terminal and log the outcome.
+            # #251: re-check the image right before an unattended flash.
+            image = images.load(firmware_path)
+            if image is None or not image.stable:
+                log.error(
+                    "Auto-recovery disarmed: %s is no longer a verified stable image (#251)",
+                    firmware_path,
+                )
+                self._recovery_firmware_path = None
+                self._recovery_device_ids = set()
+                return
             job = await self.flash_device(device.id, Path(firmware_path), force=False)
             if job is None:
                 # Blocked by `should_attempt_auto_recovery` (recently

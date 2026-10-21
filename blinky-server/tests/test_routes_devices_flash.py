@@ -204,6 +204,48 @@ async def test_route_rejects_device_in_wrong_state(
 
 async def test_route_arms_recovery_whitelist_for_target_only(
     api_with_device: tuple[AsyncClient, FleetManager, Device],
+    stable_image: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route must arm the auto-recovery whitelist for ONLY the
+    target device, so a future DFU bounce doesn't auto-flash unrelated
+    devices. This was a load-bearing protection in the legacy route
+    (per ``feedback_flash_safety_policy``) and it survives the L3a
+    migration."""
+    client, fleet, device = api_with_device
+
+    # Stub the orchestrator so the route returns quickly.
+    async def fast_terminal(job: FlashJob) -> None:
+        job.transition(FlashJobState.SELECTING_TRANSPORT)
+        job.set_transport(FlashTransport.UF2)
+        job.transition(FlashJobState.WRITING)
+        job.transition(FlashJobState.VERIFYING)
+        job.transition(FlashJobState.COMPLETED)
+
+    monkeypatch.setattr(fleet, "_run_flash_job", fast_terminal)
+    fw_file = stable_image()  # #251: only a verified stable image arms recovery
+
+    captured: list[tuple[str, list[str]]] = []
+    original_set = fleet.set_recovery_firmware
+
+    def spy_set(firmware: str, device_ids: list[str] | None = None) -> Any:
+        captured.append((firmware, list(device_ids or [])))
+        return original_set(firmware, device_ids)
+
+    monkeypatch.setattr(fleet, "set_recovery_firmware", spy_set)
+
+    resp = await client.post(
+        f"/api/devices/{device.id}/flash",
+        json={"firmware_path": str(fw_file)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured == [(str(fw_file), [device.id])], (
+        f"route must arm the whitelist with the target device only (got {captured!r})"
+    )
+
+
+async def test_route_does_not_arm_recovery_with_an_unverified_file(
+    api_with_device: tuple[AsyncClient, FleetManager, Device],
     fw_file: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -238,9 +280,9 @@ async def test_route_arms_recovery_whitelist_for_target_only(
         json={"firmware_path": str(fw_file)},
     )
     assert resp.status_code == 200, resp.text
-    assert captured == [(str(fw_file), [device.id])], (
-        f"route must arm the whitelist with the target device only (got {captured!r})"
-    )
+    # #251: a file that isn't a verified stable image still flashes, but
+    # never becomes the auto-recovery image.
+    assert captured == [], f"an unverified image must not arm recovery (got {captured!r})"
 
 
 # NOTE: ``test_route_blocks_when_legacy_dfu_lock_held`` was deleted in L3c.
