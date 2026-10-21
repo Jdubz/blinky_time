@@ -29,7 +29,21 @@ export interface FlashUi {
    * (wake lock, unload warning) and cancel is no longer offered.
    */
   committed(): void;
+  /**
+   * The update is done and reported, but the first minute is still being
+   * watched on the still-open link. The page must stop() it (and await
+   * done, which closes the link) before another run opens the port, and
+   * when it unmounts.
+   */
+  settling?(watch: SettleWatch): void;
   readonly signal: AbortSignal;
+}
+
+export interface SettleWatch {
+  /** Settles when the watch ends and its link is closed; never rejects. */
+  readonly done: Promise<void>;
+  /** End the watch early, quietly (a new run, or the page closing). */
+  stop(): void;
 }
 
 export const sleep = (ms: number, signal?: AbortSignal) =>
@@ -88,8 +102,7 @@ export async function preflight(
     throw new FirmwareError('Cancelled');
   }
 
-  // Entering the bootloader is a reset. Firmware up to b190 counts every boot
-  // toward a 5-boot config quarantine until 5 min of uptime clears it.
+  // `ota commit` ends in a reset. Wait out the 60-second rule (PREFLIGHT_UPTIME_MS).
   for (let wait = uptimeWaitMs(info); wait > 0; wait = uptimeWaitMs(info)) {
     ui.progress(
       `Waiting for the device to settle (${Math.ceil(wait / 1000)}s left — don't unplug or reset it)`,
@@ -99,7 +112,7 @@ export async function preflight(
     const next = await link.info();
     if (next.millis < info.millis) {
       throw new FirmwareError(
-        'The device restarted while waiting. Leave it running for 5 minutes, then try again.'
+        'The device restarted while waiting. Leave it running for a few minutes, then try again.'
       );
     }
     info = next;
@@ -111,18 +124,41 @@ export async function preflight(
 /**
  * deploy_local.py steps 7–9 after the device is back on its app: verify it
  * is the same configured device on exactly the expected version with BLE up
- * (BEFORE `save`, which would hang on a half-up SoftDevice), restore runtime
- * settings + save as every fleet deploy does, then hold until markStable().
+ * (BEFORE `save`, which would hang on a half-up SoftDevice), and restore
+ * runtime settings + save as every fleet deploy does.
+ *
+ * Unlike deploy_local.py, it doesn't hold the operator until markStable():
+ * it returns once the device is verified and saved, and watches the first
+ * minute in the background (watchFirstMinute), reporting only a restart.
+ * Owns the link: `close` runs when the watch ends, or right away on failure.
  */
 export async function finishAfterFlash(
+  link: DeviceLink,
+  before: FlashInfo | null,
+  expectedVersion: string,
+  ui: FlashUi,
+  close: () => Promise<void>
+): Promise<FlashInfo> {
+  let after: FlashInfo;
+  try {
+    after = await verifyAndSave(link, before, expectedVersion, ui);
+  } catch (err) {
+    await close();
+    throw err;
+  }
+  const stopper = new AbortController();
+  const done = watchFirstMinute(link, after.millis, ui, close, stopper.signal);
+  ui.settling?.({ done, stop: () => stopper.abort() });
+  return after;
+}
+
+async function verifyAndSave(
   link: DeviceLink,
   before: FlashInfo | null,
   expectedVersion: string,
   ui: FlashUi
 ): Promise<FlashInfo> {
   ui.progress('Checking the updated device', null);
-  // deploy.sh: let the 5 s loop-metrics window close so fps is real.
-  await sleep(6000);
   const after = await link.info();
   // A recovery (device found already in its bootloader) has no "before":
   // identity can't be compared, everything else still is.
@@ -134,23 +170,49 @@ export async function finishAfterFlash(
   await link.command('restore_runtime_settings');
   await link.command('save');
   ui.log('Runtime settings restored to the release defaults and saved');
+  return after;
+}
 
-  let latest = after;
-  for (let up = after.millis; up < STABLE_UPTIME_MS; ) {
-    ui.progress(
-      `Letting the new firmware settle (${Math.ceil((STABLE_UPTIME_MS - up) / 1000)}s)`,
-      up / STABLE_UPTIME_MS
-    );
-    await sleep(Math.min(STABLE_UPTIME_MS - up + 1000, 5000));
-    const now = await link.info();
-    if (now.millis < up) {
-      throw new FirmwareError(
-        `The device restarted ${Math.round(now.millis / 1000)}s ago, during its first minute on the new ` +
-          'firmware. Leave it powered and contact support before trying again.'
-      );
+/**
+ * After the page reports success: keep polling until the device passes
+ * markStable (75 s of uptime) and say something only if it restarts. An
+ * early unplug is a power-on reset, which the reboot counter doesn't count
+ * (only watchdog/lockup resets do), and a firmware that crashes before SafeBootWatchdog::begin() is caught by the
+ * bootloader's handshake watchdog, so this is a report, not a gate.
+ */
+export async function watchFirstMinute(
+  link: DeviceLink,
+  startMillis: number,
+  ui: Pick<FlashUi, 'log'>,
+  close: () => Promise<void>,
+  signal?: AbortSignal
+): Promise<void> {
+  const left = Math.ceil((STABLE_UPTIME_MS - startMillis) / 1000);
+  if (left > 0) ui.log(`Leave it powered for about ${left}s more while the new firmware settles`);
+  try {
+    for (let up = startMillis; up < STABLE_UPTIME_MS; ) {
+      await sleep(Math.min(STABLE_UPTIME_MS - up + 1000, 5000), signal);
+      const now = await link.info();
+      if (signal?.aborted) return;
+      if (now.millis < up) {
+        ui.log(
+          `The device restarted ${Math.round(now.millis / 1000)}s ago, during its first minute on the ` +
+            'new firmware. Leave it powered and contact support before trying again.',
+          'error'
+        );
+        return;
+      }
+      up = now.millis;
     }
-    up = now.millis;
-    latest = now;
+    ui.log('The new firmware passed its first minute');
+  } catch (err) {
+    if (signal?.aborted) return; // stopped by the page: say nothing
+    // Unplugged, or the port went away: the update itself is done.
+    ui.log(
+      `Stopped watching the first minute (${err instanceof Error ? err.message : String(err)})`,
+      'warn'
+    );
+  } finally {
+    await close();
   }
-  return latest;
 }

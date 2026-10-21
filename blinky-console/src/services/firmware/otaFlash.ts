@@ -221,11 +221,7 @@ export async function updateDevice(
     ui.log('The device verified the update and is installing it');
     closed = true;
     const back = await reopenAfterApply(method, session, before.sn, ui);
-    try {
-      return await finishAfterFlash(back.link, before, release.entry.version, ui);
-    } finally {
-      await back.close();
-    }
+    return await finishAfterFlash(back.link, before, release.entry.version, ui, back.close);
   } finally {
     if (!closed) await session.close();
   }
