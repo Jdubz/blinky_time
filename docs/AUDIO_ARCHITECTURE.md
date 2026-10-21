@@ -296,7 +296,7 @@ The pattern slot cache has its own settings (`slotswitchthresh`, `slotnewthresh`
 
 | Detector | F1 | Precision | Recall | LED fps |
 |---|---|---|---|---|
-| Spectral flux, `fluxOnsetFloor` 0.01 | 0.542 | 0.449 | 0.682 | 178 |
+| Spectral flux, `fluxOnsetFloor` 0.01, `pulseThresholdMult` 2.0 | 0.546 | 0.457 | 0.679 | 178 |
 | v33 NN (50 mel, 19.6 KB, **12 ms/inference** on device) | 0.480 | 0.394 | 0.613 | 48 |
 
 Re-enable a model only when it beats flux under this same measurement (a cheaper export is #174). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.

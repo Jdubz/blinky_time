@@ -48,7 +48,7 @@ Locations are in `blinky-things/audio/` (`AudioTracker.{h,cpp}`, `AudioControl.h
 
 | Term | Definition | Notes |
 |------|-----------|-------|
-| **Onset F1** | F-measure of detected onsets vs the `.onsets_consensus.json` ground truth on `blinky-test-player/music/edm/`. Our primary quality metric. blinky-server reports it at several tolerances (±70 ms is the usual one). | Current device baseline (spectral flux): 0.542 on edm/ (`docs/AUDIO_ARCHITECTURE.md`) |
+| **Onset F1** | F-measure of detected onsets vs the `.onsets_consensus.json` ground truth on `blinky-test-player/music/edm/`. Our primary quality metric. blinky-server reports it at several tolerances (±70 ms is the usual one). | Current device baseline (spectral flux): 0.546 on edm/ (`docs/AUDIO_ARCHITECTURE.md`) |
 | ~~**Beat F1**~~ | ~~F-measure of onset peaks vs metrical beat positions.~~ **DROPPED** — depends on music structure, not detector quality. | Do not use |
 | **Phase alignment %** | Fraction of visual triggers landing within tolerance of a beat grid subdivision. Measures how well the rhythm tracking follows the music. | On-device sweep metric |
 | **Onset density** | Onsets per second, smoothed. Dance music is typically 2-6/s. | `AudioControl::onsetDensity` |

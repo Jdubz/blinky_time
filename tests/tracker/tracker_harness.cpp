@@ -75,7 +75,8 @@ int usage() {
         "  loop_fps  mean simulated main-loop rate (device: ~30-90 depending on load)\n"
         "  jitter    relative std-dev of each loop period (0 = perfectly periodic)\n"
         "  then optional overrides: [plpPhaseGain] [tempoPriorWidth] [syncopatedCandidateScale]\n"
-        "  [pulseOnsetFloor] [fluxOnsetFloor] [pulseMinLevel]; \"-\" keeps the firmware\n"
+        "  [pulseOnsetFloor] [fluxOnsetFloor] [pulseMinLevel] [pulseThresholdMult];\n"
+        "  \"-\" keeps the firmware\n"
         "  default for that slot\n"
         "  --nn-cost-us=N --frame-cost-us=N --render-cost-us=N  CPU cost model: the loop\n"
         "  period becomes render cost + audio work (loop_fps is ignored; jitter scales the\n"
@@ -174,6 +175,7 @@ int main(int rawArgc, char** rawArgv) {
     if (given(9)) tracker.pulseOnsetFloor = static_cast<float>(std::atof(argv[9]));
     if (given(10)) tracker.fluxOnsetFloor = static_cast<float>(std::atof(argv[10]));
     if (given(11)) tracker.pulseMinLevel = static_cast<float>(std::atof(argv[11]));
+    if (given(12)) tracker.pulseThresholdMult = static_cast<float>(std::atof(argv[12]));
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);

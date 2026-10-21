@@ -370,7 +370,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.activationThreshold = 0.3f;
     data_.tracker.pulseOnsetFloor = 0.2f;
     data_.tracker.odfContrast = 1.25f;
-    data_.tracker.pulseThresholdMult = 2.0f;
+    data_.tracker.pulseThresholdMult = AudioTracker::PULSE_THRESHOLD_MULT_DEFAULT;
     data_.tracker.pulseMinLevel = 0.03f;
     data_.tracker.fluxOnsetFloor = AudioTracker::FLUX_ONSET_FLOOR_DEFAULT;  // v97
     data_.tracker.crestGateMin = 0.0f;  // v95: disabled by default; sweep to tune

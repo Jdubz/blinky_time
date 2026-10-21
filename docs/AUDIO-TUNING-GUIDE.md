@@ -56,7 +56,7 @@ PDM Microphone (16kHz, mono)
 ### Key Design Decisions
 
 1. **Onsets and rhythm use different signals.** Onset detection fires on every hit. The rhythm sources are tuned for periodicity and never include the NN (#155).
-2. **Spectral-flux onsets on devices.** `BLINKY_ONSET_NN_ENABLED=0`. Tuned flux scores F1 0.542 at 178 fps on edm/; the v33 NN scores 0.480 and holds the loop at 48 fps. The NN path is kept for the host NN harness and a cheaper future model (#174).
+2. **Spectral-flux onsets on devices.** `BLINKY_ONSET_NN_ENABLED=0`. Tuned flux scores F1 0.546 at 178 fps on edm/; the v33 NN scores 0.480 and holds the loop at 48 fps. The NN path is kept for the host NN harness and a cheaper future model (#174).
 3. **Spectral conditioning.** The soft-knee compressor normalizes gross signal level; mel bands get per-band whitening (per-bin FFT whitening was removed, #182). Hardware gain is fixed (nRF52840: 32).
 4. **No noise gate, no silence detection.** This mic is too weak for a fixed gate. Instead, `rhythmStrength` and `plpPulse` fade out 2-4 s after the last onset.
 5. **Pattern slot cache** (v82): every 4 beats the current pattern is compared with 4 cached 16-bin digests. Similarity above `slotswitchthresh` (0.70) recalls the cached pattern.
@@ -208,7 +208,7 @@ Each generator has its own category. List them on a device with `show <category>
 
 | Detector | F1 | Precision | Recall | LED fps |
 |---|---|---|---|---|
-| Spectral flux, `fluxonsetfloor` 0.01 | 0.542 | 0.449 | 0.682 | 178 |
+| Spectral flux, `fluxonsetfloor` 0.01, `pulsethreshmult` 2.0 | 0.546 | 0.457 | 0.679 | 178 |
 | v33 NN (50 mel, 12 ms/inference) | 0.480 | 0.394 | 0.613 | 48 |
 
 `fluxonsetfloor` sweep (v97): F1 plateaus at ~0.54 for floors 0-0.03; 0.01 is best.
