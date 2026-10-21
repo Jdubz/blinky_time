@@ -88,8 +88,7 @@ export async function preflight(
     throw new FirmwareError('Cancelled');
   }
 
-  // Entering the bootloader is a reset. Firmware up to b190 counts every boot
-  // toward a 5-boot config quarantine until 5 min of uptime clears it.
+  // `ota commit` ends in a reset. Wait out the 60-second rule (PREFLIGHT_UPTIME_MS).
   for (let wait = uptimeWaitMs(info); wait > 0; wait = uptimeWaitMs(info)) {
     ui.progress(
       `Waiting for the device to settle (${Math.ceil(wait / 1000)}s left — don't unplug or reset it)`,
@@ -99,7 +98,7 @@ export async function preflight(
     const next = await link.info();
     if (next.millis < info.millis) {
       throw new FirmwareError(
-        'The device restarted while waiting. Leave it running for 5 minutes, then try again.'
+        'The device restarted while waiting. Leave it running for a few minutes, then try again.'
       );
     }
     info = next;
@@ -161,8 +160,8 @@ async function verifyAndSave(
 /**
  * After the page reports success: keep polling until the device passes
  * markStable (75 s of uptime) and say something only if it restarts. An
- * early unplug costs one boot of the firmware's 5-boot allowance, and a
- * firmware that crashes before SafeBootWatchdog::begin() is caught by the
+ * early unplug is a power-on reset, which the reboot counter doesn't count
+ * (only watchdog/lockup resets do), and a firmware that crashes before SafeBootWatchdog::begin() is caught by the
  * bootloader's handshake watchdog, so this is a report, not a gate.
  */
 export async function watchFirstMinute(

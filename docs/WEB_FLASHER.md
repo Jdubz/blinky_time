@@ -83,13 +83,13 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam
 **Pre-flight** (`deviceGates.ts`, `flashFlow.ts`, ported from `tools/deploy_local.py`):
 - `json info`: an nRF52840 with a hardware serial, and **configured**.
 - Confirmations for a reinstall, a downgrade, or a `SETTINGS_VERSION` change.
-- **Uptime ≥ 75 s** before anything that ends in a reset, which is also what the device enforces for `ota commit`. `deploy_local.py` keeps 5 min 15 s because it resets devices of any age, including b190-era firmware that counts every boot for 5 minutes. Signed OTA only exists on b215+, which clears its reboot counter at 60 s.
+- **Uptime ≥ 75 s** before anything that ends in a reset, which is also what the device enforces for `ota commit`. `deploy_local.py` keeps 5 min 15 s because it resets devices of any age, including b190-era firmware that counts every boot for 5 minutes. Signed OTA only exists on b215+, whose reboot counter counts only fault resets (watchdog or CPU lockup), and `ota commit`'s soft reset is neither.
 - `ota status` must answer. Firmware older than signed OTA gets a clear "update it once another way" message.
 
 **After the update:**
 - The same chip (sn) and device id come back, configured, on **exactly** the release version, with audio counters and the BLE stack up, all checked before `save`.
 - Then `restore_runtime_settings` + `save`.
-- Then success is reported straight away; no 6 s metrics wait (frame rate is only a warning here). The page keeps polling until 75 s of uptime and logs an error only if the device restarts. Unplugging early costs one boot of the firmware's 5-boot allowance, and a firmware that crashes before it starts is caught by the bootloader's handshake watchdog, so this is a report, not a gate.
+- Then success is reported straight away; no 6 s metrics wait (frame rate is only a warning here). The page keeps polling until 75 s of uptime and logs an error only if the device restarts. Unplugging early is a power-on reset, which the reboot counter doesn't count. A firmware that crashes before it starts is caught by the bootloader's handshake watchdog, so this is a report, not a gate.
 
 **Cancel** works until `commit`. A cancelled or failed transfer leaves the old firmware running and a half-filled staging area, which the next manifest erases. While an update runs, `#firmware` stays mounted through Back and warns before the tab is closed.
 
