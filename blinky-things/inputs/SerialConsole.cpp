@@ -982,6 +982,8 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "reboot") == 0) {
+        // A queued settings write must reach flash first (#191).
+        if (configStorage_) configStorage_->flushPendingSave();
         out_.println(F("Rebooting..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
@@ -999,6 +1001,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     if (strcmp(cmd, "bootloader") == 0 || strcmp(cmd, "bootloader ble") == 0) {
 #ifdef BLINKY_PLATFORM_NRF52840
         const bool bleMode = (strcmp(cmd, "bootloader ble") == 0);
+        if (configStorage_) configStorage_->flushPendingSave();  // #191
         out_.print(F("Entering "));
         out_.print(bleMode ? F("BLE DFU") : F("UF2"));
         out_.println(F(" bootloader..."));
@@ -2732,6 +2735,7 @@ bool SerialConsole::handleOtaCommand(const char* cmd) {
     }
 
     if (strcmp(sub, "commit") == 0) {
+        if (configStorage_) configStorage_->flushPendingSave();  // reset follows (#191)
         qspiOta_->commitSigned(out_);
         return true;  // Never reached if the commit succeeds (device resets)
     }

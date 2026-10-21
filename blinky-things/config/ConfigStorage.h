@@ -24,6 +24,17 @@ class AudioTracker;
  *   If you need to preserve user settings across versions, manually save
  *   current tuning values before upgrading, then restore via serial console.
  */
+// Saves go through a writer task on the native nRF52 core (#191): a flash
+// write waits on the SoftDevice for erase/write timeslots, which the BLE
+// scanner keeps scarce, and it used to block the render/audio loop for
+// ~1.5 s per save (one audio overrun each). Other platforms stay synchronous.
+#if !(defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)) && \
+    (defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA))
+#define BLINKY_CONFIG_ASYNC_SAVE 1
+#else
+#define BLINKY_CONFIG_ASYNC_SAVE 0
+#endif
+
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
@@ -413,6 +424,12 @@ public:
     ConfigStorage();
     void begin();
     void end();   // Close NVS handle — call before ESP.restart() on ESP32
+
+    // Wait (up to timeoutMs) for a queued settings write to reach flash.
+    // Call before anything that resets the device, or the write is lost
+    // (#191). Returns false, after logging an error, on timeout. Always
+    // true where saves are synchronous.
+    bool flushPendingSave(uint32_t timeoutMs = 3000);
     bool isValid() const { return valid_; }
 
     // Device configuration accessors (v28+)
@@ -454,8 +471,9 @@ public:
     // Auto-save support
     // Trailing debounce: every change restarts the 5 s quiet window, so a
     // slider drag or a burst of `set` commands produces ONE flash write
-    // after the changes stop (each write stalls the CPU for tens-hundreds
-    // of ms of NVMC erase — long enough to overrun the 128 ms mic ring).
+    // after the changes stop. The write itself runs on the writer task
+    // (#191), but a page erase still halts the CPU for up to ~85 ms, so
+    // fewer writes is still better.
     void markDirty() { dirty_ = true; lastDirtyMs_ = millis(); }
     void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                      const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
@@ -470,7 +488,26 @@ private:
     bool lastWrittenValid_ = false;
 
     bool loadFromFlash();
+    // Persist data_. On nRF52 this queues a snapshot for the writer task and
+    // returns at once; the loop never waits on flash (#191).
     void saveToFlash();
+    // Persist data_ now, on the calling task (boot-time paths that re-read
+    // and verify the write: quarantine, factory reset).
+    void saveToFlashSync();
+#if BLINKY_CONFIG_ASYNC_SAVE
+    bool writeNow(const ConfigData& d);   // the LittleFS write itself; logs on failure
+    void startWriter();
+    static void writerMain(void* self);
+    ConfigData pending_;                  // newest snapshot waiting for the writer
+    bool pendingValid_ = false;
+    uint32_t pendingCrc_ = 0;
+    bool writerBusy_ = false;             // a write is on its way to flash
+    uint32_t inflightCrc_ = 0;
+    void* writerTask_ = nullptr;          // TaskHandle_t (kept out of this header)
+    void* writerWake_ = nullptr;          // SemaphoreHandle_t: binary, "work queued"
+    void* stateMutex_ = nullptr;          // SemaphoreHandle_t: guards the fields above + lastWritten*
+    void* writeMutex_ = nullptr;          // SemaphoreHandle_t: one writeNow() at a time (shared configFile)
+#endif
     void loadDefaults();
     void loadDeviceDefaults();    // Reset only device config (LED layout, pins)
     void loadSettingsDefaults();  // Reset only settings (fire, water, lightning, mic, music)
