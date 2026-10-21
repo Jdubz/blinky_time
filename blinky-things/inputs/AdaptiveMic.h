@@ -169,6 +169,14 @@ public:
   // extrapolate the rhythm phase to the moment of drawing (audio/PhaseClock.h).
   uint32_t samplesHeardSince(uint32_t idx, uint32_t nowMs) const;
 
+  // Drop everything captured so far (the external consumer starts at the
+  // current write position) WITHOUT counting it as an overrun. For the end
+  // of setup(): the PDM starts seconds before the loop's first drain, so the
+  // 128 ms ring has always overflowed by then. That audio was never going to
+  // be analysed; counting it made every boot report an overrun (#275).
+  // Returns the number of samples dropped.
+  uint32_t discardBacklog();
+
   // Record-mode tap: called from the PDM ISR with every block of samples and
   // the absolute index of block[0]. Must be ISR-safe and O(n). nullptr = off.
   using RecordTap = void (*)(const int16_t* samples, int count, uint32_t firstIndex);

@@ -703,6 +703,16 @@ void setup() {
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
 
+  // The mic has been capturing since audioController->begin(), seconds ago;
+  // its 128 ms ring overflowed long since. Start the loop from "now" and
+  // don't count that as an overrun (#275). Last thing before loop().
+  if (audioController) {
+    const uint32_t dropped = audioController->discardSetupBacklog();
+    Serial.print(F("[BOOT] Mic backlog from setup dropped: "));
+    Serial.print(dropped);
+    Serial.println(F(" samples (not an overrun)"));
+  }
+
   Serial.println(F("Ready."));
   // NOTE: SafeBootWatchdog::markStable() is intentionally NOT called here.
   // Deferred to loop() once millis() >= 60000 — a runtime crash that happens

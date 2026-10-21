@@ -300,6 +300,14 @@ uint32_t AdaptiveMic::samplesHeardSince(uint32_t idx, uint32_t nowMs) const {
   return (writeIdx - idx) + static_cast<uint32_t>(sinceIsrMs) * samplesPerMs;
 }
 
+uint32_t AdaptiveMic::discardBacklog() {
+  time_.disableInterrupts();
+  const uint32_t dropped = s_fftWriteIdx - s_extFftReadIdx;
+  s_extFftReadIdx = s_fftWriteIdx;
+  time_.enableInterrupts();
+  return dropped;
+}
+
 int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
   if (!buffer || maxCount <= 0) return 0;
 
