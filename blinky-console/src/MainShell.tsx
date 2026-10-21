@@ -22,10 +22,10 @@ import type { GeneratorType } from './types';
 const GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
 
 /**
- * The browser updater (#firmware) ships hidden until its rollout checklist
- * in docs/WEB_FLASHER.md is done (a promoted signed release; devices on
- * firmware with signed OTA). Until then it is on only in builds made with
- * VITE_FIRMWARE_UPDATES=on (bench testing with `npm run dev`).
+ * The browser updater (#firmware). On in the Firebase deploy
+ * (blinky-console-deploy.yml sets VITE_FIRMWARE_UPDATES=on); off in builds
+ * without it, e.g. the copy blinky-server serves. Removing the env line in
+ * the workflow is the kill switch. See docs/WEB_FLASHER.md.
  */
 export const FIRMWARE_UPDATES_ENABLED = import.meta.env.VITE_FIRMWARE_UPDATES === 'on';
 
