@@ -120,7 +120,9 @@ size_t BleNus::write(const uint8_t* data, size_t size) {
 uint16_t BleNus::currentMtu() const {
     if (!connected_) return 0;
     BLEConnection* conn = Bluefruit.Connection(connHandle_);
-    return conn ? conn->getMtu() : 0;
+    if (!conn) return 0;
+    const uint16_t mtu = conn->getMtu();
+    return mtu < MAX_ATT_MTU ? mtu : MAX_ATT_MTU;
 }
 
 // --- Drain TX ring buffer: send one chunk per call ---
@@ -131,7 +133,10 @@ void BleNus::drainTxBuffer() {
     BLEConnection* conn = Bluefruit.Connection(connHandle_);
     if (!conn) return;
 
-    uint16_t mtu_payload = conn->getMtu() - 3;
+    // Capped at the SoftDevice's ceiling (#173): getMtu() reported 527 for
+    // a Windows central, and copying 524 bytes into the 244-byte chunk below
+    // smashed the stack and reset the device on any reply longer than ~244 B.
+    uint16_t mtu_payload = static_cast<uint16_t>(currentMtu() - 3);
     if (mtu_payload < 20) mtu_payload = 20;
 
     // Send up to MAX_CHUNKS_PER_UPDATE chunks to improve throughput.
@@ -143,11 +148,12 @@ void BleNus::drainTxBuffer() {
     static const int MAX_CHUNKS_PER_UPDATE = 4;
 
     for (int i = 0; i < MAX_CHUNKS_PER_UPDATE && txHead_ != txTail_; i++) {
-        uint8_t chunk[244];  // Max BLE payload
+        uint8_t chunk[MAX_ATT_MTU - 3];  // max notification payload
+        static_assert(sizeof(chunk) == MAX_ATT_MTU - 3, "chunk sized to the SoftDevice MTU");
         size_t count = 0;
         size_t tail = txTail_;
 
-        while (count < mtu_payload && tail != txHead_) {
+        while (count < mtu_payload && count < sizeof(chunk) && tail != txHead_) {
             chunk[count++] = txBuf_[tail];
             tail = (tail + 1) % TX_BUF_SIZE;
         }
@@ -165,9 +171,30 @@ void BleNus::drainTxBuffer() {
 }
 
 void BleNus::update() {
+    // Commands received over NUS run here, on the loop task (#173).
+    runQueuedCommands();
     // Drain TX buffer — send one chunk per loop iteration.
     // This paces output to avoid overwhelming the SoftDevice TX queue.
     drainTxBuffer();
+}
+
+void BleNus::runQueuedCommands() {
+    // Bounded: lines queued while these run wait for the next loop tick.
+    for (uint8_t n = 0; n < CMD_QUEUE_DEPTH; n++) {
+        const uint8_t tail = cmdTail_;
+        if (tail == cmdHead_) break;  // empty
+        __DMB();                      // read the slot only after seeing it published
+        if (lineCallback_) lineCallback_(cmdQueue_[tail]);
+        __DMB();                      // finish with the slot before freeing it
+        cmdTail_ = static_cast<uint8_t>((tail + 1) % CMD_QUEUE_DEPTH);
+    }
+    const uint32_t dropped = cmdDropped_;
+    if (dropped != cmdDroppedReported_) {
+        Serial.print(F("[BLE] NUS command queue full: "));
+        Serial.print(dropped - cmdDroppedReported_);
+        Serial.println(F(" line(s) dropped"));
+        cmdDroppedReported_ = dropped;
+    }
 }
 
 void BleNus::writeLine(const char* line) {
@@ -231,8 +258,15 @@ void BleNus::processRxByte(char c) {
     if (c == '\n' || c == '\r') {
         if (lineLen_ > 0) {
             lineBuf_[lineLen_] = '\0';
-            if (lineCallback_) {
-                lineCallback_(lineBuf_);
+            // Queue for the loop task; never run the command here (#173).
+            const uint8_t head = cmdHead_;
+            const uint8_t next = static_cast<uint8_t>((head + 1) % CMD_QUEUE_DEPTH);
+            if (next == cmdTail_) {
+                cmdDropped_ = cmdDropped_ + 1;  // full: keep order, drop the newest
+            } else {
+                memcpy(cmdQueue_[head], lineBuf_, lineLen_ + 1);
+                __DMB();  // slot contents visible before it's published
+                cmdHead_ = next;
             }
             linesRx_++;
             lineLen_ = 0;
@@ -307,5 +341,7 @@ void BleNus::printDiagnostics(Print& out) const {
     out.print(F("[BLE] lines_rx="));
     out.print(linesRx_);
     out.print(F(" lines_tx="));
-    out.println(linesTx_);
+    out.print(linesTx_);
+    out.print(F(" cmd_dropped="));
+    out.println(cmdDropped_);
 }

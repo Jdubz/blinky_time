@@ -216,6 +216,10 @@ public:
 #ifdef BLINKY_PLATFORM_NRF52840
     void setBleScanner(BleScanner* scanner) { bleScanner_ = scanner; }
     void setBleNus(BleNus* nus);
+    // RESETREAS captured at boot (RebootFrequencyCounter, which only the .ino
+    // may include). Reported as json info "resetReason" so a crash-reset is
+    // diagnosable after the fact (#173).
+    void setResetReason(uint32_t resetReason) { resetReason_ = resetReason; }
     void setRecordStream(RecordStream* rec) { recordStream_ = rec; }
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     void setBleAdvertiser(BleAdvertiser* adv) { bleAdvertiser_ = adv; }
@@ -316,6 +320,7 @@ private:
 #ifdef BLINKY_PLATFORM_NRF52840
     BleScanner* bleScanner_ = nullptr;
     BleNus* bleNus_ = nullptr;
+    uint32_t resetReason_ = 0;
     RecordStream* recordStream_ = nullptr;
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     BleAdvertiser* bleAdvertiser_ = nullptr;

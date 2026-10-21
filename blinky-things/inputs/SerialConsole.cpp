@@ -611,8 +611,9 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
 #ifdef BLINKY_PLATFORM_NRF52840
         // Stack / heap headroom (#186, #187). Stack values are the minimum
         // free bytes ever seen per task. cmdStackFree is whichever task runs
-        // this command (loop for USB serial, the Bluefruit callback task for
-        // BLE NUS).
+        // this command: the loop task for USB serial and, since #173, for
+        // BLE NUS too (BleNus queues NUS lines for update()). Fleet broadcast
+        // commands also run on the loop (BleScanner::update).
         {
             TaskHandle_t loopTask = MemTelemetry::loopTaskSlot();
             if (loopTask) {
@@ -646,6 +647,10 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(F(",\"mallocIsr\":"));
             out_.print(MallocLock_isrAllocCount);
         }
+        // Hardware reset reason of this boot (nRF52 RESETREAS bits: 0x1 pin,
+        // 0x2 watchdog, 0x4 soft reset, 0x8 CPU lockup; 0 = power-on).
+        out_.print(F(",\"resetReason\":"));
+        out_.print(resetReason_);
 #endif
 
         out_.println(F("}"));
