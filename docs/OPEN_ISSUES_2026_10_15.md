@@ -91,8 +91,8 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 | # | Issue | Status | Notes |
 |---|---|---|---|
 | 6.6 ([#258](https://github.com/Jdubz/blinky_time/issues/258)) | Release gate's fps floor (150) had no measurement behind it; hat_v1 with music: b215 min 103, b214 min 114 | PARTIAL | Floor is 60 since #262. Still to do: gate on timing (longest frame, phase vs wall clock, overruns); needs the firmware to report the longest frame. |
-| 6.7 ([#270](https://github.com/Jdubz/blinky_time/issues/270)) | `make upload` uses `arduino-cli upload`; Makefile bootloader targets skip `deploy-bootloader.sh`; legacy test scripts also upload | `Makefile`, `tests/` | OPEN | Remove or make them refuse with a pointer to the right tool. |
-| 6.8 ([#271](https://github.com/Jdubz/blinky_time/issues/271)) | `make merge` would overwrite onset labels with beat labels; other ML entry points still default to beat labels | `ml-training/` | OPEN | Repoint or remove the beat paths. |
+| 6.7 ([#270](https://github.com/Jdubz/blinky_time/issues/270)) | `make upload` uses `arduino-cli upload`; Makefile bootloader targets skip `deploy-bootloader.sh`; legacy test scripts also upload (`Makefile`, `tests/`) | OPEN | Remove or make them refuse with a pointer to the right tool. |
+| 6.8 ([#271](https://github.com/Jdubz/blinky_time/issues/271)) | `make merge` would overwrite onset labels with beat labels; other ML entry points still default to beat labels (`ml-training/`) | OPEN | Repoint or remove the beat paths. |
 
 ## 7. Device verification checklist for PR #152 (hat)
 

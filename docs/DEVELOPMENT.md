@@ -301,7 +301,7 @@ validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
 Prefer runtime tuning over reflashing:
 ```
 list                # List settings
-show <name>         # Check current value
+get <name>          # Check current value
 set <name> <value>  # Modify value
 save                # Persist to flash
 ```
