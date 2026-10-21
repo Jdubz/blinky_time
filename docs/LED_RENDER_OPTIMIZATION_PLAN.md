@@ -2,7 +2,14 @@
 
 *Created: March 29, 2026. Rewritten: March 30, 2026.*
 
-**Status (2026-05-19):** Phase 3a (custom `Nrf52PwmLedStrip` with async DMA + persistent PWM buffer) has shipped — see `blinky-things/hal/hardware/Nrf52PwmLedStrip.{h,cpp}`. Phase 1/2 micro-optimizations are not all verified landed (EffectRenderer still uses `leds_.Color()` packing per `render/EffectRenderer.cpp`). Treat the remaining items as outstanding work; the headline 1024-LED feasibility unlock from Phase 3a is in place.
+**Status (2026-10-21): mostly done.** Checked against the code:
+- **Done:** 1a (`PixelMatrix::clear()` uses `memset`), 1b (`EffectRenderer::render()` calls the 3-argument `setPixelColor`, and so does `NeoPixelLedStrip`), 1c (`numPixels()` read once), 1d (`RenderPipeline` skips `apply()` when the effect is `NONE`), 2a (`LEDMapper` uses `uint16_t`/`uint8_t` arrays), and 3a (`hal/hardware/Nrf52PwmLedStrip.{h,cpp}`: buffers allocated once in `begin()`, async DMA; landed in commit 7002d253, "25→55 FPS").
+- **Partly done:** 2b. The renderer iterates by LED index, but still writes through `setPixelColor()`, not straight into the output buffer.
+- **Changed:** 1e. `ARENA_SIZE` is now 8,192 bytes (`audio/FrameOnsetNN.h`), not 4,096. The onset NN is off on devices (`BLINKY_ONSET_NN_ENABLED=0` in `audio/AudioTracker.h`), but `FrameOnsetNN` is still compiled into device builds, so the arena is still allocated.
+- **Not done:** 2c (`Nrf52PwmLedStrip::setPixelColor()` still scales brightness per pixel) and 3b (I2S driver).
+- **Open:** #193. The wait for the previous frame's DMA still costs about 30 µs per LED (~30 ms at 1024 LEDs), which matters for the ≥30 fps gate. Ideas there: double-buffered DMA, or splitting strands (`ledPin2` already splits one buffer across two strands).
+
+The tables below are the original March 2026 analysis. Their numbers (6.8 ms NN inference, 192-particle pools, ~22 FPS) predate these changes.
 
 Target hardware: nRF52840 (Cortex-M4F, 64 MHz, 256 KB RAM). 32x32 = 1024 WS2812B LEDs.
 Goal: determine if 1024-pixel display is feasible on nRF52840 and optimize accordingly.
@@ -81,7 +88,7 @@ With async DMA (CPU overlaps wire time): **~32 FPS** (wire-time limited).
 2. `show()` is made non-blocking so CPU work overlaps wire time
 3. TFLite arena is right-sized to reclaim 28 KB
 
-Without these changes, the stock Adafruit NeoPixel library will eventually malloc-fail on the 48 KB transient allocation due to heap fragmentation. The existing comment in `DeviceConfigLoader.cpp:155` ("nRF52840 practical ceiling is ~512 LEDs") reflects this — it's a library limitation, not a hardware one.
+Without these changes, the stock Adafruit NeoPixel library will eventually malloc-fail on the 48 KB transient allocation due to heap fragmentation. The comment in `config/DeviceConfigLoader.cpp` (LED-count validation) ("nRF52840 practical ceiling is ~512 LEDs") reflects this — it's a library limitation, not a hardware one.
 
 ---
 
@@ -188,18 +195,18 @@ This is an alternative to 3a, not a prerequisite. If RAM headroom from Phase 1+2
 
 ## Summary
 
-| # | Change | RAM Saved | Frame Time Saved | Complexity |
-|---|--------|-----------|-----------------|------------|
-| 1a | memset in PixelMatrix::clear | 0 | ~0.1 ms | Trivial |
-| 1b | Eliminate Color() pack-unpack | 0 | ~0.5 ms | Trivial |
-| 1c | Cache numPixels() | 0 | ~0.2 ms | Trivial |
-| 1d | Skip effect call when NONE | 0 | ~0.1 ms | Trivial |
-| 1e | Right-size TFLite arena | **28 KB** | 0 | Trivial |
-| 2a | LEDMapper uint16/uint8 arrays | **8 KB** | 0 | Low |
-| 2b | EffectRenderer direct buffer write | 0 | ~1-2 ms | Medium |
-| 2c | Pre-apply brightness | 0 | ~0.5 ms | Low |
-| 3a | Custom Nrf52PwmLedStrip (async) | **48 KB saved** (no per-frame malloc) | **~10-13 ms** (async overlap) | Medium |
-| 3b | I2S driver (alternative to 3a) | **36 KB more** vs PWM | same as 3a | Medium-High |
+| # | Change | RAM Saved | Frame Time Saved | Complexity | Status |
+|---|--------|-----------|-----------------|------------|--------|
+| 1a | memset in PixelMatrix::clear | 0 | ~0.1 ms | Trivial | Done |
+| 1b | Eliminate Color() pack-unpack | 0 | ~0.5 ms | Trivial | Done |
+| 1c | Cache numPixels() | 0 | ~0.2 ms | Trivial | Done |
+| 1d | Skip effect call when NONE | 0 | ~0.1 ms | Trivial | Done |
+| 1e | Right-size TFLite arena | **28 KB** | 0 | Trivial | Arena is 8 KB, not 4 KB |
+| 2a | LEDMapper uint16/uint8 arrays | **8 KB** | 0 | Low | Done |
+| 2b | EffectRenderer direct buffer write | 0 | ~1-2 ms | Medium | Partly (index order only) |
+| 2c | Pre-apply brightness | 0 | ~0.5 ms | Low | Not done |
+| 3a | Custom Nrf52PwmLedStrip (async) | **48 KB saved** (no per-frame malloc) | **~10-13 ms** (async overlap) | Medium | Done |
+| 3b | I2S driver (alternative to 3a) | **36 KB more** vs PWM | same as 3a | Medium-High | Not done |
 
 **After Phase 1+2:** ~36 KB RAM freed, ~2.5 ms CPU saved per frame. Still blocking at 22 FPS.
 **After Phase 3a:** async DMA, 32 FPS, no per-frame malloc. This is the real unlock for 1024 LEDs on nRF52840.

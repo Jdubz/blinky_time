@@ -1,6 +1,11 @@
 # Hybrid Feature Analysis Plan
 
-**Status:** Historical (2026-05-19). The five-gate methodology and the v27-hybrid retroactive regression findings (flatness R²=0.85, gate-b null result, kick_weighted_drums label contamination) are still actionable lessons referenced from `IMPROVEMENT_PLAN.md` and `ML_IMPROVEMENT_PLAN.md`. The specific experiment queue described here is closed — see `ML_IMPROVEMENT_PLAN.md`'s 2026-05-02 literature-review reframe for the current direction.
+**Status:** **Closed; kept for its method (checked 2026-10-21).** The five-gate method and the lessons from the v27 hybrids still apply: flatness is 85% predictable from mel (R² = 0.85), gate (b) found nothing, and the kick_weighted_drums labels were contaminated. The experiment queue below is closed. For the current direction, see `ML_IMPROVEMENT_PLAN.md` (its 2026-05-02 literature review). What changed since this was written:
+- **The onset NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0` in `audio/AudioTracker.h`). Onsets come from spectral flux, which scores higher on edm/ (F1 0.542 vs 0.480 for the v33 NN) and costs far less CPU. "NN input feature" work therefore has no deployed consumer until a model beats flux (see `AUDIO_ARCHITECTURE.md`).
+- **`edm_holdout/` was deleted** (2026-04-27). Every held-out number below was measured on it. The only validation corpus is `blinky-test-player/music/edm/` (CLAUDE.md).
+- **Phase 2b was never built.** There is no `SignalRegistry` and no `stream signal` command. The shape features (crest, centroid, rolloff, HFC, raw flatness, raw flux) are computed in `SharedSpectralAnalysis` and logged per onset (`PulseFeatureSnapshot` in `AudioTracker.h`).
+- **`crestGateMin` remains** (serial `crestgatemin`, default 0 = off, persisted since v95) and is only used on the NN path.
+- **Harness gaps 5 and 9 are covered another way.** `tests/tracker/` runs the real `AudioTracker` peak-picking on the host, and with `BLINKY_HOST_NN` it runs the real TFLite Micro model (#203). `tests/parity/` holds the feature-parity harness.
 **Owner:** Audio/ML
 **Supersedes:** ad-hoc `flat`/`rflux` streaming (b132)
 
@@ -174,8 +179,8 @@ Each step gets its own commit. Ordered by cost/benefit ratio:
 | 3 | Audit `scripts/audio.py` feature code against firmware | 6 | 1 day | **✅ closed (2026-04-20)** |
 | 4 | Hamming window variant check | 7 | 10 min | **✅ closed by inspection** |
 | 5 | AdaptiveMic chain (match or document as intentional skip) | 8 | half day | **⚠ documented, intentionally skipped — see below** |
-| 6 | Port `AudioTracker::updatePulseDetection` into harness | 9 | 1 day | pending |
-| 7 | Integrate tflite-runtime, verify vs tflite-micro | 5 | half day | pending |
+| 6 | Port `AudioTracker::updatePulseDetection` into harness | 9 | 1 day | covered by `tests/tracker/` (runs the real `AudioTracker`) |
+| 7 | Integrate tflite-runtime, verify vs tflite-micro | 5 | half day | covered differently: `tests/tracker/` with `BLINKY_HOST_NN` runs TFLite Micro itself on the host (#203) |
 | 8 | Replay-capture mode: feed device-captured raw audio | 10, 11 | 1-2 days (needs firmware raw-PCM capture) | deferred — infra doesn't exist yet |
 | 9 | Vendor CMSIS-DSP FFT into harness | 1 | 1-2 days | deferred — current parity holds at 1e-6 without it |
 
@@ -200,9 +205,9 @@ Every commit from this point forward must keep the parity test green (`tests/par
 
 ### Gaps remaining
 
-- **Gap 5 (tflite-runtime vs tflite-micro)** — pending. Matters for any offline NN inference we use to classify TP vs FP. Half day.
-- **Gap 9 (peak-picking semantics)** — pending. Matters for TP vs FP classification. 1 day.
-- **Gap 10 (device audio capture)** — deferred. Requires new firmware raw-PCM capture stream to exist.
+- **Gap 5 (tflite-runtime vs tflite-micro)** — covered: the host harness runs TFLite Micro itself (`tests/tracker/`, `BLINKY_HOST_NN`, #203).
+- **Gap 9 (peak-picking semantics)** — covered: `tests/tracker/` runs the firmware's own `updatePulseDetection()`.
+- **Gap 10 (device audio capture)** — deferred. Phone record mode (`docs/PHONE_RECORD_MODE_PLAN.md`) is the planned way to capture raw mic PCM from a device.
 - **Gap 1 (CMSIS-DSP FFT)** — deferred. Float-precision FFT drift is below feature precision; no immediate correctness issue.
 
 ## Design decisions
@@ -332,7 +337,7 @@ Expected outcome: one new deterministic gate (cheap) + one new NN input feature 
 
 ## References
 
-- `docs/AUDIO_ARCHITECTURE.md` — current v27-hybrid architecture and the 32-input feature set.
+- `docs/AUDIO_ARCHITECTURE.md` — current audio architecture. (When this was written it described the v27-hybrid 32-input model; the firmware has since moved to 50 mel bands, and the NN is off on devices.)
 - `docs/ML_IMPROVEMENT_PLAN.md` — NN training roadmap.
 - `blinky-server/blinky_server/testing/scoring.py` `HybridMetrics` — prototype scoring shipped in b132 for `flat`/`rflux`. Generalize in Phase 2.
 - `ml-training/verify_mel_pipeline.py` — parity template for Phase 2a.
@@ -460,7 +465,9 @@ Test: random 13/5 split (seed=42) of the percussion corpus, recompute cross-corp
 
 Result — every feature's sign verdict is identical across full / kept-13 / held-out-5, and |d| values agree within ~0.15 on every feature. `renyi`, `kick_ratio`, and `wpd` remain classified UNSTABLE (sign flips between variants) on every split; the other seven remain STABLE. **The shortlist is not an overfit artifact** of which 18 EDM tracks we picked. EDM-only is the target scope (see Goal), so this is sufficient stability evidence to proceed.
 
-### Training-set contamination — 2026-04-20 — **ACTION REQUIRED**
+### Training-set contamination — 2026-04-20
+
+> **Superseded (2026-04-27 corpus reset):** the action items below pointed at `edm_holdout/`, which was deleted. Training data prep now excludes the edm/ validation tracks (see `ML_IMPROVEMENT_PLAN.md`).
 
 While setting up the held-out check, discovered: the 18 EDM tracks in `blinky-test-player/music/edm/` are byte-identical with files inside the v27-hybrid training corpus at `/mnt/storage/blinky-ml-data/audio/combined/`, with the same filenames.
 
@@ -825,3 +832,5 @@ Full details in `docs/ML_IMPROVEMENT_PLAN.md` §"Thread 1: Is the problem the la
 4. If all features still fail: the original conclusion stands (shape features don't discriminate musically rhythmic-vs-random), and the firmware-level PLP AND-gate is the right answer.
 
 Gate-b doesn't need to be rebuilt — just re-run with corrected inputs.
+
+> **Outcome (2026-10-21):** this re-run did not happen. The PLP AND-gate (`beatgridmin`) has been off by default since b149, because it suppressed 65–84% of true onsets. The task is onset detection, so off-beat onsets must fire too (CLAUDE.md). And the NN is now off on devices, so the question only comes back if a future model beats spectral flux.

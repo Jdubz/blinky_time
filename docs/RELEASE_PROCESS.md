@@ -16,6 +16,8 @@ Test devices are listed in `devices/test_devices.json`. Being a test device is a
 
 ## Cutting a release
 
+A release is a vetted checkpoint that the owner picks. **Nothing releases on its own:** merging to master builds nothing for devices. Each step below is run by hand. b215 is the current stable and the first signed release.
+
 ### 1. Candidate (CI)
 ```bash
 gh workflow run release.yml --ref master     # or: Actions → "Release candidate" → Run
@@ -74,7 +76,7 @@ The result is attached to the release as `gate-<device>.json`, pass or fail.
 ```bash
 python tools/release_promote.py bN
 ```
-Refuses without a passing gate record for this exact version. It then dispatches `sign-release.yml`, which signs the release for signed OTA (the raw image `blinky-things-bN.bin` and its Ed25519-signed manifest `.otam`; the `BLINKY_RELEASE_SIGNING_KEY` secret is used nowhere else, and the workflow re-checks the gate). It waits for the run, and verifies the signature against the key in `blinky-things/ota/OtaKeys.h`. Only then does it tag `stable-bN` and mark the release stable and *Latest*.
+Refuses without a passing gate record for this exact version. It then dispatches `sign-release.yml`, which signs the release for signed OTA (the raw image `blinky-things-bN.bin` and its Ed25519-signed manifest `.otam`) and re-checks the gate. The workflow runs only from master. The key, `BLINKY_RELEASE_SIGNING_KEY`, is a secret of the GitHub environment `release-signing` (master only) and is used nowhere else. It waits for the run, and verifies the signature against the key in `blinky-things/ota/OtaKeys.h`. Only then does it tag `stable-bN` and mark the release stable and *Latest*.
 
 Promotion then dispatches a blinky-console redeploy (`gh workflow run blinky-console-deploy.yml`). That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
 
@@ -102,5 +104,5 @@ Releases are never compiled at deploy time. Both tools verify that the device re
 
 ## Day-to-day development
 - **Iterate:** use `--dev` on one test device. It needs a clean tree: commit first, then flash. The version string carries the commit, so the build on the device is always traceable.
-- **Ship:** merge to master, cut a candidate, gate it on the test device, promote.
+- **Ship:** when the owner decides master is worth releasing, cut a candidate, gate it on the test device, promote. A merge alone ships nothing.
 - **Local `build.sh`:** a plain build (with bump) still works for compile checks. Nothing flashes it except `--dev`, and that refuses a dirty tree.

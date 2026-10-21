@@ -2,7 +2,7 @@
 
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
-> **Status (2026-10-20): live, USB only.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is still hidden (`BLE_UPDATES_ENABLED`). The owner turned it on with checklist items 2 and 4 open; see the [rollout checklist](#rollout-checklist) for what's still missing.
+> **Status (2026-10-21): live, USB only, since PR #266.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is built but hidden (`BLE_UPDATES_ENABLED = false` in `FirmwarePage.tsx`). A person updated a device end to end (`b211-dev` → b215) on 2026-10-20. The owner turned it on with checklist item 2 open and item 4 parked; recovery over USB on Windows is still limited (see [Recovery](#recovery)). `blinkytime.joshwentworth.com` (no hyphen) redirects here.
 
 Code:
 - **Page:** `blinky-console/src/pages/FirmwarePage.tsx`.
@@ -29,7 +29,7 @@ The update never goes through the bootloader's UF2 drive or its BLE DFU service;
 6. **Verify.** The page finds the device again by chip serial number, checks it, restores runtime settings and saves, then reports success. It watches the first 75 s of uptime in the background and speaks up only if the device restarts.
 
 Why this route:
-- **The UF2 drive can't work for a person on Windows** with bootloader 0.8.0-10. Windows writes `System Volume Information` as the drive mounts, and the bootloader's stuck-transfer check drops the drive 8.5 s later (measured on hat_v1). Bootloader 0.8.0-11 fixes the check; see [Recovery](#recovery).
+- **The UF2 drive can't work for a person on Windows** with bootloader 0.8.0-10. Windows writes `System Volume Information` as the drive mounts, and the bootloader's stuck-transfer check drops the drive 8.5 s later (measured on hat_v1). A bootloader fix (0.8.0-11) exists but is parked; see [Recovery](#recovery).
 - **Chrome can't use the bootloader's BLE DFU.** Its Web Bluetooth GATT blocklist bans Nordic legacy DFU (`00001530-…`).
 - **This route avoids both,** and it doesn't erase anything until a verified image is waiting.
 
@@ -95,11 +95,11 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam
 
 ## Recovery
 
-*Device stuck in update mode* (the XIAO-SENSE drive is showing, no app to talk to) writes the release UF2 to the drive. The drive is picked through the File System Access API, or the user copies the downloaded file after the page has checked `INFO_UF2.TXT`. On Windows this needs **bootloader 0.8.0-11**, whose stuck-transfer timer starts only after the first real UF2 block. 0.8.0-10 drops the drive 8.5 s after Windows' metadata write.
+*Device stuck in update mode* (the XIAO-SENSE drive is showing, no app to talk to) writes the release UF2 to the drive. The drive is picked through the File System Access API, or the user copies the downloaded file after the page has checked `INFO_UF2.TXT`. **This doesn't work on Windows with the fleet bootloader (0.8.0-10):** it drops the drive 8.5 s after Windows' metadata write. Recovery from macOS, Linux or ChromeOS works. The page accepts only bootloader `0.8.0-10` (`ACCEPTED_BOOTLOADER_PREFIXES` in `flashLayout.ts`).
 
-The 0.8.0-11 change is built and passes `verify_bootloader.py`. It's on branch `fix/uf2-stuck-check-valid-blocks-only` in the bootloader fork and is **not flashed anywhere yet**. It goes to a sacrificial device first, through `deploy-bootloader.sh`.
+**Bootloader 0.8.0-11 is parked by owner decision.** It starts the stuck-transfer timer only after the first real UF2 block, which would fix Windows. It is built and passes `verify_bootloader.py`, on branch `fix/uf2-stuck-check-valid-blocks-only` of the bootloader fork (draft PR Jdubz/Adafruit_nRF52_Bootloader#1). It is not flashed anywhere. If it is ever picked up, it goes to a sacrificial device first, through `deploy-bootloader.sh`.
 
-With 0.8.0-11 the drive also no longer times out back to the app when nothing is copied. It waits for a file, a reset or an unplug, as upstream Adafruit does. CLAUDE.md and `deploy_local.py`'s messages must change with that rollout.
+With 0.8.0-11 the drive would also stop timing out back to the app when nothing is copied. It would wait for a file, a reset or an unplug, as upstream Adafruit does. CLAUDE.md and `deploy_local.py`'s messages would have to change with that rollout.
 
 ## Bench results (hat_v1, 2026-10-20)
 
@@ -123,12 +123,12 @@ With 0.8.0-11 the drive also no longer times out back to the app when nothing is
 
 ## Rollout checklist
 
-The page went live (USB) on 2026-10-20 after item 1 and a real end-to-end update (bench results). What's still open:
+The page went live (USB) on 2026-10-21 (PR #266), after item 1 and a real end-to-end update by a person (bench results). What's still open:
 
 1. ✅ Done (b215). Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
 2. **Open.** Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
 3. Bluetooth (optional for a USB-only launch; it's hidden): fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Then set `BLE_UPDATES_ENABLED`.
-4. **Open; it limits recovery on Windows.** The page's recovery option (a device stuck as the `XIAO-SENSE` drive) uses the bootloader's UF2 drive, which 0.8.0-10 drops on Windows (`msc_uf2_check_stuck`). Recovery from macOS, Linux or ChromeOS is unaffected. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
+4. **Parked (owner decision); recovery over USB on Windows stays limited.** The page's recovery option (a device stuck as the `XIAO-SENSE` drive) uses the bootloader's UF2 drive, which 0.8.0-10 drops on Windows (`msc_uf2_check_stuck`). Recovery from macOS, Linux or ChromeOS is unaffected. The fix is bootloader 0.8.0-11 (draft fork PR #1, not flashed). If it is picked up: sacrificial device first, through `deploy-bootloader.sh`. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
 5. iPhone (after Bluetooth): one full update in Bluefy.
 
 ## Open items

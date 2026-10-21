@@ -10,9 +10,23 @@ This modified bootloader adds `DEFAULT_TO_OTA_DFU=1`, which changes the
 fallback to **BLE DFU mode** when no valid app exists. The fleet server can
 then retry the firmware upload wirelessly.
 
+## Current fleet bootloader: 0.8.0-10-g4c5faae
+
+- **Staged file:** `update-bootloader-qspi-ota-default.uf2` (committed 2026-05-20).
+- **Source:** the `bootloader/src` submodule, pinned at fork commit `4c5faae` on `Jdubz/Adafruit_nRF52_Bootloader` branch `blinky-local-patches`. On a fresh machine: `git submodule update --init --recursive bootloader/src`.
+- **What it adds on top of 0.8.0-4's dual-transport (USB + BLE) DFU mode:**
+  - SD-aware flash writes and settings save (0.8.0-5 and later; see below);
+  - BLE advertising paused during a USB drive transfer, and a stuck-transfer check (`msc_uf2_check_stuck()`: 8 s idle with an incomplete transfer → reset back to the app);
+  - BLE-DFU ATT MTU 23 → 247;
+  - an app-handshake watchdog: a counter in `GPREGRET` is bumped on every jump to the app and cleared by the firmware (`SafeBootWatchdog::begin()` / `markStable()`). After 3 misses in a row the bootloader stays in DFU.
+- **Changing it:** only through `./scripts/deploy-bootloader.sh`, and on a sacrificial device first. See [How to Flash](#how-to-flash) and CLAUDE.md ("Bootloader changes are higher-stakes than firmware changes").
+- **0.8.0-11 is parked** (owner decision). It would fix USB drive recovery from Windows (the stuck-transfer timer would start only after the first real UF2 block). It lives on fork branch `fix/uf2-stuck-check-valid-blocks-only` (draft PR Jdubz/Adafruit_nRF52_Bootloader#1) and is not flashed anywhere. See `docs/WEB_FLASHER.md` ("Recovery").
+
+The sections below are the history of how the fixes came in, oldest builds last.
+
 ## Build Details
 
-- **Source**: Adafruit_nRF52_Bootloader (upstream HEAD, v0.10.0)
+- **Source**: Adafruit_nRF52_Bootloader v0.10.0 + the `blinky-local-patches` fork (`bootloader/src`)
 - **Board**: `xiao_nrf52840_ble_sense`
 - **Flag**: `DEFAULT_TO_OTA_DFU=1` (with OTAFIX-style logic — preserves explicit UF2/serial requests)
 - **SoftDevice**: S140 v7.3.0 (unchanged, not included in update UF2)
@@ -26,10 +40,11 @@ then retry the firmware upload wirelessly.
 | `update-bootloader-0.8.0-ota-default.dfu.zip` | Mar 29 | DEFAULT_TO_OTA_DFU only | First OTA-default build (BLE DFU recovery, no QSPI) |
 | `update-bootloader-ota-default.uf2` | Mar 29 | DEFAULT_TO_OTA_DFU only | Same as above, UF2 format for mass-storage flash |
 | `update-bootloader-qspi-ota.uf2` | Mar 31 | RAM magic + QSPI staged OTA, **no** DEFAULT_TO_OTA_DFU | Previous production fleet bootloader |
-| **`update-bootloader-qspi-ota-default.uf2`** | **May 13** | **RAM magic + QSPI + DEFAULT_TO_OTA_DFU + dual-transport DFU mode + SD-aware flash** | **Current target for sculpture installs (F1 in `docs/SCULPTURE_BLE_RECOVERY_PLAN.md`)** |
-| `update-bootloader-qspi-ota-default_s140_7.3.0.zip` | May 13 | Same + SoftDevice | DFU.zip form, for OTA bootloader update via fleet server |
+| **`update-bootloader-qspi-ota-default.uf2`** | **May 20** | **0.8.0-10-g4c5faae: RAM magic + QSPI + DEFAULT_TO_OTA_DFU + dual-transport DFU mode + SD-aware flash + stuck-transfer check + app-handshake watchdog** | **Current fleet bootloader** |
+| `update-bootloader-qspi-ota-default_s140_7.3.0.zip` | May 16 | 0.8.0-7 + SoftDevice | **Stale:** older than the fleet bootloader. Rebuild from `bootloader/src` before using a DFU.zip form |
+| `update-bootloader-bl-only_rev52840.zip` | May 16 | Bootloader-only legacy DFU package (predates 0.8.0-10) | BLE bootloader update on bench devices stuck on 0.8.0-4 (see below) |
 
-### Fourth critical fix in current build (`0.8.0-5-gd7be9be`): SD-aware flash writes
+### SD-aware flash writes (added in `0.8.0-5-gd7be9be`)
 
 `0.8.0-4-g76d1e60` introduced dual-transport DFU but landed broken — the USB MSC
 UF2 path silently failed to program internal flash. App UF2s wrote successfully
@@ -67,7 +82,8 @@ Verified on bench (2026-05-13):
 If a device is on the broken `0.8.0-4` build, USB UF2 cannot reflash it (same
 SD-ownership bug stops both bootloader-update and firmware writes). Use BLE
 DFU instead — the BLE DFU code path goes through `pstorage_store` which is
-already SD-aware:
+already SD-aware. This is a bench recovery for a known-broken bootloader,
+not a way to roll out a new one (that is `deploy-bootloader.sh`):
 
 ```bash
 # 1. Build a bootloader-only DFU.zip with the right device-revision.
@@ -87,8 +103,6 @@ adafruit-nrfutil dfu genpkg \
 #    CRC16 to match the trimmed firmware (see tools/push_ble_dfu.py).
 python3 tools/push_ble_dfu.py bootloader-only.zip <MAC>
 ```
-
-### Critical fix in prior build (`0.8.0-2-g6827504`)
 
 ### Critical fix in prior build (`0.8.0-2-g6827504`)
 
@@ -154,20 +168,24 @@ The update UF2 uses the MBR's power-fail-safe `SD_MBR_COMMAND_COPY_BL` to
 atomically replace the bootloader. Safe to interrupt (MBR resumes copy on
 next boot).
 
-```bash
-# Via uf2_upload.py (recommended — handles bootloader entry + UF2 copy)
-python3 tools/uf2_upload.py /dev/ttyACM0 \
-    --uf2 bootloader/update-bootloader-qspi-ota-default.uf2
+**Use `./scripts/deploy-bootloader.sh`, nothing else.** It refuses a
+bootloader whose `check_dfu_mode()` can reach DFU without starting USB
+(`scripts/verify_bootloader.py`, the bug that bricked the hat on
+2026-05-15), logs the running version first, and checks the new version
+after the reboot.
 
-# Via make target (update Makefile's BOOTLOADER_UF2 to point at this file
-# before running, currently still references update-bootloader-ota-default.uf2)
-make bootloader-update UPLOAD_PORT=/dev/ttyACM0
+```bash
+./scripts/deploy-bootloader.sh --target /dev/ttyACM0        # the staged fleet BL
+./scripts/deploy-bootloader.sh --target /dev/ttyACM0 --bootloader path/to/bl.uf2
 ```
 
-**Always test on a bench device first.** Verify the new bootloader boots
-the existing app, then erase the app region (SWD) to confirm DFU mode
-defaults to BLE OTA (not USB UF2). Only after both pass: flash sculpture
-units.
+Don't use `tools/uf2_upload.py --uf2` or `make bootloader-update` /
+`bootloader-update-all` directly: they skip all three safety layers.
+
+**Always test on a sacrificial bench device first** (reset button and SWD
+pads reachable; `swd-flash.local` for recovery). Verify the new bootloader
+boots the existing app and that every DFU path still brings up USB. Only
+after that: other devices. Mind CLAUDE.md's 60-second rule between resets.
 
 ## Behavior Change
 
@@ -178,6 +196,10 @@ units.
 | GPREGRET=0xA8 | BLE DFU | BLE DFU |
 | Double-reset button | UF2 | UF2 (preserved) |
 | Valid app | Boot app | Boot app |
+| Valid app, but 3 boots in a row without the firmware's handshake clear (0.8.0-10) | Boot app | **DFU** |
+
+Every DFU entry brings up USB as well as BLE (dual transport, 0.8.0-4 and
+later). That is the invariant `verify_bootloader.py` enforces.
 
 Uses OTAFIX-style logic: only overrides to BLE DFU when no explicit
 UF2/serial mode was requested. All wired recovery paths still work.
@@ -185,7 +207,8 @@ UF2/serial mode was requested. All wired recovery paths still work.
 ## Rebuilding
 
 ```bash
-cd ~/Development/Adafruit_nRF52_Bootloader
+git submodule update --init --recursive bootloader/src
+cd bootloader/src
 export PATH="$HOME/.arduino15/packages/Seeeduino/tools/arm-none-eabi-gcc/9-2019q4/bin:$PATH"
 pip3 install intelhex
 make BOARD=xiao_nrf52840_ble_sense DEFAULT_TO_OTA_DFU=1 all
@@ -199,14 +222,17 @@ upstream-fork state. Re-derive this section any time a new bootloader UF2
 is committed. PR #139 review specifically flagged binary-in-git provenance
 as an audit concern; this section is the answer.
 
-**Current artifacts** (`update-bootloader-qspi-ota-default*`,
-`update-bootloader-bl-only_rev52840.zip`):
+**Current artifact** (`update-bootloader-qspi-ota-default.uf2`):
 - **Upstream base**: Adafruit_nRF52_Bootloader v0.10.0 (release tag) +
-  local fork `blinky-local-patches` branch at commit `d7be9be`
-  ("flash_nrf5x: SD-aware page erase + write for dual-transport DFU").
-- **Reported version string**: `0.8.0-5-gd7be9be` (the `0.8.0` prefix is
-  the upstream version; the `-5-gd7be9be` suffix is `git describe`
+  local fork `blinky-local-patches` branch at commit `4c5faae`
+  ("BL §3.1 v2: move app-handshake counter from RAM to GPREGRET"), the
+  commit the `bootloader/src` submodule pins.
+- **Reported version string**: `0.8.0-10-g4c5faae` (the `0.8.0` prefix is
+  the upstream version; the `-10-g4c5faae` suffix is `git describe`
   output on the local fork).
+- **Older artifacts** still in this directory:
+  `update-bootloader-qspi-ota-default_s140_7.3.0.zip` (0.8.0-7) and
+  `update-bootloader-bl-only_rev52840.zip` (2026-05-16).
 - **Compiler**: arm-none-eabi-gcc 9.2.1 (the version bundled with the
   Seeeduino nRF52 1.1.12 Arduino core).
 - **Build flags**: `BOARD=xiao_nrf52840_ble_sense DEFAULT_TO_OTA_DFU=1`.
@@ -221,7 +247,8 @@ as an audit concern; this section is the answer.
   2026-05-13.
 
 The local fork is published at `Jdubz/Adafruit_nRF52_Bootloader`, branch
-`blinky-local-patches`. A future PR should add a build matrix in CI that
+`blinky-local-patches`, and pinned here as the `bootloader/src`
+submodule. A future PR should add a build matrix in CI that
 rebuilds the artifacts from that commit and diffs against the committed
 binaries to prove no manual tampering.
 

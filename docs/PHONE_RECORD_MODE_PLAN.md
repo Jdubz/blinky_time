@@ -1,5 +1,7 @@
 # Phone Record Mode Plan
 
+> **Status (2026-10-21):** implemented (firmware, console, converter); not yet run on hardware. Open work: bench test on Android Chrome ([#195](https://github.com/Jdubz/blinky_time/issues/195)), screen-lock behavior ([#196](https://github.com/Jdubz/blinky_time/issues/196)), review fixes on a phone ([#198](https://github.com/Jdubz/blinky_time/issues/198)), and the re-scope to calibration data ([#243](https://github.com/Jdubz/blinky_time/issues/243)).
+
 **Goal:** capture what a single device hears and does at real concert volume, with no blinky-server nearby. An Android phone running the hosted console (Chrome, Web Bluetooth) connects directly to one device. It starts a recording, and the device streams **raw mic PCM** plus its live analysis to the phone. The phone saves the session to disk for offline analysis.
 
 **Why:** tuning responsiveness in extremely loud rooms is the open problem. Bench playback through speakers doesn't reproduce the mic's behavior near acoustic overload. Raw device audio from the field lets us re-run the whole feature/NN pipeline offline, measure clipping, and build gain/normalization fixes against real data.
@@ -18,16 +20,16 @@ Dropped or laggy frames poison the data. Every design choice below serves these 
 | Stream | Rate | Bytes/s |
 |---|---|---|
 | Raw PCM, 16 kHz int16 mono | 118 samples per 244 B packet → ~136 pkt/s | ~33,100 |
-| Analysis frame (compact, ~36 B) | 62.5 Hz | ~2,300 |
-| Analysis frame with 50×u8 mel (`mel` flag) | 62.5 Hz | ~5,400 |
+| Analysis frame (compact, 26 B incl. header) | 62.5 Hz | ~1,600 |
+| Analysis frame with 50×u8 mel (`mel` flag, 76 B) | 62.5 Hz | ~4,800 |
 | Status | 1 Hz | ~60 |
-| **Total (default / with mel)** | | **~35.5 / ~38.6 kB/s** |
+| **Total (default / with mel)** | | **~34.8 / ~38.0 kB/s** |
 
-This needs MTU 247, Data Length Extension, the 2M PHY and a ~15 ms connection interval. nRF52840 → Android Chrome sustains well above this on a properly configured link. **At today's firmware config it's impossible** (see Phase 1).
+This needs MTU 247, Data Length Extension, the 2M PHY and a ~15 ms connection interval. nRF52840 → Android Chrome sustains well above this on a properly configured link. The firmware's BLE config used to make it impossible; Phase 1 fixed that.
 
-## Status (2026-10-14)
+## Status (2026-10-21)
 
-Phases 1–4 are implemented and compile/test clean, but **nothing has run on hardware yet.** The bench verification below is the outstanding work, and it's a hard gate before any concert use.
+Phases 1–4 are implemented and compile/test clean, but **nothing has run on hardware yet** ([#195](https://github.com/Jdubz/blinky_time/issues/195)). The bench verification below is the outstanding work, and it's a hard gate before any concert use.
 
 | Piece | Location |
 |---|---|
@@ -38,7 +40,9 @@ Phases 1–4 are implemented and compile/test clean, but **nothing has run on ha
 
 The hosted Firebase build was also broken: `build:firebase` inherited `base: '/devices/'`, so asset URLs 404'd. It now passes `--base /`.
 
-## Phase 1: firmware prerequisites (bug fixes)
+## Phase 1: firmware prerequisites (bug fixes) — done
+
+All five fixes below are in the code (`configPrphBandwidth` and the `[FALLBACK]` log in `blinky-things.ino`, `samplesNeeded()` in `AudioTracker::update()`, `clipSamples` in `json info`). They are described as the bugs they fixed.
 
 1. **BLE bandwidth was never configured.** `BleNus::onConnect` requests MTU 247, but the SoftDevice ceiling defaults to MTU 23, event length 3.75 ms and HVN queue depth 1, because `configPrphBandwidth()` is never called before `Bluefruit.begin()`. This caps app-mode NUS too (the fleet server's serial-over-BLE). It does *not* explain the "BLE-DFU negotiates MTU 23" item ([#216](https://github.com/Jdubz/blinky_time/issues/216)): DFU runs in the bootloader, which has its own SoftDevice config.
    - Fix: `Bluefruit.configPrphBandwidth(BANDWIDTH_MAX)`, which is Adafruit's tested config (MTU 247, event length 125 ms, HVN queue 3) and fits the stock linker RAM start for 1 peripheral.
@@ -73,7 +77,8 @@ On BLE disconnect, the recording stops. The phone reconnects and starts a new se
 - The record ring's sample counter is the same absolute counter as the FFT ring (`s_fftWriteIdx`), so audio and analysis share one timeline.
 
 **Analysis path:**
-- After each spectral frame, the loop pushes a compact frame packet into a 64-slot SPSC queue. Fields: sample index at window end, `nna`, pulse strength, level, raw level, peak abs, clip count, PLP phase, BPM, flags (NN ready, pulse fired, overrun-since-last-frame), plus optional mel.
+- After each spectral frame, the loop pushes a compact frame packet into a 64-slot SPSC queue. Fields: sample index at window end, device ms, `nna`, pulse strength, level, raw level, BPM×10, PLP phase, ACF periodicity strength, plus optional mel. Header flags: NN ready, pulse fired, FFT overrun since the last frame, mel present. Peak level and clip count go in the STATUS packet.
+- The onset NN is off on devices (`BLINKY_ONSET_NN_ENABLED=0`), so `nna` is 0 and the NN-ready flag is clear; pulses come from spectral flux.
 - When the queue is full, the frame is dropped and counted.
 
 **Sender task:**
@@ -107,10 +112,11 @@ type 4 END   : u32 ms, final counters
 ## Phase 4: offline tooling
 
 `ml-training/scripts/convert_blrec.py`:
-- **Audio:** one 16 kHz WAV per contiguous run of samples. Gaps are never zero-filled; they go into `gaps.json`.
-- **Analysis frames:** `frames.jsonl` with capture-nn-compatible field names (`ts`, `nna`, `lvl`, `gain`, plus `sample_index`; `mel` as floats when recorded). This feeds `replay_device_capture.py` and `mel_distribution_check.py`.
-- **Status:** `status.jsonl`.
-- **Summary:** clip-rate and peak-level summary, plus a loud warning when any loss occurred.
+- **Audio:** one 16 kHz WAV per contiguous run of samples. Gaps are never zero-filled; they are listed in `manifest.json`.
+- **Audio:** files are named `seg{S}_run{R}.wav`.
+- **Analysis frames:** `frames.jsonl` (all segments) and `frames_segNN.jsonl` (one per segment), with capture-nn-compatible field names (`ts`, `nna`, `lvl`, `gain`, `onset`, `bpm`, `phase`, `rstr`, plus `sample_index` and `seg`; `mel` as floats when recorded). This feeds `replay_device_capture.py` and `mel_distribution_check.py`.
+- **Status:** `status.jsonl`; device text lines go to `text.jsonl`.
+- **Summary:** `manifest.json` holds the header, runs, gaps, integrity and clipping summary. Every loss prints a WARNING (exit status stays 0).
 
 ## Verification (bench, before any concert)
 
@@ -128,9 +134,9 @@ type 4 END   : u32 ms, final counters
 
 ## Known side effects to watch on the bench
 
-- **NUS shares the notification queue with the record sender.** The SoftDevice HVN queue is per connection. While recording, any NUS text output (command replies) makes the loop task wait in `BleNus::drainTxBuffer`, up to 100 ms per chunk, for a queue slot. Keep console output quiet during a session, and watch the `maxFrameMs` STATUS field.
-- **The fleet scanner gets less radio time while a phone is connected.** Long connection events cut into it, so fleet broadcasts may be missed during a session.
-- **The accumulator fix changes spectral timing.** `OSS_FRAME_RATE = 66` in `AudioTracker.h` assumes one OSS sample per loop update with a new frame. That cadence is unchanged, but windows are now contiguous. Compare BPM lock and onset feel before and after.
+- **NUS shares the notification queue with the record sender.** The SoftDevice HVN queue is per connection. While recording, any NUS text output (command replies) makes the loop task wait in `BleNus::drainTxBuffer`, up to 100 ms per chunk, for a queue slot. Keep console output quiet during a session, and watch the `maxFrameMs` STATUS field ([#189](https://github.com/Jdubz/blinky_time/issues/189)).
+- **The fleet scanner gets less radio time while a phone is connected.** Long connection events cut into it, so fleet broadcasts may be missed during a session ([#190](https://github.com/Jdubz/blinky_time/issues/190)).
+- **Spectral timing.** Windows are now contiguous, and since b208 every spectral frame is processed at exactly 62.5 Hz (`AudioTracker::OSS_FRAME_RATE`; see `docs/AUDIO_ARCHITECTURE.md` "Frame Clock"). Every frame is reported, so the FRAME `skipped` field is always 0.
 
 ## Decided (2026-10-19)
 

@@ -2,7 +2,11 @@
 
 *Created: April 1, 2026.*
 
-**Status (2026-05-19):** Phases 1–6 largely executed. The 14 CJS test scripts (`ab_test_*.cjs`, `param_sweep_multidev.cjs`, etc.) are deleted. The MCP server's direct-serial internals (`scoring.ts`, `serial-logger.py`, etc.) are deleted. Standalone Python serial tools (`audio_tuner.py`, `run_ble_dfu.py`, etc.) are deleted. `blinky-server` is the sole serial owner. **Exception:** `tools/uf2_upload.py` was NOT moved into `blinky-server/blinky_server/firmware/` as planned — the server still invokes it from `tools/` via subprocess (the proven pattern works; the byte-for-byte move is no-value-add work). Treat the migration section about `uf2_upload_cli.py` as not happening.
+**Status (checked 2026-10-21): done, apart from the two exceptions below.** The result lives in `blinky-server/blinky_server/testing/` (scoring, test sessions, test runner, job manager), `api/routes_testing.py` (`/api/test/*`), and `blinky-serial-mcp/src/` (a thin HTTP client, `http-client.ts`). Earlier status (2026-05-19): Phases 1–6 largely executed. The 14 CJS test scripts (`ab_test_*.cjs`, `param_sweep_multidev.cjs`, etc.) are deleted. The MCP server's direct-serial internals (`scoring.ts`, `serial-logger.py`, etc.) are deleted. Standalone Python serial tools (`audio_tuner.py`, `run_ble_dfu.py`, etc.) are deleted. `blinky-server` is the sole serial owner. **Exception:** `tools/uf2_upload.py` was NOT moved into `blinky-server/blinky_server/firmware/` as planned — the server still invokes it from `tools/` via subprocess (the proven pattern works; the byte-for-byte move is no-value-add work). Treat the migration section about `uf2_upload_cli.py` as not happening.
+
+**Exceptions still in the tree:**
+- `tools/serial_lock.py` still exists; `tools/uf2_upload.py` imports it and still has `_request_server_release()` for its standalone path. Deleting both is the only open item from Phase 2/6.
+- **Deliberate, not a gap:** tools that work on a device plugged into *this* workstation's USB open the serial port themselves: `tools/deploy_local.py`, `tools/release_gate.py`, `tools/uf2_upload_win.py`. They never run against blinkyhost's ports, which blinky-server owns.
 
 ## Problem
 
@@ -129,10 +133,9 @@ All scoring uses `blinky_server/testing/scoring.py`. **No BPM. No beat F1. No do
 | POST | `/api/devices/{id}/flash` | Upload firmware to one device (was `/ota`) |
 | POST | `/api/fleet/command` | Broadcast to all devices |
 | PUT | `/api/fleet/settings/{name}` | Set on all devices |
-| POST | `/api/fleet/flash` | Flash all devices (was `/fleet/ota`) |
-| POST | `/api/fleet/deploy` | Compile + flash all |
-| POST | `/api/firmware/compile` | Compile firmware (was `/ota/compile`) |
-| POST | `/api/firmware/compile-dfu` | Compile + generate DFU package (was `/ota/compile-dfu`) |
+| POST | `/api/fleet/flash` | Flash all devices (was `/fleet/ota`). deploy.sh only (`X-Deploy-Tool`) |
+| POST | `/api/fleet/deploy` | Compile + flash all. Still in the code, but contradicts the stable-only release rule (docs/RELEASE_PROCESS.md); don't use |
+| ~~POST~~ | ~~`/api/firmware/compile`, `/api/firmware/compile-dfu`~~ | Removed |
 | WS | `/ws/{id}` | Device data stream |
 | WS | `/ws/fleet` | Multiplexed fleet stream |
 
@@ -408,7 +411,7 @@ The `/tmp/blinky-serial/` directory and all lock files are eliminated entirely.
 ## Implementation Order
 
 ```
-Phase 1 ✅ ──→ Phase 2 ──→ Phase 3 ──→ Phase 4 ──→ Phase 5 ──→ Phase 6
+Phase 1 ✅ ──→ Phase 2 ✅ ──→ Phase 3 ✅ ──→ Phase 4 ✅ ──→ Phase 5 ✅ ──→ Phase 6 ✅ (except serial_lock.py; uf2_upload.py move dropped)
 ```
 
 Linear critical path. Each phase builds on the previous. Phase 6 (deletion) only happens after end-to-end verification of all preceding phases.

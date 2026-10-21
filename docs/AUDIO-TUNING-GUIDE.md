@@ -1,11 +1,10 @@
 # Audio Tuning Guide
 
-**Last Updated:** April 29, 2026 (parameter snapshot through b153 / SETTINGS_VERSION 94)
-**Current firmware:** b179 / SETTINGS_VERSION 95 — this guide is a parameter snapshot at b153; verify specific defaults against `audio/AudioTracker.h` and `config/ConfigStorage.cpp` before tuning. AudioTracker pipeline (multi-source ACF + epoch-fold PLP, NN-primary pulse, AGC removed) is unchanged. Onset model has moved on from v33 (frame_onset_model_data_v15.h / _v16.h are the latest staged variants — see ml-training for active experiment).
+**Last checked against the code:** 2026-10-21 (SETTINGS_VERSION 98). Defaults below are the factory values in `blinky-things/config/ConfigStorage.cpp`; the tracker's own member defaults are in `blinky-things/audio/AudioTracker.h`. Verify there before tuning.
 
-> **NOTE:** Parameter categories marked ~~strikethrough~~ below were removed in v67-v82 (EnsembleDetector, CBSS, Bayesian fusion, AGC). See `docs/IMPROVEMENT_PLAN.md` for removal history. Current tunable parameters are in the AudioTracker section.
+> The task is **onset detection**: fire on every percussive hit, on the beat or not. Score against `.onsets_consensus.json` on `blinky-test-player/music/edm/` (the only validation corpus). Don't use beat ground truth. See CLAUDE.md.
 
-This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
+This document covers testing and tuning of the audio side of the Blinky audio-reactive LED system. For how the pipeline works, see `docs/AUDIO_ARCHITECTURE.md`.
 
 ---
 
@@ -29,44 +28,38 @@ This document consolidates all audio testing and tuning information for the Blin
 ```
 PDM Microphone (16kHz, mono)
         |
-   AdaptiveMic (fixed gain + window/range normalization, AGC removed v72)
+   AdaptiveMic (fixed gain + window/range normalization; no AGC, no noise gate)
         |
-   SharedSpectralAnalysis (FFT-256)
+   SharedSpectralAnalysis (FFT-256, 62.5 Hz frames)
    ├── Soft-knee compressor (Giannoulis 2012)
-   ├── Mel bands + per-band adaptive whitening (Stowell & Plumbley 2007)
-   └── Spectral flux (HWR: sum of positive magnitude changes, NN-independent)
+   ├── 50 mel bands (30-8000 Hz) + per-band whitening
+   └── Spectral flux (SuperFlux max filter, band-weighted bass/mid/high)
         |
-        ├── [BPM PATH]
-        │   Spectral flux → contrast sharpening → OSS buffer (~5.5s)
-        │   → Autocorrelation (every 150ms) → period estimate
+        ├── [ONSET PATH]  (devices: spectral flux; the onset NN is compiled out)
+        │   Flux vs adaptive baseline × pulsethreshmult, floor fluxonsetfloor
+        │   → onset event, pulse envelope, onset density
+        │   → Energy synthesis (mic level + bass mel + flux peak-hold)
         │
-        ├── [ONSET PATH]
-        │   FrameOnsetNN (Conv1D W16, ~7ms, single channel)
-        │   → onset_activation → NN-modulated spectral flux → pulse envelope
-        │   → Energy synthesis (onset peak-hold blend)
-        │
-        └── [PHASE PATH]
-            Multi-source ACF (beat-level lags 20-80, 3 sources)
-            Sources: spectral flux, bass energy, NN onset
-            → Bar multipliers (2×/3×/4×) + epoch-fold variance scoring
-            → Direct pattern interpolation → plpPulse
+        └── [RHYTHM PATH]  (every 100 ms)
+            Multi-source ACF (beat lags 20-80 frames, 3 sources)
+            Sources: bass flux, bass mel energy, mic level
+            → Bar multipliers (2×/3×/4×) + syncopation-derived candidates
+            → Epoch-fold scoring + tempo prior → period, accent, phase
+            → Accent-aligned pattern → plpPulse
             → Pattern slot cache (4-slot LRU, instant section recall)
-            → Silence state reset after 5s (clears all analysis buffers)
         |
-   AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
+   AudioControl { energy, level, pulse, onset, phase, beatCount, plpPulse, rhythmStrength, onsetDensity }
         |
-   Fire/Water/PlasmaGlobe Generators (visual effects)
+   Fire / Water / PlasmaGlobe ("lightning") / Audio generators
 ```
 
 ### Key Design Decisions
 
-1. **Decoupled BPM and onset paths**: BPM estimation uses spectral flux (NN-independent). The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat — syncopated transients would corrupt ACF periodicity. Spectral flux preserves periodic structure.
-2. **NN-primary pulse** (b117+): `updatePulseDetection()` uses local-maxima peak-picking directly on NN activation. Bass-band energy gate (50% threshold boost when bass ratio low) and PLP pattern bias (30% threshold boost at off-beat positions) shape sensitivity. PLP beat-grid AND-gate disabled by default (b149+). Active model: Conv1D W16 v33 (50 mel, 30-8000 Hz). Non-NN fallback: mic level.
-3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; mel bands get per-band whitening (per-bin FFT whitening was removed, #182). AGC removed v72 — hardware gain fixed at platform optimal.
-4. **PLP phase/pattern extraction** (v93): Multi-source ACF across 3 mean-subtracted sources selects period. Epoch-fold extracts repeating energy pattern at detected period → direct pattern interpolation for visual output.
-5. **Pattern slot cache** (v82): 4-slot LRU of 16-bin PLP pattern digests. Every bar, current PLP pattern compared via cosine similarity. Match > 0.70 triggers instant recall from cache. Enables rapid verse/chorus switching.
-6. **Onset information gate**: Suppresses low-confidence NN output before PLP source input and pulse detection, preventing noise-driven false patterns during silence/breakdowns.
-7. **6-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity.
+1. **Onsets and rhythm use different signals.** Onset detection fires on every hit. The rhythm sources are tuned for periodicity and never include the NN (#155).
+2. **Spectral-flux onsets on devices.** `BLINKY_ONSET_NN_ENABLED=0`. Tuned flux scores F1 0.542 at 178 fps on edm/; the v33 NN scores 0.480 and holds the loop at 48 fps. The NN path is kept for the host NN harness and a cheaper future model (#174).
+3. **Spectral conditioning.** The soft-knee compressor normalizes gross signal level; mel bands get per-band whitening (per-bin FFT whitening was removed, #182). Hardware gain is fixed (nRF52840: 32).
+4. **No noise gate, no silence detection.** This mic is too weak for a fixed gate. Instead, `rhythmStrength` and `plpPulse` fade out 2-4 s after the last onset.
+5. **Pattern slot cache** (v82): every 4 beats the current pattern is compared with 4 cached 16-bin digests. Similarity above `slotswitchthresh` (0.70) recalls the cached pattern.
 
 ---
 
@@ -76,186 +69,113 @@ PDM Microphone (16kHz, mono)
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **blinky-server** | `blinky-server/` | Fleet management, test orchestration, scoring (REST API) |
+| **Tracker harness** | `tests/tracker/` | Real tracker code on edm/ audio on the host; deterministic, runs in CI |
+| **blinky-server** | `blinky-server/` | Fleet management, on-device test orchestration, scoring (REST API, port 8420) |
 | **blinky-serial-mcp** | `blinky-serial-mcp/` | MCP tools for Claude (thin HTTP client for blinky-server) |
-| **test audio** | `blinky-test-player/music/` | Audio files + ground truth labels |
+| **Test audio** | `blinky-test-player/music/edm/` | 18 tracks + `.onsets_consensus.json` ground truth + `track_manifest.json` |
 
 ### Quick Commands
 
 ```bash
-# Run validation suite via server API
+# Host: real tracker on the corpus (see tests/tracker/README.md for the build line)
+python tests/tracker/run_tracker_eval.py --harness build/tracker_harness
+
+# Host: compare two builds, or try other loop rates
+python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
+    --compare build/tracker_harness_old --fps 35 60 90
+
+# On device: validation suite via the server API (bench test devices only)
 curl -X POST http://blinkyhost.local:8420/api/test/validate \
   -H 'Content-Type: application/json' \
   -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/music/edm"}'
 
-# Parameter sweep via server API
+# On device: parameter sweep via the server API
 curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["D1","D2","D3"], "param_name": "onsetthresh", "values": [1,2,3,4,5,6,7,8,9], "track_dir": "/path/to/music/edm"}'
+  -d '{"device_ids": ["D1"], "param_name": "fluxonsetfloor", "values": [0.005, 0.01, 0.02], "track_dir": "/path/to/music/edm"}'
 
 # Via MCP tools (poll results with check_test_result(job_id))
-run_test(port: "/dev/ttyACM0")
-run_validation_suite(ports: ["/dev/ttyACM0", "/dev/ttyACM1"])
+run_test(port: "DEVICE_ID")
+run_validation_suite(ports: ["DEVICE_ID_1", "DEVICE_ID_2"])
 
-# Monitor audio levels
-monitor_audio(port: "/dev/ttyACM0", duration_ms: 3000)
-
-# Monitor transient detections
-monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
+# Monitor audio levels and transient detections
+monitor_audio(port: "DEVICE_ID", duration_ms: 3000)
+monitor_transients(port: "DEVICE_ID", duration_ms: 5000)
 ```
+
+The harness takes optional overrides as positional arguments (`plpPhaseGain`, `tempoPriorWidth`, `syncopatedCandidateScale`, `pulseOnsetFloor`, `fluxOnsetFloor`, `pulseMinLevel`); pass them through `run_tracker_eval.py --harness-args`. Note that the harness starts from the `AudioTracker.h` member defaults, not the `ConfigStorage.cpp` factory values (they differ for `pulsethreshmult`: 1.5 vs 2.0).
 
 ### Testing Methodology
 
-**Critical: Always seek to middle of track.** EDM tracks typically have 15-30s intros with no beat. The server uses `track_manifest.json` seek offsets to jump to the densest beat region. The first 12 seconds of data are filtered out (ACF convergence settle time).
+**Start on the host.** The tracker harness is silent, deterministic and fast. Move to devices only for what the host can't model (the real mic and room).
+
+**On devices, seek past intros.** EDM tracks often have 15-30 s intros with no drums. The server uses `track_manifest.json` seek offsets to jump into the track, and drops the first 12 s of readings (`SETTLE_MS`, ACF convergence).
 
 ### Test Tracks (18 Total)
 
-| Category | Tracks | BPM Range |
-|----------|--------|-----------|
-| **Trance** | trance-party, trance-infected-vibes, trance-goa-mantra | 128-145 |
-| **Techno** | techno-minimal-01, techno-minimal-emotion, techno-deep-ambience, techno-machine-drum, techno-dub-groove | 120-140 |
-| **EDM/Trap** | edm-trap-electro, dubstep-edm-halftime | 128-150 |
-| **DnB** | dnb-energetic-breakbeat, dnb-liquid-jungle | 170-175 |
-| **World/Urban** | afrobeat-feelgood-groove, amapiano-vibez, reggaeton-fuego-lento, garage-uk-2step | 95-130 |
-| **Breakbeat** | breakbeat-drive, breakbeat-background | 120-140 |
+| Category | Tracks |
+|----------|--------|
+| **Trance** | trance-party, trance-infected-vibes, trance-goa-mantra |
+| **Techno** | techno-minimal-01, techno-minimal-emotion, techno-deep-ambience, techno-machine-drum, techno-dub-groove |
+| **EDM/Trap** | edm-trap-electro, dubstep-edm-halftime |
+| **DnB** | dnb-energetic-breakbeat, dnb-liquid-jungle |
+| **World/Urban** | afrobeat-feelgood-groove, amapiano-vibez, reggaeton-fuego-lento, garage-uk-2step |
+| **Breakbeat** | breakbeat-drive, breakbeat-background |
 
-### Synthetic Test Patterns (14 Total)
-
-| Category | Patterns | Purpose |
-|----------|----------|---------|
-| **Baseline** | strong-beats, medium-beats, soft-beats | Basic transient detection |
-| **Rejection** | hat-rejection, pad-rejection, chord-rejection | False positive testing |
-| **Tempo** | fast-tempo, tempo-sweep | Speed and tempo detection |
-| **Complexity** | bass-line, synth-stabs, lead-melody, full-mix | Real-world complexity |
-| **Edge Cases** | sparse, simultaneous | Silence gaps, overlapping hits |
+`blinky-test-player/src/patterns.ts` still defines older synthetic patterns (strong-beats, hat-rejection, etc.). They aren't part of the validation flow.
 
 ---
 
 ## All Tunable Parameters
 
-### Category: `ensemble` (3 parameters) - Ensemble Detection Gating
+Every parameter below is a serial setting: `set <name> <value>`, `get <name>`, `show [category]`, `categories`, `settings` (help), or `json settings [category]`. `save` writes the persisted ones to flash. **Only use `set`/`save` on a bench test device.** Fleet defaults change in code and ship in a release (CLAUDE.md).
+
+"Saved" = stored in flash by `save`. "Runtime" = tunable but lost on reboot.
+
+### Category: `tracker` - Onset detection, tempo, energy
+
+| Command | Default | Range | Saved | Description |
+|---------|---------|-------|-------|-------------|
+| `fluxonsetfloor` | 0.01 | 0.0-0.5 | yes | Spectral-flux pulse floor (device onset path) |
+| `pulsethreshmult` | 2.0 | 1.0-5.0 | yes | Flux baseline multiplier for a pulse |
+| `pulseminlevel` | 0.03 | 0.0-0.2 | yes | Minimum signal presence (flux peak-hold or bass energy) to fire |
+| `blfastdrop` | 0.05 | 0.01-0.2 | yes | Baseline fast drop rate |
+| `blslowrise` | 0.005 | 0.001-0.05 | yes | Baseline slow rise rate |
+| `odfpkdecay` | 0.85 | 0.5-0.99 | yes | Flux peak-hold decay per frame (energy synthesis) |
+| `pulseonsetfloor` | 0.20 | 0.0-1.0 | yes | NN activation floor for peak-picking (NN builds only) |
+| `crestgatemin` | 0.0 | 0.0-20.0 | yes | Crest-factor gate, 0 = off (NN builds only) |
+| `beatgridmin` | 0.0 | 0.0-1.0 | runtime | PLP pattern AND-gate, 0 = off (NN builds only; off since b149) |
+| `beatgridmin_rs` | 0.2 | 0.0-1.0 | runtime | rhythmStrength guard for the beat-grid gate |
+| `bassflux` | 0.5 | 0.0-1.0 | yes | Spectral flux bass weight (62-375 Hz) |
+| `midflux` | 0.2 | 0.0-1.0 | yes | Spectral flux mid weight (437-2000 Hz) |
+| `highflux` | 0.3 | 0.0-1.0 | yes | Spectral flux high weight (2-8 kHz) |
+| `odfcontrast` | 1.25 | 0.1-4.0 | yes | Exponent on bass flux before the rhythm buffer |
+| `bpmmin` | 15 | 10-120 | yes | Lowest reported BPM |
+| `bpmmax` | 200 | 120-240 | yes | Highest reported BPM |
+| `temposmooth` | 0.85 | 0.5-0.99 | yes | BPM EMA smoothing (higher = slower) |
+| `plpconfalpha` | 0.25 | 0.01-0.5 | yes | PLP confidence EMA rate |
+| `plpnovgain` | 1.0 | 0.1-5.0 | yes | Pattern power-law exponent (>1 sharpens) |
+| `plpsigfloor` | 0.10 | 0.01-0.5 | yes | Smoothed mic level for full PLP confidence |
+| `plpdecay` | 0.2 | 0.05-1.0 | yes | Epoch-fold recency decay |
+| `plpvarsens` | 0.0 | 0.0-50.0 | yes | Not read by the current tracker code |
+| `activationthreshold` | 0.3 | 0.0-1.0 | yes | Not read by the current tracker code |
+| `emicweight` | 0.30 | 0.0-1.0 | yes | Energy: mic level weight |
+| `emelweight` | 0.30 | 0.0-1.0 | yes | Energy: bass mel weight |
+| `eodfweight` | 0.40 | 0.0-1.0 | yes | Energy: flux peak-hold weight |
+| `audio_amp` | 1.0 | 0-1000 | runtime | Diagnostic: scales every AudioControl signal (100 = saturate, 0 = mute) |
+| `nnprofile` | off | bool | runtime | NN per-inference timing output (NN builds only) |
+
+Code-only (no serial command): `acfPeriodMs` 100 (saved), `plpPhaseGain` 0.3, `tempoPriorWidth` 0.8, `syncopatedCandidateScale` 1.0.
+
+### Category: `slots` - Pattern slot cache
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `enscooldown` | 250 | 20-500 ms | Base ensemble cooldown between detections |
-| `ensminconf` | 0.40 | 0.0-1.0 | Minimum detector confidence for output |
-| `ensminlevel` | 0.0 | 0.0-0.5 | Noise gate audio level |
-
-**Per-detector commands** (via `set`/`show`):
-*Detector commands removed in v67. BandFlux/EnsembleDetector fully removed. NN models are the sole ODF source (OnsetNN for pulse, RhythmNN for beat/downbeat). See git log v67 for details.*
-
-### Category: `rhythm` - Beat Tracking (AudioController)
-
-**Onset Strength Signal:**
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `odfsmooth` | 5 | 3-11 (odd) | ODF smoothing window width |
-| `odfmeansub` | false | bool | ODF mean subtraction (OFF since v32 — raw ODF preserves ACF structure, +70% F1) |
-
-**Tempo estimation:**
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `combbankenabled` | true | bool | Enable comb filter bank for tempo |
-| `combbankfeedback` | 0.92 | 0.85-0.98 | Comb bank resonance strength |
-| `autocorrperiod` | 250 | 100-1000 ms | Autocorrelation computation interval |
-| `bpmmin` | 60 | 40-120 | Minimum BPM to detect |
-| `bpmmax` | 200 | 80-240 | Maximum BPM to detect |
-| `temposmooth` | 0.85 | 0.5-0.99 | Tempo EMA smoothing factor |
-| `ft` | false | bool | Fourier tempogram observation (disabled v28) |
-| `ioi` | false | bool | IOI histogram observation (disabled v28) |
-
-**CBSS beat detection:**
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `cbssalpha` | 0.9 | 0.5-0.99 | CBSS weighting (higher = more predictive) |
-| `cbsstight` | 8.0 | 1.0-20.0 | Log-Gaussian tightness (higher = stricter tempo, raised v40) |
-| `cbssthresh` | 1.0 | 0.0-2.0 | Adaptive threshold: beat fires only if CBSS > factor × mean |
-| `beatconfdecay` | 0.98 | 0.9-0.999 | Per-frame confidence decay when no beat |
-| `beatoffset` | 5.0 | 0.0-15.0 | Beat prediction advance in frames (ODF+CBSS delay compensation) |
-| `phasecorr` | 0.0 | 0.0-1.0 | Phase correction strength (keep at 0 — hurts syncopation) |
-
-**Output modulation:**
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `musicthresh` | 0.4 | 0.0-1.0 | Rhythm activation threshold |
-| `pulseboost` | 1.3 | 1.0-2.0 | Pulse boost on beat |
-| `pulsesuppress` | 0.6 | 0.3-1.0 | Pulse suppress off beat |
-| `energyboost` | 0.3 | 0.0-1.0 | Energy boost on beat |
-
-### Category: `bayesian` (8 parameters) - Bayesian Tempo Fusion
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `bayeslambda` | 0.07 | 0.01-1.0 | Transition tightness (lower = more rigid tempo, tightened v25) |
-| `bayesprior` | 128.0 | 60-200 | Static prior center BPM |
-| `bayespriorw` | 0.0 | 0.0-3.0 | Ongoing static prior strength (0 = off, default) |
-| `priorwidth` | 50.0 | 10-80 | Prior width (sigma BPM) |
-| `bayesacf` | 0.8 | 0.0-5.0 | ACF observation weight (raised in v25 — harmonic comb makes ACF reliable) |
-| `bayesft` | 0.0 | 0.0-5.0 | Fourier tempogram weight (disabled v28) |
-| `bayescomb` | 0.7 | 0.0-5.0 | Comb filter bank weight (primary observation) |
-| `bayesioi` | 0.0 | 0.0-5.0 | IOI histogram weight (disabled v28) |
-
-**CRITICAL interaction warning:** Setting `cbssthresh` below 0.8 while `bayesft` or `bayesioi` are above 0.5 causes catastrophic beat tracking failure (F1 drops to 0.049). The FT/IOI sub-harmonic bias floods CBSS with phantom beats that the low threshold can't reject. Both are disabled by default (v28). If re-enabled: `cbssthresh >= 1.0` with any FT/IOI weight, or `bayesft/bayesioi <= 0.5` with any cbssthresh.
-
-### Category: `spectral` - Spectral Processing (v23+)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `compenabled` | true | bool | Soft-knee compressor (before mel whitening) |
-| `compthresh` | -30.0 | -60.0 to 0.0 dB | Compressor threshold |
-| `compratio` | 3.0 | 1.0-20.0 | Compression ratio (3:1) |
-| `compknee` | 15.0 | 0.0-30.0 dB | Soft knee width |
-| `compmakeup` | 6.0 | -10.0 to 30.0 dB | Makeup gain |
-| `compattack` | 0.001 | 0.0001-0.1 s | Attack time constant (effectively instantaneous at 62.5 fps) |
-| `comprelease` | 2.0 | 0.01-10.0 s | Release time constant |
-
-### Category: `nn` (1 parameter) - NN Onset Detection
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `nnprofile` | 0 | bool | Enable [NNPROF] per-operator timing output to Serial |
-
-### Category: `v45` — REMOVED (PLL removed v80, replaced by PLP)
-
-PLL parameters (`pll`, `pllkp`, `pllki`, `onsetSnapWindow`) removed. PLP Fourier tempogram handles phase alignment.
-
-### Category: `octave` (5 parameters) - Octave Disambiguation (v32)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `densityoctave` | 1 | bool | Onset-density octave penalty |
-| `octavecheck` | 1 | bool | Shadow CBSS octave checker |
-| `octavecheckbeats` | 2 | 1-8 | Octave check interval in beats |
-| `octavescoreratio` | 1.3 | 1.0-3.0 | Required score improvement for octave switch |
-| `odfmeansub` | 0 | bool | ODF mean subtraction (OFF v32: raw ODF +70% F1) |
-
-### Category: `stability` (1 parameter)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `stabilitywin` | 8.0 | 4-16 | Number of beats for stability tracking |
-
-### Category: `lookahead` (1 parameter)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `lookahead` | 50.0 | 0-200 ms | Beat prediction advance for anticipatory effects |
-
-### Category: `tempo` (1 parameter)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `tempochgthresh` | 0.1 | 0.01-0.5 | Min BPM change ratio to trigger tempo update |
-
-### Category: `agc` (5 parameters) - Hardware Gain Control
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `hwtarget` | 0.35 | 0.05-0.9 | Target raw ADC level |
-| `fastagc` | true | bool | Enable fast AGC for low-level sources |
-| `fastagcthresh` | 0.15 | 0.05-0.3 | Raw level threshold for fast AGC |
-| `fastagcperiod` | 5000 | 2000-15000 ms | Fast AGC calibration period |
-| `fastagctau` | 5.0 | 1.0-15.0 s | Fast AGC tracking time |
+| `slotswitchthresh` | 0.70 | 0.50-0.95 | Cosine similarity to recall a cached slot |
+| `slotnewthresh` | 0.40 | 0.20-0.60 | Below this similarity: allocate a new slot |
+| `slotupdaterate` | 0.15 | 0.05-0.40 | EMA rate for reinforcing the active slot |
+| `slotsaveconf` | 0.25 | 0.20-0.80 | Min PLP confidence to save/update slots |
+| `slotseedblend` | 0.70 | 0.30-0.95 | Blend ratio when seeding from a cached slot or template |
 
 ### Category: `audio` (2 parameters) - Window/Range Normalization
 
@@ -264,124 +184,51 @@ PLL parameters (`pll`, `pllkp`, `pllki`, `onsetSnapWindow`) removed. PLP Fourier
 | `peaktau` | 2.0 | 0.5-10.0 s | Peak adaptation speed |
 | `releasetau` | 5.0 | 1.0-30.0 s | Peak release speed |
 
-### Category: `fire` (13 parameters) - Fire Visual Effect
+The compressor (-30 dB threshold, 3:1, 15 dB knee, +6 dB makeup, 2 s release) and noise estimation (off) are code constants in `SharedSpectralAnalysis.h`, not serial settings.
 
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `cooling` | 80 | 0-255 | Base cooling rate |
-| `sparkchance` | 0.4 | 0.0-1.0 | Probability of sparks |
-| `sparkheatmin` | 160 | 0-255 | Minimum spark heat |
-| `sparkheatmax` | 255 | 0-255 | Maximum spark heat |
-| `audiosparkboost` | 0.3 | 0.0-1.0 | Audio influence on sparks |
-| `coolingaudiobias` | 0 | -128 to 127 | Audio cooling bias |
-| `bottomrows` | 2 | 1-8 | Spark injection rows |
-| `burstsparks` | 5 | 1-20 | Sparks per burst |
-| `suppressionms` | 150 | 50-1000 | Burst suppression time |
-| `heatdecay` | 0.85 | 0.5-0.99 | Heat decay rate |
-| `emberheatmax` | 20 | 0-50 | Max ember heat |
-| `spreaddistance` | 8 | 1-24 | Heat spread distance |
-| `embernoisespeed` | 0.0008 | 0.0001-0.002 | Ember animation speed |
+### Generator categories
 
-### Category: `firemusic` (3 parameters) - Beat-Synced Fire
+Each generator has its own category. List them on a device with `show <category>` or `json settings <category>`.
 
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `musicemberpulse` | 0.4 | 0.0-1.0 | Ember pulse on beat |
-| `musicsparkpulse` | 0.3 | 0.0-1.0 | Spark pulse on beat |
-| `musiccoolpulse` | 10.0 | 0.0-30.0 | Cooling oscillation amplitude |
-
-### Category: `fireorganic` (1 parameter) - Non-Rhythmic Fire
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `organictransmin` | 0.3 | 0.0-1.0 | Min transient for burst |
-
-**Total: ~30+ tunable parameters** (v67, after BandFlux removal)
+| Category | Generator (`gen <name>`) | Settings |
+|----------|--------------------------|----------|
+| `fire` | `fire` | `basespawnchance`, `audiospawnboost`, `burstsparks`, `windvariation`, `drag`, `sparkvelmin`, `sparkvelmax`, `sparkspread`, `defaultlifespan`, `intensitymin`, `intensitymax`, `organictransmin`, `thermalforce`, `gridcoolrate`, `buoyancycoupling`, `pressurecoupling` (saved); `burstthreshold` (0.45, min onset strength for a burst), `burstvelmult`, `burstlifemult`, `burstsizebase`, `burstsizegain`, `audiobright`, `smolderheight` (0.15), `maxflameheight` (0.50), `audioheightboost` (0.30), `noiseamplitude`, `noisespatialscale`, `noisebasespeed`, `noiseaudiospeedmult`, `maxvel` (400) (runtime) |
+| `water` | `water` | `w_spawnchance`, `w_audioboost`, `w_gravity`, `w_windbase`, `w_windvar`, `w_drag`, `w_dropvelmin`, `w_dropvelmax`, `w_dropspread`, `w_splashparts`, `w_splashvelmin`, `w_splashvelmax`, `w_splashint`, `w_maxparts`, `w_lifespan`, `w_intmin`, `w_intmax`, `w_transmin`, `w_bgintensity` (all saved) |
+| `plasma` | `lightning` or `plasma` (PlasmaGlobe) | `p_bgdim` (0.01), `p_orbbright` (0.75), `p_orbradius` (0.06), `p_driftspeed` (0.012), `p_pulsedecay` (0.88), `p_pulsebright` (0.5), `p_pulseexpand` (0.3) (all saved) |
+| `audiovis` | `audio` | `transientrowfrac`, `transientdecay`, `transientbright`, `levelbright`, `levelsmooth`, `phasebright`, `musicmodethresh`, `beatpulsebright`, `beatpulsedecay`, `beatpulsewidth`, `bgbright` (runtime) |
+| `effect` | `effect hue` / `effect none` | `hueshift` (0.0), `huespeed` (0.0 cycles/s) (runtime; `scene` sets them too) |
 
 ---
 
 ## Current Best Settings
 
-### Onset Detection & BPM Configuration (March 2026)
+### Onset Detection (2026-10)
 
-**Architecture:** Decoupled tempo/onset. BPM uses spectral flux (NN-independent). NN onset used for visual pulse + PLP source.
-- **BPM signal:** Spectral flux (half-wave rectified magnitude change) → contrast² → ACF → BPM
-- **Onset detection:** FrameOnsetNN, Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). v3 deployed: All Onsets F1=0.787 (Kick 0.688, Snare 0.773).
-- **Training data:** Consensus v5 labels (7-system), cal63 mel calibration (target_rms_db=-63 dB).
+**Spectral flux, NN off on devices.** Measured with the host harness and the hat_v1 CPU cost model on edm/ (onsets_consensus, ±50 ms):
 
-### AudioTracker Tempo Defaults (v74+)
+| Detector | F1 | Precision | Recall | LED fps |
+|---|---|---|---|---|
+| Spectral flux, `fluxonsetfloor` 0.01 | 0.542 | 0.449 | 0.682 | 178 |
+| v33 NN (50 mel, 12 ms/inference) | 0.480 | 0.394 | 0.613 | 48 |
 
-| Parameter | Command | Default | Role |
-|-----------|---------|---------|------|
-| BPM min | `bpmmin` | 60 | Minimum detectable BPM |
-| BPM max | `bpmmax` | 200 | Maximum detectable BPM |
-| Tempo smoothing | `temposmooth` | 0.85 | BPM EMA smoothing (higher = slower) |
-| Activation threshold | `activationthreshold` | 0.3 | Min periodicity to activate rhythm mode |
-| ODF gate | `odfgate` | 0.25 | NN output floor gate (suppress noise) |
-| Slot switch threshold | `slotswitchthresh` | 0.70 | Cosine sim to recall cached slot |
-| Slot new threshold | `slotnewthresh` | 0.40 | Below this: allocate new slot |
-| Slot update rate | `slotupdaterate` | 0.15 | EMA rate for reinforcing active slot |
-| Slot save confidence | `slotsaveconf` | 0.50 | Min PLP confidence to save/update slots |
-| Slot seed blend | `slotseedblend` | 0.70 | Blend ratio when seeding from cached slot |
+`fluxonsetfloor` sweep (v97): F1 plateaus at ~0.54 for floors 0-0.03; 0.01 is best.
 
-### Spectral Pipeline Defaults (v23+)
+### Rhythm
 
-| Component | Parameters | Purpose |
-|-----------|-----------|---------|
-| **Compressor** | thresh=-30dB, ratio=3:1, knee=15dB, makeup=+6dB | Normalize gross signal level |
-| **Mel whitening** | decay=0.97, floor=0.01 (fixed) | Per-band adaptive normalization |
+Factory defaults above. The CI corpus gate (`tracker-harness` job in `.github/workflows/pr-validation.yml`) holds `lock`, tempo and `recall` floors just under the current baseline; raise them when the tracker improves.
 
 ### Known Limitations
 
-| Pattern | Best F1 | Issue | Visual Impact |
-|---------|---------|-------|---------------|
-| machine-drum | ~0.22 | Sub-harmonic lock (~120 BPM vs 240) | Low — half-time still looks rhythmic |
-| trap-electro | ~0.19 | Syncopated kicks challenge causal tracking | Low — energy-reactive mode acceptable |
-| deep-ambience | ~0.40 | Soft ambient onsets below detection threshold | None — organic mode is correct response |
-| pad-rejection | ~0.42 | Pad transitions create sharp flux (~16 FPs) | Low — FPs are on-beat, not random |
-| DnB tracks | varies | Detected at ~117 BPM (half-time of ~170) | Low — half-time looks acceptable |
+- **Bar-length periods phase-lock worse than beat-length ones.** Syncopation-derived candidates (#166) trade a little tempo accuracy for phase lock on purpose.
+- **Breakdowns without percussion:** rhythm outputs fade (by design, "rhythm needs hits").
+- **Weak mic:** music can sit near the mic's noise floor; that's why there is no gate.
+- Open issues: see `docs/OPEN_ISSUES_2026_10_15.md` and GitHub.
 
 ---
 
 ## Historical Test Results
 
-### Pre-Bayesian Baseline (Feb 21, 2026) — BandFlux Solo, beatoffset=5
-
-| Track | On-device F1 | BPM Acc | Transient F1 |
-|-------|:-------:|:-------:|:------------:|
-| trance-party | 0.775 | 0.993 | 0.774 |
-| minimal-01 | 0.695 | 0.959 | 0.544 |
-| infected-vibes | 0.691 | 0.973 | 0.721 |
-| goa-mantra | 0.605 | 0.993 | 0.294 |
-| minimal-emotion | 0.486 | 0.998 | 0.154 |
-| deep-ambience | 0.404 | 0.949 | 0.187 |
-| machine-drum | 0.224 | 0.825 | 0.312 |
-| trap-electro | 0.190 | 0.924 | 0.298 |
-| dub-groove | 0.176 | 0.830 | 0.374 |
-| **Average** | **0.472** | **0.938** | **0.406** |
-
-### Bayesian v22 Combined Validation (Feb 25, 2026) — 4-device validated
-
-Defaults (v22): bayesacf=0.3, bayescomb=0.7, bayesft=0, bayesioi=0, bayeslambda=0.15, cbssthresh=1.0
-
-**Average on-device F1: 0.519** (+10% vs pre-Bayesian 0.472)
-
-### Bayesian v24 (Feb 26, 2026) — FT/IOI re-enabled after spectral processing
-
-Defaults (v24): bayesacf=0.3, bayescomb=0.7, bayesft=2.0, bayesioi=2.0, bayeslambda=0.15, cbssthresh=1.0
-
-FT and IOI re-enabled at weight 2.0 — spectral compressor + whitening (v23) fixed normalization issues that made them unreliable in v22.
-
-### Bayesian v25 (Feb 27, 2026) — BTrack-style harmonic comb ACF + Rayleigh prior
-
-Defaults (v25): bayesacf=0.8, bayescomb=0.7, bayesft=2.0, bayesioi=2.0, bayeslambda=0.07, cbssthresh=1.0
-
-Key changes from v24:
-- **Harmonic comb ACF**: 4-harmonic summation with spread windows replaces single-point ACF observation. Fundamental gets 4x advantage over sub-harmonics.
-- **Rayleigh tempo prior**: Perceptual weighting peaked at ~120 BPM, applied within ACF observation.
-- **ACF weight raised**: 0.3→0.8 — harmonic enhancement makes ACF a reliable signal.
-- **Lambda tightened**: 0.15→0.07 — prevents octave jumps accumulating over hundreds of frames.
-- **Bidirectional disambiguation**: Added 0.5x downward check (was only 2x/1.5x upward).
+The February 2026 tables that used to live here measured **beat** F1 with the CBSS/Bayesian tracker (removed in v73-v80). They don't apply to the current tracker or task. For the calibration history, see `blinky-test-player/PARAMETER_TUNING_HISTORY.md` and `docs/ML_IMPROVEMENT_PLAN.md`.
 
 ---
 
@@ -389,65 +236,34 @@ Key changes from v24:
 
 ### Overview
 
-**Goal:** Validate current v64 firmware defaults and tune parameters for optimal beat tracking and transient detection across diverse music genres.
+**Goal:** check a tracker or onset change on edm/, first on the host, then on a bench device.
 
-### Prerequisites
+### Phase 1: Host baseline
 
-1. 4 devices connected: `/dev/ttyACM0`, `/dev/ttyACM1`, `/dev/ttyACM2`, `/dev/ttyACM3`
-2. USB speakers connected and volume at 100%: `amixer -c 1 set PCM 35`
-3. Quiet testing environment
-4. All devices at factory defaults: `reset_defaults` on each
+1. Build the harness for the old and new code (`tests/tracker/README.md`).
+2. Run `run_tracker_eval.py --harness <new> --compare <old>` on the whole corpus.
+3. Check `recall`, `lock`, `worst20s` and `bpm` per track, at several `--fps` values. The numbers should barely move with fps.
+4. For onset changes, run with the CPU cost model too (`--harness-args --nn-cost-us=... --frame-cost-us=3200 --render-cost-us=4500`) so frame-rate cost shows up.
 
-### Phase 1: Baseline Validation (all 18 tracks)
+### Phase 2: Sweep (if needed)
 
-**Purpose:** Establish v60 performance across the full track library.
+- **Host:** pass overrides through `--harness-args` (positional, `-` keeps the default).
+- **Device:** `POST /api/test/param-sweep` on a bench test device. One device at a time per room: all devices hear the same speaker.
 
-**Method:** Use `run_music_test` MCP tool per track (async — poll with `check_test_result`), one at a time (shared acoustic space — all devices hear same audio). Run full tracks (PLP needs >10s to warm up).
+**Always validate combined defaults after independent sweeps.** Interaction effects are real.
 
-```
-# For each track:
-run_music_test(
-  audio_file: "blinky-test-player/music/edm/<track>.mp3",
-  ground_truth: "blinky-test-player/music/edm/<track>.beats.json",
-  port: "/dev/ttyACM0"
-)
-```
+### Phase 3: Visual check
 
-**Record:** Onset F1, BPM accuracy, transient F1 for each track.
+Watch the fire generator on a bench device with music:
+- one burst per drum hit, hi-hat-dense passages not overly busy,
+- breathing (`plpPulse`) in time,
+- no flicker or jarring jumps.
 
-### Phase 2: Bayesian Weight Tuning (if needed)
+### Phase 4: Ship
 
-Use multi-device parallel sweep to test parameter values:
-
-```bash
-cd blinky-test-player
-npm run tuner -- multi-sweep \
-  --ports /dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2,/dev/ttyACM3 \
-  --params bayesacf --duration 30
-```
-
-**Key parameters to sweep** (in priority order):
-1. `cbssthresh` — Most impactful single parameter (0.5, 0.8, 1.0, 1.2)
-2. `bayescomb` — Primary observation weight (0.5, 0.7, 1.0)
-3. `bayesacf` — Sub-harmonic prevention (0.0, 0.3, 0.5, 1.0)
-4. `bayesft` / `bayesioi` — Secondary observations (0, 1.0, 2.0, 3.0)
-
-**CRITICAL:** Always validate combined defaults after independent sweeps — interaction effects are real (bayesacf=0 looked optimal independently but caused half-time lock when combined).
-
-### Phase 3: Output Modulation (visual tuning)
-
-**Parameters:** `pulseboost`, `pulsesuppress`, `energyboost`
-
-Visual inspection of fire effect with beat-synced music:
-- On-beat sparks visibly brighter
-- Off-beat transients subdued but visible
-- No visual jarring/flickering
-
-### Phase 4: Save and Verify
-
-1. Save settings on each device: `save`
-2. Run validation pass on 3-5 tracks to confirm
-3. Update documentation with new baseline
+1. Change the default in `config/ConfigStorage.cpp` (and the member default in `audio/AudioTracker.h`, so the harness matches).
+2. If a stored struct changed, bump `SETTINGS_VERSION` and its `static_assert`.
+3. Merge, then cut and gate a release (`docs/RELEASE_PROCESS.md`). Don't `set`/`save` on fleet devices.
 
 ---
 
@@ -455,76 +271,78 @@ Visual inspection of fire effect with beat-synced music:
 
 ### No Audio Detection
 
-1. Check `stream on` shows audio data (PDM working)
-2. Verify hardware gain is reasonable (20-60 range): `show gain`
-3. Check raw level rises with sound
-4. Check NN status: `show nn`
+1. `stream on` (or `monitor_audio`) and check the level moves with sound.
+2. `show spectral` for the spectral state; `show beat` for pulse and onset density.
+3. `show nn` should say the NN is disabled by build on devices; that's expected.
+4. `show errors` for the assert-fail count.
 
 ### Too Many False Positives (pulse/spark effects)
 
-1. Pulse detection uses ODF threshold against running mean — check if NN model is producing clean activations
-2. Check AGC is tracking properly: `show gain`
-3. Retrain model with cleaner labels if persistent
+1. Raise `fluxonsetfloor` or `pulsethreshmult` on a bench device and re-run the edm/ validation.
+2. Check the flux band weights (`bassflux`/`midflux`/`highflux`); high-band weight lets hi-hats through.
 
 ### Missing Transients
 
-1. Check AGC is tracking properly: `show gain`
-2. Verify NN model is loaded and producing activations: `show nn`
-3. Check mel calibration — training target_rms_db must match firmware AGC levels
+1. Lower `fluxonsetfloor` or `pulsethreshmult`.
+2. Check `pulseminlevel` isn't blocking quiet input.
+3. Check the mic level isn't near zero (weak mic or blocked enclosure holes).
 
 ### Rhythm Not Locking
 
-1. Verify steady beat in audio
-2. Check `musicthresh` isn't too high (try 0.3)
-3. Ensure BPM is within `bpmmin`/`bpmmax` range
-4. Allow 10+ seconds for PLP to converge
-5. Check tempo: `show beat` or `get_beat_state` MCP tool
+1. Verify the audio has percussion: rhythm outputs fade 2-4 s after the last onset.
+2. Allow ~10 s: the ACF needs 1.6 s of warm-up and several epochs for a good fold.
+3. Check `show beat` (BPM, periodicity, PLP confidence, source).
 
-### BPM Detected at Half-Time (e.g., 170 BPM → 85 BPM)
+### BPM Detected at Half- or Double-Time
 
-1. v25 added BTrack-style harmonic comb ACF + Rayleigh prior to prevent this
-2. Per-sample ACF harmonic disambiguation handles most cases (2x, 1.5x, and 0.5x checks)
-3. Tighter lambda (0.07) makes octave jumps near-impossible once locked
-4. For DnB (170+ BPM): Half-time detection is expected and visually acceptable
-5. **DO NOT** enable ongoing static prior (`bayespriorw`) as a fix — it hurts tracks far from the prior center
-
-### Phantom Beats During Silence/Breakdowns
-
-1. Increase `cbssthresh` (try 1.2-1.5) — higher threshold rejects weak CBSS peaks
-2. **NEVER** lower cbssthresh below 0.8 when FT/IOI weights > 0.5 (catastrophic failure)
-3. Check that `odfmeansub` is OFF (v32: raw ODF preserves ACF structure, +70% F1)
-
-### FT/IOI Causing Problems
-
-FT and IOI are **disabled by default** since v28 (`bayesft=0`, `bayesioi=0`). No reference system uses these for real-time beat tracking. If re-enabled for experimentation:
-1. Disable them: `set bayesft 0` and `set bayesioi 0`
-2. Ensure `cbssthresh >= 1.0` before increasing FT/IOI weights
-3. FT and IOI depend on spectral processing — if compressor/whitening are disabled, disable FT/IOI too
+Expected and often fine: the tracker picks the period with the best pattern, not the "true" BPM. For DnB (170+ BPM), half-time is normal.
 
 ### Serial Commands Reference
 
 ```bash
-show beat          # CBSS beat tracker state (BPM, phase, confidence)
-show nn            # NN model status (ready, arena usage, channels)
-json beat          # Beat tracker state as JSON
-json rhythm        # Full rhythm tracking state as JSON
+show beat          # Tracker state (BPM, phase, periodicity, PLP, pulse, onset density)
+show nn            # NN status (disabled by build on devices)
+show spectral      # Spectral analysis state
+json beat          # Tracker state as JSON (alias: json rhythm)
 json settings      # All settings as JSON
 stream on          # Start audio streaming (~20 Hz)
-stream fast        # Start fast audio streaming
+stream fast        # Fast audio streaming (~100 Hz)
 stream off         # Stop streaming
+restore_runtime_settings  # Factory settings (old name: defaults)
 ```
 
 **MCP Tools:**
-- `get_beat_state` — BPM, phase, confidence, periodicity, beatCount, stability
-- `monitor_audio` — Audio levels, transient count, music mode status
-- `monitor_transients` — Raw transient detection stats
-- `monitor_music` — BPM tracking accuracy over duration
-- `run_test` — Play pattern and record detections
-- `run_music_test` — Full track evaluation with ground truth
+- `get_music_status` — rhythm/music state
+- `monitor_audio` — audio levels over a duration
+- `monitor_transients` — transient detection stats
+- `run_test` / `run_validation_suite` — track evaluation via blinky-server (async; poll `check_test_result`)
+- `get_settings` / `set_setting` / `reset_defaults` — settings (bench devices)
 
 ---
 
 ## Appendix: Removed Parameters
+
+**If you see these parameters in old documentation, ignore them. They have been removed from firmware and testing tools.**
+
+### Removed in SETTINGS_VERSION 67-98 (AudioTracker era)
+
+| Old Parameter | Old Component | Reason |
+|---------------|---------------|--------|
+| `enscooldown`, `ensminconf`, `ensminlevel` | EnsembleDetector | BandFlux/Ensemble pipeline removed (v67) |
+| `odfsmooth`, `odfmeansub`, `combbankenabled`, `combbankfeedback`, `autocorrperiod`, `ft`, `ioi` | AudioController | Replaced by AudioTracker (v73-v80) |
+| `cbssalpha`, `cbsstight`, `cbssthresh`, `beatconfdecay`, `beatoffset`, `phasecorr` | CBSS beat tracker | Removed with AudioController |
+| `musicthresh`, `pulseboost`, `pulsesuppress`, `energyboost` | Output modulation | Removed with AudioController |
+| `bayeslambda`, `bayesprior`, `bayespriorw`, `priorwidth`, `bayesacf`, `bayesft`, `bayescomb`, `bayesioi` | Bayesian tempo fusion | Removed with AudioController |
+| `densityoctave`, `octavecheck`, `octavecheckbeats`, `octavescoreratio` | Octave disambiguation | Removed with AudioController |
+| `stabilitywin`, `lookahead`, `tempochgthresh` | AudioController | Removed |
+| `hwtarget`, `fastagc`, `fastagcthresh`, `fastagcperiod`, `fastagctau` | AGC | AGC removed (v72) |
+| `compenabled`, `compthresh`, `compratio`, `compknee`, `compmakeup`, `compattack`, `comprelease` | Spectral | No longer serial settings (code constants) |
+| `pll`, `pllkp`, `pllki`, `onsetSnapWindow` | PLL | Replaced by PLP (v80) |
+| `rayleighBpm`, `combFeedback`, `percival2`, `percival4` | Comb bank / Percival ACF | Removed (v80) |
+| `odfgate` | Onset information gate | Removed |
+| `pulseNNGate` | Pulse detection | Dead since b114; slot became `fluxonsetfloor` (v97) |
+| `noisegate` | AdaptiveMic | Added v96, removed v98: a fixed gate silences quiet music on this mic |
+| `cooling`, `sparkchance`, `sparkheatmin`, `sparkheatmax`, `audiosparkboost`, `coolingaudiobias`, `bottomrows`, `suppressionms`, `heatdecay`, `emberheatmax`, `spreaddistance`, `embernoisespeed`, `musicemberpulse`, `musicsparkpulse`, `musiccoolpulse` | Old heat-diffusion Fire | Replaced by the particle/heightmap Fire |
 
 ### Removed in SETTINGS_VERSION 18-24 (Bayesian Fusion, Feb 2026)
 
@@ -547,8 +365,8 @@ stream off         # Stop streaming
 | `hyfluxwt` | TransientDetector | Hybrid mode replaced by ensemble architecture |
 | `hydrumwt` | TransientDetector | Hybrid mode replaced by ensemble architecture |
 | `hybothboost` | TransientDetector | Hybrid mode replaced by ensemble architecture |
-| `hpsEnabled` | AudioController | HPS tested and rejected (Feb 2022) |
-| `pulseTrainEnabled` | AudioController | Pulse train tested and rejected (Feb 2022) |
+| `hpsEnabled` | AudioController | HPS tested and rejected (Feb 2026) |
+| `pulseTrainEnabled` | AudioController | Pulse train tested and rejected (Feb 2026) |
 | `pulseTrainCandidates` | AudioController | Pulse train tested and rejected |
 | `combCrossValMinConf` | AudioController | Comb bank now feeds Bayesian fusion directly |
 | `combCrossValMinCorr` | AudioController | Comb bank now feeds Bayesian fusion directly |
@@ -571,11 +389,7 @@ stream off         # Stop streaming
 | `fwdphase` | Forward Phase | Removed with forward filter |
 | `templatecheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
 | `subbeatcheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
-| `noiseest` | Noise Estimation | A/B tested, hurts BPM accuracy — default OFF (settings still exposed) |
-| `noisesmooth` | Noise Estimation | Default OFF with noise estimation |
-| `noiserelease` | Noise Estimation | Default OFF with noise estimation |
-| `noiseover` | Noise Estimation | Default OFF with noise estimation |
-| `noisefloor` | Noise Estimation | Default OFF with noise estimation |
+| `noiseest`, `noisesmooth`, `noiserelease`, `noiseover`, `noisefloor` | Noise Estimation | Off by default; no longer serial settings |
 | `adaptight` | Adaptive Tightness | Removed (dead code) |
 | `percival` | Percival Harmonic | Removed (dead code) |
 | `bisnap` | Bidirectional Snap | Removed (dead code) |
@@ -617,5 +431,3 @@ stream off         # Stop streaming
 | `rhythminterval` | RhythmAnalyzer | Replaced by `autocorrperiod` |
 | `beatthresh` | RhythmAnalyzer | Replaced by `musicthresh` |
 | `minperiodicity` | RhythmAnalyzer | Merged into `musicthresh` logic |
-
-**If you see these parameters in old documentation, ignore them. They have been removed from both firmware and testing tools.**

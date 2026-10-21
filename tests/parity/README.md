@@ -12,16 +12,27 @@ the authoritative computation and forces the Python reference to track it.
 
 ## What's tested
 
-- `SharedSpectralAnalysis::computeShapeFeaturesRaw()` — centroid, crest,
-  rolloff, HFC on pre-compressor magnitudes.
+- The firmware's pre-compressor feature chain (`runRawFeaturesForTest()`,
+  which includes `computeShapeFeaturesRaw()`) on injected magnitudes:
+  centroid, crest, rolloff, HFC, flatness and raw flux. Each must match
+  Python within a tight MAE tolerance.
+- The harness also writes the mel bands, but `run_parity_test.py` does not
+  compare them; mel parity is checked by `ml-training/scripts/validate_features.py`.
 
 Not yet tested (open follow-ups):
 - FFT (firmware uses CMSIS-DSP / arduinoFFT; Python uses numpy). Feeding
   the same magnitudes to both code paths bypasses this difference —
   acceptable because the FFT is well-trodden infrastructure, not the part
   we wrote.
-- Compressor / whitening / mel bands / spectral flatness on compressed mags.
+- Compressor / whitening on compressed mags.
   Add in future rounds if those features enter the shortlist.
+
+## CI
+
+Not run in CI. The `Feature Parity` job in
+`.github/workflows/pr-validation.yml` runs only the Python side's unit tests
+(`python -m analysis.test_shape_features` in `ml-training/`). Run this
+harness locally when you change the feature math on either side.
 
 ## Build
 

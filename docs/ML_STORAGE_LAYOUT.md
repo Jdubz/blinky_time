@@ -1,6 +1,6 @@
 # ML Training Storage Layout
 
-**Last updated:** 2026-05-02
+**Last updated:** 2026-10-21 (layout unchanged since 2026-05-02)
 
 This doc is the authoritative reference for where ML training data lives, why it lives there, and how prep + training use disk. The layout is designed so disk-full failures during prep stop being possible at the workloads we currently run.
 
@@ -63,7 +63,10 @@ Without this, the kernel would idle-suspend the bridge during long sequential re
 | Path | Content | Tier |
 |------|---------|------|
 | `/mnt/storage/blinky-ml-data/audio/combined/` | Symlinked union of all audio corpora (FMA, GiantSteps, EDM test set excluded) | Warm |
-| `/mnt/storage/blinky-ml-data/labels/onsets_consensus/` | Onset labels (the actual training target — see CLAUDE.md "Task is Onset Detection") | Warm |
+| `/mnt/storage/blinky-ml-data/labels/onsets_consensus/` | 5-system onset consensus labels (`base.yaml` default `labels_dir`; see CLAUDE.md "Task is Onset Detection") | Warm |
+| `/mnt/storage/blinky-ml-data/labels/kick_weighted_drums/`, `kick_weighted_clean/` | Kick/snare onset labels from drum stems. v33 trained on `kick_weighted_drums`; v34d and v36 on `kick_weighted_clean` | Warm |
+| `/mnt/storage/blinky-ml-data/labels/onsets_human/` | Hand edits from `tools/label-reviewer/`, overlaid on the consensus labels at prep time | Warm |
+| `/mnt/storage/blinky-ml-data/labels/_archive_beats_2026_04_29/` | Archived BEAT consensus (`consensus_v*`). Never a training input; `prepare_dataset.py` refuses these paths | Warm |
 | `/mnt/storage/blinky-ml-data/rir/processed/` | Room impulse responses for augmentation | Warm |
 | `/mnt/storage/blinky-ml-data/noise/` | Background noise clips for SNR mixing | Warm |
 | `/mnt/storage/blinky-ml-data/stems_archive/` | Demucs-separated stems (cold archive, was on `/`) | Warm |
@@ -91,7 +94,7 @@ Without this, the kernel would idle-suspend the bridge during long sequential re
 peak_gb ≈ 150 × (n_mels/30) × (n_files/6732) × (chunk_frames/128) + 30 GB scratch
 ```
 
-For the current v36 config (30 mel, 6732 files, 128 chunk): **~180 GB estimated, ~217 GB actual measured peak** for the final arrays. Add ~150 GB of train shards on disk during merge: **~370 GB true peak**.
+The formula is a deliberately high upper bound. Example: `processed_v36` (80 mel, 128-frame chunks; 4.77M chunks vs v33's 7.18M after clean-label filtering) measured **~217 GB** for the final arrays. Add ~150 GB of train shards on disk during merge: **~370 GB true peak**. For 80 mel at the full 6732 files the formula asks for ~430 GB free, so the precheck may refuse an 80-mel prep on this pool even when the real peak would fit.
 
 The pool's 462 GB capacity is sized for this with ~92 GB headroom for one prep run. **Two concurrent preps will not fit** — that's by design; sequential is fine.
 
@@ -134,7 +137,7 @@ The pool goes read-only or unresponsive; training crashes with I/O errors. Recov
 
 1. Replug the disconnected enclosure.
 2. `sudo lvchange -ay nvme/data && sudo mount /mnt/nvme`
-3. Resume training from the last checkpoint in `outputs/<run-name>/training_checkpoint.pt`.
+3. Re-run the same `train.py` command with the same `--output-dir`. `train.py` resumes on its own from `outputs/<run-name>/training_checkpoint.pt` when that file exists. Run it in tmux (`train.py` refuses to start outside tmux/screen).
 
 If a drive truly fails (vs. flaky cable/hub), the pool is degraded — `pvs` shows the missing PV. Re-format the replacement, `pvcreate`, `vgextend`, then re-prep (data on the failed PV is regenerable; data on the surviving PV is fine but re-prep is simpler than partial recovery).
 

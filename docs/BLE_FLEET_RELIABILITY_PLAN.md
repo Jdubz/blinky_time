@@ -5,6 +5,16 @@ item is an independent change with its own scope, expected impact, and file
 list. Pick them up in priority order; each lands a measurable improvement
 on its own without depending on later items.
 
+**Status (2026-10-21):** items 1, 2, 3 and 5 are shipped. What's left:
+- **#221:** measure gossip-ACK command delivery across the full fleet at
+  range (item 5's field validation).
+- **#190:** measure fleet-scanner broadcast reception while a central is
+  connected.
+- **#173:** NUS commands run in the BLE callback task, concurrently with
+  loop-task output.
+- **Item 4** (broadcaster dongle) stays an optional experiment; only if
+  #221 shows a real miss rate.
+
 ## What's already shipped (May 18, 2026)
 
 Two server-side fixes are in production:
@@ -17,6 +27,8 @@ Two server-side fixes are in production:
   `set`, `save`, `load`) tolerate up to 5 applications. Measured impact:
   cart_inner BLE `packets_rx` per 3-command burst went from `+1` (pre-
   fix, ~17% per-emit reception) to `+9` (~60%).
+  Since item 2 (command-id idempotency) shipped, re-emits are free, and
+  the count is now 10 (`COMMAND_REEMIT_COUNT = 10`, 2.5 s of air time).
 
 - **`MinInterval=50` / `MaxInterval=100`** D-Bus properties on the
   advertisement (commit `a8294f31` — same file). BlueZ default is
@@ -167,9 +179,9 @@ land this without measuring the win first.
 last accepted COMMAND_V2 `command_id` in scan-response manufacturer
 data) landed in commit `699c3025`. Phase 2 (server: discovery
 extracts the ACK, FleetBroadcaster re-emits the cached last command
-for any laggard) lands in this PR. Per-device retry capped at
+for any laggard) landed 2026-05-19. Per-device retry capped at
 `REBROADCAST_MAX_ATTEMPTS = 3` and resets on every fresh
-`broadcast_command`. Field validation pending.
+`broadcast_command`. Field validation is still open (#221).
 
 **Scope:** each device's BLE advertisement already carries
 manufacturer-data via NUS. Piggyback `last_applied_command_id` as a
@@ -212,9 +224,13 @@ Each item should be measured against the bench setup before/after:
 3. Note post-change diagnostics. Compare `packets_rx`, `dropped`,
    `duped` deltas.
 4. Verify the LAST commanded generator landed on EVERY device
-   (carts via `POST /api/devices/<id>/command {"command":"gen"}`,
-   big_bucket via direct NUS query — see `/tmp/big_bucket_query.py`
-   from the May 18 debug session for the pattern).
+   (via `POST /api/devices/<id>/command {"command":"gen"}`, a
+   read-only query; devices not connected to the server need a direct
+   NUS query).
+
+Only read-only commands belong in this loop. Device-mutating commands
+(`device upload`, `reboot`, `wipe_device_identity`) are deploy.sh-gated
+and must not be scripted (CLAUDE.md).
 
 The user-visible success criterion is that every fleet command
 applies to every device within a single 5-command burst, with no

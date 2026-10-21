@@ -25,11 +25,15 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 
 ## CRITICAL: Only stable releases reach fleet and new devices
 
-**Fleet and new devices get the latest *stable* GitHub release, never a local build.** See `docs/RELEASE_PROCESS.md`. The flow:
-1. Merge to master.
+**Fleet and new devices get the latest *stable* GitHub release, never a local build.** See `docs/RELEASE_PROCESS.md`.
+
+**Releases are vetted checkpoints the owner selects.** A merge to master never triggers or implies one. Cut a candidate only when the owner asks for a release.
+
+The flow, when the owner asks:
+1. The chosen commit is on master, with CI green.
 2. `gh workflow run release.yml` builds a **candidate** (a pre-release `bN`) with the pinned toolchain.
-3. `tools/release_gate.py bN` bench-gates it on a test device: version, fps, 5 min stability, asserts, music, operator confirmation.
-4. `tools/release_promote.py bN` makes it **stable**.
+3. `tools/release_gate.py bN` bench-gates it on a test device: version, fps (≥ 60), 5 min stability, asserts, music, operator confirmation.
+4. `tools/release_promote.py bN` has CI sign it (after the gate), then makes it **stable** and *Latest*.
 
 **Firmware that isn't stable** (candidates, and `--dev` builds of a clean tree, versioned `bN-dev-<sha>`) goes to exactly one device listed in `devices/test_devices.json`. The deploy tools refuse every other device. Never flash an uncommitted or unreleased build to any other device "just to try it": that is how b210 (12 fps) and b211 (silent mic) reached the hat.
 
@@ -47,7 +51,7 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 
 Use `--dry-run` first. If an identity check refuses the drive, the bootloader times out back to the old app on its own.
 
-**A personal device, from a browser (anyone, no repo):** `blinky-time.joshwentworth.com/#firmware` (blinky-console `FirmwarePage`; live since 2026-10-20, USB only. The Firebase deploy sets `VITE_FIRMWARE_UPDATES=on`, and removing that is the kill switch). It installs **stable releases only**, through the device's **signed OTA** path over USB (Web Serial; Bluetooth/NUS is built but hidden, `BLE_UPDATES_ENABLED`, until it passes on hardware): an Ed25519-signed manifest, then the image staged in QSPI while the old firmware runs, then `ota commit` (re-verified) and the bootloader installs it. It runs deploy_local.py's gates in the browser, except the uptime holds: it waits for 75 s of uptime (not 5 min 15 s) before resetting, since signed OTA only runs on b215+, whose reboot counter counts only fault resets (not the soft reset `ota commit` ends in); it watches the first 75 s after an update in the background instead of blocking. Don't weaken a gate in `blinky-console/src/services/firmware/` or `blinky-things/ota/` without changing the matching Python tool first. It is not a fleet-ops tool; use deploy.sh for the fleet. Design, bench results, rollout checklist and open items: `docs/WEB_FLASHER.md`.
+**A personal device, from a browser (anyone, no repo):** `blinky-time.joshwentworth.com/#firmware` (blinky-console `FirmwarePage`; live since 2026-10-21 (PR #266), USB only. The Firebase deploy sets `VITE_FIRMWARE_UPDATES=on`, and removing that is the kill switch). It installs **stable releases only**, through the device's **signed OTA** path over USB (Web Serial; Bluetooth/NUS is built but hidden, `BLE_UPDATES_ENABLED`, until it passes on hardware): an Ed25519-signed manifest, then the image staged in QSPI while the old firmware runs, then `ota commit` (re-verified) and the bootloader installs it. It runs deploy_local.py's gates in the browser, except the uptime holds: it waits for 75 s of uptime (not 5 min 15 s) before resetting, since signed OTA only runs on b215+, whose reboot counter counts only fault resets (not the soft reset `ota commit` ends in); it watches the first 75 s after an update in the background instead of blocking. Don't weaken a gate in `blinky-console/src/services/firmware/` or `blinky-things/ota/` without changing the matching Python tool first. It is not a fleet-ops tool; use deploy.sh for the fleet. Design, bench results, rollout checklist and open items: `docs/WEB_FLASHER.md`.
 
 **Release signing key:** the private key is the secret `BLINKY_RELEASE_SIGNING_KEY` of the GitHub environment `release-signing` (branch policy: `master` only, so no other branch's workflow can read it; never make it a repository secret), used only by `sign-release.yml`, plus the maintainer's offline backup. **Only gated releases are signed:** every device installs a validly signed newer build, so `release_promote.py` has CI sign a release only after its bench gate passes; candidates are never signed. Its public half is compiled into the firmware (`blinky-things/ota/OtaKeys.h`); `firmware_release.py sign` refuses any other key. Never sign a dev or test build with it: bench the update path with `scripts/build.sh --dev --ota-bench-key` and the bench key (`~/.blinky/ota-bench-key.pem`). Losing the release key means devices can never accept a signed update again; rotating it means shipping, signed with the old key, a firmware that carries the new public key.
 
@@ -228,7 +232,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
 | `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | Published onset/drum-detection systems with F1 numbers, architectures, label sources — quote this before claiming "the literature says X" |
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
-| `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern |
+| `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern; animations keep absolute time (`FrameClock`, physics substeps) |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
 | `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
 | `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, I2S speaker, camera, test chips with SWD via Pi Zero W; enclosure construction, calibration, acceptance gates |
@@ -236,7 +240,8 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/RELEASE_PROCESS.md` | Firmware release channels (stable / candidate / dev), cutting, gating, promoting and rolling back releases |
-| `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`) via signed QSPI OTA over USB/Bluetooth: signing, release mirror, checks, bench results, rollout checklist, open items |
+| `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`, live, USB only) via signed QSPI OTA: signing, release mirror, checks, bench results, rollout checklist, open items |
+| `docs/WEB_UPDATE_RESEARCH_2026_10.md` | Why browser updates go through the running app, not the bootloader: what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist) |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
 | `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open-issues index; GitHub issues are the system of record. Covers the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, CI), the PR #152 device checklist, and (§8) the items carried over from the archived `docs/archive/OPEN_ISSUES_2026_05_20.md` (SWD recovery, BLE-DFU tooling, fleet ops). |

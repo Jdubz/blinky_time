@@ -10,10 +10,11 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 ### Prerequisites
 
-- Arduino IDE 2.0+ or arduino-cli
-- Seeeduino nRF52 Board Package installed
-- Access to compatible hardware for testing (recommended)
-- Git for version control
+- Git, Python 3 and bash (Git Bash on Windows)
+- The pinned build toolchain: run `bash scripts/setup_toolchain.sh` once. It installs the arduino-cli core, libraries, TFLite and core patches pinned in `tools/firmware_toolchain.json` into `.arduino/`. Don't install libraries anywhere else to "fix" a build.
+- A test device for hardware testing (recommended). Test devices are listed in `devices/test_devices.json`.
+
+**Read [CLAUDE.md](CLAUDE.md) before touching hardware.** It holds the flashing and release rules. In short: never use `arduino-cli upload`, the Arduino IDE Upload button or `adafruit-nrfutil dfu serial` on the nRF52840.
 
 ### Development Setup
 
@@ -22,24 +23,17 @@ By participating in this project, you agree to maintain a respectful and inclusi
    ```bash
    git clone https://github.com/YOUR_USERNAME/blinky_time.git
    cd blinky_time
+   bash scripts/setup_toolchain.sh
    ```
-3. **Set up branches** (run once):
+3. **Create a feature branch** from master:
    ```bash
-   # Windows
-   scripts/setup-branches.ps1
-   
-   # macOS/Linux  
-   bash scripts/setup-branches.sh
+   git checkout master
+   git pull origin master
+   git checkout -b fix/your-change
    ```
-4. **Create a feature branch** from develop:
-   ```bash
-   git checkout develop
-   git pull origin develop
-   git checkout -b feature/your-feature-name
-   ```
-5. **Make your changes** and test thoroughly
-6. **Commit and push** your changes
-7. **Submit a pull request** to the appropriate branch (see Workflow below)
+4. **Make your changes**, compile with `./scripts/build.sh`, and test
+5. **Commit and push** your changes
+6. **Open a pull request to `master`** (see Workflow below)
 
 ## 📝 Contribution Types
 
@@ -55,8 +49,7 @@ We welcome various types of contributions:
 ### Documentation
 - README improvements
 - Code comments and documentation
-- Wiki contributions
-- Example projects and tutorials
+- Example code
 
 ### Testing
 - Hardware compatibility testing
@@ -72,7 +65,7 @@ We welcome various types of contributions:
 
 ### Code Style
 
-- **Indentation**: 2 spaces (no tabs)
+- **Indentation**: match the file (4 spaces in most of `blinky-things/`; no tabs)
 - **Naming**: Use camelCase for variables and functions, PascalCase for classes
 - **Comments**: Document complex algorithms and hardware-specific code
 - **Line Length**: Keep lines under 100 characters when practical
@@ -80,9 +73,10 @@ We welcome various types of contributions:
 ### File Organization
 
 - **Main sketch**: `blinky-things/blinky-things.ino`
-- **Libraries**: Separate `.cpp/.h` files in main directory
-- **Configurations**: Device-specific configs in `devices/` directory
-- **Documentation**: Additional docs in `docs/` directory
+- **Firmware code**: subfolders of `blinky-things/` (see [blinky-things/README.md](blinky-things/README.md)). A new `.cpp` in a subfolder must be added to `BlinkyImplementations.h`, or Arduino won't compile it.
+- **Device configs**: JSON files in `devices/registry/` (uploaded at runtime, not compiled in)
+- **Documentation**: Additional docs in `docs/` directory (index: [docs/README.md](docs/README.md))
+- **No silent fallbacks**: invalid state must fail loudly (see CLAUDE.md, "No Silent Fallbacks")
 
 ### Commit Messages
 
@@ -96,70 +90,38 @@ test: add battery monitoring validation
 
 ## 🧪 Testing
 
+### Automated Tests
+
+Every pull request runs `.github/workflows/pr-validation.yml`: compile with the pinned toolchain, cppcheck, host tests (OTA manifest, absolute timing, tracker harness), blinky-server and blinky-console tests, and more. See [TESTING.md](TESTING.md) and [tests/README.md](tests/README.md) for running them locally.
+
 ### Hardware Testing
 
 When contributing code changes:
 
-1. **Test on actual hardware** when possible
-2. **Verify all device types** if changes affect core functionality
-3. **Check battery management** features with real battery usage
-4. **Validate audio responsiveness** with various audio inputs
+1. **Test on a test device** listed in `devices/test_devices.json`. Flash it with `python tools/deploy_local.py --port <port> --device-id <id> --dev` (a dev build of a clean, committed tree).
+2. **Never flash a dev build to any other device.** Only stable releases go to fleet and personal devices ([docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
+3. **Leave at least 60 s of uptime between resets** (see CLAUDE.md, "60-second rule").
+4. **Validate audio responsiveness** on the validation corpus (`blinky-test-player/music/edm/`).
 
 ### Testing Checklist
 
-- [ ] Code compiles without warnings
-- [ ] Fire effect displays correctly
+- [ ] `./scripts/build.sh` compiles without warnings
+- [ ] Generators display correctly
 - [ ] Audio responsiveness works as expected
-- [ ] Battery monitoring functions properly
+- [ ] Battery monitoring works (battery-powered devices)
 - [ ] Serial console commands respond correctly
 - [ ] LED colors and brightness are accurate
 
-## � Branching Workflow
+## 🌿 Branching Workflow
 
-We use a three-branch workflow for organized development:
+All work branches from `master` and merges back to `master` by pull request. There is no `develop` or `staging` flow any more. See [.github/BRANCHING_STRATEGY.md](.github/BRANCHING_STRATEGY.md).
 
-### Branch Types
+- **`master`** - Integration branch. PRs need the required CI checks to pass.
+- **`fix/...`, `feat/...`, `docs/...`** - Short-lived branches, one change each.
 
-- **`master`** - Production-ready code, automatically releases
-- **`staging`** - Integration testing, pre-releases for validation  
-- **`develop`** - Active development, feature integration
-- **`feature/xyz`** - Individual features and bug fixes
+Merging to master does **not** ship firmware. A release is a separate step: CI builds a candidate from master, it is bench-gated on a test device, then promoted to stable ([docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
 
-### Contribution Workflow
-
-1. **Feature Development**:
-   ```bash
-   git checkout develop
-   git pull origin develop
-   git checkout -b feature/your-feature
-   # Make changes, commit, push
-   # Create PR to develop
-   ```
-
-2. **Integration Testing**:
-   ```bash
-   # After feature is merged to develop
-   git checkout staging
-   git merge develop  # or create PR
-   # Automatic staging release created
-   # Test staging release on hardware
-   ```
-
-3. **Production Release**:
-   ```bash
-   # When staging is validated
-   # Create PR from staging to master
-   # After merge: automatic production release
-   ```
-
-### PR Target Guidelines
-
-- **Feature/Bug PRs** → `develop` branch
-- **Integration PRs** → `staging` branch (from develop)
-- **Release PRs** → `master` branch (from staging only)
-- **Hotfix PRs** → `master` branch (emergency fixes)
-
-## �📋 Pull Request Process
+## 📋 Pull Request Process
 
 ### Before Submitting
 
@@ -183,9 +145,7 @@ Brief description of the changes and their purpose.
 - [ ] Documentation update
 
 ## Hardware Tested
-- [ ] Hat Configuration
-- [ ] Tube Light Configuration  
-- [ ] Bucket Totem Configuration
+- [ ] Test device (which one, which build)
 - [ ] No hardware testing required
 
 ## Testing
@@ -207,21 +167,21 @@ If applicable, add visual documentation of your changes.
 ### Before Reporting
 
 1. **Search existing issues** to avoid duplicates
-2. **Test with latest code** from the main branch
+2. **Test with the latest stable release** (or current `master`)
 3. **Isolate the problem** to specific conditions
 
 ### Bug Report Template
 
 ```markdown
 **Hardware Configuration**
-- Device Type: [Hat/Tube Light/Bucket Totem]
+- Device ID: [e.g. hat_v1, from `json info`]
 - Board: [nRF52840 XIAO Sense]
 - LEDs: [Count and type]
 - Power: [Battery/USB/External]
 
 **Software Environment**
-- Arduino IDE Version: 
-- Library Versions:
+- Firmware version: [e.g. b214, from `json info`]
+- Bootloader version (if relevant):
 - Operating System:
 
 **Description**
@@ -262,10 +222,7 @@ We encourage feature suggestions! Please include:
 
 ## 🏷 Versioning
 
-This project follows semantic versioning:
-- **Major** (X.0.0): Breaking changes to device configurations or APIs
-- **Minor** (0.X.0): New features, device support, or significant improvements
-- **Patch** (0.0.X): Bug fixes and minor improvements
+Firmware is versioned by build number: `bN` for releases, `bN-dev-<sha>` for dev builds. The release workflow assigns `N`; `scripts/build.sh` writes it into `types/Version.h`. The saved-settings format has its own `SETTINGS_VERSION` (`config/ConfigStorage.h`); bumping it resets saved tuning on every device, so call it out in the PR. See [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
 
 ## 📄 License
 
@@ -273,7 +230,7 @@ By contributing to this project, you agree that your contributions will be licen
 
 ## 📞 Questions?
 
-- **General questions**: Use GitHub Discussions
+- **General questions**: Use GitHub Issues
 - **Bug reports**: Use GitHub Issues
 - **Feature requests**: Use GitHub Issues with "enhancement" label
 

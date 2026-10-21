@@ -1,5 +1,19 @@
 # Beat/Tempo/Phase Tracking Algorithm Comparison
 
+> **Reference only (note added 2026-10-21).** This doc compares ways to get tempo and
+> phase *from* an onset signal, for the visualizer's animation clock. It is not about
+> training. The project does **onset detection**, not beat detection (see "Task is
+> Onset Detection" in the repo's `CLAUDE.md`): beat-tracker outputs (madmom, Beat This!,
+> BeatNet, allin1, etc.) must never be used as training labels or eval ground truth.
+>
+> Its "current firmware" parts are out of date. They describe the old
+> `AudioController.cpp` CBSS / comb-filter / Bayesian-fusion tracker, which no longer
+> exists. The firmware now uses `blinky-things/audio/AudioTracker` (multi-source ACF for
+> the period, PLP for the pattern, `PhaseClock` for the phase). See
+> `docs/AUDIO_ARCHITECTURE.md`. Onsets on devices come from spectral flux; the onset
+> NN is built off (`BLINKY_ONSET_NN_ENABLED=0`), so the "NN onset activation" input
+> below is not what devices use today.
+
 **Target:** Cortex-M4F @ 64 MHz, 256 KB RAM, <1ms per frame at 62.5 Hz
 **Input:** NN onset activation signal (0-1, kicks/snares only) at 62.5 Hz
 **Outputs:** BPM (60-200), phase ramp (0->1 sawtooth), onset pulse (transient events)

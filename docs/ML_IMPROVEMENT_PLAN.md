@@ -1,5 +1,47 @@
 # ML Training Improvement Plan
 
+## Current status (checked against the code 2026-10-21) — read this first
+
+**What the firmware embeds.** `blinky-things/audio/frame_onset_model_data.h` is the **v33** export (`configs/conv1d_w16_onset_v33_mel_only.yaml`: Conv1D [32, 32], kernel 5, 16-frame window, 50 mel, 30–8000 Hz, `kick_weighted_drums` labels; SHA prefix `fa087e0a364640ab`, same bytes as `frame_onset_model_data_v33_mel_only.h`). From 2026-05-13 the active header was the 80-mel v36 export, which the 50-mel firmware refused, so no device ran the NN (#162, closed). v33 was restored in `9bca439a`. CI now runs `tools/check_model_input.py`, which fails the build on a model the firmware would refuse.
+
+**The onset NN is OFF on devices.** Device builds set `BLINKY_ONSET_NN_ENABLED=0` (`blinky-things/audio/AudioTracker.h`, since `75c2c8e9`, 2026-10-19). Onsets come from spectral flux (`fluxonsetfloor`, default 0.01). `show nn` reports the NN as disabled by build. The reason, measured on edm/ against `.onsets_consensus.json` (±50 ms) with the hat's CPU cost model in the host harness:
+
+| onset source | F1 | P | R | loop fps |
+|---|---|---|---|---|
+| spectral flux, `fluxOnsetFloor` 0.01 | **0.542** | 0.449 | 0.682 | 178 |
+| v33 NN (~12 ms per inference) | 0.480 | 0.394 | 0.613 | 48 |
+
+The NN path stays tested in CI: the `tracker-harness-nn` job builds the host harness with TFLite Micro (`tests/tracker/build_host_nn.sh`, `BLINKY_HOST_NN`) and gates it on frame rate (≥ 35 fps) and corpus floors.
+
+**Gate for turning a model back on.** It must beat flux on the host tracker harness (`tests/tracker/run_tracker_eval.py`) with the CPU cost model set to the model's measured inference time (`--nn-cost-us`, measured on a device with `set nnprofile 1`), on both onset F1 and frame rate. Offline `evaluate.py` F1 (v33: 0.617) is **not** the gate: it ignores CPU cost and the firmware's peak picking. Model cost now matters as much as accuracy: v33 uses ~12 ms of a 16 ms frame.
+
+**Open work (GitHub issues):**
+
+| issue | what | status |
+|---|---|---|
+| #174 | The model computes 16 output frames to use 1 (receptive field is 9). Re-export with W=9 or streaming conv state for about half the cost. | open — cheapest step toward passing the gate |
+| #165 | NN inference is skipped for catch-up frames when the loop runs below 62.5 fps. | partial |
+| #175 | Raw mel saturates at high SPL, so the low bands lose kick contrast. Needs a pre-gain or PCEN, mirrored in training. `melSaturated`/`melTotal` telemetry is in `json info`. | partial |
+| #178 | Non-overlapping frames (hop = FFT size) make onset strength wobble with hit position. 50 % overlap needs a retrain. | open |
+| #180 | Mel whitening gives little contrast. | open, low priority |
+
+Closed: #162 (wrong model header), #163 (model input check in CI), #169 (NN smoothing), #170 (`stream nn` frames), #203 (host test of the NN path).
+
+**The 2026-05-02 experiment queue (below).** No training has run since May 2026.
+1. Hand-curate edm/ GT: **tooling done, curation not done.** `tools/label-reviewer/` (`make reviewer`) writes `<stem>.onsets_human.json` overlays, which `prepare_dataset.py` and the blinky-server harness both apply. No `*.onsets_human.json` exists in `blinky-test-player/music/edm/` yet. Still the first step.
+2. Per-class F1 breakdown of v33: not done.
+3. Hybrid supervision: not started; gated on 1 and 2.
+4. Knowledge distillation: not started.
+5. HPSS input: deprioritized.
+
+Any new candidate must also fit the CPU budget above, not just lift offline F1.
+
+**Dead or not deployed:** v34d (flat), v36 (regressed, and built for 80 mel at 31.25 kHz while the firmware is 50 mel at 16 kHz), v35a–e (killed), v34c (beat labels, withdrawn). The W32 FC, dual-model, CBSS and consensus_v5 sections near the end are historical.
+
+**Numbering.** `#72`, `#114`, `#124`, `#135` and similar in the dated sections below are old task-tracker IDs, not GitHub issues (those GitHub numbers are unrelated PRs). Issue numbers in this status section are GitHub issues.
+
+---
+
 > **2026-05-02 — Literature review + reframe (READ THIS BEFORE PLANNING NEW EXPERIMENTS)**
 >
 > After v36 closed flat-to-negative on edm/ Onset F1 (0.537 vs v33's 0.617), commissioned a literature review of small-CNN onset detectors to ground next steps in research rather than continued speculation. Three findings re-frame the prior reading of our experiments:
@@ -1179,7 +1221,7 @@ Comparing v34d to v33 via `val_peak_F1` is misleading. The two runs evaluate aga
 
 v33 epoch-1 `val_peak_F1=0.65` is the model's score against val labels that are themselves only F1=0.66 vs GT — a moving target. v34d epoch-1 `val_peak_F1=0.35` is vs val labels that are F1=0.745 vs GT. The metric drop is partly an artefact of stricter eval, not pure model regression.
 
-**The apples-to-apples comparison is `evaluate.py` on edm/ with hand-curated `.onsets_consensus.json` GT, which is identical for both runs.** v33 b153 scored 0.570 there. v34d's edm/ score (post-training, post-export, post-deploy) is the comparable number — not val_peak_F1.
+**The apples-to-apples comparison is `evaluate.py` on edm/ with the consensus-derived `.onsets_consensus.json` GT, which is identical for both runs.** v33 b153 scored 0.570 there. v34d's edm/ score (post-training, post-export, post-deploy) is the comparable number — not val_peak_F1.
 
 This caveat applies to *every* future run on cleaned labels: their `val_peak_F1` will look lower than v33-era runs not because they're worse, but because the eval target is more honest. Plan headlines should track on-device edm/ F1, not val_peak_F1.
 
@@ -1188,12 +1230,15 @@ This caveat applies to *every* future run on cleaned labels: their `val_peak_F1`
 | Metric                | Source                                              | Apples-to-apples within… |
 |-----------------------|-----------------------------------------------------|---------------------------|
 | `val_peak_F1`         | `training_log.csv` col 9 — peak-picked F1 vs the run's *own* val labels (post-training-time threshold sweep) | runs that share the same `kick_weighted_dir` / `labels_type` |
-| edm/ Onset F1         | `evaluate.py --output-dir .../eval` → `eval_results.json` `f1` field, mir_eval onset, 50ms tolerance, vs hand-curated `.onsets_consensus.json` | all runs from 2026-04-29 onward (post-onset-GT-evaluator-fix) |
+| edm/ Onset F1         | `evaluate.py --output-dir .../eval` → `eval_results.json` `f1` field, mir_eval onset, 50ms tolerance, vs `.onsets_consensus.json` (5-detector consensus, not hand-curated) | all runs from 2026-04-29 onward (post-onset-GT-evaluator-fix) |
 | edm/ on-device F1     | blinky-server validation harness against the deployed firmware build | all firmware builds with the same peak-picker config and `pulseonsetfloor` |
+| host harness onset F1 + fps | `tests/tracker/run_tracker_eval.py` with the CPU cost model (`--nn-cost-us` etc.) | **the gate for enabling an NN on devices** (since 2026-10-19); compare against spectral flux on the same harness |
 
 When in doubt: the tables in run-result blocks should use the **same metric column header** for every run on a row, and label what that column is. Mis-attribution (treating v34d's edm/ Onset F1 0.616 as if it were a `val_peak_F1` baseline for v36) is the v34d/v36 confusion that triggered an hour-long mis-investigation 2026-05-02 04:00. Per the metric audit on 2026-05-02.
 
 ### Label audit — the actual ceiling (2026-04-28)
+
+> **WITHDRAWN (2026-04-29).** This audit scored labels against `.beats.json` (beat GT, the wrong target). Its conclusion, "switch to consensus_v5", is beat-detection framing and is forbidden by CLAUDE.md. See "2026-04-29 — beat-detection confusion cleaned up" for the re-audit against onset GT.
 
 After v34/v34b confirmed parameter tuning had hit a wall, audited every label source on disk against hand-curated `.beats.json` GT on the 18 edm/ tracks. **Result inverts the entire framing again.**
 
@@ -1214,6 +1259,8 @@ The contamination mechanism: bandpass onset detection runs on demucs-separated d
 This also explains why **firmware F1 > offline F1 by +0.12** on the same content (peak-picker parity test 2026-04-28). The model trained to over-fire (labels are over-detected). Firmware peak-picker (bass gate / PLP bias / cooldown) suppresses the spurious firings the labels taught the model to make. The +0.12 firmware lift is *recovering from label noise.*
 
 ### v34c plan — switch labels, nothing else (2026-04-28)
+
+> **WITHDRAWN, never trained.** consensus_v5 is a BEAT target. Its config and processed data were deleted 2026-04-29, and `prepare_dataset.py` now refuses beat-label paths. Kept only as a record of the mistake.
 
 `consensus_v5` (multi-system beat consensus from allin1 + beat_this + demucs_beats + essentia + librosa + madmom) matches the eval GT at F1=0.981. **100% coverage on the 6750-track training corpus** — labels exist for every track, no regeneration needed.
 
@@ -1251,14 +1298,17 @@ downbeats), giving only 40.8% inter-system agreement, and (3) the W32
 context window (0.5s = ~1 beat) is too short to identify downbeat position
 within a bar.
 
-## Deployed Model: W32 FC (cal63, on all 3 devices)
+## ~~Deployed Model: W32 FC (cal63, on all 3 devices)~~ (historical — March 2026)
+
+No longer deployed. See "Current status" at the top.
+
 
 FC(832→64→32→2), 55K params, 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
 Cal63 mel calibration (-63 dB RMS). Consensus v5 labels (7-system).
 
 ## ~~Active Priority: Dual-Model Architecture~~ (superseded — 2026-04-22)
 
-The dual-model plan below (W8 OnsetNN + W192 RhythmNN, March 15 2026) was not taken forward. Current production architecture is a single Conv1D W16 model (30 mel bands, 32-32 channels, k=5, 16-frame window ≈ 256 ms). See §"2026-04-22 — focal-loss regression + v29 reset" above for current state.
+The dual-model plan below (W8 OnsetNN + W192 RhythmNN, March 15 2026) was not taken forward. The embedded model is a single Conv1D W16 model (v33: 50 mel bands, 32-32 channels, k=5, 16-frame window ≈ 256 ms), built off on devices. See "Current status" at the top.
 
 **Status: TRAINING (March 15, 2026) — HISTORICAL**
 
@@ -1291,7 +1341,7 @@ temporal locality.
 | RAM (window) | ~0.8 KB | ~19.5 KB | ~20 KB | 236 KB | 92% |
 | Inference | <1ms@62.5Hz | <8ms@15.6Hz | — | 10ms/frame | OK |
 
-### Training (in progress)
+### Training (historical — March 2026, not taken forward)
 
 Both models training in tmux on consensus_v5 + cal63 data (chunk_frames=384):
 ```bash
@@ -1305,7 +1355,9 @@ FC(4992→64→32→2), 322K params, 314 KB INT8. Beat F1=0.370, DB F1=0.145.
 First FC layer has 319K/322K params — must learn all temporal correlations through
 raw weight matrices. Superseded by Conv1D+Pool dual-model architecture.
 
-## Labeling Pipeline
+## Labeling Pipeline (historical — BEAT labels, March 2026)
+
+> These are beat trackers. Their outputs (`consensus_v*`) were archived 2026-04-29 and must not be used as training labels or eval GT (CLAUDE.md). Current training labels are onset labels: `onsets_consensus` (`scripts/generate_onset_consensus.py`, 5 onset detectors) and `kick_weighted_drums` / `kick_weighted_clean` (`scripts/generate_kick_weighted_targets.py`, `scripts/clean_kick_weighted.py`).
 
 ### Systems (7 total, 5 with downbeats)
 
@@ -1344,16 +1396,16 @@ training, see below).
 Consensus v5 generated with all 7 systems. 6993 labels. base.yaml updated to use v5.
 Dual-model training (OnsetNN + RhythmNN) in progress on v5 data.
 
-## Training Recipe (all applied via base.yaml)
+## Training Recipe (base.yaml defaults; versioned configs override some, e.g. v33 uses plain `bce`)
 
 1. **Shift-tolerant BCE loss** — ±48ms annotation jitter tolerance (+12.6 F1 on downbeat in Beat This!)
 2. **SpecAugment** — 2 freq masks (max 4 bands), 1 time mask (max 8 frames)
 3. **Pitch shift** — ±5 semitones via prepare_dataset.py --augment
 4. **Knowledge distillation** — Deferred until teacher labels regenerated
 
-## Next: Demucs Stem-Augmented Training
+## ~~Next: Demucs Stem-Augmented Training~~ (parked)
 
-**Status: PLANNED (after W192 baseline completes)**
+**Status: PARKED.** Written for the W192 beat/downbeat model, which was dropped. `scripts/batch_demucs_separate.py` and `prepare_dataset.py --stems-dir/--stem-variants` exist, but no onset model was trained this way. If revisited, use onset labels, not beat labels, and run it under the gate in "Current status".
 
 ### Motivation
 
@@ -1483,20 +1535,24 @@ Run allin1 labeling after Demucs separation to get both benefits.
 - **W32 cal63 (deployed March 12)**: Beat F1=0.49, DB F1=0.24. Mel calibration fixed (target_rms_db -35→-63 dB).
 - **W64 (deployed ACM0 March 14)**: On-device 11/18 wins vs W32. Mean error 19.1% vs 24.6%.
 - **fc_improved_v1 (shift-BCE + SpecAugment, W32)**: Beat F1=0.477, DB F1=0.169. Regression — shift-BCE alone doesn't help without larger context.
-- **BandFlux removal (v67)**: 10 files deleted, ~2600 lines, ~24 settings.
-- **NN always-on (v68)**: TFLite required dependency.
+- **BandFlux removal (v67)**: 10 files deleted, ~2600 lines, ~24 settings. (Spectral flux is the device onset source again since 2026-10-19.)
+- **NN always-on (v68)**: TFLite required dependency. (Reversed 2026-10-19: devices build with `BLINKY_ONSET_NN_ENABLED=0`.)
 
 ## File Reference
 
 | File | Purpose |
 |------|---------|
-| `configs/frame_fc_w192.yaml` | W192 model config (current target) |
-| `configs/base.yaml` | Shared audio/training/loss settings |
-| `scripts/label_beats.py` | Multi-system labeling (7 systems) |
-| `scripts/_allin1_helper.py` | All-In-One helper (with DBN threshold fix) |
-| `scripts/_beatnet_helper.py` | BeatNet venv311 subprocess helper |
-| `scripts/merge_consensus_labels_v2.py` | Consensus merging (7-system weights) |
-| `scripts/prepare_dataset.py` | Dataset preprocessing |
-| `scripts/export_tflite.py` | TFLite INT8 export |
-| `train.py` | Training loop |
-| `evaluate.py` | Offline evaluation |
+| `configs/base.yaml` | Shared audio/training/data settings (`labels_dir` = `onsets_consensus`) |
+| `configs/conv1d_w16_onset_v33_mel_only.yaml` | v33, the model embedded in firmware |
+| `scripts/generate_onset_consensus.py` | 5-system onset consensus labels |
+| `scripts/generate_kick_weighted_targets.py`, `scripts/clean_kick_weighted.py` | Kick/snare onset labels from drum stems, and bleed cleanup |
+| `scripts/prepare_dataset.py` | Dataset preprocessing (refuses beat-label paths) |
+| `scripts/export_tflite.py` | TFLite INT8 export; also overwrites `blinky-things/audio/frame_onset_model_data.h` |
+| `train.py` | Training loop (refuses to run outside tmux/screen) |
+| `evaluate.py` | Offline onset F1 on edm/ vs `.onsets_consensus.json` |
+| `tools/label-reviewer/` | Hand-correct onset labels (`make reviewer`) |
+| `../tools/check_model_input.py` | Fails if the firmware would refuse the embedded model (runs in CI) |
+| `../tests/tracker/` | Host tracker harness and CPU cost model: the gate for enabling an NN |
+| `../blinky-things/audio/FrameOnsetNN.h`, `AudioTracker.h` | Firmware NN wrapper; `BLINKY_ONSET_NN_ENABLED` build switch |
+
+Paths starting `../` are relative to `ml-training/`; the rest are inside it.

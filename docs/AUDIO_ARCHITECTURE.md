@@ -1,19 +1,24 @@
 # Audio-Reactive Architecture (AudioTracker)
 
-> **2026-05-19 snapshot warning:** this doc was last comprehensively updated through v32/b149. Current build (b179+) has moved on — notably **NUM_MEL_BANDS is now 50** (30–8000 Hz, v33) not 30×4kHz; `pulseOnsetFloor` default is **0.20** (v33 sweep) not 0.30; and the `odfGateThreshold` / `odfgate` references below describe a parameter that has been removed from firmware. The architectural pipeline (multi-source ACF → epoch-fold PLP → NN onset, AudioControl 6-field output) is still accurate. Verify specific numbers against `audio/AudioTracker.{h,cpp}` and `audio/SharedSpectralAnalysis.h` before quoting.
-
-> **2026-04-27 note on F1 numbers:** older F1 quotes in this doc reference an `edm_holdout` corpus that has been deleted (it was adversarial GiantSteps LOFI content used as a headline metric, which kept producing misleadingly low scores). The only validation corpus going forward is `blinky-test-player/music/edm/`. See CLAUDE.md "CRITICAL: Validation Corpus".
+> **Last checked against the code: 2026-10-21 (SETTINGS_VERSION 98, after PR #268).** The task is **onset detection** (fire on every percussive hit), not beat detection. The only validation corpus is `blinky-test-player/music/edm/`, scored against `.onsets_consensus.json`. Older F1 numbers on the deleted `edm_holdout` corpus are gone from this doc on purpose. When in doubt, `audio/AudioTracker.{h,cpp}` and `audio/SharedSpectralAnalysis.h` win.
 
 ## Overview
 
-AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF tempo estimation and PLP (Predominant Local Pulse) phase/pattern extraction to output an `AudioControl` struct with 6 parameters.
+AudioTracker turns the microphone into one `AudioControl` struct that the generators read. It combines:
+- mic input with window/range normalization,
+- onset detection (spectral flux on devices; the onset NN is compiled out),
+- ACF period detection on three rhythm sources,
+- PLP (Predominant Local Pulse) pattern extraction by epoch folding.
 
-**Current Version:** AudioTracker v93 (April 2026). Multi-source ACF + PLP with direct pattern interpolation.
-**Period Detection:** Multi-source ACF (spectral flux + bass energy + NN onset, lags 20-80, ~4ms) → parabolic interpolation → bar multipliers (2×/3×/4×) → epoch-fold variance scoring with sqrt(multiplier) penalty. **Pattern quality is the objective — the system selects whichever period produces the best visual pattern. Half/double time matches are correct if they capture more rhythmic structure.**
-**Phase/Pattern:** Epoch-fold ungated spectral flux (ossLinear_) at detected period → direct pattern interpolation (v91 refactor, cosine OLA removed). **Robust epoch-fold (b119+):** NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Pattern quality is NN-independent. SuperFlux 3-wide max filter on spectral flux. plpNovGain=1.0, plpVarianceSens=0. Reliability metrics: plpMeanReliability_, plpNNAgreement_ exposed in debug stream.
-**Onset Detection:** FrameOnsetNN (Conv1D W16, 16.5 KB INT8, ~7ms nRF52840). Single output: onset activation. Detects acoustic onsets (kicks/snares + broader transients), not metrical beats. **Local-maxima peak-picking** (b127+): `updatePulseDetection()` uses local-maxima peak-picking on NN activation (prevSignal > prev AND prevSignal > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence). pulseOnsetFloor=0.30 (sweep-optimized). PLP beat-grid AND-gate `beatGridPatternMin` defaulted to **0.0 since b149** (was 0.4 in b142–b148; persist_raw analysis 2026-04-25 showed it suppressed 65–84% of true onsets — gtPatternCorr 0.86–0.99 confirmed PLP is reliable as PERIOD tracker but broken as PER-FRAME gate). v32 deployed (b149): on-device F1≈0.47 on edm_holdout (no-gate), 4 pp below madmom RNN's 0.51 ceiling on the same corpus. Also serves as one of 3 ACF sources. **On-device activations are NOT flat** — acoustic chain (speaker→room→mic) creates contrast clean audio lacks (dynRange=0.734 vs offline 0.125). Non-NN fallback: mic level.
-**AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
-**Primary Test Metrics:** plpAtTransient (pattern-onset alignment), plpAutoCorr (pattern periodicity), plpPeakiness (pattern structure). BPM accuracy uses octave-tolerant scoring.
+**Period detection:** ACF on three mean-subtracted sources (bass flux, bass mel energy, mic level), beat lags 20-80 frames in steps of 2, every `acfPeriodMs` (100 ms). Peaks are refined by parabolic interpolation. Each beat peak spawns bar candidates at 2×/3×/4×, plus syncopation-derived candidates (#166). Candidates are scored by ACF strength × epoch-fold contrast, divided by sqrt(multiplier), times a log-Gaussian tempo prior around 120 BPM (`tempoPriorWidth` 0.8 octave). **Pattern quality is the objective: a half- or double-time period is fine if it gives a better visual pattern.**
+
+**Phase/pattern:** The bass-flux buffer is epoch-folded at the chosen period (recency-weighted, Winsorized, per-bin reliability). The pattern is stored accent-aligned (bin 0 = accent), and `plpPulse` is the pattern read at the current phase. The phase keeps absolute time on the mic's sample clock (see Frame Clock).
+
+**Onset detection:** On devices, spectral flux with an adaptive baseline (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (local-maxima peak-picking on FrameOnsetNN output) is kept for the host NN harness and a future cheaper model (#174). See "Onset Detection" below.
+
+**AGC:** Removed (v72). Hardware gain is fixed at the platform value (`Platform::Microphone::DEFAULT_GAIN`: nRF52840 = 32, ESP32-S3 = 30). Window/range normalization is the only dynamic-range system. There is no noise gate (removed again 2026-10-20).
+
+**How it's measured:** `tests/tracker/` runs the real tracker code on edm/ audio at simulated loop rates. Metrics: `lock` (phase consistency at strong onsets), `worst20s`, `recall` (±50 ms), `bpm`. CI gates on them. See `tests/tracker/README.md`.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -23,21 +28,25 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 - **v5 (March 2026)**: AudioTracker — ACF+Comb+PLL, replaces AudioController CBSS. ~400 lines, ~10 params (vs ~2100 lines, ~56 params). No CBSS, no Bayesian fusion.
 - **v6 (March 2026)**: PLP (Predominant Local Pulse) — replaced PLL with Fourier tempogram. Soft blend, cold-start template seeding, beat stability gated learning. PLL proven ineffective (phase consistency ~0.04).
 - **v7 (March 2026)**: Pattern slot cache — 4-slot LRU of 16-bin PLP pattern digests for instant section recall. v77 pattern memory replaced. Fisher's g removed.
-- **v8 (March 2026, deployed)**: Multi-source ACF replaces Fourier tempogram (75ms → ~4ms). Parabolic interpolation on ACF peaks. Bar multipliers (2×/3×/4×) with sqrt penalty. Pattern-quality-driven period selection — octave matches are valid.
+- **v8 (March 2026)**: Multi-source ACF replaces Fourier tempogram (75ms → ~4ms). Parabolic interpolation on ACF peaks. Bar multipliers (2×/3×/4×) with sqrt penalty. Pattern-quality-driven period selection — octave matches are valid.
+- **b208 (2026-10)**: Frame clock — every rhythm step runs once per spectral frame; fractional period; accent-aligned pattern; `onset` and `beatCount` outputs.
+- **2026-10**: Mic level replaces the NN as rhythm source 2 (#155); syncopation-derived candidates (#166); NN off on devices, tuned flux onsets; noise gate and silence detection removed ("rhythm needs hits").
+- **PR #268 (2026-10-21)**: phase advances on the absolute sample clock and is extrapolated to drawing time (#260, #261).
 
 ---
 
 ## Output: AudioControl Struct
 
-Generators receive a single struct:
+Generators receive a single struct (`audio/AudioControl.h`):
 
 ```cpp
 struct AudioControl {
-    float energy;         // Audio energy level (0-1)
-    float pulse;          // Transient envelope (0-1, decays ~240 ms)
-    float onset;          // Onset EVENT: strength this update, 0 if none (b208)
+    float energy;         // Audio energy level (0-1), never below a 0.12-0.20 "smolder" floor
+    float level;          // Mic loudness, auto-ranged 0-1, no gate, no extra smoothing
+    float pulse;          // Transient envelope (0-1, decays with a 240 ms time constant)
+    float onset;          // Onset EVENT: strength this update, 0 if none
     float phase;          // Rhythm-cycle phase (0-1, 0 = accent)
-    uint16_t beatCount;   // +1 per rhythm cycle, never decrements (b208)
+    uint16_t beatCount;   // +1 per rhythm cycle, never decrements
     float plpPulse;       // PLP pattern value at current phase (0-1)
     float rhythmStrength; // Confidence in rhythm (0-1)
     float onsetDensity;   // Smoothed onsets per second (0-10+)
@@ -46,7 +55,8 @@ struct AudioControl {
 
 | Parameter | Description | Use For |
 |-----------|-------------|---------|
-| `energy` | Smoothed overall level | Baseline intensity, brightness |
+| `energy` | Blend of mic level, bass mel energy and flux peak-hold | Baseline intensity, brightness |
+| `level` | Normalized mic loudness, swings the full range | Continuous "breathing with the music" (height, brightness) |
 | `pulse` | Transient envelope (level, decays) | Continuous brightness/size modulation |
 | `onset` | One non-zero value per detected drum hit | Edge-triggered bursts/flashes (`onset > 0`) |
 | `phase` | Position in rhythm cycle (0=accent); can be corrected slightly backward | Continuous phase-based modulation |
@@ -55,6 +65,8 @@ struct AudioControl {
 | `rhythmStrength` | Periodicity confidence | Music mode vs organic mode |
 | `onsetDensity` | Smoothed transients/second (EMA) | Content classification (dance=2-6, ambient=0-1) |
 
+`rhythmStrength` and `plpPulse` fade to 0 when no onset has fired for 2-4 s (`RHYTHM_HOLD_S` + `RHYTHM_FADE_S`); the next onset restores them at once.
+
 ---
 
 ## Architecture
@@ -62,61 +74,52 @@ struct AudioControl {
 ```
 PDM Microphone
       |
-AdaptiveMic (fixed gain + window/range normalization, AGC removed v72)
+AdaptiveMic (fixed gain + window/range normalization; no AGC, no noise gate)
       |
-SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectral flux)
+SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 mel bands + spectral flux)
       |
-      +--- [BPM PATH: spectral flux → tempo estimation]
-      |    Spectral Flux (HWR: sum of positive magnitude changes, NN-independent)
+      +--- [ONSET PATH]
+      |    Devices: band-weighted spectral flux (SuperFlux 3-bin max filter)
+      |         adaptive baseline x pulsethreshmult, floor fluxonsetfloor, rising edge
+      |    NN builds only: FrameOnsetNN -> local-maxima peak-picking
+      |         + bass-band gate + PLP pattern bias (+ optional crest / beat-grid gates)
       |         |
-      |    Contrast sharpening (flux^2.0)
-      |         |
-      |    +--- OSS Buffer (~5.5s @ ~66 Hz, 360 samples, circular)
-      |    |
-      |    +--- Autocorrelation (every 150ms)
-      |              Peak-finding → period estimate
-      |              EMA smoothing -> BPM estimate
+      |    +--- onset (event), pulse (envelope), onsetDensity
+      |    +--- Energy: mic level + bass mel energy + flux peak-hold
       |
-      +--- [ONSET PATH: NN → local-maxima peak-picking (b127)]
-      |    FrameOnsetNN (Conv1D W16, onset-only, v25 deployed)
-      |         Input: sliding window of rawMelBands_ (16 frames x 26 bands)
-      |         Output: single onset activation (0-1, kicks/snares)
-      |         |
-      |    Local-maxima peak-picking (prevSignal > prev AND > next AND > floor)
-      |    + Bass-band energy gate + PLP pattern bias
-      |         |
-      |    +--- Pulse: local-maxima detection with FP suppression (visual sparks)
-      |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
+      +--- [PERIOD PATH: every acfPeriodMs = 100 ms, after 100 frames of warm-up]
+      |    3 sources, 792 frames each (~12.7 s at 62.5 Hz):
+      |      1. bass flux ^ odfcontrast (the "OSS" buffer)
+      |      2. bass mel energy (mel bands 0-5)
+      |      3. mic level (#155: never the NN)
+      |    ACF lags 20-80 (step 2) -> top 5 peaks -> x1/x2/x3/x4 + syncopation-derived candidates
+      |    Score = ACF x sqrt(fold variance) / sqrt(multiplier) x tempo prior
+      |    Fractional period: ACF refined at the K-th repetition (K <= 12)
       |
-      +--- [PHASE PATH: PLP → direct pattern interpolation (v91+, robust b119+)]
-           Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period
-           SuperFlux 3-wide frequency max filter (Bock 2013)
-           Robust epoch-fold (b119+): NN-confidence-weighted epochs, per-bin
-             reliability (CV-based), Winsorized mean, NN cross-correlation validation
-           Direct pattern interpolation at current cycle position → plpPulse
-           Phase = patternPosition - accentPhase (data-driven, no oscillator)
-           Pattern quality is NN-independent (decoupled v93)
-           Cold-start template seeding (8 patterns, cosine similarity > 0.50)
-           Pattern slot cache: 4-slot LRU of 16-bin digests (instant section recall)
-           Reliability metrics: plpMeanReliability_, plpNNAgreement_ in debug stream
-           Silence state reset after 5s (clears all analysis buffers)
+      +--- [PHASE PATH: PLP]
+           Accent measured on the bass-flux fold (whichever source won)
+           Robust epoch fold of bass flux: recency weights, Winsorized mean, per-bin reliability
+           Pattern rotated to accent-aligned storage (bin 0 = accent)
+           Phase advanced on the sample clock, pulled toward the measured accent
+           plpPulse = pattern at phase (extrapolated to drawing time)
+           Pattern slot cache: 4-slot LRU of 16-bin digests; cold-start seeding from 8 templates
                 |
-AudioControl { energy, pulse, phase, plpPulse, rhythmStrength, onsetDensity }
+AudioControl { energy, level, pulse, onset, phase, beatCount, plpPulse, rhythmStrength, onsetDensity }
       |
-Generators (HeatFire, Water, PlasmaGlobe)
+Generators (Fire, Water, PlasmaGlobe ["lightning"], Audio)
 ```
 
 **Key Design Decisions:**
 
-1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
+1. **Onsets and rhythm use different signals.** Onset detection fires on every percussive hit, on-beat or not. The rhythm sources are tuned for periodicity. When the NN drove an ACF source it locked straight 4/4 to 2/3 tempo and broke DnB (#155: corpus tempo 0.726 → 0.621), so source 2 is the mic level in every build.
 
-2. **Multi-Source ACF Period Detection (deployed)**: ACF scans beat-level lags (20-80) on 3 mean-subtracted sources (spectral flux, bass energy, NN onset). Parabolic interpolation refines peak position and strength. Bar multipliers (2×/3×/4×) generate candidates from beat peaks. Epoch-fold variance scoring with sqrt(multiplier) penalty selects the period producing the best visual pattern.
+2. **Multi-source ACF period detection.** ACF scans beat lags 20-80 on three mean-subtracted sources. Bar candidates come from multiples of the beat peaks. Breakbeat/DnB patterns put the strongest peaks at 1.5 and 2.5 beats, so each beat peak L also yields beat hypotheses 2L/3 and 2L/5 and bar candidates at 2× and 4× of those (#166, `syncopatedCandidateScale`, default 1.0).
 
-3. **Pattern Quality Over BPM Accuracy**: The system is a visualizer, not a BPM detector. Half/double time periods are correct if they capture more rhythmic structure (e.g., a 2-bar kick-snare-kick-snare pattern at half BPM is better than a 1-bar kick pattern at the "true" BPM). Test metrics focus on plpAtTransient, plpAutoCorr, and plpPeakiness — not BPM accuracy.
+3. **Pattern quality over BPM accuracy.** The system is a visualizer, not a BPM meter. Half/double time is fine if it captures more rhythmic structure.
 
-4. **PLP Pattern Extraction (v91+, robust b119+)**: Epoch-fold ungated spectral flux (ossLinear_) at ACF-detected period. Direct pattern interpolation at current cycle position (cosine OLA removed v91). Phase derived from position offset by accent phase. Pattern quality is NN-independent (decoupled v93). **Robust epoch-fold (b119+):** NN-confidence-weighted epochs (higher-confidence epochs contribute more), per-bin reliability scoring (CV-based, suppresses noisy bins), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Reliability metrics plpMeanReliability_ and plpNNAgreement_ exposed in debug stream. gtPatternCorr metric shows extraction accuracy of 0.84-0.97 on test tracks. Cold-start template seeding (8 patterns). Pattern slot cache (4-slot LRU of 16-bin digests) for instant section recall.
+4. **PLP pattern extraction.** The bass-flux buffer is folded at the period. Each epoch is weighted by recency (`plpDecayRate`). With 4+ epochs, the highest and lowest value per bin are dropped (Winsorized mean). Bins whose epochs disagree (high coefficient of variation) are blended toward the fold mean. The result is min-max normalized. Confidence = ACF strength × signal presence (~1 s smoothed mic level vs `plpSignalFloor`) × agreement with the mic-level fold.
 
-5. **NN Onset → Local-Maxima Peak-Picking + ACF Source**: NN activation is peak-picked via local-maxima detection (b127+). Bass-band energy gate and PLP pattern bias suppress false positives from non-percussive spectral changes. PLP beat-grid AND-gate disabled by default since b149 — see §"NN Onset Activation as PLP Source" caveat. NN also serves as one of 3 ACF sources. It does not directly determine period — ACF finds periodic structure across all 3 sources. On-device activations are dynamic (dynRange=0.734) despite being flat offline (dynRange=0.125) — the acoustic chain creates contrast. **Current on-device F1≈0.47 on edm_holdout** (v32 b149, no gate); madmom RNN ceiling on the same corpus is 0.51, so the gap is small. Pre-2026-04-25 docs quoted F1=0.628 — that was on training-contaminated edm/ (18 tracks all in-corpus), not held-out.
+5. **Rhythm needs hits.** There is no silence detector. Room noise fires no flux onsets, so `rhythmStrength` and `plpPulse` fade out 2-4 s after the last onset. Tempo and phase state are kept, so a breakdown can't wipe them (#172).
 
 ---
 
@@ -124,9 +127,11 @@ Generators (HeatFire, Water, PlasmaGlobe)
 
 **Every rhythm computation runs exactly once per spectral frame** (16 kHz /
 256 samples = 62.5 Hz, `AudioTracker::OSS_FRAME_RATE`). `update()` drains
-the mic ring and calls `processFrame()` for each completed window: NN
-inference, pulse detection, OSS/bass/NN buffers, ACF cadence (counted in
-frames) and one phase step. The main loop's rate only decides how many
+the samples that were waiting in the mic ring when it was called and calls
+`processFrame()` for each completed window: pulse detection, OSS/bass/level
+buffers, ACF cadence (counted in frames) and one phase step. In NN builds the
+NN runs at most once per `update()`, on the last frame (every frame is still
+pushed into its input window). The main loop's rate only decides how many
 frames are handled per call.
 
 **The phase keeps absolute time on the sample clock** (`audio/PhaseClock.h`).
@@ -141,11 +146,11 @@ constant was 66 instead of 62.5, and the period was an integer. Phase ran at
 
 **Phase model.** The epoch fold is end-aligned: bin `P-1` holds the newest
 frame. So at each analysis, `(P-1 - accentBin) / P_frac` is the phase of
-"now", which `correctPlpPhase()` pulls toward with gain `plpPhaseGain`. A
-period jump snaps instead. Between analyses, `advancePlpPhase()` adds
-`1/P_frac` per frame.
+"now", which `correctPlpPhase()` pulls toward with gain `plpPhaseGain` (0.3,
+not serial-tunable). A period jump of more than 10% snaps instead. Between
+analyses, `advancePlpPhase()` adds `elapsedFrames / P_frac` per frame.
 
-**Accent source.** The accent is always measured on the OSS buffer (half-wave rectified bass flux), folded at the chosen period, whichever source won the period vote. Smooth sources (bass energy, NN level) put the fold maximum at the newest frames whenever loudness trends, so the accent tracked "now" and phase stalled near 1.0.
+**Accent source.** The accent is always measured on the OSS buffer (half-wave rectified bass flux), folded at the chosen period, whichever source won the period vote. Smooth sources (bass energy, mic level) put the fold maximum at the newest frames whenever loudness trends, so the accent tracked "now" and phase stalled near 1.0.
 
 **Fractional period.** The period is refined by unbiased ACF at the K-th
 repetition of the beat lag (K up to 12), then divided by K. This removes the
@@ -160,36 +165,27 @@ corpus audio at simulated loop rates).
 
 ## Rhythm Tracking Algorithm
 
-### Multi-Source ACF + PLP (v8 - Currently Deployed)
+### Multi-Source ACF + PLP (current)
 
-> **NOTE:** The Fourier tempogram (Goertzel DFT, 75ms) was replaced by multi-source ACF (~4ms) in March 2026. ACF scans beat-level lags on 3 sources, bar multipliers generate longer candidates, and epoch-fold variance scoring selects the best visual pattern period. BPM accuracy uses octave-tolerant scoring — half/double time matches are valid.
+**Every spectral frame (62.5 Hz), in `processFrame()`:**
+1. **Onset detection**: `updatePulseDetection()` (spectral flux on devices; NN peak-picking in NN builds). See "Pulse Detection".
+2. **OSS sample**: bass flux raised to `odfContrast` (default 1.25), clamped to 0-1, into the 792-frame OSS buffer.
+3. **Bass energy sample**: mean of mel bands 0-5, into the bass buffer.
+4. **Level sample**: `mic_.getLevel()`, into source buffer 2.
+5. **Phase advance**: `elapsedFrames / P_frac` (see Frame Clock).
 
-**Every frame (~62.5 Hz, on new spectral frame):**
-1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (primary pulse signal + PLP source)
-2. **Pulse Detection**: Local-maxima peak-picking on NN activation (prevSignal > prev AND > next AND > pulseOnsetFloor). Bass-band energy gate (50% threshold increase when bass ratio low). PLP pattern bias (30% threshold increase at off-beat positions, scaled by confidence).
-3. **Onset Gate** (PLP path only): Suppress onset below `odfGateThreshold` (prevent noise-driven false patterns)
-4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
-5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
-6. **Buffer OSS**: Store contrast-enhanced spectral flux in ~5.5s circular buffer (360 samples)
-7. **Phase Advance**: `1/P_frac` per frame (see Frame Clock)
+**Every `acfPeriodMs` (100 ms), once the OSS buffer holds 100 frames:**
+6. **Linearize + mean-subtract** all three sources.
+7. **ACF**: lags 20-80 in steps of 2 on each source; local maxima above 0.05, parabolic refinement; top 5 peaks kept (10% minimum separation).
+8. **Candidates**: each peak × 1/2/3/4, plus syncopation-derived bar candidates; periods up to 264 frames with 2+ epochs in the buffer.
+9. **Scoring**: ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier) × tempo prior.
+10. **Fractional period** and **accent position** (on the bass-flux fold), then phase correction.
+11. **BPM**: `OSS_FRAMES_PER_MIN / P_frac`, clamped to `bpmMin`..`bpmMax`, EMA with `tempoSmoothing`. A BPM change above 15% clears the pattern slots.
+12. **PLP analysis** (`updatePlpAnalysis()`): robust epoch fold, normalization, agreement with the level fold, rotation to accent-aligned storage, confidence update.
 
-**Every 150ms (acfPeriodMs):**
-8. **Linearize OSS**: Copy circular spectral flux buffer to linear array with mean subtraction
-9. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
-10. **Peak Selection**: Best lag -> candidate period
-11. **Smooth Update**: EMA filter on BPM (every analysis; the old 5% hysteresis left it stale)
+**Every 4 beats:** pattern slot check (recall, reinforce or allocate; template seeding for new slots) when PLP confidence > 0.1.
 
-**PLP Update (every 150ms):**
-12. **Mean-subtract sources**: Spectral flux, bass energy, NN onset buffers each mean-subtracted
-13. **ACF period detection**: Multi-source ACF at beat-level lags (20-80), parabolic interpolation on peaks
-14. **Period Selection**: Best ACF peak across 3 sources, bar multipliers (2x/3x/4x) with sqrt penalty
-15. **Epoch-fold Pattern**: Fold ungated spectral flux (ossLinear_) at selected period
-16. **Robust epoch-fold (b119+)**: NN-confidence-weighted epochs (higher-confidence epochs contribute more), per-bin reliability (CV-based, suppresses noisy bins), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation
-17. **Pattern Normalization**: Min-max normalization (signal is mean-subtracted, may have negatives)
-18. **Confidence**: ACF peak strength x signal presence (~1 s smoothed mic level, not one sample)
-19. **Phase**: Measured from the end-aligned fold, corrected gradually (see Frame Clock)
-
-### Evolution: Why ACF+Comb, and Why PLL Failed
+### Evolution: Why ACF+PLP, and Why PLL Failed
 
 | Version | Approach | Strengths | Weaknesses |
 |---------|----------|-----------|------------|
@@ -198,26 +194,26 @@ corpus audio at simulated loop rates).
 | **v3 (Multi-Hypo)** | Multiple concurrent tempos | Handles ambiguity | Competing corrections cause phase jitter |
 | **v4 (CBSS)** | Cumulative beat strength | Deterministic phase, no jitter | Complex (~2100 lines, ~56 params). Removed in v75. |
 | **v5 (ACF+Comb+PLL)** | ACF tempo + comb validation + PLL phase | Simple (~400 lines, ~10 params), smooth phase | **PLL phase consistency ~0.04 (random)** — onset-gated corrections insufficient |
-| **v8 (ACF+PLP, deployed)** | Multi-source ACF + PLP epoch-fold | ACF selects period, epoch-fold extracts pattern, 3 sources | atTransient 0.37-0.48, autoCorr up to +0.93 |
+| **v8+ (ACF+PLP, current)** | Multi-source ACF + PLP epoch-fold | ACF selects period, epoch-fold extracts pattern, 3 sources | Bar-length periods phase-lock worse than beat-length ones |
 
 ---
 
 ## Generator Usage
 
+Generators implement `generate(PixelMatrix& matrix, const AudioControl& audio)` (`generators/Generator.h`). Typical patterns:
+
 ### Basic Usage
 
 ```cpp
-void Generator::update(float dt, const AudioControl& audio) {
+void MyGenerator::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    const float dt = frameClock_.tick(millis());   // real seconds, never clamped
+    if (audio.onset > 0.0f) {
+        burst(audio.onset);                        // one burst per drum hit
+    }
     if (audio.rhythmStrength > 0.3f) {
-        // Beat-synced behavior
-        if (audio.pulse > 0.5f) {
-            burstSparks();
-        }
-        float breathe = audio.phaseToPulse();  // PLP pattern value at current phase
-        setBrightness(breathe);
+        setBrightness(audio.plpPulse);             // beat-synced breathing
     } else {
-        // Organic behavior (no rhythm detected)
-        updateRandom(dt);
+        updateOrganic(dt);                         // no rhythm detected
     }
 }
 ```
@@ -252,41 +248,45 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ## Tuning Parameters
 
-### Tempo Detection (AudioTracker)
+All of these are `set <name> <value>` serial settings (category `tracker`, or `slots` for the slot cache) and are saved by `save`. Defaults are the factory values in `ConfigStorage.cpp`. For the full list, see `docs/AUDIO-TUNING-GUIDE.md`.
+
+### Tempo Detection
 
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
-| `bpmMin` | `bpmmin` | 15 | 10-120 | Minimum period frequency (15 = full-bar at 60 BPM) |
-| `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
+| `bpmMin` | `bpmmin` | 15 | 10-120 | Lowest reported BPM (15 lets a full bar at 60 BPM count as one period) |
+| `bpmMax` | `bpmmax` | 200 | 120-240 | Highest reported BPM |
 | `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 
-### Phase Tracking (PLP — Multi-Source ACF + Robust Epoch-Fold)
+`acfPeriodMs` (100 ms) is persisted but has no serial command. `tempoPriorWidth` (0.8), `syncopatedCandidateScale` (1.0) and `plpPhaseGain` (0.3) are code defaults only.
 
-PLP uses multi-source ACF at beat-level lags (20-80) across 3 mean-subtracted sources (spectral flux, bass energy, NN onset). ACF peak selects period, epoch-fold extracts pattern. **Robust epoch-fold (b119+):** NN-confidence-weighted epochs, per-bin reliability (CV-based), Winsorized mean (outlier epoch rejection), cross-correlation with NN fold for pattern validation. Reliability metrics: plpMeanReliability_, plpNNAgreement_ exposed in debug stream. Soft blend: PLP pattern and cosine fallback blended continuously by confidence (no hard threshold). Cold-start template seeding (8 patterns, cosine similarity > 0.50) cuts warm-up from ~8 bars to ~2 bars. Beat stability gated learning provides fill/breakdown immunity. Pattern slot cache (v82): 4-slot LRU of 16-bin PLP pattern digests — cached PLP patterns recalled instantly when a previously-heard section returns (cosine similarity > 0.70). `plpActivation` parameter exists in settings but is vestigial (soft blend uses raw confidence). `plpSignalFloor` controls the steep mic-level gate (0→1 transition near noise floor).
+### PLP Pattern
+
+| Parameter | Serial Name | Default | Range | Description |
+|-----------|-------------|---------|-------|-------------|
+| `plpConfAlpha` | `plpconfalpha` | 0.25 | 0.01-0.5 | Confidence EMA rate |
+| `plpNovGain` | `plpnovgain` | 1.0 | 0.1-5.0 | Power-law exponent on the normalized pattern (>1 sharpens peaks) |
+| `plpSignalFloor` | `plpsigfloor` | 0.10 | 0.01-0.5 | Smoothed mic level that gives full confidence |
+| `plpVarianceSens` | `plpvarsens` | 0.0 | 0-50 | Persisted and tunable, but not read by the current tracker code |
+| `plpDecayRate` | `plpdecay` | 0.2 | 0.05-1.0 | Epoch recency decay (`exp(-rate × epochs)`) |
+
+The pattern slot cache has its own settings (`slotswitchthresh`, `slotnewthresh`, `slotupdaterate`, `slotsaveconf`, `slotseedblend`).
 
 ### Rhythm Activation
 
 | Parameter | Serial Name | Default | Range | Description |
 |-----------|-------------|---------|-------|-------------|
-| `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Soft gate: quadratic falloff below this threshold (no hard cutoff) |
-| ~~`odfGateThreshold`~~ | ~~`odfgate`~~ | — | — | **REMOVED**; the firmware no longer has a separate NN-output floor gate. Pulse-detection floor lives in `pulseOnsetFloor` (default 0.20). |
+| `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Persisted and tunable; not read by the current tracker code |
 
-### Pulse/Energy Modulation — PLP phase-driven
-
-| Parameter | Serial Name | Default | Range | Description |
-|-----------|-------------|---------|-------|-------------|
-| `pulseBoostOnBeat` | `pulseboost` | 1.3 | 1.0-3.0 | Pulse boost factor near beat |
-| `pulseSuppressOffBeat` | `pulsesuppress` | 0.6 | 0.0-1.0 | Pulse suppress factor off-beat |
-| `energyBoostOnBeat` | `energyboost` | 0.3 | 0.0-1.0 | Energy boost near predicted beats |
-
-> These parameters use PLP phase for "on-beat" / "off-beat" determination. With PLP multi-source ACF providing meaningful phase output (atTransient 0.37-0.48), beat-proximity modulation is now functional.
+`plpActivation` is persisted (0.3) but has no serial command and isn't read.
 
 ### Other
 
 | Parameter | Serial Name | Default | Description |
 |-----------|-------------|---------|-------------|
-| `acfPeriodMs` | N/A (code constant) | 150 | Autocorrelation update interval (ms) |
-| `nnProfile` | `nnprofile` | off | Enable NN inference profiling output |
+| `odfContrast` | `odfcontrast` | 1.25 | Exponent on bass flux before it enters the OSS buffer |
+| `audioAmp` | `audio_amp` | 1.0 | Diagnostic: scales every AudioControl signal (100 = saturate, 0 = mute). Not saved. |
+| `nnProfile` | `nnprofile` | off | NN inference profiling output (NN builds only) |
 
 ---
 
@@ -307,62 +307,56 @@ Re-enable a model only when it beats flux under this same measurement (a cheaper
 
 Silence detection went with it. At device-like levels on edm/, an adaptive noise floor falsely reset tempo 487–2159 times in music. Never resetting gave 0 false resets and re-locked on a new song as fast or faster. Instead, **rhythm needs hits**: `rhythmStrength` and `plpPulse` fade out 2–4 s after the last onset, and the next onset restores them instantly. Room noise fires no flux onsets, so the rhythm outputs drop to 0 within 5 s after music stops (they read 0.45–0.77 without this). In music the fade engages 2.1% of the time, mostly in percussion-free breakdowns.
 
-## FrameOnsetNN (Conv1D W16) — off on devices, see above
+## FrameOnsetNN — off on devices, see above
 
-### Current: Single Conv1D Onset Model
+`FrameOnsetNN` (`audio/FrameOnsetNN.h`) runs a TFLite Micro INT8 model on a sliding window of mel frames. The embedded model (`audio/frame_onset_model_data.h`) is the v33 export: 50 mel bands (30-8000 Hz, `SpectralConstants::NUM_MEL_BANDS`), 20,056 bytes, about 12 ms per inference on hat_v1. Its single output is an onset activation. It detects acoustic onsets (kicks, snares, other hits), not metrical beats.
 
-`FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. With a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets. v25 deployed (b127): KW F1=0.842, on-device F1=0.628. **On-device activations are NOT flat** — offline FP32 on clean audio: mean=0.567, std=0.051, dynRange=0.125 (flat); on-device INT8 on real audio: mean=0.432, std=0.250, dynRange=0.734 (dynamic). The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The earlier "flat activation" diagnosis was based on offline analysis and was wrong for on-device. F1 plateau at 0.62 is from model precision (0.50) — model fires on broadband spectral changes (chords, synths, vocals). Mel filterbank corrected to match librosa HTK exactly (26/26 bands were wrong since day one, avg 4.2 INT8 level error). `MEL_DB_RANGE` extracted as constexpr in SharedSpectralAnalysis.h. Mel pipeline verified identical between training and firmware (MAE=0.0017, 0.44 INT8 levels).
+In NN builds it only drives onset detection. It never feeds the rhythm sources (#155). If the model fails to initialize, `BLINKY_ASSERT` reports it (no silent fallback).
 
-The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and as one of 3 PLP multi-source ACF sources). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
+### Spectral Flux
 
-**Architecture:** Conv1D onset-only model. 13.4 KB INT8 (per-tensor quantization). Single output channel (onset activation). Arena: 3404 bytes of 32768 allocated.
+`SharedSpectralAnalysis::getSpectralFlux()` is band-weighted half-wave rectified flux. It's computed from **compressed-but-not-whitened** magnitudes (after the soft-knee compressor). The previous frame is max-filtered across 3 bins first (SuperFlux), so slow harmonic shifts don't count as flux. Each band is normalized by its bin count, then weighted:
+- **Bass (bins 1-6, 62-375 Hz):** `bassflux` 0.5 — kicks, strongest periodic signal
+- **Mid (bins 7-32, 437-2000 Hz):** `midflux` 0.2 — vocals, pads, less rhythmic
+- **High (bins 33-127, 2-8 kHz):** `highflux` 0.3 — snares, hi-hats
 
-**Performance:** 6.8 ms inference on Cortex-M4F @ 64 MHz (nRF52840) for the 26-band v25-class model; 5.8 ms on ESP32-S3. The 50-band v33 model measures **12 ms** on hat_v1.
-
-**Fallback:** If the model fails to load, `mic_.getLevel()` serves as a simple energy-based onset signal.
-
-### Onset Information Gate
-
-The NN onset activation passes through an information gate before use in PLP source input. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false pattern detection. This improves phase stability during silence and ambient passages. Note: the gate applies to the PLP ACF source path only — pulse detection uses local-maxima peak-picking on NN activation with bass-band energy gate and PLP pattern bias (b127+).
-
-### Spectral Flux (BPM Signal)
-
-BPM estimation uses band-weighted half-wave rectified spectral flux from `SharedSpectralAnalysis::getSpectralFlux()`. Computed from **compressed-but-not-whitened** magnitudes (after the soft-knee compressor) to preserve absolute transient contrast. Band weighting emphasizes rhythmically important frequencies:
-- **Bass (bins 1-6, 62-375 Hz):** 50% weight — kicks, strongest periodic signal
-- **Mid (bins 7-32, 437-2000 Hz):** 20% weight — vocals, pads, less rhythmic
-- **High (bins 33-127, 2-8 kHz):** 30% weight — snares, hi-hats, transient markers
-
-Peaks at broadband transients, zero during sustain. NN-independent.
+`getBassFlux()` (bass band only) feeds the OSS rhythm buffer.
 
 ### Pulse Detection
 
-**`control_.pulse` (generators consume this):** Local-maxima peak-picking on NN activation (b127).
-- **Local-maxima detection**: `updatePulseDetection()` fires when prevSignal > prev AND prevSignal > next AND prevSignal > pulseOnsetFloor (0.30, sweep-optimized).
-- **Bass-band energy gate**: 50% threshold increase when bass ratio is low — suppresses false positives from non-percussive spectral changes (chord changes, synths, vocals).
-- **PLP pattern bias**: 30% threshold increase at off-beat positions (scaled by PLP confidence) — leverages rhythmic context to suppress off-beat false positives.
-- Decaying envelope (~165ms half-life)
-- **On-device activations are NOT flat**: Offline FP32 on clean audio shows flat activations (mean=0.567, std=0.051, dynRange=0.125), but on-device INT8 on real audio is dynamic (mean=0.432, std=0.250, dynRange=0.734). The acoustic chain (speaker→room→mic) creates contrast the clean audio lacks. The earlier "flat activation" diagnosis was based on offline analysis and was wrong for on-device.
-- **F1 ceiling on edm_holdout (clean held-out): ~0.47** (v32 b149, 25 tracks × 3 devices, no gate). Madmom RNN — gold-standard algorithmic onset detector — reaches F1=0.509 on the same corpus, so the gap is 4 pp; about 80% of the addressable headroom is closed. The bottleneck appears to be input representation (30 mel × 4 kHz fmax misses hi-hat/snare spectral content) — see ML_IMPROVEMENT_PLAN 2026-04-25 synthesis. v33 (in-flight 2026-04-25) tests 80 mel × 8 kHz fmax against this hypothesis.
-- **Pre-2026-04-25 docs quoted F1=0.628 plateau** on `blinky-test-player/music/edm/`. That was a training-contaminated upper bound — all 18 of those tracks are *inside* the v27-hybrid training corpus (14 train, 4 val, 0 held out). The clean held-out number on edm_holdout (25 tracks, formally excluded from training since v30) is the F1≈0.47 above.
-- **Detection-algorithm evolution:** b123 first-diff peak-picking over-detected (14.3/s vs 3.5/s GT) → b126 local-maxima → b127 +bass gate +PLP bias → **b142 PLP beat-grid AND-gate (regression: -0.21 F1)** → **b149 gate default flipped 0.4→0.0** restoring recall. The b142 gate is still a runtime-tunable, just disabled by default. See ML_IMPROVEMENT_PLAN "PLP-accuracy diagnosis".
+`updatePulseDetection()` runs once per spectral frame.
 
-**Discrete onset events (debug/serial, onset density):** Same local-maxima detection.
-- **Cooldown**: Tempo-adaptive (40ms at 200 BPM, 150ms at 60 BPM)
+**Spectral-flux path (devices):**
+- Baseline tracks the flux floor: drops fast (`blfastdrop` 0.05), rises slowly (`blslowrise` 0.005).
+- Threshold = baseline × `pulsethreshmult` (2.0), never below `fluxonsetfloor` (0.01).
+- Fires on a rising edge across the threshold, when signal presence (max of flux peak-hold and bass energy) is above `pulseminlevel` (0.03) and the cooldown has passed.
+
+**NN path (NN builds only):**
+- Local maximum: `prev > prevPrev`, `prev >= current`, `prev > floor`. Floor = `pulseonsetfloor` (0.20) × bass gate × pattern bias.
+- **Bass-band gate**: up to 50% higher floor when bass flux is under a third of broadband flux.
+- **PLP pattern bias**: up to 30% higher floor where the pattern predicts no hit, scaled by PLP confidence (only above 0.3).
+- **Crest gate** (`crestgatemin`, 0 = off) and **beat-grid AND-gate** (`beatgridmin`, 0 = off since b149; it suppressed 65-84% of true onsets) are optional.
+
+**Both paths:**
+- **Cooldown**: tempo-adaptive, 40 ms at 200 BPM to 150 ms at 60 BPM, counted in frames.
+- `onset` = strongest pulse fired in this `update()`, else 0.
+- `pulse` envelope: rises to `(signal - 0.4) / 0.6` when the normalized signal (flux / running flux peak, or NN peak) passes 0.4, then decays with a 240 ms time constant.
+- `onsetDensity`: rising edges of `pulse` over 0.1, counted per second, EMA 0.7/0.3.
 
 ### Energy Synthesis
 
-Energy output is a hybrid blend of three sources:
-- **Mic level** (30%): Raw microphone amplitude (broadband)
-- **Bass mel energy** (30%): Low-frequency mel bands 1-6 (kick drum emphasis)
-- **ODF peak-hold** (40%): Peak NN activation with ~100ms exponential decay
+Energy is a blend of three sources, with a 0.12-0.20 deterministic "smolder" floor:
+- **Mic level** (`emicweight` 0.30): normalized mic amplitude
+- **Bass mel energy** (`emelweight` 0.30): mean of mel bands 0-5
+- **Flux peak-hold** (`eodfweight` 0.40): peak spectral flux, released by `odfpkdecay` (0.85) per frame
 
-Beat-proximity boost is applied when rhythm is active: energy is increased near predicted beats by up to `energyBoostOnBeat` * `rhythmStrength`.
-
-**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow). See `IMPROVEMENT_PLAN.md` Closed Investigations.
+**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow). Beat-proximity pulse/energy boosts (`pulseboost`, `pulsesuppress`, `energyboost`) and the `odfgate` information gate no longer exist.
 
 ---
 
 ## ESP32-S3 Platform Notes
+
+ESP32-S3 support was cut in March 2026; the code below is kept for the next-generation fixtures (`docs/NEXTGEN_ESP32S3_PLAN.md`).
 
 ### JTAG Pin Conflict (Esp32PdmMic)
 
@@ -380,34 +374,27 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 | Component | RAM | CPU Time | Notes |
 |-----------|-----|----------|-------|
-| AdaptiveMic + FFT + spectral flux | ~4 KB + 4 bytes | ~2ms/frame | Fixed gain + window/range normalization. Spectral flux: 1 float (negligible). |
-| FrameOnsetNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
-| OSS Buffer (360 floats) | 1.4 KB | - | ~5.5 seconds @ ~66 Hz, circular. Fed by spectral flux. |
-| ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
-| PLP (ACF + epoch-fold) | ~2 KB | ~4ms every 150ms | Multi-source ACF at beat-level lags, epoch-fold pattern |
-| Pulse + output | negligible | <0.1ms/frame | Simple arithmetic |
-| **Total audio budget** | **~13 KB + 32 KB arena** | **~14ms/frame** | Well under 16.7ms frame budget (60 fps) |
-
-**Compared to AudioController (v4, removed):**
-- RAM: ~13 KB vs ~20 KB (saved ~7 KB, mainly from smaller NN window buffer)
-- Code: ~400 lines vs ~2100 lines
-- Parameters: ~10 vs ~56
-- Inference: 6.8ms vs 27ms (W16 vs W64 model)
+| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 | `--frame-cost-us=3200` in the harness cost model |
+| Rhythm buffers | ~22 KB | - | 7 float arrays of 792 (OSS, bass, level, their linear copies, epoch-fold copy) |
+| Scratch buffers | ~4 KB | - | 4 × 264 floats, class members so they stay off the 4 KB loop stack |
+| ACF + PLP analysis | - | ~4 ms every 100 ms (code estimate) | Timed in `lastAcfDurationMs_` / `lastPlpMs_` |
+| FrameOnsetNN | 8 KB arena + input window | ~12 ms/inference (NN builds only) | The class and its arena are still in device builds; the model never runs there |
 
 ---
 
 ## Files
 
 **Core Audio System:**
-- `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP (~10 tunable params)
-- `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLP multi-source ACF, pulse detection, output synthesis)
-- `blinky-things/audio/AudioControl.h` - Output struct definition (6 fields)
-- `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
-- `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)
+- `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + PLP, tunable params and defaults
+- `blinky-things/audio/AudioTracker.cpp` - Implementation (frame clock, ACF, PLP, pulse detection, output synthesis)
+- `blinky-things/audio/PhaseClock.h` - Sample-clock phase advance and render-time extrapolation
+- `blinky-things/audio/AudioControl.h` - Output struct definition (9 fields)
+- `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> mel bands, spectral flux
+- `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (NN builds only)
 - `blinky-things/audio/frame_onset_model_data.h` - INT8 TFLite model weights
 
 **Input Processing:**
-- `blinky-things/inputs/AdaptiveMic.h` - Microphone processing (fixed hardware gain)
+- `blinky-things/inputs/AdaptiveMic.h` - Microphone processing (fixed hardware gain, window/range normalization)
 - `blinky-things/inputs/SerialConsole.h` - Command interface
 - `blinky-things/inputs/SerialConsole.cpp` - `registerTrackerSettings()`, `handleBeatTrackingCommand()`
 
@@ -415,26 +402,35 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 - `blinky-things/hal/hardware/Esp32PdmMic.h` - ESP32-S3 PDM mic with JTAG pin conflict fix
 - `blinky-things/hal/hardware/Esp32PdmMic.cpp` - `gpio_reset_pin()` fix, software gain, I2S PDM-RX driver
 
+**Tests:**
+- `tests/tracker/` - host harness running the real tracker on edm/ audio (CI gate)
+
 ---
 
 ## SerialConsole Commands
 
 **Beat Tracker Inspection:**
 ```bash
-show beat           # Show AudioTracker state (BPM, phase, periodicity, PLP)
-audio               # Show overall audio status + BPM
-json beat           # JSON output of beat tracker state
-json rhythm         # JSON output of rhythm tracking state
-show nn             # Show NN model diagnostics (arena, window, inference time)
+show beat           # AudioTracker state (BPM, phase, periodicity, PLP, pulse, onset density)
+audio               # Overall audio status + BPM (aliases: music, rhythm)
+json beat           # JSON tracker state (alias: json rhythm)
+show pattern        # Pattern slot cache (alias: show slots; JSON: json pattern / json slots)
+reset pattern       # Clear the pattern slots (alias: reset slots)
+show spectral       # Spectral analysis state (JSON: json spectral)
+show nn             # NN diagnostics (says the NN is disabled on device builds)
+show visual         # Render frame metrics (brightness, contrast, activity, centroid) as one JSON line
 ```
 
 **Debug Control:**
 ```bash
+debug               # Show enabled channels
 debug rhythm on     # Enable rhythm debug output
 debug rhythm off    # Disable rhythm debug output
 debug transient on  # Enable transient detection debug
 debug all off       # Disable all debug output
 ```
+
+Channels: `transient`, `rhythm`, `audio`, `generator`, `ensemble`, `all`.
 
 ---
 
@@ -444,3 +440,4 @@ debug all off       # Disable all debug output
 - `blinky-test-player/PARAMETER_TUNING_HISTORY.md` - Calibration test results
 - `docs/GENERATOR_EFFECT_ARCHITECTURE.md` - Generator design patterns
 - `docs/VISUALIZER_GOALS.md` - Design philosophy (visual quality over metrics)
+- `tests/tracker/README.md` - Host tracker harness and CPU cost model
