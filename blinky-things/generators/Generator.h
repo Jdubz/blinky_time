@@ -2,6 +2,7 @@
 #include "../types/PixelMatrix.h"
 #include "../devices/DeviceConfig.h"
 #include "../audio/AudioControl.h"
+#include "../types/FrameClock.h"
 
 /**
  * GeneratorType - Type-safe enum for generator identification
@@ -62,8 +63,8 @@ protected:
     LayoutType layout_ = MATRIX_LAYOUT;
     MatrixOrientation orientation_ = HORIZONTAL;
 
-    // Timing
-    uint32_t lastUpdateMs_ = 0;
+    // Timing: real seconds per frame, never clamped (types/FrameClock.h, #259).
+    FrameClock frameClock_;
 
     // Device dimensions for scaling — computed once in begin()
     // No reference device: generators compute all physics from these directly.

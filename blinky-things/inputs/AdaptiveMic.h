@@ -163,6 +163,12 @@ public:
     return w - s_extFftReadIdx;
   }
 
+  // Samples heard since absolute index `idx` as of `nowMs`: those already in
+  // the ring plus an estimate of the PDM block still being captured (time
+  // since the last ISR at the sample rate, at most one ISR block). Used to
+  // extrapolate the rhythm phase to the moment of drawing (audio/PhaseClock.h).
+  uint32_t samplesHeardSince(uint32_t idx, uint32_t nowMs) const;
+
   // Record-mode tap: called from the PDM ISR with every block of samples and
   // the absolute index of block[0]. Must be ISR-safe and O(n). nullptr = off.
   using RecordTap = void (*)(const int16_t* samples, int count, uint32_t firstIndex);

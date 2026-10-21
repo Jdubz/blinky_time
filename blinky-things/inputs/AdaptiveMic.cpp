@@ -283,6 +283,23 @@ void AdaptiveMic::onPDMdata() {
  * Get samples from ISR ring buffer for external FFT consumers.
  * Returns the number of samples actually copied.
  */
+uint32_t AdaptiveMic::samplesHeardSince(uint32_t idx, uint32_t nowMs) const {
+  time_.disableInterrupts();
+  const uint32_t writeIdx = s_fftWriteIdx;
+  const uint32_t isrMs = lastIsrMs;
+  time_.enableInterrupts();
+  // Signed: an ISR can land between the caller reading nowMs and the
+  // snapshot above (isrMs > nowMs), which means nothing is being captured
+  // yet. Clamp the time before converting so a long PDM stall can't
+  // overflow: at most one ISR block is ever in flight.
+  int32_t sinceIsrMs = static_cast<int32_t>(nowMs - isrMs);
+  if (sinceIsrMs < 0) sinceIsrMs = 0;
+  const uint32_t samplesPerMs = _sampleRate / 1000u;
+  const uint32_t maxMs = static_cast<uint32_t>(ISR_BUFFER_SIZE) / (samplesPerMs ? samplesPerMs : 1u);
+  if (static_cast<uint32_t>(sinceIsrMs) > maxMs) sinceIsrMs = static_cast<int32_t>(maxMs);
+  return (writeIdx - idx) + static_cast<uint32_t>(sinceIsrMs) * samplesPerMs;
+}
+
 int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
   if (!buffer || maxCount <= 0) return 0;
 

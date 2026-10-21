@@ -107,6 +107,23 @@ jobs:
         g++ -std=gnu++11 -Wall -Wextra -Werror -O1 -I blinky-things -I tests/ota           tests/ota/ota_manifest_test.cpp build/mc.o build/mc_ed.o -o build/ota_manifest_test
         build/ota_manifest_test
 
+  timing:
+    name: Absolute Timing (generators + rhythm phase, #259-#261)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # A 2 s frame must land where 2 s of frames would (no stretched
+    # animation); the rhythm phase extrapolation is capped and monotonic.
+    # UBSan: a long frame must not overflow the physics either.
+    - name: Build and run (UBSan)
+      run: |
+        mkdir -p build
+        g++ -std=c++17 -Wall -Wextra -O1 -g -fsanitize=undefined,float-cast-overflow,float-divide-by-zero           -fno-sanitize-recover=all -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840           -I blinky-simulator/include -I blinky-things tests/timing/timing_test.cpp           blinky-things/types/PixelMatrix.cpp blinky-things/types/BlinkyAssert.cpp           blinky-things/physics/PhysicsContext.cpp blinky-things/particles/Particle.cpp           blinky-things/math/SimplexNoise.cpp blinky-things/generators/Fire.cpp           blinky-things/generators/Water.cpp blinky-things/generators/PlasmaGlobe.cpp           blinky-things/generators/Audio.cpp -o build/timing_test
+        build/timing_test
+
   static-init-safety:
     name: Static Init Safety Check
     runs-on: ubuntu-latest

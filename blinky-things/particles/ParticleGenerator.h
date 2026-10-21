@@ -56,7 +56,7 @@ public:
             return false;
         }
 
-        lastUpdateMs_ = millis();
+        frameClock_.restart();
 
         // Initialize physics context - subclasses implement this
         initPhysicsContext();
@@ -89,22 +89,16 @@ public:
         audio_ = audio;
         observeBeat(audio);
 
-        // Calculate delta time (clamped: first frame / long stalls)
-        uint32_t currentMs = millis();
-        float dt = (currentMs - lastUpdateMs_) / 1000.0f;
-        lastUpdateMs_ = currentMs;
-        if (dt > 0.1f) dt = 0.1f;
-
-        // Update physics forces
-        if (forceAdapter_) {
-            forceAdapter_->update(dt);
+        // Real frame time (#259). Spawning is edge-triggered, so it runs
+        // once per frame; forces and particles integrate the same span in
+        // bounded substeps, so a late frame lands where it belongs in time.
+        const float frameDt = frameClock_.tick(millis());
+        spawnParticles(FrameTiming::physicsSpan(frameDt));
+        const FrameTiming::Steps steps = FrameTiming::physicsSteps(frameDt);
+        for (int i = 0; i < steps.count; i++) {
+            if (forceAdapter_) forceAdapter_->update(steps.dt);
+            updateParticles(steps.dt);  // position, velocity, age, death
         }
-
-        // Spawn new particles based on audio
-        spawnParticles(dt);
-
-        // Update all particles (position, velocity, age, death)
-        updateParticles(dt);
 
         // Render particles to matrix
         renderParticles(matrix);
@@ -113,6 +107,7 @@ public:
     }
 
     void reset() override {
+        frameClock_.restart();
         pool_.reset();
         audio_ = AudioControl();
         beatThisFrame_ = false;

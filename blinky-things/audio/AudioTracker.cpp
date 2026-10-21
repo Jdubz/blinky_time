@@ -51,6 +51,7 @@ AudioTracker::~AudioTracker() {
 bool AudioTracker::begin(uint32_t sampleRate) {
     if (!mic_.begin(sampleRate)) return false;
     spectral_.begin();
+    haveFrameEnd_ = false;
 
 #if BLINKY_ONSET_NN_ENABLED
     bool nnOk = frameOnsetNN_.begin();
@@ -162,7 +163,24 @@ const AudioControl& AudioTracker::update(float dt) {
         BLINKY_HOST_COST(HostCost::FRAME);
         // Absolute mic-sample index at which this window ended. Shared
         // timeline with the record stream (RecordStream).
-        lastFrameEndSampleIdx_ = mic_.getExternalReadIndex();
+        const uint32_t frameEnd = mic_.getExternalReadIndex();
+        // Real time this frame covers on the sample clock (#261): one frame
+        // normally, more when an overrun dropped samples inside it. The
+        // phase advances by this, so dropped audio doesn't put the beat
+        // behind real time.
+        float elapsedFrames = 1.0f;
+        if (haveFrameEnd_) {
+            const uint32_t span = frameEnd - lastFrameEndSampleIdx_;
+            // A span beyond any real stall means the index jumped (mic
+            // restart): count it as one frame, and say so.
+            BLINKY_ASSERT_ONCE(span <= PhaseClock::MAX_FRAME_SPAN_SAMPLES,
+                "AudioTracker: frame span beyond any real stall (mic sample index jumped)");
+            if (span <= PhaseClock::MAX_FRAME_SPAN_SAMPLES) {
+                elapsedFrames = PhaseClock::framesFromSamples(span);
+            }
+        }
+        lastFrameEndSampleIdx_ = frameEnd;
+        haveFrameEnd_ = true;
         // CPU guard: run the NN only on the last complete frame of this
         // update's budget. Every frame is still pushed into the NN window, so
         // its input stays evenly spaced; NN cost per update() is at most one
@@ -170,7 +188,7 @@ const AudioControl& AudioTracker::update(float dt) {
         // inference can't turn the next frame into "the newest" again.
         bool moreFramesPending =
             samplesBudget >= static_cast<uint32_t>(SpectralConstants::FFT_SIZE);
-        processFrame(!moreFramesPending || drainIter == MAX_DRAIN_ITERS - 1);
+        processFrame(!moreFramesPending || drainIter == MAX_DRAIN_ITERS - 1, elapsedFrames);
         framesThisUpdate_++;
     }
 
@@ -208,7 +226,7 @@ const AudioControl& AudioTracker::update(float dt) {
 // Per-frame processing (the frame clock)
 // ============================================================================
 
-void AudioTracker::processFrame(bool runNN) {
+void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
     frameClock_++;
 
     // --- Onset activation for this frame ---
@@ -287,7 +305,7 @@ void AudioTracker::processFrame(bool runNN) {
 
     // --- Phase step for THIS frame (before analysis, so a correction made
     // below refers to the frame just added — the newest bin of the fold) ---
-    advancePlpPhase();
+    advancePlpPhase(elapsedFrames);
 
     // --- ACF period detection + PLP pattern analysis, cadence in frames ---
     // Warmup: 100 frames (1.6 s); ACF_MAX_LAG (80) is the hard minimum.
@@ -1067,29 +1085,22 @@ void AudioTracker::correctPlpPhase(float targetPhase, float gain) {
     plpPhase_ = p;
 }
 
-void AudioTracker::advancePlpPhase() {
-    // One frame of phase at the fractional period. Called exactly once per
-    // spectral frame (processFrame), never per loop iteration.
+void AudioTracker::advancePlpPhase(float frames) {
+    // `frames` of phase at the fractional period: the real time this
+    // spectral frame covers on the sample clock (1.0 normally; more after an
+    // overrun dropped samples, #261). Called exactly once per spectral frame
+    // (processFrame), never per loop iteration. Every accent crossed is
+    // counted, so beatCount keeps absolute time too.
     float period = (plpPeriodF_ > 1.0f) ? plpPeriodF_ : 33.0f;
-    plpPhase_ += 1.0f / period;
-    if (plpPhase_ >= 1.0f) {
-        plpPhase_ -= 1.0f;
-        countBeat();
+    const PhaseClock::Advance a = PhaseClock::advance(plpPhase_, frames, period);
+    plpPhase_ = a.phase;
+    if (a.accents > 0) {
+        countBeat();  // the first accent crossed (honours skipNextWrap_)
+        // Any more only after a long overrun: each was a real beat.
+        beatCount_ = static_cast<uint16_t>(beatCount_ + (a.accents - 1));
     }
 
-    // Pattern value at the current phase. plpPattern_ is accent-aligned
-    // (bin 0 = accent), so phase indexes it directly.
-    int patLen = plpPatternLen_;
-    if (patLen > 1) {
-        float idx = plpPhase_ * static_cast<float>(patLen);
-        int i0 = static_cast<int>(idx) % patLen;
-        float frac = idx - floorf(idx);
-        int i1 = (i0 + 1) % patLen;
-        plpPulseValue_ = clampf(
-            plpPattern_[i0] * (1.0f - frac) + plpPattern_[i1] * frac, 0.0f, 1.0f);
-    } else {
-        plpPulseValue_ = 0.5f;
-    }
+    plpPulseValue_ = patternValueAt(plpPhase_);
 
     // Beat stability: pattern amplitude at accent vs running EMA
     if (plpPhase_ < 0.05f || plpPhase_ > 0.95f) {
@@ -1098,6 +1109,18 @@ void AudioTracker::advancePlpPhase() {
         plpPeakEma_ += STABILITY_ALPHA * (peakAmp - plpPeakEma_);
         beatStability_ = (plpPeakEma_ > 0.01f) ? clampf(peakAmp / plpPeakEma_, 0.0f, 1.5f) : 0.0f;
     }
+}
+
+float AudioTracker::patternValueAt(float phase) const {
+    // plpPattern_ is accent-aligned (bin 0 = accent), so phase indexes it
+    // directly.
+    int patLen = plpPatternLen_;
+    if (patLen <= 1) return 0.5f;
+    float idx = phase * static_cast<float>(patLen);
+    int i0 = static_cast<int>(idx) % patLen;
+    float frac = idx - floorf(idx);
+    int i1 = (i0 + 1) % patLen;
+    return clampf(plpPattern_[i0] * (1.0f - frac) + plpPattern_[i1] * frac, 0.0f, 1.0f);
 }
 
 // ============================================================================
@@ -1520,9 +1543,18 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     const float rhythmPresence =
         clampf(1.0f - (sinceOnsetS - RHYTHM_HOLD_S) / RHYTHM_FADE_S, 0.0f, 1.0f);
 
-    control_.phase = plpPhase_;
+    // Phase at the moment of drawing (#260): plpPhase_ is as of the last
+    // processed frame, up to a frame plus an undelivered PDM block ago.
+    // Extrapolated along the sample clock, held below an accent the tracker
+    // hasn't counted yet (PhaseClock::outputPhase).
+    float phaseNow = plpPhase_;
+    if (haveFrameEnd_) {
+        const uint32_t ahead = mic_.samplesHeardSince(lastFrameEndSampleIdx_, time_.millis());
+        phaseNow = PhaseClock::outputPhase(plpPhase_, ahead, plpPeriodF_);
+    }
+    control_.phase = phaseNow;
     control_.beatCount = beatCount_;
-    control_.plpPulse = plpPulseValue_ * rhythmPresence;
+    control_.plpPulse = patternValueAt(phaseNow) * rhythmPresence;
     control_.onset = lastPulseStrength_;
 
     // --- Rhythm Strength ---

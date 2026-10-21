@@ -51,10 +51,10 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // Frame time. Everything below is scaled to it: the old per-frame
     // constants (tuned at ~60 fps) made the water run faster/slower and
     // decay at different rates whenever loop speed changed.
-    uint32_t nowMs = millis();
-    float dt = (lastFrameMs_ == 0) ? (1.0f / 60.0f) : (nowMs - lastFrameMs_) / 1000.0f;
-    lastFrameMs_ = nowMs;
-    if (dt > 0.1f) dt = 0.1f;
+    // Real time, never clamped (#259): the noise clock takes the whole gap;
+    // the ripple wave equation steps at its fixed rate over at most
+    // FrameTiming::MAX_PHYSICS_SPAN_S of it.
+    const float dt = waterClock_.tick(millis());
     const float frames60 = dt * 60.0f;  // "how many 60 fps frames elapsed"
 
     // Beat state for this frame (shared with spawnParticles via the base).
@@ -99,10 +99,13 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
         // current[i], ~3% damping per step. Substepping keeps wave speed
         // and damping independent of loop rate.
         rippleAccum_ += dt;
-        int steps = 0;
-        while (rippleAccum_ >= RIPPLE_STEP_S && steps < 6) {
+        // A long stall integrates only its last MAX_PHYSICS_SPAN_S (ripples
+        // damp ~3% per step, so older motion has died out anyway).
+        if (rippleAccum_ > FrameTiming::MAX_PHYSICS_SPAN_S) {
+            rippleAccum_ = FrameTiming::MAX_PHYSICS_SPAN_S;
+        }
+        while (rippleAccum_ >= RIPPLE_STEP_S) {
             rippleAccum_ -= RIPPLE_STEP_S;
-            steps++;
             int16_t* c = rippleFlip_ ? rippleA_ : rippleB_;
             int16_t* p = rippleFlip_ ? rippleB_ : rippleA_;
             for (int i = 1; i < rippleSize - 1; i++) {
@@ -112,7 +115,6 @@ void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
             }
             rippleFlip_ = !rippleFlip_;
         }
-        if (rippleAccum_ > RIPPLE_STEP_S) rippleAccum_ = 0.0f;  // long stall: drop backlog
         // After the last step, the most recently written buffer is the
         // one the next step reads as `prev`.
         int16_t* curr = rippleFlip_ ? rippleB_ : rippleA_;
@@ -205,7 +207,7 @@ void Water::reset() {
     ParticleGenerator::reset();
     noiseTime_ = 0.0f;
     rippleAccum_ = 0.0f;
-    lastFrameMs_ = 0;
+    waterClock_.restart();
     memset(rippleA_, 0, sizeof(rippleA_));
     memset(rippleB_, 0, sizeof(rippleB_));
     memset(glowBuffer_, 0, sizeof(glowBuffer_));

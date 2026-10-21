@@ -804,7 +804,10 @@ void loop() {
     }
   }
 
-  dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
+  // No upper clamp (#259): dt is real elapsed time, and everything that
+  // takes it keeps absolute time (closed-form envelopes, sample-clocked
+  // rhythm, FakeAudio's measure clock). Only a 0 ms frame is floored.
+  if (dt < Constants::MIN_FRAME_TIME) dt = Constants::MIN_FRAME_TIME;
   lastMs = now;
 
   // Update unified audio controller (handles mic + rhythm tracking internally)

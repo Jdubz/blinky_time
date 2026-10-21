@@ -38,6 +38,7 @@ struct FrameOnsetNN {
 #endif
 
 #include "SharedSpectralAnalysis.h"
+#include "PhaseClock.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -370,6 +371,7 @@ private:
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
     uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
     uint32_t lastFrameEndSampleIdx_ = 0;  // See getLastFrameEndSampleIdx()
+    bool haveFrameEnd_ = false;           // lastFrameEndSampleIdx_ is a real frame end (PhaseClock)
 
     // === Onset density ===
     float onsetDensity_ = 0.0f;
@@ -417,13 +419,16 @@ private:
     AudioControl control_;
 
     // === Internal methods ===
-    void processFrame(bool runNN);  // Everything that must run exactly once per spectral frame
+    // Everything that must run exactly once per spectral frame. elapsedFrames:
+    // real time the frame covers on the sample clock (1, more after an overrun).
+    void processFrame(bool runNN, float elapsedFrames);
     void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
     void runAcf();
     float updatePulseDetection(float spectralFlux, bool freshNN);  // One frame; returns pulse strength (0 = none)
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
-    void advancePlpPhase();         // Advance phase one frame + read pattern value
+    void advancePlpPhase(float frames);  // Advance phase by `frames` + read pattern value
+    float patternValueAt(float phase) const;  // accent-aligned PLP pattern, interpolated
     void correctPlpPhase(float targetPhase, float gain);
     void countBeat();
     void synthesizeOutputs(float dt, uint32_t nowMs);

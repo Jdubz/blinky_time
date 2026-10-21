@@ -48,25 +48,33 @@ public:
         if (!enabled_) return;
 
         float prevTime = measureTime_;
-        measureTime_ += dt;
+        const float endTime = prevTime + dt;  // unwrapped
+        // Every beat this frame crosses (a long frame can cross several, #259).
+        const int beatsCrossed = static_cast<int>(floorf(endTime / BEAT_DURATION)) -
+                                 static_cast<int>(floorf(prevTime / BEAT_DURATION));
+        const bool wholeMeasure = (dt >= MEASURE_DURATION);
+        measureTime_ = endTime;
         bool wrapped = (measureTime_ >= MEASURE_DURATION);
-        if (wrapped) measureTime_ -= MEASURE_DURATION;
+        // fmodf, not one subtraction: a long frame can span several measures.
+        if (wrapped) measureTime_ = fmodf(measureTime_, MEASURE_DURATION);
 
-        // Decay energy toward base: fast rise (handled in fireOnset), slow fall ~0.7s
-        energy_  += (BASE_ENERGY - energy_) * (dt < 1.0f ? 1.4f * dt : 1.0f);
+        // Decay energy toward base: fast rise (handled in fireOnset), slow
+        // fall ~0.7 s, closed-form so any frame length is exact.
+        energy_  += (BASE_ENERGY - energy_) * (1.0f - expf(-1.4f * dt));
         pulse_    = pulse_   > 0.0f ? pulse_   - 10.0f * dt : 0.0f;
         if (pulse_    < 0.0f) pulse_    = 0.0f;
 
         onset_ = 0.0f;
-        int beatIdx = static_cast<int>(measureTime_ / BEAT_DURATION);
-        if (wrapped || beatIdx != static_cast<int>(prevTime / BEAT_DURATION)) beatCount_++;
+        if (beatsCrossed > 0) beatCount_ = static_cast<uint16_t>(beatCount_ + beatsCrossed);
 
         // Fire onset events when measure time crosses their scheduled position
         const OnsetEvent* onsets = getOnsets();
         for (int i = 0; i < NUM_ONSETS; i++) {
             float t = onsets[i].measureTime;
             bool fired;
-            if (!wrapped) {
+            if (wholeMeasure) {
+                fired = true;  // the frame covered every scheduled onset
+            } else if (!wrapped) {
                 fired = (prevTime < t && measureTime_ >= t);
             } else {
                 // Wrapped: fire if onset is in pre-wrap tail [prevTime, MEASURE_DURATION)

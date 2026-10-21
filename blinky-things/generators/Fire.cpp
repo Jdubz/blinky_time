@@ -47,10 +47,10 @@ void Fire::initPhysicsContext() {
 
 void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     audio_ = audio;
-    uint32_t currentMs = millis();
-    float dt = (currentMs - lastUpdateMs_) / 1000.0f;
-    lastUpdateMs_ = currentMs;
-    if (dt > 0.1f) dt = 0.1f;  // clamp on first frame / long stalls
+    // Real frame time, never clamped (#259): the noise clock and the
+    // closed-form envelopes below take the whole gap; the particle physics
+    // further down integrates it in bounded substeps.
+    const float dt = frameClock_.tick(millis());
 
     // PR #149 review: removed Fire's internal matrix.clear() — the pipeline
     // already clears at RenderPipeline.cpp before calling generate(), so
@@ -112,7 +112,6 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     //   linear → "splashes" spawn at random points and travel outward, fade
     // Layered ON TOP of the ember floor as the "launch spike" accent.
     if (forceAdapter_) {
-        forceAdapter_->update(dt);
         // PR #149 review: restore audio-reactive wind gust amplitude.
         // The old generate() modulated wind by (1 + 2-3 × pulse/plpPulse)
         // so curl-noise turbulence visibly intensified on beats; the
@@ -127,9 +126,13 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // upward reinforcement). It has no meaning on a 1D strip where splashes
     // travel outward rather than rising, so it's matrix-only. With the grid
     // left cool on linear, applyGridForce() reads zeros and is a no-op.
-    if (!isLinear) updateHeatGrid(dt);
-    spawnParticles(dt);
-    updateParticles(dt);
+    spawnParticles(FrameTiming::physicsSpan(dt));
+    const FrameTiming::Steps steps = FrameTiming::physicsSteps(dt);
+    for (int i = 0; i < steps.count; i++) {
+        if (forceAdapter_) forceAdapter_->update(steps.dt);
+        if (!isLinear) updateHeatGrid(steps.dt);
+        updateParticles(steps.dt);
+    }
     renderParticles(matrix);
 }
 
