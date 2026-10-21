@@ -133,6 +133,7 @@ void ConfigStorage::begin() {
         configFile = new File(InternalFS);
     }
     flashOk = true;
+    startWriter();
 
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
         Serial.print(F("[DEBUG] ConfigData: ")); Serial.print(sizeof(ConfigData));
@@ -546,46 +547,33 @@ void ConfigStorage::saveToFlash() {
     data_.magic = MAGIC_NUMBER;
     data_.deviceVersion = DEVICE_VERSION;
     data_.settingsVersion = SETTINGS_VERSION;
+    const uint32_t crc = crc32Bytes(reinterpret_cast<const uint8_t*>(&data_), sizeof(ConfigData));
 
-    // Identical to what this boot already wrote: skip the erase/write. A
-    // flash write halts the CPU long enough to drop audio; re-writing the
-    // same bytes (e.g. a `set` back to the old value) buys nothing.
-    uint32_t crc = crc32Bytes(reinterpret_cast<const uint8_t*>(&data_), sizeof(ConfigData));
-    if (lastWrittenValid_ && crc == lastWrittenCrc_) {
+    if (writerTask_ == nullptr) {
+        // startWriter() failed (logged at boot). Write here rather than lose
+        // the setting, and say so every time: this stalls the loop (#191).
+        SerialConsole::logError(F("[FALLBACK] config writer task missing: saving on the loop task (stalls)"));
+        saveToFlashSync();
+        return;
+    }
+
+    auto mtx = static_cast<SemaphoreHandle_t>(stateMutex_);
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    // Identical to what will be on flash once queued/in-flight writes land:
+    // skip. A real write still erases flash (#152's skip-identical rule).
+    const bool same = pendingValid_ ? (crc == pendingCrc_)
+                    : writerBusy_   ? (crc == inflightCrc_)
+                    : (lastWrittenValid_ && crc == lastWrittenCrc_);
+    if (same) {
+        xSemaphoreGive(mtx);
         SerialConsole::logDebug(F("Config unchanged, flash write skipped"));
         return;
     }
-    // From here the on-flash copy may be destroyed (remove before write):
-    // until a write succeeds, nothing is known to be on flash.
-    lastWrittenValid_ = false;
-
-    // Delete existing file if present
-    if (InternalFS.exists(CONFIG_FILENAME)) {
-        if (!InternalFS.remove(CONFIG_FILENAME)) {
-            SerialConsole::logError(F("Failed to remove old config file"));
-            return;
-        }
-    }
-
-    // Write config to file
-    configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
-    if (!(*configFile)) {
-        SerialConsole::logError(F("Failed to open config file"));
-        return;
-    }
-
-    uint32_t bytesWritten = configFile->write((const uint8_t*)&data_, sizeof(ConfigData));
-    configFile->close();
-
-    if (bytesWritten != sizeof(ConfigData)) {
-        SerialConsole::logError(F("Config write failed"));
-        lastWrittenValid_ = false;
-        return;
-    }
-
-    lastWrittenCrc_ = crc;
-    lastWrittenValid_ = true;
-    SerialConsole::logDebug(F("Config saved to flash"));
+    memcpy(&pending_, &data_, sizeof(ConfigData));
+    pendingCrc_ = crc;
+    pendingValid_ = true;
+    xSemaphoreGive(mtx);
+    xSemaphoreGive(static_cast<SemaphoreHandle_t>(writerWake_));
 #elif defined(ESP32)
     if (!flashOk) {
         SerialConsole::logWarn(F("Flash not available"));
@@ -607,6 +595,137 @@ void ConfigStorage::saveToFlash() {
     SerialConsole::logWarn(F("No flash on this platform"));
 #endif
 }
+
+void ConfigStorage::saveToFlashSync() {
+#if BLINKY_CONFIG_ASYNC_SAVE
+    if (!flashOk || configFile == nullptr) {
+        SerialConsole::logWarn(F("Flash not available"));
+        return;
+    }
+    // Let a queued write land first, so it can't overwrite this one later.
+    flushPendingSave();
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+    const uint32_t crc = crc32Bytes(reinterpret_cast<const uint8_t*>(&data_), sizeof(ConfigData));
+    auto mtx = static_cast<SemaphoreHandle_t>(stateMutex_);
+    if (mtx) xSemaphoreTake(mtx, portMAX_DELAY);
+    lastWrittenValid_ = false;  // the old copy is removed before the write
+    if (mtx) xSemaphoreGive(mtx);
+    const bool ok = writeNow(data_);
+    if (mtx) xSemaphoreTake(mtx, portMAX_DELAY);
+    lastWrittenCrc_ = crc;
+    lastWrittenValid_ = ok;
+    if (mtx) xSemaphoreGive(mtx);
+#else
+    saveToFlash();
+#endif
+}
+
+bool ConfigStorage::flushPendingSave(uint32_t timeoutMs) {
+#if BLINKY_CONFIG_ASYNC_SAVE
+    auto mtx = static_cast<SemaphoreHandle_t>(stateMutex_);
+    if (mtx == nullptr) return true;  // no writer: saves were synchronous
+    const uint32_t t0 = millis();
+    for (;;) {
+        xSemaphoreTake(mtx, portMAX_DELAY);
+        const bool idle = !pendingValid_ && !writerBusy_;
+        xSemaphoreGive(mtx);
+        if (idle) return true;
+        if (millis() - t0 > timeoutMs) {
+            SerialConsole::logError(F("Settings write did not reach flash in time (pending change may be lost)"));
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+#else
+    (void)timeoutMs;
+    return true;
+#endif
+}
+
+#if BLINKY_CONFIG_ASYNC_SAVE
+bool ConfigStorage::writeNow(const ConfigData& d) {
+    // One writer at a time: the writer task and saveToFlashSync() share the
+    // configFile object (a save can also arrive from the BLE task, #173).
+    auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
+    if (wm) xSemaphoreTake(wm, portMAX_DELAY);
+    bool ok = false;
+    // Delete existing file if present
+    if (InternalFS.exists(CONFIG_FILENAME) && !InternalFS.remove(CONFIG_FILENAME)) {
+        SerialConsole::logError(F("Failed to remove old config file"));
+    } else {
+        configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
+        if (!(*configFile)) {
+            SerialConsole::logError(F("Failed to open config file"));
+        } else {
+            uint32_t bytesWritten = configFile->write(reinterpret_cast<const uint8_t*>(&d), sizeof(ConfigData));
+            configFile->close();
+            if (bytesWritten != sizeof(ConfigData)) {
+                SerialConsole::logError(F("Config write failed"));
+            } else {
+                SerialConsole::logDebug(F("Config saved to flash"));
+                ok = true;
+            }
+        }
+    }
+    if (wm) xSemaphoreGive(wm);
+    return ok;
+}
+
+void ConfigStorage::writerMain(void* arg) {
+    auto* self = static_cast<ConfigStorage*>(arg);
+    auto mtx = static_cast<SemaphoreHandle_t>(self->stateMutex_);
+    auto wake = static_cast<SemaphoreHandle_t>(self->writerWake_);
+    static ConfigData inflight;  // static: keep ~650 B off this task's stack
+    for (;;) {
+        xSemaphoreTake(wake, portMAX_DELAY);
+        for (;;) {
+            xSemaphoreTake(mtx, portMAX_DELAY);
+            if (!self->pendingValid_) {
+                xSemaphoreGive(mtx);
+                break;
+            }
+            memcpy(&inflight, &self->pending_, sizeof(ConfigData));
+            const uint32_t crc = self->pendingCrc_;
+            self->pendingValid_ = false;
+            self->writerBusy_ = true;
+            self->inflightCrc_ = crc;
+            self->lastWrittenValid_ = false;  // the old copy is removed before the write
+            xSemaphoreGive(mtx);
+
+            const bool ok = self->writeNow(inflight);
+
+            xSemaphoreTake(mtx, portMAX_DELAY);
+            self->lastWrittenCrc_ = crc;
+            self->lastWrittenValid_ = ok;
+            self->writerBusy_ = false;
+            xSemaphoreGive(mtx);
+        }
+    }
+}
+
+void ConfigStorage::startWriter() {
+    if (writerTask_ != nullptr) return;
+    stateMutex_ = xSemaphoreCreateMutex();
+    writeMutex_ = xSemaphoreCreateMutex();
+    writerWake_ = xSemaphoreCreateBinary();
+    TaskHandle_t h = nullptr;
+    // Below the loop task (TASK_PRIO_LOW): it runs only while the loop is
+    // blocked (vTaskDelay each iteration, render waits), and the loop
+    // preempts it the moment it wakes, so LittleFS's CPU work never delays
+    // a frame. Time slicing is off, so it shares the lowest level with the
+    // idle task by blocking (on flash completions and its wake semaphore).
+    // 1024 words: LittleFS + the SoftDevice flash path.
+    if (stateMutex_ == nullptr || writeMutex_ == nullptr || writerWake_ == nullptr ||
+        xTaskCreate(writerMain, "cfgw", 1024, this, TASK_PRIO_LOWEST, &h) != pdPASS) {
+        SerialConsole::logError(F("[FALLBACK] config writer task not started: saves will stall the loop (#191)"));
+        writerTask_ = nullptr;
+        return;
+    }
+    writerTask_ = h;
+}
+#endif
 
 bool ConfigStorage::quarantineDeviceConfig() {
     // Crash-loop recovery: blow away the `isValid` flag on the stored device
@@ -636,7 +755,7 @@ bool ConfigStorage::quarantineDeviceConfig() {
     // valid, the write either failed outright or was rolled back — log it
     // loudly so the operator knows the next boot will replay the crash
     // instead of falling into safeMode.
-    saveToFlash();
+    saveToFlashSync();
 
     // Re-read into a scratch struct without disturbing the in-RAM `data_`
     // (which other code paths may still depend on this boot session).
@@ -1039,5 +1158,5 @@ void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams&
 void ConfigStorage::factoryReset() {
     SerialConsole::logInfo(F("Factory reset"));
     loadDefaults();
-    saveToFlash();
+    saveToFlashSync();
 }

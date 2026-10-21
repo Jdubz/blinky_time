@@ -306,6 +306,8 @@ set <name> <value>  # Modify value
 save                # Persist to flash
 ```
 
+`save` (and the auto-save 5 s after the last `set`) returns at once. A writer task does the flash write in the background, so the visuals don't freeze (#191); a page erase can still pause a frame for up to ~90 ms. `reboot`, `bootloader` and `ota commit` wait for a pending write before resetting, so nothing saved is lost.
+
 ---
 
 ## 🔍 Common Pitfalls

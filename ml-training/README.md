@@ -23,7 +23,7 @@ make export CONFIG=...    # Export TFLite INT8 → C header
 make eval CONFIG=...      # Evaluate on the 18-track edm/ corpus
 ```
 
-Always pass `CONFIG=`. The Makefile's default (`configs/wider_rf.yaml`) is a legacy beat-era causal CNN.
+Always pass `CONFIG=` (an onset config): `prepare`, `train`, `export` and `eval` refuse without it (#271).
 
 `./train_pipeline.sh <config> <run-name> [--skip-labels] [--skip-prep]` runs onset labels → prepare → train → eval → export in one go. Launch it in tmux too.
 
