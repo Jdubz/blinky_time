@@ -90,7 +90,10 @@ def _default_corpora() -> list[Corpus]:
             audio_dir=_TRAINING_AUDIO,
             onset_dir=_TRAINING_LABELS_BASE / "onsets_consensus",
             human_edits_dir=_TRAINING_LABELS_BASE / "onsets_human",
-            beat_dir=_TRAINING_LABELS_BASE / "consensus_v5",
+            # No beat markers: consensus_v5 was archived, and beat outputs
+            # are never labels (CLAUDE.md, #271). Pass beat_dir via --corpus
+            # to show them as reference.
+            beat_dir=None,
             librosa_dir=_TRAINING_LABELS_BASE / "onsets_librosa",
             description="Training corpus (devtop-local). Edits stay on devtop and feed prepare_dataset.py.",
         ),

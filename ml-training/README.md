@@ -27,7 +27,7 @@ Always pass `CONFIG=`. The Makefile's default (`configs/wider_rf.yaml`) is a leg
 
 `./train_pipeline.sh <config> <run-name> [--skip-labels] [--skip-prep]` runs onset labels → prepare → train → eval → export in one go. Launch it in tmux too.
 
-**`make label` and `make merge` produce BEAT labels** (`label_beats.py`, `merge_consensus_labels_v2.py`). Never use them as training targets. Onset labels come from `scripts/generate_onset_consensus.py` (5 onset detectors) and `scripts/generate_kick_weighted_targets.py` / `scripts/clean_kick_weighted.py` (kick/snare weighted labels from drum stems).
+**`make label` generates onset labels** (`scripts/generate_onset_consensus.py`, 5 onset detectors; it resumes). `make merge` refuses: it used to write BEAT consensus into the onset label dir (#271). `make prepare/train/export/eval` require `CONFIG=` (an onset config). Onset labels come from `scripts/generate_onset_consensus.py` and `scripts/generate_kick_weighted_targets.py` / `scripts/clean_kick_weighted.py` (kick/snare weighted labels from drum stems).
 
 ## Configuration
 
