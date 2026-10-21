@@ -3,6 +3,9 @@
 Upload and flash are separate operations:
   POST /api/fleet/upload  — accept .hex file, store it, return path (instant)
   POST /api/fleet/flash   — flash stored firmware to devices (background job)
+  POST /api/fleet/deploy  — the whole hardened pipeline server-side: stable
+                            release -> verify -> store -> flash -> restore +
+                            save -> post-deploy assertion (firmware/deploy_pipeline.py)
   GET  /api/fleet/jobs/{id} — poll flash job progress
   GET  /api/fleet/jobs      — list all flash jobs
 
@@ -19,10 +22,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
+from ..firmware import deploy_pipeline
 from ..firmware.flash_job import FlashJob, FlashJobState
 from ..paths import firmware_dir
 from .deps import get_fleet, require_api_key, require_deploy_tool
-from .models import FlashRequest
+from .models import DeployRequest, FlashRequest
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,6 +94,25 @@ async def fleet_upload(
         raise HTTPException(400, f"Invalid version format '{version}' (expected: b<number>)")
 
     content = await firmware.read()
+    hex_path = _store_firmware(content, version)
+
+    return {
+        "status": "ok",
+        "firmware_path": str(hex_path),
+        "firmware_size": len(content),
+        "version": version,
+        "message": f"Firmware stored ({len(content)} bytes). Use POST /api/fleet/flash to deploy.",
+    }
+
+
+def _store_firmware(content: bytes, version: str | None) -> Path:
+    """Store `content` as the server's current firmware, with its metadata.
+
+    Shared by /api/fleet/upload and /api/fleet/deploy, so both leave the
+    same state behind for auto-recovery and /api/fleet/firmware.
+    """
+    import datetime
+
     if len(content) < 1000:
         raise HTTPException(400, f"Firmware file too small ({len(content)} bytes)")
     if len(content) > 5_000_000:
@@ -99,27 +122,17 @@ async def fleet_upload(
     # Overwriting is intentional — only the latest upload matters.
     hex_path = _firmware_hex_path()
     hex_path.write_bytes(content)
+    log.info("Fleet firmware stored: firmware.hex (%d bytes, version=%s)", len(content), version)
 
-    log.info("Fleet upload: stored firmware.hex (%d bytes, version=%s)", len(content), version)
-
-    # Persist firmware metadata for version tracking
-    import datetime
-
-    meta = {
-        "version": version,
-        "firmware_path": str(hex_path),
-        "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "size_bytes": len(content),
-    }
-    _save_firmware_meta(meta)
-
-    return {
-        "status": "ok",
-        "firmware_path": str(hex_path),
-        "firmware_size": len(content),
-        "version": version,
-        "message": f"Firmware stored ({len(content)} bytes). Use POST /api/fleet/flash to deploy.",
-    }
+    _save_firmware_meta(
+        {
+            "version": version,
+            "firmware_path": str(hex_path),
+            "uploaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "size_bytes": len(content),
+        }
+    )
+    return hex_path
 
 
 # ── Firmware status ──────────────────────────────────────────────────
@@ -191,36 +204,18 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
     # PRESENT BLE devices are flashable too — we just-in-time connect for
     # the flash and disconnect after. The broadcaster gets paused around
     # the flash (BCM43455 can't both advertise and act as central).
-    flashable_states = (
-        DeviceState.CONNECTED,
-        DeviceState.DFU_RECOVERY,
-        DeviceState.PRESENT,
-    )
+    flashable_states = deploy_pipeline.FLASHABLE_STATES
 
     if body.device_ids is not None:
-        # Explicit whitelist: only flash THESE devices. Validate every ID
-        # resolves and is flashable — fail loud on a typo or stale ID rather
-        # than silently dropping it (operator thought they were deploying
-        # to N but actually deployed to N-1).
-        devices = []
-        missing: list[str] = []
-        wrong_state: list[str] = []
-        for device_id in body.device_ids:
-            d = fleet.get_device(device_id)
-            if d is None:
-                missing.append(device_id)
-                continue
-            if d.platform != "nrf52840" or d.state not in flashable_states:
-                wrong_state.append(f"{device_id}({d.platform},{d.state.value})")
-                continue
-            devices.append(d)
-        if missing or wrong_state:
-            raise HTTPException(
-                400,
-                "device_ids whitelist had bad entries — "
-                f"unknown: {missing or '[]'}, "
-                f"not flashable: {wrong_state or '[]'}",
-            )
+        # Explicit whitelist: only flash THESE devices. The same resolver
+        # /api/fleet/deploy uses: every ID must resolve and be flashable,
+        # failing loud on a typo or stale ID rather than silently dropping it.
+        if not body.device_ids:
+            raise HTTPException(400, "device_ids is empty: name the devices to flash")
+        try:
+            devices = deploy_pipeline.resolve_targets(fleet, body.device_ids)
+        except deploy_pipeline.DeployError as e:
+            raise HTTPException(400, str(e)) from e
     else:
         # No whitelist provided — back-compat: flash all eligible. Auto-
         # recovery WILL NOT be armed in this branch (see below).
@@ -438,38 +433,69 @@ async def _flash_fleet_background(
     }
 
 
-# ── Compile + flash (convenience) ────────────────────────────────────
+# ── Deploy (the hardened pipeline, server-side) ───────────────────────
+
+# One deploy at a time: two would race on the stored firmware and the fleet.
+_deploy_lock = asyncio.Lock()
+
+
+def _store_release_hex(hex_path: Path, tag: str) -> Path:
+    try:
+        return _store_firmware(hex_path.read_bytes(), tag)
+    except (HTTPException, OSError) as e:
+        detail = e.detail if isinstance(e, HTTPException) else str(e)
+        raise deploy_pipeline.DeployError("store", str(detail)) from e
 
 
 @router.post("/fleet/deploy", dependencies=[Depends(require_api_key)])
-async def fleet_deploy(platform: str = "nrf52840") -> dict[str, Any]:
-    """Compile firmware and flash all connected devices.
+async def fleet_deploy(body: DeployRequest) -> dict[str, Any]:
+    """Deploy a STABLE release to explicitly named devices, server-side.
 
-    Synchronous compile, then submits flash as background job.
-    Returns compilation info + job_id for flash progress polling.
+    Runs deploy.sh's hardened pipeline with the modules deploy.sh relies on
+    (firmware/deploy_pipeline.py): release download + sha256 verify (stable
+    only), store, flash through the single orchestrator, restore runtime
+    settings + save, post-deploy assertion. It never compiles, and never
+    flashes a local build (#269).
+
+    No X-Deploy-Tool header: that header stops callers from skipping the
+    pipeline by calling the low-level /fleet/upload + /fleet/flash directly.
+    This route IS the pipeline. Needs the API key and an explicit scope
+    (device_ids, or "all").
+
+    Returns a job_id; poll GET /api/fleet/jobs/{job_id}. The result says
+    which step failed, if any.
     """
-    from ..firmware.compile import compile_firmware as _compile
-    from ..firmware.compile import generate_dfu_package
+    if _deploy_lock.locked():
+        raise HTTPException(409, "A fleet deploy is already running")
+    fleet = get_fleet()
+    # Validate the scope now so a typo fails the request, not a job later.
+    try:
+        deploy_pipeline.resolve_targets(fleet, body.device_ids)
+    except deploy_pipeline.DeployError as e:
+        raise HTTPException(400, str(e)) from e
 
-    log.info("Fleet deploy: compiling %s firmware...", platform)
-    compile_result = await asyncio.to_thread(_compile, platform)
-    if compile_result["status"] != "ok":
-        raise HTTPException(500, f"Compilation failed: {compile_result['message']}")
-    hex_path = compile_result["hex_path"]
+    jm = _get_flash_job_manager()
 
-    log.info("Fleet deploy: generating DFU package...")
-    dfu_result = await asyncio.to_thread(generate_dfu_package, hex_path)
-    if dfu_result["status"] != "ok":
-        raise HTTPException(500, f"DFU package failed: {dfu_result['message']}")
+    async def _run(job: Any) -> dict[str, Any]:
+        async with _deploy_lock:
+            return await deploy_pipeline.run_deploy(
+                fleet,
+                job,
+                release_tag=body.release,
+                device_ids=body.device_ids,
+                download_dir=firmware_dir() / "release-download",
+                store_firmware=_store_release_hex,
+                flash=_flash_fleet_background,
+            )
 
-    # Submit flash as background job
-    body = FlashRequest(firmware_path=hex_path)
-    flash_response = await fleet_flash(body)
-
+    job = jm.submit("fleet-deploy", _run)
+    scope = (
+        body.device_ids if isinstance(body.device_ids, str) else f"{len(body.device_ids)} device(s)"
+    )
     return {
+        "job_id": job.id,
         "status": "submitted",
-        "hex_path": hex_path,
-        "zip_path": dfu_result["zip_path"],
-        "job_id": flash_response.get("job_id"),
-        "devices": flash_response.get("devices"),
+        "release": body.release or "latest stable",
+        "scope": scope,
+        "message": f"Deploying {body.release or 'the latest stable release'} to {scope} in background",
     }
