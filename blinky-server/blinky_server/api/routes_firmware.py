@@ -436,7 +436,9 @@ async def _flash_fleet_background(
 # ── Deploy (the hardened pipeline, server-side) ───────────────────────
 
 # One deploy at a time: two would race on the stored firmware and the fleet.
-_deploy_lock = asyncio.Lock()
+# Claimed in the request handler itself (no await between the check and the
+# claim), so a second request gets 409 rather than queueing behind the first.
+_deploy_running = False
 
 
 def _store_release_hex(hex_path: Path, tag: str) -> Path:
@@ -465,7 +467,8 @@ async def fleet_deploy(body: DeployRequest) -> dict[str, Any]:
     Returns a job_id; poll GET /api/fleet/jobs/{job_id}. The result says
     which step failed, if any.
     """
-    if _deploy_lock.locked():
+    global _deploy_running
+    if _deploy_running:
         raise HTTPException(409, "A fleet deploy is already running")
     fleet = get_fleet()
     # Validate the scope now so a typo fails the request, not a job later.
@@ -477,7 +480,8 @@ async def fleet_deploy(body: DeployRequest) -> dict[str, Any]:
     jm = _get_flash_job_manager()
 
     async def _run(job: Any) -> dict[str, Any]:
-        async with _deploy_lock:
+        global _deploy_running
+        try:
             return await deploy_pipeline.run_deploy(
                 fleet,
                 job,
@@ -487,8 +491,15 @@ async def fleet_deploy(body: DeployRequest) -> dict[str, Any]:
                 store_firmware=_store_release_hex,
                 flash=_flash_fleet_background,
             )
+        finally:
+            _deploy_running = False
 
-    job = jm.submit("fleet-deploy", _run)
+    _deploy_running = True
+    try:
+        job = jm.submit("fleet-deploy", _run)
+    except Exception:
+        _deploy_running = False
+        raise
     scope = (
         body.device_ids if isinstance(body.device_ids, str) else f"{len(body.device_ids)} device(s)"
     )

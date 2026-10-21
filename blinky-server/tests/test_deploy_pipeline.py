@@ -349,6 +349,16 @@ async def test_route_rejects_unknown_devices_before_starting(client: AsyncClient
     assert r.status_code == 400 and "unknown" in r.text
 
 
+async def test_route_refuses_a_second_deploy_while_one_runs(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from blinky_server.api import routes_firmware
+
+    monkeypatch.setattr(routes_firmware, "_deploy_running", True)
+    r = await client.post("/api/fleet/deploy", json={"device_ids": "all"})
+    assert r.status_code == 409
+
+
 async def test_route_rejects_a_malformed_release(client: AsyncClient) -> None:
     r = await client.post("/api/fleet/deploy", json={"device_ids": "all", "release": "main"})
     assert r.status_code == 422
