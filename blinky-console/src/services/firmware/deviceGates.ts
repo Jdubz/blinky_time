@@ -7,10 +7,16 @@ import { buildOf, type ReleaseEntry, type ReleaseIndex } from './releases';
  * browser flash is held to the same bar as a workstation flash.
  */
 
-/** b190-era firmware counts every boot toward the 5-boot config quarantine until 5 min of uptime. */
-export const PREFLIGHT_UPTIME_MS = 5 * 60_000 + 15_000;
 /** CLAUDE.md 60-second rule: markStable() fires at 60 s; wait 75 s before any further reset. */
 export const STABLE_UPTIME_MS = 75_000;
+/**
+ * Uptime before the page resets a device. Browser updates (signed OTA) only
+ * run on b215+ firmware, which clears its reboot counter at markStable (60 s)
+ * and itself refuses `ota commit` before 75 s. deploy_local.py keeps 5 min
+ * 15 s: it resets devices of any age, including b190-era firmware that counts
+ * every boot for 5 minutes.
+ */
+export const PREFLIGHT_UPTIME_MS = STABLE_UPTIME_MS;
 
 /** `json info`, keeping the fields the gates read (DeviceInfoSchema strips them). */
 export const FlashInfoSchema = z

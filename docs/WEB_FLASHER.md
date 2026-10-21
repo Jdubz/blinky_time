@@ -16,7 +16,7 @@ Why this route, and what each platform allows (iPhone, Windows UF2, Chrome's DFU
 
 The update never goes through the bootloader's UF2 drive or its BLE DFU service; the page talks to the running firmware instead.
 
-1. **Connect.** The page connects over **USB** (Web Serial) or **Bluetooth** (Web Bluetooth to the app's Nordic UART service).
+1. **Connect.** The page connects over **USB** (Web Serial). **Bluetooth** (Web Bluetooth to the app's Nordic UART service) is built and tested in code but **hidden** (`BLE_UPDATES_ENABLED` in `FirmwarePage.tsx`) until it passes on hardware; see [Open items](#open-items).
 2. **Signed manifest.** The page sends `ota manifest <hex>`. The device refuses unless all of these hold:
    - the Ed25519 signature verifies against the release key compiled into it;
    - the board is ours;
@@ -26,7 +26,7 @@ The update never goes through the bootloader's UF2 drive or its BLE DFU service;
 3. **Image.** It sends the image as `ota chunk <offset> <crc16> <base64>` lines of 512 bytes. They go in order, each with its own CRC, and the device hashes them (SHA-512) as they arrive into its 2 MB QSPI flash. Throughout, the old firmware keeps running, and an interrupted transfer resumes from the device's count.
 4. **Commit.** `ota commit` makes the device re-read the staged image from QSPI and re-check its SHA-512. Only then does it arm the bootloader (RAM magic and `GPREGRET`) and reset.
 5. **Install.** The bootloader checks the image's CRC and copies it into internal flash (about 10–15 s).
-6. **Verify.** The page finds the device again by chip serial number, checks it, restores runtime settings, saves, and holds until 75 s of uptime.
+6. **Verify.** The page finds the device again by chip serial number, checks it, restores runtime settings and saves, then reports success. It watches the first 75 s of uptime in the background and speaks up only if the device restarts.
 
 Why this route:
 - **The UF2 drive can't work for a person on Windows** with bootloader 0.8.0-10. Windows writes `System Volume Information` as the drive mounts, and the bootloader's stuck-transfer check drops the drive 8.5 s later (measured on hat_v1). Bootloader 0.8.0-11 fixes the check; see [Recovery](#recovery).
@@ -39,9 +39,9 @@ Before any public page or nearby Bluetooth central could reach that path, it had
 
 | Platform | Connection |
 |---|---|
-| Desktop Chrome/Edge | USB or Bluetooth |
-| Android Chrome | Bluetooth |
-| iPhone/iPad | The free Bluefy browser (Bluetooth); Safari has no Web Bluetooth |
+| Desktop Chrome/Edge | USB |
+| Android Chrome | Not yet (needs Bluetooth) |
+| iPhone/iPad | Not yet (needs Bluetooth, through the free Bluefy browser; Safari has no Web Bluetooth) |
 | Firefox desktop (151+) | Web Serial behind an extra prompt (not tested) |
 
 ### Signing
@@ -83,13 +83,13 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam
 **Pre-flight** (`deviceGates.ts`, `flashFlow.ts`, ported from `tools/deploy_local.py`):
 - `json info`: an nRF52840 with a hardware serial, and **configured**.
 - Confirmations for a reinstall, a downgrade, or a `SETTINGS_VERSION` change.
-- **Uptime ≥ 5 min 15 s** before anything that ends in a reset. The device itself also refuses `ota commit` before 75 s.
+- **Uptime ≥ 75 s** before anything that ends in a reset, which is also what the device enforces for `ota commit`. `deploy_local.py` keeps 5 min 15 s because it resets devices of any age, including b190-era firmware that counts every boot for 5 minutes. Signed OTA only exists on b215+, which clears its reboot counter at 60 s.
 - `ota status` must answer. Firmware older than signed OTA gets a clear "update it once another way" message.
 
 **After the update:**
 - The same chip (sn) and device id come back, configured, on **exactly** the release version, with audio counters and the BLE stack up, all checked before `save`.
 - Then `restore_runtime_settings` + `save`.
-- Then a 75 s hold with no restart.
+- Then success is reported straight away; no 6 s metrics wait (frame rate is only a warning here). The page keeps polling until 75 s of uptime and logs an error only if the device restarts. Unplugging early costs one boot of the firmware's 5-boot allowance, and a firmware that crashes before it starts is caught by the bootloader's handshake watchdog, so this is a report, not a gate.
 
 **Cancel** works until `commit`. A cancelled or failed transfer leaves the old firmware running and a half-filled staging area, which the next manifest erases. While an update runs, `#firmware` stays mounted through Back and warns before the tab is closed.
 
@@ -114,6 +114,7 @@ With 0.8.0-11 the drive also no longer times out back to the app when nothing is
   - The device verified it, the bootloader installed it, and the app was back in ~8 s.
   - Exact-version, identity, config and BLE checks passed, then restore + save and the 75 s hold. Confirmed afterwards over serial.
   - The only automation stand-in: Chrome's serial-port chooser was answered with the already-permitted port.
+- **Full USB update from a real signed release, by a person on the live mirror:** `b211-dev-15db1bda` (current master, trusting the release key) → **b215**, the first release signed by `sign-release.yml`. Served from a Firebase preview channel of the console with updates on, using the same mirror the live site serves (the `.bin` and `.otam` hashes match the GitHub release). The owner clicked it through in Chrome. Afterwards over serial: `b215-39df3912`, `hat_v1`, configured, 120 fps.
 - **Bluetooth: not working from Windows Chrome yet.**
   - The hat connected, but every GATT operation took ~5 s and a 10-byte write failed after ~10 s (`GATT operation failed for unknown reason`).
   - A native client (`bleak`) on the same PC saw an incomplete service table.
@@ -126,9 +127,9 @@ Turn `FIRMWARE_UPDATES_ENABLED` on when all of these are done:
 
 1. Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
 2. Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
-3. Bluetooth: fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Until then, hide the Bluetooth option.
+3. Bluetooth (optional for a USB-only launch; it's hidden): fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Then set `BLE_UPDATES_ENABLED`.
 4. Roll bootloader 0.8.0-11 out (sacrificial device first) so recovery over USB works on Windows. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
-5. iPhone: one full update in Bluefy.
+5. iPhone (after Bluetooth): one full update in Bluefy.
 
 ## Open items
 

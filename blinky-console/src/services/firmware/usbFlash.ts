@@ -266,9 +266,7 @@ export async function reconnectApp(
 export async function recoverOverUsb(release: VerifiedRelease, ui: FlashUi): Promise<FlashInfo> {
   await deliverUf2(release, ui);
   const back = await reconnectApp(null, ui);
-  try {
-    return await finishAfterFlash(back.link, null, release.entry.version, ui);
-  } finally {
-    await back.transport.disconnect();
-  }
+  return finishAfterFlash(back.link, null, release.entry.version, ui, () =>
+    back.transport.disconnect()
+  );
 }

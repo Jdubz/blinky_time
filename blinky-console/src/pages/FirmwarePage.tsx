@@ -1,6 +1,7 @@
 /**
  * FirmwarePage (#firmware) — update ONE device to a stable release, straight
- * from the browser over USB or Bluetooth (no blinky-server), through the
+ * from the browser over USB (Bluetooth is built but hidden: BLE_UPDATES_ENABLED;
+ * no blinky-server), through the
  * device's own signed-OTA path (services/firmware/otaFlash.ts). Releases come
  * from the stable-release mirror the console deploy publishes; every check
  * lives in services/firmware. See docs/WEB_FLASHER.md.
@@ -22,6 +23,14 @@ import {
 import { recoverOverUsb, usbFlashSupported } from '../services/firmware/usbFlash';
 
 type Mode = 'update' | 'recover';
+
+/**
+ * Bluetooth updates stay hidden until they work on hardware: from Windows
+ * Chrome the bench run had slow GATT operations, a failed write and a device
+ * restart (docs/WEB_FLASHER.md, open items). The transport and protocol code
+ * stays (otaFlash.ts, tested); turn this on only with a passing BLE bench run.
+ */
+export const BLE_UPDATES_ENABLED = false;
 
 /** Releases offered for a mode: updates need the signed OTA pair; recovery uses the UF2. */
 function selectable(index: ReleaseIndex | null, mode: Mode): ReleaseEntry[] {
@@ -66,7 +75,7 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
   const [indexError, setIndexError] = useState<string | null>(null);
   const [tag, setTag] = useState<string>('');
   const usbOk = usbFlashSupported();
-  const bleOk = bleUpdateSupported();
+  const bleOk = BLE_UPDATES_ENABLED && bleUpdateSupported();
   const [mode, setMode] = useState<Mode>('update');
   const [method, setMethod] = useState<UpdateMethod>(usbOk ? 'usb' : 'ble');
 
@@ -240,9 +249,8 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
 
       {!usbOk && !bleOk && (
         <div className="shell-warning">
-          This browser can&apos;t talk to devices. Use Chrome or Edge on a computer (USB or
-          Bluetooth), or Chrome on Android (Bluetooth). On an iPhone or iPad, open this page in the
-          free Bluefy browser (Bluetooth).
+          This browser can&apos;t talk to devices. Use Chrome or Edge on a computer, and connect the
+          device with a USB cable. Phones and tablets aren&apos;t supported yet.
         </div>
       )}
       {indexError && (
@@ -278,7 +286,7 @@ export function FirmwarePage({ onClose, onActiveChange }: FirmwarePageProps) {
             </a>
           )}
 
-          {mode === 'update' && (
+          {mode === 'update' && BLE_UPDATES_ENABLED && (
             <div className="fw-field" role="radiogroup" aria-label="Connection">
               <span>Connection</span>
               <div className="fw-choices">

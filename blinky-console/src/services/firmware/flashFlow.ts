@@ -111,18 +111,39 @@ export async function preflight(
 /**
  * deploy_local.py steps 7–9 after the device is back on its app: verify it
  * is the same configured device on exactly the expected version with BLE up
- * (BEFORE `save`, which would hang on a half-up SoftDevice), restore runtime
- * settings + save as every fleet deploy does, then hold until markStable().
+ * (BEFORE `save`, which would hang on a half-up SoftDevice), and restore
+ * runtime settings + save as every fleet deploy does.
+ *
+ * Unlike deploy_local.py, it doesn't hold the operator until markStable():
+ * it returns once the device is verified and saved, and watches the first
+ * minute in the background (watchFirstMinute), reporting only a restart.
+ * Owns the link: `close` runs when the watch ends, or right away on failure.
  */
 export async function finishAfterFlash(
+  link: DeviceLink,
+  before: FlashInfo | null,
+  expectedVersion: string,
+  ui: FlashUi,
+  close: () => Promise<void>
+): Promise<FlashInfo> {
+  let after: FlashInfo;
+  try {
+    after = await verifyAndSave(link, before, expectedVersion, ui);
+  } catch (err) {
+    await close();
+    throw err;
+  }
+  void watchFirstMinute(link, after.millis, ui, close);
+  return after;
+}
+
+async function verifyAndSave(
   link: DeviceLink,
   before: FlashInfo | null,
   expectedVersion: string,
   ui: FlashUi
 ): Promise<FlashInfo> {
   ui.progress('Checking the updated device', null);
-  // deploy.sh: let the 5 s loop-metrics window close so fps is real.
-  await sleep(6000);
   const after = await link.info();
   // A recovery (device found already in its bootloader) has no "before":
   // identity can't be compared, everything else still is.
@@ -134,23 +155,46 @@ export async function finishAfterFlash(
   await link.command('restore_runtime_settings');
   await link.command('save');
   ui.log('Runtime settings restored to the release defaults and saved');
+  return after;
+}
 
-  let latest = after;
-  for (let up = after.millis; up < STABLE_UPTIME_MS; ) {
-    ui.progress(
-      `Letting the new firmware settle (${Math.ceil((STABLE_UPTIME_MS - up) / 1000)}s)`,
-      up / STABLE_UPTIME_MS
-    );
-    await sleep(Math.min(STABLE_UPTIME_MS - up + 1000, 5000));
-    const now = await link.info();
-    if (now.millis < up) {
-      throw new FirmwareError(
-        `The device restarted ${Math.round(now.millis / 1000)}s ago, during its first minute on the new ` +
-          'firmware. Leave it powered and contact support before trying again.'
-      );
+/**
+ * After the page reports success: keep polling until the device passes
+ * markStable (75 s of uptime) and say something only if it restarts. An
+ * early unplug costs one boot of the firmware's 5-boot allowance, and a
+ * firmware that crashes before SafeBootWatchdog::begin() is caught by the
+ * bootloader's handshake watchdog, so this is a report, not a gate.
+ */
+export async function watchFirstMinute(
+  link: DeviceLink,
+  startMillis: number,
+  ui: Pick<FlashUi, 'log'>,
+  close: () => Promise<void>
+): Promise<void> {
+  const left = Math.ceil((STABLE_UPTIME_MS - startMillis) / 1000);
+  if (left > 0) ui.log(`Leave it powered for about ${left}s more while the new firmware settles`);
+  try {
+    for (let up = startMillis; up < STABLE_UPTIME_MS; ) {
+      await sleep(Math.min(STABLE_UPTIME_MS - up + 1000, 5000));
+      const now = await link.info();
+      if (now.millis < up) {
+        ui.log(
+          `The device restarted ${Math.round(now.millis / 1000)}s ago, during its first minute on the ` +
+            'new firmware. Leave it powered and contact support before trying again.',
+          'error'
+        );
+        return;
+      }
+      up = now.millis;
     }
-    up = now.millis;
-    latest = now;
+    ui.log('The new firmware passed its first minute');
+  } catch (err) {
+    // Unplugged or the page let go of the port: the update itself is done.
+    ui.log(
+      `Stopped watching the first minute (${err instanceof Error ? err.message : String(err)})`,
+      'warn'
+    );
+  } finally {
+    await close();
   }
-  return latest;
 }

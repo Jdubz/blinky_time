@@ -135,40 +135,54 @@ describe('preflight', () => {
 });
 
 describe('finishAfterFlash', () => {
-  it('verifies, restores settings, saves, and holds until markStable', async () => {
+  it('verifies, restores settings and saves, then returns without holding for markStable', async () => {
     const dev = new FakeDevice();
     const before = { ...(await infoOf(dev)) };
     dev.reboot();
     dev.version = b216.version;
-    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, ui());
-    await vi.advanceTimersByTimeAsync(STABLE_UPTIME_MS + 10_000);
+    const close = vi.fn(async () => {});
+    const u = ui();
+    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, u, close);
+    await vi.advanceTimersByTimeAsync(100);
     await p;
     expect(dev.sent.filter(c => c !== 'json info')).toEqual(['restore_runtime_settings', 'save']);
-    expect(Date.now() - dev.bootedAt).toBeGreaterThanOrEqual(STABLE_UPTIME_MS);
+    expect(Date.now() - dev.bootedAt).toBeLessThan(STABLE_UPTIME_MS);
+    expect(u.logs.some(l => /Leave it powered for about \d+s/.test(l))).toBe(true);
+    // The first minute is still watched in the background; the link closes after it.
+    expect(close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STABLE_UPTIME_MS + 10_000);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(u.logs).toContain('The new firmware passed its first minute');
   });
 
-  it('fails on the wrong version and never saves', async () => {
+  it('fails on the wrong version, never saves, and closes the link', async () => {
     const dev = new FakeDevice();
     const before = await infoOf(dev);
     dev.reboot(); // came back on the old firmware
-    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, ui());
+    const close = vi.fn(async () => {});
+    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, ui(), close);
     const done = expect(p).rejects.toThrow(/expected b216-aaaaaaaa/);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(1000);
     await done;
     expect(dev.sent).not.toContain('save');
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it('fails when the device restarts during its first minute', async () => {
+  it('reports a restart during the first minute after success', async () => {
     const dev = new FakeDevice();
     const before = await infoOf(dev);
     dev.reboot();
     dev.version = b216.version;
-    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, ui());
-    const done = expect(p).rejects.toThrow(/restarted .* during its first minute/);
+    const close = vi.fn(async () => {});
+    const u = ui();
+    const p = finishAfterFlash(new DeviceLink(dev), before, b216.version, u, close);
+    await vi.advanceTimersByTimeAsync(100);
+    await p;
     await vi.advanceTimersByTimeAsync(20_000);
     dev.reboot();
     await vi.advanceTimersByTimeAsync(10_000);
-    await done;
+    expect(u.logs.some(l => /restarted .* during its first minute/.test(l))).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });
 

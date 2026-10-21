@@ -113,7 +113,7 @@ describe('FirmwarePage', () => {
     expect(ota.updateDevice).not.toHaveBeenCalled();
   });
 
-  it('updates over the chosen connection', async () => {
+  it('updates over USB and offers no Bluetooth option while BLE is unproven', async () => {
     vi.mocked(releases.fetchReleaseIndex).mockResolvedValue(index);
     const rel = { entry: release('b216'), image: new Uint8Array(4) } as unknown as OtaRelease;
     vi.mocked(releases.loadOtaRelease).mockResolvedValue(rel);
@@ -123,10 +123,11 @@ describe('FirmwarePage', () => {
     } as never);
     render(<FirmwarePage />);
     await screen.findByRole('button', { name: 'Update to b216' });
-    fireEvent.click(screen.getByRole('radio', { name: /Bluetooth/ }));
+    expect(screen.queryByRole('radio', { name: /Bluetooth/ })).toBeNull();
+    expect(screen.queryByText(/Bluetooth/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Update to b216' }));
     expect(await screen.findByText(/Updated: Hat is running b216-aaaaaaaa/)).toBeInTheDocument();
-    expect(vi.mocked(ota.updateDevice).mock.calls[0][0]).toBe('ble');
+    expect(vi.mocked(ota.updateDevice).mock.calls[0][0]).toBe('usb');
   });
 
   it('Cancel during the download stops before any device interaction', async () => {
