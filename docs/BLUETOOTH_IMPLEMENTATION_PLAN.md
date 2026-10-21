@@ -35,7 +35,7 @@ REST API: http://blinkyhost.local:8420/api/
   └── --no-serial flag            — BLE-only fleet management mode
 ```
 
-The `/firmware/compile*` routes are gone. `POST /fleet/deploy` (server-side compile + flash) still exists in `routes_firmware.py` but contradicts the stable-only rule; don't use it. Flash fleet devices only with `./scripts/deploy.sh`.
+The `/firmware/compile*` routes are gone. `POST /fleet/deploy` no longer compiles (#269). It runs deploy.sh's hardened pipeline server-side (`firmware/deploy_pipeline.py`): stable release only, verified, explicit targets, the single flash path, settings restore + save, and the post-deploy assertion. Flash fleet devices with `./scripts/deploy.sh` or that endpoint.
 
 **Use case**: Fleet management — settings changes, generator/effect selection (the scene system was retired 2026-05-19; see `archive/OPEN_ISSUES_2026_05_19.md` §1.2), device configuration, status monitoring, OTA firmware updates.
 
@@ -59,7 +59,7 @@ The `/firmware/compile*` routes are gone. `POST /fleet/deploy` (server-side comp
 | **Server flash (UF2)** | nRF52840 | `POST /api/devices/{id}/flash` delegates to `uf2_upload.py` for serial devices |
 | **BLE DFU flash** | nRF52840 | `POST /api/devices/{id}/flash` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
 | **Fleet flash** | Pi | `POST /api/fleet/flash` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
-| **Fleet deploy** | Pi | Superseded: `./scripts/deploy.sh` installs the latest stable release (`POST /api/fleet/deploy` compiled locally; don't use it) |
+| **Fleet deploy** | Pi | `./scripts/deploy.sh`, or `POST /api/fleet/deploy` (same pipeline, server-side): the latest stable release, verified |
 | **BLE DFU proven** | nRF52840 | End-to-end tested Mar 30: 510KB in ~5.5 min, 2/2 fleet flash success, auto-reconnect after DFU |
 | **DFU zip generation** | Pi | Pure-Python (`firmware/compile.py`), no adafruit-nrfutil dependency. The compile endpoints were removed |
 | **UF2 bootloader entry** | nRF52840 | Write RAM magic (0xBEEF0057) to 0x20007F7C → DSB/ISB → NVIC_SystemReset (custom bootloader checks RAM before GPREGRET) |

@@ -4,8 +4,8 @@ This document is a short index of the flashing/recovery safety mechanisms that p
 
 ## The five invariants
 
-1. **Never bypass `deploy.sh` for fleet flashes.** The server enforces an `X-Deploy-Tool` header on `/api/fleet/upload`, `/api/fleet/flash`, `/api/devices/{id}/flash`, `/api/flash-jobs`, and the destructive `/api/devices/{id}/command` subset (`device upload`, `reboot`, `wipe_device_identity`, and its old aliases `factory` / `reset`). Direct `curl` returns 403 even with a valid API key.
-   - Operator entry point: `scripts/deploy.sh` (requires explicit `--devices=` target).
+1. **Never bypass deploy.sh's hardened pipeline for fleet flashes.** The pipeline is what's required: stable release, verified; explicit targets; the single flash path; restore + save; post-deploy assertion. `scripts/deploy.sh` and `POST /api/fleet/deploy` (`blinky_server/firmware/deploy_pipeline.py`, the same modules) both run it. The low-level routes skip it, so the server enforces an `X-Deploy-Tool` header on `/api/fleet/upload`, `/api/fleet/flash`, `/api/devices/{id}/flash`, `/api/flash-jobs`, and the destructive `/api/devices/{id}/command` subset (`device upload`, `reboot`, `wipe_device_identity`, and its old aliases `factory` / `reset`). Direct `curl` returns 403 even with a valid API key.
+   - Operator entry points: `scripts/deploy.sh` (requires an explicit `--devices=` target), or `POST /api/fleet/deploy` with `device_ids` (a list, or `"all"`; API key).
    - Gated command list: `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST`.
 
 2. **One flash path inside blinky-server.** Every flash routes through `FleetManager.flash_device()` → `_run_flash_job` → guarded `_impl` functions. Direct calls to `_uf2_write_impl_for_job` or `_ble_dfu_write_impl` raise `OutsideFlashJobContextError`. The audit log at `~/.local/share/blinky-server/flash_attempts.jsonl` is the persistent ledger.

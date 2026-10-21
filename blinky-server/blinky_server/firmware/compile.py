@@ -59,7 +59,7 @@ def find_project_root() -> Path:
 # Version.h and the sketch are shared by every compile: gen_version.sh
 # truncates Version.h before writing, so a concurrent compile could read a
 # partial header. Regeneration and compilation run under one lock (concurrent
-# /fleet/deploy requests compile in separate worker threads).
+# compile requests run in separate worker threads).
 _COMPILE_LOCK = threading.Lock()
 
 

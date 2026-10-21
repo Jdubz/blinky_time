@@ -134,7 +134,7 @@ All scoring uses `blinky_server/testing/scoring.py`. **No BPM. No beat F1. No do
 | POST | `/api/fleet/command` | Broadcast to all devices |
 | PUT | `/api/fleet/settings/{name}` | Set on all devices |
 | POST | `/api/fleet/flash` | Flash all devices (was `/fleet/ota`). deploy.sh only (`X-Deploy-Tool`) |
-| POST | `/api/fleet/deploy` | Compile + flash all. Still in the code, but contradicts the stable-only release rule (docs/RELEASE_PROCESS.md); don't use |
+| POST | `/api/fleet/deploy` | deploy.sh's pipeline server-side: a stable release (verified) to explicit `device_ids` or `"all"`, flash, restore + save, post-deploy assertion (#269). API key; no compile |
 | ~~POST~~ | ~~`/api/firmware/compile`, `/api/firmware/compile-dfu`~~ | Removed |
 | WS | `/ws/{id}` | Device data stream |
 | WS | `/ws/fleet` | Multiplexed fleet stream |
