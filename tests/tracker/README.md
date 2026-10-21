@@ -23,7 +23,10 @@ tests/tracker/build_host_nn.sh --out build/host_nn
 python tests/tracker/run_tracker_eval.py --harness build/host_nn/tracker_harness_nn --compare build/tracker_harness
 ```
 
-CI's `tracker-harness-nn` job builds it, stress-tests it, and warns while the embedded model is refused.
+CI's `tracker-harness-nn` job builds it and runs the stress set with it. It also fails if:
+- the embedded model is refused (the NN harness exits 5);
+- the simulated frame rate with the NN falls below 35 fps (the b208-b210 drain-loop livelock);
+- the corpus gate with the NN falls below its floors.
 
 ## Build
 
@@ -58,6 +61,8 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 | Metric | Meaning |
 |---|---|
 | `lock` | Phase consistency at strong ground-truth onsets (0..1) |
+| `excess` | `lock` minus the `lock` of the same phase trace sampled at random times. ~0 means no real alignment. Use this, not raw `lock`, to compare builds |
+| `tempo` | Fraction of post-warm-up time where the tracked period is a valid multiple (1/2, 1, 2 or 4 beats, ±4%) of the track's tempo from `.pattern_gt.json` |
 | `worst20s` | Worst 20 s window of `lock`, which catches drift |
 | `recall` | Strong onsets with a fired onset within ±50 ms |
 | `bpm` | Median BPM after warm-up |
@@ -66,9 +71,10 @@ Compare the same track across `--fps` values: the numbers should barely move.
 
 ## CI
 
-The `tracker-harness` job in `.github/workflows/pr-validation.yml` runs on every PR. It does two things:
+The `tracker-harness` job in `.github/workflows/pr-validation.yml` runs on every PR. It does three things:
 
 - **UBSan stress:** builds the harness with `-fsanitize=undefined,float-cast-overflow,float-divide-by-zero -fno-sanitize-recover=all` and runs `run_stress.py`. That covers synthetic silence, an 8 s gap, clipping, white noise, 50 Hz hum and 128 BPM clicks, each at 15, 60 and 250 loop fps. Any UB, crash, firmware `BLINKY_ASSERT` after `begin()` (the harness exits 3), empty output or non-finite phase/bpm fails the job. The corpus gate uses the same harness, so a tripped assert fails it too. It also checks the level normalizer on a smooth noise riser: `level` must not stay pinned at 1.0 for 2 s or more (#176).
+- **Frame-rate gate:** runs the release build with the CPU cost model below (NN off, as on devices) and fails if the simulated frame rate is under 150 fps.
 - **Corpus gate:** runs `run_tracker_eval.py` with `--min-excess`, `--min-tempo` and `--min-recall` floors set just under the current baseline. Raise the floors in the workflow when the tracker improves.
 
 To run the stress set locally:

@@ -2,9 +2,9 @@
 
 This document is a short index of the flashing/recovery safety mechanisms that protect the nRF52840 fleet. The authoritative behavioural rules live in `CLAUDE.md` at the repo root — this file only summarises where each mechanism is defined.
 
-## The four invariants
+## The five invariants
 
-1. **Never bypass `deploy.sh` for fleet flashes.** The server enforces an `X-Deploy-Tool` header on `/api/fleet/upload`, `/api/fleet/flash`, and the destructive `/api/devices/{id}/command` subset (`device upload`, `reboot`, `wipe_device_identity`). Direct `curl` returns 403 even with a valid API key.
+1. **Never bypass `deploy.sh` for fleet flashes.** The server enforces an `X-Deploy-Tool` header on `/api/fleet/upload`, `/api/fleet/flash`, `/api/devices/{id}/flash`, `/api/flash-jobs`, and the destructive `/api/devices/{id}/command` subset (`device upload`, `reboot`, `wipe_device_identity`, and its old aliases `factory` / `reset`). Direct `curl` returns 403 even with a valid API key.
    - Operator entry point: `scripts/deploy.sh` (requires explicit `--devices=` target).
    - Gated command list: `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST`.
 
@@ -16,18 +16,23 @@ This document is a short index of the flashing/recovery safety mechanisms that p
    - SWD recovery host: `swd-flash.local` (Raspberry Pi Zero W with known-good fleet BL + MBR + S140 staged).
 
 4. **60-second rule between resets.** `SafeBootWatchdog::markStable()` is deferred to 60 s of uptime so mid-init crashes still count toward `RebootFrequencyCounter`. Any chain of resets within 60 s bumps the counter; at 5 cumulative trips, `configStorage.quarantineDeviceConfig()` flips `isValid=false` and the device boots into safeMode.
-   - Code: `blinky-things/blinky-things.ino` (`markStable()` deferral, `quarantineDeviceConfig` call), `hal/SafeBootWatchdog.h`, `hal/RebootFrequencyCounter.h`.
+   - Code: `blinky-things/blinky-things.ino` (`markStable()` deferral, `quarantineDeviceConfig` call), `blinky-things/hal/SafeBootWatchdog.h`, `blinky-things/hal/RebootFrequencyCounter.h`.
+   - Since b215, `RebootFrequencyCounter` counts only fault resets (watchdog or CPU lockup) and clears after 5 min of uptime; older firmware counts every boot. Keep the 60-second gap anyway: devices in the field may run older firmware.
+
+5. **Only stable releases reach the fleet and new devices.** Candidates and `--dev` builds go only to a device listed in `devices/test_devices.json`, through `tools/deploy_local.py`. `deploy.sh` installs stable releases only.
+   - Channels, gate and promotion: `docs/RELEASE_PROCESS.md`.
+   - Browser updates for personal devices (stable only, signed OTA over USB): `docs/WEB_FLASHER.md`.
 
 ## Firmware-side defences
 
-- **Static assertions** on all stored config structs (`blinky-things/config/ConfigStorage.h` ~lines 388–398). Compile fails if a struct size changes without bumping `SETTINGS_VERSION` (currently 95).
-- **Parameter validation** in `ConfigStorage.cpp::loadConfiguration()`. Out-of-range values fall back to defaults; corrupt configs cannot brick boot.
+- **Static assertions** on all stored config structs (`blinky-things/config/ConfigStorage.h` ~lines 394–406). Compile fails if a struct size changes without bumping `SETTINGS_VERSION` (currently 98).
+- **Parameter validation** in `ConfigStorage.cpp::loadConfiguration()`. An out-of-range value is clamped so the device still boots, but every clamp is logged at `[ERROR]` and counted in `BlinkyAssert::failCount`, so it shows up in `show errors`.
 - **Flash address validation** before every config write — refuses writes into the bootloader region or off the end of the application slot. See `blinky-things/tests/SafetyTest.h::isFlashAddressSafe()`.
 - **No silent fallbacks** — see CLAUDE.md "No Silent Fallbacks" section for the patterns we refuse to add (zero-fill array literals, ternary defaults, switch catchalls, etc.). Reference incident: v33 mel filterbank corruption (2026-04-27).
 
 ## Recovery path (in order)
 
-1. `./scripts/deploy.sh --devices=<id>` (re-flashes via the orchestrator; respects dedup + max-attempts unless `--force`).
+1. `./scripts/deploy.sh --devices=<id>` (re-flashes the latest stable release via the orchestrator; operator flashes skip the auto-recovery dedup).
 2. Wait ≥75 s uptime so `markStable()` clears the watchdog counter.
 3. Push device config via the fleet API `device upload` command (deploy.sh-gated).
 4. SWD via `swd-flash.local` if the device is off USB and unreachable over BLE.

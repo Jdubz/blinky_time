@@ -2,6 +2,12 @@
 
 **Status:** **CLOSED — migration complete.** All L0–L6 phases landed; `_uf2_write_impl_for_job` / `_ble_dfu_write_impl` are guarded by `assert_inside_orchestrator`, every legacy public entry point (`upload_uf2`, `upload_ble_dfu`, `upload_firmware`, `upload_via_uf2`, `_dfu_locks`) is deleted from `blinky_server/`, and `FleetManager.flash_fleet()` is the canonical multi-device entry point. `MAX_AUTO_RECOVERY_ATTEMPTS = 3` is in `manager.py:55`. This document is retained as the architectural rationale referenced from CLAUDE.md "Single Flash Entry Point"; the migration sequencing below is historical.
 
+**Still open nearby (2026-10-21), tracked as GitHub issues:**
+- #251: bind auto-recovery to an immutable, stable-only image. Until then `deploy.sh` is stable-only and candidates/dev builds go only through `tools/deploy_local.py` (docs/RELEASE_PROCESS.md).
+- #219: confirm server auto-recovery on an enrolled fleet device (hardware-test item 3 below).
+- #215: one clean all-BLE `deploy.sh` run to exit 0 (BLE-DFU path, item 2 below).
+- #212: blinky-server re-acquires the serial port after a bootloader flash despite the release hold.
+
 **Owner:** blinky-server (no active work; closed 2026-05-19).
 **Driven by:** 2026-05-17 session — flash-job-rewrite Phases 1-6 landed
 cleanly, Phase 7 live test surfaced both a real 0.8.0-4 bootloader bug
@@ -42,9 +48,11 @@ hardware shakes those out.
    end-to-end, no anomalies.
 2. BLE-DFU flash via `POST /api/flash-jobs` on a device that's in
    DFU_RECOVERY state. Should reach VERIFIED through
-   `_run_ble_dfu_flash` (L0). NOT YET EXERCISED on real hardware.
+   `_run_ble_dfu_flash` (L0). NOT YET EXERCISED on real hardware as of
+   this plan; the remaining fleet check is #215.
 3. Auto-recovery cycle via `_background_loop` calling `flash_device`
-   (after L3c migrates that branch). NOT YET EXERCISED.
+   (after L3c migrates that branch). NOT YET EXERCISED as of this plan;
+   still open as #219.
 4. Concurrent flash attempts on different devices (no global
    serialization), with broadcaster correctly stopped + restarted
    once per cycle. NOT YET EXERCISED.
@@ -451,7 +459,9 @@ surface).
 
 ### F1. 0.8.0-4 bootloader stuck-MSC
 
-The cart devices need to move to 0.8.0-7 (`msc_uf2_check_stuck()`
+**Done.** The fleet bootloader is now 0.8.0-10-g4c5faae (CLAUDE.md,
+`bootloader/README.md`), which includes `msc_uf2_check_stuck()`.
+Original note: the cart devices need to move to 0.8.0-7 (`msc_uf2_check_stuck()`
 auto-recovers from this state in ~13 s). That's a bootloader update
 — see `CLAUDE.md` "Bootloader changes are higher-stakes than firmware
 changes" and `deploy-bootloader.sh`. **Out of scope for the lockdown
@@ -469,7 +479,8 @@ underlying flash failure mode is gone.
    first — write succeeded byte-for-byte, but BL stayed in DFU mode
    (F1's second symptom, the `bootloader_settings_save` silent-fail).
 3. Operator-directed `./scripts/deploy.sh --devices=E9:A8:5C:A5:BB:BE
-   --skip-compile --no-bump` — BLE-DFU through the post-watchdog-fix
+   --skip-compile --no-bump` (flags since removed: `deploy.sh` now
+   installs only stable GitHub releases) — BLE-DFU through the post-watchdog-fix
    pipeline completed cleanly in ~6 min (watchdog-pinger task
    confirmed alive throughout). BL exited DFU, app booted, both serial
    and BLE transports show `cart_inner` running `b166-c3acc4fd-dirty`,

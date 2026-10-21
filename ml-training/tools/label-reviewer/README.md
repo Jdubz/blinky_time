@@ -46,8 +46,13 @@ overlaid. Click a marker to select it; the edit panel appears below the legend.
 
 ### Marker colors
 
-- **Red** — Beat label (consensus_v5). Read-only.
-- **Green (downbeat marker)** — Downbeat. Read-only.
+- **Red** — Beat label (consensus_v5). Read-only, reference only.
+- **Green (downbeat marker)** — Downbeat. Read-only, reference only.
+
+  Beat markers show only if the corpus's `beat_dir` holds `<stem>.beats.json`.
+  The `training` corpus still points at `labels/consensus_v5/`, which was moved
+  to `labels/_archive_beats_2026_04_29/` on 2026-04-29, and the `edm` corpus has
+  no beat dir. So on a current setup no beat markers appear.
 - **Cyan** — Auto onset (3+ systems agree, high confidence).
 - **Yellow** — Auto onset (1–2 systems, low confidence).
 - **Orange** — Human-edited auto onset (time and/or strength changed).

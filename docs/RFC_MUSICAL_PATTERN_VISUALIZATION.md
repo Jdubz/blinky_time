@@ -1,7 +1,10 @@
 # RFC: Musical Pattern Visualization — Beyond Phase Tracking
 
 **Date:** 2026-03-20
-**Status:** **IMPLEMENTED** — the PLP-replaces-PLL core proposal shipped as AudioTracker v8 (multi-source ACF + epoch-fold PLP). The `pllPhase_`/`odfGateThreshold` parameters listed under "Removed" below are gone from firmware. Secondary proposals (multi-band envelopes, nPVI rhythm complexity) are partial/deferred — see `AUDIO_ARCHITECTURE.md` for the current implementation surface. Retained as the design rationale for the PLL→PLP transition.
+**Status (checked 2026-10-21):** **Phase 1 implemented, the rest not pursued.** Kept as the design rationale for the move from PLL to PLP. For what the firmware does now, read `AUDIO_ARCHITECTURE.md`, not this RFC.
+- **Shipped (Phase 1):** PLP replaced the PLL. `audio/AudioTracker.cpp` runs ACF on three sources (bass flux, bass energy, mic level), then epoch-folds the bass flux at the chosen period. All PLL parameters and `odfgate` are gone. The comb filter bank, which this RFC kept, was removed too (v80).
+- **Different from this RFC:** `phase` and `rhythmStrength` were **not** removed. `AudioControl` keeps `phase` (now a real rhythm phase that keeps absolute time, #259–#261), adds `plpPulse` and `beatCount`, and keeps `rhythmStrength` instead of adding `plpConfidence`. The music stream sends the pattern as a new key `pp` and leaves `ph` as phase; it did not reuse `ph`/`str`. `show plp`, `json plp` and `show bands` were never added (`show pattern`/`json pattern` show the pattern slots).
+- **Not done:** Phases 2–4 (multi-band energy fields, nPVI, centroid-driven brightness, `plpLookahead`). `SharedSpectralAnalysis` computes a spectral centroid, but only for diagnostics; no generator reads it.
 **Author:** jdubz + Claude
 
 ## Problem Statement

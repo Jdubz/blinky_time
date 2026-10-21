@@ -1,6 +1,6 @@
 # Acoustic test box: build plan
 
-**Status:** planned (2026-10-20). Nothing is built yet. This doc covers the hardware, the enclosure, and the gates the box must pass before its numbers are trusted.
+**Status:** planned (2026-10-20; still nothing built as of 2026-10-21). This doc covers the hardware, the enclosure, and the gates the box must pass before its numbers are trusted.
 
 ## Why
 
@@ -179,7 +179,7 @@ The box's numbers are not trusted until all of these pass. The thresholds are pr
 1. **Open-bench prototype.** Pi 5 + DAC + speaker + one chip on an open table. Run the validation suite and pass the host-timing gate before building any enclosure.
 2. **Build the enclosure** and the internal mounts.
 3. **Calibrate** and pass the acceptance gates.
-4. **Move the release gate** to the box: `release_gate.py` runs on the box's Pi 5 against a box test chip. Today the gate talks to the chip's serial port directly (through `deploy_local.py`), while on the box blinky-server owns that port. Before this step, either the gate stops the box server for the run, or it gets a mode that goes through the box server's API.
+4. **Move the release gate** to the box: `release_gate.py` runs on the box's Pi 5 against a box test chip. Today the gate talks to the chip's serial port directly (through `deploy_local.py`), while on the box blinky-server owns that port. Before this step, either the gate stops the box server for the run, or it gets a mode that goes through the box server's API. The gate's missing timing checks (#258; today it only has a 60 fps disaster floor) are a natural fit for the box's camera.
 5. **Retire test duty from blinkyhost:** take `hat_v1` off `devices/test_devices.json` (Software setup, step 4).
 
 ## Open questions

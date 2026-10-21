@@ -1,145 +1,87 @@
 # Blinky Things - Folder Structure
 
-This document describes the organized folder structure for the Generator-Effect-Renderer architecture.
+This document describes the folder structure of the firmware sketch (XIAO nRF52840 Sense). For the Generator → Effect → Renderer design itself, see [docs/GENERATOR_EFFECT_ARCHITECTURE.md](../docs/GENERATOR_EFFECT_ARCHITECTURE.md); for audio, [docs/AUDIO_ARCHITECTURE.md](../docs/AUDIO_ARCHITECTURE.md).
+
+Build it with `./scripts/build.sh` from the repo root (pinned toolchain; see [CLAUDE.md](../CLAUDE.md)). Never flash it with `arduino-cli upload` or the Arduino IDE.
 
 ## 📁 Directory Structure
 
 ```
 blinky-things/
-├── BlinkyArchitecture.h           # Main include file for Arduino IDE
-├── Generator.h                    # Base generator interface
-├── Effect.h                       # Base effect interface  
-├── EffectMatrix.h/cpp             # Visual buffer/matrix
-├── SerialConsole.h/cpp            # Serial command interface
-├── devices/                       # Device configurations
-├── generators/                    # Pattern generators
-│   └── fire/                      # Fire generator
-│       ├── FireGenerator.h/cpp    # Fire pattern implementation
-│       └── tests/                 # Fire generator tests
-│           ├── FireGeneratorTest.h/cpp
-│           └── FireTestRunner.h/cpp
-├── effects/                       # Visual effects/modifiers
-│   └── hue-rotation/              # Hue rotation effect
-│       ├── HueRotationEffect.h/cpp
-│       └── tests/                 # Hue rotation tests
-│           └── HueRotationEffectTest.h/cpp
-├── renderers/                     # Hardware renderers
-│   ├── EffectRenderer.h/cpp       # LED strip/matrix renderer
-│   └── tests/                     # Renderer tests (future)
-└── tests/                         # Main test coordination
-    └── GeneratorTestRunner.h/cpp  # Overall test runner
+├── blinky-things.ino              # Main sketch: setup(), loop(), globals
+├── BlinkyArchitecture.h           # Single include for all headers
+├── BlinkyImplementations.h        # #includes every .cpp in a subfolder (see below)
+├── BUILD_NUMBER                   # Build number; build.sh writes types/Version.h from it
+├── Nrf52PdmMic.cpp                # nRF52840 PDM mic driver
+├── OtaMonocypher*.c               # Vendored Monocypher (Ed25519) units for signed OTA
+├── audio/                         # AudioTracker (tempo, PLP phase, onsets),
+│                                  #   SharedSpectralAnalysis, FrameOnsetNN + model data
+├── comms/                         # BLE: NUS serial, fleet scanner, phone record stream
+│                                  #   (Esp32*/Wifi* files are unused ESP32-S3 leftovers)
+├── config/                        # ConfigStorage (flash), SettingsRegistry, DeviceConfigLoader
+├── devices/                       # DeviceConfig struct + TestChipConfig (fallback for
+│                                  #   unconfigured chips); other *Config.h are legacy
+├── effects/                       # HueRotationEffect, NoOpEffect
+│   └── tests/                     # On-device effect tests (ENABLE_TESTING only)
+├── generators/                    # Fire, Water, PlasmaGlobe ("lightning"), Audio
+├── hal/                           # Platform detection, SafeBootWatchdog,
+│   │                              #   RebootFrequencyCounter, heap lock
+│   ├── hardware/                  # LED strip drivers (NeoPixel, nRF52 PWM), mic
+│   ├── interfaces/                # ILedStrip, IPdmMic, IGpio, IAdc, ISystemTime
+│   └── mock/                      # Mocks for host builds
+├── inputs/                        # AdaptiveMic, SerialConsole, BatteryMonitor, IMUHelper
+├── math/                          # SimplexNoise
+├── ota/                           # Signed OTA: OtaManifest, OtaKeys, QspiOtaStaging
+├── particles/                     # Particle, ParticlePool, ParticleGenerator base
+├── physics/                       # Spawn regions, boundaries, forces, backgrounds
+├── render/                        # RenderPipeline, EffectRenderer, LEDMapper
+│   └── tests/                     # On-device renderer tests (ENABLE_TESTING only)
+├── tests/                         # GeneratorTestRunner, safety/static-init checks
+└── types/                         # PixelMatrix, BlinkyAssert, FrameClock, Version.h (generated)
 ```
+
+Device layouts are not compiled in. Each device gets its config as JSON (from `devices/registry/` at the repo root) through the `device upload` command, stores it in flash, and loads it at boot with `config/DeviceConfigLoader`.
 
 ## 🎯 Design Principles
 
-### 1. **Co-location of Tests**
-- Tests live next to the code they test
-- Each component has its own `tests/` subdirectory
-- Easy to find and maintain component-specific tests
+### 1. **Clear Component Separation**
+- **`generators/`** - Pattern creation (fire, water, plasma, audio)
+- **`effects/`** - Pattern modification (hue rotation)
+- **`render/`** - Mapping the pattern to the physical LED layout and output
 
-### 2. **Clear Component Separation**
-- **`generators/`** - Pattern creation (fire, stars, waves, etc.)
-- **`effects/`** - Pattern modification (hue rotation, brightness, blur, etc.)
-- **`renderers/`** - Hardware output (LED strips, matrices, etc.)
+### 2. **Shared Particle Physics**
+- Fire and Water are particle generators (`particles/ParticleGenerator.h`); PlasmaGlobe and Audio derive from `Generator` directly
+- `physics/PhysicsContext` picks spawn regions, boundaries and forces for the device layout (matrix or linear)
 
-### 3. **Hierarchical Organization**
-- Each major component type gets its own directory
-- Individual implementations get subdirectories
-- Tests are co-located with their implementations
+### 3. **Arduino IDE Compatibility**
+- Arduino doesn't compile `.cpp` files in subfolders. **Every new `.cpp` in a subfolder must be added to `BlinkyImplementations.h`**, or it won't be built.
+- `BlinkyArchitecture.h` provides the headers for the main sketch
 
-### 4. **Arduino IDE Compatibility**
-- `BlinkyArchitecture.h` provides single include for main sketch
-- Relative includes work properly with subfolder structure
-- Main sketch stays clean and focused
+### 4. **Host Builds**
+- The same sources compile on a PC for the simulator (`blinky-simulator/`) and the host tests (`tests/timing`, `tests/tracker`, `tests/parity`), using the Arduino stubs in `blinky-simulator/include/`. Keep hardware access behind `hal/` so this keeps working.
 
 ## 🔧 Usage Patterns
 
-### For Arduino IDE Main Sketch
+### Main Sketch
 ```cpp
 #include "BlinkyArchitecture.h"
-
-FireGenerator fireGen;
-HueRotationEffect hueEffect;
-EffectRenderer renderer;
-EffectMatrix matrix(4, 15);
-
-void setup() {
-  fireGen.begin(4, 15);
-  hueEffect.begin(4, 15);
-  renderer.begin(4, 15, &leds);
-}
-
-void loop() {
-  fireGen.update();
-  fireGen.generate(&matrix);
-  hueEffect.apply(&matrix);
-  renderer.render(&matrix);
-}
+#include "BlinkyImplementations.h"
 ```
-
-### For Development/Testing
-```cpp
-#define ENABLE_TESTING
-#include "BlinkyArchitecture.h"
-
-// Now you have access to GeneratorTestRunner
-GeneratorTestRunner testRunner;
-```
+`blinky-things.ino` builds a `RenderPipeline` from the stored device config. The pipeline owns the generators and effects; the serial command `gen <name>` switches the active generator.
 
 ### For Adding New Generators
-1. Create `generators/myGenerator/` directory
-2. Add `MyGenerator.h/cpp` files  
-3. Create `generators/myGenerator/tests/` directory
-4. Add test files and runner
-5. Update `BlinkyArchitecture.h` to include new generator
+1. Add `generators/MyGenerator.h/.cpp` (derive from `Generator`, or `ParticleGenerator` for particle effects)
+2. Add a value to `GeneratorType` in `generators/Generator.h`
+3. Wire it into `render/RenderPipeline`
+4. Add the `.cpp` to `BlinkyImplementations.h`
+5. Add it to the simulator and the timing test build lists (`blinky-simulator/CMakeLists.txt`, `build.sh`, and the `timing` job in `.github/workflows/pr-validation.yml`)
 
 ### For Adding New Effects
-1. Create `effects/my-effect/` directory
-2. Add `MyEffect.h/cpp` files
-3. Create `effects/my-effect/tests/` directory  
-4. Add test files
-5. Update `BlinkyArchitecture.h` to include new effect
+1. Add `effects/MyEffect.h/.cpp` (derive from `Effect`)
+2. Wire it into `render/RenderPipeline`
+3. Add the `.cpp` to `BlinkyImplementations.h`
 
 ## 🧪 Testing Architecture
 
-### Component-Level Testing
-Each component has its own focused test suite:
-- **FireGeneratorTest** - Fire pattern accuracy, heat simulation
-- **HueRotationEffectTest** - Color transformation correctness
-- **EffectRendererTest** - Hardware mapping accuracy (future)
-
-### Integration Testing
-Main test runner coordinates all component tests:
-- **GeneratorTestRunner** - Runs tests for all generators and effects
-- Provides unified command interface for serial console
-- Enables comprehensive system validation
-
-### Test Commands
-All tests accessible through serial console:
-```
-generators              # Run all tests
-gen fire               # Fire generator tests
-effect hue             # Hue rotation tests (future)
-test help              # Show all commands
-```
-
-## 🚀 Benefits
-
-### Development Benefits
-- **Clear Structure** - Easy to navigate and understand
-- **Focused Testing** - Each component thoroughly tested
-- **Easy Extension** - Adding new generators/effects is straightforward
-- **Maintainable** - Related code stays together
-
-### Arduino IDE Benefits  
-- **Single Include** - Just `#include "BlinkyArchitecture.h"`
-- **Clean Main Sketch** - Focus on application logic
-- **Proper Dependencies** - All includes resolved automatically
-
-### Production Benefits
-- **Modular Architecture** - Components can be swapped easily
-- **Comprehensive Testing** - High confidence in functionality
-- **Extensible Design** - Easy to add new visual effects
-- **Professional Structure** - Enterprise-grade organization
-
-This structure scales from simple single-effect projects to complex multi-layer visual systems while maintaining clarity and testability.
+- **Host tests** (run in CI): see [tests/README.md](../tests/README.md). These are the tests that matter for new code.
+- **On-device tests** (`tests/`, `effects/tests/`, `render/tests/`): compiled only when `ENABLE_TESTING` is defined, which no current build does.

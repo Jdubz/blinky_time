@@ -2,7 +2,7 @@
 
 ## First-time setup
 
-After cloning the repo, install the git pre-push hook so blinky-server ruff (lint + format) and mypy run before every push. Without this, format-only failures only get caught on CI, costing a round-trip.
+After cloning the repo, install the pinned firmware toolchain once (`bash scripts/setup_toolchain.sh`; see [BUILD_GUIDE.md](BUILD_GUIDE.md)). Then install the git pre-push hook so blinky-server ruff (lint + format) and mypy run before every push. Without this, format-only failures only get caught on CI, costing a round-trip.
 
 ```bash
 ./scripts/install-hooks.sh
@@ -16,22 +16,16 @@ The console has a separate husky setup; `cd blinky-console && npm install` insta
 
 ### Upload Method (nRF52840)
 
-**NEVER use `arduino-cli upload` directly for the nRF52840.**
+**NEVER use `arduino-cli upload`, `make upload`, or `adafruit-nrfutil dfu serial` on the nRF52840.** The DFU serial protocol can brick the device.
 
-`arduino-cli upload` uses the DFU serial protocol which can corrupt the bootloader.
+**Only stable releases go to fleet and new devices.** Use:
+1. **Fleet devices:** `./scripts/deploy.sh --devices=<id|all|list>`.
+2. **A device on this machine's USB:** `python tools/deploy_local.py --port COMx --device-id <id>` (`--dry-run` first). `--dev` builds and release candidates are refused unless the device is listed in `devices/test_devices.json`.
+3. **A bricked bare chip that isn't in the fleet yet:** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0`.
 
-**Safe upload options:**
-1. **UF2 via script** (Linux/headless): `make uf2-upload UPLOAD_PORT=/dev/ttyACM0`
-2. **UF2 manual drag-and-drop**: double-tap Reset → drag `.uf2` to `XIAO-SENSE` drive
-3. **Arduino IDE**: Sketch → Upload (uses UF2 internally)
+Channels and the release flow: [RELEASE_PROCESS.md](RELEASE_PROCESS.md). Don't drag a local `.uf2` onto a configured device; it skips the identity and version checks.
 
-### Upload Method (ESP32-S3) — DEPRECATED
-
-> **ESP32-S3 support was cut in March 2026.** All active development targets nRF52840 only. Below retained for historical reference.
-
-The ESP32-S3 does not have the nRF52840 bootloader fragility. Both UF2 upload and `arduino-cli upload` work safely.
-
-**Recommended:** `make esp32-uf2-upload UPLOAD_PORT=/dev/ttyACM0`
+> ESP32-S3 is next-gen only ([NEXTGEN_ESP32S3_PLAN.md](NEXTGEN_ESP32S3_PLAN.md)); it isn't in the fleet.
 
 ### Recovery (nRF52840 bricked by DFU upload)
 
@@ -57,7 +51,7 @@ Installed nRF52840 devices are physically enclosed — reset buttons are **not**
 
 4. **Last resort:** SWD via `swd-flash.local`, or physical access if available. Most production fleet is sealed — exhaust the SWD path first.
 
-> **Test chips (unenclosed bare chips on bench):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible. See `feedback_test_chip_first` in memory.
+> **Test chips (unenclosed bare chips on bench):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible.
 
 > **Post-BLE-DFU quirk:** After a BLE DFU flash, USB serial does not re-enumerate without a physical power cycle. BLE reconnection works fine. See `BLUETOOTH_IMPLEMENTATION_PLAN.md`.
 
@@ -68,10 +62,12 @@ Installed nRF52840 devices are physically enclosed — reset buttons are **not**
 For any firmware deployment to fleet devices, the canonical workflow is:
 
 ```bash
-./scripts/deploy.sh --devices=<id|all|list>   # compile + upload + flash + verify
+./scripts/deploy.sh --devices=<id|all|list>   # latest stable release → upload → flash → verify
 ```
 
-This wraps `build.sh` (which auto-increments `BUILD_NUMBER`) and performs version-verify after flash. `scripts/pre_compile_safety.py` runs as a dependency of the `make compile-out` target (see Makefile `safety-check`); `build.sh`/`deploy.sh` invoke `arduino-cli` directly and do **not** currently call it. Run `make safety-check` explicitly if you want the safety pass before a `deploy.sh` run. Direct `arduino-cli compile` / `make compile` (no `-out`) skips the version bump and is fine for local iteration only.
+`deploy.sh` never compiles. It downloads the latest **stable** GitHub release (or `--release bN`, stable only), checks its sha256, flashes through blinky-server and verifies the version. A change reaches the fleet only after it is merged, built as a candidate, bench-gated and promoted, when the owner decides to release ([RELEASE_PROCESS.md](RELEASE_PROCESS.md)). To try your own build, use `./scripts/build.sh --dev` and `tools/deploy_local.py --dev` on a test device.
+
+`scripts/pre_compile_safety.py` runs only as part of the Makefile `compile-out` target (`make safety-check`); `build.sh` doesn't call it.
 
 For bare-chip recovery (device not enrolled in fleet), `make uf2-upload UPLOAD_PORT=/dev/ttyACM0`.
 
@@ -178,16 +174,11 @@ The mbed and non-mbed Seeeduino nRF52 cores define different macros. `PlatformDe
 ### Compiling for Both Platforms
 
 ```bash
-# nRF52840
-arduino-cli compile --fqbn "Seeeduino:nrf52:xiaonRF52840Sense" \
-  --output-dir /tmp/blinky-nrf52 blinky-things/
-
-# ESP32-S3
-arduino-cli compile --fqbn "esp32:esp32:XIAO_ESP32S3" \
-  --output-dir /tmp/blinky-esp32 blinky-things/
+./scripts/build.sh --no-bump          # nRF52840, inside the pinned toolchain
+./scripts/build.sh --esp32 --no-bump  # ESP32-S3 (next gen; not pinned yet)
 ```
 
-Or via Makefile: `make compile-out` and `make esp32-compile`.
+Or via Makefile: `make compile-out` and `make esp32-compile`. Don't call `arduino-cli compile` directly for the nRF52840: it would bypass the pinned toolchain in `.arduino/`.
 
 ---
 
@@ -203,17 +194,17 @@ Or via Makefile: `make compile-out` and `make esp32-compile`.
 
 ### How to Increment SETTINGS_VERSION
 
-**File: `blinky-things/config/ConfigStorage.h`** (currently at SETTINGS_VERSION = 95)
+**File: `blinky-things/config/ConfigStorage.h`** (currently at SETTINGS_VERSION = 98)
 
 ```cpp
 // Before:
-static const uint8_t SETTINGS_VERSION = 95;
+static const uint8_t SETTINGS_VERSION = 98;
 
 // After:
-static const uint8_t SETTINGS_VERSION = 96;  // v96: describe your changes here
+static const uint8_t SETTINGS_VERSION = 99;  // v99: describe your changes here
 ```
 
-Note: `SETTINGS_VERSION` bumps PRESERVE device config (LED layout, device name, etc.) via migration. The legacy `CONFIG_VERSION` field discarded all config on bump — that path is gone.
+Note: a `SETTINGS_VERSION` bump keeps the device config (LED layout, device name, etc.) but resets every runtime setting to its default on each device (boot log: "Settings version mismatch, using defaults (device config preserved)"). Release notes flag it for that reason.
 
 ### Required Steps After Struct Changes
 
@@ -234,11 +225,11 @@ struct StoredMicParams {
     float newParameter;  // NEW: describe purpose
 };
 
-// 2. Increment version (current = 95; bump to next)
-static const uint8_t SETTINGS_VERSION = 96;  // v96: added newParameter for XYZ
+// 2. Increment version (current = 98; bump to next)
+static const uint8_t SETTINGS_VERSION = 99;  // v99: added newParameter for XYZ
 
 // 3. Update static_assert (StoredMicParams is currently 8 bytes; sizes for
-//    other structs are in ConfigStorage.h ~lines 388-398)
+//    other structs are in ConfigStorage.h ~lines 394-406)
 static_assert(sizeof(StoredMicParams) == 12,  // Updated from 8
     "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion.");
 
@@ -273,19 +264,19 @@ static_assert(sizeof(StoredMicParams) == 8,
 
 ### Runtime Checks
 
-**Struct Size Logging** (prints at boot):
+**Struct Size Logging** (debug output at boot):
 ```
-[CONFIG] ConfigData size: ... bytes (per-struct sizes shown alongside)
+[DEBUG] ConfigData: ...B (MicParams: ...
 ```
 
 **Purpose**: Helps debug padding issues across platforms
 
 **Parameter Validation** (ConfigStorage.cpp):
 ```cpp
-validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
+validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
 ```
 
-**Purpose**: Prevents loading corrupt/garbage data from flash
+**Purpose**: Catches corrupt/garbage data from flash. An out-of-range value is logged at `[ERROR]`, counted in `BlinkyAssert::failCount` (visible in `show errors`), and clamped so the device still boots. Integers use the `VALIDATE_INT` macro.
 
 ### Safety Tests
 
@@ -303,14 +294,15 @@ validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
 
 ### Test Before Upload
 
-`scripts/pre_compile_safety.py` runs automatically as part of `make compile-out` and `deploy.sh`. The `SafetyTest::runAllTests()` runtime harness in `blinky-things/tests/SafetyTest.h` is no longer wired into the standard build — invoke it from a dedicated test sketch if needed.
+`scripts/pre_compile_safety.py` runs automatically as part of `make compile-out` (not `build.sh` or `deploy.sh`). The `SafetyTest::runAllTests()` runtime harness in `blinky-things/tests/SafetyTest.h` is no longer wired into the standard build — invoke it from a dedicated test sketch if needed.
 
 ### Use Serial Console for Tuning
 
 Prefer runtime tuning over reflashing:
 ```
-show onsetthresh    # Check current value
-set onsetthresh 3.0 # Modify value
+list                # List settings
+get <name>          # Check current value
+set <name> <value>  # Modify value
 save                # Persist to flash
 ```
 
@@ -320,11 +312,11 @@ save                # Persist to flash
 
 ### ❌ Forgot to Increment SETTINGS_VERSION
 
-**Symptom**: Device crashes in boot loop after upload
+**Symptom**: The `static_assert` fails at compile time (size changed), or, if the size didn't change, saved values load into the wrong fields
 
 **Cause**: Old flash data read with new struct layout
 
-**Fix**: Increment SETTINGS_VERSION, add validation, re-upload
+**Fix**: Increment SETTINGS_VERSION, update the assertion, add validation
 
 ### ❌ Missing Parameter Validation
 
@@ -332,7 +324,7 @@ save                # Persist to flash
 
 **Cause**: Garbage data from flash read into unvalidated parameter
 
-**Fix**: Add `validateFloat()` or `validateUint32()` call
+**Fix**: Add a `validateFloat()` or `VALIDATE_INT()` call
 
 ### ❌ Struct Padding Changed
 
@@ -348,7 +340,7 @@ save                # Persist to flash
 
 **Cause**: DFU serial protocol corrupted bootloader
 
-**Fix**: SWD recovery (see Recovery Requirements above). Use `make uf2-upload` instead.
+**Fix**: SWD recovery via `swd-flash.local` (see Recovery above). From then on, flash with `deploy.sh` / `deploy_local.py`.
 
 ---
 
@@ -363,7 +355,7 @@ Before merging config changes:
 - [ ] Defaults set in `loadDefaults()`
 - [ ] Load/save methods updated
 - [ ] Safety script passes: `python scripts/check_config_safety.py`
-- [ ] Compiled cleanly: `make compile-out` (ESP32 path optional — `esp32-compile` only if touching `BLINKY_PLATFORM_ESP32S3`-guarded code)
+- [ ] Compiled cleanly: `./scripts/build.sh --no-bump` (ESP32 path optional — `esp32-compile` only if touching `BLINKY_PLATFORM_ESP32S3`-guarded code)
 - [ ] No `arduino-cli upload` usage on nRF52840 in commit history
 
 Before merging platform-specific code:
@@ -417,8 +409,8 @@ the same origin. Override the static dir location with the
 
 ## 🔗 Additional Resources
 
-- [SafetyTest Documentation](blinky-things/tests/SafetyTest.h)
-- [SerialConsole Commands](blinky-things/inputs/SerialConsole.cpp)
+- [SafetyTest Documentation](../blinky-things/tests/SafetyTest.h)
+- [SerialConsole Commands](../blinky-things/inputs/SerialConsole.cpp)
 - [Architecture Overview](../blinky-things/README.md)
 - [XIAO nRF52840 Recovery Guide](https://www.pavelp.cz/posts/eng-xiao-nrf52840-bootloader-recovery/)
 
@@ -431,4 +423,4 @@ the same origin. Override the static dir location with the
 3. **Keep a backup device** for development
 4. **Document WHY**, not just what, in comments
 5. **Serial logging** is your friend - add generous debug output
-6. **Factory reset** via serial console if config gets corrupted
+6. **Reset tunables** with `restore_runtime_settings` on the serial console if settings get corrupted. `wipe_device_identity` also wipes the device config; on fleet devices it is deploy.sh-gated.

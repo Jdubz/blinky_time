@@ -2,7 +2,7 @@
 
 LED effect visualization simulator for the blinky-things Arduino firmware.
 
-Renders Fire, Water, and Lightning generator effects to animated GIF previews.
+Renders the Fire, Water, PlasmaGlobe ("lightning") and Audio generators to animated GIF previews, plus visual metrics.
 
 ## Purpose
 
@@ -21,7 +21,8 @@ The simulator exists to **test the actual firmware code** without hardware. This
 The simulator uses Arduino compatibility shims to compile the firmware on desktop:
 
 ```
-blinky-things/generators/   --> Fire.cpp, Water.cpp, Lightning.cpp (ACTUAL CODE)
+blinky-things/generators/   --> Fire.cpp, Water.cpp, PlasmaGlobe.cpp, Audio.cpp (ACTUAL CODE)
+blinky-things/particles/, physics/, math/, types/ --> shared generator code (ACTUAL CODE)
 blinky-things/effects/      --> HueRotationEffect.cpp (ACTUAL CODE)
 blinky-things/render/       --> RenderPipeline.cpp (ACTUAL CODE)
 blinky-things/hal/mock/     --> MockLedStrip.h (captures LED output)
@@ -30,7 +31,11 @@ blinky-simulator/include/   --> ArduinoCompat.h (Arduino stubs for desktop)
                             --> LEDImageRenderer.h (LED state to image)
                             --> GifEncoder.h (animated GIF output)
                             --> AudioPatternLoader.h (scripted audio patterns)
+                            --> MetricsCalculator.h (visual metrics)
+                            --> ParamParser.h (--params overrides, params.json)
 ```
+
+The same stubs are used by the host tests in `tests/` (timing, tracker, parity). When you add a generator source file, add it to `CMakeLists.txt`, `build.sh`, `build.bat` and `build_vs.cmd`.
 
 The `ArduinoCompat.h` layer provides desktop implementations for:
 - `millis()` - Controllable simulated time
@@ -80,38 +85,43 @@ cmake --build build
 
 ## Usage
 
+`-o` takes an output **directory** (default `previews`). Each run overwrites the files in it, so use a different directory to keep A/B results.
+
 ```bash
-# Fire effect preview (default)
-./build/blinky-simulator -g fire -o fire.gif
+# Fire effect preview (default) -> previews/
+./build/blinky-simulator -g fire
 
 # Water effect with 5 second duration
-./build/blinky-simulator -g water -t 5000 -o water.gif
+./build/blinky-simulator -g water -t 5000 -o previews/water
 
-# Lightning with blue hue shift
-./build/blinky-simulator -g lightning -e hue --hue 0.6 -o lightning.gif
+# Plasma globe ("lightning") with blue hue shift
+./build/blinky-simulator -g lightning -e hue --hue 0.6 -o previews/lightning
 
 # Different device configurations
-./build/blinky-simulator -g fire -d bucket -o bucket.gif  # 16x8 matrix
-./build/blinky-simulator -g fire -d tube -o tube.gif      # 4x15 vertical
-./build/blinky-simulator -g fire -d hat -o hat.gif        # 89 LED strip
+./build/blinky-simulator -g fire -d bucket -o previews/bucket  # 16x8 matrix
+./build/blinky-simulator -g fire -d tube -o previews/tube      # 4x15 vertical
+./build/blinky-simulator -g fire -d hat -o previews/hat        # 89 LED strip
 
 # Different audio patterns
-./build/blinky-simulator -g fire -p complex -o complex-fire.gif
-./build/blinky-simulator -g fire -p silence -o silent-fire.gif
+./build/blinky-simulator -g fire -p complex -o previews/complex
+./build/blinky-simulator -g fire -p silence -o previews/silent
+
+# Override generator parameters
+./build/blinky-simulator -g fire --params "baseSpawnChance=0.15,gravity=-12"
 ```
 
 ## Options
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--generator` | `-g` | Generator: fire, water, lightning | fire |
+| `--generator` | `-g` | Generator: fire, water, lightning (alias plasma), audio | fire |
 | `--effect` | `-e` | Effect: none, hue | none |
 | `--pattern` | `-p` | Audio pattern (see below) | steady-120bpm |
-| `--output` | `-o` | Output GIF filename | preview.gif |
+| `--output` | `-o` | Output directory | previews |
 | `--device` | `-d` | Device: tube, hat, bucket | bucket |
 | `--duration` | `-t` | Duration in ms | 3000 |
 | `--fps` | `-f` | Frames per second | 30 |
-| `--led-size` | | LED circle size in pixels | 16 |
+| `--params` | | Generator parameter overrides (`key=val,...`) | |
 | `--hue` | | Hue shift for hue effect (0.0-1.0) | 0.0 |
 | `--verbose` | `-v` | Verbose output | false |
 | `--help` | `-h` | Show help | |
@@ -128,6 +138,10 @@ Built-in patterns for testing rhythm/transient response:
 | `silence` | No audio (tests organic/ambient mode) |
 | `burst` | Random transient bursts |
 | `complex` | Building rhythm with variations |
+| `realistic` | Music-like levels and onsets |
+| `ambient` | Quiet, low-level audio |
+
+Any other value is read as a file path. Warning: an unknown name or unreadable file silently falls back to `steady-120bpm`, and `meta.json` still records the name you passed. Run with `-v` to see which pattern was actually loaded.
 
 Custom patterns can be loaded from CSV files:
 ```csv
@@ -146,26 +160,35 @@ Custom patterns can be loaded from CSV files:
 
 ## Output
 
-- Animated GIF with LED glow effects
-- Layout matches physical device arrangement
-- 30 FPS default (matches firmware update rate)
-- Typical size: 50-200 KB for 3-second clips
-- Output to `previews/` folder (gitignored)
+Each run writes into the output directory (`previews/` by default, gitignored):
+
+| File | Content |
+|------|---------|
+| `low-res.gif` | Exact LED pixels, one pixel per LED (for AI analysis) |
+| `high-res.gif` | Scaled, human-readable preview |
+| `params.json` | Generator parameters used |
+| `metrics.json` | Visual metrics (brightness, activity, color) |
+| `meta.json` | Run configuration (generator, device, duration, ...) |
+
+Layout matches the physical device arrangement.
 
 ## Integration with MCP
 
 Works with blinky-serial-mcp for AI-assisted parameter tuning:
 
 ```javascript
-// MCP tool call
+// MCP tool call (blinky-serial-mcp/src/index.ts)
 render_preview({
   generator: "fire",
-  settings: { gravity: -2.5, sparkSpread: 0.8 },
-  audio_pattern: "steady-120bpm",
+  params: "baseSpawnChance=0.15,gravity=-12",
+  pattern: "steady-120bpm",
+  device: "bucket",
   duration_ms: 3000,
-  output_path: "preview.gif"
+  output_dir: "previews/fire-test"
 })
 ```
+
+The MCP tool runs `build/blinky-simulator`, so build the simulator first (`./build.sh`). Its `generator` option does not offer `audio` yet.
 
 ## License
 

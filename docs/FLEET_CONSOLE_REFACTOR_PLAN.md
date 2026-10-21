@@ -4,12 +4,14 @@ Refactor `blinky-console` from a single-device WebSerial UI into a fleet managem
 
 ## Status
 
+**Status (checked 2026-10-21): done, apart from M10 (deferred) and M16's discovery side.** Since this plan, the UI was replaced by a fleet-first single page (`d3cadac1` "Fleet-first console UI + scenes backend"): `blinky-console/src/MainShell.tsx` with a device strip, and hash pages (`#firmware`, `#record`) instead of React Router. The transport/source/registry layers from Phases 2–3 are what it runs on.
+
 **Phase 1 — Plumbing.** ✅ Complete.
 **Phase 2 — Transport abstraction.** ✅ Complete.
-**Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) pending.
-**Phase 4 — Multi-device UI.** ✅ Complete (M11-M13).
-**Phase 5 — Fleet operations.** ✅ M14 complete. M15 (flash/deploy UI) pending.
-**Phase 6 — Web Bluetooth.** ⏳ Deferred.
+**Phase 3 — Server-backed transport.** ✅ M8+M9 complete. M10 (URL management UI) deferred: same-origin auto-detection covers the main use.
+**Phase 4 — Multi-device UI.** ✅ Shipped as M11–M13, then replaced by the single-page `MainShell` (no routes).
+**Phase 5 — Fleet operations.** ✅ M14 complete. M15 (server flash/deploy UI) **dropped**: fleet flashing is `./scripts/deploy.sh` only (CLAUDE.md). The console's only firmware UI is the browser updater for one personal device, stable releases only, signed OTA over USB (`#firmware`, `docs/WEB_FLASHER.md`).
+**Phase 6 — Web Bluetooth.** Partly done: `WebBluetoothTransport` exists and is used by record mode (`docs/PHONE_RECORD_MODE_PLAN.md`) and the hidden Bluetooth update path. A `WebBluetoothSource` in the device registry is not built.
 
 See the per-milestone status column in the [Milestones](#milestones) tables below for commit hashes.
 
@@ -153,7 +155,7 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M11 | ✅ | Add routing (React Router). Move current single-device tabs to `/device/:id` route. DeviceList auto-navigates to single device. | `blinky-console/src/App.tsx`, `src/routes/`, `src/hooks/useDevices.ts` |
+| M11 | ✅ (routing later removed, `d3cadac1`) | Add routing (React Router). Move current single-device tabs to `/device/:id` route. DeviceList auto-navigates to single device. | `blinky-console/src/App.tsx`, `src/routes/`, `src/hooks/useDevices.ts` |
 | M12 | ✅ | Device-registry binding: DeviceDetail looks up Device by route param, binds its protocol to serialService. SerialService proxies events across protocol swaps. | `serial.ts`, `DeviceDetail.tsx` |
 | M13 | ✅ | Real-time device list updates via polling. BlinkyServerSource polls every 10s, registry notifies subscribers, useDevices re-renders DeviceList. WebSocket push deferred. | Already implemented in M9 |
 
@@ -161,14 +163,14 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M14 | ✅ | Fleet-level command UI: generator, effect, settings (save/load/defaults), custom command. Accessible from DeviceList header. | `blinky-console/src/routes/Fleet.tsx` |
-| M15 | ⏳ | Flash/deploy UI gated behind an auth mechanism (TBD — see open questions). Hidden entirely when the current server doesn't accept the client's credentials. | `blinky-console/src/routes/Firmware.tsx`, `blinky-server` auth |
+| M14 | ✅ | Fleet-level command UI: generator, effect, settings (save/load/defaults), custom command. Now the "All" target in `MainShell.tsx`. | `blinky-console/src/MainShell.tsx` |
+| M15 | Dropped | Flash/deploy UI gated behind an auth mechanism. Not built: fleet flashes go only through `deploy.sh`, and the server's flash routes require the `X-Deploy-Tool` header. | — |
 
 ### Phase 6 — Web Bluetooth — ⏳ deferred
 
 | # | Status | Milestone | Touches |
 |---|--------|-----------|---------|
-| M16 | ⏳ | `WebBluetoothTransport` + `WebBluetoothSource`. Requires coordination with firmware BLE NUS characteristic layout. | `blinky-console/src/services/transport/`, `src/services/sources/` |
+| M16 | Partly | `WebBluetoothTransport` ✅ (`services/transport/WebBluetoothTransport.ts`, used by record mode and the hidden Bluetooth updater). `WebBluetoothSource` ⏳ not built. | `blinky-console/src/services/transport/`, `src/services/sources/` |
 
 ## Out of scope (for this refactor)
 
@@ -180,8 +182,8 @@ Every Phase 2 milestone ships with no UI behavior change. 261 console tests + 11
 
 ## Open questions (decide during implementation)
 
-1. **Auth for flash/deploy endpoints.** Today `/api/devices/{id}/flash` and `/api/fleet/*flash` require an API key. A browser can't safely hold an admin key. Options: session-based cookie auth on `blinky-server`, server-generated short-lived tokens, or hiding firmware UI entirely when the browser has no creds. Picks happen at M15.
-2. **Real-time device-list updates.** Poll `/api/devices` every N seconds vs add a new WebSocket event stream. Simpler to poll; nicer UX with events. Picks happen at M13.
+1. **Auth for flash/deploy endpoints.** Decided: no browser UI for server flashes (M15 dropped). The flash routes require an API key and the `X-Deploy-Tool` header that only `deploy.sh` sets.
+2. **Real-time device-list updates.** Decided at M13: polling (`BlinkyServerSource`, every 10 s).
 3. **Mixed-content approach** for Firebase-hosted clients talking to LAN `blinky-server`s. Deferred (see Out of scope).
 4. **Firmware upgrade paths when SN isn't emitted.** Older firmware versions may not include `sn` in `json info`. Do we refuse to connect, fall back to a transport-local synthetic ID (e.g., USB serial number string from `navigator.serial.getInfo()`), or prompt the user to flash? Should be a TODO in M5 / M7.
 5. **Fleet-server integration with Firebase build.** If Firebase build talks to a `blinky-server` over the internet (impossible today due to mixed content + LAN-only addressing), do we want a cloud-hosted `blinky-server` in the future? Informs but doesn't block this plan.

@@ -9,46 +9,47 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 ## ✨ Features
 
 ### Visual Effects
-- **🔥 Realistic Fire Simulation** - Heat diffusion with audio-reactive sparks (13 tunable parameters)
-- **💧 Water Effects** - Wave simulation with ripple propagation
-- **⚡ Lightning Effects** - Branching electric bolt animations
+- **🔥 Realistic Fire Simulation** - Particle-based fire with audio-reactive sparks
+- **💧 Water Effects** - Particle-based falling drops
+- **⚡ Plasma Globe** - Electric tendrils (the "lightning" generator)
+- **🎚 Audio Visualizer** - Direct view of the audio signals
 - **🌈 Post-Processing** - Hue rotation and effect chaining
-- **Multiple Device Support** - Hat installations (89 LEDs), tube lights (60 LEDs), bucket totems (128 LEDs)
+- **Multiple Device Support** - Hats, tube lights, bucket totems, cart strings and matrix displays (see [Hardware](docs/HARDWARE.md))
 - **Unified Architecture** - Generator→Effect→Renderer pipeline supporting matrix, linear, and custom layouts
 
 ### Audio Analysis
-- **🧠 NN Onset Detection** - Conv1D neural network for acoustic onset detection (kicks/snares, ~7ms inference)
-- **🎵 AudioTracker** - Decoupled tempo/onset: spectral flux ACF + comb bank BPM, PLL phase tracking
+- **🥁 Onset Detection** - Fires on every percussive event. Devices use spectral flux; a Conv1D onset network (`FrameOnsetNN`) is built in but off until a model beats flux (see `audio/AudioTracker.h`)
+- **🎵 AudioTracker** - Multi-source ACF tempo estimation + PLP (epoch-fold) phase and pattern tracking
 - **🎤 Adaptive Microphone** - Fixed hardware gain with window/range normalization (AGC removed v72)
-- **📊 Phase Confidence** - Subdivision-aware onset modulation with cosine proximity curve
 - **50+ Tunable Parameters** - Comprehensive audio parameter system
 
 ### System Features
 - **🌐 Web App Control** - [Blinky Console](blinky-console/) React PWA for real-time settings and visualization
-- **🔋 Battery Management** - Smart charging detection and low-battery warnings
-- **🏃 IMU Integration** - Motion-responsive effects using built-in accelerometer
+- **📡 Bluetooth + Fleet Server** - BLE serial (NUS) and fleet broadcasts; [blinky-server](blinky-server/) manages the deployed fleet
+- **⬆️ Firmware Updates** - Signed stable releases, installed from the browser at [blinky-time.joshwentworth.com/#firmware](https://blinky-time.joshwentworth.com/#firmware) (USB) or by `scripts/deploy.sh` for the fleet
+- **🔋 Battery Management** - Charging detection and low-battery warnings
 - **🧪 Testing Infrastructure** - Parameter tuning CLI, MCP server for AI integration, ground truth validation
 - **🛡️ Multi-Layer Safety** - Compile-time checks, runtime validation, flash protection, upload enforcement
-- **⚙️ Configuration Storage** - Flash persistence with validation (CONFIG_VERSION v19)
+- **⚙️ Configuration Storage** - Flash persistence with validation (`SETTINGS_VERSION` in `config/ConfigStorage.h`)
 
 ## 🛠 Hardware Compatibility
 
-| Device Type | LEDs | Matrix Size | Microcontroller | Status |
-|-------------|------|-------------|-----------------|---------|
-| **Hat Installation** | 89 | String | nRF52840 XIAO Sense | ✅ Tested |
-| **Tube Light** | 60 | 4x15 Zigzag | nRF52840 XIAO Sense | ✅ Tested |
-| **Bucket Totem** | 128 | 16x8 Matrix | nRF52840 XIAO Sense | ✅ Tested |
+All devices run on the **Seeed XIAO nRF52840 Sense**, with one firmware binary. Each device gets its layout from a JSON config at runtime; the configs live in [`devices/registry/`](devices/registry/). Examples:
+
+| Device Type | LEDs | Layout |
+|-------------|------|--------|
+| **Hat** (`hat_v1`) | 89 | String |
+| **Tube Light** (`tube_v2`) | 60 | 4x15 zigzag matrix |
+| **Bucket Totem** (`bucket_v3`) | 128 | 16x8 matrix |
+
+See [docs/HARDWARE.md](docs/HARDWARE.md) for the full device list. ESP32-S3 support was cut in March 2026; the next generation of fixtures is planned on the XIAO ESP32-S3 Sense ([plan](docs/NEXTGEN_ESP32S3_PLAN.md)).
 
 ## 🚀 Quick Start
 
-### Prerequisites
-- **Arduino IDE** 2.0+ or **arduino-cli**
-- **Seeeduino mbed nRF52 Board Package** 2.7.2+ (with platform patch - see [Platform Fix](docs/PLATFORM_FIX.md))
-- **Adafruit NeoPixel Library** 1.15.0+
+### Update a device you own (no build needed)
+Open [blinky-time.joshwentworth.com/#firmware](https://blinky-time.joshwentworth.com/#firmware) in Chrome or Edge and connect the device over USB. The page installs the latest **stable** release through the device's signed update path. See [docs/WEB_FLASHER.md](docs/WEB_FLASHER.md).
 
-> ⚠️ **Important**: The Seeeduino mbed platform requires a [patch](docs/PLATFORM_FIX.md) to enable audio-reactive features. See the [Build Guide](docs/BUILD_GUIDE.md) for details.
-
-### Installation
+### Build the firmware
 
 1. **Clone the repository**
    ```bash
@@ -56,44 +57,58 @@ A sophisticated LED fire effect controller for wearable art installations, desig
    cd blinky_time
    ```
 
-2. **Configure your device**
-   Edit `blinky-things/blinky-things.ino` and set your device type:
-   ```cpp
-   #define DEVICE_TYPE 1  // 1=Hat, 2=Tube Light, 3=Bucket Totem
+2. **Install the pinned toolchain** (once per machine). This puts the pinned arduino-cli core, libraries, TFLite and core patches into `.arduino/` (gitignored):
+   ```bash
+   bash scripts/setup_toolchain.sh
    ```
 
-3. **Upload to your board**
-   - Open `blinky-things/blinky-things.ino` in Arduino IDE
-   - Select **Tools → Board → Seeed XIAO nRF52840 Sense**
-   - Select your COM port
-   - Click **Upload**
+3. **Compile** (always through `build.sh`, which also writes `types/Version.h`):
+   ```bash
+   ./scripts/build.sh --no-bump    # compile check
+   ./scripts/build.sh --dev        # dev build for a test device, version bN-dev-<sha>
+   ```
+
+### Flash a device
+
+> ⚠️ **Never use `arduino-cli upload`, the Arduino IDE Upload button, or `adafruit-nrfutil dfu serial` on the nRF52840.** They can brick the device. See [CLAUDE.md](CLAUDE.md) and [docs/SAFETY.md](docs/SAFETY.md).
+
+- **Fleet devices:** `./scripts/deploy.sh --devices=<id>` (latest stable release, with version check).
+- **A device on your own USB:** `python tools/deploy_local.py --port COM4 --device-id <id> --dry-run`, then without `--dry-run`.
+- **Dev builds and release candidates** go only to a test device listed in `devices/test_devices.json`.
+
+Releases are cut and promoted as described in [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
+
+### Configure the device
+The firmware is the same for every device. A new chip boots unconfigured until it receives its device config (layout, LED pin, LED count) from `devices/registry/<id>.json` via the `device upload <json>` serial command. See [docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md).
 
 ## 📁 Project Structure
 
 ```
 blinky_time/
-├── blinky-things/           # Main Arduino sketch
+├── blinky-things/           # Main Arduino sketch (see blinky-things/README.md)
 │   ├── blinky-things.ino   # Main sketch file
-│   ├── BlinkyArchitecture.h # Single include for all components
-│   ├── generators/         # Pattern generators (Fire, Water, Lightning)
-│   ├── effects/            # Visual effects (HueRotation, etc.)
+│   ├── generators/         # Pattern generators (Fire, Water, PlasmaGlobe, Audio)
+│   ├── effects/            # Visual effects (HueRotation, NoOp)
 │   ├── render/             # Render pipeline and LED mapping
-│   ├── audio/              # Audio processing (AudioController)
-│   ├── inputs/             # Input devices (AdaptiveMic, SerialConsole)
-│   ├── config/             # Settings and configuration storage
-│   └── devices/            # Device-specific configurations
-├── blinky-console/          # Web-based control interface (React PWA)
-│   ├── src/                # React components and hooks
-│   ├── firebase.json       # Firebase hosting configuration
-│   └── package.json        # Node.js dependencies
-├── tests/                  # Project-wide test suite
-│   ├── BlinkyTest.h        # Custom test framework
-│   ├── test_runner.ino     # Hardware test runner
-│   ├── run_tests.py        # Automated test script
-│   └── unit/integration/   # Test categories
-├── docs/                   # 📚 Comprehensive documentation
-├── examples/               # Example configurations
-├── .github/workflows/      # CI/CD pipelines for validation and deployment
+│   ├── audio/              # AudioTracker, spectral analysis, onset NN
+│   ├── inputs/             # AdaptiveMic, SerialConsole, battery, IMU
+│   ├── comms/              # BLE serial (NUS), BLE scanner, phone record mode
+│   ├── ota/                # Signed OTA (manifest check, QSPI staging)
+│   └── config/             # Settings and configuration storage
+├── blinky-console/          # Web control interface + firmware updater (React PWA, Firebase)
+├── blinky-server/           # Fleet server: serial/BLE connections, flashing, tests
+├── blinky-serial-mcp/       # MCP server for AI-assisted testing and tuning
+├── blinky-simulator/        # Runs the real generator code on a PC, renders GIFs
+├── blinky-test-player/      # Test audio player + validation corpus (music/edm/)
+├── ml-training/             # Onset NN training pipeline
+├── bootloader/              # Bootloader source (submodule) and staged images
+├── devices/                 # Device registry JSON + test device list
+├── scripts/                 # build.sh, deploy.sh, setup_toolchain.sh, ...
+├── tools/                   # deploy_local.py, release tools, validators
+├── tests/                   # Host tests (timing, OTA, tracker, parity); see tests/README.md
+├── docs/                   # 📚 Documentation
+├── examples/               # Example code snippets
+├── .github/workflows/      # CI (PR validation), releases, console deploy
 ├── LICENSE                 # Creative Commons BY-SA 4.0
 └── README.md              # This file
 ```
@@ -104,53 +119,46 @@ Comprehensive documentation is available in the [`docs/`](docs/) folder:
 
 **Quick Links:**
 - [📖 **Documentation Index**](docs/README.md) - Complete documentation overview
-- [🏗️ **Architecture Overview**](CLAUDE.md#system-architecture-overview) - **Complete system architecture** (firmware, web UI, testing)
+- [⚠️ **CLAUDE.md**](CLAUDE.md) - Safety and workflow rules (flashing, releases, bootloader) — read first
 - [🔧 **Hardware Guide**](docs/HARDWARE.md) - Supported devices and wiring
-- [📦 **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions (includes platform patch)
-- [🛠️ **Platform Fix**](docs/PLATFORM_FIX.md) - Required patch for audio-reactive features
+- [📦 **Build Guide**](docs/BUILD_GUIDE.md) - Build setup and device configuration
+- [🚀 **Release Process**](docs/RELEASE_PROCESS.md) - Stable / candidate / dev channels
+- [⬆️ **Web Updater**](docs/WEB_FLASHER.md) - Browser firmware updates
 - [🏛️ **Generator Architecture**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Generator→Effect→Renderer pattern
-- [🎵 **Audio Architecture**](docs/AUDIO_ARCHITECTURE.md) - AudioController with CBSS beat tracking
-- [🔥 **Fire Settings**](docs/OPTIMAL_FIRE_SETTINGS.md) - Optimal configuration parameters
-- [🧪 **Testing Guide**](docs/TESTING_SUMMARY.md) - Test framework and procedures
+- [🎵 **Audio Architecture**](docs/AUDIO_ARCHITECTURE.md) - AudioTracker: ACF tempo, PLP phase, onset detection
+- [🧪 **Testing Guide**](TESTING.md) - Where the tests live and how to run them
 
 ## 🎛 Configuration
 
 ### Device Selection
-Choose your hardware configuration in `blinky-things.ino`:
+Device type is not a compile-time setting. Each device stores its config (layout, LED count, LED pin, color order) in flash. To set it, send the JSON from `devices/registry/<id>.json`:
 
-```cpp
-// Device Type Selection
-#define DEVICE_TYPE 1  // Change this value:
-// 1 = Hat (89 LEDs, STRING_FIRE mode)
-// 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)  
-// 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
+```
+device upload <json>   - Store a device config
+device show            - Show the current device config
 ```
 
-### Hardware-Specific Settings
-Each device type has its own configuration file in `devices/`:
-- `HatConfig.h` - Hat installation settings
-- `TubeLightConfig.h` - Tube light parameters  
-- `BucketTotemConfig.h` - Bucket totem configuration
+On a fleet device, config changes go through `deploy.sh` (see [CLAUDE.md](CLAUDE.md)), not ad-hoc commands.
 
 ## 🔥 Fire Effect Parameters
 
-Fire parameters are universal and dimension-normalized — they auto-adapt to any LED layout. Tune via serial console (`set <param> <value>`) or web UI. See `Fire.h` for all 18 `FireParams` fields.
+Fire parameters are universal and dimension-normalized — they auto-adapt to any LED layout. Tune via serial console (`set <param> <value>`) or web UI. See `FireParams` in `generators/Fire.h` for the full list.
 
 ## 🎵 Audio Features
 
-- **Adaptive Microphone** - Automatic gain control and noise filtering
-- **Beat Detection** - Responds to music transients and beats
+- **Adaptive Microphone** - Fixed hardware gain with window/range normalization
+- **Onset Detection** - Responds to every percussive event (kicks, snares, hi-hats)
+- **Rhythm Tracking** - Tempo and phase for beat-synced animation
 - **Configurable Sensitivity** - Adjustable via web app or serial API
-- **Real-time Visualization** - Live audio levels in debug output
-- **Low Latency** - ~16ms from sound to LED response
+- **Real-time Visualization** - Live audio data via `stream on`
 
-> 📝 **Note**: Audio features use the built-in PDM microphone on XIAO nRF52840 Sense or the MSM381ACT on XIAO ESP32-S3 Sense.
+> 📝 **Note**: Audio features use the built-in PDM microphone on the XIAO nRF52840 Sense.
 
 ## 🔋 Power Management
 
 - **Battery Monitoring** - Real-time voltage and charge level tracking
-- **Charging Detection** - Automatic display mode switching when plugged in
-- **Low Battery Warnings** - Configurable voltage thresholds
+- **Charging Detection** - Logs when charging starts and stops (battery-powered devices)
+- **Low Battery Warnings** - Serial warning below the device config's threshold
 - **Power Optimization** - Efficient LED driving and CPU usage
 
 ## 🛠 Development
@@ -172,17 +180,18 @@ Settings:
   settings            - Show settings with help text
 
 Configuration:
-  save                - Save settings to flash
-  load                - Load settings from flash
-  defaults            - Restore default values
-  reset               - Factory reset
+  save                      - Save settings to flash
+  load                      - Load settings from flash
+  restore_runtime_settings  - Restore default tunables (keeps device identity)
+  device show               - Show the device config
 ```
 
+`wipe_device_identity` (old names `reset` / `factory`) erases the device config as well. On fleet devices it, `device upload` and `reboot` go through `deploy.sh` only.
+
 ### Adding New Device Types
-1. Create new config file in `devices/`
-2. Add device type constant in `blinky-things.ino`
-3. Implement device-specific LED mapping if needed
-4. Test and validate fire effect parameters
+1. Add a `devices/registry/<id>.json` config (see `devices/registry/README.md`)
+2. Upload it to the device with `device upload <json>`
+3. Test and tune generator parameters on the device
 
 ## 🤝 Contributing
 
@@ -193,12 +202,12 @@ For additional development resources, check the [comprehensive documentation](do
 ### Development Setup
 
 **Arduino Firmware:**
-1. Fork the repository
-2. Work on `staging` branch or create feature branches from `staging`
-3. Apply the [platform patch](docs/PLATFORM_FIX.md) for audio-reactive features
-4. Test your changes on hardware
-5. Submit a pull request to `staging` with detailed description
-6. Production releases are promoted from `staging` to `master`
+1. Create a feature branch from `master` (see [.github/BRANCHING_STRATEGY.md](.github/BRANCHING_STRATEGY.md))
+2. Install the toolchain once: `bash scripts/setup_toolchain.sh`
+3. Compile with `./scripts/build.sh`
+4. Test on a test device (`devices/test_devices.json`) with `tools/deploy_local.py --dev`
+5. Open a pull request to `master`; CI (`.github/workflows/pr-validation.yml`) must pass
+6. Releases are built by CI from master and promoted to stable after a bench gate ([docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md))
 
 **Blinky Console (Web Interface):**
 ```bash
@@ -235,8 +244,6 @@ See [LICENSE](LICENSE) for full details.
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/Jdubz/blinky_time/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/Jdubz/blinky_time/discussions)
-- **Wiki**: [Project Wiki](https://github.com/Jdubz/blinky_time/wiki)
 
 ---
 

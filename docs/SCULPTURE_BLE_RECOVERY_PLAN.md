@@ -1,8 +1,15 @@
-_Created: 2026-05-13. Status updated 2026-05-19._
+_Created: 2026-05-13. Status updated 2026-10-21._
 
 # Sculpture BLE-Recovery Plan
 
-**Status:** F1–F6 all landed (bootloader rebuilt with `DEFAULT_TO_OTA_DFU`; `tests/SafeMode.h` deleted; `markStable()` deferred to 60 s uptime in `.ino:649-668`; `RebootFrequencyCounter` shipped; GPREGRET=0xA8 fallback in `SafeBootWatchdog.h:110`; `bleDfu.begin()` return checked with `[FALLBACK]` log at `.ino:572-574`). Verification tests T1–T8 are run per-unit at install time. Retained as architectural rationale + risk surface for the BL gap captured in `project_bl_no_app_crash_fallback` (BL DEFAULT_TO_OTA_DFU only fires on invalid-app-CRC, not on crashy-but-valid app).
+**Status: done.** F1–F6 all landed (bootloader rebuilt with `DEFAULT_TO_OTA_DFU`; `tests/SafeMode.h` deleted; `markStable()` deferred to 60 s uptime in `blinky-things.ino` `loop()`; `RebootFrequencyCounter` shipped; GPREGRET=0xA8 fallback in `SafeBootWatchdog.h:110`; `bleDfu.begin()` return checked with a `[FALLBACK]` log in `blinky-things.ino`). Verification tests T1–T8 are run per-unit at install time. Retained as architectural rationale and risk surface.
+
+Changes since this plan:
+- **The crashy-but-valid-app gap is closed** by the fleet bootloader 0.8.0-10's app-handshake watchdog: 3 app boots in a row without the firmware's `GPREGRET` clear → the bootloader stays in DFU (`bootloader/README.md`). `DEFAULT_TO_OTA_DFU` alone only fired on an invalid app.
+- **Every DFU entry brings up USB as well as BLE** (dual transport, 0.8.0-4+), enforced by `scripts/verify_bootloader.py` after the 2026-05-15 hat brick. Bootloader updates go only through `scripts/deploy-bootloader.sh`.
+- **F4's counter now counts only fault resets** (watchdog or CPU lockup), since b215, so operator power-cycling no longer quarantines a config.
+- **Signed firmware exists at the app level:** signed QSPI OTA (`docs/WEB_FLASHER.md`). The bootloader's legacy BLE DFU remains unsigned; see "Out of scope".
+- **Still open:** #220 (bootloader self-update over BLE, so a sealed device's bootloader is never stuck); #210 (finish 06ACEB recovery).
 
 ## Goal
 
@@ -60,7 +67,7 @@ The recovery system today has three layers:
 - `update-bootloader-qspi-ota-default.uf2` (75 KB) — UF2 mass-storage update
 - `update-bootloader-qspi-ota-default_s140_7.3.0.zip` (193 KB) — DFU.zip for OTA update via fleet
 
-**Deploy:** `make bootloader-update UPLOAD_PORT=/dev/ttyACM0` (single device) or `make bootloader-update-all` (whole bench rack). Top-level Makefile `BOOTLOADER_UF2` already points at the new file.
+**Deploy:** `./scripts/deploy-bootloader.sh --target <port>`, on a sacrificial device first (CLAUDE.md). The Makefile `bootloader-update` targets skip its safety checks; don't use them.
 
 **Verify:** SWD-erase the app region on a bench unit, power-cycle, confirm device enters BLE DFU and fleet server can connect to bootloader address and reflash. (Test T1.)
 
@@ -128,7 +135,7 @@ The recovery system today has three layers:
 ## Out of scope (for now)
 
 - **BLE-bondless DFU**: bootloader already does this (no bond required). Confirmed.
-- **Secure DFU / signed firmware**: Adafruit bootloader uses Legacy DFU (SDK v11). Adding signing would require migrating to Secure DFU (SDK v15+) — a much larger project. Not blocking sculpture install.
+- **Secure DFU / signed firmware in the bootloader**: Adafruit bootloader uses Legacy DFU (SDK v11). Adding signing would require migrating to Secure DFU (SDK v15+) — a much larger project. Not blocking sculpture install. (The app's own update path is now signed: `docs/WEB_FLASHER.md`.)
 - **Periodic "dead-man" recovery** (device voluntarily enters BLE DFU after N hours of no fleet contact): considered, deferred — F4 covers crash-loops; the dead-man case requires the app to be running well enough to count time, in which case BLE NUS works anyway.
 - **Secondary radio / LoRa fallback**: not in scope. Pi server is line-of-sight BLE.
 
@@ -192,7 +199,7 @@ Beyond `DEFAULT_TO_OTA_DFU`, OTAFIX 2.1/2.2 adds several reliability improvement
 
 Even with everything above, the following scenarios still brick a sealed sculpture:
 
-- **Power-glitch during bootloader self-update.** No mitigation — never update the bootloader on a sealed unit. Lock bootloader version at install time.
+- **Power-glitch during bootloader self-update.** No mitigation — never update the bootloader on a sealed unit. Lock bootloader version at install time. (#220 tracks a safe BLE self-update path.)
 - **SoftDevice flash region corruption** (e.g. cosmic ray hitting RAM during DFU write). Mitigation: pre-install validation of SoftDevice + bootloader integrity. Long-tail risk.
 - **Bootloader BLE stack crash inside DFU session** (rare; nRF52 hardware errata). No software mitigation. Pre-install soak test would catch most cases.
 - **Hardware failure** (flash wear, antenna damage, regulator failure). No software mitigation. Accept and replace via warranty.

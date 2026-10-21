@@ -2,209 +2,70 @@
 
 ## 🌳 Branch Structure
 
-### `master` - Production Branch
-- **Purpose**: Stable, production-ready code
-- **Protection**: Requires PR from `staging` branch
-- **Releases**: Automatic semantic versioning (e.g., v1.2.3)
-- **CI/CD**: Full test suite + production release creation
-
-### `staging` - Integration Branch  
-- **Purpose**: Integration testing and pre-release validation
-- **Protection**: Requires PR review
-- **Versioning**: Automatic staging versions (e.g., 2025.01.15-staging.42+abc123)
-- **CI/CD**: Full test suite + pre-release creation
-
-### `develop` - Development Branch
-- **Purpose**: Active development and feature integration
-- **Protection**: Basic compilation checks
-- **CI/CD**: Compilation tests only
+### `master` - The only long-lived branch
+- **Purpose**: Integration branch. Every change lands here by pull request.
+- **Protection**: Repository ruleset (see [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md)): PR required, required CI checks, no force-push or deletion.
+- **CI/CD**: `.github/workflows/pr-validation.yml` runs on every PR to master and on every push to master.
+- **Releases**: Merging does **not** ship firmware. Releases are cut from master separately (see below).
 
 ### Feature Branches
-- **Naming**: `feature/description` or `fix/description`
-- **Merge to**: `develop` or `staging`
-- **Lifecycle**: Delete after merge
+- **Naming**: by kind of change, e.g. `fix/description`, `feat/description`, `docs/description`
+- **Branch from / merge to**: `master`
+- **Lifecycle**: one change per branch; delete after merge
+
+> The old `develop` → `staging` → `master` flow, with date-stamped staging versions and semver production releases, is retired. The `staging` branch on GitHub is stale; don't target it.
 
 ## 🔄 Workflow Process
 
-### 1. Feature Development
+### 1. Make the change
 ```bash
-# Create feature branch from develop
-git checkout develop
-git pull origin develop
-git checkout -b feature/new-effect
-
-# Work on feature
-git add .
-git commit -m "Add new visual effect"
-git push origin feature/new-effect
-
-# Create PR to develop
-# PR gets basic compilation checks
-```
-
-### 2. Integration Testing
-```bash
-# Merge feature to staging for testing
-git checkout staging
-git pull origin staging
-git merge feature/new-effect
-git push origin staging
-
-# Automatic versioning triggers
-# Creates staging release: v2025.01.15-staging.42+abc123
-```
-
-### 3. Production Release
-```bash
-# When staging is stable, create PR to master
 git checkout master
 git pull origin master
+git checkout -b fix/my-change
 
-# Create PR from staging to master
-# Full test suite runs
-# Manual review required
-# After merge: automatic production release v1.2.3
+# Work, compile with ./scripts/build.sh, test on a test device
+git add <files>
+git commit -m "fix: describe the change"
+git push origin fix/my-change
 ```
 
-## 🤖 Automated Versioning
+### 2. Pull request to master
+- Open a PR against `master`.
+- The required CI checks must pass. An automated Claude code review also runs (`.github/workflows/claude-code-review.yml`).
+- Merge when green.
 
-### Staging Versions
-Format: `YYYY.MM.DD-staging.COMMIT_COUNT+SHORT_SHA`
+### 3. Release (separate from merging)
+Firmware releases follow [docs/RELEASE_PROCESS.md](../docs/RELEASE_PROCESS.md):
+1. `gh workflow run release.yml --ref master` builds a **candidate** (pre-release `bN`) from a green master commit.
+2. `python tools/release_gate.py bN ...` bench-gates it on a test device.
+3. `python tools/release_promote.py bN` makes it **stable** (tag `stable-bN`, marked *Latest*, signed for OTA).
 
-Example: `2025.01.15-staging.42+abc123`
-- `2025.01.15`: Date of commit
-- `staging`: Branch identifier  
-- `42`: Commit count on staging
-- `abc123`: Short commit SHA
+Only stable releases reach fleet and personal devices.
 
-### Production Versions
-Format: `MAJOR.MINOR.PATCH` (Semantic Versioning)
+## 🤖 Versioning
 
-Example: `1.2.3`
-- Auto-increments patch version on each master merge
-- Manual version bumps for major/minor changes
+Firmware is versioned by build number, not semver:
+- **Release:** `bN`. The release workflow sets `N = max(BUILD_NUMBER, highest bN tag) + 1`.
+- **Dev build:** `bN-dev-<sha>` (`./scripts/build.sh --dev`), for a test device only.
+- **Settings format:** `SETTINGS_VERSION` in `blinky-things/config/ConfigStorage.h`, independent of the build number. A bump resets saved tuning on every device; release notes flag it.
 
 ## 🧪 Testing Strategy
 
-### On Every Push to Any Branch
-- ✅ Compilation for all device types
-- ✅ Code quality checks
-- ✅ Basic static analysis
+### On every PR to master and every push to master
+`pr-validation.yml` runs, among others:
+- Compile Firmware (pinned toolchain, `scripts/build.sh`)
+- Static Analysis (cppcheck), Static Init Safety Check, Syntax Validation, Code Quality, Documentation Check
+- OTA Manifest (firmware verifier vs release signer)
+- Absolute Timing (generators + rhythm phase)
+- Tracker Harness (UBSan stress + corpus gate), Tracker Harness with real onset NN, Onset Model Input Check
+- Feature Parity (Python ↔ firmware)
+- Blinky Server Tests, Blinky Console Tests
 
-### On Push to `staging`
-- ✅ Full test suite
-- ✅ Memory usage validation  
-- ✅ Effect test framework validation
-- ✅ Documentation checks
-- 🏷️ Automatic versioning and pre-release
+See [tests/README.md](../tests/README.md) for the host tests.
 
-### On Push to `master`
-- ✅ Complete integration tests
-- ✅ All device configuration validation
-- ✅ Release note generation
-- 🚀 Production release creation
+### On a release
+The release workflow refuses a commit that is not on master or has no successful PR Validation run. The candidate then needs the bench gate before promotion.
 
-### On Pull Requests
-- ✅ Branch validation (master PRs must come from staging)
-- ✅ Automated PR comments with status
-- ✅ Review requirement enforcement
+## 🚨 Emergency Fixes
 
-## 📋 PR Guidelines
-
-### To `develop`
-- Basic feature PRs
-- Bug fixes
-- Documentation updates
-- **Review**: Optional but recommended
-- **Tests**: Compilation only
-
-### To `staging`  
-- Integration of completed features
-- Pre-release preparations
-- **Review**: Required
-- **Tests**: Full test suite
-
-### To `master`
-- **Source**: Must be from `staging` branch only
-- **Review**: Required (maintainer approval)
-- **Tests**: Complete validation suite
-- **Result**: Automatic production release
-
-## 🔧 Local Development Setup
-
-```bash
-# Clone and setup
-git clone https://github.com/Jdubz/blinky_time.git
-cd blinky_time
-
-# Setup all branches
-git checkout develop
-git checkout staging  
-git checkout master
-
-# Start feature work
-git checkout develop
-git checkout -b feature/my-new-feature
-
-# When ready for integration testing
-git checkout staging
-git merge feature/my-new-feature
-git push origin staging
-
-# Monitor staging release creation
-# Test staging release on hardware
-# When validated, create PR to master
-```
-
-## 🏷️ Version Management
-
-### Staging Release Example
-```
-Version: 2025.01.15-staging.42+abc123
-Tag: v2025.01.15-staging.42+abc123
-Release: Pre-release ✓
-Description: Staging release for testing
-```
-
-### Production Release Example  
-```
-Version: 1.2.3
-Tag: v1.2.3
-Release: Latest release ✓
-Description: Stable production release
-```
-
-## 🚨 Emergency Hotfixes
-
-For critical production issues:
-
-```bash
-# Create hotfix branch from master
-git checkout master
-git checkout -b hotfix/critical-fix
-
-# Fix issue
-git commit -m "Fix critical issue"
-
-# Merge directly to master (skip staging)
-git checkout master
-git merge hotfix/critical-fix
-git push origin master
-
-# Backport to staging
-git checkout staging  
-git merge hotfix/critical-fix
-git push origin staging
-```
-
-## 📊 Release Metrics
-
-The CI/CD system tracks:
-- ✅ Compilation success rate
-- 📦 Binary size trends
-- 🧪 Test coverage
-- ⏱️ Build time
-- 🔄 Release frequency
-- 🐛 Issue resolution time
-
-This workflow ensures high code quality, comprehensive testing, and reliable releases while maintaining development velocity.
+There is no separate hotfix path: branch from master, open a PR, merge when CI is green, then cut and gate a release as usual. To get a device off a bad build quickly, re-mark an earlier stable release as Latest (`python tools/release_promote.py bM --rollback`) and deploy it; see [docs/RELEASE_PROCESS.md](../docs/RELEASE_PROCESS.md).

@@ -1,11 +1,11 @@
 # Next-gen fixtures: XIAO ESP32-S3 Sense, dual-core
 
-**Status:** planned (decided 2026-10-15). The current fleet stays on the XIAO nRF52840 Sense; nothing here changes deployed devices. The next generation of fixtures is built on the XIAO ESP32-S3 Sense.
+**Status:** planned (decided 2026-10-15; no implementation work yet as of 2026-10-21). The current fleet stays on the XIAO nRF52840 Sense; nothing here changes deployed devices. The next generation of fixtures is built on the XIAO ESP32-S3 Sense.
 
 ## Why
 
 1. **Visuals come first.** Smooth LED output matters more than audio. On the nRF52840 a single 64 MHz core runs rendering, LED output, BLE and the whole audio pipeline. Audio work (FFT, mel, onset NN, tempo/phase) competes with rendering for the same core. The NN is already skipped on catch-up frames (#165) and stream formatting can stall the loop (#171).
-2. **Every unit is fully independent.** Each fixture has its own listener and its own analysis and works alone. Fleet features (broadcast scenes, gossip ACK, shared timing) are a bonus layered on top, never a dependency.
+2. **Every unit is fully independent.** Each fixture has its own listener and its own analysis and works alone. Fleet features (broadcast commands, gossip ACK, shared timing) are a bonus layered on top, never a dependency.
 3. **The fixtures are being rebuilt anyway.** Any physical change dwarfs firmware cost, so the platform can change now at no extra hardware cost.
 
 ## Architecture: one board, two cores
@@ -34,13 +34,14 @@ Core 0 (PRO_CPU): renderer             Core 1 (APP_CPU): listener
 
 ### The contract stays the same
 
-`AudioControl` (`blinky-things/audio/AudioControl.h`) is the interface between analysis and visuals: `energy`, `pulse`, `onset`, `phase`, `beatCount`, `plpPulse`, `rhythmStrength`, `onsetDensity`. Generators keep consuming it unchanged. What runs underneath is free to change: the model, the features, even a different listener entirely.
+`AudioControl` (`blinky-things/audio/AudioControl.h`) is the interface between analysis and visuals: `energy`, `level`, `pulse`, `onset`, `phase`, `beatCount`, `plpPulse`, `rhythmStrength`, `onsetDensity`. Generators keep consuming it unchanged. What runs underneath is free to change: the model, the features, even a different listener entirely.
 
 ## What carries over
 
 - **Already in the tree, dormant:** `hal/hardware/Esp32PdmMic`, `comms/Esp32BleNus`, `comms/WifiManager`, `comms/WifiCommandServer`, `comms/BleAdvertiser`, and the `BLINKY_PLATFORM_ESP32S3` branches in `hal/PlatformDetect.h` and the files that use it. CI no longer builds them, so expect bit-rot to fix first.
 - **Portable code:** generators, effects, render pipeline, `AudioTracker`, `SharedSpectralAnalysis` (needs an ESP-DSP FFT in place of CMSIS), `FrameOnsetNN` (TFLite Micro, using ESP-NN kernels), and the settings/config storage logic.
 - **Tooling:** the `tests/tracker` harness and corpus gate are platform-independent, and the validation corpus stays `blinky-test-player/music/edm/` (CLAUDE.md).
+- **Release discipline:** the same channels apply (stable / candidate / dev, `docs/RELEASE_PROCESS.md`). Two gaps to close first: ESP32-S3 builds are not under the pinned toolchain yet (`scripts/build.sh --esp32` uses the machine's own arduino-cli setup), and the release workflow builds only the nRF52840 image. The signed-manifest format (`tools/ota_manifest.py`, Ed25519) can be reused for ESP32-S3 OTA.
 
 ## Known risks (from the March 2026 cut and since)
 

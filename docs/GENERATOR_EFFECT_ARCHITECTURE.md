@@ -1,153 +1,173 @@
 # Generator-Effect-Renderer Architecture
 
-## 🎯 Overview
+## Overview
 
-This document describes the reorganized visual architecture that separates concerns into three distinct stages:
+The visual side of the firmware has three stages:
 
-1. **Generators** - Create visual patterns and output to EffectMatrix
-2. **Effects** - Modify generated patterns (hue rotation, brightness, etc.)
-3. **Renderers** - Map processed patterns to physical hardware
+1. **Generators** - Create visual patterns into a `PixelMatrix`, driven by `AudioControl`
+2. **Effects** - Optionally modify the generated pattern (hue rotation)
+3. **Renderer** - Maps the matrix to the physical LEDs (`EffectRenderer` + `LEDMapper`)
 
-## 🏗️ Architecture Flow
+`RenderPipeline` (`render/RenderPipeline.{h,cpp}`) owns all of them. It keeps exactly one active generator and zero or one active effect.
+
+## Architecture Flow
 
 ```
-Generator -> Effects -> Renderer -> Hardware
-    ↓         ↓          ↓
-  Pattern   Modify    Display
-  Creation  Pattern   on LEDs
+AudioTracker -> AudioControl -> Generator -> Effect (optional) -> FrameMetrics -> EffectRenderer -> LEDs
+                                    ↓              ↓                   ↓               ↓
+                                 Pattern        Modify            Measure          Display
+                                 Creation       Pattern            frame           on LEDs
 ```
 
-### Previous Architecture (Visual Effects)
-```
-FireVisualEffect -> LEDs (direct)
+Each frame, the main loop (`blinky-things.ino`) updates the audio tracker, then calls `pipeline->render(audio)` and `leds->show()`. `RenderPipeline::render()`:
+
+```cpp
+pixelMatrix_->clear();
+currentGenerator_->generate(*pixelMatrix_, audio);
+if (effectType_ != EffectType::NONE) currentEffect_->apply(pixelMatrix_);
+metrics_.processFrame(*pixelMatrix_);   // brightness/contrast/activity (`show visual`)
+renderer_->render(*pixelMatrix_);
 ```
 
-### New Architecture (Generator-Effect-Renderer)
-```
-FireGenerator -> HueRotationEffect -> EffectRenderer -> LEDs
-```
+## File Organization
 
-## 📁 File Organization
-
-### Directory Structure (current layout — 2026-05-19)
+### Directory Structure
 
 ```text
 blinky-things/
 ├── BlinkyArchitecture.h           # Main include for Arduino IDE
 ├── generators/                    # Pattern generators (flat — no per-generator subdirs)
-│   ├── Generator.h                # Base interface
-│   ├── Fire.{h,cpp}
-│   ├── Water.{h,cpp}
-│   ├── PlasmaGlobe.{h,cpp}
-│   └── Audio.{h,cpp}
+│   ├── Generator.h                # Base interface + GeneratorType
+│   ├── Fire.{h,cpp}               # Particle generator: heightmap flame + bursts
+│   ├── Water.{h,cpp}              # Particle generator: drops, splashes, ripples
+│   ├── PlasmaGlobe.{h,cpp}        # Drifting orbs (replaced Lightning in v94)
+│   └── Audio.{h,cpp}              # Audio-signal visualizer (debug)
+├── particles/                     # ParticleGenerator base, Particle, ParticlePool
+├── physics/                       # Spawn regions, boundaries, forces, backgrounds
 ├── effects/                       # Visual effects
 │   ├── Effect.h                   # Base interface
 │   ├── HueRotationEffect.{h,cpp}
 │   ├── NoOpEffect.h
 │   └── tests/
-├── render/                        # Rendering pipeline (was renderers/)
+├── render/                        # Rendering pipeline
 │   ├── EffectRenderer.{h,cpp}
+│   ├── FrameMetrics.h
 │   ├── LEDMapper.h
 │   ├── RenderPipeline.{h,cpp}
 │   └── tests/
-└── tests/                         # Cross-cutting tests
+├── types/FrameClock.h             # Frame timing (absolute time, #259)
+└── tests/                         # On-device test helpers (ENABLE_TESTING builds)
 ```
 
-The earlier per-generator subdirectory layout (`generators/fire/FireGenerator.{h,cpp}`) was flattened; generator class names dropped the `Generator` suffix (`FireGenerator` → `Fire`). The conceptual three-stage pipeline (Generator → Effect → Renderer) below is unchanged.
+Generator class names have no `Generator` suffix (`Fire`, not `FireGenerator`). `Fire` and `Water` derive from `ParticleGenerator` (`particles/ParticleGenerator.h`), which derives from `Generator`.
 
-## 🔧 Base Interfaces
+### Generators and serial names
 
-### Generator Interface
+| `GeneratorType` | Class | `gen` / `scene` name | Settings category |
+|-----------------|-------|----------------------|-------------------|
+| `FIRE` | `Fire` | `fire` | `fire` |
+| `WATER` | `Water` | `water` | `water` |
+| `LIGHTNING` | `PlasmaGlobe` | `lightning` or `plasma` (`gen list` shows `plasma`) | `plasma` |
+| `AUDIO` | `Audio` | `audio` | `audiovis` |
+
+`scene <generator> <off|rotate|static> <speed 0-2> <hue 0-1>` sets generator and effect in one command (used for fleet broadcasts). A device with `buttonPin` set cycles generators on a button press.
+
+## Base Interfaces
+
+### Generator Interface (`generators/Generator.h`)
+
 ```cpp
 class Generator {
 public:
-    virtual void begin(int width, int height) = 0;
-    virtual void generate(EffectMatrix* matrix) = 0;
-    virtual void update() = 0;
+    virtual ~Generator() = default;
+    virtual bool begin(const DeviceConfig& config) = 0;
+    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) = 0;
+    virtual void reset() = 0;
     virtual const char* getName() const = 0;
+    virtual GeneratorType getType() const = 0;
+
+protected:
+    uint16_t width_, height_, numLeds_;
+    LayoutType layout_;
+    MatrixOrientation orientation_;
+    FrameClock frameClock_;          // real seconds per frame, never clamped (#259)
+    float traversalDim_, crossDim_;  // set by computeDimensionScales() in begin()
 };
 ```
 
-### Effect Interface
+Generators read only the `AudioControl` struct (`audio/AudioControl.h`: `energy`, `level`, `pulse`, `onset`, `phase`, `beatCount`, `plpPulse`, `rhythmStrength`, `onsetDensity`). They don't know about the mic, FFT or tracker internals. Physics parameters scale with `traversalDim_` and `crossDim_`, so one parameter set works on any LED layout.
+
+### Effect Interface (`effects/Effect.h`)
+
 ```cpp
 class Effect {
 public:
+    virtual ~Effect() = default;
     virtual void begin(int width, int height) = 0;
-    virtual void apply(EffectMatrix* matrix) = 0;
+    virtual void apply(PixelMatrix* matrix) = 0;
+    virtual void reset() = 0;
     virtual const char* getName() const = 0;
 };
 ```
 
 ### Timing: animations keep absolute time (#259)
 
-A late frame must land where it belongs in time, not stretch the animation. A generator gets its frame time from `frameClock_.tick(millis())` (`types/FrameClock.h`). That's the real elapsed time, never clamped, and 0 on the first frame after `begin()`/`reset()`.
+A late frame must land where it belongs in time, not stretch the animation. A generator gets its frame time from `frameClock_.tick(millis())` (`types/FrameClock.h`). That's the real elapsed time, never clamped, and 0 on the first tick after construction or `frameClock_.restart()`.
 - **Clocks and decays** take the whole frame: noise time, drift, hue, palette bias, and envelopes written in closed form (`expf(-dt / tau)`, `powf(rate, dt * 60)`).
 - **Explicit physics** (forces, velocities, heat diffusion, orb drift, ripples) runs the same time in bounded substeps, `FrameTiming::physicsSteps(dt)`: at most 50 ms each, over at most the last 1 s of a long gap (particles live ≤ 2.55 s).
 - **Spawning** is edge-triggered on onsets and beats, so it runs once per frame over `FrameTiming::physicsSpan(dt)`.
 - Never add a `dt` clamp or a "gap too long, assume 16 ms" fallback. `tests/timing/timing_test.cpp` checks that one 2 s frame ends with the same time-driven state as two hundred 10 ms frames.
 
-## 🔥 Fire Generator
+The audio side follows the same rule: the rhythm `phase` and `plpPulse` are extrapolated to the moment of drawing (see `docs/AUDIO_ARCHITECTURE.md`, "Frame Clock").
 
-### Key Changes from FireVisualEffect
-- **Interface**: Implements `Generator` instead of `VisualEffect`
-- **Method**: `generate(EffectMatrix*)` instead of `render(EffectMatrix&)`
-- **Audio Input**: `setAudioInput(energy, hit)` called before `update()`
-- **Location**: `generators/fire/` directory with dedicated test suite
+## Fire Generator
+
+`Fire` is a particle generator with a heightmap flame:
+- A noise-shaped "smolder" flame sits at `smolderheight` and rises with the audio, up to `maxflameheight`.
+- Bursts of fast, short-lived sparks fire on each onset event (`audio.onset > 0`) whose strength reaches `burstthreshold`, and on each new `beatCount` when the rhythm is locked (`rhythmStrength > 0.5`). Burst size grows with strength.
+- A heat grid (`gridcoolrate`, `buoyancycoupling`, `pressurecoupling`) adds plume buoyancy and clustering.
+- It reads `energy`, `level`, `pulse`, `onset`, `beatCount`, `plpPulse` and `rhythmStrength`.
+
+All parameters are serial settings in the `fire` category (see `docs/AUDIO-TUNING-GUIDE.md`).
 
 ### Usage Pattern
-```cpp
-FireGenerator fireGen;
-HueRotationEffect hueEffect(0.1f);  // 10% hue shift
-EffectRenderer renderer;
 
-// Setup
-fireGen.begin(width, height);
-hueEffect.begin(width, height);
-renderer.begin(width, height, ledStrip);
+You don't drive generators by hand; `RenderPipeline` does:
+
+```cpp
+RenderPipeline pipeline;
+pipeline.begin(config, leds, mapper);
+
+pipeline.setGenerator(GeneratorType::FIRE);
+pipeline.setEffect(EffectType::HUE_ROTATION);   // or EffectType::NONE
 
 // Each frame
-fireGen.setAudioInput(energy, hit);
-fireGen.update();
-fireGen.generate(&matrix);
-hueEffect.apply(&matrix);
-renderer.render(&matrix);
+const AudioControl& audio = tracker.update(dt);
+pipeline.render(audio);
+leds.show();
 ```
 
-## 🎨 Effects System
+## Effects System
 
 ### HueRotationEffect
 - **Purpose**: Shifts the hue of all colors in the matrix
 - **Use Cases**: Blue fire, green fire, rainbow cycling
-- **Parameters**: 
-  - `hueShift` (0.0-1.0): Static hue shift amount
-  - `rotationSpeed` (cycles/second): Auto-rotation speed
+- **Serial**: `effect hue` / `effect none`; settings `hueshift` (0.0-1.0, static shift) and `huespeed` (cycles/second)
 
-### Planned Effects
+### Planned Effects (not built)
 - **BrightnessEffect**: Overall brightness control
 - **BlurEffect**: Spatial blur/smoothing
 - **ColorMappingEffect**: Custom color palette mapping
 - **PulseEffect**: Rhythmic brightness pulsing
 
-## 🧪 Testing Architecture
+## Testing Architecture
 
-### Generator-Specific Testing
-Each generator type has its own comprehensive test suite:
+- **Host (CI):** `tests/timing/timing_test.cpp` runs every generator under UBSan and checks absolute timing (the "Absolute Timing" job in `.github/workflows/pr-validation.yml`).
+- **Host (not in CI):** `tests/unit/` has older audio, fire and LED-mapper tests.
+- **On device, `ENABLE_TESTING` builds only:** `tests/GeneratorTestRunner`, `effects/tests/` and `render/tests/`. These aren't wired to serial commands; the old `generators` / `fire all` / `gen help` test commands no longer exist (`gen` now switches generators).
+- **Render safety:** see `docs/VISUALIZATION_SAFETY_TESTING.md`.
 
-- **FireGeneratorTest**: Tests fire-specific behavior (heat simulation, color generation)
-- **FireTestRunner**: Command interface for fire tests
-- **GeneratorTestRunner**: Coordinates all generator tests
-
-### Test Commands
-```
-generators       - Run all generator tests
-gen fire         - Run fire generator tests
-fire all         - Run all fire-specific tests
-fire color       - Test fire color generation
-fire audio       - Test audio response
-gen help         - Show all commands
-```
-
-## 🎯 Benefits of New Architecture
+## Benefits of This Architecture
 
 ### Modularity
 - **Generators** focus only on pattern creation
@@ -165,48 +185,27 @@ gen help         - Show all commands
 - New effects work with all generators
 - New renderers support different hardware
 
-### Composability
-```cpp
-fireGen -> hueRotation -> brightness -> renderer  // Blue dimmed fire
-starGen -> hueRotation -> pulse -> renderer       // Pulsing colored stars
-waveGen -> blur -> brightness -> renderer         // Soft flowing waves
-```
+## Adding a Generator
 
-## 🚀 Migration Guide
+1. Derive from `Generator` (or `ParticleGenerator` for particle systems) in `generators/`.
+2. Use `frameClock_.tick(millis())` for time and `FrameTiming::physicsSteps()` for integration.
+3. Add a `GeneratorType`, wire it into `RenderPipeline` (`begin`, `setGenerator`, the name/type tables, `NUM_GENERATORS`) and `SerialConsole::handleGeneratorCommand()` / `handleSceneCommand()`.
+4. Add the `.cpp` to `BlinkyImplementations.h` (Arduino builds only compile listed `.cpp` files in subdirectories).
+5. If its parameters should persist, add a `Stored*Params` struct to `ConfigStorage.h` and bump `SETTINGS_VERSION`.
 
-### From Old FireVisualEffect
-1. Replace `#include "FireVisualEffect.h"` with `#include "generators/fire/FireGenerator.h"`
-2. Change `FireVisualEffect` to `FireGenerator`
-3. Replace `update(energy, hit)` with:
-   ```cpp
-   setAudioInput(energy, hit);
-   update();
-   ```
-4. Replace `render(matrix)` with `generate(&matrix)`
+## Future Architecture Extensions
 
-### Testing Migration
-1. Replace `#include "FireEffectTest.h"` with `#include "generators/fire/FireGeneratorTest.h"`
-2. Replace `EffectTestRunner` with `GeneratorTestRunner`
-3. Update test commands from `fire test` to `gen fire` or `fire all`
-
-## 📈 Future Architecture Extensions
-
-### Planned Generators
+### Generator ideas (not built)
 - **StarGenerator**: Twinkling star field patterns
 - **WaveGenerator**: Flowing wave animations
 - **NoiseGenerator**: Perlin noise-based patterns
-- **PlasmaGenerator**: Plasma/energy field effects
 
-### Planned Effects
+(The plasma idea shipped as `PlasmaGlobe`.)
+
+### Effect ideas (not built)
 - **MotionBlurEffect**: Trailing/motion blur
 - **CompositeEffect**: Blend multiple patterns
-- **AudioReactiveEffect**: Real-time audio visualization
 - **ParticleEffect**: Particle system overlay
 
 ### Hardware Renderers
-- **MatrixRenderer**: 2D LED matrix mapping
-- **StripRenderer**: 1D LED strip mapping  
-- **SegmentRenderer**: Multi-segment hardware
-- **NetworkRenderer**: Network-distributed LEDs
-
-This architecture provides a solid foundation for complex visual effects while maintaining clear separation of concerns and high testability.
+`EffectRenderer` + `LEDMapper` map the matrix to the LED strip for matrix and linear layouts; two-strand devices (`ledPin2`) are handled below them by `hal/hardware/CompositeLedStrip.h`. Ideas not built: segment and network-distributed renderers.

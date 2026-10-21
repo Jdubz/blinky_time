@@ -1,45 +1,42 @@
-# Blinky Beat Activation — ML Training Pipeline
+# Blinky Onset Activation — ML Training Pipeline
 
-Train a small NN to produce beat/downbeat activation signals for the Blinky firmware. Replaces the handcrafted BandFlux ODF with a learned activation function that feeds into the existing CBSS beat tracker.
+Train a small NN that outputs a per-frame **onset** activation (one value per 16 ms mel frame) for the Blinky firmware. The task is onset detection: fire on every percussive hit, on or off the beat. It is not beat detection (see "Task is Onset Detection" in the repo's `CLAUDE.md`).
 
-**Current direction (March 2026):** Frame-level FC model on a sliding window of raw mel frames. Produces per-frame beat activation + downbeat activation at ~15.6 Hz. ~60-200µs inference on Cortex-M4F. See `docs/IMPROVEMENT_PLAN.md` Priority 1.
-
-**Previous approaches (CLOSED):** Mel-spectrogram CNN (79-98ms, too slow), beat-synchronous FC hybrid (circular dependency with CBSS, negligible discriminative power in per-beat features).
+**Current status (October 2026):**
+- The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h`.
+- **Devices ship with the onset NN off** (`BLINKY_ONSET_NN_ENABLED=0` in `blinky-things/audio/AudioTracker.h`). Onsets come from tuned spectral flux. On edm/ with the hat's CPU cost model, flux scores F1 0.542 at 178 fps; v33 scores 0.480 and holds the loop at 48 fps (~12 ms per inference).
+- A new model is enabled only when it beats flux under that same measurement (the host harness in `tests/tracker/`). Roadmap and open experiments: `docs/ML_IMPROVEMENT_PLAN.md`.
 
 ## Quick Start
 
 ```bash
 source venv/bin/activate
 
-# Standard pipeline: prepare data → train → export → evaluate
-make prepare train export eval
+# train.py refuses to run outside tmux/screen. Run long steps in tmux:
+tmux new-session -d -s train "cd ml-training && source venv/bin/activate && \
+  make prepare train export eval CONFIG=configs/conv1d_w16_onset_v33_mel_only.yaml 2>&1 | tee train.log"
 
-# Or step by step:
-make prepare                    # Extract mel features + augmentation
-make train                      # Train model (auto-named output dir)
-make export                     # Export TFLite INT8 → C header
-make eval                       # Evaluate on 18-track EDM test set
+# Steps:
+make prepare CONFIG=...   # Extract mel features + augmentation
+make train CONFIG=...     # Train model (auto-named output dir)
+make export CONFIG=...    # Export TFLite INT8 → C header
+make eval CONFIG=...      # Evaluate on the 18-track edm/ corpus
 ```
+
+Always pass `CONFIG=`. The Makefile's default (`configs/wider_rf.yaml`) is a legacy beat-era causal CNN.
+
+`./train_pipeline.sh <config> <run-name> [--skip-labels] [--skip-prep]` runs onset labels → prepare → train → eval → export in one go. Launch it in tmux too.
+
+**`make label` and `make merge` produce BEAT labels** (`label_beats.py`, `merge_consensus_labels_v2.py`). Never use them as training targets. Onset labels come from `scripts/generate_onset_consensus.py` (5 onset detectors) and `scripts/generate_kick_weighted_targets.py` / `scripts/clean_kick_weighted.py` (kick/snare weighted labels from drum stems).
 
 ## Configuration
 
-Configs use a **base + override** pattern:
+Configs use a **base + override** pattern. `configs/base.yaml` holds shared audio, training and data settings. Each versioned config (`configs/conv1d_w16_onset_v*.yaml`) overrides the model, labels, audio and export sections. `load_config()` merges them.
 
-```
-configs/
-├── base.yaml        # Shared audio/training/data settings (single source of truth)
-├── default.yaml     # 3-layer baseline model (overrides model + export sections)
-└── wider_rf.yaml    # 5-layer wider model (overrides model + export sections)
-```
-
-`base.yaml` contains everything that must match firmware or is shared across experiments. Model configs only specify the architecture and export budget. `load_config()` merges them automatically.
+Things that must match the firmware (mel bands, fmin, fmax, `mel_db_range`) live in the `audio` section. Note that `base.yaml` still says `n_mels: 26` / `fmin: 60`; the v33 config overrides these to 50 / 30.
 
 ```bash
-# Train with wider model
-make train CONFIG=configs/wider_rf.yaml
-
-# Train with custom run name
-make train RUN_NAME=v4-augmented-final
+make train CONFIG=configs/conv1d_w16_onset_v33_mel_only.yaml RUN_NAME=v33-retrain
 ```
 
 ## Directory Structure
@@ -47,96 +44,75 @@ make train RUN_NAME=v4-augmented-final
 ```
 ml-training/
 ├── configs/
-│   ├── base.yaml               # Shared settings (audio, training, data paths)
-│   ├── default.yaml            # 3-layer baseline overrides
-│   └── wider_rf.yaml           # 5-layer wider model overrides
+│   ├── base.yaml                     # Shared settings (audio, training, data paths)
+│   └── conv1d_w16_onset_v*.yaml      # Per-experiment overrides (v33 = embedded model)
 ├── scripts/
-│   ├── audio.py                # Shared mel pipeline (torch + numpy, single source of truth)
-│   ├── prepare_dataset.py      # Audio → mel spectrograms + targets (with augmentation)
-│   ├── label_beats.py          # Multi-system beat labeling (Beat This!, essentia, librosa, madmom)
-│   ├── merge_consensus_labels.py # Merge per-system labels into consensus
-│   ├── export_tflite.py        # PyTorch → TFLite INT8 → C header
-│   ├── calibrate_mic.py        # Mic calibration pipeline
-│   ├── validate_features.py    # Verify Python/firmware mel feature parity
-│   ├── download_fma.py         # Download FMA electronic subset
-│   ├── download_giantsteps.py  # Download GiantSteps tempo dataset
-│   └── download_rir.py         # Download room impulse responses
-├── tools/                      # Experimental/one-off scripts (not part of pipeline)
-│   ├── ab_test_bpm.js          # BPM A/B testing on device (single track)
-│   ├── ab_test_batch.cjs       # Batch BPM A/B testing (all tracks)
-│   ├── gain_volume_sweep.py    # ODF discriminability measurement
-│   └── capture_nn_stream.py    # NN diagnostic stream capture
-├── models/
-│   ├── beat_cnn.py             # Causal 1D CNN model definition (legacy, CLOSED)
-│   └── beat_sync.py            # Beat-sync FC classifier (ABANDONED, kept for reference)
-├── train.py                    # Training loop (BCE/focal loss, cosine LR)
-├── evaluate.py                 # Offline evaluation (beat + downbeat F1)
-├── Makefile                    # Pipeline orchestration
-├── data/                       # (gitignored) Processed .npy files, calibration
-└── venv/                       # (gitignored) Python virtual environment
+│   ├── audio.py                      # Shared mel pipeline (single source of truth)
+│   ├── prepare_dataset.py            # Audio → mel features + onset targets (with augmentation)
+│   ├── generate_onset_consensus.py   # 5-system onset consensus labels
+│   ├── generate_kick_weighted_targets.py  # Kick/snare weighted onset labels
+│   ├── clean_kick_weighted.py        # Drop drum-stem bleed from kick_weighted labels
+│   ├── export_tflite.py              # PyTorch → TFLite INT8 → C header
+│   ├── calibrate_mic.py              # Mic calibration pipeline
+│   ├── validate_features.py          # Python vs firmware mel parity check
+│   ├── label_beats.py, merge_consensus_labels*.py  # BEAT labeling (reference only, not training input)
+│   └── download_fma.py, download_giantsteps.py, download_rir.py
+├── models/                           # onset_conv1d.py (current), onset_fc*.py, onset_cnn.py, onset_conv1d_pool.py
+├── analysis/                         # Offline diagnostics (peak picker, gate checks, offline-vs-device)
+├── tools/label-reviewer/             # Browser tool for hand-correcting onset labels
+├── train.py                          # Training loop (refuses to run outside tmux/screen)
+├── evaluate.py                       # Offline onset F1 on edm/ vs .onsets_consensus.json
+├── train_pipeline.sh                 # prepare → train → eval → export
+├── Makefile                          # Pipeline targets
+└── data/                             # (gitignored) calibration, device captures
 ```
 
 ## Output Convention
 
-Each training run creates a timestamped directory under `/mnt/storage/blinky-ml-data/outputs/`:
+Each training run writes to `/mnt/nvme/outputs/<run-name>/` (see `docs/ML_STORAGE_LAYOUT.md`). The default run name is `{config}-{timestamp}`; override with `RUN_NAME=`.
 
 ```
-outputs/
-├── wider_rf-20260306-173448/   # Auto-named: {config}-{timestamp}
-│   ├── best_model.pt           # Best validation loss checkpoint
-│   ├── final_model.pt          # Last epoch checkpoint
-│   ├── model_checkpoint.pt     # Full checkpoint (state_dict + config + metadata)
-│   ├── training_log.csv        # Per-epoch metrics
-│   ├── beat_model_int8.tflite  # Exported INT8 model
-│   └── eval/                   # Evaluation results + activation plots
-│       ├── eval_results.json
-│       └── plots/
-└── v4-final/                   # Or use a custom name: RUN_NAME=v4-final
+outputs/<run-name>/
+├── best_model.pt            # Best checkpoint (by early_stopping_metric)
+├── final_model.pt           # Last epoch
+├── model_checkpoint.pt      # state_dict + config + metadata
+├── training_log.csv         # Per-epoch metrics
+└── eval/eval_results.json   # Offline edm/ onset F1
 ```
 
-Override with `make train RUN_NAME=my-experiment` for human-readable names.
+**`export_tflite.py` also overwrites the firmware's active header** `blinky-things/audio/frame_onset_model_data.h`, not just the versioned one named in the config. Check `git diff` before committing, and run `python tools/check_model_input.py` (repo root) to confirm the firmware will accept the model.
 
 ## Key Constraint: Feature Parity
 
-The model input **must exactly match** the firmware's `SharedSpectralAnalysis::getRawMelBands()`:
-- 16 kHz sample rate, Hamming window, FFT-256, hop 256
-- 26 mel bands (60–8000 Hz), HTK mel scale, no normalization
-- Log compression: `10*log10(x + 1e-10)`, mapped [-60, 0] dB to [0, 1]
+The model input **must exactly match** the firmware's `SharedSpectralAnalysis::getRawMelBands()` (`blinky-things/audio/SharedSpectralAnalysis.h`):
+- 16 kHz sample rate, Hamming window, FFT-256, hop 256 (62.5 frames/s)
+- 50 mel bands (30–8000 Hz), HTK mel scale
+- Log compression: `10*log10(x + 1e-7)`, mapped [-60, 0] dB to [0, 1]
 
-The mel pipeline is defined once in `scripts/audio.py` and imported by all scripts.
+The mel pipeline is defined once in `scripts/audio.py` and imported by all scripts. Changing the mel config needs a matching firmware change (`NUM_MEL_BANDS`, `MEL_MIN_FREQ`, `MEL_MAX_FREQ` triplet) and a model the firmware accepts. The v36 config (80 mel, 31.25 kHz) does not match the firmware.
 
 ## Hardware Target
 
 - **XIAO nRF52840 Sense** (Cortex-M4F @ 64 MHz, 256 KB RAM, 1 MB Flash)
-- Frame-level FC (planned): ~20-60 KB INT8, ~8-16 KB arena, ~60-200µs @ 15.6 Hz
-- Mel CNN (legacy): ~20-46 KB INT8, 96 KB arena, 79-98ms @ 62.5 Hz (too slow)
+- v33: ~20 KB INT8, 16-frame window, ~12 ms per inference on device
 - Runtime: TFLite Micro + CMSIS-NN
 
-## Training Results
+## Results (edm/, 18 tracks, offline onset F1 vs `.onsets_consensus.json`, ±50 ms)
 
-**Mel-spectrogram CNN (CLOSED — all too slow on MCU):**
+| Version | Change | Onset F1 | Status |
+|---------|--------|----------|--------|
+| v33 | 50 mel, 30–8000 Hz, kick_weighted labels | 0.617 | Embedded in firmware; NN off on devices |
+| v34d | kick_weighted_clean labels | 0.616 | Flat; not deployed |
+| v36 | 80 mel, 14 kHz fmax, 31.25 kHz | 0.537 | Regressed; not deployed |
 
-| Version | Architecture | Beat F1 | Downbeat F1 | Notes |
-|---------|-------------|---------|-------------|-------|
-| v2 | 3L ch32, clean data | 0.525 | 0.256 | Baseline |
-| v4 | 5L ch32, augmented + mic profile | 0.715 | 0.364 | +36% beat |
-| v7 | 7L ch32, deep | **0.787** | **0.371** | Best F1, 79ms+ inference |
-| v9 | 5L DS-TCN 24ch | 0.688 | — | 98ms, residual ADD overhead |
-
-**Beat-sync FC (ABANDONED — circular dependency, no discriminative signal):**
-
-| Version | Architecture | Downbeat F1 | Notes |
-|---------|-------------|-------------|-------|
-| Phase A | FC 316→32→16→1 | 0.548 | Per-beat features lack discriminative power |
-
-**Frame-level FC (IN PROGRESS):** Not yet trained.
+On-device, the decision metric is the host tracker harness (`tests/tracker/run_tracker_eval.py`), where tuned flux currently wins.
 
 ## Acoustic Environment Augmentation
 
-Designed for robustness across diverse venues:
-- **Volume variation**: -18 to +6 dB
-- **Pink noise**: SNR 6–20 dB (crowd noise approximation)
-- **Low-pass filter**: 4 kHz cutoff (boomy warehouse)
-- **Bass boost**: 60–200 Hz resonance
-- **Room impulse responses**: EchoThief + synthetic (warehouse, outdoor, arena, club)
-- **Mic profile**: Gain-aware noise floor from calibration data (17 gain levels × 26 bands)
+`prepare_dataset.py --augment`:
+- **Volume variation** (gain augmentation)
+- **Background noise** at varied SNR
+- **Low-pass filter** (boomy rooms)
+- **Room impulse responses** (`download_rir.py`)
+- **Time stretch and pitch shift** (factors in `base.yaml`)
+- **Mic profile**: gain-aware noise floor from calibration data (`--mic-profile`)

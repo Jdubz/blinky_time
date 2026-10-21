@@ -1,5 +1,12 @@
 # Parameter Tuner Guide - Selective Tuning
 
+> **OBSOLETE (checked 2026-10-21). Do not follow this guide.**
+> - The `param-tuner` CLI was deleted on 2026-04-02 (commit `be90f842`). Only a stale build in the untracked `dist/` folder remains. No device tool may open serial ports directly any more; blinky-server owns every connection.
+> - The firmware it tunes is gone too: there is no `AudioController`, CBSS, ensemble detectors or agreement boosts. Most parameter names below no longer exist.
+> - Today, on-device sweeps run through blinky-server: `POST /api/test/param-sweep` (or the `run_test` / `run_validation_suite` MCP tools), scored on onset F1 against `.onsets_consensus.json` in `blinky-test-player/music/edm/`.
+> - Tracker changes are checked offline with the host harness: `tests/tracker/run_tracker_eval.py` (see `tests/tracker/README.md`).
+> - Current parameters: `docs/AUDIO_ARCHITECTURE.md` and `docs/AUDIO-TUNING-GUIDE.md`.
+
 **Last Updated:** January 2026
 **Architecture:** AudioController with CBSS Beat Tracking
 

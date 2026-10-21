@@ -1,9 +1,10 @@
 # Changelog
 
-All notable changes to the Blinky Time project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+> **This file is no longer maintained** (last updated 2025). Firmware releases are versioned `bN`, not semver. The record of changes is:
+> - [GitHub Releases](https://github.com/Jdubz/blinky_time/releases): each release's notes list the changes since the previous one and flag `SETTINGS_VERSION` changes (see [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
+> - `git log` for everything else.
+>
+> The entries below are kept for history only and do not describe the current firmware.
 
 ## [Unreleased]
 

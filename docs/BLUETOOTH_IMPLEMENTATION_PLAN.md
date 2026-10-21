@@ -1,6 +1,12 @@
 # Wireless Communication Plan
 
-*Created: December 2025, Updated: March 30, 2026*
+*Created: December 2025, Updated: March 30, 2026. Status note added October 21, 2026.*
+
+> **Status (2026-10-21):** BLE fleet management over the Pi server is done and in daily use; most of this doc is the record of how it was built. ESP32-S3 (and its WiFi transport) was cut in March 2026 and lives on only in the next-gen plan (`docs/NEXTGEN_ESP32S3_PLAN.md`). What changed since March:
+> - **Flashing** goes through one entry point, `FleetManager.flash_device()` (`docs/FLASH_LOCKDOWN_PLAN.md`), and operators use only `./scripts/deploy.sh`, which installs **stable releases only** (`docs/RELEASE_PROCESS.md`). Device-mutating routes need the `X-Deploy-Tool` header that only `deploy.sh` sets.
+> - **Fleet bootloader is 0.8.0-10**; its BLE DFU accepts up to 244-byte packets (ATT MTU 247), but transfers still negotiate MTU 23 in practice (#216).
+> - **Web Bluetooth in blinky-console** exists now: phone record mode (`docs/PHONE_RECORD_MODE_PLAN.md`) and a signed-OTA update path that is built but hidden (`docs/WEB_FLASHER.md`).
+> - **Open BLE work** is tracked in `docs/BLE_FLEET_RELIABILITY_PLAN.md` and GitHub issues (#215, #216, #221, #190, #173).
 
 ## Goal
 
@@ -20,17 +26,18 @@ REST API: http://blinkyhost.local:8420/api/
   ├── POST /fleet/discover        — trigger immediate BLE/serial scan
   ├── POST /devices/{id}/command  — send command
   ├── POST /devices/{id}/flash    — firmware upload (UF2 or BLE DFU, auto-detected)
-  ├── POST /fleet/flash           — flash all nRF52840 devices (accepts .hex or .dfu.zip)
-  ├── POST /fleet/deploy          — compile + generate DFU zip + flash all devices
+  ├── POST /fleet/upload          — stage firmware for a fleet flash (deploy.sh only)
+  ├── POST /fleet/flash           — flash nRF52840 devices (deploy.sh only)
+  ├── POST /flash-jobs            — create one flash job (deploy.sh only)
   ├── POST /fleet/settings/save   — save settings on all devices
   ├── POST /fleet/settings/load   — load settings on all devices
   ├── POST /fleet/settings/defaults — restore defaults on all devices
-  ├── POST /firmware/compile      — compile firmware
-  ├── POST /firmware/compile-dfu  — compile + generate DFU zip
   └── --no-serial flag            — BLE-only fleet management mode
 ```
 
-**Use case**: Fleet management — settings changes, generator/effect selection (the scene system was retired 2026-05-19; see `OPEN_ISSUES_2026_05_19.md` §1.2), device configuration, status monitoring, OTA firmware updates.
+The `/firmware/compile*` routes are gone. `POST /fleet/deploy` (server-side compile + flash) still exists in `routes_firmware.py` but contradicts the stable-only rule; don't use it. Flash fleet devices only with `./scripts/deploy.sh`.
+
+**Use case**: Fleet management — settings changes, generator/effect selection (the scene system was retired 2026-05-19; see `archive/OPEN_ISSUES_2026_05_19.md` §1.2), device configuration, status monitoring, OTA firmware updates.
 
 ## Current Status (March 31, 2026)
 
@@ -52,11 +59,11 @@ REST API: http://blinkyhost.local:8420/api/
 | **Server flash (UF2)** | nRF52840 | `POST /api/devices/{id}/flash` delegates to `uf2_upload.py` for serial devices |
 | **BLE DFU flash** | nRF52840 | `POST /api/devices/{id}/flash` auto-detects BLE transport, does full DFU transfer wirelessly (~5.5 min/device) |
 | **Fleet flash** | Pi | `POST /api/fleet/flash` flashes all connected nRF52840 sequentially (serial + BLE mixed) |
-| **Fleet deploy** | Pi | `POST /api/fleet/deploy` one-shot compile + DFU zip + flash all devices |
+| **Fleet deploy** | Pi | Superseded: `./scripts/deploy.sh` installs the latest stable release (`POST /api/fleet/deploy` compiled locally; don't use it) |
 | **BLE DFU proven** | nRF52840 | End-to-end tested Mar 30: 510KB in ~5.5 min, 2/2 fleet flash success, auto-reconnect after DFU |
-| **Compile endpoint** | Pi | `POST /api/firmware/compile` and `/firmware/compile-dfu` (pure-Python DFU zip, no adafruit-nrfutil dependency) |
+| **DFU zip generation** | Pi | Pure-Python (`firmware/compile.py`), no adafruit-nrfutil dependency. The compile endpoints were removed |
 | **UF2 bootloader entry** | nRF52840 | Write RAM magic (0xBEEF0057) to 0x20007F7C → DSB/ISB → NVIC_SystemReset (custom bootloader checks RAM before GPREGRET) |
-| **BLE DFU protocol** | nRF52840 | Legacy DFU (SDK v11): write-with-response on control, 60s START_DFU timeout for flash erase, 20-byte chunks, word-aligned padding |
+| **BLE DFU protocol** | nRF52840 | Legacy DFU (SDK v11): write-with-response on control, 60s START_DFU timeout for flash erase, chunk size from the negotiated MTU (20 bytes at MTU 23, up to 244), word-aligned padding |
 | **BlueZ stale cleanup** | Pi | Auto-disconnects stale BLE connections from previous server sessions on startup |
 | **BLE reconnect backoff** | Pi | Exponential backoff for failing BLE devices (10s, 20s, 40s... capped at 5 min) |
 | **Discovery pause** | Pi | Background BLE discovery pauses during DFU to avoid BleakScanner conflicts |
@@ -78,13 +85,14 @@ REST API: http://blinkyhost.local:8420/api/
 | Feature | Priority | Notes |
 |---------|----------|-------|
 | **Post-DFU USB re-enumeration** | Medium | After BLE DFU, USB serial doesn't re-enumerate (host-side issue). BLE reconnects fine. Not blocking for BLE-only fleet management. |
-| **WiFi on ESP32-S3** | Low (ESP32 deprioritized) | Hardware antenna issue. BLE is primary wireless transport. |
-| **Web Bluetooth (blinky-console)** | Low | Fleet management is via Pi server |
+| **BLE-DFU MTU** | Medium | Transfers negotiate MTU 23 (20-byte chunks, ~6.5 min per device) although the bootloader allows 247 (#216) |
+| **WiFi on ESP32-S3** | Dropped | ESP32-S3 cut March 2026; next gen only |
+| **Web Bluetooth (blinky-console)** | Done in part | Record mode works; Bluetooth firmware updates are built but hidden until they pass on hardware (`docs/WEB_FLASHER.md`) |
 
 ### Known Limitations
 
 - **GPREGRET race condition (RESOLVED)**: Replaced GPREGRET with RAM magic at 0x20007F7C via custom bootloader (Apr 2026). Bootloader entry now succeeds on first attempt. See `docs/archive/UPLOAD_OVERHAUL_PLAN.md` for the original analysis; live invariants enforced by `scripts/verify_bootloader.py`.
-- **BLE DFU transfer speed**: ~1.7 KB/s (20-byte BLE packets), ~5.5 min per device for 510 KB firmware. Sequential only (Pi's BLE adapter handles one DFU at a time).
+- **BLE DFU transfer speed**: ~1.7 KB/s (20-byte BLE packets), ~5.5–6.5 min per device. Sequential only (Pi's BLE adapter handles one DFU at a time). Larger packets are possible but not negotiated yet (#216).
 - **Post-DFU USB**: After BLE DFU boot, USB serial doesn't re-enumerate without physical power cycle. uhubctl on Pi doesn't fully cut power. BLE reconnection works fine.
 - **BlueZ stale connections**: Server restart leaves stale BLE connections in BlueZ. Auto-cleanup runs on startup. Per-device `bluetoothctl disconnect` runs before each BLE connect to prevent notification stacking.
 - **BLE discovery stops after connection**: Connected devices stop advertising. Server can't discover new devices while holding connections.
@@ -115,7 +123,7 @@ All bootloader entry paths (serial command, 1200-baud touch, SafeBootWatchdog, Q
 
 ### BLE DFU Protocol (nRF52840) — Proven End-to-End (Mar 30, 2026)
 
-Adafruit bootloader v0.6.1 uses Legacy DFU (SDK v11). DFU Revision = 0x0008 (v0.8, NOT Secure DFU).
+The bootloader (stock Adafruit v0.6.1 then; the fleet's 0.8.0-10 fork now) uses Legacy DFU (SDK v11). DFU Revision = 0x0008 (v0.8, NOT Secure DFU).
 
 **Protocol sequence**: START_DFU (with 60s timeout for flash erase) → INIT_DFU (12-byte init packet with CRC-16) → SET_PRN (interval=8) → RECEIVE_FW (20-byte chunks, word-aligned) → VALIDATE → ACTIVATE_AND_RESET.
 
@@ -123,7 +131,7 @@ Adafruit bootloader v0.6.1 uses Legacy DFU (SDK v11). DFU Revision = 0x0008 (v0.
 - DFU Control writes MUST use write-with-response (`response=True` in bleak)
 - DFU Packet writes use write-without-response (`response=False`)
 - START_DFU triggers flash erase: ~25s for 500KB firmware — needs 60s timeout
-- Bootloader caps payload at 20 bytes regardless of negotiated MTU
+- Bootloader capped payload at 20 bytes regardless of negotiated MTU (0.8.0-10 accepts up to 244; see #216)
 - Last firmware chunk must be padded to 4-byte word alignment
 - Bootloader BLE address = app address + 1 (last octet)
 - Must force StartNotify (not AcquireNotify) in bleak for reliable notifications
@@ -159,6 +167,8 @@ Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3. External NimBLE-Ardu
 
 ## Resource Usage
 
+These numbers are from March 2026. A b215 image is about 485 KB.
+
 ### nRF52840 (with NUS + DFU + Print& refactor)
 
 | Resource | Usage | Available | Headroom |
@@ -166,7 +176,7 @@ Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3. External NimBLE-Ardu
 | Flash | ~394 KB (48%) | 811 KB | 417 KB (51%) |
 | RAM | 24.4 KB (10%) | 237 KB | 213 KB (90%) |
 
-### ESP32-S3 (with BLE + WiFi + OTA)
+### ESP32-S3 (with BLE + WiFi + OTA; retired platform)
 
 | Resource | Usage | Available | Headroom |
 |----------|-------|-----------|----------|

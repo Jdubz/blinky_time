@@ -11,6 +11,8 @@ LED controllers have thermal and current limits. Exceeding these limits causes:
 - **Sustained risk**: Thermal damage, melted solder joints, fire hazard
 - **Cascading failure**: Damaged controller can damage nRF52840 via backfeed
 
+> **Status (2026-10-21):** `blinky-things/tests/RenderPipelineSafetyTest.h` exists, but nothing includes it: it does not run at startup, and CI does not run it. The guard that does exist is structural: `RenderPipeline::render()` clears the matrix every frame, and `PixelMatrix` stores 8-bit channels, so a pixel can't exceed RGB(255,255,255). Wiring the safety tests into a host build is still open.
+
 ### Real-World Example: The Missing `clear()` Bug
 
 **Commit 7999748** fixed a critical bug where `RenderPipeline.render()` never cleared the matrix between frames:
@@ -22,10 +24,15 @@ void RenderPipeline::render(const AudioControl& audio) {
     renderer_->render(*pixelMatrix_);
 }
 
-// AFTER (SAFE):
+// AFTER (SAFE) — current code, render/RenderPipeline.cpp:
 void RenderPipeline::render(const AudioControl& audio) {
+    if (!initialized_) return;
     pixelMatrix_->clear();  // ← CRITICAL: Prevents accumulation
     currentGenerator_->generate(*pixelMatrix_, audio);
+    if (effectType_ != EffectType::NONE) {
+        currentEffect_->apply(pixelMatrix_);
+    }
+    metrics_.processFrame(*pixelMatrix_);
     renderer_->render(*pixelMatrix_);
 }
 ```
@@ -64,7 +71,7 @@ Location: `blinky-things/tests/RenderPipelineSafetyTest.h`
 - Checks each channel: `r <= 255`, `g <= 255`, `b <= 255`
 - Checks total brightness: `r + g + b <= 765`
 
-**Failure indicates**: Overflow in blending operations (ADDITIVE, MAX)
+**Failure indicates**: Overflow where a generator adds colors. Channels are `uint8_t`, so a sum that isn't saturated wraps around to a dark value instead of exceeding 255.
 
 #### Test 3: Color Accumulation Detection
 
@@ -83,7 +90,7 @@ Location: `blinky-things/tests/RenderPipelineSafetyTest.h`
 
 **What it tests:**
 - Counts pixels at max brightness RGB(255,255,255)
-- Fails if >50% of LEDs at max for >100 consecutive frames (~3 seconds)
+- Fails if >50% of LEDs at max for >100 consecutive frames (`MAX_CONSECUTIVE_BRIGHT_FRAMES`; ~3 s at 30 fps, under 2 s at 60 fps)
 
 **Failure indicates**: Generator producing sustained max output
 
@@ -98,6 +105,8 @@ Location: `blinky-things/tests/RenderPipelineSafetyTest.h`
 **Failure indicates**: Generator producing corrupt data
 
 ## Running Tests
+
+None of the snippets below is wired up today (see the status note at the top). They show how the header is meant to be used.
 
 ### At Development Time
 
@@ -129,23 +138,12 @@ void setup() {
 
 ### In CI/CD Pipeline
 
-Add to GitHub Actions or build scripts:
+What CI runs today (`.github/workflows/pr-validation.yml`) that touches rendering:
+- **Absolute Timing** builds `tests/timing/timing_test.cpp` with the real generators (Fire, Water, PlasmaGlobe, Audio) under UBSan and runs it.
+- **Static Init Safety Check** runs `python scripts/check_static_init.py blinky-things/`.
+- **Compile Firmware** runs `bash scripts/build.sh --build 0`.
 
-```bash
-# Compile firmware with tests enabled
-arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
-
-# Run unit tests (native x86 build)
-cd tests
-g++ -DTEST_MODE -I.. RenderPipelineTests.cpp -o test_render
-./test_render
-
-# Parse output for failures
-if grep "FAIL" test_output.txt; then
-    echo "SAFETY TESTS FAILED - BLOCKING MERGE"
-    exit 1
-fi
-```
+`RenderPipelineSafetyTest.h` includes `<Arduino.h>`, so a host run would need the simulator headers (`blinky-simulator/include`), as the timing test uses. There is no `tests/RenderPipelineTests.cpp`.
 
 ### Continuous Monitoring
 
@@ -187,6 +185,8 @@ All code touching the rendering pipeline MUST have tests:
 2. **After any rendering code change** - Run affected tests
 3. **In CI/CD pipeline** - Block merge on test failure
 4. **At device startup** - Runtime validation
+
+These are the intended test points, not current practice (see the status note).
 
 ### WARNING Test Points
 
@@ -262,10 +262,10 @@ for (all pixels) {
 
 ### Current Limits
 
-Typical APA102/SK9822 LED:
-- Per channel: 20mA @ 255 brightness
-- Per LED (RGB): 60mA @ full white (255,255,255)
-- String of 89 LEDs: 5.34A @ full white
+The fleet uses WS2812B-class LEDs (NeoPixel, `NEO_GRB + NEO_KHZ800`; see `docs/HARDWARE.md`):
+- Per channel: ~20mA @ 255 brightness
+- Per LED (RGB): ~60mA @ full white (255,255,255)
+- 100 LEDs: ~6A @ full white
 
 nRF52840 limits:
 - Total current budget: ~100mA
@@ -273,7 +273,7 @@ nRF52840 limits:
 
 **Safety margins**:
 - Keep avg brightness <50% to prevent thermal issues
-- Use current-limiting resistors on data lines
+- Use a series resistor on the data line (protects the data pin; it does not limit LED current)
 - Monitor temperature if possible
 
 ### Thermal Limits
@@ -302,6 +302,7 @@ Potential additions to safety testing:
 
 - **Missing clear() bug**: Commit 7999748
 - **Heat accumulation bug**: Commit 1d583ab
-- **Lightning underflow bug**: Commit f28afb3
-- **Safety test framework**: `blinky-things/tests/SafetyTest.h`
+- **Lightning underflow bug**: Commit f28afb3 (Lightning was replaced by PlasmaGlobe in v94)
+- **Visual safety tests**: `blinky-things/tests/RenderPipelineSafetyTest.h` (not wired up)
+- **Flash-write safety** (used by ConfigStorage): `blinky-things/tests/SafetyTest.h`
 - **Static initialization safety**: `blinky-things/tests/StaticInitCheck.h`
