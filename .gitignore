@@ -69,3 +69,8 @@ scratch/
 
 # Pinned, isolated firmware toolchain (scripts/setup_toolchain.sh, #252)
 .arduino/
+
+# Local scratch: host-test build output and deep-research notes
+/build/
+/reports/
+/research_notes/

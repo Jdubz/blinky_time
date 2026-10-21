@@ -10,6 +10,8 @@ Code:
 - **Firmware:** `blinky-things/ota/` (`QspiOtaStaging.h`, `OtaManifest.h`, `OtaKeys.h`).
 - **Signing:** `tools/ota_manifest.py`.
 
+Why this route, and what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist): [WEB_UPDATE_RESEARCH_2026_10.md](WEB_UPDATE_RESEARCH_2026_10.md).
+
 ## How an update works: signed OTA through the running app
 
 The update never goes through the bootloader's UF2 drive or its BLE DFU service; the page talks to the running firmware instead.
