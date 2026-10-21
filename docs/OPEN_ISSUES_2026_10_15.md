@@ -76,7 +76,6 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 |---|---|---|---|---|
 | 4.1 ([#192](https://github.com/Jdubz/blinky_time/issues/192)) | Fire burst re-arm, particle pool exhaustion, fps-dependent aging/decays, Water beat sweep, phase-threshold beats | generators, `ParticleGenerator` | VERIFY | `onset`/`beatCount` events, `killOldest`, stochastic rounding, dt scaling. Verify visually on the hat (linear layout). |
 | 4.2 ([#193](https://github.com/Jdubz/blinky_time/issues/193)) | LED `show()` DMA wait caps fps on large strips (~30 µs/LED) | `Nrf52PwmLedStrip` | OPEN | Not a stall; relevant to the ≥30 fps gate on 1000+ LED devices. |
-| 4.3 ([#194](https://github.com/Jdubz/blinky_time/issues/194)) | PlasmaGlobe replaces dt > 0.5 s with 16 ms; loop clamps dt at 100 ms | generators / loop | OPEN (low) | Duplicate of 4.4; close in favour of #259. |
 | 4.4 ([#259](https://github.com/Jdubz/blinky_time/issues/259)) | Long frames stretch animation time: the loop and Audio/Fire/Water clamp `dt` to 100 ms, and PlasmaGlobe advances only 16 ms after a gap over 0.5 s | `blinky-things.ino`, `Constants::MAX_FRAME_TIME`, generators | OPEN | Animations should keep absolute time. Real stalls exist (QSPI erase during `ota manifest`, settings saves). |
 
 ## 5. Phone record mode
