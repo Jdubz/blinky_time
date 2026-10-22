@@ -81,7 +81,8 @@ int usage() {
         "  --nn-cost-us=N --frame-cost-us=N --render-cost-us=N  CPU cost model: the loop\n"
         "  period becomes render cost + audio work (loop_fps is ignored; jitter scales the\n"
         "  render cost)\n"
-        "  --onset-bass-gate=X --onset-pattern-bias=X  shared onset gates (0 = off)\n");
+        "  --onset-bass-gate=X --onset-pattern-bias=X  shared onset gates (0 = off)\n"
+        "  --onset-rearm=X --onset-peak-window=N  shared peak picker\n");
     return 2;
 }
 
@@ -120,6 +121,8 @@ namespace HostCost { void (*onWork)(int) = nullptr; }
 // Shared onset gate overrides (negative = keep the firmware default).
 static double g_onsetBassGate = -1.0;
 static double g_onsetPatternBias = -1.0;
+static double g_onsetRearm = -1.0;
+static double g_onsetPeakWindow = -1.0;
 
 int main(int rawArgc, char** rawArgv) {
     // Split --name=value options from the positional arguments.
@@ -135,6 +138,8 @@ int main(int rawArgc, char** rawArgv) {
             else if (std::strncmp(a, "--render-cost-us=", 17) == 0) g_renderCostUs = v;
             else if (std::strncmp(a, "--onset-bass-gate=", 18) == 0) g_onsetBassGate = v;
             else if (std::strncmp(a, "--onset-pattern-bias=", 21) == 0) g_onsetPatternBias = v;
+            else if (std::strncmp(a, "--onset-rearm=", 14) == 0) g_onsetRearm = v;
+            else if (std::strncmp(a, "--onset-peak-window=", 20) == 0) g_onsetPeakWindow = v;
             else return usage();
         } else {
             pos.push_back(rawArgv[i]);
@@ -185,6 +190,8 @@ int main(int rawArgc, char** rawArgv) {
     if (given(12)) tracker.pulseThresholdMult = static_cast<float>(std::atof(argv[12]));
     if (g_onsetBassGate >= 0) tracker.onsetBassGate = static_cast<float>(g_onsetBassGate);
     if (g_onsetPatternBias >= 0) tracker.onsetPatternBias = static_cast<float>(g_onsetPatternBias);
+    if (g_onsetRearm >= 0) tracker.onsetRearm = static_cast<float>(g_onsetRearm);
+    if (g_onsetPeakWindow >= 0) tracker.onsetPeakWindow = static_cast<uint8_t>(g_onsetPeakWindow);
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);

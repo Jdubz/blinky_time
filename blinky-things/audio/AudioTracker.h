@@ -233,14 +233,37 @@ public:
     // (chord changes, synth stabs) needs up to this much more activation
     // (fraction of the threshold; 0 = off). Full boost when bass flux is
     // under a third of broadband flux. Was hardcoded for the NN path only.
-    float onsetBassGate = 0.5f;
+    static constexpr float ONSET_BASS_GATE_DEFAULT = 0.5f;
+    float onsetBassGate = ONSET_BASS_GATE_DEFAULT;
     // Rhythm-pattern bias: while the PLP pattern is confident, a candidate
     // at a position the pattern predicts no hit needs up to this much more
     // activation (scaled by confidence and by how low the pattern is there;
     // 0 = off). Beat-informed, so keep it easy to switch off for testing;
     // it should become a strength multiplier rather than a gate once onset
     // detection is accurate enough (separate work). Was NN-only.
-    float onsetPatternBias = 0.3f;
+    static constexpr float ONSET_PATTERN_BIAS_DEFAULT = 0.3f;
+    float onsetPatternBias = ONSET_PATTERN_BIAS_DEFAULT;
+
+    // === Shared peak picker (AudioTracker::pickOnset) ===
+    // Re-arm: after an onset, the activation must fall below this fraction
+    // of the (gated) threshold before another can fire (0 = off). At 1.0 it
+    // must drop below the threshold itself: one onset per excursion.
+    // Off by default: on edm/ (host, 60 fps) it changed nothing for flux
+    // (the activation nearly always dips below threshold between peaks, and
+    // the cooldown covers the rest), and at 1.0 it cut NN recall 0.70 -> 0.42
+    // (the NN's activation rarely falls below its floor between hits).
+    float onsetRearm = 0.0f;
+    // Peak window: the peak must exceed the activation of this many frames
+    // before it (1 = only the previous frame). Default 6 (96 ms), the best
+    // window shared by both detectors. edm/ host sweep, 60 fps, P / R / F1:
+    //   window   1                  3                  6                  8
+    //   flux     0.460/0.750/0.614  0.504/0.690/0.646  0.571/0.611/0.681  0.623/0.535/0.696
+    //   NN       0.494/0.699/0.641  0.513/0.689/0.654  0.582/0.565/0.691  0.628/0.455/0.683
+    // (flux with the old rising-edge picker: 0.514/0.691/0.656). Wider trades
+    // fast hats for precision; still allows ~10 onsets/s.
+    static constexpr int ONSET_PEAK_WINDOW_MAX = 8;
+    static constexpr uint8_t ONSET_PEAK_WINDOW_DEFAULT = 6;
+    uint8_t onsetPeakWindow = ONSET_PEAK_WINDOW_DEFAULT;
 
     // Phase 2a crest-factor gate (Phase 4 Path A experiment).
     // Suppresses pulses when the current-frame crest factor
@@ -392,6 +415,10 @@ private:
 
     float prevSignal_ = 0.0f;          // Activation at the previous fresh frame (t-1)
     float prevPrevSignal_ = 0.0f;      // ... and the one before (local max: t-1 > t-2 AND t-1 >= t)
+    // Fresh activations before t-1, newest first: [0] = t-2 (== prevPrevSignal_),
+    // [1] = t-3, ... (peak window > 1).
+    float peakHistory_[ONSET_PEAK_WINDOW_MAX] = {0};
+    bool onsetArmed_ = true;           // re-arm state (onsetRearm)
     float onsetActivation_ = 0.0f;     // Activation of the last fresh frame (getOnsetActivation)
     float activationPeak_ = 0.0f;      // Max activation over frames processed in the last update()
 

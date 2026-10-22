@@ -1171,11 +1171,19 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         pulseThresholdMult, fluxOnsetFloor, baselineFastDrop, baselineSlowRise,
         pulseOnsetFloor, nnProfile}) * bassGate * patternBias;
 
-    // Local maximum: prev frame rose above t-2, is not exceeded by t, and is
-    // above the floor. `>=` on the right fires a flat top (INT8 NN output
-    // often repeats a value) on its FIRST frame; the strict `>` on the left
-    // stops the plateau's second frame from firing again.
-    bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
+    // Local maximum: prev frame rose above the frames before it (t-2 ...
+    // t-1-onsetPeakWindow), is not exceeded by t, and is above the floor.
+    // `>=` on the right fires a flat top (INT8 NN output often repeats a
+    // value) on its FIRST frame; the strict `>` on the left stops the
+    // plateau's second frame from firing again.
+    int window = onsetPeakWindow;
+    if (window < 1) window = 1;
+    if (window > ONSET_PEAK_WINDOW_MAX) window = ONSET_PEAK_WINDOW_MAX;
+    bool risesOverWindow = (prevSignal_ > prevPrevSignal_);
+    for (int k = 1; k < window && risesOverWindow; k++) {
+        risesOverWindow = (prevSignal_ > peakHistory_[k]);
+    }
+    bool isLocalMax = risesOverWindow &&
                       (prevSignal_ >= a) &&
                       (prevSignal_ > effectiveFloor);
 
@@ -1193,9 +1201,14 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         beatGridOk = (plpPulseValue_ >= beatGridPatternMin);
     }
 
-    if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk) {
+    // Re-arm (onsetRearm 0 = always armed).
+    const bool armedOk = (onsetRearm <= 0.0f) || onsetArmed_;
+
+    if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk &&
+        armedOk) {
         pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
         lastPulseFrame_ = frameClock_ - 1;  // Peak was the previous frame
+        onsetArmed_ = false;
 
         // T1.4/T1.5 — gate state + spectral features at every onset, for
         // offline TP/FP analysis. Bits are "which gate came close":
@@ -1224,6 +1237,11 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         lastPulseFeatures_.plpConfidence = plpConfidence_;
     }
 
+    // Re-arm once the activation has fallen below onsetRearm x threshold.
+    if (!onsetArmed_ && a < effectiveFloor * onsetRearm) onsetArmed_ = true;
+
+    for (int k = ONSET_PEAK_WINDOW_MAX - 1; k > 0; k--) peakHistory_[k] = peakHistory_[k - 1];
+    peakHistory_[0] = prevSignal_;  // becomes t-2 for the next frame
     prevPrevSignal_ = prevSignal_;
     prevSignal_ = a;
 

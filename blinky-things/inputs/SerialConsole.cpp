@@ -334,6 +334,12 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("onsetpatternbias", &audioCtrl_->onsetPatternBias, "tracker",
         "Onset rhythm-pattern bias: max threshold boost off-pattern (0=off)", 0.0f, 2.0f,
         nullptr, false);
+    settings_.registerFloat("onsetrearm", &audioCtrl_->onsetRearm, "tracker",
+        "Onset re-arm: activation must fall below this x threshold between onsets (0=off)",
+        0.0f, 1.5f, nullptr, false);
+    settings_.registerUint8("onsetpeakwindow", &audioCtrl_->onsetPeakWindow, "tracker",
+        "Onset peak window: peak must exceed this many previous frames", 1,
+        AudioTracker::ONSET_PEAK_WINDOW_MAX, nullptr, false);
 
     // PLP beat-grid pattern AND-gate (b142+).
     // Suppresses onsets when plpPulseValue_ (epoch-fold pattern amplitude
@@ -1311,6 +1317,11 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->baselineFastDrop = 0.05f;
         audioCtrl_->baselineSlowRise = 0.005f;
         audioCtrl_->odfPeakHoldDecay = 0.85f;
+        // Shared onset picker + gates (runtime only, OnsetDetector.h)
+        audioCtrl_->onsetBassGate = AudioTracker::ONSET_BASS_GATE_DEFAULT;
+        audioCtrl_->onsetPatternBias = AudioTracker::ONSET_PATTERN_BIAS_DEFAULT;
+        audioCtrl_->onsetRearm = 0.0f;
+        audioCtrl_->onsetPeakWindow = AudioTracker::ONSET_PEAK_WINDOW_DEFAULT;
         // Energy synthesis
         audioCtrl_->energyMicWeight = 0.30f;
         audioCtrl_->energyMelWeight = 0.30f;

@@ -358,7 +358,16 @@ In NN builds it only drives onset detection. It never feeds the rhythm sources (
   - **Selection:** the NN when built in (`BLINKY_ONSET_NN_ENABLED`) and ready, otherwise flux. Devices use flux. `show nn` names the detector in use, and the stream's `nn` field and the record stream's `nna` carry its activation.
   - **Shared gates** (runtime-tunable, not saved; 0 = off): `onsetBassGate` (0.5) and `onsetPatternBias` (0.3). The pattern bias is beat-informed. It's on by default and easy to switch off for testing, and it should become a strength multiplier rather than a gate once detection is accurate enough.
   - **Equivalence:** the NN path through the shared stages is byte-identical to the pre-refactor NN path (host NN harness CSVs).
-  - **Flux change:** flux now uses local maximum instead of rising-edge picking, which is a deliberate behaviour change. On edm/ (host, 60 fps) precision went 0.514 → 0.460, recall 0.691 → 0.750 and F1 0.656 → 0.614, with F1@50 0.468 → 0.487. The gates move precision by less than 0.01. Tuning the picker (re-arm, window) is the next step, for both detectors.
+  - **Picker settings** (runtime-tunable, not saved): `onsetpeakwindow` (default 6) means the peak must exceed the previous 6 frames (96 ms); `onsetrearm` (default 0, off).
+  - **edm/ host results, 60 fps, P / R / F1:**
+
+    | | Before | After |
+    |---|---|---|
+    | Flux | 0.514 / 0.691 / 0.656 (rising edge) | 0.571 / 0.611 / 0.681 |
+    | NN | 0.494 / 0.699 / 0.641 (window 1) | 0.582 / 0.565 / 0.691 |
+
+  - **Window sweep:** window 6 is the best setting shared by both detectors. Flux keeps gaining F1 up to window 8 (0.696), while the NN peaks at 6. The shared gates move precision by less than 0.01.
+  - **Re-arm:** it does nothing for flux. At 1.0 it cuts NN recall to 0.42, because the NN's activation rarely falls below its floor between hits. So it stays off.
 - `pulse` envelope: rises to `(a - 0.4) / 0.6` when the activation `a` (the peak over the frames of this update) passes 0.4, then decays with a 240 ms time constant.
 - `onsetDensity`: picked onsets per second, EMA 0.7/0.3.
 
