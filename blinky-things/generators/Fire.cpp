@@ -85,6 +85,16 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
         audioEnvelope_ *= decay;
     }
 
+    // Linear hit glow: triggered by the discrete onset (its 0-1 strength),
+    // decaying fast, so each hit on the strip is a distinct flash rather than
+    // following the 240 ms pulse envelope into the next hit (#280).
+    if (audio.onset > linearHitEnv_) {
+        linearHitEnv_ = audio.onset;
+    } else {
+        linearHitEnv_ *= expf(-dt / kLinearHitTau);
+    }
+    sinceBurstS_ += dt;
+
     // === Noise time advancement ===
     // Noise animates faster during loud audio so the smolder visibly
     // "wiggles harder" when there's music — per operator spec.
@@ -141,6 +151,8 @@ void Fire::reset() {
     paletteBias_ = 0.0f;
     memset(heatGrid_, 0, sizeof(heatGrid_));
     memset(emberLevel_, 0, sizeof(emberLevel_));
+    linearHitEnv_ = 0.0f;
+    sinceBurstS_ = 1.0f;
 }
 
 // === MATRIX ember floor: per-column heightmap (b202 visual, UNCHANGED) ===
@@ -210,7 +222,11 @@ void Fire::renderLinearEmber(PixelMatrix& matrix, float dt) {
     // Coverage = the SAME audio-driven flame amount the matrix uses for
     // height, normalized by maxFlameHeight so a peak impulse can light the
     // whole strip while idle smolder lights only scattered embers.
-    float amount = audioFlameAmount();
+    // Same smolder + boost as the matrix, but the impulse term is the fast
+    // onset-triggered hit envelope, not the pulse-following audioEnvelope_
+    // (that one is shaped for flame height and smeared hits on a strip).
+    float amount = params_.smolderHeight +
+                   max(linearHitEnv_, frameOvershoot_) * params_.audioHeightBoost;
     if (amount > params_.maxFlameHeight) amount = params_.maxFlameHeight;
     // maxFlameHeight is range-enforced to [0.1, 1.0] by the settings registry
     // ("maxflameheight", SerialConsole.cpp), so a non-positive or NaN value is a
@@ -313,7 +329,11 @@ void Fire::spawnParticles(float dt) {
     float onsetStrength = (audio_.onset > audio_.pulse) ? audio_.onset : audio_.pulse;
     bool onsetBurst = (audio_.onset > 0.0f) && (onsetStrength >= params_.burstThreshold);
     bool lockedBeat = beatTick && rs > 0.5f;
-    if (onsetBurst || lockedBeat) {
+    // Strip: at most one burst per kLinearBurstMinGap so hits stay distinct
+    // (#280). Matrix layouts keep every burst.
+    const bool rateOk = (height_ > 1) || (sinceBurstS_ >= kLinearBurstMinGap);
+    if ((onsetBurst || lockedBeat) && rateOk) {
+        sinceBurstS_ = 0.0f;
         // Combined strength: direct audio is the floor, refinements stack.
         float strength = onsetBurst ? onsetStrength : audio_.pulse;
         if (lockedBeat && rs * audio_.plpPulse > strength) {
@@ -428,6 +448,11 @@ void Fire::spawnParticles(float dt) {
         float lifeMult = isBurst ? (params_.burstLifeMult * (0.7f + 0.5f * burstStrength_))
                                  : (0.6f + 0.6f * e);
         uint8_t lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * lifeMult * vigor);
+        if (isBurst && height_ <= 1) {
+            // Strip splash: short and strength-scaled (~80-140 ms), so a burst
+            // is gone before the next hit at 4-6 hits/s (#280).
+            lifespan = (uint8_t)(100.0f * kLinearBurstLifeS * (0.7f + 0.5f * burstStrength_) * vigor);
+        }
 
         // Store vigor in mass field (used by updateParticle for sustained buoyancy)
         float mass = 1.0f / max(0.3f, vigor);  // High vigor = low mass = more buoyancy
@@ -446,7 +471,9 @@ void Fire::updateParticle(Particle* p, float dt) {
     // "+1 per frame" did at 60 fps — but time-based, so flame height no
     // longer depends on loop speed (at 100 fps it used to fully cancel
     // aging and particles only died via fade).
-    if (audio_.energy > 0.5f && p->maxAge < 250) {
+    // Not on a strip: there every particle is a burst splash, whose short
+    // life is the point (#280).
+    if (height_ > 1 && audio_.energy > 0.5f && p->maxAge < 250) {
         int ext = static_cast<int>(p->maxAge) + stochasticRound(60.0f * dt);
         p->maxAge = static_cast<uint8_t>(ext > 250 ? 250 : ext);
     }
