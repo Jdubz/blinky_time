@@ -180,6 +180,9 @@ def main() -> int:
     ap.add_argument("--harness-args", nargs="*", default=[],
                     help="extra positional args after the seed: plpPhaseGain tempoPriorWidth "
                          "syncopatedCandidateScale (tuning sweeps; the new build only)")
+    ap.add_argument("--harness-opt", action="append", default=[],
+                    help="a --name=value option for the new build's harness, e.g. "
+                         "--harness-opt=--onset-pattern-bias=0 (repeatable)")
     ap.add_argument("--min-excess", type=float, help="fail if the new build's mean excess is below this")
     ap.add_argument("--min-tempo", type=float, help="fail if the new build's mean tempo score is below this")
     ap.add_argument("--min-recall", type=float, help="fail if the new build's mean recall is below this")
@@ -209,7 +212,7 @@ def main() -> int:
                 cells = []
                 for b, exe in builds:
                     rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed,
-                                       args.harness_args if b == "new" else None)
+                                       (args.harness_args + args.harness_opt) if b == "new" else None)
                     r = evaluate(rows, onsets)
                     r.update(onset_f1(rows, gt["onsets"]))
                     r["tempo"] = tempo_score(rows, gt_bpm)

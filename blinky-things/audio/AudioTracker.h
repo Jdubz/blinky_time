@@ -38,6 +38,7 @@ struct FrameOnsetNN {
 #endif
 
 #include "SharedSpectralAnalysis.h"
+#include "OnsetDetector.h"
 #include "PhaseClock.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
@@ -47,7 +48,7 @@ struct FrameOnsetNN {
 static constexpr int SLOT_COUNT = 4;
 static constexpr int SLOT_BINS = 16;
 
-// T1.5 — spectral feature snapshot captured at each NN firing moment.
+// T1.5 — spectral feature snapshot captured at each onset (either detector).
 // Emitted in the transient JSON so offline analysis can cluster TP vs FP
 // firings by spectral signature without needing persist_raw signal_frames
 // replay.
@@ -102,7 +103,9 @@ public:
     const AdaptiveMic& getMic() const { return mic_; }
     SharedSpectralAnalysis& getSpectral() { return spectral_; }
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
-    const FrameOnsetNN& getFrameOnsetNN() const { return frameOnsetNN_; }
+    const FrameOnsetNN& getFrameOnsetNN() const { return nnDetector_.model(); }
+    // The onset detector in use (OnsetDetector.h): "spectral-flux" or "onset-nn".
+    const char* getOnsetDetectorName() const { return detector_->name(); }
     float getCurrentBpm() const { return bpm_; }
     int getPlpPeriod() const { return plpBestPeriod_; }  // ACF period in spectral frames (62.5 Hz), integer
     float getPlpPeriodF() const { return plpPeriodF_; }  // Fractional period (frames) — drives phase advance
@@ -135,9 +138,9 @@ public:
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
 
-    // Raw NN activation (before pulse detection threshold/cooldown)
-    float getRawNNActivation() const { return rawNNActivation_; }
-    uint32_t getRawNNPeakMs() const { return rawNNPeakMs_; }
+    // Onset activation (0-1, either detector) of the last frame with fresh
+    // evidence, before peak picking and gates.
+    float getOnsetActivation() const { return onsetActivation_; }
 
     // Absolute mic-sample index (AdaptiveMic ring counter) at which the most
     // recent spectral frame's window ended. Same timeline as record-mode audio.
@@ -223,8 +226,24 @@ public:
     static constexpr float RHYTHM_HOLD_S = 2.0f;
     static constexpr float RHYTHM_FADE_S = 2.0f;
 
+    // === Shared onset gates (AudioTracker::pickOnset) ===
+    // Applied to every detector's candidates alike (OnsetDetector.h).
+    //
+    // Bass-ratio gate: a candidate whose flux is mostly above the bass band
+    // (chord changes, synth stabs) needs up to this much more activation
+    // (fraction of the threshold; 0 = off). Full boost when bass flux is
+    // under a third of broadband flux. Was hardcoded for the NN path only.
+    float onsetBassGate = 0.5f;
+    // Rhythm-pattern bias: while the PLP pattern is confident, a candidate
+    // at a position the pattern predicts no hit needs up to this much more
+    // activation (scaled by confidence and by how low the pattern is there;
+    // 0 = off). Beat-informed, so keep it easy to switch off for testing;
+    // it should become a strength multiplier rather than a gate once onset
+    // detection is accurate enough (separate work). Was NN-only.
+    float onsetPatternBias = 0.3f;
+
     // Phase 2a crest-factor gate (Phase 4 Path A experiment).
-    // Suppresses NN-triggered pulses when the current-frame crest factor
+    // Suppresses pulses when the current-frame crest factor
     // (peak/RMS of raw magnitudes) is below this threshold — tonal impulses
     // have lower crest than drum hits on-device per Phase 3 measurement
     // (|d|=0.74 between drum-peak and non-onset frames). Default 0 = disabled.
@@ -232,7 +251,7 @@ public:
     float crestGateMin = 0.0f;
 
     // b142 — PLP pattern AND-gate. When beatGridPatternMin > 0 AND
-    // periodicityStrength_ > beatGridMinRhythmStrength, NN-triggered pulses
+    // periodicityStrength_ > beatGridMinRhythmStrength, pulses
     // are suppressed unless plpPulseValue_ at the current phase is at least
     // beatGridPatternMin. plpPulseValue_ is the epoch-fold pattern amplitude
     // at the current phase: high at EVERY position the pattern predicts
@@ -286,8 +305,11 @@ private:
     ISystemTime& time_;
     AdaptiveMic mic_;
     SharedSpectralAnalysis spectral_;
-    FrameOnsetNN frameOnsetNN_;
-    bool nnActive_ = false;
+    // Onset detectors (OnsetDetector.h). detector_ is the one in use: the NN
+    // when built in and ready, otherwise spectral flux (devices: flux).
+    FluxOnsetDetector fluxDetector_;
+    NNOnsetDetector<FrameOnsetNN> nnDetector_;
+    OnsetDetector* detector_ = &fluxDetector_;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
     // === OSS buffer (~12 seconds: 792 samples @ ~66 Hz) ===
@@ -352,57 +374,29 @@ private:
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
-    // === Onset API: one contract for every detector (#280) ===
-    // Generators and the outputs (control_.onset, control_.pulse, onset
-    // density) never know which detector ran. Each detector reports:
-    //   activation  0-1 per frame: the detector's onset evidence;
-    //   strength    0-1 per detected onset: the activation at the detection.
-    // NN: activation is the network output (a probability). Spectral flux:
-    // the evidence is flux / adaptive threshold (>= 1 at a detection), mapped
-    // by fluxActivation() so its strengths have the NN's distribution at
-    // detections (edm/ corpus, host harness, 13-14k detections each):
-    //   NN strength       p5 0.34  p25 0.47  p50 0.65  p75 0.87  p95 0.97
-    //   flux ratio        p5 1.10  p25 1.59  p50 2.63  p75 5.29  p95 18.4
-    //   fluxActivation    p5 0.36  p25 0.55  p50 0.71  p75 0.85  p95 0.95
-    // Before this, flux reported raw flux (~0.02), so anything thresholded
-    // on onset strength (Fire's burstThreshold 0.45) never saw a flux onset.
-    static constexpr float FLUX_ACTIVATION_AT_THRESHOLD = 0.30f;
-    static constexpr float FLUX_ACTIVATION_EXPONENT = 0.90f;
-    static float fluxActivation(float ratio) {
-        // At or above the threshold: 1 - 0.7 * ratio^-0.9 (0.30 at the
-        // threshold, -> 1 for hits far above it). Below it, linear to 0, so
-        // activation is continuous and rises with the evidence.
-        if (ratio <= 1.0f) return FLUX_ACTIVATION_AT_THRESHOLD * (ratio > 0.0f ? ratio : 0.0f);
-        return 1.0f - (1.0f - FLUX_ACTIVATION_AT_THRESHOLD) * powf(ratio, -FLUX_ACTIVATION_EXPONENT);
-    }
-
-    // === Pulse detection: spectral flux on devices (NN compiled out), or the NN ===
-    float odfBaseline_ = 0.0f;        // Floor-tracking baseline for active signal
-    float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
+    // === Onset picking (shared by every detector, see OnsetDetector.h) ===
+    // Outputs never know which detector ran: control_.onset is the strength
+    // (0-1 activation at the peak), control_.pulse the envelope of the
+    // activation, onset density the count of picked onsets.
+    float odfPeakHold_ = 0.0f;        // Peak-hold of spectral flux: energy synthesis + presence gate
     float lastPulseStrength_ = 0.0f;  // Max pulse fired by any frame processed in the last update()
     float lastFramePulse_ = 0.0f;     // Pulse fired by the most recent frame
     FrameHook frameHook_ = nullptr;
     void* frameHookCtx_ = nullptr;
     uint32_t lastPulseFrame_ = 0;     // frameClock_ of the last fired pulse (cooldown is in frames)
-    // T1.4/T1.5 — per-firing diagnostics captured at updatePulseDetection
-    // when a pulse fires. Consumed by the TRANSIENT JSON emitter in
+    // T1.4/T1.5 — per-onset diagnostics captured by pickOnset at every onset
+    // (either detector). Consumed by the TRANSIENT JSON emitter in
     // blinky-things.ino for offline FP/TP class clustering.
     uint8_t lastPulseGateMask_ = 0;
     PulseFeatureSnapshot lastPulseFeatures_ = {0};
 
-    float prevSignal_ = 0.0f;          // Previous frame signal (t-1)
-    float prevPrevSignal_ = 0.0f;      // Frame t-2 (for local-max: t-1 > t-2 AND t-1 > t)
-
-    // === NN activation state ===
-    float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
-    float prevNNActivation_ = 0.0f;   // Previous frame NN output
-    // No smoothing on the NN activation (#169): peak-picking reads it raw.
-    // The 0.77/0.23 blend removed here dulled every hit by 23%.
-    float activationPeak_ = 0.0f;     // Max onset activation (0-1, either detector) over frames processed in the last update()
+    float prevSignal_ = 0.0f;          // Activation at the previous fresh frame (t-1)
+    float prevPrevSignal_ = 0.0f;      // ... and the one before (local max: t-1 > t-2 AND t-1 >= t)
+    float onsetActivation_ = 0.0f;     // Activation of the last fresh frame (getOnsetActivation)
+    float activationPeak_ = 0.0f;      // Max activation over frames processed in the last update()
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
-    uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
     uint32_t lastFrameEndSampleIdx_ = 0;  // See getLastFrameEndSampleIdx()
     bool haveFrameEnd_ = false;           // lastFrameEndSampleIdx_ is a real frame end (PhaseClock)
 
@@ -452,11 +446,12 @@ private:
     // === Internal methods ===
     // Everything that must run exactly once per spectral frame. elapsedFrames:
     // real time the frame covers on the sample clock (1, more after an overrun).
-    void processFrame(bool runNN, float elapsedFrames);
+    // mayRunExpensive: this frame may run the detector's expensive work.
+    void processFrame(bool mayRunExpensive, float elapsedFrames);
     void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
     void runAcf();
-    float updatePulseDetection(float spectralFlux, bool freshNN);  // One frame; returns pulse strength (0 = none)
+    float pickOnset(const OnsetEvidence& ev);  // One frame; returns onset strength (0 = none)
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
     void advancePlpPhase(float frames);  // Advance phase by `frames` + read pattern value
     float patternValueAt(float phase) const;  // accent-aligned PLP pattern, interpolated

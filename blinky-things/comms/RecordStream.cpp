@@ -340,7 +340,7 @@ void RecordStream::onFrame() {
     FramePayload p{};
     p.sampleIndex = audio_->getLastFrameEndSampleIdx();
     p.ms = millis();
-    p.nna = q16(audio_->getRawNNActivation());
+    p.nna = q16(audio_->getOnsetActivation());
     p.pulse = q16(pulse);
     p.level = q16(mic_ ? mic_->getLevel() : 0.0f);
     p.rawLevel = q16(mic_ ? mic_->getRawLevel() : 0.0f);

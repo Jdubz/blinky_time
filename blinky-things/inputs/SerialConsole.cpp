@@ -321,13 +321,22 @@ void SerialConsole::registerTrackerSettings() {
         "Spectral-flux pulse floor (used when the NN is off)", 0.0f, 0.5f, onParamChanged);
 
     // Crest-factor gate (Phase 2a / Phase 4 Path A).
-    // Suppresses NN pulses when per-frame crest factor is below this value.
-    // 0 = disabled. See AudioTracker.h and docs/HYBRID_FEATURE_ANALYSIS_PLAN.md.
+    // Suppresses onsets (either detector) when per-frame crest factor is below
+    // this value. 0 = disabled. See AudioTracker.h and docs/HYBRID_FEATURE_ANALYSIS_PLAN.md.
     settings_.registerFloat("crestgatemin", &audioCtrl_->crestGateMin, "tracker",
         "Crest-factor gate minimum (0=disabled)", 0.0f, 20.0f, onParamChanged);
 
+    // Shared onset gates (AudioTracker::pickOnset, both detectors). Runtime
+    // only: not persisted, so a test setting is gone after a reboot.
+    settings_.registerFloat("onsetbassgate", &audioCtrl_->onsetBassGate, "tracker",
+        "Onset bass-ratio gate: max threshold boost when bass is weak (0=off)", 0.0f, 2.0f,
+        nullptr, false);
+    settings_.registerFloat("onsetpatternbias", &audioCtrl_->onsetPatternBias, "tracker",
+        "Onset rhythm-pattern bias: max threshold boost off-pattern (0=off)", 0.0f, 2.0f,
+        nullptr, false);
+
     // PLP beat-grid pattern AND-gate (b142+).
-    // Suppresses NN pulses when plpPulseValue_ (epoch-fold pattern amplitude
+    // Suppresses onsets when plpPulseValue_ (epoch-fold pattern amplitude
     // at current phase) is below this threshold. 0 = disabled. Guarded by
     // rhythmStrength > beatgridmin_rs so ambient/sparse content is unaffected.
     settings_.registerFloat("beatgridmin", &audioCtrl_->beatGridPatternMin, "tracker",
@@ -1912,8 +1921,10 @@ void SerialConsole::streamTick() {
             line.print(audio.pulse, 2);
             line.print(F(",\"od\":"));
             line.print(audioCtrl_->getOnsetDensity(), 1);
+            // "nn" (name kept for the server's signal capture): the onset
+            // activation of whichever detector runs (OnsetDetector.h).
             line.print(F(",\"nn\":"));
-            line.print(audioCtrl_->getRawNNActivation(), 3);
+            line.print(audioCtrl_->getOnsetActivation(), 3);
             line.print(F(",\"per\":"));  // ACF period in ~66Hz analysis frames
             line.print(audioCtrl_->getPlpPeriod());
 
@@ -2452,6 +2463,8 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
+        out_.print(F("Onset detector: "));
+        out_.println(audioCtrl_->getOnsetDetectorName());
 #if !BLINKY_ONSET_NN_ENABLED
         out_.println(F("NN disabled by build (BLINKY_ONSET_NN_ENABLED=0): onsets from spectral flux"));
 #endif

@@ -53,25 +53,22 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     spectral_.begin();
     haveFrameEnd_ = false;
 
+    // Onset detector selection (OnsetDetector.h).
 #if BLINKY_ONSET_NN_ENABLED
-    bool nnOk = frameOnsetNN_.begin();
-    nnActive_ = nnOk && frameOnsetNN_.isReady();
+    const bool nnOk = nnDetector_.begin();
     // NN init failure is a build-time / model-export bug, not a runtime
-    // condition. Silently falling back to mic-energy detection (see
-    // FrameOnsetNN.h) hides the regression from anyone reading device output.
-    // Assert loudly so the failure shows up in serial / error counter.
-    BLINKY_ASSERT(nnActive_,
-        "FrameOnsetNN failed to initialize — check getInitError(); falling back to mic energy");
+    // condition. Assert loudly (serial + error counter) so the build that
+    // falls back to spectral flux is never mistaken for an NN build.
+    BLINKY_ASSERT(nnOk,
+        "FrameOnsetNN failed to initialize — check getInitError(); onsets fall back to spectral flux");
+    detector_ = nnOk ? static_cast<OnsetDetector*>(&nnDetector_) : &fluxDetector_;
+#  ifdef ONSET_MODEL_USE_PCEN
+    if (nnOk) nnDetector_.model().setPcenEnabled(true);
+#  endif
 #else
     // Disabled by design (see BLINKY_ONSET_NN_ENABLED in AudioTracker.h):
     // onsets come from spectral flux. Not a fallback; `show nn` says so.
-    nnActive_ = false;
-#endif
-
-#ifdef ONSET_MODEL_USE_PCEN
-    if (nnActive_) {
-        frameOnsetNN_.setPcenEnabled(true);
-    }
+    detector_ = &fluxDetector_;
 #endif
 
     // Initialize all time-based state to current time to avoid
@@ -232,43 +229,22 @@ const AudioControl& AudioTracker::update(float dt) {
 // Per-frame processing (the frame clock)
 // ============================================================================
 
-void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
+void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     frameClock_++;
 
-    // --- Onset activation for this frame ---
-    // The NN activation only feeds onset detection (via rawNNActivation_ and
-    // freshNN); a skipped or NN-less frame has nothing to record. The rhythm
-    // buffers take mic level below in every mode (#155).
-    bool freshNN = false;
-    if (nnActive_) {
-        frameOnsetNN_.setProfileEnabled(nnProfile);
-        // Raw (pre-compressor) flatness + flux for the NN hybrid input —
-        // matches the Python training pipeline's `append_hybrid_features`
-        // (pre-b136 passed the compressed values: train/inference gap 4).
-        frameOnsetNN_.pushFrame(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
-                                spectral_.getRawFlatness(), spectral_.getRawSpectralFlux());
+    // --- Onset evidence for this frame (the detector in use) ---
+    // Only onset detection reads it; the rhythm buffers below take bass flux,
+    // bass energy and mic level whichever detector runs (#155).
+    const OnsetDetectorParams params{pulseThresholdMult, fluxOnsetFloor, baselineFastDrop,
+                                     baselineSlowRise, pulseOnsetFloor, nnProfile};
+    const OnsetEvidence ev = detector_->process(spectral_, params, mayRunExpensive);
+    if (ev.fresh) {
+        onsetActivation_ = ev.activation;
+        if (ev.activation > activationPeak_) activationPeak_ = ev.activation;
     }
-    if (nnActive_ && runNN) {
-        freshNN = true;
-        const float odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
-        BLINKY_HOST_COST(HostCost::NN_INFER);
 
-        // Track raw NN activation peaks (rising edge, before thresholds).
-        if (odf > rawNNActivation_ && odf > 0.05f) {
-            rawNNPeakMs_ = time_.millis();
-        }
-        prevNNActivation_ = rawNNActivation_;
-        rawNNActivation_ = odf;
-
-        // No smoothing: responsiveness is the priority, so peak-picking
-        // and pulseSignal read the raw activation (#169).
-        if (odf > activationPeak_) activationPeak_ = odf;
-    }
-    // NN skipped this frame (catch-up burst): the NN peak-picker does not
-    // step. No NN: onset detection uses spectral flux (updatePulseDetection).
-
-    // --- Discrete onset detection ---
-    float pulse = updatePulseDetection(spectral_.getSpectralFlux(), freshNN);
+    // --- Discrete onset: shared peak picking and gates ---
+    float pulse = pickOnset(ev);
     lastFramePulse_ = pulse;
     if (pulse > lastPulseStrength_) lastPulseStrength_ = pulse;
     if (pulse > 0.0f) onsetCountInWindow_++;  // onset density counts detected onsets
@@ -304,7 +280,7 @@ void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
     // activation. The NN fires on every percussive hit, off-beat hats
     // included, so as an ACF source it locked straight 4/4 to 2/3 tempo
     // and broke DnB (#155: corpus tempo 0.726 -> 0.621). The NN still drives
-    // onset detection (updatePulseDetection); tempo tracking stays on the
+    // onset detection (pickOnset); tempo tracking stays on the
     // signals it was tuned on.
     nnOnsetBuffer_[nnWriteIdx_] = mic_.getLevel();
     nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
@@ -1134,27 +1110,18 @@ float AudioTracker::patternValueAt(float phase) const {
 // Pulse Detection (Floor-Tracking Baseline)
 // ============================================================================
 
-float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
-    // Runs exactly once per spectral frame (processFrame). Pre-b208 it ran
-    // once per loop iteration on a signal that only changed per frame:
-    // loop passes without a new frame pushed duplicate values through
-    // prevSignal_/prevPrevSignal_, so a real peak failed `prev > prevPrev`
-    // and was silently dropped whenever the loop ran faster than 62.5 Hz.
-    //
-    // Dual-mode onset detection:
-    //
-    // NN path: local-maxima peak-picking on half-wave rectified first-difference.
-    //   The NN produces flat activations (mean~0.6, std~0.035) with tiny bumps at
-    //   onsets. First-differencing removes the DC baseline and amplifies rate of
-    //   change. Local-maxima detection (same as offline eval) extracts peaks from
-    //   the resulting signal. This matches the offline eval's peak-picking approach
-    //   that achieves F1=0.85 vs the old threshold-crossing at F1=0.62.
-    //
-    // Spectral flux fallback: adaptive threshold + rising edge (unchanged).
+float AudioTracker::pickOnset(const OnsetEvidence& ev) {
+    // Runs exactly once per spectral frame (processFrame), for whichever
+    // detector produced `ev` (OnsetDetector.h): one peak picker and one set
+    // of gates, so swapping the detector changes only the evidence.
+    // (Pre-b208 this ran once per loop iteration: duplicate samples failed
+    // `prev > prevPrev` and real peaks were dropped above 62.5 fps.)
 
-    // ODF peak hold for energy synthesis (always track spectral flux)
-    if (odf > odfPeakHold_) {
-        odfPeakHold_ = odf;
+    // Spectral-flux peak hold: energy synthesis and the presence gate, both
+    // detector-independent. Tracked on every frame.
+    const float flux = spectral_.getSpectralFlux();
+    if (flux > odfPeakHold_) {
+        odfPeakHold_ = flux;
     } else {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
@@ -1168,155 +1135,97 @@ float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
     float pulseStrength = 0.0f;
     bool cooldownOk = (frameClock_ - lastPulseFrame_) > cooldownFrames;
 
-    if (nnActive_ && !freshNN) {
-        // No new NN sample this frame: stepping the peak-picker history with
-        // a held value would re-create the duplicate-sample peak loss.
+    if (!ev.fresh) {
+        // No new evidence this frame (an expensive detector skipped it):
+        // stepping the history with a held value would re-create the
+        // duplicate-sample peak loss.
         return 0.0f;
     }
 
-    if (nnActive_) {
-        // NN path: local-maxima peak-picking with false positive suppression.
-        //
-        // The NN fires on any broadband spectral change (chords, synths, vocals),
-        // not just percussive onsets. Two soft filters reduce false positives:
-        //
-        // 1. Bass-band energy gate: kicks/snares produce strong bass flux;
-        //    chord changes and synth stabs produce flat/mid-heavy flux.
-        //    Scale the effective threshold by inverse bass ratio.
-        //
-        // 2. PLP pattern bias: when a reliable rhythm pattern is locked,
-        //    raise the threshold slightly at positions where the pattern
-        //    predicts no onset. This is a SOFT bias (30% threshold increase),
-        //    not a hard gate — section changes and new patterns still trigger.
-        //    Only active when pattern confidence is high.
+    // --- Shared gates, as threshold multipliers ---
+    // Bass-ratio gate: kicks/snares carry strong bass flux; chord changes and
+    // synth stabs are flat or mid-heavy. Full boost below a third.
+    static constexpr float bassGateMinRatio = 1.0f / 3.0f;
+    float bassFlux = spectral_.getBassFlux();
+    float broadbandFlux = spectral_.getSpectralFlux();
+    // In near-silence (broadbandFlux < 0.001), neutral ratio so the gate
+    // doesn't suppress onsets at the start of music.
+    float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
+    float bassGate = 1.0f + onsetBassGate * clampf(1.0f - bassRatio / bassGateMinRatio, 0.0f, 1.0f);
 
-        float nn = rawNNActivation_;
-
-        // Bass-band energy gate: require bass presence for easy detections.
-        // High bass ratio → threshold stays at floor.
-        // Low bass ratio (broadband event) → threshold increases by up to bassGateMaxBoost.
-        // bassGateMinRatio: below this bass fraction, gate is fully engaged (1/3 = 33%)
-        // Post-sweep hardcoded (b127): marginal F1 improvement. Not exposed as tunable
-        // parameters — these are structural heuristics, not sensitivity knobs.
-        static constexpr float bassGateMaxBoost = 0.5f;  // Max 50% threshold increase
-        static constexpr float bassGateMinRatio = 1.0f / 3.0f;  // Full gate when bass < 33% of broadband
-        float bassFlux = spectral_.getBassFlux();
-        float broadbandFlux = spectral_.getSpectralFlux();
-        // In near-silence (broadbandFlux < 0.001), default to neutral ratio
-        // so the gate doesn't suppress onsets at the start of music.
-        float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
-        float bassGate = 1.0f + bassGateMaxBoost * clampf(1.0f - bassRatio / bassGateMinRatio, 0.0f, 1.0f);
-
-        // PLP pattern bias: soft threshold increase at off-beat positions.
-        // plpPulseValue_ is high (0.7-1.0) at expected onset positions,
-        // low (0.0-0.3) between beats. When confident, raise threshold at
-        // low-pattern positions. When uncertain, no bias.
-        static constexpr float plpBiasMaxSuppression = 0.3f;  // Max 30% threshold increase at off-beat
-        static constexpr float plpBiasMinConfidence = 0.3f;    // Only bias when pattern confidence > 30%
-        float patternBias = 1.0f;
-        if (plpConfidence_ > plpBiasMinConfidence) {
-            float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
-            // At pattern minimum (0.0): bias = 1.3 (30% harder to trigger)
-            // At pattern maximum (1.0): bias = 1.0 (no change)
-            // Scaled by confidence so uncertain patterns don't suppress
-            float suppressAmount = plpBiasMaxSuppression * plpConfidence_ * (1.0f - patternVal);
-            patternBias = 1.0f + suppressAmount;
-        }
-
-        float effectiveFloor = pulseOnsetFloor * bassGate * patternBias;
-
-        // Local maximum: prev frame rose above t-2, is not exceeded by t, and
-        // is above floor. `>=` on the right fires a flat top (INT8 output
-        // often repeats a value) on its FIRST frame; the strict `>` on the
-        // left stops the plateau's second frame from firing again.
-        bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
-                          (prevSignal_ >= nn) &&
-                          (prevSignal_ > effectiveFloor);
-
-        // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
-        // tonal impulses have lower crest on-device (Phase 3 |d|=0.74). When
-        // crestGateMin > 0, suppress pulses whose current-frame crest is below
-        // that value. Set to 0 to disable (production default).
-        bool crestOk = (crestGateMin <= 0.0f) ||
-                       (spectral_.getRawCrest() >= crestGateMin);
-
-        // b142 — PLP pattern AND-gate. plpPulseValue_ is the epoch-fold
-        // pattern amplitude at the current phase: high at EVERY position
-        // the pattern predicts an onset (beats 1-4 of a bar-length
-        // pattern, not just phase=0), low between them. Reject firings
-        // where the pattern predicts near-zero pulse.
-        // Guarded by rhythmStrength so it doesn't suppress during PLP
-        // warmup (~1.6 s) or on ambient/sparse content.
-        bool beatGridOk = true;
-        if (beatGridPatternMin > 0.0f &&
-            periodicityStrength_ > beatGridMinRhythmStrength) {
-            beatGridOk = (plpPulseValue_ >= beatGridPatternMin);
-        }
-
-        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk) {
-            pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
-            lastPulseFrame_ = frameClock_ - 1;  // Peak was the previous frame
-
-            // T1.4/T1.5 — snapshot gate state + spectral features at firing
-            // time so offline analysis can cluster FPs and attribute
-            // suppression. Bits are "which gate would have suppressed":
-            //   bit 0 — bass-gate activated (bassGate > 1.0 → threshold boosted)
-            //   bit 1 — pattern-bias activated (patternBias > 1.0 → off-beat)
-            //   bit 2 — crest-gate marginal (rawCrest within 0.5 of threshold)
-            //   bit 3 — beat-grid gate marginal (pulseValue within 0.1 of threshold)
-            // For a fired pulse, no gate WAS active (all passed), but the
-            // "activated" bits tell us which gates were close to suppressing.
-            lastPulseGateMask_ = 0;
-            if (bassGate > 1.05f) lastPulseGateMask_ |= 0x01;
-            if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
-            if (crestGateMin > 0.0f && spectral_.getRawCrest() < crestGateMin * 1.5f) {
-                lastPulseGateMask_ |= 0x04;
-            }
-            if (beatGridPatternMin > 0.0f && plpPulseValue_ < beatGridPatternMin + 0.1f) {
-                lastPulseGateMask_ |= 0x08;
-            }
-            lastPulseFeatures_.flatness = spectral_.getRawFlatness();
-            lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
-            lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
-            lastPulseFeatures_.crest = spectral_.getRawCrest();
-            lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
-            lastPulseFeatures_.hfc = spectral_.getRawHFC();
-            lastPulseFeatures_.bassRatio = bassRatio;
-            lastPulseFeatures_.plpPulse = plpPulseValue_;
-            lastPulseFeatures_.plpConfidence = plpConfidence_;
-        }
-
-        prevPrevSignal_ = prevSignal_;
-        prevSignal_ = nn;
-    } else {
-        // Spectral flux fallback: adaptive threshold + rising edge
-        float signal = odf;
-
-        if (signal < odfBaseline_) {
-            odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
-        } else {
-            odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
-        }
-
-        float pulseThreshold = odfBaseline_ * pulseThresholdMult;
-        if (pulseThreshold < fluxOnsetFloor) pulseThreshold = fluxOnsetFloor;
-
-        bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
-
-        // Normalized activation (onset API above): evidence relative to the
-        // threshold. A zero threshold (floor 0, silent baseline) is passed by
-        // any signal at all, so any signal is full evidence.
-        const float activation = (pulseThreshold > 0.0f)
-            ? fluxActivation(signal / pulseThreshold)
-            : (signal > 0.0f ? 1.0f : 0.0f);
-        if (activation > activationPeak_) activationPeak_ = activation;
-
-        if (signalPresence > pulseMinLevel && risingEdge && cooldownOk) {
-            pulseStrength = activation;
-            lastPulseFrame_ = frameClock_;
-        }
-        prevSignal_ = signal;
+    // Rhythm-pattern bias: while the PLP pattern is confident, raise the
+    // threshold at positions where it predicts no hit. Soft (scaled by
+    // confidence and pattern level), never a hard gate; onsetPatternBias 0
+    // turns it off.
+    static constexpr float plpBiasMinConfidence = 0.3f;  // only above 30% confidence
+    float patternBias = 1.0f;
+    if (plpConfidence_ > plpBiasMinConfidence) {
+        float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
+        // At pattern minimum (0.0): bias = 1 + onsetPatternBias; at maximum: 1.0
+        float suppressAmount = onsetPatternBias * plpConfidence_ * (1.0f - patternVal);
+        patternBias = 1.0f + suppressAmount;
     }
+
+    const float a = ev.activation;
+    float effectiveFloor = detector_->threshold(OnsetDetectorParams{
+        pulseThresholdMult, fluxOnsetFloor, baselineFastDrop, baselineSlowRise,
+        pulseOnsetFloor, nnProfile}) * bassGate * patternBias;
+
+    // Local maximum: prev frame rose above t-2, is not exceeded by t, and is
+    // above the floor. `>=` on the right fires a flat top (INT8 NN output
+    // often repeats a value) on its FIRST frame; the strict `>` on the left
+    // stops the plateau's second frame from firing again.
+    bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
+                      (prevSignal_ >= a) &&
+                      (prevSignal_ > effectiveFloor);
+
+    // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
+    // tonal impulses lower. crestGateMin 0 = off (default).
+    bool crestOk = (crestGateMin <= 0.0f) ||
+                   (spectral_.getRawCrest() >= crestGateMin);
+
+    // b142 — PLP pattern AND-gate (off by default, beatGridPatternMin 0):
+    // reject candidates where the pattern predicts near-zero pulse. Guarded
+    // by rhythm strength so it can't suppress during warmup or sparse content.
+    bool beatGridOk = true;
+    if (beatGridPatternMin > 0.0f &&
+        periodicityStrength_ > beatGridMinRhythmStrength) {
+        beatGridOk = (plpPulseValue_ >= beatGridPatternMin);
+    }
+
+    if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk) {
+        pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
+        lastPulseFrame_ = frameClock_ - 1;  // Peak was the previous frame
+
+        // T1.4/T1.5 — gate state + spectral features at every onset, for
+        // offline TP/FP analysis. Bits are "which gate came close":
+        //   bit 0 — bass gate raised the threshold
+        //   bit 1 — pattern bias raised the threshold (off-pattern position)
+        //   bit 2 — crest gate marginal (rawCrest within 1.5x of threshold)
+        //   bit 3 — beat-grid gate marginal (pattern value within 0.1)
+        // Features are read at the frame after the peak (detection time).
+        lastPulseGateMask_ = 0;
+        if (bassGate > 1.05f) lastPulseGateMask_ |= 0x01;
+        if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
+        if (crestGateMin > 0.0f && spectral_.getRawCrest() < crestGateMin * 1.5f) {
+            lastPulseGateMask_ |= 0x04;
+        }
+        if (beatGridPatternMin > 0.0f && plpPulseValue_ < beatGridPatternMin + 0.1f) {
+            lastPulseGateMask_ |= 0x08;
+        }
+        lastPulseFeatures_.flatness = spectral_.getRawFlatness();
+        lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
+        lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
+        lastPulseFeatures_.crest = spectral_.getRawCrest();
+        lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
+        lastPulseFeatures_.hfc = spectral_.getRawHFC();
+        lastPulseFeatures_.bassRatio = bassRatio;
+        lastPulseFeatures_.plpPulse = plpPulseValue_;
+        lastPulseFeatures_.plpConfidence = plpConfidence_;
+    }
+
+    prevPrevSignal_ = prevSignal_;
+    prevSignal_ = a;
 
     return pulseStrength;
 }

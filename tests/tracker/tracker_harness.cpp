@@ -80,7 +80,8 @@ int usage() {
         "  default for that slot\n"
         "  --nn-cost-us=N --frame-cost-us=N --render-cost-us=N  CPU cost model: the loop\n"
         "  period becomes render cost + audio work (loop_fps is ignored; jitter scales the\n"
-        "  render cost)\n");
+        "  render cost)\n"
+        "  --onset-bass-gate=X --onset-pattern-bias=X  shared onset gates (0 = off)\n");
     return 2;
 }
 
@@ -116,6 +117,10 @@ void onWork(int work) {
 
 namespace HostCost { void (*onWork)(int) = nullptr; }
 
+// Shared onset gate overrides (negative = keep the firmware default).
+static double g_onsetBassGate = -1.0;
+static double g_onsetPatternBias = -1.0;
+
 int main(int rawArgc, char** rawArgv) {
     // Split --name=value options from the positional arguments.
     std::vector<char*> pos;
@@ -128,6 +133,8 @@ int main(int rawArgc, char** rawArgv) {
             if (std::strncmp(a, "--nn-cost-us=", 13) == 0) g_nnCostUs = v;
             else if (std::strncmp(a, "--frame-cost-us=", 16) == 0) g_frameCostUs = v;
             else if (std::strncmp(a, "--render-cost-us=", 17) == 0) g_renderCostUs = v;
+            else if (std::strncmp(a, "--onset-bass-gate=", 18) == 0) g_onsetBassGate = v;
+            else if (std::strncmp(a, "--onset-pattern-bias=", 21) == 0) g_onsetPatternBias = v;
             else return usage();
         } else {
             pos.push_back(rawArgv[i]);
@@ -176,6 +183,8 @@ int main(int rawArgc, char** rawArgv) {
     if (given(10)) tracker.fluxOnsetFloor = static_cast<float>(std::atof(argv[10]));
     if (given(11)) tracker.pulseMinLevel = static_cast<float>(std::atof(argv[11]));
     if (given(12)) tracker.pulseThresholdMult = static_cast<float>(std::atof(argv[12]));
+    if (g_onsetBassGate >= 0) tracker.onsetBassGate = static_cast<float>(g_onsetBassGate);
+    if (g_onsetPatternBias >= 0) tracker.onsetPatternBias = static_cast<float>(g_onsetPatternBias);
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);

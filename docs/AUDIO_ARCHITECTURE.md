@@ -340,13 +340,27 @@ In NN builds it only drives onset detection. It never feeds the rhythm sources (
 **Both paths:**
 - **Cooldown**: tempo-adaptive, 40 ms at 200 BPM to 150 ms at 60 BPM, counted in frames.
 - `onset` = strongest pulse fired in this `update()`, else 0.
-- **Onset API (#280).** Each detector reports an *activation* (0-1 per frame) and a *strength* (the activation at a detection), with the same distribution whichever detector ran:
-  - **NN:** its output probability.
-  - **Spectral flux:** flux ÷ adaptive threshold, mapped by `fluxActivation()` = 1 − 0.7·ratio^−0.9. That's 0.30 at the threshold, and it matches the NN's strength quantiles at detections on edm/: median 0.71 vs 0.65.
-  - **Derived outputs:** `pulse` is the envelope of the activation, and `onsetDensity` counts detected onsets. Neither consults a second detector.
-  - **Before:** flux reported raw flux (~0.02) as strength, and `pulse` came from flux ÷ a 10 s running peak. Strength-gated bursts (Fire, threshold 0.45) then reached only 28% of strong hits, with gaps of several seconds.
-- `pulse` envelope: rises to `(signal - 0.4) / 0.6` when the normalized signal (flux / running flux peak, or NN peak) passes 0.4, then decays with a 240 ms time constant.
-- `onsetDensity`: rising edges of `pulse` over 0.1, counted per second, EMA 0.7/0.3.
+- **Onset detection is swappable (`audio/OnsetDetector.h`, #280).** The pipeline is:
+
+  ```
+  SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, activation 0-1}
+                              FluxOnsetDetector | NNOnsetDetector
+                         ─► AudioTracker::pickOnset (shared by both)
+                              local-max peak picking above detector->threshold()
+                              × bass-ratio gate × rhythm-pattern bias
+                              + presence, cooldown, crest and beat-grid gates
+                              feature snapshot + gate mask for every onset
+                         ─► onset strength, pulse envelope, onset density, rhythm timing
+  ```
+
+  - **Detectors** produce only evidence, on one activation scale: the NN's probability. Flux maps flux ÷ its adaptive threshold through `FluxOnsetDetector::activation()` = 1 − 0.7·ratio^−0.9, which is 0.30 at the threshold. That fit matches the NN's activation quantiles at detections on edm/ (median 0.71 vs 0.65).
+  - **Expensive detectors:** the NN runs at most once per `update()`. Frames it skips return `fresh = false`, and the picker doesn't step on them.
+  - **Selection:** the NN when built in (`BLINKY_ONSET_NN_ENABLED`) and ready, otherwise flux. Devices use flux. `show nn` names the detector in use, and the stream's `nn` field and the record stream's `nna` carry its activation.
+  - **Shared gates** (runtime-tunable, not saved; 0 = off): `onsetBassGate` (0.5) and `onsetPatternBias` (0.3). The pattern bias is beat-informed. It's on by default and easy to switch off for testing, and it should become a strength multiplier rather than a gate once detection is accurate enough.
+  - **Equivalence:** the NN path through the shared stages is byte-identical to the pre-refactor NN path (host NN harness CSVs).
+  - **Flux change:** flux now uses local maximum instead of rising-edge picking, which is a deliberate behaviour change. On edm/ (host, 60 fps) precision went 0.514 → 0.460, recall 0.691 → 0.750 and F1 0.656 → 0.614, with F1@50 0.468 → 0.487. The gates move precision by less than 0.01. Tuning the picker (re-arm, window) is the next step, for both detectors.
+- `pulse` envelope: rises to `(a - 0.4) / 0.6` when the activation `a` (the peak over the frames of this update) passes 0.4, then decays with a 240 ms time constant.
+- `onsetDensity`: picked onsets per second, EMA 0.7/0.3.
 
 ### Energy Synthesis
 
