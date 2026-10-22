@@ -37,7 +37,8 @@ PDM Microphone (16kHz, mono)
         |
         ├── [ONSET PATH]  (devices: spectral flux; the onset NN is compiled out)
         │   Flux vs adaptive baseline × pulsethreshmult, floor fluxonsetfloor
-        │   → onset event, pulse envelope, onset density
+        │   → activation 0-1 (same scale as the NN; onset API in AudioTracker.h)
+        │   → onset event, pulse envelope, onset density (all from the activation)
         │   → Energy synthesis (mic level + bass mel + flux peak-hold)
         │
         └── [RHYTHM PATH]  (every 100 ms)

@@ -352,9 +352,31 @@ private:
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
-    // === Pulse detection (NN-primary, spectral flux fallback) ===
-    // NN activation is the primary onset signal (F1=0.893 offline).
-    // Spectral flux is only used when NN is unavailable (model failed to load).
+    // === Onset API: one contract for every detector (#280) ===
+    // Generators and the outputs (control_.onset, control_.pulse, onset
+    // density) never know which detector ran. Each detector reports:
+    //   activation  0-1 per frame: the detector's onset evidence;
+    //   strength    0-1 per detected onset: the activation at the detection.
+    // NN: activation is the network output (a probability). Spectral flux:
+    // the evidence is flux / adaptive threshold (>= 1 at a detection), mapped
+    // by fluxActivation() so its strengths have the NN's distribution at
+    // detections (edm/ corpus, host harness, 13-14k detections each):
+    //   NN strength       p5 0.34  p25 0.47  p50 0.65  p75 0.87  p95 0.97
+    //   flux ratio        p5 1.10  p25 1.59  p50 2.63  p75 5.29  p95 18.4
+    //   fluxActivation    p5 0.36  p25 0.55  p50 0.71  p75 0.85  p95 0.95
+    // Before this, flux reported raw flux (~0.02), so anything thresholded
+    // on onset strength (Fire's burstThreshold 0.45) never saw a flux onset.
+    static constexpr float FLUX_ACTIVATION_AT_THRESHOLD = 0.30f;
+    static constexpr float FLUX_ACTIVATION_EXPONENT = 0.90f;
+    static float fluxActivation(float ratio) {
+        // At or above the threshold: 1 - 0.7 * ratio^-0.9 (0.30 at the
+        // threshold, -> 1 for hits far above it). Below it, linear to 0, so
+        // activation is continuous and rises with the evidence.
+        if (ratio <= 1.0f) return FLUX_ACTIVATION_AT_THRESHOLD * (ratio > 0.0f ? ratio : 0.0f);
+        return 1.0f - (1.0f - FLUX_ACTIVATION_AT_THRESHOLD) * powf(ratio, -FLUX_ACTIVATION_EXPONENT);
+    }
+
+    // === Pulse detection: spectral flux on devices (NN compiled out), or the NN ===
     float odfBaseline_ = 0.0f;        // Floor-tracking baseline for active signal
     float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
     float lastPulseStrength_ = 0.0f;  // Max pulse fired by any frame processed in the last update()
@@ -376,7 +398,7 @@ private:
     float prevNNActivation_ = 0.0f;   // Previous frame NN output
     // No smoothing on the NN activation (#169): peak-picking reads it raw.
     // The 0.77/0.23 blend removed here dulled every hit by 23%.
-    float nnPeak_ = 0.0f;             // Max raw NN activation over frames processed in the last update()
+    float activationPeak_ = 0.0f;     // Max onset activation (0-1, either detector) over frames processed in the last update()
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
@@ -389,10 +411,8 @@ private:
     int onsetCountInWindow_ = 0;
     uint32_t onsetDensityWindowStart_ = 0;
 
-    // === Pulse envelope (spectral flux auto-normalized) ===
-    float fluxPeak_ = 0.001f;        // Running peak of spectral flux (for normalization)
+    // === Pulse envelope (driven by the onset activation) ===
     float pulseEnvelope_ = 0.0f;     // Decaying envelope triggered by onset events
-    float prevPulseOutput_ = 0.0f;   // For onset density counting
 
     // === Frame clock ===
     uint32_t frameClock_ = 0;         // Spectral frames processed since boot

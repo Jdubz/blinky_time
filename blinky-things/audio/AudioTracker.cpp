@@ -123,7 +123,7 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // Per-update aggregates: update() may process 0..N spectral frames.
     lastPulseStrength_ = 0.0f;
-    nnPeak_ = 0.0f;
+    activationPeak_ = 0.0f;
     framesThisUpdate_ = 0;
 
     // 2. Drain the PDM ring, processing EVERY spectral frame exactly once.
@@ -262,7 +262,7 @@ void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
 
         // No smoothing: responsiveness is the priority, so peak-picking
         // and pulseSignal read the raw activation (#169).
-        if (odf > nnPeak_) nnPeak_ = odf;
+        if (odf > activationPeak_) activationPeak_ = odf;
     }
     // NN skipped this frame (catch-up burst): the NN peak-picker does not
     // step. No NN: onset detection uses spectral flux (updatePulseDetection).
@@ -271,6 +271,7 @@ void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
     float pulse = updatePulseDetection(spectral_.getSpectralFlux(), freshNN);
     lastFramePulse_ = pulse;
     if (pulse > lastPulseStrength_) lastPulseStrength_ = pulse;
+    if (pulse > 0.0f) onsetCountInWindow_++;  // onset density counts detected onsets
 
     // --- Rhythm buffers ---
     // Bass-only flux for ACF period detection — isolates kick energy.
@@ -1302,8 +1303,16 @@ float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
 
         bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
 
+        // Normalized activation (onset API above): evidence relative to the
+        // threshold. A zero threshold (floor 0, silent baseline) is passed by
+        // any signal at all, so any signal is full evidence.
+        const float activation = (pulseThreshold > 0.0f)
+            ? fluxActivation(signal / pulseThreshold)
+            : (signal > 0.0f ? 1.0f : 0.0f);
+        if (activation > activationPeak_) activationPeak_ = activation;
+
         if (signalPresence > pulseMinLevel && risingEdge && cooldownOk) {
-            pulseStrength = clampf(signal, 0.0f, 1.0f);
+            pulseStrength = activation;
             lastPulseFrame_ = frameClock_;
         }
         prevSignal_ = signal;
@@ -1504,23 +1513,15 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.level = clampf(mic_.getLevel(), 0.0f, 1.0f);
 
     // --- Continuous pulse envelope (visual generators) ---
-    // NN-primary: same signal as discrete onset events. NN activation is
-    // a better onset detector than spectral flux (F1 0.893 vs ~0.5).
-    // Falls back to spectral flux when NN is unavailable.
-    float pulseSignal;
-    if (nnActive_) {
-        // Peak over the frames processed this call: with several frames per
-        // update, the latest frame alone can miss the onset frame. No new
-        // frame → no new evidence → no re-trigger (re-feeding a stale value
-        // every loop pass used to hold the envelope up between frames).
-        pulseSignal = (framesThisUpdate_ > 0) ? clampf(nnPeak_, 0.0f, 1.0f) : 0.0f;
-    } else {
-        float flux = spectral_.getSpectralFlux();
-        if (flux > fluxPeak_) fluxPeak_ = flux;
-        fluxPeak_ *= expf(-dt / 10.0f);
-        if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
-        pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
-    }
+    // Driven by the onset activation, the same signal as the discrete onsets,
+    // whichever detector produced it (onset API, AudioTracker.h). Peak over
+    // the frames processed this call: with several frames per update, the
+    // latest frame alone can miss the onset frame. No new frame -> no new
+    // evidence -> no re-trigger (re-feeding a stale value every loop pass
+    // used to hold the envelope up between frames). Flux used to drive this
+    // from flux / a 10 s running peak, a second detector: after one loud hit
+    // it muted ordinary hits for seconds (#280).
+    const float pulseSignal = (framesThisUpdate_ > 0) ? clampf(activationPeak_, 0.0f, 1.0f) : 0.0f;
 
     if (pulseSignal > 0.4f) {
         float trigger = (pulseSignal - 0.4f) / 0.6f;
@@ -1568,10 +1569,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.rhythmStrength = periodicityStrength_ * rhythmPresence;
 
     // --- Onset Density ---
-    if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {
-        onsetCountInWindow_++;
-    }
-    prevPulseOutput_ = control_.pulse;
+    // Detected onsets per second (counted in processFrame). It used to count
+    // rising edges of the pulse envelope through 0.1, which dense hits keep
+    // high: it read ~1/s on dnb with 6 onsets/s (#280).
     if (nowMs - onsetDensityWindowStart_ >= 1000) {
         float newDensity = static_cast<float>(onsetCountInWindow_);
         onsetDensity_ = onsetDensity_ * 0.7f + newDensity * 0.3f;

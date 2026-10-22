@@ -58,7 +58,7 @@ struct AudioControl {
 | `energy` | Blend of mic level, bass mel energy and flux peak-hold | Baseline intensity, brightness |
 | `level` | Normalized mic loudness, swings the full range | Continuous "breathing with the music" (height, brightness) |
 | `pulse` | Transient envelope (level, decays) | Continuous brightness/size modulation |
-| `onset` | One non-zero value per detected drum hit | Edge-triggered bursts/flashes (`onset > 0`) |
+| `onset` | One non-zero value per detected drum hit: its strength, 0-1, on the same scale whichever detector ran | Edge-triggered bursts/flashes (`onset > 0`); strength-gated bursts |
 | `phase` | Position in rhythm cycle (0=accent); can be corrected slightly backward | Continuous phase-based modulation |
 | `beatCount` | Monotonic cycle counter | "A beat happened": `beatCount != last` (never threshold `phase`) |
 | `plpPulse` | PLP extracted pattern value (epoch-folded) | Beat-synced pulsing, breathing animations |
@@ -340,6 +340,11 @@ In NN builds it only drives onset detection. It never feeds the rhythm sources (
 **Both paths:**
 - **Cooldown**: tempo-adaptive, 40 ms at 200 BPM to 150 ms at 60 BPM, counted in frames.
 - `onset` = strongest pulse fired in this `update()`, else 0.
+- **Onset API (#280).** Each detector reports an *activation* (0-1 per frame) and a *strength* (the activation at a detection), with the same distribution whichever detector ran:
+  - **NN:** its output probability.
+  - **Spectral flux:** flux ÷ adaptive threshold, mapped by `fluxActivation()` = 1 − 0.7·ratio^−0.9. That's 0.30 at the threshold, and it matches the NN's strength quantiles at detections on edm/: median 0.71 vs 0.65.
+  - **Derived outputs:** `pulse` is the envelope of the activation, and `onsetDensity` counts detected onsets. Neither consults a second detector.
+  - **Before:** flux reported raw flux (~0.02) as strength, and `pulse` came from flux ÷ a 10 s running peak. Strength-gated bursts (Fire, threshold 0.45) then reached only 28% of strong hits, with gaps of several seconds.
 - `pulse` envelope: rises to `(signal - 0.4) / 0.6` when the normalized signal (flux / running flux peak, or NN peak) passes 0.4, then decays with a 240 ms time constant.
 - `onsetDensity`: rising edges of `pulse` over 0.1, counted per second, EMA 0.7/0.3.
 
