@@ -103,3 +103,25 @@ def test_apply_human_edits_unit_smoke(auto_onsets):
     merged, stats = apply_human_edits(auto_onsets, None)
     assert all(o["source"] == "auto" for o in merged)
     assert stats == {"total": 3, "edited": 0, "removed": 0, "created": 0}
+
+
+def test_segment_ground_truth_shifts_to_playback_start():
+    from blinky_server.testing.track_discovery import segment_ground_truth
+    from blinky_server.testing.types import GroundTruth, GroundTruthHit, GroundTruthOnset
+
+    times = [1.0, 91.9, 92.0, 92.5, 126.9, 127.0, 130.0]
+    gt = GroundTruth(
+        pattern="t",
+        duration_ms=140_000,
+        hits=[GroundTruthHit(time=t, type="onset", strength=0.9) for t in times],
+        onsets=[GroundTruthOnset(time=t, strength=0.9) for t in times],
+    )
+    seg = segment_ground_truth(gt, 92.0, 35_000)
+    # Played segment is [92, 127): times are relative to playback start.
+    assert [o.time for o in seg.onsets] == pytest.approx([0.0, 0.5, 34.9])
+    assert [h.time for h in seg.hits] == pytest.approx([0.0, 0.5, 34.9])
+    assert seg.duration_ms == pytest.approx(35_000)
+    # seek 0 with no duration keeps everything.
+    assert len(segment_ground_truth(gt, 0.0, None).onsets) == len(times)
+    with pytest.raises(ValueError):
+        segment_ground_truth(gt, -1.0, 35_000)

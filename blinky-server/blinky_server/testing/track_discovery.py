@@ -125,6 +125,48 @@ def load_ground_truth(gt_path: str, human_edits_path: str | None = None) -> Grou
     )
 
 
+def segment_ground_truth(
+    gt: GroundTruth, seek_sec: float, duration_ms: float | None
+) -> GroundTruth:
+    """Ground truth for the segment actually played: [seek, seek + duration).
+
+    Onset files cover the whole track (times from track start), but playback
+    starts at the manifest's `seekOffset`, and the scorer measures detections
+    from playback start. Without this shift, a track played from 92 s was
+    scored against the onsets of 0-35 s: chance matches on a dense grid
+    (12 of the 18 corpus tracks have a non-zero seek).
+    """
+    if seek_sec < 0:
+        raise ValueError(f"negative seek: {seek_sec}")
+    end = seek_sec + duration_ms / 1000 if duration_ms is not None else float("inf")
+    onsets = (
+        [
+            GroundTruthOnset(time=o.time - seek_sec, strength=o.strength, source=o.source)
+            for o in gt.onsets
+            if seek_sec <= o.time < end
+        ]
+        if gt.onsets is not None
+        else None
+    )
+    hits = [
+        GroundTruthHit(
+            time=h.time - seek_sec,
+            type=h.type,
+            strength=h.strength,
+            expect_trigger=h.expect_trigger,
+            source=h.source,
+        )
+        for h in gt.hits
+        if seek_sec <= h.time < end
+    ]
+    seg_ms = (
+        (end - seek_sec) * 1000
+        if duration_ms is not None
+        else max(gt.duration_ms - seek_sec * 1000, 0)
+    )
+    return GroundTruth(pattern=gt.pattern, duration_ms=seg_ms, hits=hits, onsets=onsets)
+
+
 def load_track_manifest(directory: str | Path) -> dict[str, Any]:
     """Load track_manifest.json for seek offsets.
 

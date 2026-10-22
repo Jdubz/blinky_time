@@ -19,7 +19,12 @@ from .audio_player import PlaybackResult, kill_orphan_audio, play_audio, stop_au
 from .job_manager import Job
 from .scoring import format_score_summary, score_device_run
 from .test_session import TestSession
-from .track_discovery import discover_tracks, load_ground_truth, load_track_manifest
+from .track_discovery import (
+    discover_tracks,
+    load_ground_truth,
+    load_track_manifest,
+    segment_ground_truth,
+)
 from .types import TestData
 
 if TYPE_CHECKING:
@@ -319,7 +324,7 @@ async def run_validation(
     Args:
         fleet: FleetManager instance
         device_ids: Device IDs to test
-        track_dir: Directory containing audio files + .beats.json
+        track_dir: Directory containing audio files + .onsets_consensus.json
         track_names: Specific tracks to test (None = all discovered)
         duration_ms: Playback duration per track
         seek_sec: Seek position (None = use track manifest if available)
@@ -369,11 +374,15 @@ async def run_validation(
 
             for track in tracks:
                 track_name = track["name"]
-                gt = load_ground_truth(track["ground_truth"], track.get("human_edits"))
                 track_seek = seek_sec
                 if track_seek is None:
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
+                gt = segment_ground_truth(
+                    load_ground_truth(track["ground_truth"], track.get("human_edits")),
+                    track_seek,
+                    duration_ms,
+                )
 
                 for run_idx in range(num_runs):
                     step += 1
@@ -520,9 +529,13 @@ async def run_param_sweep(
 
                 for track in tracks:
                     track_name = track["name"]
-                    gt = load_ground_truth(track["ground_truth"], track.get("human_edits"))
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
+                    gt = segment_ground_truth(
+                        load_ground_truth(track["ground_truth"], track.get("human_edits")),
+                        track_seek,
+                        duration_ms,
+                    )
 
                     for run_idx in range(num_runs):
                         step += 1
@@ -833,9 +846,13 @@ async def _eval_param_value(
     track_scores: list[float] = []
     for track in tracks:
         track_name = track["name"]
-        gt = load_ground_truth(track["ground_truth"], track.get("human_edits"))
         track_manifest_entry = manifest.get(track_name, {})
         track_seek = track_manifest_entry.get("seekOffset", 0)
+        gt = segment_ground_truth(
+            load_ground_truth(track["ground_truth"], track.get("human_edits")),
+            track_seek,
+            duration_ms,
+        )
 
         playback, recordings = await _record_and_play(
             [device],

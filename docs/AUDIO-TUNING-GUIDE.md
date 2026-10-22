@@ -69,7 +69,8 @@ PDM Microphone (16kHz, mono)
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **Tracker harness** | `tests/tracker/` | Real tracker code on edm/ audio on the host; deterministic, runs in CI |
+| **Tracker harness** | `tests/tracker/` | Real tracker code on edm/ audio on the host; deterministic, runs in CI. Reports onset F1/precision with the device scorer |
+| **Device eval (workstation)** | `tools/device_eval.py` | A device on this machine's USB: plays edm/ through the speakers, scores its onsets with the server's scorer. Windows or Linux |
 | **blinky-server** | `blinky-server/` | Fleet management, on-device test orchestration, scoring (REST API, port 8420) |
 | **blinky-serial-mcp** | `blinky-serial-mcp/` | MCP tools for Claude (thin HTTP client for blinky-server) |
 | **Test audio** | `blinky-test-player/music/edm/` | 18 tracks + `.onsets_consensus.json` ground truth + `track_manifest.json` |
@@ -83,6 +84,10 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness
 # Host: compare two builds, or try other loop rates
 python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
     --compare build/tracker_harness_old --fps 35 60 90
+
+# On device, from a workstation (device on this machine's USB, music from its speakers)
+python tools/device_eval.py --port COM3                       # whole corpus, ~13 min
+python tools/device_eval.py --port COM3 --tracks trance-party --commands "set fluxonsetfloor 0.02"
 
 # On device: validation suite via the server API (bench test devices only)
 curl -X POST http://blinkyhost.local:8420/api/test/validate \
@@ -197,6 +202,25 @@ Each generator has its own category. List them on a device with `show <category>
 | `plasma` | `lightning` or `plasma` (PlasmaGlobe) | `p_bgdim` (0.01), `p_orbbright` (0.75), `p_orbradius` (0.06), `p_driftspeed` (0.012), `p_pulsedecay` (0.88), `p_pulsebright` (0.5), `p_pulseexpand` (0.3) (all saved) |
 | `audiovis` | `audio` | `transientrowfrac`, `transientdecay`, `transientbright`, `levelbright`, `levelsmooth`, `phasebright`, `musicmodethresh`, `beatpulsebright`, `beatpulsedecay`, `beatpulsewidth`, `bgbright` (runtime) |
 | `effect` | `effect hue` / `effect none` | `hueshift` (0.0), `huespeed` (0.0 cycles/s) (runtime; `scene` sets them too) |
+
+### One scorer, three runners
+
+The harness, `tools/device_eval.py` and the server's `/api/test/validate` all score with `blinky-server/blinky_server/testing/scoring.py`:
+- **Reference:** `onsets_consensus` onsets with strength ≥ 0.6, deduplicated at 70 ms.
+- **Latency:** estimated and removed per run.
+- **Matching:** greedy, at ±100 ms (`f1`), with `f1_50ms` and `f1_70ms` reported alongside.
+
+Their numbers are directly comparable. The harness's `recall` column is a separate, older metric: strong onsets (≥ 0.8) within ±50 ms.
+
+**Segments, not whole tracks.** On a device, each track plays from its `track_manifest.json` `seekOffset` for 35 s, and its ground truth is cut to that segment (`segment_ground_truth`). Before 2026-10-21 the server scored those runs against the track's first 35 s. 12 of the 18 tracks have a non-zero seek, so **on-device F1 from blinkyhost before then is chance-level on those tracks; don't compare against it.**
+
+**Timing in `device_eval.py`.** Each segment is preceded by three sync clicks at irregular spacing. The device's onsets on the clicks measure that run's lag: playback start, speaker and detection delay together. Two cheaper approaches fail on the bench:
+- **The ffplay process start as audio start:** its delay depended on the seek position (165 ms vs 390 ms).
+- **Estimating the lag from the music:** dense drums alias by a grid step.
+
+The click-measured lag is the latency correction (the scorer's `latency_ms`). The scorer's own nearest-onset estimate is printed as `est` but not applied: on the b216 run it was off by up to 89 ms, where a fine lag scan agreed with the clicks. A run whose clicks weren't detected is reported and left out of the means.
+
+**b216 baseline on hat_v1** (`device_eval.py`, 18 tracks × 35 s, stream off, ±100 ms): **F1 0.653, P 0.581, R 0.800**, F1@50 0.466. Weakest: edm-trap-electro 0.45, trance-infected-vibes 0.45 (both precision ≈ 0.3), techno-machine-drum 0.52.
 
 ---
 
