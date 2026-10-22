@@ -23,6 +23,12 @@ reports, per run:
             track's tempo from `.pattern_gt.json`. Used only to judge the
             visualizer's period choice — never as an onset target.
   recall    Fraction of strong GT onsets with a fired onset within +-50 ms.
+  f1, prec  Onset F1 and precision after warm-up, scored exactly as on a
+            device (blinky-server's scoring: reference = onsets with strength
+            >= 0.6, deduped at 70 ms; latency estimated and removed; greedy
+            matching at +-100 ms; f1@50 at +-50 ms). Same numbers as
+            `tools/device_eval.py` and `POST /api/test/validate`, so a host
+            result and a device result can be compared directly.
   bpm       Median BPM after warm-up (look for loop-rate dependence).
 
 Usage:
@@ -37,7 +43,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -47,6 +52,17 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "blinky-server"))
+from blinky_server.testing.scoring import (  # noqa: E402
+    MIN_ONSET_STRENGTH,
+    ONSET_DEDUP_SEC,
+    ONSET_TOLERANCE_SEC,
+    PLAUSIBLE_LATENCY_MAX,
+    PLAUSIBLE_LATENCY_MIN,
+    estimate_audio_latency,
+    match_events_f1,
+)
+
 CORPUS = REPO / "blinky-test-player" / "music" / "edm"
 WARMUP_S = 10.0
 STRONG = 0.8
@@ -96,6 +112,31 @@ def tempo_score(rows: np.ndarray, gt_bpm: float | None) -> float:
     return float(ok.mean()) if len(p) else float("nan")
 
 
+def onset_f1(rows: np.ndarray, gt_onsets: list[dict]) -> dict:
+    """Onset F1/precision after warm-up, with blinky-server's device scoring."""
+    t = rows["t_ms"] / 1000.0
+    on = rows["onset"] > 0
+    # One detection per onset: a delivered onset can span consecutive loop rows.
+    edge = on & ~np.concatenate([[False], on[:-1]])
+    sel = edge & (t >= WARMUP_S)
+    det = [{"timestamp_ms": float(ms), "strength": float(v)}
+           for ms, v in zip(rows["t_ms"][sel], rows["onset"][sel], strict=True)]
+    end = float(t[-1])
+    hits = [{"time": o["time"], "strength": o.get("strength", 1.0), "expect_trigger": True}
+            for o in gt_onsets if WARMUP_S <= o["time"] <= end]
+    lat = estimate_audio_latency(det, hits, end * 1000)
+    if lat is None or not PLAUSIBLE_LATENCY_MIN <= lat <= PLAUSIBLE_LATENCY_MAX:
+        return {"f1": float("nan"), "prec": float("nan"), "f1_50": float("nan"), "lat": lat}
+    ref: list[float] = []
+    for x in sorted(h["time"] for h in hits if h["strength"] >= MIN_ONSET_STRENGTH):
+        if not ref or x - ref[-1] > ONSET_DEDUP_SEC:
+            ref.append(x)
+    est = [(d["timestamp_ms"] - lat) / 1000 for d in det]
+    r100 = match_events_f1(est, ref, ONSET_TOLERANCE_SEC)
+    r50 = match_events_f1(est, ref, 0.05)
+    return {"f1": r100["f1"], "prec": r100["precision"], "f1_50": r50["f1"], "lat": lat}
+
+
 def evaluate(rows: np.ndarray, onsets: np.ndarray) -> dict:
     t = rows["t_ms"] / 1000.0
     strong = onsets[onsets >= WARMUP_S]
@@ -142,6 +183,7 @@ def main() -> int:
     ap.add_argument("--min-excess", type=float, help="fail if the new build's mean excess is below this")
     ap.add_argument("--min-tempo", type=float, help="fail if the new build's mean tempo score is below this")
     ap.add_argument("--min-recall", type=float, help="fail if the new build's mean recall is below this")
+    ap.add_argument("--min-f1", type=float, help="fail if the new build's mean onset F1 is below this")
     args = ap.parse_args()
 
     ffmpeg = find_ffmpeg(args.ffmpeg)
@@ -153,7 +195,8 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
         print(f"{'track':32s} {'fps':>5s} " + "  ".join(
-            f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':bpm':>8s}" for b, _ in builds))
+            f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':f1':>7s} "
+            f"{b+':prec':>8s} {b+':bpm':>8s}" for b, _ in builds))
         for stem in stems:
             mp3 = CORPUS / f"{stem}.mp3"
             gt = json.loads((CORPUS / f"{stem}.onsets_consensus.json").read_text())
@@ -168,24 +211,28 @@ def main() -> int:
                     rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed,
                                        args.harness_args if b == "new" else None)
                     r = evaluate(rows, onsets)
+                    r.update(onset_f1(rows, gt["onsets"]))
                     r["tempo"] = tempo_score(rows, gt_bpm)
                     r["has_gt_bpm"] = bool(gt_bpm)
                     r["label"] = f"{stem}@{fps:.0f}fps"
                     summary[b].append(r)
-                    cells.append(f"{r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} {r['bpm']:8.1f}")
+                    cells.append(f"{r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
+                                 f"{r['f1']:7.3f} {r['prec']:8.3f} {r['bpm']:8.1f}")
                 print(f"{stem:32s} {fps:5.0f} " + "  ".join(cells), flush=True)
     print()
     for b, rs in summary.items():
         arr = lambda k: np.nanmean([r[k] for r in rs])
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
               f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
-              f"mean recall {arr('recall'):.3f}")
+              f"mean recall {arr('recall'):.3f}  mean F1 {arr('f1'):.3f}  mean prec {arr('prec'):.3f}  "
+              f"mean F1@50 {arr('f1_50'):.3f}")
 
     # Regression gate (CI): floors apply to the new build's corpus means. Any
     # non-finite per-run value fails outright, so a broken run can't hide inside
     # the mean. The one legitimate NaN is tempo on a track with no annotated BPM.
     failed = []
-    for key, floor in (("excess", args.min_excess), ("tempo", args.min_tempo), ("recall", args.min_recall)):
+    for key, floor in (("excess", args.min_excess), ("tempo", args.min_tempo), ("recall", args.min_recall),
+                       ("f1", args.min_f1)):
         if floor is None:
             continue
         runs = [r for r in summary["new"] if key != "tempo" or r["has_gt_bpm"]]

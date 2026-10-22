@@ -267,8 +267,15 @@ def score_device_run(
     test_data: TestData,
     audio_start_time: float,
     gt_data: GroundTruth,
+    latency_ms: float | None = None,
 ) -> DeviceRunScore:
     """Score a single device's test recording against ground truth.
+
+    `latency_ms`, when given, is the measured detection latency and is used
+    as the correction instead of the estimate (which is still computed and
+    reported). The estimate matches each detection to the nearest reference
+    onset, so on dense tracks it can be off by tens of ms; a runner that
+    measures latency directly (tools/device_eval.py: sync clicks) passes it.
 
     Computes onset F1 (at multiple tolerances) and PLP pattern metrics.
     """
@@ -311,7 +318,9 @@ def score_device_run(
     ]
     det_dicts: list[dict[str, Any]] = [dict(d) for d in detections]
     audio_latency_ms = estimate_audio_latency(det_dicts, gt_hits_dicts, audio_duration_ms)
-    if (
+    if latency_ms is not None:
+        latency_correction_ms = latency_ms
+    elif (
         audio_latency_ms is not None
         and PLAUSIBLE_LATENCY_MIN <= audio_latency_ms <= PLAUSIBLE_LATENCY_MAX
     ):
