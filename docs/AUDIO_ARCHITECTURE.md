@@ -300,14 +300,14 @@ The pattern slot cache has its own settings (`slotswitchthresh`, `slotnewthresh`
 | Spectral flux (pre-#280 picker) | 0.546 | 0.457 | 0.679 | 178 |
 | v33 NN (50 mel, 19.6 KB, **12 ms/inference** on device) | 0.480 | 0.394 | 0.613 | 48 |
 
-Those are all-onset numbers; detectors are now scored on drums (kick + snare labels aligned per track, ±50 ms, host harness at 60 fps, no cost model; #280):
+Those are all-onset numbers; detectors are now scored on drums (kick + snare labels aligned per track, ±50 ms, host harness at 60 fps, no cost model; #280). **The corpus plays at the device's level:** hat_v1's mic peaks at about 0.003 FS with music, about −50 dB re the mastered files, re-quantized to int16. Drum F at −60 / −50 / −40 dB; the other columns at −50 dB:
 
-| Detector | Picker | drum F (−20 / 0 dB) | on-drum (0 dB) | kick R | snare R* | det/s | noise det/s |
+| Detector | Picker | drum F (−60 / −50 / −40 dB) | on-drum | kick R | snare R* | det/s | noise det/s |
 |---|---|---|---|---|---|---|---|
-| Spectral flux (weighted, adaptive baseline) | 96 ms window + cooldown + gates | 0.585 / 0.580 | 48% | 79% | 59% | 5.2 | 3–6 |
-| **SuperFlux (devices)** | **online (Böck 2012), delta 11** | **0.647 / 0.648** | **55%** | **78%** | **81%** | **4.8** | **0** |
-| v33 NN, floor 0.20 | 96 ms window + cooldown + gates | 0.575 / 0.548 | 45% | 69% | 70% | 5.1 | ~5 |
-| v33 NN, floor 0.55 | online (Böck 2012) | 0.672 / 0.644 | 53% | 80% | 89% | 5.2 | 1–2 |
+| Spectral flux (weighted, adaptive baseline) | 96 ms window + cooldown + gates | 0.243 / 0.543 / 0.603 | 57% | 63% | 20% | 3.1 | 3–6 |
+| **SuperFlux (devices)** | **online (Böck 2012), δ 10, λ 32768** | **0.647 / 0.651 / 0.648** | **55%** | **79%** | **81%** | **4.8** | **0** |
+| v33 NN, floor 0.20 | 96 ms window + cooldown + gates | 0.594 / 0.595 / 0.588 | 50% | 75% | 72% | 5.0 | ~5 |
+| v33 NN, floor 0.55 | online (Böck 2012) | 0.677 / 0.672 / 0.672 | 52% | 95% | 95% | 6.1 | 1–2 |
 
 \*Snare labels are provisional (#284). Noise: steady white or pink noise from −70 to −30 dBFS. Kick timing moves from +4 ms to −4 ms, because the online picker reports the peak frame itself. The harness SuperFlux matches the Python replica of the audit to within 1.3e-4.
 

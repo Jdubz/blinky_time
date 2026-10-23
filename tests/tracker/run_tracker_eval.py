@@ -67,6 +67,13 @@ CORPUS = REPO / "blinky-test-player" / "music" / "edm"
 WARMUP_S = 10.0
 STRONG = 0.8
 TOL_S = 0.05
+# Playback level, dB re the decoded (mastered) file. The corpus peaks near
+# full scale, but the device's mic does not: hat_v1 with music peaks at
+# ~0.0028-0.004 FS, about -50 dB. Testing at file level hid that the
+# first SuperFlux lambda produced no onsets at all on the device (#280), so
+# the default is the device's level; the PCM is re-quantized to int16 after
+# scaling, as the mic's samples are.
+DEVICE_LEVEL_DB = -50.0
 
 
 def find_ffmpeg(explicit: str | None) -> str:
@@ -82,9 +89,12 @@ def find_ffmpeg(explicit: str | None) -> str:
         sys.exit("ERROR: ffmpeg not found (install it, pass --ffmpeg, or pip install imageio-ffmpeg)")
 
 
-def decode(ffmpeg: str, src: Path, dst: Path) -> None:
+def decode(ffmpeg: str, src: Path, dst: Path, level_db: float = 0.0) -> None:
     subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(src), "-ac", "1", "-ar", "16000",
                     "-f", "s16le", str(dst)], check=True)
+    if level_db != 0.0:
+        x = np.fromfile(dst, dtype="<i2").astype(np.float64) * 10 ** (level_db / 20)
+        np.clip(np.round(x), -32768, 32767).astype("<i2").tofile(dst)
 
 
 def run_harness(exe: str, pcm: Path, out: Path, fps: float, jitter: float, seed: int,
@@ -177,6 +187,9 @@ def main() -> int:
     ap.add_argument("--jitter", type=float, default=0.25)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--ffmpeg")
+    ap.add_argument("--level-db", type=float, default=DEVICE_LEVEL_DB,
+                    help=f"playback level, dB re the decoded file (default {DEVICE_LEVEL_DB:g}: "
+                         "the device mic's level with music; 0 = file level)")
     ap.add_argument("--harness-args", nargs="*", default=[],
                     help="extra positional args after the seed: plpPhaseGain tempoPriorWidth "
                          "syncopatedCandidateScale (tuning sweeps; the new build only)")
@@ -207,7 +220,7 @@ def main() -> int:
             pgt = CORPUS / f"{stem}.pattern_gt.json"
             gt_bpm = json.loads(pgt.read_text()).get("groundTruthBpm") if pgt.exists() else None
             pcm = tmpd / f"{stem}.pcm"
-            decode(ffmpeg, mp3, pcm)
+            decode(ffmpeg, mp3, pcm, args.level_db)
             for fps in args.fps:
                 cells = []
                 for b, exe in builds:
