@@ -138,11 +138,18 @@ public:
 
     // SuperFlux log compression: log10(lambda * band + 1) (getSuperFlux).
     // Log makes the flux measure relative change, so one picker delta works
-    // at any input level (there is no AGC). edm/ audit (#280), drum F at
-    // -20 / -10 / 0 / +10 dB: lambda 100 0.650 / 0.650 / 0.648 / 0.646;
-    // 1000 ~0.645 at every level; linear flux 0.158 / 0.554 / 0.675 / 0.632.
+    // at any input level (there is no AGC) -- but only while lambda * band
+    // >> 1; below that log10(x + 1) is linear and the flux shrinks with level.
+    // The device's level sets lambda: hat_v1 with music peaks at ~0.0028 FS,
+    // about -50 dB re the mastered edm/ corpus. edm/ host harness, corpus
+    // scaled AND re-quantized to int16, drum F at -60 / -50 / -40 / -20 / 0 dB
+    // (delta 10): lambda 32768 0.647 / 0.651 / 0.648 / 0.646 / 0.643. lambda
+    // 100 (the first choice, tested only at -20..+10 dB) collapsed on the
+    // device: 0.009 / 0.298 at -60 / -50 dB, no onsets at all on hat_v1.
+    // 32768 is the paper's own setting on our scale: madmom applies
+    // log10(X + 1) to magnitudes of int16 samples, which are ours x 32768.
     // Not persisted: a design constant, settable for host sweeps.
-    float superFluxLambda = 100.0f;
+    float superFluxLambda = 32768.0f;
 
     // Spectral flux band weights (v74: exposed for tuning, was hardcoded).
     // Only energy synthesis and the pickOnset presence / bass-ratio inputs

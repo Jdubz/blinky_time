@@ -71,9 +71,12 @@ public:
 // window: 0.580 / 48% / 79% / 59% / 5.2, and 3-6 det/s on noise.
 class FluxOnsetDetector : public OnsetDetector {
 public:
-    // edm/ audit sweep (lambda 100): drum F 0.644-0.648 for delta 8-14;
-    // every leave-one-track-out fold chose 11 or 12.
-    static constexpr float DELTA_DEFAULT = 11.0f;
+    // Chosen at the device's level (corpus at -50 dB re mastered, int16),
+    // lambda 32768, drum F at -60 / -50 / -40 / -20 / 0 dB: delta 10 0.647 /
+    // 0.651 / 0.648 / 0.646 / 0.643 | 12 0.631 / 0.644 / 0.644 / 0.643 /
+    // 0.641 | 14 0.609 / 0.635 / 0.638 / 0.639 / 0.638. 0 det/s on steady
+    // white / pink noise at -70..-30 dBFS.
+    static constexpr float DELTA_DEFAULT = 10.0f;
     static constexpr uint8_t AVERAGE_FRAMES_DEFAULT = 6;  // 96 ms (Boeck 2012: 100 ms)
 
     // Activation at the threshold (margin = delta) and its growth above it:

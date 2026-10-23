@@ -79,7 +79,7 @@ AdaptiveMic (fixed gain + window/range normalization; no AGC, no noise gate)
 SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 mel bands + spectral flux)
       |
       +--- [ONSET PATH]
-      |    Devices: SuperFlux (pre-compressor, 78-band log filterbank, log10(100 S + 1),
+      |    Devices: SuperFlux (pre-compressor, 78-band log filterbank, log10(32768 S + 1),
       |         +-1 band max filter, unweighted half-wave sum)
       |    NN builds only: FrameOnsetNN activation
       |         -> shared online picker (max of 30 ms, mean of 100 ms + delta, 30 ms gap)
@@ -331,7 +331,7 @@ Two flux signals, for different jobs:
 
 - **`getSuperFlux()`: onset detection (#280).** SuperFlux (Böck & Widmer, "Maximum filter vibrato suppression for onset detection", DAFx-13):
   1. Pre-compressor magnitudes go through a triangular log-frequency filterbank: 24 bands per octave from 62.5 Hz to 8 kHz, not area-normalised. Edges that round to the same FFT bin are merged, so there are 78 bands, and bins 2–41 are one band each (`SUPERFLUX_EDGES`, generated, with a `static_assert` on its size).
-  2. Each band is log-compressed: `log10(λ·S + 1)`, with λ = `superFluxLambda` = 100.
+  2. Each band is log-compressed: `log10(λ·S + 1)`, with λ = `superFluxLambda` = 32768 (the paper's log(1 + X) on int16-scale magnitudes).
   3. Each band is differenced against the previous frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights.
   - **Why unweighted:** in a full mix a kick rises only about 2–3 dB below 190 Hz but 6–7 dB from 190 Hz to over 4 kHz. A drum hit rises across many bands, a bass note in a few. The old band weights gave each bass bin about 26× a high bin's weight, which amplified bass lines and buried the broadband attack.
   - **Why log:** there is no AGC. Log flux measures relative change, so one picker δ works at any input level. On edm/, drum F was 0.650 / 0.650 / 0.648 / 0.646 at −20 / −10 / 0 / +10 dB, against linear flux's 0.158 / 0.554 / 0.675 / 0.632.

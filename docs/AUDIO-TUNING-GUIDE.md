@@ -145,7 +145,7 @@ Every parameter below is a serial setting: `set <name> <value>`, `get <name>`, `
 
 | Command | Default | Range | Saved | Description |
 |---------|---------|-------|-------|-------------|
-| `fluxdelta` | 11 | 0.5-60 | yes | Flux onset threshold: SuperFlux must exceed its 100 ms mean by this (device onset path) |
+| `fluxdelta` | 10 | 0.5-60 | yes | Flux onset threshold: SuperFlux must exceed its 100 ms mean by this (device onset path) |
 | `fluxavgframes` | 6 | 0-16 | runtime | Flux picker moving-average frames (W3, 96 ms) |
 | `onsetmaxframes` | 2 | 0-16 | runtime | Picker: onset must be the max of this many previous frames (W1, 32 ms) |
 | `onsetmingap` | 2 | 0-30 | runtime | Picker: minimum frames between onsets (W5, 32 ms) |
@@ -231,7 +231,9 @@ The click-measured lag is the latency correction (the scorer's `latency_ms`). Th
 
 **SuperFlux + the online picker, NN off on devices (#280).** Drum metrics on edm/: kick + snare labels aligned per track, ±50 ms, host harness at 60 fps. Snare labels are provisional (#284). See `docs/AUDIO_ARCHITECTURE.md` "Onset Detection" for the table.
 
-`fluxdelta` sweep (λ 100, offline replica): drum F 0.644–0.648 for δ 8–14; every leave-one-track-out fold chose 11 or 12. Higher δ trades recall for on-drum share: δ 16 gives 58% on-drum at 70% kick recall, δ 6 gives 50% at 88%. The NN keeps its 12 ms inference cost (LED fps 48 vs 178 for flux under the cost model).
+**Test at the device's level.** hat_v1 with music peaks at about 0.0028 FS, roughly −50 dB below the mastered corpus. Evaluate with the corpus scaled to that level and re-quantized to int16, not at file level. λ = 100, chosen from a −20 to +10 dB test, produced no onsets at all on the hat.
+
+`fluxdelta` sweep (λ 32768, host harness, drum F at −60 / −50 / 0 dB): δ 10 0.647 / 0.651 / 0.643, δ 12 0.631 / 0.644 / 0.641, δ 14 0.609 / 0.635 / 0.638. Higher δ trades recall for on-drum share. The NN keeps its 12 ms inference cost (LED fps 48 vs 178 for flux under the cost model).
 
 ### Rhythm
 
