@@ -32,20 +32,19 @@ struct AudioControl {
     float level = 0.0f;
 
     // === PULSE ===
-    // Transient/hit intensity (0.0 - 1.0)
-    // Spectral flux auto-normalized, modulated by NN onset activation.
-    // When NN is discriminative: onsets (kicks/snares) produce strong pulses,
-    // non-onset spectral changes are suppressed. Self-tuning via nnConf.
-    // 0.0 = no transient, 1.0 = strong transient
+    // Hit envelope (0.0 - 1.0): each detected onset raises it to the onset's
+    // strength (the same 0-1 scale as `onset`), then it decays with a 100 ms
+    // time constant (AudioTracker::PULSE_DECAY_TAU_S), shorter than the gap
+    // between drum hits, so each hit is its own flash. 0 between hits.
     // Use for: Sparks, flashes, bursts, event triggers
     float pulse = 0.0f;
 
     // === ONSET ===
     // Discrete onset event: strength (0-1) of the onset fired during this
     // update, 0 when none fired. Exactly one non-zero value per detected
-    // percussive event (the detector has its own cooldown), so generators
-    // can edge-trigger on `onset > 0` without thresholding the decaying
-    // `pulse` envelope (which never re-arms during dense hi-hat passages).
+    // percussive event (the picker's 32 ms minimum gap), so generators can
+    // edge-trigger on `onset > 0` without thresholding the decaying `pulse`
+    // envelope.
     // Use for: Bursts, flashes — one visual event per drum hit
     float onset = 0.0f;
 

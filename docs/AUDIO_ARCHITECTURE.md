@@ -43,7 +43,7 @@ Generators receive a single struct (`audio/AudioControl.h`):
 struct AudioControl {
     float energy;         // Audio energy level (0-1), never below a 0.12-0.20 "smolder" floor
     float level;          // Mic loudness, auto-ranged 0-1, no gate, no extra smoothing
-    float pulse;          // Transient envelope (0-1, decays with a 240 ms time constant)
+    float pulse;          // Hit envelope (0-1): onset strength at each onset, 100 ms decay
     float onset;          // Onset EVENT: strength this update, 0 if none
     float phase;          // Rhythm-cycle phase (0-1, 0 = accent)
     uint16_t beatCount;   // +1 per rhythm cycle, never decrements
@@ -373,7 +373,10 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
 - **Expensive detectors:** the NN runs at most once per `update()`. Frames it skips return `fresh = false`, and the picker doesn't step on them.
 - **Selection:** the NN when built in (`BLINKY_ONSET_NN_ENABLED`) and ready, otherwise flux. Devices use flux. `show nn` names the detector in use.
 - `onset` = strongest pulse fired in this `update()`, else 0.
-- `pulse` envelope: rises to `(a - 0.4) / 0.6` when the activation `a` (the peak over the frames of this update) passes 0.4, then decays with a 240 ms time constant.
+- `pulse` envelope: each picked onset raises it to that onset's strength, then it decays with a 100 ms time constant (`PULSE_DECAY_TAU_S`).
+  - It used to max-hold the per-frame activation above 0.4, mapped `(a − 0.4) / 0.6`, with a 240 ms decay. That was a second, threshold-only path beside the picker, and its decay equalled the median gap between drum hits (kick+snare gaps are p25 157 ms, p50 240 ms).
+  - Host, device level: only 53% of drum hits made a visible flash, although the picker caught 79%. Driving the pulse from onsets with a 100 ms decay raises that to 77%.
+  - Onset strength barely separates drum from non-drum picks (AUC 0.60). So the pulse can't make drums brighter than other onsets; that needs a drum cue in the detector.
 - `onsetDensity`: picked onsets per second, EMA 0.7/0.3.
 - Gate mask (TRANSIENT stream `gateMask`): bit 1 = pattern bias raised δ. Bits 0, 2 and 3 belonged to the deleted gates and are never set.
 

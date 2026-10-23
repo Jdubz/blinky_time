@@ -237,6 +237,14 @@ public:
     static constexpr float ONSET_PATTERN_BIAS_DEFAULT = 0.3f;
     float onsetPatternBias = ONSET_PATTERN_BIAS_DEFAULT;
 
+    // Pulse envelope decay (synthesizeOutputs). Shorter than the gaps between
+    // drum hits, so each hit shows as its own flash: kick+snare inter-onset
+    // intervals on edm/ are p10 112 / p25 157 / p50 240 ms, and at 100 ms the
+    // envelope is down to ~21% by the p25 gap. Host, device level, drum hits
+    // that make a visible flash (a jump >= 0.2) by tau: 60 ms 79%, 100 ms
+    // 77%, 150 ms 74%, 240 ms 68% (#280).
+    static constexpr float PULSE_DECAY_TAU_S = 0.10f;
+
     // === Shared peak picker (AudioTracker::pickOnset) ===
     // Online peak picking, Boeck, Krebs & Schedl, "Evaluating the online
     // capabilities of onset detection methods" (ISMIR 2012): frame t is an
@@ -366,7 +374,6 @@ private:
     // max and moving-average windows read it.
     float odfHistory_[ONSET_HISTORY_MAX] = {0};
     float onsetActivation_ = 0.0f;     // Activation of the last fresh frame (getOnsetActivation)
-    float activationPeak_ = 0.0f;      // Max activation over frames processed in the last update()
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};

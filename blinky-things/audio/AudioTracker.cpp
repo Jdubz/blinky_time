@@ -133,7 +133,6 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // Per-update aggregates: update() may process 0..N spectral frames.
     lastPulseStrength_ = 0.0f;
-    activationPeak_ = 0.0f;
     framesThisUpdate_ = 0;
 
     // 2. Drain the PDM ring, processing EVERY spectral frame exactly once.
@@ -1186,7 +1185,6 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams
     // pulse envelope, on the same 0-1 scale whichever detector runs.
     const float act = clampf(detector_->activation(o, mean, delta), 0.0f, 1.0f);
     onsetActivation_ = act;
-    if (act > activationPeak_) activationPeak_ = act;
 
     if (isMax && o > 0.0f && o >= threshold && gapOk) {
         pulseStrength = act;
@@ -1410,24 +1408,20 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
     control_.level = clampf(mic_.getLevel(), 0.0f, 1.0f);
 
-    // --- Continuous pulse envelope (visual generators) ---
-    // Driven by the onset activation, the same signal as the discrete onsets,
-    // whichever detector produced it (onset API, AudioTracker.h). Peak over
-    // the frames processed this call: with several frames per update, the
-    // latest frame alone can miss the onset frame. No new frame -> no new
-    // evidence -> no re-trigger (re-feeding a stale value every loop pass
-    // used to hold the envelope up between frames). Flux used to drive this
-    // from flux / a 10 s running peak, a second detector: after one loud hit
-    // it muted ordinary hits for seconds (#280).
-    const float pulseSignal = (framesThisUpdate_ > 0) ? clampf(activationPeak_, 0.0f, 1.0f) : 0.0f;
-
-    if (pulseSignal > 0.4f) {
-        float trigger = (pulseSignal - 0.4f) / 0.6f;
-        if (trigger > pulseEnvelope_) {
-            pulseEnvelope_ = trigger;
-        }
-    }
-    pulseEnvelope_ *= expf(-dt / 0.24f);
+    // --- Pulse envelope (visual generators) ---
+    // Driven by the picked onsets only: each onset raises the envelope to its
+    // strength (the onset API's 0-1 scale, either detector), which then
+    // decays with PULSE_DECAY_TAU_S. Decay first, so an onset shows at full
+    // strength in the update it fires. lastPulseStrength_ is the strongest
+    // onset of the frames this update processed (0 when none fired).
+    // It used to max-hold a per-frame activation over 0.4, mapped
+    // (a - 0.4) / 0.6 with a 240 ms decay: a second, threshold-only path
+    // beside the picker, and a decay as long as the median gap between drum
+    // hits, so a hit landing on the previous one's tail barely moved it. On
+    // edm/ (host, device level) only 53% of drum hits made a visible flash
+    // although the picker caught 79%; onset-driven with 100 ms: 77% (#280).
+    pulseEnvelope_ *= expf(-dt / PULSE_DECAY_TAU_S);
+    if (lastPulseStrength_ > pulseEnvelope_) pulseEnvelope_ = lastPulseStrength_;
     if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 
     control_.pulse = clampf(pulseEnvelope_, 0.0f, 1.0f);

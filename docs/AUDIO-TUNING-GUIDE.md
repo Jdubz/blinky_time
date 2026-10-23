@@ -41,7 +41,7 @@ PDM Microphone (16kHz, mono)
         │   → shared online picker (Böck 2012): max of 30 ms, ≥ mean of 100 ms + fluxdelta
         │     (× pattern bias), 30 ms minimum gap (AudioTracker::pickOnset)
         │   → activation 0-1 (same scale as the NN)
-        │   → onset event, pulse envelope, onset density (all from the activation)
+        │   → onset event, pulse envelope (onset strength, 100 ms decay), onset density
         │   → Energy synthesis (mic level + bass mel + flux peak-hold)
         │
         └── [RHYTHM PATH]  (every 100 ms)

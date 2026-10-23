@@ -87,7 +87,7 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
     // Linear hit glow: triggered by the discrete onset (its 0-1 strength),
     // decaying fast, so each hit on the strip is a distinct flash rather than
-    // following the 240 ms pulse envelope into the next hit (#280).
+    // following the pulse envelope into the next hit (#280).
     if (audio.onset > linearHitEnv_) {
         linearHitEnv_ = audio.onset;
     } else {
