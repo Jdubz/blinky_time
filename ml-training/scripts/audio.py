@@ -16,6 +16,9 @@ Firmware pipeline (SharedSpectralAnalysis::getRawMelBands, v56+):
 
 from __future__ import annotations
 
+import os
+import re
+
 import numpy as np
 
 
@@ -339,7 +342,42 @@ def load_config(config_path: str) -> dict:
         overrides = yaml.safe_load(f) or {}
 
     _deep_merge(cfg, overrides)
-    return cfg
+    return expand_roots(cfg)
+
+
+# Storage roots in config paths (#286). Configs name `${BLINKY_DATA}` (warm
+# tier: audio corpora, labels, RIR, noise) and `${BLINKY_WORK}` (hot tier:
+# prepared tensors, mel cache, outputs) instead of one machine's mounts, so a
+# job (the Spark's dataset volume) supplies its own. Unset, they are the
+# devtop layout (docs/ML_STORAGE_LAYOUT.md), so interactive use is unchanged.
+STORAGE_ROOT_DEFAULTS = {
+    "BLINKY_DATA": "/mnt/storage/blinky-ml-data",
+    "BLINKY_WORK": "/mnt/nvme",
+}
+_ROOT_REF = re.compile(r"\$\{([^}]*)\}")
+
+
+def storage_root(name: str) -> str:
+    """The value of a storage root: the environment variable, else the default."""
+    if name not in STORAGE_ROOT_DEFAULTS:
+        raise ValueError(f"unknown storage root ${{{name}}}; known: {sorted(STORAGE_ROOT_DEFAULTS)}")
+    value = os.environ.get(name) or STORAGE_ROOT_DEFAULTS[name]
+    return value.rstrip("/")
+
+
+def expand_roots(obj):
+    """Expand `${BLINKY_DATA}` / `${BLINKY_WORK}` in every string of a config.
+
+    Any other `${...}` is an error (a typo would otherwise become a literal
+    directory name and a confusing missing-file failure much later).
+    """
+    if isinstance(obj, dict):
+        return {k: expand_roots(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [expand_roots(v) for v in obj]
+    if isinstance(obj, str) and "${" in obj:
+        return _ROOT_REF.sub(lambda m: storage_root(m.group(1)), obj)
+    return obj
 
 
 def _deep_merge(base: dict, overrides: dict) -> None:

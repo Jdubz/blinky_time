@@ -1,8 +1,30 @@
 # ML Training Storage Layout
 
-**Last updated:** 2026-10-21 (layout unchanged since 2026-05-02)
+**Last updated:** 2026-10-23
 
 This doc is the authoritative reference for where ML training data lives, why it lives there, and how prep + training use disk. The layout is designed so disk-full failures during prep stop being possible at the workloads we currently run.
+
+## Where the data is now (2026-10-23)
+
+**The data is not on devtop.** On 2026-07-10 (Phase 0 of the homelab cutover, `homelab-stacks`), `/mnt/storage` became the my-spark object store (`/mnt/storage/spark-artifacts`). blinky's ML data was archived first, to bignasty's RAID:
+
+`bignasty:/srv/dev-disk-by-uuid-45e47416-96ad-41be-9fc0-582e15241cbd/archive/devtop-2026-07/blinky/`
+
+| Path in the archive | Size | Contents |
+|---|---|---|
+| `blinky-ml-data/stems/htdemucs` | 172 GB | Demucs stems, 6,752 tracks |
+| `blinky-ml-data/audio/fma`, `audio/metadata` | 29 GB, 1.7 GB | training audio |
+| `blinky-ml-data/audio/combined` | — | 6,111 symlinks, **all broken**: absolute `/mnt/storage/blinky-ml-data/audio/fma/…` targets. Relink to `audio/fma` when restoring. |
+| `blinky-ml-data/labels/` | ~300 MB | `onsets_consensus`, `kick_weighted_drums`, `kick_weighted_clean`, `onsets_librosa`, `fma` (6,111 tracks) |
+| `blinky-ml-data/rir`, `noise`, `calibration` | ~360 MB | augmentation inputs |
+| `processed_v36` | 217 GB | prepared tensors for the dead v36 (80-mel) config; re-prep instead |
+| `blinky-ml-archive/_archive_beats_2026_04_29` | 1 GB | archived beat labels (never a training input) |
+
+bignasty's RAID is production's only redundant backup (homelab-stacks cutover runbook): read from the archive, never write or delete there. Restoring to a training host (the Spark's dataset volume, my-spark#1525) is part of the Spark onboarding (#285).
+
+**Storage roots (#286).** Configs, the Makefile and `train_pipeline.sh` name `${BLINKY_DATA}` (warm tier: corpora, labels, RIR, noise) and `${BLINKY_WORK}` (hot tier: `processed_v*`, mel cache, outputs) instead of mounts. Unset, they default to the devtop layout below (`/mnt/storage/blinky-ml-data`, `/mnt/nvme`); a job sets them. `scripts/audio.py:load_config` expands them and refuses any other `${…}`.
+
+The tier design below is the devtop layout as it was until July 2026.
 
 ## TL;DR — where things go
 

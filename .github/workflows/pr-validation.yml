@@ -299,6 +299,15 @@ jobs:
       working-directory: ml-training
       run: python -m analysis.test_shape_features
 
+    - name: Run ML job-readiness unit tests
+      # NpyRows (#287: row reads that leave no page cache, checked against a
+      # memmap) and the config storage roots (#286: no config may hardcode a
+      # machine's mounts). On Linux, so NpyRows takes its pread + fadvise path.
+      working-directory: ml-training
+      run: |
+        pip install pytest
+        python -m pytest -q tests/test_npy_rows.py tests/test_storage_roots.py
+
   blinky-console-tests:
     name: Blinky Console Tests
     runs-on: ubuntu-latest

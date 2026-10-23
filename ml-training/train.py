@@ -620,11 +620,23 @@ def main():
                              "For quick experiments: test new labels/loss without full training from scratch.")
     parser.add_argument("--allow-foreground", action="store_true",
                         help="Allow running outside tmux/screen (not recommended)")
+    parser.add_argument("--job", action="store_true",
+                        help="Run as a platform job (Spark job worker): the job record and its "
+                             "heartbeat supervise the run, so the tmux/screen guard does not apply. "
+                             "Requires BLINKY_JOB_ID, set by the job runner.")
     args = parser.parse_args()
 
     # Guard: training takes hours — must run in tmux/screen to survive session end.
     # Claude Code background tasks die when the session closes, killing training mid-run.
-    if not args.allow_foreground:
+    # A platform job is supervised by its job record instead (#286): --job, and
+    # only with the job id the runner sets, so it can't double as a bypass.
+    if args.job:
+        if not os.environ.get("BLINKY_JOB_ID"):
+            print("ERROR: --job needs BLINKY_JOB_ID (set by the job runner). For an interactive run, "
+                  "use tmux/screen.")
+            sys.exit(1)
+        print(f"Running as platform job {os.environ['BLINKY_JOB_ID']}")
+    elif not args.allow_foreground:
         in_tmux = os.environ.get("TMUX")
         in_screen = os.environ.get("STY")
         if not (in_tmux or in_screen):

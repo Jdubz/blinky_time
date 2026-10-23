@@ -50,7 +50,7 @@ model:
 labels:
   target_type: "binary"
   labels_type: "onset_consensus"
-  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  onset_consensus_dir: "${BLINKY_DATA}/labels/onsets_consensus"
   neighbor_weight: 0.25           # Frames at onset+-1 get 0.25x onset value
   label_shift_frames: 1           # Shift targets 1 frame earlier (causal delay compensation)
   early_neighbor_frames: 0

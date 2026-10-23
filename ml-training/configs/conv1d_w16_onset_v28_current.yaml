@@ -20,7 +20,7 @@ model:
 labels:
   target_type: "binary"
   labels_type: "kick_weighted"
-  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  kick_weighted_dir: "${BLINKY_DATA}/labels/kick_weighted_drums"
   neighbor_weight: 0.25
   label_shift_frames: 1
   hard_binary_threshold: 0.1
@@ -58,7 +58,7 @@ augmentation:
 data:
   # Shared with v28_mel_only and v28_4hybrid — see comment in v28_mel_only.yaml.
   # MemmapBeatDataset slices the 34-col stored features to the first 32 here.
-  processed_dir: "/mnt/nvme/processed_v28"
+  processed_dir: "${BLINKY_WORK}/processed_v28"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v28_current.h"

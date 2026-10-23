@@ -26,7 +26,7 @@ model:
 labels:
   target_type: "binary"
   labels_type: "onset_consensus"
-  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  onset_consensus_dir: "${BLINKY_DATA}/labels/onsets_consensus"
   neighbor_weight: 0.25
   label_shift_frames: 1
   early_neighbor_frames: 0
@@ -47,7 +47,7 @@ training:
   pos_weight: 0
 
 data:
-  processed_dir: "/mnt/nvme/processed_v19"
+  processed_dir: "${BLINKY_WORK}/processed_v19"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v19b.h"

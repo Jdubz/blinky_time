@@ -36,7 +36,7 @@ done
 
 # Outputs land on the NVMe pool (see docs/ML_STORAGE_LAYOUT.md). Override
 # with OUTPUT_DIR=... if you need a different target.
-OUTPUT_DIR="${OUTPUT_DIR:-/mnt/nvme/outputs/$RUN_NAME}"
+OUTPUT_DIR="${OUTPUT_DIR:-${BLINKY_WORK:-/mnt/nvme}/outputs/$RUN_NAME}"
 mkdir -p "$OUTPUT_DIR"  # Create early so tee can write the log from the start
 
 # Read processed_dir from config — fail fast on parse errors
