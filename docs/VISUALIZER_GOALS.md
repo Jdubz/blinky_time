@@ -2,7 +2,7 @@
 
 *Last Updated: October 21, 2026*
 
-> **Detector vs. visuals.** The detector's task is **onset detection**: fire on every percussive event (kick, snare, ghost note, hi-hat), on the beat or not (CLAUDE.md). How much each onset *shows* is a visual decision, made in the generators (strength-scaled bursts, thresholds like Fire's `burstthreshold`). The principles below are about the visuals; they don't mean training or scoring the detector on beats.
+> **Detector vs. visuals.** The detector's task is **drum-hit detection**: fire on kicks and snares, on the beat or not, and not on hi-hats or non-percussive changes (CLAUDE.md). How much each hit *shows* is a later layer: its weight in the learned rhythm pattern (a strength multiplier), then the generators (strength-scaled bursts). The principles below are about the visuals; they don't mean training or scoring the detector on beats.
 
 ## Core Philosophy
 
@@ -72,7 +72,7 @@ Tracks like ambient or sparse techno with low rhythm confidence may actually sho
 
 ### Onset Density Target
 
-For smooth visuals, aim for **2-4 major visual events per bar** (kicks and snares). The detector fires on every percussive onset, about 6.5/s in music on the flux path, hi-hats included. Hi-hats and cymbals should NOT drive big visual events; they create overly busy, jittery effects. Keep them small in the generators (strength scaling, burst thresholds); the flux band weights (`bassflux`/`midflux`/`highflux`) and the tempo-adaptive cooldown also shape what fires. Don't tune the detector to drop real onsets.
+For smooth visuals, aim for **2-4 major visual events per bar** (kicks and snares). The flux detector (SuperFlux, #280) fires about 4.5/s in music; about 56% of its onsets land on a kick or snare, and the rest are mostly other percussive onsets, hi-hats included. Hi-hats and cymbals should NOT drive big visual events; they create overly busy, jittery effects. Keep them small in the generators (strength scaling, burst thresholds). `fluxdelta` trades recall for on-drum share. Don't tune the detector to drop real kicks and snares.
 
 ### Testing Priorities (Ordered by Visual Impact)
 

@@ -2,17 +2,21 @@
 
 // Onset detectors behind one interface (#280).
 //
-// A detector turns each spectral frame into onset EVIDENCE: an activation,
-// 0-1, on one scale whichever detector produced it. Everything after that is
-// shared and detector-agnostic (AudioTracker::pickOnset): local-max peak
-// picking, the gates (presence, cooldown, bass ratio, rhythm-pattern bias,
-// crest, beat grid), the feature snapshot, and every output (onset strength,
-// pulse envelope, onset density, rhythm timing). Swapping the detector
-// changes only the evidence, never how it is used.
+// A detector turns each spectral frame into onset EVIDENCE: the value of its
+// onset detection function (ODF). Everything after that is shared and
+// detector-agnostic (AudioTracker::pickOnset): the online peak picker of
+// Boeck, Krebs & Schedl (ISMIR 2012), the rhythm-pattern bias, the feature
+// snapshot, and every output (onset strength, pulse envelope, onset
+// density, rhythm timing). Swapping the
+// detector changes only the evidence and the detector's picker constants,
+// never how they are used.
 //
-// The activation scale is the NN's: a probability-like value. On edm/ the
-// NN's activation at its detections is p5 0.34, p50 0.65, p95 0.97, and flux
-// is mapped onto that distribution (FluxOnsetDetector::activation()).
+// Per detector: the ODF, the picker's delta, whether the threshold is
+// relative to the ODF's recent mean (averageFrames), and how an ODF value
+// maps onto the 0-1 activation scale. That scale is the NN's: a
+// probability-like value; flux is mapped onto it (FluxOnsetDetector::
+// activation()). Strength at detections on edm/ (host, 0 dB), p5/p50/p95:
+// flux 0.38 / 0.69 / 0.88, NN 0.57 / 0.74 / 0.95.
 
 #include <math.h>
 #include "SharedSpectralAnalysis.h"
@@ -22,11 +26,9 @@
 // persisted settings surface: ConfigStorage, SerialConsole, tests/tracker)
 // and are passed in, so a detector holds only its own running state.
 struct OnsetDetectorParams {
-    // Spectral flux
-    float pulseThresholdMult;  // threshold = adaptive baseline x this
-    float fluxOnsetFloor;      // threshold never below this (raw flux units)
-    float baselineFastDrop;    // baseline EMA rate when flux is below it
-    float baselineSlowRise;    // baseline EMA rate when flux is above it
+    // Spectral flux (SuperFlux)
+    float fluxDelta;           // picker delta above the ODF's moving average
+    uint8_t fluxAverageFrames; // moving-average window before the frame (W3)
     // NN
     float pulseOnsetFloor;     // activation threshold for peak picking
     bool nnProfile;            // FrameOnsetNN timing profile
@@ -37,7 +39,7 @@ struct OnsetEvidence {
     // skipped it to bound CPU per update). The picker then does not step:
     // re-feeding a held value would hide real peaks.
     bool fresh;
-    float activation;  // 0-1, the onset API scale
+    float odf;  // the detector's onset detection function, >= 0
 };
 
 class OnsetDetector {
@@ -49,57 +51,53 @@ public:
     // once per AudioTracker::update()).
     virtual OnsetEvidence process(const SharedSpectralAnalysis& spectral,
                                   const OnsetDetectorParams& p, bool mayRunExpensive) = 0;
-    // Peak-picking threshold in activation space: an activation peak must
-    // exceed this (before the shared gates scale it) to be an onset.
-    virtual float threshold(const OnsetDetectorParams& p) const = 0;
+    // Picker threshold: the ODF must reach (mean of the last averageFrames
+    // frames and this one) + delta, the delta scaled by the shared gates.
+    // averageFrames 0 = no moving average (a fixed threshold, delta).
+    virtual float delta(const OnsetDetectorParams& p) const = 0;
+    virtual int averageFrames(const OnsetDetectorParams& p) const = 0;
+    // The 0-1 activation of an ODF value, given the moving average and the
+    // ungated delta: the onset strength and the pulse-envelope input.
+    virtual float activation(float odf, float mean, float delta) const = 0;
 };
 
-// --- Spectral flux ---------------------------------------------------------
-// Band-weighted SuperFlux-style flux (SharedSpectralAnalysis) against an
-// adaptive, floor-tracking baseline. Activation = how far the flux is above
-// its adaptive threshold, mapped onto the NN's scale.
+// --- Spectral flux (SuperFlux) ----------------------------------------------
+// SuperFlux (Boeck & Widmer, DAFx-13; SharedSpectralAnalysis::getSuperFlux)
+// with the online picker's relative threshold: an onset reaches the mean of
+// the last 100 ms (W3 = 6 frames at 62.5 fps) plus delta. edm/ host harness
+// (#280; kick + snare labels, +-50 ms, 0 dB): drum F 0.648, on-drum 55%,
+// kick recall 78%, snare recall 81%, 4.8 det/s, and 0 det/s on steady
+// noise; the band-weighted flux with adaptive baseline, cooldown and 96 ms
+// window: 0.580 / 48% / 79% / 59% / 5.2, and 3-6 det/s on noise.
 class FluxOnsetDetector : public OnsetDetector {
 public:
-    // Activation at the adaptive threshold: the picker's threshold, so a
-    // flux peak is an onset exactly when it exceeds the adaptive threshold.
+    // edm/ audit sweep (lambda 100): drum F 0.644-0.648 for delta 8-14;
+    // every leave-one-track-out fold chose 11 or 12.
+    static constexpr float DELTA_DEFAULT = 11.0f;
+    static constexpr uint8_t AVERAGE_FRAMES_DEFAULT = 6;  // 96 ms (Boeck 2012: 100 ms)
+
+    // Activation at the threshold (margin = delta) and its growth above it:
+    // 1 - 0.7 * r^-0.9, r = (odf - mean) / delta (0.30 at r = 1, -> 1 far
+    // above). Below the threshold, linear to 0, so activation is continuous.
     static constexpr float ACTIVATION_AT_THRESHOLD = 0.30f;
     static constexpr float ACTIVATION_EXPONENT = 0.90f;
-
-    // flux / adaptive threshold -> 0-1. At or above the threshold:
-    // 1 - 0.7 * ratio^-0.9 (0.30 at the threshold, -> 1 far above it).
-    // Below it, linear to 0, so activation is continuous. Fitted so flux
-    // strengths at detections match the NN's distribution (edm/, host
-    // harness, 13-14k detections each):
-    //   NN strength       p5 0.34  p25 0.47  p50 0.65  p75 0.87  p95 0.97
-    //   flux ratio        p5 1.10  p25 1.59  p50 2.63  p75 5.29  p95 18.4
-    //   mapped flux       p5 0.36  p25 0.55  p50 0.71  p75 0.85  p95 0.95
-    static float activation(float ratio) {
-        if (ratio <= 1.0f) return ACTIVATION_AT_THRESHOLD * (ratio > 0.0f ? ratio : 0.0f);
-        return 1.0f - (1.0f - ACTIVATION_AT_THRESHOLD) * powf(ratio, -ACTIVATION_EXPONENT);
+    static float activationOfRatio(float r) {
+        if (r <= 1.0f) return ACTIVATION_AT_THRESHOLD * (r > 0.0f ? r : 0.0f);
+        return 1.0f - (1.0f - ACTIVATION_AT_THRESHOLD) * powf(r, -ACTIVATION_EXPONENT);
     }
 
     const char* name() const override { return "spectral-flux"; }
 
     OnsetEvidence process(const SharedSpectralAnalysis& spectral,
-                          const OnsetDetectorParams& p, bool) override {
-        const float signal = spectral.getSpectralFlux();
-        if (signal < baseline_) {
-            baseline_ += (signal - baseline_) * p.baselineFastDrop;
-        } else {
-            baseline_ += (signal - baseline_) * p.baselineSlowRise;
-        }
-        float thr = baseline_ * p.pulseThresholdMult;
-        if (thr < p.fluxOnsetFloor) thr = p.fluxOnsetFloor;
-        // A zero threshold (floor 0, silent baseline) is passed by any
-        // signal at all, so any signal is full evidence.
-        const float a = (thr > 0.0f) ? activation(signal / thr) : (signal > 0.0f ? 1.0f : 0.0f);
-        return OnsetEvidence{true, a};
+                          const OnsetDetectorParams&, bool) override {
+        return OnsetEvidence{true, spectral.getSuperFlux()};
     }
 
-    float threshold(const OnsetDetectorParams&) const override { return ACTIVATION_AT_THRESHOLD; }
-
-private:
-    float baseline_ = 0.0f;  // floor-tracking baseline of the flux
+    float delta(const OnsetDetectorParams& p) const override { return p.fluxDelta; }
+    int averageFrames(const OnsetDetectorParams& p) const override { return p.fluxAverageFrames; }
+    float activation(float odf, float mean, float delta) const override {
+        return activationOfRatio((odf - mean) / delta);
+    }
 };
 
 // --- Onset NN ----------------------------------------------------------------
@@ -130,7 +128,11 @@ public:
         return OnsetEvidence{true, a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a)};
     }
 
-    float threshold(const OnsetDetectorParams& p) const override { return p.pulseOnsetFloor; }
+    // The activation is already a probability: a fixed threshold
+    // (pulseOnsetFloor), no moving average.
+    float delta(const OnsetDetectorParams& p) const override { return p.pulseOnsetFloor; }
+    int averageFrames(const OnsetDetectorParams&) const override { return 0; }
+    float activation(float odf, float, float) const override { return odf; }
 
 private:
     Model model_;

@@ -369,14 +369,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 100;
     data_.tracker.activationThreshold = 0.3f;
-    data_.tracker.pulseOnsetFloor = 0.2f;
+    data_.tracker.pulseOnsetFloor = AudioTracker::PULSE_ONSET_FLOOR_DEFAULT;  // v99
     data_.tracker.odfContrast = 1.25f;
-    data_.tracker.pulseThresholdMult = AudioTracker::PULSE_THRESHOLD_MULT_DEFAULT;
-    data_.tracker.pulseMinLevel = 0.03f;
-    data_.tracker.fluxOnsetFloor = AudioTracker::FLUX_ONSET_FLOOR_DEFAULT;  // v97
-    data_.tracker.crestGateMin = 0.0f;  // v95: disabled by default; sweep to tune
-    data_.tracker.baselineFastDrop = 0.05f;
-    data_.tracker.baselineSlowRise = 0.005f;
+    data_.tracker.fluxDelta = FluxOnsetDetector::DELTA_DEFAULT;  // v99
     data_.tracker.odfPeakHoldDecay = 0.85f;
     data_.tracker.energyMicWeight = 0.30f;
     data_.tracker.energyMelWeight = 0.30f;
@@ -971,14 +966,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         }
         validateFloat(data_.tracker.tempoSmoothing, 0.5f, 0.99f, F("tracker.tempoSmooth"));
         validateFloat(data_.tracker.activationThreshold, 0.0f, 1.0f, F("tracker.actThresh"));
-        validateFloat(data_.tracker.pulseOnsetFloor, 0.0f, 0.5f, F("tracker.pulseOnsetFloor"));
+        validateFloat(data_.tracker.pulseOnsetFloor, 0.0f, 1.0f, F("tracker.pulseOnsetFloor"));
         validateFloat(data_.tracker.odfContrast, 0.1f, 4.0f, F("tracker.odfContrast"));
-        validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
-        validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
-        validateFloat(data_.tracker.fluxOnsetFloor, 0.0f, 0.5f, F("tracker.fluxOnsetFloor"));
-        validateFloat(data_.tracker.crestGateMin, 0.0f, 20.0f, F("tracker.crestGateMin"));
-        validateFloat(data_.tracker.baselineFastDrop, 0.01f, 0.2f, F("tracker.blFastDrop"));
-        validateFloat(data_.tracker.baselineSlowRise, 0.001f, 0.05f, F("tracker.blSlowRise"));
+        validateFloat(data_.tracker.fluxDelta, 0.5f, 60.0f, F("tracker.fluxDelta"));
         validateFloat(data_.tracker.odfPeakHoldDecay, 0.5f, 0.99f, F("tracker.odfPkDecay"));
         validateFloat(data_.tracker.energyMicWeight, 0.0f, 1.0f, F("tracker.eMicW"));
         validateFloat(data_.tracker.energyMelWeight, 0.0f, 1.0f, F("tracker.eMelW"));
@@ -1009,12 +999,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->activationThreshold = data_.tracker.activationThreshold;
         tracker->pulseOnsetFloor = data_.tracker.pulseOnsetFloor;
         tracker->odfContrast = data_.tracker.odfContrast;
-        tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
-        tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
-        tracker->fluxOnsetFloor = data_.tracker.fluxOnsetFloor;  // v97
-        tracker->crestGateMin = data_.tracker.crestGateMin;  // v95
-        tracker->baselineFastDrop = data_.tracker.baselineFastDrop;
-        tracker->baselineSlowRise = data_.tracker.baselineSlowRise;
+        tracker->fluxDelta = data_.tracker.fluxDelta;  // v99
         tracker->odfPeakHoldDecay = data_.tracker.odfPeakHoldDecay;
         tracker->energyMicWeight = data_.tracker.energyMicWeight;
         tracker->energyMelWeight = data_.tracker.energyMelWeight;
@@ -1112,12 +1097,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.activationThreshold = tracker->activationThreshold;
         data_.tracker.pulseOnsetFloor = tracker->pulseOnsetFloor;
         data_.tracker.odfContrast = tracker->odfContrast;
-        data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
-        data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
-        data_.tracker.fluxOnsetFloor = tracker->fluxOnsetFloor;  // v97
-        data_.tracker.crestGateMin = tracker->crestGateMin;  // v95
-        data_.tracker.baselineFastDrop = tracker->baselineFastDrop;
-        data_.tracker.baselineSlowRise = tracker->baselineSlowRise;
+        data_.tracker.fluxDelta = tracker->fluxDelta;  // v99
         data_.tracker.odfPeakHoldDecay = tracker->odfPeakHoldDecay;
         data_.tracker.energyMicWeight = tracker->energyMicWeight;
         data_.tracker.energyMelWeight = tracker->energyMelWeight;

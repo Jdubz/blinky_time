@@ -80,6 +80,19 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     return true;
 }
 
+OnsetDetectorParams AudioTracker::detectorParams() const {
+    return OnsetDetectorParams{fluxDelta, fluxAverageFrames, pulseOnsetFloor, nnProfile};
+}
+
+bool AudioTracker::selectOnsetDetector(const char* name) {
+    if (strcmp(name, fluxDetector_.name()) == 0) { detector_ = &fluxDetector_; return true; }
+    if (strcmp(name, nnDetector_.name()) == 0 && nnDetector_.model().isReady()) {
+        detector_ = &nnDetector_;
+        return true;
+    }
+    return false;
+}
+
 void AudioTracker::end() {
     mic_.end();
 }
@@ -235,16 +248,11 @@ void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     // --- Onset evidence for this frame (the detector in use) ---
     // Only onset detection reads it; the rhythm buffers below take bass flux,
     // bass energy and mic level whichever detector runs (#155).
-    const OnsetDetectorParams params{pulseThresholdMult, fluxOnsetFloor, baselineFastDrop,
-                                     baselineSlowRise, pulseOnsetFloor, nnProfile};
+    const OnsetDetectorParams params = detectorParams();
     const OnsetEvidence ev = detector_->process(spectral_, params, mayRunExpensive);
-    if (ev.fresh) {
-        onsetActivation_ = ev.activation;
-        if (ev.activation > activationPeak_) activationPeak_ = ev.activation;
-    }
 
-    // --- Discrete onset: shared peak picking and gates ---
-    float pulse = pickOnset(ev);
+    // --- Discrete onset + activation: shared peak picking and gates ---
+    float pulse = pickOnset(ev, params);
     lastFramePulse_ = pulse;
     if (pulse > lastPulseStrength_) lastPulseStrength_ = pulse;
     if (pulse > 0.0f) onsetCountInWindow_++;  // onset density counts detected onsets
@@ -1107,18 +1115,18 @@ float AudioTracker::patternValueAt(float phase) const {
 }
 
 // ============================================================================
-// Pulse Detection (Floor-Tracking Baseline)
+// Onset Picking (online peak picker, Boeck et al. 2012)
 // ============================================================================
 
-float AudioTracker::pickOnset(const OnsetEvidence& ev) {
+float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams& params) {
     // Runs exactly once per spectral frame (processFrame), for whichever
     // detector produced `ev` (OnsetDetector.h): one peak picker and one set
     // of gates, so swapping the detector changes only the evidence.
     // (Pre-b208 this ran once per loop iteration: duplicate samples failed
     // `prev > prevPrev` and real peaks were dropped above 62.5 fps.)
 
-    // Spectral-flux peak hold: energy synthesis and the presence gate, both
-    // detector-independent. Tracked on every frame.
+    // Spectral-flux peak hold for energy synthesis (detector-independent).
+    // Tracked on every frame.
     const float flux = spectral_.getSpectralFlux();
     if (flux > odfPeakHold_) {
         odfPeakHold_ = flux;
@@ -1126,14 +1134,7 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    // Tempo-adaptive cooldown, counted in frames (the frame clock), not ms
-    float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
-    float cooldownMs = 40.0f + 110.0f * (1.0f - bpmNorm);
-    uint32_t cooldownFrames = static_cast<uint32_t>(cooldownMs * OSS_FRAME_RATE / 1000.0f);
-
-    float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
     float pulseStrength = 0.0f;
-    bool cooldownOk = (frameClock_ - lastPulseFrame_) > cooldownFrames;
 
     if (!ev.fresh) {
         // No new evidence this frame (an expensive detector skipped it):
@@ -1142,17 +1143,7 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         return 0.0f;
     }
 
-    // --- Shared gates, as threshold multipliers ---
-    // Bass-ratio gate: kicks/snares carry strong bass flux; chord changes and
-    // synth stabs are flat or mid-heavy. Full boost below a third.
-    static constexpr float bassGateMinRatio = 1.0f / 3.0f;
-    float bassFlux = spectral_.getBassFlux();
-    float broadbandFlux = spectral_.getSpectralFlux();
-    // In near-silence (broadbandFlux < 0.001), neutral ratio so the gate
-    // doesn't suppress onsets at the start of music.
-    float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
-    float bassGate = 1.0f + onsetBassGate * clampf(1.0f - bassRatio / bassGateMinRatio, 0.0f, 1.0f);
-
+    // --- Shared gate, as a delta multiplier ---
     // Rhythm-pattern bias: while the PLP pattern is confident, raise the
     // threshold at positions where it predicts no hit. Soft (scaled by
     // confidence and pattern level), never a hard gate; onsetPatternBias 0
@@ -1166,66 +1157,51 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         patternBias = 1.0f + suppressAmount;
     }
 
-    const float a = ev.activation;
-    float effectiveFloor = detector_->threshold(OnsetDetectorParams{
-        pulseThresholdMult, fluxOnsetFloor, baselineFastDrop, baselineSlowRise,
-        pulseOnsetFloor, nnProfile}) * bassGate * patternBias;
+    // --- Online peak picking (Boeck, Krebs & Schedl 2012; AudioTracker.h) ---
+    // On the detector's ODF at this frame, t:
+    //   max:  odf[t] >= odf[t-1 .. t-W1]
+    //   mean: odf[t] >= mean(odf[t-W3 .. t]) + delta (W3 = 0: delta alone)
+    //   gap:  more than W5 frames since the last onset
+    const float o = ev.odf;
+    int w1 = onsetMaxFrames;
+    if (w1 > ONSET_HISTORY_MAX) w1 = ONSET_HISTORY_MAX;
+    int w3 = detector_->averageFrames(params);
+    if (w3 > ONSET_HISTORY_MAX) w3 = ONSET_HISTORY_MAX;
+    BLINKY_ASSERT_ONCE(onsetMaxFrames <= ONSET_HISTORY_MAX && detector_->averageFrames(params) <= ONSET_HISTORY_MAX,
+                       "onset picker window exceeds ONSET_HISTORY_MAX");
 
-    // Local maximum: prev frame rose above the frames before it (t-2 ...
-    // t-1-onsetPeakWindow), is not exceeded by t, and is above the floor.
-    // `>=` on the right fires a flat top (INT8 NN output often repeats a
-    // value) on its FIRST frame; the strict `>` on the left stops the
-    // plateau's second frame from firing again.
-    int window = onsetPeakWindow;
-    if (window < 1) window = 1;
-    if (window > ONSET_PEAK_WINDOW_MAX) window = ONSET_PEAK_WINDOW_MAX;
-    bool risesOverWindow = (prevSignal_ > prevPrevSignal_);
-    for (int k = 1; k < window && risesOverWindow; k++) {
-        risesOverWindow = (prevSignal_ > peakHistory_[k]);
+    bool isMax = true;
+    for (int k = 0; k < w1 && isMax; k++) isMax = (o >= odfHistory_[k]);
+    float mean = 0.0f;
+    if (w3 > 0) {
+        float sum = o;
+        for (int k = 0; k < w3; k++) sum += odfHistory_[k];
+        mean = sum / static_cast<float>(w3 + 1);
     }
-    bool isLocalMax = risesOverWindow &&
-                      (prevSignal_ >= a) &&
-                      (prevSignal_ > effectiveFloor);
+    const float delta = detector_->delta(params);
+    const float threshold = mean + delta * patternBias;
+    const bool gapOk = (frameClock_ - lastPulseFrame_) > onsetMinGapFrames;
 
-    // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
-    // tonal impulses lower. crestGateMin 0 = off (default).
-    bool crestOk = (crestGateMin <= 0.0f) ||
-                   (spectral_.getRawCrest() >= crestGateMin);
+    // Activation against the ungated threshold: onset strength and the
+    // pulse envelope, on the same 0-1 scale whichever detector runs.
+    const float act = clampf(detector_->activation(o, mean, delta), 0.0f, 1.0f);
+    onsetActivation_ = act;
+    if (act > activationPeak_) activationPeak_ = act;
 
-    // b142 — PLP pattern AND-gate (off by default, beatGridPatternMin 0):
-    // reject candidates where the pattern predicts near-zero pulse. Guarded
-    // by rhythm strength so it can't suppress during warmup or sparse content.
-    bool beatGridOk = true;
-    if (beatGridPatternMin > 0.0f &&
-        periodicityStrength_ > beatGridMinRhythmStrength) {
-        beatGridOk = (plpPulseValue_ >= beatGridPatternMin);
-    }
-
-    // Re-arm (onsetRearm 0 = always armed).
-    const bool armedOk = (onsetRearm <= 0.0f) || onsetArmed_;
-
-    if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk &&
-        armedOk) {
-        pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
-        lastPulseFrame_ = frameClock_ - 1;  // Peak was the previous frame
-        onsetArmed_ = false;
+    if (isMax && o > 0.0f && o >= threshold && gapOk) {
+        pulseStrength = act;
+        lastPulseFrame_ = frameClock_;  // no look-ahead: this frame is the peak
 
         // T1.4/T1.5 — gate state + spectral features at every onset, for
         // offline TP/FP analysis. Bits are "which gate came close":
-        //   bit 0 — bass gate raised the threshold
         //   bit 1 — pattern bias raised the threshold (off-pattern position)
-        //   bit 2 — crest gate marginal (rawCrest within 1.5x of threshold)
-        //   bit 3 — beat-grid gate marginal (pattern value within 0.1)
-        // Features are read at the frame after the peak (detection time).
+        //   bits 0, 2, 3 — bass-ratio / crest / beat-grid gates, deleted
+        //               with the online picker (#280); never set
         lastPulseGateMask_ = 0;
-        if (bassGate > 1.05f) lastPulseGateMask_ |= 0x01;
         if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
-        if (crestGateMin > 0.0f && spectral_.getRawCrest() < crestGateMin * 1.5f) {
-            lastPulseGateMask_ |= 0x04;
-        }
-        if (beatGridPatternMin > 0.0f && plpPulseValue_ < beatGridPatternMin + 0.1f) {
-            lastPulseGateMask_ |= 0x08;
-        }
+        // Bass share of the weighted flux: a feature only (the gate is gone).
+        const float broadbandFlux = spectral_.getSpectralFlux();
+        const float bassRatio = (broadbandFlux > 0.001f) ? spectral_.getBassFlux() / broadbandFlux : 0.5f;
         lastPulseFeatures_.flatness = spectral_.getRawFlatness();
         lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
         lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
@@ -1237,13 +1213,8 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev) {
         lastPulseFeatures_.plpConfidence = plpConfidence_;
     }
 
-    // Re-arm once the activation has fallen below onsetRearm x threshold.
-    if (!onsetArmed_ && a < effectiveFloor * onsetRearm) onsetArmed_ = true;
-
-    for (int k = ONSET_PEAK_WINDOW_MAX - 1; k > 0; k--) peakHistory_[k] = peakHistory_[k - 1];
-    peakHistory_[0] = prevSignal_;  // becomes t-2 for the next frame
-    prevPrevSignal_ = prevSignal_;
-    prevSignal_ = a;
+    for (int k = ONSET_HISTORY_MAX - 1; k > 0; k--) odfHistory_[k] = odfHistory_[k - 1];
+    odfHistory_[0] = o;
 
     return pulseStrength;
 }
@@ -1469,7 +1440,8 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // (the slowly varying inputs self-correlate at beat lags: rhythm read
     // 0.45-0.77 after music stopped), and there is no level threshold to
     // tell noise from music on this mic. Onsets are the evidence: the flux
-    // detector fires ~6.5/s in music and not at all on room noise. After
+    // detector fires ~4.5/s in music (edm/) and not at all on steady noise
+    // (white / pink, -70 to -30 dBFS; host harness, #280). After
     // RHYTHM_HOLD_S without an onset the rhythm outputs fade over
     // RHYTHM_FADE_S; the next onset restores them at once (no added delay).
     // Tempo/phase state is kept, so a breakdown can't wipe it (#172).

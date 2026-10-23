@@ -309,54 +309,31 @@ void SerialConsole::registerTrackerSettings() {
         "Spectral flux contrast exponent (power-law sharpening)", 0.1f, 4.0f, onParamChanged);
 
     // Pulse detection
-    settings_.registerFloat("pulsethreshmult", &audioCtrl_->pulseThresholdMult, "tracker",
-        "Pulse baseline threshold multiplier", 1.0f, 5.0f, onParamChanged);
-    settings_.registerFloat("pulseminlevel", &audioCtrl_->pulseMinLevel, "tracker",
-        "Minimum mic level for pulse detection", 0.0f, 0.2f, onParamChanged);
 
     // Pulse detection tuning
     settings_.registerFloat("pulseonsetfloor", &audioCtrl_->pulseOnsetFloor, "tracker",
         "NN activation threshold for peak-picking", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("fluxonsetfloor", &audioCtrl_->fluxOnsetFloor, "tracker",
-        "Spectral-flux pulse floor (used when the NN is off)", 0.0f, 0.5f, onParamChanged);
-
-    // Crest-factor gate (Phase 2a / Phase 4 Path A).
-    // Suppresses onsets (either detector) when per-frame crest factor is below
-    // this value. 0 = disabled. See AudioTracker.h and docs/HYBRID_FEATURE_ANALYSIS_PLAN.md.
-    settings_.registerFloat("crestgatemin", &audioCtrl_->crestGateMin, "tracker",
-        "Crest-factor gate minimum (0=disabled)", 0.0f, 20.0f, onParamChanged);
+    settings_.registerFloat("fluxdelta", &audioCtrl_->fluxDelta, "tracker",
+        "Spectral-flux picker delta above the SuperFlux moving average", 0.5f, 60.0f,
+        onParamChanged);
 
     // Shared onset gates (AudioTracker::pickOnset, both detectors). Runtime
     // only: not persisted, so a test setting is gone after a reboot.
-    settings_.registerFloat("onsetbassgate", &audioCtrl_->onsetBassGate, "tracker",
-        "Onset bass-ratio gate: max threshold boost when bass is weak (0=off)", 0.0f, 2.0f,
-        nullptr, false);
     settings_.registerFloat("onsetpatternbias", &audioCtrl_->onsetPatternBias, "tracker",
         "Onset rhythm-pattern bias: max threshold boost off-pattern (0=off)", 0.0f, 2.0f,
         nullptr, false);
-    settings_.registerFloat("onsetrearm", &audioCtrl_->onsetRearm, "tracker",
-        "Onset re-arm: activation must fall below this x threshold between onsets (0=off)",
-        0.0f, 1.5f, nullptr, false);
-    settings_.registerUint8("onsetpeakwindow", &audioCtrl_->onsetPeakWindow, "tracker",
-        "Onset peak window: peak must exceed this many previous frames", 1,
-        AudioTracker::ONSET_PEAK_WINDOW_MAX, nullptr, false);
-
-    // PLP beat-grid pattern AND-gate (b142+).
-    // Suppresses onsets when plpPulseValue_ (epoch-fold pattern amplitude
-    // at current phase) is below this threshold. 0 = disabled. Guarded by
-    // rhythmStrength > beatgridmin_rs so ambient/sparse content is unaffected.
-    settings_.registerFloat("beatgridmin", &audioCtrl_->beatGridPatternMin, "tracker",
-        "PLP pattern-value AND-gate minimum (0=disabled)", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("beatgridmin_rs", &audioCtrl_->beatGridMinRhythmStrength, "tracker",
-        "rhythmStrength guard for beat-grid gate", 0.0f, 1.0f, onParamChanged);
+    // Online peak picker windows (Boeck 2012; AudioTracker.h). Runtime only.
+    settings_.registerUint8("onsetmaxframes", &audioCtrl_->onsetMaxFrames, "tracker",
+        "Onset picker: peak must be the max of this many previous frames (W1)", 0,
+        AudioTracker::ONSET_HISTORY_MAX, nullptr, false);
+    settings_.registerUint8("onsetmingap", &audioCtrl_->onsetMinGapFrames, "tracker",
+        "Onset picker: minimum frames between onsets (W5)", 0, 30, nullptr, false);
+    settings_.registerUint8("fluxavgframes", &audioCtrl_->fluxAverageFrames, "tracker",
+        "Spectral-flux picker: moving-average frames before the peak (W3)", 0,
+        AudioTracker::ONSET_HISTORY_MAX, nullptr, false);
 
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 
-    // ODF baseline tracking
-    settings_.registerFloat("blfastdrop", &audioCtrl_->baselineFastDrop, "tracker",
-        "ODF baseline fast drop rate", 0.01f, 0.2f, onParamChanged);
-    settings_.registerFloat("blslowrise", &audioCtrl_->baselineSlowRise, "tracker",
-        "ODF baseline slow rise rate", 0.001f, 0.05f, onParamChanged);
     settings_.registerFloat("odfpkdecay", &audioCtrl_->odfPeakHoldDecay, "tracker",
         "ODF peak-hold decay rate", 0.5f, 0.99f, onParamChanged);
 
@@ -1310,18 +1287,14 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->plpVarianceSens = 0.0f;
         audioCtrl_->plpDecayRate = 0.2f;
         // Pulse detection
-        audioCtrl_->pulseThresholdMult = AudioTracker::PULSE_THRESHOLD_MULT_DEFAULT;
-        audioCtrl_->pulseMinLevel = 0.03f;
-        audioCtrl_->pulseOnsetFloor = 0.2f;
-        audioCtrl_->fluxOnsetFloor = AudioTracker::FLUX_ONSET_FLOOR_DEFAULT;
-        audioCtrl_->baselineFastDrop = 0.05f;
-        audioCtrl_->baselineSlowRise = 0.005f;
+        audioCtrl_->pulseOnsetFloor = AudioTracker::PULSE_ONSET_FLOOR_DEFAULT;
+        audioCtrl_->fluxDelta = FluxOnsetDetector::DELTA_DEFAULT;
         audioCtrl_->odfPeakHoldDecay = 0.85f;
         // Shared onset picker + gates (runtime only, OnsetDetector.h)
-        audioCtrl_->onsetBassGate = AudioTracker::ONSET_BASS_GATE_DEFAULT;
         audioCtrl_->onsetPatternBias = AudioTracker::ONSET_PATTERN_BIAS_DEFAULT;
-        audioCtrl_->onsetRearm = 0.0f;
-        audioCtrl_->onsetPeakWindow = AudioTracker::ONSET_PEAK_WINDOW_DEFAULT;
+        audioCtrl_->onsetMaxFrames = AudioTracker::ONSET_MAX_FRAMES_DEFAULT;
+        audioCtrl_->onsetMinGapFrames = AudioTracker::ONSET_MIN_GAP_FRAMES_DEFAULT;
+        audioCtrl_->fluxAverageFrames = FluxOnsetDetector::AVERAGE_FRAMES_DEFAULT;
         // Energy synthesis
         audioCtrl_->energyMicWeight = 0.30f;
         audioCtrl_->energyMelWeight = 0.30f;

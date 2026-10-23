@@ -33,12 +33,14 @@ PDM Microphone (16kHz, mono)
    SharedSpectralAnalysis (FFT-256, 62.5 Hz frames)
    ├── Soft-knee compressor (Giannoulis 2012)
    ├── 50 mel bands (30-8000 Hz) + per-band whitening
-   └── Spectral flux (SuperFlux max filter, band-weighted bass/mid/high)
+   ├── SuperFlux (pre-compressor, 78-band log filterbank, unweighted): onsets
+   └── Band-weighted spectral flux (bass/mid/high): energy synthesis
         |
         ├── [ONSET PATH]  (devices: spectral flux; the onset NN is compiled out)
-        │   Flux vs adaptive baseline × pulsethreshmult, floor fluxonsetfloor
-        │   → activation 0-1 (same scale as the NN; audio/OnsetDetector.h)
-        │   → shared picker: local max × bass gate × pattern bias (AudioTracker::pickOnset)
+        │   SuperFlux ODF (audio/OnsetDetector.h)
+        │   → shared online picker (Böck 2012): max of 30 ms, ≥ mean of 100 ms + fluxdelta
+        │     (× pattern bias), 30 ms minimum gap (AudioTracker::pickOnset)
+        │   → activation 0-1 (same scale as the NN)
         │   → onset event, pulse envelope, onset density (all from the activation)
         │   → Energy synthesis (mic level + bass mel + flux peak-hold)
         │
@@ -89,7 +91,7 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 
 # On device, from a workstation (device on this machine's USB, music from its speakers)
 python tools/device_eval.py --port COM3                       # whole corpus, ~13 min
-python tools/device_eval.py --port COM3 --tracks trance-party --commands "set fluxonsetfloor 0.02"
+python tools/device_eval.py --port COM3 --tracks trance-party --commands "set fluxdelta 14"
 
 # On device: validation suite via the server API (bench test devices only)
 curl -X POST http://blinkyhost.local:8420/api/test/validate \
@@ -99,7 +101,7 @@ curl -X POST http://blinkyhost.local:8420/api/test/validate \
 # On device: parameter sweep via the server API
 curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["D1"], "param_name": "fluxonsetfloor", "values": [0.005, 0.01, 0.02], "track_dir": "/path/to/music/edm"}'
+  -d '{"device_ids": ["D1"], "param_name": "fluxdelta", "values": [8, 11, 14], "track_dir": "/path/to/music/edm"}'
 
 # Via MCP tools (poll results with check_test_result(job_id))
 run_test(port: "DEVICE_ID")
@@ -110,7 +112,7 @@ monitor_audio(port: "DEVICE_ID", duration_ms: 3000)
 monitor_transients(port: "DEVICE_ID", duration_ms: 5000)
 ```
 
-The harness takes optional overrides as positional arguments (`plpPhaseGain`, `tempoPriorWidth`, `syncopatedCandidateScale`, `pulseOnsetFloor`, `fluxOnsetFloor`, `pulseMinLevel`); pass them through `run_tracker_eval.py --harness-args`. Note that the harness starts from the `AudioTracker.h` member defaults, not the `ConfigStorage.cpp` factory values (they differ for `pulsethreshmult`: 1.5 vs 2.0).
+The harness takes optional overrides as positional arguments (`plpPhaseGain`, `tempoPriorWidth`, `syncopatedCandidateScale`, `pulseOnsetFloor`, `fluxDelta`); pass them through `run_tracker_eval.py --harness-args`. Picker options go through `--harness-opt` (`--onset-max-frames`, `--onset-min-gap`, `--flux-avg-frames`, `--flux-lambda`, `--onset-pattern-bias`). The harness starts from the `AudioTracker.h` member defaults; the `ConfigStorage.cpp` factory values use the same constants.
 
 ### Testing Methodology
 
@@ -143,19 +145,16 @@ Every parameter below is a serial setting: `set <name> <value>`, `get <name>`, `
 
 | Command | Default | Range | Saved | Description |
 |---------|---------|-------|-------|-------------|
-| `fluxonsetfloor` | 0.01 | 0.0-0.5 | yes | Spectral-flux pulse floor (device onset path) |
-| `pulsethreshmult` | 2.0 | 1.0-5.0 | yes | Flux baseline multiplier for a pulse |
-| `pulseminlevel` | 0.03 | 0.0-0.2 | yes | Minimum signal presence (flux peak-hold or bass energy) to fire |
-| `blfastdrop` | 0.05 | 0.01-0.2 | yes | Baseline fast drop rate |
-| `blslowrise` | 0.005 | 0.001-0.05 | yes | Baseline slow rise rate |
+| `fluxdelta` | 11 | 0.5-60 | yes | Flux onset threshold: SuperFlux must exceed its 100 ms mean by this (device onset path) |
+| `fluxavgframes` | 6 | 0-16 | runtime | Flux picker moving-average frames (W3, 96 ms) |
+| `onsetmaxframes` | 2 | 0-16 | runtime | Picker: onset must be the max of this many previous frames (W1, 32 ms) |
+| `onsetmingap` | 2 | 0-30 | runtime | Picker: minimum frames between onsets (W5, 32 ms) |
+| `onsetpatternbias` | 0.3 | 0.0-2.0 | runtime | Rhythm-pattern bias: max delta boost off-pattern, 0 = off |
 | `odfpkdecay` | 0.85 | 0.5-0.99 | yes | Flux peak-hold decay per frame (energy synthesis) |
-| `pulseonsetfloor` | 0.20 | 0.0-1.0 | yes | NN activation floor for peak-picking (NN builds only) |
-| `crestgatemin` | 0.0 | 0.0-20.0 | yes | Crest-factor gate, 0 = off (NN builds only) |
-| `beatgridmin` | 0.0 | 0.0-1.0 | runtime | PLP pattern AND-gate, 0 = off (NN builds only; off since b149) |
-| `beatgridmin_rs` | 0.2 | 0.0-1.0 | runtime | rhythmStrength guard for the beat-grid gate |
-| `bassflux` | 0.5 | 0.0-1.0 | yes | Spectral flux bass weight (62-375 Hz) |
-| `midflux` | 0.2 | 0.0-1.0 | yes | Spectral flux mid weight (437-2000 Hz) |
-| `highflux` | 0.3 | 0.0-1.0 | yes | Spectral flux high weight (2-8 kHz) |
+| `pulseonsetfloor` | 0.55 | 0.0-1.0 | yes | NN activation threshold (NN builds only) |
+| `bassflux` | 0.5 | 0.0-1.0 | yes | Weighted flux bass weight (62-375 Hz; energy synthesis only) |
+| `midflux` | 0.2 | 0.0-1.0 | yes | Weighted flux mid weight (437-2000 Hz; energy synthesis only) |
+| `highflux` | 0.3 | 0.0-1.0 | yes | Weighted flux high weight (2-8 kHz; energy synthesis only) |
 | `odfcontrast` | 1.25 | 0.1-4.0 | yes | Exponent on bass flux before the rhythm buffer |
 | `bpmmin` | 15 | 10-120 | yes | Lowest reported BPM |
 | `bpmmax` | 200 | 120-240 | yes | Highest reported BPM |
@@ -230,14 +229,9 @@ The click-measured lag is the latency correction (the scorer's `latency_ms`). Th
 
 ### Onset Detection (2026-10)
 
-**Spectral flux, NN off on devices.** Measured with the host harness and the hat_v1 CPU cost model on edm/ (onsets_consensus, ±50 ms):
+**SuperFlux + the online picker, NN off on devices (#280).** Drum metrics on edm/: kick + snare labels aligned per track, ±50 ms, host harness at 60 fps. Snare labels are provisional (#284). See `docs/AUDIO_ARCHITECTURE.md` "Onset Detection" for the table.
 
-| Detector | F1 | Precision | Recall | LED fps |
-|---|---|---|---|---|
-| Spectral flux, `fluxonsetfloor` 0.01, `pulsethreshmult` 2.0 | 0.546 | 0.457 | 0.679 | 178 |
-| v33 NN (50 mel, 12 ms/inference) | 0.480 | 0.394 | 0.613 | 48 |
-
-`fluxonsetfloor` sweep (v97): F1 plateaus at ~0.54 for floors 0-0.03; 0.01 is best.
+`fluxdelta` sweep (λ 100, offline replica): drum F 0.644–0.648 for δ 8–14; every leave-one-track-out fold chose 11 or 12. Higher δ trades recall for on-drum share: δ 16 gives 58% on-drum at 70% kick recall, δ 6 gives 50% at 88%. The NN keeps its 12 ms inference cost (LED fps 48 vs 178 for flux under the cost model).
 
 ### Rhythm
 
@@ -304,14 +298,12 @@ Watch the fire generator on a bench device with music:
 
 ### Too Many False Positives (pulse/spark effects)
 
-1. Raise `fluxonsetfloor` or `pulsethreshmult` on a bench device and re-run the edm/ validation.
-2. Check the flux band weights (`bassflux`/`midflux`/`highflux`); high-band weight lets hi-hats through.
+1. Raise `fluxdelta` on a bench device and re-run the edm/ validation.
 
 ### Missing Transients
 
-1. Lower `fluxonsetfloor` or `pulsethreshmult`.
-2. Check `pulseminlevel` isn't blocking quiet input.
-3. Check the mic level isn't near zero (weak mic or blocked enclosure holes).
+1. Lower `fluxdelta`.
+2. Check the mic level isn't near zero (weak mic or blocked enclosure holes).
 
 ### Rhythm Not Locking
 
@@ -350,7 +342,7 @@ restore_runtime_settings  # Factory settings (old name: defaults)
 
 **If you see these parameters in old documentation, ignore them. They have been removed from firmware and testing tools.**
 
-### Removed in SETTINGS_VERSION 67-98 (AudioTracker era)
+### Removed in SETTINGS_VERSION 67-99 (AudioTracker era)
 
 | Old Parameter | Old Component | Reason |
 |---------------|---------------|--------|
@@ -368,6 +360,7 @@ restore_runtime_settings  # Factory settings (old name: defaults)
 | `odfgate` | Onset information gate | Removed |
 | `pulseNNGate` | Pulse detection | Dead since b114; slot became `fluxonsetfloor` (v97) |
 | `noisegate` | AdaptiveMic | Added v96, removed v98: a fixed gate silences quiet music on this mic |
+| `pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`, `pulseminlevel`, `crestgatemin`, `beatgridmin`, `beatgridmin_rs`, `onsetbassgate`, `onsetrearm`, `onsetpeakwindow` | Onset picker and gates | Replaced by SuperFlux + the online picker (v99, #280); see `fluxdelta` |
 | `cooling`, `sparkchance`, `sparkheatmin`, `sparkheatmax`, `audiosparkboost`, `coolingaudiobias`, `bottomrows`, `suppressionms`, `heatdecay`, `emberheatmax`, `spreaddistance`, `embernoisespeed`, `musicemberpulse`, `musicsparkpulse`, `musiccoolpulse` | Old heat-diffusion Fire | Replaced by the particle/heightmap Fire |
 
 ### Removed in SETTINGS_VERSION 18-24 (Bayesian Fusion, Feb 2026)

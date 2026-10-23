@@ -74,6 +74,12 @@ namespace SpectralConstants {
     constexpr int MID_MAX_BIN = 32;    // 2 kHz
     constexpr int HIGH_MIN_BIN = 33;   // 2.0625 kHz
     constexpr int HIGH_MAX_BIN = 127;  // 8 kHz (last usable bin = NUM_BINS - 1)
+
+    // SuperFlux onset detection function (Boeck & Widmer, DAFx-13): a
+    // triangular log-frequency filterbank, 24 bands per octave from 62.5 Hz
+    // to 8 kHz, on FFT bins. Band edges that round to the same bin are
+    // merged, so 80 edges -> 78 bands (bins 2-41 are one band each).
+    constexpr int SUPERFLUX_BANDS = 78;
 }
 
 /**
@@ -130,7 +136,17 @@ public:
                                      // spectral normalizer (not audio output). Slow release preserves
                                      // transient dynamics while compressing sustained level differences.
 
+    // SuperFlux log compression: log10(lambda * band + 1) (getSuperFlux).
+    // Log makes the flux measure relative change, so one picker delta works
+    // at any input level (there is no AGC). edm/ audit (#280), drum F at
+    // -20 / -10 / 0 / +10 dB: lambda 100 0.650 / 0.650 / 0.648 / 0.646;
+    // 1000 ~0.645 at every level; linear flux 0.158 / 0.554 / 0.675 / 0.632.
+    // Not persisted: a design constant, settable for host sweeps.
+    float superFluxLambda = 100.0f;
+
     // Spectral flux band weights (v74: exposed for tuning, was hardcoded).
+    // Only energy synthesis and the pickOnset presence / bass-ratio inputs
+    // read the weighted flux; onset detection uses getSuperFlux().
     // Each band's raw flux is normalized by bin count before weighting.
     // Not auto-normalized — setting all to 0.0 silences spectral flux and kills BPM.
     float bassFluxWeight = 0.5f;   // Bins 1-6: kicks (62-375 Hz)
@@ -284,6 +300,17 @@ public:
      * Independent of NN — drives ACF + comb bank for BPM estimation.
      */
     float getSpectralFlux() const { return spectralFlux_; }
+
+    /**
+     * SuperFlux onset detection function (Boeck & Widmer, DAFx-13), the
+     * spectral-flux onset detector's evidence (#280). Pre-compressor
+     * magnitudes -> 78-band log-frequency filterbank (24/octave) ->
+     * log10(superFluxLambda * band + 1) -> half-wave difference against the
+     * previous frame, max-filtered over +-1 band -> unweighted sum.
+     * Unweighted: a drum hit rises across many bands, a bass note in a few.
+     * Log: relative change, independent of input level. 0 on the first frame.
+     */
+    float getSuperFlux() const { return superFlux_; }
 
     /**
      * Get bass-only half-wave rectified spectral flux (bins 1-6, 62-375 Hz).
@@ -452,6 +479,8 @@ private:
     float spectralFlux_;
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
     float rawSpectralFlux_;    // SuperFlux from pre-compressor mags (for NN hybrid input)
+    float superFlux_;          // SuperFlux ODF (getSuperFlux)
+    float prevLogBands_[SpectralConstants::SUPERFLUX_BANDS];  // previous frame's log bands
     // Phase 2a shape features — computed from preWhitenMagnitudes_ (pre-compressor)
     // to match ml-training/analysis/features.py reference implementations.
     float rawCentroid_;         // Centre-of-mass bin index on raw magnitudes
@@ -481,6 +510,7 @@ private:
     void computeDerivedFeatures();
     void computeShapeFeaturesRaw();  // Phase 2a: centroid/crest/rolloff/HFC/flatness on preWhitenMagnitudes_
     void computeRawSpectralFluxAndSavePrev();  // SuperFlux + advance prevRawMagnitudes_
+    void computeSuperFlux();  // superFlux_ from preWhitenMagnitudes_, advances prevLogBands_
     void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {
