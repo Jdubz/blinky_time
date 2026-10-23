@@ -14,8 +14,9 @@ export const STABLE_UPTIME_MS = 75_000;
  * run on b215+ firmware. Its RebootFrequencyCounter counts only fault resets
  * (watchdog DOG / CPU LOCKUP in RESETREAS), and the soft reset `ota commit`
  * ends in is neither. The firmware itself refuses `ota commit` before 75 s.
- * deploy_local.py keeps 5 min 15 s: it resets devices of any age, including
- * b190-era firmware that counted every boot until 5 min of uptime.
+ * deploy_local.py uses the same 75 s for firmware that reports `resetReason`
+ * in `json info` (added after the counter went fault-only), and 5 min 15 s
+ * for older firmware, which counted every boot until 5 min of uptime.
  */
 export const PREFLIGHT_UPTIME_MS = STABLE_UPTIME_MS;
 

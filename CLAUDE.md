@@ -54,7 +54,7 @@ The flow, when the owner asks:
 
 **Device on THIS machine's USB (not blinkyhost's):** `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
 - **Explicit target:** `json info` `device.id` must match `--device-id`.
-- **Pre-flight:** the device must be configured, with ≥ 5 min 15 s uptime (b190-era reboot counter).
+- **Pre-flight:** the device must be configured, with ≥ 75 s uptime if its `json info` reports `resetReason` (its reboot counter counts only fault resets), else ≥ 5 min 15 s (older firmware counts every boot until 5 min of uptime).
 - **Firmware:** the latest stable release by default (downloaded, sha256-verified). `--release bN` selects a specific release, and `--dev` a local build of a clean tree (test devices only). Then the server's hex/UF2 validators run.
 - **Bootloader identity before writing:** the drive's USB serial must equal the chip's, and the bootloader must be 0.8.0-10.
 - **Post-deploy:** version, identity, config and BLE are checked *before* `save`, then `restore_runtime_settings` + `save` and a 75 s stability wait.
