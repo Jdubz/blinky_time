@@ -84,7 +84,6 @@ def _compute_peak_picked_f1(est_windows: list[np.ndarray],
     return float(f1)
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
-from scripts.npy_rows import NpyRows
 from scripts.audio import (
     compute_feature_indices,
     compute_input_features,
@@ -128,23 +127,14 @@ def _atomic_torch_save(obj: object, path: Path) -> None:
 
 
 class MemmapBeatDataset(Dataset):
-    """Dataset over the prepared .npy arrays, read row by row (low RAM).
-
-    Rows are read with pread and dropped from the page cache at once
-    (scripts/npy_rows.py, #287): a shuffled epoch over a ~217 GB array has no
-    page-cache reuse, and on the Spark that cache is unified GPU memory the
-    platform must reclaim.
-    """
+    """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
     def __init__(self, x_path, y_path, y_teacher_path=None, max_features=None,
                  hard_binary_threshold: float = 0.0,
                  feature_indices: list[int] | None = None):
-        self.X = NpyRows(x_path)
-        self.Y = NpyRows(y_path)
-        self.Y_teacher = NpyRows(y_teacher_path) if y_teacher_path else None
-        if len(self.Y) != len(self.X) or (self.Y_teacher is not None and len(self.Y_teacher) != len(self.X)):
-            raise ValueError(f"row count mismatch: X {len(self.X)}, Y {len(self.Y)}"
-                             + (f", Y_teacher {len(self.Y_teacher)}" if self.Y_teacher is not None else ""))
+        self.X = np.load(x_path, mmap_mode='r')
+        self.Y = np.load(y_path, mmap_mode='r')
+        self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
         self._empty_teacher = torch.empty(0)  # Shared placeholder (avoid per-sample alloc)
         # Column-selection policy (precedence, strictest first):
         #   1. feature_indices: explicit list of column indices to keep — used
@@ -164,12 +154,12 @@ class MemmapBeatDataset(Dataset):
         return len(self.X)
 
     def __getitem__(self, idx):
-        x = torch.from_numpy(self.X[idx]).float()
+        x = torch.from_numpy(self.X[idx].copy()).float()
         if self._feature_indices is not None:
             x = x[..., self._feature_indices]
         elif self._max_features is not None and x.shape[-1] > self._max_features:
             x = x[..., :self._max_features]
-        y = torch.from_numpy(self.Y[idx]).float()
+        y = torch.from_numpy(self.Y[idx].copy()).float()
         if self._hard_binary_threshold > 0:
             y = (y > self._hard_binary_threshold).float()
         if y.dim() == 2:
@@ -179,7 +169,7 @@ class MemmapBeatDataset(Dataset):
             y_out = y.unsqueeze(-1)
 
         if self.Y_teacher is not None:
-            t = torch.from_numpy(self.Y_teacher[idx]).float()
+            t = torch.from_numpy(self.Y_teacher[idx].copy()).float()
             return x, y_out, t
         return x, y_out, self._empty_teacher
 
@@ -620,23 +610,11 @@ def main():
                              "For quick experiments: test new labels/loss without full training from scratch.")
     parser.add_argument("--allow-foreground", action="store_true",
                         help="Allow running outside tmux/screen (not recommended)")
-    parser.add_argument("--job", action="store_true",
-                        help="Run as a platform job (Spark job worker): the job record and its "
-                             "heartbeat supervise the run, so the tmux/screen guard does not apply. "
-                             "Requires BLINKY_JOB_ID, set by the job runner.")
     args = parser.parse_args()
 
     # Guard: training takes hours — must run in tmux/screen to survive session end.
     # Claude Code background tasks die when the session closes, killing training mid-run.
-    # A platform job is supervised by its job record instead (#286): --job, and
-    # only with the job id the runner sets, so it can't double as a bypass.
-    if args.job:
-        if not os.environ.get("BLINKY_JOB_ID"):
-            print("ERROR: --job needs BLINKY_JOB_ID (set by the job runner). For an interactive run, "
-                  "use tmux/screen.")
-            sys.exit(1)
-        print(f"Running as platform job {os.environ['BLINKY_JOB_ID']}")
-    elif not args.allow_foreground:
+    if not args.allow_foreground:
         in_tmux = os.environ.get("TMUX")
         in_screen = os.environ.get("STY")
         if not (in_tmux or in_screen):
