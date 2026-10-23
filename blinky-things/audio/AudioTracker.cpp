@@ -1411,7 +1411,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // --- Pulse envelope (visual generators) ---
     // Driven by the picked onsets only: each onset raises the envelope to its
     // strength (the onset API's 0-1 scale, either detector), which then
-    // decays with PULSE_DECAY_TAU_S. Decay first, so an onset shows at full
+    // decays with pulseDecayMs. Decay first, so an onset shows at full
     // strength in the update it fires. lastPulseStrength_ is the strongest
     // onset of the frames this update processed (0 when none fired).
     // It used to max-hold a per-frame activation over 0.4, mapped
@@ -1420,7 +1420,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // hits, so a hit landing on the previous one's tail barely moved it. On
     // edm/ (host, device level) only 53% of drum hits made a visible flash
     // although the picker caught 79%; onset-driven with 100 ms: 77% (#280).
-    pulseEnvelope_ *= expf(-dt / PULSE_DECAY_TAU_S);
+    pulseEnvelope_ *= expf(-dt * 1000.0f / pulseDecayMs);
     if (lastPulseStrength_ > pulseEnvelope_) pulseEnvelope_ = lastPulseStrength_;
     if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 

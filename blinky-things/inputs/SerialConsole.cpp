@@ -328,6 +328,8 @@ void SerialConsole::registerTrackerSettings() {
         AudioTracker::ONSET_HISTORY_MAX, nullptr, false);
     settings_.registerUint8("onsetmingap", &audioCtrl_->onsetMinGapFrames, "tracker",
         "Onset picker: minimum frames between onsets (W5)", 0, 30, nullptr, false);
+    settings_.registerFloat("pulsedecay", &audioCtrl_->pulseDecayMs, "tracker",
+        "Pulse envelope decay time constant after each onset (ms)", 30.0f, 600.0f, nullptr, false);
     settings_.registerUint8("fluxavgframes", &audioCtrl_->fluxAverageFrames, "tracker",
         "Spectral-flux picker: moving-average frames before the peak (W3)", 0,
         AudioTracker::ONSET_HISTORY_MAX, nullptr, false);
@@ -1295,6 +1297,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->onsetMaxFrames = AudioTracker::ONSET_MAX_FRAMES_DEFAULT;
         audioCtrl_->onsetMinGapFrames = AudioTracker::ONSET_MIN_GAP_FRAMES_DEFAULT;
         audioCtrl_->fluxAverageFrames = FluxOnsetDetector::AVERAGE_FRAMES_DEFAULT;
+        audioCtrl_->pulseDecayMs = AudioTracker::PULSE_DECAY_MS_DEFAULT;
         // Energy synthesis
         audioCtrl_->energyMicWeight = 0.30f;
         audioCtrl_->energyMelWeight = 0.30f;

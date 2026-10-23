@@ -243,7 +243,10 @@ public:
     // envelope is down to ~21% by the p25 gap. Host, device level, drum hits
     // that make a visible flash (a jump >= 0.2) by tau: 60 ms 79%, 100 ms
     // 77%, 150 ms 74%, 240 ms 68% (#280).
-    static constexpr float PULSE_DECAY_TAU_S = 0.10f;
+    // 100 ms read as a glitch on hat_v1 (owner): default 150 ms (74%), and
+    // runtime-tunable (`pulsedecay`, ms) to set the look by eye.
+    static constexpr float PULSE_DECAY_MS_DEFAULT = 150.0f;
+    float pulseDecayMs = PULSE_DECAY_MS_DEFAULT;
 
     // === Shared peak picker (AudioTracker::pickOnset) ===
     // Online peak picking, Boeck, Krebs & Schedl, "Evaluating the online

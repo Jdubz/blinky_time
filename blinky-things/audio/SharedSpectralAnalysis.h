@@ -80,6 +80,16 @@ namespace SpectralConstants {
     // to 8 kHz, on FFT bins. Band edges that round to the same bin are
     // merged, so 80 edges -> 78 bands (bins 2-41 are one band each).
     constexpr int SUPERFLUX_BANDS = 78;
+    // Bands that vote in the onset sum: centres <= 5 kHz (bands 0-61; band
+    // 61 is centred on bin 78 = 4875 Hz). The task is kicks and snares, and
+    // the bands above add hats: on edm/ (host, device level) lone hats
+    // triggered 75% with all 78 bands, 60% at <= 5 kHz, with kick / snare
+    // recall unchanged (82/84% -> 84/83%) and drum F 0.639 -> 0.658. Lower
+    // cuts start losing snares (<= 3 kHz: snare recall 75%). Band-limited
+    // onset functions are the simplest drum-transcription front end (Wu et
+    // al. 2018 review). All 78 bands are still computed: the +-1 band max
+    // filter of the top voting band reads its neighbour.
+    constexpr int SUPERFLUX_ONSET_BANDS = 62;
 }
 
 /**

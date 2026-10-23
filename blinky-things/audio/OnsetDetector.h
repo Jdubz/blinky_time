@@ -72,11 +72,13 @@ public:
 class FluxOnsetDetector : public OnsetDetector {
 public:
     // Chosen at the device's level (corpus at -50 dB re mastered, int16),
-    // lambda 32768, drum F at -60 / -50 / -40 / -20 / 0 dB: delta 10 0.647 /
-    // 0.651 / 0.648 / 0.646 / 0.643 | 12 0.631 / 0.644 / 0.644 / 0.643 /
-    // 0.641 | 14 0.609 / 0.635 / 0.638 / 0.639 / 0.638. 0 det/s on steady
-    // white / pink noise at -70..-30 dBFS.
-    static constexpr float DELTA_DEFAULT = 10.0f;
+    // lambda 32768, voting bands <= 5 kHz; at -50 dB, drum F / kick R /
+    // snare R / lone hats that trigger: delta 5 0.661 / 85% / 85% / 63% |
+    // 6 0.661 / 82% / 81% / 54% | 7 0.657 / 79% / 76% / 45% | 8 0.652 /
+    // 76% / 72% / 36% (all 78 bands at delta 10: 0.651 / 79% / 81% / 63%).
+    // 7 keeps kick recall and cuts hats by a third: the task is kicks and
+    // snares, and hats were what the owner saw firing.
+    static constexpr float DELTA_DEFAULT = 7.0f;
     static constexpr uint8_t AVERAGE_FRAMES_DEFAULT = 6;  // 96 ms (Boeck 2012: 100 ms)
 
     // Activation at the threshold (margin = delta) and its growth above it:

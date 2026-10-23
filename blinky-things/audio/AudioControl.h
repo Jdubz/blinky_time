@@ -33,9 +33,9 @@ struct AudioControl {
 
     // === PULSE ===
     // Hit envelope (0.0 - 1.0): each detected onset raises it to the onset's
-    // strength (the same 0-1 scale as `onset`), then it decays with a 100 ms
-    // time constant (AudioTracker::PULSE_DECAY_TAU_S), shorter than the gap
-    // between drum hits, so each hit is its own flash. 0 between hits.
+    // strength (the same 0-1 scale as `onset`), then it decays with a 150 ms
+    // time constant (AudioTracker::pulseDecayMs, `pulsedecay`), short enough
+    // that each drum hit is its own flash.
     // Use for: Sparks, flashes, bursts, event triggers
     float pulse = 0.0f;
 

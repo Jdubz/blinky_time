@@ -80,7 +80,7 @@ SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 me
       |
       +--- [ONSET PATH]
       |    Devices: SuperFlux (pre-compressor, 78-band log filterbank, log10(32768 S + 1),
-      |         +-1 band max filter, unweighted half-wave sum)
+      |         +-1 band max filter, unweighted half-wave sum over bands <= 5 kHz)
       |    NN builds only: FrameOnsetNN activation
       |         -> shared online picker (max of 30 ms, mean of 100 ms + delta, 30 ms gap)
       |            + PLP pattern bias
@@ -305,7 +305,8 @@ Those are all-onset numbers; detectors are now scored on drums (kick + snare lab
 | Detector | Picker | drum F (−60 / −50 / −40 dB) | on-drum | kick R | snare R* | det/s | noise det/s |
 |---|---|---|---|---|---|---|---|
 | Spectral flux (weighted, adaptive baseline) | 96 ms window + cooldown + gates | 0.243 / 0.543 / 0.603 | 57% | 63% | 20% | 3.1 | 3–6 |
-| **SuperFlux (devices)** | **online (Böck 2012), δ 10, λ 32768** | **0.647 / 0.651 / 0.648** | **55%** | **79%** | **81%** | **4.8** | **0** |
+| SuperFlux, all 78 bands | online (Böck 2012), δ 10, λ 32768 | 0.647 / 0.651 / 0.648 | 55% | 79% | 81% | 4.8 | 0 |
+| **SuperFlux ≤ 5 kHz (devices)** | **online (Böck 2012), δ 7, λ 32768** | **0.648 / 0.657 / 0.657** | **56%** | **79%** | **76%** | **4.7** | **0** |
 | v33 NN, floor 0.20 | 96 ms window + cooldown + gates | 0.594 / 0.595 / 0.588 | 50% | 75% | 72% | 5.0 | ~5 |
 | v33 NN, floor 0.55 | online (Böck 2012) | 0.677 / 0.672 / 0.672 | 52% | 95% | 95% | 6.1 | 1–2 |
 
@@ -332,7 +333,7 @@ Two flux signals, for different jobs:
 - **`getSuperFlux()`: onset detection (#280).** SuperFlux (Böck & Widmer, "Maximum filter vibrato suppression for onset detection", DAFx-13):
   1. Pre-compressor magnitudes go through a triangular log-frequency filterbank: 24 bands per octave from 62.5 Hz to 8 kHz, not area-normalised. Edges that round to the same FFT bin are merged, so there are 78 bands, and bins 2–41 are one band each (`SUPERFLUX_EDGES`, generated, with a `static_assert` on its size).
   2. Each band is log-compressed: `log10(λ·S + 1)`, with λ = `superFluxLambda` = 32768 (the paper's log(1 + X) on int16-scale magnitudes).
-  3. Each band is differenced against the previous frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights.
+  3. Each band is differenced against the previous frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights over the bands centred ≤ 5 kHz (62 of 78). The bands above mostly add hats: at device level, lone hats triggered 75% with all bands and 60% with ≤ 5 kHz at the same δ, with kick and snare recall unchanged. At δ 7 it's 45%.
   - **Why unweighted:** in a full mix a kick rises only about 2–3 dB below 190 Hz but 6–7 dB from 190 Hz to over 4 kHz. A drum hit rises across many bands, a bass note in a few. The old band weights gave each bass bin about 26× a high bin's weight, which amplified bass lines and buried the broadband attack.
   - **Why log:** there is no AGC. Log flux measures relative change, so one picker δ works at any input level. On edm/, drum F was 0.650 / 0.650 / 0.648 / 0.646 at −20 / −10 / 0 / +10 dB, against linear flux's 0.158 / 0.554 / 0.675 / 0.632.
   - **Deviations from the paper:** our hop is 16 ms with no overlap, so the max filter compares against the previous frame (μ = 1). λ is on our [−1, 1] sample scale, chosen by that level test (1000 scored the same).
@@ -373,7 +374,7 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
 - **Expensive detectors:** the NN runs at most once per `update()`. Frames it skips return `fresh = false`, and the picker doesn't step on them.
 - **Selection:** the NN when built in (`BLINKY_ONSET_NN_ENABLED`) and ready, otherwise flux. Devices use flux. `show nn` names the detector in use.
 - `onset` = strongest pulse fired in this `update()`, else 0.
-- `pulse` envelope: each picked onset raises it to that onset's strength, then it decays with a 100 ms time constant (`PULSE_DECAY_TAU_S`).
+- `pulse` envelope: each picked onset raises it to that onset's strength, then it decays with a 150 ms time constant (`pulsedecay`, runtime-tunable; 100 ms read as a glitch on the hat).
   - It used to max-hold the per-frame activation above 0.4, mapped `(a − 0.4) / 0.6`, with a 240 ms decay. That was a second, threshold-only path beside the picker, and its decay equalled the median gap between drum hits (kick+snare gaps are p25 157 ms, p50 240 ms).
   - Host, device level: only 53% of drum hits made a visible flash, although the picker caught 79%. Driving the pulse from onsets with a 100 ms decay raises that to 77%.
   - Onset strength barely separates drum from non-drum picks (AUC 0.60). So the pulse can't make drums brighter than other onsets; that needs a drum cue in the detector.

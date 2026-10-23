@@ -113,7 +113,7 @@ static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
 // (62.5 Hz each), clipped to 1..127, duplicates removed (numpy):
 //   c = 62.5 * 2.0 ** (np.arange(0, np.log2(8000 / 62.5) * 24 + 1) / 24)
 //   np.unique(np.clip(np.round(c / 62.5).astype(int), 1, 127))
-static const uint8_t SUPERFLUX_EDGES[] = {
+static constexpr uint8_t SUPERFLUX_EDGES[] = {
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 51, 52, 54,
     55, 57, 59, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 81, 83, 85, 88, 91, 93, 96, 99, 102, 105,
@@ -121,6 +121,11 @@ static const uint8_t SUPERFLUX_EDGES[] = {
 };
 static_assert(sizeof(SUPERFLUX_EDGES) == SpectralConstants::SUPERFLUX_BANDS + 2,
               "SUPERFLUX_EDGES must have SUPERFLUX_BANDS + 2 entries (regenerate the table)");
+// Voting bands end at the last centre <= 5 kHz (bin 80): band m is centred on
+// SUPERFLUX_EDGES[m + 1].
+static_assert(SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS] <= 80 &&
+              SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS + 1] > 80,
+              "SUPERFLUX_ONSET_BANDS must end at the last band centred <= 5 kHz");
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
     : sampleBuffer_{}
@@ -514,8 +519,9 @@ void SharedSpectralAnalysis::computeSuperFlux() {
     float flux = 0.0f;
     if (hasPrevFrame_) {
         // Reference = previous frame max-filtered over +-1 band (vibrato
-        // suppression); half-wave rectified, summed unweighted.
-        for (int m = 0; m < SpectralConstants::SUPERFLUX_BANDS; m++) {
+        // suppression); half-wave rectified, summed unweighted over the
+        // voting bands (<= 5 kHz, SUPERFLUX_ONSET_BANDS).
+        for (int m = 0; m < SpectralConstants::SUPERFLUX_ONSET_BANDS; m++) {
             float ref = prevLogBands_[m];
             if (m > 0) ref = fmaxf(ref, prevLogBands_[m - 1]);
             if (m < SpectralConstants::SUPERFLUX_BANDS - 1) ref = fmaxf(ref, prevLogBands_[m + 1]);

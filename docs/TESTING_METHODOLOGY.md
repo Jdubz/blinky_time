@@ -85,7 +85,7 @@ run_validation_suite(
     tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background"],
     runs=1,
     duration_ms=30000,
-    per_device_commands={"/dev/ttyACM0": ["set fluxdelta 10"], "/dev/ttyACM1": ["set fluxdelta 14"]},
+    per_device_commands={"/dev/ttyACM0": ["set fluxdelta 7"], "/dev/ttyACM1": ["set fluxdelta 14"]},
 )
 # returns job_id — poll with check_test_result(job_id)
 ```
@@ -112,7 +112,7 @@ run_validation_suite(
     tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background", "garage-uk-2step"],
     runs=3,
     duration_ms=45000,
-    per_device_commands={"/dev/ttyACM0": ["set fluxdelta 10"], "/dev/ttyACM1": ["set fluxdelta 14"]},
+    per_device_commands={"/dev/ttyACM0": ["set fluxdelta 7"], "/dev/ttyACM1": ["set fluxdelta 14"]},
 )
 # returns job_id — poll with check_test_result(job_id)
 ```

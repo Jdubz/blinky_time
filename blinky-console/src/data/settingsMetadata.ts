@@ -487,7 +487,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   fluxdelta: {
     displayName: 'Flux Onset Delta',
     tooltip:
-      'Spectral-flux onset threshold (0.5-60): the SuperFlux value must exceed its 100 ms average by this much. Higher = fewer onsets. Default: 10.',
+      'Spectral-flux onset threshold (0.5-60): the SuperFlux value must exceed its 100 ms average by this much. Higher = fewer onsets. Default: 7.',
     unit: '',
   },
 

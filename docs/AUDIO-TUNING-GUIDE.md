@@ -145,7 +145,7 @@ Every parameter below is a serial setting: `set <name> <value>`, `get <name>`, `
 
 | Command | Default | Range | Saved | Description |
 |---------|---------|-------|-------|-------------|
-| `fluxdelta` | 10 | 0.5-60 | yes | Flux onset threshold: SuperFlux must exceed its 100 ms mean by this (device onset path) |
+| `fluxdelta` | 7 | 0.5-60 | yes | Flux onset threshold: SuperFlux must exceed its 100 ms mean by this (device onset path) |
 | `fluxavgframes` | 6 | 0-16 | runtime | Flux picker moving-average frames (W3, 96 ms) |
 | `onsetmaxframes` | 2 | 0-16 | runtime | Picker: onset must be the max of this many previous frames (W1, 32 ms) |
 | `onsetmingap` | 2 | 0-30 | runtime | Picker: minimum frames between onsets (W5, 32 ms) |
