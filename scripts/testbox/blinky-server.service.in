@@ -17,6 +17,9 @@ Group=@USER@
 SupplementaryGroups=dialout plugdev
 
 WorkingDirectory=@SERVER_DIR@
+# Root-owned usb_reset.py that the sudoers rule names (setup.sh install_usb_reset);
+# the repo copy is writable by this user, so it must not be the one run as root.
+Environment=BLINKY_USB_RESET_TOOL=@USB_RESET@
 # --no-ble: blinky-server has no discovery allowlist yet, so with BLE on it could
 # adopt (and auto-recover, i.e. flash) a production device in radio range.
 ExecStart=@SERVER_DIR@/venv/bin/python -m blinky_server --no-ble

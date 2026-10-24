@@ -11,7 +11,8 @@
 #   2. clone blinky_time into the user's home (never pulls an existing clone)
 #   3. blinky-server venv with the `firmware` extra, NOT `ble` (the box runs --no-ble)
 #   4. build blinky-console into blinky-server/web/
-#   5. narrow sudoers rule for the commands the flash path runs under sudo
+#   5. narrow sudoers rule for the commands the flash path runs under sudo, on a
+#      root-owned copy of usb_reset.py, probed after install (sudoers_selftest)
 #   6. Bluetooth off at the OS level (the box server must never adopt a production device)
 #   7. an SSH key for the user (for reaching the SWD Pi Zero)
 #   8. blinky-server.service, enabled and started with --no-ble
@@ -49,6 +50,7 @@ REPO_DIR="$HOME_DIR/blinky_time"
 SERVER_DIR="$REPO_DIR/blinky-server"
 LOG=/var/log/blinky-testbox-setup.log
 STATE_DIR=/var/lib/blinky-testbox
+USB_RESET=/usr/local/libexec/blinky/usb_reset.py
 
 exec > >(tee -a "$LOG") 2>&1
 echo "===== blinky test box setup $(date -Is) (user=$TARGET_USER, from $HERE) ====="
@@ -132,11 +134,17 @@ build_console() {
   [[ -f "$SERVER_DIR/web/index.html" ]] || { echo "build produced no $SERVER_DIR/web/index.html" >&2; return 1; }
 }
 
+install_usb_reset() {
+  # Root-owned copy for the sudoers rule; re-run setup.sh after tools/usb_reset.py changes.
+  install -d -m 0755 -o root -g root "$(dirname "$USB_RESET")" &&
+    install -m 0755 -o root -g root "$REPO_DIR/tools/usb_reset.py" "$USB_RESET"
+}
+
 install_sudoers() {
   local tmp out=/etc/sudoers.d/020_blinky-testbox
   tmp="$(mktemp)"
   sed -e "s|@USER@|$TARGET_USER|g" \
-      -e "s|@REPO@|$REPO_DIR|g" \
+      -e "s|@USB_RESET@|$USB_RESET|g" \
       -e "s|@UHUBCTL@|$(command -v uhubctl)|g" \
       -e "s|@MOUNT@|$(command -v mount)|g" \
       -e "s|@UMOUNT@|$(command -v umount)|g" \
@@ -151,6 +159,52 @@ install_sudoers() {
   fi
   install -m 0440 -o root -g root "$tmp" "$out"
   rm -f "$tmp"
+  if ! sudoers_selftest; then
+    echo "sudoers self-test failed; removed $out" >&2
+    rm -f "$out"; return 1
+  fi
+}
+
+# Probe each rule for real, as the user, with `sudo -n -k` (no password, no cached
+# ticket): a refusal is sudo's "a password is required" (or "not allowed" if the
+# user isn't in the sudo group); anything else means the
+# rule matched and the command ran. Every probe is harmless when it does run:
+# nonexistent hub, device and mount point. visudo only checks syntax; this is
+# what shows the regexes match what the flash path really sends.
+sudoers_selftest() {
+  local uid gid bad=0 out
+  uid="$(id -u "$TARGET_USER")"; gid="$(id -g "$TARGET_USER")"
+  probe() {  # probe allow|deny <command...>
+    local want="$1"; shift
+    out="$(as_user sudo -n -k "$@" 2>&1 </dev/null)"
+    if grep -qE "a password is required|is not allowed to execute" <<<"$out"; then
+      [[ $want == deny ]] && return 0
+      echo "  should be allowed, was refused: $*" >&2
+    else
+      [[ $want == allow ]] && return 0
+      echo "  should be refused, was allowed: $*" >&2
+    fi
+    bad=1
+  }
+  probe allow uhubctl -l 99-9 -p 1 -a 0
+  probe allow uhubctl -l 99-9.4 -p 2 -a 1
+  probe allow mkdir -p /mnt/uf2-selftest
+  probe allow mount -t vfat -o "uid=$uid,gid=$gid,umask=022" /dev/sdzz /mnt/uf2-selftest
+  probe allow mount -t vfat -o "uid=$uid,gid=$gid,umask=022" /dev/sdzz1 /mnt/uf2-upload
+  probe allow umount /mnt/uf2-selftest
+  probe allow umount -l /mnt/uf2-selftest
+  probe allow rmdir /mnt/uf2-selftest
+  probe allow systemctl start udisks2
+  probe allow python3 "$USB_RESET" /dev/bus/usb/999/999
+  probe deny  python3 "$REPO_DIR/tools/usb_reset.py" /dev/bus/usb/999/999
+  probe deny  mkdir -p /mnt/uf2-selftest /tmp/blinky-sudo-selftest
+  probe deny  umount /mnt/uf2-selftest /mnt/uf2-selftest2
+  probe deny  mount -t vfat -o "uid=$uid,gid=$gid,umask=022" /dev/sdzz /mnt/uf2-selftest /tmp
+  probe deny  uhubctl -l 99-9 -p 1 -a 0 -r 1
+  probe deny  systemctl stop udisks2
+  probe deny  true
+  rm -rf /tmp/blinky-sudo-selftest
+  return $bad
 }
 
 disable_bluetooth() {
@@ -183,7 +237,7 @@ EOF
 }
 
 install_service() {
-  sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$SERVER_DIR|g" \
+  sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$SERVER_DIR|g" -e "s|@USB_RESET@|$USB_RESET|g" \
     "$HERE/blinky-server.service.in" > /etc/systemd/system/blinky-server.service || return 1
   systemctl daemon-reload &&
     systemctl enable blinky-server.service &&
@@ -203,6 +257,7 @@ step "user groups"        add_groups
 step "clone blinky_time"  clone_repo
 step "blinky-server venv" server_venv
 step "blinky-console"     build_console
+step "usb_reset copy"     install_usb_reset
 step "sudoers"            install_sudoers
 step "bluetooth off"      disable_bluetooth
 step "user ssh key"       user_ssh_key
