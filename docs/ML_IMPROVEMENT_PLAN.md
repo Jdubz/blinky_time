@@ -1,15 +1,17 @@
 # ML Training Improvement Plan
 
-## Current status (checked against the code 2026-10-21) — read this first
+## Current status (checked against the code 2026-10-24) — read this first
 
 **What the firmware embeds.** `blinky-things/audio/frame_onset_model_data.h` is the **v33** export (`configs/conv1d_w16_onset_v33_mel_only.yaml`: Conv1D [32, 32], kernel 5, 16-frame window, 50 mel, 30–8000 Hz, `kick_weighted_drums` labels; SHA prefix `fa087e0a364640ab`, same bytes as `frame_onset_model_data_v33_mel_only.h`). From 2026-05-13 the active header was the 80-mel v36 export, which the 50-mel firmware refused, so no device ran the NN (#162, closed). v33 was restored in `9bca439a`. CI now runs `tools/check_model_input.py`, which fails the build on a model the firmware would refuse.
 
-**The onset NN is OFF on devices.** Device builds set `BLINKY_ONSET_NN_ENABLED=0` (`blinky-things/audio/AudioTracker.h`, since `75c2c8e9`, 2026-10-19). Onsets come from spectral flux (`fluxonsetfloor`, default 0.01). `show nn` reports the NN as disabled by build. The reason, measured on edm/ against `.onsets_consensus.json` (±50 ms) with the hat's CPU cost model in the host harness:
+**The onset NN is OFF on devices.** Device builds set `BLINKY_ONSET_NN_ENABLED=0` (`blinky-things/audio/AudioTracker.h`, since `75c2c8e9`, 2026-10-19). Onsets come from SuperFlux with the Böck 2012 online picker (PR #292, #280; `fluxdelta` 7). `show nn` reports the NN as disabled by build. The reason, measured on edm/ against `.onsets_consensus.json` (±50 ms) with the hat's CPU cost model in the host harness, before #292:
 
 | onset source | F1 | P | R | loop fps |
 |---|---|---|---|---|
-| spectral flux, `fluxOnsetFloor` 0.01, `pulseThresholdMult` 2.0 | **0.546** | 0.457 | 0.679 | 178 |
+| spectral flux (old picker) | **0.546** | 0.457 | 0.679 | 178 |
 | v33 NN (~12 ms per inference) | 0.480 | 0.394 | 0.613 | 48 |
+
+Detectors are now scored on drums (kick/snare recall, drum F) with edm/ played at the mic's real level (−50 dB). There, SuperFlux scores drum F 0.657 (kick R 79%), and the v33 NN through the same online picker (floor 0.55) 0.672 (kick R 95%) **without** CPU cost; at ~12 ms per inference it still can't hold the frame rate. Table and method: `docs/AUDIO_ARCHITECTURE.md`. A new model has to beat SuperFlux there, with the cost model on.
 
 The NN path stays tested in CI: the `tracker-harness-nn` job builds the host harness with TFLite Micro (`tests/tracker/build_host_nn.sh`, `BLINKY_HOST_NN`) and gates it on frame rate (≥ 35 fps) and corpus floors.
 
@@ -24,11 +26,18 @@ The NN path stays tested in CI: the `tracker-harness-nn` job builds the host har
 | #175 | Raw mel saturates at high SPL, so the low bands lose kick contrast. Needs a pre-gain or PCEN, mirrored in training. `melSaturated`/`melTotal` telemetry is in `json info`. | partial |
 | #178 | Non-overlapping frames (hop = FFT size) make onset strength wobble with hit position. 50 % overlap needs a retrain. | open |
 | #180 | Mel whitening gives little contrast. | open, low priority |
+| #284 | Drum labels (`kick_weighted`) are ~26 ms late, with kick/snare swaps and phantom snares. They are the NN's training targets. | open — fix before training on them |
+| #289 | Hand-curated GT for the 18 edm/ tracks. | open (owner) |
+| #290 | Shift-tolerant loss, replacing the label-widening knobs behind the v26–v28 collapse. | open — for the platform trainer |
+| #291 | Publish the mel feature spec (the firmware's integer `MEL_BANDS` table, log and range map) as a versioned contract with golden vectors. | open — needed before any model trained off-repo |
+| #288 | Spark `separate` client (`scripts/spark_jobs.py`). | partial — client merged, waiting on the platform |
 
 Closed: #162 (wrong model header), #163 (model input check in CI), #169 (NN smoothing), #170 (`stream nn` frames), #203 (host test of the NN path).
 
+**Where training runs (2026-10-23, my-spark plans/0238).** GPU work runs on the DGX Spark as platform-owned jobs; blinky runs no code there. Stem separation is the `separate` job (one track in, stems out), submitted with `ml-training/scripts/spark_jobs.py` (env `SPARK_JOB_API`, `SPARK_API_KEY`; priority 0, idempotency keys, no client-side retry of failed jobs). Training will be a `train_audio` job on the platform's `spark-audio-trainer`, which has its own mel front end; hence #291. blinky keeps the TFLite export and `tools/check_model_input.py`. devtop runs only one-shot CPU scripts over ssh. The corpus is archived on bignasty (`docs/ML_STORAGE_LAYOUT.md`); configs name it through `${BLINKY_DATA}` / `${BLINKY_WORK}`.
+
 **The 2026-05-02 experiment queue (below).** No training has run since May 2026.
-1. Hand-curate edm/ GT: **tooling done, curation not done.** `tools/label-reviewer/` (`make reviewer`) writes `<stem>.onsets_human.json` overlays, which `prepare_dataset.py` and the blinky-server harness both apply. No `*.onsets_human.json` exists in `blinky-test-player/music/edm/` yet. Still the first step.
+1. Hand-curate edm/ GT (#289): **tooling done, curation not done.** `tools/label-reviewer/` (`make reviewer`) writes `<stem>.onsets_human.json` overlays, which `prepare_dataset.py` and the blinky-server harness both apply. No `*.onsets_human.json` exists in `blinky-test-player/music/edm/` yet. Still the first step.
 2. Per-class F1 breakdown of v33: not done.
 3. Hybrid supervision: not started; gated on 1 and 2.
 4. Knowledge distillation: not started.

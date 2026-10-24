@@ -140,7 +140,7 @@ mv /mnt/nvme/processed_v36 /mnt/storage/blinky-ml-data/processed_v36_keep
 
 ### Where do training outputs go?
 
-`train_pipeline.sh` defaults `OUTPUT_DIR=/mnt/nvme/outputs/<run-name>`. Override with `OUTPUT_DIR=...` env var if you want a different target. Outputs are tiny (~5 MB per run); accumulate freely, sweep manually when you stop caring about old runs.
+`train_pipeline.sh` defaults `OUTPUT_DIR=${BLINKY_WORK}/outputs/<run-name>` (`BLINKY_WORK` defaults to `/mnt/nvme`). Override with `OUTPUT_DIR=...` env var if you want a different target. Outputs are tiny (~5 MB per run); accumulate freely, sweep manually when you stop caring about old runs.
 
 ### Adding a new version
 
@@ -148,8 +148,10 @@ Configs override `data.processed_dir` per version. New configs should set:
 
 ```yaml
 data:
-  processed_dir: "/mnt/nvme/processed_v{N}"
+  processed_dir: "${BLINKY_WORK}/processed_v{N}"
 ```
+
+Name paths through the roots, never a machine mount: `tests/test_storage_roots.py` fails on a config that does.
 
 `base.yaml` defaults the value if a config doesn't override.
 

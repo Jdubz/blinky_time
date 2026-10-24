@@ -101,7 +101,7 @@ curl -X POST http://blinkyhost.local:8420/api/test/validate \
 # On device: parameter sweep via the server API
 curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["D1"], "param_name": "fluxdelta", "values": [8, 11, 14], "track_dir": "/path/to/music/edm"}'
+  -d '{"device_ids": ["D1"], "param_name": "fluxdelta", "values": [5, 7, 9], "track_dir": "/path/to/music/edm"}'
 
 # Via MCP tools (poll results with check_test_result(job_id))
 run_test(port: "DEVICE_ID")

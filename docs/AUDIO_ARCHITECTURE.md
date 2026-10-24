@@ -376,7 +376,7 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
 - `onset` = strongest pulse fired in this `update()`, else 0.
 - `pulse` envelope: each picked onset raises it to that onset's strength, then it decays with a 150 ms time constant (`pulsedecay`, runtime-tunable; 100 ms read as a glitch on the hat).
   - It used to max-hold the per-frame activation above 0.4, mapped `(a − 0.4) / 0.6`, with a 240 ms decay. That was a second, threshold-only path beside the picker, and its decay equalled the median gap between drum hits (kick+snare gaps are p25 157 ms, p50 240 ms).
-  - Host, device level: only 53% of drum hits made a visible flash, although the picker caught 79%. Driving the pulse from onsets with a 100 ms decay raises that to 77%.
+  - Host, device level: only 53% of drum hits made a visible flash, although the picker caught 79%. Driving the pulse from onsets raises that to 77% with a 100 ms decay, and 72% with the 150 ms default.
   - Onset strength barely separates drum from non-drum picks (AUC 0.60). So the pulse can't make drums brighter than other onsets; that needs a drum cue in the detector.
 - `onsetDensity`: picked onsets per second, EMA 0.7/0.3.
 - Gate mask (TRANSIENT stream `gateMask`): bit 1 = pattern bias raised δ. Bits 0, 2 and 3 belonged to the deleted gates and are never set.
