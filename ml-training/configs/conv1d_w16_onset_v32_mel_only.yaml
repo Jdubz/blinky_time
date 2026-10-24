@@ -40,7 +40,7 @@ model:
 labels:
   target_type: "binary"
   labels_type: "onset_consensus"
-  onset_consensus_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
+  onset_consensus_dir: "${BLINKY_DATA}/labels/onsets_consensus"
   # Filter to 3+ system agreement at PREP time. 1- and 2-system events have
   # sub-random mel-diff signal and inject pure label noise. See investigation
   # in AUDIO_SYSTEM_AUDIT_2026_04_24.md.
@@ -84,7 +84,7 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/nvme/processed_v32"
+  processed_dir: "${BLINKY_WORK}/processed_v32"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v32_mel_only.h"

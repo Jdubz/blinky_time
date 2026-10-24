@@ -75,12 +75,17 @@ int usage() {
         "  loop_fps  mean simulated main-loop rate (device: ~30-90 depending on load)\n"
         "  jitter    relative std-dev of each loop period (0 = perfectly periodic)\n"
         "  then optional overrides: [plpPhaseGain] [tempoPriorWidth] [syncopatedCandidateScale]\n"
-        "  [pulseOnsetFloor] [fluxOnsetFloor] [pulseMinLevel] [pulseThresholdMult];\n"
+        "  [pulseOnsetFloor] [fluxDelta];\n"
         "  \"-\" keeps the firmware\n"
         "  default for that slot\n"
         "  --nn-cost-us=N --frame-cost-us=N --render-cost-us=N  CPU cost model: the loop\n"
         "  period becomes render cost + audio work (loop_fps is ignored; jitter scales the\n"
-        "  render cost)\n");
+        "  render cost)\n"
+        "  --onset-pattern-bias=X  shared rhythm-pattern gate (0 = off)\n"
+        "  --onset-max-frames=N --onset-min-gap=N  shared online peak picker (W1, W5)\n"
+        "  --flux-avg-frames=N --flux-lambda=X  SuperFlux picker average (W3) and log lambda\n"
+        "  --onset-detector=NAME  spectral-flux | onset-nn (NN builds)\n"
+        "  --frame-features=PATH  per-frame feature dump\n");
     return 2;
 }
 
@@ -116,6 +121,51 @@ void onWork(int work) {
 
 namespace HostCost { void (*onWork)(int) = nullptr; }
 
+// ---- Per-frame feature dump (--frame-features=PATH, drum verifier work, #280) ----
+// One row per spectral frame, written from AudioTracker's frame hook: the
+// frame's end time, the picker's output (pulse > 0 = onset at this frame:
+// the online picker has no look-ahead), the detector activation, the
+// SuperFlux ODF, global spectral features, and
+// energy + half-wave flux in 11 log-spaced bands of the compressed magnitudes.
+namespace FrameDump {
+constexpr int NB = 11;
+constexpr int EDGES[NB + 1] = {1, 3, 5, 7, 10, 14, 20, 28, 40, 56, 80, 128};  // FFT bins, 62.5 Hz each
+FILE* out = nullptr;
+const AudioTracker* tracker = nullptr;
+float prev[SpectralConstants::NUM_BINS] = {0};
+
+void hook(void*) {
+    const SharedSpectralAnalysis& s = tracker->getSpectral();
+    const float* m = s.getMagnitudes();
+    std::fprintf(out, "%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.4f,%.4f,%.4f,%.4f,%.5f",
+                 tracker->getLastFrameEndSampleIdx() / 16000.0, tracker->getLastFramePulse(),
+                 tracker->getOnsetActivation(), s.getSuperFlux(), s.getSpectralFlux(), s.getBassFlux(),
+                 s.getRawSpectralFlux(), s.getRawFlatness(), s.getRawCrest(),
+                 s.getSpectralCentroid(), s.getRawRolloff(), s.getRawHFC());
+    for (int b = 0; b < NB; b++) {
+        float e = 0.0f, f = 0.0f;
+        for (int i = EDGES[b]; i < EDGES[b + 1]; i++) {
+            e += m[i];
+            const float d = m[i] - prev[i];
+            if (d > 0.0f) f += d;
+        }
+        const float n = static_cast<float>(EDGES[b + 1] - EDGES[b]);
+        std::fprintf(out, ",%.5f,%.5f", e / n, f / n);
+    }
+    std::fputc('\n', out);
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) prev[i] = m[i];
+}
+}  // namespace FrameDump
+static const char* g_frameFeatures = nullptr;
+
+// Shared onset gate overrides (negative = keep the firmware default).
+static double g_onsetPatternBias = -1.0;
+static double g_onsetMaxFrames = -1.0;
+static double g_onsetMinGap = -1.0;
+static double g_fluxAvgFrames = -1.0;
+static double g_fluxLambda = -1.0;
+static const char* g_onsetDetector = nullptr;  // --onset-detector=NAME
+
 int main(int rawArgc, char** rawArgv) {
     // Split --name=value options from the positional arguments.
     std::vector<char*> pos;
@@ -124,10 +174,23 @@ int main(int rawArgc, char** rawArgv) {
         if (i > 0 && std::strncmp(a, "--", 2) == 0) {
             const char* eq = std::strchr(a, '=');
             if (!eq) return usage();
+            if (std::strncmp(a, "--onset-detector=", 17) == 0) {
+                g_onsetDetector = eq + 1;
+                continue;
+            }
+            if (std::strncmp(a, "--frame-features=", 17) == 0) {
+                g_frameFeatures = eq + 1;
+                continue;
+            }
             const double v = std::atof(eq + 1);
             if (std::strncmp(a, "--nn-cost-us=", 13) == 0) g_nnCostUs = v;
             else if (std::strncmp(a, "--frame-cost-us=", 16) == 0) g_frameCostUs = v;
             else if (std::strncmp(a, "--render-cost-us=", 17) == 0) g_renderCostUs = v;
+            else if (std::strncmp(a, "--onset-pattern-bias=", 21) == 0) g_onsetPatternBias = v;
+            else if (std::strncmp(a, "--onset-max-frames=", 19) == 0) g_onsetMaxFrames = v;
+            else if (std::strncmp(a, "--onset-min-gap=", 16) == 0) g_onsetMinGap = v;
+            else if (std::strncmp(a, "--flux-avg-frames=", 18) == 0) g_fluxAvgFrames = v;
+            else if (std::strncmp(a, "--flux-lambda=", 14) == 0) g_fluxLambda = v;
             else return usage();
         } else {
             pos.push_back(rawArgv[i]);
@@ -173,9 +236,32 @@ int main(int rawArgc, char** rawArgv) {
     if (given(7)) tracker.tempoPriorWidth = static_cast<float>(std::atof(argv[7]));
     if (given(8)) tracker.syncopatedCandidateScale = static_cast<float>(std::atof(argv[8]));
     if (given(9)) tracker.pulseOnsetFloor = static_cast<float>(std::atof(argv[9]));
-    if (given(10)) tracker.fluxOnsetFloor = static_cast<float>(std::atof(argv[10]));
-    if (given(11)) tracker.pulseMinLevel = static_cast<float>(std::atof(argv[11]));
-    if (given(12)) tracker.pulseThresholdMult = static_cast<float>(std::atof(argv[12]));
+    if (given(10)) tracker.fluxDelta = static_cast<float>(std::atof(argv[10]));
+    if (argc > 11) {
+        std::fprintf(stderr, "slots 11-12 (pulseMinLevel, pulseThresholdMult) were removed with the online picker (#280)\n");
+        return 2;
+    }
+    if (g_onsetPatternBias >= 0) tracker.onsetPatternBias = static_cast<float>(g_onsetPatternBias);
+    if (g_onsetMaxFrames >= 0) tracker.onsetMaxFrames = static_cast<uint8_t>(g_onsetMaxFrames);
+    if (g_onsetMinGap >= 0) tracker.onsetMinGapFrames = static_cast<uint8_t>(g_onsetMinGap);
+    if (g_fluxAvgFrames >= 0) tracker.fluxAverageFrames = static_cast<uint8_t>(g_fluxAvgFrames);
+    if (g_fluxLambda >= 0) tracker.getSpectral().superFluxLambda = static_cast<float>(g_fluxLambda);
+    if (g_onsetDetector && !tracker.selectOnsetDetector(g_onsetDetector)) {
+        std::fprintf(stderr, "unknown or unavailable onset detector: %s\n", g_onsetDetector);
+        return 2;
+    }
+    if (g_frameFeatures) {
+        FrameDump::out = std::fopen(g_frameFeatures, "w");
+        if (!FrameDump::out) {
+            std::fprintf(stderr, "cannot open %s\n", g_frameFeatures);
+            return 2;
+        }
+        std::fprintf(FrameDump::out, "t,pulse,act,superflux,flux,bassflux,rawflux,flat,crest,cent,roll,hfc");
+        for (int b = 0; b < FrameDump::NB; b++) std::fprintf(FrameDump::out, ",e%d,f%d", b, b);
+        std::fputc('\n', FrameDump::out);
+        FrameDump::tracker = &tracker;
+        tracker.setFrameHook(FrameDump::hook, nullptr);
+    }
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);
@@ -211,6 +297,7 @@ int main(int rawArgc, char** rawArgv) {
         prevFrames = frames;
     }
     std::fclose(out);
+    if (FrameDump::out) std::fclose(FrameDump::out);
     if (costModel) {
         const double secs = time.us / 1e6;
         std::fprintf(stderr, "[COST] loops=%llu sim_s=%.1f fps=%.1f nn_per_s=%.1f nn_cpu=%.0f%%\n",

@@ -81,7 +81,7 @@ labels:
   labels_type: "kick_weighted"
   # Inherit v34d's cleaned labels — that finding is independent of model
   # architecture, propagates forward. See feedback_label_improvements_propagate.
-  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_clean"
+  kick_weighted_dir: "${BLINKY_DATA}/labels/kick_weighted_clean"
   neighbor_weight: 0.25
   label_shift_frames: 1
   hard_binary_threshold: 0.1
@@ -119,7 +119,7 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/nvme/processed_v36"
+  processed_dir: "${BLINKY_WORK}/processed_v36"
 
 export:
   output_header: "../blinky-things/audio/frame_onset_model_data_v36_fmax.h"

@@ -70,7 +70,7 @@ labels:
   # entries get systems=0 (and bypass the min_systems filter — they're
   # human-confirmed). Empty list disables overlay.
   onset_human_dirs:
-    - "/mnt/storage/blinky-ml-data/labels/onsets_human"
+    - "${BLINKY_DATA}/labels/onsets_human"
     - "../blinky-test-player/music/edm"     # in-repo validation overlay; rides via git pull
                                             # so EDM curation flows into training too.
 
@@ -164,10 +164,10 @@ export:
 # (consensus_v2/v3/v4/v5) are ARCHIVED and must not be used as training input —
 # loading them silently injects beat-detection bias into onset training.
 data:
-  audio_dir: "/mnt/storage/blinky-ml-data/audio/combined"
-  labels_dir: "/mnt/storage/blinky-ml-data/labels/onsets_consensus"
-  processed_dir: "/mnt/nvme/processed"
-  rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
-  noise_dir: "/mnt/storage/blinky-ml-data/noise"
-  mel_cache_dir: "/mnt/nvme/mel_cache"
+  audio_dir: "${BLINKY_DATA}/audio/combined"
+  labels_dir: "${BLINKY_DATA}/labels/onsets_consensus"
+  processed_dir: "${BLINKY_WORK}/processed"
+  rir_dir: "${BLINKY_DATA}/rir/processed"
+  noise_dir: "${BLINKY_DATA}/noise"
+  mel_cache_dir: "${BLINKY_WORK}/mel_cache"
   test_set: "../blinky-test-player/music/edm"

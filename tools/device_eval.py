@@ -353,6 +353,9 @@ def main() -> int:
                         "onsets_ms": [round(t.timestamp_ms - music_start, 1) for t in data.transients
                                       if t.timestamp_ms >= music_start],
                         "strengths": [t.strength for t in data.transients if t.timestamp_ms >= music_start],
+                        # Feature snapshot at each detection (flat, rflux, cent, crest, roll,
+                        # hfc, bassR, plpP, plpC): for false-positive analysis.
+                        "features": [t.features for t in data.transients if t.timestamp_ms >= music_start],
                     })
                     results.append(entry)
                 time.sleep(INTER_TRACK_GAP_S)

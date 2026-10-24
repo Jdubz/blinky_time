@@ -107,6 +107,26 @@ static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
     { 115, 121, 127 },  // 49:   7587 Hz center
 };
 
+// SuperFlux filterbank edges (FFT bins): band m is the triangle
+// EDGES[m] .. EDGES[m+1] (peak 1, not area-normalised) .. EDGES[m+2].
+// Generated: centres 62.5 * 2^(i/24) Hz up to 8 kHz, rounded to bins
+// (62.5 Hz each), clipped to 1..127, duplicates removed (numpy):
+//   c = 62.5 * 2.0 ** (np.arange(0, np.log2(8000 / 62.5) * 24 + 1) / 24)
+//   np.unique(np.clip(np.round(c / 62.5).astype(int), 1, 127))
+static constexpr uint8_t SUPERFLUX_EDGES[] = {
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 51, 52, 54,
+    55, 57, 59, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 81, 83, 85, 88, 91, 93, 96, 99, 102, 105,
+    108, 111, 114, 117, 121, 124, 127,
+};
+static_assert(sizeof(SUPERFLUX_EDGES) == SpectralConstants::SUPERFLUX_BANDS + 2,
+              "SUPERFLUX_EDGES must have SUPERFLUX_BANDS + 2 entries (regenerate the table)");
+// Voting bands end at the last centre <= 5 kHz (bin 80): band m is centred on
+// SUPERFLUX_EDGES[m + 1].
+static_assert(SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS] <= 80 &&
+              SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS + 1] > 80,
+              "SUPERFLUX_ONSET_BANDS must end at the last band centred <= 5 kHz");
+
 SharedSpectralAnalysis::SharedSpectralAnalysis()
     : sampleBuffer_{}
     , sampleCount_(0)
@@ -129,6 +149,8 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralFlux_(0.0f)
     , bassFlux_(0.0f)
     , rawSpectralFlux_(0.0f)
+    , superFlux_(0.0f)
+    , prevLogBands_{}
     , rawCentroid_(0.0f)
     , rawCrest_(0.0f)
     , rawRolloff_(0.0f)
@@ -202,6 +224,8 @@ void SharedSpectralAnalysis::reset() {
     spectralFlux_ = 0.0f;
     bassFlux_ = 0.0f;
     rawSpectralFlux_ = 0.0f;
+    superFlux_ = 0.0f;
+    for (int i = 0; i < SpectralConstants::SUPERFLUX_BANDS; i++) prevLogBands_[i] = 0.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -248,8 +272,8 @@ void SharedSpectralAnalysis::process() {
     // see noise-subtracted magnitudes. This removes gain-dependent MEMS noise.
     estimateAndSubtractNoise();
 
-    // Save noise-subtracted magnitudes BEFORE compressor/whitening for detectors
-    // that handle their own normalization (BandFlux uses log(1+gamma*mag))
+    // Save noise-subtracted magnitudes BEFORE compressor/whitening for the
+    // features that handle their own normalisation (raw mels, SuperFlux).
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         preWhitenMagnitudes_[i] = magnitudes_[i];
     }
@@ -262,6 +286,10 @@ void SharedSpectralAnalysis::process() {
     // helper so tests/parity/ can invoke it on injected magnitudes without
     // re-running the full process() pipeline.
     computeRawSpectralFluxAndSavePrev();
+
+    // SuperFlux onset detection function (pre-compressor: the log does the
+    // level normalisation the compressor would).
+    computeSuperFlux();
 
     // Phase 2a shape features (centroid, crest, rolloff, HFC) on pre-compressor
     // magnitudes. Must run BEFORE applyCompressor() so values match the Python
@@ -276,7 +304,9 @@ void SharedSpectralAnalysis::process() {
     // magnitudes, which getMagnitudes() also returns (no per-bin whitening, #182).
     computeDerivedFeatures();
 
-    // Compute band-weighted spectral flux from compressed-but-not-whitened magnitudes.
+    // Band-weighted spectral flux (energy synthesis, pickOnset presence and
+    // bass ratio; onset detection uses computeSuperFlux()), from
+    // compressed-but-not-whitened magnitudes.
     // Using compressed (not whitened) magnitudes preserves absolute transient contrast.
     // Per-bin whitening (running max, 5s decay) would normalize away the peaks
     // that ACF needs for periodicity detection.
@@ -471,6 +501,39 @@ void SharedSpectralAnalysis::estimateAndSubtractNoise() {
         float clean = mag - noiseMag;
         magnitudes_[i] = (clean > floor) ? clean : floor;
     }
+}
+
+void SharedSpectralAnalysis::computeSuperFlux() {
+    float logBands[SpectralConstants::SUPERFLUX_BANDS];
+    for (int m = 0; m < SpectralConstants::SUPERFLUX_BANDS; m++) {
+        const int lo = SUPERFLUX_EDGES[m], c = SUPERFLUX_EDGES[m + 1], hi = SUPERFLUX_EDGES[m + 2];
+        // Edge bins have weight 0: only lo < k < hi contribute.
+        float sum = 0.0f;
+        for (int k = lo + 1; k < hi; k++) {
+            const float w = (k <= c) ? static_cast<float>(k - lo) / static_cast<float>(c - lo)
+                                     : static_cast<float>(hi - k) / static_cast<float>(hi - c);
+            sum += preWhitenMagnitudes_[k] * w;
+        }
+        logBands[m] = log10f(superFluxLambda * sum + 1.0f);
+    }
+    float flux = 0.0f;
+    if (hasPrevFrame_) {
+        // Reference = previous frame max-filtered over +-1 band (vibrato
+        // suppression); half-wave rectified, summed unweighted over the
+        // voting bands (<= 5 kHz, SUPERFLUX_ONSET_BANDS). The top voting
+        // band's upper neighbour is a computed band (static_assert below).
+        static_assert(SpectralConstants::SUPERFLUX_ONSET_BANDS < SpectralConstants::SUPERFLUX_BANDS,
+                      "the +-1 band max filter reads band SUPERFLUX_ONSET_BANDS");
+        for (int m = 0; m < SpectralConstants::SUPERFLUX_ONSET_BANDS; m++) {
+            float ref = fmaxf(prevLogBands_[m], prevLogBands_[m + 1]);
+            if (m > 0) ref = fmaxf(ref, prevLogBands_[m - 1]);
+            const float d = logBands[m] - ref;
+            if (d > 0.0f) flux += d;
+        }
+    }
+    BLINKY_ASSERT_ONCE(safeIsFinite(flux), "SuperFlux non-finite");
+    superFlux_ = flux;
+    for (int m = 0; m < SpectralConstants::SUPERFLUX_BANDS; m++) prevLogBands_[m] = logBands[m];
 }
 
 void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, float* outputMelBands) {

@@ -12,7 +12,8 @@
 // Supports up to 4 output channels for future multi-task models.
 //
 // Output is used for onset / visual pulse detection only (sparks, flashes on
-// kicks and snares; AudioTracker::updatePulseDetection).
+// kicks and snares; NNOnsetDetector in OnsetDetector.h, picked by
+// AudioTracker::pickOnset).
 //
 // NOT used for tempo or phase: AudioTracker's rhythm sources (ACF, PLP fold)
 // are bass flux, bass energy and mic level. The NN fires on off-beat hats
@@ -177,7 +178,7 @@ public:
         // Cache quantization params for incremental quantization. A non-positive
         // scale means the model wasn't quantized correctly at export time —
         // running inference with invScale=1.0 silently produces garbage. Fail
-        // init so the caller (AudioTracker::begin) sees nnActive_=false and
+        // init so the caller (AudioTracker::begin) selects spectral flux and
         // BLINKY_ASSERTs there. See CLAUDE.md "No Silent Fallbacks".
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;

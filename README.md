@@ -18,7 +18,7 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 - **Unified Architecture** - Generator→Effect→Renderer pipeline supporting matrix, linear, and custom layouts
 
 ### Audio Analysis
-- **🥁 Onset Detection** - Fires on every percussive event. Devices use spectral flux; a Conv1D onset network (`FrameOnsetNN`) is built in but off until a model beats flux (see `audio/AudioTracker.h`)
+- **🥁 Onset Detection** - Fires on kicks and snares (on or off the beat), not hi-hats. Devices use spectral flux; a Conv1D onset network (`FrameOnsetNN`) is built in but off until a model beats flux (see `audio/AudioTracker.h`)
 - **🎵 AudioTracker** - Multi-source ACF tempo estimation + PLP (epoch-fold) phase and pattern tracking
 - **🎤 Adaptive Microphone** - Fixed hardware gain with window/range normalization (AGC removed v72)
 - **50+ Tunable Parameters** - Comprehensive audio parameter system
@@ -147,7 +147,7 @@ Fire parameters are universal and dimension-normalized — they auto-adapt to an
 ## 🎵 Audio Features
 
 - **Adaptive Microphone** - Fixed hardware gain with window/range normalization
-- **Onset Detection** - Responds to every percussive event (kicks, snares, hi-hats)
+- **Onset Detection** - Responds to drum hits (kicks and snares), on or off the beat
 - **Rhythm Tracking** - Tempo and phase for beat-synced animation
 - **Configurable Sensitivity** - Adjustable via web app or serial API
 - **Real-time Visualization** - Live audio data via `stream on`

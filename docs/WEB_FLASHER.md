@@ -83,7 +83,7 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam
 **Pre-flight** (`deviceGates.ts`, `flashFlow.ts`, ported from `tools/deploy_local.py`):
 - `json info`: an nRF52840 with a hardware serial, and **configured**.
 - Confirmations for a reinstall, a downgrade, or a `SETTINGS_VERSION` change.
-- **Uptime ≥ 75 s** before anything that ends in a reset, which is also what the device enforces for `ota commit`. `deploy_local.py` keeps 5 min 15 s because it resets devices of any age, including b190-era firmware that counts every boot for 5 minutes. Signed OTA only exists on b215+, whose reboot counter counts only fault resets (watchdog or CPU lockup), and `ota commit`'s soft reset is neither.
+- **Uptime ≥ 75 s** before anything that ends in a reset, which is also what the device enforces for `ota commit`. `deploy_local.py` uses the same 75 s for firmware that reports `resetReason` in `json info`, and 5 min 15 s for older firmware, which counts every boot for 5 minutes. Signed OTA only exists on b215+, whose reboot counter counts only fault resets (watchdog or CPU lockup), and `ota commit`'s soft reset is neither.
 - `ota status` must answer. Firmware older than signed OTA gets a clear "update it once another way" message.
 
 **After the update:**

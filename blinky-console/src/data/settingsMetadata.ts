@@ -484,16 +484,10 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
 
   // Pulse detection
-  pulsethreshmult: {
-    displayName: 'Pulse Threshold Mult',
+  fluxdelta: {
+    displayName: 'Flux Onset Delta',
     tooltip:
-      'Pulse baseline threshold multiplier (1.0-5.0). ODF must exceed baseline by this factor to fire pulse. Higher = fewer pulses. Default: 2.0.',
-    unit: 'x',
-  },
-  pulseminlevel: {
-    displayName: 'Pulse Min Level',
-    tooltip:
-      'Minimum mic level for pulse detection (0-0.2). Prevents firing pulse on silence/noise. Default: 0.03.',
+      'Spectral-flux onset threshold (0.5-60): the SuperFlux value must exceed its 100 ms average by this much. Higher = fewer onsets. Default: 7.',
     unit: '',
   },
 
@@ -512,18 +506,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
 
   // ODF baseline tracking
-  blfastdrop: {
-    displayName: 'Baseline Fast Drop',
-    tooltip:
-      'ODF baseline fast drop rate (0.01-0.2). How quickly the floor-tracking baseline drops to follow decreasing ODF. Default: 0.05.',
-    unit: '',
-  },
-  blslowrise: {
-    displayName: 'Baseline Slow Rise',
-    tooltip:
-      'ODF baseline slow rise rate (0.001-0.05). How slowly the baseline rises, preventing it from chasing transients. Default: 0.005.',
-    unit: '',
-  },
   odfpkdecay: {
     displayName: 'ODF Peak-Hold Decay',
     tooltip:

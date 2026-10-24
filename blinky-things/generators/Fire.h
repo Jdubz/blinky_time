@@ -206,7 +206,19 @@ private:
     // physical strips never exceed this (largest is the 141-LED scarf).
     static constexpr int   MAX_LINEAR_LEDS = 256;
     static constexpr float kEmberAttackTau = 0.09f;  // ~90 ms swell on onsets
-    static constexpr float kEmberDecayTau  = 0.40f;  // ~400 ms ember cool-down
+    static constexpr float kEmberDecayTau  = 0.15f;  // ember cool-down (was 0.40: hits smeared, #280)
+
+    // === Linear (string) burst timing (#280) ===
+    // With every drum hit able to burst (normalized onsets), the strip's
+    // bursts lived ~1 s (pulse 240 ms -> flame envelope 250 ms -> ember fade
+    // 400 ms; splashes ~0.5 s, stretched while energy was high) and ran into
+    // one wash at 5 hits/s. Owner: "significantly shorter lived", "too
+    // sensitive". Constants until the look is approved; then persisted params.
+    static constexpr float kLinearHitTau      = 0.08f;  // hit glow decay (onset-triggered)
+    static constexpr float kLinearBurstLifeS  = 0.12f;  // splash life at strength 0.6
+    static constexpr float kLinearBurstMinGap = 0.25f;  // min time between bursts (<= 4/s)
+    float linearHitEnv_ = 0.0f;       // onset-driven hit envelope (linear ember glow)
+    float sinceBurstS_ = 1.0f;        // seconds since the last burst (linear rate limit)
     float emberLevel_[MAX_LINEAR_LEDS];              // 0..1 smoothed brightness
 
     void initGrid();

@@ -1092,7 +1092,7 @@ Ranked by evidence basis after 2026-04-28 peak-picker parity tests:
 
 1. **Firmware peak-picker tuning sweep** — bass gate, PLP confidence threshold, cooldown. Currently adds +0.12 F1 over simple offline picker; tuning could find a better operating point. Cheap (no retraining), uses existing `param-sweep` tooling. **Highest expected ROI.**
 2. **Cleaner training labels** (#72-blocker) — `kick_weighted` from demucs has 32% bleed contamination per HYBRID_FEATURE_ANALYSIS_PLAN.md. Cleaner targets directly improve offline F1, which firmware lifts further. ~few days of label-side work.
-3. **Recompute v33's actual offline-on-edm/ ceiling with the firmware-style peak-picker logic** (bass gate + PLP bias). If we can reproduce ~0.57 offline using the firmware-equivalent picker in `analysis/peak_picker.py` (#35), we have a fast offline iteration loop instead of the 30+ min per-experiment device-validation cycle.
+3. **Recompute v33's actual offline-on-edm/ ceiling with the firmware-style peak-picker logic** (bass gate + PLP bias). If we can reproduce ~0.57 offline using the firmware's own picker (the host tracker harness, `tests/tracker/`; the Python mirror `analysis/peak_picker.py` was deleted in #280), we have a fast offline iteration loop instead of the 30+ min per-experiment device-validation cycle.
 
 ### Peak-picker tuning result (2026-04-28) — ceiling reached
 

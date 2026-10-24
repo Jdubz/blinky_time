@@ -54,7 +54,7 @@ namespace RecordProto {
     };
 
     // FRAME flags
-    constexpr uint8_t FRAME_NN_READY     = 0x01;  // NN model loaded (nna meaningful)
+    constexpr uint8_t FRAME_NN_READY     = 0x01;  // NN model loaded (the onset detector is the NN)
     constexpr uint8_t FRAME_PULSE        = 0x02;  // onset pulse fired this frame
     constexpr uint8_t FRAME_FFT_OVERRUN  = 0x04;  // mic FFT ring overran since previous frame
     constexpr uint8_t FRAME_HAS_MEL      = 0x08;  // mel[] appended
@@ -75,7 +75,7 @@ namespace RecordProto {
     struct __attribute__((packed)) FramePayload {
         uint32_t sampleIndex;  // absolute index one past the window's last sample
         uint32_t ms;           // device millis() when the frame was reported
-        uint16_t nna;          // raw NN activation, 0..1 → 0..65535
+        uint16_t nna;          // onset activation (either detector, OnsetDetector.h), 0..1 → 0..65535
         uint16_t pulse;        // pulse strength this frame (0 unless fired), 0..1 → 0..65535
         uint16_t level;        // AdaptiveMic normalized level, 0..1 → 0..65535
         uint16_t rawLevel;     // mean |x|/32768 over the loop window, 0..1 → 0..65535

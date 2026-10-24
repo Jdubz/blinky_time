@@ -54,7 +54,7 @@ The flow, when the owner asks:
 
 **Device on THIS machine's USB (not blinkyhost's):** `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
 - **Explicit target:** `json info` `device.id` must match `--device-id`.
-- **Pre-flight:** the device must be configured, with ≥ 5 min 15 s uptime (b190-era reboot counter).
+- **Pre-flight:** the device must be configured, with ≥ 75 s uptime if its `json info` reports `resetReason` (its reboot counter counts only fault resets), else ≥ 5 min 15 s (older firmware counts every boot until 5 min of uptime).
 - **Firmware:** the latest stable release by default (downloaded, sha256-verified). `--release bN` selects a specific release, and `--dev` a local build of a clean tree (test devices only). Then the server's hex/UF2 validators run.
 - **Bootloader identity before writing:** the drive's USB serial must equal the chip's, and the bootloader must be 0.8.0-10.
 - **Post-deploy:** version, identity, config and BLE are checked *before* `save`, then `restore_runtime_settings` + `save` and a 75 s stability wait.
@@ -139,17 +139,28 @@ Rules:
 
 The 60s threshold is intentional and load-bearing for sculpture-device recovery. Don't tune it down; tune your test scripts up.
 
-## CRITICAL: Task is Onset Detection, Not Beat Detection
+## CRITICAL: Task is Drum-Hit Detection, Not Beat Detection
 
-**The model and firmware are doing ONSET DETECTION** — fire on every percussive event (kick, snare, ghost notes, hi-hats) regardless of metrical position. **We do NOT care whether an event lands on or off the beat.** Beat-detection framing is wrong for this task and creates noise — both metric noise (scoring against beat positions when the goal is to fire on every drum hit) and label noise (training on beat consensus teaches the model to suppress off-beat onsets, which we want to keep).
+**The firmware detects DRUM HITS: kicks and snares** (owner, 2026-10-22). Hi-hats, cymbals and non-percussive changes (bass notes, synth stabs, swells, vocals) are not targets; a flash on one is a false positive. **Metrical position does not decide what counts:** a kick on an off-beat or a syncopated 8th is a target exactly like one on the downbeat. Beat-detection framing is still wrong: scoring against beat positions, or training on beat consensus, teaches the detector to suppress off-beat hits we want.
+
+How strongly a hit shows is a separate, later layer: its weight in the learned rhythm *pattern* (bar-level, per drum class, syncopation-aware, not a quarter-note grid), applied as a strength multiplier, never as a gate on detection.
 
 Concrete consequences:
-- **Training labels must be onset-flavored** (`onsets_consensus`, `kick_weighted_drums`, etc.). Never use `consensus_v*` (beat tracker output) or anything from `allin1`/`beat_this`/`beatnet`/`demucs_beats` as a training target. Those directories are archived under `_archive_beats_2026_04_29/`. `prepare_dataset.py` refuses to load paths with those markers.
-- **Eval ground truth is `.onsets_consensus.json`**, not `.beats.json`. The blinky-server validation harness reads onsets_consensus when present (since 2026-04-29 it requires it). Beat GT files were archived out of `blinky-test-player/music/edm/`.
+- **Score detectors on kicks and snares**, not on all onsets: kick/snare recall at ±30/±50 ms and the share of detections that land on a kick or snare, against cleaned `kick_weighted` labels. All-onset F1 at ±100 ms scored 0.68 while the hat looked "almost entirely random" (#280); it is a secondary number at most.
+- **Training labels must be onset-flavored drum labels** (`kick_weighted_drums`, `onsets_consensus`). Never use `consensus_v*` (beat tracker output) or anything from `allin1`/`beat_this`/`beatnet`/`demucs_beats` as a training target. Those directories are archived under `_archive_beats_2026_04_29/`. `prepare_dataset.py` refuses to load paths with those markers.
+- **Eval ground truth is onset labels**, never `.beats.json`. The blinky-server validation harness reads `.onsets_consensus.json` (required since 2026-04-29). Beat GT files were archived out of `blinky-test-player/music/edm/`.
 - **Beat-tracking systems (allin1, beat_this, beatnet, demucs_beats, the BPM half of madmom)** still exist as reference scripts but their *output is beats* and must not flow into the training-label pipeline.
-- **BPM in firmware (PLP / ACF tempo tracking)** is fine — it's used to phase-lock the visualizer animation, not to gate onset detection. `beatGridPatternMin=0.0` (b149+ default) keeps the AND-gate off so the visualizer fires on every onset, not only on beats.
+- **BPM in firmware (PLP / ACF tempo tracking)** is fine: it phase-locks the visualizer animation and supplies period/phase to the rhythm-pattern layer. `beatGridPatternMin=0.0` (b149+ default) keeps the beat-grid AND-gate off.
 
-When in doubt: an onset is *every percussive event*. A beat is *every metrical position*. We want the former. Beats are a strict subset of onsets, and a beat-detection model trained or scored on beats will *under-fire* on the deployment task.
+## CRITICAL: Audio Changes Fix Root Causes, Backed by Literature
+
+**No guess-and-check tuning and no stacked patches in the audio pipeline** (owner, 2026-10-22). Every change to detection, picking or gating must:
+1. **name the root cause** it removes, shown with a measurement on edm/ (e.g. "61% of missed kicks are blocked by an earlier non-drum detection"), not a symptom;
+2. **follow a published, proven method** for that problem, cited (paper + what it reports), and say where we deviate and why; see `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` and `reports/`;
+3. **replace mechanisms rather than add to them:** when a new structure makes a gate, threshold or special case redundant, delete it in the same change. A new knob that compensates for another knob is a patch, and is refused;
+4. **be measured for both detectors** through the `OnsetDetector` / `AudioTracker::pickOnset` abstraction, with the drum metrics above, before and after.
+
+Parameter sweeps are fine *inside* a literature-backed design (to set its constants); they are not a design method.
 
 ## CRITICAL: Validation Corpus
 

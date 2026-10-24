@@ -38,6 +38,7 @@ struct FrameOnsetNN {
 #endif
 
 #include "SharedSpectralAnalysis.h"
+#include "OnsetDetector.h"
 #include "PhaseClock.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
@@ -47,7 +48,7 @@ struct FrameOnsetNN {
 static constexpr int SLOT_COUNT = 4;
 static constexpr int SLOT_BINS = 16;
 
-// T1.5 — spectral feature snapshot captured at each NN firing moment.
+// T1.5 — spectral feature snapshot captured at each onset (either detector).
 // Emitted in the transient JSON so offline analysis can cluster TP vs FP
 // firings by spectral signature without needing persist_raw signal_frames
 // replay.
@@ -102,7 +103,12 @@ public:
     const AdaptiveMic& getMic() const { return mic_; }
     SharedSpectralAnalysis& getSpectral() { return spectral_; }
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
-    const FrameOnsetNN& getFrameOnsetNN() const { return frameOnsetNN_; }
+    const FrameOnsetNN& getFrameOnsetNN() const { return nnDetector_.model(); }
+    // The onset detector in use (OnsetDetector.h): "spectral-flux" or "onset-nn".
+    const char* getOnsetDetectorName() const { return detector_->name(); }
+    // Switch detector at runtime by name ("spectral-flux", or "onset-nn" when
+    // built in and ready). False for an unknown or unavailable one.
+    bool selectOnsetDetector(const char* name);
     float getCurrentBpm() const { return bpm_; }
     int getPlpPeriod() const { return plpBestPeriod_; }  // ACF period in spectral frames (62.5 Hz), integer
     float getPlpPeriodF() const { return plpPeriodF_; }  // Fractional period (frames) — drives phase advance
@@ -135,9 +141,9 @@ public:
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
 
-    // Raw NN activation (before pulse detection threshold/cooldown)
-    float getRawNNActivation() const { return rawNNActivation_; }
-    uint32_t getRawNNPeakMs() const { return rawNNPeakMs_; }
+    // Onset activation (0-1, either detector) of the last frame with fresh
+    // evidence, before peak picking and gates.
+    float getOnsetActivation() const { return onsetActivation_; }
 
     // Absolute mic-sample index (AdaptiveMic ring counter) at which the most
     // recent spectral frame's window ended. Same timeline as record-mode audio.
@@ -199,71 +205,67 @@ public:
     // Spectral flux contrast (power-law sharpening before ACF)
     float odfContrast = 1.25f;
 
-    // Pulse detection thresholds
-    // Flux onsets fire above odfBaseline * this. One default for the class,
-    // the factory config and restore_runtime_settings (#272: the class said
-    // 1.5 while devices booted with 2.0, so the harness scored a threshold
-    // devices never ran). edm/ host sweep, CPU cost model (2026-10-21):
-    // 1.5 F1 0.542 R 0.682 | 2.0 F1 0.546 R 0.679 | 2.5 F1 0.547 R 0.668 |
-    // 3.0 F1 0.550 R 0.658. Higher trades recall (every hit) for little F1.
-    static constexpr float PULSE_THRESHOLD_MULT_DEFAULT = 2.0f;
-    float pulseThresholdMult = PULSE_THRESHOLD_MULT_DEFAULT;
-    float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
-    // edm/ host sweep with the CPU cost model (v97): F1 plateaus at ~0.54 for
-    // floors 0-0.03; 0.01 is best (F1 0.542, R 0.682, mean offset -0.1 ms,
-    // measured at pulseThresholdMult 1.5; at the device's 2.0: F1 0.546).
-    static constexpr float FLUX_ONSET_FLOOR_DEFAULT = 0.01f;
-    float pulseOnsetFloor = 0.20f;     // NN activation threshold for peak-picking (v33 sweep: 0.20 lifts F1 0.398→0.442 vs 0.30; raising threshold doesn't improve P, just drops R)
-    // pulseNNGate removed in b114 — NN is now the primary signal, not a gate
-    // Spectral-flux path's own floor (v97). It used to share pulseOnsetFloor,
-    // whose 0.20 was tuned for NN activations and left flux recall at ~0.24.
-    float fluxOnsetFloor = FLUX_ONSET_FLOOR_DEFAULT;
+    // Pulse detection
+    // Spectral-flux picker delta (FluxOnsetDetector, SuperFlux ODF units).
+    float fluxDelta = FluxOnsetDetector::DELTA_DEFAULT;
+    // NN activation threshold (the NN's picker delta). With the online
+    // picker (no 96 ms window or cooldown) the old 0.20 fired 10/s; edm/
+    // host sweep, drum F at 0 dB: 0.4 0.587 | 0.5 0.632 | 0.55 0.641 |
+    // 0.6 0.638 | 0.7 0.607 (-20 dB: 0.5 0.656 | 0.55 0.669 | 0.6 0.671).
+    static constexpr float PULSE_ONSET_FLOOR_DEFAULT = 0.55f;
+    float pulseOnsetFloor = PULSE_ONSET_FLOOR_DEFAULT;
     // Rhythm outputs need recent onsets (see update()): full for
     // RHYTHM_HOLD_S after the last onset, then fade to 0 over RHYTHM_FADE_S.
     static constexpr float RHYTHM_HOLD_S = 2.0f;
     static constexpr float RHYTHM_FADE_S = 2.0f;
 
-    // Phase 2a crest-factor gate (Phase 4 Path A experiment).
-    // Suppresses NN-triggered pulses when the current-frame crest factor
-    // (peak/RMS of raw magnitudes) is below this threshold — tonal impulses
-    // have lower crest than drum hits on-device per Phase 3 measurement
-    // (|d|=0.74 between drum-peak and non-onset frames). Default 0 = disabled.
-    // Sweep range 0..10 against the validation corpus to tune.
-    float crestGateMin = 0.0f;
+    // === Shared onset gate (AudioTracker::pickOnset) ===
+    // Applied to every detector's candidates alike (OnsetDetector.h). The
+    // bass-ratio gate and the presence gate (pulseMinLevel) were deleted
+    // with the online picker (#280): on edm/ the bass gate cost both
+    // detectors recall for no drum F (flux 0.649 -> 0.648 off, -20 dB
+    // 0.640 -> 0.647; NN 0.641 -> 0.644), and presence never blocked an
+    // onset, in music or in noise (the old flux fired 3-6/s on steady
+    // noise at -60..-30 dBFS with it on; SuperFlux fires 0).
+    //
+    // Rhythm-pattern bias: while the PLP pattern is confident, a candidate
+    // at a position the pattern predicts no hit needs up to this much more
+    // activation (scaled by confidence and by how low the pattern is there;
+    // 0 = off). Beat-informed, so keep it easy to switch off for testing;
+    // it should become a strength multiplier rather than a gate once onset
+    // detection is accurate enough (separate work). Was NN-only.
+    static constexpr float ONSET_PATTERN_BIAS_DEFAULT = 0.3f;
+    float onsetPatternBias = ONSET_PATTERN_BIAS_DEFAULT;
 
-    // b142 — PLP pattern AND-gate. When beatGridPatternMin > 0 AND
-    // periodicityStrength_ > beatGridMinRhythmStrength, NN-triggered pulses
-    // are suppressed unless plpPulseValue_ at the current phase is at least
-    // beatGridPatternMin. plpPulseValue_ is the epoch-fold pattern amplitude
-    // at the current phase: high at EVERY position the pattern predicts
-    // an onset (beats 1-4, not just phase=0), low between them.
-    //
-    // Previous b141 attempt used phase-distance-from-phase=0 (one accent
-    // per period) and lost 39 pp recall on held-out because plpBestPeriod
-    // is often a bar-length pattern with 2-4 accent positions. The pattern
-    // value correctly accepts all accent positions regardless of period
-    // interpretation.
-    //
-    // The rhythmStrength guard prevents suppression during ACF warmup
-    // (~1.6 s) and on low-periodicity content (ambient, sparse).
-    // 0 = disabled (default since 2026-04-25).
-    //
-    // 2026-04-25: default flipped 0.4 → 0.0 after persist_raw analysis on
-    // 5 edm_holdout tracks. plpPulseValue at GT-beat frames matched ≥0.4
-    // only 0-35% of the time even when the rhythm period itself was
-    // tracked correctly (gtPatternCorr 0.86-0.99). The gate suppressed
-    // 65-84% of true onsets across the corpus (recall fell from 0.65 to
-    // 0.22 in the validation runs). PLP is a reliable PERIOD tracker but
-    // a poor PER-FRAME gate. See ML_IMPROVEMENT_PLAN 2026-04-25 §"PLP
-    // accuracy". Keep the runtime tunable so the gate can be re-enabled
-    // per-device or for sparse-content profiles where false positives
-    // are more expensive than missed firings.
-    float beatGridPatternMin = 0.0f;
-    float beatGridMinRhythmStrength = 0.2f;
+    // Pulse envelope decay (synthesizeOutputs). Shorter than the gaps between
+    // drum hits, so each hit shows as its own flash: kick+snare inter-onset
+    // intervals on edm/ are p10 112 / p25 157 / p50 240 ms, and at 100 ms the
+    // envelope is down to ~21% by the p25 gap. Host, device level, drum hits
+    // that make a visible flash (a jump >= 0.2) by tau: 60 ms 79%, 100 ms
+    // 77%, 150 ms 74%, 240 ms 68% (#280).
+    // 100 ms read as a glitch on hat_v1 (owner): default 150 ms (74%), and
+    // runtime-tunable (`pulsedecay`, ms) to set the look by eye.
+    static constexpr float PULSE_DECAY_MS_DEFAULT = 150.0f;
+    float pulseDecayMs = PULSE_DECAY_MS_DEFAULT;
 
-    // ODF baseline tracking rates
-    float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
-    float baselineSlowRise = 0.005f;   // Slow rise rate for floor tracking
+    // === Shared peak picker (AudioTracker::pickOnset) ===
+    // Online peak picking, Boeck, Krebs & Schedl, "Evaluating the online
+    // capabilities of onset detection methods" (ISMIR 2012): frame t is an
+    // onset if its ODF is the maximum of the last W1 frames and itself, it
+    // reaches (mean of the last W3 frames and itself) + delta, and the last
+    // onset was more than W5 frames ago. Their online values are 30 / 100 /
+    // 30 ms; at 62.5 fps W1 = 2, W3 = 6, W5 = 2. No look-ahead: the onset is
+    // reported at the frame that peaks. W3 and delta are per detector
+    // (OnsetDetector::averageFrames / delta). This replaces the 96 ms
+    // local-max window, the tempo-adaptive 40-150 ms cooldown, the adaptive
+    // flux baseline and the crest / beat-grid / re-arm gates: on edm/ the
+    // cooldown blocked 61-71% of the kicks the old picker missed (#280).
+    static constexpr int ONSET_HISTORY_MAX = 16;  // frames of ODF history kept
+    static constexpr uint8_t ONSET_MAX_FRAMES_DEFAULT = 2;   // W1
+    static constexpr uint8_t ONSET_MIN_GAP_FRAMES_DEFAULT = 2;  // W5
+    uint8_t onsetMaxFrames = ONSET_MAX_FRAMES_DEFAULT;
+    uint8_t onsetMinGapFrames = ONSET_MIN_GAP_FRAMES_DEFAULT;
+    uint8_t fluxAverageFrames = FluxOnsetDetector::AVERAGE_FRAMES_DEFAULT;  // W3, flux
 
     // ODF peak-hold decay
     float odfPeakHoldDecay = 0.85f;    // Peak-hold release rate (~100ms at 62.5Hz)
@@ -286,8 +288,11 @@ private:
     ISystemTime& time_;
     AdaptiveMic mic_;
     SharedSpectralAnalysis spectral_;
-    FrameOnsetNN frameOnsetNN_;
-    bool nnActive_ = false;
+    // Onset detectors (OnsetDetector.h). detector_ is the one in use: the NN
+    // when built in and ready, otherwise spectral flux (devices: flux).
+    FluxOnsetDetector fluxDetector_;
+    NNOnsetDetector<FrameOnsetNN> nnDetector_;
+    OnsetDetector* detector_ = &fluxDetector_;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
     // === OSS buffer (~12 seconds: 792 samples @ ~66 Hz) ===
@@ -352,35 +357,29 @@ private:
     uint8_t plpBestSource_ = 0;                // 0=flux, 1=bass, 2=nn (which source won)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
-    // === Pulse detection (NN-primary, spectral flux fallback) ===
-    // NN activation is the primary onset signal (F1=0.893 offline).
-    // Spectral flux is only used when NN is unavailable (model failed to load).
-    float odfBaseline_ = 0.0f;        // Floor-tracking baseline for active signal
-    float odfPeakHold_ = 0.0f;        // Peak-hold for energy synthesis
+    // === Onset picking (shared by every detector, see OnsetDetector.h) ===
+    // Outputs never know which detector ran: control_.onset is the strength
+    // (0-1 activation at the peak), control_.pulse the envelope of the
+    // activation, onset density the count of picked onsets.
+    float odfPeakHold_ = 0.0f;        // Peak-hold of spectral flux: energy synthesis + presence gate
     float lastPulseStrength_ = 0.0f;  // Max pulse fired by any frame processed in the last update()
     float lastFramePulse_ = 0.0f;     // Pulse fired by the most recent frame
     FrameHook frameHook_ = nullptr;
     void* frameHookCtx_ = nullptr;
-    uint32_t lastPulseFrame_ = 0;     // frameClock_ of the last fired pulse (cooldown is in frames)
-    // T1.4/T1.5 — per-firing diagnostics captured at updatePulseDetection
-    // when a pulse fires. Consumed by the TRANSIENT JSON emitter in
+    uint32_t lastPulseFrame_ = 0;     // frameClock_ of the last onset (minimum gap W5, rhythm presence)
+    // T1.4/T1.5 — per-onset diagnostics captured by pickOnset at every onset
+    // (either detector). Consumed by the TRANSIENT JSON emitter in
     // blinky-things.ino for offline FP/TP class clustering.
     uint8_t lastPulseGateMask_ = 0;
     PulseFeatureSnapshot lastPulseFeatures_ = {0};
 
-    float prevSignal_ = 0.0f;          // Previous frame signal (t-1)
-    float prevPrevSignal_ = 0.0f;      // Frame t-2 (for local-max: t-1 > t-2 AND t-1 > t)
-
-    // === NN activation state ===
-    float rawNNActivation_ = 0.0f;    // Current NN output (unfiltered)
-    float prevNNActivation_ = 0.0f;   // Previous frame NN output
-    // No smoothing on the NN activation (#169): peak-picking reads it raw.
-    // The 0.77/0.23 blend removed here dulled every hit by 23%.
-    float nnPeak_ = 0.0f;             // Max raw NN activation over frames processed in the last update()
+    // ODF of the last fresh frames, newest first ([0] = t-1). The picker's
+    // max and moving-average windows read it.
+    float odfHistory_[ONSET_HISTORY_MAX] = {0};
+    float onsetActivation_ = 0.0f;     // Activation of the last fresh frame (getOnsetActivation)
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
-    uint32_t rawNNPeakMs_ = 0;        // Timestamp of last NN activation peak
     uint32_t lastFrameEndSampleIdx_ = 0;  // See getLastFrameEndSampleIdx()
     bool haveFrameEnd_ = false;           // lastFrameEndSampleIdx_ is a real frame end (PhaseClock)
 
@@ -389,10 +388,8 @@ private:
     int onsetCountInWindow_ = 0;
     uint32_t onsetDensityWindowStart_ = 0;
 
-    // === Pulse envelope (spectral flux auto-normalized) ===
-    float fluxPeak_ = 0.001f;        // Running peak of spectral flux (for normalization)
+    // === Pulse envelope (driven by the onset activation) ===
     float pulseEnvelope_ = 0.0f;     // Decaying envelope triggered by onset events
-    float prevPulseOutput_ = 0.0f;   // For onset density counting
 
     // === Frame clock ===
     uint32_t frameClock_ = 0;         // Spectral frames processed since boot
@@ -432,11 +429,13 @@ private:
     // === Internal methods ===
     // Everything that must run exactly once per spectral frame. elapsedFrames:
     // real time the frame covers on the sample clock (1, more after an overrun).
-    void processFrame(bool runNN, float elapsedFrames);
+    // mayRunExpensive: this frame may run the detector's expensive work.
+    void processFrame(bool mayRunExpensive, float elapsedFrames);
     void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
     void runAcf();
-    float updatePulseDetection(float spectralFlux, bool freshNN);  // One frame; returns pulse strength (0 = none)
+    float pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams& params);  // One frame; returns onset strength (0 = none)
+    OnsetDetectorParams detectorParams() const;
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
     void advancePlpPhase(float frames);  // Advance phase by `frames` + read pattern value
     float patternValueAt(float phase) const;  // accent-aligned PLP pattern, interpolated

@@ -41,7 +41,7 @@ model:
 
 labels:
   labels_type: "kick_weighted"
-  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted"
+  kick_weighted_dir: "${BLINKY_DATA}/labels/kick_weighted"
   target_type: "binary"           # Use per-onset weights directly (kick=1.0, snare=1.0, hihat=0.0)
 
 loss:

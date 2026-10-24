@@ -9,9 +9,10 @@ Pipeline (fails loud at every step, exit codes match deploy.sh):
      - `json info` identifies the device; --device-id must match device.id
        (explicit target, like deploy.sh's required --devices).
      - device must be configured (not safe mode) unless --allow-unconfigured.
-     - uptime >= 5 min 15 s: the entry touch is a reset, and b190-era
-       firmware counts every boot toward the 5-boot config quarantine until
-       5 min of uptime clears it (stricter than CLAUDE.md's 60-second rule).
+     - uptime before the entry touch (a reset): 75 s when the firmware's
+       reboot counter counts only fault resets (it reports `resetReason` in
+       `json info`), else 5 min 15 s (older firmware counts EVERY boot toward
+       the 5-boot config quarantine until 5 min of uptime clears it).
      - snapshot of `json info` + `device show` saved for rollback/forensics.
   2. Compile via scripts/build.sh (build-number bump + Version.h), unless
      --skip-compile.
@@ -71,11 +72,24 @@ BL_PID = 0x0045
 DRIVE_LABEL = "XIAO-SENSE"
 HEX = "/tmp/blinky-build/blinky-things.ino.hex"  # POSIX; cygwin_to_native() maps it on Windows
 STABLE_UPTIME_MS = 75_000      # CLAUDE.md: wait >= 75 s so markStable() fires
-# Pre-flight is stricter: firmware before e3296379 (b190 and older) counts
-# EVERY boot toward the 5-boot quarantine and only clears the counter after
-# 5 min of uptime (RebootFrequencyCounter::STABLE_UPTIME_MS). Our bootloader
-# touch is a boot, so don't start one inside that window.
+# Pre-flight uptime before our bootloader touch (a reset). Firmware before
+# e3296379 (2026-10-15) counts EVERY boot toward the 5-boot config quarantine
+# and only clears the counter after 5 min of uptime
+# (RebootFrequencyCounter::STABLE_UPTIME_MS), so a touch inside that window
+# can quarantine the config. From e3296379 on, only fault resets (watchdog /
+# lockup in RESETREAS) count; the touch and the bootloader's reset into the
+# new app are soft resets (SREQ) and don't. The firmware can't be dated by
+# build number (a --dev build keeps the last release's number), so we key on
+# a capability: `json info` gained "resetReason" (b8b71724, 2026-10-21) after
+# the counter went fault-only, so a device that reports it gets the 60-second
+# rule (STABLE_UPTIME_MS); any other device (incl. b212-b214, which are
+# fault-only but predate the field) keeps the old 5 min 15 s.
 PREFLIGHT_UPTIME_MS = 5 * 60_000 + 15_000
+
+
+def preflight_uptime_ms(info):
+    """Uptime the device needs before the bootloader touch (see above)."""
+    return STABLE_UPTIME_MS if "resetReason" in info else PREFLIGHT_UPTIME_MS
 LOOP_METRICS_SETTLE_S = 6      # deploy.sh: let the 5 s LoopMetrics window close
 BL_ENTRY_TIMEOUT_S = 30
 WRITE_TIMEOUT_S = 90           # copy + bootloader flash + drive removal
@@ -263,13 +277,16 @@ def preflight(args):
         raise DeployError("device is unconfigured/safe mode - investigate first (CLAUDE.md "
                           "recovery order), or pass --allow-unconfigured", 6)
     uptime = int(info.get("millis", 0))
-    if uptime < PREFLIGHT_UPTIME_MS:
-        wait = (PREFLIGHT_UPTIME_MS - uptime) / 1000 + 1
-        log(f"  uptime {uptime / 1000:.0f}s < {PREFLIGHT_UPTIME_MS // 1000}s (reboot-counter stable "
+    need = preflight_uptime_ms(info)
+    log(f"  reboot counter: {'fault resets only (reports resetReason)' if need == STABLE_UPTIME_MS else 'counts every boot (pre-resetReason firmware)'}"
+        f" - needs {need // 1000}s uptime before the bootloader touch")
+    if uptime < need:
+        wait = (need - uptime) / 1000 + 1
+        log(f"  uptime {uptime / 1000:.0f}s < {need // 1000}s (reboot-counter stable "
             f"window) - waiting {wait:.0f}s")
         time.sleep(wait)
         info = json_info(args.port)
-        if int(info.get("millis", 0)) < PREFLIGHT_UPTIME_MS:
+        if int(info.get("millis", 0)) < need:
             raise DeployError("device rebooted during the pre-flight wait", 6)
 
     snap_dir = Path(args.snapshot_dir)

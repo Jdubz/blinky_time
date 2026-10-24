@@ -141,7 +141,11 @@ public:
     //   fluxOnsetFloor, the spectral-flux path's own pulse floor. Same size.
     // Version 98: noiseGate removed from StoredMicParams again (the absolute gate
     //   is gone: a fixed threshold swallows quiet music on this mic).
-    static const uint8_t SETTINGS_VERSION = 98;
+    // Version 99: onset detection is SuperFlux + the Boeck online picker (#280).
+    //   StoredTrackerParams drops pulseThresholdMult, fluxOnsetFloor,
+    //   crestGateMin, baselineFastDrop, baselineSlowRise, pulseMinLevel;
+    //   adds fluxDelta. pulseOnsetFloor (NN) default 0.20 -> 0.55.
+    static const uint8_t SETTINGS_VERSION = 99;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -343,23 +347,13 @@ public:
         float odfContrast;
 
         // Pulse detection
-        float pulseThresholdMult;
-        float pulseMinLevel;
         float pulseOnsetFloor;
-        float fluxOnsetFloor;     // v97: was pulseNNGate (dead since b114); spectral-flux pulse floor
-        // v95: crest-factor gate threshold (Phase 2a). Default 0 is intentional —
-        // the production config leaves the gate disabled because the b137
-        // sweep showed no F1 improvement on held-out data. Set >0 manually to
-        // suppress pulses whose current-frame raw crest is below the
-        // threshold; range validated to [0, 20] in ConfigStorage.cpp.
-        float crestGateMin;
+        float fluxDelta;          // v99: spectral-flux picker delta (SuperFlux)
 
         // (Percival ACF + comb filter bank removed v80)
         // (phaseCorrectRate removed v91 — PLP refactored to direct pattern interpolation)
 
-        // ODF baseline tracking
-        float baselineFastDrop;
-        float baselineSlowRise;
+        // ODF peak hold
         float odfPeakHoldDecay;
 
         // Energy synthesis
@@ -411,8 +405,8 @@ public:
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats — v98 removes noiseGate)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
-    static_assert(sizeof(StoredTrackerParams) == 124,
-        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (124 bytes = 28 floats + 1 uint16 + padding — v95 adds crestGateMin)");
+    static_assert(sizeof(StoredTrackerParams) == 104,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (104 bytes = 23 floats + 1 uint16 + padding — v99 SuperFlux picker)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

@@ -14,7 +14,7 @@ AudioTracker turns the microphone into one `AudioControl` struct that the genera
 
 **Phase/pattern:** The bass-flux buffer is epoch-folded at the chosen period (recency-weighted, Winsorized, per-bin reliability). The pattern is stored accent-aligned (bin 0 = accent), and `plpPulse` is the pattern read at the current phase. The phase keeps absolute time on the mic's sample clock (see Frame Clock).
 
-**Onset detection:** On devices, spectral flux with an adaptive baseline (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (local-maxima peak-picking on FrameOnsetNN output) is kept for the host NN harness and a future cheaper model (#174). See "Onset Detection" below.
+**Onset detection:** the task is drum hits (kicks and snares). On devices: SuperFlux (Böck & Widmer, DAFx-13) through the online peak picker of Böck, Krebs & Schedl (ISMIR 2012) (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (FrameOnsetNN through the same picker) is kept for the host NN harness and a future cheaper model (#174). See "Onset Detection" below.
 
 **AGC:** Removed (v72). Hardware gain is fixed at the platform value (`Platform::Microphone::DEFAULT_GAIN`: nRF52840 = 32, ESP32-S3 = 30). Window/range normalization is the only dynamic-range system. There is no noise gate (removed again 2026-10-20).
 
@@ -43,7 +43,7 @@ Generators receive a single struct (`audio/AudioControl.h`):
 struct AudioControl {
     float energy;         // Audio energy level (0-1), never below a 0.12-0.20 "smolder" floor
     float level;          // Mic loudness, auto-ranged 0-1, no gate, no extra smoothing
-    float pulse;          // Transient envelope (0-1, decays with a 240 ms time constant)
+    float pulse;          // Hit envelope (0-1): onset strength at each onset, 150 ms decay (`pulsedecay`)
     float onset;          // Onset EVENT: strength this update, 0 if none
     float phase;          // Rhythm-cycle phase (0-1, 0 = accent)
     uint16_t beatCount;   // +1 per rhythm cycle, never decrements
@@ -58,7 +58,7 @@ struct AudioControl {
 | `energy` | Blend of mic level, bass mel energy and flux peak-hold | Baseline intensity, brightness |
 | `level` | Normalized mic loudness, swings the full range | Continuous "breathing with the music" (height, brightness) |
 | `pulse` | Transient envelope (level, decays) | Continuous brightness/size modulation |
-| `onset` | One non-zero value per detected drum hit | Edge-triggered bursts/flashes (`onset > 0`) |
+| `onset` | One non-zero value per detected drum hit: its strength, 0-1, on the same scale whichever detector ran | Edge-triggered bursts/flashes (`onset > 0`); strength-gated bursts |
 | `phase` | Position in rhythm cycle (0=accent); can be corrected slightly backward | Continuous phase-based modulation |
 | `beatCount` | Monotonic cycle counter | "A beat happened": `beatCount != last` (never threshold `phase`) |
 | `plpPulse` | PLP extracted pattern value (epoch-folded) | Beat-synced pulsing, breathing animations |
@@ -79,10 +79,11 @@ AdaptiveMic (fixed gain + window/range normalization; no AGC, no noise gate)
 SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 mel bands + spectral flux)
       |
       +--- [ONSET PATH]
-      |    Devices: band-weighted spectral flux (SuperFlux 3-bin max filter)
-      |         adaptive baseline x pulsethreshmult, floor fluxonsetfloor, rising edge
-      |    NN builds only: FrameOnsetNN -> local-maxima peak-picking
-      |         + bass-band gate + PLP pattern bias (+ optional crest / beat-grid gates)
+      |    Devices: SuperFlux (pre-compressor, 78-band log filterbank, log10(32768 S + 1),
+      |         +-1 band max filter, unweighted half-wave sum over bands <= 5 kHz)
+      |    NN builds only: FrameOnsetNN activation
+      |         -> shared online picker (max of 30 ms, mean of 100 ms + delta, 30 ms gap)
+      |            + PLP pattern bias
       |         |
       |    +--- onset (event), pulse (envelope), onsetDensity
       |    +--- Energy: mic level + bass mel energy + flux peak-hold
@@ -168,7 +169,7 @@ corpus audio at simulated loop rates).
 ### Multi-Source ACF + PLP (current)
 
 **Every spectral frame (62.5 Hz), in `processFrame()`:**
-1. **Onset detection**: `updatePulseDetection()` (spectral flux on devices; NN peak-picking in NN builds). See "Pulse Detection".
+1. **Onset detection**: the detector's ODF, then `pickOnset()` (SuperFlux on devices; the NN in NN builds). See "Pulse Detection".
 2. **OSS sample**: bass flux raised to `odfContrast` (default 1.25), clamped to 0-1, into the 792-frame OSS buffer.
 3. **Bass energy sample**: mean of mel bands 0-5, into the bass buffer.
 4. **Level sample**: `mic_.getLevel()`, into source buffer 2.
@@ -294,10 +295,22 @@ The pattern slot cache has its own settings (`slotswitchthresh`, `slotnewthresh`
 
 **Status (2026-10-19): the NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0`, `AudioTracker.h`). Onset pulses come from spectral flux, which wins on both accuracy and frame rate. Measured on edm/ (onsets_consensus, ±50 ms) with the host harness CPU cost model calibrated to hat_v1 (`tests/tracker/README.md`):
 
-| Detector | F1 | Precision | Recall | LED fps |
+| Detector (onsets_consensus, ±50 ms, cost model) | F1 | Precision | Recall | LED fps |
 |---|---|---|---|---|
-| Spectral flux, `fluxOnsetFloor` 0.01, `pulseThresholdMult` 2.0 | 0.546 | 0.457 | 0.679 | 178 |
+| Spectral flux (pre-#280 picker) | 0.546 | 0.457 | 0.679 | 178 |
 | v33 NN (50 mel, 19.6 KB, **12 ms/inference** on device) | 0.480 | 0.394 | 0.613 | 48 |
+
+Those are all-onset numbers; detectors are now scored on drums (kick + snare labels aligned per track, ±50 ms, host harness at 60 fps, no cost model; #280). **The corpus plays at the device's level:** hat_v1's mic peaks at about 0.003 FS with music, about −50 dB re the mastered files, re-quantized to int16. Drum F at −60 / −50 / −40 dB; the other columns at −50 dB:
+
+| Detector | Picker | drum F (−60 / −50 / −40 dB) | on-drum | kick R | snare R* | det/s | noise det/s |
+|---|---|---|---|---|---|---|---|
+| Spectral flux (weighted, adaptive baseline) | 96 ms window + cooldown + gates | 0.243 / 0.543 / 0.603 | 57% | 63% | 20% | 3.1 | 3–6 |
+| SuperFlux, all 78 bands | online (Böck 2012), δ 10, λ 32768 | 0.647 / 0.651 / 0.648 | 55% | 79% | 81% | 4.8 | 0 |
+| **SuperFlux ≤ 5 kHz (devices)** | **online (Böck 2012), δ 7, λ 32768** | **0.648 / 0.657 / 0.657** | **56%** | **79%** | **76%** | **4.7** | **0** |
+| v33 NN, floor 0.20 | 96 ms window + cooldown + gates | 0.594 / 0.595 / 0.588 | 50% | 75% | 72% | 5.0 | ~5 |
+| v33 NN, floor 0.55 | online (Böck 2012) | 0.677 / 0.672 / 0.672 | 52% | 95% | 95% | 6.1 | 1–2 |
+
+\*Snare labels are provisional (#284). Noise: steady white or pink noise from −70 to −30 dBFS. Kick timing moves from +4 ms to −4 ms, because the online picker reports the peak frame itself. The harness SuperFlux matches the Python replica of the audit to within 1.3e-4.
 
 Re-enable a model only when it beats flux under this same measurement (a cheaper export is #174). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
 
@@ -315,33 +328,58 @@ In NN builds it only drives onset detection. It never feeds the rhythm sources (
 
 ### Spectral Flux
 
-`SharedSpectralAnalysis::getSpectralFlux()` is band-weighted half-wave rectified flux. It's computed from **compressed-but-not-whitened** magnitudes (after the soft-knee compressor). The previous frame is max-filtered across 3 bins first (SuperFlux), so slow harmonic shifts don't count as flux. Each band is normalized by its bin count, then weighted:
-- **Bass (bins 1-6, 62-375 Hz):** `bassflux` 0.5 — kicks, strongest periodic signal
-- **Mid (bins 7-32, 437-2000 Hz):** `midflux` 0.2 — vocals, pads, less rhythmic
-- **High (bins 33-127, 2-8 kHz):** `highflux` 0.3 — snares, hi-hats
+Two flux signals, for different jobs:
+
+- **`getSuperFlux()`: onset detection (#280).** SuperFlux (Böck & Widmer, "Maximum filter vibrato suppression for onset detection", DAFx-13):
+  1. Pre-compressor magnitudes go through a triangular log-frequency filterbank: 24 bands per octave from 62.5 Hz to 8 kHz, not area-normalised. Edges that round to the same FFT bin are merged, so there are 78 bands, and bins 2–41 are one band each (`SUPERFLUX_EDGES`, generated, with a `static_assert` on its size).
+  2. Each band is log-compressed: `log10(λ·S + 1)`, with λ = `superFluxLambda` = 32768 (the paper's log(1 + X) on int16-scale magnitudes).
+  3. Each band is differenced against the previous frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights over the bands centred ≤ 5 kHz (62 of 78). The bands above mostly add hats: at device level, lone hats triggered 75% with all bands and 60% with ≤ 5 kHz at the same δ, with kick and snare recall unchanged. At δ 7 it's 45%.
+  - **Why unweighted:** in a full mix a kick rises only about 2–3 dB below 190 Hz but 6–7 dB from 190 Hz to over 4 kHz. A drum hit rises across many bands, a bass note in a few. The old band weights gave each bass bin about 26× a high bin's weight, which amplified bass lines and buried the broadband attack.
+  - **Why log:** there is no AGC. Log flux measures relative change, so one picker δ works at any input level. On edm/, drum F was 0.650 / 0.650 / 0.648 / 0.646 at −20 / −10 / 0 / +10 dB, against linear flux's 0.158 / 0.554 / 0.675 / 0.632.
+  - **Deviations from the paper:** our hop is 16 ms with no overlap, so the max filter compares against the previous frame (μ = 1). λ is on our [−1, 1] sample scale, chosen by that level test (1000 scored the same).
+- **`getSpectralFlux()`: energy synthesis only.** Band-weighted half-wave flux of the compressed magnitudes, with the previous frame max-filtered over 3 bins. Each band is normalised by its bin count, then weighted by `bassflux` 0.5 (bins 1–6), `midflux` 0.2 (bins 7–32) and `highflux` 0.3 (bins 33–127). It feeds the flux peak-hold in `energy`, and the `bassRatio` feature in the onset snapshot.
 
 `getBassFlux()` (bass band only) feeds the OSS rhythm buffer.
 
 ### Pulse Detection
 
-`updatePulseDetection()` runs once per spectral frame.
+`AudioTracker::pickOnset()` runs once per spectral frame, for whichever detector is in use (`audio/OnsetDetector.h`):
 
-**Spectral-flux path (devices):**
-- Baseline tracks the flux floor: drops fast (`blfastdrop` 0.05), rises slowly (`blslowrise` 0.005).
-- Threshold = baseline × `pulsethreshmult` (2.0), never below `fluxonsetfloor` (0.01).
-- Fires on a rising edge across the threshold, when signal presence (max of flux peak-hold and bass energy) is above `pulseminlevel` (0.03) and the cooldown has passed.
+```
+SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
+                            FluxOnsetDetector (SuperFlux) | NNOnsetDetector (activation)
+                       ─► AudioTracker::pickOnset (shared)
+                            online peak picker (Böck, Krebs & Schedl, ISMIR 2012)
+                            × rhythm-pattern bias on delta
+                            activation (0-1) + feature snapshot for every onset
+                       ─► onset strength, pulse envelope, onset density, rhythm timing
+```
 
-**NN path (NN builds only):**
-- Local maximum: `prev > prevPrev`, `prev >= current`, `prev > floor`. Floor = `pulseonsetfloor` (0.20) × bass gate × pattern bias.
-- **Bass-band gate**: up to 50% higher floor when bass flux is under a third of broadband flux.
-- **PLP pattern bias**: up to 30% higher floor where the pattern predicts no hit, scaled by PLP confidence (only above 0.3).
-- **Crest gate** (`crestgatemin`, 0 = off) and **beat-grid AND-gate** (`beatgridmin`, 0 = off since b149; it suppressed 65-84% of true onsets) are optional.
+- **Picker:** frame t is an onset if:
+  - its ODF is the maximum of the last W1 frames and itself;
+  - it reaches mean(ODF over the last W3 frames and itself) + δ;
+  - more than W5 frames have passed since the last onset.
 
-**Both paths:**
-- **Cooldown**: tempo-adaptive, 40 ms at 200 BPM to 150 ms at 60 BPM, counted in frames.
+  The paper's online values are 30 / 100 / 30 ms, which at 62.5 fps is W1 = 2 (`onsetmaxframes`), W3 = 6 (`fluxavgframes`, flux only) and W5 = 2 (`onsetmingap`). These are runtime-tunable and not saved. There's no look-ahead: the onset is reported at the frame that peaks, a frame earlier than the old local-max picker.
+- **Per-detector δ and average:**
+  - Flux: `fluxdelta`, default 7, saved. Chosen at device level (−50 dB) once only bands ≤ 5 kHz vote: against all bands at δ 10 it keeps kick recall (79%) and drum F (0.657 vs 0.651) and cuts lone-hat triggers from 63% to 45%, for a snare-recall cost (81% → 76%). Flux uses the moving average.
+  - NN: `pulseonsetfloor`, default 0.55, saved. Its activation is already a probability, so the NN uses a fixed threshold with no moving average. The old 0.20 fired 10/s without the window and cooldown.
+- **What it replaced, and why:**
+  - **Deleted** in the same change: the 96 ms local-max window, the tempo-adaptive 40–150 ms cooldown, the adaptive flux baseline (`pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`), and the crest, beat-grid, re-arm, bass-ratio and presence gates.
+  - **Why:** the cooldown blocked 61–71% of the kicks the old picker missed. The adaptive baseline settled at the noise level, so the old flux fired 3–6/s on steady noise at −60 to −30 dBFS; SuperFlux fires 0. The bass gate cost recall for no drum F. Presence never blocked an onset.
+- **Rhythm-pattern bias** (`onsetpatternbias` 0.3, runtime, 0 = off): while PLP confidence is above 0.3, δ is raised by up to 30% where the pattern predicts no hit. It is beat-informed and on by default. It should become a strength multiplier rather than a gate (separate work). It is neutral on edm/ drum F.
+- **Activation** (onset strength and pulse-envelope input, 0–1):
+  - NN: the activation itself.
+  - Flux: `1 − 0.7·r^−0.9` with `r = (odf − mean) / δ`, which is 0.30 at the threshold. Below the threshold it is linear to 0.
+- **Expensive detectors:** the NN runs at most once per `update()`. Frames it skips return `fresh = false`, and the picker doesn't step on them.
+- **Selection:** the NN when built in (`BLINKY_ONSET_NN_ENABLED`) and ready, otherwise flux. Devices use flux. `show nn` names the detector in use.
 - `onset` = strongest pulse fired in this `update()`, else 0.
-- `pulse` envelope: rises to `(signal - 0.4) / 0.6` when the normalized signal (flux / running flux peak, or NN peak) passes 0.4, then decays with a 240 ms time constant.
-- `onsetDensity`: rising edges of `pulse` over 0.1, counted per second, EMA 0.7/0.3.
+- `pulse` envelope: each picked onset raises it to that onset's strength, then it decays with a 150 ms time constant (`pulsedecay`, runtime-tunable; 100 ms read as a glitch on the hat).
+  - It used to max-hold the per-frame activation above 0.4, mapped `(a − 0.4) / 0.6`, with a 240 ms decay. That was a second, threshold-only path beside the picker, and its decay equalled the median gap between drum hits (kick+snare gaps are p25 157 ms, p50 240 ms).
+  - Host, device level: only 53% of drum hits made a visible flash, although the picker caught 79%. Driving the pulse from onsets with a 100 ms decay raises that to 77%.
+  - Onset strength barely separates drum from non-drum picks (AUC 0.60). So the pulse can't make drums brighter than other onsets; that needs a drum cue in the detector.
+- `onsetDensity`: picked onsets per second, EMA 0.7/0.3.
+- Gate mask (TRANSIENT stream `gateMask`): bit 1 = pattern bias raised δ. Bits 0, 2 and 3 belonged to the deleted gates and are never set.
 
 ### Energy Synthesis
 

@@ -53,25 +53,22 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     spectral_.begin();
     haveFrameEnd_ = false;
 
+    // Onset detector selection (OnsetDetector.h).
 #if BLINKY_ONSET_NN_ENABLED
-    bool nnOk = frameOnsetNN_.begin();
-    nnActive_ = nnOk && frameOnsetNN_.isReady();
+    const bool nnOk = nnDetector_.begin();
     // NN init failure is a build-time / model-export bug, not a runtime
-    // condition. Silently falling back to mic-energy detection (see
-    // FrameOnsetNN.h) hides the regression from anyone reading device output.
-    // Assert loudly so the failure shows up in serial / error counter.
-    BLINKY_ASSERT(nnActive_,
-        "FrameOnsetNN failed to initialize — check getInitError(); falling back to mic energy");
+    // condition. Assert loudly (serial + error counter) so the build that
+    // falls back to spectral flux is never mistaken for an NN build.
+    BLINKY_ASSERT(nnOk,
+        "FrameOnsetNN failed to initialize — check getInitError(); onsets fall back to spectral flux");
+    detector_ = nnOk ? static_cast<OnsetDetector*>(&nnDetector_) : &fluxDetector_;
+#  ifdef ONSET_MODEL_USE_PCEN
+    if (nnOk) nnDetector_.model().setPcenEnabled(true);
+#  endif
 #else
     // Disabled by design (see BLINKY_ONSET_NN_ENABLED in AudioTracker.h):
     // onsets come from spectral flux. Not a fallback; `show nn` says so.
-    nnActive_ = false;
-#endif
-
-#ifdef ONSET_MODEL_USE_PCEN
-    if (nnActive_) {
-        frameOnsetNN_.setPcenEnabled(true);
-    }
+    detector_ = &fluxDetector_;
 #endif
 
     // Initialize all time-based state to current time to avoid
@@ -81,6 +78,19 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     resetSlots();
 
     return true;
+}
+
+OnsetDetectorParams AudioTracker::detectorParams() const {
+    return OnsetDetectorParams{fluxDelta, fluxAverageFrames, pulseOnsetFloor, nnProfile};
+}
+
+bool AudioTracker::selectOnsetDetector(const char* name) {
+    if (strcmp(name, fluxDetector_.name()) == 0) { detector_ = &fluxDetector_; return true; }
+    if (strcmp(name, nnDetector_.name()) == 0 && nnDetector_.model().isReady()) {
+        detector_ = &nnDetector_;
+        return true;
+    }
+    return false;
 }
 
 void AudioTracker::end() {
@@ -123,7 +133,6 @@ const AudioControl& AudioTracker::update(float dt) {
 
     // Per-update aggregates: update() may process 0..N spectral frames.
     lastPulseStrength_ = 0.0f;
-    nnPeak_ = 0.0f;
     framesThisUpdate_ = 0;
 
     // 2. Drain the PDM ring, processing EVERY spectral frame exactly once.
@@ -232,45 +241,20 @@ const AudioControl& AudioTracker::update(float dt) {
 // Per-frame processing (the frame clock)
 // ============================================================================
 
-void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
+void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     frameClock_++;
 
-    // --- Onset activation for this frame ---
-    // The NN activation only feeds onset detection (via rawNNActivation_ and
-    // freshNN); a skipped or NN-less frame has nothing to record. The rhythm
-    // buffers take mic level below in every mode (#155).
-    bool freshNN = false;
-    if (nnActive_) {
-        frameOnsetNN_.setProfileEnabled(nnProfile);
-        // Raw (pre-compressor) flatness + flux for the NN hybrid input —
-        // matches the Python training pipeline's `append_hybrid_features`
-        // (pre-b136 passed the compressed values: train/inference gap 4).
-        frameOnsetNN_.pushFrame(spectral_.getRawMelBands(), spectral_.getLinearMelBands(),
-                                spectral_.getRawFlatness(), spectral_.getRawSpectralFlux());
-    }
-    if (nnActive_ && runNN) {
-        freshNN = true;
-        const float odf = clampf(frameOnsetNN_.invoke(), 0.0f, 1.0f);
-        BLINKY_HOST_COST(HostCost::NN_INFER);
+    // --- Onset evidence for this frame (the detector in use) ---
+    // Only onset detection reads it; the rhythm buffers below take bass flux,
+    // bass energy and mic level whichever detector runs (#155).
+    const OnsetDetectorParams params = detectorParams();
+    const OnsetEvidence ev = detector_->process(spectral_, params, mayRunExpensive);
 
-        // Track raw NN activation peaks (rising edge, before thresholds).
-        if (odf > rawNNActivation_ && odf > 0.05f) {
-            rawNNPeakMs_ = time_.millis();
-        }
-        prevNNActivation_ = rawNNActivation_;
-        rawNNActivation_ = odf;
-
-        // No smoothing: responsiveness is the priority, so peak-picking
-        // and pulseSignal read the raw activation (#169).
-        if (odf > nnPeak_) nnPeak_ = odf;
-    }
-    // NN skipped this frame (catch-up burst): the NN peak-picker does not
-    // step. No NN: onset detection uses spectral flux (updatePulseDetection).
-
-    // --- Discrete onset detection ---
-    float pulse = updatePulseDetection(spectral_.getSpectralFlux(), freshNN);
+    // --- Discrete onset + activation: shared peak picking and gates ---
+    float pulse = pickOnset(ev, params);
     lastFramePulse_ = pulse;
     if (pulse > lastPulseStrength_) lastPulseStrength_ = pulse;
+    if (pulse > 0.0f) onsetCountInWindow_++;  // onset density counts detected onsets
 
     // --- Rhythm buffers ---
     // Bass-only flux for ACF period detection — isolates kick energy.
@@ -303,7 +287,7 @@ void AudioTracker::processFrame(bool runNN, float elapsedFrames) {
     // activation. The NN fires on every percussive hit, off-beat hats
     // included, so as an ACF source it locked straight 4/4 to 2/3 tempo
     // and broke DnB (#155: corpus tempo 0.726 -> 0.621). The NN still drives
-    // onset detection (updatePulseDetection); tempo tracking stays on the
+    // onset detection (pickOnset); tempo tracking stays on the
     // signals it was tuned on.
     nnOnsetBuffer_[nnWriteIdx_] = mic_.getLevel();
     nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
@@ -1130,184 +1114,105 @@ float AudioTracker::patternValueAt(float phase) const {
 }
 
 // ============================================================================
-// Pulse Detection (Floor-Tracking Baseline)
+// Onset Picking (online peak picker, Boeck et al. 2012)
 // ============================================================================
 
-float AudioTracker::updatePulseDetection(float odf, bool freshNN) {
-    // Runs exactly once per spectral frame (processFrame). Pre-b208 it ran
-    // once per loop iteration on a signal that only changed per frame:
-    // loop passes without a new frame pushed duplicate values through
-    // prevSignal_/prevPrevSignal_, so a real peak failed `prev > prevPrev`
-    // and was silently dropped whenever the loop ran faster than 62.5 Hz.
-    //
-    // Dual-mode onset detection:
-    //
-    // NN path: local-maxima peak-picking on half-wave rectified first-difference.
-    //   The NN produces flat activations (mean~0.6, std~0.035) with tiny bumps at
-    //   onsets. First-differencing removes the DC baseline and amplifies rate of
-    //   change. Local-maxima detection (same as offline eval) extracts peaks from
-    //   the resulting signal. This matches the offline eval's peak-picking approach
-    //   that achieves F1=0.85 vs the old threshold-crossing at F1=0.62.
-    //
-    // Spectral flux fallback: adaptive threshold + rising edge (unchanged).
+float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams& params) {
+    // Runs exactly once per spectral frame (processFrame), for whichever
+    // detector produced `ev` (OnsetDetector.h): one peak picker and one set
+    // of gates, so swapping the detector changes only the evidence.
+    // (Pre-b208 this ran once per loop iteration: duplicate samples failed
+    // `prev > prevPrev` and real peaks were dropped above 62.5 fps.)
 
-    // ODF peak hold for energy synthesis (always track spectral flux)
-    if (odf > odfPeakHold_) {
-        odfPeakHold_ = odf;
+    // Spectral-flux peak hold for energy synthesis (detector-independent).
+    // Tracked on every frame.
+    const float flux = spectral_.getSpectralFlux();
+    if (flux > odfPeakHold_) {
+        odfPeakHold_ = flux;
     } else {
         odfPeakHold_ *= odfPeakHoldDecay;
     }
 
-    // Tempo-adaptive cooldown, counted in frames (the frame clock), not ms
-    float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
-    float cooldownMs = 40.0f + 110.0f * (1.0f - bpmNorm);
-    uint32_t cooldownFrames = static_cast<uint32_t>(cooldownMs * OSS_FRAME_RATE / 1000.0f);
-
-    float signalPresence = max(odfPeakHold_, cachedBassEnergy_);
     float pulseStrength = 0.0f;
-    bool cooldownOk = (frameClock_ - lastPulseFrame_) > cooldownFrames;
 
-    if (nnActive_ && !freshNN) {
-        // No new NN sample this frame: stepping the peak-picker history with
-        // a held value would re-create the duplicate-sample peak loss.
+    if (!ev.fresh) {
+        // No new evidence this frame (an expensive detector skipped it):
+        // stepping the history with a held value would re-create the
+        // duplicate-sample peak loss.
         return 0.0f;
     }
 
-    if (nnActive_) {
-        // NN path: local-maxima peak-picking with false positive suppression.
-        //
-        // The NN fires on any broadband spectral change (chords, synths, vocals),
-        // not just percussive onsets. Two soft filters reduce false positives:
-        //
-        // 1. Bass-band energy gate: kicks/snares produce strong bass flux;
-        //    chord changes and synth stabs produce flat/mid-heavy flux.
-        //    Scale the effective threshold by inverse bass ratio.
-        //
-        // 2. PLP pattern bias: when a reliable rhythm pattern is locked,
-        //    raise the threshold slightly at positions where the pattern
-        //    predicts no onset. This is a SOFT bias (30% threshold increase),
-        //    not a hard gate — section changes and new patterns still trigger.
-        //    Only active when pattern confidence is high.
-
-        float nn = rawNNActivation_;
-
-        // Bass-band energy gate: require bass presence for easy detections.
-        // High bass ratio → threshold stays at floor.
-        // Low bass ratio (broadband event) → threshold increases by up to bassGateMaxBoost.
-        // bassGateMinRatio: below this bass fraction, gate is fully engaged (1/3 = 33%)
-        // Post-sweep hardcoded (b127): marginal F1 improvement. Not exposed as tunable
-        // parameters — these are structural heuristics, not sensitivity knobs.
-        static constexpr float bassGateMaxBoost = 0.5f;  // Max 50% threshold increase
-        static constexpr float bassGateMinRatio = 1.0f / 3.0f;  // Full gate when bass < 33% of broadband
-        float bassFlux = spectral_.getBassFlux();
-        float broadbandFlux = spectral_.getSpectralFlux();
-        // In near-silence (broadbandFlux < 0.001), default to neutral ratio
-        // so the gate doesn't suppress onsets at the start of music.
-        float bassRatio = (broadbandFlux > 0.001f) ? bassFlux / broadbandFlux : 0.5f;
-        float bassGate = 1.0f + bassGateMaxBoost * clampf(1.0f - bassRatio / bassGateMinRatio, 0.0f, 1.0f);
-
-        // PLP pattern bias: soft threshold increase at off-beat positions.
-        // plpPulseValue_ is high (0.7-1.0) at expected onset positions,
-        // low (0.0-0.3) between beats. When confident, raise threshold at
-        // low-pattern positions. When uncertain, no bias.
-        static constexpr float plpBiasMaxSuppression = 0.3f;  // Max 30% threshold increase at off-beat
-        static constexpr float plpBiasMinConfidence = 0.3f;    // Only bias when pattern confidence > 30%
-        float patternBias = 1.0f;
-        if (plpConfidence_ > plpBiasMinConfidence) {
-            float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
-            // At pattern minimum (0.0): bias = 1.3 (30% harder to trigger)
-            // At pattern maximum (1.0): bias = 1.0 (no change)
-            // Scaled by confidence so uncertain patterns don't suppress
-            float suppressAmount = plpBiasMaxSuppression * plpConfidence_ * (1.0f - patternVal);
-            patternBias = 1.0f + suppressAmount;
-        }
-
-        float effectiveFloor = pulseOnsetFloor * bassGate * patternBias;
-
-        // Local maximum: prev frame rose above t-2, is not exceeded by t, and
-        // is above floor. `>=` on the right fires a flat top (INT8 output
-        // often repeats a value) on its FIRST frame; the strict `>` on the
-        // left stops the plateau's second frame from firing again.
-        bool isLocalMax = (prevSignal_ > prevPrevSignal_) &&
-                          (prevSignal_ >= nn) &&
-                          (prevSignal_ > effectiveFloor);
-
-        // Crest-factor gate (v95 / Phase 4 Path A). Drum hits have high peak/RMS;
-        // tonal impulses have lower crest on-device (Phase 3 |d|=0.74). When
-        // crestGateMin > 0, suppress pulses whose current-frame crest is below
-        // that value. Set to 0 to disable (production default).
-        bool crestOk = (crestGateMin <= 0.0f) ||
-                       (spectral_.getRawCrest() >= crestGateMin);
-
-        // b142 — PLP pattern AND-gate. plpPulseValue_ is the epoch-fold
-        // pattern amplitude at the current phase: high at EVERY position
-        // the pattern predicts an onset (beats 1-4 of a bar-length
-        // pattern, not just phase=0), low between them. Reject firings
-        // where the pattern predicts near-zero pulse.
-        // Guarded by rhythmStrength so it doesn't suppress during PLP
-        // warmup (~1.6 s) or on ambient/sparse content.
-        bool beatGridOk = true;
-        if (beatGridPatternMin > 0.0f &&
-            periodicityStrength_ > beatGridMinRhythmStrength) {
-            beatGridOk = (plpPulseValue_ >= beatGridPatternMin);
-        }
-
-        if (signalPresence > pulseMinLevel && isLocalMax && cooldownOk && crestOk && beatGridOk) {
-            pulseStrength = clampf(prevSignal_, 0.0f, 1.0f);
-            lastPulseFrame_ = frameClock_ - 1;  // Peak was the previous frame
-
-            // T1.4/T1.5 — snapshot gate state + spectral features at firing
-            // time so offline analysis can cluster FPs and attribute
-            // suppression. Bits are "which gate would have suppressed":
-            //   bit 0 — bass-gate activated (bassGate > 1.0 → threshold boosted)
-            //   bit 1 — pattern-bias activated (patternBias > 1.0 → off-beat)
-            //   bit 2 — crest-gate marginal (rawCrest within 0.5 of threshold)
-            //   bit 3 — beat-grid gate marginal (pulseValue within 0.1 of threshold)
-            // For a fired pulse, no gate WAS active (all passed), but the
-            // "activated" bits tell us which gates were close to suppressing.
-            lastPulseGateMask_ = 0;
-            if (bassGate > 1.05f) lastPulseGateMask_ |= 0x01;
-            if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
-            if (crestGateMin > 0.0f && spectral_.getRawCrest() < crestGateMin * 1.5f) {
-                lastPulseGateMask_ |= 0x04;
-            }
-            if (beatGridPatternMin > 0.0f && plpPulseValue_ < beatGridPatternMin + 0.1f) {
-                lastPulseGateMask_ |= 0x08;
-            }
-            lastPulseFeatures_.flatness = spectral_.getRawFlatness();
-            lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
-            lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
-            lastPulseFeatures_.crest = spectral_.getRawCrest();
-            lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
-            lastPulseFeatures_.hfc = spectral_.getRawHFC();
-            lastPulseFeatures_.bassRatio = bassRatio;
-            lastPulseFeatures_.plpPulse = plpPulseValue_;
-            lastPulseFeatures_.plpConfidence = plpConfidence_;
-        }
-
-        prevPrevSignal_ = prevSignal_;
-        prevSignal_ = nn;
-    } else {
-        // Spectral flux fallback: adaptive threshold + rising edge
-        float signal = odf;
-
-        if (signal < odfBaseline_) {
-            odfBaseline_ += (signal - odfBaseline_) * baselineFastDrop;
-        } else {
-            odfBaseline_ += (signal - odfBaseline_) * baselineSlowRise;
-        }
-
-        float pulseThreshold = odfBaseline_ * pulseThresholdMult;
-        if (pulseThreshold < fluxOnsetFloor) pulseThreshold = fluxOnsetFloor;
-
-        bool risingEdge = (signal > pulseThreshold) && (prevSignal_ <= pulseThreshold);
-
-        if (signalPresence > pulseMinLevel && risingEdge && cooldownOk) {
-            pulseStrength = clampf(signal, 0.0f, 1.0f);
-            lastPulseFrame_ = frameClock_;
-        }
-        prevSignal_ = signal;
+    // --- Shared gate, as a delta multiplier ---
+    // Rhythm-pattern bias: while the PLP pattern is confident, raise the
+    // threshold at positions where it predicts no hit. Soft (scaled by
+    // confidence and pattern level), never a hard gate; onsetPatternBias 0
+    // turns it off.
+    static constexpr float plpBiasMinConfidence = 0.3f;  // only above 30% confidence
+    float patternBias = 1.0f;
+    if (plpConfidence_ > plpBiasMinConfidence) {
+        float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
+        // At pattern minimum (0.0): bias = 1 + onsetPatternBias; at maximum: 1.0
+        float suppressAmount = onsetPatternBias * plpConfidence_ * (1.0f - patternVal);
+        patternBias = 1.0f + suppressAmount;
     }
+
+    // --- Online peak picking (Boeck, Krebs & Schedl 2012; AudioTracker.h) ---
+    // On the detector's ODF at this frame, t:
+    //   max:  odf[t] >= odf[t-1 .. t-W1]
+    //   mean: odf[t] >= mean(odf[t-W3 .. t]) + delta (W3 = 0: delta alone)
+    //   gap:  more than W5 frames since the last onset
+    const float o = ev.odf;
+    int w1 = onsetMaxFrames;
+    if (w1 > ONSET_HISTORY_MAX) w1 = ONSET_HISTORY_MAX;
+    int w3 = detector_->averageFrames(params);
+    if (w3 > ONSET_HISTORY_MAX) w3 = ONSET_HISTORY_MAX;
+    BLINKY_ASSERT_ONCE(onsetMaxFrames <= ONSET_HISTORY_MAX && detector_->averageFrames(params) <= ONSET_HISTORY_MAX,
+                       "onset picker window exceeds ONSET_HISTORY_MAX");
+
+    bool isMax = true;
+    for (int k = 0; k < w1 && isMax; k++) isMax = (o >= odfHistory_[k]);
+    float mean = 0.0f;
+    if (w3 > 0) {
+        float sum = o;
+        for (int k = 0; k < w3; k++) sum += odfHistory_[k];
+        mean = sum / static_cast<float>(w3 + 1);
+    }
+    const float delta = detector_->delta(params);
+    const float threshold = mean + delta * patternBias;
+    const bool gapOk = (frameClock_ - lastPulseFrame_) > onsetMinGapFrames;
+
+    // Activation against the ungated threshold: onset strength and the
+    // pulse envelope, on the same 0-1 scale whichever detector runs.
+    const float act = clampf(detector_->activation(o, mean, delta), 0.0f, 1.0f);
+    onsetActivation_ = act;
+
+    if (isMax && o > 0.0f && o >= threshold && gapOk) {
+        pulseStrength = act;
+        lastPulseFrame_ = frameClock_;  // no look-ahead: this frame is the peak
+
+        // T1.4/T1.5 — gate state + spectral features at every onset, for
+        // offline TP/FP analysis. Bits are "which gate came close":
+        //   bit 1 — pattern bias raised the threshold (off-pattern position)
+        //   bits 0, 2, 3 — bass-ratio / crest / beat-grid gates, deleted
+        //               with the online picker (#280); never set
+        lastPulseGateMask_ = 0;
+        if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
+        // Bass share of the weighted flux: a feature only (the gate is gone).
+        const float broadbandFlux = spectral_.getSpectralFlux();
+        const float bassRatio = (broadbandFlux > 0.001f) ? spectral_.getBassFlux() / broadbandFlux : 0.5f;
+        lastPulseFeatures_.flatness = spectral_.getRawFlatness();
+        lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
+        lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
+        lastPulseFeatures_.crest = spectral_.getRawCrest();
+        lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
+        lastPulseFeatures_.hfc = spectral_.getRawHFC();
+        lastPulseFeatures_.bassRatio = bassRatio;
+        lastPulseFeatures_.plpPulse = plpPulseValue_;
+        lastPulseFeatures_.plpConfidence = plpConfidence_;
+    }
+
+    for (int k = ONSET_HISTORY_MAX - 1; k > 0; k--) odfHistory_[k] = odfHistory_[k - 1];
+    odfHistory_[0] = o;
 
     return pulseStrength;
 }
@@ -1503,32 +1408,20 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.energy = clampf(max(weightedEnergy, smolder), 0.0f, 1.0f);
     control_.level = clampf(mic_.getLevel(), 0.0f, 1.0f);
 
-    // --- Continuous pulse envelope (visual generators) ---
-    // NN-primary: same signal as discrete onset events. NN activation is
-    // a better onset detector than spectral flux (F1 0.893 vs ~0.5).
-    // Falls back to spectral flux when NN is unavailable.
-    float pulseSignal;
-    if (nnActive_) {
-        // Peak over the frames processed this call: with several frames per
-        // update, the latest frame alone can miss the onset frame. No new
-        // frame → no new evidence → no re-trigger (re-feeding a stale value
-        // every loop pass used to hold the envelope up between frames).
-        pulseSignal = (framesThisUpdate_ > 0) ? clampf(nnPeak_, 0.0f, 1.0f) : 0.0f;
-    } else {
-        float flux = spectral_.getSpectralFlux();
-        if (flux > fluxPeak_) fluxPeak_ = flux;
-        fluxPeak_ *= expf(-dt / 10.0f);
-        if (fluxPeak_ < 0.001f) fluxPeak_ = 0.001f;
-        pulseSignal = clampf(flux / fluxPeak_, 0.0f, 1.0f);
-    }
-
-    if (pulseSignal > 0.4f) {
-        float trigger = (pulseSignal - 0.4f) / 0.6f;
-        if (trigger > pulseEnvelope_) {
-            pulseEnvelope_ = trigger;
-        }
-    }
-    pulseEnvelope_ *= expf(-dt / 0.24f);
+    // --- Pulse envelope (visual generators) ---
+    // Driven by the picked onsets only: each onset raises the envelope to its
+    // strength (the onset API's 0-1 scale, either detector), which then
+    // decays with pulseDecayMs. Decay first, so an onset shows at full
+    // strength in the update it fires. lastPulseStrength_ is the strongest
+    // onset of the frames this update processed (0 when none fired).
+    // It used to max-hold a per-frame activation over 0.4, mapped
+    // (a - 0.4) / 0.6 with a 240 ms decay: a second, threshold-only path
+    // beside the picker, and a decay as long as the median gap between drum
+    // hits, so a hit landing on the previous one's tail barely moved it. On
+    // edm/ (host, device level) only 53% of drum hits made a visible flash
+    // although the picker caught 79%; onset-driven with 100 ms: 77% (#280).
+    pulseEnvelope_ *= expf(-dt * 1000.0f / pulseDecayMs);
+    if (lastPulseStrength_ > pulseEnvelope_) pulseEnvelope_ = lastPulseStrength_;
     if (pulseEnvelope_ < 0.01f) pulseEnvelope_ = 0.0f;
 
     control_.pulse = clampf(pulseEnvelope_, 0.0f, 1.0f);
@@ -1541,7 +1434,8 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // (the slowly varying inputs self-correlate at beat lags: rhythm read
     // 0.45-0.77 after music stopped), and there is no level threshold to
     // tell noise from music on this mic. Onsets are the evidence: the flux
-    // detector fires ~6.5/s in music and not at all on room noise. After
+    // detector fires ~4.5/s in music (edm/) and not at all on steady noise
+    // (white / pink, -70 to -30 dBFS; host harness, #280). After
     // RHYTHM_HOLD_S without an onset the rhythm outputs fade over
     // RHYTHM_FADE_S; the next onset restores them at once (no added delay).
     // Tempo/phase state is kept, so a breakdown can't wipe it (#172).
@@ -1568,10 +1462,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.rhythmStrength = periodicityStrength_ * rhythmPresence;
 
     // --- Onset Density ---
-    if (control_.pulse > 0.1f && prevPulseOutput_ <= 0.1f) {
-        onsetCountInWindow_++;
-    }
-    prevPulseOutput_ = control_.pulse;
+    // Detected onsets per second (counted in processFrame). It used to count
+    // rising edges of the pulse envelope through 0.1, which dense hits keep
+    // high: it read ~1/s on dnb with 6 onsets/s (#280).
     if (nowMs - onsetDensityWindowStart_ >= 1000) {
         float newDensity = static_cast<float>(onsetCountInWindow_);
         onsetDensity_ = onsetDensity_ * 0.7f + newDensity * 0.3f;

@@ -19,7 +19,7 @@ model:
 labels:
   target_type: "binary"
   labels_type: "kick_weighted"
-  kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"
+  kick_weighted_dir: "${BLINKY_DATA}/labels/kick_weighted_drums"
   neighbor_weight: 0.25
   label_shift_frames: 1
   hard_binary_threshold: 0.1
@@ -52,7 +52,7 @@ augmentation:
     alpha: 0.6
 
 data:
-  processed_dir: "/mnt/nvme/processed_v28"
+  processed_dir: "${BLINKY_WORK}/processed_v28"
   stored_hybrid_features: [flatness, raw_flux, crest, hfc]
 
 export:

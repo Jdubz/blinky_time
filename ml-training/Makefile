@@ -17,8 +17,12 @@ SHELL := /bin/bash
 #   NVME    — /mnt/nvme LVM-linear pool over 2× USB-NVMe (~462 GB): hot tier for
 #             processed_v*, mel_cache, training outputs. Single mount point so
 #             prep peak (~370 GB shards+final during merge) doesn't surprise us.
-STORAGE       := /mnt/storage/blinky-ml-data
-NVME          := /mnt/nvme
+# Same roots the configs use (${BLINKY_DATA} / ${BLINKY_WORK}, scripts/audio.py
+# STORAGE_ROOT_DEFAULTS): the environment wins, else the devtop layout (#286).
+BLINKY_DATA   ?= /mnt/storage/blinky-ml-data
+BLINKY_WORK   ?= /mnt/nvme
+STORAGE       := $(BLINKY_DATA)
+NVME          := $(BLINKY_WORK)
 AUDIO_DIR     := $(STORAGE)/audio/combined
 # Onset labels (the actual training target — see CLAUDE.md "Task is Onset Detection").
 # Was previously $(STORAGE)/labels/consensus_v2 (BEAT consensus); switched 2026-04-29
