@@ -142,6 +142,16 @@ install_usb_reset() {
 
 install_sudoers() {
   local tmp out=/etc/sudoers.d/020_blinky-testbox
+  # Imager's "sudo: ALL=(ALL) NOPASSWD:ALL" (or an older image's 010_pi-nopasswd)
+  # makes this narrow rule pointless, and the self-test's deny probes would run.
+  # Removing the user's grant is the owner's call, so stop here and say how.
+  if sudo -l -U "$TARGET_USER" | grep -qE 'NOPASSWD: *ALL$'; then
+    echo "$TARGET_USER already has passwordless sudo for ALL commands:" >&2
+    grep -lsE "^[^#]*$TARGET_USER.*NOPASSWD: *ALL" /etc/sudoers /etc/sudoers.d/* >&2
+    echo "remove that grant (the cloud-init 'sudo:' key writes /etc/sudoers.d/90-cloud-init-users)," >&2
+    echo "then re-run setup.sh; the box's narrow rule is not installed until then" >&2
+    return 1
+  fi
   tmp="$(mktemp)"
   sed -e "s|@USER@|$TARGET_USER|g" \
       -e "s|@USB_RESET@|$USB_RESET|g" \
@@ -169,7 +179,8 @@ install_sudoers() {
 # ticket): a refusal is sudo's "a password is required" (or "not allowed" if the
 # user isn't in the sudo group); anything else means the
 # rule matched and the command ran. Every probe is harmless when it does run:
-# nonexistent hub, device and mount point. visudo only checks syntax; this is
+# nonexistent hub, device and mount point; deny probes are harmless too, in case
+# a rule is wrong. visudo only checks syntax; this is
 # what shows the regexes match what the flash path really sends.
 sudoers_selftest() {
   local uid gid bad=0 out
@@ -201,7 +212,7 @@ sudoers_selftest() {
   probe deny  umount /mnt/uf2-selftest /mnt/uf2-selftest2
   probe deny  mount -t vfat -o "uid=$uid,gid=$gid,umask=022" /dev/sdzz /mnt/uf2-selftest /tmp
   probe deny  uhubctl -l 99-9 -p 1 -a 0 -r 1
-  probe deny  systemctl stop udisks2
+  probe deny  systemctl status udisks2
   probe deny  true
   rm -rf /tmp/blinky-sudo-selftest
   return $bad
