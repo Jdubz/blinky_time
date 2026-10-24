@@ -30,6 +30,8 @@ The NN path stays tested in CI: the `tracker-harness-nn` job builds the host har
 | #289 | Hand-curated GT for the 18 edm/ tracks. | open (owner) |
 | #290 | Shift-tolerant loss, replacing the label-widening knobs behind the v26–v28 collapse. | open — for the platform trainer |
 | #291 | Publish the mel feature spec (the firmware's integer `MEL_BANDS` table, log and range map) as a versioned contract with golden vectors. | open — needed before any model trained off-repo |
+| #294 | Drum metrics (kick/snare recall, on-drum, drum F at device level) are only in study scripts; the harness and CI score all-onset F1. | open — needed to gate any model on the real target |
+| #295 | Training's librosa filterbank differs from the firmware `MEL_BANDS` table (weights up to 0.30 apart); no mel parity test. | open — fix with #291 |
 | #288 | Spark `separate` client (`scripts/spark_jobs.py`). | partial — client merged, waiting on the platform |
 
 Closed: #162 (wrong model header), #163 (model input check in CI), #169 (NN smoothing), #170 (`stream nn` frames), #203 (host test of the NN path).
