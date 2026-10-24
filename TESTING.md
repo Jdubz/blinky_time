@@ -44,7 +44,7 @@ curl -X POST http://blinkyhost.local:8420/api/test/validate \
 # Parameter sweep (3 devices, 3 values)
 curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["D1","D2","D3"], "param_name": "fluxdelta", "values": [8, 11, 14], "track_dir": "/path/to/blinky-test-player/music/edm"}'
+  -d '{"device_ids": ["D1","D2","D3"], "param_name": "fluxdelta", "values": [5, 7, 9], "track_dir": "/path/to/blinky-test-player/music/edm"}'
 
 # Poll for results
 curl http://blinkyhost.local:8420/api/test/jobs/{job_id}

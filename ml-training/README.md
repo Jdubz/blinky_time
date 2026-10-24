@@ -69,7 +69,7 @@ ml-training/
 
 ## Output Convention
 
-Each training run writes to `/mnt/nvme/outputs/<run-name>/` (see `docs/ML_STORAGE_LAYOUT.md`). The default run name is `{config}-{timestamp}`; override with `RUN_NAME=`.
+Each `train_pipeline.sh` run writes to `${BLINKY_WORK}/outputs/<run-name>/` (`BLINKY_WORK` defaults to `/mnt/nvme`; see `docs/ML_STORAGE_LAYOUT.md`). The default run name is `{config}-{timestamp}`; override with `RUN_NAME=`.
 
 ```
 outputs/<run-name>/

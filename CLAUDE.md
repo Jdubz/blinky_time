@@ -196,14 +196,15 @@ When you discover a silent fallback, the fix is to (a) assert / panic at the fai
 
 Always use tmux:
 ```bash
-# Output dir defaults to /mnt/nvme/outputs (training server). On a laptop or
-# any machine without /mnt/nvme mounted, override with BLINKY_OUTPUT_DIR=...
-# before the command, or substitute a local path directly.
-OUT="${BLINKY_OUTPUT_DIR:-/mnt/nvme/outputs}"
+# Paths come from the storage roots (docs/ML_STORAGE_LAYOUT.md): set
+# BLINKY_DATA / BLINKY_WORK to wherever your local copy lives.
+OUT="${BLINKY_WORK:-/mnt/nvme}/outputs"
 tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir $OUT/<experiment> 2>&1 | tee $OUT/<experiment>/training.log"
 ```
 
 `train.py` enforces this — it refuses to start outside tmux/screen unless `--allow-foreground` is passed.
+
+**GPU work runs on the DGX Spark as platform-owned jobs** (my-spark): stem separation through `ml-training/scripts/spark_jobs.py` (#288), training through the platform trainer. blinky runs no code there, and never runs ad-hoc GPU processes on it over ssh. devtop runs one-shot CPU scripts only, with nothing left running.
 
 ## Build Workflow
 

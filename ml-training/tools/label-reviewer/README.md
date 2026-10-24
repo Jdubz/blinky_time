@@ -20,12 +20,14 @@ the **Corpus** dropdown at the top of the page; no restart:
 
 | Corpus | Audio | Auto onsets | Human edits |
 |---|---|---|---|
-| `training` | `/mnt/storage/blinky-ml-data/audio/combined` | `labels/onsets_consensus/` | `labels/onsets_human/` (devtop-local) |
+| `training` | `${BLINKY_DATA}/audio/combined` | `labels/onsets_consensus/` | `labels/onsets_human/` (under `${BLINKY_DATA}`, not in git) |
 | `edm` | `blinky-test-player/music/edm/` | same dir (`*.onsets_consensus.json`) | same dir (`*.onsets_human.json`, **commits to git**) |
 
 Edits to the `edm` corpus ride with `git pull` to blinkyhost, where the
 validation harness applies them on the next test run. Edits to `training` stay
-on devtop and are picked up by the next `prepare_dataset.py` run.
+wherever `${BLINKY_DATA}` points and are picked up by the next `prepare_dataset.py`
+run. The training corpus is archived on bignasty, not on devtop
+(`docs/ML_STORAGE_LAYOUT.md`); work on a local copy and never write to the archive.
 
 ## Adding more corpora
 
@@ -214,8 +216,8 @@ Curate the EDM corpus in the reviewer → `git add blinky-test-player/music/edm/
 → `git commit && git push` → on blinkyhost: `git pull && sudo systemctl restart
 blinky-server`. The next test run uses the corrected ground truth.
 
-**Training (devtop).** `prepare_dataset.py` reads
-`labels.onset_human_dirs` from the config (default: `/mnt/storage/.../onsets_human/`
+**Training.** `prepare_dataset.py` reads
+`labels.onset_human_dirs` from the config (default: `${BLINKY_DATA}/labels/onsets_human/`
 plus `blinky-test-player/music/edm/` as a fallback). For each track, it merges
 the overlay before generating frame targets. Created onsets bypass the
 `min_systems` filter (they're human-confirmed). Edit footprint is logged per

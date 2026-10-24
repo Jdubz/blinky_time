@@ -8,7 +8,7 @@ Every finding from the 2026-10-14/15 reviews that is not fully closed. Sources:
 - CI/tooling issues hit along the way;
 - issues filed since (release gate, animation timing, auto-recovery image).
 
-Last synced with GitHub: 2026-10-21.
+Last synced with GitHub: 2026-10-24. Closed since the last sync, and removed below: #160 (`deploy_local.py` reads link and bootloader live), #164, #177 and #185 (verified on hat_v1, 2026-10-21), #280 (SuperFlux + online picker, PR #292).
 
 Every item is filed as a GitHub issue (linked in the `#` column). **The issues are the system of record**: update and close them there, and keep this file as the index. Remove an item here once its issue is closed.
 
@@ -22,7 +22,9 @@ Every item is filed as a GitHub issue (linked in the `#` column). **The issues a
 | VERIFY | merged and in a stable release, not yet verified on a device |
 | DECIDE | needs a decision |
 
-PR #152 and PR #155 are merged and ship in stable **b215**, which was installed on hat_v1 on 2026-10-20 through the web updater. Their device checks (§7) haven't been run. Read the hat's version live before starting them.
+PR #152 and PR #155 are merged and ship in stable **b215**, which was installed on hat_v1 on 2026-10-20 through the web updater. Three of their device checks passed on 2026-10-21 (#164, #177, #185); the rest of §7 hasn't been run. Read the hat's version live before starting them.
+
+PR #292 (SuperFlux onsets, online picker, onset-driven pulse; #280) is on master, not in a stable release. Its device checks are listed in §9.
 
 ---
 
@@ -30,28 +32,25 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 
 | # | Item | Status | Action |
 |---|---|---|---|
-| 0.3 ([#160](https://github.com/Jdubz/blinky_time/issues/160)) | **Hat flash prerequisites.** Read the hat's link (USB / BLE-only) and bootloader version *live* at flash time. Both change, so never take them from docs. | OPEN | USB: flash with `./scripts/deploy.sh --devices=<hat>`. BLE-only: verify §3.1 on a bare chip first. BL older than 0.8.0-10: update the BL or flash over USB only. |
 | 0.4 ([#161](https://github.com/Jdubz/blinky_time/issues/161)) | **PR #152 needs device verification.** See the checklist in §7. | VERIFY | b215 carries it. Run §7 on the hat, observing the 60 s rule. |
 
 ## 1. Rhythm tracking / prediction (AudioTracker)
 
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
-| 1.1 ([#164](https://github.com/Jdubz/blinky_time/issues/164)) | Phase advanced per loop iteration; pattern read against a rotating fold origin; frames skipped in catch-up; `OSS_FRAME_RATE` 66; integer period; peak-picker duplicate samples | `AudioTracker.cpp` | VERIFY | Frame clock, fold-measured phase, fractional period (long-lag unbiased ACF), accent from OSS. Harness: alignment −0.014 → +0.096, tempo stable across loop rates. Verify on device. |
 | 1.2 ([#165](https://github.com/Jdubz/blinky_time/issues/165)) | NN inference only on the newest frame of a catch-up burst (CPU guard). Below 62.5 fps, onsets only in skipped frames can be missed. | `AudioTracker::update` | PARTIAL | The window gets every frame. Full fix: a cheaper model (1.11) or the audio path in its own task. |
 | 1.3 ([#166](https://github.com/Jdubz/blinky_time/issues/166)) | Wrong tempo multiple on syncopated content (DnB ~170 BPM, UK garage); 6–8-beat cycles from 1.5×/2× beat-lag peaks | `runAcf` candidate selection | PARTIAL | Tempo prior (0.8 oct) lifted valid-tempo time 0.60 → 0.67; syncopation-derived bar candidates (beats from 1.5/2.5-beat ACF peaks, scored at the bar lag) lift it to 0.73: dnb-liquid 0.00 → 0.83, garage 0.06 → 0.47. Remaining: reggaeton regressed 0.81 → 0.64 (3+3+2 dembow), dnb-energetic 0.30, breakbeat-background 0.30. Duple-support scoring (ACF at 2b/4b) was tried and did not help. |
 | 1.4 ([#167](https://github.com/Jdubz/blinky_time/issues/167)) | Phase lock near the noise floor on dubstep / garage / breakbeat / trap | tracker | OPEN | Tied to 1.3. Measure with `tests/tracker` `excess`. |
 | 1.5 ([#168](https://github.com/Jdubz/blinky_time/issues/168)) | 174 BPM tracked as a 2-beat cycle (octave ambiguity) | `runAcf` | OPEN | Acceptable for visuals but limits `beatCount` meaning; revisit with 1.3. |
 | 1.8 ([#171](https://github.com/Jdubz/blinky_time/issues/171)) | JSON stream formatting costs 10–50 ms per emit (loop stall while streaming) | `SerialConsole::streamTick` | OPEN | Rate-limit to a CPU budget or move off the loop task. |
 | 1.9 ([#172](https://github.com/Jdubz/blinky_time/issues/172)) | Silence reset / confidence gating used relative level | `AudioTracker` | VERIFY | Silence detection removed with the noise gate. At device-like levels on edm/, an adaptive noise floor falsely reset tempo 487-2159 times in music; never resetting gave 0 false resets and re-locked on a new song as fast or faster. Breakdowns can no longer reset tempo. |
-| 1.11 ([#174](https://github.com/Jdubz/blinky_time/issues/174)) | NN computes 16 output frames to use 1 (receptive field 9) | model export | OPEN (ML) | Re-export with W=9 or streaming conv state → ~½ inference cost. Prerequisite for turning the NN back on: it must beat flux (F1 0.546) at a frame rate the renderer accepts, in the harness cost model. |
+| 1.11 ([#174](https://github.com/Jdubz/blinky_time/issues/174)) | NN computes 16 output frames to use 1 (receptive field 9) | model export | OPEN (ML) | Re-export with W=9 or streaming conv state → ~½ inference cost. Prerequisite for turning the NN back on: it must beat SuperFlux (drum F 0.657 at device level, `docs/AUDIO_ARCHITECTURE.md`) at a frame rate the renderer accepts, in the harness cost model. |
 
 ## 2. Spectral / mic / features
 
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
 | 2.1 ([#175](https://github.com/Jdubz/blinky_time/issues/175)) | Raw mel saturates (band pinned at 1.0) above ~−37 dBFS bass; NN loses low-band contrast at high SPL | `SharedSpectralAnalysis::computeMelBandsFrom` | PARTIAL | Telemetry added (`melSaturated`/`melTotal` in `json info`). Fix needs digital pre-gain or PCEN **mirrored in training**; use field recordings. |
-| 2.3 ([#177](https://github.com/Jdubz/blinky_time/issues/177)) | Breakdown/drop valley behaviour; single-transient suppression | `AdaptiveMic` | VERIFY | 0.2 s valley attack, debounce, valley snap-up. Verify on device. |
 | 2.4 ([#178](https://github.com/Jdubz/blinky_time/issues/178)) | Non-overlapping Hamming frames → onset-strength wobble with hit position | FFT framing | OPEN (ML) | 50 % overlap requires a retrain. |
 | 2.6 ([#180](https://github.com/Jdubz/blinky_time/issues/180)) | Mel whitening gives little contrast (log-domain ÷ running max) | `whitenMelBands` | OPEN | Low priority; comment corrected in #152. |
 | 2.7 ([#181](https://github.com/Jdubz/blinky_time/issues/181)) | Noise estimator creeps in steady music (leaky minimum) | `estimateAndSubtractNoise` | OPEN | Off by default and not persisted. Keep off, or switch to windowed min-statistics. |
@@ -61,7 +60,6 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
-| 3.1 ([#185](https://github.com/Jdubz/blinky_time/issues/185)) | `configPrphBandwidth(BANDWIDTH_MAX)`: SoftDevice RAM requirement grows | `blinky-things.ino` | VERIFY | Same config as the stock `bleuart` example on this core and linker. On failure: logged, BLE skipped, USB intact. **Verify:** boot log has no `[FALLBACK] Bluefruit.begin() FAILED`; `ble` shows MTU 247. |
 | 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | OPEN | Keep console quiet during sessions; consider a non-blocking notify check. |
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 
@@ -88,6 +86,8 @@ PR #152 and PR #155 are merged and ship in stable **b215**, which was installed 
 | 6.6 ([#258](https://github.com/Jdubz/blinky_time/issues/258)) | Release gate needs timing checks, not just an fps floor | PARTIAL | Floor 60 (#262); `frametime` check on `maxFrameMs` added. Still to do: phase keeps pace with the wall clock. |
 
 ## 7. Device verification checklist for PR #152 (hat)
+
+Steps 2 and 3 (BLE boot, MTU 247) and the tempo/mic parts of step 5 passed on 2026-10-21 (#164, #177, #185). Still to run: steps 3 (fleet reach, `device upload` round-trip), 4 and the Fire part of 5.
 
 1. Read the hat's version live (`json info`). At b215 or later, no flash is needed. Otherwise flash the latest stable release with `./scripts/deploy.sh --devices=<hat>`. Either way, don't reset it again for at least 60 s.
 2. Boot log: no `[FALLBACK] Bluefruit.begin() FAILED`; `[BLE] Record service started` present.
@@ -116,3 +116,18 @@ The still-open items of `docs/archive/OPEN_ISSUES_2026_05_20.md` (fleet rollout,
 | 8.11 ([#219](https://github.com/Jdubz/blinky_time/issues/219)) | auto-recovery untested on an enrolled device | OPEN |
 | 8.12 ([#220](https://github.com/Jdubz/blinky_time/issues/220)) | no BL-over-BLE path (future) | OPEN |
 | 8.13 ([#221](https://github.com/Jdubz/blinky_time/issues/221)) | full-fleet gossip-ACK delivery unmeasured | OPEN |
+
+## 9. Onset detection, labels and ML (filed 2026-10-22/23)
+
+The detection task is kick and snare hits (CLAUDE.md). Detectors are scored on drum metrics at the device's level (`docs/AUDIO_ARCHITECTURE.md`).
+
+| # | Issue | Status | Notes |
+|---|---|---|---|
+| 9.1 | PR #292 device checks (#280 follow-up) | VERIFY | Owner listening check on the hat and a `pulsedecay` choice (default 150 ms); a `fluxdelta` sweep on the device (kick recall 53% on the hat vs 72% on the host, same segments). Flash with `tools/deploy_local.py --dev` (test device only). |
+| 9.2 ([#284](https://github.com/Jdubz/blinky_time/issues/284)) | Drum labels ~26 ms late, kick/snare swaps, phantom snares | OPEN | Poisons NN targets and every drum metric. Snare recall numbers are provisional until fixed. |
+| 9.3 ([#289](https://github.com/Jdubz/blinky_time/issues/289)) | Hand-curate GT for the 18 edm/ tracks | OPEN (owner) | `tools/label-reviewer/` is ready; no `*.onsets_human.json` exists yet. |
+| 9.4 ([#290](https://github.com/Jdubz/blinky_time/issues/290)) | Shift-tolerant loss; retire label widening | OPEN (ML) | For the platform trainer (`spark-audio-trainer`). |
+| 9.5 ([#291](https://github.com/Jdubz/blinky_time/issues/291)) | Publish the mel feature spec as a versioned contract with golden vectors | OPEN (ML) | A model may be trained by code we don't run. The spec must describe the firmware's integer `MEL_BANDS` table (weighted average per band), not an HTK filterbank. |
+| 9.6 ([#288](https://github.com/Jdubz/blinky_time/issues/288)) | Spark `separate` job client | PARTIAL | `ml-training/scripts/spark_jobs.py` is merged (#292). First real run waits on my-spark #1530, a `blinky-time` client entry, and the `spark-audio` image. |
+| 9.7 ([#283](https://github.com/Jdubz/blinky_time/issues/283)) | Visualizer observability in the simulator | OPEN | Numeric summaries of visual impact, so tuning isn't gated on the owner watching the hat. |
+| 9.8 | The drum metrics (kick/snare recall, on-drum share, drum F at device level) are computed by ad-hoc study scripts, not by anything in the repo; CI and blinky-server still score all-onset F1 | OPEN (no issue yet) | Add drum scoring to `tests/tracker/run_tracker_eval.py` (and the server harness), so the primary metric is reproducible and gated. |
