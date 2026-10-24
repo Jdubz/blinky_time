@@ -9,7 +9,8 @@
 # What it does (each step logs OK/FAIL; any FAIL makes the run exit non-zero):
 #   1. apt upgrade + the packages the box needs (python, ffmpeg, uhubctl, gh, node...)
 #   2. clone blinky_time into the user's home (never pulls an existing clone)
-#   3. blinky-server venv with the `firmware` extra, NOT `ble` (the box runs --no-ble)
+#   3. blinky-server venv with the `firmware` and `ble` extras (the server imports bleak
+#      unconditionally; the box's BLE guard is --no-ble plus dtoverlay=disable-bt)
 #   4. build blinky-console into blinky-server/web/
 #   5. narrow sudoers rule for the commands the flash path runs under sudo, on a
 #      root-owned copy of usb_reset.py, probed after install (sudoers_selftest)
@@ -120,9 +121,10 @@ server_venv() {
   if [[ ! -x "$SERVER_DIR/venv/bin/python" ]]; then
     as_user python3 -m venv "$SERVER_DIR/venv" || return 1
   fi
-  # firmware extra only: without bleak the server cannot open BLE even if --no-ble is dropped.
+  # `ble` is required, not optional: device/manager.py imports ble.advertiser (dbus_fast) and
+  # firmware/ble_dfu.py (bleak) at startup. BLE stays off via --no-ble and dtoverlay=disable-bt.
   as_user "$SERVER_DIR/venv/bin/pip" install -q --upgrade pip &&
-    as_user "$SERVER_DIR/venv/bin/pip" install -q -e "$SERVER_DIR[firmware]"
+    as_user "$SERVER_DIR/venv/bin/pip" install -q -e "$SERVER_DIR[firmware,ble]"
 }
 
 build_console() {
