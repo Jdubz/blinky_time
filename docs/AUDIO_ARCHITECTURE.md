@@ -43,7 +43,7 @@ Generators receive a single struct (`audio/AudioControl.h`):
 struct AudioControl {
     float energy;         // Audio energy level (0-1), never below a 0.12-0.20 "smolder" floor
     float level;          // Mic loudness, auto-ranged 0-1, no gate, no extra smoothing
-    float pulse;          // Hit envelope (0-1): onset strength at each onset, 100 ms decay
+    float pulse;          // Hit envelope (0-1): onset strength at each onset, 150 ms decay (`pulsedecay`)
     float onset;          // Onset EVENT: strength this update, 0 if none
     float phase;          // Rhythm-cycle phase (0-1, 0 = accent)
     uint16_t beatCount;   // +1 per rhythm cycle, never decrements
@@ -362,7 +362,7 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
 
   The paper's online values are 30 / 100 / 30 ms, which at 62.5 fps is W1 = 2 (`onsetmaxframes`), W3 = 6 (`fluxavgframes`, flux only) and W5 = 2 (`onsetmingap`). These are runtime-tunable and not saved. There's no look-ahead: the onset is reported at the frame that peaks, a frame earlier than the old local-max picker.
 - **Per-detector δ and average:**
-  - Flux: `fluxdelta`, default 11, saved. The edm/ sweep is flat from 8 to 14, and every leave-one-track-out fold chose 11 or 12. Flux uses the moving average.
+  - Flux: `fluxdelta`, default 7, saved. Chosen at device level (−50 dB) once only bands ≤ 5 kHz vote: against all bands at δ 10 it keeps kick recall (79%) and drum F (0.657 vs 0.651) and cuts lone-hat triggers from 63% to 45%, for a snare-recall cost (81% → 76%). Flux uses the moving average.
   - NN: `pulseonsetfloor`, default 0.55, saved. Its activation is already a probability, so the NN uses a fixed threshold with no moving average. The old 0.20 fired 10/s without the window and cooldown.
 - **What it replaced, and why:**
   - **Deleted** in the same change: the 96 ms local-max window, the tempo-adaptive 40–150 ms cooldown, the adaptive flux baseline (`pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`), and the crest, beat-grid, re-arm, bass-ratio and presence gates.

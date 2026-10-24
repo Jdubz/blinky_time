@@ -520,11 +520,13 @@ void SharedSpectralAnalysis::computeSuperFlux() {
     if (hasPrevFrame_) {
         // Reference = previous frame max-filtered over +-1 band (vibrato
         // suppression); half-wave rectified, summed unweighted over the
-        // voting bands (<= 5 kHz, SUPERFLUX_ONSET_BANDS).
+        // voting bands (<= 5 kHz, SUPERFLUX_ONSET_BANDS). The top voting
+        // band's upper neighbour is a computed band (static_assert below).
+        static_assert(SpectralConstants::SUPERFLUX_ONSET_BANDS < SpectralConstants::SUPERFLUX_BANDS,
+                      "the +-1 band max filter reads band SUPERFLUX_ONSET_BANDS");
         for (int m = 0; m < SpectralConstants::SUPERFLUX_ONSET_BANDS; m++) {
-            float ref = prevLogBands_[m];
+            float ref = fmaxf(prevLogBands_[m], prevLogBands_[m + 1]);
             if (m > 0) ref = fmaxf(ref, prevLogBands_[m - 1]);
-            if (m < SpectralConstants::SUPERFLUX_BANDS - 1) ref = fmaxf(ref, prevLogBands_[m + 1]);
             const float d = logBands[m] - ref;
             if (d > 0.0f) flux += d;
         }

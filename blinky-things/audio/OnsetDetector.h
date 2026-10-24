@@ -112,6 +112,7 @@ public:
 template <typename Model>
 class NNOnsetDetector : public OnsetDetector {
 public:
+    NNOnsetDetector() : model_() {}
     const char* name() const override { return "onset-nn"; }
 
     bool begin() { return model_.begin() && model_.isReady(); }
