@@ -3,7 +3,7 @@
 #
 # Runs as root. Idempotent: safe to re-run after a failure or on a rebuilt card.
 #   First boot: cloud-init runs it from the SD card's boot partition
-#               (/boot/firmware/blinky-testbox/setup.sh, see that dir's README).
+#               (/boot/firmware/blinky-testbox/setup.sh; docs/TEST_BOX_BUILD_PLAN.md, Software setup).
 #   Later:      sudo ~/blinky_time/scripts/testbox/setup.sh
 #
 # What it does (each step logs OK/FAIL; any FAIL makes the run exit non-zero):
