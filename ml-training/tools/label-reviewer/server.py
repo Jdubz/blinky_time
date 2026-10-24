@@ -6,7 +6,7 @@ against audio. Supports multiple corpora simultaneously: switch between
 them in the UI without restarting the server.
 
 Defaults register two corpora:
-  * `training` — devtop training corpus (large, devtop-only)
+  * `training` — the training corpus under `${BLINKY_DATA}` (not in git)
   * `edm`      — in-repo validation corpus (18 EDM tracks, syncs via git)
 
 Override or replace the defaults with one or more `--corpus name=audio_dir,
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import sys
 from dataclasses import dataclass
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -33,9 +34,15 @@ from urllib.parse import parse_qs, urlparse
 STATIC_DIR = Path(__file__).parent
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Built-in corpus defaults.
-_TRAINING_LABELS_BASE = Path("/mnt/storage/blinky-ml-data/labels")
-_TRAINING_AUDIO = Path("/mnt/storage/blinky-ml-data/audio/combined")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.audio import storage_root  # noqa: E402
+
+# Built-in corpus defaults. The training corpus lives under the same
+# `${BLINKY_DATA}` root the configs name, so edits land where
+# prepare_dataset.py reads them (`labels.onset_human_dirs`).
+_TRAINING_DATA = Path(storage_root("BLINKY_DATA"))
+_TRAINING_LABELS_BASE = _TRAINING_DATA / "labels"
+_TRAINING_AUDIO = _TRAINING_DATA / "audio" / "combined"
 _EDM_DIR = REPO_ROOT / "blinky-test-player" / "music" / "edm"
 
 
@@ -95,7 +102,7 @@ def _default_corpora() -> list[Corpus]:
             # to show them as reference.
             beat_dir=None,
             librosa_dir=_TRAINING_LABELS_BASE / "onsets_librosa",
-            description="Training corpus (devtop-local). Edits stay on devtop and feed prepare_dataset.py.",
+            description="Training corpus under ${BLINKY_DATA}. Edits stay there and feed prepare_dataset.py.",
         ),
         Corpus(
             name="edm",
