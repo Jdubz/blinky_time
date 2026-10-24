@@ -27,6 +27,11 @@ dev = [
 [project.scripts]
 blinky-server = "blinky_server.__main__:main"
 
+# Only the Python package. Auto-discovery also finds web/ (the blinky-console
+# build output, gitignored) and refuses to install once it exists.
+[tool.setuptools.packages.find]
+include = ["blinky_server*"]
+
 # ── mypy ──
 [tool.mypy]
 python_version = "3.11"

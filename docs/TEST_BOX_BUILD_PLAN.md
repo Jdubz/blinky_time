@@ -33,7 +33,7 @@ Rules that follow from this:
                     |
   +-----------------+------------------------------------------------+
   |  Pi 5 (blinky-server)                                            |
-  |   - I2S DAC + amp ----------------> sealed speaker (own baffle)  |
+  |   - USB (own port) ---------------> USB speaker (own baffle)     |
   |   - CSI camera  ------------------> views every chip's LEDs      |
   |   - USB ---> powered hub, per-port switching (uhubctl)           |
   |                 |-- test chip A (+ LEDs)                         |
@@ -79,8 +79,7 @@ This also replaces the current "a test device is whatever is listed in `test_dev
 | Part | Notes |
 |------|-------|
 | Raspberry Pi 5, 4–8 GB | Official 27 W PSU. Active cooler. |
-| I2S DAC + amplifier HAT | Keeps audio off USB. A DAC with a built-in amp (IQaudio DigiAMP+ class) needs no separate amp. |
-| Sealed speaker | Sealed, not ported (port noise is an artifact). Must play down to ~50 Hz, or kick tests mean little. |
+| USB speaker | No audio HAT: playback goes to a USB audio device. Plug it into the Pi directly, on the other USB controller from the hub (the Pi 5 has two; each serves one blue and one black port), never into the switched hub: a `uhubctl` cycle or hub reset would cut the speaker mid-run. Sealed, not ported (port noise is an artifact). Must play down to ~50 Hz, or kick tests mean little. |
 | Camera | The existing Zero camera to start. If frame-rate or flicker measurement becomes a goal, a global-shutter camera avoids rolling-shutter banding. |
 | Powered USB hub with per-port power switching | Pick from the `uhubctl` supported list and confirm per-port switching (not ganged) with `uhubctl` **before** building it in. Recovery depends on cycling one port. |
 | Pi Zero W | SWD recovery (above). |
@@ -130,7 +129,7 @@ The PDM MEMS mics respond to structure-borne vibration as well as to sound.
 
 ### Heat
 
-A sealed, lined box with a Pi 5, an amp and LEDs will get hot.
+A sealed, lined box with a Pi 5, a powered speaker and LEDs will get hot.
 
 - Bring air in and out through two lined S-shaped ducts.
 - Put a slow, quiet fan at the outlet duct, not inside the box.
@@ -145,9 +144,14 @@ A sealed, lined box with a Pi 5, an amp and LEDs will get hot.
 
 ## Software setup
 
-1. Install the host OS on the Pi 5 (64-bit), plus Python 3.11+, `ffmpeg` (for `ffplay`) and `uhubctl`.
-2. Install blinky-server with the `firmware` extra (not `ble`; see "Two hosts, two roles"), run it with `--no-ble`, and give it its own API key. Copy the validation corpus (`blinky-test-player/music/edm/`, ~75 MB).
-3. Configure the I2S DAC as the default ALSA device. `audio_player.py` deliberately uses default ALSA routing (dmix), not `AUDIODEV=hw:N,0`.
+1. Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager (hostname `blinkytest`, user `jdubz`). The user must not have blanket passwordless sudo (`user-data` `sudo: null`, as Imager wrote it for the first card): `setup.sh` installs a narrow passwordless rule and refuses to continue while a `NOPASSWD:ALL` grant exists. Then copy `scripts/testbox/` to the card's boot partition as `blinky-testbox/`, add your SSH key under `user:` → `ssh_authorized_keys`, and append `- [ bash, /boot/firmware/blinky-testbox/setup.sh, --user, jdubz ]` to `runcmd` in `user-data`. On first boot cloud-init runs `setup.sh` (log: `/var/log/blinky-testbox-setup.log`; result: `/var/lib/blinky-testbox/setup-ok` or `setup-failed`). The script can be re-run at any time: `sudo ~/blinky_time/scripts/testbox/setup.sh`.
+2. `setup.sh` installs the packages (Python, `ffmpeg` for `ffplay`, `uhubctl`, `udisks2`, `gh`, Node), clones the repo (so the validation corpus `blinky-test-player/music/edm/` comes with it), installs blinky-server with the `firmware` and `ble` extras (the server imports bleak at startup, so it can't run without `ble`; BLE stays off through `--no-ble` and the OS-level overlay below, see "Two hosts, two roles") and builds blinky-console. It also installs a narrow sudoers rule for the commands the flash path runs under `sudo`, turns Bluetooth off at the OS level (`dtoverlay=disable-bt`), and starts `blinky-server.service` with `--no-ble`. The server creates its own API key in `~/.blinky-api-key` on first use. Manual afterwards: `gh auth login`, and add the Pi's `~/.ssh/id_ed25519.pub` to `swd-flash`.
+3. Make the USB speaker the default ALSA device. `audio_player.py` deliberately uses default ALSA routing (dmix), not `AUDIODEV=hw:N,0`, and Pi OS Lite has no PipeWire, so without this ffplay plays to HDMI. Find the card's name with `aplay -l` (the word after `card N:`) and put it in `/etc/asound.conf` by name, not number, since USB card numbers can change between boots:
+   ```
+   defaults.pcm.card <name>
+   defaults.ctl.card <name>
+   ```
+   Check with `ffplay -nodisp -autoexit <track>.mp3`. USB audio adds its own buffering delay; the host-timing gate (Acceptance gates) is what shows it is stable.
 4. **Test devices.** Only devices listed in `devices/test_devices.json` may take candidates and `--dev` builds. Adding box chips to that list is a deliberate decision made in its own reviewed change. Chips not on the list get stable releases only, like the rest of the fleet. Today the list holds `hat_v1`, which is a finished device. Once the box chips pass the gates, take `hat_v1` off the list in the same kind of reviewed change, so every finished device takes stable releases only.
 5. Enroll the chips with the standard workflow, and respect the 60-second rule between resets during setup.
 
@@ -176,7 +180,7 @@ The box's numbers are not trusted until all of these pass. The thresholds are pr
 
 ## Rollout
 
-1. **Open-bench prototype.** Pi 5 + DAC + speaker + one chip on an open table. Run the validation suite and pass the host-timing gate before building any enclosure.
+1. **Open-bench prototype.** Pi 5 + USB speaker + one chip on an open table. Run the validation suite and pass the host-timing gate before building any enclosure.
 2. **Build the enclosure** and the internal mounts.
 3. **Calibrate** and pass the acceptance gates.
 4. **Move the release gate** to the box: `release_gate.py` runs on the box's Pi 5 against a box test chip. Today the gate talks to the chip's serial port directly (through `deploy_local.py`), while on the box blinky-server owns that port. Before this step, either the gate stops the box server for the run, or it gets a mode that goes through the box server's API. The gate's missing timing checks (#258; today it only has a 60 fps disaster floor) are a natural fit for the box's camera.
