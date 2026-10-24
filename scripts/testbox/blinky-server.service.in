@@ -1,0 +1,36 @@
+[Unit]
+Description=blinky-server (test box: USB only, --no-ble)
+Documentation=https://github.com/Jdubz/blinky_time/blob/master/docs/TEST_BOX_BUILD_PLAN.md
+After=network-online.target
+Wants=network-online.target
+# Same self-heal window as blinkyhost's lemon-cart drop-in.
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+# Type=notify + WatchdogSec: the fleet loop pings systemd every discovery cycle
+# (blinky_server/systemd_notify.py); a hang gets killed and restarted.
+Type=notify
+NotifyAccess=main
+User=@USER@
+Group=@USER@
+SupplementaryGroups=dialout plugdev
+
+WorkingDirectory=@SERVER_DIR@
+# --no-ble: blinky-server has no discovery allowlist yet, so with BLE on it could
+# adopt (and auto-recover, i.e. flash) a production device in radio range.
+ExecStart=@SERVER_DIR@/venv/bin/python -m blinky_server --no-ble
+
+Restart=always
+RestartSec=5s
+WatchdogSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blinky-server
+
+MemoryMax=1G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target
