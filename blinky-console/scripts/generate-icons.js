@@ -5,7 +5,7 @@
  */
 
 import sharp from 'sharp';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -25,6 +25,30 @@ const ICONS = [
   { name: 'favicon-32x32.png', size: 32 },
   { name: 'favicon-16x16.png', size: 16 },
 ];
+
+// libvips' resampling rounds differently across CPUs (arm64 vs x86_64), so a
+// rebuild can differ from the committed PNG by 1 in a few channels. Keep the
+// committed file then: a rewrite would dirty the tree, and deploy_local.py
+// refuses --dev builds of a dirty tree.
+const MAX_CHANNEL_NOISE = 1;
+
+async function writeIfChanged(pngBuffer, outputPath) {
+  if (existsSync(outputPath)) {
+    const [next, prev] = await Promise.all([
+      sharp(pngBuffer).raw().toBuffer({ resolveWithObject: true }),
+      sharp(outputPath).raw().toBuffer({ resolveWithObject: true }),
+    ]);
+    const sameShape =
+      next.info.width === prev.info.width &&
+      next.info.height === prev.info.height &&
+      next.info.channels === prev.info.channels;
+    if (sameShape && next.data.every((v, i) => Math.abs(v - prev.data[i]) <= MAX_CHANNEL_NOISE)) {
+      return false;
+    }
+  }
+  writeFileSync(outputPath, pngBuffer);
+  return true;
+}
 
 // Maskable icons need padding (safe zone is 80% of icon, so 10% padding on each side)
 const MASKABLE_PADDING_PERCENT = 0.1;
@@ -61,16 +85,21 @@ async function generateIcon(svgBuffer, config) {
     ]);
   }
 
-  await pipeline.png().toFile(outputPath);
-  console.log(`Generated: ${name} (${size}x${size}${maskable ? ' maskable' : ''})`);
+  const written = await writeIfChanged(await pipeline.png().toBuffer(), outputPath);
+  console.log(
+    `${written ? 'Generated' : 'Unchanged'}: ${name} (${size}x${size}${maskable ? ' maskable' : ''})`
+  );
 }
 
 async function generateFavicon(svgBuffer) {
   // Note: This generates a 32x32 PNG saved as .ico
   // Modern browsers handle this fine; proper multi-size ICO would need additional tooling
   const outputPath = join(PUBLIC_DIR, 'favicon.ico');
-  await sharp(svgBuffer).resize(32, 32).png().toFile(outputPath);
-  console.log('Generated: favicon.ico (32x32)');
+  const written = await writeIfChanged(
+    await sharp(svgBuffer).resize(32, 32).png().toBuffer(),
+    outputPath
+  );
+  console.log(`${written ? 'Generated' : 'Unchanged'}: favicon.ico (32x32)`);
 }
 
 async function main() {
