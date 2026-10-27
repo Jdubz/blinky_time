@@ -8,7 +8,7 @@ The live contract here is `separate` (one track in, its stems out). Contract:
 my-spark docs/architecture/api.md, "separate" and "Submit — POST /jobs".
 
 usage:
-  python scripts/spark_jobs.py separate [--model-type htdemucs] [--stems drums] FILE...
+  python scripts/spark_jobs.py separate [--stems drums] [--chunk-seconds N] FILE...
   python scripts/spark_jobs.py status            # one pass over the ledger, no loop
   python scripts/spark_jobs.py fetch --out DIR   # download the stems of succeeded jobs
 
@@ -17,8 +17,15 @@ Environment (both required, no defaults):
   SPARK_API_KEY   blinky-time's key from the Spark's client registry (sent as a header only)
 
 Every submission is appended to a JSONL ledger (default ml-training/outputs/spark/separate.jsonl,
-gitignored), so
-a restarted client re-attaches to its jobs instead of re-spending the GPU.
+gitignored), and so is each result the first time `status` or `fetch` sees it. A restarted client
+skips the tracks it already has instead of re-spending the GPU.
+
+Two retention limits on the platform side matter for a pass that runs for days:
+  - A finished job's record is pruned 24 h after it finishes. After that, GET /jobs/{id} is a 404,
+    and the same idempotency key starts a new job. Run `status` or `fetch` at least daily during
+    a pass: a result nobody recorded within 24 h is lost, and its track gets separated again.
+  - Stems live under outputs/, which the store reaps 7 days after they are written. `fetch` well
+    inside that; `status` warns at 5 days.
 """
 from __future__ import annotations
 
@@ -45,6 +52,18 @@ PRIORITY = 0
 # Phase 1 measures it); a declaration above the floor still wins. Declare the floor.
 SEPARATE_MEMORY_GB = 12.0
 
+# htdemucs's segment is fixed by its architecture at 39/5 = 7.8 s. The engine refuses a longer
+# `chunk_seconds` rather than clamping it (my-spark #1534), but only once the job has waited its
+# turn in the queue. Refuse it here instead. Omit the field to get the native segment.
+HTDEMUCS_SEGMENT_S = 7.8
+
+# Retention on the platform (see the module docstring): finished job records go after 24 h,
+# un-kept outputs/ after 7 days. We fetch the stems rather than keep-tag them, since a corpus of
+# keep-tagged stems would sit in the shared store forever.
+JOB_RECORD_TTL_S = 24 * 3600
+OUTPUT_TTL_S = 7 * 24 * 3600
+REAP_WARN_S = 5 * 24 * 3600
+
 DEFAULT_LEDGER = Path(__file__).resolve().parents[1] / "outputs" / "spark" / "separate.jsonl"
 
 # Retried: the request may not have reached a verdict. Never retried: a job that FAILED.
@@ -58,6 +77,10 @@ TERMINAL = {"succeeded", "failed", "canceled"}
 
 class SparkError(RuntimeError):
     pass
+
+
+class NotFound(SparkError):
+    """A 404: a pruned job record, or a reaped artifact."""
 
 
 def _env(name: str) -> str:
@@ -94,6 +117,8 @@ class Client:
             except urllib.error.HTTPError as e:
                 if e.code in (301, 302, 303, 307, 308):
                     return e.code, dict(e.headers), b""
+                if e.code == 404:
+                    raise NotFound(f"{method} {path} -> HTTP 404") from None
                 if e.code in RETRY_STATUS and attempt < TRANSPORT_RETRIES:
                     time.sleep(2 ** attempt)
                     continue
@@ -141,8 +166,13 @@ class Client:
             loc = headers.get("Location") or headers.get("location")
             if not loc:
                 raise SparkError(f"GET artifact {key}: redirect without a Location")
-            with urllib.request.urlopen(loc, timeout=self.timeout) as r:   # presigned: no key
-                data = r.read()
+            try:
+                with urllib.request.urlopen(loc, timeout=self.timeout) as r:   # presigned: no key
+                    data = r.read()
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    raise NotFound(f"GET artifact {key} (presigned) -> HTTP 404") from None
+                raise SparkError(f"GET artifact {key} (presigned) -> HTTP {e.code}") from None
         elif status != 200:
             raise SparkError(f"GET artifact {key} -> HTTP {status}")
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -159,8 +189,20 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def idempotency_key(sha: str, model_type: str, stems: list[str], chunk_seconds: int) -> str:
-    return f"sep:{sha}:{model_type}:{'+'.join(stems)}:{chunk_seconds}"
+def idempotency_key(sha: str, model_type: str, stems: list[str], chunk_seconds: int | None) -> str:
+    chunk = "native" if chunk_seconds is None else chunk_seconds
+    return f"sep:{sha}:{model_type}:{'+'.join(stems)}:{chunk}"
+
+
+def check_chunk(model_type: str, chunk_seconds: int | None) -> None:
+    if chunk_seconds is None:
+        return
+    if chunk_seconds < 1:
+        raise SparkError(f"--chunk-seconds {chunk_seconds}: must be >= 1, or omitted")
+    if model_type == "htdemucs" and chunk_seconds > HTDEMUCS_SEGMENT_S:
+        raise SparkError(f"--chunk-seconds {chunk_seconds} exceeds htdemucs's fixed segment of "
+                         f"{HTDEMUCS_SEGMENT_S:g} s, and the engine would refuse it after queueing; "
+                         f"omit it to use the native segment")
 
 
 def read_ledger(path: Path) -> list[dict]:
@@ -177,10 +219,29 @@ def read_ledger(path: Path) -> list[dict]:
     return rows
 
 
-def latest_by_key(rows: list[dict]) -> dict[str, dict]:
+def fold_ledger(rows: list[dict]) -> dict[str, dict]:
+    """The current record per idempotency key. A row without an `event` is a submission and starts
+    a fresh record. An event row annotates the submission whose job_id it names, and is dropped if
+    that job has since been replaced by a resubmission."""
     out: dict[str, dict] = {}
     for r in rows:
-        out[r["idempotency_key"]] = r
+        k = r["idempotency_key"]
+        ev = r.get("event")
+        if ev is None:
+            out[k] = dict(r)
+            continue
+        cur = out.get(k)
+        if cur is None or cur["job_id"] != r["job_id"]:
+            continue
+        if ev == "succeeded":
+            cur.update(result_stems=r["stems"], chunk_seconds_used=r.get("chunk_seconds_used"),
+                       finished_at=r.get("finished_at"))
+        elif ev == "fetched":
+            cur["fetched"] = r["out"]
+        elif ev == "reaped":
+            cur.update(result_stems=None, fetched=None, reaped=True)
+        else:
+            raise SparkError(f"ledger: unknown event {ev!r} for {k}")
     return out
 
 
@@ -190,21 +251,71 @@ def append_ledger(path: Path, row: dict) -> None:
         f.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def record_success(ledger: Path, rec: dict, job: dict) -> None:
+    """Write a succeeded job's stems to the ledger, so they outlive the job record (24 h)."""
+    data = (job.get("result") or {}).get("data") or {}
+    stems = data.get("stems")
+    if not isinstance(stems, dict) or set(stems) != set(rec["stems"]):
+        raise SparkError(f"job {rec['job_id']}: result stems {stems!r} != requested {rec['stems']}")
+    # `chunk_seconds` in the result is the segment the engine USED, which is the provenance a label
+    # set needs; the request may have been "native".
+    row = {"event": "succeeded", "idempotency_key": rec["idempotency_key"], "job_id": rec["job_id"],
+           "stems": stems, "chunk_seconds_used": data.get("chunk_seconds"),
+           "finished_at": job.get("finished_at"), "at": time.time()}
+    append_ledger(ledger, row)
+    rec.update(result_stems=stems, chunk_seconds_used=row["chunk_seconds_used"],
+               finished_at=row["finished_at"])
+
+
+def _resubmit_reason(client: Client, ledger: Path, rec: dict) -> str | None:
+    """Why a track the ledger already knows must be submitted again, or None to skip it."""
+    name = Path(rec["path"]).name
+    if rec.get("fetched"):
+        print(f"{name}: already fetched to {rec['fetched']}; skipping")
+        return None
+    if rec.get("result_stems"):
+        print(f"{name}: succeeded, stems in the store; run `fetch`")
+        return None
+    if rec.get("reaped"):
+        return "its stems were reaped from the store before they were fetched"
+    try:
+        j = client.job(rec["job_id"])
+    except NotFound:
+        return f"job {rec['job_id']} was pruned before its result was recorded"
+    state = j.get("state")
+    if state == "succeeded":
+        record_success(ledger, rec, j)
+        print(f"{name}: succeeded; run `fetch`")
+        return None
+    if state in ("failed", "canceled"):
+        return f"job {rec['job_id']} {state}"
+    print(f"{name}: job {rec['job_id']} {state}; skipping")
+    return None
+
+
 def cmd_separate(client: Client, files: list[Path], model_type: str, stems: list[str],
-                 chunk_seconds: int, ledger: Path) -> int:
-    known = latest_by_key(read_ledger(ledger))
+                 chunk_seconds: int | None, ledger: Path) -> int:
+    check_chunk(model_type, chunk_seconds)
+    known = fold_ledger(read_ledger(ledger))
     uploaded = {r["sha256"]: r["audio"] for r in known.values()}
     for path in files:
         if not path.is_file():
             raise SparkError(f"{path}: not a file")
         sha = sha256_file(path)
         key = idempotency_key(sha, model_type, stems, chunk_seconds)
+        if key in known:
+            why = _resubmit_reason(client, ledger, known[key])
+            if why is None:
+                continue
+            print(f"{path.name}: {why}; resubmitting", file=sys.stderr)
         audio = uploaded.get(sha) or client.upload(path)
         uploaded[sha] = audio
+        payload: dict = {"audio": audio, "model_type": model_type, "stems": stems}
+        if chunk_seconds is not None:   # omitted = the engine's native segment
+            payload["chunk_seconds"] = chunk_seconds
         resp = client.submit({
             "type": "separate",
-            "payload": {"audio": audio, "model_type": model_type, "stems": stems,
-                        "chunk_seconds": chunk_seconds},
+            "payload": payload,
             "memory_estimate_gb": SEPARATE_MEMORY_GB,
             "priority": PRIORITY,
             "idempotency_key": key,
@@ -224,43 +335,87 @@ def cmd_separate(client: Client, files: list[Path], model_type: str, stems: list
     return 0
 
 
+def _describe(client: Client, ledger: Path, r: dict, now: float) -> tuple[str, str]:
+    name = Path(r["path"]).name
+    if r.get("fetched"):
+        return "fetched", f"{name}: fetched to {r['fetched']}"
+    if r.get("reaped"):
+        return "reaped", f"{name}: stems reaped before they were fetched; `separate` resubmits it"
+    if not r.get("result_stems"):
+        try:
+            j = client.job(r["job_id"])
+        except NotFound:
+            return "pruned", (f"{name}: job {r['job_id']} pruned (records last "
+                              f"{JOB_RECORD_TTL_S / 3600:g} h after finishing) before its result was "
+                              f"recorded; `separate` resubmits it")
+        state = j.get("state", "?")
+        if state == "failed":
+            return state, f"{name}: failed -- {j.get('error')}"
+        if state != "succeeded":
+            line = f"{name}: {state}"
+            if state not in TERMINAL and j.get("progress"):
+                line += f" {j['progress'].get('pct', '')}% {j['progress'].get('message', '')}"
+            return state, line
+        record_success(ledger, r, j)
+    line = f"{name}: succeeded, not fetched"
+    if r.get("finished_at") and now - r["finished_at"] > REAP_WARN_S:
+        line += (f" -- WARNING: finished {(now - r['finished_at']) / 86400:.1f} d ago and the store "
+                 f"reaps outputs/ at {OUTPUT_TTL_S / 86400:g} d; run `fetch`")
+    return "succeeded", line
+
+
 def cmd_status(client: Client, ledger: Path) -> int:
-    rows = latest_by_key(read_ledger(ledger))
+    rows = fold_ledger(read_ledger(ledger))
     if not rows:
         raise SparkError(f"{ledger}: no submissions recorded")
     counts: dict[str, int] = {}
+    now = time.time()
     for r in rows.values():
-        j = client.job(r["job_id"])
-        state = j.get("state", "?")
+        state, line = _describe(client, ledger, r, now)
         counts[state] = counts.get(state, 0) + 1
-        line = f"{Path(r['path']).name}: {state}"
-        if state == "failed":
-            line += f" -- {j.get('error')}"
-        elif state not in TERMINAL and j.get("progress"):
-            line += f" {j['progress'].get('pct', '')}% {j['progress'].get('message', '')}"
         print(line)
     print(" ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-    return 1 if counts.get("failed") or counts.get("canceled") else 0
+    return 1 if any(counts.get(k) for k in ("failed", "canceled", "pruned", "reaped")) else 0
 
 
 def cmd_fetch(client: Client, ledger: Path, out: Path) -> int:
-    rows = latest_by_key(read_ledger(ledger))
-    pending = 0
+    rows = fold_ledger(read_ledger(ledger))
+    pending = lost = 0
     for r in rows.values():
-        j = client.job(r["job_id"])
-        if j.get("state") != "succeeded":
-            pending += 1
+        if not r.get("result_stems"):
+            if r.get("reaped"):
+                lost += 1
+                continue
+            try:
+                j = client.job(r["job_id"])
+            except NotFound:          # pruned before anyone recorded it; `status` names it
+                pending += 1
+                continue
+            if j.get("state") != "succeeded":
+                pending += 1
+                continue
+            record_success(ledger, r, j)
+        try:
+            for stem, key in r["result_stems"].items():
+                dest = out / r["model_type"] / f"{Path(r['path']).stem}.{stem}.wav"
+                if not dest.exists():
+                    client.download(key, dest)
+                    print(f"{dest}")
+        except NotFound as e:
+            append_ledger(ledger, {"event": "reaped", "idempotency_key": r["idempotency_key"],
+                                   "job_id": r["job_id"], "at": time.time()})
+            print(f"{Path(r['path']).name}: {e}; the stems were reaped before fetch", file=sys.stderr)
+            lost += 1
             continue
-        stems = (j.get("result") or {}).get("data", {}).get("stems")
-        if not isinstance(stems, dict) or set(stems) != set(r["stems"]):
-            raise SparkError(f"job {r['job_id']}: result stems {stems!r} != requested {r['stems']}")
-        for stem, key in stems.items():
-            dest = out / r["model_type"] / f"{Path(r['path']).stem}.{stem}.wav"
-            if not dest.exists():
-                client.download(key, dest)
-                print(f"{dest}")
+        if r.get("fetched") != str(out):
+            append_ledger(ledger, {"event": "fetched", "idempotency_key": r["idempotency_key"],
+                                   "job_id": r["job_id"], "out": str(out), "at": time.time()})
     if pending:
         print(f"{pending} job(s) not succeeded yet; run `status`", file=sys.stderr)
+    if lost:
+        print(f"{lost} job(s) lost their stems to the store's {OUTPUT_TTL_S / 86400:g}-day reaper; "
+              f"`separate` resubmits them", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -270,9 +425,12 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("separate", help="upload tracks and submit one separate job per track")
     s.add_argument("files", type=Path, nargs="+")
-    s.add_argument("--model-type", choices=["htdemucs", "mel-band-roformer"], default="htdemucs")
+    # mel-band-roformer is in the platform's contract, but its engine refuses it at runtime
+    # (demucs 4.0.1 doesn't ship it, my-spark #1534). Add it back when the platform's image has it.
+    s.add_argument("--model-type", choices=["htdemucs"], default="htdemucs")
     s.add_argument("--stems", default="drums", help="comma-separated, e.g. drums or drums,bass")
-    s.add_argument("--chunk-seconds", type=int, default=10)
+    s.add_argument("--chunk-seconds", type=int, default=None,
+                   help="segment length; omit for the engine's native one (htdemucs: 7.8 s, the max)")
     sub.add_parser("status", help="one pass over the ledger's jobs")
     f = sub.add_parser("fetch", help="download stems of succeeded jobs")
     f.add_argument("--out", type=Path, required=True)
