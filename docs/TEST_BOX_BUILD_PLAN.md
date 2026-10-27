@@ -38,7 +38,7 @@ Rules that follow from this:
   |   - USB ---> powered hub, per-port switching (uhubctl)           |
   |                 |-- test chip A (+ LEDs)                         |
   |                 |-- test chip B (+ LEDs)                         |
-  |                 |-- test chip C (bare, no LEDs)                  |
+  |                 |-- test chip C (+ LEDs)                         |
   |                 '-- Pi Zero W (USB gadget or power only)         |
   |                                                                  |
   |  Pi Zero W (SWD recovery) --- SWDIO/SWCLK/RESET ---> each chip   |
@@ -80,10 +80,11 @@ This also replaces the current "a test device is whatever is listed in `test_dev
 |------|-------|
 | Raspberry Pi 5, 4–8 GB | Official 27 W PSU. Active cooler. |
 | USB speaker | No audio HAT: playback goes to a USB audio device. In use: JBL Pebbles (USB-powered, USB audio, ALSA card name `Pebbles`); small and ported, so check its bass against the ~50 Hz requirement in the first REW sweep before trusting kick results. Plug it into the Pi directly, on the other USB controller from the hub (the Pi 5 has two; each serves one blue and one black port), never into the switched hub: a `uhubctl` cycle or hub reset would cut the speaker mid-run. Sealed, not ported (port noise is an artifact). Must play down to ~50 Hz, or kick tests mean little. |
-| Camera | The existing Zero camera to start. If frame-rate or flicker measurement becomes a goal, a global-shutter camera avoids rolling-shutter banding. |
+| Camera | The existing Zero camera, now on the Pi 5's CSI port: Camera Module v1 class, **OmniVision OV5647**, 5 MP, rolling shutter, fixed focus. Measured on the Pi 5 (2026-10-27): 640×480 full-view binned mode, at most 67.5 fps (14.8 ms frames, spacing sd ≈ 1 µs). How it joins the harness: `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md`. A global-shutter camera stays the upgrade if that plan's reference-LED timing check fails. |
+| Reference LED | One or two LEDs driven from Pi 5 GPIO, in the camera's view, for camera timing calibration (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, Calibration). |
 | Powered USB hub with per-port power switching | Pick from the `uhubctl` supported list and confirm per-port switching (not ganged) with `uhubctl` **before** building it in. Recovery depends on cycling one port. |
 | Pi Zero W | SWD recovery (above). |
-| Test chips | XIAO nRF52840 Sense. Some with small LED strips or matrices, at least one bare. |
+| Test chips | XIAO nRF52840 Sense, each driving a string of LEDs in the camera's view (the final design; the camera harness judges the visuals from these strings). Keep each string apart from the others in the image. |
 | LED power | Separate 5 V supply for LEDs with a common ground. Keep brightness low: heat and supply noise. |
 | Measurement mic | miniDSP UMIK-1 or UMIK-2, for calibration only. |
 | SPL meter | For setting playback level at the chips' position. |
@@ -176,19 +177,18 @@ The box's numbers are not trusted until all of these pass. The thresholds are pr
 | Agreement | Box F1 on the `edm/` corpus for the current stable firmware is within a stated margin of the last recorded bench results for that build (`test-results/`). Compare against the records; don't run validation on blinkyhost. Explain any difference before relying on the box. |
 | Isolation from production | With blinkyhost's fleet powered on nearby, the box server's device list shows only box chips. |
 | Recovery | Every chip: a forced bad flash is recovered by `uhubctl` cycling, then by SWD from the Zero, without opening the box. |
-| Camera | Every LED is visible in one locked-exposure frame, with no reflections. |
+| Camera | Every LED is visible in one locked-exposure frame, with no reflections, and the camera harness's calibration and gates pass (`TEST_BOX_CAMERA_HARNESS_PLAN.md`). |
 
 ## Rollout
 
 1. **Open-bench prototype.** Pi 5 + USB speaker + one chip on an open table. Run the validation suite and pass the host-timing gate before building any enclosure.
 2. **Build the enclosure** and the internal mounts.
 3. **Calibrate** and pass the acceptance gates.
-4. **Move the release gate** to the box: `release_gate.py` runs on the box's Pi 5 against a box test chip. Today the gate talks to the chip's serial port directly (through `deploy_local.py`), while on the box blinky-server owns that port. Before this step, either the gate stops the box server for the run, or it gets a mode that goes through the box server's API. The gate's missing timing checks (#258; today it only has a 60 fps disaster floor) are a natural fit for the box's camera.
+4. **Move the release gate** to the box: `release_gate.py` runs on the box's Pi 5 against a box test chip. Today the gate talks to the chip's serial port directly (through `deploy_local.py`), while on the box blinky-server owns that port. Before this step, either the gate stops the box server for the run, or it gets a mode that goes through the box server's API. The gate's missing timing checks (#258; today it only has a 60 fps disaster floor) are a natural fit for the box's camera (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, Rollout step 5).
 5. **Retire test duty from blinkyhost:** take `hat_v1` off `devices/test_devices.json` (Software setup, step 4).
 
 ## Open questions
 
-- Which camera module is the existing one? That decides whether LED timing can be measured or only checked visually.
-- How many chips, and which LED layouts (linear, matrix) should be represented?
+- How many chips, and how long should each LED string be?
 - Multi-chip SWD: per-chip GPIO sets on one Zero (planned above), or a physical selector switch?
 - Should the box also test BLE (fleet commands, BLE DFU)? That first needs per-server device ownership (see above), so the box server can never adopt a production device. Also, a shielded box changes the radio environment compared with real installs.
