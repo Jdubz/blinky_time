@@ -112,19 +112,7 @@ def _get_usb_dev_path(serial_port: str) -> str | None:
 
 
 def _find_usb_reset_tool() -> Path | None:
-    """Find the usb_reset.py helper.
-
-    ``$BLINKY_USB_RESET_TOOL`` names a root-owned copy (the test box installs
-    one, scripts/testbox/setup.sh): a sudoers rule on a copy the server user
-    can write would be passwordless root. When it is set, it is the only path
-    used. Otherwise, tools/ in the checkout this module runs from.
-    """
-    env = os.environ.get("BLINKY_USB_RESET_TOOL")
-    if env:
-        if Path(env).is_file():
-            return Path(env)
-        log.error("BLINKY_USB_RESET_TOOL=%s does not exist", env)
-        return None
+    """Find the usb_reset.py helper in tools/."""
     p = Path(__file__).resolve()
     for _ in range(10):
         p = p.parent
