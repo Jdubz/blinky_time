@@ -20,6 +20,7 @@
 #   9. development tooling, so the box can run every script, tool and CI check itself:
 #      arduino-cli (pinned) + the firmware toolchain, cppcheck (pinned, CI's build),
 #      adafruit-nrfutil, a dev Python venv, blinky-serial-mcp, git hooks, Claude Code
+#      (with Linux MCP servers: blinky-serial on this box, playwright + its Chromium)
 #
 # Log: /var/log/blinky-testbox-setup.log
 
@@ -133,7 +134,7 @@ server_venv() {
   # firmware/ble_dfu.py (bleak) at startup. BLE stays off via --no-ble and dtoverlay=disable-bt.
   # `dev` is CI's ruff/mypy/pytest (pr-validation.yml, blinky-server-tests), in the same venv.
   as_user "$SERVER_DIR/venv/bin/pip" install -q --upgrade pip &&
-    as_user "$SERVER_DIR/venv/bin/pip" install -q -e "$SERVER_DIR[firmware,ble,dev]"
+    as_user "$SERVER_DIR/venv/bin/pip" install -q -e "${SERVER_DIR}[firmware,ble,dev]"
 }
 
 build_console() {
@@ -318,7 +319,15 @@ claude_code() {
   # scope for this checkout only.
   ( cd "$REPO_DIR" &&
     as_user "$claude" mcp remove --scope local blinky-serial >/dev/null 2>&1
-    as_user "$claude" mcp add --scope local blinky-serial -- node "$REPO_DIR/blinky-serial-mcp/dist/index.js" )
+    as_user "$claude" mcp add --scope local blinky-serial -- node "$REPO_DIR/blinky-serial-mcp/dist/index.js" &&
+    # .mcp.json starts playwright through Windows' `cmd /c`; on Linux, npx directly.
+    as_user "$claude" mcp remove --scope local playwright >/dev/null 2>&1
+    as_user "$claude" mcp add --scope local playwright -- npx -y @executeautomation/playwright-mcp-server ) || return 1
+  # Its browser, installed by the playwright the server bundles (a bare `npx playwright`
+  # resolves a different version, whose browser build the server can't launch).
+  ( cd "$HOME_DIR" &&
+    as_user npx -y -p @executeautomation/playwright-mcp-server sh -c \
+      'node "$(dirname "$(dirname "$(command -v playwright-mcp-server)")")/playwright/cli.js" install chromium' )
 }
 
 step "network"            wait_for_network
