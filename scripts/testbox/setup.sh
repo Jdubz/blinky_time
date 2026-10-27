@@ -317,12 +317,15 @@ claude_code() {
   # The repo's .mcp.json reaches blinky-serial over ssh to blinkyhost. On the box it
   # runs locally against this box's own blinky-server; local scope overrides project
   # scope for this checkout only.
-  ( cd "$REPO_DIR" &&
+  # Each `remove` only clears an earlier run's entry (absent on the first run, so its
+  # status is ignored); every `add` must succeed.
+  ( cd "$REPO_DIR" || exit 1
     as_user "$claude" mcp remove --scope local blinky-serial >/dev/null 2>&1
-    as_user "$claude" mcp add --scope local blinky-serial -- node "$REPO_DIR/blinky-serial-mcp/dist/index.js" &&
+    as_user "$claude" mcp add --scope local blinky-serial -- node "$REPO_DIR/blinky-serial-mcp/dist/index.js" || exit 1
     # .mcp.json starts playwright through Windows' `cmd /c`; on Linux, npx directly.
     as_user "$claude" mcp remove --scope local playwright >/dev/null 2>&1
-    as_user "$claude" mcp add --scope local playwright -- npx -y @executeautomation/playwright-mcp-server ) || return 1
+    as_user "$claude" mcp add --scope local playwright -- npx -y @executeautomation/playwright-mcp-server || exit 1
+  ) || return 1
   # Its browser, installed by the playwright the server bundles (a bare `npx playwright`
   # resolves a different version, whose browser build the server can't launch).
   ( cd "$HOME_DIR" &&
