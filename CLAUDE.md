@@ -259,6 +259,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
 | `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
 | `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, I2S speaker, camera, test chips with SWD via Pi Zero W; enclosure construction, calibration, acceptance gates |
+| `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | Camera (OV5647) in the test box's validation harness: LED region discovery, visual onsets, render/sound-to-light latency as distributions, follow test against drum labels, calibration, provisional gates |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
