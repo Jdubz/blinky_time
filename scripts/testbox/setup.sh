@@ -100,6 +100,7 @@ install_packages() {
     avahi-daemon
     # development (the box is also a dev machine: Claude sessions in tmux)
     cmake                           # cppcheck build, blinky-simulator
+    g++-13                          # CI's host compiler: GCC 14 rejects TFLite's bundled flatbuffers
     ripgrep fd-find shellcheck sox picocom unzip pipx
     python3-numpy python3-scipy python3-yaml python3-matplotlib python3-cryptography
     python3-pytest                  # tools/ and CI's python checks on the system python
@@ -267,12 +268,17 @@ dev_python() {
     as_user "$DEV_VENV/bin/pip" install -q "tflite==2.18.0" librosa soundfile mir_eval || return 1
   # Login shells (tmux starts them) get the venv and ~/.local/bin first on PATH.
   local profile="$HOME_DIR/.profile"
-  if ! grep -qs '>>> blinky test box' "$profile"; then
+  # Replace the managed block whenever it changes (sed drops the old one).
+  if ! grep -qs 'export CXX=g++-13' "$profile"; then
+    as_user sed -i '/^# >>> blinky test box/,/^# <<< blinky test box/d' "$profile" || return 1
     as_user tee -a "$profile" >/dev/null <<'EOF'
 
 # >>> blinky test box (scripts/testbox/setup.sh) >>>
 # The dev venv (system site packages included) and per-user tools (claude, pipx apps).
 PATH="$HOME/.venvs/blinky/bin:$HOME/.local/bin:$PATH"
+# CI's host compiler (ubuntu-latest, GCC 13). tests/tracker/build_host_nn.sh builds
+# TFLite Micro with $CXX, and GCC 14 rejects its bundled flatbuffers (stl_emulation.h).
+export CXX=g++-13
 # <<< blinky test box <<<
 EOF
   fi

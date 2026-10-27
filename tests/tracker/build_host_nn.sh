@@ -28,6 +28,11 @@ CXX="${CXX:-c++}"; AR="${AR:-ar}"
 EXE=""; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;; esac
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
+# The pinned toolchain's copy (scripts/setup_toolchain.sh) is the one device
+# builds use; CI's job installs TFLite into arduino-cli's default user dir instead.
+if [ -z "$LIB" ] && [ -f .arduino/user/libraries/Arduino_TensorFlowLite/src/TensorFlowLite.h ]; then
+    LIB="$PWD/.arduino/user/libraries/Arduino_TensorFlowLite/src"
+fi
 if [ -z "$LIB" ]; then
     LIBROOT=$(arduino-cli config get directories.user 2>/dev/null | tr -d '\r') || true
     [ -n "$LIBROOT" ] || LIBROOT="$HOME/Arduino"
