@@ -37,13 +37,19 @@ log = logging.getLogger(__name__)
 # plans/0238 §5a). Don't lower this to be nice.
 PRIORITY = 0
 
-# The platform floors `memory_estimate_gb` per type (separate: 12 GiB, provisional until
-# Phase 1 measures it); a declaration above the floor still wins. Declare the floor.
-SEPARATE_MEMORY_GB = 12.0
+# Admission reserves max(our declaration, the platform's per-type floor). The floor is the
+# platform's MEASURED number (separate: 3.0 GiB from a 1.118 GiB GPU peak, my-spark #1540) and
+# moves when they re-measure, so declare below it and let it govern: any larger number here
+# holds budget no separation job uses. The field is required and must be > 0.
+SEPARATE_MEMORY_GB = 0.5
 
 # mel-band-roformer is in the platform's contract, but its engine refuses it at runtime
 # (demucs 4.0.1 doesn't ship it, my-spark #1534). Add it here when the platform's image has it.
 MODEL_TYPES = ("htdemucs",)
+
+# The platform's stem set (my-spark models.SEPARATE_STEMS). Submit 422s anything else, but by then
+# a batch has uploaded and queued the tracks before the bad request; refuse it up front instead.
+STEMS = ("drums", "bass", "vocals", "other")
 
 # htdemucs's segment is fixed by its architecture at 39/5 = 7.8 s. The engine refuses a longer
 # `chunk_seconds` rather than clamping it (my-spark #1534), but only once the job has waited its
@@ -80,6 +86,9 @@ def check_request(model_type: str, stems: list[str], chunk_seconds: int | None) 
         raise SparkError(f"model_type {model_type!r} is not available; use one of {MODEL_TYPES}")
     if not stems or len(set(stems)) != len(stems):
         raise SparkError(f"stems must be non-empty and unique: {stems}")
+    bad = [s for s in stems if s not in STEMS]
+    if bad:
+        raise SparkError(f"unknown stem(s) {bad}; use any of {STEMS}")
     if chunk_seconds is None:
         return
     if chunk_seconds < 1:
