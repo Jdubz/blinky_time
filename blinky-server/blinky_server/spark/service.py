@@ -293,17 +293,23 @@ class SparkService:
         return counts
 
     def on_webhook(self, body: dict[str, Any]) -> str:
-        """Handle one webhook delivery (same shape as GET /jobs/{id}, but `result` is already
-        the job's result.data). Idempotent. Returns what was done, for the log and the reply."""
+        """Handle one webhook delivery: the job record, the shape `GET /jobs/{id}` returns.
+        Idempotent. Returns what was done, for the log and the reply.
+
+        `result` is the job's whole result, `{"artifacts": [...], "data": {...}}`: the sender
+        sends `job.result` (my-spark `webhooks._payload`). my-spark's webhooks.md says it is
+        already `result.data`; that is wrong, and a reader trusting it would find no stems and
+        record every success as a failure. Both shapes are accepted, so a fix to either side
+        can't break this."""
         job_id, state = str(body.get("id") or ""), str(body.get("state") or "")
         rec = self.ledger.by_job_id(job_id)
         if rec is None:
             return "ignored: not a job in this server's ledger"
         if state not in TERMINAL:
             return f"ignored: {state} is not terminal"
-        settled = self._settle(
-            rec, state, body.get("result"), body.get("error"), body.get("finished_at")
-        )
+        result = body.get("result")
+        data = result.get("data", result) if isinstance(result, dict) else None
+        settled = self._settle(rec, state, data, body.get("error"), body.get("finished_at"))
         return f"recorded {state}" if settled else "duplicate"
 
     def summary(self) -> dict[str, Any]:
