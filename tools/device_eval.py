@@ -9,7 +9,8 @@ numbers are directly comparable:
   - track discovery and ground truth (`onsets_consensus` + human edits, cut
     to the segment played: `segment_ground_truth`),
   - stream parsing (`TestSession`, with firmware-clock timestamps),
-  - scoring (`score_device_run`: onset F1/P/R at 50/70/100/150 ms, latency,
+  - scoring (`score_device_run`: drum metrics first — kick/snare recall, on-drum, drum F (#294) —
+    then onset F1/P/R at 50/70/100/150 ms, latency,
     PLP metrics with `--stream`).
 
 Timing: each track segment is cut to a WAV with ffmpeg (sample-accurate) and
@@ -313,11 +314,13 @@ def main() -> int:
             link.command("stream fast")
         link.command("debug transient on")
 
-        print(f"\n{'track':34s} {'F1':>6s} {'P':>6s} {'R':>6s} {'F1@50':>6s} {'det':>5s} {'ref':>5s} "
+        print(f"\n{'track':34s} {'kR50':>6s} {'onDrum':>6s} {'drumF':>6s} {'sR50':>6s} "
+              f"{'F1':>6s} {'P':>6s} {'R':>6s} {'F1@50':>6s} {'det':>5s} {'ref':>5s} "
               f"{'sync':>5s} {'est':>5s} {'rate/s':>7s}")
         for track in tracks:
             seek = float(manifest.get(track["name"], {}).get("seekOffset", 0))
-            gt = segment_ground_truth(load_ground_truth(track["ground_truth"], track.get("human_edits")),
+            gt = segment_ground_truth(load_ground_truth(track["ground_truth"], track.get("human_edits"),
+                                                        track.get("drum_labels")),
                                       seek, args.duration_ms)
             wav = tmpdir / f"{track['name']}.wav"
             build_wav(ffmpeg, track["audio_file"], seek, args.duration_ms, wav)
@@ -343,7 +346,13 @@ def main() -> int:
                     summary = format_score_summary(score_device_run(data, music_start, gt, latency_ms=0.0))
                     ot = summary["onsetTracking"]
                     est = summary["timing"]["latencyMs"]
-                    print(f"{track['name']:34s} {ot['f1']:6.3f} {ot['precision']:6.3f} {ot['recall']:6.3f} "
+                    dr = summary.get("drums") or {}
+
+                    def cell(k: str) -> str:
+                        return f"{dr[k]:6.3f}" if dr.get(k) is not None else f"{'-':>6s}"
+
+                    print(f"{track['name']:34s} {cell('kickR50')} {cell('onDrum')} {cell('drumF')} "
+                          f"{cell('snareR50')} {ot['f1']:6.3f} {ot['precision']:6.3f} {ot['recall']:6.3f} "
                           f"{ot['f1_50ms']:6.3f} {ot['count']:5d} {ot['refOnsets']:5d} "
                           f"{lag:5.0f} {est if est is not None else '-':>5} "
                           f"{summary['diagnostics']['onsetRate']:7.1f}", flush=True)
@@ -382,8 +391,17 @@ def main() -> int:
         def mean(k: str) -> float:
             return statistics.mean(r["score"]["onsetTracking"][k] for r in good)
 
+        def drum_mean(k: str) -> str:
+            xs = [r["score"]["drums"][k] for r in good
+                  if r["score"].get("drums") and r["score"]["drums"].get(k) is not None]
+            return f"{statistics.mean(xs):.3f}" if xs else "-"
+
+        # Drum metrics are the primary score (#294); snare recall is provisional until #284.
+        print(f"\nDRUMS mean kickR@50 {drum_mean('kickR50')}  kickR@30 {drum_mean('kickR30')}  "
+              f"onDrum {drum_mean('onDrum')}  drumF {drum_mean('drumF')}  "
+              f"snareR@50 {drum_mean('snareR50')} (provisional)  loneHat {drum_mean('loneHat')}")
         f1s = [r["score"]["onsetTracking"]["f1"] for r in good]
-        print(f"\nmean F1 {mean('f1'):.3f}  P {mean('precision'):.3f}  R {mean('recall'):.3f}  "
+        print(f"mean F1 {mean('f1'):.3f}  P {mean('precision'):.3f}  R {mean('recall'):.3f}  "
               f"F1@50 {mean('f1_50ms'):.3f}  F1@70 {mean('f1_70ms'):.3f}  "
               f"(median F1 {statistics.median(f1s):.3f}, {len(good)} run(s))")
     overruns1 = info_end.get("audioOverruns")

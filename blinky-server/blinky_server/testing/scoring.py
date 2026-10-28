@@ -651,7 +651,22 @@ def score_device_run(
                         )
                     )
 
+    # Drum metrics (#294), the primary score, on the same detections. A measured latency
+    # is used as the lag; otherwise score_drums estimates it against the drum labels.
+    drums = None
+    if gt_data.drums is not None:
+        from .drum_scoring import score_drums
+
+        drums = score_drums(
+            [(d["timestamp_ms"] / 1000.0, d["strength"]) for d in detections],
+            gt_data.drums,
+            raw_duration / 1000.0,
+            lag_ms=latency_ms,
+            fallback_lag_ms=latency_correction_ms,  # the onset scoring's correction
+        ).as_dict()
+
     return DeviceRunScore(
+        drums=drums,
         audio_latency_ms=audio_latency_ms,
         audio_duration_sec=audio_duration_sec,
         timing_offset_ms=audio_epoch_ms - test_data.start_time,
@@ -719,6 +734,7 @@ def format_score_summary(score: DeviceRunScore) -> dict[str, Any]:
     ot = score.onset_tracking
     d = score.diagnostics
     return {
+        "drums": score.drums,
         "onsetTracking": {
             "f1": ot.f1,
             "precision": ot.precision,

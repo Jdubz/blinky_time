@@ -53,10 +53,23 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 ```
 
 - **Corpus:** `blinky-test-player/music/edm/` (the validation corpus).
-- **Ground truth:** `.onsets_consensus.json`.
+- **Ground truth:** `.onsets_consensus.json`, and for the drum metrics `kick_weighted/<track>.kick_weighted.json`, cleaned (kept only where a consensus onset backed by ≥ 2 systems lies within 70 ms).
 - **Decoding:** needs `ffmpeg` on PATH or `pip install imageio-ffmpeg`.
 
 ### Metrics
+
+**Drum metrics are the primary score** (#294; CLAUDE.md: the detector targets kicks and snares). They come from `blinky_server/testing/drum_scoring.py`, the same code blinky-server uses to score device runs. They're computed after warm-up with one-to-one matching, after removing a constant per-run lag estimated against the drum labels.
+
+| Metric | Meaning |
+|---|---|
+| `kR50` / `kR30` | Kicks with a detection within ±50 / ±30 ms |
+| `sR50` | Snares with a detection within ±50 ms. **Provisional** until the label fixes in #284; not gated |
+| `onDrum` | Share of detections within ±50 ms of a kick or snare |
+| `drumF` | F1 of detections against kicks + snares at ±50 ms |
+| `loneHat` | Share of lone hats (no kick or snare within 50 ms) that fired a detection (summary line) |
+| `det/s` | Detections per second (summary line) |
+
+Rhythm and all-onset metrics (secondary):
 
 | Metric | Meaning |
 |---|---|
@@ -65,6 +78,7 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 | `tempo` | Fraction of post-warm-up time where the tracked period is a valid multiple (1/2, 1, 2 or 4 beats, ±4%) of the track's tempo from `.pattern_gt.json` |
 | `worst20s` | Worst 20 s window of `lock`, which catches drift |
 | `recall` | Strong onsets with a fired onset within ±50 ms |
+| `f1`, `prec` | All-onset F1 and precision, scored as on a device. A secondary number: it scored 0.68 while the hat looked random (#280) |
 | `bpm` | Median BPM after warm-up |
 
 Compare the same track across `--fps` values: the numbers should barely move.
@@ -75,7 +89,7 @@ The `tracker-harness` job in `.github/workflows/pr-validation.yml` runs on every
 
 - **UBSan stress:** builds the harness with `-fsanitize=undefined,float-cast-overflow,float-divide-by-zero -fno-sanitize-recover=all` and runs `run_stress.py`. That covers synthetic silence, an 8 s gap, clipping, white noise, 50 Hz hum and 128 BPM clicks, each at 15, 60 and 250 loop fps. Any UB, crash, firmware `BLINKY_ASSERT` after `begin()` (the harness exits 3), empty output or non-finite phase/bpm fails the job. The corpus gate uses the same harness, so a tripped assert fails it too. It also checks the level normalizer on a smooth noise riser: `level` must not stay pinned at 1.0 for 2 s or more (#176).
 - **Frame-rate gate:** runs the release build with the CPU cost model below (NN off, as on devices) and fails if the simulated frame rate is under 150 fps.
-- **Corpus gate:** runs `run_tracker_eval.py` with `--min-excess`, `--min-tempo` and `--min-recall` floors set just under the current baseline. Raise the floors in the workflow when the tracker improves.
+- **Corpus gate:** runs `run_tracker_eval.py` with `--min-kick-recall`, `--min-on-drum` and `--min-drum-f` (the primary gate) plus `--min-excess`, `--min-tempo` and `--min-recall`, each set just under the current baseline. Raise the floors in the workflow when the tracker improves.
 
 To run the stress set locally:
 

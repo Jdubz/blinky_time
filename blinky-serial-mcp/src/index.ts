@@ -295,7 +295,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           track_dir: { type: 'string', description: 'Track directory (default: music/edm/)' },
           tracks: { type: 'array', items: { type: 'string' }, description: 'Specific tracks (default: all)' },
           max_steps: { type: 'number', description: 'Max binary search steps (default: 8)' },
-          target_metric: { type: 'string', description: 'Metric to maximize: onsetF1, plpAtTransient, etc. (default: onsetF1)' },
+          target_metric: { type: 'string', description: 'Metric to maximize: kickR50, onDrum, drumF (the drum metrics, primary), onsetF1, plpAtTransient, etc. (default: drumF)' },
           commands: { type: 'array', items: { type: 'string' }, description: 'Setup commands' },
         },
         required: ['port'],
@@ -596,7 +596,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           track_dir,
           tracks,
           max_steps = 8,
-          target_metric = 'onsetF1',
+          target_metric = 'drumF',
           commands: setupCommands,
         } = args as {
           port: string;

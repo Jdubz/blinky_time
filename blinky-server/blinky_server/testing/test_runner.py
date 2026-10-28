@@ -379,7 +379,9 @@ async def run_validation(
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
                 gt = segment_ground_truth(
-                    load_ground_truth(track["ground_truth"], track.get("human_edits")),
+                    load_ground_truth(
+                        track["ground_truth"], track.get("human_edits"), track.get("drum_labels")
+                    ),
                     track_seek,
                     duration_ms,
                 )
@@ -532,7 +534,11 @@ async def run_param_sweep(
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
                     gt = segment_ground_truth(
-                        load_ground_truth(track["ground_truth"], track.get("human_edits")),
+                        load_ground_truth(
+                            track["ground_truth"],
+                            track.get("human_edits"),
+                            track.get("drum_labels"),
+                        ),
                         track_seek,
                         duration_ms,
                     )
@@ -595,7 +601,13 @@ def _aggregate_sweep_results(
     per_value: dict[float, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     """Compute mean scores per parameter value."""
-    results = []
+
+    def _drum(drums: list[dict[str, Any]], key: str) -> float | None:
+        # None values (no lag estimate for that run) are skipped, not averaged in as 0.
+        xs = [d[key] for d in drums if d.get(key) is not None]
+        return round(sum(xs) / len(xs), 3) if xs else None
+
+    results: list[dict[str, Any]] = []
     for value, runs in per_value.items():
         if not runs:
             results.append({"value": value, "n": 0})
@@ -607,6 +619,8 @@ def _aggregate_sweep_results(
         onset_f1 = [
             r["score"]["onsetTracking"]["f1"] for r in runs if "onsetTracking" in r.get("score", {})
         ]
+        # Drum metrics, the primary score (#294).
+        drums = [r["score"]["drums"] for r in runs if r.get("score", {}).get("drums")]
 
         def _mean(xs: list[float]) -> float:
             return sum(xs) / len(xs) if xs else 0.0
@@ -619,6 +633,10 @@ def _aggregate_sweep_results(
                 "plpAutoCorr": round(_mean(plp_ac), 3),
                 "plpPeakiness": round(_mean(plp_pk), 2),
                 "onsetF1": round(_mean(onset_f1), 3),
+                "kickR50": _drum(drums, "kickR50"),
+                "onDrum": _drum(drums, "onDrum"),
+                "drumF": _drum(drums, "drumF"),
+                "snareR50": _drum(drums, "snareR50"),
             }
         )
     return results
@@ -641,7 +659,7 @@ async def run_threshold_tune(
     duration_ms: float = 35000,
     settle_ms: float = SETTLE_MS,
     max_steps: int = 8,
-    target_metric: str = "onsetF1",
+    target_metric: str = "drumF",
     commands: list[str] | None = None,
     job: Job | None = None,
 ) -> dict[str, Any]:
@@ -663,7 +681,7 @@ async def run_threshold_tune(
         duration_ms: Playback duration per track
         settle_ms: Skip early data (ACF convergence)
         max_steps: Maximum total evaluation steps (split between coarse + refine)
-        target_metric: Metric to maximize (onsetF1, plpAtTransient, etc.)
+        target_metric: Metric to maximize: kickR50, onDrum, drumF (the drum metrics, primary, #294), onsetF1, plpAtTransient, etc.
         commands: Setup commands before tuning
         job: Job for progress updates
 
@@ -849,7 +867,9 @@ async def _eval_param_value(
         track_manifest_entry = manifest.get(track_name, {})
         track_seek = track_manifest_entry.get("seekOffset", 0)
         gt = segment_ground_truth(
-            load_ground_truth(track["ground_truth"], track.get("human_edits")),
+            load_ground_truth(
+                track["ground_truth"], track.get("human_edits"), track.get("drum_labels")
+            ),
             track_seek,
             duration_ms,
         )
@@ -871,6 +891,13 @@ async def _eval_param_value(
         summary = format_score_summary(score)
 
         metric_val = _extract_metric(summary, target_metric)
+        if metric_val is None:
+            # e.g. a drum metric on a track with no drum labels, or a run with no lag
+            # estimate: leave the track out rather than average it in as 0.
+            log.warning(
+                "%s: no %s for %s=%s, track left out", track_name, target_metric, param_name, value
+            )
+            continue
         track_scores.append(metric_val)
 
     if not track_scores:
@@ -887,22 +914,29 @@ _METRIC_PATHS: dict[str, tuple[str, str]] = {
     "plpAtTransientNorm": ("plp", "atTransientNorm"),
     "plpAutoCorr": ("plp", "autoCorr"),
     "plpPeakiness": ("plp", "peakiness"),
+    # Drum metrics, the primary score (#294). snareR50 is provisional until #284.
+    "kickR50": ("drums", "kickR50"),
+    "kickR30": ("drums", "kickR30"),
+    "onDrum": ("drums", "onDrum"),
+    "drumF": ("drums", "drumF"),
+    "snareR50": ("drums", "snareR50"),
 }
 
 
-def _extract_metric(summary: dict[str, Any], metric: str) -> float:
+def _extract_metric(summary: dict[str, Any], metric: str) -> float | None:
     """Extract a named metric from a score summary dict.
 
-    Raises ValueError if the metric name is unknown.
-    Returns 0.0 if the metric path exists but the value is missing/non-numeric.
+    Raises ValueError if the metric name is unknown. Returns None when the run has no value
+    for it (a track without drum labels has `drums: null`; a run without a lag estimate has
+    null drum metrics), so the caller leaves it out instead of scoring it as 0.
     """
     if metric not in _METRIC_PATHS:
         msg = f"Unknown metric '{metric}'. Valid metrics: {', '.join(sorted(_METRIC_PATHS))}"
         raise ValueError(msg)
 
     section, key = _METRIC_PATHS[metric]
-    val = summary.get(section, {}).get(key)
-    return float(val) if isinstance(val, (int, float)) else 0.0
+    val = (summary.get(section) or {}).get(key)
+    return float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else None
 
 
 # ---------------------------------------------------------------------------
