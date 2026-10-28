@@ -66,10 +66,20 @@ def test_kicks_only_and_spurious_detections() -> None:
     assert s.provisional == ["snare_r50"]  # snare labels are unreliable until #284
 
 
-def test_no_lag_estimate_is_nan_not_zero() -> None:
+def test_a_silent_detector_scores_zero_not_missing() -> None:
+    # Too few detections to estimate a lag: scored at the fallback, never left out, so a
+    # tuner can't prefer a value that silences the detector (review of #307).
+    for d in ([], det([1.0])):
+        s = score_drums(d, LABELS, 7.0)
+        assert s.lag_estimated is False
+        assert s.kick_r50 <= 1 / 6 and s.drum_f <= 0.2 and s.as_dict()["kickR50"] is not None
     s = score_drums([], LABELS, 7.0)
-    assert s.lag_ms is None and math.isnan(s.kick_r50)
-    assert s.as_dict()["kickR50"] is None
+    assert s.kick_r50 == 0.0 and s.drum_f == 0.0 and s.on_drum == 0.0
+
+
+def test_empty_labels_are_nan() -> None:
+    s = score_drums(det(KICKS), DrumLabels([], [], []), 7.0, lag_ms=0.0)
+    assert math.isnan(s.kick_r50) and s.as_dict()["kickR50"] is None
 
 
 def test_a_zero_length_run_serialises() -> None:
@@ -140,3 +150,5 @@ def test_tuning_targets_drum_metrics_and_skips_missing_values() -> None:
     assert _extract_metric({"drums": None}, "kickR50") is None  # track without drum labels
     assert _extract_metric({"drums": {"kickR50": None}}, "kickR50") is None  # no lag estimate
     assert _extract_metric({"onsetTracking": {"f1": 0.6}}, "onsetF1") == 0.6
+    silent = score_drums([], LABELS, 7.0).as_dict()
+    assert _extract_metric({"drums": silent}, "drumF") == 0.0  # counted, not skipped

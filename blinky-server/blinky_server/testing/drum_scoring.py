@@ -53,6 +53,9 @@ class DrumScore:
     n_kicks: int
     n_snares: int
     n_detections: int
+    # False when the lag couldn't be estimated (too few detections near a label) and the
+    # caller's fallback was used. The run is still scored: a silent detector scores 0.
+    lag_estimated: bool = True
     provisional: list[str] = field(default_factory=lambda: ["snare_r50"])
 
     def as_dict(self) -> dict[str, Any]:
@@ -73,6 +76,7 @@ class DrumScore:
             "kicks": self.n_kicks,
             "snares": self.n_snares,
             "detections": self.n_detections,
+            "lagEstimated": self.lag_estimated,
             "provisional": self.provisional,
         }
 
@@ -138,32 +142,26 @@ def score_drums(
     labels: DrumLabels,
     duration_s: float,
     lag_ms: float | None = None,
+    fallback_lag_ms: float = 0.0,
 ) -> DrumScore:
-    """Score detections (time_s, strength) against drum labels on the same clock. `lag_ms`
-    is estimated against kicks + snares when not given; NaN metrics if it can't be."""
+    """Score detections (time_s, strength) against drum labels on the same clock.
+
+    `lag_ms` is estimated against kicks + snares when not given. When it can't be (too few
+    detections near a label, e.g. a detector a tuning value has silenced), the run is scored
+    at `fallback_lag_ms` and flagged, never dropped: dropping it would let a tuner prefer
+    values that silence the detector (review of #307). Metrics are NaN only where the labels
+    themselves are empty (e.g. no kicks in the segment)."""
     drums = sorted(labels.kicks + labels.snares)
+    estimated = True  # a lag the caller gives (measured) is trusted as is
     if lag_ms is None:
         lag_ms = estimate_audio_latency(
             [{"timestamp_ms": t * 1000.0, "strength": s} for t, s in detections],
             [{"time": t, "strength": 1.0, "expect_trigger": True} for t in drums],
             duration_s * 1000.0,
         )
+        if lag_ms is None or not PLAUSIBLE_LATENCY_MIN <= lag_ms <= PLAUSIBLE_LATENCY_MAX:
+            lag_ms, estimated = fallback_lag_ms, False
     det_per_s = len(detections) / duration_s if duration_s > 0 else float("nan")
-    if lag_ms is None or not PLAUSIBLE_LATENCY_MIN <= lag_ms <= PLAUSIBLE_LATENCY_MAX:
-        nan = float("nan")
-        return DrumScore(
-            nan,
-            nan,
-            nan,
-            nan,
-            nan,
-            nan,
-            det_per_s,
-            lag_ms,
-            len(labels.kicks),
-            len(labels.snares),
-            len(detections),
-        )
     est = sorted(t - lag_ms / 1000.0 for t, _ in detections)
 
     def recall(ref: list[float], tol: float) -> float:
@@ -177,9 +175,8 @@ def score_drums(
         kick_r50=recall(labels.kicks, DRUM_TOL_SEC),
         kick_r30=recall(labels.kicks, TIGHT_TOL_SEC),
         snare_r50=recall(labels.snares, DRUM_TOL_SEC),
-        on_drum=(sum(_near(drums, t, DRUM_TOL_SEC) for t in est) / len(est))
-        if est
-        else float("nan"),
+        # No detections: on-drum is 0 (as precision is), so silencing can't look neutral.
+        on_drum=(sum(_near(drums, t, DRUM_TOL_SEC) for t in est) / len(est)) if est else 0.0,
         drum_f=(2 * p * r / (p + r)) if (p + r) > 0 else 0.0,
         lone_hat=(sum(_near(est, h, DRUM_TOL_SEC) for h in lone) / len(lone))
         if lone
@@ -189,4 +186,5 @@ def score_drums(
         n_kicks=len(labels.kicks),
         n_snares=len(labels.snares),
         n_detections=len(est),
+        lag_estimated=estimated,
     )

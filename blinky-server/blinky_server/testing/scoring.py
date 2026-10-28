@@ -662,6 +662,7 @@ def score_device_run(
             gt_data.drums,
             raw_duration / 1000.0,
             lag_ms=latency_ms,
+            fallback_lag_ms=latency_correction_ms,  # the onset scoring's correction
         ).as_dict()
 
     return DeviceRunScore(
