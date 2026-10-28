@@ -102,8 +102,9 @@ def run_harness(harness: Path, mags: np.ndarray) -> np.ndarray:
         with open(inp, "wb") as f:
             np.array([mags.shape[1], mags.shape[0]], dtype=np.int32).tofile(f)
             mags.astype(np.float32).tofile(f)
-        subprocess.run([str(harness), str(inp), str(out)], check=True,
-                       stderr=subprocess.DEVNULL)
+        r = subprocess.run([str(harness), str(inp), str(out)], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise AssertionError(f"{harness} exited {r.returncode}: {r.stderr.strip()[-500:]}")
         header = out.read_text().splitlines()[0].split(",")
         cols = [i for i, h in enumerate(header) if h.startswith("mel")]
         data = np.loadtxt(out, delimiter=",", skiprows=1, ndmin=2)
