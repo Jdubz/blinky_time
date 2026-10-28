@@ -204,7 +204,7 @@ tmux new-session -d -s training "cd ml-training && source venv/bin/activate && P
 
 `train.py` enforces this — it refuses to start outside tmux/screen unless `--allow-foreground` is passed.
 
-**GPU work runs on the DGX Spark as platform-owned jobs** (my-spark): stem separation through `ml-training/scripts/spark_jobs.py` (#288), training through the platform trainer. blinky runs no code there, and never runs ad-hoc GPU processes on it over ssh. devtop runs one-shot CPU scripts only, with nothing left running.
+**GPU work runs on the DGX Spark as platform-owned jobs** (my-spark): stem separation through blinky-server's Spark client (`blinky_server/spark/`, `/api/spark/*`; `ml-training/scripts/spark_jobs.py` is its CLI, #288), training through the platform trainer. Large assets (stems) stay in the Spark's object store; the test box keeps only the ledger and test files. blinky runs no code there, and never runs ad-hoc GPU processes on it over ssh. devtop runs one-shot CPU scripts only, with nothing left running.
 
 ## Build Workflow
 

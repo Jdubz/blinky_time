@@ -20,6 +20,9 @@ WorkingDirectory=@SERVER_DIR@
 # --no-ble: blinky-server has no discovery allowlist yet, so with BLE on it could
 # adopt (and auto-recover, i.e. flash) a production device in radio range.
 ExecStart=@SERVER_DIR@/venv/bin/python -m blinky_server --no-ble
+# The Spark client (#288): SPARK_JOB_API, SPARK_API_KEY, SPARK_WEBHOOK_SECRET. Optional ("-"):
+# without it the server runs and its /api/spark routes answer 503. Mode 600, never in the repo.
+EnvironmentFile=-@HOME_DIR@/.config/blinky/spark.env
 
 Restart=always
 RestartSec=5s
