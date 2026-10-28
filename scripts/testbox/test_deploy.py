@@ -131,10 +131,21 @@ def test_busy() -> None:
     assert "unexpected answer" in deploy.busy(lambda p: {"nope": 1})
 
 
+GIT: dict[str, Any] = {"diff": ["blinky-server/blinky_server/app.py"], "calls": []}
+
+
 def fake_git(*cmd: str, **kw: Any) -> str:
+    GIT["calls"].append(cmd)
     if cmd[:2] == ("git", "rev-parse"):
         return (SHA if cmd[2] == "origin/master" else OLD) + "\n"
+    if cmd[:2] == ("git", "diff"):
+        assert cmd[-2:] == (OLD, SHA)  # against what the server runs, not the last commit
+        return "\n".join(GIT["diff"]) + "\n"
     return ""
+
+
+def ref_updates() -> list[tuple[str, ...]]:
+    return [c for c in GIT["calls"] if c[:2] == ("git", "update-ref")]
 
 
 @pytest.fixture
@@ -145,6 +156,7 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     link = tmp_path / "blinky-deploy"
     link.symlink_to(a)
     calls: dict[str, Any] = {"prepared": [], "restarted_on": [], "healthy": [True], "busy": []}
+    GIT.update(diff=["blinky-server/blinky_server/app.py"], calls=[])
     monkeypatch.setattr(deploy, "STATE", tmp_path / "deploy.json")
     monkeypatch.setattr(deploy, "LINK", link)
     monkeypatch.setattr(deploy, "SLOTS", (a, b))
@@ -172,6 +184,47 @@ def test_deploys_into_the_other_slot_then_switches(box: dict[str, Any]) -> None:
     assert box["restarted_on"] == ["blinky-deploy-b"]
     assert box["link"].resolve().name == "blinky-deploy-b"
     assert deploy.load_state()["deployed"] == SHA
+    assert ref_updates() == [("git", "update-ref", "refs/blinky/deployable", SHA)]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        ["ml-training/train.py"],
+        ["blinky-things/BlinkyThings.ino", "docs/x.md", "ml-training/configs/x.yaml"],
+        [".github/workflows/pr-validation.yml", "tests/unit/x.cpp", "CLAUDE.md"],
+    ],
+)
+def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
+    box: dict[str, Any], files: list[str]
+) -> None:
+    GIT["diff"] = files
+    assert deploy.deploy_once() == 0
+    assert box["prepared"] == [] and box["restarted_on"] == []
+    assert box["link"].resolve().name == "blinky-deploy-a"
+    assert ref_updates() == [("git", "update-ref", "refs/blinky/deployable", SHA)]
+    s = deploy.load_state()
+    assert s["deployable"] == SHA and s["deployed"] == OLD
+    assert s["history"][-1]["result"] == "no server change"
+    GIT["calls"] = []
+    assert deploy.deploy_once() == 0 and ref_updates() == []  # seen: not gated again
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "blinky-server/pyproject.toml",
+        "blinky-console/src/App.tsx",
+        "tools/firmware_release.py",
+        "devices/test_devices.json",
+        "blinky-test-player/music/edm/x.mp3",
+        "scripts/testbox/deploy.py",
+    ],
+)
+def test_every_server_path_deploys(box: dict[str, Any], path: str) -> None:
+    GIT["diff"] = ["ml-training/train.py", path]
+    assert deploy.deploy_once() == 0
+    assert box["restarted_on"] == ["blinky-deploy-b"]
 
 
 def test_busy_after_preparing_leaves_the_live_slot_alone(box: dict[str, Any]) -> None:

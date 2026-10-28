@@ -14,6 +14,9 @@ blinky-deploy.timer runs this every 2 minutes, from the live slot. One pass:
      "No issues found" (the check run alone is green even when the review found issues).
    Still running: wait for the next pass. Red, or a review with findings: refuse the commit.
    `--accept SHA` deploys a refused commit anyway (an owner's call, recorded in the state).
+   A commit that passes but touches none of SERVER_PATHS (since the commit the server runs)
+   stops here: it moves DEPLOYABLE_REF, which the Spark training bundle is built from, and
+   nothing restarts.
 3. Prepare the OTHER slot: check out the commit, reinstall the venv if blinky-server's
    pyproject.toml differs from what that slot last installed, rebuild the console if
    blinky-console/ does. The running server's tree is never touched.
@@ -54,7 +57,24 @@ BASE_URL = "http://127.0.0.1:8420"
 STATE = (
     Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "blinky-server" / "deploy.json"
 )
-MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
+MARKER = ".deploy-installed.json"
+
+# What the running server reads or executes from its tree. Only a commit touching one of these
+# restarts it; any other commit that passes the gate just moves DEPLOYABLE_REF. Directories,
+# not files: firmware_release.py imports other tools/ modules, and a list of files would drift.
+SERVER_PATHS = (
+    "blinky-server/",
+    "blinky-console/",  # the web UI the server serves
+    "tools/",  # firmware_release.py, uf2_upload.py, usb_reset.py and what they import
+    "devices/",  # test_devices.json, read by firmware_release.py
+    "blinky-test-player/music/",  # the Spark client's default audio root
+    "scripts/testbox/",  # this deployer and the units
+)
+# The latest master commit that passed the gate, server change or not. blinky-server builds the
+# Spark training bundle from it (blinky_server/spark/bundle.py), so ml-training changes reach
+# training without a server restart, and only once CI and review passed. Shared by every
+# worktree of the clone.
+DEPLOYABLE_REF = "refs/blinky/deployable"  # in each slot: what its venv and console were built from
 
 # The checks that must have run, not just "everything that ran passed": a workflow that never
 # started reports nothing, which must not read as green.
@@ -279,6 +299,16 @@ def prepare(slot: Path, sha: str) -> None:
 # -- one pass ----------------------------------------------------------------------------------
 
 
+def server_changes(old: str, new: str, cwd: Path) -> list[str]:
+    files = run("git", "diff", "--name-only", old, new, cwd=cwd).split()
+    return [f for f in files if f.startswith(SERVER_PATHS)]
+
+
+def mark_deployable(state: dict[str, Any], sha: str, cwd: Path) -> None:
+    run("git", "update-ref", DEPLOYABLE_REF, sha, cwd=cwd)
+    state["deployable"] = sha
+
+
 def load_state() -> dict[str, Any]:
     if STATE.exists():
         state: dict[str, Any] = json.loads(STATE.read_text())
@@ -302,7 +332,8 @@ def deploy_once(dry_run: bool = False) -> int:
     target = run("git", "rev-parse", f"origin/{BRANCH}", cwd=live).strip()
     current = run("git", "rev-parse", "HEAD", cwd=live).strip()
     state["deployed"] = current
-    if not dry_run and (target == current or target in state["refused"]):
+    seen = (current, state.get("deployable"))
+    if not dry_run and (target in seen or target in state["refused"]):
         return 0
     if target in state["accepted"]:
         verdict, why = "deploy", f"accepted by the owner: {state['accepted'][target]}"
@@ -316,6 +347,17 @@ def deploy_once(dry_run: bool = False) -> int:
         save_state(state)
         log(f"{target[:12]}: refused; `deploy.py --accept {target[:12]} REASON` overrides")
         return 0
+
+    # Against what the server runs, not just the last commit: an earlier server change that
+    # merged in the same window still deploys.
+    touched = server_changes(current, target, live)
+    if not touched:
+        mark_deployable(state, target, live)
+        state["history"].append({"sha": target, "at": time.time(), "result": "no server change"})
+        save_state(state)
+        log(f"{target[:12]}: no server change since {current[:12]}; deployable, no restart")
+        return 0
+    log(f"{target[:12]}: server change ({', '.join(touched[:5])})")
 
     new = other_slot(live)
     t0 = time.time()
@@ -342,6 +384,7 @@ def deploy_once(dry_run: bool = False) -> int:
     }
     if failure is None:
         state["deployed"] = target
+        mark_deployable(state, target, new)
         state["history"].append({**entry, "result": "deployed"})
         save_state(state)
         log(f"{target[:12]}: deployed from {new.name} in {entry['seconds']} s (was {current[:12]})")
@@ -378,6 +421,7 @@ def init() -> int:
     sha = run("git", "rev-parse", f"origin/{BRANCH}", cwd=DEV_CLONE).strip()
     prepare(SLOTS[0], sha)
     point_at(SLOTS[0])
+    run("git", "update-ref", DEPLOYABLE_REF, sha, cwd=SLOTS[0])
     log(f"{LINK} -> {SLOTS[0].name} at {sha[:12]}")
     return 0
 

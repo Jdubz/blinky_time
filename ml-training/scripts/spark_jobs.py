@@ -16,9 +16,9 @@ usage:
 FILEs are read by the server, so they must be under its audio roots (by default the repo's
 blinky-test-player/music) on the machine it runs on.
 
-`train` bundles ml-training/ at the server checkout's HEAD (commit first: uncommitted changes
-under ml-training/ are refused) and runs spark_entry.py on the Spark: prep from the corpus, then
-train.py. CONFIG is relative to ml-training/, e.g. configs/conv1d_w16_onset_v34d_clean_labels.yaml.
+`train` bundles ml-training/ from the latest master commit that passed CI and review (on the
+test box, refs/blinky/deployable; elsewhere the server checkout's HEAD, with uncommitted changes
+refused) and runs spark_entry.py on the Spark: prep from the corpus, then train.py. CONFIG is relative to ml-training/, e.g. configs/conv1d_w16_onset_v34d_clean_labels.yaml.
 Corpus dirs are relative to the corpus in the Spark's store (datasets/blinky-corpus/).
 
 Environment:
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--stems", default="drums", help="comma-separated, e.g. drums or drums,bass")
     s.add_argument("--chunk-seconds", type=int, default=None,
                    help="segment length; omit for the engine's native one (htdemucs: 7.8 s, the max)")
-    t = sub.add_parser("train", help="bundle ml-training/ at HEAD and train it on the Spark")
+    t = sub.add_parser("train", help="bundle ml-training/ from master and train it on the Spark")
     t.add_argument("config", help="relative to ml-training/, e.g. configs/x.yaml")
     t.add_argument("--labels-dir", default=None,
                    help="relative to the corpus; default: the config's labels_dir")
