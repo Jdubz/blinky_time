@@ -4,14 +4,19 @@ Single source of truth for the firmware-matching mel spectrogram computation.
 Both GPU (torch) and CPU (numpy) implementations are provided here to avoid
 duplication across scripts.
 
-Firmware pipeline (SharedSpectralAnalysis::getRawMelBands, v56+):
-  - 16 kHz sample rate
+Firmware pipeline (SharedSpectralAnalysis::getRawMelBands):
+  - 16 kHz sample rate, int16 / 32768
   - Hamming window (alpha=0.54, symmetric)
-  - FFT-256, hop-256 (no overlap)
-  - Spectral noise subtraction (Martin 2001 min-statistics, v56)
-  - 26 mel bands (60-8000 Hz), HTK mel scale, no normalization
-  - Log compression: 10*log10(x + 1e-10), mapped [-60, 0] dB -> [0, 1]
+  - FFT-256, hop-256 (no overlap); bins 0..127 (Nyquist dropped)
+  - Spectral noise subtraction (Martin 2001 min-statistics) only when enabled
+    (off by default on both sides: firmware noiseest=0, base.yaml enabled: false)
+  - 50 mel bands from the firmware's integer table MEL_BANDS[] (not an HTK
+    filterbank), each a weighted average of its bins
+  - band energy < 1e-6 -> 0, else 10*log10(x + 1e-7), mapped [-60, 0] dB -> [0, 1]
   - NO compressor or whitening (raw mel path for NN input)
+
+The table and the arithmetic live in spec/mel_frontend_v1.json (scripts/mel_frontend.py);
+analysis/test_mel_parity.py checks them against the firmware in CI (#295).
 """
 
 from __future__ import annotations
@@ -26,42 +31,69 @@ import numpy as np
 SAMPLE_RATE = 16000
 N_FFT = 256
 HOP_LENGTH = 256
-N_MELS = 26
-FMIN = 60
+N_MELS = 50
+FMIN = 30
 FMAX = 8000
 FRAME_RATE = SAMPLE_RATE / HOP_LENGTH  # 62.5 Hz
 LOG_EPSILON = 1e-7   # Matches firmware (1e-7 avoids ARM Cortex-M4 denormals)
+SILENCE_THRESHOLD = 1e-6  # Firmware: band energy below this is exactly 0, before the log
+
+# `audio.mel_filterbank` in a config. Only the firmware's table matches what the NN runs on;
+# the librosa filterbank (every model through v36) is kept so historical runs reproduce.
+MEL_FILTERBANKS = ("firmware_table", "librosa_htk")
 
 
 def build_mel_filterbank_np() -> np.ndarray:
-    """Build mel filterbank as numpy array (CPU). Shape: (n_mels, n_fft//2 + 1).
+    """The firmware's mel filterbank (CPU). Shape: (n_mels, n_fft//2 + 1).
 
-    Firmware uses weighted AVERAGE (divides by sum of triangle weights per band),
-    not weighted SUM. We normalize each row by its weight sum so that
-    ``mel_fb @ magnitudes`` produces the same result as firmware's
-    ``sum(mag*weight) / sum(weight)`` loop.
+    Built from the firmware's own table (spec/mel_frontend_v1.json), each row divided by
+    its weight sum, so ``mel_fb @ magnitudes`` is the firmware's
+    ``sum(mag*weight) / sum(weight)``.
     """
-    import librosa
-    fb = librosa.filters.mel(
-        sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS,
-        fmin=FMIN, fmax=FMAX, htk=True, norm=None,
-    ).astype(np.float32)
-    # Normalize: divide each band's weights by their sum → weighted average
-    row_sums = fb.sum(axis=1, keepdims=True)
-    row_sums = np.maximum(row_sums, 1e-10)  # avoid division by zero
-    fb /= row_sums
-    return fb
+    from scripts.mel_frontend import filterbank
+    return filterbank().astype(np.float32)
+
+
+def _check_firmware_table_cfg(audio_cfg: dict) -> None:
+    from scripts.mel_frontend import load_spec
+    spec = load_spec()
+    want = {k: spec[k] for k in ("sample_rate", "n_fft", "n_mels", "fmin", "fmax")}
+    got = {k: audio_cfg.get(k) for k in want}
+    if any(float(got[k]) != float(want[k]) for k in want):
+        raise ValueError(
+            f"mel_filterbank 'firmware_table' exists only for {want}; this config has {got}. "
+            f"The firmware runs that table, so a model on other mel settings can't deploy. "
+            f"To reproduce a historical run, set audio.mel_filterbank: librosa_htk.")
+
+
+def check_mel_filterbank_cfg(cfg: dict) -> str:
+    """The config's `audio.mel_filterbank`, refused loudly if unknown or if it names the
+    firmware table for mel settings the table wasn't built for."""
+    kind = cfg["audio"].get("mel_filterbank")
+    if kind not in MEL_FILTERBANKS:
+        raise ValueError(f"audio.mel_filterbank must be one of {MEL_FILTERBANKS}, got {kind!r}")
+    if kind == "firmware_table":
+        _check_firmware_table_cfg(cfg["audio"])
+    return kind
 
 
 def build_mel_filterbank_torch(cfg: dict, device) -> "torch.Tensor":
     """Build mel filterbank as torch tensor on device. Shape: (n_mels, n_fft//2 + 1).
 
-    Reads audio params from config dict for flexibility (supports custom n_mels, fmin, etc).
-    Normalized to weighted average (matching firmware ``computeMelBandsFrom()``).
+    ``audio.mel_filterbank`` picks it: ``firmware_table`` (the firmware's own table, what
+    the NN runs on) or ``librosa_htk`` (the HTK approximation every model through v36 was
+    trained on; up to 0.30 apart per weight, #295). Both are weighted averages, matching
+    firmware ``computeMelBandsFrom()``.
     """
-    import librosa
+    kind = check_mel_filterbank_cfg(cfg)  # before importing torch, so it is testable without it
     import torch
 
+    if kind == "firmware_table":
+        from scripts.mel_frontend import filterbank
+        fb = filterbank(n_freqs=cfg["audio"]["n_fft"] // 2 + 1).astype(np.float32)
+        return torch.from_numpy(fb).to(device)
+
+    import librosa
     mel_basis = librosa.filters.mel(
         sr=cfg["audio"]["sample_rate"],
         n_fft=cfg["audio"]["n_fft"],
@@ -211,6 +243,7 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
         log_mel = 10.0 * torch.log10(mel_spec + log_eps)
         log_mel = (log_mel + db_range) / db_range
         log_mel = log_mel.clamp(0.0, 1.0)
+        log_mel = torch.where(mel_spec < SILENCE_THRESHOLD, torch.zeros_like(log_mel), log_mel)
         return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
 
 
@@ -252,8 +285,8 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
         if use_pcen:
             return pcen_transform(mel_spec.T)
         log_mel = 10.0 * np.log10(mel_spec + LOG_EPSILON)
-        log_mel = (log_mel + mel_db_range) / mel_db_range
-        return np.clip(log_mel.T, 0.0, 1.0)
+        log_mel = np.clip((log_mel + mel_db_range) / mel_db_range, 0.0, 1.0)
+        return np.where(mel_spec < SILENCE_THRESHOLD, 0.0, log_mel).T
 
     # Build mel spectrogram frame by frame
     n_freqs = N_FFT // 2 + 1
@@ -269,8 +302,8 @@ def firmware_mel_spectrogram_np(audio: np.ndarray,
     if use_pcen:
         return pcen_transform(mel_spec.T)
     log_mel = 10.0 * np.log10(mel_spec + LOG_EPSILON)
-    log_mel = (log_mel + mel_db_range) / mel_db_range
-    return np.clip(log_mel.T, 0.0, 1.0)
+    log_mel = np.clip((log_mel + mel_db_range) / mel_db_range, 0.0, 1.0)
+    return np.where(mel_spec < SILENCE_THRESHOLD, 0.0, log_mel).T
 
 
 # ---- PCEN constants (must match firmware SharedSpectralAnalysis) ----

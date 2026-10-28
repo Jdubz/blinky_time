@@ -39,7 +39,7 @@ def generate_reference(audio_path: str, config_path: str, output_path: str):
 
 def compare_features(firmware_csv: str, python_npy: str):
     """Compare firmware-captured mel bands against Python-computed ones."""
-    # Load firmware output (CSV: one row per frame, 26 columns)
+    # Load firmware output (CSV: one row per frame, one column per mel band)
     fw_mel = np.loadtxt(firmware_csv, delimiter=",")
     py_mel = np.load(python_npy)
 

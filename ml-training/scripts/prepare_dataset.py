@@ -718,16 +718,12 @@ def _apply_mic_profile(mel: np.ndarray, mic_profile: dict,
     """
     n_mel = mel.shape[1]
     band_gain = mic_profile["band_gain"]
-    # Interpolate mic profile if band count changed (e.g., 26→40 mel bands)
-    if len(band_gain) != n_mel:
-        from scipy.interpolate import interp1d
-        x_old = np.linspace(0, 1, len(band_gain))
-        x_new = np.linspace(0, 1, n_mel)
-        band_gain = interp1d(x_old, band_gain, kind='linear')(x_new).astype(np.float32)
+    if len(band_gain) != n_mel:  # main() refuses this at load; never interpolate a profile
+        raise ValueError(f"mic profile has {len(band_gain)} bands, mel has {n_mel}")
 
     # Select noise floor: gain-aware (random gain per example) or static
     if "noise_floor_by_gain" in mic_profile:
-        nf_by_gain = mic_profile["noise_floor_by_gain"]  # (G, 26)
+        nf_by_gain = mic_profile["noise_floor_by_gain"]  # (G, n_mels)
         hw_gains = mic_profile["hw_gain_levels"]           # (G,)
         # Sample a random gain level, weighted toward the recommended range
         if "recommended_gain_min" in mic_profile and "recommended_gain_max" in mic_profile:
@@ -748,12 +744,8 @@ def _apply_mic_profile(mel: np.ndarray, mic_profile: dict,
     else:
         noise_floor = mic_profile["noise_floor"]
 
-    # Interpolate noise floor if band count changed
     if len(noise_floor) != n_mel:
-        from scipy.interpolate import interp1d
-        x_old = np.linspace(0, 1, len(noise_floor))
-        x_new = np.linspace(0, 1, n_mel)
-        noise_floor = interp1d(x_old, noise_floor, kind='linear')(x_new).astype(np.float32)
+        raise ValueError(f"mic profile noise floor has {len(noise_floor)} bands, mel has {n_mel}")
 
     mel_mic = mel * band_gain[np.newaxis, :]
     if noise_floor.max() > 0:
@@ -1597,6 +1589,17 @@ def main():
             if "recommended_gain_min" in data:
                 mic_profile["recommended_gain_min"] = int(data["recommended_gain_min"])
                 mic_profile["recommended_gain_max"] = int(data["recommended_gain_max"])
+        # A profile is per mel band, measured on a device. One measured with a different band
+        # count describes other bands: interpolating it onto this front end (what this used to
+        # do, 26 -> 50) would train on a mic response nobody measured. Re-capture instead.
+        n_mels = cfg["audio"]["n_mels"]
+        widths = {k: v.shape[-1] for k, v in mic_profile.items()
+                  if k in ("band_gain", "noise_floor", "noise_floor_by_gain")}
+        if any(w != n_mels for w in widths.values()):
+            print(f"ERROR: mic profile {profile_path} has {widths} bands, the front end has "
+                  f"{n_mels}. Re-capture it on a {n_mels}-band firmware "
+                  f"(scripts/calibrate_mic.py), or run without --mic-profile.", file=sys.stderr)
+            sys.exit(1)
         print(f"Mic profile loaded: {profile_path}")
         print(f"  Band gain range: [{mic_profile['band_gain'].min():.3f}, {mic_profile['band_gain'].max():.3f}]")
         print(f"  Noise floor range: [{mic_profile['noise_floor'].min():.4f}, {mic_profile['noise_floor'].max():.4f}]")

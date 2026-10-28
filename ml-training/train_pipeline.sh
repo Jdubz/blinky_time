@@ -207,7 +207,9 @@ if [ "$SKIP_PREP" = false ]; then
         [ -n "$USE_DELTA" ] && USE_DELTA="--delta"
         # Note: prepare_dataset.py may report "VALIDATION FAILED" for mel range
         # when delta features are enabled (deltas can be negative). This is expected.
-        # Apply mic profile if available (transforms clean mel → mic-captured equivalent)
+        # Apply mic profile if available (transforms clean mel → mic-captured equivalent).
+        # prepare_dataset.py refuses a profile whose band count isn't the front end's (the
+        # checked-in one was captured on 26-band firmware): re-capture it with calibrate_mic.py.
         MIC_PROFILE=""
         if [ -f "data/calibration/mic_profile.npz" ]; then
             MIC_PROFILE="--mic-profile data/calibration/mic_profile.npz"

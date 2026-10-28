@@ -200,7 +200,7 @@ def generate(output_dir: str, duration: float = 10.0):
 
 
 def _get_mel_center_freqs() -> np.ndarray:
-    """Get center frequencies of the 26 mel filter bands."""
+    """Get center frequencies of the mel filter bands."""
     mel_fb = _build_mel_filterbank()
     freqs = np.fft.rfftfreq(N_FFT, d=1 / SAMPLE_RATE)
     centers = np.zeros(N_MELS)
@@ -522,11 +522,11 @@ def gain_sweep(port: str, output: str, gains: list[int] | None = None,
 
     Produces gain_sweep.npz with:
       - gains:        (G,) gain levels tested
-      - noise_floor:  (G, 26) per-band noise floor at each gain
-      - noise_std:    (G, 26) noise floor std dev
-      - signal_mean:  (G, 26) mean signal level (if audio provided, else zeros)
-      - snr_db:       (G, 26) signal-to-noise ratio in dB (if audio provided)
-      - dynamic_range_db: (G, 26) usable dynamic range above noise floor
+      - noise_floor:  (G, n_mels) per-band noise floor at each gain
+      - noise_std:    (G, n_mels) noise floor std dev
+      - signal_mean:  (G, n_mels) mean signal level (if audio provided, else zeros)
+      - snr_db:       (G, n_mels) signal-to-noise ratio in dB (if audio provided)
+      - dynamic_range_db: (G, n_mels) usable dynamic range above noise floor
     """
     _check_imports("serial")
     if audio:
@@ -755,7 +755,7 @@ def analyze(captures_dir: str, output: str, config: str = None,
         noise_floor[band] = mean(silence_capture[band])
 
     If --gain-sweep is provided, produces a gain-aware profile with:
-      - noise_floor_by_gain: (G, 26) noise floor indexed by HW gain
+      - noise_floor_by_gain: (G, n_mels) noise floor indexed by HW gain
       - hw_gain_levels: (G,) the gain levels
       - recommended_min/max: suggested AGC range
 
@@ -835,7 +835,7 @@ def analyze(captures_dir: str, output: str, config: str = None,
             continue
 
         ref_mel = refs[ref_key]
-        ref_mean = ref_mel.mean(axis=0)  # (26,)
+        ref_mean = ref_mel.mean(axis=0)  # (n_mels,)
         ref_mean = np.maximum(ref_mean, 0.001)  # avoid div by zero
 
         for port_name, frames in captures[sig_key].items():
@@ -914,7 +914,7 @@ def analyze(captures_dir: str, output: str, config: str = None,
                     all_hw_gains = sweep["gains"]
                 print(f"  Gain sweep loaded: {sf.name} ({len(sweep['gains'])} levels)")
 
-            nf_by_gain = np.median(np.array(all_nf), axis=0)  # (G, 26)
+            nf_by_gain = np.median(np.array(all_nf), axis=0)  # (G, n_mels)
 
             # Recommend AGC range: max gain where band 3 noise < 0.5
             recommended_max = int(all_hw_gains[-1])
