@@ -156,7 +156,17 @@ A sealed, lined box with a Pi 5, a powered speaker and LEDs will get hot.
 
    A commit still in CI waits for the next pass. A red one, or one whose review has findings, is refused. `deploy.py --accept SHA "reason"` deploys a refused commit anyway, as an owner's decision recorded in the state.
 
-   A new commit is installed into the other slot while the server keeps running untouched. The venv is reinstalled only if `blinky-server/pyproject.toml` changed, and the console rebuilt only if `blinky-console/` changed. Right before the restart, after that slow part, the deployer checks whether the server is flashing, deploying firmware or running a test job. A restart mid-flash can leave a device in its bootloader, so a busy server leaves the prepared slot for the next pass.
+   **Only server changes restart the server.** The server's paths are the ones it reads or runs from its tree:
+   - `blinky-server/`;
+   - `blinky-console/`;
+   - `tools/` (it runs `firmware_release.py`, `uf2_upload.py` and `usb_reset.py`);
+   - `devices/`;
+   - `blinky-test-player/music/`;
+   - `scripts/testbox/`.
+
+   A commit that passes the gate but changes none of these since the commit the server runs only moves `refs/blinky/deployable`, and nothing restarts. That covers firmware, ml-training, docs and CI. The Spark training bundle is built from that ref, so ml-training changes reach training once their CI and review pass, without a restart.
+
+   A server change is installed into the other slot while the server keeps running untouched. The venv is reinstalled only if `blinky-server/pyproject.toml` changed, and the console rebuilt only if `blinky-console/` changed. Right before the restart, after that slow part, the deployer checks whether the server is flashing, deploying firmware or running a test job. A restart mid-flash can leave a device in its bootloader, so a busy server leaves the prepared slot for the next pass.
 
    The deployer then swaps the symlink and restarts the server. If `/api/devices` doesn't answer within 90 s, it swaps back, restarts, and refuses the commit.
 

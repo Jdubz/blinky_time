@@ -13,8 +13,8 @@ Configuration (environment; on the test box, `~/.config/blinky/spark.env`):
                         default: the repo's blinky-test-player/music
 Without the two required values the Spark routes answer 503 and nothing else changes.
 
-Training is a `gpu_task` (#305): `ml-training/` at HEAD as a code bundle, `spark_entry.py` as the
-entry point, the corpus prefix as its one input. It preps the dataset on the Spark and trains; the
+Training is a `gpu_task` (#305): `ml-training/` as a code bundle (bundle.py says which commit),
+`spark_entry.py` as the entry point, the corpus prefix as its one input. It preps the dataset on the Spark and trains; the
 model comes back as artifacts under `outputs/<job>/model/`, which the store reaps after 7 days.
 """
 
@@ -285,7 +285,7 @@ class SparkService:
         augment: bool = True,
         memory_gb: float = TRAIN_MEMORY_GB,
     ) -> dict[str, Any]:
-        """Bundle ml-training/ at HEAD and submit it as one gpu_task. The same code with the same
+        """Bundle ml-training/ (bundle.build picks the commit) and submit it as one gpu_task. The same code with the same
         arguments is one job: skipped while it is pending or succeeded, resubmitted after a
         failure. Blocking (git, upload, HTTP): call it from a worker thread."""
         if memory_gb <= 0:

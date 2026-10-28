@@ -3,8 +3,13 @@
 The Spark returns the bundle's sha256 as `code_sha256` in the job result, and that hash is the
 model's provenance: it says exactly which code trained it. So the bundle is built from a commit,
 never from the working tree, and two builds of the same commit are byte-identical (sorted entries,
-fixed mtime/owner/modes, gzip without a timestamp). A tree with uncommitted changes under
-`ml-training/` is refused rather than silently training the last commit.
+fixed mtime/owner/modes, gzip without a timestamp).
+
+Which commit: on the test box, `refs/blinky/deployable`, the latest master commit whose CI and
+review passed (scripts/testbox/deploy.py moves it). That ref moves on every such commit, but the
+server restarts only for changes to the server itself, so the server's own HEAD can be behind
+master's ml-training/. Without the ref (a dev checkout) it is HEAD, and a tree with uncommitted
+changes under `ml-training/` is refused rather than silently training the last commit.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from pathlib import Path
 from .client import SparkError
 
 SUBDIR = "ml-training"
+DEPLOYABLE_REF = "refs/blinky/deployable"  # = scripts/testbox/deploy.py
 
 # The platform's cap on expansion (my-spark gpu_task, `code` is code, not data).
 MAX_EXPANDED_BYTES = 256 * 1024 * 1024
@@ -42,17 +48,27 @@ def _git(repo: Path, *args: str) -> bytes:
     return r.stdout
 
 
+def _deployable(repo: Path) -> str | None:
+    try:
+        out = _git(repo, "rev-parse", "--verify", "--quiet", f"{DEPLOYABLE_REF}^{{commit}}")
+    except SparkError:
+        return None
+    return out.decode().strip() or None
+
+
 def build(repo: Path, out_dir: Path) -> Bundle:
-    dirty = _git(repo, "status", "--porcelain", "--untracked-files=no", "--", SUBDIR).decode()
-    if dirty.strip():
-        raise SparkError(
-            f"{SUBDIR}/ has uncommitted changes; commit them so the bundle (and the model's "
-            f"code_sha256) is the code that trains:\n{dirty.rstrip()}"
-        )
-    commit = _git(repo, "rev-parse", "HEAD").decode().strip()
-    # `HEAD:ml-training` archives the subtree with paths relative to it, so the entry point is
-    # `spark_entry.py` and configs are `configs/<name>.yaml` inside the bundle.
-    archive = _git(repo, "archive", "--format=tar", f"HEAD:{SUBDIR}")
+    commit = _deployable(repo)
+    if commit is None:
+        dirty = _git(repo, "status", "--porcelain", "--untracked-files=no", "--", SUBDIR).decode()
+        if dirty.strip():
+            raise SparkError(
+                f"{SUBDIR}/ has uncommitted changes; commit them so the bundle (and the model's "
+                f"code_sha256) is the code that trains:\n{dirty.rstrip()}"
+            )
+        commit = _git(repo, "rev-parse", "HEAD").decode().strip()
+    # `<commit>:ml-training` archives the subtree with paths relative to it, so the entry point
+    # is `spark_entry.py` and configs are `configs/<name>.yaml` inside the bundle.
+    archive = _git(repo, "archive", "--format=tar", f"{commit}:{SUBDIR}")
     buf = io.BytesIO()
     with (
         tarfile.open(fileobj=io.BytesIO(archive)) as raw,

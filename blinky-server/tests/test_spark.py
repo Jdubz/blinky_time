@@ -403,6 +403,19 @@ def test_bundle_is_reproducible_and_only_ml_training(repo: Path, tmp_path: Path)
     assert all(i.mtime == 0 and i.uid == 0 for i in m.values())
 
 
+def test_bundle_builds_the_deployable_commit_when_there_is_one(repo: Path, tmp_path: Path) -> None:
+    # The test box's deployer moves refs/blinky/deployable to every master commit that passed
+    # CI and review; the server's own HEAD stays put unless the server itself changed.
+    gated = bundle.build(repo, tmp_path / "a").commit
+    git(repo, "update-ref", "refs/blinky/deployable", gated)
+    (repo / "ml-training" / "configs" / "y.yaml").write_text("model: {type: y}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "ungated")
+    (repo / "ml-training" / "configs" / "x.yaml").write_text("uncommitted\n")  # ignored: not HEAD
+    b = bundle.build(repo, tmp_path / "b")
+    assert b.commit == gated and "configs/y.yaml" not in b.names
+
+
 def test_bundle_refuses_uncommitted_changes(repo: Path, tmp_path: Path) -> None:
     (repo / "ml-training" / "untracked.py").write_text("x = 1\n")  # not bundled: fine
     (repo / "elsewhere.txt").write_text("changed\n")  # outside ml-training: fine
