@@ -75,7 +75,8 @@ INCOMPLETE = "Incomplete review: no issues found, but not every changed file was
 @pytest.mark.parametrize(
     "kw,want,why",
     [
-        ({"merged": False}, "reject", "not the merge of a PR"),
+        ({"merged": False}, "wait", "not linked to a merged PR"),  # GitHub links it late
+        ({"merged": False, "age_s": 7 * 3600}, "reject", "not the merge of a PR"),
         ({"master": [*GOOD_MASTER, run_("Code Quality", "failure")]}, "reject", "=failure"),
         ({"master": [*GOOD_MASTER, run_("Compile", None)]}, "wait", "running Compile"),
         ({"master": GOOD_MASTER[1:]}, "wait", "Blinky Server Tests hasn't started"),
