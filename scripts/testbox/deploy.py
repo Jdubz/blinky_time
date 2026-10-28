@@ -172,6 +172,7 @@ def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
 
 
 def api_key() -> str:
+    """OSError when there is none: busy() then refuses to restart rather than guess."""
     key = os.environ.get("BLINKY_API_KEY")
     if not key:
         key = (HOME / ".blinky-api-key").read_text().strip()
@@ -184,14 +185,25 @@ def http_get(path: str, timeout: float = 5) -> Any:
         return json.loads(r.read())
 
 
+def not_listening(e: BaseException) -> bool:
+    """Nothing on the port: the server is down, not busy."""
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    return isinstance(reason, ConnectionRefusedError) and not isinstance(e, urllib.error.HTTPError)
+
+
 def busy(get: Callable[[str], Any] = http_get) -> str | None:
-    """What the server is doing that a restart would break, or None. A server that doesn't
-    answer is doing nothing: deploying is how it gets fixed."""
+    """What stops a restart now, or None. Only a server with nothing listening counts as idle
+    (deploying is how it gets fixed). Any other failure to ask counts as busy: an HTTP error
+    (a wrong API key, a broken route) or a timeout says nothing about a flash in progress."""
     try:
         flashes = get("/api/flash-jobs?active=true")["jobs"]
         jobs = get("/api/fleet/jobs") + get("/api/test/jobs")
-    except (urllib.error.URLError, ConnectionError, TimeoutError):
-        return None
+    except (urllib.error.URLError, OSError) as e:
+        if not_listening(e):
+            return None
+        return f"can't ask the server whether it is busy: {e}"
+    except (KeyError, TypeError, ValueError) as e:
+        return f"unexpected answer from the server's job routes: {e!r}"
     if flashes:
         return f"{len(flashes)} flash job(s) active"
     live = [j for j in jobs if j.get("status") in ("pending", "running")]

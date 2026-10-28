@@ -109,10 +109,26 @@ def test_busy() -> None:
     running = [{"status": "running", "type": "fleet-deploy"}]
     assert "fleet-deploy" in deploy.busy(server([], running))
 
-    def down(p: str) -> Any:
-        raise deploy.urllib.error.URLError("refused")
+    def raising(e: BaseException) -> Any:
+        def get(p: str) -> Any:
+            raise e
 
-    assert deploy.busy(down) is None  # a dead server isn't busy; deploying may fix it
+        return get
+
+    err = deploy.urllib.error
+    # Nothing listening: the server is down, not busy, and deploying may fix it.
+    assert deploy.busy(raising(err.URLError(ConnectionRefusedError(111, "refused")))) is None
+    assert deploy.busy(raising(ConnectionRefusedError(111, "refused"))) is None
+    # Anything else says nothing about a flash in progress, so it blocks the restart.
+    http401 = err.HTTPError("u", 401, "Invalid API key", None, None)  # type: ignore[arg-type]
+    for e in (
+        http401,
+        err.URLError(TimeoutError("timed out")),
+        TimeoutError("timed out"),
+        FileNotFoundError("~/.blinky-api-key"),
+    ):
+        assert "can't ask" in deploy.busy(raising(e)), e
+    assert "unexpected answer" in deploy.busy(lambda p: {"nope": 1})
 
 
 def fake_git(*cmd: str, **kw: Any) -> str:
