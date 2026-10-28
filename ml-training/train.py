@@ -90,6 +90,19 @@ from scripts.audio import (
     load_config,
     resolve_hybrid_features,
 )
+from scripts.supervision import (
+    Preemption,
+    Progress,
+    ResumeMismatch,
+    check_resume,
+    checkpoint_dir,
+    fingerprint,
+    on_spark,
+    spark_input,
+    spark_output,
+)
+
+SWA_EPOCHS = 10
 
 
 def _set_seeds(seed: int) -> torch.Generator:
@@ -567,7 +580,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train beat activation CNN")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--data-dir", default=None, help="Override processed data dir")
-    parser.add_argument("--output-dir", default="outputs", help="Output directory for checkpoints/logs")
+    parser.add_argument("--output-dir", default=None,
+                        help="Output directory for models/logs (default: $SPARK_OUTPUT_MODEL on "
+                             "the Spark, else outputs)")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
@@ -614,7 +629,8 @@ def main():
 
     # Guard: training takes hours — must run in tmux/screen to survive session end.
     # Claude Code background tasks die when the session closes, killing training mid-run.
-    if not args.allow_foreground:
+    # A Spark gpu_task is supervised by the platform instead (#304).
+    if not args.allow_foreground and not on_spark():
         in_tmux = os.environ.get("TMUX")
         in_screen = os.environ.get("STY")
         if not (in_tmux or in_screen):
@@ -647,9 +663,22 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    data_dir = Path(args.data_dir or cfg["data"]["processed_dir"])
-    output_dir = Path(args.output_dir)
+    # On the Spark, paths arrive only through the environment (#304): the processed dataset
+    # as the `data` input, models and logs into the `model` output. A config's host path
+    # doesn't exist there, so a missing declaration is an error, not a fallback to it.
+    data_dir = Path(args.data_dir or spark_input("data") or cfg["data"]["processed_dir"])
+    output_dir = Path(args.output_dir or spark_output("model") or "outputs")
+    if on_spark() and not (args.data_dir or spark_input("data")):
+        print("ERROR: on the Spark the dataset must be the job's `data` input "
+              "($SPARK_INPUT_DATA is unset)", file=sys.stderr)
+        sys.exit(1)
+    if on_spark() and not (args.output_dir or spark_output("model")):
+        print("ERROR: on the Spark the job must declare a `model` output "
+              "($SPARK_OUTPUT_MODEL is unset)", file=sys.stderr)
+        sys.exit(1)
     output_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_dir = checkpoint_dir(output_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     epochs = args.epochs or cfg["training"]["epochs"]
     batch_size = args.batch_size or cfg["training"]["batch_size"]
@@ -694,6 +723,10 @@ def main():
             print(f"Knowledge distillation: alpha={distill_alpha}, temp={distill_temp}")
             print(f"  Teacher train: {teacher_train_path}")
             print(f"  Teacher val: {teacher_val_path}")
+        elif on_spark():
+            # A job that asked for distillation must not quietly train without it.
+            print(f"ERROR: teacher labels not found at {teacher_path}", file=sys.stderr)
+            sys.exit(1)
         else:
             print(f"WARNING: Teacher labels not found at {teacher_path}, training without distillation")
 
@@ -798,15 +831,15 @@ def main():
             generator=dataloader_generator,
         )
         train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler,
-                                  num_workers=num_workers, pin_memory=True, persistent_workers=True,
+                                  num_workers=num_workers, pin_memory=True, persistent_workers=num_workers > 0,
                                   generator=dataloader_generator)
         print(f"Subsampling: {subset_size:,} of {len(train_ds):,} per epoch ({subsample:.0%})")
     else:
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                                  num_workers=num_workers, pin_memory=True, persistent_workers=True,
+                                  num_workers=num_workers, pin_memory=True, persistent_workers=num_workers > 0,
                                   generator=dataloader_generator)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True, persistent_workers=True)
+                            num_workers=num_workers, pin_memory=True, persistent_workers=num_workers > 0)
 
     # Build model
     _quant_noise_active = False
@@ -1158,11 +1191,36 @@ def main():
     log_rows = []
     start_epoch = 0
 
+    # Everything the checkpoint's state depends on. A resume under any other value refuses
+    # (#304). Left out on purpose: the early-stopping metric and patience (switching them on
+    # resume is supported below), and where things run (device, workers, output dir).
+    id_cfg = dict(cfg)
+    id_cfg["training"] = {k: v for k, v in cfg["training"].items()
+                          if k not in ("early_stopping_metric", "patience", "num_workers")}
+    run_fp = fingerprint({
+        "config": id_cfg,
+        "epochs": epochs, "batch_size": batch_size, "lr": lr, "subsample": subsample,
+        "loss": loss_type, "focal_gamma": args.focal_gamma, "shift_tolerance": shift_tolerance,
+        "spec_augment": use_spec_augment, "swa": args.swa, "finetune": args.finetune,
+        "distill": [str(teacher_train_path), distill_alpha, distill_temp] if use_distill else None,
+        "data": [str(data_dir), list(train_ds.X.shape), list(val_ds.X.shape)],
+    })
+
+    # The checkpoint is the run's one record: it carries the best weights too, so a kill
+    # between the best-model save and the checkpoint save can't leave them disagreeing.
+    best_state = None
+    finished = False
+
     # Resume from checkpoint if available
-    ckpt_path = output_dir / "training_checkpoint.pt"
+    ckpt_path = ckpt_dir / "training_checkpoint.pt"
     if ckpt_path.exists():
         print(f"Resuming from checkpoint: {ckpt_path}")
-        ckpt = torch.load(ckpt_path, weights_only=False)
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        try:
+            check_resume(ckpt, run_fp, ckpt_path)
+        except ResumeMismatch as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
         model.load_state_dict(ckpt["model_state"])
         optimizer.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])
@@ -1201,7 +1259,23 @@ def main():
         else:
             best_metric = ckpt["best_val_loss"]
             patience_counter = ckpt["patience_counter"]
-        print(f"  Resuming at epoch {start_epoch + 1}/{epochs}, best_{es_metric}={best_metric:.4f}")
+        best_state = ckpt.get("best_state")
+        if best_state is not None:
+            _atomic_torch_save(best_state, output_dir / "best_model.pt")
+        finished = bool(ckpt.get("finished"))
+        print(f"RESUMED from epoch {start_epoch}/{epochs}"
+              f"{' (training loop already finished)' if finished else ''}, "
+              f"best_{es_metric}={best_metric:.4f}", flush=True)
+
+    # The Spark's contract (#304): STEP lines are its liveness signal, and SIGTERM must
+    # end in a clean exit 42. A real eviction today arrives as SIGKILL, so the per-epoch
+    # checkpoint is what bounds the loss (scripts/supervision.py).
+    preempt = Preemption().install()
+    total_steps_reported = (epochs + (SWA_EPOCHS if args.swa else 0)) * steps_per_epoch
+    progress = Progress(total_steps_reported)
+    if finished:
+        start_epoch = epochs
+    progress.report(start_epoch * steps_per_epoch, force=True)
 
     num_train_batches = len(train_loader)
     num_val_batches = len(val_loader)
@@ -1301,6 +1375,8 @@ def main():
             train_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
             train_total += Y_batch.numel()
             train_samples += X_batch.size(0)
+            progress.report(epoch * steps_per_epoch + batch_idx + 1)
+            preempt.exit_if_requested(f"in epoch {epoch+1}")
 
             if (batch_idx + 1) % log_interval == 0:
                 elapsed = time.time() - epoch_start
@@ -1348,6 +1424,9 @@ def main():
 
         with torch.no_grad():
             for X_batch, Y_batch, T_batch in val_loader:
+                # Validation isn't a step, but it can outlast the watchdog's patience.
+                progress.report((epoch + 1) * steps_per_epoch)
+                preempt.exit_if_requested(f"validating epoch {epoch+1}")
                 X_batch = X_batch.to(device, non_blocking=True)
                 Y_batch = Y_batch.to(device, non_blocking=True)
 
@@ -1493,13 +1572,18 @@ def main():
             if _quant_noise_active:
                 from models.onset_conv1d import unwrap_quant_noise_state_dict
                 sd = unwrap_quant_noise_state_dict(sd)
+            # A copy: state_dict() tensors ARE the live parameters, and would follow
+            # training on from here.
+            best_state = {k: v.detach().clone() for k, v in sd.items()}
             _atomic_torch_save(sd, output_dir / "best_model.pt")
             print(f"  Saved best model ({es_metric}={current_metric:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 print(f"  Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
-                break
+                # Checkpointed below before the break, so a resume after this point
+                # doesn't retrain an epoch the run already decided to stop at.
+                finished = True
 
         # Save resumable checkpoint every epoch. `best_val_loss` is a
         # legacy field name kept for backward-compat with existing
@@ -1518,7 +1602,14 @@ def main():
             "early_stopping_metric": es_metric,
             "patience_counter": patience_counter,
             "log_rows": log_rows,
-        }, output_dir / "training_checkpoint.pt")
+            "best_state": best_state,
+            "finished": finished or epoch + 1 == epochs,
+            "fingerprint": run_fp,
+        }, ckpt_path)
+        progress.report((epoch + 1) * steps_per_epoch, force=True)
+        if finished:
+            break
+        preempt.exit_if_requested(f"after epoch {epoch+1}")
 
     # Restore best weights (best_model.pt has unwrapped keys for export;
     # re-wrap if quant-noise is active so keys match the current model)
@@ -1548,7 +1639,7 @@ def main():
     # (Izmailov et al. 2018). Zero cost at inference.
     if args.swa:
         from torch.optim.swa_utils import AveragedModel, SWALR
-        swa_epochs = 10
+        swa_epochs = SWA_EPOCHS
         swa_lr = 1e-4
         print(f"\nSWA: {swa_epochs} epochs at lr={swa_lr}")
         swa_model = AveragedModel(model)
@@ -1565,6 +1656,10 @@ def main():
                 loss = loss_fn(Y_pred, Y_batch)
                 loss.backward()
                 swa_optimizer.step()
+                progress.report((epochs + swa_ep) * steps_per_epoch + batch_idx + 1)
+                # SWA keeps no checkpoint of its own: a preempted SWA reruns from the best
+                # weights, which the training checkpoint still holds.
+                preempt.exit_if_requested(f"in SWA epoch {swa_ep+1}")
             swa_model.update_parameters(model)
             print(f"  SWA epoch {swa_ep+1}/{swa_epochs} loss={loss.item():.4f}")
 
@@ -1597,6 +1692,7 @@ def main():
         writer.writerows(log_rows)
 
     print(f"\nTraining complete. Models saved to {output_dir}/")
+    progress.report(total_steps_reported, force=True)
     # Filter to rows that actually have the metric — pre-T4.4 checkpoints
     # resumed under a new metric will have a mix of rows where some lack
     # `val_peak_f1` etc. Falling through with an empty list lets the user
