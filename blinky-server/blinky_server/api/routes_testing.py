@@ -79,7 +79,9 @@ class TuneThresholdRequest(BaseModel):
         le=20,
         description="Step budget: ~60% coarse sweep, ~40% refinement. Actual evals may be slightly higher.",
     )
-    target_metric: str = "onsetF1"
+    # The drum metrics are the primary score (#294, CLAUDE.md); onsetF1 counts hats and other
+    # non-targets, so tuning on it can trade kicks for hats.
+    target_metric: str = "drumF"
     commands: list[str] | None = None
 
     @model_validator(mode="after")

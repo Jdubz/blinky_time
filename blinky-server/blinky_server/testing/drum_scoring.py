@@ -66,8 +66,10 @@ class DrumScore:
             "onDrum": r(self.on_drum),
             "drumF": r(self.drum_f),
             "loneHat": r(self.lone_hat),
-            "detPerSec": round(self.det_per_s, 3),
-            "lagMs": None if self.lag_ms is None else round(self.lag_ms, 1),
+            "detPerSec": r(self.det_per_s),
+            "lagMs": None
+            if self.lag_ms is None or math.isnan(self.lag_ms)
+            else round(self.lag_ms, 1),
             "kicks": self.n_kicks,
             "snares": self.n_snares,
             "detections": self.n_detections,

@@ -174,7 +174,7 @@ def drum_metrics(rows: np.ndarray, labels) -> dict:
     d = score_drums(det, labels.window(WARMUP_S, end), end - WARMUP_S)
     return {"kick_r50": d.kick_r50, "kick_r30": d.kick_r30, "snare_r50": d.snare_r50,
             "on_drum": d.on_drum, "drum_f": d.drum_f, "lone_hat": d.lone_hat,
-            "det_per_s": d.det_per_s, "drum_lag": d.lag_ms}
+            "det_per_s": d.det_per_s, "drum_lag": float("nan") if d.lag_ms is None else d.lag_ms}
 
 
 def evaluate(rows: np.ndarray, onsets: np.ndarray) -> dict:
@@ -281,7 +281,7 @@ def main() -> int:
         print(f"{b}: DRUMS mean kickR@50 {arr('kick_r50'):.3f}  kickR@30 {arr('kick_r30'):.3f}  "
               f"onDrum {arr('on_drum'):.3f}  drumF {arr('drum_f'):.3f}  "
               f"snareR@50 {arr('snare_r50'):.3f} (provisional, #284)  loneHat {arr('lone_hat'):.3f}  "
-              f"det/s {arr('det_per_s'):.2f}")
+              f"det/s {arr('det_per_s'):.2f}  lag {arr('drum_lag'):.0f} ms")
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
               f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
               f"mean recall {arr('recall'):.3f}  mean F1 {arr('f1'):.3f}  mean prec {arr('prec'):.3f}  "

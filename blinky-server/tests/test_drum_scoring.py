@@ -72,6 +72,12 @@ def test_no_lag_estimate_is_nan_not_zero() -> None:
     assert s.as_dict()["kickR50"] is None
 
 
+def test_a_zero_length_run_serialises() -> None:
+    import json
+
+    json.dumps(score_drums([], LABELS, 0.0).as_dict(), allow_nan=False)
+
+
 def test_cleaning_needs_two_systems_within_70ms() -> None:
     kw = {
         "onsets": [
@@ -125,3 +131,12 @@ def test_device_runs_report_drums() -> None:
     assert summary["drums"]["kickR50"] == 1.0 and summary["drums"]["snareR50"] == 0.0
     no_drums = GroundTruth(pattern="t", duration_ms=7000, hits=gt.hits)
     assert format_score_summary(score_device_run(data, start, no_drums))["drums"] is None
+
+
+def test_tuning_targets_drum_metrics_and_skips_missing_values() -> None:
+    from blinky_server.testing.test_runner import _extract_metric
+
+    assert _extract_metric({"drums": {"kickR50": 0.8}}, "kickR50") == 0.8
+    assert _extract_metric({"drums": None}, "kickR50") is None  # track without drum labels
+    assert _extract_metric({"drums": {"kickR50": None}}, "kickR50") is None  # no lag estimate
+    assert _extract_metric({"onsetTracking": {"f1": 0.6}}, "onsetF1") == 0.6

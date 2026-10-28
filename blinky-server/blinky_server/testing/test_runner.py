@@ -659,7 +659,7 @@ async def run_threshold_tune(
     duration_ms: float = 35000,
     settle_ms: float = SETTLE_MS,
     max_steps: int = 8,
-    target_metric: str = "onsetF1",
+    target_metric: str = "drumF",
     commands: list[str] | None = None,
     job: Job | None = None,
 ) -> dict[str, Any]:
@@ -681,7 +681,7 @@ async def run_threshold_tune(
         duration_ms: Playback duration per track
         settle_ms: Skip early data (ACF convergence)
         max_steps: Maximum total evaluation steps (split between coarse + refine)
-        target_metric: Metric to maximize (onsetF1, plpAtTransient, etc.)
+        target_metric: Metric to maximize: kickR50, onDrum, drumF (the drum metrics, primary, #294), onsetF1, plpAtTransient, etc.
         commands: Setup commands before tuning
         job: Job for progress updates
 
@@ -891,6 +891,13 @@ async def _eval_param_value(
         summary = format_score_summary(score)
 
         metric_val = _extract_metric(summary, target_metric)
+        if metric_val is None:
+            # e.g. a drum metric on a track with no drum labels, or a run with no lag
+            # estimate: leave the track out rather than average it in as 0.
+            log.warning(
+                "%s: no %s for %s=%s, track left out", track_name, target_metric, param_name, value
+            )
+            continue
         track_scores.append(metric_val)
 
     if not track_scores:
@@ -907,22 +914,29 @@ _METRIC_PATHS: dict[str, tuple[str, str]] = {
     "plpAtTransientNorm": ("plp", "atTransientNorm"),
     "plpAutoCorr": ("plp", "autoCorr"),
     "plpPeakiness": ("plp", "peakiness"),
+    # Drum metrics, the primary score (#294). snareR50 is provisional until #284.
+    "kickR50": ("drums", "kickR50"),
+    "kickR30": ("drums", "kickR30"),
+    "onDrum": ("drums", "onDrum"),
+    "drumF": ("drums", "drumF"),
+    "snareR50": ("drums", "snareR50"),
 }
 
 
-def _extract_metric(summary: dict[str, Any], metric: str) -> float:
+def _extract_metric(summary: dict[str, Any], metric: str) -> float | None:
     """Extract a named metric from a score summary dict.
 
-    Raises ValueError if the metric name is unknown.
-    Returns 0.0 if the metric path exists but the value is missing/non-numeric.
+    Raises ValueError if the metric name is unknown. Returns None when the run has no value
+    for it (a track without drum labels has `drums: null`; a run without a lag estimate has
+    null drum metrics), so the caller leaves it out instead of scoring it as 0.
     """
     if metric not in _METRIC_PATHS:
         msg = f"Unknown metric '{metric}'. Valid metrics: {', '.join(sorted(_METRIC_PATHS))}"
         raise ValueError(msg)
 
     section, key = _METRIC_PATHS[metric]
-    val = summary.get(section, {}).get(key)
-    return float(val) if isinstance(val, (int, float)) else 0.0
+    val = (summary.get(section) or {}).get(key)
+    return float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else None
 
 
 # ---------------------------------------------------------------------------
