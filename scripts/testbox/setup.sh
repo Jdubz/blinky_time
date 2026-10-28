@@ -16,7 +16,9 @@
 #      that develops on it (sudoers.in)
 #   6. Bluetooth off at the OS level (the box server must never adopt a production device)
 #   7. an SSH key for the user (for reaching the SWD Pi Zero)
-#   8. blinky-server.service, enabled and started with --no-ble
+#   8. the deploy worktree (~/blinky-deploy, master only) and blinky-server.service running
+#      from it with --no-ble; blinky-deploy.timer keeps it at master once CI and review pass
+#      (deploy.py). The dev checkout is for development and is never what the server runs.
 #   9. development tooling, so the box can run every script, tool and CI check itself:
 #      arduino-cli (pinned) + the firmware toolchain, cppcheck (pinned, CI's build),
 #      adafruit-nrfutil, a dev Python venv, blinky-serial-mcp, git hooks, Claude Code
@@ -53,6 +55,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 REPO_DIR="$HOME_DIR/blinky_time"
 SERVER_DIR="$REPO_DIR/blinky-server"
+DEPLOY_DIR="$HOME_DIR/blinky-deploy"
 LOG=/var/log/blinky-testbox-setup.log
 STATE_DIR=/var/lib/blinky-testbox
 
@@ -195,12 +198,39 @@ EOF
   fi
 }
 
+deploy_worktree() {
+  # A worktree of the dev clone: shares its objects (the bootloader submodule is never
+  # checked out, so it is ~120 MB), detached at master. deploy.py owns it from here on.
+  if [[ ! -d "$DEPLOY_DIR" ]]; then
+    as_user git -C "$REPO_DIR" fetch -q origin master &&
+      as_user git -C "$REPO_DIR" worktree add -q --detach "$DEPLOY_DIR" origin/master || return 1
+  fi
+  local srv="$DEPLOY_DIR/blinky-server"
+  if [[ ! -x "$srv/venv/bin/python" ]]; then
+    as_user python3 -m venv "$srv/venv" || return 1
+  fi
+  as_user "$srv/venv/bin/pip" install -q --upgrade pip &&
+    as_user "$srv/venv/bin/pip" install -q -e "${srv}[firmware,ble]" || return 1
+  if [[ ! -f "$srv/web/index.html" ]]; then
+    ( cd "$DEPLOY_DIR/blinky-console" &&
+      as_user npm ci --no-audit --no-fund --loglevel=error &&
+      as_user npm run build --silent ) || return 1
+  fi
+  # Server-side compiles use <repo>/.arduino; share the dev clone's pinned toolchain (1.3 GB).
+  [[ -e "$DEPLOY_DIR/.arduino" ]] || as_user ln -s "$REPO_DIR/.arduino" "$DEPLOY_DIR/.arduino"
+}
+
 install_service() {
-  sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$SERVER_DIR|g" -e "s|@HOME_DIR@|$HOME_DIR|g" \
-    "$HERE/blinky-server.service.in" > /etc/systemd/system/blinky-server.service || return 1
+  local unit
+  for unit in blinky-server.service blinky-deploy.service blinky-deploy.timer; do
+    sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$DEPLOY_DIR/blinky-server|g" \
+      -e "s|@DEPLOY_DIR@|$DEPLOY_DIR|g" -e "s|@HOME_DIR@|$HOME_DIR|g" \
+      "$HERE/$unit.in" > "/etc/systemd/system/$unit" || return 1
+  done
   systemctl daemon-reload &&
     systemctl enable blinky-server.service &&
-    systemctl restart blinky-server.service || return 1
+    systemctl restart blinky-server.service &&
+    systemctl enable --now blinky-deploy.timer || return 1
   local i
   for i in $(seq 1 30); do
     curl -fsS -o /dev/null http://127.0.0.1:8420/api/devices && return 0
@@ -342,6 +372,7 @@ step "blinky-console"     build_console
 step "sudoers"            install_sudoers
 step "bluetooth off"      disable_bluetooth
 step "user ssh key"       user_ssh_key
+step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
 step "arduino-cli"        install_arduino_cli
 step "firmware toolchain" firmware_toolchain
