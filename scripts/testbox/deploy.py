@@ -155,6 +155,9 @@ def review_verdict(comments: list[dict[str, Any]], head: str, where: str) -> tup
 
 def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
     """("deploy" | "wait" | "reject", why) for a commit on master."""
+    commit = fetch(f"repos/{GH_REPO}/commits/{sha}")
+    date = commit["commit"]["committer"]["date"]
+    age = now - calendar.timegm(time.strptime(date, "%Y-%m-%dT%H:%M:%SZ"))
     pulls = fetch(f"repos/{GH_REPO}/commits/{sha}/pulls")
     pr = next(
         (
@@ -167,12 +170,13 @@ def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
         None,
     )
     if pr is None:
-        return "reject", "not the merge of a PR into master"
+        # GitHub links a merge commit to its PR a little after the merge: seen empty seconds
+        # after merging #313. A refusal is final, so only refuse once that can't be the reason.
+        if age > MISSING_CHECK_GIVE_UP_S:
+            return "reject", "not the merge of a PR into master"
+        return "wait", "not linked to a merged PR (yet)"
     where = f"PR #{pr['number']}"
     head = pr["head"]["sha"]
-    commit = fetch(f"repos/{GH_REPO}/commits/{sha}")
-    date = commit["commit"]["committer"]["date"]
-    age = now - calendar.timegm(time.strptime(date, "%Y-%m-%dT%H:%M:%SZ"))
     runs = fetch(f"repos/{GH_REPO}/commits/{sha}/check-runs?per_page=100")["check_runs"]
     verdict = checks_verdict(runs, REQUIRED_ON_MASTER, age, "master")
     if verdict[0] != "deploy":
