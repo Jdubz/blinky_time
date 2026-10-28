@@ -127,9 +127,17 @@ def _load_audio_quiet(path: str, sr: int) -> tuple:
 
 import librosa
 import numpy as np
+import soundfile as sf
 import torch
 import torchaudio
 from tqdm import tqdm
+
+
+def _load_wav(path: Path) -> tuple[torch.Tensor, int]:
+    """(channels, samples) float32 and the rate, like the old `torchaudio.load`. From torchaudio
+    2.9 that call needs torchcodec, which the Spark's runtime image doesn't have (#305)."""
+    data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+    return torch.from_numpy(data.T.copy()), sr
 
 
 # Ensure ml-training root is on sys.path for `from scripts.audio import ...`
@@ -674,7 +682,7 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
                     rir_np = np.load(rir_path)
                     rir = torch.from_numpy(rir_np.astype(np.float32)).to(device)
                 else:
-                    rir, rir_sr = torchaudio.load(str(rir_path))
+                    rir, rir_sr = _load_wav(rir_path)
                     if rir.shape[0] > 1:
                         rir = rir.mean(dim=0)
                     else:
@@ -1249,7 +1257,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     if not stem_path.exists():
                         all_found = False
                         break
-                    sw, stem_sr = torchaudio.load(str(stem_path))
+                    sw, stem_sr = _load_wav(stem_path)
                     # Mix to mono
                     sw = sw.mean(dim=0)
                     # Resample to training sample rate if needed
@@ -1474,12 +1482,15 @@ def main():
             * (max(1, n_files) / REF_FILES)
             * (chunk_frames_cfg / REF_CHUNK_FRAMES)
         )
-        peak = REF_PEAK_GB * scale + 30  # +30 GB scratch for merge buffers
+        # Merge buffers scale with the data too: a fixed 30 GB refused a 100-track prep (or a
+        # test's eight) on a volume that holds it many times over. Full size is unchanged.
+        scratch = 30 * min(1.0, scale)
+        peak = REF_PEAK_GB * scale + scratch
         reasoning = (
             f"~{REF_PEAK_GB} GB v32 baseline × n_mels/{REF_MELS}={n_mels_cfg/REF_MELS:.2f} "
             f"× n_files/{REF_FILES}={max(1, n_files)/REF_FILES:.2f} "
             f"× chunk_frames/{REF_CHUNK_FRAMES}={chunk_frames_cfg/REF_CHUNK_FRAMES:.2f} "
-            f"+ 30 GB scratch = {peak:.0f} GB"
+            f"+ {scratch:.0f} GB scratch = {peak:.0f} GB"
         )
         return peak, reasoning
 

@@ -1,4 +1,5 @@
-"""Spark Job API routes (#288): submit `separate` jobs, read the ledger, receive webhooks."""
+"""Spark Job API routes (#288, #305): submit `separate` and training jobs, read the ledger,
+receive webhooks."""
 
 from __future__ import annotations
 
@@ -43,6 +44,34 @@ async def separate(req: SeparateRequest) -> dict[str, Any]:
     except SparkError as e:
         raise HTTPException(400, str(e)) from None
     return {"results": results}
+
+
+class TrainRequest(BaseModel):
+    config: str = Field(..., description="config path inside ml-training/, e.g. configs/x.yaml")
+    train_args: list[str] = Field(default_factory=list)
+    prep_args: list[str] = Field(default_factory=list)
+    audio_dir: str | None = "audio"
+    labels_dir: str | None = None
+    augment: bool = True
+    memory_gb: float = Field(spark.TRAIN_MEMORY_GB, gt=0)
+
+
+@router.post("/train", dependencies=[Depends(require_api_key)])
+async def train(req: TrainRequest) -> dict[str, Any]:
+    svc = _svc()
+    try:
+        return await asyncio.to_thread(
+            svc.train,
+            req.config,
+            req.train_args,
+            req.prep_args,
+            req.audio_dir,
+            req.labels_dir,
+            req.augment,
+            req.memory_gb,
+        )
+    except SparkError as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @router.get("/jobs")

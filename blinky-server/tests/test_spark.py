@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import tarfile
 import threading
 import time
 from collections.abc import Iterator
@@ -13,7 +16,9 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from blinky_server.api import deps
 from blinky_server.api.app import create_app
+from blinky_server.spark import bundle
 from blinky_server.spark import service as spark
 from blinky_server.spark.client import Client, SparkError
 from blinky_server.spark.ledger import Ledger
@@ -337,3 +342,172 @@ async def test_unconfigured_is_503() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/api/spark/jobs")
     assert r.status_code == 503
+
+
+# -- training (gpu_task, #305) ---------------------------------------------------------------------
+
+
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    r = tmp_path / "repo"
+    (r / "ml-training" / "configs").mkdir(parents=True)
+    (r / "ml-training" / "configs" / "x.yaml").write_text("model: {type: frame_conv1d}\n")
+    (r / "ml-training" / "spark_entry.py").write_text("print('STEP 1/1')\n")
+    (r / "ml-training" / "spark_entry.py").chmod(0o755)
+    (r / "elsewhere.txt").write_text("not bundled\n")
+    git(r, "init", "-q")
+    git(r, "add", ".")
+    git(r, "commit", "-qm", "init")
+    return r
+
+
+@pytest.fixture
+def tsvc(fake: FakeSpark, music: Path, tmp_path: Path, repo: Path) -> spark.SparkService:
+    return spark.SparkService(
+        Client(fake.url, KEY), Ledger(tmp_path / "l.jsonl"), [music], SECRET, repo=repo
+    )
+
+
+def train_result(svc: spark.SparkService, jid: str, sha: str | None = None) -> dict[str, Any]:
+    (rec,) = svc.train_ledger.records().values()
+    return {
+        "artifacts": [f"outputs/{jid}/model/best_model.pt", f"outputs/{jid}/model/spark_run.json"],
+        "data": {
+            "runtime": "torch-cu130",
+            "entry_point": "spark_entry.py",
+            "code_sha256": sha or rec["code_sha256"],
+            "gpu_peak_gib": 3.2,
+            "gpu_reserved_gib": 12.0,
+        },
+    }
+
+
+def test_bundle_is_reproducible_and_only_ml_training(repo: Path, tmp_path: Path) -> None:
+    a = bundle.build(repo, tmp_path / "a")
+    os.utime(repo / "ml-training" / "configs" / "x.yaml", (1, 1))  # mtimes must not matter
+    b = bundle.build(repo, tmp_path / "b")
+    assert a.sha256 == b.sha256 and a.path.read_bytes() == b.path.read_bytes()
+    assert a.names == {"configs/x.yaml", "spark_entry.py"}
+    with tarfile.open(a.path) as t:
+        m = {i.name: i for i in t.getmembers()}
+    assert m["spark_entry.py"].mode == 0o755 and m["configs/x.yaml"].mode == 0o644
+    assert all(i.mtime == 0 and i.uid == 0 for i in m.values())
+
+
+def test_bundle_refuses_uncommitted_changes(repo: Path, tmp_path: Path) -> None:
+    (repo / "ml-training" / "untracked.py").write_text("x = 1\n")  # not bundled: fine
+    (repo / "elsewhere.txt").write_text("changed\n")  # outside ml-training: fine
+    bundle.build(repo, tmp_path / "ok")
+    (repo / "ml-training" / "configs" / "x.yaml").write_text("model: {type: other}\n")
+    with pytest.raises(SparkError, match="uncommitted changes"):
+        bundle.build(repo, tmp_path / "no")
+
+
+def test_train_submit_shape(tsvc: spark.SparkService, fake: FakeSpark) -> None:
+    out = tsvc.train(
+        "configs/x.yaml", ["--epochs", "5"], ["--seed"], labels_dir="labels/kick_weighted_clean"
+    )
+    assert out["action"] == "submitted" and out["job_id"] == "j1"
+    (spec,) = fake.submits
+    assert spec["type"] == "gpu_task" and spec["priority"] == 0
+    assert spec["memory_estimate_gb"] == spark.TRAIN_MEMORY_GB
+    assert spec["payload"] == {
+        "code": "inputs/u1/track.mp3",
+        "entry_point": "spark_entry.py",
+        "args": [
+            "--config",
+            "configs/x.yaml",
+            "--audio-dir",
+            "audio",
+            "--labels-dir",
+            "labels/kick_weighted_clean",
+            "--prep-arg=--seed",
+            "--",
+            "--epochs",
+            "5",
+        ],
+        "inputs": {"corpus": "datasets/blinky-corpus/"},
+        "outputs": {"model": True},
+        "runtime": "torch-cu130",
+    }
+    assert spec["idempotency_key"] == spark.train_key(out["code_sha256"], spec["payload"]["args"])
+    (rec,) = tsvc.train_ledger.records().values()
+    assert rec["commit"] == out["commit"] and rec["code_sha256"] == out["code_sha256"]
+    assert not tsvc.ledger.records()  # separate's ledger is untouched
+
+
+def test_train_rerun_skips_and_a_failure_resubmits_without_reuploading(
+    tsvc: spark.SparkService, fake: FakeSpark
+) -> None:
+    tsvc.train("configs/x.yaml")
+    assert tsvc.train("configs/x.yaml")["action"] == "skipped"
+    fake.jobs["j1"].update(state="failed", error="exit 1")
+    tsvc.reconcile()
+    assert tsvc.train("configs/x.yaml")["action"] == "submitted"
+    assert fake.uploads == 1  # the bundle is already in inputs/, which is never reaped
+    assert tsvc.train("configs/x.yaml", ["--epochs", "5"])["action"] == "submitted"  # new args
+
+
+def test_train_refuses_a_config_not_in_the_bundle(
+    tsvc: spark.SparkService, fake: FakeSpark
+) -> None:
+    with pytest.raises(SparkError, match="not in ml-training"):
+        tsvc.train("configs/nope.yaml")
+    assert fake.uploads == 0 and not fake.submits
+
+
+def test_train_success_records_the_model_and_measured_peak(
+    tsvc: spark.SparkService, fake: FakeSpark
+) -> None:
+    tsvc.train("configs/x.yaml")
+    fake.jobs["j1"].update(state="succeeded", result=train_result(tsvc, "j1"))
+    tsvc.reconcile()
+    (rec,) = tsvc.train_ledger.records().values()
+    assert rec["outcome"] == "succeeded"
+    assert "outputs/j1/model/best_model.pt" in rec["artifacts"]
+    assert rec["gpu_peak_gib"] == 3.2 and rec["gpu_reserved_gib"] == 12.0
+    assert tsvc.summary()["counts"] == {"succeeded": 1}
+
+
+@pytest.mark.parametrize("bad", ["code", "model"])
+def test_train_success_must_prove_code_and_model(
+    tsvc: spark.SparkService, fake: FakeSpark, bad: str
+) -> None:
+    tsvc.train("configs/x.yaml")
+    result = train_result(tsvc, "j1", sha="0" * 64 if bad == "code" else None)
+    if bad == "model":
+        result["artifacts"] = ["outputs/j1/model/training_log.csv"]
+    body = {"id": "j1", "state": "succeeded", "finished_at": time.time(), "result": result}
+    assert tsvc.on_webhook(body) == "recorded succeeded"
+    (rec,) = tsvc.train_ledger.records().values()
+    assert rec["outcome"] == "failed"
+    assert ("code_sha256" if bad == "code" else "best_model.pt") in rec["error"]
+
+
+async def test_train_route(tsvc: spark.SparkService, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(deps, "_api_key", "k")
+    ok = {"X-API-Key": "k"}
+    spark.set_service(tsvc)
+    try:
+        transport = ASGITransport(app=create_app(enable_ble=False, enable_serial=False))
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            body = {"config": "configs/x.yaml"}
+            r = await c.post("/api/spark/train", json=body, headers={"X-API-Key": "wrong"})
+            assert r.status_code == 401
+            r = await c.post("/api/spark/train", json={"config": "configs/nope.yaml"}, headers=ok)
+            assert r.status_code == 400 and "not in ml-training" in r.json()["detail"]
+            r = await c.post("/api/spark/train", json=body, headers=ok)
+            assert r.status_code == 200 and r.json()["action"] == "submitted"
+            r = await c.get("/api/spark/jobs")
+            assert [t["config"] for t in r.json()["train"]] == ["configs/x.yaml"]
+    finally:
+        spark.set_service(None)

@@ -1,4 +1,4 @@
-"""The append-only JSONL record of every `separate` submission and its outcome.
+"""The append-only JSONL record of every Spark submission and its outcome (one file per kind).
 
 A finished job's record leaves the Spark 24 h after it finishes (`SPARK_JOB_TTL_SEC`); after
 that `GET /jobs/{id}` is a 404 and the same idempotency key starts a new job. So the outcome is
@@ -60,7 +60,15 @@ class Ledger:
                 continue
             cur["outcome"] = ev
             cur["state"] = r.get("state", ev)
-            for f in ("stems", "chunk_seconds_used", "finished_at", "error"):
+            for f in (
+                "stems",
+                "chunk_seconds_used",
+                "finished_at",
+                "error",
+                "artifacts",
+                "gpu_peak_gib",
+                "gpu_reserved_gib",
+            ):
                 if f in r:
                     cur[f] = r[f]
         return out
