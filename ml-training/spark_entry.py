@@ -25,11 +25,13 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import select
 import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from scripts.supervision import PREEMPTED_EXIT, Preemption, Progress, fingerprint
@@ -42,9 +44,16 @@ REQUIRED_MODULES = ("yaml", "librosa", "scipy", "tqdm")
 
 PREP_DONE = ".prep_done.json"
 
-# Prep reports through tqdm, which only writes when a bar moves. One line a minute keeps the log
-# readable; any output from prep counts as progress for the platform's watchdog (1800 s).
+# tqdm bars in prep write at most once a minute, to keep the log readable.
 TQDM_MININTERVAL_S = "60"
+
+# The platform's no-progress watchdog (1800 s) counts ONLY lines starting with `STEP `; other
+# output, however much, does not reset it (my-spark _container_drive.drive; #315). Prep doesn't
+# speak that, so supervise_prep turns its progress lines into STEP lines: the per-file
+# `[train] 120/5000 files` and the merge's `[train] merged 3/40 shards`, both printed at least
+# every 30 s while the phase moves. Any other prep output repeats the last STEP without
+# advancing it. A phase that prints nothing for 1800 s is killed, as the watchdog intends.
+PREP_PROGRESS = re.compile(r"^\s*\[(\w+)\] (?:merged )?(\d+)/(\d+) (files|shards)\b")
 
 
 def fail(msg: str) -> int:
@@ -84,16 +93,52 @@ def corpus_path(corpus: Path, rel: str | None, configured: str | None) -> Path |
     return Path(configured) if configured else None
 
 
+def prep_progress(line: str) -> tuple[str, int, int] | None:
+    """(phase, done, total) from one of prep's progress lines, else None."""
+    m = PREP_PROGRESS.match(line)
+    if m is None:
+        return None
+    split, done, total, unit = m.groups()
+    phase = f"{split} {'merge' if unit == 'shards' else 'files'}"
+    return phase, int(done), int(total)
+
+
+class PrepSteps:
+    """STEP lines for prep. Each phase (train files, train merge, val files, val merge) has its
+    own total, so the job's progress moves within a phase instead of sitting at 0/1."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self.phase: str | None = None
+        self.done = 0
+        self.progress = Progress(1, clock=clock)
+        self.progress.report(0, force=True)  # prep is starting
+
+    def line(self, text: str) -> None:
+        got = prep_progress(text)
+        if got is None:
+            self.progress.report(self.done)  # rate-limited; never advances the count
+            return
+        phase, done, total = got
+        if phase != self.phase or total != self.progress.total:
+            self.phase, self.progress = phase, Progress(total, clock=self.clock)
+            self.done = done
+            self.progress.report(done, force=True)
+            return
+        self.done = done
+        self.progress.report(done)
+
+
 def supervise_prep(cmd: list[str], env: dict[str, str], preempt: Preemption) -> int:
-    """Run prep, copy its output through, and turn that output into STEP lines. Prep has no
-    SIGTERM handling of its own: on one, stop it and exit 42. Its resume manifest is in the
-    checkpoint dir, so the requeued attempt carries on from the last completed file."""
-    progress = Progress(1)
-    progress.report(0, force=True)
+    """Run prep, copy its output through, and turn its progress into STEP lines (PrepSteps).
+    Prep has no SIGTERM handling of its own: on one, stop it and exit 42. Its resume manifest
+    is in the checkpoint dir, so the requeued attempt carries on from the last completed file."""
+    steps = PrepSteps()
     proc = subprocess.Popen(cmd, cwd=HERE, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     assert proc.stdout is not None
     fd = proc.stdout.fileno()
+    pending = b""
     while True:
         if preempt.requested:
             proc.terminate()
@@ -111,7 +156,12 @@ def supervise_prep(cmd: list[str], env: dict[str, str], preempt: Preemption) -> 
             break
         sys.stdout.buffer.write(chunk)
         sys.stdout.flush()
-        progress.report(0)
+        # Whole lines only: a read can end mid-line. tqdm's \r updates count as lines too.
+        *lines, pending = (pending + chunk).replace(b"\r", b"\n").split(b"\n")
+        for ln in lines:
+            steps.line(ln.decode("utf-8", "replace"))
+    if pending:
+        steps.line(pending.decode("utf-8", "replace"))
     return proc.wait()
 
 

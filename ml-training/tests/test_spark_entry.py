@@ -125,6 +125,12 @@ def test_preempt_in_prep_then_prep_and_train(job: dict) -> None:
     assert r.returncode == 0, (r.stdout + r.stderr)[-4000:]
     assert "--augment" in r.stdout and "--rir-dir" in r.stdout and "--noise-dir" in r.stdout
     assert "--seed 7" in r.stdout
+    # Prep's own progress became STEP lines with real totals (the watchdog counts only STEP):
+    # the 7 train files, then the merge, which printed nothing before #315.
+    assert re.search(r"\[train\] merged \d+/\d+ shards", r.stdout)
+    prep_steps = r.stdout[: r.stdout.index("Loading data from")]
+    assert "STEP 7/7" in prep_steps
+    assert re.search(r"^STEP (\d+)/\1$", prep_steps.split("[train] merged")[1], re.M)
     for name in ("X_train.npy", "Y_train.npy", "X_val.npy", "Y_val.npy", ".prep_done.json"):
         assert (processed / name).is_file(), name
     for name in ("best_model.pt", "final_model.pt", "training_log.csv", "spark_run.json"):

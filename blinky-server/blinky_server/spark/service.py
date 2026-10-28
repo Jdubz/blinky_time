@@ -43,14 +43,16 @@ log = logging.getLogger(__name__)
 # plans/0238 §5a). Don't lower this to be nice.
 PRIORITY = 0
 
-# Admission reserves max(our declaration, the platform's per-type floor). The floor is the
-# platform's MEASURED number (separate: 3.0 GiB from a 1.118 GiB GPU peak, my-spark #1540) and
-# moves when they re-measure, so declare below it and let it govern: any larger number here
-# holds budget no separation job uses. The field is required and must be > 0.
-SEPARATE_MEMORY_GB = 0.5
+# Admission reserves max(our declaration, the platform's per-type floor) plus a margin. The
+# floor (separate: 3.0 GiB, from a measured 1.118 GiB GPU peak, my-spark #1540) is the platform's
+# safety net for under-declarations, not something to lean on: declaring at it says what we
+# expect, and over-declaring is the safe direction (#316). Same 7.0 G reserved either way; the
+# measured peak (`spark_job_gpu_peak_gib`) is what to correct this from.
+SEPARATE_MEMORY_GB = 3.0
 
-# mel-band-roformer is in the platform's contract, but its engine refuses it at runtime
-# (demucs 4.0.1 doesn't ship it, my-spark #1534). Add it here when the platform's image has it.
+# The platform's accepted model set. mel-band-roformer was dropped from it (my-spark #1541): a
+# job naming it is a 422 at submit. It is the platform's planned drums-quality escalation
+# (models.SEPARATE_MODELS_PLANNED); add it here when they accept it again.
 MODEL_TYPES = ("htdemucs",)
 
 # The platform's stem set (my-spark models.SEPARATE_STEMS). Submit 422s anything else, but by then
