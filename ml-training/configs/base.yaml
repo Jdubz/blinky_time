@@ -15,6 +15,9 @@ audio:
   n_mels: 50                # SharedSpectralAnalysis NUM_MEL_BANDS (v33+)
   fmin: 30                  # MEL_MIN_FREQ (SharedSpectralAnalysis)
   fmax: 8000                # MEL_MAX_FREQ (SharedSpectralAnalysis)
+  # The firmware's integer MEL_BANDS table (spec/mel_frontend_v1.json), what the NN runs on.
+  # librosa_htk reproduces historical runs (every model through v36; #295).
+  mel_filterbank: firmware_table
   log_epsilon: 1.0e-7       # Must match firmware SharedSpectralAnalysis (ARM denormal safe)
   mel_db_range: 60          # Log-mel maps [-mel_db_range, 0] dB to [0, 1]. Must match firmware.
                             # v21 tried 80 to fix bass saturation, but on-device analysis showed

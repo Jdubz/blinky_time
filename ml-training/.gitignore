@@ -21,6 +21,8 @@ data/calibration_esp32s3*/
 # depending on --output-dir / --demix-dir settings.
 **/demix/
 **/spec/
+# ml-training/spec/ is the mel front-end contract (#295), not a byproduct.
+!/spec/
 
 # Training outputs
 outputs/

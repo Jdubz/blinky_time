@@ -29,9 +29,9 @@ The NN path stays tested in CI: the `tracker-harness-nn` job builds the host har
 | #284 | Drum labels (`kick_weighted`) are ~26 ms late, with kick/snare swaps and phantom snares. They are the NN's training targets. | open — fix before training on them |
 | #289 | Hand-curated GT for the 18 edm/ tracks. | open (owner) |
 | #290 | Shift-tolerant loss, replacing the label-widening knobs behind the v26–v28 collapse. | open — blinky's own trainer (it runs on the Spark as a `gpu_task`, plan 0239) |
-| #291 | Publish the mel feature spec (the firmware's integer `MEL_BANDS` table, log and range map) as a versioned contract with golden vectors. | open — blinky-side now: training builds its mel front end from this table |
+| #291 | Publish the mel feature spec (the firmware's integer `MEL_BANDS` table, log and range map) as a versioned contract with golden vectors. | partial — the spec and golden vectors exist (`ml-training/spec/`, #295) |
 | #294 | Drum metrics (kick/snare recall, on-drum, drum F at device level) are only in study scripts; the harness and CI score all-onset F1. | open — needed to gate any model on the real target |
-| #295 | Training's librosa filterbank differs from the firmware `MEL_BANDS` table (weights up to 0.30 apart); no mel parity test. | open — fix with #291 |
+| #295 | Training's librosa filterbank differs from the firmware `MEL_BANDS` table (weights up to 0.30 apart); no mel parity test. | fixed — training uses the firmware table; CI checks parity (Feature Parity job) |
 | #288 | Spark `separate` client (`scripts/spark_jobs.py`). | partial — blinky-server owns the client (#303); registered with the Spark 2026-10-27; first htdemucs run over edm/ next |
 
 Closed: #162 (wrong model header), #163 (model input check in CI), #169 (NN smoothing), #170 (`stream nn` frames), #203 (host test of the NN path).

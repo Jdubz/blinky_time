@@ -54,6 +54,11 @@ static_assert(SpectralConstants::NUM_MEL_BANDS == 50
     "Regenerate the table for the new triplet (and add the prior table to a "
     "branch if you need multi-config support).");
 // 50 bands × 30-8000 Hz, 16 kHz / FFT-256 (Nyquist-spanning, v33+).
+// This table, not an HTK filterbank, is the NN's front end: training builds its
+// features from a copy in ml-training/spec/mel_frontend_v1.json, and CI
+// (analysis/test_mel_parity.py, Feature Parity job) fails if the two differ or
+// if computeMelBandsFrom() stops producing ml-training/spec/mel_golden_v1.npz.
+// Changing it means a new spec version and a retrain (#295).
 static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
     {   0,   1,   2 },  // 0:     66 Hz center
     {   1,   2,   3 },  // 1:    105 Hz center
@@ -546,9 +551,9 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
         float weightSum = 0.0f;
 
         // Rising edge: start to center
-        // Note: band 0 has startBin==centerBin (degenerate). The guard
-        // (centerBin > startBin) falls through to weight=1.0f, giving the
-        // single center bin full weight. No division by zero.
+        // The start and end bins carry weight 0, so band 0 ({0,1,2}) reads bin 1
+        // alone. The (centerBin > startBin) guard gives weight 1 to a band whose
+        // start equals its centre, and avoids a division by zero.
         for (int bin = def.startBin; bin <= def.centerBin && bin < SpectralConstants::NUM_BINS; bin++) {
             float weight = (def.centerBin > def.startBin)
                 ? (float)(bin - def.startBin) / (def.centerBin - def.startBin)
@@ -568,9 +573,8 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
 
         float bandEnergy = (weightSum > 0) ? sum / weightSum : 0.0f;
 
-        // Special-case silence to ensure mel bands are truly zero.
-        // Note: this 1e-6 threshold is not replicated in the Python training
-        // pipeline, but only affects near-silent frames (negligible impact).
+        // Special-case silence to ensure mel bands are truly zero. Training
+        // reproduces this (ml-training/spec/mel_frontend_v1.json, #295).
         const float silenceThreshold = 1e-6f;
         if (bandEnergy < silenceThreshold) {
             outputMelBands[band] = 0.0f;

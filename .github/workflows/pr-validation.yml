@@ -299,6 +299,18 @@ jobs:
       working-directory: ml-training
       run: python -m analysis.test_shape_features
 
+    - name: Mel parity (training front end vs firmware, #295)
+      # The NN runs on the firmware's integer MEL_BANDS table, not an HTK
+      # filterbank. Builds tests/parity (the real SharedSpectralAnalysis.cpp)
+      # and checks: the spec carries the firmware's table and constants; the
+      # firmware still produces the golden frames; training's front end
+      # (scripts/mel_frontend.py) reproduces them; configs default to the table.
+      run: |
+        cmake -S tests/parity -B tests/parity/build -DCMAKE_BUILD_TYPE=Release
+        cmake --build tests/parity/build -j
+        cd ml-training
+        python -m analysis.test_mel_parity --harness ../tests/parity/build/parity_harness
+
     - name: Run ML storage-root and Spark client tests
       # No config may hardcode a machine's mounts (#286): data and work roots
       # come from BLINKY_DATA / BLINKY_WORK. The Spark CLI (#288) is a thin

@@ -56,7 +56,7 @@ def sweep_rms_levels(audio_dir: Path, rms_values: list[float],
         for rms_db in rms_values:
             target_rms = 10 ** (rms_db / 20)
             scaled = audio * (target_rms / orig_rms)
-            mel = firmware_mel_spectrogram_np(scaled)  # (frames, 26)
+            mel = firmware_mel_spectrogram_np(scaled)  # (frames, n_mels)
 
             results[rms_db]["means"].append(mel.mean())
             results[rms_db]["stds"].append(mel.std())
