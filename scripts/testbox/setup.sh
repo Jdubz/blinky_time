@@ -16,7 +16,9 @@
 #      that develops on it (sudoers.in)
 #   6. Bluetooth off at the OS level (the box server must never adopt a production device)
 #   7. an SSH key for the user (for reaching the SWD Pi Zero)
-#   8. blinky-server.service, enabled and started with --no-ble
+#   8. the deploy worktree (~/blinky-deploy -> ~/blinky-deploy-a|b, master only) and
+#      blinky-server.service running from it with --no-ble; blinky-deploy.timer keeps it at
+#      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
 #   9. development tooling, so the box can run every script, tool and CI check itself:
 #      arduino-cli (pinned) + the firmware toolchain, cppcheck (pinned, CI's build),
 #      adafruit-nrfutil, a dev Python venv, blinky-serial-mcp, git hooks, Claude Code
@@ -53,6 +55,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 REPO_DIR="$HOME_DIR/blinky_time"
 SERVER_DIR="$REPO_DIR/blinky-server"
+DEPLOY_DIR="$HOME_DIR/blinky-deploy"   # a symlink to the live slot (deploy.py)
 LOG=/var/log/blinky-testbox-setup.log
 STATE_DIR=/var/lib/blinky-testbox
 
@@ -195,12 +198,24 @@ EOF
   fi
 }
 
+deploy_worktree() {
+  # ~/blinky-deploy -> ~/blinky-deploy-a: a worktree of the dev clone (shared objects; the
+  # bootloader submodule is never checked out, so ~120 MB), detached at master, with its own
+  # venv and console build. deploy.py owns it from here on, alternating between -a and -b.
+  as_user python3 "$REPO_DIR/scripts/testbox/deploy.py" --init
+}
+
 install_service() {
-  sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$SERVER_DIR|g" -e "s|@HOME_DIR@|$HOME_DIR|g" \
-    "$HERE/blinky-server.service.in" > /etc/systemd/system/blinky-server.service || return 1
+  local unit
+  for unit in blinky-server.service blinky-deploy.service blinky-deploy.timer; do
+    sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$DEPLOY_DIR/blinky-server|g" \
+      -e "s|@DEPLOY_DIR@|$DEPLOY_DIR|g" -e "s|@HOME_DIR@|$HOME_DIR|g" \
+      "$HERE/$unit.in" > "/etc/systemd/system/$unit" || return 1
+  done
   systemctl daemon-reload &&
     systemctl enable blinky-server.service &&
-    systemctl restart blinky-server.service || return 1
+    systemctl restart blinky-server.service &&
+    systemctl enable --now blinky-deploy.timer || return 1
   local i
   for i in $(seq 1 30); do
     curl -fsS -o /dev/null http://127.0.0.1:8420/api/devices && return 0
@@ -342,6 +357,7 @@ step "blinky-console"     build_console
 step "sudoers"            install_sudoers
 step "bluetooth off"      disable_bluetooth
 step "user ssh key"       user_ssh_key
+step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
 step "arduino-cli"        install_arduino_cli
 step "firmware toolchain" firmware_toolchain
