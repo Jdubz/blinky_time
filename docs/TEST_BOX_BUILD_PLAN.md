@@ -13,7 +13,7 @@
 
 | | blinkyhost (production) | Test box (this plan) |
 |---|---|---|
-| Runs | lemon-cart (sibling repo): WiFi AP, Caddy, Hub UI, station-api, blinky-server | blinky-server only |
+| Runs | lemon-cart (sibling repo): WiFi AP, Caddy, Hub UI, station-api, blinky-server | blinky-server only, including its Spark client (#288): it submits GPU jobs and receives the Spark's webhooks. Large assets stay in the Spark's object store; the box keeps only data it collects and test files. |
 | Manages | Finished devices in the fleet | The box's own test chips |
 | Firmware | Latest **stable** only, via `./scripts/deploy.sh` | Candidates and `--dev` builds, test chips only |
 | Audio | Station audio (PipeWire) for guests | Box speaker, validation corpus only |

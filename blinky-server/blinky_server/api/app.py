@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 import os
@@ -13,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import systemd_notify
 from ..device.manager import FleetManager
+from ..spark import service as spark_service
 from .deps import set_fleet
 
 log = logging.getLogger(__name__)
@@ -54,6 +56,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     fm = FleetManager(**app.state.fleet_kwargs)
     set_fleet(fm)
     await fm.start()
+    # The Spark client (#288) is optional: unconfigured, its routes answer 503 and nothing
+    # else changes. Configured, a reconcile poll backs up the webhook.
+    svc = spark_service.start()
+    reconcile_task = asyncio.create_task(svc.run_forever()) if svc else None
     # READY only after the fleet loop is running. With Type=notify, systemd
     # holds dependents (Caddy, Hub) until this fires, so don't lie about
     # readiness — services that proxy to us would 502 against a half-up server.
@@ -62,6 +68,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     # Shutdown: kill any playing audio, stop fleet
     systemd_notify.stopping()
+    if reconcile_task is not None:
+        reconcile_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reconcile_task
+    spark_service.set_service(None)
     await stop_audio()
     await kill_orphan_audio()
     await fm.stop()
@@ -99,6 +110,7 @@ def create_app(
     from .routes_devices import router as devices_router
     from .routes_firmware import router as firmware_router
     from .routes_flash_jobs import router as flash_jobs_router
+    from .routes_spark import router as spark_router
     from .routes_testing import router as testing_router
     from .ws import router as ws_router
 
@@ -107,6 +119,7 @@ def create_app(
     app.include_router(firmware_router, prefix="/api")
     app.include_router(flash_jobs_router, prefix="/api")
     app.include_router(testing_router, prefix="/api")
+    app.include_router(spark_router, prefix="/api")
     app.include_router(ws_router)
 
     # Mount the built blinky-console as a SPA (after API routers so they

@@ -196,7 +196,7 @@ EOF
 }
 
 install_service() {
-  sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$SERVER_DIR|g" \
+  sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$SERVER_DIR|g" -e "s|@HOME_DIR@|$HOME_DIR|g" \
     "$HERE/blinky-server.service.in" > /etc/systemd/system/blinky-server.service || return 1
   systemctl daemon-reload &&
     systemctl enable blinky-server.service &&

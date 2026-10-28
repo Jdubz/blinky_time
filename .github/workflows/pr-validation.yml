@@ -301,9 +301,9 @@ jobs:
 
     - name: Run ML storage-root and Spark client tests
       # No config may hardcode a machine's mounts (#286): data and work roots
-      # come from BLINKY_DATA / BLINKY_WORK. The Spark Job API client (#288)
-      # against a fake Job API: priority 0, idempotent re-attach, no client
-      # retry of a failed job, the key never follows the presign redirect.
+      # come from BLINKY_DATA / BLINKY_WORK. The Spark CLI (#288) is a thin
+      # client of blinky-server's /api/spark routes; the client itself is
+      # tested with the server (blinky-server/tests/test_spark.py).
       working-directory: ml-training
       run: |
         pip install pytest
