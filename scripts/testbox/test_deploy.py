@@ -140,7 +140,8 @@ def fake_git(*cmd: str, **kw: Any) -> str:
         return (SHA if cmd[2] == "origin/master" else OLD) + "\n"
     if cmd[:2] == ("git", "diff"):
         assert cmd[-2:] == (OLD, SHA)  # against what the server runs, not the last commit
-        return "\n".join(GIT["diff"]) + "\n"
+        assert "-z" in cmd
+        return "\0".join(GIT["diff"]) + "\0"
     return ""
 
 
@@ -218,6 +219,7 @@ def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
         "tools/firmware_release.py",
         "devices/test_devices.json",
         "blinky-test-player/music/edm/x.mp3",
+        "blinky-test-player/music/edm/café del mar.mp3",  # non-ASCII and spaces
         "scripts/testbox/deploy.py",
     ],
 )

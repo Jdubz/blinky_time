@@ -57,7 +57,7 @@ BASE_URL = "http://127.0.0.1:8420"
 STATE = (
     Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "blinky-server" / "deploy.json"
 )
-MARKER = ".deploy-installed.json"
+MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
 
 # What the running server reads or executes from its tree. Only a commit touching one of these
 # restarts it; any other commit that passes the gate just moves DEPLOYABLE_REF. Directories,
@@ -74,7 +74,7 @@ SERVER_PATHS = (
 # Spark training bundle from it (blinky_server/spark/bundle.py), so ml-training changes reach
 # training without a server restart, and only once CI and review passed. Shared by every
 # worktree of the clone.
-DEPLOYABLE_REF = "refs/blinky/deployable"  # in each slot: what its venv and console were built from
+DEPLOYABLE_REF = "refs/blinky/deployable"
 
 # The checks that must have run, not just "everything that ran passed": a workflow that never
 # started reports nothing, which must not read as green.
@@ -300,7 +300,9 @@ def prepare(slot: Path, sha: str) -> None:
 
 
 def server_changes(old: str, new: str, cwd: Path) -> list[str]:
-    files = run("git", "diff", "--name-only", old, new, cwd=cwd).split()
+    # -z: raw paths, NUL-separated. Plain --name-only quotes a non-ASCII path ("blinky-test-
+    # player/music/caf\303\251.mp3"), which would then match no prefix and skip the deploy.
+    files = run("git", "diff", "--name-only", "-z", old, new, cwd=cwd).split("\0")
     return [f for f in files if f.startswith(SERVER_PATHS)]
 
 
