@@ -18,6 +18,7 @@ _spec.loader.exec_module(deploy)
 
 SHA, HEAD, OLD = "m" * 40, "h" * 40, "o" * 40
 NOW = 1_800_000_000.0
+BOT = "github-actions[bot]"
 
 
 def run_(name: str, conclusion: str | None = "success") -> dict[str, Any]:
@@ -25,9 +26,22 @@ def run_(name: str, conclusion: str | None = "success") -> dict[str, Any]:
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
+def verdict(
+    sha: str = HEAD, headline: str = "No issues found. Checked for bugs.", author: str = BOT
+) -> dict[str, Any]:
+    body = f"## Claude review — {sha}\n\n{headline}\n\nsummary"
+    return {"user": {"login": author}, "body": body}
+
+
+GOOD_MASTER = [run_("Blinky Server Tests"), run_("Compile Firmware"), run_("Docs", "skipped")]
+GOOD_HEAD = [run_("claude-review"), run_("Blinky Server Tests")]
+GOOD_COMMENTS = [verdict(OLD, "Found 2 issue(s) — see the inline comments."), verdict()]
+
+
 def gh(
-    master: list[dict[str, Any]],
-    head: list[dict[str, Any]],
+    master: list[dict[str, Any]] = GOOD_MASTER,
+    head: list[dict[str, Any]] = GOOD_HEAD,
+    comments: list[dict[str, Any]] = GOOD_COMMENTS,
     merged: bool = True,
     age_s: float = 600,
 ) -> Any:
@@ -35,76 +49,65 @@ def gh(
 
     def fetch(path: str) -> Any:
         if path.endswith(f"{SHA}/pulls"):
-            return [
-                {
-                    "number": 7,
-                    "merged_at": "x" if merged else None,
-                    "base": {"ref": "master"},
-                    "merge_commit_sha": SHA,
-                    "head": {"sha": HEAD},
-                }
-            ]
+            pr = {"number": 7, "merged_at": "x" if merged else None, "base": {"ref": "master"}}
+            return [{**pr, "merge_commit_sha": SHA, "head": {"sha": HEAD}}]
         if path.endswith(f"commits/{SHA}"):
             return {"commit": {"committer": {"date": date}}}
         if f"{SHA}/check-runs" in path:
             return {"check_runs": master}
         if f"{HEAD}/check-runs" in path:
             return {"check_runs": head}
+        if "issues/7/comments" in path:
+            return comments
         raise AssertionError(path)
 
     return fetch
 
 
-GOOD_MASTER = [run_("Blinky Server Tests"), run_("Compile Firmware"), run_("Docs", "skipped")]
-GOOD_HEAD = [run_("claude-review"), run_("Blinky Server Tests")]
+def test_green_ci_and_a_clean_review_deploy() -> None:
+    assert deploy.gate(SHA, gh(), NOW)[0] == "deploy"
 
 
-def test_green_master_and_reviewed_pr_deploys() -> None:
-    assert deploy.gate(SHA, gh(GOOD_MASTER, GOOD_HEAD), NOW)[0] == "deploy"
+ISSUES = "Found 2 issue(s) — see the inline comments."
+INCOMPLETE = "Incomplete review: no issues found, but not every changed file was read."
 
 
 @pytest.mark.parametrize(
-    "master,head,merged,age,verdict,why",
+    "kw,want,why",
     [
-        (GOOD_MASTER, GOOD_HEAD, False, 600, "reject", "not the merge of a PR"),
-        (
-            [*GOOD_MASTER, run_("Code Quality", "failure")],
-            GOOD_HEAD,
-            True,
-            600,
-            "reject",
-            "Code Quality=failure",
-        ),
-        ([*GOOD_MASTER, run_("Compile", None)], GOOD_HEAD, True, 600, "wait", "running Compile"),
-        (GOOD_MASTER[1:], GOOD_HEAD, True, 600, "wait", "Blinky Server Tests hasn't started"),
-        (GOOD_MASTER[1:], GOOD_HEAD, True, 7 * 3600, "reject", "never ran"),
-        (GOOD_MASTER, GOOD_HEAD[1:], True, 600, "wait", "claude-review"),
-        (GOOD_MASTER, [run_("claude-review", "cancelled")], True, 600, "reject", "PR #7"),
+        ({"merged": False}, "reject", "not the merge of a PR"),
+        ({"master": [*GOOD_MASTER, run_("Code Quality", "failure")]}, "reject", "=failure"),
+        ({"master": [*GOOD_MASTER, run_("Compile", None)]}, "wait", "running Compile"),
+        ({"master": GOOD_MASTER[1:]}, "wait", "Blinky Server Tests hasn't started"),
+        ({"master": GOOD_MASTER[1:], "age_s": 7 * 3600}, "reject", "never ran"),
+        ({"head": GOOD_HEAD[1:]}, "wait", "claude-review"),
+        ({"head": [run_("claude-review", None)]}, "wait", "running claude-review"),
+        # The review check is green either way (continue-on-error): the verdict decides.
+        ({"comments": [verdict(headline=ISSUES)]}, "reject", "Found 2 issue(s)"),
+        ({"comments": [verdict(headline=INCOMPLETE)]}, "reject", "Incomplete review"),
+        ({"comments": [verdict(OLD)]}, "reject", "no review verdict"),  # an older commit's
+        ({"comments": [verdict(author="someone")]}, "reject", "no review verdict"),  # forged
     ],
 )
-def test_gate_refuses_or_waits(
-    master: Any, head: Any, merged: bool, age: float, verdict: str, why: str
-) -> None:
-    got = deploy.gate(SHA, gh(master, head, merged, age), NOW)
-    assert got[0] == verdict and why in got[1]
+def test_gate_refuses_or_waits(kw: dict[str, Any], want: str, why: str) -> None:
+    got = deploy.gate(SHA, gh(**kw), NOW)
+    assert got[0] == want and why in got[1], got
 
 
 def test_busy() -> None:
     def server(flashes: list[Any], jobs: list[Any]) -> Any:
-        return lambda p: (
-            {"jobs": flashes}
-            if p.startswith("/api/flash-jobs")
-            else jobs
-            if p == "/api/fleet/jobs"
-            else []
-        )
+        def get(p: str) -> Any:
+            if p.startswith("/api/flash-jobs"):
+                return {"jobs": flashes}
+            return jobs if p == "/api/fleet/jobs" else []
+
+        return get
 
     assert deploy.busy(server([], [])) is None
     assert deploy.busy(server([], [{"status": "complete"}])) is None
     assert "flash" in deploy.busy(server([{"id": 1}], []))
-    assert "fleet-deploy" in deploy.busy(
-        server([], [{"status": "running", "type": "fleet-deploy"}])
-    )
+    running = [{"status": "running", "type": "fleet-deploy"}]
+    assert "fleet-deploy" in deploy.busy(server([], running))
 
     def down(p: str) -> Any:
         raise deploy.urllib.error.URLError("refused")
@@ -112,57 +115,77 @@ def test_busy() -> None:
     assert deploy.busy(down) is None  # a dead server isn't busy; deploying may fix it
 
 
+def fake_git(*cmd: str, **kw: Any) -> str:
+    if cmd[:2] == ("git", "rev-parse"):
+        return (SHA if cmd[2] == "origin/master" else OLD) + "\n"
+    return ""
+
+
 @pytest.fixture
 def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
-    """deploy_once against fake git, GitHub, server and systemd."""
-    calls: dict[str, Any] = {"installed": [], "restarts": 0, "healthy": [True]}
+    """deploy_once against fake git, GitHub, server and systemd, with real slot symlinks."""
+    a, b = tmp_path / "blinky-deploy-a", tmp_path / "blinky-deploy-b"
+    a.mkdir()
+    link = tmp_path / "blinky-deploy"
+    link.symlink_to(a)
+    calls: dict[str, Any] = {"prepared": [], "restarted_on": [], "healthy": [True], "busy": []}
     monkeypatch.setattr(deploy, "STATE", tmp_path / "deploy.json")
-
-    def run(*cmd: str, **kw: Any) -> str:
-        if cmd[:2] == ("git", "rev-parse"):
-            return (SHA if cmd[2] == "origin/master" else OLD) + "\n"
-        if cmd[:2] == ("git", "diff"):
-            return "blinky-server/blinky_server/app.py\n"
-        return ""
+    monkeypatch.setattr(deploy, "LINK", link)
+    monkeypatch.setattr(deploy, "SLOTS", (a, b))
 
     def restart() -> str | None:
-        calls["restarts"] += 1
+        calls["restarted_on"].append(link.resolve().name)
         return None if calls["healthy"].pop(0) else "not answering"
 
-    monkeypatch.setattr(deploy, "run", run)
-    monkeypatch.setattr(deploy, "gh_api", gh(GOOD_MASTER, GOOD_HEAD))
-    monkeypatch.setattr(deploy, "busy", lambda: None)
-    monkeypatch.setattr(deploy, "install", lambda sha, files: calls["installed"].append(sha))
+    def prepare(slot: Path, sha: str) -> None:
+        calls["prepared"].append((slot.name, sha))
+
+    monkeypatch.setattr(deploy, "run", fake_git)
+    monkeypatch.setattr(deploy, "gh_api", gh())
+    monkeypatch.setattr(deploy, "busy", lambda: calls["busy"].pop(0) if calls["busy"] else None)
+    monkeypatch.setattr(deploy, "prepare", prepare)
     monkeypatch.setattr(deploy, "restart_healthy", restart)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
+    calls["link"] = link
     return calls
 
 
-def test_deploys_once(box: dict[str, Any]) -> None:
+def test_deploys_into_the_other_slot_then_switches(box: dict[str, Any]) -> None:
     assert deploy.deploy_once() == 0
-    assert box["installed"] == [SHA] and box["restarts"] == 1
+    assert box["prepared"] == [("blinky-deploy-b", SHA)]
+    assert box["restarted_on"] == ["blinky-deploy-b"]
+    assert box["link"].resolve().name == "blinky-deploy-b"
     assert deploy.load_state()["deployed"] == SHA
-    assert deploy.deploy_once() == 0 and box["restarts"] == 1  # nothing new: no restart
 
 
-def test_waits_while_busy(box: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(deploy, "busy", lambda: "1 flash job(s) active")
+def test_busy_after_preparing_leaves_the_live_slot_alone(box: dict[str, Any]) -> None:
+    box["busy"] = ["1 flash job(s) active"]
     assert deploy.deploy_once() == 0
-    assert box["installed"] == [] and box["restarts"] == 0
+    assert box["prepared"] == [("blinky-deploy-b", SHA)]
+    assert box["restarted_on"] == [] and box["link"].resolve().name == "blinky-deploy-a"
+    assert deploy.deploy_once() == 0  # idle on the next pass: it goes ahead
+    assert box["restarted_on"] == ["blinky-deploy-b"]
 
 
-def test_unhealthy_rolls_back_and_refuses_the_commit(box: dict[str, Any]) -> None:
+def test_unhealthy_switches_back_and_refuses_the_commit(box: dict[str, Any]) -> None:
     box["healthy"] = [False, True]
     assert deploy.deploy_once() == 1
-    assert box["installed"] == [SHA, OLD]  # rolled back to the running commit
-    s = deploy.load_state()
-    assert s["deployed"] == OLD and "not answering" in s["refused"][SHA]
-    assert deploy.deploy_once() == 0 and box["installed"] == [SHA, OLD]  # never retried
+    assert box["restarted_on"] == ["blinky-deploy-b", "blinky-deploy-a"]
+    assert box["link"].resolve().name == "blinky-deploy-a"
+    assert "not answering" in deploy.load_state()["refused"][SHA]
+    assert deploy.deploy_once() == 0 and len(box["prepared"]) == 1  # never retried
 
 
-def test_red_ci_is_refused_without_touching_anything(
+def test_a_refused_review_is_kept_until_the_owner_accepts_it(
     box: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(deploy, "gh_api", gh([*GOOD_MASTER, run_("X", "failure")], GOOD_HEAD))
+    monkeypatch.setattr(deploy, "gh_api", gh(comments=[verdict(headline="Found 1 issue(s)")]))
     assert deploy.deploy_once() == 0
-    assert box["installed"] == [] and SHA in deploy.load_state()["refused"]
+    assert box["prepared"] == [] and "Found 1 issue(s)" in deploy.load_state()["refused"][SHA]
+    assert deploy.deploy_once() == 0 and box["prepared"] == []  # stays refused
+    monkeypatch.setattr(deploy, "run", lambda *c, **k: SHA + "\n")
+    assert deploy.accept(SHA[:12], "trivial finding, fixed in the next PR") == 0
+    monkeypatch.setattr(deploy, "run", fake_git)
+    assert deploy.deploy_once() == 0
+    assert box["link"].resolve().name == "blinky-deploy-b"
+    assert deploy.load_state()["accepted"][SHA].startswith("trivial")

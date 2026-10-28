@@ -16,9 +16,9 @@
 #      that develops on it (sudoers.in)
 #   6. Bluetooth off at the OS level (the box server must never adopt a production device)
 #   7. an SSH key for the user (for reaching the SWD Pi Zero)
-#   8. the deploy worktree (~/blinky-deploy, master only) and blinky-server.service running
-#      from it with --no-ble; blinky-deploy.timer keeps it at master once CI and review pass
-#      (deploy.py). The dev checkout is for development and is never what the server runs.
+#   8. the deploy worktree (~/blinky-deploy -> ~/blinky-deploy-a|b, master only) and
+#      blinky-server.service running from it with --no-ble; blinky-deploy.timer keeps it at
+#      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
 #   9. development tooling, so the box can run every script, tool and CI check itself:
 #      arduino-cli (pinned) + the firmware toolchain, cppcheck (pinned, CI's build),
 #      adafruit-nrfutil, a dev Python venv, blinky-serial-mcp, git hooks, Claude Code
@@ -55,7 +55,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 REPO_DIR="$HOME_DIR/blinky_time"
 SERVER_DIR="$REPO_DIR/blinky-server"
-DEPLOY_DIR="$HOME_DIR/blinky-deploy"
+DEPLOY_DIR="$HOME_DIR/blinky-deploy"   # a symlink to the live slot (deploy.py)
 LOG=/var/log/blinky-testbox-setup.log
 STATE_DIR=/var/lib/blinky-testbox
 
@@ -199,25 +199,10 @@ EOF
 }
 
 deploy_worktree() {
-  # A worktree of the dev clone: shares its objects (the bootloader submodule is never
-  # checked out, so it is ~120 MB), detached at master. deploy.py owns it from here on.
-  if [[ ! -d "$DEPLOY_DIR" ]]; then
-    as_user git -C "$REPO_DIR" fetch -q origin master &&
-      as_user git -C "$REPO_DIR" worktree add -q --detach "$DEPLOY_DIR" origin/master || return 1
-  fi
-  local srv="$DEPLOY_DIR/blinky-server"
-  if [[ ! -x "$srv/venv/bin/python" ]]; then
-    as_user python3 -m venv "$srv/venv" || return 1
-  fi
-  as_user "$srv/venv/bin/pip" install -q --upgrade pip &&
-    as_user "$srv/venv/bin/pip" install -q -e "${srv}[firmware,ble]" || return 1
-  if [[ ! -f "$srv/web/index.html" ]]; then
-    ( cd "$DEPLOY_DIR/blinky-console" &&
-      as_user npm ci --no-audit --no-fund --loglevel=error &&
-      as_user npm run build --silent ) || return 1
-  fi
-  # Server-side compiles use <repo>/.arduino; share the dev clone's pinned toolchain (1.3 GB).
-  [[ -e "$DEPLOY_DIR/.arduino" ]] || as_user ln -s "$REPO_DIR/.arduino" "$DEPLOY_DIR/.arduino"
+  # ~/blinky-deploy -> ~/blinky-deploy-a: a worktree of the dev clone (shared objects; the
+  # bootloader submodule is never checked out, so ~120 MB), detached at master, with its own
+  # venv and console build. deploy.py owns it from here on, alternating between -a and -b.
+  as_user python3 "$REPO_DIR/scripts/testbox/deploy.py" --init
 }
 
 install_service() {
