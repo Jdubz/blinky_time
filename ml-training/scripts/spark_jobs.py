@@ -68,8 +68,8 @@ def cmd_separate(files: list[Path], stems: list[str], chunk_seconds: int | None)
             "chunk_seconds": chunk_seconds}
     for r in call("POST", "/api/spark/separate", body)["results"]:
         line = f"{Path(r['path']).name}: {r['action']} job {r['job_id']} {r.get('state')}"
-        if r.get("priority_clamped"):
-            line += f" (WARNING: priority clamped {r['priority_clamped']})"
+        if "priority" in r:  # the server reports priority only when it isn't what we asked
+            line += f" (WARNING: priority {r['priority']}, clamped {r.get('priority_clamped')})"
         print(line)
     return 0
 
