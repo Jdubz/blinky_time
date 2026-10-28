@@ -325,7 +325,7 @@ jobs:
           tests/test_drum_label_sync.py tests/test_supervision.py
 
   trainer-contract:
-    name: Trainer meets the Spark gpu_task contract (#304)
+    name: Trainer meets the Spark gpu_task contract (#304, #305)
     runs-on: ubuntu-latest
 
     steps:
@@ -339,14 +339,20 @@ jobs:
 
     - name: Install CPU torch
       run: |
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install 'numpy>=1.26,<3' scipy pyyaml pytest
+        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install 'numpy>=1.26,<3' scipy pyyaml pytest librosa tqdm soundfile
 
     - name: SIGTERM -> exit 42 -> resume -> finish; a changed run refuses the checkpoint
       # The real train.py on a tiny synthetic dataset, with the environment the Spark's
       # gpu_task worker sets (SPARK_INPUT_DATA, SPARK_OUTPUT_MODEL, SPARK_CHECKPOINT_DIR).
       working-directory: ml-training
       run: python -m pytest -v tests/test_trainer_supervision.py
+
+    - name: spark_entry.py preps the corpus and trains; SIGTERM in prep exits 42
+      # Real prepare_dataset.py (augmented: RIR + noise) then train.py, on an eight-track
+      # synthetic corpus laid out like the store's datasets/blinky-corpus/, code read-only.
+      working-directory: ml-training
+      run: python -m pytest -v tests/test_spark_entry.py
 
   blinky-console-tests:
     name: Blinky Console Tests

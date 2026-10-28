@@ -38,6 +38,9 @@ def server(monkeypatch):
             if self.path == "/api/spark/separate":
                 self._send({"results": [{"path": f, "action": "submitted", "job_id": "j1",
                                          "state": "queued"} for f in seen[-1]["body"]["files"]]})
+            elif self.path == "/api/spark/train":
+                self._send({"action": "submitted", "job_id": "j2", "state": "queued",
+                            "commit": "c" * 40, "code_sha256": "s" * 64})
             else:
                 self._send({"counts": {"queued": 1}})
 
@@ -62,6 +65,18 @@ def test_separate_sends_absolute_paths_and_omits_no_chunk(server, tmp_path, caps
     assert req["path"] == "/api/spark/separate" and req["key"] == "k"
     assert req["body"] == {"files": [str(f.resolve())], "stems": ["drums"], "chunk_seconds": None}
     assert "submitted job j1" in capsys.readouterr().out
+
+
+def test_train_passes_everything_after_the_separator_to_train_py(server, capsys):
+    argv = ["train", "configs/x.yaml", "--prep-arg=--seed", "--prep-arg=7", "--",
+            "--epochs", "5"]
+    assert spark_jobs.main(argv) == 0
+    (req,) = server
+    assert req["path"] == "/api/spark/train"
+    assert req["body"] == {"config": "configs/x.yaml", "labels_dir": None, "augment": True,
+                           "prep_args": ["--seed", "7"], "memory_gb": 12.0,
+                           "train_args": ["--epochs", "5"]}
+    assert "submitted job j2" in capsys.readouterr().out
 
 
 def test_status_fails_on_a_failed_job(server, capsys):
