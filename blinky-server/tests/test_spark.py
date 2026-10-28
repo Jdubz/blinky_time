@@ -248,6 +248,25 @@ def test_missing_stem_is_a_failure(svc: spark.SparkService, fake: FakeSpark, mus
     assert r["outcome"] == "failed" and "!= requested" in r["error"]
 
 
+def test_webhook_reads_the_full_result_the_sender_sends(
+    svc: spark.SparkService, fake: FakeSpark, music: Path
+) -> None:
+    # The sender's body carries job.result, {"artifacts", "data"} (my-spark webhooks._payload).
+    svc.separate([track(music)])
+    data = fake.data("j1", ["drums"])
+    body = {
+        "id": "j1",
+        "state": "succeeded",
+        "finished_at": time.time(),
+        "result": {"artifacts": list(data["stems"].values()), "data": data},
+    }
+    assert svc.on_webhook(body) == "recorded succeeded"
+    r = the_record(svc)
+    assert r["outcome"] == "succeeded"
+    assert r["stems"] == {"drums": "blinky/stems/htdemucs/j1/drums.wav"}
+    assert r["chunk_seconds_used"] == 7.8
+
+
 def test_webhook_records_once(svc: spark.SparkService, fake: FakeSpark, music: Path) -> None:
     svc.separate([track(music)])
     body = {
