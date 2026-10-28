@@ -7,6 +7,7 @@ Only onset accuracy and PLP pattern metrics. No beat/BPM scoring.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -29,12 +30,34 @@ class GroundTruthOnset:
     source: str = "auto"
 
 
+@dataclass(frozen=True)
+class DrumLabels:
+    """Cleaned kick/snare/hat times in seconds (drum_scoring.load_drum_labels, #294)."""
+
+    kicks: list[float]
+    snares: list[float]
+    hats: list[float]
+    source: str = ""
+    dropped: int = 0
+
+    def window(self, start: float, end: float, shift: float = 0.0) -> DrumLabels:
+        """Labels with start <= t < end, re-timed by `shift` (a segment's seek offset)."""
+
+        def cut(xs: list[float]) -> list[float]:
+            return [x - shift for x in xs if start <= x < end]
+
+        return DrumLabels(cut(self.kicks), cut(self.snares), cut(self.hats), self.source)
+
+
 @dataclass
 class GroundTruth:
     pattern: str
     duration_ms: float
     hits: list[GroundTruthHit]
     onsets: list[GroundTruthOnset] | None = None
+    # Drum labels when the track has them (kick_weighted/<track>.kick_weighted.json): the
+    # primary score. None = no drum scoring for this track, reported as absent, not as zero.
+    drums: DrumLabels | None = None
 
 
 @dataclass
@@ -215,3 +238,5 @@ class DeviceRunScore:
     diagnostics: Diagnostics
     signals: list[SignalGapStats] = field(default_factory=list)
     signal_frames_captured: int = 0
+    # drum_scoring.DrumScore.as_dict(), or None when the track has no drum labels.
+    drums: dict[str, Any] | None = None

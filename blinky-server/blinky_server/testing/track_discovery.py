@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .drum_scoring import drum_label_path, load_drum_labels
 from .onset_label_merge import apply_human_edits, load_human_edits
 from .types import GroundTruth, GroundTruthHit, GroundTruthOnset
 
@@ -61,12 +62,18 @@ def discover_tracks(
         human_file = f"{base}.onsets_human.json"
         if human_file in files:
             track["human_edits"] = str(d / human_file)
+        # Drum labels (#294), the primary score: kick_weighted/<base>.kick_weighted.json.
+        drums = drum_label_path(d, base)
+        if drums.is_file():
+            track["drum_labels"] = str(drums)
         tracks.append(track)
 
     return tracks
 
 
-def load_ground_truth(gt_path: str, human_edits_path: str | None = None) -> GroundTruth:
+def load_ground_truth(
+    gt_path: str, human_edits_path: str | None = None, drum_labels_path: str | None = None
+) -> GroundTruth:
     """Load onset ground truth from a `.onsets_consensus.json` file.
 
     Schema: ``{"onsets": [{"time": float, "strength": float, "systems": int}]}``
@@ -75,6 +82,9 @@ def load_ground_truth(gt_path: str, human_edits_path: str | None = None) -> Grou
     overlay is merged in (see :mod:`onset_label_merge`). The merged onsets
     carry a ``source`` field (``'auto' | 'auto_edited' | 'human'``) so scoring
     can later split metrics by provenance.
+
+    ``drum_labels_path`` (a ``kick_weighted`` file) adds cleaned drum labels for the drum
+    metrics; they are cleaned against this track's consensus (``drum_scoring``).
     """
     with open(gt_path) as f:
         data = json.load(f)
@@ -122,6 +132,7 @@ def load_ground_truth(gt_path: str, human_edits_path: str | None = None) -> Grou
         duration_ms=data.get("durationMs", 0),
         hits=hits,
         onsets=onsets,
+        drums=load_drum_labels(Path(drum_labels_path), Path(gt_path)) if drum_labels_path else None,
     )
 
 
@@ -164,7 +175,10 @@ def segment_ground_truth(
         if duration_ms is not None
         else max(gt.duration_ms - seek_sec * 1000, 0)
     )
-    return GroundTruth(pattern=gt.pattern, duration_ms=seg_ms, hits=hits, onsets=onsets)
+    drums = gt.drums.window(seek_sec, end, shift=seek_sec) if gt.drums is not None else None
+    return GroundTruth(
+        pattern=gt.pattern, duration_ms=seg_ms, hits=hits, onsets=onsets, drums=drums
+    )
 
 
 def load_track_manifest(directory: str | Path) -> dict[str, Any]:

@@ -379,7 +379,9 @@ async def run_validation(
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
                 gt = segment_ground_truth(
-                    load_ground_truth(track["ground_truth"], track.get("human_edits")),
+                    load_ground_truth(
+                        track["ground_truth"], track.get("human_edits"), track.get("drum_labels")
+                    ),
                     track_seek,
                     duration_ms,
                 )
@@ -532,7 +534,11 @@ async def run_param_sweep(
                     track_manifest = manifest.get(track_name, {})
                     track_seek = track_manifest.get("seekOffset", 0)
                     gt = segment_ground_truth(
-                        load_ground_truth(track["ground_truth"], track.get("human_edits")),
+                        load_ground_truth(
+                            track["ground_truth"],
+                            track.get("human_edits"),
+                            track.get("drum_labels"),
+                        ),
                         track_seek,
                         duration_ms,
                     )
@@ -595,7 +601,13 @@ def _aggregate_sweep_results(
     per_value: dict[float, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     """Compute mean scores per parameter value."""
-    results = []
+
+    def _drum(drums: list[dict[str, Any]], key: str) -> float | None:
+        # None values (no lag estimate for that run) are skipped, not averaged in as 0.
+        xs = [d[key] for d in drums if d.get(key) is not None]
+        return round(sum(xs) / len(xs), 3) if xs else None
+
+    results: list[dict[str, Any]] = []
     for value, runs in per_value.items():
         if not runs:
             results.append({"value": value, "n": 0})
@@ -607,6 +619,8 @@ def _aggregate_sweep_results(
         onset_f1 = [
             r["score"]["onsetTracking"]["f1"] for r in runs if "onsetTracking" in r.get("score", {})
         ]
+        # Drum metrics, the primary score (#294).
+        drums = [r["score"]["drums"] for r in runs if r.get("score", {}).get("drums")]
 
         def _mean(xs: list[float]) -> float:
             return sum(xs) / len(xs) if xs else 0.0
@@ -619,6 +633,10 @@ def _aggregate_sweep_results(
                 "plpAutoCorr": round(_mean(plp_ac), 3),
                 "plpPeakiness": round(_mean(plp_pk), 2),
                 "onsetF1": round(_mean(onset_f1), 3),
+                "kickR50": _drum(drums, "kickR50"),
+                "onDrum": _drum(drums, "onDrum"),
+                "drumF": _drum(drums, "drumF"),
+                "snareR50": _drum(drums, "snareR50"),
             }
         )
     return results
@@ -849,7 +867,9 @@ async def _eval_param_value(
         track_manifest_entry = manifest.get(track_name, {})
         track_seek = track_manifest_entry.get("seekOffset", 0)
         gt = segment_ground_truth(
-            load_ground_truth(track["ground_truth"], track.get("human_edits")),
+            load_ground_truth(
+                track["ground_truth"], track.get("human_edits"), track.get("drum_labels")
+            ),
             track_seek,
             duration_ms,
         )
