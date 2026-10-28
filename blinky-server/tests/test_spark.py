@@ -139,7 +139,8 @@ def test_submit_shape(svc: spark.SparkService, fake: FakeSpark, music: Path) -> 
     spec = fake.submits[0]
     assert spec["type"] == "separate"
     assert spec["priority"] == 0  # never negative: eviction victim otherwise
-    assert spec["memory_estimate_gb"] > 0
+    # below the platform's measured floor, so its number governs the reservation, not ours
+    assert 0 < spec["memory_estimate_gb"] < 3.0
     # chunk_seconds omitted = the native segment; stems go to a prefix the reaper never visits
     assert spec["payload"] == {
         "audio": "inputs/u1/track.mp3",
@@ -158,13 +159,25 @@ def test_explicit_chunk(svc: spark.SparkService, fake: FakeSpark, music: Path) -
 
 
 @pytest.mark.parametrize(
-    ("model_type", "chunk"), [("htdemucs", 8), ("htdemucs", 0), ("mel-band-roformer", None)]
+    ("model_type", "chunk", "stems"),
+    [
+        ("htdemucs", 8, None),
+        ("htdemucs", 0, None),
+        ("mel-band-roformer", None, None),
+        ("htdemucs", None, ["drum"]),
+        ("htdemucs", None, ["drums", "drums"]),
+    ],
 )
 def test_refused_before_any_request(
-    svc: spark.SparkService, fake: FakeSpark, music: Path, model_type: str, chunk: int | None
+    svc: spark.SparkService,
+    fake: FakeSpark,
+    music: Path,
+    model_type: str,
+    chunk: int | None,
+    stems: list[str] | None,
 ) -> None:
     with pytest.raises(SparkError):
-        svc.separate([track(music)], model_type=model_type, chunk_seconds=chunk)
+        svc.separate([track(music)], model_type=model_type, stems=stems, chunk_seconds=chunk)
     assert fake.uploads == 0 and fake.submits == []
 
 
