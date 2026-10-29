@@ -736,3 +736,30 @@ def test_a_transient_submit_failure_retries_without_pausing(
     st = svc.corpus.status()
     assert st["batch_no"] == 1 and st["counts"]["in_flight"] == 2
     assert "runs alone" in st["reason"]  # the retry note is gone; the first-batch note stands
+
+
+@pytest.mark.parametrize("how", ["refused", "operator"])
+def test_a_pause_in_the_first_batch_still_ends_in_review(
+    svc: spark.SparkService, fake: FakeSpark, how: str
+) -> None:
+    fake.artifacts[corpus.MANIFEST_KEY] = manifest(6)
+    if how == "refused":
+        fake.refuse.add("datasets/blinky-corpus/audio/000002.mp3")
+    svc.corpus.start(batch=3)
+    svc.corpus.tick()  # batch 1 goes in (partly, when refused)
+    if how == "operator":
+        svc.corpus.pause()
+    fake.refuse.clear()
+    assert svc.corpus.status()["mode"] == corpus.PAUSED
+    st = svc.corpus.resume()
+    assert st["mode"] == corpus.FIRST and "runs alone" in st["reason"]  # not RUNNING
+    for jid in queued(fake):
+        fake.succeed(jid, ["drums"])
+    svc.corpus.tick()  # batch 1 drains: review, not batch 2
+    assert svc.corpus.status()["mode"] == corpus.REVIEW
+    n = len(fake.submits)
+    svc.corpus.tick()
+    assert len(fake.submits) == n  # nothing more until a person continues
+    assert svc.corpus.resume()["mode"] == corpus.RUNNING
+    svc.corpus.pause()  # once reviewed, a pause resumes into RUNNING
+    assert svc.corpus.resume()["mode"] == corpus.RUNNING

@@ -148,6 +148,7 @@ class CorpusPass:
                 "chunk_seconds": chunk_seconds,
                 "batch": batch,
                 "retry_failed": retry_failed,
+                "reviewed": False,  # set by `continue` from review; until then, no batch 2
                 "manifest": info,
                 "started_at": time.time(),
                 "batch_no": 0,
@@ -165,7 +166,12 @@ class CorpusPass:
             if c is None or c["mode"] not in (REVIEW, PAUSED):
                 mode = c["mode"] if c else "not started"
                 raise SparkError(f"nothing to continue: the pass is {mode}")
-            c["mode"], c["reason"] = RUNNING, None
+            if c["mode"] == REVIEW:
+                c["reviewed"] = True
+            # A pause before the first batch was reviewed (a refusal, or a person) resumes
+            # into FIRST, so the review still happens: `continue` is never a way past it.
+            c["mode"] = RUNNING if c.get("reviewed") else FIRST
+            c["reason"] = None if c["mode"] == RUNNING else FIRST_NOTE
             self._save(c)
         return self.status()
 
@@ -226,7 +232,7 @@ class CorpusPass:
                 f"batch {c['batch_no']}: {bad}/{len(outcomes)} failed; check, then continue"
             )
             log.warning("spark corpus: %s", c["reason"])
-        elif c["mode"] == FIRST:
+        elif not c.get("reviewed"):
             c["mode"] = REVIEW
             c["reason"] = "first batch done: check its stems (status: last_batch), then continue"
         self._save(c)
@@ -260,7 +266,7 @@ class CorpusPass:
                 )
                 submitted.append(self._key(c, sha))
             if (c.get("reason") or "").startswith(RETRYING):  # the hiccup is over
-                c["reason"] = FIRST_NOTE if c["mode"] == FIRST else None
+                c["reason"] = None if c.get("reviewed") else FIRST_NOTE
         except Refused as e:
             # Deterministic: the same track would be refused on every tick, and the pass
             # would sit `running` submitting nothing. Stop and say which track and why.
