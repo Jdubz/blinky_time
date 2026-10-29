@@ -378,6 +378,39 @@ def shift_tolerant_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * weights).mean()
 
 
+def beat_this_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
+                  pos_weight: torch.Tensor | float,
+                  tolerance_frames: int = 3,
+                  neg_ignore_frames: int = 6) -> torch.Tensor:
+    """Shift-tolerant BCE as Beat This! defines it (Foscarin, Schlüter & Widmer, ISMIR 2024,
+    arXiv:2407.21658), for sharp one-frame binary targets (#290).
+
+        L = -mean_t[ w·y_t·log m(ŷ)_t + (1 - m'(y)_t)·log(1 - m(ŷ)_t) ]
+
+    m max-pools predictions over ±tolerance_frames, so only the strongest prediction near a
+    label counts; m' max-pools the targets over ±neg_ignore_frames, so no frame within that
+    distance of a label is a negative. Label timing uncertainty lives in the loss, not in
+    widened targets: widening them turned a 7 % positive rate into 21 % and, with focal loss,
+    collapsed v26-v28. `shift_bce` (shift_tolerant_bce) pools positives only and keeps every
+    negative, so a model firing a frame off a label is still penalised there.
+
+    Targets must be binary (set labels.hard_binary_threshold).
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+
+    def pool(x: torch.Tensor, half: int) -> torch.Tensor:
+        # (batch, time, channels) -> max over ±half frames in time
+        return F.max_pool1d(x.permute(0, 2, 1), kernel_size=2 * half + 1, stride=1,
+                            padding=half).permute(0, 2, 1)
+
+    y_pooled = pool(y_pred, tolerance_frames)
+    near_label = pool(y_true, neg_ignore_frames)
+    pos = y_true * pw * torch.log(y_pooled)
+    neg = (1 - near_label) * torch.log(1 - y_pooled)
+    return -(pos + neg).mean()
+
+
 def confidence_shift_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
                          pos_weight: torch.Tensor | float,
                          tolerance_frames: int = 3) -> torch.Tensor:
@@ -592,7 +625,7 @@ def main():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     parser.add_argument("--loss", default=None,
-                        choices=["bce", "focal", "shift_bce", "confidence_shift_bce",
+                        choices=["bce", "focal", "shift_bce", "shift_tolerant_bce", "confidence_shift_bce",
                                  "asymmetric_focal", "asymmetric_focal_owbce",
                                  "shift_focal", "weighted_bce"],
                         help="Loss function (default: from config, or shift_bce)")
@@ -1145,6 +1178,28 @@ def main():
         effective_rate = cfg['audio']['frame_rate'] / pf
         print(f"Loss: confidence-weighted shift-tolerant BCE (±{shift_tolerance} frames = "
               f"±{shift_tolerance / effective_rate * 1000:.0f}ms at {effective_rate:.1f} Hz)")
+    elif loss_type == "shift_tolerant_bce":
+        if hard_binary_threshold <= 0:
+            raise ValueError("loss shift_tolerant_bce needs binary targets: set "
+                             "labels.hard_binary_threshold (e.g. 0.5)")
+        # Default from the configured tolerance, before pooling: scaling the already-scaled
+        # tolerance would shrink the window twice on a pooled model.
+        loss_cfg = cfg.get("loss", {})
+        neg_ignore = loss_cfg.get("neg_ignore_frames",
+                                  2 * (args.shift_tolerance if args.shift_tolerance is not None
+                                       else loss_cfg.get("shift_tolerance", 3)))
+        if pf > 1:
+            neg_ignore = max(0, neg_ignore // pf)
+        if neg_ignore < shift_tolerance:
+            raise ValueError(f"loss.neg_ignore_frames ({neg_ignore}) < shift_tolerance "
+                             f"({shift_tolerance}): negatives inside the tolerance would be "
+                             f"penalised for the prediction the positive term rewards")
+        loss_fn = partial(beat_this_bce, pos_weight=pos_weight,
+                          tolerance_frames=shift_tolerance, neg_ignore_frames=neg_ignore)
+        effective_rate = cfg['audio']['frame_rate'] / pf
+        print(f"Loss: Beat This! shift-tolerant BCE (positives ±{shift_tolerance} frames, "
+              f"negatives ignored within ±{neg_ignore} = "
+              f"±{neg_ignore / effective_rate * 1000:.0f}ms at {effective_rate:.1f} Hz)")
     elif loss_type == "shift_bce":
         loss_fn = partial(shift_tolerant_bce, pos_weight=pos_weight,
                           tolerance_frames=shift_tolerance)
@@ -1715,7 +1770,8 @@ def main():
         "config": cfg,
         "loss": loss_type,
         "focal_gamma": args.focal_gamma if loss_type == "focal" else None,
-        "shift_tolerance": shift_tolerance if loss_type in ("shift_bce", "shift_focal") else None,
+        "shift_tolerance": (shift_tolerance if loss_type in ("shift_bce", "shift_focal",
+                                                             "shift_tolerant_bce") else None),
         "spec_augment": use_spec_augment,
         "distillation": {"alpha": distill_alpha, "temp": distill_temp} if use_distill else None,
         "mel_frontend": mel_frontend,

@@ -1,0 +1,79 @@
+# Conv1D W16 v37 — shift-tolerant loss in place of widened labels (#290)
+#
+# Single-axis change vs v33 (the model the firmware embeds): how label-time
+# uncertainty is expressed. v33 paints ±1 frame at 0.25 around each onset and
+# promotes it to 1.0 (hard_binary_threshold 0.1): a true ~7 % onset-centre rate
+# becomes ~21 % positives, a 3-frame plateau that every model since v26
+# inherited (v26-v28's collapse, P 0.47 -> 0.23, was that plus focal loss).
+#
+# v37 keeps one-frame labels (neighbor_weight 0, threshold 0.5) and puts the
+# uncertainty in the loss, as Beat This! does (Foscarin, Schlüter & Widmer,
+# ISMIR 2024): only the strongest prediction within ±3 frames of a label
+# counts, and no frame within ±6 of a label is a negative. Same audio, model,
+# augmentation, labels and label_shift_frames as v33; pos_weight stays auto, so
+# it rises to the true ~13x.
+#
+# label_shift_frames stays at v33's 1 so this is one axis. It is re-derived from
+# measurement when the corpus is relabeled with ADTOF (#284, part 3); the
+# shift-tolerant loss absorbs a constant offset of up to ±3 frames anyway.
+#
+# Falsifiable predictions (vs v33 on the same eval):
+#   - val positive rate ~7 % (logged "Positive ratio"), not ~21 %
+#   - edm/ Onset precision up, recall within 0.03 of v33
+#   - edm/ Onset F1 >= v33's 0.617
+#   - INT8 export std >= 0.30 (no collapse)
+# Negative result: F1 below v33 by > 0.02 means the widened plateau was doing
+# work the loss doesn't replace; check timing spread against #289's GT.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  freq_pos_encoding: false
+  num_output_channels: 0
+
+labels:
+  target_type: "binary"
+  labels_type: "kick_weighted"
+  kick_weighted_dir: "${BLINKY_DATA}/labels/kick_weighted_drums"
+  neighbor_weight: 0.0          # one-frame labels (v33: 0.25)
+  label_shift_frames: 1
+  hard_binary_threshold: 0.5    # v33: 0.1 promoted the 0.25 neighbours to 1.0
+
+audio:
+  # Same as v33: the firmware's front end (spec/mel_frontend_v1.json).
+  n_mels: 50              # was 30 (60 ran out at merge step, 80 ran out at shard)
+  fmin: 30                # was 40 (capture more bass detail)
+  fmax: 8000              # was 4000 (Nyquist limit at 16 kHz sample rate)
+
+features:
+  use_delta: false
+  use_pcen: false
+
+loss:
+  type: "shift_tolerant_bce"   # v33: bce
+  shift_tolerance: 3           # positives: strongest prediction within ±3 frames (±48 ms)
+  neg_ignore_frames: 6         # negatives: none within ±6 frames of a label
+
+training:
+  mixup: false
+  epochs: 60
+  patience: 15
+  pos_weight: 0
+  early_stopping_metric: "val_peak_f1"
+
+augmentation:
+  freq_mixstyle:
+    enabled: true
+    p: 0.5
+    alpha: 0.6
+
+data:
+  processed_dir: "${BLINKY_WORK}/processed_v37"
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v37_shift_tolerant.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 27
