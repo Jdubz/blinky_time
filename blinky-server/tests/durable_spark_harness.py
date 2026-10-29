@@ -45,7 +45,17 @@ def separate_one(path: str, sha: str, model_type: str, stems: list[str], chunk: 
     return {"path": path, "action": "submitted", "job_id": f"job-{sha}"}
 
 
-fake = SimpleNamespace(_audio_path=lambda f: Path(f), separate_one=separate_one)
+def train(config: str, *args: Any) -> dict:
+    global submits
+    submits += 1
+    effect(f"submit {config} start")
+    if kill == f"crash:{submits}":
+        os._exit(9)
+    effect(f"submit {config} end")
+    return {"action": "submitted", "job_id": "train-1", "config": config}
+
+
+fake = SimpleNamespace(_audio_path=lambda f: Path(f), separate_one=separate_one, train=train)
 workflows._svc = lambda: fake  # type: ignore[assignment]
 spark.sha256_file = lambda p: Path(p).stem  # type: ignore[assignment]
 
@@ -55,8 +65,20 @@ async def main() -> None:
     await durable.launch()
     # Both modes send the same request: on ``resume`` that's the client sending it again
     # after the restart, and it attaches to the workflow DBOS has just recovered.
-    args = (TRACKS, "htdemucs", ["drums"], None)
-    print(json.dumps(await workflows.run("separate", workflows.separate, *args)))
+    if os.environ.get("WORKFLOW") == "train":
+        req = {
+            "config": "configs/x.yaml",
+            "train_args": [],
+            "prep_args": [],
+            "audio_dir": "audio",
+            "labels_dir": None,
+            "augment": True,
+            "memory_gb": 12.0,
+        }
+        print(json.dumps(await workflows.run("train", workflows.train, req)))
+    else:
+        args = (TRACKS, "htdemucs", ["drums"], None)
+        print(json.dumps(await workflows.run("separate", workflows.separate, *args)))
     await durable.shutdown()
 
 

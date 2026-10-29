@@ -39,6 +39,41 @@ def harness(out: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_a_train_submission_cut_off_by_a_restart_resumes_when_asked_again(
+    tmp_path: Path,
+) -> None:
+    env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"), "WORKFLOW": "train"}
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "tests.durable_spark_harness",
+                args[0],
+                str(tmp_path),
+                *args[1:],
+            ],
+            cwd=SERVER,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    assert run("start", "crash:1").returncode == 9
+    r = run("resume")
+    assert r.returncode == 0, r.stderr[-3000:]
+    assert json.loads(r.stdout.strip().splitlines()[-1])["job_id"] == "train-1"
+    # Cut off once, then sent again in full: the ledger and the idempotency key make the
+    # second submission a skip or a reattach on the Spark side.
+    assert submits(tmp_path) == [
+        "submit configs/x.yaml start",
+        "submit configs/x.yaml start",
+        "submit configs/x.yaml end",
+    ]
+
+
 def submits(out: Path) -> list[str]:
     return (out / "effects.log").read_text().splitlines()
 
@@ -163,3 +198,14 @@ async def test_reconcile_is_held_and_skipped_while_draining(
     await asyncio.sleep(0.05)
     loop.cancel()
     assert held and all(h == ["spark reconcile"] for h in held)
+
+
+def test_the_spark_service_exists_before_recovered_workflows_run() -> None:
+    """Review: DBOS recovers spark.separate/train as soon as the store launches; a step run
+    before the service exists fails for good ("Spark client not started")."""
+    import inspect
+
+    from blinky_server.api import app
+
+    src = inspect.getsource(app.lifespan)
+    assert src.index("spark_service.start()") < src.index("await durable.launch()")
