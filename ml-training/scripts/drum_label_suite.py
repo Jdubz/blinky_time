@@ -456,7 +456,11 @@ def main(argv: list[str] | None = None) -> int:
             cand = {"synthetic": run_synthetic(LABELERS[a.algorithm]),
                     "edm": run_edm(kw_dir=label_edm_mixes(Path(tmp)))}
         base = json.loads(BASELINE.read_text())
-        out = {"algorithm": a.algorithm, "edm_input": "edm/ full mixes", **cand,
+        from scripts.adtof_labels import GENERATOR as ADTOF
+
+        out = {"algorithm": a.algorithm,
+               "generator": f"{ADTOF['algorithm']} v{ADTOF['version']} ({ADTOF['params']['package']})",
+               "edm_input": "edm/ full mixes", **cand,
                "worse_than_baseline": compare(base, cand)}
         candidate_path(a.algorithm).write_text(json.dumps(out, indent=2) + "\n")
         print(f"wrote {candidate_path(a.algorithm)}; worse than baseline: "

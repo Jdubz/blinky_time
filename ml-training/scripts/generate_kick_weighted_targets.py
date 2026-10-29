@@ -198,7 +198,7 @@ ALGORITHMS = ("adtof", "bandpass")
 
 
 def generator_for(algorithm: str) -> dict:
-    """GENERATOR for an algorithm. adtof's lives in adtof_labels.py (importing it needs no torch)."""
+    """GENERATOR for an algorithm. adtof's lives in adtof_labels.py (importing it needs no TensorFlow)."""
     if algorithm == "bandpass":
         return GENERATOR
     from scripts.adtof_labels import GENERATOR as ADTOF

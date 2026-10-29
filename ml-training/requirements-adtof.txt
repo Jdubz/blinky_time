@@ -1,0 +1,32 @@
+# The runtime the original ADTOF labels in (#284): CI's adtof job and the Spark's `adtof`
+# gpu_task runtime (my-spark #1561) install exactly this. ADTOF itself goes in last with
+# --no-deps (see below), so nothing here comes from its own unpinned setup.py.
+#
+# Python 3.10: ADTOF is tested on it, and adtof/io/mir.py imports distutils (gone in 3.12).
+# TensorFlow 2.15: the last with Keras 2. ADTOF uses keras.backend and TF-format checkpoints,
+# which Keras 3 (TF >= 2.16) changed. Inference only, CPU is enough.
+tensorflow==2.15.1
+numpy==1.26.4
+scipy==1.13.1  # madmom 27f032e8 needs >= 1.13
+librosa==0.10.2.post1
+soundfile==0.12.1
+pandas==2.1.4
+scikit-learn==1.3.2
+matplotlib==3.8.4
+mir_eval==0.7
+pretty_midi==0.2.10
+jellyfish==1.0.3
+# madmom: ADTOF's spectrogram and peak picking. PyPI's 0.16.1 doesn't build on Python >= 3.10,
+# so its git head, pinned. It builds against the numpy above, so install in two steps:
+#   pip install Cython==3.0.11 numpy==1.26.4
+#   pip install --no-build-isolation -r requirements-adtof.txt
+Cython==3.0.11
+mido==1.3.2  # madmom's MIDI dependency
+madmom @ git+https://github.com/CPJKU/madmom@27f032e8947204902c675e5e341a3faf5dc86dae
+#
+# Then ADTOF, with --no-deps: its setup.py pulls madmom and tapcorrect from unpinned git heads
+# (tapcorrect has no licence, and only ADTOF's dataset grooming imports it) plus packages its
+# inference never imports.
+#   pip install --no-deps "ADTOF @ git+https://github.com/MZehren/ADTOF@b3968fb332f69b65ee07c089fc62f436503755db"
+# (scripts/adtof_labels.py ADTOF_PACKAGE; the labeler refuses any other checkpoint.)
+# madmom decodes mp3 through the ffmpeg binary, so the image needs ffmpeg.
