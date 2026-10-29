@@ -103,8 +103,9 @@ class Ledger:
                 os.fsync(f.fileno())  # a submission recorded is one a restart can't lose
 
     def _cut_torn_tail(self) -> None:
-        """Drop a final line without its newline (an interrupted write) before appending, so
-        the next row doesn't join it and corrupt both."""
+        """Mend a final line without its newline (an interrupted write) before appending, so
+        the next row doesn't join it and corrupt both: dropped if it is incomplete, given back
+        its newline if the write lost only that."""
         if not self.path.exists() or self.path.stat().st_size == 0:
             return
         with open(self.path, "rb+") as f:
@@ -112,9 +113,15 @@ class Ledger:
             if data.endswith(b"\n"):
                 return
             keep = data.rfind(b"\n") + 1
-            log.error(
-                "%s: cutting off a torn final line (%d bytes) from an interrupted write",
-                self.path,
-                len(data) - keep,
-            )
-            f.truncate(keep)
+            try:
+                json.loads(data[keep:])
+            except ValueError:
+                log.error(
+                    "%s: cutting off a torn final line (%d bytes) from an interrupted write",
+                    self.path,
+                    len(data) - keep,
+                )
+                f.truncate(keep)
+            else:
+                # Complete, only its newline lost: a real record (rows() reads it). Keep it.
+                f.write(b"\n")

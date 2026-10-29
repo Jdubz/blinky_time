@@ -132,6 +132,10 @@ def test_a_torn_ledger_tail_is_dropped_loudly_and_cut_before_the_next_append(
     assert "torn final line" in caplog.text
     ledger.append({"idempotency_key": "k3", "job_id": "j3"})
     assert [r["job_id"] for r in ledger.rows()] == ["j1", "j3"]
+    # A write that lost only its newline is a complete record: kept, not cut off.
+    path.write_text(good + "\n" + json.dumps({"idempotency_key": "k4", "job_id": "j4"}))
+    ledger.append({"idempotency_key": "k5", "job_id": "j5"})
+    assert [r["job_id"] for r in ledger.rows()] == ["j1", "j4", "j5"]
     # Corruption anywhere else is still an error, not skipped.
     path.write_text('{"broken\n' + good + "\n")
     with pytest.raises(SparkError, match="corrupt ledger line"):
