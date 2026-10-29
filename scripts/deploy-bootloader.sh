@@ -264,6 +264,7 @@ echo "  waiting for device to reboot..."
 sleep 5  # BL self-flash + reboot
 # Wait for APP mode pid 8045 OR new DFU mount
 PID=""
+POST_BL=""
 for w in $(seq 1 30); do
     sleep 1
     for dp in /sys/bus/usb/devices/*; do
@@ -272,13 +273,21 @@ for w in $(seq 1 30); do
         fi
     done
     [ "$PID" = "8045" ] && break
-    # New DFU mount means BL is up
-    if [ -f "$DFU_DRIVE/INFO_UF2.TXT" ]; then
-        POST_BL="$(head -1 "$DFU_DRIVE/INFO_UF2.TXT" 2>/dev/null || true)"
-        if [ "$POST_BL" != "$PRE_BL" ] && [ -n "$POST_BL" ]; then
-            echo "  new BL: $POST_BL"
-            break
-        fi
+    # A new DFU volume means the BL is up. Look for it afresh each time: on the headless
+    # path the copy's temp mountpoint is gone and nothing auto-mounts the volume the
+    # rebooted BL presents, so mount it ourselves (#211). Until the device re-enumerates
+    # this finds nothing, or the old volume with the old version, and the loop goes on.
+    POST_DRIVE="$(find_automount || true)"; POST_MOUNTED=""
+    if [ -z "$POST_DRIVE" ]; then
+        if POST_DRIVE="$(mount_by_label)"; then POST_MOUNTED="$POST_DRIVE"; else POST_DRIVE=""; fi
+    fi
+    if [ -n "$POST_DRIVE" ] && [ -f "$POST_DRIVE/INFO_UF2.TXT" ]; then
+        POST_BL="$(head -1 "$POST_DRIVE/INFO_UF2.TXT" 2>/dev/null || true)"
+    fi
+    cleanup_mount "$POST_MOUNTED"
+    if [ -n "${POST_BL:-}" ] && [ "$POST_BL" != "$PRE_BL" ]; then
+        echo "  new BL: $POST_BL"
+        break
     fi
 done
 
