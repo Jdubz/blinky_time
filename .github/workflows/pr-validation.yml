@@ -365,6 +365,12 @@ jobs:
       working-directory: ml-training
       run: python -m pytest -v tests/test_trainer_supervision.py
 
+    - name: Shift-tolerant loss (#290)
+      # Beat This!'s loss: firing within ±3 frames of a label is free, and no frame within ±6
+      # of one is a negative.
+      working-directory: ml-training
+      run: python -m pytest -v tests/test_losses.py
+
     - name: spark_entry.py preps the corpus and trains; SIGTERM in prep exits 42
       # Real prepare_dataset.py (augmented: RIR + noise) then train.py, on an eight-track
       # synthetic corpus laid out like the store's datasets/blinky-corpus/, code read-only.
