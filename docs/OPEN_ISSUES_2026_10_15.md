@@ -60,7 +60,7 @@ PR #292 (SuperFlux onsets, online picker, onset-driven pulse; #280) is on master
 
 | # | Issue | Location | Status | Notes / proposed fix |
 |---|---|---|---|---|
-| 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | OPEN | Keep console quiet during sessions; consider a non-blocking notify check. |
+| 3.5 ([#189](https://github.com/Jdubz/blinky_time/issues/189)) | During record sessions the HVN queue is shared with NUS; NUS text output can block the loop up to 100 ms per chunk | `BleNus::drainTxBuffer` | FIXED, needs device verification | `BleNus::notifyNoWait` takes an HVN buffer without waiting and sends via `sd_ble_gatts_hvx`; a full queue leaves the rest in the ring for the next loop. Verify: `maxFrameMs` stays flat with a record session running and console output on NUS. |
 | 3.6 ([#190](https://github.com/Jdubz/blinky_time/issues/190)) | Fleet scanner gets less radio time while a central is connected (event length 125 ms) | SoftDevice config | OPEN | Measure broadcast reception with a phone connected. |
 
 ## 4. Visual generators

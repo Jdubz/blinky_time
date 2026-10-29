@@ -90,6 +90,11 @@ private:
     /// Send up to one MTU-chunk from the ring buffer to BLEUart.
     void drainTxBuffer();
 
+    /// One notification on the NUS TX characteristic, or false at once when no HVN buffer
+    /// is free (#189). Never waits: BLECharacteristic::notify() waits up to 100 ms for a
+    /// buffer, on the loop task, and the record sender shares the same HVN queue.
+    bool notifyNoWait(BLEConnection* conn, const uint8_t* data, uint16_t len);
+
     static BleNus* instance_;
 
     // RX FIFO sized for MTU-247 writes. The SoftDevice ceiling is now MTU
@@ -98,7 +103,14 @@ private:
     // bytes = 3 chunks; the default 256-byte FIFO overflows (bytes dropped,
     // JSON corrupted) if the deferred RX callback falls one chunk behind.
     static const uint16_t RX_FIFO_DEPTH = 1024;
-    BLEUart uart_{RX_FIFO_DEPTH};
+    // BLEUart with its TX characteristic's value handle exposed (protected in BLEUart),
+    // for notifyNoWait.
+    class Uart : public BLEUart {
+    public:
+        using BLEUart::BLEUart;
+        uint16_t txValueHandle() { return _txd.handles().value_handle; }
+    };
+    Uart uart_{RX_FIFO_DEPTH};
     BLEDis dis_;
 
     LineCallback lineCallback_ = nullptr;

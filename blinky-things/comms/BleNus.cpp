@@ -125,6 +125,47 @@ uint16_t BleNus::currentMtu() const {
     return mtu < MAX_ATT_MTU ? mtu : MAX_ATT_MTU;
 }
 
+// --- Non-blocking notify (#189) ---
+//
+// BLEConnection keeps its HVN-buffer semaphore private and offers only getHvnPacket(),
+// which waits up to BLE_GENERIC_TIMEOUT (100 ms). Called from the loop task while the
+// record sender (another task) fills the same HVN queue, that wait stalled the loop. The
+// explicit-instantiation rule (access is not checked on the template arguments of an
+// explicit instantiation, C++11 [temp.explicit]/12) yields a pointer to that member, so the
+// loop can take a buffer without waiting and send exactly as notify() does. If Bluefruit
+// renames the member this fails to compile rather than misbehave.
+namespace {
+struct HvnSem {
+    typedef SemaphoreHandle_t BLEConnection::*type;
+    friend type hvnSemMember(HvnSem);
+};
+template <typename Tag, typename Tag::type Member>
+struct ExposeMember {
+    friend typename Tag::type hvnSemMember(Tag) { return Member; }
+};
+template struct ExposeMember<HvnSem, &BLEConnection::_hvn_sem>;
+}  // namespace
+
+bool BleNus::notifyNoWait(BLEConnection* conn, const uint8_t* data, uint16_t len) {
+    if (!uart_.notifyEnabled(connHandle_)) return false;
+    SemaphoreHandle_t sem = conn->*hvnSemMember(HvnSem());
+    if (xSemaphoreTake(sem, 0) != pdTRUE) return false;  // queue full: next update() retries
+    uint16_t sent = len;
+    ble_gatts_hvx_params_t hvx = {};
+    hvx.handle = uart_.txValueHandle();
+    hvx.type = BLE_GATT_HVX_NOTIFICATION;
+    hvx.offset = 0;
+    hvx.p_len = &sent;
+    hvx.p_data = data;
+    if (sd_ble_gatts_hvx(connHandle_, &hvx) != NRF_SUCCESS) {
+        xSemaphoreGive(sem);  // nothing queued: the buffer's completion will never come
+        return false;
+    }
+    // Queued: Bluefruit gives the buffer back on BLE_GATTS_EVT_HVN_TX_COMPLETE, as for
+    // notify(). A notification is sent whole or not at all at len <= MTU - 3.
+    return sent == len;
+}
+
 // --- Drain TX ring buffer: send one chunk per call ---
 
 void BleNus::drainTxBuffer() {
@@ -139,12 +180,12 @@ void BleNus::drainTxBuffer() {
     uint16_t mtu_payload = static_cast<uint16_t>(currentMtu() - 3);
     if (mtu_payload < 20) mtu_payload = 20;
 
-    // Send up to MAX_CHUNKS_PER_UPDATE chunks to improve throughput.
-    // BLECharacteristic::notify() blocks on getHvnPacket() (100ms timeout)
-    // when the TX queue is full, so sending too many risks blocking the
-    // main loop.  4 chunks × 20 bytes = 80 bytes per update at min MTU,
-    // or 4 × 244 = 976 bytes at max MTU.  At 66 Hz loop, that's ~5 KB/s
-    // (min MTU) or ~64 KB/s (max MTU).
+    // Send up to MAX_CHUNKS_PER_UPDATE chunks to improve throughput. Each is
+    // sent without waiting (notifyNoWait): a full HVN queue ends this update
+    // and the rest waits in the ring, so the loop never stalls on BLE (#189).
+    // 4 chunks × 20 bytes = 80 bytes per update at min MTU, or 4 × 244 = 976
+    // bytes at max MTU. At 66 Hz loop, that's ~5 KB/s (min MTU) or ~64 KB/s
+    // (max MTU).
     static const int MAX_CHUNKS_PER_UPDATE = 4;
 
     for (int i = 0; i < MAX_CHUNKS_PER_UPDATE && txHead_ != txTail_; i++) {
@@ -160,8 +201,8 @@ void BleNus::drainTxBuffer() {
 
         if (count == 0) break;
 
-        // If notify fails (TX queue full), stop — retry next update()
-        if (uart_.write(chunk, count) != count) break;
+        // No free HVN buffer (or the central unsubscribed): stop, retry next update()
+        if (!notifyNoWait(conn, chunk, static_cast<uint16_t>(count))) break;
 
         txTail_ = tail;
         for (size_t j = 0; j < count; j++) {
