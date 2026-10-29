@@ -120,7 +120,7 @@ def test_restart_waits_for_the_drain_and_logs_what_it_waits_for(
 ) -> None:
     monkeypatch.setattr(deploy, "http_get", lambda p: [])
     statuses = iter(["draining: waiting for a1 validation_run (40 s)"] * 2 + ["drained"])
-    assert deploy.restart_healthy(FakeRestart(waits=3), lambda: next(statuses)) is None
+    assert deploy.restart_healthy(600, FakeRestart(waits=3), lambda: next(statuses)) is None
     out = capsys.readouterr().out
     # Each new status once, not every interval.
     assert out.count("waiting for a1 validation_run") == 1 and "drained" in out
@@ -128,12 +128,11 @@ def test_restart_waits_for_the_drain_and_logs_what_it_waits_for(
 
 def test_restart_failures_are_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(deploy, "http_get", lambda p: [])
-    failed = deploy.restart_healthy(FakeRestart(0, rc=1, stderr="Job failed"), lambda: "")
+    failed = deploy.restart_healthy(600, FakeRestart(0, rc=1, stderr="Job failed"), lambda: "")
     assert failed is not None and "Job failed" in failed
-    # A restart that never returns is killed and reported, past RESTART_TIMEOUT_S.
-    monkeypatch.setattr(deploy, "RESTART_TIMEOUT_S", -1)
+    # A restart that never returns is killed and reported once its time is up.
     stuck = FakeRestart(waits=10**6)
-    assert "still waiting" in (deploy.restart_healthy(stuck, lambda: "draining") or "")
+    assert "still waiting" in (deploy.restart_healthy(-1, stuck, lambda: "draining") or "")
     assert stuck.killed
 
 
@@ -168,18 +167,22 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(deploy, "LINK", link)
     monkeypatch.setattr(deploy, "SLOTS", (a, b))
 
-    def restart() -> str | None:
+    def restart(timeout_s: float) -> str | None:
+        assert timeout_s > 0
         calls["restarted_on"].append(link.resolve().name)
         return None if calls["healthy"].pop(0) else "not answering"
 
     def prepare(slot: Path, sha: str) -> None:
         calls["prepared"].append((slot.name, sha))
+        clock[0] += calls.get("prepare_s", 0)  # how long this prepare took
 
     monkeypatch.setattr(deploy, "run", fake_git)
     monkeypatch.setattr(deploy, "gh_api", gh())
     monkeypatch.setattr(deploy, "prepare", prepare)
     monkeypatch.setattr(deploy, "restart_healthy", restart)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
+    clock = [0.0]
+    monkeypatch.setattr(deploy.time, "monotonic", lambda: clock[0])
     calls["link"] = link
     return calls
 
@@ -232,6 +235,29 @@ def test_every_server_path_deploys(box: dict[str, Any], path: str) -> None:
     GIT["diff"] = ["ml-training/train.py", path]
     assert deploy.deploy_once() == 0
     assert box["restarted_on"] == ["blinky-deploy-b"]
+
+
+def test_a_slow_prepare_leaves_the_restart_to_the_next_pass(box: dict[str, Any]) -> None:
+    """A pass must finish inside its unit's TimeoutStartSec, drain included (#329 review):
+    after a long prepare (a console rebuild) it stops, and the next pass, whose prepare is a
+    no-op, restarts with a fresh budget."""
+    box["prepare_s"] = 10 * 60
+    assert deploy.deploy_once() == 0
+    assert box["restarted_on"] == [] and box["link"].resolve().name == "blinky-deploy-a"
+    box["prepare_s"] = 0
+    assert deploy.deploy_once() == 0
+    assert box["restarted_on"] == ["blinky-deploy-b"]
+
+
+def test_the_pass_budget_is_the_units_and_fits_a_full_drain() -> None:
+    unit = (Path(deploy.__file__).parent / "blinky-deploy.service.in").read_text()
+    assert f"TimeoutStartSec={deploy.PASS_BUDGET_S // 60}min" in unit
+    # A fresh pass has room for the longest drain plus the health check and a rollback.
+    fresh = deploy.PASS_BUDGET_S - deploy.HEALTH_TIMEOUT_S - deploy.ROLLBACK_RESERVE_S
+    assert fresh >= deploy.MIN_RESTART_S
+    from blinky_server.work.durable import DRAIN_MAX_S
+
+    assert deploy.MIN_RESTART_S > DRAIN_MAX_S
 
 
 def test_unhealthy_switches_back_and_refuses_the_commit(box: dict[str, Any]) -> None:

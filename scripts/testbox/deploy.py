@@ -92,9 +92,17 @@ GREEN = {"success", "skipped", "neutral"}
 # A required check that hasn't appeared this long after the commit isn't coming.
 MISSING_CHECK_GIVE_UP_S = 6 * 3600
 HEALTH_TIMEOUT_S = 90
-# A restart drains the server first. Its drain gives up on a hung step after 20 min
-# (DRAIN_MAX_S in blinky_server/work/durable.py); past this, the restart itself is stuck.
-RESTART_TIMEOUT_S = 25 * 60
+# One pass must finish inside blinky-deploy.service's TimeoutStartSec, or systemd kills it
+# mid-restart and the health check, the rollback and the state write never happen. The unit
+# file only changes through setup.sh (root), so the pass budgets itself (test_deploy pins this
+# to the unit file).
+PASS_BUDGET_S = 30 * 60
+# Kept back from the restart for the health check plus a rollback restart.
+ROLLBACK_RESERVE_S = 5 * 60
+# A restart drains the server first, and the drain gives up on a hung step after 20 min
+# (DRAIN_MAX_S in blinky_server/work/durable.py). A pass with less than this left for the
+# restart doesn't start one; the next pass does, with a fresh budget (its prepare is a no-op).
+MIN_RESTART_S = 21 * 60
 STATUS_EVERY_S = 30.0
 
 Fetch = Callable[[str], Any]
@@ -226,11 +234,13 @@ def service_status() -> str:
 
 
 def restart_healthy(
-    popen: Callable[..., Any] = subprocess.Popen, status: Callable[[], str] = service_status
+    timeout_s: float,
+    popen: Callable[..., Any] = subprocess.Popen,
+    status: Callable[[], str] = service_status,
 ) -> str | None:
     """Restart the server; None when it is up, else why not. ``systemctl restart`` returns
     once the old server has drained (it can take minutes: a track, a flash), so its status is
-    logged while it waits."""
+    logged while it waits, for up to ``timeout_s``."""
     proc = popen(
         ["sudo", "-n", "systemctl", "restart", SERVICE],
         cwd=HOME,
@@ -238,7 +248,7 @@ def restart_healthy(
         stderr=subprocess.PIPE,
         text=True,
     )
-    deadline = time.monotonic() + RESTART_TIMEOUT_S
+    deadline = time.monotonic() + timeout_s
     last = ""
     while True:
         try:
@@ -251,7 +261,7 @@ def restart_healthy(
                 last = now
             if time.monotonic() > deadline:
                 proc.kill()
-                return f"systemctl restart still waiting after {RESTART_TIMEOUT_S} s ({last})"
+                return f"systemctl restart still waiting after {timeout_s:.0f} s ({last})"
     if proc.returncode != 0:
         return f"systemctl restart -> {proc.returncode}: {(err or out or '')[-2000:]}"
     deadline = time.monotonic() + HEALTH_TIMEOUT_S
@@ -343,6 +353,7 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def deploy_once(dry_run: bool = False) -> int:
+    started = time.monotonic()
     state = load_state()
     state.setdefault("accepted", {})
     live = live_slot()
@@ -386,9 +397,16 @@ def deploy_once(dry_run: bool = False) -> int:
         state["refused"][target] = f"prepare failed: {e}"
         save_state(state)
         return 1
+    left = PASS_BUDGET_S - (time.monotonic() - started) - HEALTH_TIMEOUT_S - ROLLBACK_RESERVE_S
+    if left < MIN_RESTART_S:
+        log(
+            f"{target[:12]}: prepared in {new.name}; restarting on the next pass, which has "
+            f"the time for a full drain ({left:.0f} s left in this one)"
+        )
+        return 0
     point_at(new)
     log(f"{target[:12]}: prepared in {new.name}; restarting (the server drains first)")
-    failure = restart_healthy()
+    failure = restart_healthy(left)
     entry = {
         "sha": target,
         "from": current,
@@ -406,7 +424,9 @@ def deploy_once(dry_run: bool = False) -> int:
 
     log(f"{target[:12]}: FAILED ({failure}); rolling back to {current[:12]} in {live.name}")
     point_at(live)
-    back = restart_healthy()
+    back = restart_healthy(
+        max(PASS_BUDGET_S - (time.monotonic() - started) - HEALTH_TIMEOUT_S, 60.0)
+    )
     state["refused"][target] = f"deploy failed: {failure}"
     state["history"].append({**entry, "result": "rolled back", "error": failure})
     save_state(state)
