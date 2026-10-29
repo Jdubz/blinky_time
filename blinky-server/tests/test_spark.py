@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import threading
 import time
+import urllib.parse
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -18,9 +19,9 @@ from httpx import ASGITransport, AsyncClient
 
 from blinky_server.api import deps
 from blinky_server.api.app import create_app
-from blinky_server.spark import bundle
+from blinky_server.spark import bundle, corpus
 from blinky_server.spark import service as spark
-from blinky_server.spark.client import Client, SparkError
+from blinky_server.spark.client import Client, NotFound, SparkError
 from blinky_server.spark.ledger import Ledger
 
 KEY = "test-key"
@@ -36,6 +37,8 @@ class FakeSpark:
         self.uploads = 0
         self.submits: list[dict[str, Any]] = []
         self.created = 0
+        self.artifacts: dict[str, bytes] = {}  # GET /artifacts/{key}, served via a 307
+        self.store_headers: list[dict[str, str]] = []
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -78,6 +81,24 @@ class FakeSpark:
                 self._send(200, {"id": jid, "state": "queued", "reattached": False, "priority": 0})
 
             def do_GET(self) -> None:
+                if self.path.startswith("/artifacts/"):
+                    key = urllib.parse.unquote(self.path[len("/artifacts/") :])
+                    if key not in fake.artifacts:
+                        self._send(404, {"detail": "no such key"})
+                        return
+                    self.send_response(307)  # as the Job API: to a presigned store URL
+                    self.send_header("Location", f"{fake.url}/store/{urllib.parse.quote(key)}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path.startswith("/store/"):
+                    fake.store_headers.append(dict(self.headers))
+                    body = fake.artifacts[urllib.parse.unquote(self.path[len("/store/") :])]
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 j = fake.jobs.get(self.path.split("/")[-1])
                 if j is None:
                     self._send(404, {"detail": "unknown"})
@@ -522,5 +543,141 @@ async def test_train_route(tsvc: spark.SparkService, monkeypatch: pytest.MonkeyP
             assert r.status_code == 200 and r.json()["action"] == "submitted"
             r = await c.get("/api/spark/jobs")
             assert [t["config"] for t in r.json()["train"]] == ["configs/x.yaml"]
+    finally:
+        spark.set_service(None)
+
+
+# -- the corpus pass (#314) ------------------------------------------------------------------------
+
+
+def manifest(n: int) -> bytes:
+    files = [
+        {"key": f"datasets/blinky-corpus/audio/{i:06d}.mp3", "size": 1, "sha256": f"{i:064x}"}
+        for i in range(n)
+    ]
+    files += [  # not audio, or not under audio/: ignored
+        {"key": "datasets/blinky-corpus/labels/x.json", "size": 1, "sha256": "f" * 64},
+        {"key": "datasets/blinky-corpus/audio/README.txt", "size": 1, "sha256": "e" * 64},
+    ]
+    return json.dumps(
+        {"version": 1, "generated_at": "2026-10-28T23:00:00Z", "files": files}
+    ).encode()
+
+
+def queued(fake: FakeSpark) -> list[str]:
+    return [jid for jid, j in fake.jobs.items() if j["state"] == "queued"]
+
+
+def test_get_artifact_follows_the_redirect_without_our_key(
+    svc: spark.SparkService, fake: FakeSpark
+) -> None:
+    fake.artifacts["datasets/x/MANIFEST.json"] = b"hello"
+    assert svc.client.get_artifact("datasets/x/MANIFEST.json") == b"hello"
+    assert "X-API-Key" not in fake.store_headers[0]  # never sent to the store host
+    with pytest.raises(NotFound):
+        svc.client.get_artifact("datasets/nope")
+
+
+def test_corpus_needs_the_manifest(svc: spark.SparkService, fake: FakeSpark) -> None:
+    with pytest.raises(SparkError, match="my-spark #1556"):
+        svc.corpus.start()
+    fake.artifacts[corpus.MANIFEST_KEY] = b'{"version": 2}'
+    with pytest.raises(SparkError, match="version 1"):
+        svc.corpus.start()
+    assert not fake.submits
+
+
+def test_corpus_pass_runs_in_drained_batches(
+    svc: spark.SparkService, fake: FakeSpark, tmp_path: Path, music: Path
+) -> None:
+    fake.artifacts[corpus.MANIFEST_KEY] = manifest(120)
+    assert svc.corpus.start(batch=50)["mode"] == corpus.FIRST
+
+    svc.corpus.tick()  # batch 1
+    assert len(fake.submits) == 50 and fake.uploads == 0  # store keys: nothing uploaded
+    assert fake.submits[0]["payload"]["audio"] == "datasets/blinky-corpus/audio/000000.mp3"
+    svc.corpus.tick()  # still in flight: nothing more goes in
+    assert len(fake.submits) == 50
+
+    for jid in queued(fake):
+        fake.succeed(jid, ["drums"])
+    svc.corpus.tick()  # drains, then waits for a person to check the stems
+    st = svc.corpus.status()
+    assert st["mode"] == corpus.REVIEW and len(st["last_batch"]) == 50
+    assert st["last_batch"][0]["stems"]["drums"].startswith("blinky/stems/htdemucs/")
+    svc.corpus.tick()
+    assert len(fake.submits) == 50
+
+    # A restart mid-pass: a new service on the same files carries on.
+    svc = spark.SparkService(Client(fake.url, KEY), Ledger(tmp_path / "l.jsonl"), [music], SECRET)
+    svc.corpus.resume()
+    svc.corpus.tick()  # batch 2
+    assert len(fake.submits) == 100
+    for jid in queued(fake):
+        fake.succeed(jid, ["drums"])
+    svc.corpus.tick()
+    svc.corpus.tick()  # batch 3: the last 20
+    assert len(fake.submits) == 120
+    for n, jid in enumerate(queued(fake)):  # 15 of 20 fail: more than half -> pause
+        if n < 15:
+            fake.jobs[jid].update(state="failed", error="engine image stale")
+        else:
+            fake.succeed(jid, ["drums"])
+    svc.corpus.tick()
+    st = svc.corpus.status()
+    assert st["mode"] == corpus.PAUSED and "15/20 failed" in st["reason"]
+    assert st["counts"] == {"succeeded": 105, "failed": 15, "in_flight": 0, "pending": 0}
+
+    svc.corpus.resume()
+    svc.corpus.tick()  # failed tracks aren't retried by the pass
+    assert svc.corpus.status()["mode"] == corpus.DONE and len(fake.submits) == 120
+
+
+def test_corpus_retry_failed_and_dedupe_with_uploads(
+    svc: spark.SparkService, fake: FakeSpark, music: Path
+) -> None:
+    fake.artifacts[corpus.MANIFEST_KEY] = manifest(3)
+    svc.corpus.start(batch=2)
+    svc.corpus.tick()
+    fake.jobs["j1"].update(state="failed", error="boom")
+    fake.succeed("j2", ["drums"])
+    svc.corpus.tick()  # 1/2 failed: not more than half, so review as usual
+    assert svc.corpus.status()["mode"] == corpus.REVIEW
+    with pytest.raises(SparkError, match="already review"):
+        svc.corpus.start()
+    svc.corpus.pause()
+    svc.corpus.start(batch=2, retry_failed=True)
+    svc.corpus.tick()  # the failed track and the untried one
+    assert [s["payload"]["audio"][-10:] for s in fake.submits[2:]] == ["000000.mp3", "000002.mp3"]
+
+
+def test_separate_takes_at_most_a_batch(svc: spark.SparkService, music: Path) -> None:
+    with pytest.raises(SparkError, match="the limit is 50"):
+        svc.separate([track(music)] * 51)
+
+
+async def test_corpus_routes(
+    svc: spark.SparkService, fake: FakeSpark, music: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(deps, "_api_key", "k")
+    ok = {"X-API-Key": "k"}
+    spark.set_service(svc)
+    try:
+        transport = ASGITransport(app=create_app(enable_ble=False, enable_serial=False))
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.post("/api/spark/separate", json={"files": [track(music)] * 51}, headers=ok)
+            assert r.status_code == 422  # capped in the request model too
+            assert (await c.get("/api/spark/corpus")).json() == {"mode": "not started"}
+            r = await c.post("/api/spark/corpus/start", json={}, headers=ok)
+            assert r.status_code == 400 and "#1556" in r.json()["detail"]
+            fake.artifacts[corpus.MANIFEST_KEY] = manifest(2)
+            r = await c.post("/api/spark/corpus/start", json={"batch": 51}, headers=ok)
+            assert r.status_code == 422
+            r = await c.post("/api/spark/corpus/start", json={}, headers=ok)
+            assert r.status_code == 200 and r.json()["counts"]["pending"] == 2
+            r = await c.post("/api/spark/corpus/continue", headers=ok)
+            assert r.status_code == 409  # nothing to review yet
+            r = await c.post("/api/spark/corpus/pause", headers=ok)
+            assert r.json()["mode"] == corpus.PAUSED
     finally:
         spark.set_service(None)

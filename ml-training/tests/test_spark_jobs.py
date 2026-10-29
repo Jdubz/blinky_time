@@ -38,6 +38,9 @@ def server(monkeypatch):
             if self.path == "/api/spark/separate":
                 self._send({"results": [{"path": f, "action": "submitted", "job_id": "j1",
                                          "state": "queued"} for f in seen[-1]["body"]["files"]]})
+            elif self.path.startswith("/api/spark/corpus/"):
+                self._send({"mode": "first", "reason": "the first batch runs alone",
+                            "counts": {"pending": 3}, "batch_no": 0, "batch": 50})
             elif self.path == "/api/spark/train":
                 self._send({"action": "submitted", "job_id": "j2", "state": "queued",
                             "commit": "c" * 40, "code_sha256": "s" * 64})
@@ -77,6 +80,15 @@ def test_train_passes_everything_after_the_separator_to_train_py(server, capsys)
                            "prep_args": ["--seed", "7"], "memory_gb": 12.0,
                            "train_args": ["--epochs", "5"]}
     assert "submitted job j2" in capsys.readouterr().out
+
+
+def test_corpus_start_and_status(server, capsys):
+    assert spark_jobs.main(["corpus", "start", "--stems", "drums,bass", "--batch", "20"]) == 0
+    (req,) = server
+    assert req["path"] == "/api/spark/corpus/start"
+    assert req["body"] == {"stems": ["drums", "bass"], "batch": 20, "retry_failed": False}
+    out = capsys.readouterr().out
+    assert "corpus pass: first -- the first batch runs alone" in out and "pending=3" in out
 
 
 def test_status_fails_on_a_failed_job(server, capsys):

@@ -1,4 +1,4 @@
-"""Spark Job API transport: upload, submit, read a job. Contract: my-spark docs/architecture/api.md."""
+"""Spark Job API transport: upload, fetch an artifact, submit, read a job. Contract: my-spark docs/architecture/api.md."""
 
 from __future__ import annotations
 
@@ -24,6 +24,11 @@ class SparkError(RuntimeError):
 
 class NotFound(SparkError):
     """A 404: for a job, its record was pruned (24 h after it finished) or never existed."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None  # surface the 3xx as an HTTPError; get_artifact follows it itself
 
 
 class Client:
@@ -80,6 +85,34 @@ class Client:
         if not uri:
             raise SparkError(f"upload {path}: response has no uri: {data[:200]!r}")
         return str(uri)
+
+    def get_artifact(self, key: str, max_bytes: int = 64 * 1024 * 1024) -> bytes:
+        """GET /artifacts/{key}. The Job API answers 307 to a short-lived presigned URL on the
+        store. That URL is followed WITHOUT our API key: urllib would otherwise copy the
+        X-API-Key header to the store host."""
+        path = "/artifacts/" + urllib.parse.quote(key)
+        req = urllib.request.Request(self.base + path, headers={"X-API-Key": self.key})
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(req, timeout=self.timeout) as r:
+                data: bytes = r.read(max_bytes + 1)  # a 200 with no redirect
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise NotFound(f"GET {path} -> HTTP 404") from None
+            location = e.headers.get("Location") if e.code in (301, 302, 303, 307, 308) else None
+            if not location:
+                detail = e.read().decode("utf-8", "replace")[:500]
+                raise SparkError(f"GET {path} -> HTTP {e.code}: {detail}") from None
+            try:
+                with urllib.request.urlopen(location, timeout=self.timeout) as r:
+                    data = r.read(max_bytes + 1)
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e2:
+                raise SparkError(f"GET {key} from the store: {e2}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            raise SparkError(f"GET {path}: {e}") from None
+        if len(data) > max_bytes:
+            raise SparkError(f"{key} is over {max_bytes} bytes")
+        return data
 
     def submit(self, spec: dict[str, Any]) -> dict[str, Any]:
         return self._json("POST", "/jobs", spec)

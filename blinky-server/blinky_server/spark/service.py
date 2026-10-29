@@ -26,12 +26,14 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from .. import paths
 from . import bundle
 from .client import Client, NotFound, SparkError
+from .corpus import CorpusPass
 from .ledger import FAILED, LOST, SUCCEEDED, Ledger
 
 log = logging.getLogger(__name__)
@@ -62,12 +64,21 @@ STEMS = ("drums", "bass", "vocals", "other")
 # turn in the queue. Refuse it here instead. Omit the field to get the native segment.
 HTDEMUCS_SEGMENT_S = 7.8
 
+# One call may queue this many tracks at most (#314). The platform runs `separate` one at a
+# time (its `audio` engine has capacity 1), so a deeper queue is no faster; it costs the
+# controller a re-read of the whole queue every tick, and one bad parameter fails all of it.
+SEPARATE_BATCH_MAX = 50
+
 # Durable: the store's reaper only lists outputs/.
 STEMS_PREFIX = "blinky/stems"
 
 # The webhook is the primary signal; this poll catches a delivery the Spark dropped. It must run
 # well inside the 24 h a finished job's record survives, or that job's outcome is lost.
 RECONCILE_INTERVAL_S = 3600.0
+
+# How often the corpus pass checks its batch. A track separates in about 5 s, so a batch of 50
+# drains in about 5 min; a minute's granularity costs little and keeps the poll light.
+CORPUS_TICK_S = 60.0
 
 TERMINAL = {"succeeded", "failed", "canceled"}
 
@@ -165,6 +176,7 @@ class SparkService:
         self.audio_roots = [r.resolve() for r in audio_roots]
         self.webhook_secret = webhook_secret
         self.repo = repo
+        self.corpus = CorpusPass(self, ledger.path.with_name("corpus.json"))
 
     @classmethod
     def from_env(cls) -> SparkService:
@@ -199,81 +211,107 @@ class SparkService:
         stems: list[str] | None = None,
         chunk_seconds: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Submit one job per track, skipping any the ledger already has or has pending.
-        Blocking (uploads, HTTP): call it from a worker thread."""
+        """Submit one job per local track, skipping any the ledger already has or has pending.
+        At most SEPARATE_BATCH_MAX tracks per call (#314): a corpus goes through the corpus
+        pass, batch by batch. Blocking (uploads, HTTP): call it from a worker thread."""
         stems = stems or ["drums"]
         check_request(model_type, stems, chunk_seconds)
+        if len(files) > SEPARATE_BATCH_MAX:
+            raise SparkError(
+                f"{len(files)} tracks in one call; the limit is {SEPARATE_BATCH_MAX}. "
+                f"Separate a corpus with the corpus pass, which runs it in drained batches"
+            )
         tracks = [self._audio_path(f) for f in files]  # refuse the whole batch on one bad path
         known = self.ledger.records()
-        uploaded = {r["sha256"]: r["audio"] for r in known.values()}
+        uploaded: dict[str, str] = {r["sha256"]: r["audio"] for r in known.values()}
         out = []
         for path in tracks:
             sha = sha256_file(path)
-            key = idempotency_key(sha, model_type, stems, chunk_seconds)
-            rec = known.get(key)
-            if rec is not None and rec.get("outcome") not in (FAILED, LOST):
-                state = rec.get("outcome") or rec.get("state")
-                out.append(
-                    {
-                        "path": str(path),
-                        "action": "skipped",
-                        "job_id": rec["job_id"],
-                        "state": state,
-                    }
+
+            def audio(path: Path = path, sha: str = sha) -> str:
+                uploaded[sha] = uploaded.get(sha) or self.client.upload(path)
+                return uploaded[sha]
+
+            out.append(
+                self.submit_separate(
+                    str(path), sha, audio, path.stem, model_type, stems, chunk_seconds, known
                 )
-                continue
-            audio = uploaded.get(sha) or self.client.upload(path)
-            uploaded[sha] = audio
-            payload: dict[str, Any] = {
-                "audio": audio,
-                "model_type": model_type,
-                "stems": stems,
-                "output_prefix": f"{STEMS_PREFIX}/{model_type}",
-            }
-            if chunk_seconds is not None:  # omitted = the engine's native segment
-                payload["chunk_seconds"] = chunk_seconds
-            resp = self.client.submit(
-                {
-                    "type": "separate",
-                    "payload": payload,
-                    "memory_estimate_gb": SEPARATE_MEMORY_GB,
-                    "priority": PRIORITY,
-                    "idempotency_key": key,
-                    "name": f"blinky separate {path.stem}",
-                }
             )
-            row = {
-                "path": str(path),
-                "sha256": sha,
-                "audio": audio,
-                "model_type": model_type,
-                "stems": stems,
-                "chunk_seconds": chunk_seconds,
-                "idempotency_key": key,
-                "job_id": resp["id"],
-                "state": resp.get("state"),
-                "reattached": bool(resp.get("reattached")),
-                "submitted_at": time.time(),
-            }
-            self.ledger.append(row)
-            result = {
-                "path": str(path),
-                "action": "reattached" if row["reattached"] else "submitted",
-                "job_id": resp["id"],
-                "state": resp.get("state"),
-            }
-            # `priority` is what we got, not what we asked for (api.md, Submit): report a clamp.
-            if resp.get("priority_clamped") or resp.get("priority") != PRIORITY:
-                result["priority"] = resp.get("priority")
-                result["priority_clamped"] = resp.get("priority_clamped")
-                log.warning(
-                    "spark: %s priority %s (clamped: %s)",
-                    path.name,
-                    resp.get("priority"),
-                    resp.get("priority_clamped"),
-                )
-            out.append(result)
         return out
+
+    def submit_separate(
+        self,
+        source: str,
+        sha: str,
+        audio: Callable[[], str],
+        name: str,
+        model_type: str,
+        stems: list[str],
+        chunk_seconds: int | None,
+        known: dict[str, dict[str, Any]],
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """One `separate` job for one track, unless the ledger has it (pending or succeeded).
+        `source` is what the ledger shows (a local path or a store key), `audio()` the store key
+        the job reads, called only when a job is actually submitted. The idempotency key is the
+        track's sha256, so the same track from an upload and from the store is one job."""
+        key = idempotency_key(sha, model_type, stems, chunk_seconds)
+        rec = known.get(key)
+        if rec is not None and rec.get("outcome") not in (FAILED, LOST):
+            state = rec.get("outcome") or rec.get("state")
+            return {"path": source, "action": "skipped", "job_id": rec["job_id"], "state": state}
+        audio_key = audio()
+        payload: dict[str, Any] = {
+            "audio": audio_key,
+            "model_type": model_type,
+            "stems": stems,
+            "output_prefix": f"{STEMS_PREFIX}/{model_type}",
+        }
+        if chunk_seconds is not None:  # omitted = the engine's native segment
+            payload["chunk_seconds"] = chunk_seconds
+        resp = self.client.submit(
+            {
+                "type": "separate",
+                "payload": payload,
+                "memory_estimate_gb": SEPARATE_MEMORY_GB,
+                "priority": PRIORITY,
+                "idempotency_key": key,
+                "name": f"blinky separate {name}",
+            }
+        )
+        row = {
+            "path": source,
+            "sha256": sha,
+            "audio": audio_key,
+            "model_type": model_type,
+            "stems": stems,
+            "chunk_seconds": chunk_seconds,
+            "idempotency_key": key,
+            "job_id": resp["id"],
+            "state": resp.get("state"),
+            "reattached": bool(resp.get("reattached")),
+            "submitted_at": time.time(),
+            **(extra or {}),
+        }
+        self.ledger.append(row)
+        known[key] = row
+        result = {
+            "path": source,
+            "action": "reattached" if row["reattached"] else "submitted",
+            "job_id": resp["id"],
+            "state": resp.get("state"),
+        }
+        # `priority` is what we got, not what we asked for (api.md, Submit): report a clamp.
+        if resp.get("priority_clamped") or resp.get("priority") != PRIORITY:
+            result["priority"] = resp.get("priority")
+            result["priority_clamped"] = resp.get("priority_clamped")
+            log.warning(
+                "spark: %s priority %s (clamped: %s)",
+                name,
+                resp.get("priority"),
+                resp.get("priority_clamped"),
+            )
+        return result
 
     def train(
         self,
@@ -285,9 +323,9 @@ class SparkService:
         augment: bool = True,
         memory_gb: float = TRAIN_MEMORY_GB,
     ) -> dict[str, Any]:
-        """Bundle ml-training/ (bundle.build picks the commit) and submit it as one gpu_task. The same code with the same
-        arguments is one job: skipped while it is pending or succeeded, resubmitted after a
-        failure. Blocking (git, upload, HTTP): call it from a worker thread."""
+        """Bundle ml-training/ (bundle.build picks the commit) and submit it as one gpu_task.
+        The same code with the same arguments is one job: skipped while it is pending or
+        succeeded, resubmitted after a failure. Blocking (git, upload, HTTP): call it from a worker thread."""
         if memory_gb <= 0:
             raise SparkError(f"memory_gb {memory_gb}: must be > 0")
         with tempfile.TemporaryDirectory(prefix="blinky-bundle-") as tmp:
@@ -457,11 +495,12 @@ class SparkService:
         )
         return True
 
-    def reconcile(self) -> dict[str, int]:
-        """One pass over the jobs with no recorded outcome. Blocking: run it in a thread."""
+    def reconcile(self, job_ids: set[str] | None = None) -> dict[str, int]:
+        """One pass over the jobs with no recorded outcome (only `job_ids`, when given: the
+        corpus pass polls its own batch). Blocking: run it in a thread."""
         counts: dict[str, int] = {}
         for ledger, rec in ((lg, r) for lg in self._ledgers() for r in lg.records().values()):
-            if rec.get("outcome"):
+            if rec.get("outcome") or (job_ids is not None and rec["job_id"] not in job_ids):
                 continue
             try:
                 j = self.client.job(rec["job_id"])
@@ -528,14 +567,22 @@ class SparkService:
         }
 
     async def run_forever(self) -> None:
+        """The corpus pass every CORPUS_TICK_S; the reconcile poll every RECONCILE_INTERVAL_S."""
+        last_reconcile = float("-inf")
         while True:
             try:
-                counts = await asyncio.to_thread(self.reconcile)
-                if counts:
-                    log.info("spark: reconcile %s", counts)
-            except Exception:  # a bad pass must not kill the loop
-                log.exception("spark: reconcile failed")
-            await asyncio.sleep(RECONCILE_INTERVAL_S)
+                await asyncio.to_thread(self.corpus.tick)
+            except Exception:  # a bad tick must not kill the loop
+                log.exception("spark: corpus tick failed")
+            if time.monotonic() - last_reconcile >= RECONCILE_INTERVAL_S:
+                last_reconcile = time.monotonic()
+                try:
+                    counts = await asyncio.to_thread(self.reconcile)
+                    if counts:
+                        log.info("spark: reconcile %s", counts)
+                except Exception:
+                    log.exception("spark: reconcile failed")
+            await asyncio.sleep(CORPUS_TICK_S)
 
 
 _service: SparkService | None = None
