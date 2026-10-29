@@ -183,3 +183,31 @@ def test_generator_fails_loudly_when_there_is_nothing_to_label(
     r = run_gen("--audio-dir", str(stems), "--output-dir", str(tmp_path / "b"),
                 "--tracks-from", str(empty))
     assert r.returncode == 1 and "no tracks to label" in r.stderr  # was "Nothing to do!", exit 0
+
+
+# -- the validator's consensus gate ------------------------------------------------------------
+
+
+def validate(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, "scripts/validate_kick_weighted.py", *args], cwd=ML,
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_validator_runs_the_consensus_gate_on_the_onset_consensus() -> None:
+    r = validate("--label-dir", str(S.EDM / "kick_weighted"), "--consensus-dir", str(S.EDM))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "18 OK, 0 flagged, 0 corrupt, 0 without consensus" in r.stdout
+
+
+def test_a_wrong_consensus_dir_fails_and_quarantines_nothing(tmp_path: Path) -> None:
+    labels = tmp_path / "kw"
+    labels.mkdir()
+    for f in sorted((S.EDM / "kick_weighted").glob("*.kick_weighted.json"))[:3]:
+        (labels / f.name).write_text(f.read_text())
+    r = validate("--label-dir", str(labels), "--consensus-dir", str(tmp_path / "nope"),
+                 "--quarantine")
+    assert r.returncode == 1  # was "All labels pass validation", exit 0
+    assert "3 without consensus" in r.stdout and "gate did not run" in r.stderr
+    assert "Nothing quarantined" in r.stderr
+    assert len(list(labels.glob("*.kick_weighted.json"))) == 3
+    assert not (labels / ".quarantined").exists()

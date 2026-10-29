@@ -115,6 +115,10 @@ def main():
     corrupt = 0
     all_issues: dict[str, list[str]] = {}
     issue_counts: dict[str, int] = {}
+    # A track with no consensus file is an input problem (wrong --consensus-dir, a label set
+    # out of step with the consensus), not a bad label: counted, never quarantined, and it
+    # fails the run, since its ratio gate couldn't run (#284).
+    no_consensus: list[str] = []
 
     kick_counts = []
     snare_counts = []
@@ -137,8 +141,7 @@ def main():
             cf = next((consensus_dir / f"{stem}{suffix}" for suffix in CONSENSUS_SUFFIXES
                        if (consensus_dir / f"{stem}{suffix}").exists()), None)
             if cf is None:
-                all_issues[stem] = [f"no_consensus: none of {CONSENSUS_SUFFIXES} in "
-                                    f"{consensus_dir}"]
+                no_consensus.append(stem)
                 continue
             consensus_data = json.loads(cf.read_text())  # corrupt consensus: fail loudly
 
@@ -164,7 +167,8 @@ def main():
 
     # Print results
     print(f"\n{'='*60}")
-    print(f"Results: {ok} OK, {flagged} flagged, {corrupt} corrupt / {total} total")
+    print(f"Results: {ok} OK, {flagged} flagged, {corrupt} corrupt, "
+          f"{len(no_consensus)} without consensus / {total} total")
     print(f"{'='*60}")
 
     if issue_counts:
@@ -189,6 +193,15 @@ def main():
               f"median={np.median(sc):.0f}, p95={np.percentile(sc,95):.0f}, max={sc.max()}")
         print(f"  Density: min={d.min():.0f}, p5={np.percentile(d,5):.0f}, "
               f"median={np.median(d):.0f}, p95={np.percentile(d,95):.0f}, max={d.max():.0f}/min")
+
+    if no_consensus:
+        print(f"\nERROR: {len(no_consensus)} track(s) have no consensus file "
+              f"({' or '.join(CONSENSUS_SUFFIXES)}) in {consensus_dir}, so the consensus-ratio "
+              f"gate did not run for them: {', '.join(no_consensus[:10])}"
+              + (" ..." if len(no_consensus) > 10 else ""), file=sys.stderr)
+        if args.quarantine:
+            print("Nothing quarantined: fix the consensus dir first.", file=sys.stderr)
+        return 1
 
     # Quarantine if requested
     if args.quarantine and all_issues:
