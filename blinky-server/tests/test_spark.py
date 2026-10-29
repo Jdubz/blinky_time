@@ -649,6 +649,22 @@ def test_corpus_retry_failed_and_dedupe_with_uploads(
     svc.corpus.start(batch=2, retry_failed=True)
     svc.corpus.tick()  # the failed track and the untried one
     assert [s["payload"]["audio"][-10:] for s in fake.submits[2:]] == ["000000.mp3", "000002.mp3"]
+    fake.jobs["j3"].update(state="failed", error="boom again")  # fails in THIS pass too
+    fake.succeed("j4", ["drums"])
+    svc.corpus.tick()
+    st = svc.corpus.status()
+    assert st["mode"] == corpus.REVIEW
+    failed = next(t for t in st["last_batch"] if t["outcome"] == "failed")
+    assert failed["stems"] is None and failed["error"] == "boom again"  # no requested names
+    svc.corpus.resume()
+    svc.corpus.tick()  # a same-pass failure isn't retried again: the pass finishes
+    assert svc.corpus.status()["mode"] == corpus.DONE and len(fake.submits) == 4
+    assert svc.corpus.status()["counts"] == {
+        "succeeded": 2,
+        "failed": 1,
+        "in_flight": 0,
+        "pending": 0,
+    }
 
 
 def test_separate_takes_at_most_a_batch(svc: spark.SparkService, music: Path) -> None:

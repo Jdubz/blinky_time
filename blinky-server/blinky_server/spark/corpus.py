@@ -14,7 +14,8 @@ until every one of them has an outcome, records it, and only then submits the ne
   control file, so a restart resumes where the pass was. A re-submit after a crash between
   "submitted" and "recorded" reattaches to the same job (the idempotency key).
 
-Failed tracks are not retried by the pass; `start(retry_failed=True)` includes them again.
+Failed tracks are not retried by the pass; `start(retry_failed=True)` includes those that failed
+in an earlier pass, once.
 """
 
 from __future__ import annotations
@@ -207,7 +208,9 @@ class CorpusPass:
             {
                 "track": r["path"],
                 "outcome": r.get("outcome"),
-                "stems": r.get("stems"),
+                # The stem keys a success recorded. Any other record still carries the
+                # submission's requested stem names (a list), which aren't stems.
+                "stems": r.get("stems") if r.get("outcome") == SUCCEEDED else None,
                 "error": r.get("error"),
             }
             for r in batch
@@ -227,11 +230,9 @@ class CorpusPass:
 
     def _submit_next(self, c: dict[str, Any]) -> None:
         records = self.svc.ledger.records()
-        retry = (FAILED, LOST) if c.get("retry_failed") else (LOST,)
         pending = []
         for key, sha in self._tracks():
-            rec = records.get(self._key(c, sha))
-            if rec is None or rec.get("outcome") in retry:
+            if self._pending(c, records.get(self._key(c, sha))):
                 pending.append((key, sha))
             if len(pending) == c["batch"]:
                 break
@@ -261,6 +262,20 @@ class CorpusPass:
             self._save(c)
         log.info("spark corpus: batch %d submitted (%d tracks)", c["batch_no"], len(submitted))
 
+    @staticmethod
+    def _pending(c: dict[str, Any], rec: dict[str, Any] | None) -> bool:
+        """Whether this pass should submit the track. A lost record always is. A failed one is
+        only with retry_failed, and only if it failed BEFORE this pass started: a track that
+        fails again in this pass stays failed, or one that always fails would be resubmitted
+        in every batch and the pass would never finish."""
+        if rec is None or rec.get("outcome") == LOST:
+            return True
+        return (
+            rec.get("outcome") == FAILED
+            and bool(c.get("retry_failed"))
+            and rec.get("submitted_at", 0) < c["started_at"]
+        )
+
     # -- reading ----------------------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
@@ -271,7 +286,7 @@ class CorpusPass:
         counts = {"succeeded": 0, "failed": 0, "in_flight": 0, "pending": 0}
         for _, sha in self._tracks():
             rec = records.get(self._key(c, sha))
-            if rec is None or rec.get("outcome") == LOST:
+            if rec is None or self._pending(c, rec):
                 counts["pending"] += 1
             elif not rec.get("outcome"):
                 counts["in_flight"] += 1

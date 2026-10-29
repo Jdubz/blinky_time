@@ -39,8 +39,14 @@ def server(monkeypatch):
                 self._send({"results": [{"path": f, "action": "submitted", "job_id": "j1",
                                          "state": "queued"} for f in seen[-1]["body"]["files"]]})
             elif self.path.startswith("/api/spark/corpus/"):
-                self._send({"mode": "first", "reason": "the first batch runs alone",
-                            "counts": {"pending": 3}, "batch_no": 0, "batch": 50})
+                self._send({"mode": "paused", "reason": "batch 3: 15/20 failed",
+                            "counts": {"pending": 3}, "batch_no": 3, "batch": 50,
+                            "last_batch": [
+                                {"track": "a.mp3", "outcome": "succeeded",
+                                 "stems": {"drums": "blinky/stems/x/drums.wav"}, "error": None},
+                                # an old server could still send the requested names (a list)
+                                {"track": "b.mp3", "outcome": "failed", "stems": ["drums"],
+                                 "error": "boom"}]})
             elif self.path == "/api/spark/train":
                 self._send({"action": "submitted", "job_id": "j2", "state": "queued",
                             "commit": "c" * 40, "code_sha256": "s" * 64})
@@ -88,7 +94,9 @@ def test_corpus_start_and_status(server, capsys):
     assert req["path"] == "/api/spark/corpus/start"
     assert req["body"] == {"stems": ["drums", "bass"], "batch": 20, "retry_failed": False}
     out = capsys.readouterr().out
-    assert "corpus pass: first -- the first batch runs alone" in out and "pending=3" in out
+    assert "corpus pass: paused -- batch 3: 15/20 failed" in out and "pending=3" in out
+    assert "a.mp3: succeeded drums=blinky/stems/x/drums.wav" in out
+    assert "b.mp3: failed -- boom" in out  # no crash on a failed track
 
 
 def test_status_fails_on_a_failed_job(server, capsys):

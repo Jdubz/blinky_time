@@ -114,7 +114,7 @@ def cmd_corpus(action: str, stems: list[str], batch: int, retry_failed: bool) ->
               + f" (batch {s['batch_no']}, {s['batch']} per batch)")
     for t in s.get("last_batch") or []:
         line = f"  {t['track']}: {t['outcome']}"
-        if t.get("stems"):
+        if isinstance(t.get("stems"), dict):  # only a success has stem keys
             line += " " + " ".join(f"{k}={v}" for k, v in t["stems"].items())
         if t.get("error"):
             line += f" -- {t['error']}"
