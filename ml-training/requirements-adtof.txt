@@ -7,7 +7,7 @@
 # which Keras 3 (TF >= 2.16) changed. Inference only, CPU is enough.
 tensorflow==2.15.1
 numpy==1.26.4
-scipy==1.11.4
+scipy==1.13.1  # madmom 27f032e8 needs >= 1.13
 librosa==0.10.2.post1
 soundfile==0.12.1
 pandas==2.1.4
@@ -21,6 +21,7 @@ jellyfish==1.0.3
 #   pip install Cython==3.0.11 numpy==1.26.4
 #   pip install --no-build-isolation -r requirements-adtof.txt
 Cython==3.0.11
+mido==1.3.2  # madmom's MIDI dependency
 madmom @ git+https://github.com/CPJKU/madmom@27f032e8947204902c675e5e341a3faf5dc86dae
 #
 # Then ADTOF, with --no-deps: its setup.py pulls madmom and tapcorrect from unpinned git heads
