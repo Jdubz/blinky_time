@@ -85,11 +85,15 @@ def _compute_peak_picked_f1(est_windows: list[np.ndarray],
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
+    check_mel_filterbank_cfg,
     compute_feature_indices,
     compute_input_features,
     load_config,
     resolve_hybrid_features,
 )
+from scripts.mel_frontend import RECORD_FILE as MEL_FRONTEND_RECORD
+from scripts.mel_frontend import read_record as read_mel_frontend
+from scripts.mel_frontend import write_record as write_mel_frontend
 from scripts.supervision import (
     Preemption,
     Progress,
@@ -676,7 +680,38 @@ def main():
         print("ERROR: on the Spark the job must declare a `model` output "
               "($SPARK_OUTPUT_MODEL is unset)", file=sys.stderr)
         sys.exit(1)
+    # The mel front end the features were made with (#291), from the dataset itself: the
+    # model gets it, and export_tflite.py writes it into the header the firmware checks.
+    try:
+        mel_frontend = read_mel_frontend(data_dir)
+    except (OSError, ValueError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    if mel_frontend["mel_filterbank"] != check_mel_filterbank_cfg(cfg):
+        print(f"ERROR: {data_dir} holds {mel_frontend['mel_filterbank']} features, but the "
+              f"config says audio.mel_filterbank: {cfg['audio']['mel_filterbank']}",
+              file=sys.stderr)
+        sys.exit(1)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # export_tflite.py trusts the record beside a model, so it may describe only models this
+    # run writes: an output dir holding another front end's models, or models from before the
+    # record existed, is refused rather than relabeled.
+    if (output_dir / MEL_FRONTEND_RECORD).exists():
+        try:
+            same = read_mel_frontend(output_dir) == mel_frontend
+        except ValueError:
+            same = False
+        if not same:
+            print(f"ERROR: {output_dir} holds a model trained on another mel front end "
+                  f"({(output_dir / MEL_FRONTEND_RECORD).read_text().strip()}); use another "
+                  f"--output-dir", file=sys.stderr)
+            sys.exit(1)
+    elif any(output_dir.glob("*.pt")):
+        print(f"ERROR: {output_dir} holds models with no {MEL_FRONTEND_RECORD}, from before "
+              f"#291; use another --output-dir rather than label them {mel_frontend}",
+              file=sys.stderr)
+        sys.exit(1)
+    write_mel_frontend(output_dir, mel_frontend)
     ckpt_dir = checkpoint_dir(output_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1683,6 +1718,7 @@ def main():
         "shift_tolerance": shift_tolerance if loss_type in ("shift_bce", "shift_focal") else None,
         "spec_augment": use_spec_augment,
         "distillation": {"alpha": distill_alpha, "temp": distill_temp} if use_distill else None,
+        "mel_frontend": mel_frontend,
     }, output_dir / "model_checkpoint.pt")
 
     # Save training log

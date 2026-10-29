@@ -319,6 +319,15 @@ jobs:
         cd ml-training
         python -m analysis.test_mel_parity --harness ../tests/parity/build/parity_harness
 
+    - name: Mel front end travels to the model header (#291)
+      # prepare_dataset.py records the front end, train.py and export_tflite.py
+      # carry it into the header, and FrameOnsetNN.h / check_model_input.py
+      # refuse one the firmware doesn't run. The record and the header check.
+      working-directory: ml-training
+      run: |
+        pip install pytest
+        python -m pytest -q tests/test_mel_frontend_record.py
+
     - name: Run ML storage-root, Spark client and drum-label sync tests
       # No config may hardcode a machine's mounts (#286): data and work roots
       # come from BLINKY_DATA / BLINKY_WORK. The Spark CLI (#288) is a thin
@@ -499,6 +508,7 @@ jobs:
     # model the firmware would refuse fails the PR instead of silently running
     # devices without the onset NN (the 80-mel v36 export did that, initError 5).
     - name: Check embedded model against the firmware's limits
+      # Also its mel front end and the bytes' hash, as FrameOnsetNN.h does (#291).
       run: python tools/check_model_input.py
 
   tracker-harness-nn:

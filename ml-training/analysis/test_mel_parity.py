@@ -2,7 +2,8 @@
 
 Three checks, cheapest first:
   1. spec/mel_frontend_v1.json carries the firmware's MEL_BANDS[] and constants, read from
-     blinky-things/audio/SharedSpectralAnalysis.{cpp,h};
+     blinky-things/audio/SharedSpectralAnalysis.{cpp,h}, and its version is the firmware's
+     MEL_FRONTEND_VERSION, the number a model header must record (#291);
   2. scripts/mel_frontend.py (what training uses) reproduces spec/mel_golden_v1.npz, mel the
      firmware computed on golden magnitude frames: numpy only, no compiler;
   3. with --harness, the firmware itself (tests/parity/parity_harness) still produces those
@@ -73,6 +74,13 @@ def check_spec_matches_firmware(spec: dict) -> None:
                         (spec["log_epsilon"], "epsilon")):
         m = re.search(rf"const float {what} = ([0-9.e+-]+)f;", cpp)
         assert m and float(m.group(1)) == value, f"spec {what} != firmware"
+    # The number a model header records and FrameOnsetNN.h compares (#291).
+    assert header_constant("MEL_FRONTEND_VERSION") == spec["version"], (
+        f"spec version {spec['version']} != firmware MEL_FRONTEND_VERSION "
+        f"{header_constant('MEL_FRONTEND_VERSION'):g}: bump both together")
+    from scripts.mel_frontend import SPEC_PATH
+    assert SPEC_PATH.name == f"mel_frontend_v{spec['version']}.json", \
+        f"{SPEC_PATH.name} holds version {spec['version']}"
     print(f"ok  spec matches the firmware's MEL_BANDS[] ({len(fw)} bands) and constants")
 
 

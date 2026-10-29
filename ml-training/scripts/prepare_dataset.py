@@ -187,10 +187,16 @@ from scripts.audio import (
     append_band_flux_features,
     append_hybrid_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
+    check_mel_filterbank_cfg,
     compute_input_features,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
     resolve_hybrid_features,
+)
+from scripts.mel_frontend import (
+    RECORD_FILE as MEL_FRONTEND_RECORD,
+    frontend_record,
+    write_record as write_mel_frontend_record,
 )
 
 
@@ -1444,6 +1450,28 @@ def main():
     print(f"Using device: {device}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Which mel front end these features are (#291). train.py and export_tflite.py carry the
+    # record into the model header, and the firmware refuses a front end it doesn't run. A dir
+    # holding another front end's work (or work from before the record existed) is refused,
+    # not resumed: a resume would merge both into one dataset.
+    frontend = frontend_record(check_mel_filterbank_cfg(cfg))
+    record_path = output_dir / MEL_FRONTEND_RECORD
+    if record_path.exists():
+        if json.loads(record_path.read_text()) != frontend:
+            print(f"ERROR: {output_dir} was prepared with mel front end "
+                  f"{record_path.read_text().strip()}, not this run's {frontend}. "
+                  f"Use another --output-dir or delete it.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        earlier = sorted(p.name for p in output_dir.iterdir()
+                         if p.name.startswith((".prep_", "X_", "Y_")))
+        if earlier:
+            print(f"ERROR: {output_dir} holds earlier prep output ({', '.join(earlier[:4])}) "
+                  f"with no {MEL_FRONTEND_RECORD}, so its front end is unknown. "
+                  f"Use another --output-dir or delete it.", file=sys.stderr)
+            sys.exit(1)
+        write_mel_frontend_record(output_dir, frontend)
 
     # --- Disk space pre-check ---
     # Actual merge step requires:

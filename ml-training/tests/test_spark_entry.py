@@ -131,10 +131,15 @@ def test_preempt_in_prep_then_prep_and_train(job: dict) -> None:
     prep_steps = r.stdout[: r.stdout.index("Loading data from")]
     assert "STEP 7/7" in prep_steps
     assert re.search(r"^STEP (\d+)/\1$", prep_steps.split("[train] merged")[1], re.M)
-    for name in ("X_train.npy", "Y_train.npy", "X_val.npy", "Y_val.npy", ".prep_done.json"):
+    for name in ("X_train.npy", "Y_train.npy", "X_val.npy", "Y_val.npy", ".prep_done.json",
+                 "mel_frontend.json"):
         assert (processed / name).is_file(), name
-    for name in ("best_model.pt", "final_model.pt", "training_log.csv", "spark_run.json"):
+    for name in ("best_model.pt", "final_model.pt", "training_log.csv", "spark_run.json",
+                 "mel_frontend.json"):
         assert (model / name).is_file(), name
+    # Prep's mel front-end record is what the model publishes, for its export (#291).
+    assert (model / "mel_frontend.json").read_text() == (processed / "mel_frontend.json").read_text()
+    assert json.loads((model / "mel_frontend.json").read_text())["mel_filterbank"] == "firmware_table"
     assert not any(p.suffix == ".npy" for p in model.rglob("*"))  # tensors are never published
     run = json.loads((model / "spark_run.json").read_text())
     assert run["config"] == "configs/tiny.yaml" and run["train_args"] == ["--device", "cpu"]
@@ -163,3 +168,21 @@ def test_bad_corpus_paths_fail_before_any_work(job: dict) -> None:
                        text=True, timeout=120)
     assert r.returncode == 1 and "SPARK_INPUT_CORPUS is unset" in r.stderr
     assert not (job["work"] / "checkpoints" / "processed").exists()
+
+
+def test_prep_refuses_a_dir_of_another_front_end(job: dict, tmp_path: Path) -> None:
+    """Prep records its mel front end (#291) and never resumes into a dir whose features are
+    another front end's, or are from before the record existed: a resume would merge both."""
+    out = tmp_path / "processed"
+    out.mkdir()
+    prep = [sys.executable, "scripts/prepare_dataset.py", "--config", "configs/tiny.yaml",
+            "--output-dir", str(out), "--audio-dir", str(tmp_path / "none"),
+            "--labels-dir", str(tmp_path / "none"), "--device", "cpu"]
+    env = {**job["env"], "BLINKY_DATA": str(tmp_path), "BLINKY_WORK": str(tmp_path / "w")}
+    np.save(out / "X_train.npy", np.zeros((1, 1), np.float32))
+    r = subprocess.run(prep, cwd=job["code"], env=env, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 1 and "with no mel_frontend.json" in r.stderr, r.stderr[-2000:]
+    (out / "mel_frontend.json").write_text(json.dumps({"mel_filterbank": "librosa_htk",
+                                                       "version": 0}))
+    r = subprocess.run(prep, cwd=job["code"], env=env, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 1 and "was prepared with mel front end" in r.stderr, r.stderr[-2000:]

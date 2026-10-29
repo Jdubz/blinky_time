@@ -16,6 +16,11 @@ mirrors begin()'s static checks so any model it would refuse fails the build:
   7  output channels outside 1..4 (or fewer outputs than channels), or an
      int8 input with a non-positive scale
 
+It also checks the model's mel front end (#291), mirroring FrameOnsetNN.h's
+static_assert, plus what the compiler can't: that the embedded bytes hash to
+the header's FRAME_ONSET_MODEL_DATA_HASH, so the v33 waiver can't be claimed by
+another model.
+
 Not checked (needs the TFLite Micro runtime): AllocateTensors failing for
 arena size or an unsupported op (initErrors 1 and 3).
 
@@ -24,6 +29,7 @@ Constants are read from the firmware headers, so they can't drift.
 Usage:  python tools/check_model_input.py   (needs: pip install tflite)
 """
 
+import hashlib
 import math
 import re
 import sys
@@ -45,7 +51,46 @@ def const(path: Path, pattern: str) -> int:
     return int(m.group(1))
 
 
+def model_bytes(src: str) -> bytes:
+    start = src.index("{", src.index("frame_onset_model_data[]"))
+    body = src[start:src.index("};", start)]
+    return bytes(int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{2})", body))
+
+
+def frontend_errors(src: str, data: bytes, firmware_version: int, waived_hash: str) -> list[str]:
+    """Why FrameOnsetNN.h would refuse this header's mel front end, or why its hash lies."""
+    errors = []
+    declared = re.search(r'#define FRAME_ONSET_MODEL_DATA_HASH "([0-9a-f]+)"', src)
+    actual = hashlib.sha256(data).hexdigest()[:16]
+    if declared is None:
+        errors.append("no FRAME_ONSET_MODEL_DATA_HASH")
+    elif declared.group(1) != actual:
+        errors.append(f"FRAME_ONSET_MODEL_DATA_HASH {declared.group(1)} but the bytes hash to "
+                      f"{actual}: the header was edited or mis-generated")
+    m = re.search(r"#define FRAME_ONSET_MODEL_DATA_MEL_FRONTEND (\d+)", src)
+    if m is None:
+        errors.append("no FRAME_ONSET_MODEL_DATA_MEL_FRONTEND: re-export with export_tflite.py")
+    elif int(m.group(1)) != firmware_version and not (int(m.group(1)) == 0
+                                                      and actual == waived_hash):
+        errors.append(f"mel front end {m.group(1)}, firmware runs {firmware_version} "
+                      f"(waived: only {waived_hash} on front end 0)")
+    return errors
+
+
 def main() -> int:
+    src = MODEL_H.read_text(encoding="utf-8")
+    data = model_bytes(src)
+    waived = re.search(r'WAIVED_LIBROSA_MODEL = "([0-9a-f]{16})"', NN_H.read_text(encoding="utf-8"))
+    if waived is None:
+        print(f"ERROR: WAIVED_LIBROSA_MODEL not found in {NN_H}", file=sys.stderr)
+        return 2
+    fe_errors = frontend_errors(src, data, const(SPECTRAL_H, r"MEL_FRONTEND_VERSION = (\d+);"),
+                                waived.group(1))
+    if fe_errors:
+        for e in fe_errors:
+            print(f"FAIL: {e}. FrameOnsetNN.h refuses it (#291).", file=sys.stderr)
+        return 1
+
     try:
         import tflite  # type: ignore
     except ImportError:
@@ -60,11 +105,6 @@ def main() -> int:
                      NN_H.read_text(encoding="utf-8")):
         print("ERROR: MAX_INPUT_FEATURES definition changed; update this check", file=sys.stderr)
         return 2
-
-    src = MODEL_H.read_text(encoding="utf-8")
-    start = src.index("{", src.index("frame_onset_model_data[]"))
-    body = src[start:src.index("};", start)]
-    data = bytes(int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{2})", body))
 
     errors = []
     if len(data) < 100:
@@ -111,7 +151,7 @@ def main() -> int:
                   file=sys.stderr)
         return 1
     print(f"OK: input {in_shape} = {mode}, window {window} frames, output {out_shape}, "
-          f"for NUM_MEL_BANDS={n_mel} ({len(data)} bytes)")
+          f"for NUM_MEL_BANDS={n_mel} ({len(data)} bytes), mel front end accepted")
     return 0
 
 

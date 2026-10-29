@@ -8,6 +8,10 @@
 
 #define FRAME_ONSET_MODEL_DATA_HASH "fa087e0a364640ab"
 #define FRAME_ONSET_MODEL_DATA_SIZE 20056
+// The mel front end it trained on (#291): FrameOnsetNN.h refuses one the firmware doesn't run.
+// librosa_htk. Added by hand (2026-10-28): v33 was exported before the record existed, and
+// trained on the librosa HTK filterbank like every model through v36. FrameOnsetNN.h waives it.
+#define FRAME_ONSET_MODEL_DATA_MEL_FRONTEND 0
 
 alignas(8) static const unsigned char frame_onset_model_data[] = {
   0x1c, 0x00, 0x00, 0x00, 0x54, 0x46, 0x4c, 0x33, 0x14, 0x00, 0x20, 0x00,

@@ -52,6 +52,13 @@ namespace SpectralConstants {
     constexpr float MEL_MIN_FREQ = 30.0f;   // Hz (low-bass detail)
     constexpr float MEL_MAX_FREQ = 8000.0f; // Hz (Nyquist at 16 kHz sample rate; captures hi-hat/snare)
 
+    // The mel front end this firmware runs: MEL_BANDS[], the weighted average, the silence
+    // floor and the log map, as specified by ml-training/spec/mel_frontend_v<N>.json with
+    // "version": N. Bump it with the spec when any of them changes. FrameOnsetNN.h refuses a
+    // model header that records a different one (#291), and
+    // ml-training/analysis/test_mel_parity.py checks this number against the spec.
+    constexpr int MEL_FRONTEND_VERSION = 1;
+
     // Log-mel dB range: maps [-MEL_DB_RANGE, 0] dB to [0, 1].
     // MUST match ml-training base.yaml mel_db_range.
     constexpr float MEL_DB_RANGE = 60.0f;
