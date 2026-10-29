@@ -997,8 +997,9 @@ def main():
                         help="Context frames for device inference (default: use training chunk size). "
                              "Smaller = less device RAM. Must be >= receptive field (15 frames).")
     parser.add_argument("--mel-frontend", choices=MEL_FILTERBANKS, default=None,
-                        help="The mel front end the model trained on, for a model with no "
-                             "record of it (trained before #291). Must agree with any record.")
+                        help="The mel front end the model trained on, for a model (and "
+                             "calibration data) with no record of it, from before #291. Must "
+                             "agree with any record.")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -1036,8 +1037,16 @@ def main():
     try:
         calib_frontend = read_record(data_dir)
     except FileNotFoundError:
-        print(f"WARNING: {data_dir} has no mel front-end record; calibrating on it assumes it "
-              f"is {mel_frontend['mel_filterbank']}", file=sys.stderr)
+        # Data prepared before records existed: usable only when the operator has stated the
+        # front end (--mel-frontend, the same historical case), never assumed.
+        if args.mel_frontend is None:
+            print(f"Error: {data_dir} (the quantization calibration data) has no mel front-end "
+                  f"record, so nothing says it matches the model's "
+                  f"{mel_frontend['mel_filterbank']}. Calibrate on data prepared since #291, "
+                  f"or state the front end of both with --mel-frontend.", file=sys.stderr)
+            sys.exit(1)
+        print(f"Calibration data {data_dir} is unrecorded; taking it as "
+              f"{mel_frontend['mel_filterbank']}, as --mel-frontend states", file=sys.stderr)
     except ValueError as e:
         print(f"Error: calibration data: {e}", file=sys.stderr)
         sys.exit(1)

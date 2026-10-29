@@ -33,12 +33,14 @@ from scripts.audio import (
     append_delta_features,
     append_hybrid_features,
     build_mel_filterbank_torch as _build_mel_filterbank,
+    check_mel_filterbank_cfg,
     compute_input_features,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
     load_config,
     resolve_hybrid_features,
 )
 from scripts.features import append_features as _append_features, sliding_window_inference
+from scripts.mel_frontend import read_record as read_mel_frontend
 
 
 def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
@@ -844,6 +846,28 @@ def main():
     cfg = load_config(args.config)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # The front end the model trained on (#291) against the one it is scored on. Scoring on the
+    # other one is legitimate (the device runs v33, a librosa model, on its table), but it is
+    # announced, never silent. Device captures are the device's own table; the validation set
+    # is whatever its dataset recorded.
+    def recorded(directory: Path) -> str:
+        try:
+            return read_mel_frontend(directory)["mel_filterbank"]
+        except FileNotFoundError:
+            return f"unrecorded ({directory}, from before #291)"
+
+    trained_on = recorded(Path(args.model).parent)
+    if args.device_captures:
+        scored_on = "firmware_table"
+    elif args.audio_dir:
+        scored_on = check_mel_filterbank_cfg(cfg)
+    else:
+        scored_on = recorded(Path(cfg["data"]["processed_dir"]))
+    print(f"Mel front end: model trained on {trained_on}, scored on {scored_on}")
+    if trained_on != scored_on:
+        print(f"NOTE: the model is scored on a different mel front end ({scored_on}) from "
+              f"the one it trained on ({trained_on})", file=sys.stderr)
 
     if args.device is None or args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

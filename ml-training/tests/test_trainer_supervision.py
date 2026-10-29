@@ -167,3 +167,18 @@ def test_unrecorded_or_mismatched_front_end_is_refused(job: dict) -> None:
     r = subprocess.run(cmd(job), cwd=ML, env=job["env"], capture_output=True, text=True,
                        timeout=300)
     assert r.returncode == 1 and "holds librosa_htk features" in r.stderr
+
+    # An output dir already holding another front end's model is not relabeled.
+    write_record(data, frontend_record("firmware_table"))
+    model_dir = Path(job["env"]["SPARK_OUTPUT_MODEL"])
+    model_dir.mkdir(parents=True)
+    write_record(model_dir, frontend_record("librosa_htk"))
+    r = subprocess.run(cmd(job), cwd=ML, env=job["env"], capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 1 and "another mel front end" in r.stderr
+    # ...nor one holding models from before records existed.
+    (model_dir / RECORD_FILE).unlink()
+    (model_dir / "best_model.pt").write_bytes(b"old")
+    r = subprocess.run(cmd(job), cwd=ML, env=job["env"], capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 1 and "from before #291" in r.stderr

@@ -91,6 +91,7 @@ from scripts.audio import (
     load_config,
     resolve_hybrid_features,
 )
+from scripts.mel_frontend import RECORD_FILE as MEL_FRONTEND_RECORD
 from scripts.mel_frontend import read_record as read_mel_frontend
 from scripts.mel_frontend import write_record as write_mel_frontend
 from scripts.supervision import (
@@ -692,6 +693,24 @@ def main():
               file=sys.stderr)
         sys.exit(1)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # export_tflite.py trusts the record beside a model, so it may describe only models this
+    # run writes: an output dir holding another front end's models, or models from before the
+    # record existed, is refused rather than relabeled.
+    if (output_dir / MEL_FRONTEND_RECORD).exists():
+        try:
+            same = read_mel_frontend(output_dir) == mel_frontend
+        except ValueError:
+            same = False
+        if not same:
+            print(f"ERROR: {output_dir} holds a model trained on another mel front end "
+                  f"({(output_dir / MEL_FRONTEND_RECORD).read_text().strip()}); use another "
+                  f"--output-dir", file=sys.stderr)
+            sys.exit(1)
+    elif any(output_dir.glob("*.pt")):
+        print(f"ERROR: {output_dir} holds models with no {MEL_FRONTEND_RECORD}, from before "
+              f"#291; use another --output-dir rather than label them {mel_frontend}",
+              file=sys.stderr)
+        sys.exit(1)
     write_mel_frontend(output_dir, mel_frontend)
     ckpt_dir = checkpoint_dir(output_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)

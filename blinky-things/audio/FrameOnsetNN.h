@@ -36,6 +36,8 @@
 // Only ONE model header can be active per build. To deploy a versioned model:
 //   cp blinky-things/audio/frame_onset_model_data_v3.h blinky-things/audio/frame_onset_model_data.h
 // The export_tflite.py script writes directly to this path by default.
+// The versioned headers from before #291 (all but v33) record no mel front end, so the
+// check below refuses them: re-export, don't copy.
 #include "frame_onset_model_data.h"
 
 // The model must have trained on the mel front end this firmware feeds it (#291). The export
