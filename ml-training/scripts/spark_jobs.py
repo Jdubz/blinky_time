@@ -34,9 +34,11 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -58,7 +60,42 @@ def _api_key() -> str:
     return key
 
 
+# blinky-server restarts (a deploy) without losing a submission: it finishes the step in flight,
+# resumes the rest after, and the same request sent again attaches to it (#325). So a request
+# that meets a restart is sent again, for up to this long.
+RESTART_RETRY_S = 300.0
+RETRY_EVERY_S = 5.0
+
+
 def call(method: str, path: str, body: dict | None = None, timeout: float = 600.0) -> dict:
+    """The request, sent again while blinky-server is restarting: a 503 (draining), or a
+    connection that dropped mid-request. A refused connection counts only once a restart has
+    been seen in this call; on its own it means the server isn't running."""
+    deadline = time.monotonic() + RESTART_RETRY_S
+    restarting = False
+    while True:
+        try:
+            return _call_once(method, path, body, timeout)
+        except _Restarting as e:
+            restarting = True
+            why = str(e)
+        except urllib.error.URLError as e:
+            refused = isinstance(e.reason, ConnectionRefusedError)
+            if not (restarting and refused):
+                raise CliError(f"{method} {path}: {e.reason} (is blinky-server running?)") from None
+            why = "not listening yet"
+        if time.monotonic() > deadline:
+            raise CliError(f"{method} {path}: blinky-server still restarting after "
+                           f"{RESTART_RETRY_S:.0f} s ({why})")
+        print(f"blinky-server is restarting ({why}); sending the request again", file=sys.stderr)
+        time.sleep(RETRY_EVERY_S)
+
+
+class _Restarting(Exception):
+    pass
+
+
+def _call_once(method: str, path: str, body: dict | None, timeout: float) -> dict:
     base = os.environ.get("BLINKY_SERVER", DEFAULT_SERVER).rstrip("/")
     headers = {"X-API-Key": _api_key()}
     data = None
@@ -71,9 +108,11 @@ def call(method: str, path: str, body: dict | None = None, timeout: float = 600.
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:500]
+        if e.code == 503 and "restarting" in detail:
+            raise _Restarting("HTTP 503: draining") from None
         raise CliError(f"{method} {path} -> HTTP {e.code}: {detail}") from None
-    except urllib.error.URLError as e:
-        raise CliError(f"{method} {path}: {e.reason} (is blinky-server running?)") from None
+    except (http.client.RemoteDisconnected, ConnectionResetError, http.client.IncompleteRead) as e:
+        raise _Restarting(f"connection dropped: {type(e).__name__}") from None
 
 
 def cmd_separate(files: list[Path], stems: list[str], chunk_seconds: int | None) -> int:

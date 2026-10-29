@@ -139,7 +139,10 @@ class CorpusPass:
                 ) from None
             info, tracks = tracks_from_manifest(raw)
             self.tracks_path.parent.mkdir(parents=True, exist_ok=True)
-            self.tracks_path.write_text(json.dumps(tracks))
+            # Atomic, like corpus.json: a restart mid-write must not leave half a track list.
+            tmp = self.tracks_path.with_name(self.tracks_path.name + ".tmp")
+            tmp.write_text(json.dumps(tracks))
+            tmp.replace(self.tracks_path)
             c = {
                 "mode": FIRST,
                 "reason": FIRST_NOTE,
