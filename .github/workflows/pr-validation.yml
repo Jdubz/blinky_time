@@ -362,11 +362,15 @@ jobs:
       working-directory: ml-training
       run: python -m pytest -v tests/test_spark_entry.py
 
-    - name: Drum label regression suite and generator guards (#284)
-      # The suite a new kick/snare label generator must pass, its committed baseline, and the
-      # generator's refusal to mix labels from two versions in one dir. Needs librosa.
+    - name: Drum label regression suite, ADTOF and generator guards (#284)
+      # The suite a kick/snare label generator must pass, its baseline, ADTOF passing it, and
+      # the generator's refusal to mix labels from two generators in one dir.
       working-directory: ml-training
-      run: python -m pytest -v tests/test_drum_label_suite.py
+      run: |
+        # ADTOF-pytorch has no licence file, so it is installed, pinned, never vendored
+        # (scripts/adtof_labels.py ADTOF_PYTORCH; ADTOF's weights are CC BY-NC-SA 4.0).
+        pip install "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9"
+        python -m pytest -v tests/test_drum_label_suite.py
 
   blinky-console-tests:
     name: Blinky Console Tests

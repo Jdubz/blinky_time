@@ -16,7 +16,11 @@ Usage:
         --output-dir "$BLINKY_DATA/labels/kick_weighted_drums_g1" \\
         --tracks-from "$BLINKY_DATA/labels/onsets_consensus" --workers 4
 
-Every label file and the directory's .provenance.json carry GENERATOR: the algorithm, its
+--algorithm adtof (the default since #284) labels with the ADTOF transcription model
+(scripts/adtof_labels.py), on full mixes or drum stems; --algorithm bandpass is the original
+band-onset generator below, kept so the suite can compare against it.
+
+Every label file and the directory's .provenance.json carry the generator: the algorithm, its
 version and every parameter. A run resumes only over files from the same generator and refuses
 a directory written by another, so labels from two generators never mix in one dir (#284).
 Score any change with scripts/drum_label_suite.py first.
@@ -41,6 +45,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 from scipy.signal import butter, sosfilt
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `scripts.` for adtof_labels
 
 # Frequency bands for onset classification
 # Kick: 40-200 Hz (below 40 Hz is sub-bass rumble / mp3 noise artifacts)
@@ -188,27 +194,43 @@ def label_audio(y: np.ndarray, sr: int) -> dict:
     }
 
 
-def same_generator(path: Path) -> bool:
+ALGORITHMS = ("adtof", "bandpass")
+
+
+def generator_for(algorithm: str) -> dict:
+    """GENERATOR for an algorithm. adtof's lives in adtof_labels.py (importing it needs no torch)."""
+    if algorithm == "bandpass":
+        return GENERATOR
+    from scripts.adtof_labels import GENERATOR as ADTOF
+
+    return ADTOF
+
+
+def same_generator(path: Path, generator: dict) -> bool:
     """Whether an existing label file came from this generator (old files carry none)."""
     try:
-        return json.loads(path.read_text()).get("generator") == GENERATOR
+        return json.loads(path.read_text()).get("generator") == generator
     except (OSError, ValueError):
         return False
 
 
 def process_track(args):
     """Process a single track."""
-    audio_path, output_path = args
+    audio_path, output_path, algorithm = args
 
-    if output_path.exists() and same_generator(output_path):
+    if output_path.exists() and same_generator(output_path, generator_for(algorithm)):
         return None  # Resumable: done by this same generator
 
     try:
-        y, sr = librosa.load(str(audio_path), sr=SR)
-    except Exception as e:
-        return f"FAILED {audio_path.name}: {e}"
+        if algorithm == "adtof":
+            from scripts.adtof_labels import label_file
 
-    result = label_audio(y, sr)
+            result = label_file(audio_path)
+        else:
+            y, sr = librosa.load(str(audio_path), sr=SR)
+            result = label_audio(y, sr)
+    except Exception as e:
+        return f"FAILED {audio_path.name}: {type(e).__name__}: {e}"
 
     # Atomic write: temp file + rename prevents corrupt partial writes
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,7 +245,7 @@ def process_track(args):
 
 
 def write_provenance(output_dir: Path, audio_dir: Path, tracks_from: Path | None,
-                     track_count: int) -> None:
+                     track_count: int, generator: dict) -> None:
     """Record what produced this dir: a later run refuses it unless the generator matches."""
     provenance = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -231,7 +253,7 @@ def write_provenance(output_dir: Path, audio_dir: Path, tracks_from: Path | None
         "tracks_from": str(tracks_from) if tracks_from else None,
         "track_count": track_count,
         "script": "generate_kick_weighted_targets.py",
-        "generator": GENERATOR,
+        "generator": generator,
     }
     tmp = output_dir / ".provenance.json.tmp"
     tmp.write_text(json.dumps(provenance, indent=2))
@@ -240,8 +262,12 @@ def write_provenance(output_dir: Path, audio_dir: Path, tracks_from: Path | None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate kick-weighted onset targets")
+    parser.add_argument("--algorithm", choices=ALGORITHMS, default="adtof",
+                        help="adtof: the ADTOF transcription model (full mixes or drum stems; "
+                             "#284). bandpass: the old band-onset generator (drum stems), kept "
+                             "for comparison")
     parser.add_argument("--audio-dir", type=Path, required=True,
-                        help="Directory of drum stems, flat (<track>.wav)")
+                        help="Directory of audio, flat (<track>.<ext>)")
     parser.add_argument("--output-dir", type=Path, required=True,
                         help="Output dir. Use a new one for a new generator version.")
     parser.add_argument("--tracks-from", type=Path, default=None,
@@ -255,6 +281,7 @@ def main() -> int:
     args = parser.parse_args()
 
     audio_dir, output_dir = args.audio_dir, args.output_dir
+    generator = generator_for(args.algorithm)
 
     # Labels from two generators, or two audio sources, must never share a dir.
     provenance_path = output_dir / ".provenance.json"
@@ -263,10 +290,10 @@ def main() -> int:
         problems = []
         if prev.get("audio_source") != str(audio_dir):
             problems.append(f"audio source {prev.get('audio_source')} != {audio_dir}")
-        if prev.get("generator") != GENERATOR:
+        if prev.get("generator") != generator:
             got = prev.get("generator") or {"algorithm": "unversioned"}
             problems.append(f"generator {got.get('algorithm')} v{got.get('version', '?')} "
-                            f"!= {GENERATOR['algorithm']} v{GENERATOR['version']}")
+                            f"!= {generator['algorithm']} v{generator['version']}")
         if problems:
             print(f"ERROR: {output_dir} holds other labels: " + "; ".join(problems),
                   file=sys.stderr)
@@ -306,10 +333,10 @@ def main() -> int:
     skipped = 0
     for stem, af in sorted(audio_by_stem.items()):
         out = output_dir / f"{stem}.kick_weighted.json"
-        if out.exists() and same_generator(out):
+        if out.exists() and same_generator(out, generator):
             skipped += 1
         else:
-            work.append((af, out))
+            work.append((af, out, args.algorithm))
     print(f"Processing {len(work)} tracks ({skipped} already done by this generator)")
 
     errors = 0
@@ -344,7 +371,7 @@ def main() -> int:
     else:
         print("  No onsets found in any track")
 
-    write_provenance(output_dir, audio_dir, args.tracks_from, len(all_files))
+    write_provenance(output_dir, audio_dir, args.tracks_from, len(all_files), generator)
     print(f"\nProvenance written to {output_dir / '.provenance.json'}")
     if errors:
         print(f"ERROR: {errors} track(s) failed to load", file=sys.stderr)

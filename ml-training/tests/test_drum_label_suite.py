@@ -110,9 +110,10 @@ def test_synthetic_baseline_reproduces_with_the_same_librosa() -> None:
 # -- the generator's pipeline guards -----------------------------------------------------------
 
 
-def run_gen(*args: str) -> subprocess.CompletedProcess[str]:
+def run_gen(*args: str, algorithm: str = "bandpass") -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, "scripts/generate_kick_weighted_targets.py", *args,
-                           "--workers", "1"], cwd=ML, capture_output=True, text=True, timeout=300)
+                           "--algorithm", algorithm, "--workers", "1"], cwd=ML,
+                          capture_output=True, text=True, timeout=600)
 
 
 @pytest.fixture
@@ -211,3 +212,40 @@ def test_a_wrong_consensus_dir_fails_and_quarantines_nothing(tmp_path: Path) -> 
     assert "Nothing quarantined" in r.stderr
     assert len(list(labels.glob("*.kick_weighted.json"))) == 3
     assert not (labels / ".quarantined").exists()
+
+
+# -- ADTOF, the replacement --------------------------------------------------------------------
+
+
+def test_adtof_beats_the_baseline_on_every_synthetic_row() -> None:
+    pytest.importorskip("adtof_pytorch")
+    base = json.loads(S.BASELINE.read_text())
+    got = S.run_synthetic(S.adtof)
+    synthetic_rows = [r for r in S.compare({"synthetic": base["synthetic"], "edm": base["edm"]},
+                                           {"synthetic": got, "edm": base["edm"]})]
+    assert synthetic_rows == [], synthetic_rows
+    assert got["snare_as_kick"] == 0 and got["snare"]["f1"] > 0.9 and got["kick"]["f1"] > 0.9
+    # The committed candidate evidence says the same, edm/ rows included.
+    assert json.loads(S.candidate_path("adtof").read_text())["worse_than_baseline"] == []
+
+
+def test_adtof_generator_writes_attributed_labels_with_co_hits(tmp_path: Path) -> None:
+    pytest.importorskip("adtof_pytorch")
+    from scripts import adtof_labels as A
+
+    tr = S.synth_corpus(0)[0]
+    audio = tmp_path / "mix"
+    audio.mkdir()
+    sf.write(audio / "000001.wav", tr.audio, tr.sr)
+    out = tmp_path / "kw"
+    r = run_gen("--audio-dir", str(audio), "--output-dir", str(out), algorithm="adtof")
+    assert r.returncode == 0, r.stderr
+    lab = json.loads((out / "000001.kick_weighted.json").read_text())
+    assert lab["generator"] == A.GENERATOR and "CC BY-NC-SA" in lab["generator"]["attribution"]
+    assert lab["generator"]["params"]["weights_sha256"] == A.WEIGHTS_SHA256
+    kicks = {round(o["time"], 2) for o in lab["onsets"] if o["type"] == "kick"}
+    snares = {round(o["time"], 2) for o in lab["onsets"] if o["type"] == "snare"}
+    assert kicks & snares, "a kick and a snare at one instant are both kept"
+    # The band generator's dir and ADTOF's never mix.
+    r = run_gen("--audio-dir", str(audio), "--output-dir", str(out), algorithm="bandpass")
+    assert r.returncode == 1 and "adtof_frame_rnn v1 != bandpass_onset_detect v1" in r.stderr

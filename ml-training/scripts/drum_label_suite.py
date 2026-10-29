@@ -21,9 +21,11 @@ before a kick, duplicate kicks, density, and what the clean step (`clean_kick_we
 keeps. These are proxies; no hand-annotated drum reference exists yet.
 
 usage:
-  python scripts/drum_label_suite.py synthetic        # score the current generator
+  python scripts/drum_label_suite.py synthetic [--algorithm adtof]  # score a generator
   python scripts/drum_label_suite.py edm              # score the edm/ labels in the repo
-  python scripts/drum_label_suite.py baseline         # both, written to drum_label_baseline.json
+  python scripts/drum_label_suite.py baseline         # the band generator: drum_label_baseline.json
+  python scripts/drum_label_suite.py candidate --algorithm adtof    # vs the baseline:
+                                                      # drum_label_adtof.json
 """
 
 from __future__ import annotations
@@ -229,6 +231,7 @@ def score_synthetic(truth: list[Event], est: list[Event]) -> dict[str, Any]:
             "precision": round(p, 3), "recall": round(r, 3),
             "f1": round(2 * p * r / (p + r), 3) if p + r else 0.0,
             "timing": _dist([got[j] - ref[i] for i, j in m]),
+            "tp_10ms": sum(1 for i, j in m if abs(got[j] - ref[i]) <= 0.010),
             "duplicates": duplicates(est, kind),
         }
     # A true hit of one type whose only label within tolerance is the other type.
@@ -254,8 +257,13 @@ def _sum_scores(per_track: list[dict[str, Any]]) -> dict[str, Any]:
         est = sum(s[kind]["est"] for s in per_track)
         tp = sum(s[kind]["tp"] for s in per_track)
         p, r = (tp / est if est else 0.0), (tp / ref if ref else 0.0)
+        tp10 = sum(s[kind]["tp_10ms"] for s in per_track)
         out[kind] = {"ref": ref, "est": est, "tp": tp, "precision": round(p, 3),
                      "recall": round(r, 3), "f1": round(2 * p * r / (p + r), 3) if p + r else 0.0,
+                     # True hits labeled as their type AND within 10 ms, out of all true hits.
+                     # `timing.within_10ms` is a share of the MATCHED hits, which rewards
+                     # finding few: 9 of 14 matched snares is 0.64, as is 77 of 120.
+                     "recall_10ms": round(tp10 / ref, 3) if ref else 0.0,
                      "duplicates": sum(s[kind]["duplicates"] for s in per_track)}
     for k in ("snare_as_kick", "kick_as_snare", "phantom_snares"):
         out[k] = sum(s[k] for s in per_track)
@@ -327,13 +335,15 @@ def run_edm(kw_dir: Path = EDM / "kick_weighted", cons_dir: Path = EDM) -> dict[
 # -- the gate ---------------------------------------------------------------------------------
 
 # Every gated row and which way is better. A candidate generator must hold or improve each one
-# against the baseline (`compare`). Timing is gated on |median| and on the share within 10 ms,
-# so a constant offset can't pass for accuracy and a tight spread can't hide a lag.
+# against the baseline (`compare`). Timing is gated on |median| and, on synthetic audio where the
+# truth is known, on the share of TRUE hits labeled within 10 ms (recall_10ms), so a constant
+# offset can't pass for accuracy and finding few hits can't pass for precise timing. Without
+# truth (edm/) it is the share of consensus-matched labels within 10 ms.
 HIGHER, LOWER, CLOSER_TO_0 = "higher", "lower", "closer_to_0"
 GATED: dict[str, str] = {
     "synthetic.kick.f1": HIGHER, "synthetic.snare.f1": HIGHER,
     "synthetic.kick.timing.median_ms": CLOSER_TO_0, "synthetic.snare.timing.median_ms": CLOSER_TO_0,
-    "synthetic.kick.timing.within_10ms": HIGHER, "synthetic.snare.timing.within_10ms": HIGHER,
+    "synthetic.kick.recall_10ms": HIGHER, "synthetic.snare.recall_10ms": HIGHER,
     "synthetic.snare_as_kick": LOWER, "synthetic.kick_as_snare": LOWER,
     "synthetic.kick.duplicates": LOWER, "synthetic.snare.duplicates": LOWER,
     "edm.kick.timing_vs_consensus.median_ms": CLOSER_TO_0,
@@ -368,22 +378,57 @@ def compare(baseline: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
 
 
 def current_generator(y: np.ndarray, sr: int) -> list[Event]:
-    """The generator as it is (generate_kick_weighted_targets.label_audio), as a Labeler."""
+    """The band-onset generator (generate_kick_weighted_targets.label_audio), as a Labeler."""
     sys.path.insert(0, str(ML))
     from scripts.generate_kick_weighted_targets import label_audio
 
     return [(o["time"], o["type"]) for o in label_audio(y, sr)["onsets"]]
 
 
+def adtof(y: np.ndarray, sr: int) -> list[Event]:
+    """ADTOF (scripts/adtof_labels.py), as a Labeler: it reads files, so via a temp WAV."""
+    import tempfile
+
+    import soundfile as sf
+
+    sys.path.insert(0, str(ML))
+    from scripts.adtof_labels import label_file
+
+    with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+        sf.write(f.name, y, sr)
+        return [(o["time"], o["type"]) for o in label_file(Path(f.name))["onsets"]]
+
+
+LABELERS: dict[str, Labeler] = {"bandpass": current_generator, "adtof": adtof}
+
+
+def label_edm_mixes(out_dir: Path) -> Path:
+    """ADTOF labels for edm/'s full mixes (it needs no stems), written like the repo's
+    edm/kick_weighted so run_edm scores them the same way."""
+    sys.path.insert(0, str(ML))
+    from scripts.adtof_labels import label_file
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for mp3 in sorted(EDM.glob("*.mp3")):
+        (out_dir / f"{mp3.stem}.kick_weighted.json").write_text(json.dumps(label_file(mp3)))
+    return out_dir
+
+
+def candidate_path(algorithm: str) -> Path:
+    return BASELINE.with_name(f"drum_label_{algorithm}.json")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("what", choices=["synthetic", "edm", "baseline"])
+    ap.add_argument("what", choices=["synthetic", "edm", "baseline", "candidate"])
+    ap.add_argument("--algorithm", choices=sorted(LABELERS), default="bandpass",
+                    help="synthetic/candidate: which generator to score")
     a = ap.parse_args(argv)
     if a.what == "synthetic":
-        print(json.dumps(run_synthetic(current_generator), indent=2))
+        print(json.dumps(run_synthetic(LABELERS[a.algorithm]), indent=2))
     elif a.what == "edm":
         print(json.dumps(run_edm(), indent=2))
-    else:
+    elif a.what == "baseline":
         import librosa
 
         sys.path.insert(0, str(ML))
@@ -402,6 +447,20 @@ def main(argv: list[str] | None = None) -> int:
         }
         BASELINE.write_text(json.dumps(base, indent=2) + "\n")
         print(f"wrote {BASELINE}")
+    else:  # candidate: the evidence a generator change is judged on
+        import tempfile
+
+        if a.algorithm != "adtof":
+            raise SystemExit("candidate scoring is wired for adtof (edm/ is labeled from mixes)")
+        with tempfile.TemporaryDirectory() as tmp:
+            cand = {"synthetic": run_synthetic(LABELERS[a.algorithm]),
+                    "edm": run_edm(kw_dir=label_edm_mixes(Path(tmp)))}
+        base = json.loads(BASELINE.read_text())
+        out = {"algorithm": a.algorithm, "edm_input": "edm/ full mixes", **cand,
+               "worse_than_baseline": compare(base, cand)}
+        candidate_path(a.algorithm).write_text(json.dumps(out, indent=2) + "\n")
+        print(f"wrote {candidate_path(a.algorithm)}; worse than baseline: "
+              f"{out['worse_than_baseline'] or 'nothing'}")
     return 0
 
 
