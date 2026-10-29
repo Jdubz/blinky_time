@@ -56,8 +56,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     fm = FleetManager(**app.state.fleet_kwargs)
     set_fleet(fm)
     await fm.start()
-    # Durable work (#325), launched after the fleet so recovered jobs find their devices. The
-    # workflows are imported first: DBOS recovers only workflows it knows.
+    # Durable work (#325). Recovered jobs start as soon as it launches, before discovery has
+    # reconnected their devices; their steps wait for them (testing/workflows.py _connected).
+    # The workflows are imported first: DBOS recovers only workflows it knows.
     from ..paths import data_dir
     from ..testing import workflows  # noqa: F401  (registers the test workflows)
     from ..work import durable

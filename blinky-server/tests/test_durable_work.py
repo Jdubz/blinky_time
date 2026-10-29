@@ -146,3 +146,18 @@ async def test_routes_answer_503_without_the_work_store(api_client) -> None:
     r = await api_client.post("/api/test/validate", json={"device_ids": ["x"], "track_dir": "/tmp"})
     assert r.status_code == 503
     assert (await api_client.get("/api/test/jobs")).status_code == 503
+
+
+def test_recovered_job_waits_for_its_devices_to_reconnect(tmp_path: Path) -> None:
+    """Recovery runs as soon as the store launches, before discovery has connected anything.
+    The job must wait for its devices, not play to none and record empty scores for good."""
+    assert harness(tmp_path, "start", "crash:3").returncode == 9
+    r = harness(tmp_path, "resume", "late")
+    assert result(r) == RUNS
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    assert all(set(x["scores"]) == {"dev-a", "dev-b"} for x in res["results"]), res["results"]
+    log = effects(tmp_path)
+    # Nothing was configured or played after the restart until the devices were back.
+    after = log[log.index("play bravo start") + 1 :]
+    first_connect = after.index("dev-a connected")
+    assert not any(x.startswith(("play ", "dev-a cmd")) for x in after[:first_connect])

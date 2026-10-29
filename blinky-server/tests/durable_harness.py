@@ -2,7 +2,7 @@
 test_durable_work.py can kill it for real and start it again (#325).
 
     python -m tests.durable_harness start  OUT KILL   # KILL: none | crash:N | drain:N
-    python -m tests.durable_harness resume OUT
+    python -m tests.durable_harness resume OUT [late]  # late: devices reconnect 1.5 s in
 
 Every device command and playback is appended to OUT/effects.log. ``crash:N`` exits the
 process in the middle of the Nth playback; ``drain:N`` starts the shutdown drain in the middle
@@ -121,7 +121,20 @@ workflows.acquire_audio_lock = lambda ids: True
 workflows.release_audio_lock = lambda: None
 
 
+async def reconnect_late() -> None:
+    """As after a real restart: discovery connects the devices a while after the start."""
+    for d in devices.values():
+        d.state = DeviceState.PRESENT
+    await asyncio.sleep(1.5)
+    for d in devices.values():
+        d.state = DeviceState.CONNECTED
+        effect(f"{d.id} connected")
+
+
 async def main() -> None:
+    if kill == "late":
+        asyncio.get_running_loop().create_task(reconnect_late())
+        await asyncio.sleep(0)
     durable.configure(data_dir())
     await durable.launch()
     wid_file = out / "workflow_id"

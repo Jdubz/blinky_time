@@ -70,6 +70,7 @@ class NotRunning(RuntimeError):
 
 
 _launched = False
+_launched_at: float | None = None
 _draining = False
 _resume = asyncio.Event()  # never set: a drained workflow waits on it until the process exits
 # The tasks of workflows held at a boundary, so shutdown can stop them (running their cleanup,
@@ -98,8 +99,9 @@ def configure(data_dir: Path) -> Path:
 async def launch() -> None:
     """Launch from the server's event loop. DBOS runs async workflows, recovered ones too, on
     the loop that launched it, which is the one the devices' connections belong to."""
-    global _launched, _draining
+    global _launched, _draining, _launched_at
     _draining = False
+    _launched_at = time.monotonic()
     DBOS.launch()
     _launched = True
 
@@ -120,6 +122,12 @@ async def shutdown() -> None:
 
 def launched() -> bool:
     return _launched
+
+
+def since_launch() -> float:
+    """Seconds since the store launched: the restart window recovered work runs in, while
+    discovery is still reconnecting devices."""
+    return time.monotonic() - _launched_at if _launched_at is not None else float("inf")
 
 
 def draining() -> bool:

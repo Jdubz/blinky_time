@@ -36,7 +36,6 @@ from .test_runner import (
     _configure_device,
     _extract_metric,
     _record_and_play,
-    _resolve_devices,
     _serialize_raw_capture,
     _start_streaming,
     _stop_streaming,
@@ -63,6 +62,36 @@ def _fleet() -> Any:
     return get_fleet()
 
 
+# How long after the server starts a job waits for its devices to reconnect. Recovered jobs
+# run as soon as the store launches, before discovery has connected anything; without the
+# wait they would play to no device and record empty scores for good.
+DEVICE_WAIT_S = 120.0
+
+
+async def _connected(device_ids: list[str]) -> list[Any]:
+    """The planned devices that are connected. Within DEVICE_WAIT_S of the server starting,
+    waits for all of them first. With none connected after that, fails loudly; with some, goes
+    on with those and logs the rest, as a run always has."""
+    fleet = _fleet()
+    from ..device.device import DeviceState
+
+    while True:
+        devices = [
+            d
+            for i in device_ids
+            if (d := fleet.get_device(i)) is not None and d.state == DeviceState.CONNECTED
+        ]
+        if len(devices) == len(device_ids) or durable.since_launch() >= DEVICE_WAIT_S:
+            break
+        await asyncio.sleep(1)
+    missing = sorted(set(device_ids) - {d.id for d in devices})
+    if not devices:
+        raise RuntimeError(f"none of the job's devices is connected: {missing}")
+    if missing:
+        log.warning("Devices not connected, skipped this run: %s", [m[:12] for m in missing])
+    return devices
+
+
 @contextlib.asynccontextmanager
 async def session(
     device_ids: list[str],
@@ -77,7 +106,7 @@ async def session(
             raise RuntimeError("Audio lock held by another process")
         try:
             await kill_orphan_audio()
-            devices = _resolve_devices(_fleet(), device_ids)
+            devices = await _connected(device_ids)
             for device in devices:
                 await _configure_device(device, commands)
                 device_cmds = (per_device_commands or {}).get(device.id)
@@ -101,8 +130,9 @@ async def plan(
     seek_sec: float | None,
 ) -> dict[str, Any]:
     """The devices connected now and the tracks to play, fixed for the whole job."""
-    devices = [d.id for d in _resolve_devices(_fleet(), device_ids)]
-    if not devices:
+    try:
+        devices = [d.id for d in await _connected(device_ids)]
+    except RuntimeError:
         return {"error": "No connected devices found"}
     tracks: list[dict[str, Any]] = list(discover_tracks(track_dir))
     if track_names:
@@ -136,7 +166,7 @@ def _raw_path(track: str, run: int, device: str) -> Path:
 
 
 async def _play(device_ids: list[str], track: dict[str, Any], duration_ms: float) -> Any:
-    devices = _resolve_devices(_fleet(), device_ids)
+    devices = await _connected(device_ids)
     playback, recordings = await _record_and_play(
         devices, track["audio_file"], duration_ms=duration_ms, seek_sec=track["seek"]
     )
@@ -225,11 +255,10 @@ async def sweep_run(
     """One run of one track with each device set to its value of this batch."""
     if run > 1:
         await asyncio.sleep(INTER_RUN_GAP_S)
-    fleet = _fleet()
+    connected = {d.id: d for d in await _connected([d for d, _ in assignments])}
     for device_id, value in assignments:
-        device = fleet.get_device(device_id)
-        if device is not None:
-            await device.protocol.send_command(f"set {param_name} {value}")
+        if device_id in connected:
+            await connected[device_id].protocol.send_command(f"set {param_name} {value}")
             await asyncio.sleep(0.1)
     gt = _ground_truth(track, duration_ms)
     devices, playback, recordings = await _play([d for d, _ in assignments], track, duration_ms)
@@ -308,9 +337,7 @@ async def tune_run(
     """One value on one track: the target metric, or None when there is none to average."""
     if gap:
         await asyncio.sleep(INTER_RUN_GAP_S)
-    device = _fleet().get_device(device_id)
-    if device is None:
-        return None
+    device = (await _connected([device_id]))[0]
     await device.protocol.send_command(f"set {param_name} {value}")
     await asyncio.sleep(0.2)
     gt = _ground_truth(track, duration_ms)
@@ -413,9 +440,7 @@ async def tune_threshold(req: dict[str, Any]) -> dict[str, Any]:
 
 @durable.step
 async def nn_capture(device_id: str, duration_ms: float, output: str) -> dict[str, Any]:
-    device = _fleet().get_device(device_id)
-    if device is None:
-        raise RuntimeError(f"Device not found: {device_id}")
+    device = (await _connected([device_id]))[0]
     r = await capture_nn_stream(device, duration_ms, output)
     return {
         "status": "ok",
