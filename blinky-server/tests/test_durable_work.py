@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -304,3 +305,42 @@ def test_every_workflow_has_a_restart_test() -> None:
     for name, ref in RESTART_TESTS.items():
         file, fn = ref.split("::")
         assert f"def {fn}(" in (here / file).read_text(), f"{name}: {ref} doesn't exist"
+
+
+@pytest.mark.asyncio
+async def test_per_device_commands_add_to_the_shared_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#327: a device with its own commands gets one reset, then the shared commands, then its
+    own; a second reset would undo the shared ones."""
+    from types import SimpleNamespace
+
+    from blinky_server.testing import workflows as wf
+
+    sent: dict[str, list[str]] = {"a": [], "b": []}
+
+    def device(dev: str) -> SimpleNamespace:
+        async def send_command(cmd: str) -> str:
+            sent[dev].append(cmd)
+            return "{}"
+
+        return SimpleNamespace(id=dev, protocol=SimpleNamespace(send_command=send_command))
+
+    async def nothing(*a: Any) -> None:
+        return None
+
+    async def connected(ids: list[str]) -> list[Any]:
+        return [device(d) for d in ids]
+
+    monkeypatch.setattr(wf, "jobs", SimpleNamespace(report=lambda *a: None))
+    monkeypatch.setattr(wf, "acquire_audio_lock", lambda ids: True)
+    monkeypatch.setattr(wf, "release_audio_lock", lambda: None)
+    monkeypatch.setattr(wf, "kill_orphan_audio", nothing)
+    monkeypatch.setattr(wf, "stop_audio", nothing)
+    monkeypatch.setattr(wf, "_start_streaming", nothing)
+    monkeypatch.setattr(wf, "_stop_streaming", nothing)
+    monkeypatch.setattr(wf, "_connected", connected)
+    async with wf.session(["a", "b"], ["set x 1"], {"b": ["set y 2"]}):
+        pass
+    assert sent == {
+        "a": ["restore_runtime_settings", "set x 1"],
+        "b": ["restore_runtime_settings", "set x 1", "set y 2"],
+    }
