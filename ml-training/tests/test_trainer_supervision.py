@@ -9,6 +9,7 @@ Needs torch, so it runs in its own CI step.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -25,6 +26,9 @@ torch = pytest.importorskip("torch")
 
 ML = Path(__file__).resolve().parents[1]
 EPOCHS = 40
+sys.path.insert(0, str(ML))
+
+from scripts.mel_frontend import RECORD_FILE, frontend_record, write_record  # noqa: E402
 
 
 @pytest.fixture
@@ -54,6 +58,7 @@ def job(tmp_path: Path) -> dict:
         y = (rng.random((n, 128)) < 0.05).astype(np.float32)
         np.save(data / f"X_{split}.npy", x)
         np.save(data / f"Y_{split}.npy", y)
+    write_record(data, frontend_record("firmware_table"))  # as prepare_dataset.py does (#291)
     work = tmp_path / "work"
     env = {
         **os.environ,
@@ -110,6 +115,10 @@ def test_preempt_resume_and_refuse(job: dict) -> None:
     # Results only inside the declared output; the checkpoint in its own preserved dir.
     for name in ("best_model.pt", "final_model.pt", "model_checkpoint.pt", "training_log.csv"):
         assert (model_dir / name).is_file(), name
+    # The dataset's mel front end travels with the model, for export_tflite.py (#291).
+    assert json.loads((model_dir / RECORD_FILE).read_text()) == frontend_record("firmware_table")
+    assert torch.load(model_dir / "model_checkpoint.pt", weights_only=False)["mel_frontend"] \
+        == frontend_record("firmware_table")
     assert not (model_dir / "training_checkpoint.pt").exists()
     assert len((model_dir / "training_log.csv").read_text().splitlines()) == EPOCHS + 1
     # The checkpoint's best weights are the saved best model's, not the latest weights.
@@ -144,3 +153,17 @@ def test_missing_declarations_fail_loud(job: dict) -> None:
     env = {k: v for k, v in job["env"].items() if k != "SPARK_OUTPUT_MODEL"}
     r = subprocess.run(cmd(job), cwd=ML, env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 1 and "SPARK_OUTPUT_MODEL is unset" in r.stderr
+
+
+def test_unrecorded_or_mismatched_front_end_is_refused(job: dict) -> None:
+    """Features with no front-end record, or another front end than the config's, never train:
+    the model would carry a front end nothing vouches for into the firmware's header (#291)."""
+    data = Path(job["env"]["SPARK_INPUT_DATA"])
+    (data / RECORD_FILE).unlink()
+    r = subprocess.run(cmd(job), cwd=ML, env=job["env"], capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 1 and "mel_frontend.json is missing" in r.stderr
+    write_record(data, frontend_record("librosa_htk"))
+    r = subprocess.run(cmd(job), cwd=ML, env=job["env"], capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 1 and "holds librosa_htk features" in r.stderr

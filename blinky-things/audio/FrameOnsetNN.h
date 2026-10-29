@@ -38,6 +38,31 @@
 // The export_tflite.py script writes directly to this path by default.
 #include "frame_onset_model_data.h"
 
+// The model must have trained on the mel front end this firmware feeds it (#291). The export
+// records it as FRAME_ONSET_MODEL_DATA_MEL_FRONTEND; a header without it predates the record
+// and has to be re-exported (export_tflite.py --mel-frontend, if trained before #291).
+#ifndef FRAME_ONSET_MODEL_DATA_MEL_FRONTEND
+#error "frame_onset_model_data.h records no mel front end (FRAME_ONSET_MODEL_DATA_MEL_FRONTEND): re-export it with ml-training/scripts/export_tflite.py (#291)"
+#endif
+namespace frame_onset_model_check {
+constexpr bool sameString(const char* a, const char* b) {
+    return *a == *b && (*a == '\0' || sameString(a + 1, b + 1));
+}
+// One waiver: v33 (fa087e0a364640ab, deployed since b146) trained on the librosa HTK
+// filterbank (front end 0), not MEL_BANDS[]. #306 ran it on all 18 edm/ tracks with both front
+// ends and measured the same onset F1 (0.609) and kick recall (0.844 vs 0.846), so it stays
+// until the next retrain replaces it. tools/check_model_input.py checks that the embedded
+// bytes really hash to this. No other model gets a waiver: retrain on the firmware's table.
+constexpr const char* WAIVED_LIBROSA_MODEL = "fa087e0a364640ab";
+}  // namespace frame_onset_model_check
+static_assert(FRAME_ONSET_MODEL_DATA_MEL_FRONTEND == SpectralConstants::MEL_FRONTEND_VERSION ||
+              (FRAME_ONSET_MODEL_DATA_MEL_FRONTEND == 0 &&
+               frame_onset_model_check::sameString(FRAME_ONSET_MODEL_DATA_HASH,
+                                                   frame_onset_model_check::WAIVED_LIBROSA_MODEL)),
+              "frame_onset_model_data.h was trained on a mel front end this firmware doesn't run "
+              "(FRAME_ONSET_MODEL_DATA_MEL_FRONTEND != SpectralConstants::MEL_FRONTEND_VERSION). "
+              "Retrain on the firmware's front end (#291).");
+
 class FrameOnsetNN {
 public:
     static constexpr int INPUT_MEL_BANDS = SpectralConstants::NUM_MEL_BANDS;

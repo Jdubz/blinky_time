@@ -27,7 +27,8 @@ import tf_keras as keras
 from tf_keras import layers
 import torch
 
-from scripts.audio import compute_input_features, load_config
+from scripts.audio import MEL_FILTERBANKS, compute_input_features, load_config
+from scripts.mel_frontend import model_record, read_record
 
 
 def build_tf_onset_cnn(n_mels: int, channels: int, kernel_size: int,
@@ -820,7 +821,7 @@ def export_tflite(model: keras.Model, data_path: Path, output_path: str,
 
 
 def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str,
-                       use_pcen: bool = False):
+                       mel_frontend: dict, use_pcen: bool = False):
     """Convert TFLite model bytes to a C header file with integrity metadata."""
     import hashlib
     from datetime import datetime, timezone
@@ -851,6 +852,9 @@ def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str,
 
 #define {macro_prefix}_HASH "{model_hash}"
 #define {macro_prefix}_SIZE {len(tflite_bytes)}{pcen_define}
+// The mel front end it trained on (#291): FrameOnsetNN.h refuses one the firmware doesn't run.
+// {mel_frontend['mel_filterbank']}
+#define {macro_prefix}_MEL_FRONTEND {mel_frontend['version']}
 
 alignas(8) static const unsigned char {c_array_name}[] = {{
 {chr(10).join(hex_lines)}
@@ -992,6 +996,9 @@ def main():
     parser.add_argument("--inference-frames", type=int, default=None,
                         help="Context frames for device inference (default: use training chunk size). "
                              "Smaller = less device RAM. Must be >= receptive field (15 frames).")
+    parser.add_argument("--mel-frontend", choices=MEL_FILTERBANKS, default=None,
+                        help="The mel front end the model trained on, for a model with no "
+                             "record of it (trained before #291). Must agree with any record.")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -1015,6 +1022,30 @@ def main():
         pt_state = checkpoint["state_dict"]
     else:
         pt_state = checkpoint
+    # Written into the header, where the firmware refuses a front end it doesn't run (#291).
+    try:
+        mel_frontend = model_record(
+            Path(args.model),
+            checkpoint.get("mel_frontend") if "state_dict" in checkpoint else None,
+            args.mel_frontend)
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Mel front end: {mel_frontend['mel_filterbank']} (version {mel_frontend['version']})")
+    # Quantization calibrates on data_dir's features, so they must be the same front end.
+    try:
+        calib_frontend = read_record(data_dir)
+    except FileNotFoundError:
+        print(f"WARNING: {data_dir} has no mel front-end record; calibrating on it assumes it "
+              f"is {mel_frontend['mel_filterbank']}", file=sys.stderr)
+    except ValueError as e:
+        print(f"Error: calibration data: {e}", file=sys.stderr)
+        sys.exit(1)
+    else:
+        if calib_frontend != mel_frontend:
+            print(f"Error: the model trained on {mel_frontend}, but the calibration data in "
+                  f"{data_dir} is {calib_frontend}", file=sys.stderr)
+            sys.exit(1)
 
     model_type = cfg["model"].get("type", "causal_cnn")
     n_mels = compute_input_features(cfg)
@@ -1309,7 +1340,7 @@ def main():
     # Export C header
     Path(header_path).parent.mkdir(parents=True, exist_ok=True)
     use_pcen = cfg.get("features", {}).get("use_pcen", False)
-    tflite_to_c_header(tflite_bytes, c_array_name, header_path, use_pcen=use_pcen)
+    tflite_to_c_header(tflite_bytes, c_array_name, header_path, mel_frontend, use_pcen=use_pcen)
     print(f"C header: {header_path}")
 
     # Also save .tflite next to the header for verification/re-export
@@ -1327,7 +1358,7 @@ def main():
     active_header = Path(header_path).parent / f"{c_array_name}.h"
     if active_header.resolve() != Path(header_path).resolve():
         tflite_to_c_header(
-            tflite_bytes, c_array_name, str(active_header), use_pcen=use_pcen
+            tflite_bytes, c_array_name, str(active_header), mel_frontend, use_pcen=use_pcen
         )
         print(f"Active header: {active_header} (matches {Path(header_path).name})")
 

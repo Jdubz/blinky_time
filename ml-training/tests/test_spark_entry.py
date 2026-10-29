@@ -131,10 +131,15 @@ def test_preempt_in_prep_then_prep_and_train(job: dict) -> None:
     prep_steps = r.stdout[: r.stdout.index("Loading data from")]
     assert "STEP 7/7" in prep_steps
     assert re.search(r"^STEP (\d+)/\1$", prep_steps.split("[train] merged")[1], re.M)
-    for name in ("X_train.npy", "Y_train.npy", "X_val.npy", "Y_val.npy", ".prep_done.json"):
+    for name in ("X_train.npy", "Y_train.npy", "X_val.npy", "Y_val.npy", ".prep_done.json",
+                 "mel_frontend.json"):
         assert (processed / name).is_file(), name
-    for name in ("best_model.pt", "final_model.pt", "training_log.csv", "spark_run.json"):
+    for name in ("best_model.pt", "final_model.pt", "training_log.csv", "spark_run.json",
+                 "mel_frontend.json"):
         assert (model / name).is_file(), name
+    # Prep's mel front-end record is what the model publishes, for its export (#291).
+    assert (model / "mel_frontend.json").read_text() == (processed / "mel_frontend.json").read_text()
+    assert json.loads((model / "mel_frontend.json").read_text())["mel_filterbank"] == "firmware_table"
     assert not any(p.suffix == ".npy" for p in model.rglob("*"))  # tensors are never published
     run = json.loads((model / "spark_run.json").read_text())
     assert run["config"] == "configs/tiny.yaml" and run["train_args"] == ["--device", "cpu"]

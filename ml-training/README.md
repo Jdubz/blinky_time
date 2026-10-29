@@ -75,7 +75,8 @@ Each `train_pipeline.sh` run writes to `${BLINKY_WORK}/outputs/<run-name>/` (`BL
 outputs/<run-name>/
 ├── best_model.pt            # Best checkpoint (by early_stopping_metric)
 ├── final_model.pt           # Last epoch
-├── model_checkpoint.pt      # state_dict + config + metadata
+├── model_checkpoint.pt      # state_dict + config + metadata (incl. mel_frontend)
+├── mel_frontend.json        # the dataset's mel front end, for export (#291)
 ├── training_log.csv         # Per-epoch metrics
 └── eval/eval_results.json   # Offline edm/ onset F1
 ```
@@ -86,10 +87,12 @@ outputs/<run-name>/
 
 The model input **must exactly match** the firmware's `SharedSpectralAnalysis::getRawMelBands()` (`blinky-things/audio/SharedSpectralAnalysis.h`):
 - 16 kHz sample rate, Hamming window, FFT-256, hop 256 (62.5 frames/s)
-- 50 mel bands (30–8000 Hz), HTK mel scale
-- Log compression: `10*log10(x + 1e-7)`, mapped [-60, 0] dB to [0, 1]
+- 50 mel bands from the firmware's integer table `MEL_BANDS[]` (30–8000 Hz), each a weighted average; **not** an HTK filterbank (#295)
+- Log compression: `10*log10(x + 1e-7)` with a 1e-6 silence floor, mapped [-60, 0] dB to [0, 1]
 
-The mel pipeline is defined once in `scripts/audio.py` and imported by all scripts. Changing the mel config needs a matching firmware change (`NUM_MEL_BANDS`, `MEL_MIN_FREQ`, `MEL_MAX_FREQ` triplet) and a model the firmware accepts. The v36 config (80 mel, 31.25 kHz) does not match the firmware.
+The spec is `spec/mel_frontend_v1.json`, and `scripts/mel_frontend.py` builds training's front end from it; CI's mel parity test holds both to the firmware. Changing the mel config needs a matching firmware change (`NUM_MEL_BANDS`, `MEL_MIN_FREQ`, `MEL_MAX_FREQ` triplet), a new spec version and a model the firmware accepts. The v36 config (80 mel, 31.25 kHz) does not match the firmware.
+
+**The model carries its front end (#291).** `prepare_dataset.py` writes `mel_frontend.json` into the processed dir, `train.py` copies it beside the model (and into `model_checkpoint.pt`), and `export_tflite.py` writes it into the header as `FRAME_ONSET_MODEL_DATA_MEL_FRONTEND`. The firmware build refuses a header whose front end isn't `SpectralConstants::MEL_FRONTEND_VERSION`, or that records none. The one exception is v33, trained on the librosa filterbank (front end 0) and waived by hash in `FrameOnsetNN.h`. To export a model trained before the record existed, state its front end with `--mel-frontend librosa_htk`; the firmware will refuse it unless it's retrained.
 
 ## Hardware Target
 
