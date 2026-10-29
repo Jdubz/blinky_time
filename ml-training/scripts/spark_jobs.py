@@ -65,6 +65,10 @@ def _api_key() -> str:
 # that meets a restart is sent again, for up to this long.
 RESTART_RETRY_S = 300.0
 RETRY_EVERY_S = 5.0
+# Safe to send again: reads, and the submissions that attach to their pending workflow. A
+# corpus action that met a restart may already have happened; sent again it would be refused
+# ("already running"), so it is reported and the status read instead.
+RESENDABLE = ("/api/spark/separate", "/api/spark/train")
 
 
 def call(method: str, path: str, body: dict | None = None, timeout: float = 600.0) -> dict:
@@ -72,16 +76,22 @@ def call(method: str, path: str, body: dict | None = None, timeout: float = 600.
     connection that dropped mid-request. A refused connection counts only once a restart has
     been seen in this call; on its own it means the server isn't running."""
     deadline = time.monotonic() + RESTART_RETRY_S
+    resendable = method == "GET" or path in RESENDABLE
     restarting = False
     while True:
         try:
             return _call_once(method, path, body, timeout)
         except _Restarting as e:
+            if not resendable:
+                raise CliError(
+                    f"{method} {path}: blinky-server restarted mid-request ({e}); it may have "
+                    f"been applied. Check with `spark_jobs.py corpus status`."
+                ) from None
             restarting = True
             why = str(e)
         except urllib.error.URLError as e:
             refused = isinstance(e.reason, ConnectionRefusedError)
-            if not (restarting and refused):
+            if not (restarting and refused and resendable):
                 raise CliError(f"{method} {path}: {e.reason} (is blinky-server running?)") from None
             why = "not listening yet"
         if time.monotonic() > deadline:
@@ -111,6 +121,11 @@ def _call_once(method: str, path: str, body: dict | None, timeout: float) -> dic
         if e.code == 503 and "restarting" in detail:
             raise _Restarting("HTTP 503: draining") from None
         raise CliError(f"{method} {path} -> HTTP {e.code}: {detail}") from None
+    except urllib.error.URLError as e:
+        # A reset while the body was still being sent arrives wrapped.
+        if isinstance(e.reason, (ConnectionResetError, BrokenPipeError)):
+            raise _Restarting(f"connection dropped: {type(e.reason).__name__}") from None
+        raise
     except (http.client.RemoteDisconnected, ConnectionResetError, http.client.IncompleteRead) as e:
         raise _Restarting(f"connection dropped: {type(e).__name__}") from None
 

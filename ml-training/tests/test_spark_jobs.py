@@ -131,8 +131,22 @@ def test_a_request_meeting_a_restart_is_sent_again(monkeypatch, capsys):
 
     monkeypatch.setattr(spark_jobs, "_call_once", once)
     monkeypatch.setattr(spark_jobs, "RETRY_EVERY_S", 0)
-    assert spark_jobs.call("POST", "/api/spark/reconcile") == {"counts": {"queued": 1}}
+    assert spark_jobs.call("POST", "/api/spark/separate") == {"counts": {"queued": 1}}
     assert capsys.readouterr().err.count("restarting") == 3
+
+
+def test_a_corpus_action_that_met_a_restart_is_reported_not_resent(monkeypatch):
+    """It may already have happened; sent again it would be refused ("already running")."""
+    sent = []
+
+    def once(method, path, body, timeout):
+        sent.append(path)
+        raise spark_jobs._Restarting("connection dropped")
+
+    monkeypatch.setattr(spark_jobs, "_call_once", once)
+    with pytest.raises(spark_jobs.CliError, match="may have been applied"):
+        spark_jobs.call("POST", "/api/spark/corpus/start", {})
+    assert sent == ["/api/spark/corpus/start"]
 
 
 def test_a_draining_503_is_retried_through_the_real_http_path(monkeypatch):
@@ -160,7 +174,7 @@ def test_a_draining_503_is_retried_through_the_real_http_path(monkeypatch):
     monkeypatch.setenv("BLINKY_API_KEY", "k")
     monkeypatch.setattr(spark_jobs, "RETRY_EVERY_S", 0)
     try:
-        assert spark_jobs.call("POST", "/api/spark/reconcile") == {"counts": {}}
+        assert spark_jobs.call("POST", "/api/spark/train") == {"counts": {}}
         assert len(calls) == 2
     finally:
         srv.shutdown()

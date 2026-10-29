@@ -114,3 +114,48 @@ async def test_corpus_loop_holds_the_drain_and_starts_no_tick_while_draining(
     await asyncio.sleep(0.1)
     loop.cancel()
     assert seen and all(s == ["spark corpus tick"] for s in seen)  # each tick held the drain
+
+
+def test_a_torn_ledger_tail_is_dropped_loudly_and_cut_before_the_next_append(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A crash or power cut can leave the last append half-written. That one line is not a
+    record (the rest of the ledger still loads), and the next append mustn't join it."""
+    from blinky_server.spark.client import SparkError
+    from blinky_server.spark.ledger import Ledger
+
+    path = tmp_path / "separate.jsonl"
+    good = json.dumps({"idempotency_key": "k1", "job_id": "j1"}, sort_keys=True)
+    path.write_text(good + "\n" + '{"idempotency_key": "k2", "jo')
+    ledger = Ledger(path)
+    assert [r["job_id"] for r in ledger.rows()] == ["j1"]
+    assert "torn final line" in caplog.text
+    ledger.append({"idempotency_key": "k3", "job_id": "j3"})
+    assert [r["job_id"] for r in ledger.rows()] == ["j1", "j3"]
+    # Corruption anywhere else is still an error, not skipped.
+    path.write_text('{"broken\n' + good + "\n")
+    with pytest.raises(SparkError, match="corrupt ledger line"):
+        ledger.rows()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_is_held_and_skipped_while_draining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    held: list[list[str]] = []
+
+    def reconcile() -> dict:
+        held.append([s["step"] for s in durable.in_flight()])
+        return {}
+
+    svc = SimpleNamespace(corpus=SimpleNamespace(tick=lambda: None), reconcile=reconcile)
+    monkeypatch.setattr(spark, "CORPUS_TICK_S", 0.01)
+    monkeypatch.setattr(spark, "RECONCILE_INTERVAL_S", 0)
+    monkeypatch.setattr(durable, "_draining", True)
+    loop = asyncio.create_task(spark.SparkService.run_forever(svc))  # type: ignore[arg-type]
+    await asyncio.sleep(0.05)
+    assert held == []
+    monkeypatch.setattr(durable, "_draining", False)
+    await asyncio.sleep(0.05)
+    loop.cancel()
+    assert held and all(h == ["spark reconcile"] for h in held)

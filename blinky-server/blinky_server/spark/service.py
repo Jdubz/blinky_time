@@ -594,10 +594,11 @@ class SparkService:
                         await asyncio.to_thread(self.corpus.tick)
                 except Exception:  # a bad tick must not kill the loop
                     log.exception("spark: corpus tick failed")
-            if time.monotonic() - last_reconcile >= RECONCILE_INTERVAL_S:
+            if not durable.draining() and time.monotonic() - last_reconcile >= RECONCILE_INTERVAL_S:
                 last_reconcile = time.monotonic()
                 try:
-                    counts = await asyncio.to_thread(self.reconcile)
+                    with durable.hold("spark reconcile", "spark"):  # it appends to the ledger
+                        counts = await asyncio.to_thread(self.reconcile)
                     if counts:
                         log.info("spark: reconcile %s", counts)
                 except Exception:
