@@ -23,7 +23,7 @@ echo "=== Drum label generation ($ALGORITHM) ==="
 if [ "$ALGORITHM" = adtof ]; then
     AUDIO_DIR="${AUDIO_DIR:-$DATA/audio/combined}"
     # Named for the generator: it refuses a dir another generator wrote (#284).
-    LABELS_DIR="${LABELS_DIR:-$DATA/labels/kick_weighted_adtof_v1}"
+    LABELS_DIR="${LABELS_DIR:-$DATA/labels/kick_weighted_adtof_v2}"
 else
     STEMS_DIR="${STEMS_DIR:-$DATA/stems/htdemucs}"
     AUDIO_DIR="${DRUMS_DIR:-$DATA/audio/drums_only}"

@@ -9,6 +9,7 @@ uses it), so it runs in the trainer-contract CI job.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -215,10 +216,30 @@ def test_a_wrong_consensus_dir_fails_and_quarantines_nothing(tmp_path: Path) -> 
 
 
 # -- ADTOF, the replacement --------------------------------------------------------------------
+#
+# These need the original ADTOF (TensorFlow, madmom), which only CI's adtof job installs. There,
+# BLINKY_REQUIRE_ADTOF=1 turns a missing package into a failure instead of a skip, so the job
+# can't pass by testing nothing.
+
+
+def need_adtof() -> None:
+    if os.environ.get("BLINKY_REQUIRE_ADTOF") == "1":
+        import adtof.model.model  # noqa: F401  (ImportError fails the test)
+    else:
+        pytest.importorskip("adtof.model.model")
+
+
+def test_adtof_checkpoint_pin_is_the_git_blob_sha(tmp_path: Path) -> None:
+    """WEIGHT_BLOBS are git blob shas (what GitHub lists), so the hash must be git's."""
+    from scripts import adtof_labels as A
+
+    f = tmp_path / "x"
+    f.write_bytes(b"hello\n")
+    assert A.git_blob_sha(f) == "ce013625030ba8dba906f756967f9e9ca394464a"  # git hash-object
 
 
 def test_adtof_beats_the_baseline_on_every_synthetic_row() -> None:
-    pytest.importorskip("adtof_pytorch")
+    need_adtof()
     base = json.loads(S.BASELINE.read_text())
     got = S.run_synthetic(S.adtof)
     synthetic_rows = [r for r in S.compare({"synthetic": base["synthetic"], "edm": base["edm"]},
@@ -230,7 +251,7 @@ def test_adtof_beats_the_baseline_on_every_synthetic_row() -> None:
 
 
 def test_adtof_generator_writes_attributed_labels_with_co_hits(tmp_path: Path) -> None:
-    pytest.importorskip("adtof_pytorch")
+    need_adtof()
     from scripts import adtof_labels as A
 
     tr = S.synth_corpus(0)[0]
@@ -242,10 +263,10 @@ def test_adtof_generator_writes_attributed_labels_with_co_hits(tmp_path: Path) -
     assert r.returncode == 0, r.stderr
     lab = json.loads((out / "000001.kick_weighted.json").read_text())
     assert lab["generator"] == A.GENERATOR and "CC BY-NC-SA" in lab["generator"]["attribution"]
-    assert lab["generator"]["params"]["weights_sha256"] == A.WEIGHTS_SHA256
+    assert lab["generator"]["params"]["weight_blobs"] == A.WEIGHT_BLOBS
     kicks = {round(o["time"], 2) for o in lab["onsets"] if o["type"] == "kick"}
     snares = {round(o["time"], 2) for o in lab["onsets"] if o["type"] == "snare"}
     assert kicks & snares, "a kick and a snare at one instant are both kept"
     # The band generator's dir and ADTOF's never mix.
     r = run_gen("--audio-dir", str(audio), "--output-dir", str(out), algorithm="bandpass")
-    assert r.returncode == 1 and "adtof_frame_rnn v1 != bandpass_onset_detect v1" in r.stderr
+    assert r.returncode == 1 and "adtof_frame_rnn v2 != bandpass_onset_detect v1" in r.stderr

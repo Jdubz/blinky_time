@@ -26,7 +26,7 @@ The NN path stays tested in CI: the `tracker-harness-nn` job builds the host har
 | #175 | Raw mel saturates at high SPL, so the low bands lose kick contrast. Needs a pre-gain or PCEN, mirrored in training. `melSaturated`/`melTotal` telemetry is in `json info`. | partial |
 | #178 | Non-overlapping frames (hop = FFT size) make onset strength wobble with hit position. 50 % overlap needs a retrain. | open |
 | #180 | Mel whitening gives little contrast. | open, low priority |
-| #284 | Drum labels (`kick_weighted`) are ~26 ms late, with kick/snare swaps and phantom snares. They are the NN's training targets. | partial — the generator is now ADTOF (`scripts/adtof_labels.py`), which passes every row of the label suite. The corpus is not relabeled yet, so don't train on the old labels |
+| #284 | Drum labels (`kick_weighted`) are ~26 ms late, with kick/snare swaps and phantom snares. They are the NN's training targets. | partial — the generator is now the original ADTOF (`scripts/adtof_labels.py`), which passes every row of the label suite. Relabeling the corpus waits on the Spark's ADTOF runtime (my-spark #1561), so don't train on the old labels |
 | #289 | Hand-curated GT for the 18 edm/ tracks. | open (owner) |
 | #290 | Shift-tolerant loss, replacing the label-widening knobs behind the v26–v28 collapse. | open — blinky's own trainer (it runs on the Spark as a `gpu_task`, plan 0239) |
 | #291 | Publish the mel feature spec (the firmware's integer `MEL_BANDS` table, log and range map) as a versioned contract with golden vectors. | done — spec and golden vectors in `ml-training/spec/` (#295); the model header records its front end and the firmware build refuses another |

@@ -371,15 +371,59 @@ jobs:
       working-directory: ml-training
       run: python -m pytest -v tests/test_spark_entry.py
 
-    - name: Drum label regression suite, ADTOF and generator guards (#284)
-      # The suite a kick/snare label generator must pass, its baseline, ADTOF passing it, and
-      # the generator's refusal to mix labels from two generators in one dir.
+    - name: Drum label regression suite and generator guards (#284)
+      # The suite a kick/snare label generator must pass, its baseline, and the generator's
+      # refusal to mix labels from two generators in one dir. ADTOF's own tests skip here:
+      # they run in the adtof-labeler job, in ADTOF's runtime.
+      working-directory: ml-training
+      run: python -m pytest -v tests/test_drum_label_suite.py
+
+  adtof-labeler:
+    name: ADTOF drum labeler, the original (#284)
+    # The labels' generator: ADTOF's own code, TensorFlow model and weights (CC BY-NC-SA 4.0),
+    # in the runtime the Spark labels in (ml-training/requirements-adtof.txt). Its tests may not
+    # skip here, and the committed evidence (drum_label_adtof.json) must be what it produces.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install ADTOF's runtime
       working-directory: ml-training
       run: |
-        # ADTOF-pytorch has no licence file, so it is installed, pinned, never vendored
-        # (scripts/adtof_labels.py ADTOF_PYTORCH; ADTOF's weights are CC BY-NC-SA 4.0).
-        pip install "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9"
-        python -m pytest -v tests/test_drum_label_suite.py
+        sudo apt-get update && sudo apt-get install -y ffmpeg
+        pip install Cython==3.0.11 numpy==1.26.4
+        pip install --no-build-isolation -r requirements-adtof.txt
+        pip install --no-deps "$(python -c 'from scripts.adtof_labels import ADTOF_PACKAGE; print(ADTOF_PACKAGE)')"
+        pip install pytest
+
+    - name: ADTOF's tests (no skips)
+      working-directory: ml-training
+      env:
+        BLINKY_REQUIRE_ADTOF: "1"
+      run: python -m pytest -v tests/test_drum_label_suite.py -k adtof
+
+    - name: The committed evidence is ADTOF's
+      # Re-scores ADTOF on the synthetic set and edm/'s 18 mixes. A difference means
+      # drum_label_adtof.json isn't what this generator produces: commit the uploaded file.
+      working-directory: ml-training
+      run: |
+        python scripts/drum_label_suite.py candidate --algorithm adtof
+        git diff --exit-code scripts/drum_label_adtof.json
+
+    - name: Upload the regenerated evidence
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: drum_label_adtof
+        path: ml-training/scripts/drum_label_adtof.json
 
   blinky-console-tests:
     name: Blinky Console Tests

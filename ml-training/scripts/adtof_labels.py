@@ -3,17 +3,16 @@
 ADTOF (Zehren et al., https://github.com/MZehren/ADTOF) is a CRNN trained on 359 h of real
 music, transcribing five classes at 100 frames/s. It replaces the band-onset generator because
 it classifies a hit by what the instrument is, not by which frequency band fired first. On the
-drum label suite (drum_label_suite.py) it scores:
-- synthetic kick F1 0.93 and snare F1 1.00, against 0.66 and 0.16 for the band generator;
-- 0 snares labeled kicks, against 106 of 120;
-- edm/ timing 0 ms against consensus, against +26 ms;
-- edm/ phantom snares 0.2 %, against 14.6 %.
+drum label suite (drum_label_suite.py; the numbers in drum_label_adtof.json) it beats the band
+generator on every row: no snare labeled a kick (against 106 of 120), timing on edm/ at the
+onset consensus (against +26 ms late), and almost no phantom snares (against 14.6 %).
 
-It runs through ADTOF-pytorch (https://github.com/xavriley/ADTOF-pytorch), a PyTorch port with
-the weights bundled. That port has no licence file, so it is an installed dependency, pinned
-below, and never copied into this repo. ADTOF's model and weights are licensed CC BY-NC-SA 4.0:
-non-commercial use only, which blinky_time is, with attribution, and share-alike for adapted
-material. Labels made with it carry that attribution in their `generator` field.
+This runs the original: its own code, TensorFlow model and weights, pinned to one commit. Its
+repository's content, code and weights alike, is licensed CC BY-NC-SA 4.0 (its README and
+LICENSE): non-commercial use only, which blinky_time is, with attribution, and share-alike for
+adapted material. Labels made with it carry that attribution in their `generator` field. It is
+an installed dependency (the Spark's `adtof` runtime, my-spark #1561; CI's adtof job), never
+copied into this repo. It is not the PyTorch port, which has no licence.
 
 ADTOF labels the audio it is given: a full mix or a drum stem. Kick (GM 35), snare (38) and
 hi-hat (42, weight 0, kept so the schema matches the band generator's) are written; toms and
@@ -28,9 +27,18 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-ADTOF_PYTORCH = "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9"
-WEIGHTS_SHA256 = "1bc986e596ec47ba0b44916f87cd4a39f0b2bec23596df3fb5d0e87749217320"
-# The port's tuned per-class peak-picking thresholds, in its class order (BD, SD, TT, HH, CY).
+ADTOF_COMMIT = "b3968fb332f69b65ee07c089fc62f436503755db"
+ADTOF_PACKAGE = f"ADTOF @ git+https://github.com/MZehren/ADTOF@{ADTOF_COMMIT}"
+MODEL = {"modelName": "Frame_RNN", "scenario": "adtofAll", "fold": 0}
+# The checkpoint the package ships (adtof/models/), pinned by git blob sha at ADTOF_COMMIT, so
+# they are checkable against GitHub without downloading anything.
+WEIGHT_BLOBS = {
+    "Frame_RNN_adtofAll_0.index": "c835b33d1981a6bff634b8137bb4d546fb9ded74",
+    "Frame_RNN_adtofAll_0.data-00000-of-00001": "38df829b7590315306cc3ad3923cb9b085a9f400",
+}
+# Frame_RNN's tuned per-class peak-picking thresholds, in ADTOF's class order
+# (config.LABELS_5: BD 35, SD 38, TT 47, HH 42, CY+RD 49).
+LABELS_5 = [35, 38, 47, 42, 49]
 THRESHOLDS = [0.22, 0.24, 0.32, 0.22, 0.30]
 FPS = 100
 CLASSES = {35: ("kick", 1.0), 38: ("snare", 1.0), 42: ("hihat", 0.0)}
@@ -39,10 +47,12 @@ RMS_SR = 16000
 
 GENERATOR: dict[str, Any] = {
     "algorithm": "adtof_frame_rnn",
-    "version": 1,
+    # v1 was the unlicensed PyTorch port; v2 is the original. Their labels never mix.
+    "version": 2,
     "params": {
-        "package": ADTOF_PYTORCH,
-        "weights_sha256": WEIGHTS_SHA256,
+        "package": ADTOF_PACKAGE,
+        "model": MODEL,
+        "weight_blobs": WEIGHT_BLOBS,
         "thresholds": THRESHOLDS,
         "fps": FPS,
         "classes": {str(k): v[0] for k, v in CLASSES.items()},
@@ -53,39 +63,45 @@ GENERATOR: dict[str, Any] = {
 }
 
 
-@lru_cache(maxsize=1)
-def _model() -> Any:
-    """Load once per process. Refuse weights that aren't the pinned ones, and refuse a partial
-    load: the port defaults to strict=False, which would label with a half-loaded model."""
-    from adtof_pytorch import (
-        FRAME_RNN_THRESHOLDS,
-        calculate_n_bins,
-        create_frame_rnn_model,
-        get_default_weights_path,
-        load_pytorch_weights,
-    )
+def git_blob_sha(path: Path) -> str:
+    """The sha git (and GitHub's contents API) gives a file: sha1 of `blob <size>\\0<bytes>`."""
+    data = path.read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
-    path = get_default_weights_path()
-    if path is None:
-        raise RuntimeError("adtof_pytorch ships no weights")
-    got = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    if got != WEIGHTS_SHA256:
-        raise RuntimeError(f"ADTOF weights {got[:12]} are not the pinned {WEIGHTS_SHA256[:12]}; "
-                           f"install {ADTOF_PYTORCH}")
-    if list(FRAME_RNN_THRESHOLDS) != THRESHOLDS:
-        raise RuntimeError(f"adtof_pytorch's thresholds {FRAME_RNN_THRESHOLDS} != {THRESHOLDS}")
-    model = create_frame_rnn_model(calculate_n_bins())
-    model = load_pytorch_weights(model, path, strict=True)
-    model.eval()
-    return model
+
+@lru_cache(maxsize=1)
+def _model() -> tuple[Any, dict]:
+    """Load once per process. Refuse a checkpoint that isn't the pinned one, thresholds that
+    aren't Frame_RNN's, and a partial load: ADTOF's `load_weights` doesn't check that every
+    variable was restored, and a half-loaded model labels plausibly and wrongly."""
+    from adtof import config
+    from adtof.model.model import Model
+
+    for name, want in WEIGHT_BLOBS.items():
+        path = Path(config.CHECKPOINT_DIR) / name
+        if not path.is_file():
+            raise RuntimeError(f"ADTOF checkpoint {path} is missing; install {ADTOF_PACKAGE}")
+        got = git_blob_sha(path)
+        if got != want:
+            raise RuntimeError(f"ADTOF checkpoint {name} is blob {got[:12]}, not the pinned "
+                               f"{want[:12]}; install {ADTOF_PACKAGE}")
+    model, hparams = Model.modelFactory(**MODEL)
+    if not model.weightLoadedFlag:
+        raise RuntimeError(f"ADTOF loaded no weights from {config.CHECKPOINT_DIR}")
+    model.model.load_weights(model.path).assert_existing_objects_matched()
+    if list(config.LABELS_5) != LABELS_5 or list(hparams["labels"]) != LABELS_5:
+        raise RuntimeError(f"ADTOF's classes {hparams['labels']} != {LABELS_5}")
+    if [round(t, 6) for t in hparams["peakThreshold"]] != THRESHOLDS:
+        raise RuntimeError(f"ADTOF's thresholds {hparams['peakThreshold']} != {THRESHOLDS}")
+    if hparams["sampleRate"] != FPS:
+        raise RuntimeError(f"ADTOF's frame rate {hparams['sampleRate']} != {FPS}")
+    return model, hparams
 
 
 def label_file(path: Path) -> dict[str, Any]:
     """The labels for one audio file, in the kick_weighted schema."""
     import librosa
     import numpy as np
-    import torch
-    from adtof_pytorch import LABELS_5, PeakPicker, load_audio_for_model
 
     y, _ = librosa.load(str(path), sr=RMS_SR, mono=True)
     rms = float(np.sqrt(np.mean(y**2))) if len(y) else 0.0
@@ -96,9 +112,16 @@ def label_file(path: Path) -> dict[str, Any]:
                 "total": 0, "skipped": True,
                 "skip_reason": f"silent audio (RMS={rms:.6f} < {MIN_RMS})"}
 
-    with torch.no_grad():
-        act = _model()(load_audio_for_model(str(path))).cpu().numpy()
-    peaks = PeakPicker(thresholds=THRESHOLDS, fps=FPS).pick(act, labels=LABELS_5)[0]
+    # What ADTOF's Model.predictFolder does per track, minus its catch-all: it logs an
+    # exception and moves on, which would leave a track silently unlabeled.
+    from adtof.model.peakPicking import PeakPicking
+    from adtof.model.track import Track
+
+    model, hparams = _model()
+    act = model.predict(Track(str(path), **hparams), **hparams)
+    pp = PeakPicking()
+    pp.setParameters(**hparams)
+    peaks = pp.predict([act], **hparams)[0]
     onsets = sorted(
         ({"time": round(float(t), 4), "weight": CLASSES[p][1], "type": CLASSES[p][0]}
          for p, times in peaks.items() if p in CLASSES for t in times),
