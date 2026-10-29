@@ -144,8 +144,8 @@ def test_submit_shape(svc: spark.SparkService, fake: FakeSpark, music: Path) -> 
     spec = fake.submits[0]
     assert spec["type"] == "separate"
     assert spec["priority"] == 0  # never negative: eviction victim otherwise
-    # below the platform's measured floor, so its number governs the reservation, not ours
-    assert 0 < spec["memory_estimate_gb"] < 3.0
+    # at the platform's measured floor: what we expect to use, never leaning on the floor (#316)
+    assert spec["memory_estimate_gb"] == spark.SEPARATE_MEMORY_GB == 3.0
     # chunk_seconds omitted = the native segment; stems go to a prefix the reaper never visits
     assert spec["payload"] == {
         "audio": "inputs/u1/track.mp3",
