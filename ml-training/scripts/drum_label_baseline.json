@@ -9,6 +9,7 @@
       "precision": 0.563,
       "recall": 0.782,
       "f1": 0.655,
+      "recall_10ms": 0.069,
       "duplicates": 3,
       "timing": {
         "median_ms": 19.4,
@@ -24,6 +25,7 @@
       "precision": 0.255,
       "recall": 0.117,
       "f1": 0.16,
+      "recall_10ms": 0.075,
       "duplicates": 4,
       "timing": {
         "median_ms": 9.5,
