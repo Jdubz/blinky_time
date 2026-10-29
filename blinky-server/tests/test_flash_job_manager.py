@@ -2295,8 +2295,66 @@ async def test_dfu_recovery_to_disconnected_transition_when_serial_reappears(
     assert device.port == "/dev/ttyACM-fresh"
     # Transport rebuilt (the old one was stale — port may have changed).
     assert isinstance(device.transport, MockTransport)
-    # Reconnect-backoff state cleared.
+    # Reconnect-backoff state cleared; an active hold is its owner's to release (#212).
     assert sn not in fleet._reconnect_failures
-    assert sn not in fleet._reconnect_blackout
+    assert sn in fleet._reconnect_blackout
     # Discovery snapshot refreshed so reconnect loop sees serial type.
     assert fleet._device_discovery[sn] is fresh_disc
+
+
+@pytest.mark.asyncio
+async def test_a_release_hold_survives_usb_re_enumeration(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#212: a device released with a hold for a bootloader flash re-enumerates when the BL
+    reboots. Discovery used to clear the hold then, and the server took the port back before
+    the app flash could open it."""
+    from blinky_server.device import manager as mgr_mod
+    from blinky_server.device.device import Device, DeviceState
+    from blinky_server.transport.discovery import DiscoveredDevice
+
+    from .mock_transport import MockTransport
+
+    sn = "AABBCCDDEEFF0012"
+    transport = MockTransport(transport_type="serial")
+    device = Device(
+        device_id=sn,
+        port="/dev/ttyACM0",
+        platform="nrf52840",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    device.state = DeviceState.CONNECTED
+    fleet._devices[sn] = device
+    assert await fleet.release_device(sn, hold_seconds=600)
+    assert device.state is DeviceState.DISCONNECTED
+
+    fresh = DiscoveredDevice(
+        device_id=sn, platform="nrf52840", transport_type="serial", address="/dev/ttyACM1"
+    )
+
+    async def fake_discover_all(**_kwargs: Any) -> list[DiscoveredDevice]:
+        return [fresh]
+
+    rebuilt: list[MockTransport] = []
+
+    def fake_create_transport(disc: DiscoveredDevice) -> Any:
+        rebuilt.append(MockTransport(transport_type="serial"))
+        return rebuilt[-1]
+
+    monkeypatch.setattr(mgr_mod, "discover_all", fake_discover_all)
+    monkeypatch.setattr(mgr_mod, "_create_transport", fake_create_transport)
+    monkeypatch.setattr(fleet, "_refresh_dedup_exclusions", lambda: None)
+    monkeypatch.setattr(
+        "blinky_server.transport.discovery.discover_serial_devices", lambda: [fresh]
+    )
+
+    await fleet._discover_and_connect()  # the BL reboot: the device is back, on a new port
+    await fleet._reconnect_disconnected()
+    assert device.port == "/dev/ttyACM1"
+    assert sn in fleet._reconnect_blackout
+    assert device.state is DeviceState.DISCONNECTED  # still released: the port stays free
+    assert not any(t.is_connected for t in rebuilt)
+
+    fleet.resume_reconnect(sn)  # the operator's /reconnect, or the hold expiring
+    await fleet._reconnect_disconnected()
+    assert device.state is DeviceState.CONNECTED
