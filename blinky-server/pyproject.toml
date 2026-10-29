@@ -11,6 +11,9 @@ dependencies = [
     "pyserial-asyncio-fast>=0.13",
     "pydantic>=2.0",
     "websockets>=13.0",
+    # Durable work (#325): long-running jobs as workflows that survive restarts. Pinned: its
+    # recovery and replay semantics are load-bearing (blinky_server/work/durable.py).
+    "dbos==3.4.0",
 ]
 
 [project.optional-dependencies]

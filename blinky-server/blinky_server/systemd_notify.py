@@ -68,6 +68,13 @@ def stopping() -> None:
     _send("STOPPING=1\n")
 
 
+def extend_timeout(seconds: float) -> None:
+    """Ask systemd for ``seconds`` more in the current state (EXTEND_TIMEOUT_USEC=, systemd
+    >= 236): sent again before it lapses, it holds a graceful stop past TimeoutStopSec= while
+    the drain waits for in-flight steps (work/durable.py)."""
+    _send(f"EXTEND_TIMEOUT_USEC={int(seconds * 1_000_000)}\n")
+
+
 def watchdog_sec() -> float | None:
     """Return WatchdogSec= from systemd (in seconds), or None if unset.
 
