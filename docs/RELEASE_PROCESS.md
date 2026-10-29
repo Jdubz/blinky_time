@@ -69,6 +69,7 @@ Flashes the candidate through `deploy_local.py --release bN`, then checks:
 | stability | no reboot for 5 min (`--stable-minutes`); `audioOverruns` grows ≤ 5 |
 | asserts | no `[ASSERT]` / `[FALLBACK]` on the console |
 | music | with music playing (it prompts): level mean ≥ 0.05, ≥ 1 pulse onset/s |
+| beatpace | with the music still playing, 60 s (`--pace-seconds`) of `json rhythm`: the beats counted (`beatCount`) match the reported tempo integrated over wall-clock time within 3 % (`--max-pace-error`, at least ±2 beats). The beat phase keeps absolute time under load: one advanced per loop frame would fall behind when frames run late (#258, #261). |
 | operator | a human confirms the visuals look right (prompt, or `--operator-confirmed "<note>"`) |
 
 The result is attached to the release as `gate-<device>.json`, pass or fail.

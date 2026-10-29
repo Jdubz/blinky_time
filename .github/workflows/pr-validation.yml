@@ -124,6 +124,18 @@ jobs:
         g++ -std=c++17 -Wall -Wextra -O1 -g -fsanitize=undefined,float-cast-overflow,float-divide-by-zero           -fno-sanitize-recover=all -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840           -I blinky-simulator/include -I blinky-things tests/timing/timing_test.cpp           blinky-things/types/PixelMatrix.cpp blinky-things/types/BlinkyAssert.cpp           blinky-things/physics/PhysicsContext.cpp blinky-things/particles/Particle.cpp           blinky-things/math/SimplexNoise.cpp blinky-things/generators/Fire.cpp           blinky-things/generators/Water.cpp blinky-things/generators/PlasmaGlobe.cpp           blinky-things/generators/Audio.cpp -o build/timing_test
         build/timing_test
 
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    # The bench side of the same property: the release gate's beatpace check compares the
+    # beats a device counts with its tempo integrated over wall-clock time (#258).
+    - name: Release gate beat-pace arithmetic
+      run: |
+        pip install pytest pyserial
+        python -m pytest -v tests/tools/test_release_gate.py
+
   static-init-safety:
     name: Static Init Safety Check
     runs-on: ubuntu-latest

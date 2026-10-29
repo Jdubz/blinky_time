@@ -22,6 +22,12 @@ Checks (each one must pass):
   music        with music playing near the device (operator starts it when
                prompted): normalized mic level mean >= --min-level and
                >= --min-onsets-per-s pulse onsets
+  beatpace     with the music still playing, the beats counted (json rhythm
+               beatCount) over --pace-seconds match the reported tempo
+               integrated over wall-clock time, within --max-pace-error. The
+               beat phase must keep absolute time under load: a phase that
+               advanced per loop frame would fall behind as frames ran late
+               (#258, #261)
   operator     the operator confirms the visuals look right (prompt, or
                --operator-confirmed "<note>" when a human already confirmed)
 
@@ -99,6 +105,54 @@ def music_check(port, seconds, asserts):
             "samples": len(levels)}
 
 
+def beat_pace(samples):
+    """Beats counted vs beats the reported tempo predicts, over [(wall_s, bpm, beatCount)].
+
+    beatCount is the firmware's uint16 count of beat-phase wraps; it wraps at 65536. The
+    prediction integrates bpm over wall-clock time (trapezoid), so it holds while the tempo
+    moves. Returns None when fewer than two samples, or no tempo was tracked."""
+    if len(samples) < 2:
+        return None
+    counted, expected = 0, 0.0
+    for (t0, b0, c0), (t1, b1, c1) in zip(samples, samples[1:]):
+        counted += (c1 - c0) % 65536
+        expected += (b0 + b1) / 2 / 60 * (t1 - t0)
+    if expected <= 0:
+        return None
+    return {"counted": counted, "expected": round(expected, 1),
+            "error": round(abs(counted - expected) / expected, 3),
+            "seconds": round(samples[-1][0] - samples[0][0], 1)}
+
+
+def json_rhythm(port):
+    """One `json rhythm` reply as a dict, or None."""
+    for line in deploy_local.send(port, "json rhythm", wait_s=0.5).splitlines():
+        line = line.strip()
+        if line.startswith("{") and '"beatCount"' in line:
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def pace_check(port, seconds, max_error):
+    """Poll json rhythm for `seconds` and compare beats counted with the tempo's prediction."""
+    samples, end = [], time.monotonic() + seconds
+    while time.monotonic() < end:
+        r = json_rhythm(port)
+        if r is not None:
+            samples.append((time.monotonic(), float(r["bpm"]), int(r["beatCount"])))
+        time.sleep(1.0)
+    pace = beat_pace(samples)
+    if pace is None:
+        return {"pass": False, "detail": f"no tempo tracked ({len(samples)} json rhythm samples)"}
+    # A beat either way is sampling, not drift: ±1 at each end of the window.
+    pace["pass"] = abs(pace["counted"] - pace["expected"]) <= max(2.0, max_error * pace["expected"])
+    pace["limit"] = max_error
+    return pace
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("tag", help="release tag, e.g. b214")
@@ -113,6 +167,10 @@ def main():
     ap.add_argument("--music-seconds", type=float, default=15.0)
     ap.add_argument("--min-level", type=float, default=0.05)
     ap.add_argument("--min-onsets-per-s", type=float, default=1.0)
+    ap.add_argument("--pace-seconds", type=float, default=60.0,
+                    help="window for the beatpace check (music still playing)")
+    ap.add_argument("--max-pace-error", type=float, default=0.03,
+                    help="beats counted may differ from the tempo's prediction by this fraction")
     ap.add_argument("--music-ready", action="store_true",
                     help="music is already playing; don't wait for Enter")
     ap.add_argument("--operator-confirmed", metavar="NOTE",
@@ -182,6 +240,8 @@ def main():
         m["pass"] = (m.get("level_mean", 0) >= args.min_level
                      and m.get("onsets_per_s", 0) >= args.min_onsets_per_s)
         checks["music"] = m
+        log(f"=== Beat pace: {args.pace_seconds:.0f} s (keep the music playing) ===")
+        checks["beatpace"] = pace_check(args.port, args.pace_seconds, args.max_pace_error)
         checks["asserts"] = {"pass": not asserts, "lines": asserts[:20]}
 
         log("=== Operator ===")
