@@ -217,29 +217,41 @@ class SparkService:
         At most SEPARATE_BATCH_MAX tracks per call (#314): a corpus goes through the corpus
         pass, batch by batch. Blocking (uploads, HTTP): call it from a worker thread."""
         stems = stems or ["drums"]
+        tracks = self.check_separate(files, model_type, stems, chunk_seconds)
+        return [
+            self.separate_one(str(p), sha256_file(p), model_type, stems, chunk_seconds)
+            for p in tracks
+        ]
+
+    def check_separate(
+        self, files: list[str], model_type: str, stems: list[str], chunk_seconds: int | None
+    ) -> list[Path]:
+        """The request's tracks, or a SparkError for the whole batch: run before any upload."""
         check_request(model_type, stems, chunk_seconds)
         if len(files) > SEPARATE_BATCH_MAX:
             raise SparkError(
                 f"{len(files)} tracks in one call; the limit is {SEPARATE_BATCH_MAX}. "
                 f"Separate a corpus with the corpus pass, which runs it in drained batches"
             )
-        tracks = [self._audio_path(f) for f in files]  # refuse the whole batch on one bad path
+        return [self._audio_path(f) for f in files]  # refuse the whole batch on one bad path
+
+    def separate_one(
+        self, path: str, sha: str, model_type: str, stems: list[str], chunk_seconds: int | None
+    ) -> dict[str, Any]:
+        """One local track: skipped if the ledger has it, else uploaded (once: the ledger
+        remembers the key) and submitted. Safe to repeat: a durable step (spark/workflows.py)
+        that a restart cut off runs it again, and the ledger and the idempotency key make the
+        second run a skip or a reattach, never a second job."""
         known = self.ledger.records()
-        uploaded: dict[str, str] = {r["sha256"]: r["audio"] for r in known.values()}
-        out = []
-        for path in tracks:
-            sha = sha256_file(path)
+        uploaded = next((r["audio"] for r in known.values() if r.get("sha256") == sha), None)
+        p = Path(path)
 
-            def audio(path: Path = path, sha: str = sha) -> str:
-                uploaded[sha] = uploaded.get(sha) or self.client.upload(path)
-                return uploaded[sha]
+        def audio() -> str:
+            return uploaded or self.client.upload(p)
 
-            out.append(
-                self.submit_separate(
-                    str(path), sha, audio, path.stem, model_type, stems, chunk_seconds, known
-                )
-            )
-        return out
+        return self.submit_separate(
+            path, sha, audio, p.stem, model_type, stems, chunk_seconds, known
+        )
 
     def submit_separate(
         self,
@@ -571,15 +583,22 @@ class SparkService:
     async def run_forever(self) -> None:
         """The corpus pass every CORPUS_TICK_S; the reconcile poll every RECONCILE_INTERVAL_S."""
         last_reconcile = float("-inf")
+        from ..work import durable
+
         while True:
-            try:
-                await asyncio.to_thread(self.corpus.tick)
-            except Exception:  # a bad tick must not kill the loop
-                log.exception("spark: corpus tick failed")
-            if time.monotonic() - last_reconcile >= RECONCILE_INTERVAL_S:
+            # A drain (a restart, #325) waits for a tick in progress (a batch being submitted)
+            # and starts no new one; the pass is in corpus.json and carries on after.
+            if not durable.draining():
+                try:
+                    with durable.hold("spark corpus tick", "spark"):
+                        await asyncio.to_thread(self.corpus.tick)
+                except Exception:  # a bad tick must not kill the loop
+                    log.exception("spark: corpus tick failed")
+            if not durable.draining() and time.monotonic() - last_reconcile >= RECONCILE_INTERVAL_S:
                 last_reconcile = time.monotonic()
                 try:
-                    counts = await asyncio.to_thread(self.reconcile)
+                    with durable.hold("spark reconcile", "spark"):  # it appends to the ledger
+                        counts = await asyncio.to_thread(self.reconcile)
                     if counts:
                         log.info("spark: reconcile %s", counts)
                 except Exception:

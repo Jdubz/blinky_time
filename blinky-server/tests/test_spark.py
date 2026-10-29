@@ -536,7 +536,9 @@ def test_train_success_must_prove_code_and_model(
     assert ("code_sha256" if bad == "code" else "best_model.pt") in rec["error"]
 
 
-async def test_train_route(tsvc: spark.SparkService, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_train_route(
+    tsvc: spark.SparkService, monkeypatch: pytest.MonkeyPatch, work_store: None
+) -> None:
     monkeypatch.setattr(deps, "_api_key", "k")
     ok = {"X-API-Key": "k"}
     spark.set_service(tsvc)

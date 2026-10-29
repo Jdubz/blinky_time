@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ..spark import corpus
 from ..spark import service as spark
 from ..spark.client import SparkError
+from ..work import durable
 from .deps import require_api_key
 
 log = logging.getLogger(__name__)
@@ -36,15 +37,35 @@ class SeparateRequest(BaseModel):
     chunk_seconds: int | None = None
 
 
+async def _durably(kind: str, fn: Any, *args: Any) -> Any:
+    """Run a submission as a durable workflow (#325) and wait for it: a restart part-way
+    through resumes it, and the same request sent again attaches to it while it's pending."""
+    from ..spark import workflows
+
+    try:
+        return await workflows.run(kind, fn, *args)
+    except durable.Draining as e:
+        raise HTTPException(503, str(e), headers={"Retry-After": "30"}) from e
+    except durable.NotRunning as e:
+        raise HTTPException(503, str(e)) from e
+    except SparkError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @router.post("/separate", dependencies=[Depends(require_api_key)])
 async def separate(req: SeparateRequest) -> dict[str, Any]:
+    from ..spark import workflows
+
     svc = _svc()
-    try:
-        results = await asyncio.to_thread(
-            svc.separate, req.files, req.model_type, req.stems, req.chunk_seconds
+    try:  # a bad batch fails now, before anything is uploaded
+        await asyncio.to_thread(
+            svc.check_separate, req.files, req.model_type, req.stems, req.chunk_seconds
         )
     except SparkError as e:
         raise HTTPException(400, str(e)) from None
+    results = await _durably(
+        "separate", workflows.separate, req.files, req.model_type, req.stems, req.chunk_seconds
+    )
     return {"results": results}
 
 
@@ -60,20 +81,11 @@ class TrainRequest(BaseModel):
 
 @router.post("/train", dependencies=[Depends(require_api_key)])
 async def train(req: TrainRequest) -> dict[str, Any]:
-    svc = _svc()
-    try:
-        return await asyncio.to_thread(
-            svc.train,
-            req.config,
-            req.train_args,
-            req.prep_args,
-            req.audio_dir,
-            req.labels_dir,
-            req.augment,
-            req.memory_gb,
-        )
-    except SparkError as e:
-        raise HTTPException(400, str(e)) from None
+    from ..spark import workflows
+
+    _svc()
+    result: dict[str, Any] = await _durably("train", workflows.train, req.model_dump())
+    return result
 
 
 class CorpusStartRequest(BaseModel):

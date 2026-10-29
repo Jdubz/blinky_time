@@ -148,3 +148,18 @@ async def api_client(
         yield client
 
     set_fleet(None)  # type: ignore[arg-type]
+
+
+@pytest_asyncio.fixture
+async def work_store(tmp_path: Path) -> AsyncGenerator[None, None]:
+    """A real durable work store (#325) in a tmp dir, launched on the test's event loop, for
+    route tests that run workflows (apps built without their lifespan have none)."""
+    from blinky_server.firmware import fleet_workflows  # noqa: F401  (register before launch)
+    from blinky_server.spark import workflows as _spark  # noqa: F401
+    from blinky_server.testing import workflows  # noqa: F401
+    from blinky_server.work import durable
+
+    durable.configure(tmp_path)
+    await durable.launch()
+    yield
+    await durable.shutdown()

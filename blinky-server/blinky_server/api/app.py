@@ -61,14 +61,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The workflows are imported first: DBOS recovers only workflows it knows.
     from ..firmware import fleet_workflows  # noqa: F401  (registers fleet flash and deploy)
     from ..paths import data_dir
+    from ..spark import workflows as _spark  # noqa: F401  (registers separate and train)
     from ..testing import workflows  # noqa: F401  (registers the test workflows)
     from ..work import durable
 
+    # The Spark client (#288) is optional: unconfigured, its routes answer 503 and nothing
+    # else changes. Built before the launch: a recovered spark.separate/train step needs it,
+    # and would otherwise fail for good on "Spark client not started" (#325 review).
+    svc = spark_service.start()
     durable.configure(data_dir())
     await durable.launch()
-    # The Spark client (#288) is optional: unconfigured, its routes answer 503 and nothing
-    # else changes. Configured, a reconcile poll backs up the webhook.
-    svc = spark_service.start()
+    # Configured, a reconcile poll backs up the webhook.
     reconcile_task = asyncio.create_task(svc.run_forever()) if svc else None
     # READY only after the fleet loop is running. With Type=notify, systemd
     # holds dependents (Caddy, Hub) until this fires, so don't lie about

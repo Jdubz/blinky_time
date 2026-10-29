@@ -109,3 +109,72 @@ def test_unreachable_server_is_an_error(monkeypatch, capsys):
     monkeypatch.setenv("BLINKY_API_KEY", "k")
     assert spark_jobs.main(["reconcile"]) == 2
     assert "is blinky-server running" in capsys.readouterr().err
+
+
+def test_a_request_meeting_a_restart_is_sent_again(monkeypatch, capsys):
+    """blinky-server drains on a restart and resumes a submission after (#325); the CLI sends
+    the request again (it attaches to the resumed job) instead of failing."""
+    import urllib.error
+
+    answers = [
+        spark_jobs._Restarting("HTTP 503: draining"),
+        spark_jobs._Restarting("connection dropped"),  # the restart cut the response
+        urllib.error.URLError(ConnectionRefusedError(111, "refused")),  # not up yet
+        {"counts": {"queued": 1}},
+    ]
+
+    def once(method, path, body, timeout):
+        a = answers.pop(0)
+        if isinstance(a, BaseException):
+            raise a
+        return a
+
+    monkeypatch.setattr(spark_jobs, "_call_once", once)
+    monkeypatch.setattr(spark_jobs, "RETRY_EVERY_S", 0)
+    assert spark_jobs.call("POST", "/api/spark/separate") == {"counts": {"queued": 1}}
+    assert capsys.readouterr().err.count("restarting") == 3
+
+
+def test_a_corpus_action_that_met_a_restart_is_reported_not_resent(monkeypatch):
+    """It may already have happened; sent again it would be refused ("already running")."""
+    sent = []
+
+    def once(method, path, body, timeout):
+        sent.append(path)
+        raise spark_jobs._Restarting("connection dropped")
+
+    monkeypatch.setattr(spark_jobs, "_call_once", once)
+    with pytest.raises(spark_jobs.CliError, match="may have been applied"):
+        spark_jobs.call("POST", "/api/spark/corpus/start", {})
+    assert sent == ["/api/spark/corpus/start"]
+
+
+def test_a_draining_503_is_retried_through_the_real_http_path(monkeypatch):
+    calls = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            calls.append(1)
+            if len(calls) == 1:
+                body = b'{"detail": "the server is restarting; submit again shortly"}'
+                self.send_response(503)
+            else:
+                body = b'{"counts": {}}'
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("BLINKY_SERVER", f"http://127.0.0.1:{srv.server_address[1]}")
+    monkeypatch.setenv("BLINKY_API_KEY", "k")
+    monkeypatch.setattr(spark_jobs, "RETRY_EVERY_S", 0)
+    try:
+        assert spark_jobs.call("POST", "/api/spark/train") == {"counts": {}}
+        assert len(calls) == 2
+    finally:
+        srv.shutdown()

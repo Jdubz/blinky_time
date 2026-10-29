@@ -280,6 +280,10 @@ RESTART_TESTS = {
     "test.capture-nn": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "fleet.flash": "test_durable_flash.py::test_killed_before_the_bytes_land_reflashes_that_device_only",
     "fleet.deploy": "test_durable_flash.py::test_a_deploy_cut_off_mid_flash_resumes_with_that_device",
+    "spark.separate": "test_durable_spark.py::"
+    "test_a_separate_cut_off_by_a_restart_resumes_when_asked_again",
+    "spark.train": "test_durable_spark.py::"
+    "test_a_train_submission_cut_off_by_a_restart_resumes_when_asked_again",
 }
 
 

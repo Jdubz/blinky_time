@@ -268,13 +268,16 @@ def workflow(name: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awa
     return wrap
 
 
-async def submit(fn: Callable[..., Coroutine[Any, Any, Any]], *args: Any) -> str:
-    """Start a workflow now; return its id. Its record is written before it runs."""
+async def submit(
+    fn: Callable[..., Coroutine[Any, Any, Any]], *args: Any, workflow_id: str | None = None
+) -> str:
+    """Start a workflow now; return its id (``workflow_id``, or a new one). Its record is
+    written before it runs."""
     if not _launched:
         raise NotRunning("the durable work store isn't running")
     if _draining:
         raise Draining("the server is restarting; submit again shortly")
-    workflow_id = uuid.uuid4().hex[:12]
+    workflow_id = workflow_id or uuid.uuid4().hex[:12]
     with SetWorkflowID(workflow_id):
         await DBOS.start_workflow_async(fn, *args)
     return workflow_id
