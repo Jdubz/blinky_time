@@ -180,3 +180,14 @@ def test_drain_holds_a_job_waiting_for_the_audio_lock(tmp_path: Path) -> None:
         assert res["status"] == "ok"
         assert [(x["track"], x["run"]) for x in res["results"]] == RUNS
     assert "dev-a cmd set x 2" in effects(tmp_path)  # B ran after the restart
+
+
+@pytest.mark.asyncio
+async def test_work_status_route(api_client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        durable, "_in_flight", {1: {"workflow_id": "w1", "step": "m.run", "since": 0.0}}
+    )
+    r = await api_client.get("/api/work")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["draining"] is False and body["in_flight"][0]["workflow_id"] == "w1"

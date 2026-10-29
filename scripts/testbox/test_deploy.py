@@ -1,4 +1,4 @@
-"""The test box deployer (deploy.py): the gate, the busy check, and a pass with rollback."""
+"""The test box deployer (deploy.py): the gate, the draining restart, and a pass with rollback."""
 
 from __future__ import annotations
 
@@ -95,41 +95,46 @@ def test_gate_refuses_or_waits(kw: dict[str, Any], want: str, why: str) -> None:
     assert got[0] == want and why in got[1], got
 
 
-def test_busy() -> None:
-    def server(flashes: list[Any], jobs: list[Any]) -> Any:
-        def get(p: str) -> Any:
-            if p.startswith("/api/flash-jobs"):
-                return {"jobs": flashes}
-            return jobs if p == "/api/fleet/jobs" else []
+class FakeRestart:
+    """``systemctl restart`` as Popen: still draining for ``waits`` status intervals."""
 
-        return get
+    def __init__(self, waits: int, rc: int = 0, stderr: str = "") -> None:
+        self.waits, self.returncode, self.stderr, self.killed = waits, rc, stderr, False
 
-    assert deploy.busy(server([], [])) is None
-    assert deploy.busy(server([], [{"status": "complete"}])) is None
-    assert "flash" in deploy.busy(server([{"id": 1}], []))
-    running = [{"status": "running", "type": "fleet-deploy"}]
-    assert "fleet-deploy" in deploy.busy(server([], running))
+    def __call__(self, cmd: list[str], **kw: Any) -> FakeRestart:
+        assert cmd == ["sudo", "-n", "systemctl", "restart", deploy.SERVICE]
+        return self
 
-    def raising(e: BaseException) -> Any:
-        def get(p: str) -> Any:
-            raise e
+    def communicate(self, timeout: float) -> tuple[str, str]:
+        if self.waits:
+            self.waits -= 1
+            raise deploy.subprocess.TimeoutExpired("systemctl", timeout)
+        return "", self.stderr
 
-        return get
+    def kill(self) -> None:
+        self.killed = True
 
-    err = deploy.urllib.error
-    # Nothing listening: the server is down, not busy, and deploying may fix it.
-    assert deploy.busy(raising(err.URLError(ConnectionRefusedError(111, "refused")))) is None
-    assert deploy.busy(raising(ConnectionRefusedError(111, "refused"))) is None
-    # Anything else says nothing about a flash in progress, so it blocks the restart.
-    http401 = err.HTTPError("u", 401, "Invalid API key", None, None)  # type: ignore[arg-type]
-    for e in (
-        http401,
-        err.URLError(TimeoutError("timed out")),
-        TimeoutError("timed out"),
-        FileNotFoundError("~/.blinky-api-key"),
-    ):
-        assert "can't ask" in deploy.busy(raising(e)), e
-    assert "unexpected answer" in deploy.busy(lambda p: {"nope": 1})
+
+def test_restart_waits_for_the_drain_and_logs_what_it_waits_for(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(deploy, "http_get", lambda p: [])
+    statuses = iter(["draining: waiting for a1 validation_run (40 s)"] * 2 + ["drained"])
+    assert deploy.restart_healthy(FakeRestart(waits=3), lambda: next(statuses)) is None
+    out = capsys.readouterr().out
+    # Each new status once, not every interval.
+    assert out.count("waiting for a1 validation_run") == 1 and "drained" in out
+
+
+def test_restart_failures_are_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(deploy, "http_get", lambda p: [])
+    failed = deploy.restart_healthy(FakeRestart(0, rc=1, stderr="Job failed"), lambda: "")
+    assert failed is not None and "Job failed" in failed
+    # A restart that never returns is killed and reported, past RESTART_TIMEOUT_S.
+    monkeypatch.setattr(deploy, "RESTART_TIMEOUT_S", -1)
+    stuck = FakeRestart(waits=10**6)
+    assert "still waiting" in (deploy.restart_healthy(stuck, lambda: "draining") or "")
+    assert stuck.killed
 
 
 GIT: dict[str, Any] = {"diff": ["blinky-server/blinky_server/app.py"], "calls": []}
@@ -157,7 +162,7 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     a.mkdir()
     link = tmp_path / "blinky-deploy"
     link.symlink_to(a)
-    calls: dict[str, Any] = {"prepared": [], "restarted_on": [], "healthy": [True], "busy": []}
+    calls: dict[str, Any] = {"prepared": [], "restarted_on": [], "healthy": [True]}
     GIT.update(diff=["blinky-server/blinky_server/app.py"], calls=[])
     monkeypatch.setattr(deploy, "STATE", tmp_path / "deploy.json")
     monkeypatch.setattr(deploy, "LINK", link)
@@ -172,7 +177,6 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
 
     monkeypatch.setattr(deploy, "run", fake_git)
     monkeypatch.setattr(deploy, "gh_api", gh())
-    monkeypatch.setattr(deploy, "busy", lambda: calls["busy"].pop(0) if calls["busy"] else None)
     monkeypatch.setattr(deploy, "prepare", prepare)
     monkeypatch.setattr(deploy, "restart_healthy", restart)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
@@ -227,15 +231,6 @@ def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
 def test_every_server_path_deploys(box: dict[str, Any], path: str) -> None:
     GIT["diff"] = ["ml-training/train.py", path]
     assert deploy.deploy_once() == 0
-    assert box["restarted_on"] == ["blinky-deploy-b"]
-
-
-def test_busy_after_preparing_leaves_the_live_slot_alone(box: dict[str, Any]) -> None:
-    box["busy"] = ["1 flash job(s) active"]
-    assert deploy.deploy_once() == 0
-    assert box["prepared"] == [("blinky-deploy-b", SHA)]
-    assert box["restarted_on"] == [] and box["link"].resolve().name == "blinky-deploy-a"
-    assert deploy.deploy_once() == 0  # idle on the next pass: it goes ahead
     assert box["restarted_on"] == ["blinky-deploy-b"]
 
 

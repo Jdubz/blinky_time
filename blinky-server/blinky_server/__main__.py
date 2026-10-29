@@ -8,6 +8,9 @@ import uvicorn
 
 from .api.app import create_app
 
+# How long uvicorn waits for open connections on SIGTERM before the lifespan shutdown (#325).
+GRACEFUL_HTTP_S = 30
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Blinky Fleet Server")
@@ -82,6 +85,11 @@ def main() -> None:
         port=args.port,
         log_level=args.log_level,
         access_log=args.access_log,
+        # On SIGTERM uvicorn first waits for open HTTP connections, then runs the lifespan
+        # shutdown, where the drain (#325) starts holding systemd's stop timeout open
+        # (EXTEND_TIMEOUT_USEC). Bounded here, well inside the unit's 90 s TimeoutStopSec, so a
+        # long request can't spend the stop timeout before the drain begins.
+        timeout_graceful_shutdown=GRACEFUL_HTTP_S,
     )
 
 

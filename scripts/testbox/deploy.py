@@ -20,11 +20,13 @@ blinky-deploy.timer runs this every 2 minutes, from the live slot. One pass:
 3. Prepare the OTHER slot: check out the commit, reinstall the venv if blinky-server's
    pyproject.toml differs from what that slot last installed, rebuild the console if
    blinky-console/ does. The running server's tree is never touched.
-4. Wait while the server is busy (a flash, a fleet deploy, a test job): a restart mid-flash can
-   leave a device in its bootloader. The check runs right before the restart, after the slow
-   preparation, and a busy server leaves the prepared slot for the next pass.
-5. Point ~/blinky-deploy at the new slot and restart. Not answering /api/devices within
-   HEALTH_TIMEOUT_S: point it back, restart, and refuse the commit.
+4. Point ~/blinky-deploy at the new slot and restart. The deployer doesn't wait for the server
+   to be idle: the server drains on SIGTERM by itself (#325, blinky_server/work/durable.py).
+   New work is refused, every step or flash in flight finishes, durable jobs stop at their next
+   step boundary and resume on the new code. The restart holds until then (systemd
+   EXTEND_TIMEOUT_USEC), and the deployer logs what it waits for (the unit's StatusText).
+5. Not answering /api/devices within HEALTH_TIMEOUT_S: point it back, restart, and refuse the
+   commit.
 
 State is in ~/.local/share/blinky-server/deploy.json; the log goes to the journal
 (`journalctl -u blinky-deploy`). `deploy.py --status` prints the state; `--dry-run` gates the
@@ -90,6 +92,10 @@ GREEN = {"success", "skipped", "neutral"}
 # A required check that hasn't appeared this long after the commit isn't coming.
 MISSING_CHECK_GIVE_UP_S = 6 * 3600
 HEALTH_TIMEOUT_S = 90
+# A restart drains the server first. Its drain gives up on a hung step after 20 min
+# (DRAIN_MAX_S in blinky_server/work/durable.py); past this, the restart itself is stuck.
+RESTART_TIMEOUT_S = 25 * 60
+STATUS_EVERY_S = 30.0
 
 Fetch = Callable[[str], Any]
 
@@ -196,7 +202,7 @@ def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
 
 
 def api_key() -> str:
-    """OSError when there is none: busy() then refuses to restart rather than guess."""
+    """OSError when there is none."""
     key = os.environ.get("BLINKY_API_KEY")
     if not key:
         key = (HOME / ".blinky-api-key").read_text().strip()
@@ -209,39 +215,45 @@ def http_get(path: str, timeout: float = 5) -> Any:
         return json.loads(r.read())
 
 
-def not_listening(e: BaseException) -> bool:
-    """Nothing on the port: the server is down, not busy."""
-    reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    return isinstance(reason, ConnectionRefusedError) and not isinstance(e, urllib.error.HTTPError)
-
-
-def busy(get: Callable[[str], Any] = http_get) -> str | None:
-    """What stops a restart now, or None. Only a server with nothing listening counts as idle
-    (deploying is how it gets fixed). Any other failure to ask counts as busy: an HTTP error
-    (a wrong API key, a broken route) or a timeout says nothing about a flash in progress."""
+def service_status() -> str:
+    """The server's systemd StatusText: during a drain, what it is waiting for."""
     try:
-        flashes = get("/api/flash-jobs?active=true")["jobs"]
-        jobs = get("/api/fleet/jobs") + get("/api/test/jobs")
-    except (urllib.error.URLError, OSError) as e:
-        if not_listening(e):
-            return None
-        return f"can't ask the server whether it is busy: {e}"
-    except (KeyError, TypeError, ValueError) as e:
-        return f"unexpected answer from the server's job routes: {e!r}"
-    if flashes:
-        return f"{len(flashes)} flash job(s) active"
-    live = [j for j in jobs if j.get("status") in ("pending", "running")]
-    if live:
-        return f"job(s) running: {', '.join(str(j.get('type') or j.get('id')) for j in live)}"
-    return None
+        return run(
+            "systemctl", "show", SERVICE, "-p", "StatusText", "--value", cwd=HOME, timeout=10
+        ).strip()
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        return f"(status unavailable: {e})"
 
 
-def restart_healthy() -> str | None:
-    """Restart the server; None when it is up, else why not."""
-    try:
-        run("sudo", "-n", "systemctl", "restart", SERVICE, cwd=HOME, timeout=180)
-    except RuntimeError as e:
-        return str(e)
+def restart_healthy(
+    popen: Callable[..., Any] = subprocess.Popen, status: Callable[[], str] = service_status
+) -> str | None:
+    """Restart the server; None when it is up, else why not. ``systemctl restart`` returns
+    once the old server has drained (it can take minutes: a track, a flash), so its status is
+    logged while it waits."""
+    proc = popen(
+        ["sudo", "-n", "systemctl", "restart", SERVICE],
+        cwd=HOME,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + RESTART_TIMEOUT_S
+    last = ""
+    while True:
+        try:
+            out, err = proc.communicate(timeout=STATUS_EVERY_S)
+            break
+        except subprocess.TimeoutExpired:
+            now = status()
+            if now and now != last:
+                log(f"restart waiting on the server: {now}")
+                last = now
+            if time.monotonic() > deadline:
+                proc.kill()
+                return f"systemctl restart still waiting after {RESTART_TIMEOUT_S} s ({last})"
+    if proc.returncode != 0:
+        return f"systemctl restart -> {proc.returncode}: {(err or out or '')[-2000:]}"
     deadline = time.monotonic() + HEALTH_TIMEOUT_S
     while time.monotonic() < deadline:
         try:
@@ -374,12 +386,8 @@ def deploy_once(dry_run: bool = False) -> int:
         state["refused"][target] = f"prepare failed: {e}"
         save_state(state)
         return 1
-    doing = busy()  # after the slow part: anything that started meanwhile counts
-    if doing:
-        log(f"{target[:12]}: prepared in {new.name}; waiting, the server is busy ({doing})")
-        return 0
-
     point_at(new)
+    log(f"{target[:12]}: prepared in {new.name}; restarting (the server drains first)")
     failure = restart_healthy()
     entry = {
         "sha": target,
