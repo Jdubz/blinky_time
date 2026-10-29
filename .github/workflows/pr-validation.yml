@@ -374,15 +374,15 @@ jobs:
     - name: Drum label regression suite and generator guards (#284)
       # The suite a kick/snare label generator must pass, its baseline, and the generator's
       # refusal to mix labels from two generators in one dir. ADTOF's own tests skip here:
-      # they run in the adtof-labeler job, in ADTOF's runtime.
+      # they run in the adtof-labeler job.
       working-directory: ml-training
       run: python -m pytest -v tests/test_drum_label_suite.py
 
   adtof-labeler:
-    name: ADTOF drum labeler, the original (#284)
-    # The labels' generator: ADTOF's own code, TensorFlow model and weights (CC BY-NC-SA 4.0),
-    # in the runtime the Spark labels in (ml-training/requirements-adtof.txt). Its tests may not
-    # skip here, and the committed evidence (drum_label_adtof.json) must be what it produces.
+    name: ADTOF drum labeler (#284)
+    # The labels' generator: ADTOF's Frame_RNN through the PyTorch port, pinned, as the Spark's
+    # torch-cu130 runtime installs it (my-spark #1561). Its tests may not skip here, and the
+    # committed evidence (drum_label_adtof.json) must be what it produces.
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -393,16 +393,14 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
 
-    - name: Install ADTOF's runtime
+    - name: Install CPU torch and the port
       working-directory: ml-training
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
-        pip install Cython==3.0.11 numpy==1.26.4
-        pip install --no-build-isolation -r requirements-adtof.txt
-        pip install --no-deps "$(python -c 'from scripts.adtof_labels import ADTOF_PACKAGE; print(ADTOF_PACKAGE)')"
-        pip install pytest
+        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install 'numpy>=1.26,<3' scipy pyyaml pytest librosa tqdm soundfile pretty_midi
+        pip install "$(python -c 'from scripts.adtof_labels import ADTOF_PYTORCH; print(ADTOF_PYTORCH)')"
 
     - name: ADTOF's tests (no skips)
       working-directory: ml-training
