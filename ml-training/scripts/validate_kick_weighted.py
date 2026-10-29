@@ -10,7 +10,7 @@ Checks for quality issues that would degrade model training:
 Usage:
     python scripts/validate_kick_weighted.py \
         --label-dir /mnt/storage/blinky-ml-data/labels/kick_weighted_drums \
-        --consensus-dir /mnt/storage/blinky-ml-data/labels/consensus_v5
+        --consensus-dir /mnt/storage/blinky-ml-data/labels/onsets_consensus
 
     # Quarantine bad tracks (move to .quarantined/ subdir):
     python scripts/validate_kick_weighted.py \
@@ -32,6 +32,9 @@ MIN_KICK_SNARE = 10        # Fewer than this = likely Demucs failure
 MAX_DENSITY_PER_MIN = 600  # More than this = likely over-detection
 MAX_CONSENSUS_RATIO = 8.0  # More than 8x consensus = suspicious
 MIN_CONSENSUS_RATIO = 0.15 # Less than 15% of consensus = likely failed separation
+
+# The onset consensus: labels/onsets_consensus/<track>.onsets.json, or edm/'s in-repo copies.
+CONSENSUS_SUFFIXES = (".onsets.json", ".onsets_consensus.json")
 
 
 def load_label(path: Path) -> dict:
@@ -70,9 +73,12 @@ def validate_track(stem: str, label_data: dict, consensus_data: dict | None) -> 
             if density > MAX_DENSITY_PER_MIN:
                 issues.append(f"high_density: {density:.0f}/min (max {MAX_DENSITY_PER_MIN})")
 
-    # Check ratio vs consensus
+    # Check ratio vs the full-mix onset consensus (>=2 systems, as clean_kick_weighted.py).
+    # This read the BEAT consensus's `hits` until #284; that set was archived in #271, so the
+    # gate had silently stopped running.
     if consensus_data is not None:
-        n_consensus = len(consensus_data.get("hits", []))
+        n_consensus = sum(1 for o in consensus_data.get("onsets", [])
+                          if o.get("systems", 1) >= 2)
         if n_consensus > 10:
             ratio = n_ks / n_consensus
             if ratio > MAX_CONSENSUS_RATIO:
@@ -128,13 +134,13 @@ def main():
         # Load consensus if available
         consensus_data = None
         if consensus_dir:
-            cf = consensus_dir / f"{stem}.beats.json"
-            if cf.exists():
-                try:
-                    with open(cf) as f:
-                        consensus_data = json.load(f)
-                except json.JSONDecodeError:
-                    pass
+            cf = next((consensus_dir / f"{stem}{suffix}" for suffix in CONSENSUS_SUFFIXES
+                       if (consensus_dir / f"{stem}{suffix}").exists()), None)
+            if cf is None:
+                all_issues[stem] = [f"no_consensus: none of {CONSENSUS_SUFFIXES} in "
+                                    f"{consensus_dir}"]
+                continue
+            consensus_data = json.loads(cf.read_text())  # corrupt consensus: fail loudly
 
         # Validate
         issues = validate_track(stem, label_data, consensus_data)
