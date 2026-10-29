@@ -192,6 +192,16 @@ If you need to test against harder material, do it *after* edm/ is solid and rep
 
 When you discover a silent fallback, the fix is to (a) assert / panic at the failing site, (b) add a `[FALLBACK]` serial log with file:line and the offending value, or (c) add a compile-time check that prevents the bad state. Do not just "improve" the comment.
 
+## CRITICAL: blinky-server work survives any restart (#325)
+
+**A restart can arrive at any moment (a deploy, `systemctl restart`, a reboot, a crash), and no in-flight work may be lost to it.** Every long-running server job is a durable workflow on the work store, `blinky-server/blinky_server/work/durable.py` (DBOS, embedded, SQLite): `@durable.workflow` for the job, `@durable.step` for each non-interruptible unit (one track run, one device's flash, one Spark submission). After a restart DBOS replays the workflow and completed steps return their recorded result, so jobs have no resume code of their own. Never run long work as a bare `asyncio.create_task` or inside a request handler.
+
+- **Follow the four rules in `durable.py`'s docstring:** the workflow body is deterministic (device I/O, files and the clock go in steps); a step runs at least once, so it is self-contained and safe to repeat (check-then-act for a flash: `durable.rerun`); per-run setup (locks, device state, streaming) lives in the workflow body, inside `durable.hold`, so it is set up again after a restart; step results are small (bulk data goes to a file).
+- **Device or Spark I/O outside a step goes in `durable.hold`**, or a drain won't wait for it and the fleet will stop under it.
+- **The drain:** on SIGTERM the server refuses new work (503 + Retry-After), lets every step and hold in flight finish (holding systemd's stop open), stops each workflow at its next step boundary, and DBOS resumes them on the next start. `KillMode=mixed` (the unit, installed by the deployer) keeps the SIGTERM off the ffplay, UF2 copy or download a step is waiting for.
+- **Every workflow needs a restart test** (kill it mid-unit, start it again, compare with an uninterrupted run): `RESTART_TESTS` in `tests/test_durable_work.py` fails CI for one without.
+- **`SCHEMA_VERSION`** in `durable.py`: bump it when a workflow's sequence of steps changes incompatibly; unfinished workflows of the old version are then cancelled, loudly, at the next start.
+
 ## CRITICAL: Long-Running Scripts
 
 **NEVER run ML training or other long-running scripts as Claude session tasks** — they die when the session ends.

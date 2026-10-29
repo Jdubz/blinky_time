@@ -21,9 +21,13 @@ NOW = 1_800_000_000.0
 BOT = "github-actions[bot]"
 
 
+RUN_IDS = iter(range(1, 10**6))
+
+
 def run_(name: str, conclusion: str | None = "success") -> dict[str, Any]:
+    """A check run; ids increase in creation order, as GitHub's do."""
     status = "completed" if conclusion else "in_progress"
-    return {"name": name, "status": status, "conclusion": conclusion}
+    return {"name": name, "status": status, "conclusion": conclusion, "id": next(RUN_IDS)}
 
 
 def verdict(
@@ -70,6 +74,15 @@ def test_green_ci_and_a_clean_review_deploy() -> None:
 
 ISSUES = "Found 2 issue(s) — see the inline comments."
 INCOMPLETE = "Incomplete review: no issues found, but not every changed file was read."
+
+
+def test_a_check_is_judged_by_its_latest_run() -> None:
+    """A re-run supersedes the run before it. Seen on PR #328: its review was retriggered after
+    a failed run, and the stale failure refused the merge though the re-run passed."""
+    retried = [run_("claude-review", "failure"), run_("claude-review"), run_("Blinky Server Tests")]
+    assert deploy.gate(SHA, gh(head=retried), NOW)[0] == "deploy"
+    regressed = [run_("claude-review"), run_("claude-review", "failure")]
+    assert deploy.gate(SHA, gh(head=regressed), NOW)[0] == "reject"
 
 
 @pytest.mark.parametrize(

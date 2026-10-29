@@ -134,9 +134,20 @@ def gh_api(path: str) -> Any:
 # -- the gate ----------------------------------------------------------------------------------
 
 
+def latest_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each check's newest run. A re-run (a retriggered review, a re-run job) supersedes the
+    one before it: a stale failure mustn't refuse a commit, nor a stale success pass one."""
+    newest: dict[str, dict[str, Any]] = {}
+    for r in runs:
+        if r["name"] not in newest or r["id"] > newest[r["name"]]["id"]:
+            newest[r["name"]] = r
+    return list(newest.values())
+
+
 def checks_verdict(
     runs: list[dict[str, Any]], required: tuple[str, ...], age_s: float, where: str
 ) -> tuple[str, str]:
+    runs = latest_runs(runs)
     bad = [
         f"{r['name']}={r['conclusion']}"
         for r in runs
