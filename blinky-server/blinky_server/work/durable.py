@@ -110,10 +110,13 @@ async def shutdown() -> None:
     """After ``drain``, before the devices disconnect: stop the held workflows (their cleanup,
     such as stopping streams, runs now), then DBOS. Held workflows stay PENDING for recovery."""
     global _launched
-    held = [t for t in _held if not t.done()]
-    for t in held:
-        t.cancel()
-    await asyncio.gather(*held, return_exceptions=True)
+    # Repeatedly: stopping one held workflow can release a lock another was waiting on, which
+    # then reaches its own boundary and is held in turn.
+    while held := [t for t in _held if not t.done()]:
+        for t in held:
+            t.cancel()
+        await asyncio.gather(*held, return_exceptions=True)
+        await asyncio.sleep(0.05)  # let a woken waiter reach its boundary before we look again
     _held.clear()
     if _launched:
         DBOS.destroy()

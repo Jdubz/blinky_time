@@ -81,7 +81,7 @@ async def fake_play(device_ids: list[str], track: dict[str, Any], duration_ms: f
     effect(f"play {track['name']} start")
     if kill == f"crash:{plays}":
         os._exit(9)
-    if kill == f"drain:{plays}":
+    if kill in (f"drain:{plays}", f"two-drain:{plays}"):
         asyncio.get_running_loop().create_task(sigterm())
     await asyncio.sleep(0.3)
     effect(f"play {track['name']} end")
@@ -141,12 +141,19 @@ async def main() -> None:
     if mode == "start":
         wid = await durable.submit(workflows.validate, REQ)
         wid_file.write_text(wid)
+        if kill.startswith("two-"):
+            # A second job, queued behind the first on the audio lock.
+            second = await durable.submit(workflows.validate, {**REQ, "commands": ["set x 2"]})
+            (out / "second_id").write_text(second)
     else:
         wid = wid_file.read_text()
     from dbos import DBOS
 
     handle = await DBOS.retrieve_workflow_async(wid)
     print(json.dumps(await handle.get_result()))
+    if (out / "second_id").exists():
+        second = await DBOS.retrieve_workflow_async((out / "second_id").read_text())
+        print(json.dumps(await second.get_result()))
     await durable.shutdown()
 
 

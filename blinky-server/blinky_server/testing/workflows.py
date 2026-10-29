@@ -102,6 +102,9 @@ async def session(
     Runs on every execution of the workflow, so a resumed job starts from known device state."""
     jobs.report(None, "waiting for the audio lock")
     async with _AUDIO:
+        # A job that waited here for another to finish is past every boundary: if the server
+        # started draining meanwhile, it stops now, before touching a device (#325 review).
+        await durable.boundary()
         if not acquire_audio_lock([d[:12] for d in device_ids]):
             raise RuntimeError("Audio lock held by another process")
         try:

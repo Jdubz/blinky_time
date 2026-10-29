@@ -161,3 +161,22 @@ def test_recovered_job_waits_for_its_devices_to_reconnect(tmp_path: Path) -> Non
     after = log[log.index("play bravo start") + 1 :]
     first_connect = after.index("dev-a connected")
     assert not any(x.startswith(("play ", "dev-a cmd")) for x in after[:first_connect])
+
+
+def test_drain_holds_a_job_waiting_for_the_audio_lock(tmp_path: Path) -> None:
+    """Review: a second job waiting on the audio lock is past every boundary. When the drain
+    stops the first, the second must not set up its devices while the server shuts down."""
+    r = harness(tmp_path, "start", "two-drain:2")
+    assert r.returncode == 0, r.stderr[-3000:]
+    log = effects(tmp_path)
+    before_exit = log[: log.index("exited")]
+    # B touched no device: only A's session restored the defaults before the exit.
+    assert before_exit.count("dev-a cmd restore_runtime_settings") == 1
+    assert "dev-a cmd set x 2" not in before_exit
+    r = harness(tmp_path, "resume")
+    assert r.returncode == 0, r.stderr[-3000:]
+    a, b = (json.loads(x) for x in r.stdout.strip().splitlines()[-2:])
+    for res in (a, b):
+        assert res["status"] == "ok"
+        assert [(x["track"], x["run"]) for x in res["results"]] == RUNS
+    assert "dev-a cmd set x 2" in effects(tmp_path)  # B ran after the restart
