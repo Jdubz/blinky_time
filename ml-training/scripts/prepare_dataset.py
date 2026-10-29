@@ -2163,8 +2163,11 @@ def main():
                 p.unlink(missing_ok=True)
             sys.exit(1)
 
-        # Copy shards into memmap (don't delete yet — verify output first)
+        # Copy shards into memmap (don't delete yet — verify output first). At full size this is
+        # ~180 GB of copying with no other output, so it reports progress like the per-file loop
+        # (spark_entry.py turns these lines into the Spark's STEP lines; #315).
         offset = 0
+        last_progress = _time.time()
         for s in range(shard_idx):
             X_s = np.load(shard_dir / f"X_{s}.npy")
             Y_s = np.load(shard_dir / f"Y_{s}.npy")
@@ -2177,6 +2180,10 @@ def main():
                 del T_s
             offset += n
             del X_s, Y_s
+            now = _time.time()
+            if now - last_progress >= PROGRESS_INTERVAL or s == shard_idx - 1:
+                print(f"  [{split_name}] merged {s + 1}/{shard_idx} shards", flush=True)
+                last_progress = now
 
         X_out.flush()
         Y_out.flush()
