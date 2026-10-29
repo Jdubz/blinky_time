@@ -650,8 +650,10 @@ class FleetManager:
                 return None
             # A drain (the server stopping for a restart, #325) lets flashes in flight finish
             # but starts none: auto-recovery tries again after the restart, and an operator's
-            # request is refused (503) rather than begun and cut off.
-            if durable.draining():
+            # request is refused (503) rather than begun and cut off. A flash asked for from
+            # inside held work (a fleet job's per-device step) goes ahead: the drain is already
+            # waiting for that step, and refusing would record the device failed for good.
+            if durable.draining() and not durable.inside_hold():
                 if not force:
                     log.info(
                         "flash_device(%s, force=False): server draining for a restart; "

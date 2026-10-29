@@ -210,3 +210,36 @@ async def test_a_flash_holds_the_drain_from_the_moment_it_is_created(
             break
         await asyncio.sleep(0.01)
     assert durable.in_flight() == []
+
+
+@pytest.mark.asyncio
+async def test_a_step_already_running_may_still_start_its_flash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review: a drain that begins while a fleet step waits for its device must not refuse
+    that step's flash. The drain waits for the step anyway, and a refusal would be recorded
+    as the device's result for good, so it would never be flashed after the restart."""
+    import asyncio
+
+    fleet = FleetManager(enable_ble=False, enable_serial=False)
+    from blinky_server.device.device import Device, DeviceState
+
+    from .mock_transport import MockTransport
+
+    dev = Device(device_id="dev-1", port="/dev/x", platform="nrf52840", transport=MockTransport())
+    dev.state = DeviceState.CONNECTED
+    fleet._devices[dev.id] = dev
+
+    async def quick(job: object) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(fleet, "_run_flash_job", quick)
+    monkeypatch.setattr(durable, "_draining", True)
+    with durable.hold("fleet step"):
+        job = await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
+    assert job is not None
+    # Outside held work, the same request is refused.
+    fleet._flash_jobs.clear()
+    fleet._device_in_flight.clear()
+    with pytest.raises(durable.Draining):
+        await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))

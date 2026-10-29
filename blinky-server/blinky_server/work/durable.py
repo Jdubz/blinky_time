@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import functools
 import logging
 import time
@@ -76,6 +77,8 @@ _resume = asyncio.Event()  # never set: a drained workflow waits on it until the
 # The tasks of workflows held at a boundary, so shutdown can stop them (running their cleanup,
 # while the devices are still connected) without DBOS recording an outcome: they stay PENDING.
 _held: set[asyncio.Task[Any]] = set()
+# True inside held work; asyncio tasks inherit it, so a flash task a step starts does too.
+_inside_hold: contextvars.ContextVar[bool] = contextvars.ContextVar("inside_hold", default=False)
 # Steps executing now, by a token, for drain to wait on and report.
 _in_flight: dict[int, dict[str, Any]] = {}
 _next_token = 0
@@ -148,10 +151,18 @@ def hold(name: str, owner: str | None = None) -> Iterator[None]:
     work that can't be a step at all, such as a flash (a write can't resume halfway). ``owner``
     names it in the drain's status; inside a workflow it defaults to the workflow id."""
     token = begin_hold(name, owner)
+    inside = _inside_hold.set(True)
     try:
         yield
     finally:
+        _inside_hold.reset(inside)
         end_hold(token)
+
+
+def inside_hold() -> bool:
+    """Whether this code runs inside held work (a step, or a ``hold``). The drain already waits
+    for that work, so what it starts (a step's flash) must go ahead, not be refused."""
+    return _inside_hold.get()
 
 
 def begin_hold(name: str, owner: str | None = None) -> int:
