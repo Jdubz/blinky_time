@@ -1860,7 +1860,13 @@ class FleetManager:
                     # rather than waiting through whatever backoff the
                     # prior failures accumulated.
                     self._reconnect_failures.pop(device_id, None)
-                    self._reconnect_blackout.pop(device_id, None)
+                    # A reconnect hold is NOT cleared here: re-enumeration is
+                    # exactly what a hold exists to ride out (a bootloader
+                    # flash re-enumerates the device, and clearing the hold
+                    # let the server grab the port the app flash needed,
+                    # #212). Whoever set the hold releases it (release_device
+                    # by expiry or /reconnect, flash jobs and their sibling
+                    # holds in their `finally`), or it expires.
                     log.info(
                         "Device %s re-appeared on serial after %s; "
                         "transitioning to DISCONNECTED for reconnect",
