@@ -14,10 +14,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from ..testing import jobs
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..testing.track_discovery import discover_tracks
-from ..work import durable
+from ..work import durable, jobs
 from .deps import get_fleet
 
 router = APIRouter(prefix="/test", tags=["testing"])
@@ -191,17 +190,21 @@ def _require_store() -> None:
 async def list_jobs() -> list[dict[str, Any]]:
     """List recent test jobs."""
     _require_store()
-    return await jobs.list_recent()
+    from ..testing.workflows import TEST_JOBS
+
+    return await jobs.list_recent(TEST_JOBS)
 
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str) -> dict[str, Any]:
     """Get status/progress/result for a test job (raw captures inlined)."""
     _require_store()
-    job = await jobs.get(job_id)
+    from ..testing.workflows import TEST_JOBS, inline_raw
+
+    job = await jobs.get(TEST_JOBS, job_id)
     if not job:
         raise HTTPException(404, f"Job not found: {job_id}")
-    return jobs.inline_raw(job)
+    return inline_raw(job)
 
 
 # ── Track Discovery ──

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..device.device import Device, DeviceState
 from ..firmware import images
 from ..firmware.flash_job import FlashConflict, FlashJobState
+from ..work import durable
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import (
     CommandResponse,
@@ -332,6 +333,9 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
             )
         except FlashConflict as exc:
             raise HTTPException(409, str(exc)) from exc
+        except durable.Draining as exc:
+            # The server is stopping for a restart: no new flash starts (#325).
+            raise HTTPException(503, str(exc), headers={"Retry-After": "30"}) from exc
 
         # Arm auto-recovery for THIS device only — the explicit whitelist
         # keeps a future DFU bounce from auto-flashing unrelated devices.

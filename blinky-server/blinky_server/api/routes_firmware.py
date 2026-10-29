@@ -23,8 +23,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from ..device.device import DeviceState
 from ..firmware import deploy_pipeline, images
-from ..firmware.flash_job import FlashJob, FlashJobState
 from ..paths import firmware_dir
+from ..work import durable, jobs
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import DeployRequest, FlashRequest
 
@@ -289,15 +289,12 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
             "(pass device_ids in FlashRequest to opt in)"
         )
 
-    jm = _get_flash_job_manager()
+    from ..firmware.fleet_workflows import fleet_flash as wf
 
-    async def _run(job: Any) -> dict[str, Any]:
-        return await _flash_fleet_background(fleet, device_ids, firmware, job)
-
-    job = jm.submit("fleet-flash", _run)
+    job_id = await _submit(wf, device_ids, str(firmware))
 
     return {
-        "job_id": job.id,
+        "job_id": job_id,
         "status": "submitted",
         "devices": len(devices),
         **recovery,
@@ -310,186 +307,53 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
 
 @router.get("/fleet/jobs/{job_id}")
 async def get_flash_job(job_id: str) -> dict[str, Any]:
-    """Get the status of a fleet flash job."""
-    jm = _get_flash_job_manager()
-    job = jm.get(job_id)
+    """Get the status of a fleet flash or deploy job (durable: survives restarts, #325)."""
+    from ..firmware.fleet_workflows import FLEET_JOBS
+
+    _require_store()
+    job = await jobs.get(FLEET_JOBS, job_id)
     if not job:
         raise HTTPException(404, f"Job {job_id} not found")
-    return dict(job.to_dict())
+    return job
 
 
 @router.get("/fleet/jobs")
 async def list_flash_jobs() -> list[dict[str, Any]]:
-    """List all fleet flash jobs."""
-    jm = _get_flash_job_manager()
-    return [dict(j.to_dict()) for j in jm.list_recent()]
+    """List fleet flash and deploy jobs."""
+    from ..firmware.fleet_workflows import FLEET_JOBS
+
+    _require_store()
+    return await jobs.list_recent(FLEET_JOBS)
 
 
-# ── Flash job manager singleton ───────────────────────────────────────
-
-_flash_jm: Any = None
-
-
-def _get_flash_job_manager() -> Any:
-    global _flash_jm
-    if _flash_jm is None:
-        from ..testing.job_manager import JobManager
-
-        _flash_jm = JobManager(jobs_dir=Path("/tmp/blinky-flash-jobs"))
-    return _flash_jm
+def _require_store() -> None:
+    if not durable.launched():
+        raise HTTPException(503, "the durable work store isn't running")
 
 
-# ── Background flash implementation ──────────────────────────────────
-
-
-async def _flash_fleet_background(
-    fleet: Any,
-    device_ids: list[str],
-    firmware: Path,
-    job: Any,
-) -> dict[str, Any]:
-    """Thin wrapper around ``FleetManager.flash_fleet()``.
-
-    Drives the JobManager super-job's progress display from the strictly-
-    serial per-device iterations the orchestrator runs. The actual flash
-    work (per-device transport selection, write, verify, BLE radio
-    coordination, sibling serial holds, udevadm settle between
-    iterations) lives inside ``flash_fleet()`` / ``_run_flash_job``,
-    not here.
-
-    deploy.sh + UI clients poll
-    ``GET /api/fleet/jobs/{id}`` and read ``progressMessage`` —
-    formatting that string is the route's responsibility, since
-    flash_fleet's contract is data (per-iteration results) not
-    presentation.
-    """
-    results: dict[str, dict[str, Any]] = {}
-    total = len(device_ids)
-
-    def _label(device_id: str) -> str:
-        d = fleet.get_device(device_id)
-        name = (d.device_name if d is not None else None) or "unknown"
-        return f"{device_id[:12]} ({name})"
-
-    def _on_iteration(
-        index: int, count: int, device_id: str, fjob: FlashJob | None, err: str | None
-    ) -> None:
-        # Per-iteration progress: report the NEXT device about to flash,
-        # or "Verifying" once the last one's done. `index` is 0-based and
-        # already reflects the device that just finished.
-        if index + 1 < count:
-            job.progress = int(((index + 1) / count) * 90)
-            job.progress_message = f"Flashing device {index + 2}/{count}"
-        else:
-            job.progress = 90
-            job.progress_message = "Verifying firmware versions"
-
-    # `flash_fleet` is an async generator that yields one tuple per
-    # device as that device's flash reaches a terminal state. We pull
-    # them as they come; strict-serial ordering is the generator's
-    # invariant.
-    job.progress = 0
-    job.progress_message = f"Flashing device 1/{total}"
-
-    async for device_id, fjob, err in fleet.flash_fleet(
-        device_ids=device_ids,
-        firmware_path=firmware,
-        per_device_timeout=600.0,
-        on_iteration=_on_iteration,
-    ):
-        short_id = device_id[:12]
-        dev_label = _label(device_id)
-
-        if fjob is None:
-            # Device couldn't be scheduled (not in fleet, etc.)
-            results[short_id] = {
-                "status": "error",
-                "message": err or "device not scheduled",
-            }
-            log.error("Fleet flash: %s — %s", dev_label, err)
-            continue
-
-        if err == "timeout":
-            results[short_id] = {
-                "status": "error",
-                "message": "flash exceeded per-device 600s timeout",
-            }
-            log.error("Fleet flash: %s timeout", dev_label)
-            continue
-
-        if fjob.state is FlashJobState.COMPLETED:
-            results[short_id] = {
-                "status": "ok",
-                "elapsed_s": round(fjob.duration_s, 1),
-                "transport": fjob.transport.value if fjob.transport else None,
-            }
-        else:
-            # FAILED or ABANDONED
-            results[short_id] = {
-                "status": "error",
-                "message": fjob.error or f"flash {fjob.state.value} without specific error",
-            }
-            log.error(
-                "Fleet flash: %s ended in %s — continuing to next device",
-                dev_label,
-                fjob.state.value,
-            )
-
-    # Post-iteration version sweep: the orchestrator's verify already
-    # observed each device's app boot, but device.version / device_name
-    # may take an extra discovery cycle to reach the in-memory device
-    # entry. 10s gives the manager's loop time to refresh those fields
-    # before we build the response.
-    job.progress = 90
-    job.progress_message = "Verifying firmware versions"
-    await asyncio.sleep(10)
-
-    verified: dict[str, dict[str, Any]] = {}
-    for _ in range(6):
-        all_done = True
-        for d in fleet.get_all_devices():
-            short_id = d.id[:12]
-            if short_id not in results:
-                continue
-            if d.state == DeviceState.CONNECTED and d.version:
-                verified[short_id] = {"version": d.version, "device_name": d.device_name}
-            else:
-                all_done = False
-        if all_done or len(verified) == len(results):
-            break
-        await asyncio.sleep(5)
-
-    ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
-    per_device: dict[str, dict[str, Any]] = {}
-    for short_id, flash_result in results.items():
-        v = verified.get(short_id, {})
-        per_device_entry: dict[str, Any] = {
-            "flash": flash_result.get("status", "error"),
-            "version": v.get("version"),
-            "device_name": v.get("device_name"),
-        }
-        # Surface the failure detail so deploy.sh + any other client
-        # rendering per-device results can print *why* a device failed,
-        # not just that it did. Only included for failures, to keep the
-        # success path noise-free.
-        if flash_result.get("status") != "ok" and flash_result.get("message"):
-            per_device_entry["message"] = flash_result["message"]
-        per_device[short_id] = per_device_entry
-
-    job.progress = 100
-    return {
-        "status": "ok" if ok_count == total else "error",
-        "message": f"{ok_count}/{total} devices flashed",
-        "per_device": per_device,
-    }
+async def _submit(fn: Any, *args: Any) -> str:
+    """Start a durable fleet job; 503 (with Retry-After) while the server drains."""
+    try:
+        return await durable.submit(fn, *args)
+    except durable.Draining as e:
+        raise HTTPException(503, str(e), headers={"Retry-After": "30"}) from e
+    except durable.NotRunning as e:
+        raise HTTPException(503, str(e)) from e
 
 
 # ── Deploy (the hardened pipeline, server-side) ───────────────────────
 
-# One deploy at a time: two would race on the stored firmware and the fleet.
-# Claimed in the request handler itself (no await between the check and the
-# claim), so a second request gets 409 rather than queueing behind the first.
-_deploy_running = False
+_deploy_lock = asyncio.Lock()
+
+
+async def _deploy_active() -> bool:
+    """Whether a fleet deploy hasn't finished (running, or held for a restart). With no store
+    there can be none, and ``_submit`` then refuses the new one with a 503 anyway."""
+    from ..firmware.fleet_workflows import FLEET_JOBS
+
+    if not durable.launched():
+        return False
+    return bool(await jobs.active(FLEET_JOBS, "deploy"))
 
 
 def _store_release_hex(hex_path: Path, tag: str) -> Path:
@@ -520,44 +384,26 @@ async def fleet_deploy(body: DeployRequest) -> dict[str, Any]:
     Returns a job_id; poll GET /api/fleet/jobs/{job_id}. The result says
     which step failed, if any.
     """
-    global _deploy_running
-    if _deploy_running:
-        raise HTTPException(409, "A fleet deploy is already running")
-    fleet = get_fleet()
-    # Validate the scope now so a typo fails the request, not a job later.
-    try:
-        deploy_pipeline.resolve_targets(fleet, body.device_ids)
-    except deploy_pipeline.DeployError as e:
-        raise HTTPException(400, str(e)) from e
+    from ..firmware.fleet_workflows import fleet_deploy as wf
 
-    jm = _get_flash_job_manager()
-
-    async def _run(job: Any) -> dict[str, Any]:
-        global _deploy_running
+    # One deploy at a time: two would race on the stored firmware and the fleet. The lock
+    # makes the check and the submit one step; a deploy held for a restart still counts.
+    async with _deploy_lock:
+        if await _deploy_active():
+            raise HTTPException(409, "A fleet deploy is already running")
+        # Validate the scope now so a typo fails the request, not a job later.
         try:
-            return await deploy_pipeline.run_deploy(
-                fleet,
-                job,
-                release_tag=body.release,
-                device_ids=body.device_ids,
-                download_dir=firmware_dir() / "release-download",
-                store_firmware=_store_release_hex,
-                flash=_flash_fleet_background,
-            )
-        finally:
-            _deploy_running = False
-
-    _deploy_running = True
-    try:
-        job = jm.submit("fleet-deploy", _run)
-    except Exception:
-        _deploy_running = False
-        raise
+            deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
+        except deploy_pipeline.DeployError as e:
+            raise HTTPException(400, str(e)) from e
+        job_id = await _submit(
+            wf, body.release, body.device_ids, str(firmware_dir() / "release-download")
+        )
     scope = (
         body.device_ids if isinstance(body.device_ids, str) else f"{len(body.device_ids)} device(s)"
     )
     return {
-        "job_id": job.id,
+        "job_id": job_id,
         "status": "submitted",
         "release": body.release or "latest stable",
         "scope": scope,

@@ -23,8 +23,7 @@ from typing import Any
 from dbos import DBOS
 
 from ..paths import data_dir
-from ..work import durable
-from . import jobs
+from ..work import durable, jobs
 from .audio_lock import acquire_audio_lock, release_audio_lock
 from .audio_player import kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
@@ -48,6 +47,12 @@ from .track_discovery import (
 )
 
 log = logging.getLogger(__name__)
+
+TEST_JOBS = jobs.Family(
+    prefix="test.",
+    kinds=("validate", "param-sweep", "tune-threshold", "capture-nn"),
+    result_steps=("validation_run", "sweep_run", "tune_run", "nn_capture"),
+)
 
 # One audio job at a time: every device hears the same room. The file lock (audio_lock.py)
 # keeps other processes out; this keeps two of this server's jobs from interleaving, which a
@@ -461,3 +466,16 @@ async def nn_capture(device_id: str, duration_ms: float, output: str) -> dict[st
 async def capture_nn(device_id: str, duration_ms: float, output: str) -> dict[str, Any]:
     jobs.report(None, f"capturing {duration_ms / 1000:.0f} s")
     return await nn_capture(device_id, duration_ms, output)
+
+
+def inline_raw(job: dict[str, Any]) -> dict[str, Any]:
+    """A validation job with its runs' raw captures read back from their files, as the API
+    returned them before they moved out of the step results (gate-(b) tooling reads them)."""
+    res = job.get("result")
+    if not isinstance(res, dict):
+        return job
+    for entry in res.get("results", []) + res.get("partial_results", []):
+        paths = entry.pop("raw_capture_path", None) if isinstance(entry, dict) else None
+        if paths:
+            entry["raw_capture"] = {d: json.loads(Path(p).read_text()) for d, p in paths.items()}
+    return job

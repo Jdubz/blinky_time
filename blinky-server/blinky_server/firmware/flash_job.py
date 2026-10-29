@@ -30,6 +30,7 @@ import enum
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -280,6 +281,12 @@ class FlashJob:
     # Lazily created on first use so a ``FlashJob`` constructed in sync
     # code (tests, scripts) doesn't bind to a loop that isn't running.
     _change_event: asyncio.Event | None = field(default=None, repr=False, compare=False)
+    # Called after every transition. The orchestrator uses it to write the audit log's
+    # progress events (bytes written), so a flash a crash cuts off still leaves a record
+    # (#325). None for jobs built directly (tests, scripts).
+    on_transition: Callable[[FlashJob], None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     # ------------------------------------------------------------------ #
     # State transitions
@@ -314,6 +321,8 @@ class FlashJob:
             self.finished_at = now
         self.state = new_state
         self._notify_change()
+        if self.on_transition is not None:
+            self.on_transition(self)
 
     def set_transport(self, transport: FlashTransport) -> None:
         """Pin the transport. Callable exactly once, in ``SELECTING_TRANSPORT``.
