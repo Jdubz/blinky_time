@@ -2,7 +2,7 @@
 test_durable_flash.py can kill it for real and start it again (#325).
 
     python -m tests.durable_fleet_harness start  OUT KILL   # none | before:N | after:N
-    python -m tests.durable_fleet_harness resume OUT
+    python -m tests.durable_fleet_harness resume OUT [late|never]
 
 Every flash is appended to OUT/effects.log. ``before:N`` exits in the Nth device's flash before
 its bytes land; ``after:N`` exits after they land (the device already reports the new version)
@@ -105,9 +105,27 @@ set_fleet(
 fleet_workflows.images.load = lambda path: SimpleNamespace(version=NEW)
 fleet_workflows.VERSION_SETTLE_S = 0
 fleet_workflows.VERSION_POLL_S = 0
+fleet_workflows.DEVICE_WAIT_S = 4
+
+
+async def come_back(never: str | None) -> None:
+    """As after a real restart: devices are registered before they're connected, with no
+    version, and connect a while later (``never``: that one stays PRESENT, like BLE)."""
+    for d in devices.values():
+        d.state, d.version = DeviceState.DISCONNECTED, None
+    await asyncio.sleep(1.5)
+    for d in devices.values():
+        if d.id == never:
+            d.state = DeviceState.PRESENT
+            continue
+        d.state, d.version = DeviceState.CONNECTED, versions[d.id]
+        effect(f"{d.id} connected")
 
 
 async def main() -> None:
+    if mode == "resume" and kill in ("late", "never"):
+        asyncio.get_running_loop().create_task(come_back("dev-b" if kill == "never" else None))
+        await asyncio.sleep(0)
     durable.configure(data_dir())
     await durable.launch()
     wid_file = out / "workflow_id"

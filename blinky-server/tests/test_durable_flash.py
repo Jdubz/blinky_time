@@ -82,6 +82,33 @@ def test_killed_after_the_bytes_land_does_not_flash_twice(tmp_path: Path) -> Non
     ]
 
 
+def test_resumed_step_waits_for_the_version_before_deciding(tmp_path: Path) -> None:
+    """Review: after a restart discovery registers devices before they connect (serial) or
+    with no version (BLE). The resumed step must wait for the version, not flash again."""
+    assert harness(tmp_path, "start", "after:2").returncode == 9
+    res = result(harness(tmp_path, "resume", "late"))
+    assert res["status"] == "ok"
+    assert flashes(tmp_path) == [
+        "flash dev-a start",
+        "flash dev-a end",
+        "flash dev-b start",
+        "flash dev-c start",
+        "flash dev-c end",
+    ]
+
+
+def test_resumed_step_never_flashes_blind(tmp_path: Path) -> None:
+    """A device that doesn't come back with a version after the restart isn't flashed again:
+    it fails loudly, and the rest of the fleet carries on."""
+    assert harness(tmp_path, "start", "after:2").returncode == 9
+    res = result(harness(tmp_path, "resume", "never"))
+    assert res["status"] == "error"
+    assert res["per_device"]["dev-b"]["flash"] == "error"
+    assert "interrupted by a restart" in res["per_device"]["dev-b"]["message"]
+    assert res["per_device"]["dev-c"]["flash"] == "ok"
+    assert flashes(tmp_path).count("flash dev-b start") == 1
+
+
 # -- the audit log across a restart -----------------------------------------------------------
 
 

@@ -40,12 +40,20 @@ def _fleet() -> Any:
     return get_fleet()
 
 
-async def _wait_for_device(fleet: Any, device_id: str) -> Any:
+async def _wait_for(fleet: Any, device_id: str, ready: Any) -> Any:
+    """The device once ``ready(device)`` holds, polling for up to DEVICE_WAIT_S; else the
+    device as it is (None if discovery never found it)."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + DEVICE_WAIT_S
-    while (d := fleet.get_device(device_id)) is None and loop.time() < deadline:
+    while True:
+        d = fleet.get_device(device_id)
+        if (d is not None and ready(d)) or loop.time() >= deadline:
+            return d
         await asyncio.sleep(2)
-    return d
+
+
+def _reports_version(d: Any) -> bool:
+    return bool(d.state == DeviceState.CONNECTED and d.version)
 
 
 @durable.step
@@ -54,24 +62,38 @@ async def flash_one(device_id: str, firmware: str, settle_after: bool) -> dict[s
     fleet = _fleet()
     image = images.load(firmware)
     expected_version = image.version if image is not None else None
-    device = await _wait_for_device(fleet, device_id)
     short = device_id[:12]
-    # Cut off by a restart, the write may have landed: check before acting (rule 2). The
-    # rerun marker is set on the first run, so it is checked first, always.
-    rerun = durable.rerun(f"flash-{device_id}")
-    if (
-        rerun
-        and device is not None
-        and expected_version is not None
-        and device.state == DeviceState.CONNECTED
-        and device.version == expected_version
-    ):
-        log.info(
-            "fleet flash: %s already runs %s after the restart; not flashing it again",
-            short,
-            expected_version,
-        )
-        return {"device": short, "status": "ok", "note": "already at version (resumed)"}
+    # The rerun marker is set on the first run, so ask first, always.
+    if durable.rerun(f"flash-{device_id}"):
+        # A restart cut this step off, and the write may have landed: check before acting
+        # (rule 2). Discovery registers a device before it is connected (serial) or with no
+        # version at all (BLE, PRESENT), so wait until it reports one. If it never does, or
+        # there's no target version to compare, the step doesn't flash blind: the device
+        # fails, loudly, for the operator to check (#325 review).
+        device = await _wait_for(fleet, device_id, _reports_version)
+        if expected_version is None or device is None or not _reports_version(device):
+            why = (
+                f"{firmware} isn't an image in the server's store, so its version is unknown"
+                if expected_version is None
+                else f"it didn't come back connected with a version within {DEVICE_WAIT_S:.0f} s"
+            )
+            log.error(
+                "fleet flash: %s was cut off by a restart and %s; not flashing it blind", short, why
+            )
+            return {
+                "device": short,
+                "status": "error",
+                "message": f"interrupted by a restart, and {why}: check the device, then "
+                f"flash it again if it needs it",
+            }
+        if device.version == expected_version:
+            log.info(
+                "fleet flash: %s already runs %s after the restart; not flashing it again",
+                short,
+                expected_version,
+            )
+            return {"device": short, "status": "ok", "note": "already at version (resumed)"}
+    device = await _wait_for(fleet, device_id, lambda d: True)
     serial = device is not None and device.transport.transport_type == "serial"
     result: dict[str, Any] = {"device": short, "status": "error", "message": "not scheduled"}
     async for _did, fjob, err in fleet.flash_fleet(
