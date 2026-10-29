@@ -272,10 +272,10 @@ Parameter sweep orchestration (matching param_sweep_multidev.cjs):
 4. Per-value aggregate statistics with optimal value recommendation
 5. Phase alignment scoring (% pulses on 8th-note grid)
 
-`blinky_server/testing/job_manager.py` — In-memory async job tracker:
-- Jobs: id, status (pending/running/complete/error), progress, result, created_at
-- Background task execution via asyncio
-- Auto-prune completed jobs after 1 hour
+`blinky_server/work/` — durable jobs (#325): every long-running job is a DBOS workflow that
+survives a restart (`durable.py`), and the job view the API serves is read from its records
+(`jobs.py`). Test jobs: `testing/workflows.py`; fleet flash and deploy:
+`firmware/fleet_workflows.py`.
 
 `blinky_server/api/routes_testing.py` — REST endpoints (see table above)
 

@@ -39,6 +39,7 @@ from ..transport.discovery import (
     discover_all,
 )
 from ..transport.serial_transport import SerialTransport
+from ..work import durable
 from .device import Device, DeviceState
 from .protocol import DeviceProtocol
 
@@ -647,6 +648,18 @@ class FleetManager:
                     device_id,
                 )
                 return None
+            # A drain (the server stopping for a restart, #325) lets flashes in flight finish
+            # but starts none: auto-recovery tries again after the restart, and an operator's
+            # request is refused (503) rather than begun and cut off.
+            if durable.draining():
+                if not force:
+                    log.info(
+                        "flash_device(%s, force=False): server draining for a restart; "
+                        "auto-recovery waits for the next start",
+                        device_id,
+                    )
+                    return None
+                durable.refuse_while_draining("flash")
             job = FlashJob(
                 device_id=full_device_id,
                 firmware_path=firmware_path,
@@ -654,6 +667,9 @@ class FleetManager:
                 canonical_id=canonical,
                 is_auto_recovery=not force,
             )
+            # Held from now until _run_flash_job ends, so a drain that starts before the task
+            # first runs still waits for this flash.
+            job_hold = durable.begin_hold(f"flash {full_device_id[:12]}", job.job_id)
             self._flash_jobs[canonical] = job
             # Register in the single in-flight set so any other code path
             # that checks before touching firmware sees this device is
@@ -673,10 +689,40 @@ class FleetManager:
         # Launch the orchestrator OUTSIDE the lock so a long-running flash
         # doesn't block subsequent flash_device queries for the same device
         # (those will see is_active=True and return the in-flight job).
-        task = asyncio.create_task(self._run_flash_job(job), name=f"flash-job-{job.job_id}")
+        task = asyncio.create_task(
+            self._held_flash_job(job, job_hold), name=f"flash-job-{job.job_id}"
+        )
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return job
+
+    async def usb_settle(self) -> None:
+        """Between UF2 flashes: 8 s, then ``udevadm settle`` so the kernel's USB event queue
+        drains before the next device's bus reset."""
+        await asyncio.sleep(8)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "udevadm",
+                "settle",
+                "--timeout=10",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            # rc=1 means the udev queue was still non-empty after
+            # 10s — the host-USB-jam pattern from 2026-05-01.
+            # Don't fail the deploy (the next device's flash
+            # retries enumeration independently), but log
+            # loudly so the operator sees the early warning.
+            if proc.returncode != 0:
+                log.warning(
+                    "flash_fleet: udevadm settle exited rc=%d after 10s — "
+                    "USB event queue still busy; next device's flash may "
+                    "hit a _wait_for_uf2_drive timeout",
+                    proc.returncode,
+                )
+        except (FileNotFoundError, OSError) as exc:
+            log.warning("flash_fleet: udevadm settle skipped: %s", exc)
 
     async def flash_fleet(
         self,
@@ -710,10 +756,8 @@ class FleetManager:
             progress reporting can show it.
 
         ``on_iteration(index, total, device_id, job, error)`` is
-        invoked synchronously between iterations. The JobManager
-        super-job's progress callback uses this to update its visible
-        progress + message without needing to consume the generator
-        out-of-band.
+        invoked synchronously between iterations, for callers that show
+        progress without consuming the generator out-of-band.
 
         Batch-level coordination (done ONCE around the whole loop):
           - Broadcaster paused if running, restored in ``finally``. The
@@ -827,30 +871,7 @@ class FleetManager:
                 # Inter-iteration USB settle (UF2 only — BLE doesn't need
                 # USB-bus stabilization). Skip after the last iteration.
                 if is_serial_target and i < total - 1:
-                    await asyncio.sleep(8)
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
-                            "udevadm",
-                            "settle",
-                            "--timeout=10",
-                            stdout=asyncio.subprocess.DEVNULL,
-                            stderr=asyncio.subprocess.DEVNULL,
-                        )
-                        await proc.wait()
-                        # rc=1 means the udev queue was still non-empty after
-                        # 10s — the host-USB-jam pattern from 2026-05-01.
-                        # Don't fail the deploy (the next device's flash
-                        # retries enumeration independently), but log
-                        # loudly so the operator sees the early warning.
-                        if proc.returncode != 0:
-                            log.warning(
-                                "flash_fleet: udevadm settle exited rc=%d after 10s — "
-                                "USB event queue still busy; next device's flash may "
-                                "hit a _wait_for_uf2_drive timeout",
-                                proc.returncode,
-                            )
-                    except (FileNotFoundError, OSError) as exc:
-                        log.warning("flash_fleet: udevadm settle skipped: %s", exc)
+                    await self.usb_settle()
         finally:
             if broadcaster_was_running and self.broadcaster is not None:
                 try:
@@ -860,6 +881,13 @@ class FleetManager:
                         "flash_fleet: failed to restart broadcaster — fleet "
                         "commands will not reach BLE devices until manual restart"
                     )
+
+    async def _held_flash_job(self, job: FlashJob, hold: int) -> None:
+        """``_run_flash_job`` inside the drain hold ``flash_device`` took for it (#325)."""
+        try:
+            await self._run_flash_job(job)
+        finally:
+            durable.end_hold(hold)
 
     async def _run_flash_job(self, job: FlashJob) -> None:
         """Drive a ``FlashJob`` through its state machine.
@@ -896,6 +924,11 @@ class FleetManager:
         # — the lockdown's "single entry point" invariant. Reset in
         # the finally block so cross-task contamination is impossible.
         _orch_token = enter_orchestrator_context()
+        # Progress events in the audit log (#325): "started" before anything touches the
+        # device, "written" once the bytes are on it. A restart that cuts this job off then
+        # still leaves a record, which the next start turns into an ABANDONED entry.
+        self._write_flash_audit_event(job, "started")
+        job.on_transition = self._audit_transition
         try:
             job.transition(FlashJobState.SELECTING_TRANSPORT)
             probe = self._build_transport_probe(job.device_id)
@@ -1473,6 +1506,7 @@ class FleetManager:
         # re-fire on a device that just failed pre-restart. Reads only
         # the entries inside FLASH_DEDUP_WINDOW_S of now; older entries
         # are skipped.
+        self._abandon_interrupted_flashes()
         self._load_recent_flash_attempts_from_audit_log()
         # Bring up the BLE broadcaster. Single-radio adapters (BCM43455 on
         # Pi 4) refuse advertising while we hold GATT central connections,
@@ -2472,6 +2506,38 @@ class FleetManager:
 
         return data_dir() / "flash_attempts.jsonl"
 
+    def _audit_transition(self, job: FlashJob) -> None:
+        """FlashJob.on_transition: record the moment the bytes are on the device."""
+        if job.state is FlashJobState.VERIFYING:
+            self._write_flash_audit_event(job, "written")
+
+    def _write_flash_audit_event(self, job: FlashJob, event: str) -> None:
+        """A progress line (#325): ``started`` or ``written``, not a terminal snapshot. On the
+        next start, a job with progress lines and no terminal line was cut off by a restart
+        (``_abandon_interrupted_flashes``)."""
+        entry = {
+            "event": event,
+            "job_id": job.job_id,
+            "device_id": job.device_id,
+            "canonical_id": job.canonical_id or self.resolve_canonical(job.device_id),
+            "is_auto_recovery": job.is_auto_recovery,
+            "firmware_path": str(job.firmware_path),
+            "expected_version": job.expected_version,
+            "transport": job.transport.value if job.transport else None,
+            "at": _time.time(),
+        }
+        try:
+            with self._flash_audit_log_path().open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except OSError as exc:
+            log.error(
+                "Failed to append flash-audit %s event for job %s: %s. A restart during "
+                "this flash would leave no record of it.",
+                event,
+                job.job_id,
+                exc,
+            )
+
     def _write_flash_audit_entry(self, job: FlashJob, canonical: str) -> None:
         """Append one JSONL line for a terminal ``FlashJob``.
 
@@ -2515,6 +2581,80 @@ class FleetManager:
                 job.job_id,
                 exc,
             )
+
+    def _abandon_interrupted_flashes(self) -> list[dict[str, Any]]:
+        """At start: record every flash a restart cut off (#325) as ABANDONED.
+
+        Such a job has ``started`` (and maybe ``written``) progress lines and no terminal
+        line. Its terminal line is appended now, with ``finished_at`` = now, so the dedup
+        window runs from this start, and with ``write_completed_at`` from its ``written``
+        line, so a UF2 write that landed keeps BLE-DFU auto-recovery off it (the cascade
+        guard). Written once: the next start finds the terminal line. Returns what it wrote.
+        """
+        path = self._flash_audit_log_path()
+        if not path.is_file():
+            return []
+        progress: dict[str, dict[str, Any]] = {}
+        finished: set[str] = set()
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for raw in fh:
+                    try:
+                        entry = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    job_id = entry.get("job_id") if isinstance(entry, dict) else None
+                    if not isinstance(job_id, str):
+                        continue
+                    if entry.get("event") in ("started", "written"):
+                        p = progress.setdefault(job_id, dict(entry))
+                        if entry["event"] == "written":
+                            p["written_at"] = entry.get("at")
+                        if entry.get("transport"):
+                            p["transport"] = entry["transport"]
+                    else:
+                        finished.add(job_id)
+        except OSError as exc:
+            log.error("Failed to read flash-audit log %s: %s", path, exc)
+            return []
+        now = _time.time()
+        written = []
+        for job_id, p in progress.items():
+            if job_id in finished:
+                continue
+            entry = {
+                "job_id": job_id,
+                "device_id": p.get("device_id"),
+                "canonical_id": p.get("canonical_id"),
+                "is_auto_recovery": p.get("is_auto_recovery", False),
+                "firmware_path": p.get("firmware_path"),
+                "expected_version": p.get("expected_version"),
+                "transport": p.get("transport"),
+                "created_at": p.get("at"),
+                "started_at": p.get("at"),
+                "write_completed_at": p.get("written_at"),
+                "verified_at": None,
+                "finished_at": now,
+                "state": FlashJobState.ABANDONED.value,
+                "error": "interrupted by a server restart (no terminal record)",
+                "anomalies": [],
+            }
+            log.warning(
+                "Flash job %s on %s was cut off by a restart (%s); recorded ABANDONED. "
+                "Auto-recovery leaves the device alone for the dedup window.",
+                job_id,
+                str(p.get("device_id"))[:12],
+                "bytes written" if p.get("written_at") else "no bytes written",
+            )
+            written.append(entry)
+        if written:
+            try:
+                with path.open("a", encoding="utf-8") as fh:
+                    for entry in written:
+                        fh.write(json.dumps(entry) + "\n")
+            except OSError as exc:
+                log.error("Failed to record interrupted flashes in %s: %s", path, exc)
+        return written
 
     def _load_recent_flash_attempts_from_audit_log(self) -> None:
         """Repopulate ``_recent_flash_attempts`` from the JSONL audit log.
@@ -2574,6 +2714,8 @@ class FleetManager:
                         log.warning("Flash-audit log line %d unparseable; skipping", line_num)
                         skipped_bad += 1
                         continue
+                    if isinstance(entry, dict) and entry.get("event"):
+                        continue  # a progress line; its job's terminal line is what counts
                     canonical = entry.get("canonical_id") or entry.get("device_id")
                     finished_at = entry.get("finished_at")
                     if not isinstance(canonical, str) or not isinstance(finished_at, (int, float)):

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from ..device.manager import FleetManager
 from ..firmware.flash_job import FlashConflict
 from ..paths import firmware_dir
+from ..work import durable
 from .deps import get_fleet, require_api_key, require_deploy_tool
 
 log = logging.getLogger(__name__)
@@ -103,6 +104,9 @@ async def create_flash_job(
         # different firmware. Returning the in-flight job would
         # mislead the caller into thinking their image landed.
         raise HTTPException(409, str(exc)) from exc
+    except durable.Draining as exc:
+        # The server is stopping for a restart: no new flash starts (#325).
+        raise HTTPException(503, str(exc), headers={"Retry-After": "30"}) from exc
     return job.to_dict()
 
 

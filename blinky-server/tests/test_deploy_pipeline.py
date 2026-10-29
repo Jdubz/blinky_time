@@ -354,7 +354,10 @@ async def test_route_refuses_a_second_deploy_while_one_runs(
 ) -> None:
     from blinky_server.api import routes_firmware
 
-    monkeypatch.setattr(routes_firmware, "_deploy_running", True)
+    async def active() -> bool:
+        return True  # a deploy hasn't finished (running, or held for a restart)
+
+    monkeypatch.setattr(routes_firmware, "_deploy_active", active)
     r = await client.post("/api/fleet/deploy", json={"device_ids": "all"})
     assert r.status_code == 409
 

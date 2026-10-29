@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from ..device.device import DeviceState
+from ..work import durable
 from .compile import find_project_root
 
 log = logging.getLogger(__name__)
@@ -57,7 +58,13 @@ class DeployError(Exception):
     def __init__(self, step: str, message: str, detail: Any = None) -> None:
         super().__init__(f"{step}: {message}")
         self.step = step
+        self.message = message
         self.detail = detail
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # DBOS records a step's exception and raises it again on replay, which needs pickle,
+        # and the default reduction would call __init__ with the formatted message only.
+        return (DeployError, (self.step, self.message, self.detail))
 
 
 # ── 1. Firmware: a stable release, downloaded and verified ─────────────
@@ -278,6 +285,47 @@ async def assert_post_deploy(
 
 
 # ── The pipeline ────────────────────────────────────────────────────────
+#
+# Each stage that touches the world is a durable step (work/durable.py, #325): run as the
+# fleet.deploy workflow (firmware/fleet_workflows.py), a restart resumes the deploy after the
+# last finished stage. Outside a workflow (the unit tests) the steps simply run. Each is safe
+# to run again: resolving, downloading and storing are idempotent, and restore + save and the
+# assertion are what deploy.sh repeats on a re-run.
+
+
+@durable.step
+async def _targets(fleet: Any, device_ids: Sequence[str] | str) -> list[str]:
+    return [d.id for d in resolve_targets(fleet, device_ids)]
+
+
+@durable.step
+async def _release(tag: str | None, download_dir: Path) -> dict[str, Any]:
+    return await asyncio.to_thread(fetch_stable_release, tag, download_dir)
+
+
+@durable.step
+async def _store_and_arm(
+    fleet: Any,
+    store_firmware: Callable[[Path, str], Path],
+    rel: dict[str, Any],
+    target_ids: list[str],
+) -> str:
+    firmware = store_firmware(Path(rel["hex"]), rel["tag"])
+    fleet.set_recovery_firmware(str(firmware), target_ids)
+    return str(firmware)
+
+
+@durable.step
+async def _settings(fleet: Any) -> dict[str, Any]:
+    return await restore_and_save(fleet)
+
+
+@durable.step
+async def _verify(
+    fleet: Any, target_ids: list[str], version: str, settle_s: float
+) -> dict[str, Any]:
+    await asyncio.sleep(settle_s)
+    return await assert_post_deploy(fleet, target_ids, version)
 
 
 async def run_deploy(
@@ -307,17 +355,15 @@ async def run_deploy(
 
     try:
         job.progress, job.progress_message = 0, "Resolving targets"
-        targets = resolve_targets(fleet, device_ids)
-        target_ids = [d.id for d in targets]
+        target_ids = await _targets(fleet, device_ids)
         steps["targets"] = {"status": "ok", "devices": target_ids}
 
         job.progress_message = "Downloading and verifying the stable release"
-        rel = await asyncio.to_thread(fetch_stable_release, release_tag, download_dir)
+        rel = await _release(release_tag, download_dir)
         version = rel["version"]
         steps["release"] = {"status": "ok", "tag": rel["tag"], "version": version}
 
-        firmware = store_firmware(Path(rel["hex"]), rel["tag"])
-        fleet.set_recovery_firmware(str(firmware), target_ids)
+        firmware = Path(await _store_and_arm(fleet, store_firmware, rel, target_ids))
         steps["store"] = {"status": "ok", "firmware_path": str(firmware)}
     except DeployError as e:
         return failed(e)
@@ -331,13 +377,12 @@ async def run_deploy(
 
     try:
         job.progress_message = "Restoring runtime settings and saving"
-        steps["settings"] = {"status": "ok", "results": await restore_and_save(fleet)}
+        steps["settings"] = {"status": "ok", "results": await _settings(fleet)}
 
         job.progress_message = "Verifying post-deploy state"
-        await asyncio.sleep(settle_s)
         steps["verify"] = {
             "status": "ok",
-            "devices": await assert_post_deploy(fleet, target_ids, version),
+            "devices": await _verify(fleet, target_ids, version, settle_s),
         }
     except DeployError as e:
         return failed(e)

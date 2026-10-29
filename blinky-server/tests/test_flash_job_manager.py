@@ -1786,9 +1786,11 @@ async def test_audit_log_appended_on_terminal_transition(
     assert job.state is FlashJobState.FAILED
 
     assert audit_path.is_file()
-    lines = audit_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    entry = _json.loads(lines[0])
+    entries = [_json.loads(li) for li in audit_path.read_text(encoding="utf-8").splitlines()]
+    # A progress line first ("started", written before anything touches the device, so a
+    # restart mid-flash leaves a record: #325), then exactly one terminal snapshot.
+    assert [e.get("event") for e in entries] == ["started", None]
+    entry = entries[1]
     assert entry["job_id"] == job.job_id
     assert entry["device_id"] == "dev-A"
     assert entry["canonical_id"] == "dev-A"
@@ -1811,9 +1813,8 @@ async def test_audit_log_appended_per_job(fleet: FleetManager) -> None:
     await b.wait_until_terminal(timeout=2.0)
 
     lines = fleet._flash_audit_log_path().read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2
-    devs = [_json.loads(li)["device_id"] for li in lines]
-    assert devs == ["dev-1", "dev-2"]
+    terminal = [e for e in map(_json.loads, lines) if "event" not in e]
+    assert [e["device_id"] for e in terminal] == ["dev-1", "dev-2"]
 
 
 @pytest.mark.asyncio

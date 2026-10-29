@@ -81,8 +81,13 @@ _in_flight: dict[int, dict[str, Any]] = {}
 _next_token = 0
 
 
+_data_dir: Path | None = None
+
+
 def configure(data_dir: Path) -> Path:
     """Create the DBOS instance (once per process), with its system database under data_dir."""
+    global _data_dir
+    _data_dir = data_dir
     db = data_dir / DB_FILE
     DBOS(
         config=DBOSConfig(
@@ -138,15 +143,38 @@ def draining() -> bool:
 
 
 @contextlib.contextmanager
-def _step_in_flight(name: str) -> Iterator[None]:
-    global _next_token
-    _next_token += 1
-    token = _next_token
-    _in_flight[token] = {"workflow_id": DBOS.workflow_id, "step": name, "since": time.time()}
+def hold(name: str, owner: str | None = None) -> Iterator[None]:
+    """A non-interruptible region that a drain waits for: every step runs in one, and so does
+    work that can't be a step at all, such as a flash (a write can't resume halfway). ``owner``
+    names it in the drain's status; inside a workflow it defaults to the workflow id."""
+    token = begin_hold(name, owner)
     try:
         yield
     finally:
-        _in_flight.pop(token, None)
+        end_hold(token)
+
+
+def begin_hold(name: str, owner: str | None = None) -> int:
+    """``hold`` for a region that starts in one function and ends in another (a flash job is
+    held from the moment it's created, before its task first runs). Pair with ``end_hold``."""
+    global _next_token
+    _next_token += 1
+    _in_flight[_next_token] = {
+        "workflow_id": owner if owner is not None else DBOS.workflow_id,
+        "step": name,
+        "since": time.time(),
+    }
+    return _next_token
+
+
+def end_hold(token: int) -> None:
+    _in_flight.pop(token, None)
+
+
+def refuse_while_draining(what: str) -> None:
+    """Raise Draining if the server is draining: for work that starts outside ``submit``."""
+    if _draining:
+        raise Draining(f"the server is restarting; {what} again shortly")
 
 
 async def boundary() -> None:
@@ -169,7 +197,7 @@ def step(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     @functools.wraps(fn)
     async def run(*args: P.args, **kwargs: P.kwargs) -> R:
         await boundary()
-        with _step_in_flight(name):
+        with hold(name):
             return await recorded(*args, **kwargs)
 
     return run
@@ -199,6 +227,21 @@ async def submit(fn: Callable[..., Coroutine[Any, Any, Any]], *args: Any) -> str
     with SetWorkflowID(workflow_id):
         await DBOS.start_workflow_async(fn, *args)
     return workflow_id
+
+
+def rerun(key: str) -> bool:
+    """Inside a step: True when this step already ran in this workflow and was cut off (rule
+    2), so check-then-act code checks first. ``key`` names the step within its workflow.
+    Outside a workflow, or before ``configure``, always False."""
+    wid = DBOS.workflow_id
+    if wid is None or _data_dir is None:
+        return False
+    marker = _data_dir / "work-attempts" / wid / key
+    if marker.exists():
+        return True
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    return False
 
 
 def in_flight() -> list[dict[str, Any]]:
