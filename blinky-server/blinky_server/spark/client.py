@@ -26,6 +26,11 @@ class NotFound(SparkError):
     """A 404: for a job, its record was pruned (24 h after it finished) or never existed."""
 
 
+class Refused(SparkError):
+    """Any other 4xx: the Job API looked at the request and said no. Sending it again gets the
+    same answer, unlike a transport failure or a 5xx."""
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args: Any, **kwargs: Any) -> None:
         return None  # surface the 3xx as an HTTPError; get_artifact follows it itself
@@ -56,7 +61,8 @@ class Client:
                     time.sleep(2**attempt)
                     continue
                 detail = e.read().decode("utf-8", "replace")[:500]
-                raise SparkError(f"{method} {path} -> HTTP {e.code}: {detail}") from None
+                kind = Refused if 400 <= e.code < 500 else SparkError
+                raise kind(f"{method} {path} -> HTTP {e.code}: {detail}") from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
                 if attempt < TRANSPORT_RETRIES:
                     time.sleep(2**attempt)

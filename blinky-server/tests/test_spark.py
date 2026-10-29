@@ -39,6 +39,8 @@ class FakeSpark:
         self.created = 0
         self.artifacts: dict[str, bytes] = {}  # GET /artifacts/{key}, served via a 307
         self.store_headers: list[dict[str, str]] = []
+        self.refuse: set[str] = set()  # audio keys the Job API answers 422 for
+        self.fail_next = 0  # submits to answer 500 (a platform hiccup, not a refusal)
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -62,6 +64,13 @@ class FakeSpark:
                     self._send(200, {"uri": f"inputs/u{fake.uploads}/track.mp3"})
                     return
                 spec = json.loads(body)
+                if fake.fail_next:
+                    fake.fail_next -= 1
+                    self._send(500, {"detail": "controller restarting"})
+                    return
+                if spec.get("payload", {}).get("audio") in fake.refuse:
+                    self._send(422, {"detail": "no such object in the store"})
+                    return
                 fake.submits.append(spec)
                 k = spec["idempotency_key"]
                 live = k in fake.by_key and fake.jobs[fake.by_key[k]]["state"] not in (
@@ -697,3 +706,33 @@ async def test_corpus_routes(
             assert r.json()["mode"] == corpus.PAUSED
     finally:
         spark.set_service(None)
+
+
+def test_a_refused_submit_pauses_the_pass_and_names_the_track(
+    svc: spark.SparkService, fake: FakeSpark
+) -> None:
+    fake.artifacts[corpus.MANIFEST_KEY] = manifest(3)
+    fake.refuse.add("datasets/blinky-corpus/audio/000001.mp3")
+    svc.corpus.start(batch=3)
+    svc.corpus.tick()
+    st = svc.corpus.status()
+    assert st["mode"] == corpus.PAUSED
+    assert "refused datasets/blinky-corpus/audio/000001.mp3" in st["reason"]
+    assert "HTTP 422" in st["reason"] and st["batch_no"] == 1
+    assert st["counts"]["in_flight"] == 1  # what went in before the refusal still drains
+
+
+def test_a_transient_submit_failure_retries_without_pausing(
+    svc: spark.SparkService, fake: FakeSpark
+) -> None:
+    fake.artifacts[corpus.MANIFEST_KEY] = manifest(2)
+    svc.corpus.start(batch=2)
+    fake.fail_next = 1
+    svc.corpus.tick()
+    st = svc.corpus.status()
+    assert st["mode"] == corpus.FIRST and "retrying next tick" in st["reason"]
+    assert st["batch_no"] == 0 and st["counts"]["pending"] == 2  # nothing counted as a batch
+    svc.corpus.tick()
+    st = svc.corpus.status()
+    assert st["batch_no"] == 1 and st["counts"]["in_flight"] == 2
+    assert "runs alone" in st["reason"]  # the retry note is gone; the first-batch note stands

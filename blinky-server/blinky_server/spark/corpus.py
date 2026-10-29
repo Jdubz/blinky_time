@@ -29,7 +29,7 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from .client import NotFound, SparkError
+from .client import NotFound, Refused, SparkError
 from .ledger import FAILED, LOST, SUCCEEDED
 
 if TYPE_CHECKING:
@@ -45,6 +45,9 @@ FAILED_BATCH_FRACTION = 0.5  # more than this many failed in one batch: pause
 
 # Modes. `first` and `running` submit; `review` and `paused` wait for a person; `done` is done.
 FIRST, REVIEW, RUNNING, PAUSED, DONE = "first", "review", "running", "paused", "done"
+
+RETRYING = "submitting failed, retrying next tick"
+FIRST_NOTE = "the first batch runs alone; check its stems, then `continue`"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -139,7 +142,7 @@ class CorpusPass:
             self.tracks_path.write_text(json.dumps(tracks))
             c = {
                 "mode": FIRST,
-                "reason": "the first batch runs alone; check its stems, then `continue`",
+                "reason": FIRST_NOTE,
                 "model_type": model_type,
                 "stems": stems,
                 "chunk_seconds": chunk_seconds,
@@ -241,8 +244,7 @@ class CorpusPass:
             self._save(c)
             log.info("spark corpus: done")
             return
-        c["batch_no"] += 1
-        submitted = []
+        submitted: list[str] = []
         try:
             for key, sha in pending:
                 self.svc.submit_separate(
@@ -257,10 +259,24 @@ class CorpusPass:
                     extra={"corpus": True},
                 )
                 submitted.append(self._key(c, sha))
-        finally:  # a crash mid-batch still drains what went in; the rest is pending again
+            if (c.get("reason") or "").startswith(RETRYING):  # the hiccup is over
+                c["reason"] = FIRST_NOTE if c["mode"] == FIRST else None
+        except Refused as e:
+            # Deterministic: the same track would be refused on every tick, and the pass
+            # would sit `running` submitting nothing. Stop and say which track and why.
+            c["mode"] = PAUSED
+            c["reason"] = f"the Job API refused {key}: {e}"
+            log.warning("spark corpus: %s", c["reason"])
+        except SparkError as e:  # transport or 5xx: the next tick tries again
+            c["reason"] = f"{RETRYING}: {e}"
+            log.warning("spark corpus: %s", c["reason"])
+        finally:  # whatever went in drains as this batch; the rest is pending again
+            if submitted:
+                c["batch_no"] += 1
             c["current"] = submitted
             self._save(c)
-        log.info("spark corpus: batch %d submitted (%d tracks)", c["batch_no"], len(submitted))
+        if submitted:
+            log.info("spark corpus: batch %d submitted (%d tracks)", c["batch_no"], len(submitted))
 
     @staticmethod
     def _pending(c: dict[str, Any], rec: dict[str, Any] | None) -> bool:
