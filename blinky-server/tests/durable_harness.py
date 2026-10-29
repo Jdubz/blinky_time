@@ -29,6 +29,7 @@ from blinky_server.work import durable
 TRACKS = ["alpha", "bravo", "charlie"]
 RUNS = 2
 DEVICES = ["dev-a", "dev-b"]
+WORKFLOW = os.environ.get("WORKFLOW", "validate")
 REQ = {
     "device_ids": DEVICES,
     "track_dir": "/fake",
@@ -118,7 +119,29 @@ workflows.load_track_manifest = lambda d: {}
 workflows._ground_truth = lambda track, duration_ms: None
 workflows._play = fake_play
 workflows.score_device_run = lambda data, start, gt: {"data": data}
-workflows.format_score_summary = lambda score: {"ok": True}
+workflows.format_score_summary = lambda score: {"ok": True, "drums": {"drumF": 0.5}}
+
+
+async def fake_capture(device: Any, duration_ms: float, output: str) -> Any:
+    global plays
+    plays += 1
+    effect("play capture start")
+    if kill == f"crash:{plays}":
+        os._exit(9)
+    await asyncio.sleep(0.3)
+    effect("play capture end")
+    return SimpleNamespace(
+        frames=10,
+        duration_sec=1.0,
+        frame_rate=62.5,
+        output_path=output,
+        nn_active=True,
+        onset_stats={},
+        level_stats={},
+    )
+
+
+workflows.capture_nn_stream = fake_capture
 workflows.INTER_RUN_GAP_S = 0
 workflows.kill_orphan_audio = noop
 workflows.stop_audio = noop
@@ -145,7 +168,32 @@ async def main() -> None:
     durable.configure(data_dir())
     await durable.launch()
     wid_file = out / "workflow_id"
-    if mode == "start":
+    if mode == "start" and WORKFLOW != "validate":
+        jobs = {
+            "param-sweep": (
+                workflows.param_sweep,
+                {**REQ, "param_name": "odfgate", "values": [0.1, 0.2, 0.3, 0.4]},
+            ),
+            "tune-threshold": (
+                workflows.tune_threshold,
+                {
+                    **REQ,
+                    "device_id": "dev-a",
+                    "param_name": "odfgate",
+                    "low": 0.1,
+                    "high": 0.5,
+                    "max_steps": 4,
+                    "target_metric": "drumF",
+                },
+            ),
+        }
+        if WORKFLOW == "capture-nn":
+            wid = await durable.submit(workflows.capture_nn, "dev-a", 1000.0, str(out / "c.jsonl"))
+        else:
+            fn, req = jobs[WORKFLOW]
+            wid = await durable.submit(fn, req)
+        wid_file.write_text(wid)
+    elif mode == "start":
         wid = await durable.submit(workflows.validate, REQ)
         wid_file.write_text(wid)
         if kill.startswith("two-"):

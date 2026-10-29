@@ -321,3 +321,43 @@ async def test_sibling_holds_last_as_long_as_the_flash_not_the_request() -> None
     done.set()
     await asyncio.sleep(0.01)
     assert resumed == ["sib-1", "sib-2"]
+
+
+# -- fleet.deploy across a restart ------------------------------------------------------------
+
+
+def deploy_harness(out: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "XDG_DATA_HOME": str(out / "data"), "WORKFLOW": "deploy"}
+    return subprocess.run(
+        [sys.executable, "-m", "tests.durable_fleet_harness", args[0], str(out), *args[1:]],
+        cwd=SERVER,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+
+def effects_of(out: Path) -> list[str]:
+    return (out / "effects.log").read_text().splitlines()
+
+
+def test_a_deploy_cut_off_mid_flash_resumes_with_that_device(tmp_path: Path) -> None:
+    assert deploy_harness(tmp_path, "start", "before:2").returncode == 9
+    res = result(deploy_harness(tmp_path, "resume"))
+    assert res["status"] == "ok", res
+    assert list(res["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
+    log = effects_of(tmp_path)
+    assert log.count("flash dev-a start") == 1 and log.count("flash dev-b start") == 2
+    assert log.count("arm 3") == 1  # recovery armed once: the replay doesn't run it again
+    assert log.count("broadcast save end") == 1
+
+
+def test_a_deploy_cut_off_in_its_settings_stage_redoes_only_that(tmp_path: Path) -> None:
+    assert deploy_harness(tmp_path, "start", "broadcast:1").returncode == 9
+    res = result(deploy_harness(tmp_path, "resume"))
+    assert res["status"] == "ok", res
+    log = effects_of(tmp_path)
+    assert all(log.count(f"flash {d} start") == 1 for d in ALL)  # no device flashed twice
+    assert log.count("broadcast restore_runtime_settings start") == 2  # cut off, then redone
+    assert log.count("broadcast save end") == 1

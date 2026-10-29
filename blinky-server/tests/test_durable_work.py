@@ -229,3 +229,74 @@ def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> No
     assert st["status"] == "CANCELLED" and st["app_version"] == "blinky-work-1"
     assert "can't resume on this code" in r.stderr
     assert sum(x == "play bravo start" for x in effects(tmp_path)) == 1  # not run again
+
+
+@pytest.mark.parametrize("workflow", ["param-sweep", "tune-threshold", "capture-nn"])
+def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow: str) -> None:
+    """The other test jobs, as validate above: crashed in the middle of a unit, then started
+    again, they finish with the same units as an uninterrupted run, only the cut-off unit
+    repeated."""
+
+    def run(out: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "XDG_DATA_HOME": str(out / "data"), "WORKFLOW": workflow}
+        return subprocess.run(
+            [sys.executable, "-m", "tests.durable_harness", args[0], str(out), *args[1:]],
+            cwd=SERVER,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    clean, cut = tmp_path / "clean", tmp_path / "cut"
+    clean.mkdir()
+    cut.mkdir()
+    r = run(clean, "start", "none")
+    assert r.returncode == 0, r.stderr[-3000:]
+
+    def outcome(r: subprocess.CompletedProcess[str]) -> dict:
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+        res.pop("output_path", None)  # each run writes its capture in its own dir
+        return res
+
+    want_result = outcome(r)
+    want = plays(clean)
+    crash_at = 1 if workflow == "capture-nn" else 2
+    assert run(cut, "start", f"crash:{crash_at}").returncode == 9
+    r = run(cut, "resume")
+    assert r.returncode == 0, r.stderr[-3000:]
+    assert outcome(r) == want_result
+    starts = [i for i, x in enumerate(want) if x.endswith(" start")]
+    expected = want[: starts[crash_at - 1] + 1] + want[starts[crash_at - 1] :]
+    assert plays(cut) == expected
+
+
+# Each durable workflow and the test that kills it mid-unit and checks it resumes (#325). A new
+# workflow without an entry here fails CI: durable work is only durable once a restart is shown.
+RESTART_TESTS = {
+    "test.validate": "test_durable_work.py::test_crash_mid_step_reruns_only_that_step",
+    "test.param-sweep": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
+    "test.tune-threshold": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
+    "test.capture-nn": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
+    "fleet.flash": "test_durable_flash.py::test_killed_before_the_bytes_land_reflashes_that_device_only",
+    "fleet.deploy": "test_durable_flash.py::test_a_deploy_cut_off_mid_flash_resumes_with_that_device",
+}
+
+
+def test_every_workflow_has_a_restart_test() -> None:
+    import importlib
+
+    # Every module that declares a workflow, found by its source, so none is missed.
+    pkg = Path(durable.__file__).resolve().parents[1]
+    for src in pkg.rglob("*.py"):
+        if "@durable.workflow(" in src.read_text():
+            rel = src.relative_to(pkg.parent).with_suffix("")
+            importlib.import_module(".".join(rel.parts))
+    assert set(durable.WORKFLOWS) == set(RESTART_TESTS), (
+        f"workflows without a restart test: {sorted(set(durable.WORKFLOWS) - set(RESTART_TESTS))}"
+        f"; entries for no workflow: {sorted(set(RESTART_TESTS) - set(durable.WORKFLOWS))}"
+    )
+    here = Path(__file__).parent
+    for name, ref in RESTART_TESTS.items():
+        file, fn = ref.split("::")
+        assert f"def {fn}(" in (here / file).read_text(), f"{name}: {ref} doesn't exist"

@@ -2,12 +2,15 @@
 test_durable_flash.py can kill it for real and start it again (#325).
 
     python -m tests.durable_fleet_harness start  OUT KILL   # none | before:N | after:N
+                                                            # | broadcast:N (deploy)
     python -m tests.durable_fleet_harness resume OUT [late|never|dfu]
 
 Every flash is appended to OUT/effects.log. ``before:N`` exits in the Nth device's flash before
 its bytes land; ``after:N`` exits after they land (the device already reports the new version)
 but before the flash finished. ``resume`` starts again and prints the job's result. The data
-dir (the work store) comes from XDG_DATA_HOME.
+dir (the work store) comes from XDG_DATA_HOME. WORKFLOW=deploy runs ``fleet.deploy`` instead
+(release download, store, settings broadcast and post-deploy assertion faked);
+``broadcast:N`` exits in the middle of the Nth settings broadcast.
 """
 
 from __future__ import annotations
@@ -21,9 +24,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from blinky_server.api import routes_firmware
 from blinky_server.api.deps import set_fleet
 from blinky_server.device.device import DeviceState
-from blinky_server.firmware import fleet_workflows
+from blinky_server.firmware import deploy_pipeline, fleet_workflows
 from blinky_server.firmware.flash_job import FlashJobState, FlashTransport
 from blinky_server.paths import data_dir
 from blinky_server.work import durable
@@ -53,16 +57,29 @@ def set_version(dev: str, v: str) -> None:
     state_file.write_text(json.dumps(versions))
 
 
+class Protocol:
+    def __init__(self, dev: str) -> None:
+        self.dev = dev
+
+    async def send_command(self, cmd: str, timeout: float = 5.0) -> str:
+        assert cmd == "json info", cmd
+        v = devices[self.dev].version
+        return json.dumps({"version": v, "audioOverruns": 0, "audioSamplesLost": 0, "fps": 60})
+
+
 devices = {
     d: SimpleNamespace(
         id=d,
         state=DeviceState.CONNECTED,
         version=versions[d],
         device_name=d,
+        platform="nrf52840",
         transport=SimpleNamespace(transport_type="serial"),
+        protocol=Protocol(d),
     )
     for d in DEVICES
 }
+broadcasts = 0
 flashes = 0
 
 
@@ -94,14 +111,34 @@ async def usb_settle() -> None:
     effect("settle")
 
 
+async def broadcast(cmd: str) -> dict[str, str]:
+    global broadcasts
+    broadcasts += 1
+    effect(f"broadcast {cmd} start")
+    if kill == f"broadcast:{broadcasts}":
+        os._exit(9)
+    effect(f"broadcast {cmd} end")
+    return dict.fromkeys(DEVICES, "OK")
+
+
 set_fleet(
     SimpleNamespace(
         get_device=devices.get,
         get_all_devices=lambda: list(devices.values()),
         flash_fleet=flash_fleet,
         usb_settle=usb_settle,
+        broadcast=broadcast,
+        set_recovery_firmware=lambda fw, ids: effect(f"arm {len(ids)}"),
     )
 )
+deploy_pipeline.fetch_stable_release = lambda tag, out: {  # type: ignore[assignment]
+    "tag": NEW,
+    "version": NEW,
+    "hex": "/fake/release.hex",
+    "stable": True,
+}
+routes_firmware._store_release_hex = lambda hex_path, tag: Path("/fake/stored.hex")  # type: ignore[assignment]
+WORKFLOW = os.environ.get("WORKFLOW", "flash")
 fleet_workflows.images.load = lambda path: SimpleNamespace(version=NEW)
 fleet_workflows.VERSION_SETTLE_S = 0
 fleet_workflows.VERSION_POLL_S = 0
@@ -129,7 +166,10 @@ async def main() -> None:
     durable.configure(data_dir())
     await durable.launch()
     wid_file = out / "workflow_id"
-    if mode == "start":
+    if mode == "start" and WORKFLOW == "deploy":
+        wid = await durable.submit(fleet_workflows.fleet_deploy, None, DEVICES, str(out / "dl"))
+        wid_file.write_text(wid)
+    elif mode == "start":
         wid = await durable.submit(fleet_workflows.fleet_flash, DEVICES, "/fake/fw.hex")
         wid_file.write_text(wid)
     else:

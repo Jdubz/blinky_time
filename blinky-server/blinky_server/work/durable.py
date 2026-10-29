@@ -241,10 +241,16 @@ def step(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     return run
 
 
+# Every registered workflow's name. tests/test_durable_work.py requires a restart test for each.
+WORKFLOWS: list[str] = []
+
+
 def workflow(name: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """A durable job. ``name`` is its registered name: renaming one orphans its pending runs."""
 
     def wrap(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+        WORKFLOWS.append(name)
+
         @functools.wraps(fn)
         async def body(*args: P.args, **kwargs: P.kwargs) -> R:
             task = asyncio.current_task()
