@@ -1,8 +1,8 @@
 """REST endpoints for test orchestration.
 
-All test endpoints return a job_id immediately. Long-running tests
-execute as async background tasks. Poll GET /api/test/jobs/{id} for
-progress and results.
+All test endpoints return a job_id immediately. Each test runs as a durable workflow
+(``testing/workflows.py``, #325) that survives a server restart: poll GET /api/test/jobs/{id}
+for progress and results. While the server is restarting, submissions answer 503.
 """
 
 from __future__ import annotations
@@ -14,22 +14,24 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from ..testing import jobs
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
-from ..testing.job_manager import Job, JobManager
 from ..testing.track_discovery import discover_tracks
+from ..work import durable
 from .deps import get_fleet
 
 router = APIRouter(prefix="/test", tags=["testing"])
 
-# Singleton job manager (created on first use)
-_job_manager: JobManager | None = None
 
-
-def _get_job_manager() -> JobManager:
-    global _job_manager
-    if _job_manager is None:
-        _job_manager = JobManager()
-    return _job_manager
+async def _submit(fn: Any, *args: Any) -> dict[str, Any]:
+    """Start a durable test job; 503 (with Retry-After) while the server drains for a restart."""
+    try:
+        job_id = await durable.submit(fn, *args)
+    except durable.Draining as e:
+        raise HTTPException(503, str(e), headers={"Retry-After": "30"}) from e
+    except durable.NotRunning as e:
+        raise HTTPException(503, str(e)) from e
+    return {"job_id": job_id, "status": "submitted"}
 
 
 # ── Request Models ──
@@ -106,29 +108,9 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
 
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
-    from ..testing.test_runner import run_validation
+    from ..testing.workflows import validate as wf
 
-    fleet = get_fleet()
-    jm = _get_job_manager()
-
-    async def _run(job: Job) -> dict[str, Any]:
-        return await run_validation(
-            fleet,
-            body.device_ids,
-            track_dir=body.track_dir,
-            track_names=body.track_names,
-            duration_ms=body.duration_ms,
-            seek_sec=body.seek_sec,
-            settle_ms=body.settle_ms,
-            num_runs=body.num_runs,
-            commands=body.commands,
-            per_device_commands=body.per_device_commands,
-            persist_raw=body.persist_raw,
-            job=job,
-        )
-
-    job = jm.submit("validate", _run)
-    return {"job_id": job.id, "status": "submitted"}
+    return await _submit(wf, body.model_dump())
 
 
 @router.post("/param-sweep")
@@ -137,28 +119,9 @@ async def param_sweep(body: ParamSweepRequest) -> dict[str, Any]:
 
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
-    from ..testing.test_runner import run_param_sweep
+    from ..testing.workflows import param_sweep as wf
 
-    fleet = get_fleet()
-    jm = _get_job_manager()
-
-    async def _run(job: Job) -> dict[str, Any]:
-        return await run_param_sweep(
-            fleet,
-            body.device_ids,
-            param_name=body.param_name,
-            values=body.values,
-            track_dir=body.track_dir,
-            track_names=body.track_names,
-            duration_ms=body.duration_ms,
-            settle_ms=body.settle_ms,
-            num_runs=body.num_runs,
-            commands=body.commands,
-            job=job,
-        )
-
-    job = jm.submit("param-sweep", _run)
-    return {"job_id": job.id, "status": "submitted"}
+    return await _submit(wf, body.model_dump())
 
 
 @router.post("/tune-threshold")
@@ -167,30 +130,9 @@ async def tune_threshold(body: TuneThresholdRequest) -> dict[str, Any]:
 
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
-    from ..testing.test_runner import run_threshold_tune
+    from ..testing.workflows import tune_threshold as wf
 
-    fleet = get_fleet()
-    jm = _get_job_manager()
-
-    async def _run(job: Job) -> dict[str, Any]:
-        return await run_threshold_tune(
-            fleet,
-            body.device_id,
-            param_name=body.param_name,
-            low=body.low,
-            high=body.high,
-            track_dir=body.track_dir,
-            track_names=body.track_names,
-            duration_ms=body.duration_ms,
-            settle_ms=body.settle_ms,
-            max_steps=body.max_steps,
-            target_metric=body.target_metric,
-            commands=body.commands,
-            job=job,
-        )
-
-    job = jm.submit("tune-threshold", _run)
-    return {"job_id": job.id, "status": "submitted"}
+    return await _submit(wf, body.model_dump())
 
 
 # ── NN Capture ──
@@ -207,8 +149,6 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
     from pathlib import Path
-
-    from ..testing.nn_capture import capture_nn_stream
 
     fleet = get_fleet()
     device = fleet.get_device(device_id)
@@ -234,41 +174,34 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
             400, f"Output path must be under /tmp or home directory, got: {resolved}"
         )
 
-    jm = _get_job_manager()
+    from ..testing.workflows import capture_nn as wf
 
-    async def _run(job: Job) -> dict[str, Any]:
-        result = await capture_nn_stream(device, body.duration_ms, output)
-        return {
-            "status": "ok",
-            "frames": result.frames,
-            "duration_sec": result.duration_sec,
-            "frame_rate": result.frame_rate,
-            "output_path": result.output_path,
-            "nn_active": result.nn_active,
-            "onset_stats": result.onset_stats,
-            "level_stats": result.level_stats,
-        }
-
-    job = jm.submit("capture-nn", _run)
-    return {"job_id": job.id, "status": "submitted"}
+    return await _submit(wf, device_id, body.duration_ms, output)
 
 
 # ── Job Management ──
 
 
+def _require_store() -> None:
+    if not durable.launched():
+        raise HTTPException(503, "the durable work store isn't running")
+
+
 @router.get("/jobs")
 async def list_jobs() -> list[dict[str, Any]]:
     """List recent test jobs."""
-    return [j.to_dict() for j in _get_job_manager().list_recent()]
+    _require_store()
+    return await jobs.list_recent()
 
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str) -> dict[str, Any]:
-    """Get status/progress/result for a test job."""
-    job = _get_job_manager().get(job_id)
+    """Get status/progress/result for a test job (raw captures inlined)."""
+    _require_store()
+    job = await jobs.get(job_id)
     if not job:
         raise HTTPException(404, f"Job not found: {job_id}")
-    return job.to_dict()
+    return jobs.inline_raw(job)
 
 
 # ── Track Discovery ──
