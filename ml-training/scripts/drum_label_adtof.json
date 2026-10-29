@@ -1,22 +1,22 @@
 {
   "algorithm": "adtof",
-  "generator": "adtof_frame_rnn v2 (ADTOF @ git+https://github.com/MZehren/ADTOF@b3968fb332f69b65ee07c089fc62f436503755db)",
+  "generator": "adtof_frame_rnn v1 (adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9)",
   "edm_input": "edm/ full mixes",
   "synthetic": {
     "kick": {
       "ref": 216,
-      "est": 203,
-      "tp": 203,
+      "est": 187,
+      "tp": 187,
       "precision": 1.0,
-      "recall": 0.94,
-      "f1": 0.969,
-      "recall_10ms": 0.741,
+      "recall": 0.866,
+      "f1": 0.928,
+      "recall_10ms": 0.648,
       "duplicates": 0,
       "timing": {
-        "median_ms": -6.6,
-        "p10_ms": -10.9,
-        "p90_ms": -1.8,
-        "within_10ms": 0.788
+        "median_ms": -7.3,
+        "p10_ms": -11.1,
+        "p90_ms": -2.7,
+        "within_10ms": 0.749
       }
     },
     "snare": {
@@ -26,46 +26,46 @@
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0,
-      "recall_10ms": 0.708,
+      "recall_10ms": 0.642,
       "duplicates": 0,
       "timing": {
-        "median_ms": -8.0,
-        "p10_ms": -12.2,
-        "p90_ms": -2.8,
-        "within_10ms": 0.708
+        "median_ms": -8.6,
+        "p10_ms": -12.8,
+        "p90_ms": -3.8,
+        "within_10ms": 0.642
       }
     },
     "snare_as_kick": 0,
-    "kick_as_snare": 12,
+    "kick_as_snare": 20,
     "phantom_snares": 0
   },
   "edm": {
     "tracks": 18,
     "kick": {
-      "labels": 4372,
-      "per_minute": 121.4,
+      "labels": 3989,
+      "per_minute": 111.0,
       "timing_vs_consensus": {
         "median_ms": 0.0,
-        "p10_ms": -38.9,
+        "p10_ms": -37.3,
         "p90_ms": 42.0,
-        "within_10ms": 0.384
+        "within_10ms": 0.39
       }
     },
     "snare": {
-      "labels": 3120,
-      "per_minute": 86.6,
+      "labels": 3196,
+      "per_minute": 89.0,
       "timing_vs_consensus": {
-        "median_ms": -6.7,
-        "p10_ms": -38.2,
+        "median_ms": -5.7,
+        "p10_ms": -38.0,
         "p90_ms": 35.0,
-        "within_10ms": 0.384
+        "within_10ms": 0.394
       }
     },
-    "phantom_snares": 9,
-    "phantom_snare_rate": 0.003,
-    "kick_duplicates": 42,
-    "kick_duplicate_rate": 0.01,
-    "clean_retention": 0.653
+    "phantom_snares": 6,
+    "phantom_snare_rate": 0.002,
+    "kick_duplicates": 17,
+    "kick_duplicate_rate": 0.004,
+    "clean_retention": 0.662
   },
   "worse_than_baseline": []
 }
