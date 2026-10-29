@@ -1182,7 +1182,12 @@ def main():
         if hard_binary_threshold <= 0:
             raise ValueError("loss shift_tolerant_bce needs binary targets: set "
                              "labels.hard_binary_threshold (e.g. 0.5)")
-        neg_ignore = cfg.get("loss", {}).get("neg_ignore_frames", 2 * shift_tolerance)
+        # Default from the configured tolerance, before pooling: scaling the already-scaled
+        # tolerance would shrink the window twice on a pooled model.
+        loss_cfg = cfg.get("loss", {})
+        neg_ignore = loss_cfg.get("neg_ignore_frames",
+                                  2 * (args.shift_tolerance if args.shift_tolerance is not None
+                                       else loss_cfg.get("shift_tolerance", 3)))
         if pf > 1:
             neg_ignore = max(0, neg_ignore // pf)
         if neg_ignore < shift_tolerance:
@@ -1765,7 +1770,8 @@ def main():
         "config": cfg,
         "loss": loss_type,
         "focal_gamma": args.focal_gamma if loss_type == "focal" else None,
-        "shift_tolerance": shift_tolerance if loss_type in ("shift_bce", "shift_focal") else None,
+        "shift_tolerance": (shift_tolerance if loss_type in ("shift_bce", "shift_focal",
+                                                             "shift_tolerant_bce") else None),
         "spec_augment": use_spec_augment,
         "distillation": {"alpha": distill_alpha, "temp": distill_temp} if use_distill else None,
         "mel_frontend": mel_frontend,
