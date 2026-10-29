@@ -362,6 +362,12 @@ jobs:
       working-directory: ml-training
       run: python -m pytest -v tests/test_spark_entry.py
 
+    - name: Drum label regression suite and generator guards (#284)
+      # The suite a new kick/snare label generator must pass, its committed baseline, and the
+      # generator's refusal to mix labels from two versions in one dir. Needs librosa.
+      working-directory: ml-training
+      run: python -m pytest -v tests/test_drum_label_suite.py
+
   blinky-console-tests:
     name: Blinky Console Tests
     runs-on: ubuntu-latest

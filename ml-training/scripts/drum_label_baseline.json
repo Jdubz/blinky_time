@@ -1,0 +1,68 @@
+{
+  "generator": "bandpass_onset_detect v1",
+  "librosa": "1.0.0",
+  "synthetic": {
+    "kick": {
+      "ref": 216,
+      "est": 300,
+      "tp": 169,
+      "precision": 0.563,
+      "recall": 0.782,
+      "f1": 0.655,
+      "duplicates": 3,
+      "timing": {
+        "median_ms": 19.4,
+        "p10_ms": 9.8,
+        "p90_ms": 28.0,
+        "within_10ms": 0.089
+      }
+    },
+    "snare": {
+      "ref": 120,
+      "est": 55,
+      "tp": 14,
+      "precision": 0.255,
+      "recall": 0.117,
+      "f1": 0.16,
+      "duplicates": 4,
+      "timing": {
+        "median_ms": 9.5,
+        "p10_ms": -2.9,
+        "p90_ms": 20.2,
+        "within_10ms": 0.643
+      }
+    },
+    "snare_as_kick": 106,
+    "kick_as_snare": 33,
+    "phantom_snares": 1
+  },
+  "edm_labels": "blinky-test-player/music/edm/kick_weighted (older parameterization)",
+  "edm": {
+    "tracks": 18,
+    "kick": {
+      "labels": 9533,
+      "per_minute": 256.7,
+      "timing_vs_consensus": {
+        "median_ms": 26.0,
+        "p10_ms": -45.0,
+        "p90_ms": 53.6,
+        "within_10ms": 0.108
+      }
+    },
+    "snare": {
+      "labels": 2908,
+      "per_minute": 78.3,
+      "timing_vs_consensus": {
+        "median_ms": 22.0,
+        "p10_ms": -46.9,
+        "p90_ms": 50.0,
+        "within_10ms": 0.141
+      }
+    },
+    "phantom_snares": 424,
+    "phantom_snare_rate": 0.146,
+    "kick_duplicates": 319,
+    "kick_duplicate_rate": 0.033,
+    "clean_retention": 0.634
+  }
+}

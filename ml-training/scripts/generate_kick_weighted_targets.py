@@ -12,9 +12,14 @@ density target needed for smooth LED animations.
 
 Usage:
     python scripts/generate_kick_weighted_targets.py \\
-        --audio-dir /mnt/storage/blinky-ml-data/audio \\
-        --output-dir /mnt/storage/blinky-ml-data/labels/kick_weighted \\
-        --workers 4
+        --audio-dir "$BLINKY_DATA/audio/drums_only" \\
+        --output-dir "$BLINKY_DATA/labels/kick_weighted_drums_g1" \\
+        --tracks-from "$BLINKY_DATA/labels/onsets_consensus" --workers 4
+
+Every label file and the directory's .provenance.json carry GENERATOR: the algorithm, its
+version and every parameter. A run resumes only over files from the same generator and refuses
+a directory written by another, so labels from two generators never mix in one dir (#284).
+Score any change with scripts/drum_label_suite.py first.
 
 Output format (per track):
     {
@@ -27,8 +32,8 @@ Output format (per track):
 """
 
 import argparse
-import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from multiprocessing import Pool
 from pathlib import Path
@@ -36,7 +41,6 @@ from pathlib import Path
 import librosa
 import numpy as np
 from scipy.signal import butter, sosfilt
-
 
 # Frequency bands for onset classification
 # Kick: 40-200 Hz (below 40 Hz is sub-bass rumble / mp3 noise artifacts)
@@ -62,6 +66,28 @@ HIHAT_WEIGHT = 0.0
 
 SR = 16000
 HOP = 256
+MERGE_TOL_S = 0.03
+
+# What produced a label. Bump `version` with any change to how labels are made, which also
+# makes every existing output dir refuse the new generator until pointed at a new one.
+GENERATOR = {
+    "algorithm": "bandpass_onset_detect",
+    "version": 1,
+    "params": {
+        "sr": SR,
+        "hop": HOP,
+        "bands_hz": {
+            "kick": [KICK_LOW, KICK_HIGH],
+            "snare": [SNARE_LOW, SNARE_HIGH],
+            "hihat": [HIHAT_LOW, HIHAT_HIGH],
+        },
+        "weights": {"kick": KICK_WEIGHT, "snare": SNARE_WEIGHT, "hihat": HIHAT_WEIGHT},
+        "min_rms": MIN_RMS,
+        "merge_tol_s": MERGE_TOL_S,
+        "filter": "butter4 sosfilt",
+        "onset": "librosa.onset.onset_detect(hop=256, backtrack=False)",
+    },
+}
 
 
 def bandpass_onsets(y: np.ndarray, sr: int, low_hz: float, high_hz: float) -> np.ndarray:
@@ -78,7 +104,7 @@ def bandpass_onsets(y: np.ndarray, sr: int, low_hz: float, high_hz: float) -> np
     return times
 
 
-def merge_weighted_onsets(kick_times, snare_times, hihat_times, merge_tol=0.03):
+def merge_weighted_onsets(kick_times, snare_times, hihat_times, merge_tol=MERGE_TOL_S):
     """Merge onset times from different bands with priority weighting.
 
     When onsets from different bands overlap (within merge_tol seconds),
@@ -111,22 +137,23 @@ def merge_weighted_onsets(kick_times, snare_times, hihat_times, merge_tol=0.03):
     return merged
 
 
-def process_track(args):
-    """Process a single track."""
-    audio_path, output_path = args
-
-    if output_path.exists():
-        return None  # Skip existing (resumable)
-
-    try:
-        y, sr = librosa.load(str(audio_path), sr=SR)
-    except Exception as e:
-        return f"FAILED {audio_path.name}: {e}"
+def label_audio(y: np.ndarray, sr: int) -> dict:
+    """The labels for one drum stem, as written to its .kick_weighted.json (without the file).
+    Resamples to SR first, as loading does, so a caller can pass audio at any rate."""
+    if sr != SR:
+        y = librosa.resample(y, orig_sr=sr, target_sr=SR)
+        sr = SR
+    bands = {
+        "kick": [KICK_LOW, KICK_HIGH],
+        "snare": [SNARE_LOW, SNARE_HIGH],
+        "hihat": [HIHAT_LOW, HIHAT_HIGH],
+    }
+    weights = {"kick": KICK_WEIGHT, "snare": SNARE_WEIGHT, "hihat": HIHAT_WEIGHT}
 
     # Validate drum stem has actual content (not silent/failed separation)
     rms = float(np.sqrt(np.mean(y ** 2)))
     if rms < MIN_RMS:
-        result = {
+        return {
             "onsets": [],
             "kick_count": 0,
             "snare_count": 0,
@@ -136,21 +163,10 @@ def process_track(args):
             "rms": rms,
             "skipped": True,
             "skip_reason": f"silent drum stem (RMS={rms:.6f} < {MIN_RMS})",
-            "bands_hz": {
-                "kick": [KICK_LOW, KICK_HIGH],
-                "snare": [SNARE_LOW, SNARE_HIGH],
-                "hihat": [HIHAT_LOW, HIHAT_HIGH]
-            },
-            "weights": {
-                "kick": KICK_WEIGHT,
-                "snare": SNARE_WEIGHT,
-                "hihat": HIHAT_WEIGHT
-            },
+            "bands_hz": bands,
+            "weights": weights,
+            "generator": GENERATOR,
         }
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w') as f:
-            json.dump(result, f, indent=2)
-        return f"SILENT {audio_path.stem}: RMS={rms:.6f}"
 
     kick_times = bandpass_onsets(y, sr, KICK_LOW, KICK_HIGH)
     snare_times = bandpass_onsets(y, sr, SNARE_LOW, SNARE_HIGH)
@@ -158,29 +174,41 @@ def process_track(args):
 
     merged = merge_weighted_onsets(kick_times, snare_times, hihat_times)
 
-    kick_count = sum(1 for e in merged if e["type"] == "kick")
-    snare_count = sum(1 for e in merged if e["type"] == "snare")
-    hihat_count = sum(1 for e in merged if e["type"] == "hihat")
-
-    result = {
+    return {
         "onsets": merged,
-        "kick_count": kick_count,
-        "snare_count": snare_count,
-        "hihat_count": hihat_count,
+        "kick_count": sum(1 for e in merged if e["type"] == "kick"),
+        "snare_count": sum(1 for e in merged if e["type"] == "snare"),
+        "hihat_count": sum(1 for e in merged if e["type"] == "hihat"),
         "total": len(merged),
         "source": "bandpass_onset_detect",
         "rms": rms,
-        "weights": {
-            "kick": KICK_WEIGHT,
-            "snare": SNARE_WEIGHT,
-            "hihat": HIHAT_WEIGHT
-        },
-        "bands_hz": {
-            "kick": [KICK_LOW, KICK_HIGH],
-            "snare": [SNARE_LOW, SNARE_HIGH],
-            "hihat": [HIHAT_LOW, HIHAT_HIGH]
-        }
+        "weights": weights,
+        "bands_hz": bands,
+        "generator": GENERATOR,
     }
+
+
+def same_generator(path: Path) -> bool:
+    """Whether an existing label file came from this generator (old files carry none)."""
+    try:
+        return json.loads(path.read_text()).get("generator") == GENERATOR
+    except (OSError, ValueError):
+        return False
+
+
+def process_track(args):
+    """Process a single track."""
+    audio_path, output_path = args
+
+    if output_path.exists() and same_generator(output_path):
+        return None  # Resumable: done by this same generator
+
+    try:
+        y, sr = librosa.load(str(audio_path), sr=SR)
+    except Exception as e:
+        return f"FAILED {audio_path.name}: {e}"
+
+    result = label_audio(y, sr)
 
     # Atomic write: temp file + rename prevents corrupt partial writes
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,68 +217,66 @@ def process_track(args):
         json.dump(result, f, indent=2)
     tmp_path.rename(output_path)
 
+    if result.get("skipped"):
+        return f"SILENT {audio_path.stem}: RMS={result['rms']:.6f}"
     return None
 
 
-def write_provenance(output_dir: Path, audio_dir: Path, labels_dir: Path, track_count: int):
-    """Write provenance metadata to prevent silent overwrites."""
+def write_provenance(output_dir: Path, audio_dir: Path, tracks_from: Path | None,
+                     track_count: int) -> None:
+    """Record what produced this dir: a later run refuses it unless the generator matches."""
     provenance = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "audio_source": str(audio_dir),
-        "labels_source": str(labels_dir),
+        "tracks_from": str(tracks_from) if tracks_from else None,
         "track_count": track_count,
         "script": "generate_kick_weighted_targets.py",
-        "bands_hz": {
-            "kick": [KICK_LOW, KICK_HIGH],
-            "snare": [SNARE_LOW, SNARE_HIGH],
-            "hihat": [HIHAT_LOW, HIHAT_HIGH],
-        },
-        "weights": {
-            "kick": KICK_WEIGHT,
-            "snare": SNARE_WEIGHT,
-            "hihat": HIHAT_WEIGHT,
-        },
+        "generator": GENERATOR,
     }
-    with open(output_dir / ".provenance.json", "w") as f:
-        json.dump(provenance, f, indent=2)
+    tmp = output_dir / ".provenance.json.tmp"
+    tmp.write_text(json.dumps(provenance, indent=2))
+    tmp.rename(output_dir / ".provenance.json")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Generate kick-weighted onset targets")
-    parser.add_argument("--audio-dir", type=str,
-                        default="/mnt/storage/blinky-ml-data/audio/combined",
-                        help="Directory containing audio files (flat namespace)")
-    parser.add_argument("--output-dir", type=str,
-                        default="/mnt/storage/blinky-ml-data/labels/kick_weighted",
-                        help="Output directory for weighted onset labels")
-    parser.add_argument("--labels-dir", type=str,
-                        default="/mnt/storage/blinky-ml-data/labels/consensus_v5",
-                        help="Consensus labels dir (only process tracks with labels)")
+    parser.add_argument("--audio-dir", type=Path, required=True,
+                        help="Directory of drum stems, flat (<track>.wav)")
+    parser.add_argument("--output-dir", type=Path, required=True,
+                        help="Output dir. Use a new one for a new generator version.")
+    parser.add_argument("--tracks-from", type=Path, default=None,
+                        help="Only tracks that have a label file here (any <track>.*.json), "
+                             "e.g. labels/onsets_consensus. Default: every audio file.")
     parser.add_argument("--workers", type=int, default=4,
                         help="Number of parallel workers")
     parser.add_argument("--force", action="store_true",
-                        help="Overwrite existing labels from a different audio source")
+                        help="Write into a dir from another audio source or generator, "
+                             "regenerating every file not from this generator")
     args = parser.parse_args()
 
-    audio_dir = Path(args.audio_dir)
-    output_dir = Path(args.output_dir)
-    labels_dir = Path(args.labels_dir)
+    audio_dir, output_dir = args.audio_dir, args.output_dir
 
-    # Check provenance before overwriting existing labels
+    # Labels from two generators, or two audio sources, must never share a dir.
     provenance_path = output_dir / ".provenance.json"
     if provenance_path.exists() and not args.force:
-        with open(provenance_path) as f:
-            prev = json.load(f)
-        prev_source = prev.get("audio_source", "unknown")
-        if prev_source != str(audio_dir):
-            print(f"ERROR: Existing labels generated from: {prev_source}")
-            print(f"       New audio source:               {audio_dir}")
-            print(f"       Generated at: {prev.get('generated_at', 'unknown')}")
-            print(f"       Tracks: {prev.get('track_count', '?')}")
-            print(f"\nThis would overwrite labels from a different source.")
-            print(f"Use --force to proceed, or use a different --output-dir.")
-            return
-        print(f"Resuming previous run (same audio source: {prev_source})")
+        prev = json.loads(provenance_path.read_text())
+        problems = []
+        if prev.get("audio_source") != str(audio_dir):
+            problems.append(f"audio source {prev.get('audio_source')} != {audio_dir}")
+        if prev.get("generator") != GENERATOR:
+            got = prev.get("generator") or {"algorithm": "unversioned"}
+            problems.append(f"generator {got.get('algorithm')} v{got.get('version', '?')} "
+                            f"!= {GENERATOR['algorithm']} v{GENERATOR['version']}")
+        if problems:
+            print(f"ERROR: {output_dir} holds other labels: " + "; ".join(problems),
+                  file=sys.stderr)
+            print("Use a new --output-dir (or --force to regenerate in place).", file=sys.stderr)
+            return 1
+        print(f"Resuming previous run in {output_dir}")
+    elif any(output_dir.glob("*.kick_weighted.json")) and not args.force:
+        print(f"ERROR: {output_dir} has labels but no .provenance.json, so what made them is "
+              f"unknown. Use a new --output-dir (or --force).", file=sys.stderr)
+        return 1
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,60 +286,45 @@ def main():
         if f.suffix.lower() in (".mp3", ".wav", ".flac", ".ogg")
     )
     print(f"Found {len(audio_files)} audio files in {audio_dir}")
-
-    # Build stem→path map, only keep tracks that have consensus labels.
-    # Label files are named like "000397.beats.json" or "3618176.LOFI.beats.json".
-    # Audio stems match: "000397" or "3618176.LOFI".
-    label_stems = set(f.stem.replace(".beats", "") for f in labels_dir.glob("*.beats.json"))
-    audio_by_stem = {}
+    audio_by_stem: dict[str, Path] = {}
     for af in audio_files:
-        stem = af.stem  # Full stem: "000397" or "3618176.LOFI"
-        if stem in label_stems and stem not in audio_by_stem:
-            audio_by_stem[stem] = af
-    print(f"Matched {len(audio_by_stem)} audio files to consensus labels")
+        audio_by_stem.setdefault(af.stem, af)  # full stem: "000397" or "3618176.LOFI"
+    if args.tracks_from is not None:
+        if not args.tracks_from.is_dir():
+            print(f"ERROR: --tracks-from {args.tracks_from} is not a directory", file=sys.stderr)
+            return 1
+        wanted = {f.name.split(".")[0] for f in args.tracks_from.glob("*.json")}
+        audio_by_stem = {s: a for s, a in audio_by_stem.items() if s.split(".")[0] in wanted}
+        print(f"Matched {len(audio_by_stem)} audio files to labels in {args.tracks_from}")
+    if not audio_by_stem:
+        # The old default (--labels-dir consensus_v5, archived in #271) matched nothing and
+        # exited 0 with "Nothing to do!": a silent failure.
+        print("ERROR: no tracks to label", file=sys.stderr)
+        return 1
 
-    # Prepare work items
     work = []
     skipped = 0
     for stem, af in sorted(audio_by_stem.items()):
         out = output_dir / f"{stem}.kick_weighted.json"
-        if out.exists():
+        if out.exists() and same_generator(out):
             skipped += 1
         else:
             work.append((af, out))
+    print(f"Processing {len(work)} tracks ({skipped} already done by this generator)")
 
-    print(f"Processing {len(work)} tracks ({skipped} already done)")
-
-    if not work:
-        print("Nothing to do!")
-        # Count totals from existing files
-        existing = list(output_dir.glob("*.kick_weighted.json"))
-        if existing:
-            kicks = snares = hihats = 0
-            for f in existing:
-                with open(f) as fh:
-                    data = json.load(fh)
-                kicks += data["kick_count"]
-                snares += data["snare_count"]
-                hihats += data["hihat_count"]
-            print(f"Existing labels: {len(existing)} tracks, "
-                  f"{kicks} kicks, {snares} snares, {hihats} hi-hats")
-        return
-
-    # Process with multiprocessing
     errors = 0
     done = 0
-    with Pool(args.workers) as pool:
-        for result in pool.imap_unordered(process_track, work):
-            done += 1
-            if result:
-                print(f"  {result}")
-                errors += 1
-            if done % 100 == 0:
-                print(f"  Progress: {done}/{len(work)} "
-                      f"({100*done/len(work):.1f}%)")
-
-    print(f"\nDone! Processed {done} tracks ({errors} errors)")
+    if work:
+        with Pool(args.workers) as pool:
+            for result in pool.imap_unordered(process_track, work):
+                done += 1
+                if result:
+                    print(f"  {result}")
+                    errors += result.startswith("FAILED")
+                if done % 100 == 0:
+                    print(f"  Progress: {done}/{len(work)} "
+                          f"({100*done/len(work):.1f}%)")
+        print(f"\nDone! Processed {done} tracks ({errors} failed)")
 
     # Summary stats
     all_files = list(output_dir.glob("*.kick_weighted.json"))
@@ -333,10 +344,13 @@ def main():
     else:
         print("  No onsets found in any track")
 
-    # Write provenance metadata
-    write_provenance(output_dir, audio_dir, labels_dir, len(all_files))
+    write_provenance(output_dir, audio_dir, args.tracks_from, len(all_files))
     print(f"\nProvenance written to {output_dir / '.provenance.json'}")
+    if errors:
+        print(f"ERROR: {errors} track(s) failed to load", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

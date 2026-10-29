@@ -14,9 +14,15 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-STEMS_DIR="${STEMS_DIR:-/mnt/storage/blinky-ml-data/stems/htdemucs}"
-DRUMS_DIR="${DRUMS_DIR:-/mnt/storage/blinky-ml-data/audio/drums_only}"
-LABELS_DIR="${LABELS_DIR:-/mnt/storage/blinky-ml-data/labels/kick_weighted_drums}"
+# Storage roots as the configs name them (#286); unset, the old devtop layout.
+DATA="${BLINKY_DATA:-/mnt/storage/blinky-ml-data}"
+STEMS_DIR="${STEMS_DIR:-$DATA/stems/htdemucs}"
+DRUMS_DIR="${DRUMS_DIR:-$DATA/audio/drums_only}"
+# Named for the generator version (GENERATOR in generate_kick_weighted_targets.py): the
+# generator refuses a dir another version wrote, so a new version needs a new dir (#284).
+LABELS_DIR="${LABELS_DIR:-$DATA/labels/kick_weighted_drums_g1}"
+# Which tracks to label: those with full-mix onset consensus (the clean step needs it).
+TRACKS_FROM="${TRACKS_FROM:-$DATA/labels/onsets_consensus}"
 
 echo "=== Drum-stem label generation ==="
 
@@ -42,7 +48,7 @@ mkdir -p "$LABELS_DIR"
 python "$SCRIPT_DIR/generate_kick_weighted_targets.py" \
     --audio-dir "$DRUMS_DIR" \
     --output-dir "$LABELS_DIR" \
-    --labels-dir /mnt/storage/blinky-ml-data/labels/consensus_v5 \
+    --tracks-from "$TRACKS_FROM" \
     --workers 4
 
 # Step 3: Report
@@ -53,5 +59,5 @@ echo "  Drum stems: $COUNT"
 echo "  Labels generated: $LABEL_COUNT"
 echo "  Output: $LABELS_DIR"
 echo ""
-echo "To train v20:"
-echo "  ./train_pipeline.sh configs/conv1d_w16_onset_v20.yaml v20-drum-labels --skip-labels"
+echo "Next: clean them (scripts/clean_kick_weighted.py --kw-dir $LABELS_DIR) and validate"
+echo "(scripts/validate_kick_weighted.py). Score any generator change with drum_label_suite.py."

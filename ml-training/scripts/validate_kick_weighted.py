@@ -10,7 +10,7 @@ Checks for quality issues that would degrade model training:
 Usage:
     python scripts/validate_kick_weighted.py \
         --label-dir /mnt/storage/blinky-ml-data/labels/kick_weighted_drums \
-        --consensus-dir /mnt/storage/blinky-ml-data/labels/consensus_v5
+        --consensus-dir /mnt/storage/blinky-ml-data/labels/onsets_consensus
 
     # Quarantine bad tracks (move to .quarantined/ subdir):
     python scripts/validate_kick_weighted.py \
@@ -32,6 +32,9 @@ MIN_KICK_SNARE = 10        # Fewer than this = likely Demucs failure
 MAX_DENSITY_PER_MIN = 600  # More than this = likely over-detection
 MAX_CONSENSUS_RATIO = 8.0  # More than 8x consensus = suspicious
 MIN_CONSENSUS_RATIO = 0.15 # Less than 15% of consensus = likely failed separation
+
+# The onset consensus: labels/onsets_consensus/<track>.onsets.json, or edm/'s in-repo copies.
+CONSENSUS_SUFFIXES = (".onsets.json", ".onsets_consensus.json")
 
 
 def load_label(path: Path) -> dict:
@@ -70,9 +73,12 @@ def validate_track(stem: str, label_data: dict, consensus_data: dict | None) -> 
             if density > MAX_DENSITY_PER_MIN:
                 issues.append(f"high_density: {density:.0f}/min (max {MAX_DENSITY_PER_MIN})")
 
-    # Check ratio vs consensus
+    # Check ratio vs the full-mix onset consensus (>=2 systems, as clean_kick_weighted.py).
+    # This read the BEAT consensus's `hits` until #284; that set was archived in #271, so the
+    # gate had silently stopped running.
     if consensus_data is not None:
-        n_consensus = len(consensus_data.get("hits", []))
+        n_consensus = sum(1 for o in consensus_data.get("onsets", [])
+                          if o.get("systems", 1) >= 2)
         if n_consensus > 10:
             ratio = n_ks / n_consensus
             if ratio > MAX_CONSENSUS_RATIO:
@@ -109,6 +115,10 @@ def main():
     corrupt = 0
     all_issues: dict[str, list[str]] = {}
     issue_counts: dict[str, int] = {}
+    # A track with no consensus file is an input problem (wrong --consensus-dir, a label set
+    # out of step with the consensus), not a bad label: counted, never quarantined, and it
+    # fails the run, since its ratio gate couldn't run (#284).
+    no_consensus: list[str] = []
 
     kick_counts = []
     snare_counts = []
@@ -128,13 +138,12 @@ def main():
         # Load consensus if available
         consensus_data = None
         if consensus_dir:
-            cf = consensus_dir / f"{stem}.beats.json"
-            if cf.exists():
-                try:
-                    with open(cf) as f:
-                        consensus_data = json.load(f)
-                except json.JSONDecodeError:
-                    pass
+            cf = next((consensus_dir / f"{stem}{suffix}" for suffix in CONSENSUS_SUFFIXES
+                       if (consensus_dir / f"{stem}{suffix}").exists()), None)
+            if cf is None:
+                no_consensus.append(stem)
+                continue
+            consensus_data = json.loads(cf.read_text())  # corrupt consensus: fail loudly
 
         # Validate
         issues = validate_track(stem, label_data, consensus_data)
@@ -158,7 +167,8 @@ def main():
 
     # Print results
     print(f"\n{'='*60}")
-    print(f"Results: {ok} OK, {flagged} flagged, {corrupt} corrupt / {total} total")
+    print(f"Results: {ok} OK, {flagged} flagged, {corrupt} corrupt, "
+          f"{len(no_consensus)} without consensus / {total} total")
     print(f"{'='*60}")
 
     if issue_counts:
@@ -183,6 +193,15 @@ def main():
               f"median={np.median(sc):.0f}, p95={np.percentile(sc,95):.0f}, max={sc.max()}")
         print(f"  Density: min={d.min():.0f}, p5={np.percentile(d,5):.0f}, "
               f"median={np.median(d):.0f}, p95={np.percentile(d,95):.0f}, max={d.max():.0f}/min")
+
+    if no_consensus:
+        print(f"\nERROR: {len(no_consensus)} track(s) have no consensus file "
+              f"({' or '.join(CONSENSUS_SUFFIXES)}) in {consensus_dir}, so the consensus-ratio "
+              f"gate did not run for them: {', '.join(no_consensus[:10])}"
+              + (" ..." if len(no_consensus) > 10 else ""), file=sys.stderr)
+        if args.quarantine:
+            print("Nothing quarantined: fix the consensus dir first.", file=sys.stderr)
+        return 1
 
     # Quarantine if requested
     if args.quarantine and all_issues:
