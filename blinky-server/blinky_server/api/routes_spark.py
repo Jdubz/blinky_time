@@ -1,5 +1,5 @@
-"""Spark Job API routes (#288, #305): submit `separate` and training jobs, read the ledger,
-receive webhooks."""
+"""Spark Job API routes (#288, #305, #314): submit `separate` and training jobs, run the corpus
+separation pass, read the ledger, receive webhooks."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from ..spark import corpus
 from ..spark import service as spark
 from ..spark.client import SparkError
 from .deps import require_api_key
@@ -28,7 +29,8 @@ def _svc() -> spark.SparkService:
 
 
 class SeparateRequest(BaseModel):
-    files: list[str] = Field(..., min_length=1)
+    # Capped (#314): a corpus goes through /spark/corpus, which runs it in drained batches.
+    files: list[str] = Field(..., min_length=1, max_length=spark.SEPARATE_BATCH_MAX)
     model_type: str = "htdemucs"
     stems: list[str] = Field(default_factory=lambda: ["drums"])
     chunk_seconds: int | None = None
@@ -72,6 +74,53 @@ async def train(req: TrainRequest) -> dict[str, Any]:
         )
     except SparkError as e:
         raise HTTPException(400, str(e)) from None
+
+
+class CorpusStartRequest(BaseModel):
+    model_type: str = "htdemucs"
+    stems: list[str] = Field(default_factory=lambda: ["drums"])
+    chunk_seconds: int | None = None
+    batch: int = Field(corpus.BATCH, ge=1, le=spark.SEPARATE_BATCH_MAX)
+    retry_failed: bool = False
+
+
+@router.get("/corpus")
+async def corpus_status() -> dict[str, Any]:
+    return await asyncio.to_thread(_svc().corpus.status)
+
+
+@router.post("/corpus/start", dependencies=[Depends(require_api_key)])
+async def corpus_start(req: CorpusStartRequest) -> dict[str, Any]:
+    """Start a pass over the corpus in the Spark's store. The first batch runs alone; the
+    pass then waits in `review` for /corpus/continue."""
+    svc = _svc()
+    try:
+        return await asyncio.to_thread(
+            svc.corpus.start,
+            req.model_type,
+            req.stems,
+            req.chunk_seconds,
+            req.batch,
+            req.retry_failed,
+        )
+    except SparkError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@router.post("/corpus/continue", dependencies=[Depends(require_api_key)])
+async def corpus_continue() -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(_svc().corpus.resume)
+    except SparkError as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@router.post("/corpus/pause", dependencies=[Depends(require_api_key)])
+async def corpus_pause() -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(_svc().corpus.pause)
+    except SparkError as e:
+        raise HTTPException(409, str(e)) from None
 
 
 @router.get("/jobs")

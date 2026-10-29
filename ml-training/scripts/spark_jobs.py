@@ -10,8 +10,14 @@ usage:
   python scripts/spark_jobs.py separate [--stems drums] [--chunk-seconds N] FILE...
   python scripts/spark_jobs.py train CONFIG [--labels-dir DIR] [--no-augment] [--prep-arg=A]
                                      [--memory-gb N] [-- TRAIN_ARG...]
+  python scripts/spark_jobs.py corpus start [--stems drums] [--batch 50] | continue | pause | status
   python scripts/spark_jobs.py status       # the ledger, as blinky-server holds it
   python scripts/spark_jobs.py reconcile    # poll the Spark now instead of waiting for the hour
+
+`corpus` separates every track in the Spark's corpus (its store's manifest, my-spark #1556), in
+batches that each drain before the next. The first batch runs alone and the pass waits for
+`corpus continue` once its stems are checked; a batch where most jobs fail pauses it (#314).
+`separate` takes at most 50 FILEs.
 
 FILEs are read by the server, so they must be under its audio roots (by default the repo's
 blinky-test-player/music) on the machine it runs on.
@@ -94,6 +100,28 @@ def cmd_train(config: str, labels_dir: str | None, augment: bool, prep_args: lis
     return 0
 
 
+def cmd_corpus(action: str, stems: list[str], batch: int, retry_failed: bool) -> int:
+    if action == "status":
+        s = call("GET", "/api/spark/corpus")
+    elif action == "start":
+        s = call("POST", "/api/spark/corpus/start",
+                 {"stems": stems, "batch": batch, "retry_failed": retry_failed})
+    else:
+        s = call("POST", f"/api/spark/corpus/{action}")
+    print(f"corpus pass: {s['mode']}" + (f" -- {s['reason']}" if s.get("reason") else ""))
+    if "counts" in s:
+        print(" ".join(f"{k}={v}" for k, v in s["counts"].items())
+              + f" (batch {s['batch_no']}, {s['batch']} per batch)")
+    for t in s.get("last_batch") or []:
+        line = f"  {t['track']}: {t['outcome']}"
+        if isinstance(t.get("stems"), dict):  # only a success has stem keys
+            line += " " + " ".join(f"{k}={v}" for k, v in t["stems"].items())
+        if t.get("error"):
+            line += f" -- {t['error']}"
+        print(line)
+    return 0
+
+
 def cmd_status() -> int:
     s = call("GET", "/api/spark/jobs")
     for r in s["jobs"]:
@@ -144,6 +172,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="passed to prepare_dataset.py (repeatable; --prep-arg=--seed)")
     t.add_argument("--memory-gb", type=float, default=12.0,
                    help="declared GPU memory; the result reports the measured peak")
+    c = sub.add_parser("corpus", help="separate the Spark's whole corpus, batch by batch")
+    c.add_argument("action", choices=["start", "continue", "pause", "status"])
+    c.add_argument("--stems", default="drums", help="comma-separated, for start")
+    c.add_argument("--batch", type=int, default=50, help="tracks per batch, for start (max 50)")
+    c.add_argument("--retry-failed", action="store_true",
+                   help="for start: include tracks whose job failed in an earlier pass")
     sub.add_parser("status", help="show the server's ledger")
     sub.add_parser("reconcile", help="poll the Spark for pending jobs now")
     a = ap.parse_args(argv)
@@ -153,6 +187,9 @@ def main(argv: list[str] | None = None) -> int:
         if a.cmd == "train":
             return cmd_train(a.config, a.labels_dir, not a.no_augment, a.prep_arg, a.memory_gb,
                              train_args)
+        if a.cmd == "corpus":
+            return cmd_corpus(a.action, [x for x in a.stems.split(",") if x], a.batch,
+                              a.retry_failed)
         if a.cmd == "status":
             return cmd_status()
         return cmd_reconcile()
