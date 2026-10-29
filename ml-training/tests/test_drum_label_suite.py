@@ -226,7 +226,7 @@ def need_adtof() -> None:
     if os.environ.get("BLINKY_REQUIRE_ADTOF") == "1":
         import adtof_pytorch  # noqa: F401  (ImportError fails the test)
     else:
-        need_adtof()
+        pytest.importorskip("adtof_pytorch")
 
 
 def test_adtof_beats_the_baseline_on_every_synthetic_row() -> None:

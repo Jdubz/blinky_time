@@ -59,6 +59,7 @@ GENERATOR: dict[str, Any] = {
 def _model() -> Any:
     """Load once per process. Refuse weights that aren't the pinned ones, and refuse a partial
     load: the port defaults to strict=False, which would label with a half-loaded model."""
+    import torch
     from adtof_pytorch import (
         FRAME_RNN_THRESHOLDS,
         calculate_n_bins,
@@ -79,7 +80,11 @@ def _model() -> Any:
     model = create_frame_rnn_model(calculate_n_bins())
     model = load_pytorch_weights(model, path, strict=True)
     model.eval()
-    return model
+    # The port's library API leaves the model on the CPU (only its CLI moves it): on the Spark,
+    # the GPU is the reason for running the port at all (my-spark #1561).
+    import torch
+
+    return model.to("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def label_file(path: Path) -> dict[str, Any]:
@@ -99,7 +104,9 @@ def label_file(path: Path) -> dict[str, Any]:
                 "skip_reason": f"silent audio (RMS={rms:.6f} < {MIN_RMS})"}
 
     with torch.no_grad():
-        act = _model()(load_audio_for_model(str(path))).cpu().numpy()
+        model = _model()
+        x = load_audio_for_model(str(path)).to(next(model.parameters()).device)
+        act = model(x).cpu().numpy()
     peaks = PeakPicker(thresholds=THRESHOLDS, fps=FPS).pick(act, labels=LABELS_5)[0]
     onsets = sorted(
         ({"time": round(float(t), 4), "weight": CLASSES[p][1], "type": CLASSES[p][0]}
