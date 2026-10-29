@@ -57,7 +57,11 @@ class Protocol:
         self.dev = dev
 
     async def send_command(self, cmd: str) -> str:
+        global setup_drain
         effect(f"{self.dev} cmd {cmd}")
+        if kill == "drain-setup" and cmd == "restore_runtime_settings" and not setup_drain:
+            setup_drain = True  # SIGTERM in the middle of the session's device setup
+            asyncio.get_running_loop().create_task(sigterm())
         return "{}"
 
     async def start_stream(self, mode: str) -> None:
@@ -73,6 +77,7 @@ devices = {
 set_fleet(SimpleNamespace(get_device=devices.get, get_all_devices=lambda: list(devices.values())))
 
 plays = 0
+setup_drain = False
 
 
 async def fake_play(device_ids: list[str], track: dict[str, Any], duration_ms: float) -> Any:
@@ -132,6 +137,8 @@ async def reconnect_late() -> None:
 
 
 async def main() -> None:
+    if kill == "newschema":  # this restart's code declares the recorded steps incompatible
+        durable.SCHEMA_VERSION = "blinky-work-next"
     if kill == "late":
         asyncio.get_running_loop().create_task(reconnect_late())
         await asyncio.sleep(0)
@@ -149,6 +156,11 @@ async def main() -> None:
         wid = wid_file.read_text()
     from dbos import DBOS
 
+    if kill == "newschema":
+        st = await DBOS.get_workflow_status_async(wid)
+        print(json.dumps({"status": st.status, "app_version": st.app_version}))
+        await durable.shutdown()
+        return
     handle = await DBOS.retrieve_workflow_async(wid)
     print(json.dumps(await handle.get_result()))
     if (out / "second_id").exists():

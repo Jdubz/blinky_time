@@ -1,4 +1,4 @@
-"""The test box deployer (deploy.py): the gate, the busy check, and a pass with rollback."""
+"""The test box deployer (deploy.py): the gate, the draining restart, and a pass with rollback."""
 
 from __future__ import annotations
 
@@ -95,41 +95,97 @@ def test_gate_refuses_or_waits(kw: dict[str, Any], want: str, why: str) -> None:
     assert got[0] == want and why in got[1], got
 
 
-def test_busy() -> None:
-    def server(flashes: list[Any], jobs: list[Any]) -> Any:
-        def get(p: str) -> Any:
-            if p.startswith("/api/flash-jobs"):
-                return {"jobs": flashes}
-            return jobs if p == "/api/fleet/jobs" else []
+class FakeStop:
+    """``systemctl stop`` as Popen: still draining for ``waits`` status intervals."""
 
-        return get
+    def __init__(self, waits: int, rc: int = 0, stderr: str = "") -> None:
+        self.waits, self.returncode, self.stderr, self.killed = waits, rc, stderr, False
 
-    assert deploy.busy(server([], [])) is None
-    assert deploy.busy(server([], [{"status": "complete"}])) is None
-    assert "flash" in deploy.busy(server([{"id": 1}], []))
-    running = [{"status": "running", "type": "fleet-deploy"}]
-    assert "fleet-deploy" in deploy.busy(server([], running))
+    def __call__(self, cmd: list[str], **kw: Any) -> FakeStop:
+        assert cmd == ["sudo", "-n", "systemctl", "stop", deploy.SERVICE]
+        return self
 
-    def raising(e: BaseException) -> Any:
-        def get(p: str) -> Any:
-            raise e
+    def communicate(self, timeout: float) -> tuple[str, str]:
+        if self.waits:
+            self.waits -= 1
+            raise deploy.subprocess.TimeoutExpired("systemctl", timeout)
+        return "", self.stderr
 
-        return get
+    def kill(self) -> None:
+        self.killed = True
 
-    err = deploy.urllib.error
-    # Nothing listening: the server is down, not busy, and deploying may fix it.
-    assert deploy.busy(raising(err.URLError(ConnectionRefusedError(111, "refused")))) is None
-    assert deploy.busy(raising(ConnectionRefusedError(111, "refused"))) is None
-    # Anything else says nothing about a flash in progress, so it blocks the restart.
-    http401 = err.HTTPError("u", 401, "Invalid API key", None, None)  # type: ignore[arg-type]
-    for e in (
-        http401,
-        err.URLError(TimeoutError("timed out")),
-        TimeoutError("timed out"),
-        FileNotFoundError("~/.blinky-api-key"),
-    ):
-        assert "can't ask" in deploy.busy(raising(e)), e
-    assert "unexpected answer" in deploy.busy(lambda p: {"nope": 1})
+
+def test_stop_waits_for_the_drain_and_logs_what_it_waits_for(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    statuses = iter(["draining: waiting for a1 validation_run (40 s)"] * 2 + ["drained"])
+    assert deploy.stop_drained(600, FakeStop(waits=3), lambda: next(statuses)) is None
+    out = capsys.readouterr().out
+    # Each new status once, not every interval.
+    assert out.count("waiting for a1 validation_run") == 1 and "drained" in out
+
+
+def test_stop_failures_are_reported() -> None:
+    failed = deploy.stop_drained(600, FakeStop(0, rc=1, stderr="Job failed"), lambda: "")
+    assert failed is not None and "Job failed" in failed
+    # A stop that never returns is killed and reported once its time is up.
+    stuck = FakeStop(waits=10**6)
+    assert "still waiting" in (deploy.stop_drained(-1, stuck, lambda: "draining") or "")
+    assert stuck.killed
+
+
+def test_switch_installs_units_stops_then_moves_the_link_then_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The link moves only once the old server has exited: it runs its venv through the
+    link, and a draining server must never load the new slot's code (#325 review)."""
+    slot, live = tmp_path / "blinky-deploy-b", tmp_path / "blinky-deploy-a"
+    for d in (slot, live):
+        (d / "scripts" / "testbox").mkdir(parents=True)
+        for u in deploy.UNITS:
+            (d / "scripts" / "testbox" / f"{u}.in").write_text(f"[Service]\n# {u} @DEPLOY_DIR@\n")
+    link = tmp_path / "blinky-deploy"
+    link.symlink_to(live)
+    monkeypatch.setattr(deploy, "LINK", link)
+    monkeypatch.setattr(deploy, "UNIT_DIR", tmp_path / "units")
+    (tmp_path / "units").mkdir()
+    events: list[str] = []
+
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:3] == ("sudo", "-n", "tee"):
+            Path(cmd[3]).write_text(kw["stdin"])
+            events.append(f"unit {Path(cmd[3]).name}")
+        elif cmd[-2:] == ("start", deploy.SERVICE):
+            events.append(f"start on {link.resolve().name}")
+        else:
+            events.append(" ".join(cmd[2:]))
+        return ""
+
+    def fake_stop(timeout_s: float) -> None:
+        events.append(f"stop on {link.resolve().name}")
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    monkeypatch.setattr(deploy, "stop_drained", fake_stop)
+    monkeypatch.setattr(deploy, "http_get", lambda p: [])
+    assert deploy.switch_to(slot, 600) is None
+    assert events == [
+        *(f"unit {u}" for u in deploy.UNITS),
+        "systemctl daemon-reload",
+        "stop on blinky-deploy-a",
+        "start on blinky-deploy-b",
+    ]
+    rendered = (tmp_path / "units" / "blinky-server.service").read_text()
+    assert str(link) in rendered and "@" not in rendered
+    events.clear()
+    assert deploy.switch_to(slot, 600) is None  # unchanged units: no install, no reload
+    assert events == ["stop on blinky-deploy-b", "start on blinky-deploy-b"]
+
+
+def test_the_server_unit_signals_only_the_server_on_stop() -> None:
+    """KillMode=mixed: the default control-group SIGTERMs ffplay, the UF2 copy and a release
+    download at the same moment as the server, before its drain could wait for them."""
+    unit = (Path(deploy.__file__).parent / "blinky-server.service.in").read_text()
+    assert "\nKillMode=mixed\n" in unit
 
 
 GIT: dict[str, Any] = {"diff": ["blinky-server/blinky_server/app.py"], "calls": []}
@@ -157,25 +213,29 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     a.mkdir()
     link = tmp_path / "blinky-deploy"
     link.symlink_to(a)
-    calls: dict[str, Any] = {"prepared": [], "restarted_on": [], "healthy": [True], "busy": []}
+    calls: dict[str, Any] = {"prepared": [], "restarted_on": [], "healthy": [True]}
     GIT.update(diff=["blinky-server/blinky_server/app.py"], calls=[])
     monkeypatch.setattr(deploy, "STATE", tmp_path / "deploy.json")
     monkeypatch.setattr(deploy, "LINK", link)
     monkeypatch.setattr(deploy, "SLOTS", (a, b))
 
-    def restart() -> str | None:
+    def switch(slot: Path, timeout_s: float) -> str | None:
+        assert timeout_s > 0
+        deploy.point_at(slot)
         calls["restarted_on"].append(link.resolve().name)
         return None if calls["healthy"].pop(0) else "not answering"
 
     def prepare(slot: Path, sha: str) -> None:
         calls["prepared"].append((slot.name, sha))
+        clock[0] += calls.get("prepare_s", 0)  # how long this prepare took
 
     monkeypatch.setattr(deploy, "run", fake_git)
     monkeypatch.setattr(deploy, "gh_api", gh())
-    monkeypatch.setattr(deploy, "busy", lambda: calls["busy"].pop(0) if calls["busy"] else None)
     monkeypatch.setattr(deploy, "prepare", prepare)
-    monkeypatch.setattr(deploy, "restart_healthy", restart)
+    monkeypatch.setattr(deploy, "switch_to", switch)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
+    clock = [0.0]
+    monkeypatch.setattr(deploy.time, "monotonic", lambda: clock[0])
     calls["link"] = link
     return calls
 
@@ -230,13 +290,27 @@ def test_every_server_path_deploys(box: dict[str, Any], path: str) -> None:
     assert box["restarted_on"] == ["blinky-deploy-b"]
 
 
-def test_busy_after_preparing_leaves_the_live_slot_alone(box: dict[str, Any]) -> None:
-    box["busy"] = ["1 flash job(s) active"]
+def test_a_slow_prepare_leaves_the_restart_to_the_next_pass(box: dict[str, Any]) -> None:
+    """A pass must finish inside its unit's TimeoutStartSec, drain included (#329 review):
+    after a long prepare (a console rebuild) it stops, and the next pass, whose prepare is a
+    no-op, restarts with a fresh budget."""
+    box["prepare_s"] = 10 * 60
     assert deploy.deploy_once() == 0
-    assert box["prepared"] == [("blinky-deploy-b", SHA)]
     assert box["restarted_on"] == [] and box["link"].resolve().name == "blinky-deploy-a"
-    assert deploy.deploy_once() == 0  # idle on the next pass: it goes ahead
+    box["prepare_s"] = 0
+    assert deploy.deploy_once() == 0
     assert box["restarted_on"] == ["blinky-deploy-b"]
+
+
+def test_the_pass_budget_is_the_units_and_fits_a_full_drain() -> None:
+    unit = (Path(deploy.__file__).parent / "blinky-deploy.service.in").read_text()
+    assert f"TimeoutStartSec={deploy.PASS_BUDGET_S // 60}min" in unit
+    # A fresh pass has room for the longest drain plus the health check and a rollback.
+    fresh = deploy.PASS_BUDGET_S - deploy.HEALTH_TIMEOUT_S - deploy.ROLLBACK_RESERVE_S
+    assert fresh >= deploy.MIN_RESTART_S
+    from blinky_server.work.durable import DRAIN_MAX_S
+
+    assert deploy.MIN_RESTART_S > DRAIN_MAX_S
 
 
 def test_unhealthy_switches_back_and_refuses_the_commit(box: dict[str, Any]) -> None:

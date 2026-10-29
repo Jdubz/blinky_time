@@ -24,6 +24,13 @@ ExecStart=@SERVER_DIR@/venv/bin/python -m blinky_server --no-ble
 # without it the server runs and its /api/spark routes answer 503. Mode 600, never in the repo.
 EnvironmentFile=-@HOME_DIR@/.config/blinky/spark.env
 
+# A stop is a drain (#325): blinky-server finishes the step or flash in flight, holding the
+# stop open with EXTEND_TIMEOUT_USEC. mixed: the SIGTERM goes to the server only, never to the
+# ffplay, UF2 copy or release download it is waiting for (control-group, the default, would
+# kill them at once and the drain would record their failures); SIGKILL reaches every process
+# only at the final timeout. scripts/testbox/deploy.py installs this unit before each stop.
+KillMode=mixed
+
 Restart=always
 RestartSec=5s
 WatchdogSec=120

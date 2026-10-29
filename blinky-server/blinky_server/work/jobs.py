@@ -38,6 +38,8 @@ class Family:
 
 
 _progress: dict[str, tuple[int, str]] = {}
+# Progress is display only (rebuilt as a resumed job replays): the newest this many are kept.
+PROGRESS_KEEP = 500
 
 
 def report(progress: int | None, message: str) -> None:
@@ -46,7 +48,10 @@ def report(progress: int | None, message: str) -> None:
     if wid is None:
         return
     pct = progress if progress is not None else _progress.get(wid, (0, ""))[0]
+    _progress.pop(wid, None)  # re-insert: the dict's order is most recently reported last
     _progress[wid] = (pct, message)
+    while len(_progress) > PROGRESS_KEEP:
+        del _progress[next(iter(_progress))]
 
 
 class Progress:

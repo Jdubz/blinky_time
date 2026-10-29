@@ -2,7 +2,7 @@
 test_durable_flash.py can kill it for real and start it again (#325).
 
     python -m tests.durable_fleet_harness start  OUT KILL   # none | before:N | after:N
-    python -m tests.durable_fleet_harness resume OUT [late|never]
+    python -m tests.durable_fleet_harness resume OUT [late|never|dfu]
 
 Every flash is appended to OUT/effects.log. ``before:N`` exits in the Nth device's flash before
 its bytes land; ``after:N`` exits after they land (the device already reports the new version)
@@ -116,15 +116,15 @@ async def come_back(never: str | None) -> None:
     await asyncio.sleep(1.5)
     for d in devices.values():
         if d.id == never:
-            d.state = DeviceState.PRESENT
+            d.state = DeviceState.DFU_RECOVERY if kill == "dfu" else DeviceState.PRESENT
             continue
         d.state, d.version = DeviceState.CONNECTED, versions[d.id]
         effect(f"{d.id} connected")
 
 
 async def main() -> None:
-    if mode == "resume" and kill in ("late", "never"):
-        asyncio.get_running_loop().create_task(come_back("dev-b" if kill == "never" else None))
+    if mode == "resume" and kill in ("late", "never", "dfu"):
+        asyncio.get_running_loop().create_task(come_back(None if kill == "late" else "dev-b"))
         await asyncio.sleep(0)
     durable.configure(data_dir())
     await durable.launch()

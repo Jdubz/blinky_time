@@ -180,3 +180,52 @@ def test_drain_holds_a_job_waiting_for_the_audio_lock(tmp_path: Path) -> None:
         assert res["status"] == "ok"
         assert [(x["track"], x["run"]) for x in res["results"]] == RUNS
     assert "dev-a cmd set x 2" in effects(tmp_path)  # B ran after the restart
+
+
+@pytest.mark.asyncio
+async def test_work_status_route(api_client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        durable, "_in_flight", {1: {"workflow_id": "w1", "step": "m.run", "since": 0.0}}
+    )
+    r = await api_client.get("/api/work")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["draining"] is False and body["in_flight"][0]["workflow_id"] == "w1"
+
+
+def test_drain_during_session_setup_waits_for_it(tmp_path: Path) -> None:
+    """Review: the session's device setup runs outside any step. A drain starting in the middle
+    of it must wait for it (else the fleet stops under it and the job fails for good), then
+    hold the job before its first run, which happens after the restart."""
+    r = harness(tmp_path, "start", "drain-setup")
+    assert r.returncode == 0, r.stderr[-3000:]
+    log = effects(tmp_path)
+    assert log.index("dev-b stream fast") < log.index("drained")  # setup finished first
+    assert not any(x.startswith("play ") for x in log)  # nothing played before the restart
+    assert result(harness(tmp_path, "resume")) == RUNS
+
+
+def test_progress_table_keeps_only_the_newest(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from blinky_server.work import jobs
+
+    monkeypatch.setattr(jobs, "_progress", {})
+    monkeypatch.setattr(jobs, "PROGRESS_KEEP", 3)
+    for i in range(5):
+        monkeypatch.setattr(jobs, "DBOS", SimpleNamespace(workflow_id=f"w{i}"))
+        jobs.report(i, "x")
+    assert list(jobs._progress) == ["w2", "w3", "w4"]
+
+
+def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> None:
+    """Review: DBOS never recovers a workflow of another SCHEMA_VERSION, so it would stay
+    "running" for good (blocking a new fleet deploy, catching a retried Spark request).
+    The next start cancels it and says why."""
+    assert harness(tmp_path, "start", "crash:3").returncode == 9
+    r = harness(tmp_path, "resume", "newschema")
+    assert r.returncode == 0, r.stderr[-3000:]
+    st = json.loads(r.stdout.strip().splitlines()[-1])
+    assert st["status"] == "CANCELLED" and st["app_version"] == "blinky-work-1"
+    assert "can't resume on this code" in r.stderr
+    assert sum(x == "play bravo start" for x in effects(tmp_path)) == 1  # not run again

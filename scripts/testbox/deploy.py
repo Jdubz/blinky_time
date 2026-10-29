@@ -20,11 +20,15 @@ blinky-deploy.timer runs this every 2 minutes, from the live slot. One pass:
 3. Prepare the OTHER slot: check out the commit, reinstall the venv if blinky-server's
    pyproject.toml differs from what that slot last installed, rebuild the console if
    blinky-console/ does. The running server's tree is never touched.
-4. Wait while the server is busy (a flash, a fleet deploy, a test job): a restart mid-flash can
-   leave a device in its bootloader. The check runs right before the restart, after the slow
-   preparation, and a busy server leaves the prepared slot for the next pass.
-5. Point ~/blinky-deploy at the new slot and restart. Not answering /api/devices within
-   HEALTH_TIMEOUT_S: point it back, restart, and refuse the commit.
+4. Switch (`switch_to`): install the new slot's units where they changed, stop the server, point
+   ~/blinky-deploy at the new slot, start it. The deployer doesn't wait for the server to be
+   idle: the stop is a drain (#325, blinky_server/work/durable.py). New work is refused, every
+   step or flash in flight finishes, durable jobs stop at their next step boundary and resume
+   on the new code. The stop holds until then (systemd EXTEND_TIMEOUT_USEC; KillMode=mixed, so
+   only the server gets the SIGTERM, not the ffplay or UF2 copy it is waiting for), and the
+   deployer logs what it waits for (the unit's StatusText). The link moves only once the old
+   server has exited: it runs its venv through the link.
+5. Not answering /api/devices within HEALTH_TIMEOUT_S: switch back, and refuse the commit.
 
 State is in ~/.local/share/blinky-server/deploy.json; the log goes to the journal
 (`journalctl -u blinky-deploy`). `deploy.py --status` prints the state; `--dry-run` gates the
@@ -37,6 +41,7 @@ import argparse
 import calendar
 import json
 import os
+import pwd
 import subprocess
 import sys
 import time
@@ -57,6 +62,9 @@ BASE_URL = "http://127.0.0.1:8420"
 STATE = (
     Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "blinky-server" / "deploy.json"
 )
+UNIT_DIR = Path("/etc/systemd/system")
+# setup.sh's install_service set: rendered from scripts/testbox/<unit>.in.
+UNITS = ("blinky-server.service", "blinky-deploy.service", "blinky-deploy.timer")
 MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
 
 # What the running server reads or executes from its tree. Only a commit touching one of these
@@ -90,6 +98,18 @@ GREEN = {"success", "skipped", "neutral"}
 # A required check that hasn't appeared this long after the commit isn't coming.
 MISSING_CHECK_GIVE_UP_S = 6 * 3600
 HEALTH_TIMEOUT_S = 90
+# One pass must finish inside blinky-deploy.service's TimeoutStartSec, or systemd kills it
+# mid-restart and the health check, the rollback and the state write never happen. The unit
+# file only changes through setup.sh (root), so the pass budgets itself (test_deploy pins this
+# to the unit file).
+PASS_BUDGET_S = 30 * 60
+# Kept back from the restart for the health check plus a rollback restart.
+ROLLBACK_RESERVE_S = 5 * 60
+# A restart drains the server first, and the drain gives up on a hung step after 20 min
+# (DRAIN_MAX_S in blinky_server/work/durable.py). A pass with less than this left for the
+# restart doesn't start one; the next pass does, with a fresh budget (its prepare is a no-op).
+MIN_RESTART_S = 21 * 60
+STATUS_EVERY_S = 30.0
 
 Fetch = Callable[[str], Any]
 
@@ -98,8 +118,10 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def run(*cmd: str, cwd: Path = LINK, timeout: float = 900) -> str:
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
+def run(*cmd: str, cwd: Path = LINK, timeout: float = 900, stdin: str | None = None) -> str:
+    r = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False, input=stdin
+    )
     if r.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} -> {r.returncode}: {(r.stderr or r.stdout)[-2000:]}")
     return r.stdout
@@ -196,7 +218,7 @@ def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
 
 
 def api_key() -> str:
-    """OSError when there is none: busy() then refuses to restart rather than guess."""
+    """OSError when there is none."""
     key = os.environ.get("BLINKY_API_KEY")
     if not key:
         key = (HOME / ".blinky-api-key").read_text().strip()
@@ -209,38 +231,90 @@ def http_get(path: str, timeout: float = 5) -> Any:
         return json.loads(r.read())
 
 
-def not_listening(e: BaseException) -> bool:
-    """Nothing on the port: the server is down, not busy."""
-    reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    return isinstance(reason, ConnectionRefusedError) and not isinstance(e, urllib.error.HTTPError)
-
-
-def busy(get: Callable[[str], Any] = http_get) -> str | None:
-    """What stops a restart now, or None. Only a server with nothing listening counts as idle
-    (deploying is how it gets fixed). Any other failure to ask counts as busy: an HTTP error
-    (a wrong API key, a broken route) or a timeout says nothing about a flash in progress."""
+def service_status() -> str:
+    """The server's systemd StatusText: during a drain, what it is waiting for."""
     try:
-        flashes = get("/api/flash-jobs?active=true")["jobs"]
-        jobs = get("/api/fleet/jobs") + get("/api/test/jobs")
-    except (urllib.error.URLError, OSError) as e:
-        if not_listening(e):
-            return None
-        return f"can't ask the server whether it is busy: {e}"
-    except (KeyError, TypeError, ValueError) as e:
-        return f"unexpected answer from the server's job routes: {e!r}"
-    if flashes:
-        return f"{len(flashes)} flash job(s) active"
-    live = [j for j in jobs if j.get("status") in ("pending", "running")]
-    if live:
-        return f"job(s) running: {', '.join(str(j.get('type') or j.get('id')) for j in live)}"
+        return run(
+            "systemctl", "show", SERVICE, "-p", "StatusText", "--value", cwd=HOME, timeout=10
+        ).strip()
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        return f"(status unavailable: {e})"
+
+
+def install_units(slot: Path) -> list[str]:
+    """Install ``slot``'s units, rendered exactly as setup.sh's install_service renders them,
+    where they differ from what's installed; daemon-reload if any did. Run before the stop, so
+    a unit change (KillMode=mixed, #325) applies to that stop and the start after it. The box
+    user has passwordless sudo (sudoers.in)."""
+    subs = {
+        "@USER@": pwd.getpwuid(os.getuid()).pw_name,
+        "@SERVER_DIR@": str(LINK / "blinky-server"),
+        "@DEPLOY_DIR@": str(LINK),
+        "@HOME_DIR@": str(HOME),
+    }
+    changed = []
+    for unit in UNITS:
+        text = (slot / "scripts" / "testbox" / f"{unit}.in").read_text()
+        for k, v in subs.items():
+            text = text.replace(k, v)
+        dest = UNIT_DIR / unit
+        if not dest.is_file() or dest.read_text() != text:
+            run("sudo", "-n", "tee", str(dest), cwd=HOME, timeout=30, stdin=text)
+            changed.append(unit)
+    if changed:
+        run("sudo", "-n", "systemctl", "daemon-reload", cwd=HOME, timeout=60)
+        log(f"installed {', '.join(changed)} from {slot.name}")
+    return changed
+
+
+def stop_drained(
+    timeout_s: float,
+    popen: Callable[..., Any] = subprocess.Popen,
+    status: Callable[[], str] = service_status,
+) -> str | None:
+    """Stop the server; None once it has. The stop is the drain (it can take minutes: a track,
+    a flash), so its status is logged while it waits, for up to ``timeout_s``."""
+    proc = popen(
+        ["sudo", "-n", "systemctl", "stop", SERVICE],
+        cwd=HOME,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + timeout_s
+    last = ""
+    while True:
+        try:
+            out, err = proc.communicate(timeout=STATUS_EVERY_S)
+            break
+        except subprocess.TimeoutExpired:
+            now = status()
+            if now and now != last:
+                log(f"stop waiting on the server: {now}")
+                last = now
+            if time.monotonic() > deadline:
+                proc.kill()
+                return f"systemctl stop still waiting after {timeout_s:.0f} s ({last})"
+    if proc.returncode != 0:
+        return f"systemctl stop -> {proc.returncode}: {(err or out or '')[-2000:]}"
     return None
 
 
-def restart_healthy() -> str | None:
-    """Restart the server; None when it is up, else why not."""
+def switch_to(slot: Path, timeout_s: float) -> str | None:
+    """Run the server from ``slot``; None when it is up, else why not. Units first, then stop
+    (which drains), and only then point ~/blinky-deploy at ``slot``: the unit runs the venv
+    through that link, so a draining server must never see the new one's code."""
     try:
-        run("sudo", "-n", "systemctl", "restart", SERVICE, cwd=HOME, timeout=180)
-    except RuntimeError as e:
+        install_units(slot)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        return f"installing {slot.name}'s units: {e}"
+    stopped = stop_drained(timeout_s)
+    if stopped is not None:
+        return stopped
+    point_at(slot)
+    try:
+        run("sudo", "-n", "systemctl", "start", SERVICE, cwd=HOME, timeout=180)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
         return str(e)
     deadline = time.monotonic() + HEALTH_TIMEOUT_S
     while time.monotonic() < deadline:
@@ -331,6 +405,7 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def deploy_once(dry_run: bool = False) -> int:
+    started = time.monotonic()
     state = load_state()
     state.setdefault("accepted", {})
     live = live_slot()
@@ -374,13 +449,15 @@ def deploy_once(dry_run: bool = False) -> int:
         state["refused"][target] = f"prepare failed: {e}"
         save_state(state)
         return 1
-    doing = busy()  # after the slow part: anything that started meanwhile counts
-    if doing:
-        log(f"{target[:12]}: prepared in {new.name}; waiting, the server is busy ({doing})")
+    left = PASS_BUDGET_S - (time.monotonic() - started) - HEALTH_TIMEOUT_S - ROLLBACK_RESERVE_S
+    if left < MIN_RESTART_S:
+        log(
+            f"{target[:12]}: prepared in {new.name}; restarting on the next pass, which has "
+            f"the time for a full drain ({left:.0f} s left in this one)"
+        )
         return 0
-
-    point_at(new)
-    failure = restart_healthy()
+    log(f"{target[:12]}: prepared in {new.name}; stopping the server (it drains first)")
+    failure = switch_to(new, left)
     entry = {
         "sha": target,
         "from": current,
@@ -397,8 +474,9 @@ def deploy_once(dry_run: bool = False) -> int:
         return 0
 
     log(f"{target[:12]}: FAILED ({failure}); rolling back to {current[:12]} in {live.name}")
-    point_at(live)
-    back = restart_healthy()
+    back = switch_to(
+        live, max(PASS_BUDGET_S - (time.monotonic() - started) - HEALTH_TIMEOUT_S, 60.0)
+    )
     state["refused"][target] = f"deploy failed: {failure}"
     state["history"].append({**entry, "result": "rolled back", "error": failure})
     save_state(state)

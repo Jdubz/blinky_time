@@ -125,6 +125,7 @@ def create_app(
     from .routes_flash_jobs import router as flash_jobs_router
     from .routes_spark import router as spark_router
     from .routes_testing import router as testing_router
+    from .routes_work import router as work_router
     from .ws import router as ws_router
 
     app.include_router(devices_router, prefix="/api")
@@ -133,6 +134,7 @@ def create_app(
     app.include_router(flash_jobs_router, prefix="/api")
     app.include_router(testing_router, prefix="/api")
     app.include_router(spark_router, prefix="/api")
+    app.include_router(work_router, prefix="/api")
     app.include_router(ws_router)
 
     # Mount the built blinky-console as a SPA (after API routers so they
