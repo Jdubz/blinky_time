@@ -249,6 +249,11 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
     if not firmware.is_file():
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
+    # Refused now while draining, before arming recovery for a flash that won't start.
+    try:
+        durable.refuse_while_draining("flash")
+    except durable.Draining as e:
+        raise HTTPException(503, str(e), headers={"Retry-After": "30"}) from e
     fleet = get_fleet()
     # PRESENT BLE devices are flashable too — we just-in-time connect for
     # the flash and disconnect after. The broadcaster gets paused around
@@ -291,7 +296,7 @@ async def fleet_flash(body: FlashRequest) -> dict[str, Any]:
 
     from ..firmware.fleet_workflows import fleet_flash as wf
 
-    job_id = await _submit(wf, device_ids, str(firmware))
+    job_id = await _submit(wf, device_ids, str(_kept_for_job(firmware)))
 
     return {
         "job_id": job_id,
@@ -324,6 +329,27 @@ async def list_flash_jobs() -> list[dict[str, Any]]:
 
     _require_store()
     return await jobs.list_recent(FLEET_JOBS)
+
+
+def _kept_for_job(firmware: Path) -> Path:
+    """The firmware as a durable job may name it: a stored image as it is, anything else
+    copied (by its sha256) under the data dir. A job resumed after a reboot must not point at
+    a /tmp file the reboot removed."""
+    if images.load(firmware) is not None:
+        return firmware
+    import hashlib
+    import shutil
+
+    from ..paths import data_dir
+
+    sha = hashlib.sha256(firmware.read_bytes()).hexdigest()
+    kept = data_dir() / "job-firmware" / f"{sha}{firmware.suffix}"
+    if not kept.exists():
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        tmp = kept.with_name(kept.name + ".tmp")
+        shutil.copyfile(firmware, tmp)
+        tmp.replace(kept)
+    return kept
 
 
 def _require_store() -> None:

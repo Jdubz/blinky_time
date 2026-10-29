@@ -56,6 +56,11 @@ def _reports_version(d: Any) -> bool:
     return bool(d.state == DeviceState.CONNECTED and d.version)
 
 
+def _settled(d: Any) -> bool:
+    """Back far enough to decide: running its app with a version, or in its bootloader."""
+    return _reports_version(d) or d.state == DeviceState.DFU_RECOVERY
+
+
 @durable.step
 async def flash_one(device_id: str, firmware: str, settle_after: bool) -> dict[str, Any]:
     """One device: flash and verify, then the USB settle if another device follows."""
@@ -67,18 +72,27 @@ async def flash_one(device_id: str, firmware: str, settle_after: bool) -> dict[s
     if durable.rerun(f"flash-{device_id}"):
         # A restart cut this step off, and the write may have landed: check before acting
         # (rule 2). Discovery registers a device before it is connected (serial) or with no
-        # version at all (BLE, PRESENT), so wait until it reports one. If it never does, or
-        # there's no target version to compare, the step doesn't flash blind: the device
-        # fails, loudly, for the operator to check (#325 review).
-        device = await _wait_for(fleet, device_id, _reports_version)
-        if expected_version is None or device is None or not _reports_version(device):
+        # version at all (BLE, PRESENT), so wait until it reports one, or turns up in its
+        # bootloader. Neither, or no target version to compare: the step doesn't flash blind,
+        # the device fails, loudly, for the operator to check (#325 review).
+        device = await _wait_for(fleet, device_id, _settled)
+        if device is not None and device.state == DeviceState.DFU_RECOVERY:
+            # Stranded in its bootloader: the cut-off flash clearly didn't finish, and this is
+            # the device that most needs it. Flash it (the interrupted-flash record keeps
+            # auto-recovery off it, so nothing else will).
+            log.warning(
+                "fleet flash: %s is in its bootloader after the restart; flashing it", short
+            )
+        elif expected_version is None or device is None or not _reports_version(device):
             why = (
                 f"{firmware} isn't an image in the server's store, so its version is unknown"
                 if expected_version is None
                 else f"it didn't come back connected with a version within {DEVICE_WAIT_S:.0f} s"
             )
             log.error(
-                "fleet flash: %s was cut off by a restart and %s; not flashing it blind", short, why
+                "fleet flash: %s was cut off by a restart and %s; not flashing it blind",
+                short,
+                why,
             )
             return {
                 "device": short,
@@ -86,7 +100,7 @@ async def flash_one(device_id: str, firmware: str, settle_after: bool) -> dict[s
                 "message": f"interrupted by a restart, and {why}: check the device, then "
                 f"flash it again if it needs it",
             }
-        if device.version == expected_version:
+        elif device.version == expected_version:
             log.info(
                 "fleet flash: %s already runs %s after the restart; not flashing it again",
                 short,

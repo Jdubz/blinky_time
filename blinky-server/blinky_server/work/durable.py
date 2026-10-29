@@ -73,10 +73,11 @@ class NotRunning(RuntimeError):
 _launched = False
 _launched_at: float | None = None
 _draining = False
-_resume = asyncio.Event()  # never set: a drained workflow waits on it until the process exits
 # The tasks of workflows held at a boundary, so shutdown can stop them (running their cleanup,
 # while the devices are still connected) without DBOS recording an outcome: they stay PENDING.
 _held: set[asyncio.Task[Any]] = set()
+# Every workflow executing in this process, for shutdown to stop.
+_running: set[asyncio.Task[Any]] = set()
 # True inside held work; asyncio tasks inherit it, so a flash task a step starts does too.
 _inside_hold: contextvars.ContextVar[bool] = contextvars.ContextVar("inside_hold", default=False)
 # Steps executing now, by a token, for drain to wait on and report.
@@ -91,6 +92,7 @@ def configure(data_dir: Path) -> Path:
     """Create the DBOS instance (once per process), with its system database under data_dir."""
     global _data_dir
     _data_dir = data_dir
+    _prune_job_files(data_dir)
     db = data_dir / DB_FILE
     DBOS(
         config=DBOSConfig(
@@ -112,19 +114,43 @@ async def launch() -> None:
     _launched_at = time.monotonic()
     DBOS.launch()
     _launched = True
+    await _retire_other_versions()
+
+
+async def _retire_other_versions() -> None:
+    """Cancel, loudly, unfinished workflows of another SCHEMA_VERSION. DBOS never recovers
+    them, so they would stay "running" for good: blocking a new fleet deploy (one at a time)
+    and catching a retried Spark request that attaches to them. A bump of SCHEMA_VERSION
+    declares their recorded steps incompatible with this code; they are not resumed."""
+    pending = await DBOS.list_workflows_async(
+        status=["ENQUEUED", "PENDING", "DELAYED"], load_input=False, load_output=False
+    )
+    for st in pending:
+        if st.app_version != SCHEMA_VERSION:
+            log.error(
+                "workflow %s (%s) is from schema %s, not %s: it can't resume on this code; "
+                "cancelled. Run the job again.",
+                st.workflow_id,
+                st.name,
+                st.app_version,
+                SCHEMA_VERSION,
+            )
+            await DBOS.cancel_workflow_async(st.workflow_id)
 
 
 async def shutdown() -> None:
     """After ``drain``, before the devices disconnect: stop the held workflows (their cleanup,
     such as stopping streams, runs now), then DBOS. Held workflows stay PENDING for recovery."""
     global _launched
-    # Repeatedly: stopping one held workflow can release a lock another was waiting on, which
-    # then reaches its own boundary and is held in turn.
-    while held := [t for t in _held if not t.done()]:
-        for t in held:
+    # After the drain, no step or held region is running, so every live workflow is at a safe
+    # point: held at a boundary, or waiting (on the audio lock, say) before reaching one. Stop
+    # them all, again while stopping one lets another start (it then stops at its boundary or
+    # at its next await); they stay PENDING. After a drain that gave up, this also cuts off the
+    # stragglers, which run again after the restart (rule 2).
+    while live := [t for t in _running if not t.done()]:
+        for t in live:
             t.cancel()
-        await asyncio.gather(*held, return_exceptions=True)
-        await asyncio.sleep(0.05)  # let a woken waiter reach its boundary before we look again
+        await asyncio.gather(*live, return_exceptions=True)
     _held.clear()
     if _launched:
         DBOS.destroy()
@@ -196,7 +222,8 @@ async def boundary() -> None:
         task = asyncio.current_task()
         if task is not None:
             _held.add(task)
-        await _resume.wait()
+        # Never resolved: the workflow waits here until shutdown stops it (it stays PENDING).
+        await asyncio.get_running_loop().create_future()
 
 
 def step(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -220,8 +247,15 @@ def workflow(name: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awa
     def wrap(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @functools.wraps(fn)
         async def body(*args: P.args, **kwargs: P.kwargs) -> R:
-            await boundary()  # a workflow that starts while draining does nothing yet
-            return await fn(*args, **kwargs)
+            task = asyncio.current_task()
+            if task is not None:
+                _running.add(task)
+            try:
+                await boundary()  # a workflow that starts while draining does nothing yet
+                return await fn(*args, **kwargs)
+            finally:
+                if task is not None:
+                    _running.discard(task)
 
         return DBOS.workflow(name=name)(body)
 
@@ -238,6 +272,38 @@ async def submit(fn: Callable[..., Coroutine[Any, Any, Any]], *args: Any) -> str
     with SetWorkflowID(workflow_id):
         await DBOS.start_workflow_async(fn, *args)
     return workflow_id
+
+
+# What jobs leave under the data dir, and how long it is kept: rerun markers (``rerun``) only
+# while their workflow could still resume; validation raw captures (testing/workflows.py) and
+# firmware copied for a fleet flash (routes_firmware.py) a month.
+RERUN_MARKER_KEEP_S = 7 * 24 * 3600
+JOB_FILES_KEEP_S = 30 * 24 * 3600
+_KEPT = (
+    ("work-attempts", RERUN_MARKER_KEEP_S),
+    ("test-raw", JOB_FILES_KEEP_S),
+    ("job-firmware", JOB_FILES_KEEP_S),
+)
+
+
+def _prune_job_files(data_dir: Path) -> None:
+    """At start: remove what jobs left under the data dir once it is older than _KEPT says."""
+    import shutil
+
+    now = time.time()
+    for name, keep_s in _KEPT:
+        root = data_dir / name
+        if not root.is_dir():
+            continue
+        for entry in root.iterdir():
+            try:
+                if entry.stat().st_mtime < now - keep_s:
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
+            except OSError as e:
+                log.warning("could not prune %s: %s", entry, e)
 
 
 def rerun(key: str) -> bool:

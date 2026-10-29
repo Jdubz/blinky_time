@@ -109,6 +109,15 @@ def test_resumed_step_never_flashes_blind(tmp_path: Path) -> None:
     assert flashes(tmp_path).count("flash dev-b start") == 1
 
 
+def test_resumed_step_flashes_a_device_left_in_its_bootloader(tmp_path: Path) -> None:
+    """Review: a device the cut-off flash left in its bootloader never reports a version, and
+    is the one that most needs the flash: it is flashed, not failed as "blind"."""
+    assert harness(tmp_path, "start", "before:2").returncode == 9
+    res = result(harness(tmp_path, "resume", "dfu"))
+    assert res["per_device"]["dev-b"]["flash"] == "ok"
+    assert flashes(tmp_path).count("flash dev-b start") == 2
+
+
 # -- the audit log across a restart -----------------------------------------------------------
 
 
@@ -243,3 +252,72 @@ async def test_a_step_already_running_may_still_start_its_flash(
     fleet._device_in_flight.clear()
     with pytest.raises(durable.Draining):
         await fleet.flash_device("dev-1", Path("/tmp/fw.hex"))
+
+
+def test_old_job_files_are_pruned_and_new_ones_kept(tmp_path: Path) -> None:
+    import os as _os
+
+    old = tmp_path / "work-attempts" / "wf-old"
+    new = tmp_path / "work-attempts" / "wf-new"
+    for d in (old, new):
+        d.mkdir(parents=True)
+        (d / "flash-dev").touch()
+    raw_old, fw_new = tmp_path / "test-raw" / "wf-1", tmp_path / "job-firmware" / "a.hex"
+    raw_old.mkdir(parents=True)
+    fw_new.parent.mkdir(parents=True)
+    fw_new.touch()
+    for p, age in ((old, durable.RERUN_MARKER_KEEP_S), (raw_old, durable.JOB_FILES_KEEP_S)):
+        t = time.time() - age - 60
+        _os.utime(p, (t, t))
+    durable._prune_job_files(tmp_path)
+    assert not old.exists() and (new / "flash-dev").exists()
+    assert not raw_old.exists() and fw_new.exists()
+
+
+@pytest.mark.asyncio
+async def test_fleet_flash_is_refused_before_arming_while_draining(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    from blinky_server.api import routes_firmware
+    from blinky_server.api.app import create_app
+    from blinky_server.api.deps import require_api_key, require_deploy_tool, set_fleet
+
+    armed: list[object] = []
+    monkeypatch.setattr(routes_firmware, "_arm_recovery_if_stable", lambda *a: armed.append(a))
+    monkeypatch.setattr(durable, "_draining", True)
+    set_fleet(FleetManager(enable_ble=False, enable_serial=False))
+    app = create_app()
+    app.dependency_overrides[require_api_key] = lambda: None
+    app.dependency_overrides[require_deploy_tool] = lambda: None
+    fw = tmp_path / "fw.hex"
+    fw.write_text(":00000001FF\n")
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            r = await c.post(
+                "/api/fleet/flash", json={"firmware_path": str(fw), "device_ids": ["d"]}
+            )
+    finally:
+        set_fleet(None)  # type: ignore[arg-type]
+    assert r.status_code == 503 and "restarting" in r.text and armed == []
+
+
+@pytest.mark.asyncio
+async def test_sibling_holds_last_as_long_as_the_flash_not_the_request() -> None:
+    """Review: on a restart the flash request ends (uvicorn stops waiting for it) while the
+    drain lets the flash finish; the siblings' reconnect holds must last until the flash ends."""
+    import asyncio
+
+    from blinky_server.api import routes_devices
+
+    done = asyncio.Event()
+    resumed: list[str] = []
+    job = type("J", (), {"job_id": "j1", "wait_until_terminal": lambda self: done.wait()})()
+    fleet = type("F", (), {"resume_reconnect": lambda self, sid: resumed.append(sid)})()
+    routes_devices._release_when_done(fleet, job, ["sib-1", "sib-2"])
+    await asyncio.sleep(0.01)
+    assert resumed == []  # the request may be gone; the flash isn't
+    done.set()
+    await asyncio.sleep(0.01)
+    assert resumed == ["sib-1", "sib-2"]

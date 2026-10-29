@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..device.device import Device, DeviceState
 from ..firmware import images
-from ..firmware.flash_job import FlashConflict, FlashJobState
+from ..firmware.flash_job import FlashConflict, FlashJob, FlashJobState
 from ..work import durable
 from .deps import get_fleet, require_api_key, require_deploy_tool
 from .models import (
@@ -311,6 +312,7 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
                 fleet.hold_reconnect(dev.id, 600)
                 sibling_ids.append(dev.id)
 
+    job: FlashJob | None = None
     try:
         # ── Single flash entry point ──────────────────────────────────
         # ``flash_device()`` returns a ``FlashJob`` immediately (it
@@ -336,6 +338,11 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
         except durable.Draining as exc:
             # The server is stopping for a restart: no new flash starts (#325).
             raise HTTPException(503, str(exc), headers={"Retry-After": "30"}) from exc
+        # The sibling holds last as long as the flash, not this request: on a restart the
+        # request ends (uvicorn stops waiting for it) while the drain lets the flash finish,
+        # and releasing them then would let siblings reconnect into the UF2 bus reset.
+        if sibling_ids:
+            _release_when_done(fleet, job, sibling_ids)
 
         # Arm auto-recovery for THIS device only — the explicit whitelist
         # keeps a future DFU bounce from auto-flashing unrelated devices.
@@ -382,5 +389,22 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
             job.error or f"flash {job.state.value} without specific error",
         )
     finally:
-        for sid in sibling_ids:
-            fleet.resume_reconnect(sid)
+        if job is None:  # no flash started: nothing else will release them
+            for sid in sibling_ids:
+                fleet.resume_reconnect(sid)
+
+
+_releasers: set[asyncio.Task[None]] = set()
+
+
+def _release_when_done(fleet: Any, job: FlashJob, sibling_ids: list[str]) -> None:
+    async def release() -> None:
+        try:
+            await job.wait_until_terminal()
+        finally:
+            for sid in sibling_ids:
+                fleet.resume_reconnect(sid)
+
+    task = asyncio.create_task(release(), name=f"release-siblings-{job.job_id}")
+    _releasers.add(task)
+    task.add_done_callback(_releasers.discard)

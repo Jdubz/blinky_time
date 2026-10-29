@@ -112,22 +112,26 @@ async def session(
         await durable.boundary()
         if not acquire_audio_lock([d[:12] for d in device_ids]):
             raise RuntimeError("Audio lock held by another process")
+        # Setup and teardown are device I/O outside any step: held, so a drain that starts
+        # during either waits for it to finish instead of the fleet stopping under it, which
+        # would fail the job for good (#325 review).
+        devices: list[Any] = []
         try:
-            await kill_orphan_audio()
-            devices = await _connected(device_ids)
-            for device in devices:
-                await _configure_device(device, commands)
-                device_cmds = (per_device_commands or {}).get(device.id)
-                if device_cmds:
-                    await _configure_device(device, device_cmds)
-            await _start_streaming(devices)
-            try:
-                yield
-            finally:
-                await _stop_streaming(devices)
+            with durable.hold("test session setup"):
+                await kill_orphan_audio()
+                devices = await _connected(device_ids)
+                for device in devices:
+                    await _configure_device(device, commands)
+                    device_cmds = (per_device_commands or {}).get(device.id)
+                    if device_cmds:
+                        await _configure_device(device, device_cmds)
+                await _start_streaming(devices)
+            yield
         finally:
-            await stop_audio()
-            release_audio_lock()
+            with durable.hold("test session cleanup"):
+                await _stop_streaming(devices)
+                await stop_audio()
+                release_audio_lock()
 
 
 @durable.step
