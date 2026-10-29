@@ -121,10 +121,10 @@ async def session(
                 await kill_orphan_audio()
                 devices = await _connected(device_ids)
                 for device in devices:
-                    await _configure_device(device, commands)
-                    device_cmds = (per_device_commands or {}).get(device.id)
-                    if device_cmds:
-                        await _configure_device(device, device_cmds)
+                    # One reset, then the shared commands, then the device's own: configuring
+                    # twice would reset the shared ones away (#327).
+                    own = (per_device_commands or {}).get(device.id) or []
+                    await _configure_device(device, [*(commands or []), *own])
                 await _start_streaming(devices)
             yield
         finally:
