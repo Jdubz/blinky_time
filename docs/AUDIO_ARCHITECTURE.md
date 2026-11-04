@@ -79,8 +79,9 @@ AdaptiveMic (fixed gain + window/range normalization; no AGC, no noise gate)
 SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 mel bands + spectral flux)
       |
       +--- [ONSET PATH]
-      |    Devices: SuperFlux (pre-compressor, 78-band log filterbank, log10(32768 S + 1),
-      |         +-1 band max filter, unweighted half-wave sum over bands <= 5 kHz)
+      |    Devices: SuperFlux on its own onset STFT (Hann 512, hop 128 = 125 fps, #178;
+      |         101-band log filterbank, log10(32768 S + 1), +-1 band max filter,
+      |         unweighted half-wave sum over bands <= 5 kHz)
       |    NN builds only: FrameOnsetNN activation
       |         -> shared online picker (max of 30 ms, mean of 100 ms + delta, 30 ms gap)
       |            + PLP pattern bias
@@ -306,11 +307,12 @@ Those are all-onset numbers; detectors are now scored on drums (kick + snare lab
 |---|---|---|---|---|---|---|---|
 | Spectral flux (weighted, adaptive baseline) | 96 ms window + cooldown + gates | 0.243 / 0.543 / 0.603 | 57% | 63% | 20% | 3.1 | 3–6 |
 | SuperFlux, all 78 bands | online (Böck 2012), δ 10, λ 32768 | 0.647 / 0.651 / 0.648 | 55% | 79% | 81% | 4.8 | 0 |
-| **SuperFlux ≤ 5 kHz (devices)** | **online (Böck 2012), δ 7, λ 32768** | **0.648 / 0.657 / 0.657** | **56%** | **79%** | **76%** | **4.7** | **0** |
+| SuperFlux ≤ 5 kHz, 62.5 fps frames (before #178) | online (Böck 2012), δ 7, λ 32768 | 0.648 / 0.657 / 0.657 | 56% | 79% | 76% | 4.7 | 0 |
+| **SuperFlux ≤ 5 kHz, onset STFT 512/128 (devices, #178)** | **online at 125 fps, δ 8, λ 32768** | **— / 0.640† / —** | **61%†** | **80%†** | **63%†** | **4.4†** | **—** |
 | v33 NN, floor 0.20 | 96 ms window + cooldown + gates | 0.594 / 0.595 / 0.588 | 50% | 75% | 72% | 5.0 | ~5 |
 | v33 NN, floor 0.55 | online (Böck 2012) | 0.677 / 0.672 / 0.672 | 52% | 95% | 95% | 6.1 | 1–2 |
 
-\*Snare labels are provisional (#284). Noise: steady white or pink noise from −70 to −30 dBFS. Kick timing moves from +4 ms to −4 ms, because the online picker reports the peak frame itself. The harness SuperFlux matches the Python replica of the audit to within 1.3e-4.
+†Mean over 35 / 60 / 90 fps (`tracker-ab.yml`), not the 60 fps of the other rows; master in the same setup (62.5 fps frames, δ 7): drum F 0.638, kick R 79 %, snare R 73 %, on-drum 58 %. −60 / −40 dB and noise not yet run for it. \*Snare labels are provisional (#284). Noise: steady white or pink noise from −70 to −30 dBFS. Kick timing moves from +4 ms to −4 ms, because the online picker reports the peak frame itself. The harness SuperFlux matches the Python replica of the audit to within 1.3e-4.
 
 The NN is shelved on the nRF52840: on accuracy it ties flux, and a tie goes to flux (`docs/ML_IMPROVEMENT_PLAN.md`, 2026-11-03). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
 
@@ -331,12 +333,13 @@ In NN builds it only drives onset detection. It never feeds the rhythm sources (
 Two flux signals, for different jobs:
 
 - **`getSuperFlux()`: onset detection (#280).** SuperFlux (Böck & Widmer, "Maximum filter vibrato suppression for onset detection", DAFx-13):
-  1. Pre-compressor magnitudes go through a triangular log-frequency filterbank: 24 bands per octave from 62.5 Hz to 8 kHz, not area-normalised. Edges that round to the same FFT bin are merged, so there are 78 bands, and bins 2–41 are one band each (`SUPERFLUX_EDGES`, generated, with a `static_assert` on its size).
+  0. **Framing (#178):** SuperFlux has its own STFT, separate from the 256-sample frames: a Hann window of 512 samples (32 ms) right-aligned at the newest sample, hop 128 (8 ms, 125 fps, 75 % overlap), two onset frames per spectral frame (`computeOnsetFrame`). With hop = window, a hit was seen by one frame only, weighted 0.08–1.0 by where it landed: 38 % of edm/ kicks and snares fired at some frame phases and not others (frame-phase study, PR #347). The published framing overlaps heavily: SuperFlux uses Hann 46 ms at 200 fps; the online detector of Böck, Arzt, Krebs & Schedl (DAFx-12) uses Hann 11.6–46 ms, right-aligned, at 100 fps. And an STFT avoids time aliasing only for hop ≤ N/4 with a Hann window (Smith, *Spectral Audio Signal Processing*, "Choice of Hop Size"). 512 / 128 is that bound, inside the published 23–46 ms and 100–200 fps. After the change, 9.6 % of hits are phase-sensitive. The onset path uses magnitudes without the compressor and without noise subtraction (which is off by default). After an overrun, the onset frames whose windows span the gap give 0 (`markDiscontinuity`).
+  1. The magnitudes go through a triangular log-frequency filterbank: 24 bands per octave from 62.5 Hz to 8 kHz, not area-normalised. Edges that round to the same onset-STFT bin (31.25 Hz) are merged, so there are 101 bands, and bins 2–41 are one band each (`SUPERFLUX_EDGES`, generated, with `static_assert`s on its size and voting range).
   2. Each band is log-compressed: `log10(λ·S + 1)`, with λ = `superFluxLambda` = 32768 (the paper's log(1 + X) on int16-scale magnitudes).
-  3. Each band is differenced against the previous frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights over the bands centred ≤ 5 kHz (62 of 78). The bands above mostly add hats: at device level, lone hats triggered 75% with all bands and 60% with ≤ 5 kHz at the same δ, with kick and snare recall unchanged. At δ 7 it's 45%.
+  3. Each band is differenced against the previous onset frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights over the bands centred ≤ 5 kHz (85 of 101). The bands above mostly add hats: at device level, lone hats triggered 75% with all bands and 60% with ≤ 5 kHz at the same δ, with kick and snare recall unchanged. At δ 7 it's 45%.
   - **Why unweighted:** in a full mix a kick rises only about 2–3 dB below 190 Hz but 6–7 dB from 190 Hz to over 4 kHz. A drum hit rises across many bands, a bass note in a few. The old band weights gave each bass bin about 26× a high bin's weight, which amplified bass lines and buried the broadband attack.
   - **Why log:** there is no AGC. Log flux measures relative change, so one picker δ works at any input level. On edm/, drum F was 0.650 / 0.650 / 0.648 / 0.646 at −20 / −10 / 0 / +10 dB, against linear flux's 0.158 / 0.554 / 0.675 / 0.632.
-  - **Deviations from the paper:** our hop is 16 ms with no overlap, so the max filter compares against the previous frame (μ = 1). λ is on our [−1, 1] sample scale, chosen by that level test (1000 scored the same).
+  - **Deviations from the paper:** a 32 ms window at 125 fps, not 46 ms at 200 fps (512 is the power of two inside the published window range at 16 kHz; 125 fps is the N/4 bound). The difference is to the previous onset frame: the paper's ratio-0.5 rule gives round((N/2 − N/6) / hop) = 1. λ is on our [−1, 1] sample scale, chosen by that level test (1000 scored the same); the window is not normalised, as in the reference code.
 - **`getSpectralFlux()`: energy synthesis only.** Band-weighted half-wave flux of the compressed magnitudes, with the previous frame max-filtered over 3 bins. Each band is normalised by its bin count, then weighted by `bassflux` 0.5 (bins 1–6), `midflux` 0.2 (bins 7–32) and `highflux` 0.3 (bins 33–127). It feeds the flux peak-hold in `energy`, and the `bassRatio` feature in the onset snapshot.
 
 `getBassFlux()` (bass band only) feeds the OSS rhythm buffer.
@@ -346,7 +349,7 @@ Two flux signals, for different jobs:
 `AudioTracker::pickOnset()` runs once per spectral frame, for whichever detector is in use (`audio/OnsetDetector.h`):
 
 ```
-SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
+SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {count, odf[]}  (evidenceRate per frame)
                             FluxOnsetDetector (SuperFlux) | NNOnsetDetector (activation)
                        ─► AudioTracker::pickOnset (shared)
                             online peak picker (Böck, Krebs & Schedl, ISMIR 2012)
@@ -355,14 +358,14 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
                        ─► onset strength, pulse envelope, onset density, rhythm timing
 ```
 
-- **Picker:** frame t is an onset if:
-  - its ODF is the maximum of the last W1 frames and itself;
-  - it reaches mean(ODF over the last W3 frames and itself) + δ;
-  - more than W5 frames have passed since the last onset.
+- **Picker:** the picker steps once per ODF value, at the detector's rate (`OnsetDetector::evidenceRate`: SuperFlux 2 per spectral frame, 125 fps; the NN 1). Step t is an onset if:
+  - its ODF is the maximum of the last W1 steps and itself;
+  - it reaches mean(ODF over the last W3 steps and itself) + δ;
+  - more than W5 steps have passed since the last onset.
 
-  The paper's online values are 30 / 100 / 30 ms, which at 62.5 fps is W1 = 2 (`onsetmaxframes`), W3 = 6 (`fluxavgframes`, flux only) and W5 = 2 (`onsetmingap`). These are runtime-tunable and not saved. There's no look-ahead: the onset is reported at the frame that peaks, a frame earlier than the old local-max picker.
+  The paper's online values are 30 / 100 / 30 ms. W1 = 2 (`onsetmaxframes`), W3 = 6 (`fluxavgframes`, flux only) and W5 = 2 (`onsetmingap`) are set in 62.5 fps spectral frames and scaled by the rate, so they are 32 / 96 / 32 ms at any rate. These are runtime-tunable and not saved. There's no look-ahead: the onset is reported at the step that peaks.
 - **Per-detector δ and average:**
-  - Flux: `fluxdelta`, default 7, saved. Chosen at device level (−50 dB) once only bands ≤ 5 kHz vote: against all bands at δ 10 it keeps kick recall (79%) and drum F (0.657 vs 0.651) and cuts lone-hat triggers from 63% to 45%, for a snare-recall cost (81% → 76%). Flux uses the moving average.
+  - Flux: `fluxdelta`, default 8, saved (settings v100). Re-chosen for the onset STFT at device level (−50 dB, 35/60/90 fps) by the criterion that chose 7 before: the largest δ that keeps kick recall at the previous baseline (0.789). δ 8: kick R 0.799, snare R 0.629, drum F 0.640, lone hats 25 %, repS 0.715; δ 7: 0.830 / 0.684 / 0.652 / 32 % / 0.717. Before #178 (δ 7): 0.789 / 0.727 / 0.638 / 46 % / 0.661. The sweep is in `OnsetDetector.h`. Flux uses the moving average.
   - NN: `pulseonsetfloor`, default 0.55, saved. Its activation is already a probability, so the NN uses a fixed threshold with no moving average. The old 0.20 fired 10/s without the window and cooldown.
 - **What it replaced, and why:**
   - **Deleted** in the same change: the 96 ms local-max window, the tempo-adaptive 40–150 ms cooldown, the adaptive flux baseline (`pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`), and the crest, beat-grid, re-arm, bass-ratio and presence gates.
@@ -412,7 +415,8 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 | Component | RAM | CPU Time | Notes |
 |-----------|-----|----------|-------|
-| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 | `--frame-cost-us=3200` in the harness cost model |
+| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 (before #178) | |
+| Onset STFT (2 × Hann 512 FFT + SuperFlux per frame, #178) | ~6 KB (ring, FFT buffers, window, weights) | est. ~2 × 0.7 ms/frame, **not yet timed on device** | harness cost model `--frame-cost-us=4600` (3.2 ms + the estimate) |
 | Rhythm buffers | ~22 KB | - | 7 float arrays of 792 (OSS, bass, level, their linear copies, epoch-fold copy) |
 | Scratch buffers | ~4 KB | - | 4 × 264 floats, class members so they stay off the 4 KB loop stack |
 | ACF + PLP analysis | - | ~4 ms every 100 ms (code estimate) | Timed in `lastAcfDurationMs_` / `lastPlpMs_` |

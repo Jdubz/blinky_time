@@ -82,14 +82,20 @@ public:
 // window: 0.580 / 48% / 79% / 59% / 5.2, and 3-6 det/s on noise.
 class FluxOnsetDetector : public OnsetDetector {
 public:
-    // Chosen at the device's level (corpus at -50 dB re mastered, int16),
-    // lambda 32768, voting bands <= 5 kHz; at -50 dB, drum F / kick R /
-    // snare R / lone hats that trigger: delta 5 0.661 / 85% / 85% / 63% |
-    // 6 0.661 / 82% / 81% / 54% | 7 0.657 / 79% / 76% / 45% | 8 0.652 /
-    // 76% / 72% / 36% (all 78 bands at delta 10: 0.651 / 79% / 81% / 63%).
-    // 7 keeps kick recall and cuts hats by a third: the task is kicks and
-    // snares, and hats were what the owner saw firing.
-    static constexpr float DELTA_DEFAULT = 7.0f;
+    // Re-chosen for the onset STFT (#178; its ODF sums 85 bands, not 62) by
+    // the criterion that chose 7 before (#280), fixed before the sweep: the
+    // largest delta that keeps kick recall at the previous baseline (0.789),
+    // which cuts the most lone hats. edm/ at the device's level (-50 dB re
+    // mastered, int16), lambda 32768, 35/60/90 fps; kick R@50 / snare R@50 /
+    // drum F / lone hats that trigger / repS (#340):
+    //   5   0.892 / 0.809 / 0.670 / 0.550 / 0.742
+    //   7   0.830 / 0.684 / 0.652 / 0.320 / 0.717
+    //   8   0.799 / 0.629 / 0.640 / 0.254 / 0.715
+    //   9   0.767 / 0.566 / 0.623 / 0.222 / 0.690
+    //   11  0.713 / 0.472 / 0.592 / 0.139 / 0.680
+    // Before #178 (62.5 fps frames, delta 7): 0.789 / 0.727 / 0.638 / 0.464
+    // / 0.661. Snare labels are provisional (#284).
+    static constexpr float DELTA_DEFAULT = 8.0f;
     static constexpr uint8_t AVERAGE_FRAMES_DEFAULT = 6;  // 96 ms (Boeck 2012: 100 ms)
 
     // Activation at the threshold (margin = delta) and its growth above it:
