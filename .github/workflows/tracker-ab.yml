@@ -1,0 +1,58 @@
+# Tracker A/B (#340): the same harness binary on edm/, once with its defaults
+# ("old") and once with the given --name=value options ("new"), every metric
+# side by side: drum scores, repetition consistency, rhythm. Manual only; it
+# gates nothing. Use it to measure one suspect at a time before any firmware
+# change (CLAUDE.md: root causes, measured).
+#
+#   gh workflow run tracker-ab.yml -f opts="--onset-pattern-bias=0"
+name: Tracker A/B
+
+on:
+  workflow_dispatch:
+    inputs:
+      opts:
+        description: "space-separated --name=value harness options for the 'new' side"
+        required: true
+      fps:
+        description: "simulated loop rates"
+        default: "35 60 90"
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    name: Tracker A/B (${{ inputs.opts }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python deps
+      run: pip install numpy imageio-ffmpeg
+
+    - name: Build harness
+      run: |
+        mkdir -p build
+        g++ -std=c++17 -O2 -DBLINKY_HOST_HARNESS -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 \
+          -Iblinky-simulator/include -Iblinky-things \
+          tests/tracker/tracker_harness.cpp blinky-things/audio/AudioTracker.cpp \
+          blinky-things/audio/SharedSpectralAnalysis.cpp blinky-things/inputs/AdaptiveMic.cpp \
+          blinky-things/types/BlinkyAssert.cpp -o build/tracker_harness
+
+    - name: A/B on edm/
+      env:
+        OPTS: ${{ inputs.opts }}
+        FPS: ${{ inputs.fps }}
+      run: |
+        args=()
+        for o in $OPTS; do
+          case "$o" in --[a-z]*=*) args+=("--harness-opt=$o") ;; *) echo "::error::not a --name=value option: $o"; exit 1 ;; esac
+        done
+        python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
+          --compare build/tracker_harness --fps $FPS "${args[@]}" | tee ab.txt
+        { echo '```'; echo "new = $OPTS, old = defaults"; grep -E '^(new|old):' ab.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

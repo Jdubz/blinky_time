@@ -55,6 +55,7 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 - **Corpus:** `blinky-test-player/music/edm/` (the validation corpus).
 - **Ground truth:** `.onsets_consensus.json`, and for the drum metrics `kick_weighted/<track>.kick_weighted.json`, cleaned (kept only where a consensus onset backed by ≥ 2 systems lies within 70 ms).
 - **Decoding:** needs `ffmpeg` on PATH or `pip install imageio-ffmpeg`.
+- **A/B in CI (#340):** `gh workflow run tracker-ab.yml -f opts="--onset-pattern-bias=0"` runs the corpus with the same binary twice, defaults (`old`) and the given options (`new`), and puts both summaries in the run's step summary. It gates nothing; it is for measuring one suspect at a time.
 
 ### Metrics
 
