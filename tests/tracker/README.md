@@ -56,6 +56,7 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 - **Ground truth:** `.onsets_consensus.json`, and for the drum metrics `kick_weighted/<track>.kick_weighted.json`, cleaned (kept only where a consensus onset backed by ≥ 2 systems lies within 70 ms).
 - **Decoding:** needs `ffmpeg` on PATH or `pip install imageio-ffmpeg`.
 - **A/B in CI (#340):** `gh workflow run tracker-ab.yml -f opts="--onset-pattern-bias=0"` runs the corpus with the same binary twice, defaults (`old`) and the given options (`new`), and puts both summaries in the run's step summary. It gates nothing; it is for measuring one suspect at a time.
+- **Studies in CI (#340):** `gh workflow run tracker-study.yml -f study=pattern_bias` runs `tests/tracker/<study>_study.py`, and the results go in the log, the step summary and the `study` artifact. `pattern_bias_study.py` lists the hits the rhythm-pattern bias suppresses (they fire with it off, not with it on). For each it records the drum label, whether it breaks a repeat, the tracker's local lock, and whether it is a timing near-miss.
 
 ### Metrics
 
