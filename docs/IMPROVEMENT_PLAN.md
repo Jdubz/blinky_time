@@ -45,13 +45,13 @@ Grouped by area. Status words follow the open-issues index: OPEN (not done), PAR
 - **Drum cue (next):** only ~56% of detections land on a kick or snare, and onset strength barely separates drums from other onsets (AUC 0.60). An offline study on flux candidates found sub-band coincidence (how many bands rise together) the strongest cue. It must go through the root-cause rules in CLAUDE.md before any firmware change.
 - **#284 (OPEN):** drum labels are ~26 ms late with kick/snare swaps; snare numbers are provisional until fixed.
 - **#289 (OPEN, owner):** hand-curated GT for the 18 edm/ tracks.
-- **#174 (OPEN, ML):** the NN computes 16 output frames to use 1. A W=9 or streaming export halves inference cost. This is the prerequisite for re-enabling the NN.
-- **#165 (PARTIAL):** with the NN on and the loop below 62.5 fps, inference runs only on the newest frame of a catch-up burst.
+- **Direction (2026-11-03): NN shelved on the nRF52840; the work is flux consistency.** A tie on accuracy goes to flux. The goal is that hits a listener hears always show, where today it is somewhat random which trigger. Hypotheses (frame position #178, pattern bias, context-dependent threshold, the threshold cliff, device vs host) and the label-free repetition-consistency metric: `docs/ML_IMPROVEMENT_PLAN.md`, top section.
+- **#174, #165 (closed, NN shelved):** a streaming export would cut the cost about 16× (estimated, ~0.75 ms), but nothing beats flux on accuracy, so nothing ships. Both reopen only on the ESP32-S3, or if a model wins against #289's ground truth.
 - Training roadmap (label coverage, capacity, eval ceiling): `docs/ML_IMPROVEMENT_PLAN.md`. Labels must be onset-flavored drum labels, scored on edm/ only (CLAUDE.md). Training and stem separation run on the Spark through the platform's own jobs (#288, #290, #291); blinky keeps export and the firmware gate.
 
 ### Spectral / mic
 - **#175 (PARTIAL):** raw mel saturates at high SPL. A fix must be mirrored in training.
-- **#178 (OPEN, ML):** non-overlapping frames make onset strength wobble with hit position; overlap needs a retrain.
+- **#178 (OPEN, flux):** non-overlapping frames make onset strength wobble with hit position. This is a consistency suspect for flux; with the NN shelved, overlap needs no retrain.
 - **#180 (OPEN, low):** mel whitening gives little contrast.
 - **#181 (OPEN):** noise estimator creeps upward in steady music (off by default).
 

@@ -14,7 +14,7 @@ AudioTracker turns the microphone into one `AudioControl` struct that the genera
 
 **Phase/pattern:** The bass-flux buffer is epoch-folded at the chosen period (recency-weighted, Winsorized, per-bin reliability). The pattern is stored accent-aligned (bin 0 = accent), and `plpPulse` is the pattern read at the current phase. The phase keeps absolute time on the mic's sample clock (see Frame Clock).
 
-**Onset detection:** the task is drum hits (kicks and snares). On devices: SuperFlux (Böck & Widmer, DAFx-13) through the online peak picker of Böck, Krebs & Schedl (ISMIR 2012) (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (FrameOnsetNN through the same picker) is kept for the host NN harness and a future cheaper model (#174). See "Onset Detection" below.
+**Onset detection:** the task is drum hits (kicks and snares). On devices: SuperFlux (Böck & Widmer, DAFx-13) through the online peak picker of Böck, Krebs & Schedl (ISMIR 2012) (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (FrameOnsetNN through the same picker) is kept only in the host NN harness; it is shelved on the nRF52840 (`docs/ML_IMPROVEMENT_PLAN.md`, 2026-11-03). See "Onset Detection" below.
 
 **AGC:** Removed (v72). Hardware gain is fixed at the platform value (`Platform::Microphone::DEFAULT_GAIN`: nRF52840 = 32, ESP32-S3 = 30). Window/range normalization is the only dynamic-range system. There is no noise gate (removed again 2026-10-20).
 
@@ -312,7 +312,7 @@ Those are all-onset numbers; detectors are now scored on drums (kick + snare lab
 
 \*Snare labels are provisional (#284). Noise: steady white or pink noise from −70 to −30 dBFS. Kick timing moves from +4 ms to −4 ms, because the online picker reports the peak frame itself. The harness SuperFlux matches the Python replica of the audit to within 1.3e-4.
 
-Re-enable a model only when it beats flux under this same measurement (a cheaper export is #174). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
+The NN is shelved on the nRF52840: on accuracy it ties flux, and a tie goes to flux (`docs/ML_IMPROVEMENT_PLAN.md`, 2026-11-03). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
 
 **Drain-loop livelock (b208-b210, fixed):** `update()` used to keep processing samples that arrived *during* a ~12 ms inference. Every frame looked like the newest, so the NN ran on every frame and starved the renderer: hat_v1 b210 ran at 12 fps with 62.4 inferences/s. `update()` now drains only what was waiting at entry and runs at most one inference. CI gates on simulated fps with and without the NN.
 

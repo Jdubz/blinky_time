@@ -1,6 +1,24 @@
 # ML Training Improvement Plan
 
-## Current status (checked against the code 2026-10-24) — read this first
+## Direction (2026-11-03): NN shelved on the nRF52840; the work is flux consistency — read this first
+
+**Goal.** The sculpture should react smoothly, reliably and consistently, in a way that follows the music as a person hears it. Telling kicks from snares doesn't matter; what matters is that the drum hits a listener hears always show (CLAUDE.md's drum-hit task is unchanged). Today it is somewhat random which hits trigger and which look silent. LED smoothness comes first: dropped frames are never acceptable.
+
+**Decision: no NN on the nRF52840.** Speed only has to fit the frame budget; past that, the comparison is accuracy alone. A tie goes to flux, because flux is faster, needs no training and is plain code. Without CPU cost, v33 scores drum F 0.672 against SuperFlux's 0.657 on 18 edm/ tracks. That is a tie, measured against labels known to be late and wrong (#284). Nothing we have shows a model that beats flux on accuracy, so a cheaper or streaming export (#174) has nothing to ship. Training (#305, #290's v37) is paused. The NN path stays in the host harness and CI so it doesn't bit-rot. The ESP32-S3 (second core, `docs/NEXTGEN_ESP32S3_PLAN.md`) is where to look again, and only once a model clearly wins on accuracy against hand-curated ground truth (#289).
+
+For the record, compute was never what ruled it out. v33 recomputes all 16 window frames, about 210k MACs, to use one output. Keeping per-layer state and computing only the newest frame is about 13k MACs, roughly 0.75 ms at v33's measured rate. That figure is estimated, not measured. A model 3–4× v33's per-frame size would fit a 2–3 ms ceiling. The blocker is accuracy.
+
+**The work: make flux consistent.** A hit a listener hears should trigger every time it repeats. These are hypotheses to measure, not fixes. Each one has to go through CLAUDE.md's root-cause rules (a measured cause on edm/, a published method, replace rather than add) before any firmware change:
+
+1. **Hit position within the frame (#178).** Hop = FFT size (256 samples, 16 ms, no overlap). The same hit can land early or late in a frame and produce different flux, which can push it above or below the threshold. 50 % overlap doubles FFT work, which flux can afford. With the NN shelved, this needs no retrain.
+2. **Rhythm-pattern bias.** `onsetPatternBias` defaults to 0.3. While PLP is confident, it raises the threshold where the pattern predicts no hit. When PLP's phase or pattern is wrong, it silences real hits. That makes it a soft gate on detection, which CLAUDE.md rules out (the pattern may weight how strongly a hit shows, never whether it is detected). Measure with `onsetPatternBias 0`, and if it is the cause, delete the bias rather than retune it.
+3. **Context-dependent threshold.** The online picker needs the ODF above the 96 ms moving mean + δ, and at least the previous 2 frames. The same kick passes after silence but can fail right after a hat or inside a busy bass line.
+4. **The cliff at the threshold.** Activation is 0.30 at the threshold, and a hit below it produces no flash at all. A small difference in flux turns into all-or-nothing.
+5. **Device vs host.** The hat caught 53 % of kicks against 72 % on the host for the same segments (PR #292). Suspects: mic saturation (#175) and noise-estimator creep (#181).
+
+**The metric: repetition consistency.** Music repeats, and repeated audio should get repeated light. For bars whose spectra match the bar before them, score whether the trigger pattern and strengths match too. This measures "random which hits show" directly, and it needs no labels. Run it in the host harness at device level, alongside drum F. A change ships only if consistency improves without lowering kick/snare recall or raising noise triggers. #289's hand-curated ground truth is still the anchor for "what a person hears". The repetition metric doesn't replace it; it is what we can measure before #289 exists.
+
+## Current status (checked against the code 2026-10-24)
 
 **What the firmware embeds.** `blinky-things/audio/frame_onset_model_data.h` is the **v33** export (`configs/conv1d_w16_onset_v33_mel_only.yaml`: Conv1D [32, 32], kernel 5, 16-frame window, 50 mel, 30–8000 Hz, `kick_weighted_drums` labels; SHA prefix `fa087e0a364640ab`, same bytes as `frame_onset_model_data_v33_mel_only.h`). From 2026-05-13 the active header was the 80-mel v36 export, which the 50-mel firmware refused, so no device ran the NN (#162, closed). v33 was restored in `9bca439a`. CI now runs `tools/check_model_input.py`, which fails the build on a model the firmware would refuse.
 
@@ -21,14 +39,14 @@ The NN path stays tested in CI: the `tracker-harness-nn` job builds the host har
 
 | issue | what | status |
 |---|---|---|
-| #174 | The model computes 16 output frames to use 1 (receptive field is 9). Re-export with W=9 or streaming conv state for about half the cost. | open — cheapest step toward passing the gate |
-| #165 | NN inference is skipped for catch-up frames when the loop runs below 62.5 fps. | partial |
+| #174 | The model computes 16 output frames to use 1 (receptive field is 9). Re-export with W=9 or streaming conv state for about half the cost. | closed 2026-11-03 — NN shelved (see the direction above) |
+| #165 | NN inference is skipped for catch-up frames when the loop runs below 62.5 fps. | closed 2026-11-03 — NN shelved |
 | #175 | Raw mel saturates at high SPL, so the low bands lose kick contrast. Needs a pre-gain or PCEN, mirrored in training. `melSaturated`/`melTotal` telemetry is in `json info`. | partial |
-| #178 | Non-overlapping frames (hop = FFT size) make onset strength wobble with hit position. 50 % overlap needs a retrain. | open |
+| #178 | Non-overlapping frames (hop = FFT size) make onset strength wobble with hit position. | open — now a flux consistency suspect (direction above) |
 | #180 | Mel whitening gives little contrast. | open, low priority |
 | #284 | Drum labels (`kick_weighted`) are ~26 ms late, with kick/snare swaps and phantom snares. They are the NN's training targets. | partial — the generator is now ADTOF (`scripts/adtof_labels.py`), which passes every row of the label suite. Relabeling the corpus waits on the port in the Spark's torch-cu130 runtime (my-spark #1561), so don't train on the old labels |
 | #289 | Hand-curated GT for the 18 edm/ tracks. | open (owner) |
-| #290 | Shift-tolerant loss, replacing the label-widening knobs behind the v26–v28 collapse. | built, not yet trained — `loss.type: shift_tolerant_bce` (Beat This!) and `configs/conv1d_w16_onset_v37_shift_tolerant.yaml`, v33 with one-frame labels and that loss; it runs on the Spark through #305 |
+| #290 | Shift-tolerant loss, replacing the label-widening knobs behind the v26–v28 collapse. | built; training paused 2026-11-03 (NN shelved) — `loss.type: shift_tolerant_bce` (Beat This!) and `configs/conv1d_w16_onset_v37_shift_tolerant.yaml`, v33 with one-frame labels and that loss; it runs on the Spark through #305 |
 | #291 | Publish the mel feature spec (the firmware's integer `MEL_BANDS` table, log and range map) as a versioned contract with golden vectors. | done — spec and golden vectors in `ml-training/spec/` (#295); the model header records its front end and the firmware build refuses another |
 | #294 | Drum metrics (kick/snare recall, on-drum, drum F at device level) are only in study scripts; the harness and CI score all-onset F1. | fixed — drum scoring in the tracker eval, CI and blinky-server (kick R 0.789, on-drum 0.583, drum F 0.638 on master) |
 | #295 | Training's librosa filterbank differs from the firmware `MEL_BANDS` table (weights up to 0.30 apart); no mel parity test. | fixed — training uses the firmware table; CI checks parity (Feature Parity job) |
