@@ -82,21 +82,42 @@ namespace SpectralConstants {
     constexpr int HIGH_MIN_BIN = 33;   // 2.0625 kHz
     constexpr int HIGH_MAX_BIN = 127;  // 8 kHz (last usable bin = NUM_BINS - 1)
 
+    // Onset STFT (#178): SuperFlux runs on its own overlapped frames, not on
+    // the 256-sample frames above. Those have hop = window, so a hit is seen
+    // by one frame only, weighted 0.08-1.0 by where it lands: 38% of edm/
+    // kicks and snares fired at some frame phases and not others (frame-phase
+    // study, PR #347). The published framing overlaps heavily: SuperFlux
+    // (Boeck & Widmer, DAFx-13) Hann 46 ms at 200 fps; the online detector
+    // (Boeck, Arzt, Krebs & Schedl, DAFx-12) Hann 11.6-46 ms, right-aligned,
+    // at 100 fps; and an STFT avoids time aliasing only at hop <= N/4 for a
+    // Hann window (Smith, Spectral Audio Signal Processing, "Choice of Hop
+    // Size"). Here: Hann 512 (32 ms) right-aligned at the newest sample, hop
+    // 128 (8 ms, 125 fps, 75% overlap), two onset frames per spectral frame.
+    constexpr int ONSET_FFT_SIZE = 512;
+    constexpr int ONSET_NUM_BINS = ONSET_FFT_SIZE / 2;  // 256 bins of 31.25 Hz (Nyquist bin unused)
+    constexpr int ONSET_HOP = 128;
+    constexpr int ONSET_FRAMES_PER_FRAME = FFT_SIZE / ONSET_HOP;  // 2
+    static_assert(FFT_SIZE % ONSET_HOP == 0, "onset frames must tile the spectral frame");
+    static_assert(ONSET_HOP * 4 <= ONSET_FFT_SIZE, "hop <= N/4: no time aliasing for a Hann window");
+    // History: the newest window plus the hops before the frame's last onset frame.
+    constexpr int ONSET_RING_SIZE = ONSET_FFT_SIZE + FFT_SIZE - ONSET_HOP;
+
     // SuperFlux onset detection function (Boeck & Widmer, DAFx-13): a
     // triangular log-frequency filterbank, 24 bands per octave from 62.5 Hz
-    // to 8 kHz, on FFT bins. Band edges that round to the same bin are
-    // merged, so 80 edges -> 78 bands (bins 2-41 are one band each).
-    constexpr int SUPERFLUX_BANDS = 78;
-    // Bands that vote in the onset sum: centres <= 5 kHz (bands 0-61; band
-    // 61 is centred on bin 78 = 4875 Hz). The task is kicks and snares, and
-    // the bands above add hats: on edm/ (host, device level) lone hats
-    // triggered 75% with all 78 bands, 60% at <= 5 kHz, with kick / snare
-    // recall unchanged (82/84% -> 84/83%) and drum F 0.639 -> 0.658. Lower
-    // cuts start losing snares (<= 3 kHz: snare recall 75%). Band-limited
-    // onset functions are the simplest drum-transcription front end (Wu et
-    // al. 2018 review). All 78 bands are still computed: the +-1 band max
-    // filter of the top voting band reads its neighbour.
-    constexpr int SUPERFLUX_ONSET_BANDS = 62;
+    // to 8 kHz, on the onset STFT's bins. Band edges that round to the same
+    // bin are merged, so 169 edges -> 103 -> 101 bands (bins 2-41 are one
+    // band each).
+    constexpr int SUPERFLUX_BANDS = 101;
+    // Bands that vote in the onset sum: centres <= 5 kHz (bands 0-84; band
+    // 84 is centred on bin 157 = 4906 Hz). The task is kicks and snares, and
+    // the bands above add hats: on edm/ (host, device level, 62.5 fps
+    // frames) lone hats triggered 75% with all bands, 60% at <= 5 kHz, with
+    // kick / snare recall unchanged (82/84% -> 84/83%) and drum F 0.639 ->
+    // 0.658. Lower cuts start losing snares (<= 3 kHz: snare recall 75%).
+    // Band-limited onset functions are the simplest drum-transcription front
+    // end (Wu et al. 2018 review). All bands are still computed: the +-1
+    // band max filter of the top voting band reads its neighbour.
+    constexpr int SUPERFLUX_ONSET_BANDS = 85;
 }
 
 /**
@@ -300,9 +321,17 @@ public:
      * overrun discarded samples). The next frame's flux is computed as if
      * there were no previous frame (0) instead of differencing across the
      * gap — a spliced window otherwise produces a spurious flux spike that
-     * lands in the tempo buffer and can fire a false onset.
+     * lands in the tempo buffer and can fire a false onset. The onset STFT's
+     * windows reach 512 samples back, so every onset frame whose window can
+     * hold a sample of this block (its own frames and those ending within
+     * the next ONSET_FFT_SIZE samples) gives SuperFlux 0, and the frame after
+     * them is not differenced against a spliced one.
      */
-    void markDiscontinuity() { hasPrevFrame_ = false; }
+    void markDiscontinuity() {
+        hasPrevFrame_ = false;
+        onsetSpliceFrames_ = SpectralConstants::ONSET_FRAMES_PER_FRAME +
+                             SpectralConstants::ONSET_FFT_SIZE / SpectralConstants::ONSET_HOP;
+    }
 
     /**
      * Get total spectral energy (sum of magnitudes)
@@ -327,14 +356,21 @@ public:
 
     /**
      * SuperFlux onset detection function (Boeck & Widmer, DAFx-13), the
-     * spectral-flux onset detector's evidence (#280). Pre-compressor
-     * magnitudes -> 78-band log-frequency filterbank (24/octave) ->
+     * spectral-flux onset detector's evidence (#280), on the onset STFT
+     * (#178: Hann 512, hop 128). Magnitudes (no compressor, no noise
+     * subtraction) -> 101-band log-frequency filterbank (24/octave) ->
      * log10(superFluxLambda * band + 1) -> half-wave difference against the
-     * previous frame, max-filtered over +-1 band -> unweighted sum.
-     * Unweighted: a drum hit rises across many bands, a bass note in a few.
-     * Log: relative change, independent of input level. 0 on the first frame.
+     * previous onset frame, max-filtered over +-1 band -> unweighted sum.
+     * The previous frame is one hop back: the paper's ratio-0.5 rule gives
+     * round((N/2 - N/6) / hop) = 1. Unweighted: a drum hit rises across many
+     * bands, a bass note in a few. Log: relative change, independent of input
+     * level. 0 on the first onset frame. This one: the newest onset frame.
      */
-    float getSuperFlux() const { return superFlux_; }
+    float getSuperFlux() const { return superFlux_[ONSET_FRAMES_LAST]; }
+    // The SuperFlux ODF of onset frame i (0 = oldest) of the last spectral
+    // frame: SpectralConstants::ONSET_FRAMES_PER_FRAME values, 8 ms apart,
+    // the last one ending at the spectral frame's last sample (#178).
+    float getSuperFlux(int i) const;
 
     /**
      * Get bass-only half-wave rectified spectral flux (bins 1-6, 62-375 Hz).
@@ -503,8 +539,18 @@ private:
     float spectralFlux_;
     float bassFlux_;           // Bass-only spectral flux (bins 1-6, kicks only)
     float rawSpectralFlux_;    // SuperFlux from pre-compressor mags (for NN hybrid input)
-    float superFlux_;          // SuperFlux ODF (getSuperFlux)
-    float prevLogBands_[SpectralConstants::SUPERFLUX_BANDS];  // previous frame's log bands
+    // Onset STFT (#178): sample history, FFT buffers (members, off the 4 KB
+    // loop stack), and the SuperFlux state.
+    static constexpr int ONSET_FRAMES_LAST = SpectralConstants::ONSET_FRAMES_PER_FRAME - 1;
+    int16_t onsetRing_[SpectralConstants::ONSET_RING_SIZE];
+    int onsetWrite_;           // next write position in onsetRing_
+    float onsetIn_[SpectralConstants::ONSET_FFT_SIZE];
+    float onsetOut_[SpectralConstants::ONSET_FFT_SIZE];
+    float onsetMag_[SpectralConstants::ONSET_NUM_BINS];
+    float superFlux_[SpectralConstants::ONSET_FRAMES_PER_FRAME];  // per onset frame (getSuperFlux)
+    float prevLogBands_[SpectralConstants::SUPERFLUX_BANDS];  // previous onset frame's log bands
+    bool hasPrevOnsetFrame_;
+    int onsetSpliceFrames_;    // onset frames left whose window spans a discontinuity
     // Phase 2a shape features — computed from preWhitenMagnitudes_ (pre-compressor)
     // to match ml-training/analysis/features.py reference implementations.
     float rawCentroid_;         // Centre-of-mass bin index on raw magnitudes
@@ -534,7 +580,8 @@ private:
     void computeDerivedFeatures();
     void computeShapeFeaturesRaw();  // Phase 2a: centroid/crest/rolloff/HFC/flatness on preWhitenMagnitudes_
     void computeRawSpectralFluxAndSavePrev();  // SuperFlux + advance prevRawMagnitudes_
-    void computeSuperFlux();  // superFlux_ from preWhitenMagnitudes_, advances prevLogBands_
+    void computeOnsetFrame(int endOffset, int slot);  // one onset STFT frame -> superFlux_[slot]
+    void computeOnsetFFT();   // onsetIn_ (windowed) -> onsetOut_ (CMSIS rfft layout)
     void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {

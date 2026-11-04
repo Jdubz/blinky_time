@@ -2,8 +2,10 @@
 
 // Onset detectors behind one interface (#280).
 //
-// A detector turns each spectral frame into onset EVIDENCE: the value of its
-// onset detection function (ODF). Everything after that is shared and
+// A detector turns each spectral frame into onset EVIDENCE: the values of its
+// onset detection function (ODF), at its own rate (evidenceRate() values per
+// spectral frame: SuperFlux runs on the overlapped onset STFT, #178).
+// Everything after that is shared and
 // detector-agnostic (AudioTracker::pickOnset): the online peak picker of
 // Boeck, Krebs & Schedl (ISMIR 2012), the rhythm-pattern bias, the feature
 // snapshot, and every output (onset strength, pulse envelope, onset
@@ -34,12 +36,15 @@ struct OnsetDetectorParams {
     bool nnProfile;            // FrameOnsetNN timing profile
 };
 
+static constexpr int ONSET_EVIDENCE_MAX = SpectralConstants::ONSET_FRAMES_PER_FRAME;
+
 struct OnsetEvidence {
-    // False when this frame produced no new evidence (an expensive detector
-    // skipped it to bound CPU per update). The picker then does not step:
+    // ODF values from this spectral frame, oldest first, one picker step
+    // each. 0 when the frame produced no new evidence (an expensive detector
+    // skipped it to bound CPU per update): the picker then does not step, as
     // re-feeding a held value would hide real peaks.
-    bool fresh;
-    float odf;  // the detector's onset detection function, >= 0
+    int count;
+    float odf[ONSET_EVIDENCE_MAX];  // the detector's onset detection function, >= 0
 };
 
 class OnsetDetector {
@@ -51,6 +56,10 @@ public:
     // once per AudioTracker::update()).
     virtual OnsetEvidence process(const SharedSpectralAnalysis& spectral,
                                   const OnsetDetectorParams& p, bool mayRunExpensive) = 0;
+    // ODF values per spectral frame when fresh (1..ONSET_EVIDENCE_MAX). The
+    // picker's windows (W1, W3, W5) are set in spectral frames and scaled by
+    // this, so they keep their length in time at any detector rate.
+    virtual int evidenceRate() const = 0;
     // Picker threshold: the ODF must reach (mean of the last averageFrames
     // frames and this one) + delta, the delta scaled by the shared gates.
     // averageFrames 0 = no moving average (a fixed threshold, delta).
@@ -64,7 +73,9 @@ public:
 // --- Spectral flux (SuperFlux) ----------------------------------------------
 // SuperFlux (Boeck & Widmer, DAFx-13; SharedSpectralAnalysis::getSuperFlux)
 // with the online picker's relative threshold: an onset reaches the mean of
-// the last 100 ms (W3 = 6 frames at 62.5 fps) plus delta. edm/ host harness
+// the last 100 ms (W3 = 6 spectral frames = 12 onset frames) plus delta.
+// Evidence at the onset STFT's 125 fps (#178). Before #178 (62.5 fps frames,
+// hop = window), edm/ host harness
 // (#280; kick + snare labels, +-50 ms, 0 dB): drum F 0.648, on-drum 55%,
 // kick recall 78%, snare recall 81%, 4.8 det/s, and 0 det/s on steady
 // noise; the band-weighted flux with adaptive baseline, cooldown and 96 ms
@@ -95,8 +106,11 @@ public:
 
     OnsetEvidence process(const SharedSpectralAnalysis& spectral,
                           const OnsetDetectorParams&, bool) override {
-        return OnsetEvidence{true, spectral.getSuperFlux()};
+        OnsetEvidence ev{SpectralConstants::ONSET_FRAMES_PER_FRAME, {}};
+        for (int i = 0; i < SpectralConstants::ONSET_FRAMES_PER_FRAME; i++) ev.odf[i] = spectral.getSuperFlux(i);
+        return ev;
     }
+    int evidenceRate() const override { return SpectralConstants::ONSET_FRAMES_PER_FRAME; }
 
     float delta(const OnsetDetectorParams& p) const override { return p.fluxDelta; }
     int averageFrames(const OnsetDetectorParams& p) const override { return p.fluxAverageFrames; }
@@ -127,12 +141,13 @@ public:
         // the compressed values: train/inference gap 4).
         model_.pushFrame(spectral.getRawMelBands(), spectral.getLinearMelBands(),
                          spectral.getRawFlatness(), spectral.getRawSpectralFlux());
-        if (!mayRunExpensive) return OnsetEvidence{false, 0.0f};
+        if (!mayRunExpensive) return OnsetEvidence{0, {}};
         const float a = model_.invoke();
         BLINKY_HOST_COST(HostCost::NN_INFER);
         // No smoothing (#169): the picker reads the raw activation.
-        return OnsetEvidence{true, a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a)};
+        return OnsetEvidence{1, {a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a)}};
     }
+    int evidenceRate() const override { return 1; }  // the 62.5 fps mel frames
 
     // The activation is already a probability: a fixed threshold
     // (pulseOnsetFloor), no moving average.

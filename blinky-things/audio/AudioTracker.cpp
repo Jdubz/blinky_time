@@ -1135,7 +1135,7 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams
 
     float pulseStrength = 0.0f;
 
-    if (!ev.fresh) {
+    if (ev.count == 0) {
         // No new evidence this frame (an expensive detector skipped it):
         // stepping the history with a held value would re-create the
         // duplicate-sample peak loss.
@@ -1146,7 +1146,8 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams
     // Rhythm-pattern bias: while the PLP pattern is confident, raise the
     // threshold at positions where it predicts no hit. Soft (scaled by
     // confidence and pattern level), never a hard gate; onsetPatternBias 0
-    // turns it off.
+    // turns it off. One value per spectral frame (the PLP phase steps per
+    // spectral frame).
     static constexpr float plpBiasMinConfidence = 0.3f;  // only above 30% confidence
     float patternBias = 1.0f;
     if (plpConfidence_ > plpBiasMinConfidence) {
@@ -1157,62 +1158,77 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams
     }
 
     // --- Online peak picking (Boeck, Krebs & Schedl 2012; AudioTracker.h) ---
-    // On the detector's ODF at this frame, t:
+    // One step per ODF value, at the detector's rate. On the ODF at step t:
     //   max:  odf[t] >= odf[t-1 .. t-W1]
     //   mean: odf[t] >= mean(odf[t-W3 .. t]) + delta (W3 = 0: delta alone)
-    //   gap:  more than W5 frames since the last onset
-    const float o = ev.odf;
-    int w1 = onsetMaxFrames;
+    //   gap:  more than W5 steps since the last onset
+    // W1 / W3 / W5 are set in spectral frames and scaled by the rate, so the
+    // windows keep their length in time (32 / 96 / 32 ms; the paper's online
+    // values are 30 / 100 / 30 ms).
+    const int rate = detector_->evidenceRate();
+    BLINKY_ASSERT_ONCE(rate >= 1 && rate <= ONSET_EVIDENCE_MAX && ev.count <= ONSET_EVIDENCE_MAX,
+                       "onset evidence rate out of range");
+    int w1 = onsetMaxFrames * rate;
     if (w1 > ONSET_HISTORY_MAX) w1 = ONSET_HISTORY_MAX;
-    int w3 = detector_->averageFrames(params);
+    int w3 = detector_->averageFrames(params) * rate;
     if (w3 > ONSET_HISTORY_MAX) w3 = ONSET_HISTORY_MAX;
-    BLINKY_ASSERT_ONCE(onsetMaxFrames <= ONSET_HISTORY_MAX && detector_->averageFrames(params) <= ONSET_HISTORY_MAX,
-                       "onset picker window exceeds ONSET_HISTORY_MAX");
-
-    bool isMax = true;
-    for (int k = 0; k < w1 && isMax; k++) isMax = (o >= odfHistory_[k]);
-    float mean = 0.0f;
-    if (w3 > 0) {
-        float sum = o;
-        for (int k = 0; k < w3; k++) sum += odfHistory_[k];
-        mean = sum / static_cast<float>(w3 + 1);
-    }
+    BLINKY_ASSERT_ONCE(onsetMaxFrames <= PICKER_WINDOW_MAX_FRAMES &&
+                       detector_->averageFrames(params) <= PICKER_WINDOW_MAX_FRAMES,
+                       "onset picker window exceeds PICKER_WINDOW_MAX_FRAMES");
+    const uint32_t w5 = static_cast<uint32_t>(onsetMinGapFrames) * static_cast<uint32_t>(rate);
     const float delta = detector_->delta(params);
-    const float threshold = mean + delta * patternBias;
-    const bool gapOk = (frameClock_ - lastPulseFrame_) > onsetMinGapFrames;
+    const int steps = (ev.count <= ONSET_EVIDENCE_MAX) ? ev.count : ONSET_EVIDENCE_MAX;
 
-    // Activation against the ungated threshold: onset strength and the
-    // pulse envelope, on the same 0-1 scale whichever detector runs.
-    const float act = clampf(detector_->activation(o, mean, delta), 0.0f, 1.0f);
-    onsetActivation_ = act;
+    float maxAct = 0.0f;
+    for (int s = 0; s < steps; s++) {
+        const float o = ev.odf[s];
+        bool isMax = true;
+        for (int k = 0; k < w1 && isMax; k++) isMax = (o >= odfHistory_[k]);
+        float mean = 0.0f;
+        if (w3 > 0) {
+            float sum = o;
+            for (int k = 0; k < w3; k++) sum += odfHistory_[k];
+            mean = sum / static_cast<float>(w3 + 1);
+        }
+        const float threshold = mean + delta * patternBias;
+        if (pickerStepsSinceOnset_ < UINT32_MAX / 2) pickerStepsSinceOnset_++;
+        const bool gapOk = pickerStepsSinceOnset_ > w5;
 
-    if (isMax && o > 0.0f && o >= threshold && gapOk) {
-        pulseStrength = act;
-        lastPulseFrame_ = frameClock_;  // no look-ahead: this frame is the peak
+        // Activation against the ungated threshold: onset strength and the
+        // pulse envelope, on the same 0-1 scale whichever detector runs.
+        const float act = clampf(detector_->activation(o, mean, delta), 0.0f, 1.0f);
+        if (act > maxAct) maxAct = act;
 
-        // T1.4/T1.5 — gate state + spectral features at every onset, for
-        // offline TP/FP analysis. Bits are "which gate came close":
-        //   bit 1 — pattern bias raised the threshold (off-pattern position)
-        //   bits 0, 2, 3 — bass-ratio / crest / beat-grid gates, deleted
-        //               with the online picker (#280); never set
-        lastPulseGateMask_ = 0;
-        if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
-        // Bass share of the weighted flux: a feature only (the gate is gone).
-        const float broadbandFlux = spectral_.getSpectralFlux();
-        const float bassRatio = (broadbandFlux > 0.001f) ? spectral_.getBassFlux() / broadbandFlux : 0.5f;
-        lastPulseFeatures_.flatness = spectral_.getRawFlatness();
-        lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
-        lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
-        lastPulseFeatures_.crest = spectral_.getRawCrest();
-        lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
-        lastPulseFeatures_.hfc = spectral_.getRawHFC();
-        lastPulseFeatures_.bassRatio = bassRatio;
-        lastPulseFeatures_.plpPulse = plpPulseValue_;
-        lastPulseFeatures_.plpConfidence = plpConfidence_;
+        if (isMax && o > 0.0f && o >= threshold && gapOk) {
+            if (act > pulseStrength) pulseStrength = act;
+            pickerStepsSinceOnset_ = 0;
+            lastPulseFrame_ = frameClock_;  // no look-ahead: this step is the peak
+
+            // T1.4/T1.5 — gate state + spectral features at every onset, for
+            // offline TP/FP analysis. Bits are "which gate came close":
+            //   bit 1 — pattern bias raised the threshold (off-pattern position)
+            //   bits 0, 2, 3 — bass-ratio / crest / beat-grid gates, deleted
+            //               with the online picker (#280); never set
+            lastPulseGateMask_ = 0;
+            if (patternBias > 1.05f) lastPulseGateMask_ |= 0x02;
+            // Bass share of the weighted flux: a feature only (the gate is gone).
+            const float broadbandFlux = spectral_.getSpectralFlux();
+            const float bassRatio = (broadbandFlux > 0.001f) ? spectral_.getBassFlux() / broadbandFlux : 0.5f;
+            lastPulseFeatures_.flatness = spectral_.getRawFlatness();
+            lastPulseFeatures_.rawFlux = spectral_.getRawSpectralFlux();
+            lastPulseFeatures_.centroid = spectral_.getSpectralCentroid();
+            lastPulseFeatures_.crest = spectral_.getRawCrest();
+            lastPulseFeatures_.rolloff = spectral_.getRawRolloff();
+            lastPulseFeatures_.hfc = spectral_.getRawHFC();
+            lastPulseFeatures_.bassRatio = bassRatio;
+            lastPulseFeatures_.plpPulse = plpPulseValue_;
+            lastPulseFeatures_.plpConfidence = plpConfidence_;
+        }
+
+        for (int k = ONSET_HISTORY_MAX - 1; k > 0; k--) odfHistory_[k] = odfHistory_[k - 1];
+        odfHistory_[0] = o;
     }
-
-    for (int k = ONSET_HISTORY_MAX - 1; k > 0; k--) odfHistory_[k] = odfHistory_[k - 1];
-    odfHistory_[0] = o;
+    onsetActivation_ = maxAct;
 
     return pulseStrength;
 }

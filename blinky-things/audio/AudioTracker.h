@@ -260,7 +260,11 @@ public:
     // local-max window, the tempo-adaptive 40-150 ms cooldown, the adaptive
     // flux baseline and the crest / beat-grid / re-arm gates: on edm/ the
     // cooldown blocked 61-71% of the kicks the old picker missed (#280).
-    static constexpr int ONSET_HISTORY_MAX = 16;  // frames of ODF history kept
+    // W1 / W3 / W5 are in spectral frames (62.5 fps) and scale by the
+    // detector's evidence rate, so their length in time is the same at any
+    // rate (OnsetDetector::evidenceRate; SuperFlux 2 per frame, #178).
+    static constexpr int PICKER_WINDOW_MAX_FRAMES = 16;  // settings range for W1 / W3
+    static constexpr int ONSET_HISTORY_MAX = PICKER_WINDOW_MAX_FRAMES * ONSET_EVIDENCE_MAX;  // picker steps of ODF history
     static constexpr uint8_t ONSET_MAX_FRAMES_DEFAULT = 2;   // W1
     static constexpr uint8_t ONSET_MIN_GAP_FRAMES_DEFAULT = 2;  // W5
     uint8_t onsetMaxFrames = ONSET_MAX_FRAMES_DEFAULT;
@@ -366,7 +370,8 @@ private:
     float lastFramePulse_ = 0.0f;     // Pulse fired by the most recent frame
     FrameHook frameHook_ = nullptr;
     void* frameHookCtx_ = nullptr;
-    uint32_t lastPulseFrame_ = 0;     // frameClock_ of the last onset (minimum gap W5, rhythm presence)
+    uint32_t lastPulseFrame_ = 0;     // frameClock_ of the last onset (rhythm presence)
+    uint32_t pickerStepsSinceOnset_ = UINT32_MAX / 2;  // picker steps since the last onset (minimum gap W5)
     // T1.4/T1.5 — per-onset diagnostics captured by pickOnset at every onset
     // (either detector). Consumed by the TRANSIENT JSON emitter in
     // blinky-things.ino for offline FP/TP class clustering.
@@ -376,7 +381,7 @@ private:
     // ODF of the last fresh frames, newest first ([0] = t-1). The picker's
     // max and moving-average windows read it.
     float odfHistory_[ONSET_HISTORY_MAX] = {0};
-    float onsetActivation_ = 0.0f;     // Activation of the last fresh frame (getOnsetActivation)
+    float onsetActivation_ = 0.0f;     // Max activation over the last fresh frame's picker steps (getOnsetActivation)
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
