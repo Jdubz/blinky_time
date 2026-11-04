@@ -130,6 +130,16 @@ def study_track(stem: str, exe: str, fps: float, ffmpeg: str, tmpd: Path) -> lis
     fired_kicks = [k for k in kicks_h if k >= WARMUP_S and has_near(t_on, k, DRUM_TOL_SEC)]
     base = [local_lock(k, kicks_h, rt, on["phase"]) for k in fired_kicks]
     vals = [float(on["plp_value"][min(int(np.searchsorted(rt, k)), len(rt) - 1)]) for k in fired_kicks]
+    # Does the pattern know where kicks are? Its value at every kick vs at every frame
+    # (after warm-up, while the bias can act: conf > 0.3).
+    act = (rt >= WARMUP_S) & (on["plp_conf"] > 0.3)
+    all_k = [k for k in kicks_h if k >= WARMUP_S]
+    ki = np.clip(np.searchsorted(rt, all_k), 0, len(rt) - 1)
+    ki = ki[act[ki]]
+    v_k = float(np.median(on["plp_value"][ki])) if len(ki) else float("nan")
+    v_all = float(np.median(on["plp_value"][act])) if act.any() else float("nan")
+    print(f"#   {stem}: pattern value median at kicks {v_k:.2f} vs all frames {v_all:.2f}  "
+          f"(bias active {act[rt >= WARMUP_S].mean():.0%} of the time)", flush=True)
     for r in out:
         r["base_lock"] = float(np.nanmedian(base)) if np.isfinite(base).any() else float("nan")
         r["base_val"] = float(np.median(vals)) if vals else float("nan")
