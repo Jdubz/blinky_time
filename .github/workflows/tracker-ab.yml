@@ -48,6 +48,7 @@ jobs:
       env:
         OPTS: ${{ inputs.opts }}
         FPS: ${{ inputs.fps }}
+      shell: bash  # Actions adds -o pipefail: a failed eval must fail the step through tee
       run: |
         args=()
         for o in $OPTS; do
