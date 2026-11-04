@@ -618,13 +618,13 @@ void SharedSpectralAnalysis::computeOnsetFrame(int endOffset, int slot) {
 }
 
 void SharedSpectralAnalysis::computeOnsetFFT() {
-    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
 #ifdef BLINKY_PARITY_HARNESS
     // The parity harness never calls process() (magnitudes are injected).
     BLINKY_ASSERT_ONCE(false, "onset FFT called in the parity harness");
 #elif defined(BLINKY_HOST_HARNESS)
     // Host tracker harness: iterative radix-2 complex FFT in double, packed
     // into the CMSIS rfft layout the device branch produces.
+    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
     static double tw[N / 2][2];
     static bool twReady = false;
     if (!twReady) {
@@ -665,6 +665,7 @@ void SharedSpectralAnalysis::computeOnsetFFT() {
     arm_rfft_fast_f32(&onsetRfftInstance, onsetIn_, onsetOut_, 0);
 #else
     // ArduinoFFT (ESP32-S3 and other platforms), repacked to the rfft layout.
+    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
     float im[N] = {0};
     ArduinoFFT<float> fft(onsetIn_, im, N, SpectralConstants::SAMPLE_RATE);
     fft.compute(FFTDirection::Forward);
