@@ -138,8 +138,13 @@ def study_track(stem: str, exe: str, fps: float, ffmpeg: str, tmpd: Path) -> lis
     ki = ki[act[ki]]
     v_k = float(np.median(on["plp_value"][ki])) if len(ki) else float("nan")
     v_all = float(np.median(on["plp_value"][act])) if act.any() else float("nan")
-    print(f"#   {stem}: pattern value median at kicks {v_k:.2f} vs all frames {v_all:.2f}  "
-          f"(bias active {act[rt >= WARMUP_S].mean():.0%} of the time)", flush=True)
+    # Max within +-2 frames: a narrow peak a frame or two off the kick (phase offset,
+    # label timing) reads low at the kick itself but high here.
+    rows_per = max(1, int(round(NEAR_FRAMES * FRAME_S / float(np.median(np.diff(rt))))))
+    pv = on["plp_value"]
+    v_k2 = float(np.median([pv[max(0, i - rows_per):i + rows_per + 1].max() for i in ki])) if len(ki) else float("nan")
+    print(f"#   {stem}: pattern value median at kicks {v_k:.2f} (max +-2 frames {v_k2:.2f}) "
+          f"vs all frames {v_all:.2f}  (bias active {act[rt >= WARMUP_S].mean():.0%} of the time)", flush=True)
     for r in out:
         r["base_lock"] = float(np.nanmedian(base)) if np.isfinite(base).any() else float("nan")
         r["base_val"] = float(np.median(vals)) if vals else float("nan")
