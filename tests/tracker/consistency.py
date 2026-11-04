@@ -8,7 +8,11 @@ trigger". This scores exactly that, and it needs no labels: the reference is
 the track's own audio.
 
   1. Features: log-mel frames of the clean decoded file (not the device-level
-     copy, whose quantization noise is part of what is being tested).
+     copy, whose quantization noise is part of what is being tested), on a
+     finer, overlapping hop than the firmware's 16 ms frames. With the
+     firmware's framing, a hit's strength depends on where it lands in a
+     frame (#178), and a repeat it changed would drop out of the regions
+     instead of being scored.
   2. Repeat lag L: the peak of the mean frame-to-frame similarity over lags in
      [LAG_MIN_S, LAG_MAX_S] that stands highest above the curve's local median
      (short lags are always more alike, so the raw maximum drifts to the floor).
@@ -39,8 +43,8 @@ from dataclasses import dataclass
 import numpy as np
 
 SR = 16000
-HOP = 256  # the firmware's frame: 16 ms, 62.5 fps
-WIN = 512
+HOP = 128  # 8 ms, half the firmware's frame (see 1. above)
+WIN = 1024
 N_MELS = 40
 FMIN, FMAX = 30.0, 8000.0
 LAG_MIN_S, LAG_MAX_S = 1.5, 8.0  # a bar at 160 BPM up to two bars at 60
