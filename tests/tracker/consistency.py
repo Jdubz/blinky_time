@@ -156,22 +156,38 @@ def consistency(times: np.ndarray, strengths: np.ndarray, rep: Repetition,
     lo, hi = t_start, t_end - L
     frames = np.arange(int(np.ceil(lo / rep.frame_s)), int(hi / rep.frame_s) + 1)
     coverage = float(rep.repeated(frames * rep.frame_s).mean()) if len(frames) else float("nan")
-    in_a = (times >= lo) & (times <= hi) & rep.repeated(times)
+    # A pair counts when either side lies in the region; a lone detection only
+    # when it lies strictly inside. Otherwise a hit on a region's edge loses its
+    # partner to a fraction of a frame of lag error (or the tolerance).
+    tol = MATCH_TOL_S
+    grow = int(np.ceil(tol / rep.frame_s))
+    near = np.convolve(rep.mask.astype(int), np.ones(2 * grow + 1, dtype=int), "same") > 0
+    near_rep = Repetition(lag_s=L, frame_s=rep.frame_s, mask=near)
+
+    def side(t: np.ndarray):
+        inside = (t >= lo) & (t <= hi) & rep.repeated(t)
+        cand = (t >= lo - tol) & (t <= hi + tol) & near_rep.repeated(t)
+        return cand, inside
+
+    cand_a, inside_a = side(times)
     shifted = times - L
-    in_b = (shifted >= lo) & (shifted <= hi) & rep.repeated(shifted)
-    ta, sa = times[in_a], strengths[in_a]
-    tb, sb = shifted[in_b], strengths[in_b]
-    if len(ta) + len(tb) == 0:
+    cand_b, inside_b = side(shifted)
+    ta, sa, ka = times[cand_a], strengths[cand_a], inside_a[cand_a]
+    tb, sb, kb = shifted[cand_b], strengths[cand_b], inside_b[cand_b]
+    pairs = [(i, j) for i, j in _match(ta, tb, tol) if ka[i] or kb[j]]
+    ia = {i for i, _ in pairs}
+    ib = {j for _, j in pairs}
+    lone_a = [i for i in range(len(ta)) if ka[i] and i not in ia]
+    lone_b = [j for j in range(len(tb)) if kb[j] and j not in ib]
+    n = 2 * len(pairs) + len(lone_a) + len(lone_b)
+    if n == 0:
         return {"rep": float("nan"), "rep_s": float("nan"), "coverage": coverage, "lag_s": L}
-    pairs = _match(ta, tb, MATCH_TOL_S)
-    ia = [i for i, _ in pairs]
-    ib = [j for _, j in pairs]
     diff = sum(abs(sa[i] - sb[j]) for i, j in pairs)
     top = sum(max(sa[i], sb[j]) for i, j in pairs)
-    lone = np.delete(sa, ia).sum() + np.delete(sb, ib).sum()
+    lone = sa[lone_a].sum() + sb[lone_b].sum()
     den = top + lone
     return {
-        "rep": 2 * len(pairs) / (len(ta) + len(tb)),
+        "rep": 2 * len(pairs) / n,
         "rep_s": 1.0 - (diff + lone) / den if den > 0 else float("nan"),
         "coverage": coverage,
         "lag_s": L,
