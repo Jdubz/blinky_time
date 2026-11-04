@@ -9,8 +9,9 @@ the track's own audio.
 
   1. Features: log-mel frames of the clean decoded file (not the device-level
      copy, whose quantization noise is part of what is being tested).
-  2. Repeat lag L: the lag in [LAG_MIN_S, LAG_MAX_S] that maximizes the mean
-     frame-to-frame similarity, refined to a fraction of a frame.
+  2. Repeat lag L: the highest peak (a local maximum, never an end of the
+     range, where the true peak lies outside it) of the mean frame-to-frame
+     similarity over lags in [LAG_MIN_S, LAG_MAX_S], refined to a fraction of a frame.
   3. Repeated regions: frames whose +-PATCH_S patch correlates with the patch
      one lag later above that track's own null (the same correlation at
      random lags, quantile NULL_QUANTILE). Breakdowns, fills and transitions
@@ -23,6 +24,8 @@ the track's own audio.
   repS      Strength agreement: 1 - sum|s_a - s_b| / sum max(s_a, s_b), where an
             unmatched detection pairs with 0. 1 = same hits at the same strengths.
   coverage  Share of the scored time that is a repeated region.
+  n         Detections scored (in a repeated region, or one lag after one).
+            Below MIN_SCORED, rep and repS are NaN: too few to say anything.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ PATCH_S = 0.25
 NULL_QUANTILE = 0.99
 NULL_LAGS = 64
 MATCH_TOL_S = 0.032  # two frames: a hit that moves by one frame still counts
+MIN_SCORED = 20  # fewer detections in repeated audio than this is no evidence either way
 
 
 @dataclass(frozen=True)
@@ -111,12 +115,13 @@ def find_repetition(x: np.ndarray, seed: int = 0) -> Repetition:
         raise ValueError(f"audio too short to find a repeat ({len(f) * frame_s:.1f} s)")
     norm = f / np.maximum(np.linalg.norm(f, axis=1, keepdims=True), 1e-9)
     sim = np.array([(norm[:-lag] * norm[lag:]).sum(1).mean() for lag in range(lo, hi + 1)])
-    k = int(np.argmax(sim))
-    frac = 0.0
-    if 0 < k < len(sim) - 1:
-        y0, y1, y2 = sim[k - 1], sim[k], sim[k + 1]
-        den = y0 - 2 * y1 + y2
-        frac = 0.5 * (y0 - y2) / den if den < 0 else 0.0
+    peaks = np.flatnonzero((sim[1:-1] > sim[:-2]) & (sim[1:-1] >= sim[2:])) + 1
+    if not len(peaks):
+        raise ValueError("no repeat: frame similarity has no peak inside the lag range")
+    k = int(peaks[np.argmax(sim[peaks])])
+    y0, y1, y2 = sim[k - 1], sim[k], sim[k + 1]
+    den = y0 - 2 * y1 + y2
+    frac = 0.5 * (y0 - y2) / den if den < 0 else 0.0
     lag = lo + k
     half = int(round(PATCH_S / frame_s))
     r = _patch_corr(f, lag, half)
@@ -180,8 +185,8 @@ def consistency(times: np.ndarray, strengths: np.ndarray, rep: Repetition,
     lone_a = [i for i in range(len(ta)) if ka[i] and i not in ia]
     lone_b = [j for j in range(len(tb)) if kb[j] and j not in ib]
     n = 2 * len(pairs) + len(lone_a) + len(lone_b)
-    if n == 0:
-        return {"rep": float("nan"), "rep_s": float("nan"), "coverage": coverage, "lag_s": L}
+    if n < MIN_SCORED:
+        return {"rep": float("nan"), "rep_s": float("nan"), "coverage": coverage, "lag_s": L, "n": n}
     diff = sum(abs(sa[i] - sb[j]) for i, j in pairs)
     top = sum(max(sa[i], sb[j]) for i, j in pairs)
     lone = sa[lone_a].sum() + sb[lone_b].sum()
@@ -191,4 +196,5 @@ def consistency(times: np.ndarray, strengths: np.ndarray, rep: Repetition,
         "rep_s": 1.0 - (diff + lone) / den if den > 0 else float("nan"),
         "coverage": coverage,
         "lag_s": L,
+        "n": n,
     }

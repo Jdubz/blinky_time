@@ -92,6 +92,16 @@ def test_a_one_frame_shift_still_counts_as_the_same_hit(rep) -> None:
     assert score(rep, t, s)["rep"] == pytest.approx(1.0)
 
 
+def test_a_peak_at_the_end_of_the_lag_range_is_not_the_lag() -> None:
+    # A 1.2 s loop: the similarity is still rising at the 1.5 s floor (towards
+    # 2.4 s), so only an interior peak (2.4 s) is a repeat, never the floor itself.
+    rng = np.random.default_rng(2)
+    bar = rng.standard_normal(int(1.2 * SR)) * np.exp(-np.arange(int(1.2 * SR)) / SR / 0.3)
+    r = find_repetition(np.tile(bar, 20) + 1e-3 * rng.standard_normal(20 * len(bar)))
+    assert r.lag_s / 1.2 == pytest.approx(round(r.lag_s / 1.2), abs=0.01)
+    assert round(r.lag_s / 1.2) >= 2
+
+
 def test_no_detections_is_not_a_score(rep) -> None:
     out = score(rep, np.array([]), np.array([]))
     assert np.isnan(out["rep"]) and np.isnan(out["rep_s"])

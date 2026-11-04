@@ -196,7 +196,8 @@ def repetition_metrics(rows: np.ndarray, rep: Repetition) -> dict:
     on = rows["onset"] > 0
     edge = on & ~np.concatenate([[False], on[:-1]]) & (t >= WARMUP_S)
     c = consistency(t[edge], rows["onset"][edge], rep, WARMUP_S, float(t[-1]))
-    return {"rep": c["rep"], "rep_s": c["rep_s"], "rep_cov": c["coverage"], "rep_lag": c["lag_s"]}
+    return {"rep": c["rep"], "rep_s": c["rep_s"], "rep_cov": c["coverage"], "rep_lag": c["lag_s"],
+            "rep_n": c["n"]}
 
 
 def evaluate(rows: np.ndarray, onsets: np.ndarray) -> dict:
@@ -268,7 +269,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
         print(f"{'track':32s} {'fps':>5s} " + "  ".join(
-            f"{b+':kR50':>8s} {b+':onDrum':>9s} {b+':drumF':>8s} {b+':sR50':>7s} {b+':repS':>8s} "
+            f"{b+':kR50':>8s} {b+':onDrum':>9s} {b+':drumF':>8s} {b+':sR50':>7s} {b+':repS':>8s} {b+':cov':>7s} {b+':n':>5s} "
             f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':f1':>7s} "
             f"{b+':prec':>8s} {b+':bpm':>8s}" for b, _ in builds))
         for stem in stems:
@@ -297,7 +298,7 @@ def main() -> int:
                     r["label"] = f"{stem}@{fps:.0f}fps"
                     summary[b].append(r)
                     cells.append(f"{r['kick_r50']:8.2f} {r['on_drum']:9.2f} {r['drum_f']:8.3f} "
-                                 f"{r['snare_r50']:7.2f} {r['rep_s']:8.2f} {r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
+                                 f"{r['snare_r50']:7.2f} {r['rep_s']:8.2f} {r['rep_cov']:7.2f} {r['rep_n']:5d} {r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
                                  f"{r['f1']:7.3f} {r['prec']:8.3f} {r['bpm']:8.1f}")
                 print(f"{stem:32s} {fps:5.0f} " + "  ".join(cells), flush=True)
     print()
@@ -307,8 +308,10 @@ def main() -> int:
               f"onDrum {arr('on_drum'):.3f}  drumF {arr('drum_f'):.3f}  "
               f"snareR@50 {arr('snare_r50'):.3f} (provisional, #284)  loneHat {arr('lone_hat'):.3f}  "
               f"det/s {arr('det_per_s'):.2f}  lag {arr('drum_lag'):.0f} ms")
+        scored = sum(np.isfinite(r["rep"]) for r in rs)
         print(f"{b}: REPEAT mean rep {arr('rep'):.3f}  repS {arr('rep_s'):.3f}  "
-              f"coverage {arr('rep_cov'):.3f}  (#340: does repeated audio get repeated light)")
+              f"coverage {arr('rep_cov'):.3f}  scored runs {scored}/{len(rs)}  "
+              f"(#340: does repeated audio get repeated light)")
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
               f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
               f"mean recall {arr('recall'):.3f}  mean F1 {arr('f1'):.3f}  mean prec {arr('prec'):.3f}  "
