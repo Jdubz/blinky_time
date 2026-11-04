@@ -21,8 +21,12 @@ a shift when exactly one of the two fires. The study reports how many inconsiste
 pairs involve a phase-sensitive hit, i.e. how much of the "same hit, different
 bar, different result" comes from frame phase.
 
+--control keeps the frame phase fixed (no shift) and varies the harness's
+loop-jitter seed instead (1..8). Whatever varies there comes from the loop
+timing and the tracker's adaptive state, not from frame phase; subtract it.
+
 Usage:
-    python tests/tracker/frame_phase_study.py --harness build/tracker_harness [--fps 60]
+    python tests/tracker/frame_phase_study.py --harness build/tracker_harness [--fps 60] [--control]
 """
 
 from __future__ import annotations
@@ -73,16 +77,17 @@ def nearest(xs: np.ndarray, t: float) -> int:
     return min(cands, key=lambda k: abs(xs[k] - t))
 
 
-def study_track(stem: str, exe: str, fps: float, ffmpeg: str, tmpd: Path) -> dict:
+def study_track(stem: str, exe: str, fps: float, ffmpeg: str, tmpd: Path, control: bool) -> dict:
     pcm = tmpd / f"{stem}.pcm"
     rep = find_repetition(decode(ffmpeg, CORPUS / f"{stem}.mp3", pcm, DEVICE_LEVEL_DB))
     base = np.fromfile(pcm, dtype="<i2")
     labels = load_drum_labels(drum_label_path(CORPUS, stem), CORPUS / f"{stem}.onsets_consensus.json")
     runs = []  # per shift: (onset times on the audio clock, strengths)
-    for s in SHIFTS:
+    for i, shift in enumerate(SHIFTS):
+        s, seed = (0, i + 1) if control else (shift, 1)
         p = tmpd / f"{stem}_{s}.pcm"
         np.concatenate([np.zeros(s, dtype="<i2"), base]).tofile(p)
-        rows = run_harness(exe, p, tmpd / f"{stem}_{s}.csv", fps, 0.25, 1)
+        rows = run_harness(exe, p, tmpd / f"{stem}_{i}.csv", fps, 0.25, seed)
         t, v = edges(rows)
         runs.append((t - s / SAMPLE_RATE, v))
     t0 = runs[0][0]
@@ -148,7 +153,7 @@ def study_track(stem: str, exe: str, fps: float, ffmpeg: str, tmpd: Path) -> dic
     return out
 
 
-def summarize(rows: list[dict]) -> None:
+def summarize(rows: list[dict], control: bool) -> None:
     n = sum(r["hits"] for r in rows)
     if not n:
         print("no hits")
@@ -158,7 +163,9 @@ def summarize(rows: list[dict]) -> None:
     ps = sum(r["pair_shifts"] for r in rows)
     inc = sum(r["inconsistent"] for r in rows)
     incp = sum(r["inconsistent_phase"] for r in rows)
-    print(f"\nFRAME PHASE ({len(SHIFTS)} shifts of {FRAME // len(SHIFTS)} samples, kicks + snares, {n} hits)")
+    what = f"{len(SHIFTS)} jitter seeds, no shift (CONTROL)" if control else \
+        f"{len(SHIFTS)} shifts of {FRAME // len(SHIFTS)} samples"
+    print(f"\nFRAME PHASE ({what}, kicks + snares, {n} hits)")
     print(f"  always fire {al / n:5.1%}   phase-sensitive {se / n:5.1%}   never fire {nv / n:5.1%}")
     print(f"  recall: mean over shifts {counts.mean() / len(SHIFTS):.3f}, if every phase-sensitive hit "
           f"fired {(counts > 0).mean():.3f}")
@@ -176,6 +183,7 @@ def main() -> int:
     ap.add_argument("--tracks", nargs="*")
     ap.add_argument("--ffmpeg")
     ap.add_argument("--json", help="write the per-track results here")
+    ap.add_argument("--control", action="store_true", help="vary the jitter seed, not the frame phase")
     args = ap.parse_args()
     ffmpeg = find_ffmpeg(args.ffmpeg)
     stems = args.tracks or sorted(p.name[:-len(".onsets_consensus.json")]
@@ -183,8 +191,8 @@ def main() -> int:
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
         for stem in stems:
-            rows.append(study_track(stem, args.harness, args.fps, ffmpeg, Path(tmp)))
-    summarize(rows)
+            rows.append(study_track(stem, args.harness, args.fps, ffmpeg, Path(tmp), args.control))
+    summarize(rows, args.control)
     if args.json:
         Path(args.json).write_text(json.dumps(rows, indent=1))
     return 0
