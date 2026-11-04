@@ -21,6 +21,10 @@ onset within +-32 ms. For each suppressed hit:
   near      a timing near-miss: the pattern at the hit's phase is below 0.5 but
             reaches 0.5 within +-2 frames (tolerance would have let it through)
   conf/val  PLP confidence and pattern value there (bias = 1 + 0.3 * conf * (1 - val))
+  base val  the pattern value at the kicks the "on" run fired. `lock` can't see a
+            constant phase offset (an offset tracker is still consistent); this can.
+            High here and low at the suppressed kicks = the pattern is aligned and
+            those kicks are off it; low at both = the pattern or phase is off.
 
 Usage:
     python tests/tracker/pattern_bias_study.py --harness build/tracker_harness [--fps 60]
@@ -125,8 +129,25 @@ def study_track(stem: str, exe: str, fps: float, ffmpeg: str, tmpd: Path) -> lis
     # Baseline lock: at the kicks the "on" run fired.
     fired_kicks = [k for k in kicks_h if k >= WARMUP_S and has_near(t_on, k, DRUM_TOL_SEC)]
     base = [local_lock(k, kicks_h, rt, on["phase"]) for k in fired_kicks]
+    vals = [float(on["plp_value"][min(int(np.searchsorted(rt, k)), len(rt) - 1)]) for k in fired_kicks]
+    # Does the pattern know where kicks are? Its value at every kick vs at every frame
+    # (after warm-up, while the bias can act: conf > 0.3).
+    act = (rt >= WARMUP_S) & (on["plp_conf"] > 0.3)
+    all_k = [k for k in kicks_h if k >= WARMUP_S]
+    ki = np.clip(np.searchsorted(rt, all_k), 0, len(rt) - 1)
+    ki = ki[act[ki]]
+    v_k = float(np.median(on["plp_value"][ki])) if len(ki) else float("nan")
+    v_all = float(np.median(on["plp_value"][act])) if act.any() else float("nan")
+    # Max within +-2 frames: a narrow peak a frame or two off the kick (phase offset,
+    # label timing) reads low at the kick itself but high here.
+    rows_per = max(1, int(round(NEAR_FRAMES * FRAME_S / float(np.median(np.diff(rt))))))
+    pv = on["plp_value"]
+    v_k2 = float(np.median([pv[max(0, i - rows_per):i + rows_per + 1].max() for i in ki])) if len(ki) else float("nan")
+    print(f"#   {stem}: pattern value median at kicks {v_k:.2f} (max +-2 frames {v_k2:.2f}) "
+          f"vs all frames {v_all:.2f}  (bias active {act[rt >= WARMUP_S].mean():.0%} of the time)", flush=True)
     for r in out:
         r["base_lock"] = float(np.nanmedian(base)) if np.isfinite(base).any() else float("nan")
+        r["base_val"] = float(np.median(vals)) if vals else float("nan")
     n_off = len(t_off)
     print(f"{stem:28s} off {n_off:5d}  suppressed {len(out):4d}  "
           + "  ".join(f"{k} {sum(r['label'] == k for r in out):3d}" for k in ("kick", "snare", "hat", "other"))
@@ -156,6 +177,8 @@ def summarize(rows: list[dict]) -> None:
         base = np.array([r["base_lock"] for r in drums], dtype=float)
         print(f"  suppressed drums: tracker lock median {np.nanmedian(lk):.2f} vs {np.nanmedian(base):.2f} "
               f"at fired kicks (lower = the tracker was off there)")
+        print(f"  pattern value: {np.median([r['val'] for r in drums]):.2f} at suppressed drums vs "
+              f"{np.nanmedian([r['base_val'] for r in drums]):.2f} at fired kicks (same tracks)")
         print(f"  suppressed drums that are timing near-misses: {np.mean([r['near'] for r in drums]):.1%}; "
               f"that break a repeat: {np.mean([r['breaks_repeat'] for r in drums]):.1%}")
 
