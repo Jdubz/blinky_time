@@ -15,6 +15,7 @@
 #include <arm_math.h>
 static arm_rfft_fast_instance_f32 rfftInstance;
 static bool rfftInitialized = false;
+static arm_rfft_fast_instance_f32 onsetRfftInstance;  // ONSET_FFT_SIZE, set up in begin()
 #else
 #include <arduinoFFT.h>
 #endif
@@ -112,25 +113,37 @@ static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
     { 115, 121, 127 },  // 49:   7587 Hz center
 };
 
-// SuperFlux filterbank edges (FFT bins): band m is the triangle
+// SuperFlux filterbank edges (onset STFT bins): band m is the triangle
 // EDGES[m] .. EDGES[m+1] (peak 1, not area-normalised) .. EDGES[m+2].
 // Generated: centres 62.5 * 2^(i/24) Hz up to 8 kHz, rounded to bins
-// (62.5 Hz each), clipped to 1..127, duplicates removed (numpy):
+// (31.25 Hz each), clipped to 1..255, duplicates removed (numpy):
 //   c = 62.5 * 2.0 ** (np.arange(0, np.log2(8000 / 62.5) * 24 + 1) / 24)
-//   np.unique(np.clip(np.round(c / 62.5).astype(int), 1, 127))
+//   np.unique(np.clip(np.round(c / 31.25).astype(int), 1, 255))
 static constexpr uint8_t SUPERFLUX_EDGES[] = {
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 51, 52, 54,
     55, 57, 59, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 81, 83, 85, 88, 91, 93, 96, 99, 102, 105,
-    108, 111, 114, 117, 121, 124, 127,
+    108, 111, 114, 117, 121, 124, 128, 132, 136, 140, 144, 148, 152, 157, 161, 166, 171, 176, 181,
+    186, 192, 197, 203, 209, 215, 222, 228, 235, 242, 249, 255,
 };
 static_assert(sizeof(SUPERFLUX_EDGES) == SpectralConstants::SUPERFLUX_BANDS + 2,
               "SUPERFLUX_EDGES must have SUPERFLUX_BANDS + 2 entries (regenerate the table)");
-// Voting bands end at the last centre <= 5 kHz (bin 80): band m is centred on
-// SUPERFLUX_EDGES[m + 1].
-static_assert(SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS] <= 80 &&
-              SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS + 1] > 80,
+static_assert(SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_BANDS + 1] < SpectralConstants::ONSET_NUM_BINS,
+              "SUPERFLUX_EDGES must stay below the onset STFT's Nyquist bin");
+// Voting bands end at the last centre <= 5 kHz (bin 160): band m is centred
+// on SUPERFLUX_EDGES[m + 1].
+static_assert(SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS] <= 160 &&
+              SUPERFLUX_EDGES[SpectralConstants::SUPERFLUX_ONSET_BANDS + 1] > 160,
               "SUPERFLUX_ONSET_BANDS must end at the last band centred <= 5 kHz");
+
+// Onset STFT tables, filled by begin(): the Hann window (numpy's
+// np.hanning, as in the SuperFlux reference code; not normalised: lambda is
+// on the paper's scale, see superFluxLambda) and the triangle weights of
+// each band's interior bins lo < k < hi, flattened.
+static constexpr int SUPERFLUX_WEIGHTS_MAX = 2 * SpectralConstants::ONSET_NUM_BINS;
+static float onsetWindow_[SpectralConstants::ONSET_FFT_SIZE];
+static float superFluxWeights_[SUPERFLUX_WEIGHTS_MAX];
+static bool onsetTablesReady_ = false;
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
     : sampleBuffer_{}
@@ -154,8 +167,15 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralFlux_(0.0f)
     , bassFlux_(0.0f)
     , rawSpectralFlux_(0.0f)
-    , superFlux_(0.0f)
+    , onsetRing_{}
+    , onsetWrite_(0)
+    , onsetIn_{}
+    , onsetOut_{}
+    , onsetMag_{}
+    , superFlux_{}
     , prevLogBands_{}
+    , hasPrevOnsetFrame_(false)
+    , onsetSpliceFrames_(0)
     , rawCentroid_(0.0f)
     , rawCrest_(0.0f)
     , rawRolloff_(0.0f)
@@ -192,7 +212,33 @@ void SharedSpectralAnalysis::begin() {
             "MEL_BANDS[band] yields weightSum==0 — corrupt mel filterbank table");
         linearMelInvWeightSum_[band] = (weightSum > 0) ? 1.0f / weightSum : 0.0f;
     }
+
+    // Onset STFT tables (#178).
+    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
+    for (int n = 0; n < N; n++) {
+        onsetWindow_[n] = 0.5f - 0.5f * cosf(2.0f * 3.14159265f * n / (N - 1));
+    }
+    int w = 0;
+    for (int m = 0; m < SpectralConstants::SUPERFLUX_BANDS; m++) {
+        const int lo = SUPERFLUX_EDGES[m], c = SUPERFLUX_EDGES[m + 1], hi = SUPERFLUX_EDGES[m + 2];
+        for (int k = lo + 1; k < hi; k++) {
+            BLINKY_ASSERT(w < SUPERFLUX_WEIGHTS_MAX, "SuperFlux weight table overflow");
+            superFluxWeights_[w++] = (k <= c) ? static_cast<float>(k - lo) / static_cast<float>(c - lo)
+                                              : static_cast<float>(hi - k) / static_cast<float>(hi - c);
+        }
+    }
+#if defined(BLINKY_PLATFORM_NRF52840) && !defined(BLINKY_PARITY_HARNESS) && !defined(BLINKY_HOST_HARNESS)
+    BLINKY_ASSERT(arm_rfft_fast_init_f32(&onsetRfftInstance, N) == ARM_MATH_SUCCESS,
+                  "onset rfft init failed");
+#endif
+    onsetTablesReady_ = true;
     reset();
+}
+
+float SharedSpectralAnalysis::getSuperFlux(int i) const {
+    BLINKY_ASSERT_ONCE(i >= 0 && i < SpectralConstants::ONSET_FRAMES_PER_FRAME,
+                       "getSuperFlux: onset frame index out of range");
+    return superFlux_[(i >= 0 && i < SpectralConstants::ONSET_FRAMES_PER_FRAME) ? i : ONSET_FRAMES_LAST];
 }
 
 void SharedSpectralAnalysis::reset() {
@@ -229,8 +275,12 @@ void SharedSpectralAnalysis::reset() {
     spectralFlux_ = 0.0f;
     bassFlux_ = 0.0f;
     rawSpectralFlux_ = 0.0f;
-    superFlux_ = 0.0f;
+    for (int i = 0; i < SpectralConstants::ONSET_RING_SIZE; i++) onsetRing_[i] = 0;
+    onsetWrite_ = 0;
+    for (int i = 0; i < SpectralConstants::ONSET_FRAMES_PER_FRAME; i++) superFlux_[i] = 0.0f;
     for (int i = 0; i < SpectralConstants::SUPERFLUX_BANDS; i++) prevLogBands_[i] = 0.0f;
+    hasPrevOnsetFrame_ = false;
+    onsetSpliceFrames_ = 0;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -261,6 +311,15 @@ void SharedSpectralAnalysis::process() {
         // Normalize int16 to float (-1.0 to 1.0)
         vReal_[i] = sampleBuffer_[idx] / 32768.0f;
         vImag_[i] = 0.0f;
+        // The same samples, in order, into the onset STFT's history.
+        onsetRing_[onsetWrite_] = sampleBuffer_[idx];
+        onsetWrite_ = (onsetWrite_ + 1) % SpectralConstants::ONSET_RING_SIZE;
+    }
+
+    // SuperFlux on the onset STFT (#178): ONSET_FRAMES_PER_FRAME frames, one
+    // hop apart, the last ending at this frame's newest sample.
+    for (int j = 0; j < SpectralConstants::ONSET_FRAMES_PER_FRAME; j++) {
+        computeOnsetFrame((ONSET_FRAMES_LAST - j) * SpectralConstants::ONSET_HOP, j);
     }
 
     // Apply windowing
@@ -292,10 +351,6 @@ void SharedSpectralAnalysis::process() {
     // re-running the full process() pipeline.
     computeRawSpectralFluxAndSavePrev();
 
-    // SuperFlux onset detection function (pre-compressor: the log does the
-    // level normalisation the compressor would).
-    computeSuperFlux();
-
     // Phase 2a shape features (centroid, crest, rolloff, HFC) on pre-compressor
     // magnitudes. Must run BEFORE applyCompressor() so values match the Python
     // reference (ml-training/analysis/features.py), which computes on raw STFT.
@@ -310,7 +365,7 @@ void SharedSpectralAnalysis::process() {
     computeDerivedFeatures();
 
     // Band-weighted spectral flux (energy synthesis, pickOnset presence and
-    // bass ratio; onset detection uses computeSuperFlux()), from
+    // bass ratio; onset detection uses getSuperFlux()), from
     // compressed-but-not-whitened magnitudes.
     // Using compressed (not whitened) magnitudes preserves absolute transient contrast.
     // Per-bin whitening (running max, 5s decay) would normalize away the peaks
@@ -508,25 +563,45 @@ void SharedSpectralAnalysis::estimateAndSubtractNoise() {
     }
 }
 
-void SharedSpectralAnalysis::computeSuperFlux() {
+void SharedSpectralAnalysis::computeOnsetFrame(int endOffset, int slot) {
+    // One onset STFT frame (#178): the ONSET_FFT_SIZE samples ending
+    // endOffset samples before the newest, Hann-windowed (right-aligned at
+    // the frame's newest sample, as in Boeck et al. DAFx-12), then SuperFlux.
+    BLINKY_ASSERT_ONCE(onsetTablesReady_, "onset STFT used before SharedSpectralAnalysis::begin()");
+    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
+    constexpr int R = SpectralConstants::ONSET_RING_SIZE;
+    const int first = onsetWrite_ - endOffset - N + 2 * R;  // + 2R keeps it non-negative
+    for (int n = 0; n < N; n++) {
+        onsetIn_[n] = onsetRing_[(first + n) % R] / 32768.0f * onsetWindow_[n];
+    }
+    computeOnsetFFT();
+    // onsetOut_ is in CMSIS rfft layout: [Re0, Re(N/2), Re1, Im1, ...].
+    onsetMag_[0] = fabsf(onsetOut_[0]);
+    for (int k = 1; k < SpectralConstants::ONSET_NUM_BINS; k++) {
+        const float re = onsetOut_[2 * k], im = onsetOut_[2 * k + 1];
+        const float mag = sqrtf(re * re + im * im);
+        BLINKY_ASSERT_ONCE(safeIsFinite(mag), "onset FFT magnitude non-finite");
+        onsetMag_[k] = mag;
+    }
+
     float logBands[SpectralConstants::SUPERFLUX_BANDS];
+    int w = 0;
     for (int m = 0; m < SpectralConstants::SUPERFLUX_BANDS; m++) {
-        const int lo = SUPERFLUX_EDGES[m], c = SUPERFLUX_EDGES[m + 1], hi = SUPERFLUX_EDGES[m + 2];
+        const int lo = SUPERFLUX_EDGES[m], hi = SUPERFLUX_EDGES[m + 2];
         // Edge bins have weight 0: only lo < k < hi contribute.
         float sum = 0.0f;
-        for (int k = lo + 1; k < hi; k++) {
-            const float w = (k <= c) ? static_cast<float>(k - lo) / static_cast<float>(c - lo)
-                                     : static_cast<float>(hi - k) / static_cast<float>(hi - c);
-            sum += preWhitenMagnitudes_[k] * w;
-        }
+        for (int k = lo + 1; k < hi; k++) sum += onsetMag_[k] * superFluxWeights_[w++];
         logBands[m] = log10f(superFluxLambda * sum + 1.0f);
     }
     float flux = 0.0f;
-    if (hasPrevFrame_) {
-        // Reference = previous frame max-filtered over +-1 band (vibrato
-        // suppression); half-wave rectified, summed unweighted over the
-        // voting bands (<= 5 kHz, SUPERFLUX_ONSET_BANDS). The top voting
-        // band's upper neighbour is a computed band (static_assert below).
+    const bool spliced = onsetSpliceFrames_ > 0;  // markDiscontinuity()
+    if (spliced) onsetSpliceFrames_--;
+    if (hasPrevOnsetFrame_ && !spliced) {
+        // Reference = previous onset frame (one hop back: the paper's
+        // ratio-0.5 rule) max-filtered over +-1 band (vibrato suppression);
+        // half-wave rectified, summed unweighted over the voting bands
+        // (<= 5 kHz, SUPERFLUX_ONSET_BANDS). The top voting band's upper
+        // neighbour is a computed band (static_assert below).
         static_assert(SpectralConstants::SUPERFLUX_ONSET_BANDS < SpectralConstants::SUPERFLUX_BANDS,
                       "the +-1 band max filter reads band SUPERFLUX_ONSET_BANDS");
         for (int m = 0; m < SpectralConstants::SUPERFLUX_ONSET_BANDS; m++) {
@@ -537,8 +612,70 @@ void SharedSpectralAnalysis::computeSuperFlux() {
         }
     }
     BLINKY_ASSERT_ONCE(safeIsFinite(flux), "SuperFlux non-finite");
-    superFlux_ = flux;
+    superFlux_[slot] = flux;
     for (int m = 0; m < SpectralConstants::SUPERFLUX_BANDS; m++) prevLogBands_[m] = logBands[m];
+    hasPrevOnsetFrame_ = !spliced;
+}
+
+void SharedSpectralAnalysis::computeOnsetFFT() {
+#ifdef BLINKY_PARITY_HARNESS
+    // The parity harness never calls process() (magnitudes are injected).
+    BLINKY_ASSERT_ONCE(false, "onset FFT called in the parity harness");
+#elif defined(BLINKY_HOST_HARNESS)
+    // Host tracker harness: iterative radix-2 complex FFT in double, packed
+    // into the CMSIS rfft layout the device branch produces.
+    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
+    static double tw[N / 2][2];
+    static bool twReady = false;
+    if (!twReady) {
+        for (int k = 0; k < N / 2; k++) {
+            tw[k][0] = cos(-2.0 * 3.14159265358979323846 * k / N);
+            tw[k][1] = sin(-2.0 * 3.14159265358979323846 * k / N);
+        }
+        twReady = true;
+    }
+    double re[N], im[N];
+    for (int n = 0; n < N; n++) { re[n] = onsetIn_[n]; im[n] = 0.0; }
+    for (int i = 1, j = 0; i < N; i++) {  // bit-reversal permutation
+        int bit = N >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { const double t = re[i]; re[i] = re[j]; re[j] = t; }
+    }
+    for (int len = 2; len <= N; len <<= 1) {
+        const int step = N / len;
+        for (int i = 0; i < N; i += len) {
+            for (int k = 0; k < len / 2; k++) {
+                const double wr = tw[k * step][0], wi = tw[k * step][1];
+                const int a = i + k, b = i + k + len / 2;
+                const double xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+                re[b] = re[a] - xr; im[b] = im[a] - xi;
+                re[a] += xr; im[a] += xi;
+            }
+        }
+    }
+    onsetOut_[0] = (float)re[0];
+    onsetOut_[1] = (float)re[N / 2];
+    for (int k = 1; k < N / 2; k++) {
+        onsetOut_[2 * k] = (float)re[k];
+        onsetOut_[2 * k + 1] = (float)im[k];
+    }
+#elif defined(BLINKY_PLATFORM_NRF52840)
+    // CMSIS-DSP real FFT (modifies its input).
+    arm_rfft_fast_f32(&onsetRfftInstance, onsetIn_, onsetOut_, 0);
+#else
+    // ArduinoFFT (ESP32-S3 and other platforms), repacked to the rfft layout.
+    constexpr int N = SpectralConstants::ONSET_FFT_SIZE;
+    float im[N] = {0};
+    ArduinoFFT<float> fft(onsetIn_, im, N, SpectralConstants::SAMPLE_RATE);
+    fft.compute(FFTDirection::Forward);
+    onsetOut_[0] = onsetIn_[0];
+    onsetOut_[1] = onsetIn_[N / 2];
+    for (int k = 1; k < N / 2; k++) {
+        onsetOut_[2 * k] = onsetIn_[k];
+        onsetOut_[2 * k + 1] = im[k];
+    }
+#endif
 }
 
 void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, float* outputMelBands) {

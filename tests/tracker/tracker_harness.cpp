@@ -85,6 +85,7 @@ int usage() {
         "  --onset-pattern-bias=X  shared rhythm-pattern gate (0 = off)\n"
         "  --onset-max-frames=N --onset-min-gap=N  shared online peak picker (W1, W5)\n"
         "  --flux-avg-frames=N --flux-lambda=X  SuperFlux picker average (W3) and log lambda\n"
+        "  --flux-delta=X  SuperFlux picker delta (overrides the positional fluxDelta)\n"
         "  --onset-detector=NAME  spectral-flux | onset-nn (NN builds)\n"
         "  --frame-features=PATH  per-frame feature dump\n");
     return 2;
@@ -165,6 +166,7 @@ static double g_onsetMaxFrames = -1.0;
 static double g_onsetMinGap = -1.0;
 static double g_fluxAvgFrames = -1.0;
 static double g_fluxLambda = -1.0;
+static double g_fluxDelta = -1.0;
 static const char* g_onsetDetector = nullptr;  // --onset-detector=NAME
 
 int main(int rawArgc, char** rawArgv) {
@@ -192,6 +194,7 @@ int main(int rawArgc, char** rawArgv) {
             else if (std::strncmp(a, "--onset-min-gap=", 16) == 0) g_onsetMinGap = v;
             else if (std::strncmp(a, "--flux-avg-frames=", 18) == 0) g_fluxAvgFrames = v;
             else if (std::strncmp(a, "--flux-lambda=", 14) == 0) g_fluxLambda = v;
+            else if (std::strncmp(a, "--flux-delta=", 13) == 0) g_fluxDelta = v;
             else return usage();
         } else {
             pos.push_back(rawArgv[i]);
@@ -248,6 +251,7 @@ int main(int rawArgc, char** rawArgv) {
     if (g_onsetMinGap >= 0) tracker.onsetMinGapFrames = static_cast<uint8_t>(g_onsetMinGap);
     if (g_fluxAvgFrames >= 0) tracker.fluxAverageFrames = static_cast<uint8_t>(g_fluxAvgFrames);
     if (g_fluxLambda >= 0) tracker.getSpectral().superFluxLambda = static_cast<float>(g_fluxLambda);
+    if (g_fluxDelta >= 0) tracker.fluxDelta = static_cast<float>(g_fluxDelta);
     if (g_onsetDetector && !tracker.selectOnsetDetector(g_onsetDetector)) {
         std::fprintf(stderr, "unknown or unavailable onset detector: %s\n", g_onsetDetector);
         return 2;

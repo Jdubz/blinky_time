@@ -325,14 +325,14 @@ void SerialConsole::registerTrackerSettings() {
     // Online peak picker windows (Boeck 2012; AudioTracker.h). Runtime only.
     settings_.registerUint8("onsetmaxframes", &audioCtrl_->onsetMaxFrames, "tracker",
         "Onset picker: peak must be the max of this many previous frames (W1)", 0,
-        AudioTracker::ONSET_HISTORY_MAX, nullptr, false);
+        AudioTracker::PICKER_WINDOW_MAX_FRAMES, nullptr, false);
     settings_.registerUint8("onsetmingap", &audioCtrl_->onsetMinGapFrames, "tracker",
         "Onset picker: minimum frames between onsets (W5)", 0, 30, nullptr, false);
     settings_.registerFloat("pulsedecay", &audioCtrl_->pulseDecayMs, "tracker",
         "Pulse envelope decay time constant after each onset (ms)", 30.0f, 600.0f, nullptr, false);
     settings_.registerUint8("fluxavgframes", &audioCtrl_->fluxAverageFrames, "tracker",
         "Spectral-flux picker: moving-average frames before the peak (W3)", 0,
-        AudioTracker::ONSET_HISTORY_MAX, nullptr, false);
+        AudioTracker::PICKER_WINDOW_MAX_FRAMES, nullptr, false);
 
     // (Percival ACF harmonic enhancement removed v80 — percival2/percival4)
 

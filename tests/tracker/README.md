@@ -115,12 +115,13 @@ python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
 The harness clock normally moves only by the simulated loop period, so audio work is free. Pass any of these to make the loop period emergent, as on the device: each loop costs the render time, and every spectral frame and NN inference advances the clock while the PDM "DMA" keeps delivering mic blocks.
 
 ```bash
-build/tracker_harness in.pcm out.csv 60 0.25 1 --nn-cost-us=12000 --frame-cost-us=3200 --render-cost-us=4500
+build/tracker_harness in.pcm out.csv 60 0.25 1 --nn-cost-us=12000 --frame-cost-us=4600 --render-cost-us=4500
 # stderr: [COST] loops=... sim_s=... fps=... nn_per_s=... nn_cpu=...%
 ```
 
 The values above are calibrated to hat_v1 (89 LEDs, 64 MHz nRF52840):
 - **NN:** 12 ms per v33 inference, measured with `set nnprofile 1`.
+- **Spectral frame:** 3.2 ms measured on hat_v1 before the onset STFT (#178), plus an estimated 2 × 0.7 ms for its two 512-point frames, until it is timed on the device.
 - **Calibration check:** without the NN the model gives 177.7 fps (device: 179 fps on b190). With b210's drain loop and the NN on, it gives 11.2 fps and 62.5 inferences/s (device: 12.4 fps, 62.4/s).
 
 This is how the b208-b210 drain-loop livelock was reproduced. `update()` used to chase samples that arrived during a ~12 ms inference, so it ran the NN on every frame and starved the renderer. It now drains only what was waiting at entry.

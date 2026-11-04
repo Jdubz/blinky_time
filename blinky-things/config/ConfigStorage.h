@@ -145,7 +145,10 @@ public:
     //   StoredTrackerParams drops pulseThresholdMult, fluxOnsetFloor,
     //   crestGateMin, baselineFastDrop, baselineSlowRise, pulseMinLevel;
     //   adds fluxDelta. pulseOnsetFloor (NN) default 0.20 -> 0.55.
-    static const uint8_t SETTINGS_VERSION = 99;
+    // Version 100: SuperFlux on the overlapped onset STFT (#178); fluxDelta
+    //   default 7 -> 8 (its ODF has another scale). Same layout: the bump
+    //   only makes stored settings take the new default.
+    static const uint8_t SETTINGS_VERSION = 100;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
