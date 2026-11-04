@@ -145,7 +145,7 @@ The 60s threshold is intentional and load-bearing for sculpture-device recovery.
 
 **The firmware detects DRUM HITS: kicks and snares** (owner, 2026-10-22). Hi-hats, cymbals and non-percussive changes (bass notes, synth stabs, swells, vocals) are not targets; a flash on one is a false positive. **Metrical position does not decide what counts:** a kick on an off-beat or a syncopated 8th is a target exactly like one on the downbeat. Beat-detection framing is still wrong: scoring against beat positions, or training on beat consensus, teaches the detector to suppress off-beat hits we want.
 
-How strongly a hit shows is a separate, later layer: its weight in the learned rhythm *pattern* (bar-level, per drum class, syncopation-aware, not a quarter-note grid), applied as a strength multiplier, never as a gate on detection.
+How strongly a hit shows is a separate, later layer: its weight in the learned rhythm *pattern* (bar-level, per drum class, syncopation-aware, not a quarter-note grid), applied as a strength multiplier. Preferring triggers on the pattern (the soft rhythm-pattern bias on the picker's δ, `onsetPatternBias`) is wanted too: it is how musical repetition shows. What to fix is a pattern tracker that is wrong or too strict, not the preference.
 
 Concrete consequences:
 - **Score detectors on kicks and snares**, not on all onsets: kick/snare recall at ±30/±50 ms and the share of detections that land on a kick or snare, against cleaned `kick_weighted` labels. All-onset F1 at ±100 ms scored 0.68 while the hat looked "almost entirely random" (#280); it is a secondary number at most.

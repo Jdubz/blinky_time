@@ -367,7 +367,7 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {fresh, odf}
 - **What it replaced, and why:**
   - **Deleted** in the same change: the 96 ms local-max window, the tempo-adaptive 40–150 ms cooldown, the adaptive flux baseline (`pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`), and the crest, beat-grid, re-arm, bass-ratio and presence gates.
   - **Why:** the cooldown blocked 61–71% of the kicks the old picker missed. The adaptive baseline settled at the noise level, so the old flux fired 3–6/s on steady noise at −60 to −30 dBFS; SuperFlux fires 0. The bass gate cost recall for no drum F. Presence never blocked an onset.
-- **Rhythm-pattern bias** (`onsetpatternbias` 0.3, runtime, 0 = off): while PLP confidence is above 0.3, δ is raised by up to 30% where the pattern predicts no hit. It is beat-informed and on by default. It should become a strength multiplier rather than a gate (separate work). It is neutral on edm/ drum F.
+- **Rhythm-pattern bias** (`onsetpatternbias` 0.3, runtime, 0 = off): while PLP confidence is above 0.3, δ is raised by up to 30% where the pattern predicts no hit. It is on by default and wanted: triggers prefer the music's pattern. The work on it is tuning and improving it where the pattern tracker is wrong or too strict (#340). It is neutral on edm/ drum F and on repetition consistency (`repS` 0.662 on and off, 2026-11-03).
 - **Activation** (onset strength and pulse-envelope input, 0–1):
   - NN: the activation itself.
   - Flux: `1 − 0.7·r^−0.9` with `r = (odf − mean) / δ`, which is 0.30 at the threshold. Below the threshold it is linear to 0.

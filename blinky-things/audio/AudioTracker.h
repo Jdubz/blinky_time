@@ -231,9 +231,9 @@ public:
     // Rhythm-pattern bias: while the PLP pattern is confident, a candidate
     // at a position the pattern predicts no hit needs up to this much more
     // activation (scaled by confidence and by how low the pattern is there;
-    // 0 = off). Beat-informed, so keep it easy to switch off for testing;
-    // it should become a strength multiplier rather than a gate once onset
-    // detection is accurate enough (separate work). Was NN-only.
+    // 0 = off). Wanted: triggers prefer the music's pattern. Tune and
+    // improve it where the pattern tracker is wrong or too strict (#340);
+    // keep it switchable for A/B tests. Was NN-only.
     static constexpr float ONSET_PATTERN_BIAS_DEFAULT = 0.3f;
     float onsetPatternBias = ONSET_PATTERN_BIAS_DEFAULT;
 
