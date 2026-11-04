@@ -69,6 +69,16 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 | `loneHat` | Share of lone hats (no kick or snare within 50 ms) that fired a detection (summary line) |
 | `det/s` | Detections per second (summary line) |
 
+**Repetition consistency** (#340, `tests/tracker/consistency.py`, tests in `test_consistency.py`). This is label-free: it asks whether repeated audio gets repeated light. Each track's clean decoded audio gives a repeat lag (the lag in 1.5–8 s with the most frame-to-frame similarity) and the repeated regions. A frame belongs to a repeated region when its ±250 ms log-mel patch correlates with the patch one lag later above that track's own null (the 99th percentile of the same correlation at random lags). Detections in those regions are matched one-to-one with detections one lag later, within ±32 ms. The eval prints each track's lag next to its annotated bar length, as a sanity check.
+
+| Metric | Meaning |
+|---|---|
+| `rep` | Share of detections in repeated audio that fire again one repeat later (2 × matched / all) |
+| `repS` | The same, weighted by strength: 1 − Σ\|sₐ − s_b\| / Σ max(sₐ, s_b), where an unmatched detection pairs with 0. 1 = the same hits at the same strengths |
+| `coverage` | Share of the scored time that is repeated audio (summary line) |
+
+It measures "which hits trigger looks random" directly. It doesn't replace the drum metrics: a detector that fires on a fixed grid would score well here and badly there. A consistency change ships only if consistency goes up without lowering kick recall or on-drum share, or raising noise triggers.
+
 Rhythm and all-onset metrics (secondary):
 
 | Metric | Meaning |

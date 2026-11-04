@@ -491,7 +491,10 @@ jobs:
         python-version: '3.11'
 
     - name: Install Python deps
-      run: pip install numpy imageio-ffmpeg
+      run: pip install numpy imageio-ffmpeg pytest
+
+    - name: Repetition consistency metric tests (#340)
+      run: python -m pytest -q tests/tracker/test_consistency.py
 
     - name: Build harness (UBSan and release)
       run: |
