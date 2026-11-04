@@ -9,13 +9,17 @@ the track's own audio.
 
   1. Features: log-mel frames of the clean decoded file (not the device-level
      copy, whose quantization noise is part of what is being tested).
-  2. Repeat lag L: the highest peak (a local maximum, never an end of the
-     range, where the true peak lies outside it) of the mean frame-to-frame
-     similarity over lags in [LAG_MIN_S, LAG_MAX_S], refined to a fraction of a frame.
+  2. Repeat lag L: the peak of the mean frame-to-frame similarity over lags in
+     [LAG_MIN_S, LAG_MAX_S] that stands highest above the curve's local median
+     (short lags are always more alike, so the raw maximum drifts to the floor).
+     Only local maxima count, never an end of the range; refined to a fraction of a frame.
   3. Repeated regions: frames whose +-PATCH_S patch correlates with the patch
-     one lag later above that track's own null (the same correlation at
-     random lags, quantile NULL_QUANTILE). Breakdowns, fills and transitions
-     drop out, so only audio that really repeats is scored.
+     one lag later above that track's own null: the same correlation at random
+     lags off the 16th-note grid (L may span 1, 2 or 4 bars: the most that keeps
+     a bar >= MIN_BAR_S), where the audio may genuinely repeat, at least
+     NULL_OFF_GRID of a grid step from every grid line; quantile NULL_QUANTILE.
+     Breakdowns, fills and transitions drop out, so only audio that really
+     repeats is scored.
   4. Agreement: detections in a repeated region, matched one-to-one with
      detections one lag later (+-MATCH_TOL_S).
 
@@ -43,6 +47,9 @@ LAG_MIN_S, LAG_MAX_S = 1.5, 8.0  # a bar at 160 BPM up to two bars at 60
 PATCH_S = 0.25
 NULL_QUANTILE = 0.99
 NULL_LAGS = 64
+MIN_BAR_S = 1.3  # a 4-beat bar at 185 BPM, faster than anything in edm/
+NULL_OFF_GRID = 0.35  # of a 16th-note step: null lags sit between grid lines
+BASELINE_S = 0.5  # local-median window of the lag curve
 MATCH_TOL_S = 0.032  # two frames: a hit that moves by one frame still counts
 MIN_SCORED = 20  # fewer detections in repeated audio than this is no evidence either way
 
@@ -118,7 +125,9 @@ def find_repetition(x: np.ndarray, seed: int = 0) -> Repetition:
     peaks = np.flatnonzero((sim[1:-1] > sim[:-2]) & (sim[1:-1] >= sim[2:])) + 1
     if not len(peaks):
         raise ValueError("no repeat: frame similarity has no peak inside the lag range")
-    k = int(peaks[np.argmax(sim[peaks])])
+    w = int(round(BASELINE_S / frame_s))
+    base = np.array([np.median(sim[max(0, i - w):i + w + 1]) for i in range(len(sim))])
+    k = int(peaks[np.argmax((sim - base)[peaks])])
     y0, y1, y2 = sim[k - 1], sim[k], sim[k + 1]
     den = y0 - 2 * y1 + y2
     frac = 0.5 * (y0 - y2) / den if den < 0 else 0.0
@@ -126,8 +135,15 @@ def find_repetition(x: np.ndarray, seed: int = 0) -> Repetition:
     half = int(round(PATCH_S / frame_s))
     r = _patch_corr(f, lag, half)
     rng = np.random.default_rng(seed)
+    bars = 1
+    while (lag + frac) * frame_s / (2 * bars) >= MIN_BAR_S:
+        bars *= 2
+    grid = (lag + frac) / (16 * bars)  # a 16th note, in frames
+    cands = [L for L in range(lo, hi + 1) if abs(L / grid - round(L / grid)) > NULL_OFF_GRID]
+    if not cands:
+        raise ValueError("no off-grid lag for the null")
     null = np.concatenate([_patch_corr(f, int(L), half)[::half]
-                           for L in rng.integers(lo, hi + 1, NULL_LAGS) if abs(int(L) - lag) > half])
+                           for L in rng.choice(cands, min(NULL_LAGS, len(cands)), replace=False)])
     thr = float(np.quantile(null, NULL_QUANTILE))
     mask = np.zeros(len(f), dtype=bool)
     mask[:len(r)] = r > thr
