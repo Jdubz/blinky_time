@@ -11,7 +11,7 @@ on:
       study:
         description: "which study"
         type: choice
-        options: [pattern_bias]
+        options: [pattern_bias, frame_phase, frame_phase_control]
       fps:
         description: "simulated loop rate"
         default: "60"
@@ -49,9 +49,11 @@ jobs:
         STUDY: ${{ inputs.study }}
         FPS: ${{ inputs.fps }}
       run: |
+        extra=()
+        if [ "$STUDY" = frame_phase_control ]; then STUDY=frame_phase; extra=(--control); fi
         python "tests/tracker/${STUDY}_study.py" --harness build/tracker_harness --fps "$FPS" \
-          --json study.json | tee study.txt
-        { echo '```'; sed -n '/^SUPPRESSED\|^[A-Z][A-Z ]*:/,$p' study.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          --json study.json "${extra[@]}" | tee study.txt
+        { echo '```'; sed -n '/^[A-Z][A-Z ]*[:(]/,$p' study.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
     - uses: actions/upload-artifact@v4
       with:
