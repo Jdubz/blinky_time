@@ -83,6 +83,7 @@ int usage() {
         "  period becomes render cost + audio work (loop_fps is ignored; jitter scales the\n"
         "  render cost)\n"
         "  --onset-pattern-bias=X  shared rhythm-pattern gate (0 = off)\n"
+        "  --onset-pattern-tolerance=N  the gate reads the pattern as its max within +-N frames\n"
         "  --onset-max-frames=N --onset-min-gap=N  shared online peak picker (W1, W5)\n"
         "  --flux-avg-frames=N --flux-lambda=X  SuperFlux picker average (W3) and log lambda\n"
         "  --onset-detector=NAME  spectral-flux | onset-nn (NN builds)\n"
@@ -161,6 +162,7 @@ static const char* g_frameFeatures = nullptr;
 
 // Shared onset gate overrides (negative = keep the firmware default).
 static double g_onsetPatternBias = -1.0;
+static double g_onsetPatternTolerance = -1.0;
 static double g_onsetMaxFrames = -1.0;
 static double g_onsetMinGap = -1.0;
 static double g_fluxAvgFrames = -1.0;
@@ -188,6 +190,7 @@ int main(int rawArgc, char** rawArgv) {
             else if (std::strncmp(a, "--frame-cost-us=", 16) == 0) g_frameCostUs = v;
             else if (std::strncmp(a, "--render-cost-us=", 17) == 0) g_renderCostUs = v;
             else if (std::strncmp(a, "--onset-pattern-bias=", 21) == 0) g_onsetPatternBias = v;
+            else if (std::strncmp(a, "--onset-pattern-tolerance=", 26) == 0) g_onsetPatternTolerance = v;
             else if (std::strncmp(a, "--onset-max-frames=", 19) == 0) g_onsetMaxFrames = v;
             else if (std::strncmp(a, "--onset-min-gap=", 16) == 0) g_onsetMinGap = v;
             else if (std::strncmp(a, "--flux-avg-frames=", 18) == 0) g_fluxAvgFrames = v;
@@ -244,6 +247,7 @@ int main(int rawArgc, char** rawArgv) {
         return 2;
     }
     if (g_onsetPatternBias >= 0) tracker.onsetPatternBias = static_cast<float>(g_onsetPatternBias);
+    if (g_onsetPatternTolerance >= 0) tracker.onsetPatternTolerance = static_cast<uint8_t>(g_onsetPatternTolerance);
     if (g_onsetMaxFrames >= 0) tracker.onsetMaxFrames = static_cast<uint8_t>(g_onsetMaxFrames);
     if (g_onsetMinGap >= 0) tracker.onsetMinGapFrames = static_cast<uint8_t>(g_onsetMinGap);
     if (g_fluxAvgFrames >= 0) tracker.fluxAverageFrames = static_cast<uint8_t>(g_fluxAvgFrames);

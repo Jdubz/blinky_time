@@ -1113,6 +1113,24 @@ float AudioTracker::patternValueAt(float phase) const {
     return clampf(plpPattern_[i0] * (1.0f - frac) + plpPattern_[i1] * frac, 0.0f, 1.0f);
 }
 
+float AudioTracker::patternValueNear(float phase, int frames) const {
+    // Max of the pattern within +-frames of `phase`, one frame apart: a soft
+    // timing tolerance on the pattern read, as in the Gaussian width of the
+    // rhythmic prior in Degara et al. 2011 (here a flat max, which keeps the
+    // peak's height). frames 0 = patternValueAt(phase).
+    float period = (plpPeriodF_ > 1.0f) ? plpPeriodF_ : 33.0f;
+    float best = patternValueAt(phase);
+    for (int k = 1; k <= frames; k++) {
+        float d = static_cast<float>(k) / period;
+        float lo = phase - d;
+        lo -= floorf(lo);
+        float hi = phase + d;
+        hi -= floorf(hi);
+        best = fmaxf(best, fmaxf(patternValueAt(lo), patternValueAt(hi)));
+    }
+    return best;
+}
+
 // ============================================================================
 // Onset Picking (online peak picker, Boeck et al. 2012)
 // ============================================================================
@@ -1150,7 +1168,7 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams
     static constexpr float plpBiasMinConfidence = 0.3f;  // only above 30% confidence
     float patternBias = 1.0f;
     if (plpConfidence_ > plpBiasMinConfidence) {
-        float patternVal = clampf(plpPulseValue_, 0.0f, 1.0f);
+        float patternVal = patternValueNear(plpPhase_, onsetPatternTolerance);
         // At pattern minimum (0.0): bias = 1 + onsetPatternBias; at maximum: 1.0
         float suppressAmount = onsetPatternBias * plpConfidence_ * (1.0f - patternVal);
         patternBias = 1.0f + suppressAmount;

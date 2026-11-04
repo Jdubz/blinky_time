@@ -322,6 +322,9 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("onsetpatternbias", &audioCtrl_->onsetPatternBias, "tracker",
         "Onset rhythm-pattern bias: max threshold boost off-pattern (0=off)", 0.0f, 2.0f,
         nullptr, false);
+    settings_.registerUint8("onsetpatterntol", &audioCtrl_->onsetPatternTolerance, "tracker",
+        "Onset rhythm-pattern bias: read the pattern as its max within +-N frames", 0, 4,
+        nullptr, false);
     // Online peak picker windows (Boeck 2012; AudioTracker.h). Runtime only.
     settings_.registerUint8("onsetmaxframes", &audioCtrl_->onsetMaxFrames, "tracker",
         "Onset picker: peak must be the max of this many previous frames (W1)", 0,
@@ -1294,6 +1297,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->odfPeakHoldDecay = 0.85f;
         // Shared onset picker + gates (runtime only, OnsetDetector.h)
         audioCtrl_->onsetPatternBias = AudioTracker::ONSET_PATTERN_BIAS_DEFAULT;
+        audioCtrl_->onsetPatternTolerance = AudioTracker::ONSET_PATTERN_TOLERANCE_DEFAULT;
         audioCtrl_->onsetMaxFrames = AudioTracker::ONSET_MAX_FRAMES_DEFAULT;
         audioCtrl_->onsetMinGapFrames = AudioTracker::ONSET_MIN_GAP_FRAMES_DEFAULT;
         audioCtrl_->fluxAverageFrames = FluxOnsetDetector::AVERAGE_FRAMES_DEFAULT;

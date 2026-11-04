@@ -236,6 +236,12 @@ public:
     // keep it switchable for A/B tests. Was NN-only.
     static constexpr float ONSET_PATTERN_BIAS_DEFAULT = 0.3f;
     float onsetPatternBias = ONSET_PATTERN_BIAS_DEFAULT;
+    // The bias reads the pattern as its maximum within +-this many frames
+    // of the current phase, so a hit a frame or two off the folded peak is
+    // not treated as off-pattern (#340: at edm/ kicks the +-2-frame max is
+    // 2-7x the value at the frame itself). 0 = the exact phase.
+    static constexpr uint8_t ONSET_PATTERN_TOLERANCE_DEFAULT = 0;
+    uint8_t onsetPatternTolerance = ONSET_PATTERN_TOLERANCE_DEFAULT;
 
     // Pulse envelope decay (synthesizeOutputs). Shorter than the gaps between
     // drum hits, so each hit shows as its own flash: kick+snare inter-onset
@@ -439,6 +445,7 @@ private:
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
     void advancePlpPhase(float frames);  // Advance phase by `frames` + read pattern value
     float patternValueAt(float phase) const;  // accent-aligned PLP pattern, interpolated
+    float patternValueNear(float phase, int frames) const;  // its max within +-frames
     void correctPlpPhase(float targetPhase, float gain);
     void countBeat();
     void synthesizeOutputs(float dt, uint32_t nowMs);
