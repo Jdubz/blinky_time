@@ -42,6 +42,13 @@ warm-up, one-to-one, with a constant per-run lag removed first:
   loneHat   share of lone hats (no kick/snare within 50 ms) that fired a detection
   det/s     detections per second
 
+Repetition consistency (#340, tests/tracker/consistency.py), label-free: where the
+track's clean audio repeats one lag later, does the same hit fire again?
+
+  rep       share of detections in repeated audio that fire again one repeat later
+  repS      the same, weighted by strength (1 = same hits at the same strengths)
+  cov       share of the scored time that is repeated audio
+
 Usage:
     python tests/tracker/run_tracker_eval.py --harness build/tracker_harness.exe \
         [--compare build/tracker_old.exe] [--tracks techno-minimal-01 ...] \
@@ -79,6 +86,9 @@ from blinky_server.testing.drum_scoring import (  # noqa: E402
     score_drums,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from consistency import Repetition, consistency, find_repetition  # noqa: E402
+
 CORPUS = REPO / "blinky-test-player" / "music" / "edm"
 WARMUP_S = 10.0
 STRONG = 0.8
@@ -105,12 +115,15 @@ def find_ffmpeg(explicit: str | None) -> str:
         sys.exit("ERROR: ffmpeg not found (install it, pass --ffmpeg, or pip install imageio-ffmpeg)")
 
 
-def decode(ffmpeg: str, src: Path, dst: Path, level_db: float = 0.0) -> None:
+def decode(ffmpeg: str, src: Path, dst: Path, level_db: float = 0.0) -> np.ndarray:
+    """Write the harness PCM at `level_db`; return the clean file-level samples (-1..1)."""
     subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(src), "-ac", "1", "-ar", "16000",
                     "-f", "s16le", str(dst)], check=True)
+    clean = np.fromfile(dst, dtype="<i2").astype(np.float64)
     if level_db != 0.0:
-        x = np.fromfile(dst, dtype="<i2").astype(np.float64) * 10 ** (level_db / 20)
+        x = clean * 10 ** (level_db / 20)
         np.clip(np.round(x), -32768, 32767).astype("<i2").tofile(dst)
+    return clean / 32768.0
 
 
 def run_harness(exe: str, pcm: Path, out: Path, fps: float, jitter: float, seed: int,
@@ -175,6 +188,16 @@ def drum_metrics(rows: np.ndarray, labels) -> dict:
     return {"kick_r50": d.kick_r50, "kick_r30": d.kick_r30, "snare_r50": d.snare_r50,
             "on_drum": d.on_drum, "drum_f": d.drum_f, "lone_hat": d.lone_hat,
             "det_per_s": d.det_per_s, "drum_lag": float("nan") if d.lag_ms is None else d.lag_ms}
+
+
+def repetition_metrics(rows: np.ndarray, rep: Repetition) -> dict:
+    """Repetition consistency after warm-up, on the same onset edges as `onset_f1`."""
+    t = rows["t_ms"] / 1000.0
+    on = rows["onset"] > 0
+    edge = on & ~np.concatenate([[False], on[:-1]]) & (t >= WARMUP_S)
+    c = consistency(t[edge], rows["onset"][edge], rep, WARMUP_S, float(t[-1]))
+    return {"rep": c["rep"], "rep_s": c["rep_s"], "rep_cov": c["coverage"], "rep_lag": c["lag_s"],
+            "rep_n": c["n"]}
 
 
 def evaluate(rows: np.ndarray, onsets: np.ndarray) -> dict:
@@ -246,7 +269,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpd = Path(tmp)
         print(f"{'track':32s} {'fps':>5s} " + "  ".join(
-            f"{b+':kR50':>8s} {b+':onDrum':>9s} {b+':drumF':>8s} {b+':sR50':>7s} "
+            f"{b+':kR50':>8s} {b+':onDrum':>9s} {b+':drumF':>8s} {b+':sR50':>7s} {b+':repS':>8s} {b+':cov':>7s} {b+':n':>5s} "
             f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':f1':>7s} "
             f"{b+':prec':>8s} {b+':bpm':>8s}" for b, _ in builds))
         for stem in stems:
@@ -258,7 +281,9 @@ def main() -> int:
             drums = load_drum_labels(drum_label_path(CORPUS, stem),
                                      CORPUS / f"{stem}.onsets_consensus.json")
             pcm = tmpd / f"{stem}.pcm"
-            decode(ffmpeg, mp3, pcm, args.level_db)
+            rep = find_repetition(decode(ffmpeg, mp3, pcm, args.level_db))
+            bar = f", a 4-beat bar is {240.0 / gt_bpm:.3f} s" if gt_bpm else ""
+            print(f"# {stem}: repeat lag {rep.lag_s:.3f} s{bar}", flush=True)
             for fps in args.fps:
                 cells = []
                 for b, exe in builds:
@@ -267,12 +292,13 @@ def main() -> int:
                     r = evaluate(rows, onsets)
                     r.update(onset_f1(rows, gt["onsets"]))
                     r.update(drum_metrics(rows, drums))
+                    r.update(repetition_metrics(rows, rep))
                     r["tempo"] = tempo_score(rows, gt_bpm)
                     r["has_gt_bpm"] = bool(gt_bpm)
                     r["label"] = f"{stem}@{fps:.0f}fps"
                     summary[b].append(r)
                     cells.append(f"{r['kick_r50']:8.2f} {r['on_drum']:9.2f} {r['drum_f']:8.3f} "
-                                 f"{r['snare_r50']:7.2f} {r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
+                                 f"{r['snare_r50']:7.2f} {r['rep_s']:8.2f} {r['rep_cov']:7.2f} {r['rep_n']:5d} {r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
                                  f"{r['f1']:7.3f} {r['prec']:8.3f} {r['bpm']:8.1f}")
                 print(f"{stem:32s} {fps:5.0f} " + "  ".join(cells), flush=True)
     print()
@@ -282,6 +308,10 @@ def main() -> int:
               f"onDrum {arr('on_drum'):.3f}  drumF {arr('drum_f'):.3f}  "
               f"snareR@50 {arr('snare_r50'):.3f} (provisional, #284)  loneHat {arr('lone_hat'):.3f}  "
               f"det/s {arr('det_per_s'):.2f}  lag {arr('drum_lag'):.0f} ms")
+        scored = sum(np.isfinite(r["rep"]) for r in rs)
+        print(f"{b}: REPEAT mean rep {arr('rep'):.3f}  repS {arr('rep_s'):.3f}  "
+              f"coverage {arr('rep_cov'):.3f}  scored runs {scored}/{len(rs)}  "
+              f"(#340: does repeated audio get repeated light)")
         print(f"{b}: mean lock {arr('lock'):.3f}  mean excess {arr('excess'):.3f}  "
               f"mean tempo {arr('tempo'):.3f}  mean worst20s {arr('worst20s'):.3f}  "
               f"mean recall {arr('recall'):.3f}  mean F1 {arr('f1'):.3f}  mean prec {arr('prec'):.3f}  "
