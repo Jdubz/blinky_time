@@ -7,7 +7,8 @@
 //
 // Input:  raw little-endian int16 mono PCM at 16 kHz (the PDM rate).
 // Output: CSV, one row per simulated loop iteration:
-//   t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames,level,energy
+//   t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames,level,energy,
+//   plp_conf,plp_value,act   (pattern-bias inputs and picker activation, #340)
 //
 // Default build: no TFLite, and the onset NN is off (BLINKY_ONSET_NN_ENABLED=0,
 // as on devices), so onset pulses come from spectral flux, exactly as the
@@ -219,7 +220,8 @@ int main(int rawArgc, char** rawArgv) {
 
     FILE* out = std::fopen(argv[2], "w");
     if (!out) { std::perror(argv[2]); return 1; }
-    std::fprintf(out, "t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames,level,energy\n");
+    std::fprintf(out, "t_ms,phase,plp_pulse,pulse,onset,beat_count,bpm,period_f,rhythm,frames,level,energy,"
+                      "plp_conf,plp_value,act\n");
 
     HostTime time;
     HostPdm pdm;
@@ -289,11 +291,15 @@ int main(int rawArgc, char** rawArgv) {
         if (dt > 0.1f) dt = 0.1f;   // same clamp as the firmware loop
         const AudioControl& c = tracker.update(dt);
         uint32_t frames = tracker.getSpectral().getFrameCount();
-        std::fprintf(out, "%.3f,%.5f,%.4f,%.4f,%.4f,%u,%.2f,%.3f,%.4f,%u,%.4f,%.4f\n",
+        std::fprintf(out, "%.3f,%.5f,%.4f,%.4f,%.4f,%u,%.2f,%.3f,%.4f,%u,%.4f,%.4f,%.4f,%.4f,%.4f\n",
                      time.us / 1000.0, c.phase, c.plpPulse, c.pulse,
                      c.onset, tracker.getBeatCount(),  // delivered (gated) onset, as generators see it
                      tracker.getCurrentBpm(), tracker.getPlpPeriodF(), c.rhythmStrength,
-                     frames - prevFrames, tracker.getMicForTuning().getLevel(), c.energy);
+                     frames - prevFrames, tracker.getMicForTuning().getLevel(), c.energy,
+                     // What the pattern bias read at the last frame: its confidence and the
+                     // pattern at the current phase (bias = 1 + onsetPatternBias * conf * (1 - value)
+                     // above conf 0.3), and the picker's activation (#340).
+                     tracker.getPlpConfidence(), tracker.getPlpPulseValue(), tracker.getOnsetActivation());
         prevFrames = frames;
     }
     std::fclose(out);

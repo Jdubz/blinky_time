@@ -12,6 +12,26 @@ For the record, compute was never what ruled it out. v33 recomputes all 16 windo
 
 1. **Hit position within the frame (#178).** Hop = FFT size (256 samples, 16 ms, no overlap). The same hit can land early or late in a frame and produce different flux, which can push it above or below the threshold. 50 % overlap doubles FFT work, which flux can afford. With the NN shelved, this needs no retrain.
 2. **Rhythm-pattern bias: keep it, tune and improve it.** `onsetPatternBias` (0.3) raises the threshold where the PLP pattern predicts no hit, so triggers prefer the music's own pattern. That is wanted: it's a key mechanism for musical repetition. The risk is the pattern tracker being wrong (phase or pattern) or too strict, which silences real hits. Measured 2026-11-03 (#340): on average it doesn't move consistency (`repS` 0.662 with it on or off). So the work is making it right when it matters: when the tracker is wrong and how strongly it enforces, not whether to have it.
+   - **Where it can be too strict** (read from `AudioTracker.cpp`, not yet measured):
+     1. The fold is min-max stretched to 0–1, so even a nearly flat pattern applies the full penalty somewhere.
+     2. There is no timing tolerance: a 16 ms-resolution pattern with linear interpolation, so a hit a frame or two off its peak (phase error, a push) is penalised.
+     3. Confidence (ACF strength × level × agreement with the mic-level fold) measures periodicity, not whether the pattern predicts the hits right now.
+     4. It only raises the threshold off-pattern and never helps an expected hit.
+     5. Nothing notices when the pattern stops predicting.
+   - **Proven methods:**
+     - Degara et al. 2011 (IEEE JSTSP): a rhythmic IOI prior combined with the ODF beats adaptive thresholding. This is a soft prior on the evidence, for 2 and 4.
+     - Vogl et al. 2017 (ISMIR): beat information helps drum detection with oracle beats and not with estimated ones. The prior helps only as much as the tracker is right, for 3.
+     - Krebs, Böck & Widmer 2013 (ISMIR), on Whiteley 2006's bar pointer, and Krebs et al. 2015 (particle filters): patterns on a 16th-note grid inside probabilistic tracking, so belief spreads when the observations disagree. For 2, 3 and 5.
+     - Davies & Plumbley 2007 (context-dependent beat tracking): fall back from the context state when it stops fitting, for 5.
+     - Zapata et al. 2012/2014 and IBT (Oliveira et al. 2010): confidence from agreement, or from how well predictions match the onsets that actually arrive, for 3.
+     - Paulus & Klapuri 2003/2007 (periodic N-grams): the same bar position one bar ago predicts now, which is repetition as a prior.
+   - **Options, cheapest first:**
+     1. Tolerance: a ±1–2 frame max filter, or 16th-grid quantisation.
+     2. Keep the pattern's real contrast instead of stretching it to 0–1.
+     3. Confidence from recent prediction success.
+     4. A two-sided probabilistic prior.
+     5. A full bar-pointer or particle-filter tracker (ESP32-era).
+   - **First, measure** (`tests/tracker/pattern_bias_study.py`, #340): the hits the bias suppresses (fired with it off, not with it on). For each one: is it a drum, does it break a repeat, is the tracker locked there, and is it a timing near-miss? That tells which option to try first.
 3. **Context-dependent threshold.** The online picker needs the ODF above the 96 ms moving mean + δ, and at least the previous 2 frames. The same kick passes after silence but can fail right after a hat or inside a busy bass line.
 4. **The cliff at the threshold.** Activation is 0.30 at the threshold, and a hit below it produces no flash at all. A small difference in flux turns into all-or-nothing.
 5. **Device vs host.** The hat caught 53 % of kicks against 72 % on the host for the same segments (PR #292). Suspects: mic saturation (#175) and noise-estimator creep (#181).
