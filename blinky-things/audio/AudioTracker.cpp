@@ -1138,7 +1138,10 @@ float AudioTracker::pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams
     if (ev.count == 0) {
         // No new evidence this frame (an expensive detector skipped it):
         // stepping the history with a held value would re-create the
-        // duplicate-sample peak loss.
+        // duplicate-sample peak loss. The gap (W5) still counts the skipped
+        // frame's time, so it lasts the same at any loop rate.
+        const uint32_t skipped = static_cast<uint32_t>(detector_->evidenceRate());
+        if (pickerStepsSinceOnset_ < UINT32_MAX / 2) pickerStepsSinceOnset_ += skipped;
         return 0.0f;
     }
 
