@@ -310,6 +310,21 @@ def test_a_commit_without_submodules_checks_out_none(monkeypatch: pytest.MonkeyP
     assert deploy.init_submodules(Path("/slot"), SHA) == []
 
 
+def test_the_firmware_checkout_gets_the_pinned_toolchain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """uf2_upload.py (in firmware/tools) converts hex to UF2 with the toolchain at its repo's
+    .arduino; the first flash from blinky-firmware failed without it (#357)."""
+    dev, slot = tmp_path / "dev", tmp_path / "slot"
+    (dev / ".arduino").mkdir(parents=True)
+    monkeypatch.setattr(deploy, "DEV_CLONE", dev)
+    assert deploy.link_firmware_toolchain(slot) is False  # no firmware checkout: nothing
+    (slot / "firmware" / "tools").mkdir(parents=True)
+    assert deploy.link_firmware_toolchain(slot) is True
+    assert (slot / "firmware" / ".arduino").resolve() == (dev / ".arduino").resolve()
+    assert deploy.link_firmware_toolchain(slot) is False  # once
+
+
 def test_the_server_unit_signals_only_the_server_on_stop() -> None:
     """KillMode=mixed: the default control-group SIGTERMs ffplay, the UF2 copy and a release
     download at the same moment as the server, before its drain could wait for them."""
@@ -365,6 +380,7 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(
         deploy, "install_missing_units", lambda slot: calls["reconciled"].append(slot.name)
     )
+    monkeypatch.setattr(deploy, "link_firmware_toolchain", lambda slot: False)
     monkeypatch.setattr(deploy, "switch_to", switch)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
     clock = [0.0]
