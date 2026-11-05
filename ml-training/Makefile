@@ -34,7 +34,7 @@ LABELS_ONSETS := $(STORAGE)/labels/onsets_consensus
 LABELS_CONSENSUS := $(LABELS_ONSETS)
 PROCESSED_DIR := $(NVME)/processed
 RIR_DIR       := $(STORAGE)/rir/processed
-TEST_AUDIO    := ../blinky-test-player/music/edm
+TEST_AUDIO    := ../corpus/edm
 # No default: the old default (configs/wider_rf.yaml) was a legacy BEAT CNN (#271).
 CONFIG        ?=
 REQUIRE_CONFIG = $(if $(CONFIG),,$(error CONFIG is required: pass CONFIG=configs/<onset config>.yaml (#271)))
@@ -90,7 +90,7 @@ download-rir:
 .PHONY: combine-audio
 combine-audio:
 	@mkdir -p $(AUDIO_DIR)
-	-ln -sf $(CURDIR)/../blinky-test-player/music/edm/*.mp3 $(AUDIO_DIR)/
+	-ln -sf $(CURDIR)/../corpus/edm/*.mp3 $(AUDIO_DIR)/
 	-ln -sf $(STORAGE)/audio/giantsteps/giantsteps-tempo-dataset/audio/*.mp3 $(AUDIO_DIR)/
 	@if [ -d "$(STORAGE)/audio/fma" ]; then \
 		for f in $(STORAGE)/audio/fma/*.mp3; do \
@@ -214,7 +214,7 @@ REVIEWER_PORT  := 8765
 #
 # Edits land in:
 #   training corpus -> /mnt/storage/.../labels/onsets_human/  (devtop-local)
-#   edm corpus      -> blinky-test-player/music/edm/          (commits via git
+#   edm corpus      -> corpus/edm/          (commits via git
 #                                                              -> blinkyhost)
 reviewer:
 	$(REVIEWER) --port $(REVIEWER_PORT)

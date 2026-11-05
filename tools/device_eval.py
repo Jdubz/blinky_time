@@ -66,10 +66,11 @@ import numpy as np
 import serial
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "corpus"))  # blinky_scoring (blinky-corpus, #357)
+sys.path.insert(0, str(REPO / "blinky-server"))
+# blinky_server's package init puts blinky_scoring (the corpus submodule, #357) on the path.
+from blinky_server.testing.test_session import TestSession  # noqa: E402
 
 from blinky_scoring.scoring import format_score_summary, score_device_run  # noqa: E402
-from blinky_scoring.test_session import TestSession  # noqa: E402
 from blinky_scoring.track_discovery import (  # noqa: E402
     discover_tracks,
     load_ground_truth,

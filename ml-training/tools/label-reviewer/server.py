@@ -43,7 +43,7 @@ from scripts.audio import storage_root  # noqa: E402
 _TRAINING_DATA = Path(storage_root("BLINKY_DATA"))
 _TRAINING_LABELS_BASE = _TRAINING_DATA / "labels"
 _TRAINING_AUDIO = _TRAINING_DATA / "audio" / "combined"
-_EDM_DIR = REPO_ROOT / "blinky-test-player" / "music" / "edm"
+_EDM_DIR = REPO_ROOT / "corpus" / "edm"
 
 
 @dataclass

@@ -92,7 +92,7 @@ Without this, the kernel would idle-suspend the bridge during long sequential re
 | `/mnt/storage/blinky-ml-data/rir/processed/` | Room impulse responses for augmentation | Warm |
 | `/mnt/storage/blinky-ml-data/noise/` | Background noise clips for SNR mixing | Warm |
 | `/mnt/storage/blinky-ml-data/stems_archive/` | Demucs-separated stems (cold archive, was on `/`) | Warm |
-| `../blinky-test-player/music/edm/` | 18-track EDM validation corpus (in repo, not on /mnt/storage) | Repo |
+| `../corpus/edm/` | 18-track EDM validation corpus (in repo, not on /mnt/storage) | Repo |
 | `/mnt/nvme/processed_v*/X_*.npy, Y_*.npy` | Prepared training tensors (memmap-streamed by train.py) | Hot |
 | `/mnt/nvme/mel_cache/<config-hash>/<stem>/` | Cached mel spectrograms keyed by config hash | Hot |
 

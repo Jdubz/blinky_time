@@ -91,7 +91,7 @@ Closed: #162 (wrong model header), #163 (model input check in CI), #169 (NN smoo
 **Where training runs (2026-10-27, my-spark plans/0238 and 0239).** GPU work runs on the DGX Spark through its job API, never over ssh. Stem separation is the `separate` job (one track in, stems out). blinky-server owns the client (`blinky_server/spark/`, `/api/spark/*`; env `SPARK_JOB_API`, `SPARK_API_KEY`, `SPARK_WEBHOOK_SECRET`): priority 0, idempotency keys, no client-side retry of failed jobs. It records each outcome from the Spark's webhook as it happens, with an hourly poll as the backstop, because finished job records leave the Spark after 24 h. Stems are written under `blinky/stems/<model_type>/` in the Spark's object store, which is never reaped, and are not downloaded. `ml-training/scripts/spark_jobs.py` is the CLI (`separate`, `status`, `reconcile`). Only `htdemucs` runs today, at its native 7.8 s segment. Training is blinky's own code again: my-spark plan 0239 (PR #1538) replaces the platform's audio trainer with `gpu_task`, which runs a code bundle blinky uploads (tar.gz artifact plus entry point and args) in a platform runtime image, with named inputs staged read-only. It shipped in my-spark #1544. Inputs are object-store key prefixes, never host paths; the corpus is in the store under `datasets/blinky-corpus/` (my-spark #1545; `labels/` is 0.22 GiB, the whole tree 6.66 GiB, copied into the job's workspace for every job that declares it). `train.py` meets the supervision contract (#304, `scripts/supervision.py`): `STEP n/total` lines, its checkpoint in `$SPARK_CHECKPOINT_DIR` carrying the best weights and a run fingerprint that a resume must match before any state loads, exit 42 after SIGTERM, the processed dataset as the `data` input and results in the `model` output. The platform's eviction today `docker stop`s the worker and `docker rm -f`s the trainer's container, so a real eviction is a SIGKILL; the checkpoint once per epoch (about 14 min at v34d's size, measured before the Spark) is what bounds the loss. Submitting training is #305: `spark_jobs.py train CONFIG` has blinky-server bundle `ml-training/` at HEAD (reproducible; its sha256 comes back as `code_sha256`, the model's provenance) and submit `spark_entry.py`, which preps from the whole corpus prefix into `$SPARK_CHECKPOINT_DIR/processed` and then trains. The prepared tensors (about 200 GB at full size) never go to the store. It waits on my-spark #1550 (librosa, scipy, pyyaml, tqdm in the runtime image). A corpus-wide separation pass needs none of this: `separate` takes per-track store keys. blinky keeps the TFLite export and `tools/check_model_input.py`. devtop runs only one-shot CPU scripts over ssh. The corpus is archived on bignasty (`docs/ML_STORAGE_LAYOUT.md`); configs name it through `${BLINKY_DATA}` / `${BLINKY_WORK}`.
 
 **The 2026-05-02 experiment queue (below).** No training has run since May 2026.
-1. Hand-curate edm/ GT (#289): **tooling done, curation not done.** `tools/label-reviewer/` (`make reviewer`) writes `<stem>.onsets_human.json` overlays, which `prepare_dataset.py` and the blinky-server harness both apply. No `*.onsets_human.json` exists in `blinky-test-player/music/edm/` yet. Still the first step.
+1. Hand-curate edm/ GT (#289): **tooling done, curation not done.** `tools/label-reviewer/` (`make reviewer`) writes `<stem>.onsets_human.json` overlays, which `prepare_dataset.py` and the blinky-server harness both apply. No `*.onsets_human.json` exists in `corpus/edm/` yet. Still the first step.
 2. Per-class F1 breakdown of v33: not done.
 3. Hybrid supervision: not started; gated on 1 and 2.
 4. Knowledge distillation: not started.
@@ -313,7 +313,7 @@ Any new candidate must also fit the CPU budget above, not just lift offline F1.
 >
 > Commit chain: prep + clean labels + diagnostics (e0e13088) → NaN logging (a93361f3) → eval onset-GT fix (a8af902e, da4d4485) → label-gen silent-fallback fixes (2dbdac01).
 >
-> **2026-04-27 corpus reset:** `edm_holdout/` (the GiantSteps LOFI adversarial corpus) was deleted entirely. Multiple regressions came from using adversarial content as the headline F1 metric and chasing model fixes for problems that were partly content-difficulty. **The only validation corpus going forward is `blinky-test-player/music/edm/` (18 tracks).** All historical F1 numbers in this doc that mention `edm_holdout` should be read as "measured on adversarial content that no longer informs decisions." See CLAUDE.md "CRITICAL: Validation Corpus".
+> **2026-04-27 corpus reset:** `edm_holdout/` (the GiantSteps LOFI adversarial corpus) was deleted entirely. Multiple regressions came from using adversarial content as the headline F1 metric and chasing model fixes for problems that were partly content-difficulty. **The only validation corpus going forward is `corpus/edm/` (18 tracks).** All historical F1 numbers in this doc that mention `edm_holdout` should be read as "measured on adversarial content that no longer informs decisions." See CLAUDE.md "CRITICAL: Validation Corpus".
 >
 > The GiantSteps LOFI tracks are still in the *training* corpus (they always were — `Makefile` symlinks them via `giantsteps-tempo-dataset/audio/*.mp3`); they're no longer treated as a separate evaluation set. The held-out role moves to a tier-1 subset of `edm/` once tier-1 is defined.
 
@@ -1080,7 +1080,7 @@ The v34/v34b/v34c sequence was muddled by a long-standing confusion between **on
 
 1. **`labels_dir` defaulted to `consensus_v5` in `base.yaml`** — beat consensus from `allin1`, `beat_this`, `beatnet`, `demucs_beats`, plus the BPM half of madmom. Any training run that didn't explicitly override `labels_dir` was being trained against beat targets without the config making that visible.
 
-2. **Eval ground-truth files in `blinky-test-player/music/edm/` were named `.beats.json`** — but the validation harness was actually scoring against `.onsets_consensus.json` (when present, since `scoring.py:315-331`). All 18 edm/ tracks had both files. The misnaming meant our offline label audits compared training labels to `.beats.json` (wrong reference) and produced misleading F1 numbers — the actual on-device F1=0.570 was always against onsets, not beats.
+2. **Eval ground-truth files in `corpus/edm/` were named `.beats.json`** — but the validation harness was actually scoring against `.onsets_consensus.json` (when present, since `scoring.py:315-331`). All 18 edm/ tracks had both files. The misnaming meant our offline label audits compared training labels to `.beats.json` (wrong reference) and produced misleading F1 numbers — the actual on-device F1=0.570 was always against onsets, not beats.
 
 3. **Internal variable names (`beat_times`, `beat_strengths`)** in `prepare_dataset.py` and `train.py` were used for any timestamp source — onset OR beat — making code review unable to tell whether a particular run was beat- or onset-targeted.
 
@@ -1088,7 +1088,7 @@ The v34/v34b/v34c sequence was muddled by a long-standing confusion between **on
 - `base.yaml` `labels_dir` now points at `onsets_consensus`. Every training run gets onset targets unless explicitly overridden.
 - `prepare_dataset.py` default-fallback branch raises if the labels path matches a beat-tracker marker (`consensus_v*`, `beat_this`, `beatnet`, `demucs_beats`, `allin1`).
 - `consensus_v2/v3/v4/v5` and the older `consensus`, `consensus-3sys`, `consensus-combined` label directories moved out of `/mnt/storage/blinky-ml-data/labels/` into `_archive_beats_2026_04_29/`. The training pipeline can no longer find them at the canonical path.
-- `.beats.json` files in `blinky-test-player/music/edm/` archived under `blinky-test-player/music/_archive_beats_gt/`. The eval harness now requires `.onsets_consensus.json` (which all 18 tracks had).
+- `.beats.json` files in `corpus/edm/` archived under `blinky-test-player/music/_archive_beats_gt/`. The eval harness now requires `.onsets_consensus.json` (which all 18 tracks had).
 - `track_discovery.py` and `load_ground_truth` rewritten to find onset GT directly. The legacy beat-consensus loader path no longer exists.
 - `Makefile` `LABELS_CONSENSUS` retained as alias of `LABELS_ONSETS` (= `onsets_consensus`) so out-of-tree scripts don't crash.
 - `annotate-beats.py` archived; not used in any active pipeline.
@@ -1563,7 +1563,7 @@ python scripts/prepare_dataset.py \
     --stems-dir /mnt/storage/blinky-ml-data/stems \
     --stem-variants drums \
     --mic-profile data/calibration/mic_profile.npz \
-    --exclude-dir ../blinky-test-player/music/edm \
+    --exclude-dir ../corpus/edm \
     --rir-dir /mnt/storage/blinky-ml-data/rir/processed
 
 python train.py --config configs/frame_fc_w192.yaml --output-dir outputs/w192_stems
@@ -1616,6 +1616,6 @@ Run allin1 labeling after Demucs separation to get both benefits.
 | `tools/label-reviewer/` | Hand-correct onset labels (`make reviewer`) |
 | `../tools/check_model_input.py` | Fails if the firmware would refuse the embedded model (runs in CI) |
 | `../tests/tracker/` | Host tracker harness and CPU cost model: the gate for enabling an NN |
-| `../blinky-things/audio/FrameOnsetNN.h`, `AudioTracker.h` | Firmware NN wrapper; `BLINKY_ONSET_NN_ENABLED` build switch |
+| `../firmware/blinky-things/audio/FrameOnsetNN.h`, `AudioTracker.h` | Firmware NN wrapper; `BLINKY_ONSET_NN_ENABLED` build switch |
 
 Paths starting `../` are relative to `ml-training/`; the rest are inside it.

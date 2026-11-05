@@ -42,7 +42,7 @@ import numpy as np
 
 ML = Path(__file__).resolve().parents[1]
 REPO = ML.parent
-EDM = REPO / "blinky-test-player" / "music" / "edm"
+EDM = REPO / "corpus" / "edm"
 BASELINE = Path(__file__).with_name("drum_label_baseline.json")
 
 TYPES = ("kick", "snare")
@@ -442,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
             # The labels committed in edm/kick_weighted, which an OLDER parameterization made
             # (snare weight 0.5, bands 30-200/200-4000/4000-8000 Hz): what the drum metrics and
             # the edm/ studies have used, not a run of the current generator.
-            "edm_labels": "blinky-test-player/music/edm/kick_weighted (older parameterization)",
+            "edm_labels": "corpus/edm/kick_weighted (older parameterization)",
             "edm": run_edm(),
         }
         BASELINE.write_text(json.dumps(base, indent=2) + "\n")

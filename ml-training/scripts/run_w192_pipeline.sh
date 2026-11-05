@@ -156,7 +156,7 @@ PYTHONUNBUFFERED=1 python scripts/prepare_dataset.py \
     --augment \
     --labels-dir "$CONSENSUS_V5_DIR" \
     --mic-profile data/calibration/mic_profile.npz \
-    --exclude-dir ../blinky-test-player/music/edm \
+    --exclude-dir ../corpus/edm \
     --rir-dir "$DATA_ROOT/rir/processed" \
     --stems-dir "$STEMS_DIR" \
     --stem-variants drums \
@@ -207,7 +207,7 @@ else
     python evaluate.py \
         --config configs/frame_fc_w192.yaml \
         --model "$OUTPUTS/w192/best_model.pt" \
-        --audio-dir ../blinky-test-player/music/edm \
+        --audio-dir ../corpus/edm \
         --output-dir "$OUTPUTS/w192/eval" \
         &> "$LOGDIR/step6_eval.log"
     tail -10 "$LOGDIR/step6_eval.log"

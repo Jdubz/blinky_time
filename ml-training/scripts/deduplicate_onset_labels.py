@@ -97,7 +97,7 @@ def main():
                         default=Path('/mnt/storage/blinky-ml-data/labels/onsets_consensus'),
                         help='Directory of onset label files')
     parser.add_argument('--test-dir', type=Path,
-                        default=Path(__file__).parent.parent.parent / 'blinky-test-player/music/edm',
+                        default=Path(__file__).parent.parent.parent / 'corpus/edm',
                         help='Also process test track onset labels')
     parser.add_argument('--tolerance', type=float, default=70,
                         help='Merge tolerance in ms (default: 70)')

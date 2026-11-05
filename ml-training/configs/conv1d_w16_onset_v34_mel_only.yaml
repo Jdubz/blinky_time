@@ -99,6 +99,6 @@ data:
   processed_dir: "${BLINKY_WORK}/processed_v34"
 
 export:
-  output_header: "../blinky-things/audio/frame_onset_model_data_v34_mel_only.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_v34_mel_only.h"
   c_array_name: "frame_onset_model_data"
   max_model_size_kb: 27

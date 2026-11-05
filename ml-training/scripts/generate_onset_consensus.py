@@ -331,7 +331,7 @@ def main():
         type=Path,
         default=[
             Path("/mnt/storage/blinky-ml-data/labels/onsets_human"),
-            Path(__file__).resolve().parents[2] / "blinky-test-player" / "music" / "edm",
+            Path(__file__).resolve().parents[2] / "corpus" / "edm",
         ],
         help="Directories scanned for `<stem>.onsets_human.json` overlays. With "
              "--force-regenerate, regeneration of any track that has an overlay "

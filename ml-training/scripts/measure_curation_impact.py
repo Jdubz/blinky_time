@@ -10,9 +10,9 @@ Usage:
 
     # In-repo validation corpus (overlays + auto GT live next to audio)
     python scripts/measure_curation_impact.py \\
-        --auto-dir ../blinky-test-player/music/edm \\
+        --auto-dir ../corpus/edm \\
         --auto-glob "*.onsets_consensus.json" \\
-        --human-dir ../blinky-test-player/music/edm
+        --human-dir ../corpus/edm
 
     # Training corpus (auto in one dir, overlays in another)
     python scripts/measure_curation_impact.py \\

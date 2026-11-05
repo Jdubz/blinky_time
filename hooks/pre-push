@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Pre-push hook: runs cppcheck before allowing push
+# Pre-push hook: blinky-server lint, format and types before allowing a push
+# (the firmware's cppcheck runs in blinky-firmware, #357)
 # Install with: ./scripts/install-hooks.sh
 #
 
@@ -17,47 +18,6 @@ echo -e "${YELLOW}Running pre-push checks...${NC}"
 # Find the repository root
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
-
-# Run cppcheck if installed; SKIP only this section if missing (do NOT
-# exit 0 here — the server checks below MUST still run, otherwise
-# ruff/mypy regressions slip through to CI. Caught 2026-05-19 when a
-# format-only failure made it to PR #145 because the hook bailed at
-# this point on a box without cppcheck.)
-if command -v cppcheck &> /dev/null; then
-    echo "Running cppcheck static analysis..."
-
-    # Run cppcheck with same settings as CI
-    CPPCHECK_ARGS=(
-        --enable=warning,style,performance,portability
-        --error-exitcode=1
-        --inline-suppr
-        -I blinky-things/
-        --std=c++14
-        --platform=native
-        --quiet
-    )
-
-    # Add suppressions file if it exists
-    if [ -f ".cppcheck-suppressions" ]; then
-        CPPCHECK_ARGS+=(--suppressions-list=.cppcheck-suppressions)
-    fi
-
-    # Run cppcheck
-    if cppcheck "${CPPCHECK_ARGS[@]}" blinky-things/ 2>&1; then
-        echo -e "${GREEN}✅ cppcheck passed${NC}"
-    else
-        echo -e "${RED}❌ cppcheck found issues${NC}"
-        echo ""
-        echo "Fix the issues above before pushing, or use:"
-        echo "  git push --no-verify  (to skip this check)"
-        exit 1
-    fi
-else
-    echo -e "${YELLOW}⚠️  cppcheck not installed, skipping static analysis${NC}"
-    echo "   Install with: sudo apt install cppcheck (Linux)"
-    echo "                 brew install cppcheck (macOS)"
-    echo "                 choco install cppcheck (Windows)"
-fi
 
 # --- Git pack size check ---
 # The .git pack once grew to 37 GB (repo is 0.2 GB on GitHub). This was caused

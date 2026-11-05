@@ -27,6 +27,6 @@ training:
   batch_size: 512           # Reduced from 4096 — W192 flat tensor is 6× larger
 
 export:
-  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  output_header: "../firmware/blinky-things/audio/frame_beat_model_data.h"
   c_array_name: "frame_beat_model_data"
   max_model_size_kb: 320    # ~314 KB INT8 for 4992→64→32→2

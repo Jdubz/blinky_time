@@ -30,7 +30,7 @@ from scripts.mel_frontend import (  # noqa: E402
 )
 
 _spec = importlib.util.spec_from_file_location("check_model_input",
-                                               REPO / "tools" / "check_model_input.py")
+                                               REPO / "firmware" / "tools" / "check_model_input.py")
 check_model_input = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_model_input)
 

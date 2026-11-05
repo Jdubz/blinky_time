@@ -74,7 +74,7 @@ labels:
   # human-confirmed). Empty list disables overlay.
   onset_human_dirs:
     - "${BLINKY_DATA}/labels/onsets_human"
-    - "../blinky-test-player/music/edm"     # in-repo validation overlay; rides via git pull
+    - "../corpus/edm"     # in-repo validation overlay; rides via git pull
                                             # so EDM curation flows into training too.
 
 # Training hyperparameters (shared across model variants)
@@ -150,7 +150,7 @@ export:
   # Not the firmware's active header (frame_onset_model_data.h): a config that
   # falls back to this default must not overwrite the shipped model. Model
   # configs set their own versioned header (#271).
-  output_header: "../blinky-things/audio/frame_onset_model_data_unversioned.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_unversioned.h"
   c_array_name: "frame_onset_model_data"
 
 # Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
@@ -173,4 +173,4 @@ data:
   rir_dir: "${BLINKY_DATA}/rir/processed"
   noise_dir: "${BLINKY_DATA}/noise"
   mel_cache_dir: "${BLINKY_WORK}/mel_cache"
-  test_set: "../blinky-test-player/music/edm"
+  test_set: "../corpus/edm"

@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 source venv/bin/activate
 
 STORAGE=/mnt/storage/blinky-ml-data
-TEST_AUDIO=../blinky-test-player/music/edm
+TEST_AUDIO=../corpus/edm
 LOG="$STORAGE/outputs/v9-ds-tcn-$(date +%Y%m%d-%H%M%S).log"
 
 echo "=== v9 DS-TCN Training Pipeline ===" | tee "$LOG"
