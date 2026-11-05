@@ -234,6 +234,51 @@ def test_switch_installs_units_stops_then_moves_the_link_then_starts(
     assert events == ["stop on blinky-deploy-b", "start on blinky-deploy-b"]
 
 
+def test_a_unit_added_by_a_commit_is_installed_on_the_next_pass(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The first deploy of a commit that adds a unit runs the previous deploy.py, which doesn't
+    know it. Every pass installs what the live slot ships but systemd doesn't have, and enables
+    a new timer; installed units are left alone (#351 review)."""
+    slot = tmp_path / "live"
+    (slot / "scripts" / "testbox").mkdir(parents=True)
+    for u in deploy.UNITS:
+        (slot / "scripts" / "testbox" / f"{u}.in").write_text(f"[Unit]\n# {u} new\n")
+    units = tmp_path / "units"
+    units.mkdir()
+    for u in ("blinky-server.service", "blinky-deploy.service", "blinky-deploy.timer"):
+        (units / u).write_text("old\n")  # installed, different: not touched here
+    monkeypatch.setattr(deploy, "UNIT_DIR", units)
+    events: list[str] = []
+
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:3] == ("sudo", "-n", "tee"):
+            Path(cmd[3]).write_text(kw["stdin"])
+            events.append(f"unit {Path(cmd[3]).name}")
+        else:
+            events.append(" ".join(cmd[2:]))
+        return ""
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.install_missing_units(slot) == ["blinky-staging.service", "blinky-staging.timer"]
+    assert events == [
+        "unit blinky-staging.service",
+        "unit blinky-staging.timer",
+        "systemctl daemon-reload",
+        "systemctl enable --now blinky-staging.timer",
+    ]
+    assert (units / "blinky-server.service").read_text() == "old\n"
+    events.clear()
+    assert deploy.install_missing_units(slot) == [] and events == []
+
+
+def test_every_pass_reconciles_units_from_the_live_slot(box: dict[str, Any]) -> None:
+    deploy.save_state({"refused": {}, "history": [], "deployed": SHA})
+    GIT["calls"].clear()
+    assert deploy.deploy_once() == 0
+    assert box["reconciled"] == ["blinky-deploy-a"]
+
+
 def test_the_server_unit_signals_only_the_server_on_stop() -> None:
     """KillMode=mixed: the default control-group SIGTERMs ffplay, the UF2 copy and a release
     download at the same moment as the server, before its drain could wait for them."""
@@ -285,6 +330,10 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(deploy, "run", fake_git)
     monkeypatch.setattr(deploy, "gh_api", gh())
     monkeypatch.setattr(deploy, "prepare", prepare)
+    calls["reconciled"] = []
+    monkeypatch.setattr(
+        deploy, "install_missing_units", lambda slot: calls["reconciled"].append(slot.name)
+    )
     monkeypatch.setattr(deploy, "switch_to", switch)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
     clock = [0.0]

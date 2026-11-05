@@ -12,13 +12,13 @@ import contextlib
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..testing.track_discovery import discover_tracks
 from ..work import durable, jobs
-from .deps import get_fleet
+from .deps import get_fleet, require_api_key
 
 router = APIRouter(prefix="/test", tags=["testing"])
 
@@ -121,7 +121,7 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
     return await _submit(wf, body.model_dump())
 
 
-@router.post("/staging")
+@router.post("/staging", dependencies=[Depends(require_api_key)])
 async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
     """The staging hardware suite (#349, testing/staging.py): deploy the staging build of
     ``sha`` to the test devices, then health, music, beat pace, validation and timing.
@@ -139,12 +139,19 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
     unknown = sorted(set(body.limits or {}) - set(DEFAULTS))
     if unknown:
         raise HTTPException(422, f"unknown limits: {unknown}")
-    try:
-        devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
-        await asyncio.to_thread(deploy_pipeline.require_test_devices, devices)
-    except deploy_pipeline.DeployError as e:
-        raise HTTPException(400, str(e)) from e
-    return await _submit(staging_suite, body.model_dump())
+    from . import routes_firmware
+
+    # One deploy-bearing job at a time, the suite included (routes_firmware._deploy_active):
+    # the same lock makes the check and the submit one step.
+    async with routes_firmware._deploy_lock:
+        if await routes_firmware._deploy_active():
+            raise HTTPException(409, "A deploy or staging suite is already running")
+        try:
+            devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
+            await asyncio.to_thread(deploy_pipeline.require_test_devices, devices)
+        except deploy_pipeline.DeployError as e:
+            raise HTTPException(400, str(e)) from e
+        return await _submit(staging_suite, body.model_dump())
 
 
 @router.post("/param-sweep")

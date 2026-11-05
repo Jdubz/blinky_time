@@ -373,14 +373,19 @@ _deploy_lock = asyncio.Lock()
 
 
 async def _deploy_active() -> bool:
-    """Whether a fleet deploy hasn't finished (running, or held for a restart). With no store
+    """Whether a deploy hasn't finished (running, or held for a restart). With no store
     there can be none, and ``_submit`` then refuses the new one with a 503 anyway."""
     from ..firmware.fleet_workflows import FLEET_JOBS
+    from ..testing.workflows import TEST_JOBS
 
     if not durable.launched():
         return False
+    # Every job that flashes devices: the fleet deploys, and the staging suite (#349), which
+    # deploys and then measures the chips, so it holds them until it finishes.
     return bool(
-        await jobs.active(FLEET_JOBS, "deploy") or await jobs.active(FLEET_JOBS, "deploy-staging")
+        await jobs.active(FLEET_JOBS, "deploy")
+        or await jobs.active(FLEET_JOBS, "deploy-staging")
+        or await jobs.active(TEST_JOBS, "staging")
     )
 
 

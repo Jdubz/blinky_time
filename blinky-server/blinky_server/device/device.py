@@ -5,6 +5,7 @@ import json
 import logging
 import time as _time
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from ..testing.test_session import TestSession
@@ -20,6 +21,29 @@ STALE_THRESHOLD_S = 300.0
 
 
 ALERTS_KEEP = 50
+
+
+def alerts_path() -> Path:
+    """Every firmware [ASSERT] / [FALLBACK] line this server saw, JSONL {t, device, line}."""
+    from ..paths import data_dir
+
+    return data_dir() / "firmware-alerts.jsonl"
+
+
+def alerts_since(device_ids: list[str], t0: float) -> dict[str, list[str]]:
+    """The alert lines recorded for ``device_ids`` at or after wall time ``t0``."""
+    out: dict[str, list[str]] = {}
+    p = alerts_path()
+    if not p.exists():
+        return out
+    for raw in p.read_text().splitlines():
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("device") in device_ids and float(rec.get("t", 0)) >= t0:
+            out.setdefault(rec["device"], []).append(str(rec.get("line")))
+    return out
 
 
 class DeviceState(StrEnum):
@@ -90,14 +114,16 @@ class Device:
         self._stream_subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
 
         # Firmware [ASSERT] / [FALLBACK] console lines (CLAUDE.md, No Silent Fallbacks): a
-        # count since connect and the newest ALERTS_KEEP lines. The staging suite (#349)
-        # fails a build that prints any.
+        # count since connect and the newest ALERTS_KEEP lines here, and every one appended
+        # to alerts_path() with its wall time, which survives a server restart. The staging
+        # suite (#349) fails a build that prints any while it runs.
         self.alert_count = 0
         self.alerts: collections.deque[str] = collections.deque(maxlen=ALERTS_KEEP)
 
         # Wire up streaming data routing
         self.protocol.on_stream_line(self._route_stream_line)
         self.protocol.on_raw_line(self._on_raw_line)
+        self.protocol.on_alert(self._on_alert)
 
     async def connect(self) -> None:
         """Connect to the device and retrieve its info.
@@ -296,7 +322,14 @@ class Device:
     def _on_raw_line(self, line: str) -> None:
         """Handle non-streaming, non-response lines (log output)."""
         log.debug("[%s] %s", self.id[:8], line)
-        if "[ASSERT]" in line or "[FALLBACK]" in line:
-            self.alert_count += 1
-            self.alerts.append(line.strip())
-            log.warning("[%s] firmware alert: %s", self.id[:8], line.strip())
+
+    def _on_alert(self, line: str) -> None:
+        text = line.strip()
+        self.alert_count += 1
+        self.alerts.append(text)
+        log.warning("[%s] firmware alert: %s", self.id[:8], text)
+        try:
+            with alerts_path().open("a") as f:
+                f.write(json.dumps({"t": _time.time(), "device": self.id, "line": text}) + "\n")
+        except OSError as e:
+            log.error("[FALLBACK] could not record firmware alert to %s: %s", alerts_path(), e)

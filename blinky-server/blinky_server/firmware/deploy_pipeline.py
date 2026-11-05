@@ -269,6 +269,31 @@ async def restore_and_save(fleet: Any) -> dict[str, Any]:
     return out
 
 
+async def restore_and_save_on(fleet: Any, device_ids: list[str]) -> dict[str, Any]:
+    """restore_runtime_settings, then save, on exactly ``device_ids``: a staging deploy
+    (#349) touches no device but its targets. Judged per device by deploy.sh's rule."""
+    out: dict[str, Any] = {}
+    for command in ("restore_runtime_settings", "save"):
+        results: dict[str, str] = {}
+        for device_id in device_ids:
+            d = fleet.get_device(device_id)
+            try:
+                if d is None:
+                    raise RuntimeError("gone")
+                results[device_id] = await d.protocol.send_command(command, timeout=20.0)
+            except Exception as e:
+                results[device_id] = f"error: {e}"
+        out[command] = results
+        fails = broadcast_failures(results)
+        if fails:
+            raise DeployError(
+                "settings",
+                f"{command} did not land on every target: {'; '.join(fails)}",
+                detail=out,
+            )
+    return out
+
+
 # ── 6. Post-deploy assertion ────────────────────────────────────────────
 
 
@@ -412,6 +437,11 @@ async def _settings(fleet: Any) -> dict[str, Any]:
 
 
 @durable.step
+async def _settings_on(fleet: Any, target_ids: list[str]) -> dict[str, Any]:
+    return await restore_and_save_on(fleet, target_ids)
+
+
+@durable.step
 async def _verify(
     fleet: Any, target_ids: list[str], version: str, settle_s: float
 ) -> dict[str, Any]:
@@ -436,7 +466,8 @@ async def run_deploy(
 
     ``staging_sha``: deploy that commit's staging build instead of a release (#349). The
     targets must be an explicit list of test devices, the image is stored as non-stable and
-    auto-recovery stays armed with the stable image it had; every other step is the same.
+    auto-recovery stays armed with the stable image it had, and the settings restore + save
+    go to the targets only, not the whole fleet; every other step is the same.
 
     ``store_firmware`` and ``flash`` are the routes' own storage and
     flash-job helpers, passed in so the deploy writes and flashes exactly
@@ -487,7 +518,11 @@ async def run_deploy(
 
     try:
         job.progress_message = "Restoring runtime settings and saving"
-        steps["settings"] = {"status": "ok", "results": await _settings(fleet)}
+        if staging_sha is None:
+            settings = await _settings(fleet)
+        else:
+            settings = await _settings_on(fleet, target_ids)
+        steps["settings"] = {"status": "ok", "results": settings}
 
         job.progress_message = "Verifying post-deploy state"
         steps["verify"] = {

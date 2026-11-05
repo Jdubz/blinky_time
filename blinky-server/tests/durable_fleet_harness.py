@@ -63,6 +63,9 @@ class Protocol:
         self.dev = dev
 
     async def send_command(self, cmd: str, timeout: float = 5.0) -> str:
+        if cmd in ("restore_runtime_settings", "save"):  # a staging deploy's per-target settings
+            effect(f"cmd {self.dev} {cmd}")
+            return "OK"
         assert cmd == "json info", cmd
         v = devices[self.dev].version
         return json.dumps({"version": v, "audioOverruns": 0, "audioSamplesLost": 0, "fps": 60})

@@ -284,7 +284,7 @@ def service_status() -> str:
         return f"(status unavailable: {e})"
 
 
-def install_units(slot: Path) -> list[str]:
+def install_units(slot: Path, only_missing: bool = False) -> list[str]:
     """Install ``slot``'s units, rendered exactly as setup.sh's install_service renders them,
     where they differ from what's installed; daemon-reload if any did. Run before the stop, so
     a unit change (KillMode=mixed, #325) applies to that stop and the start after it. The box
@@ -301,6 +301,8 @@ def install_units(slot: Path) -> list[str]:
         for k, v in subs.items():
             text = text.replace(k, v)
         dest = UNIT_DIR / unit
+        if only_missing and dest.is_file():
+            continue
         if not dest.is_file() or dest.read_text() != text:
             if not dest.is_file() and unit.endswith(".timer"):
                 new_timers.append(unit)
@@ -313,6 +315,16 @@ def install_units(slot: Path) -> list[str]:
         run("sudo", "-n", "systemctl", "enable", "--now", timer, cwd=HOME, timeout=60)
         log(f"enabled {timer}")
     return changed
+
+
+def install_missing_units(slot: Path) -> list[str]:
+    """Install the units ``slot`` ships that aren't installed at all, and enable a new timer.
+
+    Every pass runs this from the live slot. A unit added by a commit (blinky-staging.*, #349)
+    is first deployed by the previous deploy.py, whose UNITS don't list it; without this the
+    unit would wait for the next server restart. Units that are installed are left alone:
+    changing those is install_units' job, before a restart."""
+    return install_units(slot, only_missing=True)
 
 
 def stop_drained(
@@ -461,6 +473,8 @@ def deploy_once(dry_run: bool = False) -> int:
     target = run("git", "rev-parse", f"origin/{BRANCH}", cwd=live).strip()
     current = run("git", "rev-parse", "HEAD", cwd=live).strip()
     state["deployed"] = current
+    if not dry_run:
+        install_missing_units(live)
     seen = (current, state.get("deployable"))
     if not dry_run and (target in seen or target in state["refused"]):
         return 0

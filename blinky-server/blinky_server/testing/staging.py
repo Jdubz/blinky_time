@@ -6,13 +6,19 @@ puts a staging build on the test chips and tests it on real hardware.
    settings restore + save, the post-deploy version assertion).
 2. Health: ``stable_minutes`` of ``json info`` with no music, the bench gate's checks
    (tools/release_gate.py): fps floor, longest frame, no reboot, overrun growth.
-3. In one test session (the audio lock, runtime defaults, streaming), with the box speaker:
+3. In a test session (runtime defaults, streaming), with the box speaker:
    - music: the first track for ``music_seconds``: mean level and pulse-onset rate;
    - beat pace: the same track for ``pace_seconds`` more: beats counted against the tempo
      integrated over wall-clock time (release_gate.beat_pace);
    - validation: every edm/ track once, scored like /api/test/validate (drum metrics).
-4. After: version unchanged, no reboot across the whole job, the onset-path timing from
-   ``json info`` when the firmware reports it, and every firmware [ASSERT] / [FALLBACK] line.
+4. After: version unchanged, no reboot across the whole job (uptime against wall time since
+   the deploy), the onset-path timing from ``json info`` when the firmware reports it, and no
+   firmware [ASSERT] / [FALLBACK] line from the deploy on (the server's alert record,
+   device.alerts_since, which survives a restart).
+
+The whole job holds the audio lock (workflows.reserve): no other test job plays or measures
+the chips while it deploys and measures them. Fleet deploys refuse to start while it runs
+(routes_firmware._deploy_active) and it refuses to start during one.
 
 Pass = every check passes. The validation numbers are reported, not gated: the box hasn't
 passed its acceptance gates (TEST_BOX_BUILD_PLAN.md), so its F1 isn't trusted as a floor yet.
@@ -28,11 +34,12 @@ import logging
 import time
 from typing import Any
 
+from ..device.device import alerts_since
 from ..firmware import deploy_pipeline
 from ..paths import data_dir
 from ..work import durable, jobs
 from .audio_player import play_audio, stop_audio
-from .workflows import _connected, _fleet, plan, session, validation_run
+from .workflows import _connected, _fleet, plan, reserve, session, validation_run
 
 log = logging.getLogger(__name__)
 
@@ -54,27 +61,13 @@ HEALTH_POLL_S = 4.0  # one json info per < 5 s: every loop-metrics window is rea
 TIMING_FIELDS = ("onsetUs", "onsetMaxUs")
 
 
-def _alerts(device_ids: list[str], since: dict[str, int]) -> dict[str, list[str]]:
-    """Each device's [ASSERT] / [FALLBACK] lines since ``since`` (its alert_count then)."""
-    out: dict[str, list[str]] = {}
-    for i in device_ids:
-        d = _fleet().get_device(i)
-        if d is None:
-            continue
-        new = d.alert_count - since.get(i, 0)
-        if new > 0:
-            out[i] = list(d.alerts)[-new:]
-    return out
-
-
-def _counts(device_ids: list[str]) -> dict[str, int]:
-    return {i: d.alert_count for i in device_ids if (d := _fleet().get_device(i)) is not None}
+# Uptime may trail wall time by this much without counting as a reboot (clock rates, polling).
+REBOOT_SLACK_MS = 15_000
 
 
 async def _info(device_id: str) -> dict[str, Any]:
-    d = _fleet().get_device(device_id)
-    if d is None:
-        raise deploy_pipeline.DeployError("health", f"{device_id} is gone")
+    # A step resumed after a restart can run before discovery reconnects the device: wait.
+    (d,) = await _connected([device_id])
     return await deploy_pipeline._json_info(d)
 
 
@@ -103,8 +96,7 @@ def beat_pace(samples: list[tuple[float, float, int]]) -> dict[str, Any] | None:
 @durable.step
 async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, Any]:
     """``stable_minutes`` of json info per device, no music: fps, longest frame, reboots,
-    overrun growth, alerts. Safe to repeat: it only reads."""
-    since = _counts(device_ids)
+    overrun growth. Safe to repeat: it only reads."""
     first = {i: await _info(i) for i in device_ids}
     seen: dict[str, dict[str, Any]] = {
         i: {"fps": [], "frame_ms": [], "rebooted": False, "last_ms": int(first[i].get("millis", 0))}
@@ -126,7 +118,6 @@ async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, A
                 s["frame_ms"].append(int(cur["maxFrameMs"]))
             last[i] = cur
     out: dict[str, Any] = {}
-    alerts = _alerts(device_ids, since)
     for i in device_ids:
         s = seen[i]
         growth = int(last[i].get("audioOverruns") or 0) - int(first[i].get("audioOverruns") or 0)
@@ -145,7 +136,6 @@ async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, A
                 "rebooted": s["rebooted"],
                 "overrun_growth": growth,
             },
-            "alerts": alerts.get(i, []),
         }
     return out
 
@@ -157,7 +147,6 @@ async def music_and_pace(
     """One track on the box speaker. First ``music_seconds`` of the stream: level and pulse
     onsets (release_gate.music_check); then ``pace_seconds`` of json rhythm (pace_check)."""
     devices = await _connected(device_ids)
-    since = _counts(device_ids)
     total_s = limits["music_seconds"] + limits["pace_seconds"] + 5
     player = asyncio.create_task(
         play_audio(track["audio_file"], duration_ms=total_s * 1000, seek_sec=track["seek"])
@@ -204,7 +193,6 @@ async def music_and_pace(
         await stop_audio()
         player.cancel()
     out: dict[str, Any] = {}
-    alerts = _alerts(device_ids, since)
     for d in devices:
         lv = levels[d.id]
         if lv:
@@ -226,28 +214,42 @@ async def music_and_pace(
             pace["pass"] = abs(pace["counted"] - pace["expected"]) <= max(
                 2.0, limits["max_pace_error"] * pace["expected"]
             )
-        out[d.id] = {"music": music, "beatpace": pace, "alerts": alerts.get(d.id, [])}
+        out[d.id] = {"music": music, "beatpace": pace}
     return out
 
 
 @durable.step
-async def final_state(device_ids: list[str], version: str, start_ms: dict[str, int]) -> Any:
-    """Version unchanged and no reboot since the deploy; the onset-path timing if reported."""
+async def final_state(device_ids: list[str], version: str, start: dict[str, Any]) -> Any:
+    """Version unchanged; no reboot since ``start`` (uptimes()): a chip that kept running has
+    gained the wall time that passed, a reset one restarted from zero; no firmware alert
+    recorded since the suite started; the onset-path timing if reported."""
     out: dict[str, Any] = {}
+    alerts = alerts_since(device_ids, start["suite_t"])
     for i in device_ids:
         info = await _info(i)
         ms = int(info.get("millis", 0))
+        want = start["ms"].get(i, 0) + (time.time() - start["t"]) * 1000 - REBOOT_SLACK_MS
         out[i] = {
             "version": {"pass": info.get("version") == version, "got": info.get("version")},
-            "no_reboot": {"pass": ms > start_ms.get(i, 0), "uptime_s": ms // 1000},
+            "no_reboot": {"pass": ms >= want, "uptime_s": ms // 1000},
+            "alerts": {"pass": not alerts.get(i), "lines": alerts.get(i, [])[:30]},
             "timing": {k: info[k] for k in TIMING_FIELDS if k in info} or None,
         }
     return out
 
 
 @durable.step
-async def uptimes(device_ids: list[str]) -> dict[str, int]:
-    return {i: int((await _info(i)).get("millis", 0)) for i in device_ids}
+async def started() -> float:
+    """The suite's start, wall time: alerts from here on count (recorded, so a resumed suite
+    keeps its start)."""
+    return time.time()
+
+
+@durable.step
+async def uptimes(device_ids: list[str], suite_t: float) -> dict[str, Any]:
+    """Each chip's uptime and the wall time it was read: final_state's reboot baseline."""
+    ms = {i: int((await _info(i)).get("millis", 0)) for i in device_ids}
+    return {"t": time.time(), "ms": ms, "suite_t": suite_t}
 
 
 @durable.step
@@ -264,9 +266,9 @@ async def write_report(sha: str, report: dict[str, Any]) -> str:
 
 
 def _passed(node: Any) -> bool:
-    """Every dict carrying "pass" is True, and no "alerts" list has lines."""
+    """Every dict carrying "pass" is True."""
     if isinstance(node, dict):
-        if node.get("pass") is False or node.get("alerts"):
+        if node.get("pass") is False:
             return False
         return all(_passed(v) for v in node.values())
     if isinstance(node, list):
@@ -277,12 +279,25 @@ def _passed(node: Any) -> bool:
 @durable.workflow("test.staging")
 async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
     """req: sha, device_ids, track_dir, optional limits (DEFAULTS' keys)."""
-    from ..api.routes_firmware import _store_staging_hex
-    from ..firmware.fleet_workflows import flash_devices
-
     sha, device_ids = req["sha"], list(req["device_ids"])
     limits = {**DEFAULTS, **(req.get("limits") or {})}
     report: dict[str, Any] = {"sha": sha, "devices": device_ids, "limits": limits}
+
+    suite_t = await started()
+    async with reserve(device_ids):
+        return await _suite(sha, device_ids, req, limits, report, suite_t)
+
+
+async def _suite(
+    sha: str,
+    device_ids: list[str],
+    req: dict[str, Any],
+    limits: dict[str, float],
+    report: dict[str, Any],
+    suite_t: float,
+) -> dict[str, Any]:
+    from ..api.routes_firmware import _store_staging_hex
+    from ..firmware.fleet_workflows import flash_devices
 
     jobs.report(0, "deploying the staging build")
     deploy = await deploy_pipeline.run_deploy(
@@ -302,7 +317,7 @@ async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
         return report
     version = deploy["version"]
     report["version"] = version
-    start_ms = await uptimes(device_ids)
+    start = await uptimes(device_ids, suite_t)
 
     jobs.report(10, f"health: {limits['stable_minutes']:.0f} min of json info")
     report["health"] = await health(device_ids, limits)
@@ -311,7 +326,7 @@ async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
     if "error" in p:
         report["validation"] = {"pass": False, "detail": p["error"]}
     else:
-        async with session(p["devices"]):
+        async with session(p["devices"], reserved=True):
             jobs.report(30, "music and beat pace")
             report["music"] = await music_and_pace(p["devices"], p["tracks"][0], limits)
             results = []
@@ -329,7 +344,7 @@ async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
             "results": results,
         }
 
-    report["final"] = await final_state(device_ids, version, start_ms)
+    report["final"] = await final_state(device_ids, version, start)
     report["passed"] = _passed({k: v for k, v in report.items() if k != "limits"})
     report["path"] = await write_report(sha, report)
     jobs.report(100, "passed" if report["passed"] else "FAILED")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -314,6 +315,20 @@ def test_every_workflow_has_a_restart_test() -> None:
     for name, ref in RESTART_TESTS.items():
         file, fn = ref.split("::")
         assert f"def {fn}(" in (here / file).read_text(), f"{name}: {ref} doesn't exist"
+
+
+def test_the_app_registers_every_workflow_before_launch() -> None:
+    """DBOS recovers only workflows it knows at launch: a module that declares one but isn't
+    imported by the app's startup leaves its pending jobs unrecovered after a restart until
+    some request happens to import it (#351 review)."""
+    pkg = Path(durable.__file__).resolve().parents[1]
+    app_src = (pkg / "api" / "app.py").read_text()
+    for src in pkg.rglob("*.py"):
+        if not re.search(r"^@durable\.workflow\(", src.read_text(), re.M):
+            continue
+        rel = src.relative_to(pkg).with_suffix("")
+        parent, name = ".".join(rel.parts[:-1]), rel.parts[-1]
+        assert f"from ..{parent} import {name}" in app_src, f"app.py doesn't import {rel}"
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,8 @@ class FakeProtocol:
         self.sent.append(command)
         if isinstance(self.info, Exception):
             raise self.info
+        if command in ("restore_runtime_settings", "save"):
+            return "OK"
         return json.dumps(self.info)
 
 
@@ -404,7 +406,16 @@ async def test_staging_deploy_runs_every_step_and_never_arms_recovery(
     assert list(result["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
     assert flashed == [(["hat_v1"], tmp_path / "staging.hex")] and stored == [STAGING_VERSION]
     assert fleet.recovery is None  # #251: only a stable image arms auto-recovery
-    assert fleet.broadcasts == ["restore_runtime_settings", "save"]
+    # Settings on the target only: nothing is broadcast to the rest of the fleet.
+    assert fleet.broadcasts == []
+    hat = fleet.devices["hat_v1"].protocol.sent
+    assert [c for c in hat if c != "json info"] == ["restore_runtime_settings", "save"]
+    assert all(
+        c == "json info"
+        for d in fleet.devices.values()
+        if d.id != "hat_v1"
+        for c in d.protocol.sent
+    )
 
 
 @pytest.mark.parametrize(

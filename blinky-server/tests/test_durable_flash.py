@@ -364,7 +364,9 @@ def test_a_staging_deploy_cut_off_mid_flash_resumes_with_that_device(tmp_path: P
     assert log.count("flash dev-a start") == 1 and log.count("flash dev-b start") == 2
     assert log.count("test devices 3") == 1 and log.count("store staging b300") == 1
     assert not any(line.startswith("arm ") for line in log)  # never armed: not stable (#251)
-    assert log.count("broadcast save end") == 1
+    # Settings on each target, once (the replay doesn't redo them); never a fleet broadcast.
+    assert all(log.count(f"cmd {d} save") == 1 for d in ALL)
+    assert not any(line.startswith("broadcast ") for line in log)
 
 
 def test_a_deploy_cut_off_in_its_settings_stage_redoes_only_that(tmp_path: Path) -> None:

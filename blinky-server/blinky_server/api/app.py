@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from ..firmware import fleet_workflows  # noqa: F401  (registers fleet flash and deploy)
     from ..paths import data_dir
     from ..spark import workflows as _spark  # noqa: F401  (registers separate and train)
+    from ..testing import staging as _staging  # noqa: F401  (registers the staging suite)
     from ..testing import workflows  # noqa: F401  (registers the test workflows)
     from ..work import durable
 

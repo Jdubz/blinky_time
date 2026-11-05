@@ -102,7 +102,13 @@ GOOD_REPORT = {
         "played": 1,
         "results": [{"track": "t", "scores": {"C04C56F9": {"drums": {"kickR50": 0.8}}}}],
     },
-    "final": {"C04C56F9": {"version": {"pass": True}, "timing": {"onsetUs": 700}}},
+    "final": {
+        "C04C56F9": {
+            "version": {"pass": True},
+            "alerts": {"pass": True, "lines": []},
+            "timing": {"onsetUs": 700},
+        }
+    },
 }
 
 
@@ -131,10 +137,39 @@ def test_a_pass_reports_and_promotes_with_a_merge_commit() -> None:
     pr, text = g.comments[0]
     assert pr == "12" and text.startswith(staging.REPORT_HEADER + SHA) and "PASSED" in text
     assert "onsetUs" in text and "0.8" in text
-    assert ("pr", "merge", "77", "--repo", staging.GH_REPO, "--merge", "--auto") in g.calls
+    merge = (
+        "pr",
+        "merge",
+        "77",
+        "--repo",
+        staging.GH_REPO,
+        "--merge",
+        "--auto",
+        "--match-head-commit",
+        SHA,
+    )
+    assert merge in g.calls
     # Reported once: the next pass does nothing.
     staging.run_once(g, srv, listed)
     assert len(srv.submitted) == 1 and len(g.comments) == 1
+
+
+def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
+    """Staging moved on while the suite ran: the tested commit gets its status, the new head
+    its own run; nothing untested reaches the PR to master (#351 review)."""
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    staging.run_once(g, srv, listed)
+    newer = "n" * 40
+    real = g.__call__
+
+    def moved(*args: str, stdin: str | None = None) -> str:
+        if " ".join(args).startswith("api repos/Jdubz/blinky_time/branches/staging"):
+            return json.dumps({"commit": {"sha": newer}})
+        return real(*args, stdin=stdin)
+
+    state = staging.run_once(moved, srv, listed)
+    assert g.statuses[-1][0] == "success" and state["reported"] == SHA
+    assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
 
 
 def test_a_failed_report_fails_the_status_and_promotes_nothing() -> None:
@@ -181,6 +216,15 @@ def test_no_test_device_waits_without_reporting() -> None:
     g, srv = GitHub(), Server([LAMP], {})
     state = staging.run_once(g, srv, listed)
     assert "running" not in state and "reported" not in state and not srv.submitted
+
+
+def test_alert_lines_are_in_the_report() -> None:
+    bad = {**GOOD_REPORT, "passed": False}
+    bad["final"] = {
+        "C04C56F9": {"alerts": {"pass": False, "lines": ["[FALLBACK] x"]}, "timing": None}
+    }
+    text = staging.render(bad)
+    assert "| alerts | ❌ |" in text and "C04C56F9 [FALLBACK] x" in text
 
 
 def test_a_deploy_failure_renders_its_step() -> None:

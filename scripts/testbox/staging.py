@@ -6,8 +6,9 @@ deploy.py). One pass:
 
 1. A suite is in flight: poll it (GET /api/test/jobs/{id}). Finished: post the commit status
    HARDWARE_CONTEXT on its sha (success only if the report passed) and the report as a comment
-   on the PR that merged it into staging. On a pass, open the staging -> master PR if none is
-   open and turn on its auto-merge (a merge commit: master's tree is the tested tree).
+   on the PR that merged it into staging. On a pass, if staging's head is still that sha, open
+   the staging -> master PR if none is open and turn on its auto-merge, pinned to that sha (a
+   merge commit: master's tree is the tested tree).
 2. Otherwise, the staging head: already reported, nothing to do. Its staging build
    (staging-build.yml, artifact staging-firmware-<sha>) failed: post a failure. Not built yet:
    a pending status. Built: submit the suite (POST /api/test/staging) for every connected test
@@ -203,7 +204,8 @@ def promote(gh_: Gh, sha: str, report_url: str | None) -> str:
             body,
         ).strip()
         number = url.rsplit("/", 1)[-1]
-    gh_("pr", "merge", number, "--repo", GH_REPO, "--merge", "--auto")
+    # Pinned to the tested commit: GitHub refuses the merge if the head has moved since.
+    gh_("pr", "merge", number, "--repo", GH_REPO, "--merge", "--auto", "--match-head-commit", sha)
     return number
 
 
@@ -235,13 +237,11 @@ def render(report: dict[str, Any]) -> str:
     for section in ("health", "music", "final"):
         for dev, checks in (report.get(section) or {}).items():
             for name, c in checks.items():
-                if name == "alerts" or not isinstance(c, dict):
+                if not isinstance(c, dict) or "pass" not in c:
                     continue
-                if "pass" not in c:
-                    continue
-                detail = ", ".join(f"{k}={v}" for k, v in c.items() if k != "pass")
+                detail = ", ".join(f"{k}={v}" for k, v in c.items() if k not in ("pass", "lines"))
                 rows.append(f"| {dev[:12]} | {name} | {'✅' if c['pass'] else '❌'} | {detail} |")
-    lines += rows + [""]
+    lines += [*rows, ""]
     val = report.get("validation") or {}
     if val.get("results"):
         by_dev: dict[str, dict[str, list[float | None]]] = {}
@@ -269,9 +269,8 @@ def render(report: dict[str, Any]) -> str:
         lines.append(f"Onset-path timing ({dev[:12]}): {f.get('timing') or 'not reported'}")
     alerts = [
         (dev, a)
-        for section in ("health", "music")
-        for dev, c in (report.get(section) or {}).items()
-        for a in c.get("alerts", [])
+        for dev, f in (report.get("final") or {}).items()
+        for a in (f.get("alerts") or {}).get("lines", [])
     ]
     if alerts:
         lines += ["", "Firmware alerts:", "```"] + [f"{d[:12]} {a}" for d, a in alerts[:30]]
@@ -323,8 +322,14 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
     )
     log(f"{sha[:12]}: {'passed' if passed else 'FAILED'} ({url or 'no PR to comment on'})")
     if passed:
-        number = promote(gh_, sha, url)
-        log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
+        # Only the commit that was tested goes to master. Staging moved on during the suite:
+        # the new head gets its own run, and its own promotion.
+        head = staging_head(gh_)
+        if head != sha:
+            log(f"{sha[:12]}: passed, but staging is now at {head[:12]}; not promoting")
+        else:
+            number = promote(gh_, sha, url)
+            log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
     state["reported"] = sha
     state.pop("running", None)
 
