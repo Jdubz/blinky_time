@@ -24,7 +24,7 @@ The reviewer is the only writer. Training (prepare_dataset.py) and validation
 (blinky-server's track_discovery) are the readers.
 
 A near-identical copy lives at
-``blinky-server/blinky_server/testing/onset_label_merge.py`` so the validation
+``corpus/blinky_scoring/onset_label_merge.py`` (blinky-corpus) so the validation
 harness can apply edits without depending on the ml-training package.
 **If you change this file, change the other one.**
 """

@@ -32,7 +32,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-GH_REPO = "Jdubz/blinky_time"
+# The firmware and its staging flow live in blinky-firmware (blinky_time#357): its staging
+# head is what gets tested, and its statuses and PRs are what this posts.
+GH_REPO = "Jdubz/blinky-firmware"
+LEGACY_REPO = "Jdubz/blinky_time"  # where runs from before the split came from
 BRANCH = "staging"
 HARDWARE_CONTEXT = "Hardware test (staging)"  # deploy.py gates staging -> master merges on it
 HOME = Path.home()
@@ -44,7 +47,7 @@ STATE = (
     / "staging.json"
 )
 BUILD_WORKFLOW = "staging-build.yml"
-CORPUS = "blinky-test-player/music/edm"
+CORPUS = "corpus/edm"  # the blinky-corpus submodule
 REPORT_HEADER = "## Hardware test (staging) — "
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
 
@@ -102,7 +105,8 @@ def test_devices(devices: list[dict[str, Any]], listed: set[str]) -> list[str]:
 
 
 def listed_test_devices() -> set[str]:
-    data = json.loads((LINK / "devices" / "test_devices.json").read_text())
+    # The firmware repo's list (the firmware/ submodule): the same one its tools enforce.
+    data = json.loads((LINK / "firmware" / "devices" / "test_devices.json").read_text())
     return set(data["test_devices"])
 
 
@@ -136,12 +140,14 @@ def build_state(gh_: Gh, sha: str) -> str:
     return "pending"
 
 
-def post_status(gh_: Gh, sha: str, state: str, description: str, url: str | None = None) -> None:
+def post_status(
+    gh_: Gh, sha: str, state: str, description: str, url: str | None = None, repo: str = GH_REPO
+) -> None:
     args = [
         "api",
         "-X",
         "POST",
-        f"repos/{GH_REPO}/statuses/{sha}",
+        f"repos/{repo}/statuses/{sha}",
         "-f",
         f"state={state}",
         "-f",
@@ -154,9 +160,9 @@ def post_status(gh_: Gh, sha: str, state: str, description: str, url: str | None
     gh_(*args)
 
 
-def staging_pr(gh_: Gh, sha: str) -> int | None:
+def staging_pr(gh_: Gh, sha: str, repo: str = GH_REPO) -> int | None:
     """The PR that merged sha into staging, if any."""
-    for p in gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{sha}/pulls") or []:
+    for p in gh_json(gh_, "api", f"repos/{repo}/commits/{sha}/pulls") or []:
         if p.get("merged_at") and p["base"]["ref"] == BRANCH:
             return int(p["number"])
     return None
@@ -297,6 +303,9 @@ def save_state(state: dict[str, Any]) -> None:
 
 def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
     sha = state["running"]["sha"]
+    # The repo the run was started for: a run from before the split (no "repo") belongs to
+    # blinky_time, which no longer promotes through staging (blinky_time#357).
+    repo = state["running"].get("repo", LEGACY_REPO)
     report = job.get("result") if job.get("status") == "complete" else None
     if not isinstance(report, dict) or "passed" not in report:
         report = {
@@ -306,10 +315,10 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
             "deploy": {"pass": False, "failed_step": "suite", "message": job.get("error")},
         }
     text = render(report)
-    pr = staging_pr(gh_, sha)
+    pr = staging_pr(gh_, sha, repo)
     url = None
     if pr is not None:
-        url = gh_("pr", "comment", str(pr), "--repo", GH_REPO, "--body", text).strip() or None
+        url = gh_("pr", "comment", str(pr), "--repo", repo, "--body", text).strip() or None
     passed = bool(report["passed"])
     post_status(
         gh_,
@@ -319,9 +328,12 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
         if passed
         else "FAILED: see the report",
         url,
+        repo,
     )
     log(f"{sha[:12]}: {'passed' if passed else 'FAILED'} ({url or 'no PR to comment on'})")
-    if passed:
+    if passed and repo != GH_REPO:
+        log(f"{sha[:12]}: a {repo} run from before the split; reported, not promoted")
+    elif passed:
         # Only the commit that was tested goes to master. Staging moved on during the suite:
         # the new head gets its own run, and its own promotion.
         head = staging_head(gh_)
@@ -416,7 +428,7 @@ def run_once(
     except (urllib.error.URLError, OSError) as e:
         log(f"server not answering ({e}); next pass")
         return state
-    state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices}
+    state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices, "repo": GH_REPO}
     state.pop("waiting", None)
     save_state(state)
     post_status(gh_, sha, "pending", f"testing on {len(devices)} test device(s)")

@@ -13,10 +13,11 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from blinky_scoring.types import TestData
+
 from ..device.protocol import json_object_from
 from .audio_player import PlaybackResult, play_audio
 from .test_session import TestSession
-from .types import TestData
 
 if TYPE_CHECKING:
     from ..device.device import Device

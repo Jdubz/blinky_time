@@ -35,7 +35,7 @@ class GitHub:
     def __call__(self, *args: str, stdin: str | None = None) -> str:
         self.calls.append(args)
         a = " ".join(args)
-        if a.startswith("api repos/Jdubz/blinky_time/branches/staging"):
+        if a.startswith(f"api repos/{staging.GH_REPO}/branches/staging"):
             return json.dumps({"commit": {"sha": SHA}})
         if "actions/artifacts?name=staging-firmware-" + SHA in a:
             arts = [{"expired": False}] if self.artifact else []
@@ -50,11 +50,11 @@ class GitHub:
             return json.dumps([{"number": 12, "merged_at": "x", "base": {"ref": "staging"}}])
         if args[:2] == ("pr", "comment"):
             self.comments.append((args[2], args[-1]))
-            return f"https://github.com/Jdubz/blinky_time/pull/{args[2]}#issuecomment-1\n"
+            return f"https://github.com/{staging.GH_REPO}/pull/{args[2]}#issuecomment-1\n"
         if args[:2] == ("pr", "list"):
             return json.dumps(self.open_promotion)
         if args[:2] == ("pr", "create"):
-            return "https://github.com/Jdubz/blinky_time/pull/77\n"
+            return f"https://github.com/{staging.GH_REPO}/pull/77\n"
         if args[:2] == ("pr", "merge"):
             return ""
         raise AssertionError(args)
@@ -163,13 +163,29 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
     real = g.__call__
 
     def moved(*args: str, stdin: str | None = None) -> str:
-        if " ".join(args).startswith("api repos/Jdubz/blinky_time/branches/staging"):
+        if " ".join(args).startswith(f"api repos/{staging.GH_REPO}/branches/staging"):
             return json.dumps({"commit": {"sha": newer}})
         return real(*args, stdin=stdin)
 
     state = staging.run_once(moved, srv, listed)
     assert g.statuses[-1][0] == "success" and state["reported"] == SHA
     assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
+
+
+def test_a_run_from_before_the_split_finishes_in_its_own_repo() -> None:
+    """A suite started for blinky_time before the runner moved to blinky-firmware (no "repo"
+    in its state) is reported against blinky_time, and never promoted (#362 review)."""
+    staging.save_state({"running": {"sha": SHA, "job": "job-1", "devices": ["C04C56F9"]}})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    state = staging.run_once(g, srv, listed)
+    assert state["reported"] == SHA and "running" not in state
+    status = [
+        c
+        for c in g.calls
+        if c[:4] == ("api", "-X", "POST", f"repos/{staging.LEGACY_REPO}/statuses/{SHA}")
+    ]
+    assert status and not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
+    assert all(staging.LEGACY_REPO in c for c in g.calls if c[:2] == ("pr", "comment"))
 
 
 def test_a_failed_report_fails_the_status_and_promotes_nothing() -> None:

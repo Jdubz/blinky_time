@@ -38,6 +38,8 @@ include = ["blinky_server*"]
 # ── mypy ──
 [tool.mypy]
 python_version = "3.11"
+# blinky_scoring comes from the blinky-corpus submodule (blinky_server/testing/__init__.py).
+mypy_path = "../corpus"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

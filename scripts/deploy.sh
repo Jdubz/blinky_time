@@ -10,7 +10,7 @@
 #   --release bN    a specific STABLE release (e.g. to pin or roll back a subset)
 # Candidates and dev builds never go through blinky-server: it keeps the last
 # uploaded image for auto-recovery and could re-flash it to production devices
-# (#251). Put a test device on this machine's USB and use tools/deploy_local.py.
+# (#251). Put a test device on this machine's USB and use blinky-firmware's tools/deploy_local.py.
 #
 # Usage:
 #   ./scripts/deploy.sh --devices=all                  # latest stable to every device
@@ -127,7 +127,7 @@ DEPLOY_TOOL_HEADER="X-Deploy-Tool: deploy.sh-${GIT_SHA}"
 REL_DIR="/tmp/blinky-release"
 REL_ARGS=(download --out "$REL_DIR")
 [[ -n "$RELEASE" ]] && REL_ARGS+=(--tag "$RELEASE")
-REL_JSON=$(python3 tools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
+REL_JSON=$(python3 firmware/tools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
 rel() { python3 -c "import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])" "$REL_JSON" "$1"; }
 if [[ "$(rel stable)" != "True" ]]; then
     fail "$(rel tag) is not a stable release. deploy.sh flashes stable releases only; gate a candidate with tools/release_gate.py on a test device (docs/RELEASE_PROCESS.md)" 6
