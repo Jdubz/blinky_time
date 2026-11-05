@@ -207,7 +207,8 @@ deploy_worktree() {
 
 install_service() {
   local unit
-  for unit in blinky-server.service blinky-deploy.service blinky-deploy.timer; do
+  for unit in blinky-server.service blinky-deploy.service blinky-deploy.timer \
+    blinky-staging.service blinky-staging.timer; do
     sed -e "s|@USER@|$TARGET_USER|g" -e "s|@SERVER_DIR@|$DEPLOY_DIR/blinky-server|g" \
       -e "s|@DEPLOY_DIR@|$DEPLOY_DIR|g" -e "s|@HOME_DIR@|$HOME_DIR|g" \
       "$HERE/$unit.in" > "/etc/systemd/system/$unit" || return 1
@@ -215,7 +216,8 @@ install_service() {
   systemctl daemon-reload &&
     systemctl enable blinky-server.service &&
     systemctl restart blinky-server.service &&
-    systemctl enable --now blinky-deploy.timer || return 1
+    systemctl enable --now blinky-deploy.timer &&
+    systemctl enable --now blinky-staging.timer || return 1
   local i
   for i in $(seq 1 30); do
     curl -fsS -o /dev/null http://127.0.0.1:8420/api/devices && return 0

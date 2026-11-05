@@ -1,5 +1,7 @@
 """Runs the real ``test.validate`` workflow against a fake fleet in its own process, so
-test_durable_work.py can kill it for real and start it again (#325).
+test_durable_work.py can kill it for real and start it again (#325). WORKFLOW names another
+test job instead; ``staging`` runs the staging suite (#349) with the deploy, json info, the
+stream and json rhythm faked, its validation playbacks counted like validate's.
 
     python -m tests.durable_harness start  OUT KILL   # KILL: none | crash:N | drain:N
     python -m tests.durable_harness resume OUT [late]  # late: devices reconnect 1.5 s in
@@ -16,14 +18,16 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from blinky_server.api.deps import set_fleet
 from blinky_server.device.device import DeviceState
+from blinky_server.firmware import deploy_pipeline
 from blinky_server.paths import data_dir
-from blinky_server.testing import workflows
+from blinky_server.testing import staging, workflows
 from blinky_server.work import durable
 
 TRACKS = ["alpha", "bravo", "charlie"]
@@ -59,6 +63,8 @@ class Protocol:
 
     async def send_command(self, cmd: str) -> str:
         global setup_drain
+        if cmd == "json rhythm":  # the staging suite's beat pace: 120 bpm, counted exactly
+            return json.dumps({"bpm": 120.0, "beatCount": int(2 * time.time()) % 65536})
         effect(f"{self.dev} cmd {cmd}")
         if kill == "drain-setup" and cmd == "restore_runtime_settings" and not setup_drain:
             setup_drain = True  # SIGTERM in the middle of the session's device setup
@@ -72,8 +78,25 @@ class Protocol:
         effect(f"{self.dev} stream off")
 
 
+def subscribe_stream() -> asyncio.Queue[dict[str, Any] | None]:
+    """The staging suite's music check: a loud stream with a pulse every other line."""
+    q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    for n in range(200):
+        q.put_nowait({"type": "audio", "data": {"a": {"l": 0.3}, "m": {"p": float(n % 2)}}})
+    return q
+
+
 devices = {
-    d: SimpleNamespace(id=d, state=DeviceState.CONNECTED, protocol=Protocol(d)) for d in DEVICES
+    d: SimpleNamespace(
+        id=d,
+        state=DeviceState.CONNECTED,
+        protocol=Protocol(d),
+        alert_count=0,
+        alerts=[],
+        subscribe_stream=subscribe_stream,
+        unsubscribe_stream=lambda q: None,
+    )
+    for d in DEVICES
 }
 set_fleet(SimpleNamespace(get_device=devices.get, get_all_devices=lambda: list(devices.values())))
 
@@ -149,6 +172,49 @@ workflows.acquire_audio_lock = lambda ids: True
 workflows.release_audio_lock = lambda: None
 
 
+STAGING_VERSION = "b300-dev-abababab"
+
+
+async def fake_deploy(*a: Any, **k: Any) -> dict[str, Any]:
+    effect(f"deploy {k['staging_sha'][:8]}")
+    return {"status": "ok", "version": STAGING_VERSION, "steps": {"store": {"flash_t": 0.0}}}
+
+
+async def fake_info(device_id: str) -> dict[str, Any]:
+    # Wall-clock millis: uptime keeps rising across this process's restart, as on a chip
+    # that the server's restart doesn't reset.
+    return {
+        "version": STAGING_VERSION,
+        "millis": int(time.time() * 1000),
+        "fps": 120.0,
+        "maxFrameMs": 20,
+        "audioOverruns": 0,
+    }
+
+
+async def fake_play_audio(*a: Any, **k: Any) -> Any:
+    await asyncio.sleep(0.01)
+    return SimpleNamespace(success=True)
+
+
+deploy_pipeline.run_deploy = fake_deploy  # type: ignore[assignment]
+staging._info = fake_info
+staging.play_audio = fake_play_audio
+staging.stop_audio = noop
+staging.HEALTH_POLL_S = 0.05
+STAGING_REQ = {
+    "sha": "ab" * 20,
+    "device_ids": DEVICES,
+    "track_dir": "/fake",
+    "limits": {
+        "stable_minutes": 0.005,
+        "music_seconds": 0.3,
+        "pace_seconds": 2.5,
+        "validation_ms": 1000,
+    },
+}
+
+
 async def reconnect_late() -> None:
     """As after a real restart: discovery connects the devices a while after the start."""
     for d in devices.values():
@@ -187,7 +253,9 @@ async def main() -> None:
                 },
             ),
         }
-        if WORKFLOW == "capture-nn":
+        if WORKFLOW == "staging":
+            wid = await durable.submit(staging.staging_suite, STAGING_REQ)
+        elif WORKFLOW == "capture-nn":
             wid = await durable.submit(workflows.capture_nn, "dev-a", 1000.0, str(out / "c.jsonl"))
         else:
             fn, req = jobs[WORKFLOW]

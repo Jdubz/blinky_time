@@ -37,6 +37,13 @@ class DeployRequest(BaseModel):
     )
 
 
+class StagingDeployRequest(BaseModel):
+    sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The staging commit (full sha).")
+    device_ids: list[str] = Field(
+        ..., min_length=1, description="Explicit TEST device IDs (devices/test_devices.json)."
+    )
+
+
 class FlashRequest(BaseModel):
     firmware_path: str = Field(..., description="Path to .hex or .uf2 firmware file on the server")
     device_ids: list[str] | None = Field(

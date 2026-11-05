@@ -63,6 +63,7 @@ class DeviceProtocol:
         # Streaming data callbacks
         self._on_stream_line: Callable[[str], None] | None = None
         self._on_raw_line: Callable[[str], None] | None = None
+        self._on_alert: Callable[[str], None] | None = None
 
         # Wire up the transport line callback
         transport.on_line(self._handle_line)
@@ -78,6 +79,11 @@ class DeviceProtocol:
     def on_raw_line(self, callback: Callable[[str], None]) -> None:
         """Register callback for non-streaming lines (log output, etc.)."""
         self._on_raw_line = callback
+
+    def on_alert(self, callback: Callable[[str], None]) -> None:
+        """Register callback for firmware [ASSERT] / [FALLBACK] lines. It sees every one,
+        including those that arrive in the middle of a command's response."""
+        self._on_alert = callback
 
     async def send_command(self, command: str, timeout: float | None = None) -> str:
         """Send a command and wait for the multi-line response.
@@ -253,6 +259,10 @@ class DeviceProtocol:
 
     def _handle_line(self, line: str) -> None:
         """Route an incoming line from the transport."""
+        # Firmware alerts first: one interleaved with a command's response is still an alert
+        # (it also stays in the response, as before).
+        if self._on_alert and ("[ASSERT]" in line or "[FALLBACK]" in line):
+            self._on_alert(line)
         # Streaming JSON data - route to subscribers
         if line.startswith("{"):
             if self._on_stream_line and not self._pending:

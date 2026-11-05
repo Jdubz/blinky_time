@@ -7,17 +7,18 @@ for progress and results. While the server is restarting, submissions answer 503
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..testing.track_discovery import discover_tracks
 from ..work import durable, jobs
-from .deps import get_fleet
+from .deps import get_fleet, require_api_key
 
 router = APIRouter(prefix="/test", tags=["testing"])
 
@@ -51,6 +52,14 @@ class ValidateRequest(BaseModel):
     # Adds ~20-50 KB per device per track to the result payload -- don't
     # enable for routine validation runs. See ml-training/analysis/run_gate_b.py.
     persist_raw: bool = False
+
+
+class StagingSuiteRequest(BaseModel):
+    sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The staging commit (full sha).")
+    device_ids: list[str] = Field(..., min_length=1, description="Explicit TEST device IDs.")
+    track_dir: str = Field(..., description="The validation corpus (blinky-test-player/music/edm)")
+    track_names: list[str] | None = None
+    limits: dict[str, float] | None = None
 
 
 class ParamSweepRequest(BaseModel):
@@ -110,6 +119,39 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
     from ..testing.workflows import validate as wf
 
     return await _submit(wf, body.model_dump())
+
+
+@router.post("/staging", dependencies=[Depends(require_api_key)])
+async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
+    """The staging hardware suite (#349, testing/staging.py): deploy the staging build of
+    ``sha`` to the test devices, then health, music, beat pace, validation and timing.
+
+    Refused unless the server runs with --staging (the test box). Returns a job_id; poll
+    /test/jobs/{id}. The result is the report, ``passed`` its verdict.
+    """
+    from ..firmware import deploy_pipeline
+    from ..testing.staging import DEFAULTS, staging_suite
+
+    if not get_fleet().staging_enabled:
+        raise HTTPException(
+            403, "staging runs are off on this server (start it with --staging: the test box)"
+        )
+    unknown = sorted(set(body.limits or {}) - set(DEFAULTS))
+    if unknown:
+        raise HTTPException(422, f"unknown limits: {unknown}")
+    from . import routes_firmware
+
+    # One deploy-bearing job at a time, the suite included (routes_firmware._deploy_active):
+    # the same lock makes the check and the submit one step.
+    async with routes_firmware._deploy_lock:
+        if await routes_firmware._deploy_active():
+            raise HTTPException(409, "A deploy or staging suite is already running")
+        try:
+            devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
+            await asyncio.to_thread(deploy_pipeline.require_test_devices, devices)
+        except deploy_pipeline.DeployError as e:
+            raise HTTPException(400, str(e)) from e
+        return await _submit(staging_suite, body.model_dump())
 
 
 @router.post("/param-sweep")
