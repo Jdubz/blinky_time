@@ -247,8 +247,8 @@ def test_a_refused_suite_is_a_failure_not_a_retry(code: int) -> None:
     assert "not test devices" in g.statuses[-1][1]
 
 
-@pytest.mark.parametrize("code", [409, 503])
-def test_a_busy_server_is_retried(code: int) -> None:
+@pytest.mark.parametrize("code", [409, 429, 500, 502, 503])
+def test_a_busy_or_failing_server_is_retried(code: int) -> None:
     g = GitHub()
     state = staging.run_once(g, Refusing(code), listed)
     assert "reported" not in state and not g.statuses

@@ -334,7 +334,7 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
     state.pop("running", None)
 
 
-RETRY_CODES = (409, 503)
+RETRY_CODES = (409, 429)  # 4xx that mean "not now"; every 5xx is retried too
 
 
 def _detail(e: urllib.error.HTTPError) -> str:
@@ -401,8 +401,9 @@ def run_once(
             {"sha": sha, "device_ids": devices, "track_dir": str(LINK / CORPUS)},
         )
     except urllib.error.HTTPError as e:
-        if e.code in RETRY_CODES:  # busy (a deploy or suite runs) or draining for a restart
-            log(f"{sha[:12]}: server busy ({e.code}); next pass")
+        if not (400 <= e.code < 500) or e.code in RETRY_CODES:
+            # Busy (a deploy or suite runs), draining for a restart, or a server error: next pass.
+            log(f"{sha[:12]}: server answered {e.code}; next pass")
             return state
         # Refused for good (403 not --staging, 400 not a test device, 422 bad request): a
         # failure with the server's reason, loudly, not a retry every pass forever.

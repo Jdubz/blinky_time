@@ -25,8 +25,12 @@ permissions:
   contents: write
   actions: read
 
+# One run per master commit: a shared group keeps only one PENDING run, so a burst of
+# merges (or a queued sign-release.yml, which used to share it) could drop a candidate.
+# Two commits' runs racing for the same build number fail loudly at `gh release create`
+# (the tag exists); re-run the later one.
 concurrency:
-  group: firmware-release
+  group: firmware-release-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -65,8 +69,8 @@ jobs:
     - name: One candidate per commit
       id: once
       run: |
-        have=$(gh release list --limit 30 --json tagName --jq '.[].tagName' | while read -r t; do
-                 [ "$(git rev-list -n 1 "$t" 2>/dev/null)" = "$SHA" ] && echo "$t"; done | head -1)
+        # A candidate is the tag b<N> on its commit (fetch-depth 0 fetched every tag).
+        have=$(git tag --points-at "$SHA" | grep -E '^b[0-9]+$' | head -1 || true)
         if [ -n "$have" ]; then
           echo "$SHA already has candidate $have; nothing to do"
           echo "skip=true" >> "$GITHUB_OUTPUT"
