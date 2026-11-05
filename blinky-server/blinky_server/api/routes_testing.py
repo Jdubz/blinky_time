@@ -12,11 +12,11 @@ import contextlib
 import os
 from typing import Any
 
+from blinky_scoring.track_discovery import discover_tracks
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
-from ..testing.track_discovery import discover_tracks
 from ..work import durable, jobs
 from .deps import get_fleet, require_api_key
 

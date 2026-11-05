@@ -4,7 +4,7 @@
 Two copies exist intentionally:
 
 * ``ml-training/scripts/onset_label_merge.py`` — used by the training pipeline.
-* ``blinky-server/blinky_server/testing/onset_label_merge.py`` — used by the
+* ``corpus/blinky_scoring/onset_label_merge.py`` (blinky-corpus, #357) — used by the
   blinky-server validation harness, which runs on blinkyhost (a Raspberry Pi)
   where the ml-training package is intentionally not installed.
 
@@ -25,7 +25,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 FILE_A = REPO / "ml-training" / "scripts" / "onset_label_merge.py"
-FILE_B = REPO / "blinky-server" / "blinky_server" / "testing" / "onset_label_merge.py"
+FILE_B = REPO / "corpus" / "blinky_scoring" / "onset_label_merge.py"
 
 
 def _strip_module_docstring(src: str) -> str:

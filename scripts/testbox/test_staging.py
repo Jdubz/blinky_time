@@ -35,7 +35,7 @@ class GitHub:
     def __call__(self, *args: str, stdin: str | None = None) -> str:
         self.calls.append(args)
         a = " ".join(args)
-        if a.startswith("api repos/Jdubz/blinky_time/branches/staging"):
+        if a.startswith(f"api repos/{staging.GH_REPO}/branches/staging"):
             return json.dumps({"commit": {"sha": SHA}})
         if "actions/artifacts?name=staging-firmware-" + SHA in a:
             arts = [{"expired": False}] if self.artifact else []
@@ -50,11 +50,11 @@ class GitHub:
             return json.dumps([{"number": 12, "merged_at": "x", "base": {"ref": "staging"}}])
         if args[:2] == ("pr", "comment"):
             self.comments.append((args[2], args[-1]))
-            return f"https://github.com/Jdubz/blinky_time/pull/{args[2]}#issuecomment-1\n"
+            return f"https://github.com/{staging.GH_REPO}/pull/{args[2]}#issuecomment-1\n"
         if args[:2] == ("pr", "list"):
             return json.dumps(self.open_promotion)
         if args[:2] == ("pr", "create"):
-            return "https://github.com/Jdubz/blinky_time/pull/77\n"
+            return f"https://github.com/{staging.GH_REPO}/pull/77\n"
         if args[:2] == ("pr", "merge"):
             return ""
         raise AssertionError(args)
@@ -163,7 +163,7 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
     real = g.__call__
 
     def moved(*args: str, stdin: str | None = None) -> str:
-        if " ".join(args).startswith("api repos/Jdubz/blinky_time/branches/staging"):
+        if " ".join(args).startswith(f"api repos/{staging.GH_REPO}/branches/staging"):
             return json.dumps({"commit": {"sha": newer}})
         return real(*args, stdin=stdin)
 

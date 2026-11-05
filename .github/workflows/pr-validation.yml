@@ -266,6 +266,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # The server runs the firmware repo's tools/ and scores with the corpus's blinky_scoring
+    # (#357); never the bootloader submodule.
+    - name: Firmware and corpus submodules
+      working-directory: .
+      run: git submodule update --init --depth 1 firmware corpus
+
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
@@ -305,6 +311,10 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    # The edm labels and blinky_scoring, for test_drum_label_sync (#357).
+    - name: Corpus submodule
+      run: git submodule update --init --depth 1 corpus
 
     - name: Setup Python
       uses: actions/setup-python@v5

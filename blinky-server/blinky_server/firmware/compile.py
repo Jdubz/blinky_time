@@ -46,14 +46,23 @@ def find_arduino_cli() -> str | None:
 
 
 def find_project_root() -> Path:
-    """Find the blinky_time project root."""
-    # Walk up from this file to find blinky-things/
+    """The firmware checkout: blinky_time's ``firmware/`` submodule (blinky-firmware, #357).
+
+    Its ``tools/`` (release client, hex/UF2 validators, test-device list) and its sketch are
+    what the server runs and flashes, at the commit blinky_time pins. A missing submodule is
+    an error, never a fallback to some other copy.
+    """
     p = Path(__file__).resolve()
     for _ in range(10):
         p = p.parent
-        if (p / SKETCH_DIR / f"{SKETCH_DIR}.ino").exists():
-            return p
-    raise FileNotFoundError("Cannot find blinky_time project root")
+        if (p / "blinky-server").is_dir():
+            fw = p / "firmware"
+            if not (fw / SKETCH_DIR / f"{SKETCH_DIR}.ino").exists():
+                raise FileNotFoundError(
+                    f"{fw} has no firmware checkout: run `git submodule update --init firmware`"
+                )
+            return fw
+    raise FileNotFoundError("Cannot find the blinky_time checkout (no blinky-server/ above)")
 
 
 # Version.h and the sketch are shared by every compile: gen_version.sh

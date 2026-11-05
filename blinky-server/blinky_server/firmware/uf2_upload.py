@@ -46,14 +46,11 @@ _WRITE_COMPLETE_RE = re.compile(r"\[PASS\] Wrote ([\d,]+) ?/ ?([\d,]+) bytes")
 
 
 def _find_uf2_tool() -> Path | None:
-    """Find uf2_upload.py in the project."""
-    p = Path(__file__).resolve()
-    for _ in range(10):
-        p = p.parent
-        candidate = p / "tools" / "uf2_upload.py"
-        if candidate.exists():
-            return candidate
-    return None
+    """tools/uf2_upload.py in the firmware checkout (compile.find_project_root)."""
+    from .compile import find_project_root
+
+    candidate = find_project_root() / "tools" / "uf2_upload.py"
+    return candidate if candidate.exists() else None
 
 
 def _get_usb_dev_path(serial_port: str) -> str | None:
@@ -112,14 +109,11 @@ def _get_usb_dev_path(serial_port: str) -> str | None:
 
 
 def _find_usb_reset_tool() -> Path | None:
-    """Find the usb_reset.py helper in tools/."""
-    p = Path(__file__).resolve()
-    for _ in range(10):
-        p = p.parent
-        candidate = p / "tools" / "usb_reset.py"
-        if candidate.exists():
-            return candidate
-    return None
+    """tools/usb_reset.py in the firmware checkout (compile.find_project_root)."""
+    from .compile import find_project_root
+
+    candidate = find_project_root() / "tools" / "usb_reset.py"
+    return candidate if candidate.exists() else None
 
 
 async def _usb_reset_device(usb_dev_path: str | None) -> bool:

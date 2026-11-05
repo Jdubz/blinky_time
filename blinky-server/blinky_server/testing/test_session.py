@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any
 
-from .types import MusicState, SignalFrame, TestData, TransientEvent
+from blinky_scoring.types import MusicState, SignalFrame, TestData, TransientEvent
 
 log = logging.getLogger(__name__)
 

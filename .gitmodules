@@ -2,3 +2,9 @@
 	path = bootloader/src
 	url = https://github.com/Jdubz/Adafruit_nRF52_Bootloader.git
 	branch = blinky-local-patches
+[submodule "firmware"]
+	path = firmware
+	url = https://github.com/Jdubz/blinky-firmware.git
+[submodule "corpus"]
+	path = corpus
+	url = https://github.com/Jdubz/blinky-corpus.git

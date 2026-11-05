@@ -20,6 +20,13 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from blinky_scoring.scoring import format_score_summary, score_device_run
+from blinky_scoring.track_discovery import (
+    discover_tracks,
+    load_ground_truth,
+    load_track_manifest,
+    segment_ground_truth,
+)
 from dbos import DBOS
 
 from ..paths import data_dir
@@ -27,7 +34,6 @@ from ..work import durable, jobs
 from .audio_lock import acquire_audio_lock, release_audio_lock
 from .audio_player import kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
-from .scoring import format_score_summary, score_device_run
 from .test_runner import (
     INTER_RUN_GAP_S,
     _aggregate_sweep_results,
@@ -38,12 +44,6 @@ from .test_runner import (
     _serialize_raw_capture,
     _start_streaming,
     _stop_streaming,
-)
-from .track_discovery import (
-    discover_tracks,
-    load_ground_truth,
-    load_track_manifest,
-    segment_ground_truth,
 )
 
 log = logging.getLogger(__name__)

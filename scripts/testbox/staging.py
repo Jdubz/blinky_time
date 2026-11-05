@@ -32,7 +32,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-GH_REPO = "Jdubz/blinky_time"
+# The firmware and its staging flow live in blinky-firmware (blinky_time#357): its staging
+# head is what gets tested, and its statuses and PRs are what this posts.
+GH_REPO = "Jdubz/blinky-firmware"
 BRANCH = "staging"
 HARDWARE_CONTEXT = "Hardware test (staging)"  # deploy.py gates staging -> master merges on it
 HOME = Path.home()
@@ -44,7 +46,7 @@ STATE = (
     / "staging.json"
 )
 BUILD_WORKFLOW = "staging-build.yml"
-CORPUS = "blinky-test-player/music/edm"
+CORPUS = "corpus/edm"  # the blinky-corpus submodule
 REPORT_HEADER = "## Hardware test (staging) — "
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
 
@@ -102,7 +104,8 @@ def test_devices(devices: list[dict[str, Any]], listed: set[str]) -> list[str]:
 
 
 def listed_test_devices() -> set[str]:
-    data = json.loads((LINK / "devices" / "test_devices.json").read_text())
+    # The firmware repo's list (the firmware/ submodule): the same one its tools enforce.
+    data = json.loads((LINK / "firmware" / "devices" / "test_devices.json").read_text())
     return set(data["test_devices"])
 
 
