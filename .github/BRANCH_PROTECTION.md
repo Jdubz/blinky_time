@@ -1,55 +1,37 @@
 # Branch Protection Configuration
 
-This document records the branch protection on the blinky_time repository. `master` is the only protected branch (see [BRANCHING_STRATEGY.md](BRANCHING_STRATEGY.md)).
+The protection on blinky_time's `master` (see [BRANCHING_STRATEGY.md](BRANCHING_STRATEGY.md)). It's a **repository ruleset**, not classic branch protection: Settings → Rules → Rulesets → "master (default branch: tooling, CI + PR)", targeting the default branch.
 
-Protection uses a **repository ruleset** named `master` (Settings → Rules → Rulesets), not classic branch protection. The ruleset targets the default branch (`master`).
-
-## Master Branch Ruleset (current, as of 2026-10-21)
+## Master ruleset (as of 2026-11-05)
 
 - ✅ **Restrict deletions**
 - ✅ **Block force pushes** (`non_fast_forward`)
-- ✅ **Require a pull request before merging**
-  - Required approvals: 0
-  - Allowed merge methods: merge, squash, rebase
-- ✅ **Require status checks to pass** (branch must be up to date with master)
+- ✅ **Require a pull request before merging**: 0 approvals; merge, squash or rebase
+- ✅ **Copilot code review** on every PR
+- ✅ **Require status checks to pass** (branch up to date with master):
+  - `Blinky Server Tests`
   - `Blinky Console Tests`
   - `Documentation Check`
-  - `Static Analysis (cppcheck)`
-  - `Static Init Safety Check`
-  - `Syntax Validation`
-  - `Code Quality`
-- ✅ **Copilot code review** rule enabled
-- **Bypass:** repository admins, for pull requests only
+  - `Feature Parity (Python ↔ firmware)`
+  - `Trainer meets the Spark gpu_task contract (#304, #305)`
+  - `ADTOF drum labeler (#284)`
 
-The required check names are the `name:` fields of jobs in `.github/workflows/pr-validation.yml`. If you rename a job, update the ruleset, or PRs will wait forever on a check that never reports.
+The Claude review (`claude-review`) is not a required check: it's advisory and never fails a PR. Its sha-stamped verdict is what the test box deployer reads (CLAUDE.md).
 
-## Checks that run but are not required
+A required check's name must match the job's `name:` exactly. Quote a job name that contains ` #`: unquoted, YAML reads the rest as a comment and the check gets a truncated name.
 
-`pr-validation.yml` also runs these jobs. They are not in the ruleset, so a red result doesn't block the merge button; treat them as blocking anyway:
-
-- `Compile Firmware` (pinned toolchain, `scripts/build.sh`)
-- `OTA Manifest (firmware verifier vs release signer)`
-- `Absolute Timing (generators + rhythm phase, #259-#261)`
-- `Tracker Harness (UBSan stress + corpus gate)`
-- `Tracker Harness with real onset NN (host TFLite Micro)`
-- `Onset Model Input Check`
-- `Feature Parity (Python ↔ firmware)`
-- `Blinky Server Tests`
-
-`release.yml` adds its own gate: it refuses to build a candidate from a commit without a successful `PR Validation` run on master.
-
-## Repository Settings
-
-- **Default branch**: `master`
-- **Merge button**: merge commits, squash merging and rebase merging allowed
-- **Automatically delete head branches**: off
-
-## Checking or Changing the Ruleset
+## Changing it
 
 ```bash
-# List rulesets, then show the master ruleset's rules
-gh api repos/Jdubz/blinky_time/rulesets
-gh api repos/Jdubz/blinky_time/rulesets/<id> --jq '.rules'
+gh api repos/Jdubz/blinky_time/rulesets                 # list
+gh api repos/Jdubz/blinky_time/rulesets/8415633 > rs.json
+# edit rules / required_status_checks, then:
+gh api -X PUT repos/Jdubz/blinky_time/rulesets/8415633 --input rs.json
 ```
 
-Change it in the GitHub UI (Settings → Rules → Rulesets → `master`), then update this file.
+Rename a check in the workflow and in the ruleset in the same step, or PRs wait for a check that never reports.
+
+## Other repos
+
+- **blinky-firmware**: a `staging` ruleset (the default branch: PR, Copilot review, the firmware CI checks) and a `master` ruleset (merge commits only; the same checks plus `Master takes staging only` and `Hardware test (staging)`). See its `docs/RELEASE_PROCESS.md`.
+- **blinky-corpus**: a `main` ruleset (PR, Copilot review, `Scoring tests`).
