@@ -83,7 +83,7 @@ async def test_slow_flash_commands_get_longer_timeout_floor(
     proto = DeviceProtocol(transport)  # type: ignore[arg-type]
     captured: list[float] = []
 
-    async def _capture(command: str, timeout: float) -> str:
+    async def _capture(command: str, timeout: float, ack: bool = False) -> str:
         captured.append(timeout)
         return "OK"
 
@@ -116,7 +116,7 @@ async def test_slow_flash_floor_never_shortens_ble_timeout() -> None:
     proto = DeviceProtocol(ble_transport)  # type: ignore[arg-type]
     captured: list[float] = []
 
-    async def _capture(command: str, timeout: float) -> str:
+    async def _capture(command: str, timeout: float, ack: bool = False) -> str:
         captured.append(timeout)
         return "OK"
 
