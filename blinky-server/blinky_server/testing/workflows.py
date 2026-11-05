@@ -187,6 +187,14 @@ async def plan(
     return {"devices": devices, "tracks": tracks}
 
 
+def track_seconds(track: dict[str, Any]) -> float:
+    """How long a track's labels say it is (the onset labels' durationMs)."""
+    gt = load_ground_truth(
+        track["ground_truth"], track.get("human_edits"), track.get("drum_labels")
+    )
+    return float(gt.duration_ms) / 1000
+
+
 def _ground_truth(track: dict[str, Any], duration_ms: float) -> Any:
     return segment_ground_truth(
         load_ground_truth(

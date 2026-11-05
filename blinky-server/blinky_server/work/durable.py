@@ -48,7 +48,7 @@ from dbos import DBOS, DBOSConfig, SetWorkflowID
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "blinky-work-1"
+SCHEMA_VERSION = "blinky-work-2"  # 2: test.staging plays each track once (pace_track)
 DB_FILE = "work.sqlite"
 # A step that hasn't finished after this long while draining is a hung step, not a long one
 # (a track is at most a few minutes, a flash a few more): give up waiting, loudly. It runs

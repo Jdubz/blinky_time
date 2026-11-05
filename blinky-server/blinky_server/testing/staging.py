@@ -6,11 +6,13 @@ puts a staging build on the test chips and tests it on real hardware.
    settings restore + save, the post-deploy version assertion).
 2. Health: ``stable_minutes`` of ``json info`` with no music, the bench gate's checks
    (tools/release_gate.py): fps floor, longest frame, no reboot, overrun growth.
-3. In a test session (runtime defaults, streaming), with the box speaker:
-   - music: the first track for ``music_seconds``: mean level and pulse-onset rate;
-   - beat pace: the same track for ``pace_seconds`` more: beats counted against the tempo
-     integrated over wall-clock time (release_gate.beat_pace);
-   - validation: every edm/ track once, scored like /api/test/validate (drum metrics).
+3. In a test session (runtime defaults, streaming), with the box speaker, every track is
+   played once:
+   - validation: every edm/ track, scored like /api/test/validate (drum metrics);
+   - music and beat pace: the first track long enough to hold them goes on playing after its
+     validation window: ``music_seconds`` of mean level and pulse-onset rate, then
+     ``pace_seconds`` of beats counted against the tempo integrated over wall-clock time
+     (release_gate.beat_pace).
 4. After: version unchanged, no reboot across the whole job (uptime against wall time since
    the deploy), the onset-path timing from ``json info`` when the firmware reports it, and no
    firmware [ASSERT] / [FALLBACK] line from the flash on (the server's alert record,
@@ -32,6 +34,7 @@ import itertools
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ..device.device import alerts_since
@@ -39,7 +42,7 @@ from ..firmware import deploy_pipeline
 from ..paths import data_dir
 from ..work import durable, jobs
 from .audio_player import play_audio, stop_audio
-from .workflows import _connected, _fleet, plan, reserve, session, validation_run
+from .workflows import _connected, _fleet, plan, reserve, session, track_seconds, validation_run
 
 log = logging.getLogger(__name__)
 
@@ -235,6 +238,38 @@ async def music_and_pace(
     return out
 
 
+def choose_pace_track(
+    tracks: list[dict[str, Any]],
+    limits: dict[str, float],
+    seconds: Callable[[dict[str, Any]], float],
+) -> int | None:
+    """The first track with room, after its validation window, for the music and beat-pace
+    checks (plus ffplay's start-up), so they continue that track instead of replaying one.
+    None when no track is long enough."""
+    need = limits["validation_ms"] / 1000 + limits["music_seconds"] + limits["pace_seconds"] + 5
+    for i, t in enumerate(tracks):
+        if seconds(t) - float(t["seek"]) >= need:
+            return i
+    return None
+
+
+def no_pace_track(device_ids: list[str]) -> dict[str, Any]:
+    """The music section when no track is long enough: both checks fail, with the reason."""
+    return {
+        d: {
+            "music": {"pass": False, "detail": "no track long enough for the music check"},
+            "beatpace": {"pass": False, "detail": "no track long enough"},
+        }
+        for d in device_ids
+    }
+
+
+@durable.step
+async def pace_track(tracks: list[dict[str, Any]], limits: dict[str, float]) -> int | None:
+    """choose_pace_track over the labels' durations. A step: it reads the label files."""
+    return choose_pace_track(tracks, limits, track_seconds)
+
+
 @durable.step
 async def final_state(device_ids: list[str], version: str, start: dict[str, Any]) -> Any:
     """Version unchanged; no reboot since ``start`` (uptimes()): a chip that kept running has
@@ -336,9 +371,10 @@ async def _suite(
     if "error" in p:
         report["validation"] = {"pass": False, "detail": p["error"]}
     else:
+        pace_i = await pace_track(p["tracks"], limits)
+        if pace_i is None:
+            report["music"] = no_pace_track(p["devices"])
         async with session(p["devices"], reserved=True):
-            jobs.report(30, "music and beat pace")
-            report["music"] = await music_and_pace(p["devices"], p["tracks"][0], limits)
             results = []
             for n, track in enumerate(p["tracks"], 1):
                 jobs.report(30 + 65 * n // len(p["tracks"]), f"validation: {track['name']}")
@@ -346,6 +382,13 @@ async def _suite(
                     p["devices"], track, 1, limits["validation_ms"], 0.0, False
                 )
                 results.append(r if r is not None else {"track": track["name"], "failed": True})
+                if n - 1 == pace_i:
+                    # The same track goes on from where its validation window ended.
+                    jobs.report(
+                        30 + 65 * n // len(p["tracks"]), f"music and beat pace: {track['name']}"
+                    )
+                    rest = {**track, "seek": float(track["seek"]) + limits["validation_ms"] / 1000}
+                    report["music"] = await music_and_pace(p["devices"], rest, limits)
         played = [r for r in results if not r.get("failed")]
         report["validation"] = {
             "pass": len(played) == len(p["tracks"]),
