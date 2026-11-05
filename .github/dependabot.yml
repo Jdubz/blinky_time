@@ -8,5 +8,9 @@ updates:
     directory: /
     schedule:
       interval: daily
+    # Dependabot otherwise applies its own cooldown and skips commits younger than
+    # it (its first run here found nothing newer to offer). A day keeps a pin close.
+    cooldown:
+      default-days: 1
     commit-message:
       prefix: "submodules"
