@@ -231,9 +231,10 @@ def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
     verdict = checks_verdict(runs, REQUIRED_ON_MASTER, age, "master")
     if verdict[0] != "deploy":
         return verdict
-    if pr["head"].get("ref") == STAGING and (pr["head"].get("repo") or {}).get(
-        "full_name"
-    ) == GH_REPO:
+    if (
+        pr["head"].get("ref") == STAGING
+        and (pr["head"].get("repo") or {}).get("full_name") == GH_REPO
+    ):
         statuses = fetch(f"repos/{GH_REPO}/commits/{head}/statuses?per_page=100")
         verdict = hardware_verdict(statuses, head, where)
         if verdict[0] != "deploy":
