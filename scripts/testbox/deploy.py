@@ -429,6 +429,21 @@ def init_submodules(slot: Path, sha: str) -> list[str]:
     return want
 
 
+def link_firmware_toolchain(slot: Path) -> bool:
+    """The pinned toolchain inside the slot's firmware checkout. The firmware's tools find it
+    at their repo's ``.arduino`` (uf2_upload.py's uf2conv.py: every flash converts hex to UF2
+    with it), and their repo is the firmware/ submodule now (#357): without this every
+    flash failed. Runs from prepare and on every pass, so a slot prepared by an older
+    deploy.py gets it too. True when it made the link."""
+    fw = slot / "firmware"
+    link = fw / ".arduino"
+    if not (fw / "tools").is_dir() or link.exists() or link.is_symlink():
+        return False
+    link.symlink_to(DEV_CLONE / ".arduino")
+    log(f"linked the pinned toolchain into {fw}")
+    return True
+
+
 def prepare(slot: Path, sha: str) -> None:
     """Make `slot` a ready tree at `sha`: venv and console built from it."""
     if not (slot / ".git").exists():
@@ -436,6 +451,7 @@ def prepare(slot: Path, sha: str) -> None:
     # --force: server-side compiles regenerate blinky-things/Version.h in a slot's tree.
     run("git", "checkout", "--force", "--quiet", "--detach", sha, cwd=slot)
     init_submodules(slot, sha)
+    link_firmware_toolchain(slot)
     if not (slot / ".arduino").exists():  # the pinned toolchain, shared (1.3 GB)
         (slot / ".arduino").symlink_to(DEV_CLONE / ".arduino")
     want = {
@@ -500,6 +516,7 @@ def deploy_once(dry_run: bool = False) -> int:
     state["deployed"] = current
     if not dry_run:
         install_missing_units(live)
+        link_firmware_toolchain(live)
     seen = (current, state.get("deployable"))
     if not dry_run and (target in seen or target in state["refused"]):
         return 0
