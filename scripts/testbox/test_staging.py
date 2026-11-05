@@ -32,12 +32,15 @@ class GitHub:
         runs: list[dict[str, Any]] | None = None,
         changed: list[str] | None = None,
         paths: list[str] | None = None,
+        no_path_list: bool = False,
     ) -> None:
         self.artifact, self.runs = artifact, runs or []
-        # What staging changed since master, and the firmware's path list at the head (None:
-        # the file isn't there). By default a firmware change, so the suite runs.
+        # What staging changed since master, and the firmware's path list at the head
+        # (no_path_list: the file isn't there). By default a firmware change, so the suite runs.
         self.changed = ["blinky-things/audio/AudioTracker.cpp"] if changed is None else changed
         self.paths = ["blinky-things/", "scripts/build.sh"] if paths is None else paths
+        self.no_path_list = no_path_list
+        self.fail_merge = False
         self.statuses: list[tuple[str, str]] = []
         self.comments: list[tuple[str, str]] = []
         self.calls: list[tuple[str, ...]] = []
@@ -52,7 +55,7 @@ class GitHub:
             arts = [{"expired": False}] if self.artifact else []
             return json.dumps({"artifacts": arts})
         if f"contents/{staging.FIRMWARE_PATHS}?ref={SHA}" in a:
-            if self.paths is None:
+            if self.no_path_list:
                 raise RuntimeError("gh api repos/... -> 1: HTTP 404: Not Found")
             raw = json.dumps({"paths": self.paths}).encode()
             return json.dumps({"content": base64.b64encode(raw).decode()})
@@ -79,6 +82,8 @@ class GitHub:
         if args[:2] == ("pr", "create"):
             return f"https://github.com/{staging.GH_REPO}/pull/77\n"
         if args[:2] == ("pr", "merge"):
+            if self.fail_merge:
+                raise RuntimeError("gh pr merge -> 1: GraphQL: something went wrong")
             return ""
         raise AssertionError(args)
 
@@ -369,7 +374,7 @@ def test_a_rename_out_of_the_firmware_counts_as_a_change() -> None:
 @pytest.mark.parametrize(
     "gh_kwargs",
     [
-        {"changed": ["docs/x.md"], "paths": None},  # no list at that commit
+        {"changed": ["docs/x.md"], "no_path_list": True},  # no list at that commit
         {"changed": ["docs/x.md"], "paths": []},  # an empty list
         {"changed": [f"docs/{i}.md" for i in range(300)]},  # GitHub truncated the compare
     ],
@@ -378,3 +383,15 @@ def test_anything_that_cant_be_judged_gets_the_suite(gh_kwargs: dict[str, Any]) 
     g, srv = GitHub(**gh_kwargs), Server([HAT], {})
     staging.run_once(g, srv, listed)
     assert len(srv.submitted) == 1
+
+
+def test_a_skipped_head_whose_promotion_fails_is_retried() -> None:
+    g, srv = GitHub(changed=["docs/x.md"]), Server([HAT], {})
+    g.fail_merge = True
+    with pytest.raises(RuntimeError):
+        staging.run_once(g, srv, listed)
+    assert staging.load_state().get("reported") != SHA
+    g.fail_merge = False
+    state = staging.run_once(g, srv, listed)
+    assert state["reported"] == SHA
+    assert srv.submitted == []

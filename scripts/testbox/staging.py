@@ -437,13 +437,14 @@ def run_once(
     changed, why = firmware_change(gh_, sha)
     if not changed:
         # Nothing on the device changes: master gets it without a run (the owner, 2026-11-05).
+        # Reported only once promoted, so a failed PR create or auto-merge is retried next pass.
         post_status(gh_, sha, "success", why)
-        state["reported"] = sha
-        state.pop("waiting", None)
-        save_state(state)
         log(f"{sha[:12]}: {why}")
         number = promote(gh_, sha, None, skipped=why)
         log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
+        state["reported"] = sha
+        state.pop("waiting", None)
+        save_state(state)
         return state
     built = build_state(gh_, sha)
     if built == "failed":
