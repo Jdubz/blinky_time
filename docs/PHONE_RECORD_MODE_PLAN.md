@@ -44,7 +44,7 @@ The hosted Firebase build was also broken: `build:firebase` inherited `base: '/d
 
 All five fixes below are in the code (`configPrphBandwidth` and the `[FALLBACK]` log in `blinky-things.ino`, `samplesNeeded()` in `AudioTracker::update()`, `clipSamples` in `json info`). They are described as the bugs they fixed.
 
-1. **BLE bandwidth was never configured.** `BleNus::onConnect` requests MTU 247, but the SoftDevice ceiling defaults to MTU 23, event length 3.75 ms and HVN queue depth 1, because `configPrphBandwidth()` is never called before `Bluefruit.begin()`. This caps app-mode NUS too (the fleet server's serial-over-BLE). It does *not* explain the "BLE-DFU negotiates MTU 23" item ([#216](https://github.com/Jdubz/blinky_time/issues/216)): DFU runs in the bootloader, which has its own SoftDevice config.
+1. **BLE bandwidth was never configured.** `BleNus::onConnect` requests MTU 247, but the SoftDevice ceiling defaults to MTU 23, event length 3.75 ms and HVN queue depth 1, because `configPrphBandwidth()` is never called before `Bluefruit.begin()`. This caps app-mode NUS too (the fleet server's serial-over-BLE). It does *not* explain the "BLE-DFU negotiates MTU 23" item ([blinky-firmware#11](https://github.com/Jdubz/blinky-firmware/issues/11)): DFU runs in the bootloader, which has its own SoftDevice config.
    - Fix: `Bluefruit.configPrphBandwidth(BANDWIDTH_MAX)`, which is Adafruit's tested config (MTU 247, event length 125 ms, HVN queue 3) and fits the stock linker RAM start for 1 peripheral.
    - On connect, also request the 2M PHY, Data Length Extension and a 15 ms connection interval.
 2. **The `Bluefruit.begin()` return value is ignored.** If SoftDevice enable failed, BLE would silently be dead, including the BLE-DFU recovery path. Log `[FALLBACK]` loudly.
@@ -135,7 +135,7 @@ type 4 END   : u32 ms, final counters
 ## Known side effects to watch on the bench
 
 - **NUS shares the notification queue with the record sender.** The SoftDevice HVN queue is per connection. While recording, any NUS text output (command replies) makes the loop task wait in `BleNus::drainTxBuffer`, up to 100 ms per chunk, for a queue slot. Keep console output quiet during a session, and watch the `maxFrameMs` STATUS field ([#189](https://github.com/Jdubz/blinky_time/issues/189)).
-- **The fleet scanner gets less radio time while a phone is connected.** Long connection events cut into it, so fleet broadcasts may be missed during a session ([#190](https://github.com/Jdubz/blinky_time/issues/190)).
+- **The fleet scanner gets less radio time while a phone is connected.** Long connection events cut into it, so fleet broadcasts may be missed during a session ([blinky-firmware#16](https://github.com/Jdubz/blinky-firmware/issues/16)).
 - **Spectral timing.** Windows are now contiguous, and since b208 every spectral frame is processed at exactly 62.5 Hz (`AudioTracker::OSS_FRAME_RATE`; see `docs/AUDIO_ARCHITECTURE.md` "Frame Clock"). Every frame is reported, so the FRAME `skipped` field is always 0.
 
 ## Decided (2026-10-19)
