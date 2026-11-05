@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <math.h>  // isfinite() used by safeIsFinite() inline member
 #include "../hal/PlatformDetect.h"
+#include "../hal/interfaces/ISystemTime.h"
 
 /**
  * SharedSpectralAnalysis - Shared FFT computation for ensemble detectors
@@ -146,6 +147,17 @@ public:
      * Must be called before use
      */
     void begin();
+
+    /**
+     * The clock that times the onset STFT (#178, #349): set by AudioTracker::begin.
+     * getOnsetUs() / getOnsetMaxUs(): its cost per spectral frame (all
+     * ONSET_FRAMES_PER_FRAME onset frames), mean and max over the last closed
+     * ONSET_TIMING_WINDOW_MS window; 0 until one closes. `json info` reports them.
+     */
+    void setClock(const ISystemTime* clock) { clock_ = clock; }
+    uint32_t getOnsetUs() const { return onsetUsMean_; }
+    uint32_t getOnsetMaxUs() const { return onsetUsMaxClosed_; }
+    static constexpr uint32_t ONSET_TIMING_WINDOW_MS = 5000;
 
     /**
      * Reset all state (call when switching modes or after silence)
@@ -499,6 +511,15 @@ public:
     float getFrameRmsDb() const { return frameRmsDb_; }
 
 private:
+    // Onset STFT timing (setClock): the window in progress, then the last closed one.
+    const ISystemTime* clock_ = nullptr;
+    uint32_t onsetWindowStartMs_ = 0;
+    uint32_t onsetUsSum_ = 0;
+    uint32_t onsetUsCount_ = 0;
+    uint32_t onsetUsMax_ = 0;
+    uint32_t onsetUsMean_ = 0;
+    uint32_t onsetUsMaxClosed_ = 0;
+
     // Sample ring buffer
     int16_t sampleBuffer_[SpectralConstants::FFT_SIZE];
     int sampleCount_;

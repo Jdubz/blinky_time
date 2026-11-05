@@ -51,6 +51,7 @@ AudioTracker::~AudioTracker() {
 bool AudioTracker::begin(uint32_t sampleRate) {
     if (!mic_.begin(sampleRate)) return false;
     spectral_.begin();
+    spectral_.setClock(&time_);  // times the onset STFT for `json info` (#178)
     haveFrameEnd_ = false;
 
     // Onset detector selection (OnsetDetector.h).
