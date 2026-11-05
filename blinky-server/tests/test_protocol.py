@@ -273,3 +273,25 @@ async def test_a_stream_command_ends_at_its_ack_though_the_stream_never_pauses()
     finally:
         if t.task:
             t.task.cancel()
+
+
+def test_a_json_reply_with_a_firmware_log_line_in_it_still_parses() -> None:
+    """The first full staging run lost its validation to a `json info` reply that began with
+    a firmware log line (#357): the reply's object is found line by line."""
+    from blinky_server.device.protocol import json_object_from
+
+    info = {"version": "b216-dev-5b572ba4", "millis": 775566}
+    got, others = json_object_from("[NN] ready=no error=0\n" + json.dumps(info), "version")
+    assert got == info and others == ["[NN] ready=no error=0"]
+    got, others = json_object_from(json.dumps(info), "version")
+    assert got == info and others == []
+    # A stream line that is JSON but isn't the reply is kept aside, not mistaken for it.
+    got, others = json_object_from('{"a": {"l": 0.1}}\n' + json.dumps(info), "version")
+    assert got == info and others == ['{"a": {"l": 0.1}}']
+
+
+def test_a_reply_without_the_object_says_what_it_got() -> None:
+    from blinky_server.device.protocol import json_object_from
+
+    with pytest.raises(ValueError, match=r"no JSON object with 'version'.*\[NN\] ready"):
+        json_object_from("[NN] ready=no error=0\n{truncated", "version")

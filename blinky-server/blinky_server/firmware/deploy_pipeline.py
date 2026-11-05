@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from ..device.device import DeviceState
+from ..device.protocol import json_object_from
 from ..work import durable
 from .compile import find_project_root
 
@@ -303,7 +304,11 @@ async def _json_info(device: Any) -> dict[str, Any]:
     last: Exception | None = None
     for attempt in range(2):
         try:
-            return dict(json.loads(await device.protocol.send_command("json info", timeout=20.0)))
+            reply = await device.protocol.send_command("json info", timeout=20.0)
+            info, others = json_object_from(reply, "version")
+            if others:
+                log.info("json info %s: firmware lines inside the reply: %r", device.id, others)
+            return info
         except Exception as e:
             last = e
             if attempt == 0:
