@@ -4,7 +4,7 @@
 
 Audio tests are loud and time-consuming. Use the minimum test tier needed to answer your current question. Never gather more data than the decision requires.
 
-The task is **onset detection** (fire on every percussive hit), scored against `.onsets_consensus.json` ground truth on the `blinky-test-player/music/edm/` corpus (18 tracks). See CLAUDE.md.
+The task is **onset detection** (fire on every percussive hit), scored against `.onsets_consensus.json` ground truth on the `corpus/edm/` corpus (18 tracks). See CLAUDE.md.
 
 ```
 Code change

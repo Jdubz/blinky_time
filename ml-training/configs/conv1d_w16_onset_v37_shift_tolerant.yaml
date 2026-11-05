@@ -74,6 +74,6 @@ data:
   processed_dir: "${BLINKY_WORK}/processed_v37"
 
 export:
-  output_header: "../blinky-things/audio/frame_onset_model_data_v37_shift_tolerant.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_v37_shift_tolerant.h"
   c_array_name: "frame_onset_model_data"
   max_model_size_kb: 27

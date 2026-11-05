@@ -11,7 +11,7 @@ Usage:
     python evaluate.py --config configs/default.yaml
 
     # Evaluate on specific tracks
-    python evaluate.py --config configs/default.yaml --audio-dir ../blinky-test-player/music/edm
+    python evaluate.py --config configs/default.yaml --audio-dir ../corpus/edm
 """
 
 import argparse

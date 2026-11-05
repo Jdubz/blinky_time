@@ -48,7 +48,7 @@ python evaluate.py --config "$CONFIG" --model "$MODEL" --output-dir "$EVAL_DIR"
 echo ""
 echo "=== On-Track Evaluation (EDM) ==="
 python evaluate.py --config "$CONFIG" --model "$MODEL" \
-    --audio-dir ../blinky-test-player/music/edm \
+    --audio-dir ../corpus/edm \
     --output-dir "${EVAL_DIR}/tracks"
 
 # 3. TFLite INT8 export

@@ -24,7 +24,7 @@ don't fire at onsets at all.
 
 Usage:
     cd ml-training && ./venv/bin/python -m analysis.run_catalog \
-        --perc-corpus ../blinky-test-player/music/edm \
+        --perc-corpus ../corpus/edm \
         --tonal-corpus ../blinky-test-player/music/synthetic_tonals \
         --out outputs/feature_catalog
 """

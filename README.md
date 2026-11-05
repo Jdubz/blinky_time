@@ -1,5 +1,7 @@
 # 🔥 Blinky Time - LED Fire Effect Controller
 
+> **Repositories (#357).** This repo is the tooling: blinky-server, blinky-console, ml-training and the test box. The firmware and its release flow live in **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)** (the `firmware/` submodule here), and the validation corpus and its scorers live in **[blinky-corpus](https://github.com/Jdubz/blinky-corpus)** (`corpus/`). Clone with `git clone --recurse-submodules` or run `git submodule update --init firmware corpus`. The firmware's own bootloader submodule isn't needed here.
+
 [![License: CC BY-SA 4.0](https://img.shields.io/badge/License-CC%20BY--SA%204.0-lightgrey.svg)](http://creativecommons.org/licenses/by-sa/4.0/)
 [![Arduino](https://img.shields.io/badge/Arduino-Compatible-blue.svg)](https://www.arduino.cc/)
 [![Platform](https://img.shields.io/badge/Platform-nRF52840-green.svg)](https://www.nordicsemi.com/Products/nRF52840)

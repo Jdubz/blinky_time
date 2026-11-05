@@ -123,9 +123,13 @@ add_groups() {
 clone_repo() {
   if [[ -d "$REPO_DIR/.git" ]]; then
     log "repo already at $REPO_DIR; not pulling (update it yourself)"
-    return 0
+  else
+    as_user git clone "$REPO_URL" "$REPO_DIR" || return 1
   fi
-  as_user git clone "$REPO_URL" "$REPO_DIR"
+  # blinky-firmware (its tools: release client, validators, the pinned toolchain's setup)
+  # and blinky-corpus, at the commits this repo pins (#357). Never the firmware's own
+  # bootloader submodule.
+  ( cd "$REPO_DIR" && as_user git submodule update --init firmware corpus )
 }
 
 server_venv() {
@@ -232,11 +236,11 @@ install_service() {
 # scripts and CI checks as a workstation, with the same pins.
 
 install_arduino_cli() {
-  # The version is pinned in tools/firmware_toolchain.json; build.sh refuses any other.
+  # The version is pinned in the firmware's tools/firmware_toolchain.json; build.sh refuses any other.
   local want have tgz tmp rc
   [[ "$(uname -m)" == aarch64 ]] || { echo "arduino-cli step expects aarch64, got $(uname -m)" >&2; return 1; }
   want="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["arduino_cli"])' \
-    "$REPO_DIR/tools/firmware_toolchain.json")" || return 1
+    "$REPO_DIR/firmware/tools/firmware_toolchain.json")" || return 1
   have="$(/usr/local/bin/arduino-cli version 2>/dev/null | sed -n 's/.*Version: *\([^ ]*\).*/\1/p')"
   [[ "$have" == "$want" ]] && return 0
   tgz="arduino-cli_${want}_Linux_ARM64.tar.gz"
@@ -251,8 +255,14 @@ install_arduino_cli() {
 }
 
 firmware_toolchain() {
-  # The pinned core, libraries, TFLite and core patches into <repo>/.arduino (#252).
-  ( cd "$REPO_DIR" && as_user bash scripts/setup_toolchain.sh )
+  # The pinned core, libraries, TFLite and core patches (#252), installed by the firmware's
+  # own script into firmware/.arduino. Every flash needs it: uf2_upload.py converts hex to
+  # UF2 with the core's uf2conv.py. <repo>/.arduino points there too: the deploy slots link
+  # that path (scripts/testbox/deploy.py, link_firmware_toolchain).
+  ( cd "$REPO_DIR/firmware" && as_user bash scripts/setup_toolchain.sh ) || return 1
+  if [[ ! -e "$REPO_DIR/.arduino" ]]; then
+    as_user ln -s firmware/.arduino "$REPO_DIR/.arduino"
+  fi
 }
 
 CPPCHECK_VERSION=2.16.0   # = pr-validation.yml's cppcheck job: apt's version misses findings (#201)

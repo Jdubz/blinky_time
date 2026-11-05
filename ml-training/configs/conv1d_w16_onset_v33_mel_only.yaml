@@ -104,6 +104,6 @@ data:
   processed_dir: "${BLINKY_WORK}/processed_v33"
 
 export:
-  output_header: "../blinky-things/audio/frame_onset_model_data_v33_mel_only.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_v33_mel_only.h"
   c_array_name: "frame_onset_model_data"
   max_model_size_kb: 27   # was 25 (input layer grows from 30→50 mels: layer 1 weights 30×32×5=4800 → 50×32×5=8000, model size ~17→~20 KB)

@@ -695,7 +695,7 @@ def main():
     )
     sweep.add_argument(
         "--audio-dir",
-        default=str(Path.home() / "blinky_time/blinky-test-player/music/edm"),
+        default=str(Path.home() / "blinky_time/corpus/edm"),
         help="Directory with test audio files",
     )
     sweep.add_argument(

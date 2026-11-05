@@ -26,6 +26,6 @@ model:
   dropout: 0.1
 
 export:
-  output_header: "../blinky-things/audio/rhythm_model_data.h"
+  output_header: "../firmware/blinky-things/audio/rhythm_model_data.h"
   c_array_name: "rhythm_model_data"
   max_model_size_kb: 20
