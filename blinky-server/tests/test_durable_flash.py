@@ -326,8 +326,10 @@ async def test_sibling_holds_last_as_long_as_the_flash_not_the_request() -> None
 # -- fleet.deploy across a restart ------------------------------------------------------------
 
 
-def deploy_harness(out: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "XDG_DATA_HOME": str(out / "data"), "WORKFLOW": "deploy"}
+def deploy_harness(
+    out: Path, *args: str, workflow: str = "deploy"
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "XDG_DATA_HOME": str(out / "data"), "WORKFLOW": workflow}
     return subprocess.run(
         [sys.executable, "-m", "tests.durable_fleet_harness", args[0], str(out), *args[1:]],
         cwd=SERVER,
@@ -350,6 +352,18 @@ def test_a_deploy_cut_off_mid_flash_resumes_with_that_device(tmp_path: Path) -> 
     log = effects_of(tmp_path)
     assert log.count("flash dev-a start") == 1 and log.count("flash dev-b start") == 2
     assert log.count("arm 3") == 1  # recovery armed once: the replay doesn't run it again
+    assert log.count("broadcast save end") == 1
+
+
+def test_a_staging_deploy_cut_off_mid_flash_resumes_with_that_device(tmp_path: Path) -> None:
+    assert deploy_harness(tmp_path, "start", "before:2", workflow="staging").returncode == 9
+    res = result(deploy_harness(tmp_path, "resume", workflow="staging"))
+    assert res["status"] == "ok", res
+    assert list(res["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
+    log = effects_of(tmp_path)
+    assert log.count("flash dev-a start") == 1 and log.count("flash dev-b start") == 2
+    assert log.count("test devices 3") == 1 and log.count("store staging b300") == 1
+    assert not any(line.startswith("arm ") for line in log)  # never armed: not stable (#251)
     assert log.count("broadcast save end") == 1
 
 

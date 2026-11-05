@@ -119,7 +119,79 @@ def fetch_stable_release(tag: str | None, out_dir: Path) -> dict[str, Any]:
     return rel
 
 
+def fetch_staging_build(sha: str, out_dir: Path) -> dict[str, Any]:
+    """Run ``tools/firmware_release.py download-staging``: the staging build of commit ``sha``
+    (docs/RELEASE_PROCESS.md, "Staging"), verified against its manifest and refused unless it
+    is the dev-channel build of exactly that commit, from a successful staging-build.yml run,
+    with the commit on staging. Not a release: only test devices take it."""
+    root = find_project_root()
+    args = [
+        sys.executable,
+        str(root / "tools" / "firmware_release.py"),
+        "download-staging",
+        "--sha",
+        sha,
+        "--out",
+        str(out_dir),
+    ]
+    try:
+        r = subprocess.run(
+            args, cwd=root, capture_output=True, text=True, timeout=RELEASE_DOWNLOAD_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired as e:
+        raise DeployError(
+            "release", f"staging download timed out after {RELEASE_DOWNLOAD_TIMEOUT_S:.0f}s"
+        ) from e
+    if r.returncode != 0:
+        msg = (r.stderr or r.stdout).strip().splitlines()
+        raise DeployError(
+            "release", msg[-1] if msg else f"firmware_release.py exited {r.returncode}"
+        )
+    try:
+        rel: dict[str, Any] = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        raise DeployError(
+            "release", f"firmware_release.py printed no JSON: {r.stdout[:200]!r}"
+        ) from e
+    if rel.get("channel") != "dev" or rel.get("stable") is not False or rel.get("sha") != sha:
+        raise DeployError("release", f"not the staging build of {sha[:12]}: {rel!r}")
+    for key in ("tag", "hex", "version"):
+        if key not in rel:
+            raise DeployError("release", f"firmware_release.py output has no {key!r}")
+    if not Path(rel["hex"]).is_file():
+        raise DeployError("release", f"verified hex missing: {rel['hex']}")
+    return rel
+
+
 # ── 3. Targets ──────────────────────────────────────────────────────────
+
+
+def require_test_devices(devices: Sequence[Any]) -> None:
+    """Every target is a listed test device (devices/test_devices.json, keyed by the configured
+    device id the chip reports). Non-stable firmware goes nowhere else (RELEASE_PROCESS.md)."""
+    root = find_project_root()
+    refused = []
+    for d in devices:
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(root / "tools" / "firmware_release.py"),
+                "is-test-device",
+                str(d.device_type),
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode != 0:
+            refused.append(f"{d.id}({d.device_type})")
+    if refused:
+        raise DeployError(
+            "targets",
+            f"not test devices: {refused}. Only devices in devices/test_devices.json take "
+            "non-stable firmware",
+        )
 
 
 def resolve_targets(fleet: Any, device_ids: Sequence[str] | str) -> list[Any]:
@@ -304,6 +376,25 @@ async def _release(tag: str | None, download_dir: Path) -> dict[str, Any]:
 
 
 @durable.step
+async def _staging_targets(fleet: Any, device_ids: list[str]) -> list[str]:
+    devices = resolve_targets(fleet, device_ids)
+    require_test_devices(devices)
+    return [d.id for d in devices]
+
+
+@durable.step
+async def _staging_build(sha: str, download_dir: Path) -> dict[str, Any]:
+    return await asyncio.to_thread(fetch_staging_build, sha, download_dir)
+
+
+@durable.step
+async def _store_only(store_firmware: Callable[[Path, str], Path], rel: dict[str, Any]) -> str:
+    # Not stable, so never armed for auto-recovery (#251): a test chip that a bad staging
+    # build leaves in its bootloader is recovered with the stable image armed before.
+    return str(store_firmware(Path(rel["hex"]), rel["version"]))
+
+
+@durable.step
 async def _store_and_arm(
     fleet: Any,
     store_firmware: Callable[[Path, str], Path],
@@ -338,9 +429,14 @@ async def run_deploy(
     store_firmware: Callable[[Path, str], Path],
     flash: Callable[[Any, list[str], Path, Any], Awaitable[dict[str, Any]]],
     settle_s: float = LOOP_METRICS_SETTLE_S,
+    staging_sha: str | None = None,
 ) -> dict[str, Any]:
     """All six steps. Returns a result dict; any failed step returns
     ``status: error`` with ``failed_step`` and that step's details.
+
+    ``staging_sha``: deploy that commit's staging build instead of a release (#349). The
+    targets must be an explicit list of test devices, the image is stored as non-stable and
+    auto-recovery stays armed with the stable image it had; every other step is the same.
 
     ``store_firmware`` and ``flash`` are the routes' own storage and
     flash-job helpers, passed in so the deploy writes and flashes exactly
@@ -355,15 +451,29 @@ async def run_deploy(
 
     try:
         job.progress, job.progress_message = 0, "Resolving targets"
-        target_ids = await _targets(fleet, device_ids)
+        if staging_sha is None:
+            target_ids = await _targets(fleet, device_ids)
+        else:
+            if isinstance(device_ids, str) or release_tag is not None:
+                raise DeployError(
+                    "targets", "a staging deploy takes an explicit list of test devices only"
+                )
+            target_ids = await _staging_targets(fleet, list(device_ids))
         steps["targets"] = {"status": "ok", "devices": target_ids}
 
-        job.progress_message = "Downloading and verifying the stable release"
-        rel = await _release(release_tag, download_dir)
+        if staging_sha is None:
+            job.progress_message = "Downloading and verifying the stable release"
+            rel = await _release(release_tag, download_dir)
+        else:
+            job.progress_message = "Downloading and verifying the staging build"
+            rel = await _staging_build(staging_sha, download_dir)
         version = rel["version"]
         steps["release"] = {"status": "ok", "tag": rel["tag"], "version": version}
 
-        firmware = Path(await _store_and_arm(fleet, store_firmware, rel, target_ids))
+        if staging_sha is None:
+            firmware = Path(await _store_and_arm(fleet, store_firmware, rel, target_ids))
+        else:
+            firmware = Path(await _store_only(store_firmware, rel))
         steps["store"] = {"status": "ok", "firmware_path": str(firmware)}
     except DeployError as e:
         return failed(e)

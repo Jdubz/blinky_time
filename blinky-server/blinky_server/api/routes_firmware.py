@@ -26,7 +26,7 @@ from ..firmware import deploy_pipeline, images
 from ..paths import firmware_dir
 from ..work import durable, jobs
 from .deps import get_fleet, require_api_key, require_deploy_tool
-from .models import DeployRequest, FlashRequest
+from .models import DeployRequest, FlashRequest, StagingDeployRequest
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -379,7 +379,9 @@ async def _deploy_active() -> bool:
 
     if not durable.launched():
         return False
-    return bool(await jobs.active(FLEET_JOBS, "deploy"))
+    return bool(
+        await jobs.active(FLEET_JOBS, "deploy") or await jobs.active(FLEET_JOBS, "deploy-staging")
+    )
 
 
 def _store_release_hex(hex_path: Path, tag: str) -> Path:
@@ -390,6 +392,52 @@ def _store_release_hex(hex_path: Path, tag: str) -> Path:
     except (HTTPException, OSError) as e:
         detail = e.detail if isinstance(e, HTTPException) else str(e)
         raise deploy_pipeline.DeployError("store", str(detail)) from e
+
+
+def _store_staging_hex(hex_path: Path, version: str) -> Path:
+    # NOT stable: a staging build (#349) never arms auto-recovery (#251).
+    try:
+        return _store_firmware(hex_path.read_bytes(), version, stable=False, source="staging").path
+    except (HTTPException, OSError) as e:
+        detail = e.detail if isinstance(e, HTTPException) else str(e)
+        raise deploy_pipeline.DeployError("store", str(detail)) from e
+
+
+@router.post("/fleet/deploy-staging", dependencies=[Depends(require_api_key)])
+async def fleet_deploy_staging(body: StagingDeployRequest) -> dict[str, Any]:
+    """Deploy commit ``sha``'s staging build to explicitly named TEST devices (#349).
+
+    The same pipeline as /fleet/deploy (deploy_pipeline.run_deploy), with the staging build
+    (tools/firmware_release.py download-staging: a successful staging-build.yml artifact of
+    exactly that commit, every file checked against its manifest) in place of a release.
+    Refused unless the server was started with --staging (the test box's unit) and every
+    target is in devices/test_devices.json. The image is stored as non-stable, so
+    auto-recovery stays armed with the stable image.
+    """
+    from ..firmware.fleet_workflows import fleet_deploy_staging as wf
+
+    if not get_fleet().staging_enabled:
+        raise HTTPException(
+            403, "staging deploys are off on this server (start it with --staging: the test box)"
+        )
+    async with _deploy_lock:
+        if await _deploy_active():
+            raise HTTPException(409, "A fleet deploy is already running")
+        try:
+            devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
+            await asyncio.to_thread(deploy_pipeline.require_test_devices, devices)
+        except deploy_pipeline.DeployError as e:
+            raise HTTPException(400, str(e)) from e
+        job_id = await _submit(
+            wf, body.sha, body.device_ids, str(firmware_dir() / "staging-download")
+        )
+    return {
+        "job_id": job_id,
+        "status": "submitted",
+        "sha": body.sha,
+        "message": f"Deploying the staging build of {body.sha[:12]} to {len(body.device_ids)} "
+        "test device(s) in background",
+    }
 
 
 @router.post("/fleet/deploy", dependencies=[Depends(require_api_key)])

@@ -99,6 +99,7 @@ def create_app(
     enable_ble: bool = True,
     enable_serial: bool = True,
     wifi_hosts: list[dict[str, Any]] | None = None,
+    staging: bool = False,
 ) -> FastAPI:
     app = FastAPI(
         title="Blinky Server",
@@ -110,6 +111,7 @@ def create_app(
         "enable_ble": enable_ble,
         "enable_serial": enable_serial,
         "wifi_hosts": wifi_hosts,
+        "staging": staging,
     }
 
     app.add_middleware(

@@ -25,7 +25,9 @@ from .flash_job import FlashJobState
 
 log = logging.getLogger(__name__)
 
-FLEET_JOBS = jobs.Family(prefix="fleet.", kinds=("flash", "deploy"), result_steps=("flash_one",))
+FLEET_JOBS = jobs.Family(
+    prefix="fleet.", kinds=("flash", "deploy", "deploy-staging"), result_steps=("flash_one",)
+)
 PER_DEVICE_TIMEOUT_S = 600.0
 # After a restart, discovery needs a moment to find the device again.
 DEVICE_WAIT_S = 120.0
@@ -196,6 +198,25 @@ async def flash_devices(
 @durable.workflow("fleet.flash")
 async def fleet_flash(device_ids: list[str], firmware: str) -> dict[str, Any]:
     return await flash_devices(_fleet(), device_ids, Path(firmware), None)
+
+
+@durable.workflow("fleet.deploy-staging")
+async def fleet_deploy_staging(
+    sha: str, device_ids: list[str], download_dir: str
+) -> dict[str, Any]:
+    """The staging build of ``sha`` to test devices, through the same pipeline (#349)."""
+    from ..api.routes_firmware import _store_staging_hex
+
+    return await deploy_pipeline.run_deploy(
+        _fleet(),
+        jobs.Progress(),
+        release_tag=None,
+        device_ids=device_ids,
+        download_dir=Path(download_dir),
+        store_firmware=_store_staging_hex,
+        flash=flash_devices,
+        staging_sha=sha,
+    )
 
 
 @durable.workflow("fleet.deploy")

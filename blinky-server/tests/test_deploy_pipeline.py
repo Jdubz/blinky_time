@@ -54,6 +54,7 @@ class FakeDevice:
         self.state = state
         self.platform = platform
         self.device_name = device_id
+        self.device_type = device_id  # the configured id test_devices.json lists
         self.protocol = FakeProtocol(
             info
             if info is not None
@@ -324,6 +325,120 @@ async def test_deploy_stops_after_a_failed_flash(
     assert fleet.broadcasts == []  # no settings writes after a failed flash
 
 
+# ── Staging (#349): the staging build of a commit, test devices only ────
+
+STAGING_SHA = "ab" * 20
+STAGING_VERSION = f"b215-dev-{STAGING_SHA[:8]}"
+
+
+def _staging_run(tmp_path: Path, rel: dict[str, Any] | None = None) -> Any:
+    """firmware_release.py as subprocess: hat_v1 is the only test device; download-staging
+    answers with ``rel``."""
+    hex_path = tmp_path / "blinky-things-b215.hex"
+    hex_path.write_text(":00000001FF\n")
+    good = {
+        "tag": f"staging-{STAGING_SHA[:8]}",
+        "stable": False,
+        "channel": "dev",
+        "sha": STAGING_SHA,
+        "hex": str(hex_path),
+        "version": STAGING_VERSION,
+    }
+    calls: list[list[str]] = []
+
+    def run(args: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[2] == "is-test-device":
+            ok = args[3] == "hat_v1"
+            return subprocess.CompletedProcess(args, 0 if ok else 1, "yes" if ok else "", "")
+        assert args[2:5] == ["download-staging", "--sha", STAGING_SHA]
+        return subprocess.CompletedProcess(args, 0, json.dumps({**good, **(rel or {})}), "")
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+async def _staging_deploy(
+    fleet: FakeFleet,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    device_ids: Any = ("hat_v1",),
+    rel: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[Any], list[Any]]:
+    monkeypatch.setattr(dp.subprocess, "run", _staging_run(tmp_path, rel))
+    for d in fleet.devices.values():
+        if d.id == "hat_v1":
+            d.protocol.info = {**d.protocol.info, "version": STAGING_VERSION}  # type: ignore[dict-item]
+    flashed: list[Any] = []
+    stored: list[Any] = []
+
+    async def flash(_fleet: Any, ids: list[str], fw: Path, _job: Any) -> dict[str, Any]:
+        flashed.append((ids, fw))
+        return {"status": "ok", "message": "flashed"}
+
+    def store(p: Path, version: str) -> Path:
+        stored.append(version)
+        return tmp_path / "staging.hex"
+
+    result = await dp.run_deploy(
+        fleet,
+        FakeJob(),
+        release_tag=None,
+        device_ids=list(device_ids) if not isinstance(device_ids, str) else device_ids,
+        download_dir=tmp_path,
+        store_firmware=store,
+        flash=flash,
+        settle_s=0.0,
+        staging_sha=STAGING_SHA,
+    )
+    return result, flashed, stored
+
+
+async def test_staging_deploy_runs_every_step_and_never_arms_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fleet = _fleet()
+    result, flashed, stored = await _staging_deploy(fleet, monkeypatch, tmp_path)
+    assert result["status"] == "ok" and result["version"] == STAGING_VERSION, result
+    assert list(result["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
+    assert flashed == [(["hat_v1"], tmp_path / "staging.hex")] and stored == [STAGING_VERSION]
+    assert fleet.recovery is None  # #251: only a stable image arms auto-recovery
+    assert fleet.broadcasts == ["restore_runtime_settings", "save"]
+
+
+@pytest.mark.parametrize(
+    ("device_ids", "match"),
+    [
+        (["ble_lamp"], "not test devices"),
+        (["hat_v1", "ble_lamp"], "not test devices"),
+        ("all", "explicit list of test devices"),
+    ],
+)
+async def test_staging_deploy_refuses_anything_but_test_devices(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, device_ids: Any, match: str
+) -> None:
+    fleet = _fleet()
+    result, flashed, stored = await _staging_deploy(
+        fleet, monkeypatch, tmp_path, device_ids=device_ids
+    )
+    assert result["status"] == "error" and result["failed_step"] == "targets"
+    assert match in result["message"] and flashed == [] and stored == []
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [{"channel": "release"}, {"stable": True}, {"sha": "cd" * 20}],
+)
+async def test_staging_deploy_refuses_anything_but_that_commits_build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rel: dict[str, Any]
+) -> None:
+    fleet = _fleet()
+    result, flashed, _ = await _staging_deploy(fleet, monkeypatch, tmp_path, rel=rel)
+    assert result["status"] == "error" and result["failed_step"] == "release"
+    assert flashed == [] and fleet.broadcasts == []
+
+
 # ── Route ───────────────────────────────────────────────────────────────
 
 
@@ -382,3 +497,29 @@ def test_route_no_longer_compiles() -> None:
         encoding="utf-8"
     )
     assert "compile_firmware" not in src and "generate_dfu_package" not in src
+
+
+async def test_staging_route_is_off_unless_the_server_runs_with_staging(
+    client: AsyncClient,
+) -> None:
+    r = await client.post(
+        "/api/fleet/deploy-staging", json={"sha": STAGING_SHA, "device_ids": ["hat_v1"]}
+    )
+    assert r.status_code == 403 and "--staging" in r.text
+
+
+async def test_staging_route_validates_its_request(client: AsyncClient) -> None:
+    from blinky_server.api.deps import get_fleet
+
+    get_fleet().staging_enabled = True
+    for body in (
+        {"sha": STAGING_SHA[:12], "device_ids": ["hat_v1"]},  # not a full sha
+        {"sha": STAGING_SHA, "device_ids": []},  # no scope
+        {"sha": STAGING_SHA, "device_ids": "all"},  # never "all"
+    ):
+        r = await client.post("/api/fleet/deploy-staging", json=body)
+        assert r.status_code == 422, body
+    r = await client.post(
+        "/api/fleet/deploy-staging", json={"sha": STAGING_SHA, "device_ids": ["nope"]}
+    )
+    assert r.status_code == 400 and "unknown" in r.text
