@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import sys
@@ -25,8 +26,21 @@ LAMP = {"id": "AAAA", "state": "connected", "platform": "nrf52840", "device_type
 class GitHub:
     """gh as a fake: answers for one staging commit, records what was posted."""
 
-    def __init__(self, artifact: bool = True, runs: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        artifact: bool = True,
+        runs: list[dict[str, Any]] | None = None,
+        changed: list[str] | None = None,
+        paths: list[str] | None = None,
+        no_path_list: bool = False,
+    ) -> None:
         self.artifact, self.runs = artifact, runs or []
+        # What staging changed since master, and the firmware's path list at the head
+        # (no_path_list: the file isn't there). By default a firmware change, so the suite runs.
+        self.changed = ["blinky-things/audio/AudioTracker.cpp"] if changed is None else changed
+        self.paths = ["blinky-things/", "scripts/build.sh"] if paths is None else paths
+        self.no_path_list = no_path_list
+        self.fail_merge = False
         self.statuses: list[tuple[str, str]] = []
         self.comments: list[tuple[str, str]] = []
         self.calls: list[tuple[str, ...]] = []
@@ -40,6 +54,18 @@ class GitHub:
         if "actions/artifacts?name=staging-firmware-" + SHA in a:
             arts = [{"expired": False}] if self.artifact else []
             return json.dumps({"artifacts": arts})
+        if f"contents/{staging.FIRMWARE_PATHS}?ref={SHA}" in a:
+            if self.no_path_list:
+                raise RuntimeError("gh api repos/... -> 1: HTTP 404: Not Found")
+            raw = json.dumps({"paths": self.paths}).encode()
+            return json.dumps({"content": base64.b64encode(raw).decode()})
+        if f"compare/master...{SHA}" in a:
+            return json.dumps(
+                {
+                    "merge_base_commit": {"sha": "m" * 40},
+                    "files": [{"filename": f} for f in self.changed],
+                }
+            )
         if f"actions/runs?head_sha={SHA}" in a:
             return json.dumps({"workflow_runs": self.runs})
         if f"statuses/{SHA}" in a:
@@ -56,6 +82,8 @@ class GitHub:
         if args[:2] == ("pr", "create"):
             return f"https://github.com/{staging.GH_REPO}/pull/77\n"
         if args[:2] == ("pr", "merge"):
+            if self.fail_merge:
+                raise RuntimeError("gh pr merge -> 1: GraphQL: something went wrong")
             return ""
         raise AssertionError(args)
 
@@ -289,3 +317,83 @@ def test_a_deploy_failure_renders_its_step() -> None:
         }
     )
     assert "FAILED" in text and "`targets`" in text and "not test devices" in text
+
+
+# -- no firmware change, no hardware test (the owner, 2026-11-05) -----------------------------
+
+
+def test_a_head_with_no_firmware_change_is_promoted_without_a_run() -> None:
+    g = GitHub(changed=[".github/workflows/pr-validation.yml", "docs/RELEASE_PROCESS.md"])
+    srv = Server([HAT], {})
+    state = staging.run_once(g, srv, listed)
+    assert srv.submitted == []
+    assert g.statuses == [
+        ("success", "no firmware change since master mmmmmmmmmmmm: hardware test skipped")
+    ]
+    assert state["reported"] == SHA
+    assert ("pr", "create") in [c[:2] for c in g.calls]
+    merge = next(c for c in g.calls if c[:2] == ("pr", "merge"))
+    assert merge[-2:] == ("--match-head-commit", SHA)
+    # Reported: the next pass does nothing.
+    g.calls.clear()
+    staging.run_once(g, srv, listed)
+    assert [c for c in g.calls if c[0] == "pr"] == []
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ["docs/x.md", "blinky-things/generators/Fire.cpp"],  # a directory prefix
+        ["scripts/build.sh"],  # an exact path
+    ],
+)
+def test_a_firmware_change_gets_the_suite(changed: list[str]) -> None:
+    g, srv = GitHub(changed=changed), Server([HAT], {})
+    staging.run_once(g, srv, listed)
+    assert len(srv.submitted) == 1
+    assert not any(s == "success" for s, _ in g.statuses)
+
+
+def test_a_rename_out_of_the_firmware_counts_as_a_change() -> None:
+    g = GitHub(changed=["docs/old.cpp"])
+    real = g.__call__
+
+    def call(*args: str, stdin: str | None = None) -> str:
+        out = real(*args, stdin=stdin)
+        if "compare/master..." in " ".join(args):
+            d = json.loads(out)
+            d["files"] = [
+                {"filename": "docs/old.cpp", "previous_filename": "blinky-things/old.cpp"}
+            ]
+            return json.dumps(d)
+        return out
+
+    srv = Server([HAT], {})
+    staging.run_once(call, srv, listed)
+    assert len(srv.submitted) == 1
+
+
+@pytest.mark.parametrize(
+    "gh_kwargs",
+    [
+        {"changed": ["docs/x.md"], "no_path_list": True},  # no list at that commit
+        {"changed": ["docs/x.md"], "paths": []},  # an empty list
+        {"changed": [f"docs/{i}.md" for i in range(300)]},  # GitHub truncated the compare
+    ],
+)
+def test_anything_that_cant_be_judged_gets_the_suite(gh_kwargs: dict[str, Any]) -> None:
+    g, srv = GitHub(**gh_kwargs), Server([HAT], {})
+    staging.run_once(g, srv, listed)
+    assert len(srv.submitted) == 1
+
+
+def test_a_skipped_head_whose_promotion_fails_is_retried() -> None:
+    g, srv = GitHub(changed=["docs/x.md"]), Server([HAT], {})
+    g.fail_merge = True
+    with pytest.raises(RuntimeError):
+        staging.run_once(g, srv, listed)
+    assert staging.load_state().get("reported") != SHA
+    g.fail_merge = False
+    state = staging.run_once(g, srv, listed)
+    assert state["reported"] == SHA
+    assert srv.submitted == []
