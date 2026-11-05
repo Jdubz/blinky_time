@@ -362,7 +362,9 @@ def test_a_rename_out_of_the_firmware_counts_as_a_change() -> None:
         out = real(*args, stdin=stdin)
         if "compare/master..." in " ".join(args):
             d = json.loads(out)
-            d["files"] = [{"filename": "docs/old.cpp", "previous_filename": "blinky-things/old.cpp"}]
+            d["files"] = [
+                {"filename": "docs/old.cpp", "previous_filename": "blinky-things/old.cpp"}
+            ]
             return json.dumps(d)
         return out
 
