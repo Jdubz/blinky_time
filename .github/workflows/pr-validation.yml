@@ -16,7 +16,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Check required files
       run: |
@@ -51,7 +51,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # The server runs the firmware repo's tools/ and scores with the corpus's blinky_scoring
     # (#357); never the bootloader submodule.
@@ -97,7 +97,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # The firmware's DSP for the parity harness, and the edm labels and blinky_scoring for
     # test_drum_label_sync, at the commits this repo pins (#357).
@@ -161,7 +161,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # The edm corpus and its labels (#357).
     - name: Corpus submodule
@@ -212,7 +212,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # The edm corpus and its labels (#357).
     - name: Corpus submodule
@@ -261,7 +261,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Setup Node.js
       uses: actions/setup-node@v4

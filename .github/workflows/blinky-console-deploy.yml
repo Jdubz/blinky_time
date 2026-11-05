@@ -42,7 +42,7 @@ jobs:
     if: github.event_name != 'pull_request'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The release client (firmware_release.py mirror), at the commit blinky_time pins.
       - name: Firmware submodule
@@ -89,7 +89,7 @@ jobs:
     if: github.event_name == 'pull_request'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Firmware submodule
         working-directory: .
