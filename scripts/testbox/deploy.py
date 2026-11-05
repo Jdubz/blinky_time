@@ -86,7 +86,14 @@ SERVER_PATHS = (
     "devices/",  # test_devices.json, read by firmware_release.py
     "blinky-test-player/music/",  # the Spark client's default audio root
     "scripts/testbox/",  # this deployer and the units
+    # Submodules (gitlinks, so no trailing slash; blinky_time#357): the firmware repo's
+    # tools/ (release client, validators, test-device list) and the corpus + its scorers.
+    "firmware",
+    "corpus",
 )
+# The submodules a slot checks out, when the commit has them. Never recursive: the firmware
+# repo's own bootloader and corpus submodules aren't needed (the corpus is a sibling here).
+SUBMODULES = ("firmware", "corpus")
 # The latest master commit that passed the gate, server change or not. blinky-server builds the
 # Spark training bundle from it (blinky_server/spark/bundle.py), so ml-training changes reach
 # training without a server restart, and only once CI and review passed. Shared by every
@@ -405,12 +412,30 @@ def point_at(slot: Path) -> None:
     os.replace(tmp, LINK)
 
 
+def init_submodules(slot: Path, sha: str) -> list[str]:
+    """Check out the SUBMODULES that ``sha`` declares (none before blinky_time#357), at the
+    commits it pins. Returns the paths checked out."""
+    try:
+        listed = run(
+            "git", "config", "--blob", f"{sha}:.gitmodules", "--get-regexp", "path", cwd=slot
+        )
+    except RuntimeError:
+        return []  # no .gitmodules at that commit, or no entries
+    paths = [line.split()[1] for line in listed.splitlines() if len(line.split()) == 2]
+    want = [p for p in SUBMODULES if p in paths]
+    if want:
+        run("git", "submodule", "sync", "--quiet", "--", *want, cwd=slot)
+        run("git", "submodule", "update", "--init", "--quiet", "--", *want, cwd=slot)
+    return want
+
+
 def prepare(slot: Path, sha: str) -> None:
     """Make `slot` a ready tree at `sha`: venv and console built from it."""
     if not (slot / ".git").exists():
         run("git", "worktree", "add", "--quiet", "--detach", str(slot), sha, cwd=DEV_CLONE)
     # --force: server-side compiles regenerate blinky-things/Version.h in a slot's tree.
     run("git", "checkout", "--force", "--quiet", "--detach", sha, cwd=slot)
+    init_submodules(slot, sha)
     if not (slot / ".arduino").exists():  # the pinned toolchain, shared (1.3 GB)
         (slot / ".arduino").symlink_to(DEV_CLONE / ".arduino")
     want = {

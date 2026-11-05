@@ -279,6 +279,37 @@ def test_every_pass_reconciles_units_from_the_live_slot(box: dict[str, Any]) -> 
     assert box["reconciled"] == ["blinky-deploy-a"]
 
 
+def test_a_slot_checks_out_the_server_submodules_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """firmware and corpus at the commit's pins; never the bootloader, never recursive."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        calls.append(cmd)
+        if cmd[:3] == ("git", "config", "--blob"):
+            return (
+                "submodule.bootloader/src.path bootloader/src\n"
+                "submodule.firmware.path firmware\nsubmodule.corpus.path corpus\n"
+            )
+        return ""
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.init_submodules(Path("/slot"), SHA) == ["firmware", "corpus"]
+    update = [c for c in calls if c[:3] == ("git", "submodule", "update")]
+    assert update == [
+        ("git", "submodule", "update", "--init", "--quiet", "--", "firmware", "corpus")
+    ]
+
+
+def test_a_commit_without_submodules_checks_out_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:3] == ("git", "config", "--blob"):
+            raise RuntimeError("no .gitmodules")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.init_submodules(Path("/slot"), SHA) == []
+
+
 def test_the_server_unit_signals_only_the_server_on_stop() -> None:
     """KillMode=mixed: the default control-group SIGTERMs ffplay, the UF2 copy and a release
     download at the same moment as the server, before its drain could wait for them."""
