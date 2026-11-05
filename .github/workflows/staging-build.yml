@@ -84,7 +84,9 @@ jobs:
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: staging-firmware
+        # Named for the built commit: a workflow_run run's own head_sha is the
+        # default branch's tip when it started, not necessarily this commit.
+        name: staging-firmware-${{ github.event.workflow_run.head_sha }}
         path: dist/
         retention-days: 30
         if-no-files-found: error
