@@ -31,6 +31,7 @@ import json
 import logging
 import subprocess
 import sys
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -420,6 +421,13 @@ async def _store_only(store_firmware: Callable[[Path, str], Path], rel: dict[str
 
 
 @durable.step
+async def _flash_time() -> float:
+    """Wall time just before a staging flash: the staging suite counts firmware alerts from
+    here on, so the old firmware's never count against the build under test (#351 review)."""
+    return time.time()
+
+
+@durable.step
 async def _store_and_arm(
     fleet: Any,
     store_firmware: Callable[[Path, str], Path],
@@ -503,9 +511,14 @@ async def run_deploy(
 
         if staging_sha is None:
             firmware = Path(await _store_and_arm(fleet, store_firmware, rel, target_ids))
+            steps["store"] = {"status": "ok", "firmware_path": str(firmware)}
         else:
             firmware = Path(await _store_only(store_firmware, rel))
-        steps["store"] = {"status": "ok", "firmware_path": str(firmware)}
+            steps["store"] = {
+                "status": "ok",
+                "firmware_path": str(firmware),
+                "flash_t": await _flash_time(),
+            }
     except DeployError as e:
         return failed(e)
 

@@ -13,7 +13,7 @@ puts a staging build on the test chips and tests it on real hardware.
    - validation: every edm/ track once, scored like /api/test/validate (drum metrics).
 4. After: version unchanged, no reboot across the whole job (uptime against wall time since
    the deploy), the onset-path timing from ``json info`` when the firmware reports it, and no
-   firmware [ASSERT] / [FALLBACK] line from the deploy on (the server's alert record,
+   firmware [ASSERT] / [FALLBACK] line from the flash on (the server's alert record,
    device.alerts_since, which survives a restart).
 
 The whole job holds the audio lock (workflows.reserve): no other test job plays or measures
@@ -222,9 +222,9 @@ async def music_and_pace(
 async def final_state(device_ids: list[str], version: str, start: dict[str, Any]) -> Any:
     """Version unchanged; no reboot since ``start`` (uptimes()): a chip that kept running has
     gained the wall time that passed, a reset one restarted from zero; no firmware alert
-    recorded since the suite started; the onset-path timing if reported."""
+    recorded since the flash; the onset-path timing if reported."""
     out: dict[str, Any] = {}
-    alerts = alerts_since(device_ids, start["suite_t"])
+    alerts = alerts_since(device_ids, start["alert_t"])
     for i in device_ids:
         info = await _info(i)
         ms = int(info.get("millis", 0))
@@ -239,17 +239,12 @@ async def final_state(device_ids: list[str], version: str, start: dict[str, Any]
 
 
 @durable.step
-async def started() -> float:
-    """The suite's start, wall time: alerts from here on count (recorded, so a resumed suite
-    keeps its start)."""
-    return time.time()
-
-
-@durable.step
-async def uptimes(device_ids: list[str], suite_t: float) -> dict[str, Any]:
-    """Each chip's uptime and the wall time it was read: final_state's reboot baseline."""
+async def uptimes(device_ids: list[str], alert_t: float) -> dict[str, Any]:
+    """Each chip's uptime and the wall time it was read: final_state's reboot baseline. With
+    ``alert_t``, the wall time just before the flash (deploy_pipeline._flash_time): alerts
+    from then on count, the old firmware's never."""
     ms = {i: int((await _info(i)).get("millis", 0)) for i in device_ids}
-    return {"t": time.time(), "ms": ms, "suite_t": suite_t}
+    return {"t": time.time(), "ms": ms, "alert_t": alert_t}
 
 
 @durable.step
@@ -283,9 +278,8 @@ async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
     limits = {**DEFAULTS, **(req.get("limits") or {})}
     report: dict[str, Any] = {"sha": sha, "devices": device_ids, "limits": limits}
 
-    suite_t = await started()
     async with reserve(device_ids):
-        return await _suite(sha, device_ids, req, limits, report, suite_t)
+        return await _suite(sha, device_ids, req, limits, report)
 
 
 async def _suite(
@@ -294,7 +288,6 @@ async def _suite(
     req: dict[str, Any],
     limits: dict[str, float],
     report: dict[str, Any],
-    suite_t: float,
 ) -> dict[str, Any]:
     from ..api.routes_firmware import _store_staging_hex
     from ..firmware.fleet_workflows import flash_devices
@@ -317,7 +310,7 @@ async def _suite(
         return report
     version = deploy["version"]
     report["version"] = version
-    start = await uptimes(device_ids, suite_t)
+    start = await uptimes(device_ids, float(deploy["steps"]["store"]["flash_t"]))
 
     jobs.report(10, f"health: {limits['stable_minutes']:.0f} min of json info")
     report["health"] = await health(device_ids, limits)

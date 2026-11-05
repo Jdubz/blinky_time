@@ -403,6 +403,7 @@ async def test_staging_deploy_runs_every_step_and_never_arms_recovery(
     fleet = _fleet()
     result, flashed, stored = await _staging_deploy(fleet, monkeypatch, tmp_path)
     assert result["status"] == "ok" and result["version"] == STAGING_VERSION, result
+    assert result["steps"]["store"]["flash_t"] > 0  # the staging suite's alert window opens here
     assert list(result["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
     assert flashed == [(["hat_v1"], tmp_path / "staging.hex")] and stored == [STAGING_VERSION]
     assert fleet.recovery is None  # #251: only a stable image arms auto-recovery

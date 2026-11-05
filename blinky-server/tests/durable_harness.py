@@ -177,7 +177,7 @@ STAGING_VERSION = "b300-dev-abababab"
 
 async def fake_deploy(*a: Any, **k: Any) -> dict[str, Any]:
     effect(f"deploy {k['staging_sha'][:8]}")
-    return {"status": "ok", "version": STAGING_VERSION, "steps": {}}
+    return {"status": "ok", "version": STAGING_VERSION, "steps": {"store": {"flash_t": 0.0}}}
 
 
 async def fake_info(device_id: str) -> dict[str, Any]:
