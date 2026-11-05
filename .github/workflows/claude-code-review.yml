@@ -80,6 +80,9 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Without this the action mints a GitHub App token via OIDC, which 403s.
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Dependabot's submodule bumps (.github/dependabot.yml) need a verdict too: the
+          # box deployer moves only to commits whose PR has a clean one.
+          allowed_bots: "dependabot[bot]"
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}

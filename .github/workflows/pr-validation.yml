@@ -155,7 +155,8 @@ jobs:
           tests/test_drum_label_sync.py tests/test_supervision.py
 
   trainer-contract:
-    name: Trainer meets the Spark gpu_task contract (#304, #305)
+    # Quoted: unquoted, YAML reads ` #305)` as a comment and the check is named "...(#304,".
+    name: "Trainer meets the Spark gpu_task contract (#304, #305)"
     runs-on: ubuntu-latest
 
     steps:
