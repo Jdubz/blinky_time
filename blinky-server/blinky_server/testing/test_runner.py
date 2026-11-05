@@ -160,11 +160,19 @@ async def _start_streaming(devices: list[Device]) -> None:
 async def _stop_streaming(devices: list[Device]) -> None:
     """Stop streaming and disable transient debug channel. Best-effort."""
     for device in devices:
+        # Each on its own: a failed "debug transient off" must not skip the "stream off",
+        # or the device keeps streaming and every later command to it times out (the first
+        # staging run on the hat, #349).
         try:
             await device.protocol.send_command("debug transient off")
+        except Exception as e:
+            log.warning(
+                "[FALLBACK] 'debug transient off' on %s failed in cleanup: %s", device.id, e
+            )
+        try:
             await device.protocol.stop_stream()
         except Exception as e:
-            log.debug("stream-stop for %s failed (non-fatal): %s", device.id, e)
+            log.warning("[FALLBACK] 'stream off' on %s failed in cleanup: %s", device.id, e)
 
 
 async def _record_and_play(
