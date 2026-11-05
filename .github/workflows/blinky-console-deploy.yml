@@ -58,7 +58,7 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 firmware/tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
+        run: python3 firmware/tools/firmware_release.py mirror --out "$GITHUB_WORKSPACE/blinky-console/public/firmware" --keep 5
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install
@@ -104,7 +104,7 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 firmware/tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
+        run: python3 firmware/tools/firmware_release.py mirror --out "$GITHUB_WORKSPACE/blinky-console/public/firmware" --keep 5
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install

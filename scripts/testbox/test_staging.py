@@ -172,6 +172,22 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
     assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
 
 
+def test_a_run_from_before_the_split_finishes_in_its_own_repo() -> None:
+    """A suite started for blinky_time before the runner moved to blinky-firmware (no "repo"
+    in its state) is reported against blinky_time, and never promoted (#362 review)."""
+    staging.save_state({"running": {"sha": SHA, "job": "job-1", "devices": ["C04C56F9"]}})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    state = staging.run_once(g, srv, listed)
+    assert state["reported"] == SHA and "running" not in state
+    status = [
+        c
+        for c in g.calls
+        if c[:4] == ("api", "-X", "POST", f"repos/{staging.LEGACY_REPO}/statuses/{SHA}")
+    ]
+    assert status and not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
+    assert all(staging.LEGACY_REPO in c for c in g.calls if c[:2] == ("pr", "comment"))
+
+
 def test_a_failed_report_fails_the_status_and_promotes_nothing() -> None:
     bad = {**GOOD_REPORT, "passed": False}
     g, srv = GitHub(), Server([HAT], {"status": "complete", "result": bad})

@@ -66,19 +66,19 @@ import numpy as np
 import serial
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "blinky-server"))
+sys.path.insert(0, str(REPO / "corpus"))  # blinky_scoring (blinky-corpus, #357)
 
-from blinky_server.testing.scoring import format_score_summary, score_device_run  # noqa: E402
-from blinky_server.testing.test_session import TestSession  # noqa: E402
-from blinky_server.testing.track_discovery import (  # noqa: E402
+from blinky_scoring.scoring import format_score_summary, score_device_run  # noqa: E402
+from blinky_scoring.test_session import TestSession  # noqa: E402
+from blinky_scoring.track_discovery import (  # noqa: E402
     discover_tracks,
     load_ground_truth,
     load_track_manifest,
     segment_ground_truth,
 )
-from blinky_server.testing.types import TestData  # noqa: E402
+from blinky_scoring.types import TestData  # noqa: E402
 
-CORPUS = REPO / "blinky-test-player" / "music" / "edm"
+CORPUS = REPO / "corpus" / "edm"  # the blinky-corpus submodule
 RATE = 44100
 INTER_TRACK_GAP_S = 2.0
 # Sync lead-in: silence, three clicks at irregular spacing (no grid to alias
