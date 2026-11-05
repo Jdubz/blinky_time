@@ -4,10 +4,17 @@ release_promote.py - promote a gated candidate to stable, or roll back
 (docs/RELEASE_PROCESS.md).
 
   python tools/release_promote.py b214            # candidate -> stable
+  python tools/release_promote.py b214 --operator-confirmed "smooth, reactive on the hat"
   python tools/release_promote.py b212 --rollback # make an older stable the latest again
 
 Promote refuses unless the release carries a passing gate-<device>.json whose
-version matches the release manifest. It then has CI sign the release for
+version matches the release manifest. A candidate cut by a merge to master
+(#349) has none from tools/release_gate.py: its hardware test ran on the
+staging head it merged. Promote then writes gate-staging.json from that
+report, after checking that the release commit is a merge of that staging head
+with the same tree and that its "Hardware test (staging)" status passed, plus
+the operator's visual confirmation (--operator-confirmed, or the prompt): the
+one check the unattended suite can't make. It then has CI sign the release for
 OTA (sign-release.yml: the signing key is a GitHub secret and is only ever
 used after a passing gate), checks the signature itself against the key the
 firmware trusts, tags the commit stable-b<N>, marks the release a full
@@ -55,6 +62,55 @@ def sign_in_ci(tag):
     print(f"  signed and verified: build {f['build']}, {f['size']} bytes")
 
 
+HARDWARE_CONTEXT = "Hardware test (staging)"
+
+
+def staging_gate(tag, manifest, note):
+    """gate-staging.json for a candidate cut from a staging merge (#349); uploaded to `tag`."""
+    import datetime
+    slug = repo_slug()
+    sha = manifest["git_sha"]
+    commit = json.loads(gh("api", f"repos/{slug}/commits/{sha}"))
+    parents = commit.get("parents") or []
+    if len(parents) != 2:
+        raise ReleaseError(f"{tag}: {sha[:12]} is not a merge commit, so it has no staging hardware "
+                           "report; gate it with tools/release_gate.py instead")
+    head = parents[1]["sha"]
+    head_commit = json.loads(gh("api", f"repos/{slug}/commits/{head}"))
+    if commit["commit"]["tree"]["sha"] != head_commit["commit"]["tree"]["sha"]:
+        raise ReleaseError(f"{tag}: {sha[:12]}'s tree differs from the staging head {head[:12]} it merged")
+    statuses = json.loads(gh("api", f"repos/{slug}/commits/{head}/statuses?per_page=100"))
+    hw = [st for st in statuses if st.get("context") == HARDWARE_CONTEXT]
+    if not hw or hw[0].get("state") != "success":
+        raise ReleaseError(f"{tag}: staging head {head[:12]} has no passing hardware report "
+                           f"({hw[0].get('state') if hw else 'none'})")
+    if note is None:
+        print(f"  hardware report for {head[:12]}: {hw[0].get('target_url')}")
+        ans = input("  Do the visuals look right with music on the test device (smooth, reactive)? [y/N] ")
+        note = "confirmed at prompt" if ans.strip().lower() == "y" else None
+    if not note:
+        raise ReleaseError(f"{tag}: the operator did not confirm the visuals; not promoted")
+    record = {
+        "tag": tag,
+        "version": manifest["version"],
+        "device_id": "staging",
+        "basis": "staging hardware report of the merged head (same tree, #349)",
+        "staging_sha": head,
+        "tree": commit["commit"]["tree"]["sha"],
+        "checks": {
+            "hardware": {"pass": True, "report": hw[0].get("target_url"),
+                         "description": hw[0].get("description")},
+            "operator": {"pass": True, "note": note},
+        },
+        "passed": True,
+        "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    }
+    out = Path(tempfile.mkdtemp(prefix="blinky-promote-")) / "gate-staging.json"
+    out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    gh("release", "upload", tag, str(out), "--clobber")
+    print(f"  recorded gate-staging.json on {tag} (hardware: {head[:12]}, operator: {note})")
+
+
 def redeploy_console(what):
     """Re-mirror stable releases for the web flasher (docs/WEB_FLASHER.md).
 
@@ -79,6 +135,8 @@ def main():
     ap.add_argument("tag", help="release tag, e.g. b214")
     ap.add_argument("--rollback", action="store_true",
                     help="re-mark an already-promoted stable release as Latest")
+    ap.add_argument("--operator-confirmed", metavar="NOTE",
+                    help="a human has watched the visuals with music and approves (recorded verbatim)")
     args = ap.parse_args()
     try:
         n = firmware_release.TAG_RE.match(args.tag)
@@ -96,6 +154,10 @@ def main():
             return 0
 
         rel = firmware_release.download(args.tag, Path(tempfile.gettempdir()) / "blinky-promote-assets")
+        has_gate = any(a["name"].startswith("gate-") and a["name"].endswith(".json")
+                       for a in info["assets"])
+        if not has_gate:
+            staging_gate(args.tag, rel["manifest"], args.operator_confirmed)
         passing = firmware_release.gate_records(args.tag, rel["manifest"])
         sign_in_ci(args.tag)
         # Tag first, then mark stable + Latest. Each step fires a console
