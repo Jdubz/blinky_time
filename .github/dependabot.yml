@@ -1,0 +1,12 @@
+# Pin bumps for the firmware/ and corpus/ submodules (#357). Each bump is a PR, so CI runs
+# the firmware tools and the Python <-> firmware parity check against the new pin, and the
+# Claude review runs on it (its token is a Dependabot secret here). .gitmodules names the
+# branch each one follows: blinky-firmware master (hardware-tested), blinky-corpus main.
+version: 2
+updates:
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: "submodules"

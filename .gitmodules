@@ -1,6 +1,9 @@
 [submodule "firmware"]
 	path = firmware
 	url = https://github.com/Jdubz/blinky-firmware.git
+	# Dependabot bumps the pin to this branch: master is hardware-tested firmware.
+	branch = master
 [submodule "corpus"]
 	path = corpus
 	url = https://github.com/Jdubz/blinky-corpus.git
+	branch = main
