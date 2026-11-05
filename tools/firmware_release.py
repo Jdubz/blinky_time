@@ -18,6 +18,9 @@ plus, once bench-gated, gate-<device_id>.json. Channels:
   candidate  pre-release `b<N>` (CI-built, not yet gated)
   stable     full release `b<N>` + tag `stable-b<N>`; the latest stable is
              the release GitHub marks "Latest" (rollback = re-mark an older one)
+  staging    not a release: the workflow artifact `staging-firmware-<sha>` that
+             staging-build.yml builds from every green staging push (version
+             b<N>-dev-<sha8>), for test devices only (download_staging)
 
 CLI:
   firmware_release.py package --hex H --build N --sha SHA --out DIR
@@ -27,6 +30,7 @@ CLI:
   firmware_release.py sign --tag bN --key-env VAR    (gated release -> signed OTA pair; CI only)
   firmware_release.py verify-signed --tag bN         (signature check, no key needed)
   firmware_release.py is-test-device <device_id>
+  firmware_release.py download-staging --sha SHA [--out DIR]   (staging build, test devices only)
 
 Every failure exits non-zero with a message; nothing falls back silently.
 """
@@ -145,8 +149,11 @@ def release_pubkey_from_firmware():
     return m.group(1)
 
 
-def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
+def package(hex_path, build, sha, out_dir, toolchain, libraries=None, dev=False):
     """Validate a compiled hex and write release assets + manifest into out_dir.
+
+    ``dev``: a ``scripts/build.sh --dev`` hex (the staging build, CI on every push to
+    staging): version ``b<N>-dev-<sha8>``, as gen_version.sh stamps it. Test devices only.
 
     Same validators the deploy paths run (tools/uf2_upload.py), but strict:
     the hex safety check must actually run (uf2_upload.validate_hex skips it
@@ -174,7 +181,8 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
 
     manifest = {
         "build": int(build),
-        "version": f"b{build}-{sha[:8]}",
+        "version": f"b{build}-dev-{sha[:8]}" if dev else f"b{build}-{sha[:8]}",
+        "channel": "dev" if dev else "release",
         "git_sha": sha,
         "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
         "toolchain": toolchain,
@@ -187,6 +195,77 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
 
 
 # --------------------------------------------------------------- download ---
+
+STAGING_WORKFLOW = ".github/workflows/staging-build.yml"
+STAGING_BRANCH = "staging"
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def download_staging(sha, out_dir):
+    """Download and verify the staging build of commit ``sha`` (staging-build.yml).
+
+    Refuses unless: the artifact came from a successful staging-build.yml run in
+    this repository; its manifest is a dev-channel build of exactly ``sha`` with
+    the version gen_version.sh stamps; every listed file matches its sha256; and
+    ``sha`` is on the staging branch.
+    """
+    if not SHA_RE.match(sha or ""):
+        raise ReleaseError(f"not a full commit sha: {sha!r}")
+    slug = repo_slug()
+    name = f"staging-firmware-{sha}"
+    arts = json.loads(gh("api", f"repos/{slug}/actions/artifacts?name={name}&per_page=20"))
+    live = [a for a in arts.get("artifacts", []) if not a.get("expired")]
+    if not live:
+        raise ReleaseError(f"no staging build for {sha[:12]} (artifact {name}): "
+                           "has staging-build.yml run for it?")
+    art = max(live, key=lambda a: a["created_at"])
+    run_id = (art.get("workflow_run") or {}).get("id")
+    run = json.loads(gh("api", f"repos/{slug}/actions/runs/{run_id}"))
+    if run.get("path") != STAGING_WORKFLOW or run.get("event") != "workflow_run":
+        raise ReleaseError(f"{name} was not built by {STAGING_WORKFLOW} (run {run_id}: "
+                           f"{run.get('path')}, {run.get('event')})")
+    if (run.get("repository") or {}).get("full_name") != slug:
+        raise ReleaseError(f"{name}: run {run_id} is from another repository")
+    if run.get("conclusion") != "success":
+        raise ReleaseError(f"{name}: build run {run_id} concluded {run.get('conclusion')}")
+    cmp = json.loads(gh("api", f"repos/{slug}/compare/{sha}...{STAGING_BRANCH}"))
+    if cmp.get("status") not in ("identical", "ahead"):
+        raise ReleaseError(f"{sha[:12]} is not on {STAGING_BRANCH} ({cmp.get('status')})")
+
+    # Its own subdirectory, emptied first: nothing else under out_dir is touched.
+    out_dir = Path(out_dir) / sha
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    gh("run", "download", str(run_id), "--name", name, "--dir", str(out_dir))
+    manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+    n = manifest.get("build")
+    want = f"b{n}-dev-{sha[:8]}"
+    if manifest.get("channel") != "dev" or manifest.get("git_sha") != sha or manifest.get("version") != want:
+        raise ReleaseError(f"{name}: manifest is not the dev build of {sha[:12]} "
+                           f"(channel {manifest.get('channel')}, sha {manifest.get('git_sha')}, "
+                           f"version {manifest.get('version')}, want {want})")
+    files = manifest.get("files") or {}
+    required = [f"blinky-things-b{n}.hex", f"blinky-things-b{n}.uf2"]
+    for fname in required:
+        p = out_dir / fname
+        if fname not in files:
+            raise ReleaseError(f"{name}: manifest has no sha256 for {fname} - refusing to use it")
+        if not p.exists():
+            raise ReleaseError(f"{name}: {fname} missing")
+        if sha256(p) != files[fname]:
+            raise ReleaseError(f"{name}: {fname} sha256 mismatch - refusing to use it")
+    return {
+        "tag": f"staging-{sha[:8]}",
+        "sha": sha,
+        "run_id": run_id,
+        "hex": out_dir / required[0],
+        "uf2": out_dir / required[1],
+        "manifest": manifest,
+        "stable": False,
+        "channel": "dev",
+    }
+
 
 def list_releases():
     rows = json.loads(gh("release", "list", "--limit", "200",
@@ -448,9 +527,14 @@ def main():
     p.add_argument("--toolchain-json", default="{}", help="toolchain versions as JSON")
     p.add_argument("--libraries-json", required=True,
                    help="libraries.json written by scripts/build.sh (resolved library set)")
+    p.add_argument("--dev", action="store_true",
+                   help="a scripts/build.sh --dev hex: version b<N>-dev-<sha8> (staging, test devices only)")
     d = sub.add_parser("download")
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
+    ds = sub.add_parser("download-staging")
+    ds.add_argument("--sha", required=True, help="the staging commit (full sha)")
+    ds.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-staging"))
     sub.add_parser("latest-stable")
     sg = sub.add_parser("sign")
     sg.add_argument("--tag", required=True)
@@ -467,12 +551,18 @@ def main():
     try:
         if args.cmd == "package":
             libs = json.loads(Path(args.libraries_json).read_text(encoding="utf-8"))
-            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs)
+            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs,
+                        dev=args.dev)
             print(json.dumps(m, indent=2))
         elif args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)
             print(json.dumps({"tag": r["tag"], "stable": r["stable"], "hex": str(r["hex"]),
                               "uf2": str(r["uf2"]), "version": r["manifest"]["version"]}))
+        elif args.cmd == "download-staging":
+            r = download_staging(args.sha, args.out)
+            print(json.dumps({"tag": r["tag"], "stable": False, "channel": "dev", "sha": r["sha"],
+                              "run_id": r["run_id"], "hex": str(r["hex"]), "uf2": str(r["uf2"]),
+                              "version": r["manifest"]["version"]}))
         elif args.cmd == "latest-stable":
             print(latest_stable_tag())
         elif args.cmd == "sign":

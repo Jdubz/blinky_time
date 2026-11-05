@@ -2,11 +2,12 @@ name: PR Validation
 
 on:
   pull_request:
-    branches: [ master, main ]
-  # Also validate master itself: two PRs that each pass alone can still break
-  # together once both are merged.
+    branches: [ master, staging ]
+  # Also validate master and staging themselves: two PRs that each pass alone
+  # can still break together once both are merged. A green run on a staging
+  # push starts the staging firmware build (staging-build.yml).
   push:
-    branches: [ master ]
+    branches: [ master, staging ]
 
 jobs:
   compile:
@@ -134,7 +135,7 @@ jobs:
     - name: Release gate beat-pace arithmetic
       run: |
         pip install pytest pyserial
-        python -m pytest -v tests/tools/test_release_gate.py
+        python -m pytest -v tests/tools/test_release_gate.py tests/tools/test_staging_download.py
 
   static-init-safety:
     name: Static Init Safety Check

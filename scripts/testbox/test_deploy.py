@@ -72,6 +72,44 @@ def test_green_ci_and_a_clean_review_deploy() -> None:
     assert deploy.gate(SHA, gh(), NOW)[0] == "deploy"
 
 
+def staging_gh(statuses: list[dict[str, Any]], repo: str = deploy.GH_REPO) -> Any:
+    """A staging -> master merge: no review comments at all, a hardware status instead."""
+    base = gh(comments=[])
+
+    def fetch(path: str) -> Any:
+        if path.endswith(f"{SHA}/pulls"):
+            (pr,) = base(path)
+            return [{**pr, "head": {"sha": HEAD, "ref": "staging", "repo": {"full_name": repo}}}]
+        if f"{HEAD}/statuses" in path:
+            return statuses
+        return base(path)
+
+    return fetch
+
+
+def hw(state: str, context: str = deploy.HARDWARE_CONTEXT) -> dict[str, Any]:
+    return {"context": context, "state": state}
+
+
+@pytest.mark.parametrize(
+    "statuses,repo,want,why",
+    [
+        ([hw("success")], deploy.GH_REPO, "deploy", "hardware report passed"),
+        # newest first: a later failure wins over an earlier pass
+        ([hw("failure"), hw("success")], deploy.GH_REPO, "reject", "failure"),
+        ([hw("success", "other")], deploy.GH_REPO, "reject", "no hardware report"),
+        ([], deploy.GH_REPO, "reject", "no hardware report"),
+        # a fork's branch named staging is an ordinary PR: it needs a review
+        ([hw("success")], "someone/fork", "reject", "no review verdict"),
+    ],
+)
+def test_a_staging_merge_is_gated_on_its_hardware_report(
+    statuses: list[dict[str, Any]], repo: str, want: str, why: str
+) -> None:
+    got = deploy.gate(SHA, staging_gh(statuses, repo), NOW)
+    assert got[0] == want and why in got[1], got
+
+
 ISSUES = "Found 2 issue(s) — see the inline comments."
 INCOMPLETE = "Incomplete review: no issues found, but not every changed file was read."
 

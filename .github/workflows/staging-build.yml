@@ -1,0 +1,92 @@
+# Build the staging firmware (docs/RELEASE_PROCESS.md, "Staging").
+#
+# Every push to staging that passes PR Validation is compiled with the pinned
+# toolchain, packaged with the release validators (tools/firmware_release.py
+# package --dev) and uploaded as the workflow artifact `staging-firmware`.
+# It is NOT a release: version b<N>-dev-<sha8>, unsigned, test devices only.
+# The test box's staging runner (scripts/testbox/staging.py) downloads it,
+# flashes the test chips and runs the hardware suite, then posts the
+# "Hardware test (staging)" status on the commit. A PR staging -> master
+# needs that status.
+#
+# workflow_run runs this file from the default branch (staging).
+name: Staging build
+
+on:
+  workflow_run:
+    workflows: ["PR Validation"]
+    types: [completed]
+    branches: [staging]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: staging-build-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build staging firmware
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'staging'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the validated commit
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
+
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v2
+      with:
+        version: 1.3.1   # = tools/firmware_toolchain.json arduino_cli
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install pinned toolchain
+      run: |
+        pip install adafruit-nrfutil pyserial
+        bash scripts/setup_toolchain.sh
+
+    # --dev: no bump, version b<N>-dev-<sha8> from BUILD_NUMBER and the commit.
+    - name: Build firmware
+      run: bash scripts/build.sh --dev
+
+    - name: Package and validate
+      env:
+        SHA: ${{ github.event.workflow_run.head_sha }}
+      run: |
+        N=$(tr -d '[:space:]' < blinky-things/BUILD_NUMBER)
+        TFLITE_REF=$(sed -n 's/^TFLITE_REF="${TFLITE_REF:-\([0-9a-f]*\)}"$/\1/p' tools/setup_tflite_lib.sh)
+        [ -n "$TFLITE_REF" ] || { echo "::error::TFLITE_REF pin not found in setup_tflite_lib.sh"; exit 1; }
+        TC=$(jq -c --arg tflite "$TFLITE_REF" --arg cli "$(arduino-cli version | head -1)" \
+               '{core: .core, libraries: .libraries, fqbn: .fqbn, tflite_ref: $tflite, arduino_cli: $cli}' \
+               tools/firmware_toolchain.json)
+        python tools/firmware_release.py package --dev \
+          --hex /tmp/blinky-build/blinky-things.ino.hex \
+          --build "$N" --sha "$SHA" \
+          --out dist --toolchain-json "$TC" \
+          --libraries-json /tmp/blinky-build/libraries.json
+        # The firmware must report exactly the manifest's version.
+        want=$(jq -r .version dist/manifest.json)
+        grep -q "\"$want\"" blinky-things/types/Version.h || {
+          echo "::error title=Staging build::Version.h does not carry $want"; cat blinky-things/types/Version.h; exit 1; }
+        ls -la dist
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        # Named for the built commit: a workflow_run run's own head_sha is the
+        # default branch's tip when it started, not necessarily this commit.
+        name: staging-firmware-${{ github.event.workflow_run.head_sha }}
+        path: dist/
+        retention-days: 30
+        if-no-files-found: error

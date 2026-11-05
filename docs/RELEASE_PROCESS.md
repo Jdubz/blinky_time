@@ -14,6 +14,16 @@
 
 Test devices are listed in `devices/test_devices.json`. Being a test device is a deliberate property of the device, not where it happens to be plugged in. Candidates and dev builds are refused for every other device.
 
+## Staging (#349, being built)
+
+Changes reach master only through `staging`, after a hardware test on the box's test chips.
+
+1. **Feature PRs target `staging`** (the default branch). CI and the Claude review run there; a PR merges once CI is green and the review's findings are addressed.
+2. **Staging build.** Every push to `staging` that passes PR Validation is compiled with the pinned toolchain and packaged with the release validators (`.github/workflows/staging-build.yml`, `firmware_release.py package --dev`). It is uploaded as the workflow artifact `staging-firmware`: version `b<N>-dev-<sha8>`, unsigned, a `dev`-channel build that only test devices take. Nothing is published as a release.
+3. **Hardware test** (step 2–3 of #349). The box's staging runner downloads the artifact, checks it against its manifest, flashes the test chips through blinky-server's single flash path and runs the hardware suite: the bench gate's automated checks (below), the `edm/` validation suite with the drum metrics, and the onset-path timing. It posts the commit status `Hardware test (staging)` with the report.
+4. **Staging → master.** A PR from `staging` to `master` needs that status on its head. It is merged with a merge commit, so master's tree is the tree that was tested. It gets no Claude review (every change in it was reviewed into staging); the box deployer gates it on the hardware status instead (`scripts/testbox/deploy.py`).
+5. **Release** (step 5 of #349). Every merge to master will cut a candidate. Marking it stable stays manual (below).
+
 ## Cutting a release
 
 A release is a vetted checkpoint that the owner picks. **Nothing releases on its own:** merging to master builds nothing for devices. Each step below is run by hand. b215 is the current stable and the first signed release.
