@@ -29,7 +29,7 @@ Changes reach master only through `staging`, after a hardware test on the box's 
 
    It posts the commit status `Hardware test (staging)` (pending while it waits or runs, then success or failure) and the report as a comment on the PR that merged the commit into staging. A failed build or CI is a failure too. `staging.py --status` shows its state; `journalctl -u blinky-staging` its log.
 4. **Staging → master.** On a pass the runner opens the PR `staging` → `master` (or comments on the open one) and turns on its auto-merge, as a merge commit, so master's tree is the tree that was tested. That PR gets no Claude review (every change in it was reviewed into staging); the box deployer gates it on the hardware status instead (`scripts/testbox/deploy.py`).
-5. **Release.** Every merge to master cuts a candidate (below). `master` is protected: a PR needs `Master takes staging only` (`.github/workflows/master-source.yml`), `Hardware test (staging)` and CI green. Marking a candidate stable stays manual, with the operator's visual check (Promote).
+5. **Release.** Every merge to master cuts a candidate (below). `master` is protected by the repository ruleset "master (staging only, hardware-tested)": merge commits only, and a PR needs `Master takes staging only` (`.github/workflows/master-source.yml`), `Hardware test (staging)` and CI green. The ruleset "staging (default branch)" protects `staging` (PRs, CI green). Marking a candidate stable stays manual, with the operator's visual check (Promote).
 
 ## Cutting a release
 

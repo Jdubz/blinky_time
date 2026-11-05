@@ -215,7 +215,43 @@ def test_an_unbuilt_head_waits_and_a_failed_build_fails() -> None:
 def test_no_test_device_waits_without_reporting() -> None:
     g, srv = GitHub(), Server([LAMP], {})
     state = staging.run_once(g, srv, listed)
+    staging.run_once(g, srv, listed)
     assert "running" not in state and "reported" not in state and not srv.submitted
+    assert g.statuses == [("pending", "no test device connected to the box")]  # posted once
+
+
+class Refusing(Server):
+    def __init__(self, code: int) -> None:
+        super().__init__([HAT], {})
+        self.code = code
+
+    def __call__(self, method: str, path: str, body: Any = None) -> Any:
+        if method == "POST":
+            import io
+
+            raise urllib.error.HTTPError(
+                path,
+                self.code,
+                "x",
+                {},
+                io.BytesIO(b'{"detail": "not test devices"}'),  # type: ignore[arg-type]
+            )
+        return super().__call__(method, path, body)
+
+
+@pytest.mark.parametrize("code", [400, 403, 422])
+def test_a_refused_suite_is_a_failure_not_a_retry(code: int) -> None:
+    g = GitHub()
+    state = staging.run_once(g, Refusing(code), listed)
+    assert state["reported"] == SHA and g.statuses[-1][0] == "failure"
+    assert "not test devices" in g.statuses[-1][1]
+
+
+@pytest.mark.parametrize("code", [409, 503])
+def test_a_busy_server_is_retried(code: int) -> None:
+    g = GitHub()
+    state = staging.run_once(g, Refusing(code), listed)
+    assert "reported" not in state and not g.statuses
 
 
 def test_alert_lines_are_in_the_report() -> None:
