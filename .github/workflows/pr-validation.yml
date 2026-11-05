@@ -288,13 +288,15 @@ jobs:
     - name: Run tests
       run: venv/bin/python -m pytest tests/ -v
 
-    - name: Test box deployer (scripts/testbox/deploy.py)
-      # It decides what the test box runs, so its gate is tested like the server.
+    - name: Test box deployer and staging runner (scripts/testbox/)
+      # They decide what the test box runs and what reaches master (#349), so they are
+      # tested like the server.
       run: |
         venv/bin/python -m ruff check --line-length 100 ../scripts/testbox/
         venv/bin/python -m ruff format --check --line-length 100 ../scripts/testbox/
-        venv/bin/python -m mypy --strict --ignore-missing-imports ../scripts/testbox/deploy.py
-        venv/bin/python -m pytest -v ../scripts/testbox/test_deploy.py
+        venv/bin/python -m mypy --strict --ignore-missing-imports \
+          ../scripts/testbox/deploy.py ../scripts/testbox/staging.py
+        venv/bin/python -m pytest -v ../scripts/testbox/test_deploy.py ../scripts/testbox/test_staging.py
 
   feature-parity:
     name: Feature Parity (Python ↔ firmware)

@@ -211,3 +211,22 @@ async def test_parse_json_response_empty() -> None:
 async def test_parse_json_response_raw_fallback() -> None:
     result = DeviceProtocol._parse_json_response("not json at all")
     assert result == {"raw": "not json at all"}
+
+
+async def test_an_alert_inside_a_command_response_is_still_an_alert(
+    protocol: DeviceProtocol,
+) -> None:
+    """A firmware [ASSERT] / [FALLBACK] line that arrives while a command's response is being
+    collected goes to the response buffer, and must still reach the alert hook (#351 review)."""
+    seen: list[str] = []
+    raw: list[str] = []
+    protocol.on_alert(seen.append)
+    protocol.on_raw_line(raw.append)
+    protocol._pending = True  # collecting a response
+    protocol._handle_line("[FALLBACK] clock sync: no millis")
+    protocol._pending = False
+    protocol._handle_line("[ASSERT] onset evidence rate out of range")
+    protocol._handle_line("plain log line")
+    assert seen == ["[FALLBACK] clock sync: no millis", "[ASSERT] onset evidence rate out of range"]
+    assert protocol._response_buf[-1] == "[FALLBACK] clock sync: no millis"  # still in it
+    assert raw == ["[ASSERT] onset evidence rate out of range", "plain log line"]

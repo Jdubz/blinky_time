@@ -14,14 +14,21 @@
 
 Test devices are listed in `devices/test_devices.json`. Being a test device is a deliberate property of the device, not where it happens to be plugged in. Candidates and dev builds are refused for every other device.
 
-## Staging (#349, being built)
+## Staging (#349)
 
 Changes reach master only through `staging`, after a hardware test on the box's test chips.
 
 1. **Feature PRs target `staging`** (the default branch). CI and the Claude review run there; a PR merges once CI is green and the review's findings are addressed.
 2. **Staging build.** Every push to `staging` that passes PR Validation is compiled with the pinned toolchain and packaged with the release validators (`.github/workflows/staging-build.yml`, `firmware_release.py package --dev`). It is uploaded as the workflow artifact `staging-firmware`: version `b<N>-dev-<sha8>`, unsigned, a `dev`-channel build that only test devices take. Nothing is published as a release.
-3. **Hardware test** (step 2–3 of #349). The box's staging runner downloads the artifact, checks it against its manifest, flashes the test chips through blinky-server's single flash path and runs the hardware suite: the bench gate's automated checks (below), the `edm/` validation suite with the drum metrics, and the onset-path timing. It posts the commit status `Hardware test (staging)` with the report.
-4. **Staging → master.** A PR from `staging` to `master` needs that status on its head. It is merged with a merge commit, so master's tree is the tree that was tested. It gets no Claude review (every change in it was reviewed into staging); the box deployer gates it on the hardware status instead (`scripts/testbox/deploy.py`).
+3. **Hardware test.** `blinky-staging.timer` on the box runs `scripts/testbox/staging.py` every 2 minutes. For the newest staging commit, once its build exists, it submits the suite to blinky-server (`POST /api/test/staging`, the durable job `test.staging` in `blinky_server/testing/staging.py`, enabled only by the box unit's `--staging`), for every connected test device:
+   - **deploy:** the staging build through the fleet deploy pipeline (`POST /api/fleet/deploy-staging` runs the same): test devices only, the single flash path, settings restore + save, the post-deploy version assertion. The image is stored as non-stable, so auto-recovery stays armed with the stable image (#251);
+   - **health:** 5 min of `json info` with no music: fps ≥ 60, longest frame ≤ 100 ms, no reboot, overrun growth ≤ 5 (the bench gate's checks, below);
+   - **music and beat pace:** the first `edm/` track on the box speaker: level and pulse-onset rate, then 60 s of beat pace;
+   - **validation:** every `edm/` track once, with the drum metrics. Reported, **not gated**, until the box passes its acceptance gates (`TEST_BOX_BUILD_PLAN.md`);
+   - **after:** the same version, no reboot, the onset-path timing when `json info` reports it, and no `[ASSERT]` / `[FALLBACK]` line at any point.
+
+   It posts the commit status `Hardware test (staging)` (pending while it waits or runs, then success or failure) and the report as a comment on the PR that merged the commit into staging. A failed build or CI is a failure too. `staging.py --status` shows its state; `journalctl -u blinky-staging` its log.
+4. **Staging → master.** On a pass the runner opens the PR `staging` → `master` (or comments on the open one) and turns on its auto-merge, as a merge commit, so master's tree is the tree that was tested. That PR gets no Claude review (every change in it was reviewed into staging); the box deployer gates it on the hardware status instead (`scripts/testbox/deploy.py`).
 5. **Release** (step 5 of #349). Every merge to master will cut a candidate. Marking it stable stays manual (below).
 
 ## Cutting a release

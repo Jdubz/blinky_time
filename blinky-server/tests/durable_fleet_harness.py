@@ -10,7 +10,8 @@ its bytes land; ``after:N`` exits after they land (the device already reports th
 but before the flash finished. ``resume`` starts again and prints the job's result. The data
 dir (the work store) comes from XDG_DATA_HOME. WORKFLOW=deploy runs ``fleet.deploy`` instead
 (release download, store, settings broadcast and post-deploy assertion faked);
-``broadcast:N`` exits in the middle of the Nth settings broadcast.
+``broadcast:N`` exits in the middle of the Nth settings broadcast. WORKFLOW=staging runs
+``fleet.deploy-staging`` the same way (staging download and the test-device check faked).
 """
 
 from __future__ import annotations
@@ -62,6 +63,9 @@ class Protocol:
         self.dev = dev
 
     async def send_command(self, cmd: str, timeout: float = 5.0) -> str:
+        if cmd in ("restore_runtime_settings", "save"):  # a staging deploy's per-target settings
+            effect(f"cmd {self.dev} {cmd}")
+            return "OK"
         assert cmd == "json info", cmd
         v = devices[self.dev].version
         return json.dumps({"version": v, "audioOverruns": 0, "audioSamplesLost": 0, "fps": 60})
@@ -138,6 +142,26 @@ deploy_pipeline.fetch_stable_release = lambda tag, out: {  # type: ignore[assign
     "stable": True,
 }
 routes_firmware._store_release_hex = lambda hex_path, tag: Path("/fake/stored.hex")  # type: ignore[assignment]
+STAGING_SHA = "ab" * 20
+deploy_pipeline.fetch_staging_build = (
+    lambda sha, out: {  # type: ignore[assignment]
+        "tag": f"staging-{sha[:8]}",
+        "version": NEW,
+        "hex": "/fake/staging.hex",
+        "stable": False,
+        "channel": "dev",
+        "sha": sha,
+    }
+)
+deploy_pipeline.require_test_devices = lambda devices: effect(f"test devices {len(devices)}")  # type: ignore[assignment]
+
+
+def _store_staging(hex_path: Path, version: str) -> Path:
+    effect(f"store staging {version}")
+    return Path("/fake/stored-staging.hex")
+
+
+routes_firmware._store_staging_hex = _store_staging  # type: ignore[assignment]
 WORKFLOW = os.environ.get("WORKFLOW", "flash")
 fleet_workflows.images.load = lambda path: SimpleNamespace(version=NEW)
 fleet_workflows.VERSION_SETTLE_S = 0
@@ -168,6 +192,11 @@ async def main() -> None:
     wid_file = out / "workflow_id"
     if mode == "start" and WORKFLOW == "deploy":
         wid = await durable.submit(fleet_workflows.fleet_deploy, None, DEVICES, str(out / "dl"))
+        wid_file.write_text(wid)
+    elif mode == "start" and WORKFLOW == "staging":
+        wid = await durable.submit(
+            fleet_workflows.fleet_deploy_staging, STAGING_SHA, DEVICES, str(out / "dl")
+        )
         wid_file.write_text(wid)
     elif mode == "start":
         wid = await durable.submit(fleet_workflows.fleet_flash, DEVICES, "/fake/fw.hex")

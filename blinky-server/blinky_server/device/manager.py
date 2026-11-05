@@ -127,7 +127,10 @@ class FleetManager:
         enable_serial: bool = True,
         ble_timeout: float = 5.0,
         wifi_hosts: list[dict[str, Any]] | None = None,
+        staging: bool = False,
     ) -> None:
+        # Staging deploys to test devices (#349): the test box's server only (--staging).
+        self.staging_enabled = staging
         self._devices: dict[str, Device] = {}  # keyed by device_id
         self._discovery_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = (
