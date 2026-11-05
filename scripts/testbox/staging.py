@@ -9,7 +9,9 @@ deploy.py). One pass:
    on the PR that merged it into staging. On a pass, if staging's head is still that sha, open
    the staging -> master PR if none is open and turn on its auto-merge, pinned to that sha (a
    merge commit: master's tree is the tested tree).
-2. Otherwise, the staging head: already reported, nothing to do. Its staging build
+2. Otherwise, the staging head: already reported, nothing to do. No change under the
+   firmware's paths (tools/firmware_paths.json at the head) since master: post a passing
+   status saying the test was skipped, and promote. Its staging build
    (staging-build.yml, artifact staging-firmware-<sha>) failed: post a failure. Not built yet:
    a pending status. Built: submit the suite (POST /api/test/staging) for every connected test
    device (devices/test_devices.json, by configured device id) and post a pending status.
@@ -22,6 +24,7 @@ goes to the journal (`journalctl -u blinky-staging`). `--status` prints the stat
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -47,6 +50,10 @@ STATE = (
     / "staging.json"
 )
 BUILD_WORKFLOW = "staging-build.yml"
+# The paths that change what is built and flashed, owned by the firmware repo and read at the
+# commit being judged; its release.yml skips a candidate by the same list.
+FIRMWARE_PATHS = "tools/firmware_paths.json"
+COMPARE_FILE_LIMIT = 300  # GitHub's compare lists at most this many files
 CORPUS = "corpus/edm"  # the blinky-corpus submodule
 REPORT_HEADER = "## Hardware test (staging) — "
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
@@ -140,6 +147,39 @@ def build_state(gh_: Gh, sha: str) -> str:
     return "pending"
 
 
+def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str]:
+    """(changed, why): whether sha changes anything under the firmware's paths since master.
+
+    Anything that can't be judged counts as a change, so it gets the hardware test: no path
+    list at that commit, a GitHub error, or a compare GitHub truncated.
+    """
+    try:
+        meta = gh_json(gh_, "api", f"repos/{GH_REPO}/contents/{FIRMWARE_PATHS}?ref={sha}")
+        paths = [str(p) for p in json.loads(base64.b64decode(meta["content"]))["paths"]]
+        cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/master...{sha}")
+    except (RuntimeError, KeyError, ValueError, TypeError) as e:
+        return True, f"can't compare with master ({str(e)[:80]}): testing"
+    if not paths:
+        return True, f"{FIRMWARE_PATHS} lists no paths: testing"
+    files = cmp.get("files")
+    if not isinstance(files, list) or len(files) >= COMPARE_FILE_LIMIT:
+        return True, "the compare with master is truncated: testing"
+
+    def firmware(name: str) -> bool:
+        return any(name.startswith(p) if p.endswith("/") else name == p for p in paths)
+
+    hits = [
+        n
+        for f in files
+        for n in (f.get("filename"), f.get("previous_filename"))
+        if n and firmware(n)
+    ]
+    base = str(cmp.get("merge_base_commit", {}).get("sha", "master"))[:12]
+    if hits:
+        return True, f"{len(hits)} firmware file(s) changed since master {base}"
+    return False, f"no firmware change since master {base}: hardware test skipped"
+
+
 def post_status(
     gh_: Gh, sha: str, state: str, description: str, url: str | None = None, repo: str = GH_REPO
 ) -> None:
@@ -168,7 +208,7 @@ def staging_pr(gh_: Gh, sha: str, repo: str = GH_REPO) -> int | None:
     return None
 
 
-def promote(gh_: Gh, sha: str, report_url: str | None) -> str:
+def promote(gh_: Gh, sha: str, report_url: str | None, skipped: str | None = None) -> str:
     """Open the staging -> master PR if none is open; turn on its auto-merge (merge commit)."""
     open_prs = gh_json(
         gh_,
@@ -185,12 +225,19 @@ def promote(gh_: Gh, sha: str, report_url: str | None) -> str:
         "--json",
         "number,url",
     )
-    body = (
-        f"Staging at `{sha[:12]}` passed the hardware test on the box's test chips"
-        + (f": {report_url}" if report_url else ".")
-        + "\n\nMerging this to master cuts a candidate release (docs/RELEASE_PROCESS.md). "
-        "Opened by the test box (scripts/testbox/staging.py)."
-    )
+    if skipped:
+        body = (
+            f"Staging at `{sha[:12]}`: {skipped} (`{FIRMWARE_PATHS}`). Merging this to master "
+            "cuts no candidate release (docs/RELEASE_PROCESS.md). "
+            "Opened by the test box (scripts/testbox/staging.py)."
+        )
+    else:
+        body = (
+            f"Staging at `{sha[:12]}` passed the hardware test on the box's test chips"
+            + (f": {report_url}" if report_url else ".")
+            + "\n\nMerging this to master cuts a candidate release (docs/RELEASE_PROCESS.md). "
+            "Opened by the test box (scripts/testbox/staging.py)."
+        )
     if open_prs:
         number = str(open_prs[0]["number"])
         gh_("pr", "comment", number, "--repo", GH_REPO, "--body", body)
@@ -386,6 +433,17 @@ def run_once(
 
     sha = staging_head(gh_)
     if state.get("reported") == sha:
+        return state
+    changed, why = firmware_change(gh_, sha)
+    if not changed:
+        # Nothing on the device changes: master gets it without a run (the owner, 2026-11-05).
+        post_status(gh_, sha, "success", why)
+        state["reported"] = sha
+        state.pop("waiting", None)
+        save_state(state)
+        log(f"{sha[:12]}: {why}")
+        number = promote(gh_, sha, None, skipped=why)
+        log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
         return state
     built = build_state(gh_, sha)
     if built == "failed":
