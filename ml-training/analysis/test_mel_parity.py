@@ -32,8 +32,8 @@ sys.path.insert(0, str(ML))
 
 from scripts.mel_frontend import filterbank, load_spec, mel_from_magnitudes  # noqa: E402
 
-CPP = REPO / "blinky-things" / "audio" / "SharedSpectralAnalysis.cpp"
-HEADER = REPO / "blinky-things" / "audio" / "SharedSpectralAnalysis.h"
+CPP = REPO / "firmware" / "blinky-things" / "audio" / "SharedSpectralAnalysis.cpp"
+HEADER = REPO / "firmware" / "blinky-things" / "audio" / "SharedSpectralAnalysis.h"
 GOLDEN = ML / "spec" / "mel_golden_v1.npz"
 
 # Python is float64, the firmware float32; the [0, 1] outputs agree to ~1e-6.

@@ -2,7 +2,7 @@
 
 **Status:** **Closed; kept for its method (checked 2026-10-21).** The five-gate method and the lessons from the v27 hybrids still apply: flatness is 85% predictable from mel (R² = 0.85), gate (b) found nothing, and the kick_weighted_drums labels were contaminated. The experiment queue below is closed. For the current direction, see `ML_IMPROVEMENT_PLAN.md` (its 2026-05-02 literature review). What changed since this was written:
 - **The onset NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0` in `audio/AudioTracker.h`). Onsets come from SuperFlux (#280), which costs far less CPU than the v33 NN (~12 ms per inference). "NN input feature" work therefore has no deployed consumer until a model beats flux (see `AUDIO_ARCHITECTURE.md`).
-- **`edm_holdout/` was deleted** (2026-04-27). Every held-out number below was measured on it. The only validation corpus is `blinky-test-player/music/edm/` (CLAUDE.md).
+- **`edm_holdout/` was deleted** (2026-04-27). Every held-out number below was measured on it. The only validation corpus is `corpus/edm/` (CLAUDE.md).
 - **Phase 2b was never built.** There is no `SignalRegistry` and no `stream signal` command. The shape features (crest, centroid, rolloff, HFC, raw flatness, raw flux) are computed in `SharedSpectralAnalysis` and logged per onset (`PulseFeatureSnapshot` in `AudioTracker.h`).
 - **Every post-detection gate is gone** (#292): `crestGateMin`, the bass-ratio gate, the beat-grid gate, re-arm and presence were deleted with the old picker. Both detectors now go through one online peak picker (`AudioTracker::pickOnset`). Gap 9 below describes the old picker.
 - **Harness gaps 5 and 9 are covered another way.** `tests/tracker/` runs the real `AudioTracker` peak-picking on the host, and with `BLINKY_HOST_NN` it runs the real TFLite Micro model (#203). `tests/parity/` holds the feature-parity harness.
@@ -355,7 +355,7 @@ Regenerate with
 
 ```
 ./venv/bin/python -m analysis.generate_tonal_corpus --out ../blinky-test-player/music/synthetic_tonals
-./venv/bin/python -m analysis.run_catalog --perc-corpus ../blinky-test-player/music/edm --tonal-corpus ../blinky-test-player/music/synthetic_tonals --out outputs/feature_catalog
+./venv/bin/python -m analysis.run_catalog --perc-corpus ../corpus/edm --tonal-corpus ../blinky-test-player/music/synthetic_tonals --out outputs/feature_catalog
 ```
 
 ### Primary metric: |d| between percussion and tonal-impulse peaks
@@ -469,7 +469,7 @@ Result — every feature's sign verdict is identical across full / kept-13 / hel
 
 > **Superseded (2026-04-27 corpus reset):** the action items below pointed at `edm_holdout/`, which was deleted. Training data prep now excludes the edm/ validation tracks (see `ML_IMPROVEMENT_PLAN.md`).
 
-While setting up the held-out check, discovered: the 18 EDM tracks in `blinky-test-player/music/edm/` are byte-identical with files inside the v27-hybrid training corpus at `/mnt/storage/blinky-ml-data/audio/combined/`, with the same filenames.
+While setting up the held-out check, discovered: the 18 EDM tracks in `corpus/edm/` are byte-identical with files inside the v27-hybrid training corpus at `/mnt/storage/blinky-ml-data/audio/combined/`, with the same filenames.
 
 Per `/mnt/storage/blinky-ml-data/processed_v27/.prep_splits.json`:
 
@@ -520,7 +520,7 @@ Re-ran Phase 1 cross-corpus Cohen's d against both tonal variants on this truly-
 
 ### Phase 3 first measurement — 2026-04-20
 
-b133 deployed to all 4 serial devices with centroid/crest/rolloff/hfc added to the debug stream. Full 18-track validation run against `blinky-test-player/music/edm/` produced 71 per-device-per-track observations (18 tracks × 4 devices, one run per combination). The server's new per-signal `SignalGapStats` computes a Cohen's d for each.
+b133 deployed to all 4 serial devices with centroid/crest/rolloff/hfc added to the debug stream. Full 18-track validation run against `corpus/edm/` produced 71 per-device-per-track observations (18 tracks × 4 devices, one run per combination). The server's new per-signal `SignalGapStats` computes a Cohen's d for each.
 
 **On-device vs offline Cohen's d (mean across devices and tracks):**
 
@@ -768,7 +768,7 @@ The corrected baseline may make some feature that previously looked flat (e.g., 
 
 ### Corpus framing revision — 2026-04-23
 
-**Primary corpus is `blinky-test-player/music/edm/` (18 tracks, representative).** `edm_holdout/` (25 GiantSteps LOFI tracks) is an adversarial / stress-test secondary — ambient, phrase-shifting, boom-bap content where VISUALIZER_GOALS §5 explicitly permits low F1 ("organic mode is the correct response").
+**Primary corpus is `corpus/edm/` (18 tracks, representative).** `edm_holdout/` (25 GiantSteps LOFI tracks) is an adversarial / stress-test secondary — ambient, phrase-shifting, boom-bap content where VISUALIZER_GOALS §5 explicitly permits low F1 ("organic mode is the correct response").
 
 Every F1 number in this document before this note was measured on one or the other without the primary/secondary distinction. In particular, gate (b)'s 2953-TP / 8991-FP population was captured on edm_holdout — which is both the hardest content AND (as of v28) training-contaminated. Future gate (b) re-runs should report edm/ and edm_holdout separately and compare.
 

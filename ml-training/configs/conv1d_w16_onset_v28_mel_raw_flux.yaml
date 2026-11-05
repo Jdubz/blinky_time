@@ -58,6 +58,6 @@ data:
   stored_hybrid_features: [flatness, raw_flux, crest, hfc]
 
 export:
-  output_header: "../blinky-things/audio/frame_onset_model_data_v28_mel_raw_flux.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_v28_mel_raw_flux.h"
   c_array_name: "frame_onset_model_data"
   max_model_size_kb: 25

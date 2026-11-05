@@ -38,7 +38,7 @@
     "kick_as_snare": 33,
     "phantom_snares": 1
   },
-  "edm_labels": "blinky-test-player/music/edm/kick_weighted (older parameterization)",
+  "edm_labels": "corpus/edm/kick_weighted (older parameterization)",
   "edm": {
     "tracks": 18,
     "kick": {

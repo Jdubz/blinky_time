@@ -19,6 +19,6 @@ model:
   dropout: 0.1
 
 export:
-  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  output_header: "../firmware/blinky-things/audio/frame_beat_model_data.h"
   c_array_name: "frame_beat_model_data"
   max_model_size_kb: 60           # ~23 KB INT8 — ample headroom

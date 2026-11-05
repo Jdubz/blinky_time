@@ -3,7 +3,7 @@
 > **Not used by the console today (checked 2026-10-21).** No code in `blinky-console/src` reads this folder. It holds one sample annotation file, `simple_beat.csv`, left over from an older test tab that loaded audio + CSV pairs.
 >
 > - **Console test mode:** the **Audio Debug** page (button in the top bar, dev builds only: `npm run dev`) has a **Run Test** control. It plays built-in synthesized patterns from `src/lib/testPatterns.ts` and scores the device's transient events against them. It does not load files from here.
-> - **Real validation:** onset detection is validated on the 18-track corpus in `blinky-test-player/music/edm/`, scored against `.onsets_consensus.json` by the blinky-server test harness. Don't add test material here expecting it to count.
+> - **Real validation:** onset detection is validated on the 18-track corpus in `corpus/edm/`, scored against `.onsets_consensus.json` by the blinky-server test harness. Don't add test material here expecting it to count.
 
 ## CSV Annotation Format
 

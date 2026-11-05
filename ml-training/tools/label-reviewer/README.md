@@ -21,7 +21,7 @@ the **Corpus** dropdown at the top of the page; no restart:
 | Corpus | Audio | Auto onsets | Human edits |
 |---|---|---|---|
 | `training` | `${BLINKY_DATA}/audio/combined` | `labels/onsets_consensus/` | `labels/onsets_human/` (under `${BLINKY_DATA}`, not in git) |
-| `edm` | `blinky-test-player/music/edm/` | same dir (`*.onsets_consensus.json`) | same dir (`*.onsets_human.json`, **commits to git**) |
+| `edm` | `corpus/edm/` | same dir (`*.onsets_consensus.json`) | same dir (`*.onsets_human.json`, **commits to git**) |
 
 Edits to the `edm` corpus ride with `git pull` to blinkyhost, where the
 validation harness applies them on the next test run. Edits to `training` stay
@@ -212,13 +212,13 @@ next to each audio file. If present, `load_ground_truth()` merges it via
 merged onsets carry a `source` field (`'auto' | 'auto_edited' | 'human'`) so
 scoring can later split metrics by provenance.
 
-Curate the EDM corpus in the reviewer → `git add blinky-test-player/music/edm/*.onsets_human.json`
+Curate the EDM corpus in the reviewer → `git add corpus/edm/*.onsets_human.json`
 → `git commit && git push` → on blinkyhost: `git pull && sudo systemctl restart
 blinky-server`. The next test run uses the corrected ground truth.
 
 **Training.** `prepare_dataset.py` reads
 `labels.onset_human_dirs` from the config (default: `${BLINKY_DATA}/labels/onsets_human/`
-plus `blinky-test-player/music/edm/` as a fallback). For each track, it merges
+plus `corpus/edm/` as a fallback). For each track, it merges
 the overlay before generating frame targets. Created onsets bypass the
 `min_systems` filter (they're human-confirmed). Edit footprint is logged per
 track as `HUMAN_EDITS_APPLIED <stem> edited=N removed=M created=K`.

@@ -11,7 +11,7 @@ Per track, produces a .pattern_gt.json file containing:
 - Phrase repeats (cosine similarity of 4-bar density profiles >0.80)
 
 Usage:
-    python3 derive_pattern_ground_truth.py --music-dir blinky-test-player/music/edm
+    python3 derive_pattern_ground_truth.py --music-dir corpus/edm
 """
 
 import argparse
@@ -307,7 +307,7 @@ def main():
     )
     parser.add_argument(
         "--music-dir",
-        default="blinky-test-player/music/edm",
+        default="corpus/edm",
         help="Directory containing .beats.json, .onsets.json, and track_manifest.json",
     )
     parser.add_argument(

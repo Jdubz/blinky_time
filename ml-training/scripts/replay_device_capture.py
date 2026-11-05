@@ -20,7 +20,7 @@ Usage:
         --capture capture.jsonl \\
         --model outputs/v16-no-delta/best_model.pt \\
         --config configs/conv1d_w16_onset_v16.yaml \\
-        --labels ../blinky-test-player/music/edm/techno-minimal-01.onsets_consensus.json
+        --labels ../corpus/edm/techno-minimal-01.onsets_consensus.json
 """
 
 import argparse

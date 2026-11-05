@@ -10,219 +10,6 @@ on:
     branches: [ master, staging ]
 
 jobs:
-  compile:
-    name: Compile Firmware
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Arduino CLI
-      uses: arduino/setup-arduino-cli@v2
-      with:
-        version: 1.3.1   # = tools/firmware_toolchain.json arduino_cli
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    # The pinned, isolated toolchain (scripts/setup_toolchain.sh, #252), the
-    # same one release builds and every workstation use, so this check
-    # compiles exactly what devices run.
-    - name: Install pinned toolchain
-      run: |
-        pip install adafruit-nrfutil
-        bash scripts/setup_toolchain.sh
-
-    - name: Compile sketch (scripts/build.sh, as releases do)
-      run: bash scripts/build.sh --build 0
-
-  cppcheck:
-    name: Static Analysis (cppcheck)
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    # Pinned: Ubuntu's apt cppcheck (2.13 on 24.04) misses findings that 2.16
-    # reports, so CI passed code that failed locally (#201). Built from source
-    # once and cached by version.
-    - name: Cache cppcheck
-      id: cppcheck-cache
-      uses: actions/cache@v4
-      with:
-        path: ~/cppcheck
-        key: cppcheck-2.16.0-${{ runner.os }}
-
-    - name: Build cppcheck 2.16.0
-      if: steps.cppcheck-cache.outputs.cache-hit != 'true'
-      run: |
-        git clone --depth 1 --branch 2.16.0 https://github.com/danmar/cppcheck.git /tmp/cppcheck-src
-        cmake -S /tmp/cppcheck-src -B /tmp/cppcheck-build -DCMAKE_BUILD_TYPE=Release           -DUSE_MATCHCOMPILER=ON -DCMAKE_INSTALL_PREFIX=$HOME/cppcheck
-        cmake --build /tmp/cppcheck-build -j"$(nproc)"
-        cmake --install /tmp/cppcheck-build
-
-    - name: Run cppcheck
-      run: |
-        export PATH="$HOME/cppcheck/bin:$PATH"
-        cppcheck --version | grep -qx 'Cppcheck 2.16.0' || { cppcheck --version; echo "wrong cppcheck version"; exit 1; }
-        cppcheck \
-          --enable=warning,style,performance,portability \
-          --error-exitcode=1 \
-          --suppressions-list=.cppcheck-suppressions \
-          --inline-suppr \
-          -I blinky-things/ \
-          --std=c++14 \
-          --platform=native \
-          --quiet \
-          blinky-things/
-
-  ota-manifest:
-    name: OTA Manifest (firmware verifier vs release signer)
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Vectors are current
-      run: |
-        pip install cryptography
-        python tools/ota_manifest.py vectors --out /tmp/vectors.h
-        diff -u tests/ota/vectors.h /tmp/vectors.h || {
-          echo "::error::tests/ota/vectors.h is stale: run python tools/ota_manifest.py vectors --out tests/ota/vectors.h"; exit 1; }
-
-    - name: Build and run (firmware's own Monocypher units, -std=gnu++11 like the core)
-      run: |
-        mkdir -p build
-        gcc -c -O1 -Wall -I blinky-things blinky-things/OtaMonocypher.c -o build/mc.o
-        gcc -c -O1 -Wall -I blinky-things blinky-things/OtaMonocypherEd25519.c -o build/mc_ed.o
-        g++ -std=gnu++11 -Wall -Wextra -Werror -O1 -I blinky-things -I tests/ota           tests/ota/ota_manifest_test.cpp build/mc.o build/mc_ed.o -o build/ota_manifest_test
-        build/ota_manifest_test
-
-  timing:
-    name: Absolute Timing (generators + rhythm phase, #259-#261)
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    # A 2 s frame must land where 2 s of frames would (no stretched
-    # animation); the rhythm phase extrapolation is capped and monotonic.
-    # UBSan: a long frame must not overflow the physics either.
-    - name: Build and run (UBSan)
-      run: |
-        mkdir -p build
-        g++ -std=c++17 -Wall -Wextra -O1 -g -fsanitize=undefined,float-cast-overflow,float-divide-by-zero           -fno-sanitize-recover=all -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840           -I blinky-simulator/include -I blinky-things tests/timing/timing_test.cpp           blinky-things/types/PixelMatrix.cpp blinky-things/types/BlinkyAssert.cpp           blinky-things/physics/PhysicsContext.cpp blinky-things/particles/Particle.cpp           blinky-things/math/SimplexNoise.cpp blinky-things/generators/Fire.cpp           blinky-things/generators/Water.cpp blinky-things/generators/PlasmaGlobe.cpp           blinky-things/generators/Audio.cpp -o build/timing_test
-        build/timing_test
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    # The bench side of the same property: the release gate's beatpace check compares the
-    # beats a device counts with its tempo integrated over wall-clock time (#258).
-    - name: Release gate beat-pace arithmetic
-      run: |
-        pip install pytest pyserial
-        python -m pytest -v tests/tools/test_release_gate.py tests/tools/test_staging_download.py
-
-  static-init-safety:
-    name: Static Init Safety Check
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Check for dangerous static initialization
-      run: |
-        echo "Checking for static initialization order fiasco patterns..."
-        echo "These patterns can brick devices by crashing before setup() runs."
-        echo ""
-        python scripts/check_static_init.py blinky-things/
-
-  syntax-validation:
-    name: Syntax Validation
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Run syntax validation
-      run: |
-        python tools/validate_syntax.py blinky-things/
-
-  code-quality:
-    name: Code Quality
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Check include guards
-      run: |
-        echo "Checking include guards..."
-        missing_guards=""
-        for file in $(find blinky-things/ -name "*.h" -type f); do
-          if ! grep -q "#pragma once" "$file" && ! grep -q "#ifndef.*_H" "$file"; then
-            missing_guards="$missing_guards\n  - $file"
-          fi
-        done
-        if [ -n "$missing_guards" ]; then
-          echo "❌ Missing include guards in:$missing_guards"
-          exit 1
-        fi
-        echo "✅ All header files have include guards"
-
-    - name: Check for debug code
-      run: |
-        echo "Checking for leftover debug code..."
-        # These are warnings, not failures
-        if grep -rn "TODO\|FIXME\|HACK\|XXX" blinky-things/ --include="*.cpp" --include="*.h" --include="*.ino" 2>/dev/null; then
-          echo "⚠️  Found TODO/FIXME comments (not blocking)"
-        else
-          echo "✅ No TODO/FIXME comments found"
-        fi
-
-    - name: Check for large files
-      run: |
-        echo "Checking for overly large source files..."
-        large_files=""
-        for file in $(find blinky-things/ -name "*.cpp" -o -name "*.h" -o -name "*.ino" | head -100); do
-          lines=$(wc -l < "$file")
-          if [ "$lines" -gt 1000 ]; then
-            large_files="$large_files\n  - $file ($lines lines)"
-          fi
-        done
-        if [ -n "$large_files" ]; then
-          echo "⚠️  Large files found (consider splitting):$large_files"
-        else
-          echo "✅ No overly large files"
-        fi
-
   documentation:
     name: Documentation Check
     runs-on: ubuntu-latest
@@ -312,9 +99,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # The edm labels and blinky_scoring, for test_drum_label_sync (#357).
-    - name: Corpus submodule
-      run: git submodule update --init --depth 1 corpus
+    # The firmware's DSP for the parity harness, and the edm labels and blinky_scoring for
+    # test_drum_label_sync, at the commits this repo pins (#357).
+    - name: Firmware and corpus submodules
+      run: git submodule update --init --depth 1 firmware corpus
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -334,15 +122,15 @@ jobs:
 
     - name: Mel parity (training front end vs firmware, #295)
       # The NN runs on the firmware's integer MEL_BANDS table, not an HTK
-      # filterbank. Builds tests/parity (the real SharedSpectralAnalysis.cpp)
+      # filterbank. Builds firmware/tests/parity (the real SharedSpectralAnalysis.cpp, at the pinned blinky-firmware)
       # and checks: the spec carries the firmware's table and constants; the
       # firmware still produces the golden frames; training's front end
       # (scripts/mel_frontend.py) reproduces them; configs default to the table.
       run: |
-        cmake -S tests/parity -B tests/parity/build -DCMAKE_BUILD_TYPE=Release
-        cmake --build tests/parity/build -j
+        cmake -S firmware/tests/parity -B firmware/tests/parity/build -DCMAKE_BUILD_TYPE=Release
+        cmake --build firmware/tests/parity/build -j
         cd ml-training
-        python -m analysis.test_mel_parity --harness ../tests/parity/build/parity_harness
+        python -m analysis.test_mel_parity --harness ../firmware/tests/parity/build/parity_harness
 
     - name: Mel front end travels to the model header (#291)
       # prepare_dataset.py records the front end, train.py and export_tflite.py
@@ -488,26 +276,3 @@ jobs:
 
     - name: Build
       run: npm run build
-
-  model-input-check:
-    name: Onset Model Input Check
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install tflite schema parser
-      run: pip install tflite==2.18.0
-
-    # Mirrors FrameOnsetNN::begin()'s static checks on the embedded model so a
-    # model the firmware would refuse fails the PR instead of silently running
-    # devices without the onset NN (the 80-mel v36 export did that, initError 5).
-    - name: Check embedded model against the firmware's limits
-      # Also its mel front end and the bytes' hash, as FrameOnsetNN.h does (#291).
-      run: python tools/check_model_input.py

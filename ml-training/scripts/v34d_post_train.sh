@@ -21,7 +21,7 @@ V34D_OUT="/mnt/storage/blinky-ml-data/outputs/v34d"
 V33_OUT="${ROOT}/outputs/v33_mel_only"
 V34D_CFG="configs/conv1d_w16_onset_v34d_clean_labels.yaml"
 V33_CFG="configs/conv1d_w16_onset_v33_mel_only.yaml"
-TEST_AUDIO="../blinky-test-player/music/edm"
+TEST_AUDIO="../corpus/edm"
 
 echo "=== v34d post-train pipeline ==="
 echo "v34d output dir: ${V34D_OUT}"

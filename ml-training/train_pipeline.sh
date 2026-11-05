@@ -241,7 +241,7 @@ python train.py --config "$CONFIG" --output-dir "$OUTPUT_DIR" --allow-foreground
 echo "=== Phase 4: Evaluating ==="
 python evaluate.py --config "$CONFIG" \
     --model "$OUTPUT_DIR/best_model.pt" \
-    --audio-dir ../blinky-test-player/music/edm \
+    --audio-dir ../corpus/edm \
     --output-dir "$OUTPUT_DIR/eval" \
     --sweep-thresholds
 

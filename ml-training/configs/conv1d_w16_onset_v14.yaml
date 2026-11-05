@@ -80,6 +80,6 @@ augmentation:
     max_time_width: 8
 
 export:
-  output_header: "../blinky-things/audio/frame_onset_model_data_v14.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_v14.h"
   c_array_name: "frame_onset_model_data"
   max_model_size_kb: 15           # Budget: ~13.4 KB expected (same as v11)

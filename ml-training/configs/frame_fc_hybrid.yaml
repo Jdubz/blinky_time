@@ -22,6 +22,6 @@ training:
   patience: 15
 
 export:
-  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  output_header: "../firmware/blinky-things/audio/frame_beat_model_data.h"
   c_array_name: "frame_beat_model_data"
   max_model_size_kb: 100   # FC input grows: 32*32=1024 → hidden

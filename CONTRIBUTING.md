@@ -1,5 +1,7 @@
 # Contributing to Blinky Time
 
+> **Firmware contributions go to [blinky-firmware](https://github.com/Jdubz/blinky-firmware)** (#357), with its staging and hardware-test flow. This repo takes the tooling: blinky-server, blinky-console, ml-training and the test box, by PR to `master`. The firmware sections below describe that repo until this guide is split.
+
 Thank you for your interest in contributing to Blinky Time! This document provides guidelines for contributing to this open-source LED fire effect controller project.
 
 ## 🤝 Code of Conduct
@@ -101,7 +103,7 @@ When contributing code changes:
 1. **Test on a test device** listed in `devices/test_devices.json`. Flash it with `python tools/deploy_local.py --port <port> --device-id <id> --dev` (a dev build of a clean, committed tree).
 2. **Never flash a dev build to any other device.** Only stable releases go to fleet and personal devices ([docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
 3. **Leave at least 60 s of uptime between resets** (see CLAUDE.md, "60-second rule").
-4. **Validate audio responsiveness** on the validation corpus (`blinky-test-player/music/edm/`).
+4. **Validate audio responsiveness** on the validation corpus (`corpus/edm/`).
 
 ### Testing Checklist
 

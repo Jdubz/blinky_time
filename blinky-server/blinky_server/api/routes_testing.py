@@ -57,7 +57,7 @@ class ValidateRequest(BaseModel):
 class StagingSuiteRequest(BaseModel):
     sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The staging commit (full sha).")
     device_ids: list[str] = Field(..., min_length=1, description="Explicit TEST device IDs.")
-    track_dir: str = Field(..., description="The validation corpus (blinky-test-player/music/edm)")
+    track_dir: str = Field(..., description="The validation corpus (corpus/edm)")
     track_names: list[str] | None = None
     limits: dict[str, float] | None = None
 

@@ -411,9 +411,9 @@ the same origin. Override the static dir location with the
 
 ## 🔗 Additional Resources
 
-- [SafetyTest Documentation](../blinky-things/tests/SafetyTest.h)
-- [SerialConsole Commands](../blinky-things/inputs/SerialConsole.cpp)
-- [Architecture Overview](../blinky-things/README.md)
+- [SafetyTest Documentation](../firmware/blinky-things/tests/SafetyTest.h)
+- [SerialConsole Commands](../firmware/blinky-things/inputs/SerialConsole.cpp)
+- [Architecture Overview](../firmware/blinky-things/README.md)
 - [XIAO nRF52840 Recovery Guide](https://www.pavelp.cz/posts/eng-xiao-nrf52840-bootloader-recovery/)
 
 ---

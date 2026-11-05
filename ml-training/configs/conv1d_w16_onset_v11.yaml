@@ -66,6 +66,6 @@ training:
   pos_weight: 0                    # Auto-calculate (onset labels ~6% positive → auto ~15.5)
 
 export:
-  output_header: "../blinky-things/audio/frame_onset_model_data_v11.h"
+  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_v11.h"
   c_array_name: "frame_onset_model_data"
   max_model_size_kb: 15
