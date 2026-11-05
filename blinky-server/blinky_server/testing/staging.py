@@ -99,7 +99,13 @@ async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, A
     overrun growth. Safe to repeat: it only reads."""
     first = {i: await _info(i) for i in device_ids}
     seen: dict[str, dict[str, Any]] = {
-        i: {"fps": [], "frame_ms": [], "rebooted": False, "last_ms": int(first[i].get("millis", 0))}
+        i: {
+            "fps": [],
+            "frame_ms": [],
+            "over": [],
+            "rebooted": False,
+            "last_ms": int(first[i].get("millis", 0)),
+        }
         for i in device_ids
     }
     last = dict(first)
@@ -115,7 +121,15 @@ async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, A
             s["last_ms"] = ms
             s["fps"].append(float(cur.get("fps") or 0.0))
             if cur.get("maxFrameMs") is not None:
-                s["frame_ms"].append(int(cur["maxFrameMs"]))
+                frame = int(cur["maxFrameMs"])
+                s["frame_ms"].append(frame)
+                if frame > limits["max_frame_ms"]:
+                    # When: the device's uptime and wall time, so a long frame can be lined
+                    # up with what the server and box were doing then (the first full run
+                    # had one 1118 ms window out of 73, and only its size was kept).
+                    s["over"].append(
+                        {"uptime_s": ms // 1000, "at": round(time.time(), 1), "max_ms": frame}
+                    )
             last[i] = cur
     out: dict[str, Any] = {}
     for i in device_ids:
@@ -130,6 +144,9 @@ async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, A
                 "pass": frame_max is not None and frame_max <= limits["max_frame_ms"],
                 "max_ms": frame_max,
                 "windows": len(s["frame_ms"]),
+                "over_limit": s["over"],
+                # Every 5 s window's longest frame, in order (small: about 75 numbers).
+                "series_ms": s["frame_ms"],
             },
             "stability": {
                 "pass": not s["rebooted"] and growth <= limits["max_overrun_growth"],
