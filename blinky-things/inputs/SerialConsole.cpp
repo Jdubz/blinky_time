@@ -589,6 +589,12 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(audioCtrl_->getSpectral().getRawMelSaturatedCount());
             out_.print(F(",\"melTotal\":"));
             out_.print(audioCtrl_->getSpectral().getRawMelTotalCount());
+            // Onset STFT cost per spectral frame, mean and max over the last
+            // closed 5 s window (#178; the staging suite reports it, #349).
+            out_.print(F(",\"onsetUs\":"));
+            out_.print(audioCtrl_->getSpectral().getOnsetUs());
+            out_.print(F(",\"onsetMaxUs\":"));
+            out_.print(audioCtrl_->getSpectral().getOnsetMaxUs());
         }
 
         // Main-loop fps + frame-time range (#137). The publicly-readable

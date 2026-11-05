@@ -1,0 +1,28 @@
+# master takes PRs from staging only (docs/RELEASE_PROCESS.md, "Staging", #349).
+# A required check on master (branch protection), next to the box's
+# "Hardware test (staging)" status on the PR's head.
+name: Master source
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  staging-only:
+    name: Master takes staging only
+    runs-on: ubuntu-latest
+    steps:
+    - name: Head is this repo's staging branch
+      env:
+        HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: |
+        if [ "$HEAD_REF" != "staging" ] || [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+          echo "::error title=Master source::master takes PRs from staging only (got $HEAD_REPO:$HEAD_REF). Target staging instead."
+          exit 1
+        fi
+        echo "staging -> master"

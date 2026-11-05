@@ -30,25 +30,23 @@ Direct `curl` against the low-level `/api/fleet/upload`, `/api/fleet/flash`, or 
 ./scripts/deploy.sh --devices=ID --release b214     # a specific STABLE release (deploy.sh is stable-only, #251)
 ```
 
-Candidates and `--dev` builds go only through `tools/deploy_local.py` to a test device on this machine's USB.
+Candidates and `--dev` builds go only through `tools/deploy_local.py` to a test device on this machine's USB. Staging builds go only through the test box's staging suite (`POST /api/test/staging`, or `/api/fleet/deploy-staging`: test devices only, a server started with `--staging`).
 
 deploy.sh runs the full pipeline (select firmware → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
 
 ## Branches: staging before master (#349)
 
-**Feature PRs target `staging`, never `master`.** `master` takes only PRs from `staging`, after the box's hardware report on the staging head passes (`docs/RELEASE_PROCESS.md`, "Staging"). Merge a staging → master PR with a merge commit (not squash), so master's tree is the tested tree. Until #349 step 5 lands, follow the release rules below as written.
+**Feature PRs target `staging` (the default branch), never `master`.** `master` takes only PRs from `staging`, after the box's hardware report on the staging head passes (`docs/RELEASE_PROCESS.md`, "Staging"). The box opens that PR and auto-merges it with a merge commit (never squash: master's tree must be the tested tree).
 
 ## CRITICAL: Only stable releases reach fleet and new devices
 
 **Fleet and new devices get the latest *stable* GitHub release, never a local build.** See `docs/RELEASE_PROCESS.md`.
 
-**Releases are vetted checkpoints the owner selects.** A merge to master never triggers or implies one. Cut a candidate only when the owner asks for a release.
+**Every merge to master cuts a candidate; only the owner makes one stable.** Never promote on your own.
 
-The flow, when the owner asks:
-1. The chosen commit is on master, with CI green.
-2. `gh workflow run release.yml` builds a **candidate** (a pre-release `bN`) with the pinned toolchain.
-3. `tools/release_gate.py bN` bench-gates it on a test device: version, fps (≥ 60), 5 min stability, asserts, music, operator confirmation.
-4. `tools/release_promote.py bN` has CI sign it (after the gate), then makes it **stable** and *Latest*.
+The flow:
+1. A staging head passes the box's hardware test; its merge to master (CI green) runs `release.yml`, which builds a **candidate** (a pre-release `bN`) with the pinned toolchain.
+2. When the owner picks it, `tools/release_promote.py bN` records the staging report plus the owner's visual confirmation as its gate (or uses a `tools/release_gate.py` bench gate), has CI sign it, then makes it **stable** and *Latest*.
 
 **Firmware that isn't stable** (candidates, and `--dev` builds of a clean tree, versioned `bN-dev-<sha>`) goes to exactly one device listed in `devices/test_devices.json`. The deploy tools refuse every other device. Never flash an uncommitted or unreleased build to any other device "just to try it": that is how b210 (12 fps) and b211 (silent mic) reached the hat.
 

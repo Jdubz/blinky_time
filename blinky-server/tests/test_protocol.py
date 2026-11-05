@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -82,7 +83,7 @@ async def test_slow_flash_commands_get_longer_timeout_floor(
     proto = DeviceProtocol(transport)  # type: ignore[arg-type]
     captured: list[float] = []
 
-    async def _capture(command: str, timeout: float) -> str:
+    async def _capture(command: str, timeout: float, ack: bool = False) -> str:
         captured.append(timeout)
         return "OK"
 
@@ -115,7 +116,7 @@ async def test_slow_flash_floor_never_shortens_ble_timeout() -> None:
     proto = DeviceProtocol(ble_transport)  # type: ignore[arg-type]
     captured: list[float] = []
 
-    async def _capture(command: str, timeout: float) -> str:
+    async def _capture(command: str, timeout: float, ack: bool = False) -> str:
         captured.append(timeout)
         return "OK"
 
@@ -230,3 +231,45 @@ async def test_an_alert_inside_a_command_response_is_still_an_alert(
     assert seen == ["[FALLBACK] clock sync: no millis", "[ASSERT] onset evidence rate out of range"]
     assert protocol._response_buf[-1] == "[FALLBACK] clock sync: no millis"  # still in it
     assert raw == ["[ASSERT] onset evidence rate out of range", "plain log line"]
+
+
+class StreamingTransport(MockTransport):
+    """Like the hat: after "OK debug" the device streams a line every 20 ms until stopped, so
+    a reply never goes quiet for the line timeout."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.task: asyncio.Task[None] | None = None
+
+    async def write_line(self, line: str) -> None:
+        await super().write_line(line)
+        if line.startswith("stream ") and line != "stream off" and self.task is None:
+            self.task = asyncio.get_running_loop().create_task(self._stream())
+        elif line == "stream off" and self.task is not None:
+            self.task.cancel()
+            self.task = None
+
+    async def _stream(self) -> None:
+        n = 0
+        while True:
+            await asyncio.sleep(0.02)
+            n += 1
+            self._emit_line(json.dumps({"a": {"l": 0.1}, "n": n}))
+
+
+async def test_a_stream_command_ends_at_its_ack_though_the_stream_never_pauses() -> None:
+    t = StreamingTransport()
+    await t.connect()
+    p = DeviceProtocol(t)  # type: ignore[arg-type]
+    lines: list[str] = []
+    p.on_stream_line(lines.append)
+    try:
+        resp = await p.send_command("stream debug", timeout=2.0)
+        assert resp.startswith("OK")
+        await asyncio.sleep(0.2)
+        assert lines, "the stream after the ack goes to the stream subscribers"
+        # A command while streaming: the pause ("stream off") ends at its ack too.
+        assert "Water" in await p.send_command("gen water", timeout=2.0)
+    finally:
+        if t.task:
+            t.task.cancel()

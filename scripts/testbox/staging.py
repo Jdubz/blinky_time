@@ -334,6 +334,17 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
     state.pop("running", None)
 
 
+RETRY_CODES = (409, 429)  # 4xx that mean "not now"; every 5xx is retried too
+
+
+def _detail(e: urllib.error.HTTPError) -> str:
+    try:
+        body = json.loads(e.read() or b"{}")
+        return str(body.get("detail", body))[:100]
+    except (ValueError, OSError):
+        return str(e.reason)[:100]
+
+
 def run_once(
     gh_: Gh = gh,
     server: Callable[..., Any] = http,
@@ -378,7 +389,10 @@ def run_once(
     try:
         devices = test_devices(server("GET", "/api/devices"), listed())
         if not devices:
-            post_status(gh_, sha, "pending", "no test device connected to the box")
+            if state.get("no_device") != sha:  # once per commit, not every pass
+                post_status(gh_, sha, "pending", "no test device connected to the box")
+                state["no_device"] = sha
+                save_state(state)
             log(f"{sha[:12]}: no test device connected")
             return state
         job = server(
@@ -386,6 +400,19 @@ def run_once(
             "/api/test/staging",
             {"sha": sha, "device_ids": devices, "track_dir": str(LINK / CORPUS)},
         )
+    except urllib.error.HTTPError as e:
+        if not (400 <= e.code < 500) or e.code in RETRY_CODES:
+            # Busy (a deploy or suite runs), draining for a restart, or a server error: next pass.
+            log(f"{sha[:12]}: server answered {e.code}; next pass")
+            return state
+        # Refused for good (403 not --staging, 400 not a test device, 422 bad request): a
+        # failure with the server's reason, loudly, not a retry every pass forever.
+        detail = _detail(e)
+        post_status(gh_, sha, "failure", f"the server refused the suite ({e.code}): {detail}")
+        state["reported"] = sha
+        save_state(state)
+        log(f"{sha[:12]}: suite refused ({e.code}): {detail}")
+        return state
     except (urllib.error.URLError, OSError) as e:
         log(f"server not answering ({e}); next pass")
         return state

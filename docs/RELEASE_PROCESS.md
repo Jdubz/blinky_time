@@ -29,18 +29,19 @@ Changes reach master only through `staging`, after a hardware test on the box's 
 
    It posts the commit status `Hardware test (staging)` (pending while it waits or runs, then success or failure) and the report as a comment on the PR that merged the commit into staging. A failed build or CI is a failure too. `staging.py --status` shows its state; `journalctl -u blinky-staging` its log.
 4. **Staging → master.** On a pass the runner opens the PR `staging` → `master` (or comments on the open one) and turns on its auto-merge, as a merge commit, so master's tree is the tree that was tested. That PR gets no Claude review (every change in it was reviewed into staging); the box deployer gates it on the hardware status instead (`scripts/testbox/deploy.py`).
-5. **Release** (step 5 of #349). Every merge to master will cut a candidate. Marking it stable stays manual (below).
+5. **Release.** Every merge to master cuts a candidate (below). `master` is protected by the repository ruleset "master (staging only, hardware-tested)": merge commits only, and a PR needs `Master takes staging only` (`.github/workflows/master-source.yml`), `Hardware test (staging)` and CI green. The ruleset "staging (default branch)" protects `staging` (PRs, CI green). Marking a candidate stable stays manual, with the operator's visual check (Promote).
 
 ## Cutting a release
 
-A release is a vetted checkpoint that the owner picks. **Nothing releases on its own:** merging to master builds nothing for devices. Each step below is run by hand. b215 is the current stable and the first signed release.
+A merge to master cuts a **candidate** on its own; nothing becomes **stable** without the owner. b215 is the current stable and the first signed release.
 
 ### 1. Candidate (CI)
 ```bash
-gh workflow run release.yml --ref master     # or: Actions → "Release candidate" → Run
+# automatic: after PR Validation passes on each master merge
+gh workflow run release.yml --ref master     # by hand (master's tip), or: Actions → "Release candidate" → Run
 ```
 `.github/workflows/release.yml`:
-1. **Gates:** refuses unless the commit is on master with a successful `PR Validation` run.
+1. **Gates:** refuses unless the commit is on master with a successful `PR Validation` run, and is the merge of a staging head with the same tree whose `Hardware test (staging)` status passed. One candidate per commit: a commit that has one is skipped.
 2. **Build number:** `N = max(BUILD_NUMBER, highest bN tag) + 1`.
 3. **Pinned toolchain:** `tools/firmware_toolchain.json`, TFLite pinned in `tools/setup_tflite_lib.sh`, and the core patches from `scripts/apply_core_patches.sh`.
 4. **Build:** `scripts/build.sh --build N`.
@@ -91,10 +92,14 @@ Flashes the candidate through `deploy_local.py --release bN`, then checks:
 
 The result is attached to the release as `gate-<device>.json`, pass or fail.
 
+For a candidate cut from a staging merge, the box's staging suite already ran these checks except the operator's, on the staging build of the same tree. Running the bench gate on the candidate itself is optional; Promote below records the staging report instead.
+
 ### 3. Promote
 ```bash
-python tools/release_promote.py bN
+python tools/release_promote.py bN --operator-confirmed "smooth, reactive on hat_v1"   # or answer the prompt
 ```
+Without a bench-gate record, Promote writes `gate-staging.json` to the release: the staging head's hardware report (it checks the release commit merges that head with the same tree, and that the status passed) plus the operator's visual confirmation. Then, either way:
+
 Refuses without a passing gate record for this exact version. It then dispatches `sign-release.yml`, which signs the release for signed OTA (the raw image `blinky-things-bN.bin` and its Ed25519-signed manifest `.otam`) and re-checks the gate. The workflow runs only from master. The key, `BLINKY_RELEASE_SIGNING_KEY`, is a secret of the GitHub environment `release-signing` (master only) and is used nowhere else. It waits for the run, and verifies the signature against the key in `blinky-things/ota/OtaKeys.h`. Only then does it tag `stable-bN` and mark the release stable and *Latest*.
 
 Promotion then dispatches a blinky-console redeploy (`gh workflow run blinky-console-deploy.yml`). That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
@@ -123,5 +128,5 @@ Releases are never compiled at deploy time. Both tools verify that the device re
 
 ## Day-to-day development
 - **Iterate:** use `--dev` on one test device. It needs a clean tree: commit first, then flash. The version string carries the commit, so the build on the device is always traceable.
-- **Ship:** when the owner decides master is worth releasing, cut a candidate, gate it on the test device, promote. A merge alone ships nothing.
+- **Ship:** a PR to `staging`; the box tests it and opens the PR to master on a pass; its merge cuts a candidate. The owner promotes the candidates worth shipping.
 - **Local `build.sh`:** a plain build (with bump) still works for compile checks. Nothing flashes it except `--dev`, and that refuses a dirty tree.

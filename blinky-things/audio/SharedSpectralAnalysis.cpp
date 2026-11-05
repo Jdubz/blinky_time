@@ -318,8 +318,23 @@ void SharedSpectralAnalysis::process() {
 
     // SuperFlux on the onset STFT (#178): ONSET_FRAMES_PER_FRAME frames, one
     // hop apart, the last ending at this frame's newest sample.
+    BLINKY_ASSERT_ONCE(clock_ != nullptr, "SharedSpectralAnalysis: no clock (setClock)");
+    const uint32_t onsetT0 = clock_ ? clock_->micros() : 0;
     for (int j = 0; j < SpectralConstants::ONSET_FRAMES_PER_FRAME; j++) {
         computeOnsetFrame((ONSET_FRAMES_LAST - j) * SpectralConstants::ONSET_HOP, j);
+    }
+    if (clock_) {
+        const uint32_t dt = clock_->micros() - onsetT0;
+        onsetUsSum_ += dt;
+        onsetUsCount_++;
+        if (dt > onsetUsMax_) onsetUsMax_ = dt;
+        const uint32_t now = clock_->millis();
+        if (now - onsetWindowStartMs_ >= ONSET_TIMING_WINDOW_MS) {
+            onsetUsMean_ = onsetUsSum_ / onsetUsCount_;
+            onsetUsMaxClosed_ = onsetUsMax_;
+            onsetUsSum_ = onsetUsCount_ = onsetUsMax_ = 0;
+            onsetWindowStartMs_ = now;
+        }
     }
 
     // Apply windowing
