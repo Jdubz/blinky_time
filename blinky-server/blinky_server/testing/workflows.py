@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 
 TEST_JOBS = jobs.Family(
     prefix="test.",
-    kinds=("validate", "param-sweep", "tune-threshold", "capture-nn"),
+    kinds=("validate", "param-sweep", "tune-threshold", "capture-nn", "staging"),  # staging.py
     result_steps=("validation_run", "sweep_run", "tune_run", "nn_capture"),
 )
 
@@ -98,13 +98,10 @@ async def _connected(device_ids: list[str]) -> list[Any]:
 
 
 @contextlib.asynccontextmanager
-async def session(
-    device_ids: list[str],
-    commands: list[str] | None = None,
-    per_device_commands: dict[str, list[str]] | None = None,
-) -> AsyncIterator[None]:
-    """The audio lock, then each device at runtime defaults plus the test commands, streaming.
-    Runs on every execution of the workflow, so a resumed job starts from known device state."""
+async def reserve(device_ids: list[str]) -> AsyncIterator[None]:
+    """The audio lock: this server's other audio jobs (``_AUDIO``), then other processes (the
+    file lock). A job that flashes or measures the devices outside its test session holds it
+    for the whole job (the staging suite, #349), and opens its session with reserved=True."""
     jobs.report(None, "waiting for the audio lock")
     async with _AUDIO:
         # A job that waited here for another to finish is past every boundary: if the server
@@ -112,26 +109,57 @@ async def session(
         await durable.boundary()
         if not acquire_audio_lock([d[:12] for d in device_ids]):
             raise RuntimeError("Audio lock held by another process")
-        # Setup and teardown are device I/O outside any step: held, so a drain that starts
-        # during either waits for it to finish instead of the fleet stopping under it, which
-        # would fail the job for good (#325 review).
-        devices: list[Any] = []
         try:
-            with durable.hold("test session setup"):
-                await kill_orphan_audio()
-                devices = await _connected(device_ids)
-                for device in devices:
-                    # One reset, then the shared commands, then the device's own: configuring
-                    # twice would reset the shared ones away (#327).
-                    own = (per_device_commands or {}).get(device.id) or []
-                    await _configure_device(device, [*(commands or []), *own])
-                await _start_streaming(devices)
             yield
         finally:
-            with durable.hold("test session cleanup"):
-                await _stop_streaming(devices)
-                await stop_audio()
+            with durable.hold("audio lock release"):
                 release_audio_lock()
+
+
+@contextlib.asynccontextmanager
+async def _devices(
+    device_ids: list[str],
+    commands: list[str] | None,
+    per_device_commands: dict[str, list[str]] | None,
+) -> AsyncIterator[None]:
+    # Setup and teardown are device I/O outside any step: held, so a drain that starts
+    # during either waits for it to finish instead of the fleet stopping under it, which
+    # would fail the job for good (#325 review).
+    devices: list[Any] = []
+    try:
+        with durable.hold("test session setup"):
+            await kill_orphan_audio()
+            devices = await _connected(device_ids)
+            for device in devices:
+                # One reset, then the shared commands, then the device's own: configuring
+                # twice would reset the shared ones away (#327).
+                own = (per_device_commands or {}).get(device.id) or []
+                await _configure_device(device, [*(commands or []), *own])
+            await _start_streaming(devices)
+        yield
+    finally:
+        with durable.hold("test session cleanup"):
+            await _stop_streaming(devices)
+            await stop_audio()
+
+
+@contextlib.asynccontextmanager
+async def session(
+    device_ids: list[str],
+    commands: list[str] | None = None,
+    per_device_commands: dict[str, list[str]] | None = None,
+    *,
+    reserved: bool = False,
+) -> AsyncIterator[None]:
+    """The audio lock (unless the job already holds it: ``reserved``), then each device at
+    runtime defaults plus the test commands, streaming. Runs on every execution of the
+    workflow, so a resumed job starts from known device state."""
+    if reserved:
+        async with _devices(device_ids, commands, per_device_commands):
+            yield
+        return
+    async with reserve(device_ids), _devices(device_ids, commands, per_device_commands):
+        yield
 
 
 @durable.step

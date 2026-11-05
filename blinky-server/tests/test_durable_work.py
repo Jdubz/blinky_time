@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -232,7 +233,7 @@ def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> No
     assert sum(x == "play bravo start" for x in effects(tmp_path)) == 1  # not run again
 
 
-@pytest.mark.parametrize("workflow", ["param-sweep", "tune-threshold", "capture-nn"])
+@pytest.mark.parametrize("workflow", ["param-sweep", "tune-threshold", "capture-nn", "staging"])
 def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow: str) -> None:
     """The other test jobs, as validate above: crashed in the middle of a unit, then started
     again, they finish with the same units as an uninterrupted run, only the cut-off unit
@@ -258,6 +259,12 @@ def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow:
     def outcome(r: subprocess.CompletedProcess[str]) -> dict:
         res = json.loads(r.stdout.strip().splitlines()[-1])
         res.pop("output_path", None)  # each run writes its capture in its own dir
+        res.pop("path", None)  # the staging report, likewise
+        if workflow == "staging":  # measured, so not equal run to run; the verdict must be
+            assert res["passed"] is True, res
+            res = {k: res[k] for k in ("sha", "version", "passed")} | {
+                "played": res["validation"]["played"]
+            }
         return res
 
     want_result = outcome(r)
@@ -279,8 +286,11 @@ RESTART_TESTS = {
     "test.param-sweep": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "test.tune-threshold": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "test.capture-nn": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
+    "test.staging": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "fleet.flash": "test_durable_flash.py::test_killed_before_the_bytes_land_reflashes_that_device_only",
     "fleet.deploy": "test_durable_flash.py::test_a_deploy_cut_off_mid_flash_resumes_with_that_device",
+    "fleet.deploy-staging": "test_durable_flash.py::"
+    "test_a_staging_deploy_cut_off_mid_flash_resumes_with_that_device",
     "spark.separate": "test_durable_spark.py::"
     "test_a_separate_cut_off_by_a_restart_resumes_when_asked_again",
     "spark.train": "test_durable_spark.py::"
@@ -305,6 +315,20 @@ def test_every_workflow_has_a_restart_test() -> None:
     for name, ref in RESTART_TESTS.items():
         file, fn = ref.split("::")
         assert f"def {fn}(" in (here / file).read_text(), f"{name}: {ref} doesn't exist"
+
+
+def test_the_app_registers_every_workflow_before_launch() -> None:
+    """DBOS recovers only workflows it knows at launch: a module that declares one but isn't
+    imported by the app's startup leaves its pending jobs unrecovered after a restart until
+    some request happens to import it (#351 review)."""
+    pkg = Path(durable.__file__).resolve().parents[1]
+    app_src = (pkg / "api" / "app.py").read_text()
+    for src in pkg.rglob("*.py"):
+        if not re.search(r"^@durable\.workflow\(", src.read_text(), re.M):
+            continue
+        rel = src.relative_to(pkg).with_suffix("")
+        parent, name = ".".join(rel.parts[:-1]), rel.parts[-1]
+        assert f"from ..{parent} import {name}" in app_src, f"app.py doesn't import {rel}"
 
 
 @pytest.mark.asyncio

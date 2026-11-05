@@ -27,6 +27,12 @@ def main() -> None:
     )
     parser.add_argument("--no-ble", action="store_true", help="Disable BLE discovery")
     parser.add_argument(
+        "--staging",
+        action="store_true",
+        help="Allow staging deploys to test devices (/api/fleet/deploy-staging, #349). "
+        "The test box only: never on the production host.",
+    )
+    parser.add_argument(
         "--no-serial", action="store_true", help="Disable serial discovery (wireless-only mode)"
     )
     parser.add_argument(
@@ -78,6 +84,7 @@ def main() -> None:
         enable_ble=not args.no_ble,
         enable_serial=not args.no_serial,
         wifi_hosts=wifi_hosts,
+        staging=args.staging,
     )
     uvicorn.run(
         app,
