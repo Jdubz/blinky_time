@@ -208,13 +208,17 @@ when reading auto onsets — it works against either filename convention.
 **Validation (blinkyhost).** The blinky-server validation harness's
 `track_discovery.discover_tracks()` looks for a sibling `<stem>.onsets_human.json`
 next to each audio file. If present, `load_ground_truth()` merges it via
-`apply_human_edits()` (in `blinky_server/testing/onset_label_merge.py`). The
+`apply_human_edits()` (in `blinky_scoring/onset_label_merge.py`, blinky-corpus). The
 merged onsets carry a `source` field (`'auto' | 'auto_edited' | 'human'`) so
 scoring can later split metrics by provenance.
 
-Curate the EDM corpus in the reviewer → `git add corpus/edm/*.onsets_human.json`
-→ `git commit && git push` → on blinkyhost: `git pull && sudo systemctl restart
-blinky-server`. The next test run uses the corrected ground truth.
+Curate the EDM corpus in the reviewer. `corpus/` is the blinky-corpus submodule (#357), so
+the edits are committed **there**: `cd corpus && git switch -c <branch> && git add
+edm/*.onsets_human.json && git commit`, push, and open a PR to Jdubz/blinky-corpus. Once it
+merges, bump the pin here (`cd corpus && git pull origin main`, then commit `corpus` in a
+blinky_time PR). The box deployer counts the corpus gitlink as a server path, so that merge
+restarts its blinky-server on the corrected ground truth. blinky-firmware's corpus gate takes
+the same bump in its own repo.
 
 **Training.** `prepare_dataset.py` reads
 `labels.onset_human_dirs` from the config (default: `${BLINKY_DATA}/labels/onsets_human/`

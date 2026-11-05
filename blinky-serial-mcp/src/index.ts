@@ -27,7 +27,7 @@ const __dirname = dirname(__filename);
 // the track directory must be a path on THAT machine, not the MCP host.
 // Set BLINKY_TRACK_DIR to override (e.g., /home/blinkytime/blinky_time/corpus/edm).
 const DEFAULT_TRACK_DIR = process.env.BLINKY_TRACK_DIR
-  || join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
+  || join(__dirname, '..', '..', 'corpus', 'edm');
 
 // JSON response helper
 function ok(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
