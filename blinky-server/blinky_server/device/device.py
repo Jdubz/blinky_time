@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import contextlib
 import json
 import logging
@@ -16,6 +17,9 @@ log = logging.getLogger(__name__)
 # For CONNECTED devices, liveness check kicks in well before this.
 # For DISCONNECTED/ERROR, this marks the slot as long-abandoned (UI hint).
 STALE_THRESHOLD_S = 300.0
+
+
+ALERTS_KEEP = 50
 
 
 class DeviceState(StrEnum):
@@ -84,6 +88,12 @@ class Device:
 
         # Stream subscribers (WebSocket queues)
         self._stream_subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
+
+        # Firmware [ASSERT] / [FALLBACK] console lines (CLAUDE.md, No Silent Fallbacks): a
+        # count since connect and the newest ALERTS_KEEP lines. The staging suite (#349)
+        # fails a build that prints any.
+        self.alert_count = 0
+        self.alerts: collections.deque[str] = collections.deque(maxlen=ALERTS_KEEP)
 
         # Wire up streaming data routing
         self.protocol.on_stream_line(self._route_stream_line)
@@ -286,3 +296,7 @@ class Device:
     def _on_raw_line(self, line: str) -> None:
         """Handle non-streaming, non-response lines (log output)."""
         log.debug("[%s] %s", self.id[:8], line)
+        if "[ASSERT]" in line or "[FALLBACK]" in line:
+            self.alert_count += 1
+            self.alerts.append(line.strip())
+            log.warning("[%s] firmware alert: %s", self.id[:8], line.strip())
