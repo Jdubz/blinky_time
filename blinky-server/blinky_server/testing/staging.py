@@ -34,6 +34,7 @@ import itertools
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ..device.device import alerts_since
@@ -237,16 +238,36 @@ async def music_and_pace(
     return out
 
 
-@durable.step
-async def pace_track(tracks: list[dict[str, Any]], limits: dict[str, float]) -> int | None:
+def choose_pace_track(
+    tracks: list[dict[str, Any]],
+    limits: dict[str, float],
+    seconds: Callable[[dict[str, Any]], float],
+) -> int | None:
     """The first track with room, after its validation window, for the music and beat-pace
     checks (plus ffplay's start-up), so they continue that track instead of replaying one.
-    None when no track is long enough. A step: it reads the label files."""
+    None when no track is long enough."""
     need = limits["validation_ms"] / 1000 + limits["music_seconds"] + limits["pace_seconds"] + 5
     for i, t in enumerate(tracks):
-        if track_seconds(t) - float(t["seek"]) >= need:
+        if seconds(t) - float(t["seek"]) >= need:
             return i
     return None
+
+
+def no_pace_track(device_ids: list[str]) -> dict[str, Any]:
+    """The music section when no track is long enough: both checks fail, with the reason."""
+    return {
+        d: {
+            "music": {"pass": False, "detail": "no track long enough for the music check"},
+            "beatpace": {"pass": False, "detail": "no track long enough"},
+        }
+        for d in device_ids
+    }
+
+
+@durable.step
+async def pace_track(tracks: list[dict[str, Any]], limits: dict[str, float]) -> int | None:
+    """choose_pace_track over the labels' durations. A step: it reads the label files."""
+    return choose_pace_track(tracks, limits, track_seconds)
 
 
 @durable.step
@@ -352,13 +373,7 @@ async def _suite(
     else:
         pace_i = await pace_track(p["tracks"], limits)
         if pace_i is None:
-            report["music"] = {
-                d: {
-                    "music": {"pass": False, "detail": "no track long enough for the music check"},
-                    "beatpace": {"pass": False, "detail": "no track long enough"},
-                }
-                for d in p["devices"]
-            }
+            report["music"] = no_pace_track(p["devices"])
         async with session(p["devices"], reserved=True):
             results = []
             for n, track in enumerate(p["tracks"], 1):
