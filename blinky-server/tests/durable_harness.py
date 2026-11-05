@@ -140,6 +140,7 @@ workflows.discover_tracks = lambda d: [
 ]
 workflows.load_track_manifest = lambda d: {}
 workflows._ground_truth = lambda track, duration_ms: None
+staging.track_seconds = lambda t: 100.0  # every fake track has room for music and pace
 workflows._play = fake_play
 workflows.score_device_run = lambda data, start, gt: {"data": data}
 workflows.format_score_summary = lambda score: {"ok": True, "drums": {"drumF": 0.5}}

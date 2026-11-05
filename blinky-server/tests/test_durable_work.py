@@ -228,7 +228,7 @@ def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> No
     r = harness(tmp_path, "resume", "newschema")
     assert r.returncode == 0, r.stderr[-3000:]
     st = json.loads(r.stdout.strip().splitlines()[-1])
-    assert st["status"] == "CANCELLED" and st["app_version"] == "blinky-work-1"
+    assert st["status"] == "CANCELLED" and st["app_version"] == durable.SCHEMA_VERSION
     assert "can't resume on this code" in r.stderr
     assert sum(x == "play bravo start" for x in effects(tmp_path)) == 1  # not run again
 
