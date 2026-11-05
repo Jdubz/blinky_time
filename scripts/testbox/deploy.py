@@ -12,6 +12,9 @@ blinky-deploy.timer runs this every 2 minutes, from the live slot. One pass:
    - every check run on the master commit has completed green, including `Blinky Server Tests`;
    - the PR's head has a clean Claude review: the workflow's sha-stamped verdict comment says
      "No issues found" (the check run alone is green even when the review found issues).
+     A PR from staging (docs/RELEASE_PROCESS.md, "Staging") is not reviewed: its changes were
+     reviewed on their way into staging. Its head needs the box's passing hardware report, the
+     "Hardware test (staging)" commit status, instead.
    Still running: wait for the next pass. Red, or a review with findings: refuse the commit.
    `--accept SHA` deploys a refused commit anyway (an owner's call, recorded in the state).
    A commit that passes but touches none of SERVER_PATHS (since the commit the server runs)
@@ -93,6 +96,8 @@ REVIEW_CHECK = "claude-review"
 REVIEW_HEADER = "## Claude review — "
 REVIEW_AUTHOR = "github-actions[bot]"
 REVIEW_CLEAN = "No issues found."
+STAGING = "staging"
+HARDWARE_CONTEXT = "Hardware test (staging)"  # posted by scripts/testbox/staging.py
 GREEN = {"success", "skipped", "neutral"}
 
 # A required check that hasn't appeared this long after the commit isn't coming.
@@ -186,6 +191,18 @@ def review_verdict(comments: list[dict[str, Any]], head: str, where: str) -> tup
     return "deploy", f"{where}: review clean"
 
 
+def hardware_verdict(statuses: list[dict[str, Any]], head: str, where: str) -> tuple[str, str]:
+    """The staging head's hardware report, from its commit status (newest first, as GitHub
+    lists them). By the merge it has passed (the staging -> master gate requires it), so
+    anything else is refused."""
+    mine = [st for st in statuses if st.get("context") == HARDWARE_CONTEXT]
+    if not mine:
+        return "reject", f"{where}: no hardware report for {head[:12]}"
+    if mine[0].get("state") != "success":
+        return "reject", f"{where}: hardware report for {head[:12]}: {mine[0].get('state')}"
+    return "deploy", f"{where}: hardware report passed"
+
+
 def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
     """("deploy" | "wait" | "reject", why) for a commit on master."""
     commit = fetch(f"repos/{GH_REPO}/commits/{sha}")
@@ -214,6 +231,14 @@ def gate(sha: str, fetch: Fetch, now: float) -> tuple[str, str]:
     verdict = checks_verdict(runs, REQUIRED_ON_MASTER, age, "master")
     if verdict[0] != "deploy":
         return verdict
+    if pr["head"].get("ref") == STAGING and (pr["head"].get("repo") or {}).get(
+        "full_name"
+    ) == GH_REPO:
+        statuses = fetch(f"repos/{GH_REPO}/commits/{head}/statuses?per_page=100")
+        verdict = hardware_verdict(statuses, head, where)
+        if verdict[0] != "deploy":
+            return verdict
+        return "deploy", f"{where}: CI green, hardware report passed"
     runs = fetch(f"repos/{GH_REPO}/commits/{head}/check-runs?per_page=100")["check_runs"]
     verdict = checks_verdict(runs, (REVIEW_CHECK,), age, where)
     if verdict[0] != "deploy":

@@ -145,8 +145,11 @@ def release_pubkey_from_firmware():
     return m.group(1)
 
 
-def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
+def package(hex_path, build, sha, out_dir, toolchain, libraries=None, dev=False):
     """Validate a compiled hex and write release assets + manifest into out_dir.
+
+    ``dev``: a ``scripts/build.sh --dev`` hex (the staging build, CI on every push to
+    staging): version ``b<N>-dev-<sha8>``, as gen_version.sh stamps it. Test devices only.
 
     Same validators the deploy paths run (tools/uf2_upload.py), but strict:
     the hex safety check must actually run (uf2_upload.validate_hex skips it
@@ -174,7 +177,8 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None):
 
     manifest = {
         "build": int(build),
-        "version": f"b{build}-{sha[:8]}",
+        "version": f"b{build}-dev-{sha[:8]}" if dev else f"b{build}-{sha[:8]}",
+        "channel": "dev" if dev else "release",
         "git_sha": sha,
         "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
         "toolchain": toolchain,
@@ -448,6 +452,8 @@ def main():
     p.add_argument("--toolchain-json", default="{}", help="toolchain versions as JSON")
     p.add_argument("--libraries-json", required=True,
                    help="libraries.json written by scripts/build.sh (resolved library set)")
+    p.add_argument("--dev", action="store_true",
+                   help="a scripts/build.sh --dev hex: version b<N>-dev-<sha8> (staging, test devices only)")
     d = sub.add_parser("download")
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
@@ -467,7 +473,8 @@ def main():
     try:
         if args.cmd == "package":
             libs = json.loads(Path(args.libraries_json).read_text(encoding="utf-8"))
-            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs)
+            m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs,
+                        dev=args.dev)
             print(json.dumps(m, indent=2))
         elif args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)

@@ -22,7 +22,13 @@ concurrency:
 
 jobs:
   claude-review:
-    if: github.event.pull_request.draft == false
+    # Not on staging -> master: every change in it was reviewed on its way into
+    # staging, and the hardware report is that PR's gate (docs/RELEASE_PROCESS.md).
+    if: >-
+      github.event.pull_request.draft == false &&
+      !(github.event.pull_request.base.ref == 'master' &&
+        github.event.pull_request.head.ref == 'staging' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read

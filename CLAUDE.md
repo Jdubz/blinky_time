@@ -34,6 +34,10 @@ Candidates and `--dev` builds go only through `tools/deploy_local.py` to a test 
 
 deploy.sh runs the full pipeline (select firmware → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
 
+## Branches: staging before master (#349)
+
+**Feature PRs target `staging`, never `master`.** `master` takes only PRs from `staging`, after the box's hardware report on the staging head passes (`docs/RELEASE_PROCESS.md`, "Staging"). Merge a staging → master PR with a merge commit (not squash), so master's tree is the tested tree. Until #349 step 5 lands, follow the release rules below as written.
+
 ## CRITICAL: Only stable releases reach fleet and new devices
 
 **Fleet and new devices get the latest *stable* GitHub release, never a local build.** See `docs/RELEASE_PROCESS.md`.
