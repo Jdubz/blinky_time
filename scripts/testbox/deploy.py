@@ -67,7 +67,13 @@ STATE = (
 )
 UNIT_DIR = Path("/etc/systemd/system")
 # setup.sh's install_service set: rendered from scripts/testbox/<unit>.in.
-UNITS = ("blinky-server.service", "blinky-deploy.service", "blinky-deploy.timer")
+UNITS = (
+    "blinky-server.service",
+    "blinky-deploy.service",
+    "blinky-deploy.timer",
+    "blinky-staging.service",  # the staging hardware test (staging.py, #349)
+    "blinky-staging.timer",
+)
 MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
 
 # What the running server reads or executes from its tree. Only a commit touching one of these
@@ -289,18 +295,23 @@ def install_units(slot: Path) -> list[str]:
         "@DEPLOY_DIR@": str(LINK),
         "@HOME_DIR@": str(HOME),
     }
-    changed = []
+    changed, new_timers = [], []
     for unit in UNITS:
         text = (slot / "scripts" / "testbox" / f"{unit}.in").read_text()
         for k, v in subs.items():
             text = text.replace(k, v)
         dest = UNIT_DIR / unit
         if not dest.is_file() or dest.read_text() != text:
+            if not dest.is_file() and unit.endswith(".timer"):
+                new_timers.append(unit)
             run("sudo", "-n", "tee", str(dest), cwd=HOME, timeout=30, stdin=text)
             changed.append(unit)
     if changed:
         run("sudo", "-n", "systemctl", "daemon-reload", cwd=HOME, timeout=60)
         log(f"installed {', '.join(changed)} from {slot.name}")
+    for timer in new_timers:  # a timer that first arrives with a deploy (setup.sh enables the rest)
+        run("sudo", "-n", "systemctl", "enable", "--now", timer, cwd=HOME, timeout=60)
+        log(f"enabled {timer}")
     return changed
 
 

@@ -222,6 +222,8 @@ def test_switch_installs_units_stops_then_moves_the_link_then_starts(
     assert events == [
         *(f"unit {u}" for u in deploy.UNITS),
         "systemctl daemon-reload",
+        # A timer installed for the first time is enabled too (blinky-staging.timer, #349).
+        *(f"systemctl enable --now {u}" for u in deploy.UNITS if u.endswith(".timer")),
         "stop on blinky-deploy-a",
         "start on blinky-deploy-b",
     ]
