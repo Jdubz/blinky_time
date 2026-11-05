@@ -59,6 +59,7 @@ class DeviceProtocol:
         self._response_timer: asyncio.TimerHandle | None = None
         self._pending = False
         self._cancelled = False
+        self._ack = False  # the pending command's reply ends at its "OK" line
 
         # Streaming data callbacks
         self._on_stream_line: Callable[[str], None] | None = None
@@ -116,11 +117,16 @@ class DeviceProtocol:
             # Without this, queued stream lines contaminate command responses
             # and cause garbled data / missed commands.
             if was_streaming:
-                await self._send_and_collect("stream off", timeout=self._cmd_timeout)
+                await self._send_and_collect("stream off", timeout=self._cmd_timeout, ack=True)
                 self._streaming = False
 
-            # Send the actual command and collect response
-            response = await self._send_and_collect(command, timeout)
+            # Send the actual command and collect response. A stream on/off command's reply
+            # ends at its "OK..." line: once a stream starts the device sends a line every
+            # 10-50 ms, so the reply never goes quiet for the line timeout and would always
+            # time out (the first staging run on hardware, #349).
+            response = await self._send_and_collect(
+                command, timeout, ack=is_stream_enable or is_stream_disable
+            )
 
             # Update streaming state
             if is_stream_enable:
@@ -202,8 +208,9 @@ class DeviceProtocol:
     async def _raw_send(self, line: str) -> None:
         await self._transport.write_line(line)
 
-    async def _send_and_collect(self, command: str, timeout: float) -> str:
-        """Send command and accumulate response lines until a silence gap.
+    async def _send_and_collect(self, command: str, timeout: float, ack: bool = False) -> str:
+        """Send command and accumulate response lines until a silence gap, or with ``ack``
+        until the first line starting "OK" (the stream commands' acknowledgement).
 
         Raises TimeoutError if the response is not finalized within
         ``timeout`` — i.e. the response_event was never set, regardless of
@@ -220,6 +227,7 @@ class DeviceProtocol:
         self._response_buf.clear()
         self._pending = True
         self._cancelled = False
+        self._ack = ack
         self._response_event.clear()
 
         await self._raw_send(command)
@@ -231,6 +239,7 @@ class DeviceProtocol:
             timed_out = True
 
         self._pending = False
+        self._ack = False
 
         if self._cancelled:
             self._cancelled = False
@@ -290,6 +299,14 @@ class DeviceProtocol:
     def _add_response_line(self, line: str) -> None:
         """Add a line to the response buffer, resetting the line timeout."""
         self._response_buf.append(line)
+        if self._ack and line.startswith("OK"):
+            # The acknowledgement ends the reply; what follows is the stream.
+            if self._response_timer:
+                self._response_timer.cancel()
+                self._response_timer = None
+            self._pending = False
+            self._response_event.set()
+            return
         # Cancel previous timer
         if self._response_timer:
             self._response_timer.cancel()
