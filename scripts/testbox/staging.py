@@ -245,7 +245,9 @@ def render(report: dict[str, Any]) -> str:
             for name, c in checks.items():
                 if not isinstance(c, dict) or "pass" not in c:
                     continue
-                detail = ", ".join(f"{k}={v}" for k, v in c.items() if k not in ("pass", "lines"))
+                detail = ", ".join(
+                    f"{k}={v}" for k, v in c.items() if k not in ("pass", "lines", "series_ms")
+                )
                 rows.append(f"| {dev[:12]} | {name} | {'✅' if c['pass'] else '❌'} | {detail} |")
     lines += [*rows, ""]
     val = report.get("validation") or {}
