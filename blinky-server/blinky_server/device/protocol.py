@@ -33,6 +33,35 @@ SLOW_FLASH_COMMANDS = frozenset({"save", "load"})
 SLOW_FLASH_COMMAND_TIMEOUT_S = 10.0
 
 
+def json_object_from(response: str, key: str) -> tuple[dict[str, Any], list[str]]:
+    """The JSON object carrying ``key`` in a command's reply, and the reply's other lines.
+
+    The firmware prints log lines (``[NN] ready=...``, ``[ASSERT] ...``) whenever they
+    happen, so one can land inside a reply: the first staging run on the hat lost its
+    validation to a ``json info`` reply that began with one (#357). The reply's object is
+    found line by line; ValueError (with the reply's start) when no line holds one.
+    """
+    others: list[str] = []
+    found: dict[str, Any] | None = None
+    for line in response.splitlines():
+        text = line.strip()
+        if found is None and text.startswith("{"):
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict) and key in obj:
+                found = obj
+                continue
+        if text:
+            others.append(text)
+    if found is None:
+        raise ValueError(
+            f"no JSON object with {key!r} in the reply ({len(response)} chars): {response[:200]!r}"
+        )
+    return found, others
+
+
 class DeviceProtocol:
     """Stateful command/response protocol handler for a single device.
 

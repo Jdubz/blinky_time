@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from ..device.protocol import json_object_from
 from .audio_player import PlaybackResult, play_audio
 from .test_session import TestSession
 from .types import TestData
@@ -81,15 +81,12 @@ async def _sync_clock(device: Device) -> float | None:
     t_recv = time.time() * 1000
 
     try:
-        info = json.loads(resp)
-    except json.JSONDecodeError as e:
-        log.warning(
-            "[FALLBACK] clock sync %s: malformed json info response (%d chars): %s",
-            device.id[:12],
-            len(resp),
-            e,
-        )
+        info, others = json_object_from(resp, "version")
+    except ValueError as e:
+        log.warning("[FALLBACK] clock sync %s: malformed json info response: %s", device.id[:12], e)
         return None
+    if others:
+        log.info("clock sync %s: firmware lines inside the reply: %r", device.id[:12], others)
 
     fw_millis_raw = info.get("millis")
     if fw_millis_raw is None:
