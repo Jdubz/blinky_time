@@ -25,6 +25,8 @@ FP_A, FP_B = "sha256:" + "a" * 64, "sha256:" + "b" * 64
 
 def fp_status(description: str, state: str = "success") -> dict[str, Any]:
     return {"context": staging.FINGERPRINT_CONTEXT, "state": state, "description": description}
+
+
 HAT = {"id": "C04C56F9", "state": "connected", "platform": "nrf52840", "device_type": "hat_v1"}
 LAMP = {"id": "AAAA", "state": "connected", "platform": "nrf52840", "device_type": "lamp"}
 
@@ -378,10 +380,15 @@ def test_the_image_is_only_compared_once_the_head_is_built() -> None:
         ({TESTED: [fp_status(FP_A)]}, None),  # the head has none (built before fingerprints)
         ({SHA: [fp_status(FP_A)]}, None),  # master's tested commit has none
         ({SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]}, [TESTED]),  # master not a merge
-        # Only the newest status counts, and only a successful one.
+        # Only the newest status counts, and only a successful one: an older match behind a
+        # newer different, failed or pending fingerprint is not a match.
         ({SHA: [fp_status(FP_B), fp_status(FP_A)], TESTED: [fp_status(FP_A)]}, None),
-        ({SHA: [fp_status(FP_A, "error")], TESTED: [fp_status(FP_A, "error")]}, None),
-        ({SHA: [fp_status("garbage")], TESTED: [fp_status("garbage")]}, None),
+        ({SHA: [fp_status(FP_A, "error"), fp_status(FP_A)], TESTED: [fp_status(FP_A)]}, None),
+        ({SHA: [fp_status(FP_A, "pending"), fp_status(FP_A)], TESTED: [fp_status(FP_A)]}, None),
+        # A malformed fingerprint matches nothing, not even itself.
+        ({SHA: [fp_status("sha256:")], TESTED: [fp_status("sha256:")]}, None),
+        ({SHA: [fp_status("sha256:garbage")], TESTED: [fp_status("sha256:garbage")]}, None),
+        ({SHA: [fp_status("sha256:" + "A" * 64)], TESTED: [fp_status("sha256:" + "A" * 64)]}, None),
     ],
 )
 def test_anything_short_of_the_same_image_gets_the_suite(

@@ -30,6 +30,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -55,6 +56,7 @@ BUILD_WORKFLOW = "staging-build.yml"
 # The status staging-build.yml posts on each staging head: "sha256:<hex>" over the hex and UF2
 # built with every per-commit field fixed. Equal fingerprints, equal image on the device.
 FINGERPRINT_CONTEXT = "Firmware fingerprint"
+FINGERPRINT_RE = re.compile(r"sha256:[0-9a-f]{64}")
 # The paths that change what is built and flashed, owned by the firmware repo and read at the
 # commit being judged; its release.yml skips a candidate by the same list.
 FIRMWARE_PATHS = "tools/firmware_paths.json"
@@ -186,12 +188,18 @@ def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str]:
 
 
 def fingerprint(gh_: Gh, sha: str) -> str | None:
-    """sha's newest Firmware fingerprint ("sha256:<hex>"), or None if it has none."""
+    """sha's Firmware fingerprint ("sha256:<64 hex>"), or None.
+
+    Only the newest status with that context counts: if it isn't a success with a well-formed
+    hash, there is no fingerprint, whatever older statuses say.
+    """
     statuses = gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{sha}/statuses?per_page=100")
     for s in statuses or []:  # newest first
-        if s.get("context") == FINGERPRINT_CONTEXT and s.get("state") == "success":
-            d = str(s.get("description") or "")
-            return d if d.startswith("sha256:") else None
+        if s.get("context") != FINGERPRINT_CONTEXT:
+            continue
+        d = str(s.get("description") or "")
+        ok = s.get("state") == "success" and FINGERPRINT_RE.fullmatch(d)
+        return d if ok else None
     return None
 
 
