@@ -32,7 +32,7 @@ from dbos import DBOS
 from ..paths import data_dir
 from ..work import durable, jobs
 from .audio_lock import acquire_audio_lock, release_audio_lock
-from .audio_player import kill_orphan_audio, stop_audio
+from .audio_player import audio_seconds, kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
 from .test_runner import (
     INTER_RUN_GAP_S,
@@ -188,11 +188,9 @@ async def plan(
 
 
 def track_seconds(track: dict[str, Any]) -> float:
-    """How long a track's labels say it is (the onset labels' durationMs)."""
-    gt = load_ground_truth(
-        track["ground_truth"], track.get("human_edits"), track.get("drum_labels")
-    )
-    return float(gt.duration_ms) / 1000
+    """How long a track's audio is. Not the labels' durationMs: edm/'s onset labels carry none,
+    which read as 0 s and left the staging suite no track for its music check (#370)."""
+    return audio_seconds(track["audio_file"])
 
 
 def _ground_truth(track: dict[str, Any], duration_ms: float) -> Any:
