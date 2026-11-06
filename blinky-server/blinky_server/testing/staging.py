@@ -266,8 +266,9 @@ def no_pace_track(device_ids: list[str]) -> dict[str, Any]:
 
 @durable.step
 async def pace_track(tracks: list[dict[str, Any]], limits: dict[str, float]) -> int | None:
-    """choose_pace_track over the labels' durations. A step: it reads the label files."""
-    return choose_pace_track(tracks, limits, track_seconds)
+    """choose_pace_track over the tracks' audio lengths. A step: it probes the audio files,
+    in a worker thread so ffprobe never blocks the event loop the devices share."""
+    return await asyncio.to_thread(choose_pace_track, tracks, limits, track_seconds)
 
 
 @durable.step
