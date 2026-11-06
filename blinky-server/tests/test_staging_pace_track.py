@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import Any
 
-from blinky_server.testing import staging
+import pytest
+from blinky_scoring.track_discovery import discover_tracks, load_track_manifest
+
+from blinky_server.testing import audio_player, staging, workflows
+
+EDM = Path(__file__).resolve().parents[2] / "corpus" / "edm"
 
 LIMITS = {**staging.DEFAULTS}  # 35 s validation + 15 s music + 60 s pace + 5 s = 115 s
 
@@ -40,3 +47,36 @@ def test_no_track_long_enough_fails_music_and_pace_and_the_report() -> None:
     assert music["dev-a"]["beatpace"]["pass"] is False
     report = {"deploy": {"pass": True}, "music": music, "validation": {"pass": True}}
     assert staging._passed(report) is False
+
+
+def test_the_real_corpus_has_a_track_for_the_music_check() -> None:
+    """The staging suite's own choice over edm/, with real lengths and seeks. The check #370
+    shipped without: its labels have no durationMs, so every track read as 0 s and every suite
+    failed music and beat-pace. CI installs ffmpeg so this runs there, as on the box."""
+    ts = list(discover_tracks(str(EDM)))
+    assert len(ts) == 18, "corpus/ submodule not checked out"
+    manifest = load_track_manifest(str(EDM))
+    for t in ts:
+        t["seek"] = manifest.get(t["name"], {}).get("seekOffset", 0)
+    assert staging.choose_pace_track(ts, staging.DEFAULTS, workflows.track_seconds) is not None
+
+
+def test_track_seconds_is_the_audio_length() -> None:
+    track = next(t for t in discover_tracks(str(EDM)) if t["name"] == "amapiano-vibez")
+    assert 260 < workflows.track_seconds(track) < 266
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        subprocess.CompletedProcess([], 1, "", "No such file"),
+        subprocess.CompletedProcess([], 0, "N/A\n", ""),
+        subprocess.CompletedProcess([], 0, "0.000000\n", ""),
+    ],
+)
+def test_an_unreadable_length_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch, result: subprocess.CompletedProcess[str]
+) -> None:
+    monkeypatch.setattr(audio_player.subprocess, "run", lambda *a, **k: result)
+    with pytest.raises(RuntimeError, match="ffprobe"):
+        audio_player.audio_seconds("x.mp3")

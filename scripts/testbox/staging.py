@@ -223,9 +223,12 @@ def same_image(gh_: Gh, sha: str) -> tuple[bool, str]:
         parents = gh_json(gh_, "api", f"repos/{GH_REPO}/commits/master")["parents"]
         if len(parents) != 2:
             return False, "master's head is not a staging merge: testing"
-        base = fingerprint(gh_, str(parents[1]["sha"]))
+        tested = str(parents[1]["sha"])
+        base = fingerprint(gh_, tested)
     except (RuntimeError, KeyError, ValueError, TypeError) as e:
         return False, f"can't read the firmware fingerprints ({str(e)[:80]}): testing"
+    if base is None:
+        return False, f"master's staging commit {tested[:12]} has no firmware fingerprint: testing"
     if base != head:
         return False, "the firmware image differs from master's: testing"
     return True, f"same firmware image as master's ({head[:19]}): hardware test skipped"

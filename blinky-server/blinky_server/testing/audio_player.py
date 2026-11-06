@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
 import time
 from dataclasses import dataclass
 
@@ -23,6 +24,27 @@ class PlaybackResult:
     audio_start_time_ms: float  # epoch ms when playback started
     duration_ms: float  # actual playback duration
     error: str | None = None
+
+
+def audio_seconds(audio_file: str) -> float:
+    """The audio file's length in seconds, from ffprobe (it ships with the ffmpeg that plays
+    the file). Fails loudly: a track whose length can't be read is an error, never 0."""
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"]
+    try:
+        out = subprocess.run(
+            [*cmd, audio_file], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"ffprobe {audio_file}: {e}") from e
+    if out.returncode != 0:
+        raise RuntimeError(f"ffprobe {audio_file} exited {out.returncode}: {out.stderr.strip()}")
+    try:
+        seconds = float(out.stdout.strip())
+    except ValueError as e:
+        raise RuntimeError(f"ffprobe {audio_file}: no duration in {out.stdout!r}") from e
+    if not seconds > 0:
+        raise RuntimeError(f"ffprobe {audio_file}: duration {seconds}")
+    return seconds
 
 
 # ---------------------------------------------------------------------------

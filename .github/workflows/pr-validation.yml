@@ -64,6 +64,9 @@ jobs:
       with:
         python-version: '3.13'
 
+    - name: ffmpeg (ffprobe reads track lengths, as on the box)
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+
     - name: Install dependencies
       run: |
         python -m venv venv
