@@ -1,6 +1,0 @@
-{
-    "board": "Seeeduino:mbed:xiaonRF52840Sense",
-    "programmer": "nrfjprog",
-    "port": "COM5",
-    "sketch": "fire-totem\\fire-totem.ino"
-}

@@ -10,7 +10,7 @@ Configuration (environment; on the test box, `~/.config/blinky/spark.env`):
   SPARK_API_KEY         blinky-time's key from the Spark's client registry (required)
   SPARK_WEBHOOK_SECRET  the secret the Spark sends as `Authorization: Bearer` (webhook only)
   BLINKY_SPARK_AUDIO_ROOTS  directories tracks may be read from (os.pathsep-separated);
-                        default: the repo's blinky-test-player/music
+                        default: the corpus/ submodule (blinky-corpus)
 Without the two required values the Spark routes answer 503 and nothing else changes.
 
 Training is a `gpu_task` (#305): `ml-training/` as a code bundle (bundle.py says which commit),
@@ -85,7 +85,7 @@ CORPUS_TICK_S = 60.0
 TERMINAL = {"succeeded", "failed", "canceled"}
 
 _REPO = Path(__file__).resolve().parents[3]
-_DEFAULT_AUDIO_ROOT = _REPO / "blinky-test-player" / "music"
+_DEFAULT_AUDIO_ROOT = _REPO / "corpus"  # blinky-corpus: edm/ and its labels (#357)
 
 # -- training (gpu_task) ---------------------------------------------------------------------------
 

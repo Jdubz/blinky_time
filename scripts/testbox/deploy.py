@@ -78,16 +78,14 @@ MARKER = ".deploy-installed.json"  # in each slot: what its venv and console wer
 
 # What the running server reads or executes from its tree. Only a commit touching one of these
 # restarts it; any other commit that passes the gate just moves DEPLOYABLE_REF. Directories,
-# not files: firmware_release.py imports other tools/ modules, and a list of files would drift.
+# not files, so a new module in one is covered without editing this list.
 SERVER_PATHS = (
     "blinky-server/",
     "blinky-console/",  # the web UI the server serves
-    "tools/",  # firmware_release.py, uf2_upload.py, usb_reset.py and what they import
-    "devices/",  # test_devices.json, read by firmware_release.py
-    "blinky-test-player/music/",  # the Spark client's default audio root
     "scripts/testbox/",  # this deployer and the units
     # Submodules (gitlinks, so no trailing slash; blinky_time#357): the firmware repo's
-    # tools/ (release client, validators, test-device list) and the corpus + its scorers.
+    # tools/ (release client, validators, test-device list), and the corpus (the Spark
+    # client's default audio root) with its scorers.
     "firmware",
     "corpus",
 )

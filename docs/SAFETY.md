@@ -22,7 +22,7 @@ This document is a short index of the flashing/recovery safety mechanisms that p
 5. **Only stable releases reach the fleet and new devices.** Candidates and `--dev` builds go only to a device listed in `devices/test_devices.json`, through `tools/deploy_local.py`. `deploy.sh` installs stable releases only.
    - **Auto-recovery flashes only a verified stable image** (#251). blinky-server stores every image immutably, by sha256 (`firmware/images/`). An image is stable only when the server itself matched its bytes to a promoted stable release's hex (`tools/firmware_release.py download`). Only stable images can arm auto-recovery; the binding records the sha256, which is re-checked at boot and before every recovery flash. Other uploads can still be flashed explicitly, but never auto-recover.
    - Channels, gate and promotion: `docs/RELEASE_PROCESS.md`.
-   - Browser updates for personal devices (stable only, signed OTA over USB): `docs/WEB_FLASHER.md`.
+   - Browser updates for personal devices (stable only, signed OTA over USB): blinky-firmware's `docs/WEB_FLASHER.md`.
 
 ## Firmware-side defences
 

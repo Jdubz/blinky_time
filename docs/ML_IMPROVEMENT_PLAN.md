@@ -138,7 +138,7 @@ Any new candidate must also fit the CPU budget above, not just lift offline F1.
 > - "Label cleanup doesn't help" — actually means "cleaning kick labels doesn't expand coverage to hi-hats"; the cleaner labels still improve their own metric (kw F1 0.66 → 0.74)
 > - "F1 ≥ 0.70 is reachable" / "synthesis says 0.71" — synthesis treated labels as fixed; if labels are coverage-limited and eval GT is consensus-noisy, the *measured* ceiling against current GT might be lower than that
 >
-> Full literature review notes: see `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` for citations and per-paper detail.
+> Full literature review notes: see blinky-firmware's `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` for citations and per-paper detail.
 >
 > ---
 
@@ -1088,7 +1088,7 @@ The v34/v34b/v34c sequence was muddled by a long-standing confusion between **on
 - `base.yaml` `labels_dir` now points at `onsets_consensus`. Every training run gets onset targets unless explicitly overridden.
 - `prepare_dataset.py` default-fallback branch raises if the labels path matches a beat-tracker marker (`consensus_v*`, `beat_this`, `beatnet`, `demucs_beats`, `allin1`).
 - `consensus_v2/v3/v4/v5` and the older `consensus`, `consensus-3sys`, `consensus-combined` label directories moved out of `/mnt/storage/blinky-ml-data/labels/` into `_archive_beats_2026_04_29/`. The training pipeline can no longer find them at the canonical path.
-- `.beats.json` files in `corpus/edm/` archived under `blinky-test-player/music/_archive_beats_gt/`. The eval harness now requires `.onsets_consensus.json` (which all 18 tracks had).
+- `.beats.json` files in `corpus/edm/` archived under blinky-corpus's `archive/beats_gt/`. The eval harness now requires `.onsets_consensus.json` (which all 18 tracks had).
 - `track_discovery.py` and `load_ground_truth` rewritten to find onset GT directly. The legacy beat-consensus loader path no longer exists.
 - `Makefile` `LABELS_CONSENSUS` retained as alias of `LABELS_ONSETS` (= `onsets_consensus`) so out-of-tree scripts don't crash.
 - `annotate-beats.py` archived; not used in any active pipeline.

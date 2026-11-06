@@ -21,7 +21,7 @@ The history of how we got here (model versions v3–v36, CBSS, Bayesian tempo fu
 
 **Visuals (`blinky-things/generators/`, details in `docs/GENERATOR_EFFECT_ARCHITECTURE.md`):** Fire (per-column heightmap flame plus particle bursts on onsets), Water (rain particles, ripple simulation, bioluminescence, depth gradient), PlasmaGlobe (replaced Lightning in v94; selected with `gen lightning` or `gen plasma`), Audio (diagnostic visualizer). One effect: hue rotation. `scene` sets generator, effect, speed and hue in one command.
 
-**Updates:** signed QSPI-staged OTA (`blinky-things/ota/`, Ed25519) and the browser firmware page (USB) are shipped; see `docs/WEB_FLASHER.md`. Fleet flashing goes through `./scripts/deploy.sh` only.
+**Updates:** signed QSPI-staged OTA (`blinky-things/ota/`, Ed25519) and the browser firmware page (USB) are shipped; see blinky-firmware's `docs/WEB_FLASHER.md`. Fleet flashing goes through `./scripts/deploy.sh` only.
 
 **Test tooling:** `tests/tracker/` runs the real `AudioTracker` on edm/ audio at simulated loop rates, with a CPU cost model (in CI, #202). blinky-server owns all device connections and runs validation (`docs/TESTING_METHODOLOGY.md`).
 
@@ -167,5 +167,5 @@ See **[VISUALIZER_GOALS.md](VISUALIZER_GOALS.md)**. Visual quality comes before 
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern |
 | `docs/VISUALIZER_GOALS.md` | Design philosophy |
 | `docs/RELEASE_PROCESS.md` | Stable / candidate / dev releases |
-| `docs/WEB_FLASHER.md` | Signed QSPI OTA and the browser firmware page |
+| [blinky-firmware `docs/WEB_FLASHER.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md) | Signed QSPI OTA and the browser firmware page |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Calibration history |

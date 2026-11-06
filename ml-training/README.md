@@ -3,9 +3,9 @@
 Train a small NN that outputs a per-frame **onset** activation (one value per 16 ms mel frame) for the Blinky firmware. The task is onset detection: fire on every percussive hit, on or off the beat. It is not beat detection (see "Task is Onset Detection" in the repo's `CLAUDE.md`).
 
 **Current status (October 2026):**
-- The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h`.
+- The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h` in blinky-firmware (`../firmware/` here).
 - **Devices ship with the onset NN off** (`BLINKY_ONSET_NN_ENABLED=0` in `blinky-things/audio/AudioTracker.h`). Onsets come from tuned spectral flux. On edm/ with the hat's CPU cost model, flux scores F1 0.546 at 178 fps; v33 scores 0.480 and holds the loop at 48 fps (~12 ms per inference).
-- A new model is enabled only when it beats flux under that same measurement (the host harness in `tests/tracker/`). Roadmap and open experiments: `docs/ML_IMPROVEMENT_PLAN.md`.
+- A new model is enabled only when it beats flux under that same measurement (blinky-firmware's host harness in `tests/tracker/`). Roadmap and open experiments: `docs/ML_IMPROVEMENT_PLAN.md`.
 
 ## Quick Start
 
@@ -81,7 +81,7 @@ outputs/<run-name>/
 └── eval/eval_results.json   # Offline edm/ onset F1
 ```
 
-**`export_tflite.py` also overwrites the firmware's active header** `blinky-things/audio/frame_onset_model_data.h`, not just the versioned one named in the config. Check `git diff` before committing, and run `python tools/check_model_input.py` (repo root) to confirm the firmware will accept the model.
+**`export_tflite.py` writes into the `firmware/` submodule** and also overwrites the firmware's active header `firmware/blinky-things/audio/frame_onset_model_data.h`, not just the versioned one named in the config. Check `git diff` in `firmware/`, and run `python tools/check_model_input.py` there to confirm the firmware will accept the model. Shipping a model is a PR to blinky-firmware (its `staging` branch), never a commit to the submodule pin here.
 
 ## Key Constraint: Feature Parity
 
@@ -108,7 +108,7 @@ The spec is `spec/mel_frontend_v1.json`, and `scripts/mel_frontend.py` builds tr
 | v34d | kick_weighted_clean labels | 0.616 | Flat; not deployed |
 | v36 | 80 mel, 14 kHz fmax, 31.25 kHz | 0.537 | Regressed; not deployed |
 
-On-device, the decision metric is the host tracker harness (`tests/tracker/run_tracker_eval.py`), where tuned flux currently wins.
+On-device, the decision metric is blinky-firmware's host tracker harness (`tests/tracker/run_tracker_eval.py`), where tuned flux currently wins.
 
 ## Acoustic Environment Augmentation
 

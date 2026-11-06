@@ -41,7 +41,7 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 
 ## CRITICAL: Only stable releases reach fleet and new devices
 
-**Fleet and new devices get the latest *stable* GitHub release, never a local build.** See `docs/RELEASE_PROCESS.md`.
+**Fleet and new devices get the latest *stable* GitHub release, never a local build.** See blinky-firmware's `docs/RELEASE_PROCESS.md`.
 
 **Releases are made in blinky-firmware** (its `docs/RELEASE_PROCESS.md`): every merge to its master cuts a candidate, and only the owner promotes one to stable. Never promote on your own.
 
@@ -139,7 +139,7 @@ Concrete consequences:
 
 **No guess-and-check tuning and no stacked patches in the audio pipeline** (owner, 2026-10-22). Every change to detection, picking or gating must:
 1. **name the root cause** it removes, shown with a measurement on edm/ (e.g. "61% of missed kicks are blocked by an earlier non-drum detection"), not a symptom;
-2. **follow a published, proven method** for that problem, cited (paper + what it reports), and say where we deviate and why; see `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` and `reports/`;
+2. **follow a published, proven method** for that problem, cited (paper + what it reports), and say where we deviate and why; see blinky-firmware's `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` and `reports/`;
 3. **replace mechanisms rather than add to them:** when a new structure makes a gate, threshold or special case redundant, delete it in the same change. A new knob that compensates for another knob is a patch, and is refused;
 4. **be measured for both detectors** through the `OnsetDetector` / `AudioTracker::pickOnset` abstraction, with the drum metrics above, before and after.
 
@@ -224,13 +224,12 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/ML_STORAGE_LAYOUT.md` | NVMe pool / SATA tier layout for ML data; disk budget; recovery |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
-| `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | Published onset/drum-detection systems with F1 numbers, architectures, label sources — quote this before claiming "the literature says X" |
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, I2S speaker, camera, test chips with SWD via Pi Zero W; enclosure construction, calibration, acceptance gates |
 | `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | Camera (OV5647) in the test box's validation harness: LED region discovery, visual onsets, render/sound-to-light latency as distributions, follow test against drum labels, calibration, provisional gates |
-| `docs/DEVELOPMENT.md` | Development guide, config management |
+| `docs/DEVELOPMENT.md` | Tooling development: git hooks, console + server dev |
+| `docs/TESTING_METHODOLOGY.md` | Tiered on-device testing through blinky-server and the MCP tools |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
-| `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`, live, USB only) via signed QSPI OTA: signing, release mirror, checks, bench results, rollout checklist, open items |
 | `docs/WEB_UPDATE_RESEARCH_2026_10.md` | Why browser updates go through the running app, not the bootloader: what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist) |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
@@ -239,4 +238,4 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/PHONE_RECORD_MODE_PLAN.md` | Phone field recorder: Android Chrome ⇄ one device over Web Bluetooth, raw mic PCM + analysis for concert-volume tuning; wire format, integrity rules, bench gate |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |
-| `firmware/docs/` (blinky-firmware) | Firmware architecture (`AUDIO_ARCHITECTURE.md`, `HARDWARE.md`, ...), `RELEASE_PROCESS.md`, build and bootloader docs |
+| `firmware/docs/` (blinky-firmware) | Firmware architecture (`AUDIO_ARCHITECTURE.md`, `HARDWARE.md`, ...), `RELEASE_PROCESS.md`, `WEB_FLASHER.md` (browser updates, signed OTA), `ONSET_DETECTION_LITERATURE_2026_05_02.md` (quote it before claiming "the literature says X"), `GLOSSARY.md`, `DEVELOPMENT.md`, build and bootloader docs |

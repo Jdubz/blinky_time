@@ -70,7 +70,7 @@ Changes go to `master` by pull request, with CI (`.github/workflows/pr-validatio
 - [docs/README.md](docs/README.md): the tooling docs index
 - [CLAUDE.md](CLAUDE.md): safety and workflow rules (flashing, releases, the test box). Read it first.
 - [docs/TEST_BOX_BUILD_PLAN.md](docs/TEST_BOX_BUILD_PLAN.md): the test box and its deployer
-- [docs/WEB_FLASHER.md](docs/WEB_FLASHER.md): browser firmware updates
+- [blinky-firmware docs/WEB_FLASHER.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md): browser firmware updates
 - [docs/ML_IMPROVEMENT_PLAN.md](docs/ML_IMPROVEMENT_PLAN.md): ML roadmap
 - Firmware architecture, hardware and audio docs: [blinky-firmware/docs](https://github.com/Jdubz/blinky-firmware/tree/staging/docs)
 

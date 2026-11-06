@@ -18,9 +18,8 @@
     "files.trimFinalNewlines": true,
     // Unified diffs: a blank context line is a single space, and context can
     // carry the source's trailing whitespace. Trimming either corrupts the
-    // patch (patches/tinyusb-cdc-no-overwritable-fifo.patch broke this way).
+    // patch (blinky-firmware's patches/tinyusb-cdc-no-overwritable-fifo.patch broke this way).
     "[diff]": {
         "files.trimTrailingWhitespace": false
-    },
-    "cmake.sourceDirectory": "C:/Development/blinky_time/blinky-simulator"
+    }
 }

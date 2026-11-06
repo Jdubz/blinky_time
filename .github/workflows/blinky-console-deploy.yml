@@ -68,7 +68,7 @@ jobs:
 
       - name: Build
         env:
-          # The browser updater (#firmware) is live: docs/WEB_FLASHER.md. Set
+          # The browser updater (#firmware) is live: blinky-firmware's docs/WEB_FLASHER.md. Set
           # anything else here to hide it again (kill switch).
           VITE_FIRMWARE_UPDATES: 'on'
         run: npm run build:firebase
@@ -111,7 +111,7 @@ jobs:
 
       - name: Build
         env:
-          # The browser updater (#firmware) is live: docs/WEB_FLASHER.md. Set
+          # The browser updater (#firmware) is live: blinky-firmware's docs/WEB_FLASHER.md. Set
           # anything else here to hide it again (kill switch).
           VITE_FIRMWARE_UPDATES: 'on'
         run: npm run build:firebase

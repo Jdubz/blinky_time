@@ -112,6 +112,12 @@ jobs:
     - name: Install numpy for unit tests
       run: pip install 'numpy>=1.26,<3' scipy pyyaml
 
+    - name: onset_label_merge.py copies match (ml-training vs blinky-corpus)
+      # Training and the server's scoring (blinky-corpus) each carry a copy; they must stay
+      # byte-identical apart from the docstring. Before the split this ran in the firmware's
+      # pre-compile safety script, which can't see ml-training any more (#357).
+      run: python scripts/check_label_merge_sync.py
+
     - name: Run Python shape-feature unit tests
       # Regression guard for bin-indexing (centroid/HFC k=1..N) and the
       # resolve_hybrid_features config parser. Runs offline — no audio
