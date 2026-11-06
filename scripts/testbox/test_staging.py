@@ -19,6 +19,12 @@ sys.modules["staging"] = staging
 _spec.loader.exec_module(staging)
 
 SHA = "s" * 40
+TESTED = "t" * 40  # the staging commit master was last merged from (master's second parent)
+FP_A, FP_B = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+
+
+def fp_status(description: str, state: str = "success") -> dict[str, Any]:
+    return {"context": staging.FINGERPRINT_CONTEXT, "state": state, "description": description}
 HAT = {"id": "C04C56F9", "state": "connected", "platform": "nrf52840", "device_type": "hat_v1"}
 LAMP = {"id": "AAAA", "state": "connected", "platform": "nrf52840", "device_type": "lamp"}
 
@@ -33,6 +39,8 @@ class GitHub:
         changed: list[str] | None = None,
         paths: list[str] | None = None,
         no_path_list: bool = False,
+        fingerprints: dict[str, list[dict[str, Any]]] | None = None,
+        master_parents: list[str] | None = None,
     ) -> None:
         self.artifact, self.runs = artifact, runs or []
         # What staging changed since master, and the firmware's path list at the head
@@ -40,6 +48,15 @@ class GitHub:
         self.changed = ["blinky-things/audio/AudioTracker.cpp"] if changed is None else changed
         self.paths = ["blinky-things/", "scripts/build.sh"] if paths is None else paths
         self.no_path_list = no_path_list
+        # Each commit's statuses, newest first. By default the head's image differs from
+        # master's, so the suite runs.
+        self.fingerprints = (
+            {SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_B)]}
+            if fingerprints is None
+            else fingerprints
+        )
+        self.master_parents = ["p" * 40, TESTED] if master_parents is None else master_parents
+        self.fail_fingerprints = False
         self.fail_merge = False
         self.statuses: list[tuple[str, str]] = []
         self.comments: list[tuple[str, str]] = []
@@ -66,6 +83,13 @@ class GitHub:
                     "files": [{"filename": f} for f in self.changed],
                 }
             )
+        if "/statuses?per_page=" in a:
+            if self.fail_fingerprints:
+                raise RuntimeError("gh api repos/... -> 1: HTTP 502: Bad Gateway")
+            sha = a.split("/commits/", 1)[1].split("/", 1)[0]
+            return json.dumps(self.fingerprints.get(sha, []))
+        if a.endswith(f"repos/{staging.GH_REPO}/commits/master"):
+            return json.dumps({"parents": [{"sha": p} for p in self.master_parents]})
         if f"actions/runs?head_sha={SHA}" in a:
             return json.dumps({"workflow_runs": self.runs})
         if f"statuses/{SHA}" in a:
@@ -322,6 +346,60 @@ def test_a_head_with_no_firmware_change_is_promoted_without_a_run() -> None:
     g.calls.clear()
     staging.run_once(g, srv, listed)
     assert [c for c in g.calls if c[0] == "pr"] == []
+
+
+# -- same firmware image, no hardware test (Firmware fingerprint) ------------------------------
+
+
+def test_a_head_with_masters_image_is_promoted_without_a_run() -> None:
+    """A firmware path changed (a comment in blinky-things/), but the image didn't."""
+    g = GitHub(fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]})
+    srv = Server([HAT], {})
+    state = staging.run_once(g, srv, listed)
+    assert srv.submitted == []
+    assert g.statuses == [
+        ("success", "same firmware image as master's (sha256:aaaaaaaaaaaa): hardware test skipped")
+    ]
+    assert state["reported"] == SHA
+    assert ("pr", "merge") in [c[:2] for c in g.calls]
+
+
+def test_the_image_is_only_compared_once_the_head_is_built() -> None:
+    g = GitHub(artifact=False, fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]})
+    staging.run_once(g, Server([HAT], {}), listed)
+    assert g.statuses == [("pending", "waiting for the staging build")]
+    assert not any("/statuses?per_page=" in " ".join(c) for c in g.calls)
+
+
+@pytest.mark.parametrize(
+    "fingerprints, master_parents",
+    [
+        ({SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_B)]}, None),  # a different image
+        ({TESTED: [fp_status(FP_A)]}, None),  # the head has none (built before fingerprints)
+        ({SHA: [fp_status(FP_A)]}, None),  # master's tested commit has none
+        ({SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]}, [TESTED]),  # master not a merge
+        # Only the newest status counts, and only a successful one.
+        ({SHA: [fp_status(FP_B), fp_status(FP_A)], TESTED: [fp_status(FP_A)]}, None),
+        ({SHA: [fp_status(FP_A, "error")], TESTED: [fp_status(FP_A, "error")]}, None),
+        ({SHA: [fp_status("garbage")], TESTED: [fp_status("garbage")]}, None),
+    ],
+)
+def test_anything_short_of_the_same_image_gets_the_suite(
+    fingerprints: dict[str, list[dict[str, Any]]], master_parents: list[str] | None
+) -> None:
+    g = GitHub(fingerprints=fingerprints, master_parents=master_parents)
+    srv = Server([HAT], {})
+    staging.run_once(g, srv, listed)
+    assert len(srv.submitted) == 1
+    assert not any(c[:2] == ("pr", "create") for c in g.calls)
+
+
+def test_unreadable_fingerprints_get_the_suite() -> None:
+    g = GitHub(fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]})
+    g.fail_fingerprints = True
+    srv = Server([HAT], {})
+    staging.run_once(g, srv, listed)
+    assert len(srv.submitted) == 1
 
 
 @pytest.mark.parametrize(
