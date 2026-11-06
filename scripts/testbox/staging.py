@@ -13,8 +13,12 @@ deploy.py). One pass:
    firmware's paths (tools/firmware_paths.json at the head) since master: post a passing
    status saying the test was skipped, and promote. Its staging build
    (staging-build.yml, artifact staging-firmware-<sha>) failed: post a failure. Not built yet:
-   a pending status. Built: submit the suite (POST /api/test/staging) for every connected test
-   device (devices/test_devices.json, by configured device id) and post a pending status.
+   a pending status. Built, with the same Firmware fingerprint (the build's hash of the image
+   with per-commit fields fixed) as the staging commit master was last merged from, and no
+   change under the list's "unfingerprinted" paths: the same image, so skip and promote as
+   above. Otherwise submit the suite (POST /api/test/staging)
+   for every connected test device (devices/test_devices.json, by configured device id) and
+   post a pending status.
 
 Only the newest staging commit is tested; a commit superseded while it waits is skipped (its
 successor carries its changes). State is in ~/.local/share/blinky-server/staging.json; the log
@@ -27,6 +31,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -49,6 +54,10 @@ STATE = (
     / "staging.json"
 )
 BUILD_WORKFLOW = "staging-build.yml"
+# The status staging-build.yml posts on each staging head: "sha256:<hex>" over the hex and UF2
+# built with every per-commit field fixed. Equal fingerprints, equal image on the device.
+FINGERPRINT_CONTEXT = "Firmware fingerprint"
+FINGERPRINT_RE = re.compile(r"sha256:[0-9a-f]{64}")
 # The paths that change what is built and flashed, owned by the firmware repo and read at the
 # commit being judged; its release.yml skips a candidate by the same list.
 FIRMWARE_PATHS = "tools/firmware_paths.json"
@@ -146,37 +155,95 @@ def build_state(gh_: Gh, sha: str) -> str:
     return "pending"
 
 
-def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str]:
-    """(changed, why): whether sha changes anything under the firmware's paths since master.
+def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str, bool]:
+    """(changed, why, blind): whether sha changes anything under the firmware's paths since
+    master, and whether one of those changes is where the Firmware fingerprint can't see it
+    (the list's "unfingerprinted" paths: the bootloader, the OTA signing tools).
 
-    Anything that can't be judged counts as a change, so it gets the hardware test: no path
-    list at that commit, a GitHub error, or a compare GitHub truncated.
+    Anything that can't be judged counts as a change the fingerprint can't vouch for, so it
+    gets the hardware test: no path list at that commit, a GitHub error, or a compare GitHub
+    truncated.
     """
     try:
         meta = gh_json(gh_, "api", f"repos/{GH_REPO}/contents/{FIRMWARE_PATHS}?ref={sha}")
-        paths = [str(p) for p in json.loads(base64.b64decode(meta["content"]))["paths"]]
+        spec = json.loads(base64.b64decode(meta["content"]))
+        paths = [str(p) for p in spec["paths"]]
+        unseen = [str(p) for p in spec.get("unfingerprinted", [])]
         cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/master...{sha}")
     except (RuntimeError, KeyError, ValueError, TypeError) as e:
-        return True, f"can't compare with master ({str(e)[:80]}): testing"
+        return True, f"can't compare with master ({str(e)[:80]}): testing", True
     if not paths:
-        return True, f"{FIRMWARE_PATHS} lists no paths: testing"
+        return True, f"{FIRMWARE_PATHS} lists no paths: testing", True
     files = cmp.get("files")
     if not isinstance(files, list) or len(files) >= COMPARE_FILE_LIMIT:
-        return True, "the compare with master is truncated: testing"
+        return True, "the compare with master is truncated: testing", True
 
-    def firmware(name: str) -> bool:
-        return any(name.startswith(p) if p.endswith("/") else name == p for p in paths)
+    def under(name: str, prefixes: list[str]) -> bool:
+        return any(name.startswith(p) if p.endswith("/") else name == p for p in prefixes)
 
     hits = [
         n
         for f in files
         for n in (f.get("filename"), f.get("previous_filename"))
-        if n and firmware(n)
+        if n and under(n, paths)
     ]
     base = str(cmp.get("merge_base_commit", {}).get("sha", "master"))[:12]
     if hits:
-        return True, f"{len(hits)} firmware file(s) changed since master {base}"
-    return False, f"no firmware change since master {base}: hardware test skipped"
+        blind = any(under(n, unseen) for n in hits)
+        return True, f"{len(hits)} firmware file(s) changed since master {base}", blind
+    return False, f"no firmware change since master {base}: hardware test skipped", False
+
+
+def fingerprint(gh_: Gh, sha: str) -> str | None:
+    """sha's Firmware fingerprint ("sha256:<64 hex>"), or None.
+
+    Only the newest status with that context counts: if it isn't a success with a well-formed
+    hash, there is no fingerprint, whatever older statuses say.
+    """
+    statuses = gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{sha}/statuses?per_page=100")
+    for s in statuses or []:  # newest first
+        if s.get("context") != FINGERPRINT_CONTEXT:
+            continue
+        d = str(s.get("description") or "")
+        ok = s.get("state") == "success" and FINGERPRINT_RE.fullmatch(d)
+        return d if ok else None
+    return None
+
+
+def same_image(gh_: Gh, sha: str) -> tuple[bool, str]:
+    """(same, why): whether sha builds the image master was last merged from.
+
+    Master takes only merges of a tested staging head (its second parent). A fingerprint
+    missing on either side, or one GitHub won't return, means a different image: test.
+    """
+    try:
+        head = fingerprint(gh_, sha)
+        if head is None:
+            return False, "no firmware fingerprint on the head: testing"
+        parents = gh_json(gh_, "api", f"repos/{GH_REPO}/commits/master")["parents"]
+        if len(parents) != 2:
+            return False, "master's head is not a staging merge: testing"
+        base = fingerprint(gh_, str(parents[1]["sha"]))
+    except (RuntimeError, KeyError, ValueError, TypeError) as e:
+        return False, f"can't read the firmware fingerprints ({str(e)[:80]}): testing"
+    if base != head:
+        return False, "the firmware image differs from master's: testing"
+    return True, f"same firmware image as master's ({head[:19]}): hardware test skipped"
+
+
+def skip(gh_: Gh, state: dict[str, Any], sha: str, why: str) -> dict[str, Any]:
+    """Nothing on the device changes: master gets sha without a run (the owner, 2026-11-05).
+
+    Reported only once promoted, so a failed PR create or auto-merge is retried next pass.
+    """
+    post_status(gh_, sha, "success", why)
+    log(f"{sha[:12]}: {why}")
+    number = promote(gh_, sha, None, skipped=why)
+    log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
+    state["reported"] = sha
+    state.pop("waiting", None)
+    save_state(state)
+    return state
 
 
 def post_status(gh_: Gh, sha: str, state: str, description: str, url: str | None = None) -> None:
@@ -224,8 +291,9 @@ def promote(gh_: Gh, sha: str, report_url: str | None, skipped: str | None = Non
     )
     if skipped:
         body = (
-            f"Staging at `{sha[:12]}`: {skipped} (`{FIRMWARE_PATHS}`). Merging this to master "
-            "cuts no candidate release (docs/RELEASE_PROCESS.md). "
+            f"Staging at `{sha[:12]}`: {skipped}. Nothing on the device changes, so merging "
+            "this to master cuts no candidate when the newest bN has the same files or image "
+            "(docs/RELEASE_PROCESS.md). "
             "Opened by the test box (scripts/testbox/staging.py)."
         )
     else:
@@ -425,18 +493,9 @@ def run_once(
     sha = staging_head(gh_)
     if state.get("reported") == sha:
         return state
-    changed, why = firmware_change(gh_, sha)
+    changed, why, blind = firmware_change(gh_, sha)
     if not changed:
-        # Nothing on the device changes: master gets it without a run (the owner, 2026-11-05).
-        # Reported only once promoted, so a failed PR create or auto-merge is retried next pass.
-        post_status(gh_, sha, "success", why)
-        log(f"{sha[:12]}: {why}")
-        number = promote(gh_, sha, None, skipped=why)
-        log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
-        state["reported"] = sha
-        state.pop("waiting", None)
-        save_state(state)
-        return state
+        return skip(gh_, state, sha, why)
     built = build_state(gh_, sha)
     if built == "failed":
         post_status(gh_, sha, "failure", "the staging build or its CI failed: nothing to test")
@@ -450,6 +509,13 @@ def run_once(
             state["waiting"] = sha
             save_state(state)
         return state
+    if blind:
+        log(f"{sha[:12]}: {why}, some where the fingerprint can't see: testing")
+    else:
+        same, why = same_image(gh_, sha)
+        if same:
+            return skip(gh_, state, sha, why)
+        log(f"{sha[:12]}: {why}")
     try:
         devices = test_devices(server("GET", "/api/devices"), listed())
         if not devices:
