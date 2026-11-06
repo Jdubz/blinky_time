@@ -226,6 +226,24 @@ def test_path_outside_the_audio_roots(
     assert fake.uploads == 0
 
 
+def test_default_audio_root_is_the_corpus(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Unconfigured, the server reads tracks from the corpus/ submodule: the corpus left
+    blinky-test-player/music in the split (#357), and the box sets no override."""
+    monkeypatch.setenv("SPARK_JOB_API", "http://127.0.0.1:9")
+    monkeypatch.setenv("SPARK_API_KEY", "k")
+    monkeypatch.delenv("BLINKY_SPARK_AUDIO_ROOTS", raising=False)
+    monkeypatch.setattr(spark.paths, "data_dir", lambda: tmp_path)
+    svc = spark.SparkService.from_env()
+    corpus_root = (spark._REPO / "corpus").resolve()
+    assert svc.audio_roots == [corpus_root]
+    tracks = sorted((corpus_root / "edm").glob("*.mp3"))
+    assert tracks, "corpus/ submodule not checked out"
+    assert svc._audio_path(str(tracks[0])) == tracks[0].resolve()
+
+    monkeypatch.setenv("BLINKY_SPARK_AUDIO_ROOTS", str(tmp_path))
+    assert spark.SparkService.from_env().audio_roots == [tmp_path.resolve()]
+
+
 def test_rerun_skips_pending_and_succeeded(
     svc: spark.SparkService, fake: FakeSpark, music: Path
 ) -> None:
