@@ -5,7 +5,7 @@
 > **Status (2026-10-21):** BLE fleet management over the Pi server is done and in daily use; most of this doc is the record of how it was built. ESP32-S3 (and its WiFi transport) was cut in March 2026 and lives on only in the next-gen plan (`docs/NEXTGEN_ESP32S3_PLAN.md`). What changed since March:
 > - **Flashing** goes through one entry point, `FleetManager.flash_device()` (`docs/FLASH_LOCKDOWN_PLAN.md`), and operators use only `./scripts/deploy.sh`, which installs **stable releases only** (`docs/RELEASE_PROCESS.md`). Device-mutating routes need the `X-Deploy-Tool` header that only `deploy.sh` sets.
 > - **Fleet bootloader is 0.8.0-10**; its BLE DFU accepts up to 244-byte packets (ATT MTU 247), but transfers still negotiate MTU 23 in practice (#216).
-> - **Web Bluetooth in blinky-console** exists now: phone record mode (`docs/PHONE_RECORD_MODE_PLAN.md`) and a signed-OTA update path that is built but hidden (`docs/WEB_FLASHER.md`).
+> - **Web Bluetooth in blinky-console** exists now: phone record mode (`docs/PHONE_RECORD_MODE_PLAN.md`) and a signed-OTA update path that is built but hidden (blinky-firmware's `docs/WEB_FLASHER.md`).
 > - **Open BLE work** is tracked in `docs/BLE_FLEET_RELIABILITY_PLAN.md` and GitHub issues (#215, #216, #221, #190, #173).
 
 ## Goal
@@ -87,7 +87,7 @@ The `/firmware/compile*` routes are gone. `POST /fleet/deploy` no longer compile
 | **Post-DFU USB re-enumeration** | Medium | After BLE DFU, USB serial doesn't re-enumerate (host-side issue). BLE reconnects fine. Not blocking for BLE-only fleet management. |
 | **BLE-DFU MTU** | Medium | Transfers negotiate MTU 23 (20-byte chunks, ~6.5 min per device) although the bootloader allows 247 (#216) |
 | **WiFi on ESP32-S3** | Dropped | ESP32-S3 cut March 2026; next gen only |
-| **Web Bluetooth (blinky-console)** | Done in part | Record mode works; Bluetooth firmware updates are built but hidden until they pass on hardware (`docs/WEB_FLASHER.md`) |
+| **Web Bluetooth (blinky-console)** | Done in part | Record mode works; Bluetooth firmware updates are built but hidden until they pass on hardware (blinky-firmware's `docs/WEB_FLASHER.md`) |
 
 ### Known Limitations
 

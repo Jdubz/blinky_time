@@ -25,7 +25,7 @@ const GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
  * The browser updater (#firmware). On in the Firebase deploy
  * (blinky-console-deploy.yml sets VITE_FIRMWARE_UPDATES=on); off in builds
  * without it, e.g. the copy blinky-server serves. Removing the env line in
- * the workflow is the kill switch. See docs/WEB_FLASHER.md.
+ * the workflow is the kill switch. See blinky-firmware's docs/WEB_FLASHER.md.
  */
 export const FIRMWARE_UPDATES_ENABLED = import.meta.env.VITE_FIRMWARE_UPDATES === 'on';
 

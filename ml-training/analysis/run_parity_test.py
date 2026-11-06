@@ -194,12 +194,12 @@ def main(argv: list[str] | None = None) -> int:
         "--harness",
         type=Path,
         default=None,
-        help="Path to prebuilt parity_harness. Default: build it under tests/parity/build.",
+        help="Path to prebuilt parity_harness. Default: build it under firmware/tests/parity/build.",
     )
     parser.add_argument(
         "--build-dir",
         type=Path,
-        default=_ROOT.parent / "tests" / "parity" / "build",
+        default=_ROOT.parent / "firmware" / "tests" / "parity" / "build",
     )
     parser.add_argument("--force-rebuild", action="store_true")
     parser.add_argument("--keep-temp", action="store_true")

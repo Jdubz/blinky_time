@@ -86,7 +86,7 @@ A helper process, `tools/camera_capture.py`, runs on the system Python, which ha
 
 ### 3. Visual onsets
 
-For each chip's region, the same recipe as audio onset detection (a published approach; see `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md`):
+For each chip's region, the same recipe as audio onset detection (a published approach; see blinky-firmware's `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md`):
 
 - Signal: summed luminance, background-subtracted (the region's level with the LEDs dark, taken at run start). A generator profile may name a color channel or segment instead.
 - Visual flux: the half-wave rectified frame-to-frame rise, normalized by the region's running range.

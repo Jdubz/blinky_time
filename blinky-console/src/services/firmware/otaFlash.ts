@@ -27,7 +27,7 @@ import { reconnectApp } from './usbFlash';
  *   -> find the device again -> postflight checks (finishAfterFlash)
  *
  * Desktop Chrome/Edge: USB or Bluetooth. Android Chrome: Bluetooth. iPhone:
- * a Web Bluetooth browser such as Bluefy (docs/WEB_FLASHER.md).
+ * a Web Bluetooth browser such as Bluefy (blinky-firmware's docs/WEB_FLASHER.md).
  */
 
 export type UpdateMethod = 'usb' | 'ble';

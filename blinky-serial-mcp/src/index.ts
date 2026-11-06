@@ -649,11 +649,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           output_dir?: string;
         };
 
-        const SIMULATOR_DIR = join(__dirname, '..', '..', 'blinky-simulator');
+        // The simulator is blinky-firmware's, at the firmware/ submodule (#357).
+        const SIMULATOR_DIR = join(__dirname, '..', '..', 'firmware', 'blinky-simulator');
         const SIMULATOR_PATH = join(SIMULATOR_DIR, 'build', 'blinky-simulator');
 
         if (!existsSync(SIMULATOR_PATH)) {
-          return ok({ error: 'Simulator not built. Run: cd blinky-simulator && ./build.sh' });
+          return ok({ error: 'Simulator not built. Run: cd firmware/blinky-simulator && ./build.sh' });
         }
 
         const cliArgs = ['-g', generator, '-e', effect, '-p', pattern, '-d', device, '-t', duration_ms.toString(), '-f', fps.toString()];

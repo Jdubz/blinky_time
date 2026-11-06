@@ -20,7 +20,7 @@ batches that each drain before the next. The first batch runs alone and the pass
 `separate` takes at most 50 FILEs.
 
 FILEs are read by the server, so they must be under its audio roots (by default the repo's
-blinky-test-player/music) on the machine it runs on.
+corpus/, the blinky-corpus submodule) on the machine it runs on.
 
 `train` bundles ml-training/ from the latest master commit that passed CI and review (on the
 test box, refs/blinky/deployable; elsewhere the server checkout's HEAD, with uncommitted changes

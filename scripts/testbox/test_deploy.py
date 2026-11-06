@@ -402,8 +402,8 @@ def test_deploys_into_the_other_slot_then_switches(box: dict[str, Any]) -> None:
     "files",
     [
         ["ml-training/train.py"],
-        ["blinky-things/BlinkyThings.ino", "docs/x.md", "ml-training/configs/x.yaml"],
-        [".github/workflows/pr-validation.yml", "tests/unit/x.cpp", "CLAUDE.md"],
+        ["tools/device_eval.py", "docs/x.md", "ml-training/configs/x.yaml"],
+        [".github/workflows/pr-validation.yml", "devices/registry/hat_v1.json", "CLAUDE.md"],
     ],
 )
 def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
@@ -426,11 +426,10 @@ def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
     [
         "blinky-server/pyproject.toml",
         "blinky-console/src/App.tsx",
-        "tools/firmware_release.py",
-        "devices/test_devices.json",
-        "blinky-test-player/music/edm/x.mp3",
-        "blinky-test-player/music/edm/café del mar.mp3",  # non-ASCII and spaces
+        "blinky-console/src/café del mar.ts",  # non-ASCII and spaces
         "scripts/testbox/deploy.py",
+        "firmware",
+        "corpus",
     ],
 )
 def test_every_server_path_deploys(box: dict[str, Any], path: str) -> None:

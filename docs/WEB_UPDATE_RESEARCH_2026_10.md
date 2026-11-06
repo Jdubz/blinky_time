@@ -1,6 +1,6 @@
 # Bypass the bootloader, let the app update
 
-> **Research input (2026-10-20), not the current design.** It describes the firmware as it was before PR #257: the unsigned, CRC-only `ota begin/chunk/commit` commands. What was built from it is in [WEB_FLASHER.md](WEB_FLASHER.md):
+> **Research input (2026-10-20), not the current design.** It describes the firmware as it was before PR #257: the unsigned, CRC-only `ota begin/chunk/commit` commands. What was built from it is in [WEB_FLASHER.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md):
 > - signed OTA via `ota manifest/chunk/commit`, with Ed25519 signing, board and load-address checks, and anti-rollback;
 > - signing only after the bench gate;
 > - a USB and Bluetooth page.

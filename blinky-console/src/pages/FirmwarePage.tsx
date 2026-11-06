@@ -4,7 +4,7 @@
  * no blinky-server), through the
  * device's own signed-OTA path (services/firmware/otaFlash.ts). Releases come
  * from the stable-release mirror the console deploy publishes; every check
- * lives in services/firmware. See docs/WEB_FLASHER.md.
+ * lives in services/firmware. See blinky-firmware's docs/WEB_FLASHER.md.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWakeLock } from '../hooks/useWakeLock';
@@ -27,7 +27,7 @@ type Mode = 'update' | 'recover';
 /**
  * Bluetooth updates stay hidden until they work on hardware: from Windows
  * Chrome the bench run had slow GATT operations, a failed write and a device
- * restart (docs/WEB_FLASHER.md, open items). The transport and protocol code
+ * restart (blinky-firmware's docs/WEB_FLASHER.md, open items). The transport and protocol code
  * stays (otaFlash.ts, tested); turn this on only with a passing BLE bench run.
  */
 export const BLE_UPDATES_ENABLED = false;

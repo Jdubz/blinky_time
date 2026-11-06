@@ -20,7 +20,7 @@ import type { VerifiedRelease } from './releases';
  * at all; they go through the running app (otaFlash.ts).
  *
  * The drive route needs the 0.8.0-11 bootloader on Windows: earlier ones
- * drop the drive 8.5 s after Windows' own metadata write (docs/WEB_FLASHER.md).
+ * drop the drive 8.5 s after Windows' own metadata write (blinky-firmware's docs/WEB_FLASHER.md).
  *
  * Identity: a browser can't read the drive's USB serial, so the drive can't
  * be pinned to the chip before writing as deploy_local.py does. Instead the
