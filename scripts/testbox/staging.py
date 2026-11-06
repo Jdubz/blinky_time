@@ -14,8 +14,9 @@ deploy.py). One pass:
    status saying the test was skipped, and promote. Its staging build
    (staging-build.yml, artifact staging-firmware-<sha>) failed: post a failure. Not built yet:
    a pending status. Built, with the same Firmware fingerprint (the build's hash of the image
-   with per-commit fields fixed) as the staging commit master was last merged from: the same
-   image, so skip and promote as above. Otherwise submit the suite (POST /api/test/staging)
+   with per-commit fields fixed) as the staging commit master was last merged from, and no
+   change under the list's "unfingerprinted" paths: the same image, so skip and promote as
+   above. Otherwise submit the suite (POST /api/test/staging)
    for every connected test device (devices/test_devices.json, by configured device id) and
    post a pending status.
 
@@ -154,37 +155,43 @@ def build_state(gh_: Gh, sha: str) -> str:
     return "pending"
 
 
-def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str]:
-    """(changed, why): whether sha changes anything under the firmware's paths since master.
+def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str, bool]:
+    """(changed, why, blind): whether sha changes anything under the firmware's paths since
+    master, and whether one of those changes is where the Firmware fingerprint can't see it
+    (the list's "unfingerprinted" paths: the bootloader, the OTA signing tools).
 
-    Anything that can't be judged counts as a change, so it gets the hardware test: no path
-    list at that commit, a GitHub error, or a compare GitHub truncated.
+    Anything that can't be judged counts as a change the fingerprint can't vouch for, so it
+    gets the hardware test: no path list at that commit, a GitHub error, or a compare GitHub
+    truncated.
     """
     try:
         meta = gh_json(gh_, "api", f"repos/{GH_REPO}/contents/{FIRMWARE_PATHS}?ref={sha}")
-        paths = [str(p) for p in json.loads(base64.b64decode(meta["content"]))["paths"]]
+        spec = json.loads(base64.b64decode(meta["content"]))
+        paths = [str(p) for p in spec["paths"]]
+        unseen = [str(p) for p in spec.get("unfingerprinted", [])]
         cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/master...{sha}")
     except (RuntimeError, KeyError, ValueError, TypeError) as e:
-        return True, f"can't compare with master ({str(e)[:80]}): testing"
+        return True, f"can't compare with master ({str(e)[:80]}): testing", True
     if not paths:
-        return True, f"{FIRMWARE_PATHS} lists no paths: testing"
+        return True, f"{FIRMWARE_PATHS} lists no paths: testing", True
     files = cmp.get("files")
     if not isinstance(files, list) or len(files) >= COMPARE_FILE_LIMIT:
-        return True, "the compare with master is truncated: testing"
+        return True, "the compare with master is truncated: testing", True
 
-    def firmware(name: str) -> bool:
-        return any(name.startswith(p) if p.endswith("/") else name == p for p in paths)
+    def under(name: str, prefixes: list[str]) -> bool:
+        return any(name.startswith(p) if p.endswith("/") else name == p for p in prefixes)
 
     hits = [
         n
         for f in files
         for n in (f.get("filename"), f.get("previous_filename"))
-        if n and firmware(n)
+        if n and under(n, paths)
     ]
     base = str(cmp.get("merge_base_commit", {}).get("sha", "master"))[:12]
     if hits:
-        return True, f"{len(hits)} firmware file(s) changed since master {base}"
-    return False, f"no firmware change since master {base}: hardware test skipped"
+        blind = any(under(n, unseen) for n in hits)
+        return True, f"{len(hits)} firmware file(s) changed since master {base}", blind
+    return False, f"no firmware change since master {base}: hardware test skipped", False
 
 
 def fingerprint(gh_: Gh, sha: str) -> str | None:
@@ -486,7 +493,7 @@ def run_once(
     sha = staging_head(gh_)
     if state.get("reported") == sha:
         return state
-    changed, why = firmware_change(gh_, sha)
+    changed, why, blind = firmware_change(gh_, sha)
     if not changed:
         return skip(gh_, state, sha, why)
     built = build_state(gh_, sha)
@@ -502,10 +509,13 @@ def run_once(
             state["waiting"] = sha
             save_state(state)
         return state
-    same, why = same_image(gh_, sha)
-    if same:
-        return skip(gh_, state, sha, why)
-    log(f"{sha[:12]}: {why}")
+    if blind:
+        log(f"{sha[:12]}: {why}, some where the fingerprint can't see: testing")
+    else:
+        same, why = same_image(gh_, sha)
+        if same:
+            return skip(gh_, state, sha, why)
+        log(f"{sha[:12]}: {why}")
     try:
         devices = test_devices(server("GET", "/api/devices"), listed())
         if not devices:

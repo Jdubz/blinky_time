@@ -41,6 +41,7 @@ class GitHub:
         changed: list[str] | None = None,
         paths: list[str] | None = None,
         no_path_list: bool = False,
+        unfingerprinted: list[str] | None = None,
         fingerprints: dict[str, list[dict[str, Any]]] | None = None,
         master_parents: list[str] | None = None,
     ) -> None:
@@ -50,6 +51,7 @@ class GitHub:
         self.changed = ["blinky-things/audio/AudioTracker.cpp"] if changed is None else changed
         self.paths = ["blinky-things/", "scripts/build.sh"] if paths is None else paths
         self.no_path_list = no_path_list
+        self.unfingerprinted = ["bootloader/"] if unfingerprinted is None else unfingerprinted
         # Each commit's statuses, newest first. By default the head's image differs from
         # master's, so the suite runs.
         self.fingerprints = (
@@ -76,7 +78,8 @@ class GitHub:
         if f"contents/{staging.FIRMWARE_PATHS}?ref={SHA}" in a:
             if self.no_path_list:
                 raise RuntimeError("gh api repos/... -> 1: HTTP 404: Not Found")
-            raw = json.dumps({"paths": self.paths}).encode()
+            spec = {"paths": self.paths, "unfingerprinted": self.unfingerprinted}
+            raw = json.dumps(spec).encode()
             return json.dumps({"content": base64.b64encode(raw).decode()})
         if f"compare/master...{SHA}" in a:
             return json.dumps(
@@ -399,6 +402,19 @@ def test_anything_short_of_the_same_image_gets_the_suite(
     staging.run_once(g, srv, listed)
     assert len(srv.submitted) == 1
     assert not any(c[:2] == ("pr", "create") for c in g.calls)
+
+
+def test_a_change_the_fingerprint_cant_see_gets_the_suite() -> None:
+    """A bootloader change leaves the app image alone; equal fingerprints don't vouch for it."""
+    g = GitHub(
+        changed=["bootloader/README.md", "blinky-things/x.h"],
+        paths=["blinky-things/", "bootloader/"],
+        fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]},
+    )
+    srv = Server([HAT], {})
+    staging.run_once(g, srv, listed)
+    assert len(srv.submitted) == 1
+    assert not any("/statuses?per_page=" in " ".join(c) for c in g.calls)
 
 
 def test_unreadable_fingerprints_get_the_suite() -> None:
