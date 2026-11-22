@@ -95,10 +95,19 @@ class _RecoveryRetryEntry:
 REAP_THRESHOLD_S = 900.0  # 15 min
 REAP_INTERVAL_CYCLES = 6  # every 6th background cycle (~60s)
 
+# A XIAO seen in its USB (UF2) bootloader is only auto-recovered after it has
+# stayed there this long. A flash through the server passes through the
+# bootloader too, but that job holds ``_device_in_flight``; this grace covers
+# bootloader visits the server didn't start (an operator's UF2 drop, a
+# bootloader update), which finish well inside it.
+USB_DFU_RECOVERY_GRACE_S = 120.0
+
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
     """Create the appropriate transport for a discovered device."""
-    if disc.transport_type == "serial":
+    if disc.transport_type in ("serial", "usb_dfu"):
+        # usb_dfu: bound to the bootloader's CDC but never connected — it
+        # doesn't speak our protocol; the UF2 path only needs its address.
         return SerialTransport(disc.address)
     elif disc.transport_type == "ble":
         from ..transport.ble_transport import BleTransport
@@ -261,6 +270,10 @@ class FleetManager:
         # through `flash_device` which honors this. Keys are canonical
         # IDs from `resolve_canonical()`.
         self._device_in_flight: set[str] = set()
+        # device_id → monotonic time a device was first seen (continuously)
+        # in its USB bootloader; pruned when it leaves. See
+        # ``_handle_usb_dfu_device`` / ``USB_DFU_RECOVERY_GRACE_S``.
+        self._usb_dfu_since: dict[str, float] = {}
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
         # — `_running == True` is not enough, the loop can be alive but stuck.
@@ -1115,6 +1128,9 @@ class FleetManager:
             serial_port=device.transport.address,
             firmware_path=str(job.firmware_path),
             transport=device.transport,
+            already_in_bootloader=(
+                device.state is DeviceState.DFU_RECOVERY and device.id in self._usb_dfu_since
+            ),
         )
         if not write_ok:
             # ``_uf2_write_impl_for_job`` already set ``job.error``.
@@ -1466,10 +1482,17 @@ class FleetManager:
             and device.state is DeviceState.PRESENT
             and bool(device.ble_address)
         )
+        has_usb_dfu = (
+            device is not None
+            and device.state is DeviceState.DFU_RECOVERY
+            and device.transport.transport_type == "serial"
+            and device_id in self._usb_dfu_since
+        )
         return TransportProbe(
             has_usb_app=has_usb_app,
             has_ble_dfu_advert=has_ble_dfu_advert,
             has_ble_app=has_ble_app,
+            has_usb_dfu=has_usb_dfu,
         )
 
     async def start(self) -> None:
@@ -1717,6 +1740,7 @@ class FleetManager:
             wifi_hosts=self._wifi_hosts,
         )
         known_ids = set(self._devices.keys())
+        usb_dfu_seen: set[str] = set()
 
         for disc in discovered:
             device_id = disc.device_id
@@ -1725,6 +1749,15 @@ class FleetManager:
             # These can't be connected normally — surface their state for the operator.
             if disc.transport_type == "ble_dfu":
                 self._handle_dfu_recovery_device(disc)
+                continue
+
+            # A XIAO in its UF2 bootloader over USB (no valid app, a crash
+            # loop the app-handshake watchdog parked in DFU, or a flash in
+            # progress). Never connected; parked in DFU_RECOVERY so the UF2
+            # path can recover it without BLE.
+            if disc.transport_type == "usb_dfu":
+                usb_dfu_seen.add(device_id)
+                await self._handle_usb_dfu_device(disc)
                 continue
 
             # BLE app-mode devices: track presence, do NOT connect. The BCM43455
@@ -1800,6 +1833,8 @@ class FleetManager:
 
             if device_id in known_ids:
                 existing = self._devices[device_id]
+                # Back in app mode (or never left): no longer in the bootloader.
+                self._usb_dfu_since.pop(device_id, None)
                 # Update address if it changed (USB re-enumeration)
                 if existing.port != disc.address:
                     log.info(
@@ -1904,6 +1939,11 @@ class FleetManager:
                     disc.address,
                     e,
                 )
+
+        # A device that left its USB bootloader (back to app mode, unplugged,
+        # or powered off) restarts the grace clock if it returns there.
+        for gone in set(self._usb_dfu_since) - usb_dfu_seen:
+            self._usb_dfu_since.pop(gone, None)
 
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
         # prefer serial (faster, more reliable) and disconnect the wireless one.
@@ -2092,6 +2132,80 @@ class FleetManager:
                 del self._devices[did]
                 self._device_discovery.pop(did, None)
 
+    async def _handle_usb_dfu_device(self, disc: DiscoveredDevice) -> None:
+        """Handle a XIAO enumerated as its UF2 bootloader over USB.
+
+        The bootloader's CDC carries the same USB serial number as the app,
+        so ``disc.device_id`` is the device's normal identity. The device is
+        parked in ``DFU_RECOVERY`` with an unconnected ``SerialTransport``
+        bound to the bootloader's port: the UF2 path flashes through the
+        bootloader's mass-storage drive, and when the app comes back the
+        serial branch of discovery rebuilds the transport and reconnects.
+
+        A flash the server is running passes through the bootloader too;
+        that device is in ``_device_in_flight`` and is left alone. Auto-
+        recovery additionally waits ``USB_DFU_RECOVERY_GRACE_S`` (see
+        ``_usb_dfu_recovery_ready``).
+        """
+        device_id = disc.device_id
+        if self.resolve_canonical(device_id) in self._device_in_flight:
+            return
+        now = _time.monotonic()
+        self._usb_dfu_since.setdefault(device_id, now)
+        self._device_discovery[device_id] = disc
+
+        device = self._devices.get(device_id)
+        if device is None:
+            device = Device(
+                device_id=device_id,
+                port=disc.address,
+                platform=disc.platform,
+                transport=_create_transport(disc),
+            )
+            device.state = DeviceState.DFU_RECOVERY
+            device.last_seen = now
+            self._devices[device_id] = device
+            log.warning(
+                "Device %s is in its USB bootloader at %s (no app, or parked in DFU). "
+                "Push firmware via POST /api/devices/%s/flash to recover.",
+                device_id[:12],
+                disc.address,
+                device_id,
+            )
+            return
+
+        device.last_seen = now
+        if device.state is DeviceState.DFU_RECOVERY and device.port == disc.address:
+            return
+        if device.state is not DeviceState.DFU_RECOVERY:
+            log.warning(
+                "Device %s (%s) dropped into its USB bootloader at %s. "
+                "Push firmware via POST /api/devices/%s/flash to recover.",
+                device_id[:12],
+                device.device_name or "unknown",
+                disc.address,
+                device_id,
+            )
+        # The app-mode link is gone (the USB device re-enumerated as the
+        # bootloader). Release it and bind an unconnected transport to the
+        # bootloader's port, rebinding the protocol as the reconnect path does.
+        if device.transport.is_connected:
+            with contextlib.suppress(Exception):
+                await device.transport.disconnect()
+        transport = _create_transport(disc)
+        device.transport = transport
+        device.protocol = DeviceProtocol(transport)
+        device.protocol.on_stream_line(device._route_stream_line)
+        device.protocol.on_raw_line(device._on_raw_line)
+        device.port = disc.address
+        device.state = DeviceState.DFU_RECOVERY
+
+    def _usb_dfu_recovery_ready(self, device_id: str) -> bool:
+        """True iff the device is in its USB bootloader right now and has
+        stayed there for ``USB_DFU_RECOVERY_GRACE_S``."""
+        since = self._usb_dfu_since.get(device_id)
+        return since is not None and _time.monotonic() - since >= USB_DFU_RECOVERY_GRACE_S
+
     def _handle_dfu_recovery_device(self, disc: DiscoveredDevice) -> None:
         """Handle a device discovered in BLE DFU bootloader mode.
 
@@ -2188,7 +2302,10 @@ class FleetManager:
         fresh_serial_ports: dict[str, str] = {}  # device_id → address
         try:
             for fresh in discover_serial_devices():
-                fresh_serial_ports[fresh.device_id] = fresh.address
+                # App-mode CDC only: a bootloader port must never become the
+                # reconnect target of a device's app protocol.
+                if fresh.transport_type == "serial":
+                    fresh_serial_ports[fresh.device_id] = fresh.address
         except Exception:
             pass  # Discovery failure is non-fatal
 
@@ -3057,7 +3174,7 @@ class FleetManager:
             d
             for d in self._devices.values()
             if d.state == DeviceState.DFU_RECOVERY
-            and d.ble_address
+            and (d.ble_address or self._usb_dfu_recovery_ready(d.id))
             and self.resolve_canonical(d.id) in whitelist_canonical
         ]
         if not dfu_devices:
@@ -3086,9 +3203,11 @@ class FleetManager:
                 continue
 
             log.info(
-                "Auto-recovering DFU device %s (BLE: %s, attempt %d/%d)...",
+                "Auto-recovering DFU device %s (%s, attempt %d/%d)...",
                 device.id[:12],
-                device.ble_address,
+                f"USB bootloader {device.port}"
+                if device.id in self._usb_dfu_since
+                else f"BLE: {device.ble_address}",
                 (retry.fails if retry else 0) + 1,
                 MAX_AUTO_RECOVERY_ATTEMPTS,
             )

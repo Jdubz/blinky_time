@@ -180,13 +180,21 @@ class TransportProbe:
     # the orchestrator didn't actually support it.
     has_ble_app: bool = False
 
+    # True iff the device is enumerated over USB as its UF2 bootloader
+    # (``usb_dfu`` discovery: no valid app, or parked in DFU) and is in
+    # ``DFU_RECOVERY``. The UF2 path writes straight to the bootloader's
+    # mass-storage drive, with no bootloader entry needed: this is how a
+    # USB-only host (the test box runs ``--no-ble``) recovers it.
+    has_usb_dfu: bool = False
+
 
 def select_transport(probe: TransportProbe) -> FlashTransport:
     """Pick the flash transport for a job. Pinned for the job's lifetime.
 
     Decision rule (per ``feedback_flash_safety_policy``: USB > BLE):
-      1. USB-CDC app present → UF2 (fast, no radio contention with the
-         broadcaster, no BlueZ slot management).
+      1. USB-CDC app present, or the device is in its USB bootloader →
+         UF2 (fast, no radio contention with the broadcaster, no BlueZ
+         slot management).
       2. Otherwise, AdaDFU advert present → BLE-DFU direct.
       3. Otherwise, BLE app mode present → BLE-DFU (the orchestrator's
          ``_run_ble_dfu_flash`` issues ``bootloader ble`` over NUS to
@@ -201,13 +209,13 @@ def select_transport(probe: TransportProbe) -> FlashTransport:
     was caused by the two transports racing; collapsing the choice to
     USB-when-available is exactly the point.
     """
-    if probe.has_usb_app:
+    if probe.has_usb_app or probe.has_usb_dfu:
         return FlashTransport.UF2
     if probe.has_ble_dfu_advert or probe.has_ble_app:
         return FlashTransport.BLE_DFU
     raise NoReachableTransport(
-        "Device is not reachable: no USB-CDC app handshake, no BLE app "
-        "mode, and no AdaDFU advertisement. Cannot flash. Defer until "
+        "Device is not reachable: no USB-CDC app handshake, no USB "
+        "bootloader, no BLE app mode, and no AdaDFU advertisement. Cannot flash. Defer until "
         "one transport reappears."
     )
 

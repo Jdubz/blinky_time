@@ -43,3 +43,25 @@ def test_discover_empty_when_no_devices() -> None:
         devices = discover_serial_devices()
 
     assert devices == []
+
+
+def test_discover_sense_plus_app_and_usb_bootloaders() -> None:
+    """A Sense Plus on Seeed's factory app (0x8065) is a normal serial device;
+    a XIAO in its UF2 bootloader (0x0045 ours/Seeed, 0x0065 Plus factory) is
+    reported as ``usb_dfu`` with the same serial-number identity."""
+    ports = [
+        FakePortInfo("/dev/ttyACM0", 0x2886, 0x8065, "SN_PLUS_APP"),
+        FakePortInfo("/dev/ttyACM1", 0x2886, 0x0045, "SN_SENSE_BL"),
+        FakePortInfo("/dev/ttyACM2", 0x2886, 0x0065, "SN_PLUS_BL"),
+    ]
+
+    with patch(
+        "blinky_server.transport.discovery.serial.tools.list_ports.comports", return_value=ports
+    ):
+        devices = discover_serial_devices()
+
+    by_id = {d.device_id: d for d in devices}
+    assert by_id["SN_PLUS_APP"].transport_type == "serial"
+    assert by_id["SN_SENSE_BL"].transport_type == "usb_dfu"
+    assert by_id["SN_PLUS_BL"].transport_type == "usb_dfu"
+    assert all(d.platform == "nrf52840" for d in devices)

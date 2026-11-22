@@ -11,8 +11,19 @@ log = logging.getLogger(__name__)
 
 # Known USB VID/PID pairs for blinky devices
 KNOWN_DEVICES = {
-    (0x2886, 0x8045): "nrf52840",  # Seeed XIAO nRF52840
+    (0x2886, 0x8045): "nrf52840",  # Seeed XIAO nRF52840 Sense (and any XIAO on our app)
+    (0x2886, 0x8065): "nrf52840",  # XIAO nRF52840 Sense Plus on Seeed's factory app
     (0x303A, 0x1001): "esp32s3",  # Espressif ESP32-S3
+}
+
+# A XIAO in its UF2 bootloader: the bootloader's CDC enumerates with these
+# PIDs and the same USB serial number as the app. It doesn't speak our
+# SerialConsole protocol, so it is reported as ``usb_dfu`` (never connected
+# as a serial device): the fleet manager parks it in DFU_RECOVERY and the
+# UF2 path flashes it through the bootloader's mass-storage drive.
+USB_BOOTLOADER_DEVICES = {
+    (0x2886, 0x0045): "nrf52840",  # XIAO nRF52840 Sense bootloader (ours and Seeed's)
+    (0x2886, 0x0065): "nrf52840",  # XIAO nRF52840 Sense Plus factory bootloader
 }
 
 
@@ -22,7 +33,7 @@ class DiscoveredDevice:
 
     device_id: str  # Stable ID (serial number, BLE address, or IP)
     platform: str  # "nrf52840" or "esp32s3"
-    transport_type: str  # "serial", "ble", or "wifi"
+    transport_type: str  # "serial", "usb_dfu" (USB bootloader), "ble", "ble_dfu", or "wifi"
     address: str  # Port path, BLE address, or host:port
     description: str = ""
     rssi: int | None = None  # BLE/WiFi signal strength
@@ -62,7 +73,11 @@ def discover_serial_devices() -> list[DiscoveredDevice]:
     for info in serial.tools.list_ports.comports():
         if info.vid is None or info.pid is None:
             continue
+        transport_type = "serial"
         platform = KNOWN_DEVICES.get((info.vid, info.pid))
+        if platform is None:
+            platform = USB_BOOTLOADER_DEVICES.get((info.vid, info.pid))
+            transport_type = "usb_dfu"
         if platform is None:
             continue
         device_id = info.serial_number or info.device
@@ -71,13 +86,18 @@ def discover_serial_devices() -> list[DiscoveredDevice]:
             DiscoveredDevice(
                 device_id=device_id,
                 platform=platform,
-                transport_type="serial",
+                transport_type=transport_type,
                 address=stable_path,
                 description=info.description or "",
                 extra={"vid": info.vid, "pid": info.pid},
             )
         )
-        log.info("Discovered serial %s on %s (SN: %s)", platform, stable_path, device_id[:12])
+        if transport_type == "usb_dfu":
+            log.info(
+                "Discovered USB bootloader %s on %s (SN: %s)", platform, stable_path, device_id[:12]
+            )
+        else:
+            log.info("Discovered serial %s on %s (SN: %s)", platform, stable_path, device_id[:12])
     return devices
 
 

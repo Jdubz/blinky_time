@@ -349,11 +349,31 @@ async def _uf2_write_impl(
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _count_xiao_uf2_drives() -> int:
+    """Number of USB block devices that belong to a Seeed (VID 2886) device,
+    i.e. XIAO UF2 bootloader drives currently enumerated."""
+    count = 0
+    for block in Path("/sys/block").glob("sd*"):
+        try:
+            node = (block / "device").resolve()
+        except OSError:
+            continue
+        for parent in [node, *node.parents]:
+            vid = parent / "idVendor"
+            if vid.is_file():
+                with contextlib.suppress(OSError):
+                    if vid.read_text().strip() == "2886":
+                        count += 1
+                break
+    return count
+
+
 async def _uf2_write_impl_for_job(
     job: FlashJob,
     serial_port: str,
     firmware_path: str,
     transport: Any,
+    already_in_bootloader: bool = False,
 ) -> bool:
     """Write firmware to one device via UF2, bound to a ``FlashJob``.
 
@@ -371,6 +391,12 @@ async def _uf2_write_impl_for_job(
     received and committed every UF2 block. False on any subprocess
     failure that happens *before* that line (file-not-found, MSC mount
     failure, bootloader entry failure, etc.).
+
+    ``already_in_bootloader``: the device is enumerated as its UF2
+    bootloader (``usb_dfu`` discovery). No bootloader entry and no USB
+    reset; ``uf2_upload.py --already-in-bootloader`` writes to the drive.
+    That mode takes the first XIAO drive it finds, so it refuses to run
+    when more than one is present.
 
     Critically, this function does NOT wait for the subprocess to exit
     cleanly. Once write-complete is seen, the subprocess is terminated
@@ -412,7 +438,15 @@ async def _uf2_write_impl_for_job(
     with contextlib.suppress(Exception):
         await transport.disconnect()
 
-    if usb_dev_path:
+    if already_in_bootloader:
+        drives = _count_xiao_uf2_drives()
+        if drives != 1:
+            job.set_error(
+                f"device is in its USB bootloader but {drives} XIAO UF2 drives are "
+                "present; refusing to guess which one is this device's"
+            )
+            return False
+    elif usb_dev_path:
         usb_ok = await _usb_reset_device(usb_dev_path)
         if usb_ok:
             await asyncio.sleep(3)
@@ -422,7 +456,10 @@ async def _uf2_write_impl_for_job(
                         serial_port = str(entry.resolve())
                         break
 
-    cmd = ["python3", str(tool), "--hex", firmware_path, serial_port, "-v"]
+    cmd = ["python3", str(tool), "--hex", firmware_path]
+    if already_in_bootloader:
+        cmd.append("--already-in-bootloader")
+    cmd += [serial_port, "-v"]
     log.info("_uf2_write_impl_for_job %s: launching %s", job.job_id, " ".join(cmd))
 
     proc = await asyncio.create_subprocess_exec(

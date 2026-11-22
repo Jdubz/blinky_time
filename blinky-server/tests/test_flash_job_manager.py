@@ -2358,3 +2358,124 @@ async def test_a_release_hold_survives_usb_re_enumeration(
     fleet.resume_reconnect(sn)  # the operator's /reconnect, or the hold expiring
     await fleet._reconnect_disconnected()
     assert device.state is DeviceState.CONNECTED
+
+
+# --- USB bootloader (usb_dfu) recovery --------------------------------------
+
+
+def _usb_dfu_disc(device_id: str = "04F2A79622BF8B6F", address: str = "/dev/ttyACM9") -> Any:
+    from blinky_server.transport.discovery import DiscoveredDevice
+
+    return DiscoveredDevice(
+        device_id=device_id,
+        platform="nrf52840",
+        transport_type="usb_dfu",
+        address=address,
+        extra={"vid": 0x2886, "pid": 0x0045},
+    )
+
+
+@pytest.mark.asyncio
+async def test_usb_dfu_unknown_device_parked_in_dfu_recovery(fleet: FleetManager) -> None:
+    """A XIAO first seen in its USB bootloader gets a DFU_RECOVERY entry with
+    an unconnected serial transport, and the probe routes it to UF2."""
+    from blinky_server.device.device import DeviceState
+    from blinky_server.firmware.flash_job import select_transport
+
+    await fleet._handle_usb_dfu_device(_usb_dfu_disc())
+
+    device = fleet._devices["04F2A79622BF8B6F"]
+    assert device.state is DeviceState.DFU_RECOVERY
+    assert device.transport.transport_type == "serial"
+    assert not device.transport.is_connected
+    assert device.port == "/dev/ttyACM9"
+    probe = fleet._build_transport_probe("04F2A79622BF8B6F")
+    assert probe.has_usb_dfu is True
+    assert select_transport(probe) is FlashTransport.UF2
+
+
+@pytest.mark.asyncio
+async def test_usb_dfu_known_device_drops_app_link(fleet: FleetManager) -> None:
+    """A connected app-mode device that re-enumerates as its bootloader:
+    the app link is released and the device parks in DFU_RECOVERY on the
+    bootloader's port."""
+    from blinky_server.device.device import Device, DeviceState
+
+    from .mock_transport import MockTransport
+
+    old = MockTransport(transport_type="serial")
+    await old.connect()
+    device = Device(
+        device_id="04F2A79622BF8B6F",
+        port="/dev/ttyACM1",
+        platform="nrf52840",
+        transport=old,  # type: ignore[arg-type]
+    )
+    device.state = DeviceState.CONNECTED
+    fleet._devices[device.id] = device
+
+    await fleet._handle_usb_dfu_device(_usb_dfu_disc())
+
+    assert not old.is_connected
+    assert device.state is DeviceState.DFU_RECOVERY
+    assert device.transport is not old
+    assert device.port == "/dev/ttyACM9"
+
+
+@pytest.mark.asyncio
+async def test_usb_dfu_ignored_while_flash_in_flight(fleet: FleetManager) -> None:
+    """A flash the server runs passes through the bootloader; that device must
+    not be re-parked or timed for recovery mid-job."""
+    from blinky_server.device.device import Device, DeviceState
+
+    from .mock_transport import MockTransport
+
+    device = Device(
+        device_id="04F2A79622BF8B6F",
+        port="/dev/ttyACM1",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="serial"),  # type: ignore[arg-type]
+    )
+    device.state = DeviceState.DISCONNECTED
+    fleet._devices[device.id] = device
+    fleet._device_in_flight.add(fleet.resolve_canonical(device.id))
+
+    await fleet._handle_usb_dfu_device(_usb_dfu_disc())
+
+    assert device.state is DeviceState.DISCONNECTED
+    assert "04F2A79622BF8B6F" not in fleet._usb_dfu_since
+
+
+@pytest.mark.asyncio
+async def test_usb_dfu_recovery_waits_for_grace(fleet: FleetManager) -> None:
+    from blinky_server.device import manager as mgr
+
+    await fleet._handle_usb_dfu_device(_usb_dfu_disc())
+    assert fleet._usb_dfu_recovery_ready("04F2A79622BF8B6F") is False
+    fleet._usb_dfu_since["04F2A79622BF8B6F"] -= mgr.USB_DFU_RECOVERY_GRACE_S + 1
+    assert fleet._usb_dfu_recovery_ready("04F2A79622BF8B6F") is True
+    assert fleet._usb_dfu_recovery_ready("someone-else") is False
+
+
+@pytest.mark.asyncio
+async def test_usb_dfu_timer_pruned_when_device_leaves_bootloader(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The grace clock restarts if the device leaves the bootloader (back to
+    the app, or unplugged) and later returns."""
+    from blinky_server.device import manager as mgr
+
+    cycles = [[_usb_dfu_disc()], []]
+
+    async def fake_discover_all(**_: Any) -> list[Any]:
+        return cycles.pop(0)
+
+    async def noop() -> None:
+        return None
+
+    monkeypatch.setattr(mgr, "discover_all", fake_discover_all)
+    monkeypatch.setattr(fleet, "_deduplicate_transports", noop)
+    await fleet._discover_and_connect()
+    assert "04F2A79622BF8B6F" in fleet._usb_dfu_since
+    await fleet._discover_and_connect()
+    assert "04F2A79622BF8B6F" not in fleet._usb_dfu_since
