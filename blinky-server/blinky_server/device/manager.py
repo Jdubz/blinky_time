@@ -1944,9 +1944,24 @@ class FleetManager:
                 )
 
         # A device that left its USB bootloader (back to app mode, unplugged,
-        # or powered off) restarts the grace clock if it returns there.
+        # or powered off) restarts the grace clock if it returns there. If it
+        # is still parked in DFU_RECOVERY (the app didn't enumerate this same
+        # cycle), it leaves that state: DFU_RECOVERY + the app's ble_address
+        # would otherwise make it look like a BLE-DFU device. DISCONNECTED
+        # lets the app branch reconnect it, or the reaper drop it if gone.
         for gone in set(self._usb_dfu_since) - usb_dfu_seen:
             self._usb_dfu_since.pop(gone, None)
+            parked = self._devices.get(gone)
+            if (
+                parked is not None
+                and parked.state is DeviceState.DFU_RECOVERY
+                and self.resolve_canonical(gone) not in self._device_in_flight
+            ):
+                log.info(
+                    "Device %s left its USB bootloader; DFU_RECOVERY -> DISCONNECTED",
+                    gone[:12],
+                )
+                parked.state = DeviceState.DISCONNECTED
 
         # Deduplicate: if a device is connected via both serial and BLE/WiFi,
         # prefer serial (faster, more reliable) and disconnect the wireless one.

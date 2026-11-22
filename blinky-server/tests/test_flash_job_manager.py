@@ -2555,3 +2555,34 @@ async def test_usb_auto_recovery_does_not_block_the_loop(
     assert len(started) == 1  # the first USB recovery is still running
     for task in list(fleet._usb_recovery_watchers):
         task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_device_leaving_usb_bootloader_is_not_ble_dfu_eligible(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A device parked from its USB bootloader that disappears (unplugged, or
+    the app enumerates a cycle late) must not fall through to BLE-DFU via the
+    app's ble_address (PR #378 review): it leaves DFU_RECOVERY."""
+    from blinky_server.device import manager as mgr
+    from blinky_server.device.device import DeviceState
+
+    cycles = [[_usb_dfu_disc()], []]
+
+    async def fake_discover_all(**_: Any) -> list[Any]:
+        return cycles.pop(0)
+
+    async def noop() -> None:
+        return None
+
+    monkeypatch.setattr(mgr, "discover_all", fake_discover_all)
+    monkeypatch.setattr(fleet, "_deduplicate_transports", noop)
+    await fleet._discover_and_connect()
+    device = fleet._devices["04F2A79622BF8B6F"]
+    device.ble_address = "F4:7E:4B:50:1F:4F"
+    assert device.state is DeviceState.DFU_RECOVERY
+
+    await fleet._discover_and_connect()
+    assert device.state is DeviceState.DISCONNECTED
+    assert fleet._dfu_recovery_eligible(device) is False
+    assert fleet._build_transport_probe(device.id).has_ble_dfu_advert is False
