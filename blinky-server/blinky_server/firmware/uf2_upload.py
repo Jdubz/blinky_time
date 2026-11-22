@@ -388,32 +388,81 @@ def _mount_point_of(block_dev: str, mounts: Path = Path("/proc/mounts")) -> str 
     return None
 
 
-async def _mount_uf2_block_device(block_dev: str) -> str | None:
-    """Mount exactly ``block_dev`` (udisks2, no root needed) and return its
-    mount point; an existing mount is reused. None if it can't be mounted."""
+async def _run_quiet(*cmd: str, timeout: float = 20.0) -> tuple[int, str]:
+    """Run a short command; on timeout or cancellation it is terminated and
+    reaped, so a mount/unmount can't change state after we've given up."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+    except OSError as exc:
+        return -1, str(exc)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except (TimeoutError, asyncio.CancelledError) as exc:
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()  # sudo relays SIGTERM to its child
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return -1, f"timed out after {timeout:.0f}s: {' '.join(cmd)}"
+    return proc.returncode or 0, out.decode("utf-8", errors="replace").strip()
+
+
+async def _mount_uf2_block_device(block_dev: str, usb_serial: str) -> str | None:
+    """Mount exactly ``block_dev`` and return its mount point; an existing
+    mount is reused. None if it can't be mounted.
+
+    udisks2 first (no root). Under systemd there is no login session, so
+    polkit refuses it (``NotAuthorizedCanObtain``); then ``sudo -n mount``
+    at ``/mnt/blinky-uf2-<serial>``, like uf2_upload.py's own fallback
+    (which uses ``/mnt/uf2-*``, a prefix its stale-mount cleanup owns, so
+    this one is kept separate).
+    """
     existing = _mount_point_of(block_dev)
     if existing:
         return existing
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "udisksctl",
-            "mount",
-            "--no-user-interaction",
-            "-b",
-            block_dev,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
-    except (OSError, TimeoutError) as exc:
-        log.warning("udisksctl mount %s failed: %s", block_dev, exc)
+    rc, text = await _run_quiet("udisksctl", "mount", "--no-user-interaction", "-b", block_dev)
+    if rc == 0:
+        # The mount table is authoritative (a mount point may contain spaces).
+        mounted = _mount_point_of(block_dev)
+        if mounted:
+            return mounted
+        m = re.search(r" at (/\S+?)\.?\s*$", text)
+        if m:
+            return m.group(1)
+    log.info("udisksctl mount %s refused (%s); falling back to sudo mount", block_dev, text)
+
+    mount_dir = f"/mnt/blinky-uf2-{usb_serial}"
+    # A previous write's mount goes stale when the bootloader reboots.
+    await _run_quiet("sudo", "-n", "umount", "-l", mount_dir)
+    await _run_quiet("sudo", "-n", "mkdir", "-p", mount_dir)
+    rc, text = await _run_quiet(
+        "sudo",
+        "-n",
+        "mount",
+        "-t",
+        "vfat",
+        "-o",
+        f"uid={os.getuid()},gid={os.getgid()},umask=022",
+        block_dev,
+        mount_dir,
+    )
+    if rc != 0:
+        log.warning("sudo mount %s at %s failed: %s", block_dev, mount_dir, text)
         return None
-    text = out.decode("utf-8", errors="replace")
-    m = re.search(r" at (/\S+?)\.?\s*$", text.strip())
-    if m:
-        return m.group(1)
-    log.warning("udisksctl mount %s: %s", block_dev, text.strip())
-    return _mount_point_of(block_dev)
+    if not (Path(mount_dir) / "INFO_UF2.TXT").is_file():
+        log.warning(
+            "%s mounted at %s but has no INFO_UF2.TXT; not a UF2 drive", block_dev, mount_dir
+        )
+        await _run_quiet("sudo", "-n", "umount", mount_dir)
+        return None
+    return mount_dir
 
 
 async def _uf2_write_impl_for_job(
@@ -496,7 +545,7 @@ async def _uf2_write_impl_for_job(
         if block_dev is None:
             job.set_error(f"no UF2 drive with USB serial {device_usb_sn} is present")
             return False
-        mount_point = await _mount_uf2_block_device(block_dev)
+        mount_point = await _mount_uf2_block_device(block_dev, device_usb_sn)
         if mount_point is None:
             job.set_error(f"could not mount {block_dev} (UF2 drive of {device_usb_sn})")
             return False
