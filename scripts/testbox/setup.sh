@@ -193,8 +193,8 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d28", ATTRS{idProduct}=="0204", MODE="06
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0d28", ATTRS{idProduct}=="0204", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 RULES
   udevadm control --reload || return 1
-  udevadm trigger --subsystem-match=hidraw --action=add
-  udevadm trigger --subsystem-match=usb --attr-match=idVendor=0d28 --action=add
+  udevadm trigger --subsystem-match=hidraw --action=add || return 1
+  udevadm trigger --subsystem-match=usb --attr-match=idVendor=0d28 --action=add || return 1
   return 0
 }
 
