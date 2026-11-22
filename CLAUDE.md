@@ -71,11 +71,11 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 **Risky firmware:** always test on unenclosed bare chips first (reset button + SWD pads accessible). Installed devices have no physical access.
 
-**Unresponsive device recovery:** `uhubctl -a cycle -p <port>` → server flash → wait for re-enumeration. Last resort: physical reset.
+**Unresponsive device recovery:** `uhubctl -a cycle -p <port>` → server flash → wait for re-enumeration. Last resort: physical reset. On the test box, blinky-server recovers a chip sitting in its USB bootloader by itself (120 s grace, armed stable image), and SWD through the chip's XIAO Debug Mate (blinky-firmware `scripts/swd_recover.sh`) is the last resort; a real cold boot there cuts both hub ports (chip and Debug Mate). See `docs/TEST_BOX_BUILD_PLAN.md`, "Recovery chain".
 
 ## Bootloader and firmware builds
 
-Bootloader changes (`deploy-bootloader.sh`, the verifier, SWD recovery) and firmware builds (`scripts/build.sh`, the pinned toolchain) live in blinky-firmware with their rules. The SWD recovery Pi (`swd-flash.local`) is described there.
+Bootloader changes (`deploy-bootloader.sh`, the verifier, SWD recovery) and firmware builds (`scripts/build.sh`, the pinned toolchain) live in blinky-firmware with their rules. SWD recovery (the test box's XIAO Debug Mate, `docs/SWD_RECOVERY.md`; the bench Pi `swd-flash.local`) is described there.
 
 ## CRITICAL: Single Flash Entry Point (blinky-server)
 
@@ -225,7 +225,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
-| `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, I2S speaker, camera, test chips with SWD via Pi Zero W; enclosure construction, calibration, acceptance gates |
+| `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, USB speaker, camera, one test chip (XIAO nRF52840 Sense Plus) in a XIAO Debug Mate for SWD, Belkin per-port-switched hub, 8x8 LED grid wiring, hands-off recovery chain; enclosure, calibration, acceptance gates |
 | `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | Camera (OV5647) in the test box's validation harness: LED region discovery, visual onsets, render/sound-to-light latency as distributions, follow test against drum labels, calibration, provisional gates |
 | `docs/DEVELOPMENT.md` | Tooling development: git hooks, console + server dev |
 | `docs/TESTING_METHODOLOGY.md` | Tiered on-device testing through blinky-server and the MCP tools |

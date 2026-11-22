@@ -1,12 +1,12 @@
 # Acoustic test box: build plan
 
-**Status:** planned (2026-10-20; still nothing built as of 2026-10-21). This doc covers the hardware, the enclosure, and the gates the box must pass before its numbers are trusted.
+**Status:** open-bench prototype running (2026-11-21): Pi 5 + Belkin F4U058 hub + **one** XIAO nRF52840 in a XIAO Debug Mate (SWD), hands-off USB recovery verified. Enclosure not built. This doc covers the hardware, the enclosure, and the gates the box must pass before its numbers are trusted.
 
 ## Why
 
 1. **Repeatable runs.** Validation F1 currently depends on the room: background noise, where the speaker sits, what else is playing. A closed, calibrated box makes runs comparable across days and firmware builds.
 2. **Unattended testing.** The box is self-contained: a host, a speaker, a camera and the test chips are wired permanently. Release gates (`tools/release_gate.py`) and validation suites can run without anyone setting up the bench.
-3. **Safe recovery.** Every chip in the box has SWD wired, so a bad candidate never needs the box opened.
+3. **Safe recovery, hands-off.** The box recovers a bad candidate by itself: blinky-server re-flashes a chip stuck in its bootloader over USB, and SWD (through the chip's XIAO Debug Mate) is the last resort. Nobody opens the box.
 4. **Testing stays off the production machine.** blinkyhost is production (see below). Candidates, `--dev` builds and validation runs move to the box, so nothing unreleased runs on the machine that manages finished devices.
 
 ## Two hosts, two roles
@@ -35,13 +35,13 @@ Rules that follow from this:
   |  Pi 5 (blinky-server)                                            |
   |   - USB (own port) ---------------> USB speaker (own baffle)     |
   |   - CSI camera  ------------------> views every chip's LEDs      |
-  |   - USB ---> powered hub, per-port switching (uhubctl)           |
-  |                 |-- test chip A (+ LEDs)                         |
-  |                 |-- test chip B (+ LEDs)                         |
-  |                 |-- test chip C (+ LEDs)                         |
-  |                 '-- Pi Zero W (USB gadget or power only)         |
+  |   - USB ---> Belkin F4U058 powered hub (per-port switching)      |
+  |                 |-- port: test chip USB (data + its only 5 V)    |
+  |                 '-- port: XIAO Debug Mate USB (SWD probe)        |
   |                                                                  |
-  |  Pi Zero W (SWD recovery) --- SWDIO/SWCLK/RESET ---> each chip   |
+  |  XIAO Debug Mate --- pogo SWDIO/SWCLK/GND ---> test chip         |
+  |  (the chip sits in its socket; no 5V/3V3 header pins)            |
+  |  test chip D10 ---330R---> 8x8 LED grid <--- own 5 V supply      |
   +------------------------------------------------------------------+
 ```
 
@@ -56,11 +56,25 @@ The Pi Zero W cannot host blinky-server reliably:
 
 The Pi 5 has four cores, USB 3 on two controllers, Gigabit Ethernet, and the same 22-pin narrow camera connector as the Zero, so the existing camera cable fits.
 
-### The Pi Zero W keeps its SWD job
+### One chip, a Debug Mate for SWD, recovery hands-off
 
-SWD recovery is light work, and the setup is already proven (`swd-flash.local`). Put the Zero inside the box and wire SWD to every chip there, following the wiring in CLAUDE.md (SWDIO=BCM 24, SWCLK=BCM 25, RESET=BCM 18 for the first chip).
+Owner decisions (2026-11-21):
+- The box has **one** test chip: a XIAO nRF52840 **Sense Plus** (new chips are Plus; the legacy fleet is the plain Sense, and every bootloader and firmware build must run on both). It sits in a **Seeed XIAO Debug Mate**, which is for debugging and recovery only. The Pi Zero W / `swd-flash.local` setup is not used in the box.
+- **Every normal process runs over USB** (BLE preferred too, once the box may use it), and **everything is hands-off**: no step needs a person. All validation runs on that one chip, so automatic recovery is the safety net.
 
-**Several chips on one Zero.** OpenOCD's `bcm2835gpio` driver takes its pins from config. Give each chip its own GPIO set (SWDIO/SWCLK/RESET), and have `recover.sh` take a `--chip` argument that selects the set. The Zero has enough free GPIO for 4–5 chips. This needs a change in `~/swd-recovery` and a per-chip pin table on the Pi. Keep the reset-line crosstalk fix: hold the chip's RESET pin high during long writes, then release it to input.
+The Debug Mate, from its schematic and firmware (details and sources: blinky-firmware `docs/SWD_RECOVERY.md`):
+- CMSIS-DAP v1 (HID) on an ESP32-S3, driven with OpenOCD. **No working nRESET** (resets are SYSRESETREQ or CTRL-AP). pyOCD can't open it (empty USB serial). Run **one OpenOCD at a time**; two sessions wedge the probe.
+- Its 2x3 contact block lands only on the chip's SWDIO/SWCLK/RST/GND back pads, on both the Sense and the Sense Plus. The extra Plus header rows can't reach a seated XIAO.
+- It feeds the XIAO's 5 V pin, which is the same net as the chip's USB VBUS. **Leave the chip's 5V and 3V3 header pins unsoldered**, so the chip has exactly one 5 V source (its own USB port). Solder the pins the socket needs for D10 (LED data) and GND.
+- Its "GND" at the socket is the low side of its power-analyser shunt (10 Ω at low current), and it is rated 5 V / 1 A. Never power LEDs through it.
+
+### Recovery chain (hands-off)
+
+1. **USB, by blinky-server** (blinky_time#378, #379). A chip enumerating as its UF2 bootloader (`2886:0045`, or `0065` for a Sense Plus factory bootloader) is parked in `DFU_RECOVERY`. After 120 s there, the server flashes the armed stable image through the single flash path onto the drive bound by USB serial, then verifies. Recovery is armed for a device by a stable deploy to it through `POST /api/fleet/deploy` (the box's equivalent of `deploy.sh`, which targets blinkyhost). Verified live on 2026-11-21: a chip with no app came back on b217 with no one touching it.
+2. **SWD**: blinky-firmware `scripts/swd_recover.sh restore` (backup, CTRL-AP erase, MBR + S140 + fleet bootloader + UICR + stable app + valid settings page, verify, reset). Verified in 3.5 min. Not yet triggered by the server automatically (open work in blinky-firmware `docs/BOOTLOADER_WORKFLOW.md`).
+3. **Power**: the hub cuts VBUS per port (verified). A real cold boot cuts **both** ports, the chip's and the Debug Mate's: a core left halted by an SWD session survives a cut of the chip's port alone (the SWD lines keep it powered). End SWD sessions with the core running.
+
+Two behaviours to expect: the server doesn't auto-recover a device within 30 minutes of a UF2 write to it (the cascade guard), and a chip stuck in an enumeration loop can make the hub reset its upstream link, so switch such a port off.
 
 ### Needed: per-server device ownership
 
@@ -82,10 +96,10 @@ This also replaces the current "a test device is whatever is listed in `test_dev
 | USB speaker | No audio HAT: playback goes to a USB audio device. In use: JBL Pebbles (USB-powered, USB audio, ALSA card name `Pebbles`); small and ported, so check its bass against the ~50 Hz requirement in the first REW sweep before trusting kick results. Plug it into the Pi directly, on the other USB controller from the hub (the Pi 5 has two; each serves one blue and one black port), never into the switched hub: a `uhubctl` cycle or hub reset would cut the speaker mid-run. Sealed, not ported (port noise is an artifact). Must play down to ~50 Hz, or kick tests mean little. |
 | Camera | The existing Zero camera, now on the Pi 5's CSI port: Camera Module v1 class, **OmniVision OV5647**, 5 MP, rolling shutter, fixed focus. Measured on the Pi 5 (2026-10-27): 640×480 full-view binned mode, at most 67.5 fps (14.8 ms frames, spacing sd ≈ 1 µs). How it joins the harness: `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md`. A global-shutter camera stays the upgrade if that plan's reference-LED timing check fails. |
 | Reference LED | One or two LEDs driven from Pi 5 GPIO, in the camera's view, for camera timing calibration (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, Calibration). |
-| Powered USB hub with per-port power switching | Pick from the `uhubctl` supported list and confirm per-port switching (not ganged) with `uhubctl` **before** building it in. Recovery depends on cycling one port. |
-| Pi Zero W | SWD recovery (above). |
-| Test chips | XIAO nRF52840 Sense, each driving a string of LEDs in the camera's view (the final design; the camera harness judges the visuals from these strings). Keep each string apart from the others in the image. |
-| LED power | Separate 5 V supply for LEDs with a common ground. Keep brightness low: heat and supply noise. |
+| Powered USB hub with per-port power switching | **Belkin F4U058** (VIA Labs, `050d:005c`/`0058`): per-port power switching confirmed with `uhubctl` and by a cold reboot of the device on the switched port, other ports unaffected (2026-11-21). The Pi 5's own ports switch only as a gang. |
+| XIAO Debug Mate | SWD debugging and recovery for the test chip (above). Keep its screen on the main dashboard page; debugging only works from there. |
+| Test chip | One XIAO nRF52840 **Sense Plus**, seated in the Debug Mate without 5V/3V3 header pins, driving an **8x8 LED grid** in the camera's view. |
+| LED power | Separate 5 V supply sized for the grid (64 LEDs at full white is ~3.8 A). Not the Debug Mate, the XIAO, or the USB hub. Keep brightness low: heat and supply noise. |
 | Measurement mic | miniDSP UMIK-1 or UMIK-2, for calibration only. |
 | SPL meter | For setting playback level at the chips' position. |
 | Enclosure materials | 18 mm MDF, Green Glue, Sorbothane pads, mineral wool (Rockwool or OC 703-class boards), acoustically transparent fabric, compression gasket, draw latches, cable glands, acoustic putty, matte black paint. |
@@ -141,12 +155,19 @@ A sealed, lined box with a Pi 5, a powered speaker and LEDs will get hot.
 
 - Bring mains in through one panel inlet. The Pi PSU, hub supply and LED supply all live inside.
 - Ethernet comes in through a gland. Do not rely on WiFi inside a dense box.
-- Label every USB port and SWD harness with the chip's device ID.
+- Label every USB port with what it feeds (chip / Debug Mate) and the chip's device ID.
+- **One 5 V source for the chip**: its own USB port. No 5V/3V3 header pins on the XIAO (the Debug Mate would back-feed the hub port through them).
+- **LED grid** (8x8, WS2812B-class):
+  - Data from **D10** (the fleet default `ledPin=10`). The Debug Mate's D10 header pin is a direct wire to the XIAO's D10, so wiring there keeps the chip swappable. Avoid D6/D7: on the Debug Mate they go through its UART-bridge analog switch.
+  - A **330 Ω** resistor in series with data, at the grid. The box power-cycles the chip while the grid stays powered, and the resistor protects both ends.
+  - **~1000 µF** across the grid's 5 V input.
+  - The LED supply's ground joins the chip's GND at one point (signal reference only). LED current flows only between its supply and the grid.
+  - The chip sends 3.3 V data; the fleet runs without a level shifter, so the box matches it. A 74AHCT125 fixes flicker if it ever appears.
 
 ## Software setup
 
 1. Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager (hostname `blinkytest`, user `jdubz`). `setup.sh` gives that user passwordless sudo for everything: the box is a dedicated dev/test machine, and the Claude session that develops on it administers it (packages, services, scripts) without a password prompt. Then copy `scripts/testbox/` to the card's boot partition as `blinky-testbox/`, add your SSH key under `user:` → `ssh_authorized_keys`, and append `- [ bash, /boot/firmware/blinky-testbox/setup.sh, --user, jdubz ]` to `runcmd` in `user-data`. On first boot cloud-init runs `setup.sh` (log: `/var/log/blinky-testbox-setup.log`; result: `/var/lib/blinky-testbox/setup-ok` or `setup-failed`). The script can be re-run at any time: `sudo ~/blinky_time/scripts/testbox/setup.sh`.
-2. `setup.sh` installs the packages (Python, `ffmpeg` for `ffplay`, `uhubctl`, `udisks2`, `gh`, Node), clones the repo (so the validation corpus `corpus/edm/` comes with it), installs blinky-server with the `firmware` and `ble` extras (the server imports bleak at startup, so it can't run without `ble`; BLE stays off through `--no-ble` and the OS-level overlay below, see "Two hosts, two roles") and builds blinky-console, all in the deploy worktree (step 3). It also installs the passwordless sudo grant (`scripts/testbox/sudoers.in`), turns Bluetooth off at the OS level (`dtoverlay=disable-bt`), and starts `blinky-server.service` with `--no-ble`. Then the development tooling, so the box runs every script and CI check itself with the same pins as CI: arduino-cli and the firmware toolchain (`scripts/setup_toolchain.sh`), cppcheck 2.16.0 built as CI builds it, GCC 13 as `$CXX` (CI's host compiler; GCC 14 rejects TFLite's bundled flatbuffers), adafruit-nrfutil, blinky-server's `dev` extra (ruff, mypy, pytest), a dev venv `~/.venvs/blinky` (system packages plus tflite, librosa, mir_eval), blinky-serial-mcp registered with Claude Code against the box's own server, the git hooks, and Claude Code itself. `ml-training/requirements.txt` is not installed: training runs on the Spark, and its `numpy<2.0` pin has no build for the box's Python 3.13. The server creates its own API key in `~/.blinky-api-key` on first use. Manual afterwards: `gh auth login`, `gh auth setup-git`, your git `user.name`/`user.email`, sign in to Claude Code (run `claude` once), and add the Pi's `~/.ssh/id_ed25519.pub` to `swd-flash`.
+2. `setup.sh` installs the packages (Python, `ffmpeg` for `ffplay`, `uhubctl`, `udisks2`, `gh`, Node), clones the repo (so the validation corpus `corpus/edm/` comes with it), installs blinky-server with the `firmware` and `ble` extras (the server imports bleak at startup, so it can't run without `ble`; BLE stays off through `--no-ble` and the OS-level overlay below, see "Two hosts, two roles") and builds blinky-console, all in the deploy worktree (step 3). It also installs the passwordless sudo grant (`scripts/testbox/sudoers.in`), turns Bluetooth off at the OS level (`dtoverlay=disable-bt`), and starts `blinky-server.service` with `--no-ble`. Then the development tooling, so the box runs every script and CI check itself with the same pins as CI: arduino-cli and the firmware toolchain (`scripts/setup_toolchain.sh`), cppcheck 2.16.0 built as CI builds it, GCC 13 as `$CXX` (CI's host compiler; GCC 14 rejects TFLite's bundled flatbuffers), adafruit-nrfutil, blinky-server's `dev` extra (ruff, mypy, pytest), a dev venv `~/.venvs/blinky` (system packages plus tflite, librosa, mir_eval), blinky-serial-mcp registered with Claude Code against the box's own server, the git hooks, and Claude Code itself. `ml-training/requirements.txt` is not installed: training runs on the Spark, and its `numpy<2.0` pin has no build for the box's Python 3.13. The server creates its own API key in `~/.blinky-api-key` on first use. It also installs OpenOCD and a udev rule for the XIAO Debug Mate (SWD recovery runs as the user). Manual afterwards: `gh auth login`, `gh auth setup-git`, your git `user.name`/`user.email`, and sign in to Claude Code (run `claude` once).
 3. **Deploys come from master only.** blinky-server runs from `~/blinky-deploy`, a symlink to one of two worktrees of the clone, `~/blinky-deploy-a` and `~/blinky-deploy-b`. Each worktree is detached at a master commit and has its own venv and console build. The clone itself, `~/blinky_time`, is for development, and the server never runs from it.
 
    `blinky-deploy.timer` runs `scripts/testbox/deploy.py` every 2 minutes. The deployer takes a new master commit only when:
@@ -205,7 +226,7 @@ The box's numbers are not trusted until all of these pass. The thresholds are pr
 | Repeatability | Same firmware, same track, 5 runs: onset F1 spread ≤ 0.02 per chip. |
 | Agreement | Box F1 on the `edm/` corpus for the current stable firmware is within a stated margin of the last recorded bench results for that build (`test-results/`). Compare against the records; don't run validation on blinkyhost. Explain any difference before relying on the box. |
 | Isolation from production | With blinkyhost's fleet powered on nearby, the box server's device list shows only box chips. |
-| Recovery | Every chip: a forced bad flash is recovered by `uhubctl` cycling, then by SWD from the Zero, without opening the box. |
+| Recovery | The test chip: a chip left with no app is recovered by blinky-server over USB, and a chip USB can't reach is recovered by SWD through the Debug Mate, without opening the box or a person acting. (USB tier passed 2026-11-21.) |
 | Camera | Every LED is visible in one locked-exposure frame, with no reflections, and the camera harness's calibration and gates pass (`TEST_BOX_CAMERA_HARNESS_PLAN.md`). |
 
 ## Rollout
@@ -218,6 +239,5 @@ The box's numbers are not trusted until all of these pass. The thresholds are pr
 
 ## Open questions
 
-- How many chips, and how long should each LED string be?
-- Multi-chip SWD: per-chip GPIO sets on one Zero (planned above), or a physical selector switch?
+- ~~How many chips, and how long should each LED string be?~~ One chip, an 8x8 grid (2026-11-21). The grid needs a device config in `devices/registry/` (layout order and LED type to confirm).
 - Should the box also test BLE (fleet commands, BLE DFU)? That first needs per-server device ownership (see above), so the box server can never adopt a production device. Also, a shielded box changes the radio environment compared with real installs.

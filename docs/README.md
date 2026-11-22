@@ -23,7 +23,7 @@ Each plan carries a status header; check it before treating the plan as outstand
 
 | Doc | Status |
 |-----|--------|
-| [`TEST_BOX_BUILD_PLAN.md`](TEST_BOX_BUILD_PLAN.md) | **Planned** — sound-isolated test box: Pi 5 host, speaker, camera, test chips with SWD; acceptance gates. |
+| [`TEST_BOX_BUILD_PLAN.md`](TEST_BOX_BUILD_PLAN.md) | **Open-bench prototype running** — sound-isolated test box: Pi 5 host, speaker, camera, one test chip in a XIAO Debug Mate (SWD), per-port-switched hub, LED grid wiring, hands-off recovery chain; acceptance gates. |
 | [`PHONE_RECORD_MODE_PLAN.md`](PHONE_RECORD_MODE_PLAN.md) | **Implemented, not yet run on hardware** — Android Chrome ⇄ one device over Web Bluetooth, raw mic PCM + analysis. |
 | [`ML_IMPROVEMENT_PLAN.md`](ML_IMPROVEMENT_PLAN.md) | Current ML roadmap. The onset NN is off on devices until a model beats spectral flux. |
 | [`BLE_FLEET_RELIABILITY_PLAN.md`](BLE_FLEET_RELIABILITY_PLAN.md) | Items 1, 2, 3 and 5 shipped; field measurements (#221, #190) left. |
