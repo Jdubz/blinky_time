@@ -274,6 +274,9 @@ class FleetManager:
         # in its USB bootloader; pruned when it leaves. See
         # ``_handle_usb_dfu_device`` / ``USB_DFU_RECOVERY_GRACE_S``.
         self._usb_dfu_since: dict[str, float] = {}
+        # Watchers for USB auto-recovery jobs: the loop doesn't wait on those
+        # (UF2 verify needs the loop's discovery), so outcomes are logged here.
+        self._usb_recovery_watchers: set[asyncio.Task[None]] = set()
         # Background-loop health. Updated after every successful cycle so
         # external watchdogs (systemd, /api/fleet/status) can detect a wedge
         # — `_running == True` is not enough, the loop can be alive but stuck.
@@ -1129,7 +1132,7 @@ class FleetManager:
             firmware_path=str(job.firmware_path),
             transport=device.transport,
             already_in_bootloader=(
-                device.state is DeviceState.DFU_RECOVERY and device.id in self._usb_dfu_since
+                device.state is DeviceState.DFU_RECOVERY and self._in_usb_bootloader(device.id)
             ),
         )
         if not write_ok:
@@ -1486,7 +1489,7 @@ class FleetManager:
             device is not None
             and device.state is DeviceState.DFU_RECOVERY
             and device.transport.transport_type == "serial"
-            and device_id in self._usb_dfu_since
+            and self._in_usb_bootloader(device_id)
         )
         return TransportProbe(
             has_usb_app=has_usb_app,
@@ -2200,11 +2203,58 @@ class FleetManager:
         device.port = disc.address
         device.state = DeviceState.DFU_RECOVERY
 
+    def _usb_dfu_entered_at(self, device_id: str) -> float | None:
+        """When the physical device (any alias of ``device_id``) entered its
+        USB bootloader, or None if it isn't there now."""
+        canonical = self.resolve_canonical(device_id)
+        times = [
+            since
+            for usb_id, since in self._usb_dfu_since.items()
+            if self.resolve_canonical(usb_id) == canonical
+        ]
+        return min(times) if times else None
+
+    def _in_usb_bootloader(self, device_id: str) -> bool:
+        return self._usb_dfu_entered_at(device_id) is not None
+
     def _usb_dfu_recovery_ready(self, device_id: str) -> bool:
         """True iff the device is in its USB bootloader right now and has
         stayed there for ``USB_DFU_RECOVERY_GRACE_S``."""
-        since = self._usb_dfu_since.get(device_id)
+        since = self._usb_dfu_entered_at(device_id)
         return since is not None and _time.monotonic() - since >= USB_DFU_RECOVERY_GRACE_S
+
+    def _dfu_recovery_eligible(self, device: Device) -> bool:
+        """Reachability half of the auto-recovery filter (the whitelist is
+        checked separately). A device in its USB bootloader always waits out
+        the grace — even one with a ``ble_address``, which every device seen
+        in app mode has (``json info`` reports it, also on a ``--no-ble``
+        host). Otherwise BLE-DFU needs the bootloader's BLE address."""
+        if device.state != DeviceState.DFU_RECOVERY:
+            return False
+        if self._in_usb_bootloader(device.id):
+            return self._usb_dfu_recovery_ready(device.id)
+        return bool(device.ble_address)
+
+    def _watch_usb_recovery(self, job: FlashJob, device_id: str) -> None:
+        """Log a USB auto-recovery job's outcome without blocking the loop."""
+
+        async def _watch() -> None:
+            terminal = await job.wait_until_terminal(timeout=900.0)
+            if not terminal:
+                log.error("Auto-recovery for %s: no terminal state after 900s", device_id[:12])
+            elif job.state is FlashJobState.COMPLETED:
+                log.info("Auto-recovery succeeded for %s!", device_id[:12])
+            else:
+                log.warning(
+                    "Auto-recovery failed for %s: state=%s error=%s",
+                    device_id[:12],
+                    job.state.value,
+                    job.error or "(none)",
+                )
+
+        task = asyncio.create_task(_watch())
+        self._usb_recovery_watchers.add(task)
+        task.add_done_callback(self._usb_recovery_watchers.discard)
 
     def _handle_dfu_recovery_device(self, disc: DiscoveredDevice) -> None:
         """Handle a device discovered in BLE DFU bootloader mode.
@@ -3173,8 +3223,7 @@ class FleetManager:
         dfu_devices = [
             d
             for d in self._devices.values()
-            if d.state == DeviceState.DFU_RECOVERY
-            and (d.ble_address or self._usb_dfu_recovery_ready(d.id))
+            if self._dfu_recovery_eligible(d)
             and self.resolve_canonical(d.id) in whitelist_canonical
         ]
         if not dfu_devices:
@@ -3206,7 +3255,7 @@ class FleetManager:
                 "Auto-recovering DFU device %s (%s, attempt %d/%d)...",
                 device.id[:12],
                 f"USB bootloader {device.port}"
-                if device.id in self._usb_dfu_since
+                if self._in_usb_bootloader(device.id)
                 else f"BLE: {device.ble_address}",
                 (retry.fails if retry else 0) + 1,
                 MAX_AUTO_RECOVERY_ATTEMPTS,
@@ -3227,11 +3276,23 @@ class FleetManager:
                 self._recovery_firmware_path = None
                 self._recovery_device_ids = set()
                 return
+            usb_target = self._in_usb_bootloader(device.id)
+            if usb_target and any(not w.done() for w in self._usb_recovery_watchers):
+                # One USB recovery at a time; the next cycle picks this up.
+                continue
             job = await self.flash_device(device.id, Path(firmware_path), force=False)
             if job is None:
                 # Blocked by `should_attempt_auto_recovery` (recently
                 # attempted, in-flight elsewhere, or inside backoff).
                 # Try again next cycle.
+                continue
+
+            if usb_target:
+                # Don't wait here: UF2 verify needs this loop's discovery and
+                # reconnect to see the app come back, so waiting would stall
+                # until verify times out. The job runs in its own task under
+                # the in-flight set and drain hold; the watcher logs it.
+                self._watch_usb_recovery(job, device.id)
                 continue
 
             # 900s outer cap: orchestrator's _run_ble_dfu_flash internally

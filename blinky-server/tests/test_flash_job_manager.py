@@ -2479,3 +2479,79 @@ async def test_usb_dfu_timer_pruned_when_device_leaves_bootloader(
     assert "04F2A79622BF8B6F" in fleet._usb_dfu_since
     await fleet._discover_and_connect()
     assert "04F2A79622BF8B6F" not in fleet._usb_dfu_since
+
+
+@pytest.mark.asyncio
+async def test_usb_dfu_grace_applies_even_with_ble_address(fleet: FleetManager) -> None:
+    """Every device seen in app mode has a ble_address (json info reports it,
+    also under --no-ble); that must not skip the USB grace (PR #378 review)."""
+    from blinky_server.device import manager as mgr
+
+    await fleet._handle_usb_dfu_device(_usb_dfu_disc())
+    device = fleet._devices["04F2A79622BF8B6F"]
+    device.ble_address = "F4:7E:4B:50:1F:4F"
+    assert fleet._dfu_recovery_eligible(device) is False
+    fleet._usb_dfu_since["04F2A79622BF8B6F"] -= mgr.USB_DFU_RECOVERY_GRACE_S + 1
+    assert fleet._dfu_recovery_eligible(device) is True
+
+
+def test_ble_dfu_eligibility_unchanged_without_usb(fleet: FleetManager) -> None:
+    from blinky_server.device.device import Device, DeviceState
+
+    from .mock_transport import MockTransport
+
+    device = Device(
+        device_id="ble-dfu",
+        port="AA:BB",
+        platform="nrf52840",
+        transport=MockTransport(transport_type="ble"),  # type: ignore[arg-type]
+    )
+    device.state = DeviceState.DFU_RECOVERY
+    assert fleet._dfu_recovery_eligible(device) is False
+    device.ble_address = "AA:BB:CC:DD:EE:FF"
+    assert fleet._dfu_recovery_eligible(device) is True
+
+
+@pytest.mark.asyncio
+async def test_usb_auto_recovery_does_not_block_the_loop(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UF2 verify needs the background loop's discovery to see the app come
+    back, so auto-recovery must not wait on a USB job inside that loop
+    (PR #378 review). Only one USB recovery runs at a time."""
+    from types import SimpleNamespace
+
+    from blinky_server.device import manager as mgr
+
+    fw = tmp_path / "blinky-things-b217.hex"
+    fw.write_text(":00000001FF\n")
+    fleet._recovery_firmware_path = str(fw)
+    fleet._recovery_device_ids = {"04F2A79622BF8B6F", "0123456789ABCDEF"}
+    monkeypatch.setattr(fleet, "_maybe_reload_recovery_whitelist", lambda: None)
+    monkeypatch.setattr(mgr.images, "load", lambda _p: SimpleNamespace(stable=True))
+
+    class NeverEnds:
+        state = FlashJobState.WRITING
+        error = None
+
+        async def wait_until_terminal(self, timeout: float) -> bool:
+            await asyncio.sleep(3600)
+            return False
+
+    started: list[str] = []
+
+    async def fake_flash_device(device_id: str, _fw: Path, force: bool = True) -> Any:
+        started.append(device_id)
+        return NeverEnds()
+
+    monkeypatch.setattr(fleet, "flash_device", fake_flash_device)
+    for sn in ("04F2A79622BF8B6F", "0123456789ABCDEF"):
+        await fleet._handle_usb_dfu_device(_usb_dfu_disc(device_id=sn, address=f"/dev/{sn}"))
+        fleet._usb_dfu_since[sn] -= mgr.USB_DFU_RECOVERY_GRACE_S + 1
+
+    await asyncio.wait_for(fleet._auto_recover_dfu_devices(), timeout=2.0)
+    assert len(started) == 1
+    await asyncio.wait_for(fleet._auto_recover_dfu_devices(), timeout=2.0)
+    assert len(started) == 1  # the first USB recovery is still running
+    for task in list(fleet._usb_recovery_watchers):
+        task.cancel()
