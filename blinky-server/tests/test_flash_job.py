@@ -428,6 +428,18 @@ def test_select_transport_ble_only() -> None:
     assert select_transport(probe) is FlashTransport.BLE_DFU
 
 
+def test_select_transport_usb_bootloader_uses_uf2() -> None:
+    """A device sitting in its USB UF2 bootloader is flashed over UF2 (straight
+    to the drive) — the USB-only recovery path for a host without BLE."""
+    probe = TransportProbe(has_usb_app=False, has_ble_dfu_advert=False, has_usb_dfu=True)
+    assert select_transport(probe) is FlashTransport.UF2
+
+
+def test_select_transport_usb_bootloader_beats_ble_dfu() -> None:
+    probe = TransportProbe(has_usb_app=False, has_ble_dfu_advert=True, has_usb_dfu=True)
+    assert select_transport(probe) is FlashTransport.UF2
+
+
 def test_select_transport_raises_when_unreachable() -> None:
     probe = TransportProbe(has_usb_app=False, has_ble_dfu_advert=False)
     with pytest.raises(NoReachableTransport):

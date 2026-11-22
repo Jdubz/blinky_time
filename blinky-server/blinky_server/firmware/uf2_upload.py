@@ -349,11 +349,79 @@ async def _uf2_write_impl(
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _find_uf2_block_device_for_serial(
+    usb_serial: str, sys_block: Path = Path("/sys/block")
+) -> str | None:
+    """The block device (``/dev/sdX``) of the UF2 drive that belongs to the
+    Seeed USB device with this serial number, or None.
+
+    The bootloader's mass-storage interface and its CDC share one USB
+    device, so the drive is identified by walking up from the block device
+    to the USB device node and comparing its ``idVendor`` and ``serial``.
+    """
+    for block in sorted(sys_block.glob("sd*")):
+        try:
+            node = (block / "device").resolve()
+        except OSError:
+            continue
+        for parent in [node, *node.parents]:
+            if (parent / "idVendor").is_file():
+                try:
+                    vid = (parent / "idVendor").read_text().strip()
+                    serial = (parent / "serial").read_text().strip()
+                except OSError:
+                    break
+                if vid == "2886" and serial == usb_serial:
+                    return f"/dev/{block.name}"
+                break
+    return None
+
+
+def _mount_point_of(block_dev: str, mounts: Path = Path("/proc/mounts")) -> str | None:
+    try:
+        for line in mounts.read_text().splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[0] == block_dev:
+                return fields[1].replace("\\040", " ")
+    except OSError:
+        return None
+    return None
+
+
+async def _mount_uf2_block_device(block_dev: str) -> str | None:
+    """Mount exactly ``block_dev`` (udisks2, no root needed) and return its
+    mount point; an existing mount is reused. None if it can't be mounted."""
+    existing = _mount_point_of(block_dev)
+    if existing:
+        return existing
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "udisksctl",
+            "mount",
+            "--no-user-interaction",
+            "-b",
+            block_dev,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+    except (OSError, TimeoutError) as exc:
+        log.warning("udisksctl mount %s failed: %s", block_dev, exc)
+        return None
+    text = out.decode("utf-8", errors="replace")
+    m = re.search(r" at (/\S+?)\.?\s*$", text.strip())
+    if m:
+        return m.group(1)
+    log.warning("udisksctl mount %s: %s", block_dev, text.strip())
+    return _mount_point_of(block_dev)
+
+
 async def _uf2_write_impl_for_job(
     job: FlashJob,
     serial_port: str,
     firmware_path: str,
     transport: Any,
+    already_in_bootloader: bool = False,
 ) -> bool:
     """Write firmware to one device via UF2, bound to a ``FlashJob``.
 
@@ -371,6 +439,13 @@ async def _uf2_write_impl_for_job(
     received and committed every UF2 block. False on any subprocess
     failure that happens *before* that line (file-not-found, MSC mount
     failure, bootloader entry failure, etc.).
+
+    ``already_in_bootloader``: the device is enumerated as its UF2
+    bootloader (``usb_dfu`` discovery). No bootloader entry and no USB
+    reset. The drive is bound by identity: the block device whose USB
+    serial is this device's is mounted here and handed to
+    ``uf2_upload.py --already-in-bootloader --mount-point``. A missing or
+    mismatched drive fails the write; it is never guessed.
 
     Critically, this function does NOT wait for the subprocess to exit
     cleanly. Once write-complete is seen, the subprocess is terminated
@@ -412,7 +487,27 @@ async def _uf2_write_impl_for_job(
     with contextlib.suppress(Exception):
         await transport.disconnect()
 
-    if usb_dev_path:
+    mount_point: str | None = None
+    if already_in_bootloader:
+        if not device_usb_sn:
+            job.set_error(f"no USB serial for {serial_port}; can't identify its UF2 drive")
+            return False
+        block_dev = _find_uf2_block_device_for_serial(device_usb_sn)
+        if block_dev is None:
+            job.set_error(f"no UF2 drive with USB serial {device_usb_sn} is present")
+            return False
+        mount_point = await _mount_uf2_block_device(block_dev)
+        if mount_point is None:
+            job.set_error(f"could not mount {block_dev} (UF2 drive of {device_usb_sn})")
+            return False
+        log.info(
+            "_uf2_write_impl_for_job %s: %s's UF2 drive is %s at %s",
+            job.job_id,
+            device_usb_sn,
+            block_dev,
+            mount_point,
+        )
+    elif usb_dev_path:
         usb_ok = await _usb_reset_device(usb_dev_path)
         if usb_ok:
             await asyncio.sleep(3)
@@ -422,7 +517,10 @@ async def _uf2_write_impl_for_job(
                         serial_port = str(entry.resolve())
                         break
 
-    cmd = ["python3", str(tool), "--hex", firmware_path, serial_port, "-v"]
+    cmd = ["python3", str(tool), "--hex", firmware_path]
+    if mount_point is not None:
+        cmd += ["--already-in-bootloader", "--mount-point", mount_point]
+    cmd += [serial_port, "-v"]
     log.info("_uf2_write_impl_for_job %s: launching %s", job.job_id, " ".join(cmd))
 
     proc = await asyncio.create_subprocess_exec(
