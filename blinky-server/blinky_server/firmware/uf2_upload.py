@@ -389,13 +389,28 @@ def _mount_point_of(block_dev: str, mounts: Path = Path("/proc/mounts")) -> str 
 
 
 async def _run_quiet(*cmd: str, timeout: float = 20.0) -> tuple[int, str]:
+    """Run a short command; on timeout or cancellation it is terminated and
+    reaped, so a mount/unmount can't change state after we've given up."""
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
         )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except (OSError, TimeoutError) as exc:
+    except OSError as exc:
         return -1, str(exc)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except (TimeoutError, asyncio.CancelledError) as exc:
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()  # sudo relays SIGTERM to its child
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return -1, f"timed out after {timeout:.0f}s: {' '.join(cmd)}"
     return proc.returncode or 0, out.decode("utf-8", errors="replace").strip()
 
 
@@ -413,9 +428,14 @@ async def _mount_uf2_block_device(block_dev: str, usb_serial: str) -> str | None
     if existing:
         return existing
     rc, text = await _run_quiet("udisksctl", "mount", "--no-user-interaction", "-b", block_dev)
-    m = re.search(r" at (/\S+?)\.?\s*$", text) if rc == 0 else None
-    if m:
-        return m.group(1)
+    if rc == 0:
+        # The mount table is authoritative (a mount point may contain spaces).
+        mounted = _mount_point_of(block_dev)
+        if mounted:
+            return mounted
+        m = re.search(r" at (/\S+?)\.?\s*$", text)
+        if m:
+            return m.group(1)
     log.info("udisksctl mount %s refused (%s); falling back to sudo mount", block_dev, text)
 
     mount_dir = f"/mnt/blinky-uf2-{usb_serial}"
