@@ -13,7 +13,7 @@ This document is a short index of the flashing/recovery safety mechanisms that p
 
 3. **Bootloader changes go through `deploy-bootloader.sh`.** Wraps `scripts/verify_bootloader.py` (refuses BLs whose `check_dfu_mode()` reaches `bootloader_dfu_start()` without USB initialised — the literal bug that bricked the hat 2026-05-15). Pre-flash version log + post-flash version verify.
    - Diagnostic narrative: `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md`.
-   - SWD recovery host: `swd-flash.local` (Raspberry Pi Zero W with known-good fleet BL + MBR + S140 staged).
+   - SWD recovery: the test box's XIAO Debug Mate with blinky-firmware `scripts/swd_recover.sh` (`docs/SWD_RECOVERY.md`); for fleet devices on the bench, `swd-flash.local` (Raspberry Pi Zero W with known-good fleet BL + MBR + S140 staged).
 
 4. **60-second rule between resets.** `SafeBootWatchdog::markStable()` is deferred to 60 s of uptime so mid-init crashes still count toward `RebootFrequencyCounter`. Any chain of resets within 60 s bumps the counter; at 5 cumulative trips, `configStorage.quarantineDeviceConfig()` flips `isValid=false` and the device boots into safeMode.
    - Code: `blinky-things/blinky-things.ino` (`markStable()` deferral, `quarantineDeviceConfig` call), `blinky-things/hal/SafeBootWatchdog.h`, `blinky-things/hal/RebootFrequencyCounter.h`.
@@ -36,7 +36,9 @@ This document is a short index of the flashing/recovery safety mechanisms that p
 1. `./scripts/deploy.sh --devices=<id>` (re-flashes the latest stable release via the orchestrator; operator flashes skip the auto-recovery dedup).
 2. Wait ≥75 s uptime so `markStable()` clears the watchdog counter.
 3. Push device config via the fleet API `device upload` command (deploy.sh-gated).
-4. SWD via `swd-flash.local` if the device is off USB and unreachable over BLE.
+4. SWD if the device is off USB and unreachable over BLE: on the test box, `swd_recover.sh restore` through the Debug Mate; elsewhere `swd-flash.local`.
+
+On the test box, step 1 normally happens by itself: blinky-server recovers a chip it sees in its USB bootloader (`2886:0045`/`0065`) after 120 s, with the armed stable image (blinky_time#378/#379; `docs/TEST_BOX_BUILD_PLAN.md`, "Recovery chain").
 
 For unenrolled bare chips on the bench, `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` is the recovery path.
 

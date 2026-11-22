@@ -14,8 +14,9 @@
 #   4. build blinky-console into blinky-server/web/
 #   5. passwordless sudo for the user: the box's administrator is the Claude session
 #      that develops on it (sudoers.in)
-#   6. Bluetooth off at the OS level (the box server must never adopt a production device)
-#   7. an SSH key for the user (for reaching the SWD Pi Zero)
+#   6. Bluetooth off at the OS level (the box server must never adopt a production device),
+#      and a udev rule so the user can drive the XIAO Debug Mate (SWD recovery) with OpenOCD
+#   7. an SSH key for the user
 #   8. the deploy worktree (~/blinky-deploy -> ~/blinky-deploy-a|b, master only) and
 #      blinky-server.service running from it with --no-ble; blinky-deploy.timer keeps it at
 #      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
@@ -98,6 +99,7 @@ install_packages() {
     python3 python3-venv python3-dev python3-pip python3-serial build-essential
     ffmpeg alsa-utils               # ffplay for validation playback; aplay/amixer for the USB speaker
     uhubctl udisks2                 # USB port power-cycling; UF2 drive mounting
+    openocd                         # SWD recovery through the XIAO Debug Mate (swd_recover.sh)
     gh                              # tools/firmware_release.py downloads releases with gh
     nodejs npm                      # blinky-console build
     rpicam-apps-lite i2c-tools      # camera bring-up, I2C debugging
@@ -180,6 +182,19 @@ disable_bluetooth() {
     touch /var/run/reboot-required
   fi
   systemctl disable --now hciuart.service bluetooth.service 2>/dev/null
+  return 0
+}
+
+# The XIAO Debug Mate's CMSIS-DAP (0d28:0204) is root-only by default; OpenOCD
+# runs as the user (blinky-firmware scripts/swd_recover.sh, docs/SWD_RECOVERY.md).
+debug_mate_udev() {
+  cat > /etc/udev/rules.d/60-xiao-debug-mate.rules <<'RULES' || return 1
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d28", ATTRS{idProduct}=="0204", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0d28", ATTRS{idProduct}=="0204", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+RULES
+  udevadm control --reload || return 1
+  udevadm trigger --subsystem-match=hidraw --action=add
+  udevadm trigger --subsystem-match=usb --attr-match=idVendor=0d28 --action=add
   return 0
 }
 
@@ -368,6 +383,7 @@ step "blinky-server venv" server_venv
 step "blinky-console"     build_console
 step "sudoers"            install_sudoers
 step "bluetooth off"      disable_bluetooth
+step "debug mate udev"    debug_mate_udev
 step "user ssh key"       user_ssh_key
 step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
