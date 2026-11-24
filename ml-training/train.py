@@ -289,7 +289,7 @@ def specmix(x: torch.Tensor, y: torch.Tensor,
 
     Note: SpecMix is not recommended for frame-level onset detection —
     frequency-domain cuts break broadband onset semantics. Prefer standard
-    mixup for onset models. See v13 post-mortem in IMPROVEMENT_PLAN.md.
+    mixup for onset models (v13 lost with it; the "Don't retry" list is in blinky-firmware docs/AUDIO_ARCHITECTURE.md).
 
     Args:
         x: (batch, time, n_mels) mel spectrogram tensor
