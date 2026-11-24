@@ -74,6 +74,11 @@ UNITS = (
     "blinky-staging.service",  # the staging hardware test (staging.py, #349)
     "blinky-staging.timer",
 )
+# Alloy (the box's telemetry forwarder to the central LGTM stack): its config ships in the slot and
+# is installed verbatim when it differs, then Alloy reloads (SIGHUP). setup.sh installs Alloy itself
+# and /etc/default/alloy (the push endpoints).
+ALLOY_CONFIG_SRC = Path("scripts/testbox/alloy/blinkytest.alloy")
+ALLOY_CONFIG = Path("/etc/alloy/config.alloy")
 MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
 
 # What the running server reads or executes from its tree. Only a commit touching one of these
@@ -322,6 +327,22 @@ def install_units(slot: Path, only_missing: bool = False) -> list[str]:
     return changed
 
 
+def install_alloy_config(slot: Path) -> bool:
+    """Install ``slot``'s Alloy config where it differs from the live one, and reload Alloy.
+    True if it changed. Alloy not installed (no /etc/alloy): say so and leave it, since installing
+    the agent is setup.sh's job, not a deploy's."""
+    if not ALLOY_CONFIG.parent.is_dir():
+        log(f"Alloy isn't installed ({ALLOY_CONFIG.parent} missing): config not installed; run setup.sh")
+        return False
+    text = (slot / ALLOY_CONFIG_SRC).read_text()
+    if ALLOY_CONFIG.is_file() and ALLOY_CONFIG.read_text() == text:
+        return False
+    run("sudo", "-n", "tee", str(ALLOY_CONFIG), cwd=HOME, timeout=30, stdin=text)
+    run("sudo", "-n", "systemctl", "reload-or-restart", "alloy", cwd=HOME, timeout=60)
+    log(f"installed the Alloy config from {slot.name} and reloaded Alloy")
+    return True
+
+
 def install_missing_units(slot: Path) -> list[str]:
     """Install the units ``slot`` ships that aren't installed at all, and enable a new timer.
 
@@ -373,6 +394,11 @@ def switch_to(slot: Path, timeout_s: float) -> str | None:
         install_units(slot)
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
         return f"installing {slot.name}'s units: {e}"
+    try:
+        install_alloy_config(slot)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        # Telemetry must not block a deploy: log it loudly and carry on with the server.
+        log(f"WARNING: installing {slot.name}'s Alloy config failed: {e}")
     stopped = stop_drained(timeout_s)
     if stopped is not None:
         return stopped

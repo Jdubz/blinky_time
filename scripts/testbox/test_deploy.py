@@ -199,6 +199,7 @@ def test_switch_installs_units_stops_then_moves_the_link_then_starts(
     link.symlink_to(live)
     monkeypatch.setattr(deploy, "LINK", link)
     monkeypatch.setattr(deploy, "UNIT_DIR", tmp_path / "units")
+    monkeypatch.setattr(deploy, "ALLOY_CONFIG", tmp_path / "no-alloy" / "config.alloy")
     (tmp_path / "units").mkdir()
     events: list[str] = []
 
@@ -232,6 +233,38 @@ def test_switch_installs_units_stops_then_moves_the_link_then_starts(
     events.clear()
     assert deploy.switch_to(slot, 600) is None  # unchanged units: no install, no reload
     assert events == ["stop on blinky-deploy-b", "start on blinky-deploy-b"]
+
+
+def test_the_alloy_config_installs_when_it_changes_and_reloads_alloy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    slot = tmp_path / "slot"
+    src = slot / deploy.ALLOY_CONFIG_SRC
+    src.parent.mkdir(parents=True)
+    src.write_text("// v1\n")
+    etc = tmp_path / "etc-alloy"
+    monkeypatch.setattr(deploy, "ALLOY_CONFIG", etc / "config.alloy")
+    events: list[str] = []
+
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:3] == ("sudo", "-n", "tee"):
+            Path(cmd[3]).write_text(kw["stdin"])
+            events.append(f"tee {Path(cmd[3]).name}")
+        else:
+            events.append(" ".join(cmd[2:]))
+        return ""
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    # Alloy not installed: nothing is written, and the deploy carries on.
+    assert deploy.install_alloy_config(slot) is False and events == []
+    etc.mkdir()
+    assert deploy.install_alloy_config(slot) is True
+    assert events == ["tee config.alloy", "systemctl reload-or-restart alloy"]
+    assert (etc / "config.alloy").read_text() == "// v1\n"
+    events.clear()
+    assert deploy.install_alloy_config(slot) is False and events == []  # unchanged
+    src.write_text("// v2\n")
+    assert deploy.install_alloy_config(slot) is True and len(events) == 2
 
 
 def test_a_unit_added_by_a_commit_is_installed_on_the_next_pass(
