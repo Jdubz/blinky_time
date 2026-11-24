@@ -150,7 +150,7 @@ Repeat whenever the camera or the grid moves.
    - from LEDs at different heights (the grid's rows), the rolling-shutter line time, checking the 15.87 µs inferred from exposure steps.
    A few toggles at the start of every run re-check the offset. If it drifted beyond tolerance, the run is INVALID.
 2. **Rolling-shutter line time**, from step 1, stored with the camera settings (`camera_analysis.LINE_NS` until then).
-3. **LED PWM.** WS2812-class LEDs dim with PWM at a few hundred Hz to a few kHz. A short exposure makes that PWM show as brightness ripple, and with a rolling shutter as bands. Measure the PWM period once (with a short exposure, the band spacing in rows × line time gives it). Then set the exposure to the largest whole number of PWM periods that fits in the frame period, which averages the PWM out.
+3. **LED PWM.** WS2812-class LEDs dim with PWM at a few hundred Hz to a few kHz. A short exposure makes that PWM show as brightness ripple, and with a rolling shutter as bands. Measure the PWM period once (with a short exposure, the band spacing in rows × line time gives it). Then set the exposure to the largest whole number of PWM periods that fits in the frame period, which averages the PWM out. Tried 2026-11-24 with an exposure sweep (0.2-4 ms) on fire's base row: fire's own flicker (frame-to-frame CV 0.2-0.4) swamps any PWM ripple, and no generator holds still. It needs a static pattern from the firmware (below).
 4. **Levels.** Set LED brightness for test runs and the analog gain so the brightest flash stays below ~80% of full scale. Saturated pixels hide the rise and the brightness. A region with saturated pixels makes the run INVALID.
 5. **Region map** (How it works, step 1).
 6. **Baseline.** Current stable firmware, both profiles, 5 runs on the `edm/` corpus: the usual spread a review compares against.
@@ -189,6 +189,8 @@ The camera code lives in `scripts/testbox/camera/` and runs on the box's system 
 4. **Alongside the staging suite:** a review of the suite's validation run, linked from the staging report (artifact store), never part of its verdict.
 
 ## Open questions
+
+- **A firmware test-pattern command** would serve several calibration steps at once: a solid colour (PWM, levels), one LED at a time (region map and orientation, dead or stuck LEDs), and flashes at reported `millis()` times (the timing reference, step 1). None exists today: every generator animates.
 
 - Can the OV5647 run faster in a cropped mode, or a newer libcamera tuning? Faster frames shrink quantization directly. 67.5 fps is the measured ceiling at 640×480 today.
 - Is the timestamp from picamera2 exposure start or readout? The timing reference answers this; the plan assumes nothing.
