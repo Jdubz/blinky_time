@@ -117,7 +117,7 @@ async def fake_play(device_ids: list[str], track: dict[str, Any], duration_ms: f
     devs = [devices[d] for d in device_ids]
     return (
         devs,
-        SimpleNamespace(success=True, audio_start_time_ms=0.0),
+        SimpleNamespace(success=True, audio_start_time_ms=0.0, clock={}),
         {d: "data" for d in device_ids},
     )
 
