@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -46,9 +47,21 @@ def command(device: str, text: str) -> str:
     return resp
 
 
+def json_line(resp: str, key: str) -> dict[str, Any]:
+    """The JSON object on the reply line that carries ``key``. Replies can interleave log
+    lines or other JSON (stream lines, alerts), so the first ``{`` is not enough."""
+    for line in resp.split("\n"):
+        line = line.strip()
+        if line.startswith("{") and f'"{key}"' in line:
+            try:
+                return dict(json.loads(line))
+            except ValueError:
+                continue
+    raise SystemExit(f"no JSON line with {key!r} in the reply: {resp[:200]!r}")
+
+
 def info(device: str) -> dict[str, Any]:
-    resp = command(device, "json info")
-    return dict(json.loads(resp[resp.index("{") :]))
+    return json_line(command(device, "json info"), "millis")
 
 
 def clock_sync(device: str, samples: int = SYNC_SAMPLES) -> dict[str, float]:
@@ -56,7 +69,7 @@ def clock_sync(device: str, samples: int = SYNC_SAMPLES) -> dict[str, float]:
     trips, offset = midpoint - millis, error at most RTT/2. The round trip is the server's own
     (``sent_at`` to the arrival of the reply line with millis, blinky_time#395), not this
     HTTP call's: the reply is returned a 100 ms silence gap after it arrives."""
-    best: tuple[float, float] | None = None
+    best: tuple[float, float, float] | None = None
     for _ in range(samples):
         out = api("POST", f"/devices/{device}/command", {"command": "json info"})
         if out.get("sent_at") is None or not out.get("line_times"):
@@ -65,15 +78,14 @@ def clock_sync(device: str, samples: int = SYNC_SAMPLES) -> dict[str, float]:
         at = [i for i, line in enumerate(lines) if '"millis"' in line]
         if not at:
             raise SystemExit(f"json info reply has no millis: {out['response'][:200]}")
-        line = lines[at[0]]
-        millis = float(json.loads(line[line.index("{") :])["millis"])
+        millis = float(json_line(lines[at[0]], "millis")["millis"])
         t0 = float(out["sent_at"]) * 1000
         t1 = float(out["line_times"][at[0]]) * 1000
         rtt = t1 - t0
         if best is None or rtt < best[1]:
-            best = ((t0 + t1) / 2 - millis, rtt)
+            best = ((t0 + t1) / 2 - millis, rtt, millis)
     assert best is not None
-    return {"offset_ms": best[0], "rtt_ms": best[1]}
+    return {"offset_ms": best[0], "rtt_ms": best[1], "millis": best[2]}
 
 
 class Camera:
@@ -87,6 +99,10 @@ class Camera:
             raise SystemExit(
                 f"region map was made at {self.settings['exposure_us']} us / gain "
                 f"{self.settings['analog_gain']}; pass those or re-run the survey"
+            )
+        if tuple(m["labels"].shape) != (cc.SIZE[1], cc.SIZE[0]):
+            raise SystemExit(
+                f"region map is {m['labels'].shape}, camera is {cc.SIZE[1]}x{cc.SIZE[0]}"
             )
         self.order, self.starts, self.ids = cc.region_index(m["labels"])
         self.exposure_us, self.gain = exposure_us, gain
@@ -186,7 +202,7 @@ def do_timing(args: argparse.Namespace, cam: Camera, dev: dict[str, Any]) -> dic
     deadline = time.monotonic() + 30
     while True:
         status_resp = command(args.device, "testpattern status")
-        status = json.loads(status_resp[status_resp.index("{") :])
+        status = json_line(status_resp, "edges")
         if status["done"] or time.monotonic() > deadline:
             break
         time.sleep(1)
@@ -198,10 +214,12 @@ def do_timing(args: argparse.Namespace, cam: Camera, dev: dict[str, Any]) -> dic
     edges = np.asarray(status["edges"], np.float64)
     latch_s = status["latchUs"] / 1e6  # per strand (firmware#53)
     # The chip's millis() on the host clock, its drift spread linearly across the train.
-    t0 = edges[0, 0]
-    span = max(edges[-1, 0] - t0, 1.0)
+    # The offset at each edge, interpolated in chip time between the two syncs (each offset
+    # holds at the millis() its sample read): the crystal's drift between them is linear.
     drift = after["offset_ms"] - before["offset_ms"]
-    on_s = (edges[:, 0] + before["offset_ms"] + drift * (edges[:, 0] - t0) / span) / 1000 + latch_s
+    span = max(after["millis"] - before["millis"], 1.0)
+    frac = (edges[:, 0] - before["millis"]) / span
+    on_s = (edges[:, 0] + before["offset_ms"] + drift * frac) / 1000 + latch_s
     rows = [r["row"] for r in cam.regions]
     sig = lum.sum(axis=1)
     row_all = float(np.mean(rows))
@@ -323,17 +341,26 @@ def main(argv: list[str] | None = None) -> int:
         args.device = connected[0]
     out_dir = args.out or OUT_ROOT / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.mode}"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    def on_signal(signum: int, frame: Any) -> None:
+        raise SystemExit(f"stopped by signal {signum}")  # unwinds through the cleanup below
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
     dev = info(args.device)
     cam = Camera(args.regions, args.exposure_us, args.gain)
     try:
         fn = {"walk": do_walk, "timing": do_timing, "pwm": do_pwm}[args.mode]
         report = fn(args, cam, dev)
     finally:
-        cam.close()
+        # The chip first, whatever happened to the camera: a pattern left on would hide the
+        # generator until a reboot.
         try:
             command(args.device, "testpattern off")
         except (OSError, SystemExit) as e:
             print(f"WARNING: testpattern off failed on {args.device}: {e}", file=sys.stderr)
+        finally:
+            cam.close()
     report.update(mode=args.mode, device=args.device, version=dev.get("version"))
     (out_dir / "report.json").write_text(json.dumps(report, indent=2, default=float))
     print(
