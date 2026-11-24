@@ -39,6 +39,7 @@ SIZE = (640, 480)
 FRAME_US = 14815  # the sensor's ceiling at 640x480 (67.5 fps)
 SATURATED = 250  # a channel at or above this is clipped (8-bit)
 EXPOSURE_TOL_US = 40  # about 2.5 line times: the sensor rounds to whole lines
+FRAME_TOL_US = 20  # measured 14816 us for a requested 14815
 GAIN_TOL = 0.02
 
 _stop = False
@@ -96,8 +97,14 @@ def settle(cam: Any, exposure_us: int, gain: float, timeout_s: float = 3.0) -> d
 
 
 def control_errors(md: dict[str, Any], exposure_us: int, gain: float) -> list[str]:
-    """What in a frame's metadata differs from the locked controls."""
+    """What in a frame's metadata differs from the locked controls (a missing field counts)."""
     out = []
+    fd = md.get("FrameDuration")
+    if fd is None or abs(fd - FRAME_US) > FRAME_TOL_US:
+        out.append(f"frame duration {fd} us, want {FRAME_US}")
+    cg = md.get("ColourGains")
+    if cg is None or any(abs(g - 1.0) > GAIN_TOL for g in cg):
+        out.append(f"colour gains {cg}, want (1.0, 1.0)")
     exp = md.get("ExposureTime")
     if exp is None or abs(exp - exposure_us) > EXPOSURE_TOL_US:
         out.append(f"exposure {exp} us, want {exposure_us}")
@@ -126,11 +133,19 @@ def cmd_still(args: argparse.Namespace) -> dict[str, Any]:
 
     cam = open_camera(args.exposure_us, args.gain)
     try:
-        md = settle(cam, args.exposure_us, args.gain)
-        frame = cam.capture_array("main")
+        settle(cam, args.exposure_us, args.gain)
+        req = cam.capture_request()  # image and metadata from the same frame
+        try:
+            md = req.get_metadata()
+            frame = req.make_array("main")
+        finally:
+            req.release()
     finally:
         cam.stop()
         cam.close()
+    errors = control_errors(md, args.exposure_us, args.gain)
+    if errors:
+        raise SystemExit(f"still frame's controls drifted: {errors}")
     Image.fromarray(frame[:, :, ::-1]).save(args.out)  # RGB888 is B, G, R in memory
     return {
         "mode": "still",
@@ -157,17 +172,18 @@ def _frames(cam: Any, seconds: float) -> Any:
 
 
 def _timing(ts: np.ndarray) -> dict[str, Any]:
-    """Frame spacing and dropped frames (a gap over 1.5 frame periods)."""
+    """Frame spacing, and dropped frames counted against the locked period (a gap over 1.5 of
+    it): the observed median would hide sustained loss."""
     if len(ts) < 2:
         return {"frames": len(ts), "dropped": 0}
     d = np.diff(ts) / 1e3  # us
     period = float(np.median(d))
-    gaps = d[d > 1.5 * period]
+    gaps = d[d > 1.5 * FRAME_US]
     return {
         "frames": len(ts),
         "period_us": round(period, 3),
         "period_sd_us": round(float(d.std()), 3),
-        "dropped": int(np.round(gaps / period).sum() - len(gaps)),
+        "dropped": int(np.round(gaps / FRAME_US).sum() - len(gaps)),
         "longest_gap_us": round(float(d.max()), 1),
     }
 

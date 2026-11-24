@@ -159,10 +159,13 @@ def review_run(
     summary: dict[str, Any],
     regions: list[dict[str, Any]],
     profile: dict[str, bool],
-    fps: dict[str, float | None],
+    fps: dict[str, list[float | None]],
     args: argparse.Namespace,
     job: dict[str, Any],
+    search_from: float,
 ) -> dict[str, Any]:
+    """One run's review. ``search_from`` (wall clock, s) is where a relative alignment may
+    start looking: past the previous run, so a repeated track can't borrow its frames."""
     ts = capture["ts_ns"]
     t_s = frame_epoch_s(ts, summary)
     lum = capture["rgb"].sum(axis=2).astype(np.float64)
@@ -180,15 +183,28 @@ def review_run(
         dets[dev] = d
     out: dict[str, Any] = {"track": run["track"], "run": run["run"], "absolute_timing": absolute}
     if not absolute:
-        # No audio start on the wall clock: line the first device up by the shift that matches
-        # most detections, inside the job's lifetime. Only the lag's spread is then meaningful.
+        # No audio start on the wall clock: line the devices up by the shift that matches most
+        # detections, between ``search_from`` and the job's end (runs are sequential, so this
+        # run can't land on an earlier one's frames), in two passes: onsets of every region
+        # first, then of the regions that pass selection. Only the lag's spread is meaningful.
         first = next(iter(dets))
-        all_on = []
-        for k in range(lum.shape[1]):
-            all_on += [t_s[o["frame"]] for o in ca.visual_onsets(lum[:, k], ts, row=rows[k])]
-        shift = ca.best_constant_offset(
-            dets[first], np.unique(np.round(all_on, 4)), (job["created_at"], job["completed_at"])
-        )
+        cols = list(range(lum.shape[1]))
+        slot = (t_s >= search_from) & (t_s <= job["completed_at"])
+        for _ in range(2):
+            on_t: list[float] = []
+            for k in cols:
+                on = ca.visual_onsets(lum[slot, k], ts[slot], row=rows[k])
+                on_t += [t_s[slot][o["frame"]] for o in on]
+            span = float(dets[first].max()) if len(dets[first]) else 0.0
+            shift = ca.best_constant_offset(
+                dets[first],
+                np.unique(np.round(on_t, 4)),
+                (search_from, max(search_from + 0.001, job["completed_at"] - span)),
+            )
+            d0 = dets[first] + shift
+            w0 = (t_s >= d0.min() - 2) & (t_s <= d0.max() + 2)
+            rec, prec = ca.responsiveness(lum[w0], ts[w0], rows, d0, t_s[w0])
+            cols = ca.select_regions(rec, prec) or cols
         dets = {dev: d + shift for dev, d in dets.items()}
         out["note"] = "relative timing: lag medians are fixed by alignment, only spreads count"
     # The run's frames: from its first detection's audio start to the end of the music.
@@ -197,35 +213,29 @@ def review_run(
     w = (t_s >= lo) & (t_s <= hi)
     ts_w, t_w, lum_w = ts[w], t_s[w], lum[w]
     try:
-        out["frames"] = ca.frame_timing(ts_w)
+        out["frames"] = ca.frame_timing(ts_w, summary["settings"]["frame_us"] * 1e3)
     except ca.Invalid as e:
         out["invalid"] = str(e)
+        out["ends_at"] = hi - 2.0  # the last detection: the next run starts after it
         return out
     resp = {dev: ca.responsiveness(lum_w, ts_w, rows, d, t_w) for dev, d in dets.items()}
     devices: dict[str, Any] = {}
     for dev, d in dets.items():
         recall, precision = resp[dev]
         others = [resp[o][0] for o in resp if o != dev]
-        best_elsewhere = np.max(others, axis=0) if others else np.zeros(lum.shape[1])
-        mine = [
-            k
-            for k in range(lum.shape[1])
-            if recall[k] >= RESPONSIVE
-            and precision[k] >= RESPONSIVE
-            and recall[k] > best_elsewhere[k]
-        ]
+        mine = ca.select_regions(recall, precision, np.max(others, axis=0) if others else None)
         rep: dict[str, Any] = {
             "detections": len(d),
             "responsive_leds": [regions[k]["id"] for k in mine],
             "follows_loud_hits_only": [
                 regions[k]["id"]
                 for k in range(lum.shape[1])
-                if recall[k] >= RESPONSIVE and precision[k] < RESPONSIVE
+                if recall[k] >= RESPONSIVE and k not in mine
             ],
             "budget": ca.timing_budget(
                 frame_ns=period_ns,
                 exposure_us=summary["settings"]["exposure_us"],
-                chip_fps=fps.get(dev),
+                chip_fps=min((f for f in fps.get(dev, []) if f), default=None),
                 clock=(raws[dev].get("clock") or None),
             ),
         }
@@ -243,6 +253,7 @@ def review_run(
             rep.update(
                 lit_share=round(len(pairs) / len(d), 3) if len(d) else None,
                 unlit=len(unlit),
+                unlit_split=ca.split_unlit(d, unlit),
                 flashes=len(on),
                 flashes_without_detection=len(orphans),
                 orphan_strength_median=round(float(np.median(strength[orphans])), 3)
@@ -260,6 +271,7 @@ def review_run(
             rep["freezes"] = {"count": len(fr), "longest_ms": max((f["ms"] for f in fr), default=0)}
         devices[dev] = rep
     out["devices"] = devices
+    out["ends_at"] = hi - 2.0  # the last detection: the next run starts after it
     return out
 
 
@@ -294,7 +306,9 @@ def markdown(report: dict[str, Any]) -> str:
             if "lag_ms" in r:
                 lag = r["lag_ms"]
                 lines.append(
-                    f"  - lit {r['lit_share']:.0%} ({r['unlit']} unlit); "
+                    f"  - lit {r['lit_share']:.0%} ({r['unlit']} unlit: "
+                    f"{r['unlit_split']['during_previous_flash']} during the previous flash, "
+                    f"{r['unlit_split']['isolated']} isolated); "
                     f"{r['flashes_without_detection']} of {r['flashes']} flashes had no detection "
                     f"(median strength {r['orphan_strength_median']} vs {r['matched_strength_median']} matched)"
                 )
@@ -340,16 +354,22 @@ def main(argv: list[str] | None = None) -> int:
         job = json.loads((out_dir / "job.json").read_text())
         fps = json.loads((out_dir / "fps.json").read_text())
     else:
-        fps = {d[:12]: chip_info(d).get("fps") for d in args.device}
-        (out_dir / "fps.json").write_text(json.dumps(fps))
+        # The chip's frame rate depends on the generator and the music: read it before and
+        # after the run, and let the budget use the lower (the wider chip-frame spread).
+        fps = {d[:12]: [chip_info(d).get("fps")] for d in args.device}
         _, job = run_capture(args, out_dir)
+        for d in args.device:
+            fps[d[:12]].append(chip_info(d).get("fps"))
+        (out_dir / "fps.json").write_text(json.dumps(fps))
     capture = dict(np.load(out_dir / "capture.npz"))
     summary = json.loads(str(capture["summary"]))
     profile = PROFILES[args.generator]
-    runs = [
-        review_run(r, capture, summary, regions, profile, fps, args, job)
-        for r in job["result"]["results"]
-    ]
+    runs = []
+    search_from = float(job["created_at"])
+    for r in job["result"]["results"]:  # in the order they ran
+        rev = review_run(r, capture, summary, regions, profile, fps, args, job, search_from)
+        search_from = float(rev.pop("ends_at", search_from))
+        runs.append(rev)
     report = {
         "stamp": stamp,
         "generator": args.generator,

@@ -99,10 +99,58 @@ def test_noise_alone_has_no_onsets() -> None:
 
 def test_dropped_frames_make_the_run_invalid() -> None:
     ts = np.arange(100, dtype=np.int64) * PERIOD
-    assert ca.frame_timing(ts)["dropped"] == 0
+    assert ca.frame_timing(ts, PERIOD)["dropped"] == 0
     with pytest.raises(ca.Invalid, match="2 dropped"):
-        ca.frame_timing(np.delete(ts, [10, 11]))
-    assert ca.frame_timing(np.delete(ts, [10, 11]), max_dropped=2)["dropped"] == 2
+        ca.frame_timing(np.delete(ts, [10, 11]), PERIOD)
+    assert ca.frame_timing(np.delete(ts, [10, 11]), PERIOD, max_dropped=2)["dropped"] == 2
+
+
+def test_losing_every_other_frame_is_caught_against_the_locked_period() -> None:
+    every_other = np.arange(0, 200, 2, dtype=np.int64) * PERIOD  # median doubles
+    with pytest.raises(ca.Invalid, match="frame period"):  # allowed drops, still off-period
+        ca.frame_timing(every_other, PERIOD, max_dropped=1000)
+    with pytest.raises(ca.Invalid, match="99 dropped"):
+        ca.frame_timing(every_other, PERIOD)
+
+
+def test_a_tilted_row_is_not_split() -> None:
+    # 3 rows 16 px apart, each tilted 0.4 px per column, LEDs ~9 px tall: rows cross any
+    # fixed band boundary, but stay one row each, read left to right.
+    found = []
+    for r in range(3):
+        for c in range(8):
+            y = 20 + 16 * r + 0.4 * c
+            rr = np.arange(int(y) - 4, int(y) + 5)
+            found.append((y, 30.0 + 16 * c, rr, rr))
+    rng = np.random.default_rng(1)
+    rng.shuffle(found)
+    ordered = ca.order_rows(found)
+    for r in range(3):
+        row = ordered[r * 8 : r * 8 + 8]
+        assert [f[1] for f in row] == [30.0 + 16 * c for c in range(8)]
+        assert all(abs(f[0] - (20 + 16 * r)) < 4 for f in row)
+
+
+def test_a_lone_flash_in_a_long_recording_is_found() -> None:
+    n = 2025
+    x = 30.0 + np.random.default_rng(2).normal(0, 0.5, n)
+    x[1000:1004] = [1030, 600, 300, 150]
+    ts = np.arange(n, dtype=np.int64) * PERIOD
+    on = ca.visual_onsets(x, ts)
+    assert [o["frame"] for o in on] == [1000]
+
+
+def test_region_selection_is_relative_to_the_best_region() -> None:
+    recall = np.array([0.9, 0.88, 0.55, 0.2])
+    precision = np.array([0.85, 0.8, 0.56, 0.9])  # region 2: an energy bar on a dense track
+    assert ca.select_regions(recall, precision) == [0, 1]
+    assert ca.select_regions(recall, precision, np.array([0.95, 0, 0, 0])) == [1]
+    assert ca.select_regions(np.zeros(3), np.zeros(3)) == []
+
+
+def test_unlit_detections_are_split_by_the_previous_flash() -> None:
+    det = np.array([1.0, 1.05, 2.0, 5.0])
+    assert ca.split_unlit(det, [1, 3]) == {"during_previous_flash": 1, "isolated": 1}
 
 
 def test_region_map_round_trips_through_npz(tmp_path: Path) -> None:

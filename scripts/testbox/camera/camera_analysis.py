@@ -80,6 +80,23 @@ def max_filter(a: np.ndarray, r: int) -> np.ndarray:
     return out
 
 
+def order_rows(found: list[Any]) -> list[Any]:
+    """Regions (row, col, rows, cols) in reading order: top row first, each row left to right.
+    Rows are grouped by gaps between sorted row centroids (a new row where the gap exceeds half
+    a region's height), not fixed bands, so a slightly tilted camera can't split a row."""
+    if not found:
+        return found
+    half = max(1.0, float(np.median([np.ptp(f[2]) + 1 for f in found])) / 2)
+    by_row = sorted(found, key=lambda f: f[0])
+    rows: list[list[Any]] = [[by_row[0]]]
+    for f in by_row[1:]:
+        if f[0] - rows[-1][-1][0] > half:
+            rows.append([f])
+        else:
+            rows[-1].append(f)
+    return [f for row in rows for f in sorted(row, key=lambda f: f[1])]
+
+
 def find_regions(
     var: np.ndarray,
     *,
@@ -142,9 +159,7 @@ def find_regions(
             found.append((float(rr.mean()), float(cc.mean()), rr, cc))
     if not found:
         raise Invalid(f"{len(peaks)} peaks, none with {min_area} pixels: lower min_area?")
-    # Stable numbering: by row band (a region's height), then column.
-    band = max(1.0, float(np.median([np.ptp(f[2]) + 1 for f in found])))
-    found.sort(key=lambda f: (round(f[0] / band), f[1]))
+    found = order_rows(found)
     labels = np.zeros(var.shape, np.uint16)
     regions = []
     for i, (row, col, rr, cc) in enumerate(found, start=1):
@@ -178,19 +193,27 @@ def row_offset_ns(row: float, line_ns: int = LINE_NS) -> int:
     return round(row * line_ns)
 
 
-def frame_timing(ts_ns: np.ndarray, *, max_dropped: int = 0) -> dict[str, Any]:
-    """Frame spacing; raises Invalid on more than ``max_dropped`` dropped frames (a gap over
-    1.5 periods), since a dropped frame can hide an onset or a freeze."""
+def frame_timing(
+    ts_ns: np.ndarray, expected_period_ns: float, *, max_dropped: int = 0
+) -> dict[str, Any]:
+    """Frame spacing against the locked frame period (the observed median is reported, never
+    used as the reference: losing every other frame would double it and hide the loss).
+    Raises Invalid on more than ``max_dropped`` dropped frames (a gap over 1.5 periods), since
+    a dropped frame can hide an onset or a freeze, or when the observed period is off."""
     if len(ts_ns) < 3:
         raise Invalid(f"only {len(ts_ns)} frames")
     d = np.diff(ts_ns).astype(np.float64)
     if (d <= 0).any():
         raise Invalid("frame timestamps not increasing")
     period = float(np.median(d))
-    gaps = d[d > 1.5 * period]
-    dropped = int(np.round(gaps / period).sum() - len(gaps))
+    gaps = d[d > 1.5 * expected_period_ns]
+    dropped = int(np.round(gaps / expected_period_ns).sum() - len(gaps))
     if dropped > max_dropped:
         raise Invalid(f"{dropped} dropped frames (longest gap {d.max() / 1e6:.1f} ms)")
+    if abs(period - expected_period_ns) > 0.01 * expected_period_ns:
+        raise Invalid(
+            f"frame period {period / 1e6:.3f} ms, locked {expected_period_ns / 1e6:.3f} ms"
+        )
     return {"period_ns": period, "dropped": dropped}
 
 
@@ -208,8 +231,8 @@ def visual_onsets(
     """Onsets in one region's brightness series (one value per frame).
 
     - nothing, if the series' range is under ``min_snr`` times its frame-to-frame noise;
-    - flux: the half-wave rectified frame-to-frame rise, normalized by the series' robust
-      range (p99 - p1), so thresholds don't depend on LED brightness or exposure;
+    - flux: the half-wave rectified frame-to-frame rise, normalized by the series' range (max -
+      p1), so thresholds don't depend on LED brightness or exposure;
     - threshold: median + k * MAD of the flux over a centered window of ``window_s``, and at
       least ``min_rise`` of the range (silence would otherwise make noise an onset);
     - peaks: a local maximum of flux over threshold, at least ``min_gap_ms`` after the last.
@@ -220,7 +243,9 @@ def visual_onsets(
     x = np.asarray(signal, np.float64)
     if len(x) != len(ts_ns):
         raise ValueError("signal and timestamps differ in length")
-    lo, hi = np.percentile(x, [1, 99])
+    # Scale: from a low percentile (the dark level) to the maximum. A high percentile would
+    # miss a lone flash in a long recording; noise-only series are still rejected below.
+    lo, hi = float(np.percentile(x, 1)), float(x.max())
     span = hi - lo
     # Frame-to-frame noise (sd), from the MAD of the differences: a region whose range isn't
     # well above it never lit (sensor noise alone, normalized, would look like flashes).
@@ -376,6 +401,43 @@ def responsiveness(
         recall[k] = len(pairs) / len(det_s)
         precision[k] = len(pairs) / len(on)
     return recall, precision
+
+
+def select_regions(
+    recall: np.ndarray,
+    precision: np.ndarray,
+    elsewhere: np.ndarray | None = None,
+    *,
+    floor: float = 0.5,
+    rel: float = 0.8,
+) -> list[int]:
+    """The regions showing a device's hits: recall and precision both at least ``floor``, an
+    F-score (2PR / (P + R)) at least ``rel`` of the best region's, and more recall than any
+    other device gets from it (``elsewhere``). Relative, because on a dense track a region that
+    moves with the music (an energy bar) clears any fixed bar: on the box's grid the transient
+    rows score F ~0.85 and the energy row ~0.55."""
+    f = np.where(
+        recall + precision > 0, 2 * recall * precision / np.maximum(recall + precision, 1e-9), 0
+    )
+    if f.max() <= 0:
+        return []
+    other = np.zeros_like(recall) if elsewhere is None else elsewhere
+    return [
+        k
+        for k in range(len(recall))
+        if recall[k] >= floor
+        and precision[k] >= floor
+        and f[k] >= rel * f.max()
+        and recall[k] > other[k]
+    ]
+
+
+def split_unlit(det_s: np.ndarray, unlit: list[int], masked_ms: float = 160.0) -> dict[str, int]:
+    """Unlit detections that came while the previous detection's flash was still fading (within
+    ``masked_ms``: the second rise barely shows, a generator trait, not a dropped render) and
+    the isolated ones (worth a look)."""
+    masked = sum(1 for i in unlit if i > 0 and (det_s[i] - det_s[i - 1]) * 1000 < masked_ms)
+    return {"during_previous_flash": masked, "isolated": len(unlit) - masked}
 
 
 def sensor_noise(signal: np.ndarray, near_dark: float = 0.1) -> float:
