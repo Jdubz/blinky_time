@@ -295,3 +295,20 @@ def test_a_reply_without_the_object_says_what_it_got() -> None:
 
     with pytest.raises(ValueError, match=r"no JSON object with 'version'.*\[NN\] ready"):
         json_object_from("[NN] ready=no error=0\n{truncated", "version")
+
+
+async def test_a_command_that_times_out_still_restores_the_stream(
+    protocol: DeviceProtocol, transport: MockTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clock sync keeps going after one of its json info samples times out; the stream it
+    paused must come back, or the run records nothing (#394 review)."""
+    await protocol.start_stream("fast")
+    real = transport._generate_response
+    monkeypatch.setattr(
+        transport, "_generate_response", lambda c: None if c == "json info" else real(c)
+    )
+    transport._sent_commands.clear()
+    with pytest.raises(TimeoutError):
+        await protocol.send_command("json info", timeout=0.2)
+    assert protocol.streaming
+    assert transport.sent_commands[-1] == "stream fast"
