@@ -210,14 +210,18 @@ def review_run(
     period_ns = float(np.median(np.diff(ts)))
     duration_s = args.duration_ms / 1000.0
     raws = run.get("raw_capture") or {}
-    dets: dict[str, np.ndarray] = {}
-    absolute = True
-    for dev, raw in raws.items():
-        d = detections_epoch_s(raw, duration_s)
-        if d is None:
-            absolute = False
-            d = np.array([e["t"] for e in raw["transients"]], np.float64)
-        dets[dev] = d
+    # Absolute only if every device has it: one device without (its clock sync failed) puts
+    # the whole run in relative mode, so no device's epoch times get a relative shift added.
+    epoch = {dev: detections_epoch_s(raw, duration_s) for dev, raw in raws.items()}
+    absolute = all(d is not None for d in epoch.values())
+    dets: dict[str, np.ndarray] = {
+        dev: (
+            d
+            if absolute and d is not None
+            else np.array([e["t"] for e in raws[dev]["transients"]], np.float64)
+        )
+        for dev, d in epoch.items()
+    }
     out: dict[str, Any] = {"track": run["track"], "run": run["run"], "absolute_timing": absolute}
     if not absolute:
         # No audio start on the wall clock: line the devices up by the shift that matches most
