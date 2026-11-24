@@ -50,7 +50,7 @@ Heavy work runs on the Spark or devtop, never on the box.
 - The camera harness for the grid ([#387](https://github.com/Jdubz/blinky_time/issues/387)): dropped frames, render fidelity and latency, measured from outside the chip.
 - Run the release gate on the box through the server API.
 - Recovery: auto-recovery on an enrolled box chip (#219), server-triggered SWD, and the bootloader gate runner.
-- Spark and devtop: inventory what each offers and route every heavy workload there.
+- Spark and devtop: put the surveyed services to work (#386): Grafana observability for the box, the artifact store for reports and captures, Spark `audio` / `gpu_task` jobs for heavy work.
 
 ## P1: consistent drum-hit reactivity
 
@@ -101,5 +101,5 @@ Decided 2026-11-23: the `swd-flash.local` Pi is retired; SWD recovery is the tes
 
 Still open:
 
-- **devtop:** which services it runs, so P0 can use them. The repo only describes one-shot CPU scripts.
+- **What P0 uses from the platform.** devtop runs the Spark platform's shared infrastructure, not blinky compute: the SeaweedFS artifact store, the job archive, imagineer's aux GPU, org CI runners, and the Alloy forwarder to Grafana on bignasty. Surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919). Proposals there: ship box logs and metrics to the existing Grafana, keep reports and captures in the artifact store, run heavy analysis as Spark jobs, and maybe register CI runners on devtop.
 - **The frame-time gate:** the target threshold once the P2 stalls are fixed.
