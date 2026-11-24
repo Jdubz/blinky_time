@@ -227,7 +227,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | Document | Purpose |
 |----------|---------|
 | `docs/ML_STORAGE_LAYOUT.md` | NVMe pool / SATA tier layout for ML data; disk budget; recovery |
-| `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
+| `docs/ROADMAP.md` | **Priorities across all three repos** (P0 tooling, P1 audio, P2 smoothness, P3 ESP32-S3), quality bars, parked work and open owner decisions. GitHub issues, labelled `P0-tooling` / `P1-audio` / `P2-smoothness` / `P3-esp32` / `parked`, are the system of record. |
 | `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, USB speaker, camera, one test chip (XIAO nRF52840 Sense Plus) in a XIAO Debug Mate for SWD, Belkin per-port-switched hub, 8x8 LED grid wiring, hands-off recovery chain; enclosure, calibration, acceptance gates |
@@ -238,7 +238,6 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/WEB_UPDATE_RESEARCH_2026_10.md` | Why browser updates go through the running app, not the bootloader: what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist) |
 | `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
 | `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
-| `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open-issues index; GitHub issues are the system of record. Covers the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, CI), the PR #152 device checklist, and (§8) the items carried over from the archived `docs/archive/OPEN_ISSUES_2026_05_20.md` (SWD recovery, BLE-DFU tooling, fleet ops). |
 | `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
 | `docs/PHONE_RECORD_MODE_PLAN.md` | Phone field recorder: Android Chrome ⇄ one device over Web Bluetooth, raw mic PCM + analysis for concert-volume tuning; wire format, integrity rules, bench gate |
 | `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |

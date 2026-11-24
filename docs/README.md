@@ -8,10 +8,9 @@ Each plan carries a status header; check it before treating the plan as outstand
 
 | Doc | Purpose |
 |-----|---------|
-| [`OPEN_ISSUES_2026_10_15.md`](OPEN_ISSUES_2026_10_15.md) | Current index of open issues by area (rhythm-tracking drift, record mode, brick risk, CI, device checks); each item links its GitHub issue. |
 | [`SAFETY.md`](SAFETY.md) | Flashing/recovery safety model — short index of the invariants and where each is enforced. |
 | [`DEVELOPMENT.md`](DEVELOPMENT.md) | Tooling development: git hooks, console + server dev. |
-| [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) | Where the system stands (verified against code) and what is left to do, plus a "don't retry" list. |
+| [`ROADMAP.md`](ROADMAP.md) | Priorities across all three repos (P0 tooling, P1 audio, P2 smoothness, P3 ESP32-S3), linked to the labelled GitHub issues, which are the system of record. |
 
 ## Architecture / design
 
@@ -56,7 +55,7 @@ Each plan carries a status header; check it before treating the plan as outstand
 
 Docs that no longer reflect the current system are in [`archive/`](archive/). They are kept for the diagnostic narrative they contain; **do not** treat them as current guidance:
 
-- `archive/OPEN_ISSUES_2026_05_19.md`, `archive/OPEN_ISSUES_2026_05_20.md` — earlier open-issue snapshots; items still open from 2026-05-20 were carried into `OPEN_ISSUES_2026_10_15.md` §8.
+- `archive/OPEN_ISSUES_2026_05_19.md`, `archive/OPEN_ISSUES_2026_05_20.md` — earlier open-issue snapshots; their still-open items are GitHub issues now (see `ROADMAP.md`).
 - `archive/UPLOAD_OVERHAUL_PLAN.md`, `archive/UPLOAD_RELIABILITY_PLAN.md` — completed April 2026; the RAM-magic mechanism described still works and lives in firmware.
 - `archive/FLASH_LOCKDOWN_AUDIT.md` — migration gap inventory; the migration finished.
 - `archive/SAFETY_pre_2026_05.md` — pre-FlashLockdown safety doc, replaced by `SAFETY.md`.
