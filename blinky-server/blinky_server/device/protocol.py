@@ -153,9 +153,21 @@ class DeviceProtocol:
             # ends at its "OK..." line: once a stream starts the device sends a line every
             # 10-50 ms, so the reply never goes quiet for the line timeout and would always
             # time out (the first staging run on hardware, #349).
-            response = await self._send_and_collect(
-                command, timeout, ack=is_stream_enable or is_stream_disable
-            )
+            try:
+                response = await self._send_and_collect(
+                    command, timeout, ack=is_stream_enable or is_stream_disable
+                )
+            except BaseException:
+                # A command that times out or fails must not leave the stream paused: the
+                # caller may carry on (a clock sync keeps its good samples) and would then
+                # record with no data arriving (#394 review).
+                if was_streaming and not (is_stream_enable or is_stream_disable):
+                    try:
+                        await self._raw_send(f"stream {self._streaming_mode}")
+                        self._streaming = True
+                    except Exception as e:
+                        log.warning("stream not restored after %r failed: %s", command, e)
+                raise
 
             # Update streaming state
             if is_stream_enable:

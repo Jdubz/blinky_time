@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from .. import systemd_notify
+from .. import systemd_notify, telemetry
 from ..ble.advertiser import FleetBroadcaster
 from ..firmware import ble_dfu as _ble_dfu_mod
 from ..firmware import images
@@ -912,7 +912,16 @@ class FleetManager:
     async def _held_flash_job(self, job: FlashJob, hold: int) -> None:
         """``_run_flash_job`` inside the drain hold ``flash_device`` took for it (#325)."""
         try:
-            await self._run_flash_job(job)
+            # One trace per flash job; its log lines carry the trace id (telemetry.py).
+            with telemetry.tracer.start_as_current_span("flash_job") as span:
+                span.set_attribute("blinky.device", job.device_id)
+                span.set_attribute("blinky.flash_job", job.job_id)
+                span.set_attribute("blinky.auto_recovery", job.is_auto_recovery)
+                await self._run_flash_job(job)
+                span.set_attribute("blinky.transport", job.transport.value if job.transport else "")
+                span.set_attribute("blinky.state", job.state.value)
+                if job.error:
+                    span.set_attribute("blinky.error", job.error[:500])
         finally:
             durable.end_hold(hold)
 
@@ -2774,6 +2783,10 @@ class FleetManager:
         the cost is negligible relative to the flash itself (~100ms
         worst case on a busy filesystem; the flash itself is minutes).
         """
+        try:
+            telemetry.record_flash(job)
+        except Exception:  # metrics must never touch the flash's own bookkeeping
+            log.exception("flash metrics for job %s", job.job_id)
         entry: dict[str, Any] = {
             "job_id": job.job_id,
             "device_id": job.device_id,

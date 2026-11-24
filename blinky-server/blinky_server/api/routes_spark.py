@@ -9,11 +9,12 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..spark import corpus
 from ..spark import service as spark
-from ..spark.client import SparkError
+from ..spark.client import NotFound, SparkError
 from ..work import durable
 from .deps import require_api_key
 
@@ -138,6 +139,27 @@ async def corpus_pause() -> dict[str, Any]:
 @router.get("/jobs")
 async def jobs() -> dict[str, Any]:
     return await asyncio.to_thread(_svc().summary)
+
+
+@router.get("/artifacts/{key:path}")
+async def artifact(key: str) -> RedirectResponse:
+    """A stable link to an artifact the staging suite archived: redirects to a freshly signed
+    URL, valid 10 minutes. Presigned URLs expire, so reports link here. The store signs its LAN
+    address (devtop's SeaweedFS), so the redirect opens from the home network.
+
+    No API key (the links open in a browser), so it signs only keys this box archived
+    (``staging.is_archived``); anything else in the store is 404 here."""
+    from ..testing.staging import is_archived
+
+    if not await asyncio.to_thread(is_archived, key):
+        raise HTTPException(404, "not an artifact this box archived")
+    try:
+        urls = await asyncio.to_thread(_svc().client.presign, [key], 600)
+    except NotFound as e:
+        raise HTTPException(404, str(e)) from e
+    except SparkError as e:
+        raise HTTPException(502, str(e)) from e
+    return RedirectResponse(urls[key], status_code=307)
 
 
 @router.post("/reconcile", dependencies=[Depends(require_api_key)])

@@ -46,6 +46,8 @@ from typing import Any, ParamSpec, TypeVar
 
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 
+from .. import telemetry
+
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "blinky-work-2"  # 2: test.staging plays each track once (pace_track)
@@ -232,11 +234,26 @@ def step(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     name = f"{fn.__module__}.{fn.__qualname__}"
     recorded = DBOS.step(name=name)(fn)
 
+    short = f"{fn.__module__.rsplit('.', 1)[-1]}.{fn.__qualname__}"
+
     @functools.wraps(fn)
     async def run(*args: P.args, **kwargs: P.kwargs) -> R:
         await boundary()
         with hold(name):
-            return await recorded(*args, **kwargs)
+            # Telemetry is observation only: it never changes what runs or what is recorded.
+            outcome = "error"
+            t0 = time.monotonic()
+            with telemetry.tracer.start_as_current_span(f"step {short}") as span:
+                span.set_attribute("blinky.step", name)
+                try:
+                    result = await recorded(*args, **kwargs)
+                    outcome = "ok"
+                    return result
+                except asyncio.CancelledError:
+                    outcome = "cancelled"
+                    raise
+                finally:
+                    telemetry.STEP_SECONDS.labels(short, outcome).observe(time.monotonic() - t0)
 
     return run
 
@@ -256,10 +273,22 @@ def workflow(name: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awa
             task = asyncio.current_task()
             if task is not None:
                 _running.add(task)
+            outcome = "error"
             try:
-                await boundary()  # a workflow that starts while draining does nothing yet
-                return await fn(*args, **kwargs)
+                with telemetry.tracer.start_as_current_span(f"workflow {name}") as span:
+                    span.set_attribute("blinky.workflow", name)
+                    wid = DBOS.workflow_id
+                    if wid:
+                        span.set_attribute("blinky.workflow_id", wid)
+                    await boundary()  # a workflow that starts while draining does nothing yet
+                    result = await fn(*args, **kwargs)
+                    outcome = "ok"
+                    return result
+            except asyncio.CancelledError:
+                outcome = "stopped"  # a drain: DBOS resumes it after the restart
+                raise
             finally:
+                telemetry.WORKFLOWS.labels(name, outcome).inc()
                 if task is not None:
                     _running.discard(task)
 

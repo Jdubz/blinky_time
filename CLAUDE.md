@@ -227,7 +227,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | Document | Purpose |
 |----------|---------|
 | `docs/ML_STORAGE_LAYOUT.md` | Where the ML data is (bignasty archive, the Spark's object store) and the `${BLINKY_DATA}`/`${BLINKY_WORK}` storage roots |
-| `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
+| `docs/ROADMAP.md` | **Priorities across all three repos** (P0 tooling, P1 audio, P2 smoothness, P3 ESP32-S3), quality bars, parked work and open owner decisions. GitHub issues, labelled `P0-tooling` / `P1-audio` / `P2-smoothness` / `P3-esp32` / `parked`, are the system of record. |
 | `docs/ML_IMPROVEMENT_PLAN.md` | ML status: NN shelved on the nRF52840 and why, the gate to turn it back on, ESP32-S3 feasibility (P3), paused items |
 | `docs/TEST_BOX.md` | The test box: hosts and roles, hardware as built (Pi 5, one XIAO Sense Plus in a Debug Mate, 8x8 grid), hands-off recovery chain, setup, blue/green deployer, staging runner |
 | `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | Plan (not built): the box camera (OV5647) watching the grid: render fidelity, render and sound-to-light latency as distributions, follow test against drum labels, freezes |
@@ -235,7 +235,6 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/TESTING_METHODOLOGY.md` | Tiered testing (host harness to full validation on the box chip), drum metrics, removed metrics |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/BLE_REFERENCE.md` | BLE today: NUS connections, fleet broadcast, BLE DFU protocol, known limitations |
-| `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open-issues index; GitHub issues are the system of record. Covers the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, CI), the PR #152 device checklist, and (§8) the items carried over from the archived `docs/archive/OPEN_ISSUES_2026_05_20.md` (SWD recovery, BLE-DFU tooling, fleet ops). |
 | `docs/PHONE_RECORD_MODE_PLAN.md` | Parked (#243 re-scope supersedes it): phone field recorder over Web Bluetooth, wire format, integrity rules |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |
 | `docs/archive/` | Finished plans and audits kept for their rationale (flash lockdown, BLE build, server consolidation, console refactor, hybrid features, the 2026-04 audio audit); not current guidance |
