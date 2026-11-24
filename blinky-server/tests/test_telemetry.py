@@ -122,3 +122,30 @@ async def test_metrics_endpoint_serves_prometheus_text(api_client: AsyncClient) 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/plain")
     assert "blinky_device_up" in resp.text
+
+
+def test_a_restart_restores_the_staging_gauges_from_the_newest_report(tmp_path: Any) -> None:
+    import json as _json
+    import os as _os
+
+    old = tmp_path / "old.json"
+    old.write_text(_json.dumps({"passed": False, "devices": ["CHIP"]}))
+    _os.utime(old, (1_000, 1_000))
+    new = tmp_path / "new.json"
+    new.write_text(
+        _json.dumps(
+            {"passed": True, "devices": ["CHIP"], "health": {"CHIP": {"fps": {"pass": True}}}}
+        )
+    )
+    _os.utime(new, (2_000, 2_000))
+    telemetry.restore_staging(tmp_path)
+    assert _value("blinky_staging_last_passed", {}) == 1
+    assert _value("blinky_staging_last_run_timestamp_seconds", {}) == 2_000
+    check = {"device": "CHIP", "section": "health", "check": "fps"}
+    assert _value("blinky_staging_check_passed", check) == 1
+
+
+def test_no_reports_leave_the_staging_gauges_alone(tmp_path: Any) -> None:
+    telemetry.record_staging({"passed": True, "devices": []}, written_at=5.0)
+    telemetry.restore_staging(tmp_path)
+    assert _value("blinky_staging_last_run_timestamp_seconds", {}) == 5.0

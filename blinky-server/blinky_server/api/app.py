@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # and would otherwise fail for good on "Spark client not started" (#325 review).
     svc = spark_service.start()
     durable.configure(data_dir())
+    telemetry.restore_staging(data_dir() / "staging-reports")
     await durable.launch()
     # Configured, a reconcile poll backs up the webhook.
     reconcile_task = asyncio.create_task(svc.run_forever()) if svc else None

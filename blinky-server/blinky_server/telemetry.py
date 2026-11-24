@@ -19,11 +19,13 @@ transports and outcomes. Never job ids or SHAs.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 from opentelemetry import trace
@@ -79,13 +81,13 @@ def record_flash(job: Any) -> None:
     FLASH_JOBS.labels(
         transport, state, "auto_recovery" if job.is_auto_recovery else "operator"
     ).inc()
-    if job.started_at and job.finished_at:
-        FLASH_SECONDS.labels(transport, state).observe(job.finished_at - job.started_at)
+    if job.finished_at:  # from creation: pre-write failures and preparation count too
+        FLASH_SECONDS.labels(transport, state).observe(job.finished_at - job.created_at)
 
 
-def record_staging(report: dict[str, Any]) -> None:
+def record_staging(report: dict[str, Any], written_at: float | None = None) -> None:
     """The staging suite's report, as written. Replaces the previous run's check gauges."""
-    STAGING_LAST_RUN.set(time.time())
+    STAGING_LAST_RUN.set(time.time() if written_at is None else written_at)
     STAGING_LAST_PASSED.set(1 if report.get("passed") else 0)
     STAGING_CHECK.clear()
     for section in ("health", "music", "final"):
@@ -101,6 +103,21 @@ def record_staging(report: dict[str, Any]) -> None:
     if "pass" in dep:
         for device in report.get("devices", []):
             STAGING_CHECK.labels(device, "deploy", "deploy").set(1 if dep["pass"] else 0)
+
+
+def restore_staging(reports_dir: Path) -> None:
+    """At startup: the newest report on disk sets the staging gauges, with its write time, so
+    a restart doesn't make the last suite look failed (or never run) until the next one."""
+    reports = sorted(reports_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    if not reports:
+        return
+    newest = reports[-1]
+    try:
+        report = json.loads(newest.read_text())
+    except (OSError, ValueError) as e:
+        log.warning("staging metrics not restored from %s: %s", newest, e)
+        return
+    record_staging(report, written_at=newest.stat().st_mtime)
 
 
 # -- device health, read at scrape time --------------------------------------------------------
