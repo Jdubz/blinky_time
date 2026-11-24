@@ -78,6 +78,15 @@ async def test_send_command(api_client: AsyncClient) -> None:
     assert "[BLE]" in resp.json()["response"]
 
 
+async def test_a_command_reply_carries_its_line_timings(api_client: AsyncClient) -> None:
+    """For clients syncing to the device clock over the API (the box camera's calibration)."""
+    body = (
+        await api_client.post("/api/devices/MOCK_DEVICE_000/command", json={"command": "ble"})
+    ).json()
+    assert len(body["line_times"]) == len(body["response"].split("\n"))
+    assert body["sent_at"] <= body["line_times"][0]
+
+
 async def test_send_command_empty_rejected(api_client: AsyncClient) -> None:
     resp = await api_client.post(
         "/api/devices/MOCK_DEVICE_000/command",
