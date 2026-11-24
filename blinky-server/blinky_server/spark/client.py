@@ -92,6 +92,15 @@ class Client:
             raise SparkError(f"upload {path}: response has no uri: {data[:200]!r}")
         return str(uri)
 
+    def presign(self, keys: list[str], expiry_s: int = 3600) -> dict[str, str]:
+        """POST /artifacts/presign -> {key: short-lived public GET URL}. A key the store doesn't
+        have is NotFound (the Job API lists it under ``missing``)."""
+        out = self._json("POST", "/artifacts/presign", {"keys": keys, "expiry_s": expiry_s})
+        missing = out.get("missing") or []
+        if missing:
+            raise NotFound(f"not in the artifact store: {missing}")
+        return {str(k): str(v) for k, v in (out.get("urls") or {}).items()}
+
     def get_artifact(self, key: str, max_bytes: int = 64 * 1024 * 1024) -> bytes:
         """GET /artifacts/{key}. The Job API answers 307 to a short-lived presigned URL on the
         store. That URL is followed WITHOUT our API key: urllib would otherwise copy the
