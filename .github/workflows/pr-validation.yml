@@ -43,18 +43,20 @@ jobs:
           printf 'server=true\nml=true\nconsole=true\n' >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        git diff --name-only "$range" > changed.txt
+        # --no-renames: a move lists both paths, so moving a file out of a watched tree still
+        # runs that tree's suite.
+        git diff --name-only --no-renames "$range" > changed.txt
         echo "changed ($range):"; cat changed.txt
         # server: blinky-server and the test box scripts its job also tests (not camera/, which
-        # has its own job), with the firmware
+        # has its own job), the device registry it lints (devices/), with the firmware
         # tools and corpus scorers it runs; ml: ml-training and the corpus it labels and trains
         # on; console: blinky-console. A change to this workflow runs everything.
         check() {
           if grep -qE "$2" changed.txt; then v=true; else v=false; fi
           echo "$1=$v" >> "$GITHUB_OUTPUT"; echo "$1: $v"
         }
-        check server '^(blinky-server/|scripts/testbox/[^/]+$|scripts/testbox/alloy/|firmware$|corpus$|\.github/workflows/pr-validation\.yml$)'
-        check ml '^(ml-training/|corpus$|\.github/workflows/pr-validation\.yml$)'
+        check server '^(blinky-server/|scripts/testbox/[^/]+$|scripts/testbox/alloy/|devices/|firmware$|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
+        check ml '^(ml-training/|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
         check console '^(blinky-console/|\.github/workflows/pr-validation\.yml$)'
 
   documentation:
