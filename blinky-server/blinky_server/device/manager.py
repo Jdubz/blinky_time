@@ -216,7 +216,7 @@ class FleetManager:
         # server restart. A device that failed 30 s ago looks "clean" after
         # a quick restart, so the auto-recovery loop could re-fire
         # immediately. The persistent flash-attempt audit log specced in
-        # docs/FLASH_LOCKDOWN_PLAN.md §L4 closes this gap by rebuilding
+        # docs/archive/FLASH_LOCKDOWN_PLAN.md §L4 closes this gap by rebuilding
         # this dict from `/var/lib/blinky-server/flash_attempts.jsonl` on
         # boot. Until L4 lands, restart timing matters — the auto-recovery
         # loop's per-cycle dedup-gate is the only line of defense.
@@ -339,7 +339,7 @@ class FleetManager:
         return list(self._devices.values())
 
     # ────────────────────────────────────────────────────────────────────
-    # Flash-job API (see ``docs/FLASH_LOCKDOWN_PLAN.md`` and
+    # Flash-job API (see ``docs/archive/FLASH_LOCKDOWN_PLAN.md`` and
     # ``[[project-deploy-flash-cascade-bug]]``)
     #
     # ``flash_device`` is THE single entry point — operator routes
@@ -1405,7 +1405,7 @@ class FleetManager:
             # operator must know — silently calling it completed
             # opened a 10-min auto-recovery dedup window over a stuck
             # device, which is exactly what the BLE-only fleet
-            # cannot tolerate. See docs/BLE_FLEET_RELIABILITY_PLAN.md
+            # cannot tolerate. See docs/archive/BLE_FLEET_RELIABILITY_PLAN.md
             # item A.
             if result.get("status") != "ok" or not result.get("verified", False):
                 msg = result.get("message", "unknown error")

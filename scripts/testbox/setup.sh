@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Provision the acoustic test box's Pi 5 (docs/TEST_BOX_BUILD_PLAN.md).
+# Provision the test box's Pi 5 (docs/TEST_BOX.md).
 #
 # Runs as root. Idempotent: safe to re-run after a failure or on a rebuilt card.
 #   First boot: cloud-init runs it from the SD card's boot partition
-#               (/boot/firmware/blinky-testbox/setup.sh; docs/TEST_BOX_BUILD_PLAN.md, Software setup).
+#               (/boot/firmware/blinky-testbox/setup.sh; docs/TEST_BOX.md, Software setup).
 #   Later:      sudo ~/blinky_time/scripts/testbox/setup.sh
 #
 # What it does (each step logs OK/FAIL; any FAIL makes the run exit non-zero):
@@ -178,7 +178,7 @@ install_sudoers() {
 disable_bluetooth() {
   local cfg=/boot/firmware/config.txt
   if ! grep -q '^dtoverlay=disable-bt' "$cfg"; then
-    printf '\n[all]\n# blinky test box: no Bluetooth until per-server device ownership exists\n# (docs/TEST_BOX_BUILD_PLAN.md). Remove to re-enable, then reboot.\ndtoverlay=disable-bt\n' >> "$cfg" || return 1
+    printf '\n[all]\n# blinky test box: no Bluetooth until per-server device ownership exists\n# (docs/TEST_BOX.md). Remove to re-enable, then reboot.\ndtoverlay=disable-bt\n' >> "$cfg" || return 1
     touch /var/run/reboot-required
   fi
   systemctl disable --now hciuart.service bluetooth.service 2>/dev/null
@@ -203,17 +203,6 @@ user_ssh_key() {
   if [[ ! -f "$key" ]]; then
     as_user mkdir -p -m 700 "$HOME_DIR/.ssh" &&
       as_user ssh-keygen -q -t ed25519 -N "" -C "$TARGET_USER@$(hostname)" -f "$key" || return 1
-  fi
-  local cfg="$HOME_DIR/.ssh/config"
-  if ! grep -qs '^Host swd-flash' "$cfg"; then
-    as_user tee -a "$cfg" >/dev/null <<'EOF'
-# SWD recovery Pi Zero W (see CLAUDE.md, "SWD recovery for fully-bricked devices")
-Host swd-flash swd-flash.local
-    HostName swd-flash.local
-    User jdubz
-    IdentityFile ~/.ssh/id_ed25519
-EOF
-    chmod 600 "$cfg"
   fi
 }
 
@@ -411,7 +400,6 @@ fi
 echo
 log "next steps (manual):"
 log "  gh auth login                      # release downloads"
-log "  cat ~/.ssh/id_ed25519.pub          # add to swd-flash's authorized_keys"
 log "  cat ~/.blinky-api-key              # this server's own API key"
 log "  claude                             # sign in to Claude Code (once)"
 [[ ${#FAILED[@]} -eq 0 ]]
