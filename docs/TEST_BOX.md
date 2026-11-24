@@ -34,7 +34,7 @@ Owner-stated and checked on 2026-11-23. Don't change this section from guesses; 
 | USB hub | Belkin hub with per-port power switching (`uhubctl`). The chip's own USB-C and the Debug Mate's USB-C are each on a hub port. |
 | LEDs | An 8x8 WS2812 grid, data from **D10** through the Debug Mate's D10 header pin (a direct trace to the socket in Seeed's netlist). The grid has its own external 5 V supply. No level shifter. |
 | Grid wiring | Data enters at the bottom-right LED (seen from the front); each row runs right to left, rows go bottom to top, no serpentine. Firmware orientation 5, `HORIZONTAL_ROTATED_180` ([blinky-firmware#46](https://github.com/Jdubz/blinky-firmware/pull/46), merged, not yet in a stable release). |
-| Camera | OmniVision OV5647 (Camera Module v1 class) on the Pi's CSI port. Rolling shutter, fixed focus; 640×480 binned at up to 67.5 fps (measured 2026-10-27). How it joins the harness: `TEST_BOX_CAMERA_HARNESS_PLAN.md`. |
+| Camera | OmniVision OV5647 (Camera Module v1 class) on the Pi's CSI port. Rolling shutter, fixed focus; 640×480 binned at up to 67.5 fps (measured 2026-10-27). Capture and analysis: `scripts/testbox/camera/` (system Python, `python3-picamera2`); the plan and bench numbers: `TEST_BOX_CAMERA_HARNESS_PLAN.md`. |
 | Speaker | JBL Pebbles (USB-powered, USB audio, ALSA card name `Pebbles`), plugged into the Pi directly, not into the switched hub, so a port cycle or hub reset can't cut it mid-run. |
 
 Firmware-side details of the chip and grid: blinky-firmware's [HARDWARE.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/HARDWARE.md).
@@ -120,5 +120,4 @@ Written before the box was built, without an owner request. None of this is a re
 - **Acoustic isolation.** An enclosure would make runs independent of room noise. Size, materials and construction are open.
 - **Speaker bass.** The Pebbles is small and ported; a sweep would show how well it reproduces kick fundamentals (~50 Hz).
 - **Calibration gear.** A measurement mic and an SPL meter to set and record the playback level at the chip.
-- **Camera timing reference.** A Pi-driven LED in the camera's view to calibrate camera timestamps (see `TEST_BOX_CAMERA_HARNESS_PLAN.md`).
 - **Grid data line.** A series resistor on the data line and a bulk capacitor at the grid's 5 V input are common WS2812 practice; a level shifter if flicker ever appears.

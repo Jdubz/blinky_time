@@ -112,6 +112,7 @@ install_packages() {
     ripgrep fd-find shellcheck sox picocom unzip pipx
     python3-numpy python3-scipy python3-yaml python3-matplotlib python3-cryptography
     python3-pytest                  # tools/ and CI's python checks on the system python
+    python3-picamera2               # the box camera (scripts/testbox/camera/)
   )
   "${APT[@]}" install "${pkgs[@]}"
 }

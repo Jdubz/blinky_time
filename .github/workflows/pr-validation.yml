@@ -94,6 +94,26 @@ jobs:
           ../scripts/testbox/deploy.py ../scripts/testbox/staging.py
         venv/bin/python -m pytest -v ../scripts/testbox/test_deploy.py ../scripts/testbox/test_staging.py
 
+  testbox-camera:
+    name: Test box camera analysis
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    # The analysis runs on the box's system Python (numpy from apt), not the server's venv;
+    # the capture helper needs the camera and is exercised on the box.
+    - name: Region discovery and visual onsets on synthetic data
+      run: |
+        pip install 'numpy>=1.26,<3' pytest
+        python -m pytest -v scripts/testbox/camera/test_camera_analysis.py
+
   feature-parity:
     name: Feature Parity (Python ↔ firmware)
     runs-on: ubuntu-latest
