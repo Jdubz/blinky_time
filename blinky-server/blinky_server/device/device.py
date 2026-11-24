@@ -249,6 +249,9 @@ class Device:
 
     def apply_info(self, info: dict[str, Any]) -> None:
         """Apply parsed json info response to device state."""
+        # Kept whole for /metrics (telemetry.FleetCollector): fps, frame times, overruns, uptime.
+        self.last_info = info
+        self.last_info_at = _time.monotonic()
         self.version = info.get("version")
         dev = info.get("device", {})
         self.device_type = dev.get("id")

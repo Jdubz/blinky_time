@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .. import systemd_notify
+from .. import systemd_notify, telemetry
 from ..device.manager import FleetManager
 from ..spark import service as spark_service
 from .deps import set_fleet
@@ -55,6 +55,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     fm = FleetManager(**app.state.fleet_kwargs)
     set_fleet(fm)
+    telemetry.init_tracing(staging=app.state.fleet_kwargs.get("staging", False))
+    telemetry.register_fleet(fm.get_all_devices)
     await fm.start()
     # Durable work (#325). Recovered jobs start as soon as it launches, before discovery has
     # reconnected their devices; their steps wait for them (testing/workflows.py _connected).
@@ -85,6 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     systemd_notify.stopping()
     await durable.drain(systemd_notify.status, systemd_notify.extend_timeout)
     await durable.shutdown()
+    telemetry.shutdown_tracing()
     if reconcile_task is not None:
         reconcile_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -143,6 +146,17 @@ def create_app(
     app.include_router(work_router, prefix="/api")
     app.include_router(ws_router)
 
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        """Prometheus metrics (telemetry.py), scraped by the box's Alloy on loopback."""
+        body, content_type = telemetry.metrics_body()
+        return Response(content=body, media_type=content_type)
+
+    # A span per HTTP request; /metrics and the frequent device polls aren't worth one.
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="metrics,api/devices$,api/work$")
+
     # Mount the built blinky-console as a SPA (after API routers so they
     # take precedence). Skipped silently if the static dir isn't present,
     # so the server runs fine in dev without a console build.
@@ -165,7 +179,7 @@ def _resolve_static_dir() -> Path:
 # /openapi.json, /redoc) aren't listed here — they're registered on the
 # app before this catch-all, so a real request hits them first; a typo
 # like `/documents` should reach the SPA, not 404.
-_RESERVED_NAMES = frozenset({"api", "ws"})
+_RESERVED_NAMES = frozenset({"api", "ws", "metrics"})
 
 
 def _is_reserved(path: str) -> bool:
