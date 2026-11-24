@@ -14,6 +14,13 @@ dependencies = [
     # Durable work (#325): long-running jobs as workflows that survive restarts. Pinned: its
     # recovery and replay semantics are load-bearing (blinky_server/work/durable.py).
     "dbos==3.4.0",
+    # Telemetry (blinky_server/telemetry.py): /metrics for Prometheus, OTLP traces for Tempo,
+    # both through the test box's Alloy agent to the central LGTM stack.
+    "prometheus-client>=0.20",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
 ]
 
 [project.optional-dependencies]
