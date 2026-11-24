@@ -231,3 +231,59 @@ def test_sensor_noise_comes_from_the_dark_frames() -> None:
     x = 30 + rng.normal(0, 1.0, 1000)
     x[::5] += 500  # flashes on a fifth of the frames
     assert ca.sensor_noise(x) == pytest.approx(1.41, abs=0.3)  # diff of two N(0, 1)
+
+
+def test_lit_regions_are_the_ones_that_rise_above_dark() -> None:
+    rng = np.random.default_rng(7)
+    dark = 100 + rng.normal(0, 1.0, (20, 5))
+    frames = 100 + rng.normal(0, 1.0, (3, 5))
+    frames[:, 2] += 500
+    assert ca.lit_regions(frames, dark) == [2]
+    assert ca.lit_regions(dark[:3], dark) == []
+
+
+def test_a_walk_in_reading_order_is_ok() -> None:
+    lit = {(x, y): [y * 3 + x] for y in range(2) for x in range(3)}
+    r = ca.walk_report(lit, 3, 2, 6)
+    assert r["ok"] and r["reading_order"]
+    assert r["mapping"]["2,1"] == 5
+
+
+def test_a_walk_finds_dead_shared_and_unseen_and_a_flipped_panel() -> None:
+    lit = {(x, y): [(1 - y) * 3 + x] for y in range(2) for x in range(3)}  # rows flipped
+    r = ca.walk_report(lit, 3, 2, 6)
+    assert r["ok"] and not r["reading_order"]
+    lit[(0, 0)] = []  # dead
+    lit[(1, 0)] = [4, 5]  # lights two regions
+    r = ca.walk_report(lit, 3, 2, 7)
+    assert r["dead"] == ["0,0"]
+    assert r["ambiguous"] == [{"pixel": "1,0", "regions": [4, 5]}]
+    assert r["shared"] == {"5": ["1,0", "2,0"]}
+    assert r["unseen"] == [3, 6]
+    assert not r["ok"]
+
+
+def test_flash_lags_measure_the_camera_offset_and_floor() -> None:
+    rng = np.random.default_rng(8)
+    edges = np.sort(rng.uniform(0, 60, 200))
+    onsets = edges + 0.004 + rng.uniform(-0.0074, 0.0074, 200)  # 4 ms offset, one frame wide
+    r = ca.flash_lags(edges, np.delete(onsets, [5, 6]))
+    assert r["flashes"] == 200 and r["seen"] == 198 and r["missed"] == 2
+    assert r["lag_ms"]["median"] == pytest.approx(4.0, abs=1.0)
+    assert r["lag_ms"]["iqr"][1] - r["lag_ms"]["iqr"][0] == pytest.approx(7.4, abs=1.5)
+
+
+def test_line_time_comes_from_how_often_the_bottom_row_sees_a_flash_first() -> None:
+    rng = np.random.default_rng(9)
+    period = 14.816e6
+    line = 15_870.0
+    gap_rows = 140
+    on = rng.uniform(0, 1000 * period, 4000)  # random phases
+    top_end = 0.0  # top row's exposure ends at k * period
+    bottom_end = gap_rows * line  # bottom row's, later by the readout gap
+    top = np.ceil((on - top_end) / period)
+    bottom = np.ceil((on - bottom_end) / period)
+    r = ca.line_time_from_rows(top, bottom, gap_rows, period)
+    assert r["inconsistent"] == 0
+    assert r["line_time_ns"] == pytest.approx(line, rel=0.1)
+    assert r["line_time_se_ns"] < 1000

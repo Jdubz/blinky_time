@@ -475,6 +475,110 @@ def freezes(
     return out
 
 
+# -- calibration with the firmware's testpattern command ---------------------------------------
+
+
+def lit_regions(frames: np.ndarray, dark: np.ndarray, k: float = 8.0) -> list[int]:
+    """Regions lit in ``frames`` (frames x regions brightness) compared with ``dark`` (the
+    same regions with every LED off): mean rise above the dark mean by more than k times the
+    dark frames' spread (and at least 1% of the dark level, against a zero spread)."""
+    f = np.asarray(frames, np.float64).mean(axis=0)
+    d = np.asarray(dark, np.float64)
+    base = d.mean(axis=0)
+    spread = d.std(axis=0)
+    rise = f - base
+    return [int(r) for r in np.flatnonzero(rise > np.maximum(k * spread, 0.01 * np.abs(base) + 1))]
+
+
+def walk_report(
+    lit: dict[tuple[int, int], list[int]], width: int, height: int, n_regions: int
+) -> dict[str, Any]:
+    """From a pixel walk (logical (x, y) -> regions that lit): the mapping, and what's wrong.
+
+    - dead: pixels that lit no region;
+    - ambiguous: pixels that lit more than one;
+    - shared: regions lit by more than one pixel (two LEDs seen as one, or a stuck LED);
+    - unseen: regions no pixel lit (a reflection mapped as an LED, or a stale map);
+    - reading_order: True when pixel (x, y) lit region y * width + x (regions are numbered
+      top to bottom, left to right), i.e. the camera sees logical rows as rows, top first.
+      Not a requirement: a mounted panel may face any way; this says which way it faces."""
+    mapping: dict[str, int] = {}
+    dead, ambiguous = [], []
+    seen: dict[int, list[str]] = {}
+    for y in range(height):
+        for x in range(width):
+            regs = lit.get((x, y), [])
+            key = f"{x},{y}"
+            if not regs:
+                dead.append(key)
+            elif len(regs) > 1:
+                ambiguous.append({"pixel": key, "regions": regs})
+            else:
+                mapping[key] = regs[0]
+            for r in regs:
+                seen.setdefault(r, []).append(key)
+    shared = {str(r): px for r, px in seen.items() if len(px) > 1}
+    unseen = [r for r in range(n_regions) if r not in seen]
+    reading = bool(mapping) and all(
+        mapping.get(f"{x},{y}") == y * width + x for y in range(height) for x in range(width)
+    )
+    return {
+        "mapping": mapping,
+        "dead": dead,
+        "ambiguous": ambiguous,
+        "shared": shared,
+        "unseen": unseen,
+        "reading_order": reading,
+        "ok": not dead and not ambiguous and not shared and not unseen,
+    }
+
+
+def flash_lags(
+    edges_on_s: np.ndarray, onset_s: np.ndarray, lo_ms: float = -20.0, hi_ms: float = 60.0
+) -> dict[str, Any]:
+    """The timing reference: each flash's on-edge (chip time on the host clock, when its
+    frame went to the LEDs, plus the latch delay) against the camera's onset of it. The lag
+    distribution is what the camera adds to every timing number: its offset (median) and its
+    floor (spread). Flashes the camera missed, or onsets with no flash, are counted."""
+    pairs, missed, extra = match_events(edges_on_s, onset_s, lo_ms, hi_ms)
+    lags = [(onset_s[j] - edges_on_s[i]) * 1000.0 for i, j in pairs]
+    return {
+        "flashes": len(edges_on_s),
+        "seen": len(pairs),
+        "missed": len(missed),
+        "onsets_without_flash": len(extra),
+        "lag_ms": distribution(lags),
+    }
+
+
+def line_time_from_rows(
+    top_frames: np.ndarray, bottom_frames: np.ndarray, row_gap: float, period_ns: float
+) -> dict[str, Any]:
+    """The rolling-shutter line time from one flash train seen by two rows of LEDs.
+
+    Rows are read top to bottom, ``row_gap`` rows apart, so the bottom row's exposure ends
+    row_gap * line_time after the top's. A flash that comes on inside that gap shows in the
+    bottom row one frame before the top. Flashes come at random phases, so the share of them
+    that do is gap / period: line_time = share * period / row_gap."""
+    t = np.asarray(top_frames)
+    b = np.asarray(bottom_frames)
+    n = len(t)
+    if n == 0 or row_gap <= 0:
+        return {"flashes": n}
+    early = int(np.sum(t - b == 1))
+    other = int(np.sum((t - b != 0) & (t - b != 1)))
+    share = early / n
+    # binomial standard error of the share, carried through
+    se = (share * (1 - share) / n) ** 0.5
+    return {
+        "flashes": n,
+        "bottom_first": early,
+        "inconsistent": other,
+        "line_time_ns": round(share * period_ns / row_gap, 1),
+        "line_time_se_ns": round(se * period_ns / row_gap, 1),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """``regions SURVEY --out MAP``: a region map from a survey (camera_capture.py survey)."""
     import argparse
