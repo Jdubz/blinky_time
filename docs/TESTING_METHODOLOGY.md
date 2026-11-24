@@ -110,12 +110,14 @@ run_validation_suite(ports=["<chip>"], tracks=["techno-minimal-01", "trance-goa-
 Same shape as Tier 2, with more tracks, more runs and longer windows:
 
 ```
+# three rounds; in each round run A, wait for it to finish, then run B
 run_validation_suite(ports=["<chip>"],
                      tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background", "garage-uk-2step"],
-                     runs=3, duration_ms=45000, commands=[...])   # once for A, once for B, alternating
+                     runs=1, duration_ms=45000, commands=[...A...])
+run_validation_suite(ports=["<chip>"], tracks=[...same...], runs=1, duration_ms=45000, commands=[...B...])
 ```
 
-- **4 tracks, 3 runs each, per configuration**
+- **4 tracks, 3 runs each, per configuration, interleaved A/B by round.** One suite call holds a single session with fixed setup commands for all its runs (`testing/workflows.py`). So `runs=3` once for A and once for B gives all-A then all-B, and room or chip drift would land on one side.
 - 45 s duration to clear intros (many tracks have 10–15 s beatless intros)
 - 3 runs cut per-track std from ~0.15 to ~0.09 (onset F1, earlier measurements)
 
