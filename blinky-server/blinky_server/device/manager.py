@@ -101,6 +101,9 @@ REAP_INTERVAL_CYCLES = 6  # every 6th background cycle (~60s)
 # bootloader visits the server didn't start (an operator's UF2 drop, a
 # bootloader update), which finish well inside it.
 USB_DFU_RECOVERY_GRACE_S = 120.0
+# Reconnect hold on a UF2 target while uf2_upload.py runs (_run_uf2_flash): longer than the
+# subprocess can live (300 s stream timeout + 10 s exit wait), released as soon as it exits.
+UF2_WRITE_HOLD_S = 330.0
 
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
@@ -791,10 +794,12 @@ class FleetManager:
             UF2 USB bus reset disrupts other serial devices on the same
             hub, so we freeze their reconnect timers across the flash.
             Released between iterations so each next-target's siblings
-            are computed fresh. (Notably absent: ``pause_discovery`` and
-            target ``hold_reconnect`` — both block the orchestrator's
-            verify-via-reconnect; see ``project_deploy_flash_cascade_bug``
-            and the L3a hardware-test post-mortem.)
+            are computed fresh. (Notably absent: ``pause_discovery`` and a
+            target ``hold_reconnect`` across the whole flash — both block the
+            orchestrator's verify-via-reconnect; see
+            ``project_deploy_flash_cascade_bug`` and the L3a hardware-test
+            post-mortem. ``_run_uf2_flash`` holds the target only while
+            uf2_upload.py runs, and lifts it before VERIFYING.)
           - ``udevadm settle`` + 8 s sleep after every UF2 iteration
             except the last, so the kernel's USB event queue drains
             before the next device's reset.
@@ -1126,15 +1131,31 @@ class FleetManager:
 
         # WRITING: subprocess + progress callbacks.
         job.transition(FlashJobState.WRITING)
-        write_ok = await _uf2_write_impl_for_job(
-            job,
-            serial_port=device.transport.address,
-            firmware_path=str(job.firmware_path),
-            transport=device.transport,
-            already_in_bootloader=(
-                device.state is DeviceState.DFU_RECOVERY and self._in_usb_bootloader(device.id)
-            ),
-        )
+        # Keep the server off the target's port while uf2_upload.py owns it. The write USB-
+        # resets the chip and the tool then enters its bootloader over that same port; the
+        # reset re-enumerates the chip, discovery saw it "re-appear" and reconnected mid-entry
+        # (staging run 2026-11-23: the server opened the port at 20:57:13, the tool's
+        # `bootloader` got no drive and its retry died on EIO). The hold covers only the
+        # subprocess and is released the moment it exits, before VERIFYING, whose
+        # verify-via-reconnect is why the target isn't held across the whole flash.
+        prior_hold = self._reconnect_blackout.get(job.device_id)
+        self.hold_reconnect(job.device_id, UF2_WRITE_HOLD_S)
+        try:
+            write_ok = await _uf2_write_impl_for_job(
+                job,
+                serial_port=device.transport.address,
+                firmware_path=str(job.firmware_path),
+                transport=device.transport,
+                already_in_bootloader=(
+                    device.state is DeviceState.DFU_RECOVERY and self._in_usb_bootloader(device.id)
+                ),
+            )
+        finally:
+            # Lift this hold only; a hold someone else set before the flash runs out as set.
+            if prior_hold is not None and prior_hold > _time.monotonic():
+                self._reconnect_blackout[job.device_id] = prior_hold
+            else:
+                self.resume_reconnect(job.device_id)
         if not write_ok:
             # ``_uf2_write_impl_for_job`` already set ``job.error``.
             job.transition(FlashJobState.FAILED)
