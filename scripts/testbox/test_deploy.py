@@ -267,6 +267,30 @@ def test_the_alloy_config_installs_when_it_changes_and_reloads_alloy(
     assert deploy.install_alloy_config(slot) is True and len(events) == 2
 
 
+def test_a_failed_alloy_reload_restores_the_old_config_so_the_next_pass_retries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    slot = tmp_path / "slot"
+    src = slot / deploy.ALLOY_CONFIG_SRC
+    src.parent.mkdir(parents=True)
+    src.write_text("// new\n")
+    etc = tmp_path / "etc-alloy"
+    etc.mkdir()
+    (etc / "config.alloy").write_text("// old\n")
+    monkeypatch.setattr(deploy, "ALLOY_CONFIG", etc / "config.alloy")
+
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:3] == ("sudo", "-n", "tee"):
+            Path(cmd[3]).write_text(kw["stdin"])
+        elif "reload-or-restart" in cmd:
+            raise RuntimeError("alloy: reload failed")
+        return ""
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    deploy.reconcile_alloy_config(slot)  # logged, not raised
+    assert (etc / "config.alloy").read_text() == "// old\n"  # differs again: retried next pass
+
+
 def test_a_unit_added_by_a_commit_is_installed_on_the_next_pass(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -310,6 +334,7 @@ def test_every_pass_reconciles_units_from_the_live_slot(box: dict[str, Any]) -> 
     GIT["calls"].clear()
     assert deploy.deploy_once() == 0
     assert box["reconciled"] == ["blinky-deploy-a"]
+    assert box["alloy"] == ["blinky-deploy-a"]  # the Alloy config is reconciled every pass too
 
 
 def test_a_slot_checks_out_the_server_submodules_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -410,6 +435,10 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(deploy, "gh_api", gh())
     monkeypatch.setattr(deploy, "prepare", prepare)
     calls["reconciled"] = []
+    monkeypatch.setattr(
+        deploy, "reconcile_alloy_config", lambda slot: calls["alloy"].append(slot.name)
+    )
+    calls["alloy"] = []
     monkeypatch.setattr(
         deploy, "install_missing_units", lambda slot: calls["reconciled"].append(slot.name)
     )

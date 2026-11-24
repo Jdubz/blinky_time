@@ -77,9 +77,10 @@ loki.process "box" {
 			}
 		}
 
-		// Job ids (12 hex) as structured metadata, never labels.
+		// Job and durable workflow ids (12 hex) as structured metadata, never labels. Forms in the
+		// server's lines: "job <id>", "job_id=<id>", "workflow <id>" (work/durable.py).
 		stage.regex {
-			expression = `(?:job |job_id[=:] ?)(?P<job_id>[0-9a-f]{12})\b`
+			expression = `(?:job |job_id[=:] ?|workflow )(?P<job_id>[0-9a-f]{12})\b`
 		}
 	}
 

@@ -330,19 +330,34 @@ def install_units(slot: Path, only_missing: bool = False) -> list[str]:
 def install_alloy_config(slot: Path) -> bool:
     """Install ``slot``'s Alloy config where it differs from the live one, and reload Alloy.
     True if it changed. Alloy not installed (no /etc/alloy): say so and leave it, since installing
-    the agent is setup.sh's job, not a deploy's."""
+    the agent is setup.sh's job, not a deploy's. If the reload fails, the previous file goes back,
+    so the next pass sees a difference and tries again instead of trusting an unapplied file."""
     if not ALLOY_CONFIG.parent.is_dir():
-        log(
-            f"Alloy isn't installed ({ALLOY_CONFIG.parent} missing): config not installed; run setup.sh"
-        )
+        log(f"Alloy isn't installed ({ALLOY_CONFIG.parent} missing): config left; run setup.sh")
         return False
     text = (slot / ALLOY_CONFIG_SRC).read_text()
-    if ALLOY_CONFIG.is_file() and ALLOY_CONFIG.read_text() == text:
+    previous = ALLOY_CONFIG.read_text() if ALLOY_CONFIG.is_file() else None
+    if previous == text:
         return False
     run("sudo", "-n", "tee", str(ALLOY_CONFIG), cwd=HOME, timeout=30, stdin=text)
-    run("sudo", "-n", "systemctl", "reload-or-restart", "alloy", cwd=HOME, timeout=60)
+    try:
+        run("sudo", "-n", "systemctl", "reload-or-restart", "alloy", cwd=HOME, timeout=60)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        if previous is None:
+            run("sudo", "-n", "rm", "-f", str(ALLOY_CONFIG), cwd=HOME, timeout=30)
+        else:
+            run("sudo", "-n", "tee", str(ALLOY_CONFIG), cwd=HOME, timeout=30, stdin=previous)
+        raise
     log(f"installed the Alloy config from {slot.name} and reloaded Alloy")
     return True
+
+
+def reconcile_alloy_config(slot: Path) -> None:
+    """install_alloy_config, logged and never raised: telemetry must not block a deploy."""
+    try:
+        install_alloy_config(slot)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        log(f"WARNING: installing {slot.name}'s Alloy config failed (retried next pass): {e}")
 
 
 def install_missing_units(slot: Path) -> list[str]:
@@ -396,11 +411,7 @@ def switch_to(slot: Path, timeout_s: float) -> str | None:
         install_units(slot)
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
         return f"installing {slot.name}'s units: {e}"
-    try:
-        install_alloy_config(slot)
-    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-        # Telemetry must not block a deploy: log it loudly and carry on with the server.
-        log(f"WARNING: installing {slot.name}'s Alloy config failed: {e}")
+    reconcile_alloy_config(slot)
     stopped = stop_drained(timeout_s)
     if stopped is not None:
         return stopped
@@ -542,6 +553,9 @@ def deploy_once(dry_run: bool = False) -> int:
     state["deployed"] = current
     if not dry_run:
         install_missing_units(live)
+        # Every pass, like the units: the deploy that brings this code runs the previous
+        # deploy.py, which has no Alloy step, and a failed reload must be retried.
+        reconcile_alloy_config(live)
         link_firmware_toolchain(live)
     seen = (current, state.get("deployable"))
     if not dry_run and (target in seen or target in state["refused"]):
