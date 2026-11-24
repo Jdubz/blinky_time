@@ -35,6 +35,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .. import telemetry
@@ -319,6 +320,59 @@ async def write_report(sha: str, report: dict[str, Any]) -> str:
     return str(path)
 
 
+@durable.step
+async def store_report(path: str) -> str | None:
+    """The report in the Spark artifact store (under inputs/, never reaped), so it outlives the
+    box's disk and can be linked from anywhere: the key, or None when the Spark client isn't
+    configured or the upload fails. Logged either way; archiving never fails a report."""
+    from ..spark import service as spark_service
+    from ..spark.client import SparkError
+
+    svc = spark_service.get_service()
+    if svc is None:
+        log.warning("staging report not archived: %s", spark_service.disabled_reason())
+        return None
+    try:
+        key = await asyncio.to_thread(svc.client.upload, Path(path))
+    except (SparkError, OSError, ValueError) as e:  # ValueError: a reply that isn't JSON
+        log.warning("staging report not archived: upload of %s failed: %s", path, e)
+        return None
+    _record_archived(key)
+    log.info("staging report archived as %s", key)
+    return key
+
+
+def _archived_index() -> Path:
+    return data_dir() / "staging-reports" / "archived-keys.txt"
+
+
+def _record_archived(key: str) -> None:
+    """Remember a key this box archived: the artifact link serves only these (routes_spark)."""
+    if is_archived(key):
+        return
+    path = _archived_index()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(key + "\n")
+
+
+def is_archived(key: str) -> bool:
+    """True if the staging suite archived ``key`` (so a report links to it)."""
+    try:
+        return key in _archived_index().read_text().splitlines()
+    except FileNotFoundError:
+        return False
+
+
+async def _finish(sha: str, report: dict[str, Any]) -> dict[str, Any]:
+    """Write the report, then archive it (the archive key goes in the returned report)."""
+    report["path"] = await write_report(sha, report)
+    key = await store_report(report["path"])
+    if key:
+        report["artifact"] = key
+    return report
+
+
 # -- the job -----------------------------------------------------------------------------------
 
 
@@ -368,8 +422,7 @@ async def _suite(
     report["deploy"] = {"pass": deploy.get("status") == "ok", **deploy}
     if deploy.get("status") != "ok":
         report["passed"] = False
-        report["path"] = await write_report(sha, report)
-        return report
+        return await _finish(sha, report)
     version = deploy["version"]
     report["version"] = version
     start = await uptimes(device_ids, float(deploy["steps"]["store"]["flash_t"]))
@@ -409,6 +462,6 @@ async def _suite(
 
     report["final"] = await final_state(device_ids, version, start)
     report["passed"] = _passed({k: v for k, v in report.items() if k != "limits"})
-    report["path"] = await write_report(sha, report)
+    await _finish(sha, report)
     jobs.report(100, "passed" if report["passed"] else "FAILED")
     return report

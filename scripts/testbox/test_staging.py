@@ -557,3 +557,10 @@ def test_a_stalled_review_lookup_is_a_note_not_a_failure() -> None:
     state = staging.run_once(g, srv)
     assert f"{staging.REVIEWS_HEADER} couldn't read them" in g.comments[0][1]
     assert g.statuses[-1][0] == "success" and state["reported"] == SHA
+
+
+def test_the_report_links_its_archived_copy_through_the_box() -> None:
+    text = staging.render({**GOOD_REPORT, "artifact": "inputs/abc/s.json"})
+    assert "`inputs/abc/s.json`" in text
+    assert "http://blinkytest:8420/api/spark/artifacts/inputs/abc/s.json" in text
+    assert "artifact store" not in staging.render(GOOD_REPORT)
