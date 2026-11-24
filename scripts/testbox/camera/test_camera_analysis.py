@@ -116,3 +116,70 @@ def test_region_map_round_trips_through_npz(tmp_path: Path) -> None:
     assert json.loads(str(back["settings"])) == settings
     assert (back["labels"] == labels).all()
     assert len(json.loads(str(back["regions"]))) == 2
+
+
+def test_matching_is_one_to_one_and_reports_unlit_and_orphans() -> None:
+    det = np.array([1.000, 2.000, 3.000, 4.000])
+    on = np.array([1.010, 1.020, 2.050, 5.000])  # 1.020 is a second onset for one detection
+    pairs, unlit, orphans = ca.match_events(det, on)
+    assert pairs == [(0, 0), (1, 2)]
+    assert unlit == [2, 3]
+    assert orphans == [1, 3]
+
+
+def test_the_distribution_is_median_iqr_and_tails() -> None:
+    d = ca.distribution(list(range(101)))
+    assert d["n"] == 101 and d["median"] == 50 and d["iqr"] == [25, 75]
+    assert d["p10"] == 10 and d["p90"] == 90
+    assert ca.distribution([]) == {"n": 0}
+
+
+def test_the_constant_offset_lines_detections_up_with_onsets() -> None:
+    rng = np.random.default_rng(5)
+    det = np.sort(rng.uniform(0, 30, 40))
+    on = det + 0.812 + rng.uniform(-0.005, 0.005, 40)
+    assert ca.best_constant_offset(det, on, (0.0, 2.0)) == pytest.approx(0.812, abs=0.012)
+
+
+def test_the_budget_lists_each_source_of_spread() -> None:
+    b = ca.timing_budget(
+        frame_ns=14.816e6, exposure_us=1000, chip_fps=100.0, clock={"rtt_ms": 4.0, "drift_ms": 0.6}
+    )
+    assert b["camera_frame_ms"]["sd"] == pytest.approx(4.28, abs=0.01)
+    assert b["chip_frame_ms"]["spread"] == 10.0
+    assert b["clock_sync_ms"]["shift_up_to"] == 2.0
+    assert b["clock_drift_ms"] == 0.6
+    assert "chip_frame_ms" not in ca.timing_budget(
+        frame_ns=14.816e6, exposure_us=1000, chip_fps=None, clock=None
+    )
+
+
+def test_regions_that_follow_the_detections_are_responsive() -> None:
+    n = 600
+    ts = np.arange(n, dtype=np.int64) * PERIOD
+    t_s = ts / 1e9
+    hits = [50, 120, 200, 260, 330, 400, 470, 540]
+    follows = _flashes(n, hits)
+    other = _flashes(n, [80, 160, 300, 450], seed=2)  # flashes, but not on the detections
+    sig = np.stack([follows, other], axis=1)
+    det_s = t_s[hits] - 0.010  # each hit lit 10 ms after its detection
+    recall, precision = ca.responsiveness(sig, ts, [0.0, 0.0], det_s, t_s)
+    assert recall[0] == 1.0 and precision[0] == 1.0
+    assert recall[1] == 0.0
+
+
+def test_a_stuck_stretch_is_a_freeze() -> None:
+    rng = np.random.default_rng(4)
+    x = 100 + rng.normal(0, 20, 300)  # an animating region
+    x[100:120] = x[100] + rng.normal(0, 0.5, 20)  # stuck for 20 frames: sensor noise only
+    ts = np.arange(300, dtype=np.int64) * PERIOD
+    fr = ca.freezes(x, ts, noise=0.5)
+    assert len(fr) == 1 and 19 * PERIOD / 1e6 - 0.1 <= fr[0]["ms"] <= 20 * PERIOD / 1e6 + 0.1
+    assert ca.freezes(100 + rng.normal(0, 20, 300), ts, noise=0.5) == []
+
+
+def test_sensor_noise_comes_from_the_dark_frames() -> None:
+    rng = np.random.default_rng(6)
+    x = 30 + rng.normal(0, 1.0, 1000)
+    x[::5] += 500  # flashes on a fifth of the frames
+    assert ca.sensor_noise(x) == pytest.approx(1.41, abs=0.3)  # diff of two N(0, 1)

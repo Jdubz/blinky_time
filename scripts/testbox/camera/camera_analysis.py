@@ -261,6 +261,158 @@ def background_level(signal: np.ndarray, pct: float = 5.0) -> float:
     return float(np.percentile(np.asarray(signal, np.float64), pct))
 
 
+# -- matching serial detections to light ------------------------------------------------------
+
+
+def match_events(
+    det_s: np.ndarray, onset_s: np.ndarray, lo_ms: float = -30.0, hi_ms: float = 80.0
+) -> tuple[list[tuple[int, int]], list[int], list[int]]:
+    """One-to-one pairs (detection index, onset index) with onset - detection inside
+    [lo_ms, hi_ms], closest first; then the detections that never lit and the onsets with no
+    detection. The window is wide on purpose: frame quantization, the chip's frame loop and
+    the clock sync all spread the lag, and the lag's distribution is what's reported."""
+    cand = []
+    for i, d in enumerate(det_s):
+        for j, o in enumerate(onset_s):
+            lag = (o - d) * 1000.0
+            if lo_ms <= lag <= hi_ms:
+                cand.append((abs(lag), i, j))
+    cand.sort()
+    used_d: set[int] = set()
+    used_o: set[int] = set()
+    pairs = []
+    for _, i, j in cand:
+        if i not in used_d and j not in used_o:
+            pairs.append((i, j))
+            used_d.add(i)
+            used_o.add(j)
+    pairs.sort()
+    unlit = [i for i in range(len(det_s)) if i not in used_d]
+    orphans = [j for j in range(len(onset_s)) if j not in used_o]
+    return pairs, unlit, orphans
+
+
+def distribution(values_ms: np.ndarray | list[float]) -> dict[str, Any]:
+    """Median, IQR and p10/p90 (ms): timing is only ever reported as a distribution."""
+    v = np.asarray(values_ms, np.float64)
+    if len(v) == 0:
+        return {"n": 0}
+    p10, p25, p50, p75, p90 = np.percentile(v, [10, 25, 50, 75, 90])
+    return {
+        "n": len(v),
+        "median": round(float(p50), 2),
+        "iqr": [round(float(p25), 2), round(float(p75), 2)],
+        "p10": round(float(p10), 2),
+        "p90": round(float(p90), 2),
+    }
+
+
+def best_constant_offset(
+    det_s: np.ndarray, onset_s: np.ndarray, search_s: tuple[float, float], tol_ms: float = 20.0
+) -> float:
+    """The constant shift (s) that lines most detections up with an onset within ``tol_ms``.
+    For runs without absolute timing: it fixes the lag's center, so only the lag's spread is
+    meaningful, never its median."""
+    best, best_n = search_s[0], -1
+    for shift in np.arange(search_s[0], search_s[1], 0.001):
+        d = onset_s[None, :] - (det_s[:, None] + shift)
+        n = int((np.abs(d) < tol_ms / 1000.0).any(axis=1).sum())
+        if n > best_n:
+            best, best_n = float(shift), n
+    # Many shifts tie (anything within the tolerance matches); center on the matched pairs.
+    d = onset_s[None, :] - (det_s[:, None] + best)
+    nearest = d[np.arange(len(det_s)), np.abs(d).argmin(axis=1)]
+    ok = np.abs(nearest) < tol_ms / 1000.0
+    return best + (float(np.median(nearest[ok])) if ok.any() else 0.0)
+
+
+def timing_budget(
+    *, frame_ns: float, exposure_us: float, chip_fps: float | None, clock: dict[str, Any] | None
+) -> dict[str, Any]:
+    """What spreads or shifts a detection-to-light lag, in ms, so a report says how far its
+    numbers can be trusted. The camera and the chip run unsynced, so the frame terms are
+    uniform spreads, not errors that average out of a single event.
+
+    - camera_frame: the light came on somewhere in the frame before the one that shows it;
+      onsets are placed mid-interval, so +-period/2 (sd period/sqrt 12);
+    - exposure: the timestamp's position in the exposure (start or readout) is unknown, a
+      shift of up to the exposure time;
+    - chip_frame: a detection waits for the chip's next render frame, 0 to 1/fps;
+    - clock_sync: firmware times are placed on the host clock to within RTT/2 (a constant
+      shift for the run); drift is corrected linearly and listed for the record."""
+    period_ms = frame_ns / 1e6
+    out: dict[str, Any] = {
+        "camera_frame_ms": {"spread": round(period_ms, 2), "sd": round(period_ms / 12**0.5, 2)},
+        "exposure_ms": {"shift_up_to": round(exposure_us / 1000.0, 3)},
+    }
+    if chip_fps:
+        f = 1000.0 / chip_fps
+        out["chip_frame_ms"] = {"spread": round(f, 2), "sd": round(f / 12**0.5, 2)}
+    if clock:
+        out["clock_sync_ms"] = {"shift_up_to": round(clock["rtt_ms"] / 2, 2)}
+        if "drift_ms" in clock:
+            out["clock_drift_ms"] = round(clock["drift_ms"], 2)
+    return out
+
+
+def responsiveness(
+    signals: np.ndarray, ts_ns: np.ndarray, rows: list[float], det_s: np.ndarray, t_s: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per region (columns of ``signals``): recall, the share of detections followed by an
+    onset in that region within -30..+80 ms, and precision, the share of the region's onsets
+    that follow a detection. A region showing a device's hits has both high; one that only
+    moves with the music (an energy bar) lights on loud hits too but flashes without them.
+    With two devices, each region belongs to the device it follows best."""
+    recall = np.zeros(signals.shape[1])
+    precision = np.zeros(signals.shape[1])
+    if len(det_s) == 0:
+        return recall, precision
+    for k in range(signals.shape[1]):
+        on = visual_onsets(signals[:, k], ts_ns, row=rows[k])
+        if not on:
+            continue
+        on_s = t_s[[o["frame"] for o in on]] + row_offset_ns(rows[k]) / 1e9
+        pairs, _, _ = match_events(det_s, on_s)
+        recall[k] = len(pairs) / len(det_s)
+        precision[k] = len(pairs) / len(on)
+    return recall, precision
+
+
+def sensor_noise(signal: np.ndarray, near_dark: float = 0.1) -> float:
+    """The camera's frame-to-frame noise on a region (sd), from frames near its dark level
+    (within ``near_dark`` of the way to its peak), where the LEDs contribute nothing. The
+    animation's own spread must not set a freeze threshold. The cut sits well above the dark
+    level so it doesn't clip the noise itself."""
+    x = np.asarray(signal, np.float64)
+    d = np.diff(x)
+    lo, hi = np.percentile(x, [5, 99.5])
+    cut = lo + near_dark * (hi - lo)
+    dark = (x[1:] <= cut) & (x[:-1] <= cut)  # both frames dark: no flash edge in the difference
+    d = d[dark] if dark.sum() >= 10 else d
+    return 1.4826 * float(np.median(np.abs(d - np.median(d))))
+
+
+def freezes(
+    signal: np.ndarray, ts_ns: np.ndarray, noise: float, min_ms: float = 100.0
+) -> list[dict[str, Any]]:
+    """Stretches of at least ``min_ms`` where the region's brightness changed by no more than
+    the camera's noise (``sensor_noise``) frame to frame: a stuck frame on an animating
+    generator. Only meaningful where the generator never holds still (the caller decides)."""
+    x = np.asarray(signal, np.float64)
+    still = np.abs(np.diff(x)) <= 3 * max(noise, 1e-9)
+    out = []
+    start = None
+    for i, s in enumerate(np.append(still, False)):
+        if s and start is None:
+            start = i
+        elif not s and start is not None:
+            ms = (ts_ns[i] - ts_ns[start]) / 1e6
+            if ms >= min_ms:
+                out.append({"start_ns": int(ts_ns[start]), "ms": round(float(ms), 1)})
+            start = None
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     """``regions SURVEY --out MAP``: a region map from a survey (camera_capture.py survey)."""
     import argparse
