@@ -84,6 +84,8 @@ async def test_the_artifact_link_redirects_to_a_fresh_signed_url(
             raise NotFound("not in the artifact store: ['inputs/gone.json']")
         return {keys[0]: f"https://artifacts.example/{keys[0]}?sig"}
 
+    staging._record_archived("inputs/abc/report.json")
+    staging._record_archived("inputs/gone.json")
     spark(_FakeClient(presign=presign))
     r = await api_client.get("/api/spark/artifacts/inputs/abc/report.json", follow_redirects=False)
     assert r.status_code == 307
@@ -93,3 +95,40 @@ async def test_the_artifact_link_redirects_to_a_fresh_signed_url(
     spark(None)
     r = await api_client.get("/api/spark/artifacts/inputs/abc/report.json", follow_redirects=False)
     assert r.status_code == 503
+
+
+async def test_the_artifact_link_signs_only_keys_this_box_archived(
+    api_client: AsyncClient, spark: Any, tmp_path: Path
+) -> None:
+    signed: list[list[str]] = []
+
+    def presign(keys: list[str]) -> dict[str, str]:
+        signed.append(keys)
+        return {keys[0]: f"https://artifacts.example/{keys[0]}?sig"}
+
+    spark(_FakeClient(presign=presign, upload=lambda p: f"inputs/x/{p.name}"))
+    r = await api_client.get("/api/spark/artifacts/inputs/corpus/track.wav", follow_redirects=False)
+    assert r.status_code == 404
+    assert signed == []  # never signed
+    report = tmp_path / "r.json"
+    report.write_text("{}")
+    assert await store_report(str(report)) == "inputs/x/r.json"
+    assert await store_report(str(report)) == "inputs/x/r.json"  # a replay records it once
+    assert staging._archived_index().read_text() == "inputs/x/r.json\n"
+    r = await api_client.get("/api/spark/artifacts/inputs/x/r.json", follow_redirects=False)
+    assert r.status_code == 307
+
+
+async def test_an_upload_reply_that_is_not_json_does_not_fail_the_report(
+    spark: Any, tmp_path: Path
+) -> None:
+    import json
+
+    report = tmp_path / "r.json"
+    report.write_text("{}")
+
+    def garbled(p: Path) -> str:
+        return str(json.loads("<html>bad gateway</html>"))
+
+    spark(_FakeClient(upload=garbled))
+    assert await store_report(str(report)) is None

@@ -143,9 +143,16 @@ async def jobs() -> dict[str, Any]:
 
 @router.get("/artifacts/{key:path}")
 async def artifact(key: str) -> RedirectResponse:
-    """A stable link to an artifact in the Spark store (staging reports, captures): redirects to
-    a freshly signed URL, valid 10 minutes. Presigned URLs expire, so reports link here. The
-    store signs its LAN address (devtop's SeaweedFS), so the redirect opens from the home network."""
+    """A stable link to an artifact the staging suite archived: redirects to a freshly signed
+    URL, valid 10 minutes. Presigned URLs expire, so reports link here. The store signs its LAN
+    address (devtop's SeaweedFS), so the redirect opens from the home network.
+
+    No API key (the links open in a browser), so it signs only keys this box archived
+    (``staging.is_archived``); anything else in the store is 404 here."""
+    from ..testing.staging import is_archived
+
+    if not await asyncio.to_thread(is_archived, key):
+        raise HTTPException(404, "not an artifact this box archived")
     try:
         urls = await asyncio.to_thread(_svc().client.presign, [key], 600)
     except NotFound as e:

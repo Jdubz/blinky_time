@@ -332,11 +332,34 @@ async def store_report(path: str) -> str | None:
         return None
     try:
         key = await asyncio.to_thread(svc.client.upload, Path(path))
-    except (SparkError, OSError) as e:
+    except (SparkError, OSError, ValueError) as e:  # ValueError: a reply that isn't JSON
         log.warning("staging report not archived: upload of %s failed: %s", path, e)
         return None
+    _record_archived(key)
     log.info("staging report archived as %s", key)
     return key
+
+
+def _archived_index() -> Path:
+    return data_dir() / "staging-reports" / "archived-keys.txt"
+
+
+def _record_archived(key: str) -> None:
+    """Remember a key this box archived: the artifact link serves only these (routes_spark)."""
+    if is_archived(key):
+        return
+    path = _archived_index()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(key + "\n")
+
+
+def is_archived(key: str) -> bool:
+    """True if the staging suite archived ``key`` (so a report links to it)."""
+    try:
+        return key in _archived_index().read_text().splitlines()
+    except FileNotFoundError:
+        return False
 
 
 async def _finish(sha: str, report: dict[str, Any]) -> dict[str, Any]:
