@@ -1,6 +1,6 @@
 [Unit]
 Description=blinky-server (test box: USB only, --no-ble)
-Documentation=https://github.com/Jdubz/blinky_time/blob/master/docs/TEST_BOX_BUILD_PLAN.md
+Documentation=https://github.com/Jdubz/blinky_time/blob/master/docs/TEST_BOX.md
 After=network-online.target
 Wants=network-online.target
 # Same self-heal window as blinkyhost's lemon-cart drop-in.

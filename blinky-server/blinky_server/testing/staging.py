@@ -22,8 +22,8 @@ The whole job holds the audio lock (workflows.reserve): no other test job plays 
 the chips while it deploys and measures them. Fleet deploys refuse to start while it runs
 (routes_firmware._deploy_active) and it refuses to start during one.
 
-Pass = every check passes. The validation numbers are reported, not gated: the box hasn't
-passed its acceptance gates (TEST_BOX_BUILD_PLAN.md), so its F1 isn't trusted as a floor yet.
+Pass = every check passes. The validation numbers are reported, not gated: the box's numbers
+aren't trusted as a floor yet (docs/TEST_BOX.md, "Trusting the box's numbers").
 The operator's visual check is not here: it happens at promotion to stable.
 """
 

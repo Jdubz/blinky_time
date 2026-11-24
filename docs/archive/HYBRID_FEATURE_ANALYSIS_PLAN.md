@@ -1,5 +1,7 @@
 # Hybrid Feature Analysis Plan
 
+> **Archived 2026-11-23.** Kept for its rationale and history; not current guidance. Current docs: `docs/README.md`.
+
 **Status:** **Closed; kept for its method (checked 2026-10-21).** The five-gate method and the lessons from the v27 hybrids still apply: flatness is 85% predictable from mel (R² = 0.85), gate (b) found nothing, and the kick_weighted_drums labels were contaminated. The experiment queue below is closed. For the current direction, see `ML_IMPROVEMENT_PLAN.md` (its 2026-05-02 literature review). What changed since this was written:
 - **The onset NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0` in `audio/AudioTracker.h`). Onsets come from SuperFlux (#280), which costs far less CPU than the v33 NN (~12 ms per inference). "NN input feature" work therefore has no deployed consumer until a model beats flux (see `AUDIO_ARCHITECTURE.md`).
 - **`edm_holdout/` was deleted** (2026-04-27). Every held-out number below was measured on it. The only validation corpus is `corpus/edm/` (CLAUDE.md).

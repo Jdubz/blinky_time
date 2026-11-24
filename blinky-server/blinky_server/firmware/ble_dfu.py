@@ -913,7 +913,7 @@ async def _ble_dfu_write_impl(
         # 10 minutes despite the device never having booted to app.
         # Observed live 2026-05-18: 4 successive auto-recoveries all
         # marked "Auto-recovery succeeded" yet devices remained stuck
-        # in DFU. See docs/BLE_FLEET_RELIABILITY_PLAN.md item A.
+        # in DFU. See docs/archive/BLE_FLEET_RELIABILITY_PLAN.md item A.
         #
         # For the 100%-BLE-managed deployment this code is on the
         # critical path: there is no USB-DFU fallback, so a false

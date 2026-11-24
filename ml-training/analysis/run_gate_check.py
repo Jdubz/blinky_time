@@ -1,6 +1,6 @@
 """Run the five-gate check on held-out validation data.
 
-Gate definitions are documented in docs/HYBRID_FEATURE_ANALYSIS_PLAN.md
+Gate definitions are documented in docs/archive/HYBRID_FEATURE_ANALYSIS_PLAN.md
 "Working principles". This script executes the cheap four (a already
 passed by definition for features in the shortlist):
 
