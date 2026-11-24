@@ -919,7 +919,7 @@ async def test_ble_dfu_flash_fails_when_transfer_ok_but_verify_failed(
     feeding it the exact pre-fix shape (status=ok + verified=False)
     and asserting the job ends up FAILED.
 
-    See docs/BLE_FLEET_RELIABILITY_PLAN.md item A.
+    See docs/archive/BLE_FLEET_RELIABILITY_PLAN.md item A.
     """
     from blinky_server.device.device import Device, DeviceState
     from blinky_server.firmware import ble_dfu as ble_dfu_mod

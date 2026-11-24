@@ -38,7 +38,7 @@ blinky_time/
 
 > ⚠️ **Never use `arduino-cli upload`, the Arduino IDE Upload button, or `adafruit-nrfutil dfu serial` on the nRF52840.** They can brick the device. See [CLAUDE.md](CLAUDE.md) and [docs/SAFETY.md](docs/SAFETY.md).
 
-- **A device you own, no repo:** open [blinky-time.joshwentworth.com/#firmware](https://blinky-time.joshwentworth.com/#firmware) in Chrome or Edge and connect it over USB. It installs the latest **stable** release through the device's signed update path ([docs/WEB_FLASHER.md](docs/WEB_FLASHER.md)).
+- **A device you own, no repo:** open [blinky-time.joshwentworth.com/#firmware](https://blinky-time.joshwentworth.com/#firmware) in Chrome or Edge and connect it over USB. It installs the latest **stable** release through the device's signed update path ([blinky-firmware's WEB_FLASHER.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md)).
 - **Fleet devices:** `./scripts/deploy.sh --devices=<id>` (latest stable release, with version check). `--devices=list` shows the candidates.
 - **Building, test devices and releases** are blinky-firmware's: see its [README](https://github.com/Jdubz/blinky-firmware#readme) and [RELEASE_PROCESS.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/RELEASE_PROCESS.md).
 
@@ -69,10 +69,10 @@ Changes go to `master` by pull request, with CI (`.github/workflows/pr-validatio
 
 - [docs/README.md](docs/README.md): the tooling docs index
 - [CLAUDE.md](CLAUDE.md): safety and workflow rules (flashing, releases, the test box). Read it first.
-- [docs/TEST_BOX_BUILD_PLAN.md](docs/TEST_BOX_BUILD_PLAN.md): the test box and its deployer
+- [docs/TEST_BOX.md](docs/TEST_BOX.md): the test box, its deployer and staging runner
 - [blinky-firmware docs/WEB_FLASHER.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md): browser firmware updates
-- [docs/ML_IMPROVEMENT_PLAN.md](docs/ML_IMPROVEMENT_PLAN.md): ML roadmap
-- Firmware architecture, hardware and audio docs: [blinky-firmware/docs](https://github.com/Jdubz/blinky-firmware/tree/staging/docs)
+- [docs/ML_IMPROVEMENT_PLAN.md](docs/ML_IMPROVEMENT_PLAN.md): ML status (NN shelved on the nRF52840; ESP32-S3 feasibility)
+- Firmware architecture, hardware and audio docs: [blinky-firmware/docs](https://github.com/Jdubz/blinky-firmware/tree/master/docs)
 
 ## License
 

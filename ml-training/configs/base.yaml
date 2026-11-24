@@ -46,7 +46,7 @@ audio:
   #     Conditioned variant (compressor + whitening) lands near device
   #     level via the augmentation path. Override per-config until v34b
   #     result is known; do not change base default until then.
-  # See docs/ML_IMPROVEMENT_PLAN.md "v34 result + correction" for details.
+  # See "v34 result + correction" in docs/ML_IMPROVEMENT_PLAN.md before 2026-11-23 (git history).
   # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
   # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
   # prepare_dataset.py uses this to cap gain-aware noise augmentation.
@@ -95,7 +95,7 @@ training:
   # val_loss     — minimize; legacy (pre-2026-04-24) and the default for backward compat.
   # val_peak_f1  — maximize; matches firmware peak-picker, recommended for new runs.
   # val_f1       — maximize frame-level F1 at threshold=0.5 (rarely useful).
-  # See AUDIO_SYSTEM_AUDIT_2026_04_24.md §B1, §B2, §T4.4.
+  # See docs/archive/AUDIO_SYSTEM_AUDIT_2026_04_24.md §B1, §B2, §T4.4.
   early_stopping_metric: "val_loss"
   min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15

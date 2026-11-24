@@ -1,5 +1,7 @@
 # Flash Lockdown Plan
 
+> **Archived 2026-11-23.** Kept for its rationale and history; not current guidance. Current docs: `docs/README.md`.
+
 **Status:** **CLOSED — migration complete.** All L0–L6 phases landed; `_uf2_write_impl_for_job` / `_ble_dfu_write_impl` are guarded by `assert_inside_orchestrator`, every legacy public entry point (`upload_uf2`, `upload_ble_dfu`, `upload_firmware`, `upload_via_uf2`, `_dfu_locks`) is deleted from `blinky_server/`, and `FleetManager.flash_fleet()` is the canonical multi-device entry point. `MAX_AUTO_RECOVERY_ATTEMPTS = 3` is in `manager.py:55`. This document is retained as the architectural rationale referenced from CLAUDE.md "Single Flash Entry Point"; the migration sequencing below is historical.
 
 **Still open nearby (2026-10-21), tracked as GitHub issues:**

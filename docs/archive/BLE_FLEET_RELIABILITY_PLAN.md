@@ -1,5 +1,7 @@
 # BLE Fleet-Command Reliability Plan
 
+> **Archived 2026-11-23.** Kept for its rationale and history; not current guidance. Current docs: `docs/README.md`.
+
 Roadmap for closing the remaining gaps in BLE fleet-command delivery. Each
 item is an independent change with its own scope, expected impact, and file
 list. Pick them up in priority order; each lands a measurable improvement

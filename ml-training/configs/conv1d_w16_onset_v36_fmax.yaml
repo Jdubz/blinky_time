@@ -1,6 +1,6 @@
 # Conv1D W16 v36 — full-spectrum mel (fmax=14 kHz)
 #
-# The synthesis (ML_IMPROVEMENT_PLAN.md, lines ~466-484) identifies fmax
+# The synthesis (ML_IMPROVEMENT_PLAN.md in git history before 2026-11-23) identifies fmax
 # (4-8 kHz vs published 10-17 kHz) and mel resolution (30-50 vs 80-128)
 # as the dominant deltas vs Schluter '14 / Bock '12 / Beat-This! systems
 # that hit F1 0.85+. Architecture capacity isn't the binding constraint
@@ -37,7 +37,7 @@
 #     kick_weighted_clean labels). Originally written as ">0.71 vs 0.616",
 #     but 0.616 is v34d's *edm/ Onset F1* (deployment metric), not its
 #     val_peak_F1 — comparing the two is the metric-conflation that the
-#     v34d caveat in ML_IMPROVEMENT_PLAN.md warns about. The honest
+#     v34d caveat in ML_IMPROVEMENT_PLAN.md (git history) warns about. The honest
 #     prediction on the val_peak_F1 axis is "noticeably above v34d's
 #     0.394", which 0.55 captures with margin.
 #   - edm/ Onset F1 > 0.70 (vs v33's 0.617 / v34d's 0.616, +0.08).

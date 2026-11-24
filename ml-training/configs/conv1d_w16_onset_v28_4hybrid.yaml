@@ -2,7 +2,7 @@
 #
 # Target model for the Phase 4 Path B ablation. Adds crest + hfc on top
 # of v27-hybrid's existing flatness + raw_flux. Selection rationale from
-# docs/HYBRID_FEATURE_ANALYSIS_PLAN.md "Gate (b)/(c)/(d) run" section:
+# docs/archive/HYBRID_FEATURE_ANALYSIS_PLAN.md "Gate (b)/(c)/(d) run" section:
 #
 #   Gate (b) peak-mode |d| on b137 held-out:
 #     crest=0.96, flatness=0.89, raw_flux=0.84, hfc=0.67 — all moderate/strong.

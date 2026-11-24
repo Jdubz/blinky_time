@@ -4,7 +4,9 @@
 
 Audio tests are loud and time-consuming. Use the minimum test tier needed to answer your current question. Never gather more data than the decision requires.
 
-The task is **onset detection** (fire on every percussive hit), scored against `.onsets_consensus.json` ground truth on the `corpus/edm/` corpus (18 tracks). See CLAUDE.md.
+The task is **drum-hit detection**: kicks and snares, wherever they fall in the bar (CLAUDE.md, "Task is Drum-Hit Detection"). Runs are scored on the `corpus/edm/` corpus (18 tracks) by `blinky_scoring` in the `corpus/` submodule (blinky-corpus). The primary numbers are the drum metrics: kick and snare recall at ±30/±50 ms (`kickR30`, `kickR50`, `snareR50`), the share of detections on a kick or snare (`onDrum`), and drum F (`drumF`). `snareR50` is provisional until the drum labels are validated (blinky-corpus#4). All-onset F1 against `.onsets_consensus.json` is a secondary number.
+
+Device tests run on the test box's one chip (`TEST_BOX.md`). Every chip on the box is a test chip, so setup commands go straight to it; validation still resets the chip to defaults before each run.
 
 ```
 Code change
@@ -15,12 +17,12 @@ Tier 0: Host harness (silent, minutes)
     │
     ▼
 Tier 1: Smoke test (2 min)
-    "Does it work at all? BPM plausible? Onsets firing? No crashes?"
+    "Does it work at all? Detections firing? No crashes?"
     │
     ├─ Broken → fix and re-smoke
     │
     ▼
-Tier 2: Quick A/B (10 min)
+Tier 2: Quick A/B (~20 min)
     "Is it better than baseline? Any signal at all?"
     │
     ├─ Worse or neutral → abandon approach, try something else
@@ -30,23 +32,23 @@ Tier 2: Quick A/B (10 min)
 Lock in feature set (may involve multiple Tier 1/2 iterations)
     │
     ▼
-Tier 3: Reliable A/B (25 min)
+Tier 3: Reliable A/B (~50 min)
     "Is the improvement real and statistically meaningful?"
     │
     ├─ Not significant → reconsider before committing
     │
     ▼
-Tier 4: Full Validation (50 min)
-    "Final regression check before merge to master"
+Tier 4: Full Validation (~50 min)
+    "Final regression check before merge"
     → Establishes new baseline for future comparisons
 ```
 
 **Key rules:**
-- Tier 0 before any device test when the change touches `audio/` — it is silent and deterministic
-- Tier 1 after every compile+flash — always
-- Tier 2 for proof-of-concept — prove/disprove quickly, then iterate or abandon
-- Tier 3/4 only when features are finalized — never during iteration
-- Parameter sweeps use Tier 2 on individual tracks, not the full suite
+- Tier 0 before any device test when the change touches `audio/`: it is silent and deterministic
+- Tier 1 after every flash, always
+- Tier 2 for proof of concept: prove or disprove quickly, then iterate or abandon
+- Tier 3/4 only when features are finalized, never during iteration
+- Parameter sweeps use Tier 0, or Tier 2 on individual tracks, not the full suite
 - Never run full validation to test a single code change
 
 ## Tiered Testing Approach
@@ -54,46 +56,45 @@ Tier 4: Full Validation (50 min)
 ### Tier 0: Host Harness (no device, no speaker)
 **When:** Any change to `AudioTracker`, `SharedSpectralAnalysis` or `AdaptiveMic`.
 
-`tests/tracker/` runs the firmware's real audio code on the host against the edm/ corpus, with a simulated main loop and a CPU cost model calibrated to hat_v1. It reports onset F1 and rhythm metrics, and can compare two builds. Build and run instructions: `tests/tracker/README.md`.
+blinky-firmware's `tests/tracker/` runs the firmware's real audio code on the host against the edm/ corpus, with a simulated main loop and a CPU cost model calibrated to hat_v1. It reports the drum metrics, onset F1 and rhythm metrics, and can compare two builds. Build and run instructions: blinky-firmware's `tests/tracker/README.md`.
 
 ```bash
-python tests/tracker/run_tracker_eval.py --harness build/tracker_harness     --compare build/tracker_harness_old --tracks techno-minimal-01
+# in blinky-firmware (firmware/ here)
+python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
+    --compare build/tracker_harness_old --tracks techno-minimal-01
 ```
 
-CI runs it too (the "Tracker Harness" job in `.github/workflows/pr-validation.yml`).
+blinky-firmware's CI runs it too (the "Tracker Harness" job in its `pr-validation.yml`), and its `tracker-ab.yml` workflow runs a host A/B between two refs. Host A/B is the cheapest A/B there is: use it before a device A/B.
 
 ### Tier 1: Smoke Test (~2 min)
-**When:** After every compile+flash. Verify firmware boots and feature activates.
+**When:** After every flash. Verify firmware boots and the feature activates.
 
 ```
-run_test(port="/dev/ttyACM0", tracks=["techno-minimal-01"], duration_ms=30000, commands=["set fluxdelta 14"])
+run_test(port="<chip id or port>", tracks=["techno-minimal-01"], duration_ms=30000, commands=["set fluxdelta 8"])
 # returns job_id — poll with check_test_result(job_id)
 ```
 
-- **1 track, 1 run, 1 device**
+- **1 track, 1 run**
 - Use `techno-minimal-01` (strong 4-on-floor kicks, 129 BPM, reliable baseline)
-- Check: BPM output plausible? Onset events firing? No crashes?
-- **NOT for performance measurement** — variance too high for 1 run
+- Check: detections firing on the kicks? No crashes, no `[ASSERT]`/`[FALLBACK]`?
+- **Not for performance measurement:** variance is too high for one run
 
-### Tier 2: Quick A/B (~10 min)
+### Tier 2: Quick A/B (~20 min)
 **When:** Proof-of-concept testing. Does a code change show any signal at all?
 
+With one chip, an A/B runs the two configurations one after the other on the same chip, through the same speaker. Alternate them (A, B, A, B) rather than all-A then all-B, so drift in the room or the chip doesn't land on one side.
+
 ```
-# Multi-device A/B uses run_validation_suite (run_test is single-port).
-run_validation_suite(
-    ports=["/dev/ttyACM0", "/dev/ttyACM1"],
-    tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background"],
-    runs=1,
-    duration_ms=30000,
-    per_device_commands={"/dev/ttyACM0": ["set fluxdelta 7"], "/dev/ttyACM1": ["set fluxdelta 14"]},
-)
-# returns job_id — poll with check_test_result(job_id)
+# A, then B; repeat for each round
+run_validation_suite(ports=["<chip>"], tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background"],
+                     runs=1, duration_ms=30000, commands=["set fluxdelta 7"])
+run_validation_suite(ports=["<chip>"], tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background"],
+                     runs=1, duration_ms=30000, commands=["set fluxdelta 8"])
+# each returns job_id — poll with check_test_result(job_id)
 ```
 
-- **3 tracks, 1 run each, 2 devices** (A/B simultaneous)
-- Same audio → eliminates acoustic variation between configs
-- Catches catastrophic regressions (>0.10 F1 drop) and large improvements
-- **Cannot detect improvements < ~0.10 F1** due to single-run variance
+- **3 tracks, 1 run each, per configuration**
+- Catches catastrophic regressions and large improvements only: single runs vary a lot (per-track onset-F1 std was ~0.15 in earlier measurements)
 
 **Quick A/B Track Set** (chosen for diversity):
 
@@ -103,24 +104,20 @@ run_validation_suite(
 | `trance-goa-mantra` | 136 | Moderate difficulty, good reference point |
 | `breakbeat-background` | 86 | Slow tempo, syncopated breaks |
 
-### Tier 3: Reliable A/B (~25 min)
+### Tier 3: Reliable A/B (~50 min)
 **When:** Feature validation before committing. Statistically meaningful comparison.
 
+Same shape as Tier 2, with more tracks, more runs and longer windows:
+
 ```
-run_validation_suite(
-    ports=["/dev/ttyACM0", "/dev/ttyACM1"],
-    tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background", "garage-uk-2step"],
-    runs=3,
-    duration_ms=45000,
-    per_device_commands={"/dev/ttyACM0": ["set fluxdelta 7"], "/dev/ttyACM1": ["set fluxdelta 14"]},
-)
-# returns job_id — poll with check_test_result(job_id)
+run_validation_suite(ports=["<chip>"],
+                     tracks=["techno-minimal-01", "trance-goa-mantra", "breakbeat-background", "garage-uk-2step"],
+                     runs=3, duration_ms=45000, commands=[...])   # once for A, once for B, alternating
 ```
 
-- **4 tracks, 3 runs each, 2 devices**
-- 45s duration to clear intros (many tracks have 10-15s beatless intros)
-- 3 runs reduces per-track std from ~0.15 to ~0.09
-- **Detects improvements > ~0.05 F1** with reasonable confidence
+- **4 tracks, 3 runs each, per configuration**
+- 45 s duration to clear intros (many tracks have 10–15 s beatless intros)
+- 3 runs cut per-track std from ~0.15 to ~0.09 (onset F1, earlier measurements)
 
 **Reliable A/B Track Set** (adds a hard syncopated track):
 
@@ -132,36 +129,49 @@ run_validation_suite(
 | `garage-uk-2step` | 129 | Syncopated 2-step: many off-beat hits |
 
 ### Tier 4: Full Validation (~50 min)
-**When:** Before merging to master. Final regression check.
+**When:** Before merging. Final regression check.
 
 ```
-run_validation_suite(ports=[...], runs=3, duration_ms=45000)
+run_validation_suite(ports=["<chip>"], runs=3, duration_ms=45000)
 # returns job_id — poll with check_test_result(job_id)
 ```
 
-- **18 tracks (all of edm/), 3 runs, 1-2 devices**
+- **18 tracks (all of edm/), 3 runs**
 - Gold standard for release decisions
 - Run once per feature, not during iteration
-- Save results file for historical comparison
+- Save the results file for later comparison
+
+The staging suite on the box (`TEST_BOX.md`, "Staging runner") plays every edm/ track once for each staging build and reports the numbers; it doesn't gate on them yet.
 
 ## Duration Guidelines
 
-- **30s** for smoke tests and quick A/B (sufficient for most tracks with strong intros)
-- **45s** for reliable A/B and full validation (clears 10-15s beatless intros)
+- **30 s** for smoke tests and quick A/B (enough for most tracks with strong intros)
+- **45 s** for reliable A/B and full validation (clears 10–15 s beatless intros)
 - **Full track** only when investigating specific track behavior
 
 ## When NOT to Run Full Validation
 
-- Proof-of-concept testing (use Tier 2)
-- Parameter sweeps (use Tier 2 on individual tracks)
-- Debugging a specific track (use single-port `run_test(port=..., tracks=[name], runs=3-5)`)
-- Checking if firmware compiles/boots (use Tier 1)
+- Proof-of-concept testing (use Tier 0 or Tier 2)
+- Parameter sweeps (use Tier 0, or Tier 2 on individual tracks)
+- Debugging a specific track (use `run_test(port=..., tracks=[name], runs=3-5)`)
+- Checking if firmware compiles or boots (use Tier 1)
 
-## Multi-Device A/B Best Practices
+## A/B practice
 
-- Use bench test devices, never installed fleet devices. Setup commands are runtime `set` changes only; validation resets devices to defaults before each run. Never send `save`, `device upload` or `reboot` here (CLAUDE.md).
+- Use the box's test chip, never an installed fleet device. Setup commands are runtime `set` changes; validation resets the chip to defaults before each run. Don't send `save` in a test.
 - `port` accepts a serial port or a device ID. `run_test` defaults to 35 s per track and 1 run; `run_validation_suite` defaults to 3 runs.
-- `run_test` is **single-port only** (`port` is a required scalar). For A/B across multiple devices, use `run_validation_suite(ports=[...], per_device_commands={...})`. Poll results with `check_test_result(job_id)`.
-- Both devices hear identical audio → no acoustic confounding
-- Set baseline on port 0, variant on port 1 via `per_device_commands`
-- Use `duration_ms` parameter, not full track length, for consistent test windows
+- One chip means A and B never hear the same playback. Alternate the configurations and use enough runs that the difference is larger than the run-to-run spread.
+- Use the `duration_ms` parameter, not full track length, for consistent test windows.
+
+## Removed metrics (do not reintroduce)
+
+These were dropped from scoring because they measure beat tracking, not drum hits:
+
+| Metric | Why |
+|--------|-----|
+| beatF1 | Confounds music structure with model quality |
+| CMLt / CMLc / AMLt | Beat continuity is meaningless for a visualizer |
+| detectedBpm | Just a number; half and double time are equally valid |
+| phaseStability | Coupled to the BPM estimate, misleading |
+| downbeatF1 | Meter position is irrelevant |
+| bpmError | Never a server metric |

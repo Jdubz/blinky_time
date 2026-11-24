@@ -26,7 +26,7 @@ We then compute per-signal |d|(TP, FP) overall and per-device, and report
 whether each candidate passes the gate-(b) threshold (|d| ≥ 0.3). The
 threshold is documented in the memory
 `project_hybrid_feature_principles.md` and
-`docs/HYBRID_FEATURE_ANALYSIS_PLAN.md`.
+`docs/archive/HYBRID_FEATURE_ANALYSIS_PLAN.md`.
 
 Usage:
     cd ml-training && ./venv/bin/python -m analysis.run_gate_b \

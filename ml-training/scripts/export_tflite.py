@@ -1439,7 +1439,7 @@ def main():
         if a_std < 0.10:
             print(f"    WARNING: std < 0.10 — output likely collapsed to near-constant. "
                   f"Peak-picking will not work reliably. See "
-                  f"docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md §T1.2 and v30 case study.",
+                  f"docs/archive/AUDIO_SYSTEM_AUDIT_2026_04_24.md §T1.2 and v30 case study.",
                   file=sys.stderr)
         elif a_std < 0.15:
             print(f"    WARNING: std < 0.15 (v30 threshold) — consider investigating "

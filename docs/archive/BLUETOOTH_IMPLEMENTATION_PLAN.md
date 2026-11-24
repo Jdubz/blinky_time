@@ -1,5 +1,7 @@
 # Wireless Communication Plan
 
+> **Archived 2026-11-23.** Kept for its rationale and history; not current guidance. Current docs: `docs/README.md`.
+
 *Created: December 2025, Updated: March 30, 2026. Status note added October 21, 2026.*
 
 > **Status (2026-10-21):** BLE fleet management over the Pi server is done and in daily use; most of this doc is the record of how it was built. ESP32-S3 (and its WiFi transport) was cut in March 2026 and lives on only in the next-gen plan (`docs/NEXTGEN_ESP32S3_PLAN.md`). What changed since March:
