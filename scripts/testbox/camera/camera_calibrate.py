@@ -53,12 +53,22 @@ def info(device: str) -> dict[str, Any]:
 
 def clock_sync(device: str, samples: int = SYNC_SAMPLES) -> dict[str, float]:
     """Chip millis() to host wall clock (ms): the shortest of ``samples`` json info round
-    trips through the server's API, offset = midpoint - millis, error at most RTT/2."""
+    trips, offset = midpoint - millis, error at most RTT/2. The round trip is the server's own
+    (``sent_at`` to the arrival of the reply line with millis, blinky_time#395), not this
+    HTTP call's: the reply is returned a 100 ms silence gap after it arrives."""
     best: tuple[float, float] | None = None
     for _ in range(samples):
-        t0 = time.time() * 1000
-        millis = float(info(device)["millis"])
-        t1 = time.time() * 1000
+        out = api("POST", f"/devices/{device}/command", {"command": "json info"})
+        if out.get("sent_at") is None or not out.get("line_times"):
+            raise SystemExit("the server doesn't report reply line timings (needs #395)")
+        lines = str(out["response"]).split("\n")
+        at = [i for i, line in enumerate(lines) if '"millis"' in line]
+        if not at:
+            raise SystemExit(f"json info reply has no millis: {out['response'][:200]}")
+        line = lines[at[0]]
+        millis = float(json.loads(line[line.index("{") :])["millis"])
+        t0 = float(out["sent_at"]) * 1000
+        t1 = float(out["line_times"][at[0]]) * 1000
         rtt = t1 - t0
         if best is None or rtt < best[1]:
             best = ((t0 + t1) / 2 - millis, rtt)
@@ -166,7 +176,7 @@ def do_timing(args: argparse.Namespace, cam: Camera, dev: dict[str, Any]) -> dic
     frame = ca.frame_timing(ts, cc.FRAME_US * 1e3)
     t_s = ts / 1e9 + wall
     edges = np.asarray(status["edges"], np.float64)
-    latch_s = status["pixels"] * status["usPerPixel"] / 1e6
+    latch_s = status["latchUs"] / 1e6  # per strand (firmware#53)
     # The chip's millis() on the host clock, its drift spread linearly across the train.
     t0 = edges[0, 0]
     span = max(edges[-1, 0] - t0, 1.0)
