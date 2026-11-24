@@ -1,6 +1,6 @@
 # Test box camera harness: plan
 
-**Status:** planned. Nothing is built, and no GitHub issue tracks it yet (#258, the release gate's timing checks, is closed). Camera facts below were measured on the box's Pi 5 (`blinkytest`) on 2026-10-27. Part of the test box (`TEST_BOX.md`).
+**Status:** rollout step 1 under way (2026-11-24). Built: the capture helper, region discovery and visual onsets (`scripts/testbox/camera/`), with bench numbers below. Not built: running capture alongside validation runs, matching against serial detections, scoring, gates. Camera facts were measured on the box's Pi 5 (`blinkytest`) on 2026-10-27 and 2026-11-24. Part of the test box (`TEST_BOX.md`).
 
 The box has one test chip driving an 8x8 WS2812 grid, and the camera sees the grid (hardware: `TEST_BOX.md`, "Hardware as built"). This plan adds the camera to the validation harness, so a run judges what a person at a show sees, not only what the firmware reports over serial.
 
@@ -31,7 +31,11 @@ It also gives an independent check for visible freezes, which the staging suite 
 | Measured frame rate | Asking for 60 fps gives 64.9 fps (15.40 ms); asking for 90 gives the cap, **67.5 fps (14.82 ms)**. Frame spacing sd ≈ 1 µs, so the camera's own clock is not a jitter source. |
 | Field of view | About 54° × 41°. Check that the whole grid is in frame at the camera's mounting distance. |
 | Focus | Fixed. Soft focus is harmless: the harness sums brightness over regions. |
-| Software | `python3-picamera2` (apt; not installed yet). Per-frame metadata gives the sensor timestamp, exposure, gain and frame sequence number. |
+| Software | `python3-picamera2` (apt, installed by `setup.sh`). Per-frame metadata gives the sensor timestamp, exposure and gain. |
+| Line time | About **15.87 µs**: requested exposures land on whole multiples of it (126, 285, 984, 2984 µs). Rows are read about 7.6 ms apart top to bottom, about 2.2 ms across the grid. Inferred from the exposure steps; to be confirmed by a timing reference (Calibration). |
+| Clock | `SensorTimestamp` is on CLOCK_MONOTONIC (it matches monotonic and boottime alike, and the box never suspends). Whether it marks the start of exposure or of readout is still open. |
+| Levels (8x8 grid, brightness 40) | At gain 1.0 and 1 ms exposure, every LED resolves with no saturated pixel; at the auto-exposure setting (gain 8, ~16 ms) the grid saturates. The ISP leaves a pedestal of about 30 per channel in dark areas. At 100 µs some LEDs drop out of a frame: the LEDs' PWM showing through (Calibration, step 3). |
+| Capture cost | `record` with 64 regions: about 14% of one core, zero dropped frames in 30 s (2025 frames, spacing sd 1 µs). |
 
 **Rolling shutter.** Each image row starts its exposure a fixed line time after the previous one, so the top and bottom of a frame are exposed several ms apart. A region's timestamp is the frame timestamp plus (its row centroid × the line time). The line time is measured, not taken from a datasheet (Calibration, step 2).
 
@@ -67,21 +71,21 @@ Expected detection→light: roughly 3–15 ms of render plus the camera's quanti
 
 The harness finds the LEDs instead of being told where they are:
 
-1. A calibration run plays a corpus track. The harness computes each pixel's brightness variance over time. LEDs vary; the background should not (keep ambient light constant and low).
-2. Threshold the variance map and take connected components: the grid's region.
+1. A survey (`camera_capture.py survey`) runs while the LEDs animate. It records each pixel's brightness mean, variance and max over time. LEDs vary; the background should not (keep ambient light constant and low).
+2. Find each LED as a local peak of the standard-deviation map, judged against its own neighbourhood (`camera_analysis.find_regions`). A single global threshold doesn't work: generators light some LEDs far more often than others (fire rarely reaches the top rows), and light reflected off the foam varies too. Each LED's region is the pixels near its peak above a fraction of its own level. On the box's grid this finds all 64 LEDs, 69-81 px each, and nothing else.
 3. Check the region follows the chip: correlate its brightness series with the chip's serial `TRANSIENT` train. That needs no device commands and no resets (60-second rule).
-4. Optional segments: split the region into K bins (default K=1, the whole grid; rows or single LEDs are possible on an 8x8 grid). Generators with spatial effects (e.g. hit height) can use them.
-5. Save `roi_map.json`: chip ID → pixel mask, row centroid, segments, plus the camera settings it was made with.
+4. Segments come for free: a region per LED, so the whole grid, a row or one LED are sums of regions. Generators with spatial effects (e.g. hit height) can use them.
+5. Save the region map (`.npz`): the label image, each region's area, centroid and bounding box, and the camera settings it was made with. `record` refuses a map made with other settings.
 
 **Every run checks the map still fits:** light outside the region, a region that stays dark while the chip reports detections, or different camera settings make the run INVALID with "layout changed: re-run the region calibration". So a moved grid or a bumped camera can't produce wrong numbers, only a clear request to recalibrate.
 
 ### 2. Capture
 
-A helper process, `tools/camera_capture.py`, runs on the system Python, which has `python3-picamera2`. blinky-server's venv doesn't have it, and the process boundary keeps camera work out of the server's event loop. blinky-server starts and stops it for each run, next to `ffplay`.
+A helper process, `scripts/testbox/camera/camera_capture.py`, runs on the system Python, which has `python3-picamera2`. blinky-server's venv doesn't have it, and the process boundary keeps camera work out of the server's event loop. blinky-server starts and stops it for each run, next to `ffplay`.
 
 - Pinned to a core away from `ffplay` and the server (`taskset`), so capture load doesn't move the audio timing (host-timing gate).
 - Fixed controls: frame duration, exposure, analog gain, AWB gains. AE, AWB and any denoise that blends frames are off. Each frame's metadata is checked against the locked values; a mismatch makes the run INVALID.
-- Per frame it records the sequence number, sensor timestamp, and per region: summed luminance, mean R/G/B, saturated-pixel count, and per-segment luminance. It does **not** store raw video (4 minutes of 640×480 YUV is about 6.6 GB). For human review it can save a low-rate MJPEG preview and a short clip around any event the scorer flags.
+- Per frame it records the sensor timestamp, exposure and gain, and per region the summed R, G and B, the saturated-pixel count and the peak value. Dropped frames (a gap over 1.5 periods) and frames whose controls drifted are counted in its summary. It does **not** store raw video (4 minutes of 640×480 YUV is about 6.6 GB). For human review it can save a low-rate JPEG preview; a short clip around any event the scorer flags is still to do.
 - Output goes next to the run's other test data (one `.npz` per run).
 
 ### 3. Visual onsets
@@ -89,7 +93,7 @@ A helper process, `tools/camera_capture.py`, runs on the system Python, which ha
 For the grid's region, the same recipe as audio onset detection (a published approach; see blinky-firmware's `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md`):
 
 - Signal: summed luminance, background-subtracted (the region's level with the LEDs dark, taken at run start). A generator profile may name a color channel or segment instead.
-- Visual flux: the half-wave rectified frame-to-frame rise, normalized by the region's running range.
+- Visual flux: the half-wave rectified frame-to-frame rise, normalized by the region's range (p99 - p1). A region whose range isn't well above its frame-to-frame noise has no onsets (sensor noise, normalized, would otherwise look like flashes; a steadily lit LED is the same case).
 - Peak picking: adaptive threshold (median + k·MAD over a ~1 s window) and a minimum gap between onsets of 50 ms. The onset's time is the first frame of the rise, with the row offset applied.
 
 ### 4. Measurements
@@ -125,12 +129,12 @@ The test run selects the chip's generator through the validation job and never s
 
 Repeat whenever the camera or the grid moves.
 
-1. **Timing reference.** The camera's clock has to be tied to host monotonic time by something the host switches at known times. The proposal is a reference LED driven by a Pi 5 GPIO in the camera's view, ideally two (top and bottom of the frame). That is not installed and not decided (`TEST_BOX.md`, "Ideas (not decided)"); an alternative is the chip itself showing a host-commanded flash, with its serial clock offset as the link. Several hundred toggles give:
+1. **Timing reference.** The sensor timestamp is already on host monotonic time (The camera, Clock). What a reference still has to give is where in the exposure the timestamp falls, and the floor the camera adds to every timing number. A Pi GPIO LED is out: the Pi can't be reached for soldering (owner, 2026-11-23). The remaining option is the chip itself showing flashes at times it reports over serial, with the serial clock offset as the link. That needs a firmware hook (a test pattern with timestamps), to be designed. Several hundred flashes give:
    - the camera timestamp's offset from host monotonic, and which clock it is on;
    - the timing error distribution the camera alone contributes (the floor under every other number);
-   - with LEDs at two heights, the rolling-shutter line time.
+   - from LEDs at different heights (the grid's rows), the rolling-shutter line time, checking the 15.87 µs inferred from exposure steps.
    A few toggles at the start of every run re-check the offset. If it drifted beyond tolerance, the run is INVALID.
-2. **Rolling-shutter line time**, from step 1 (needs two reference points at different heights), stored with the camera settings.
+2. **Rolling-shutter line time**, from step 1, stored with the camera settings (`camera_analysis.LINE_NS` until then).
 3. **LED PWM.** WS2812-class LEDs dim with PWM at a few hundred Hz to a few kHz. A short exposure makes that PWM show as brightness ripple, and with a rolling shutter as bands. Measure the PWM period once (with a short exposure, the band spacing in rows × line time gives it). Then set the exposure to the largest whole number of PWM periods that fits in the frame period, which averages the PWM out.
 4. **Levels.** Set LED brightness for test runs and the analog gain so the brightest flash stays below ~80% of full scale. Saturated pixels hide the rise and the brightness. A region with saturated pixels makes the run INVALID.
 5. **Region map** (How it works, step 1).
@@ -154,16 +158,18 @@ Verdicts per run: **PASS**, **MARGINAL** (inside the gate but outside the baseli
 
 ## Code shape
 
-- `tools/camera_capture.py`: capture helper (system Python, picamera2), described above.
-- `blinky_server/testing/camera_capture.py`: starts and stops the helper around a run, records the clock pairs, loads its output.
-- `blinky_server/testing/camera_scoring.py`: pure functions on arrays (region signals, visual onsets, matching, follow test). Unit-tested in CI with synthetic frame series, so `blinky-server-tests` covers it with no camera.
-- `tools/camera_calibrate.py`: camera timing, PWM, levels, region map, baseline.
+The camera code lives in `scripts/testbox/camera/` and runs on the box's system Python (numpy and picamera2 from apt). blinky-server's venv has neither, and the box stays capture and routing only.
+
+- `camera_capture.py` (built): `still`, `survey`, `record`, described above.
+- `camera_analysis.py` (built in part): pure functions on arrays: region discovery, frame timing, visual onsets, row offsets. CI tests it on synthetic data (`test_camera_analysis.py`, job "Test box camera analysis"). Matching against serial detections and the follow test come next.
+- blinky-server starts and stops `camera_capture.py record` around a run as a subprocess, records the clock pairs, and keeps its `.npz` with the run's data (not built).
+- Calibration: camera timing, PWM, levels, region map, baseline (not built beyond the region survey).
 - `DeviceRunScore` gets an optional `visual` block, and the console shows it next to the serial scores.
-- `setup.sh` installs `python3-picamera2` and adds the user to the `video` group (already done), plus GPIO access if a GPIO timing reference is chosen.
+- `setup.sh` installs `python3-picamera2` and adds the user to the `video` group (done).
 
 ## Rollout
 
-1. **On the box.** Install picamera2. Choose the timing reference (with the owner), then measure the camera timing, line time and PWM against the grid. Do the numbers support the plan, or is a global-shutter camera needed?
+1. **On the box.** Done: picamera2, the capture helper, region discovery, frame timing (no drops at 67.5 fps) and levels. Still to do: the timing reference (a firmware flash pattern, Calibration step 1), then the line time and PWM measured against it. Do the numbers support the plan, or is a global-shutter camera needed?
 2. **Offline first.** Capture alongside normal validation runs, score afterwards, compare with serial. Nothing gates yet.
 3. **Baseline** on the current stable release; set and freeze the thresholds.
 4. **Into the validation job:** the visual block in every box validation run.
@@ -173,5 +179,5 @@ Verdicts per run: **PASS**, **MARGINAL** (inside the gate but outside the baseli
 
 - Can the OV5647 run faster in a cropped mode, or a newer libcamera tuning? Faster frames shrink quantization directly. 67.5 fps is the measured ceiling at 640×480 today.
 - Is the timestamp from picamera2 exposure start or readout? The timing reference answers this; the plan assumes nothing.
-- Which timing reference: a GPIO LED (new hardware) or a host-commanded flash on the grid?
+- The timing reference's firmware hook: which pattern, and how its flash times reach the host (TRANSIENT-style lines with `millis()`?).
 - Should the PLP phase visuals (the `Audio` generator's moving phase row) be checked against the wall clock here, next to the staging suite's beat-pace check?
