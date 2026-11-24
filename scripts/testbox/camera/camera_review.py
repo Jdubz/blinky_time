@@ -8,7 +8,8 @@ their LEDs, and how late.
 
 1. Starts ``camera_capture.py record`` (pinned to a core away from ffplay and the server).
 2. Submits a validation job to the local blinky-server (``POST /api/test/validate`` with
-   ``persist_raw`` and ``gen <generator>``; the run's reset to defaults undoes it afterwards).
+   ``persist_raw`` and ``gen <generator>``), then puts each chip back on the generator it had
+   (``gen`` is runtime state, never saved; without the restore it would stay until a reboot).
 3. Stops the capture when the job ends, then for each run and device:
    - puts the chip's detections and the camera frames on the host's wall clock (absolute,
      when the raw capture carries ``audio_start_epoch_ms`` and the clock syncs; relative
@@ -71,6 +72,23 @@ def chip_info(device_id: str) -> dict[str, Any]:
     out = api("POST", f"/devices/{device_id}/command", {"command": "json info"})
     resp = out.get("response", "")
     return json.loads(resp[resp.index("{") :]) if "{" in resp else {}
+
+
+def generator(device_id: str) -> str:
+    """The chip's current generator (``json state``, read-only), lower-case as ``gen`` takes it."""
+    out = api("POST", f"/devices/{device_id}/command", {"command": "json state"})
+    resp = out.get("response", "")
+    return str(json.loads(resp[resp.index("{") :])["generator"]).lower()
+
+
+def restore_generators(before: dict[str, str]) -> None:
+    """Put each chip back on the generator it had: the run's ``gen`` is runtime state, never
+    saved, but it would otherwise stay until the next reboot (a dark grid under ``audio``)."""
+    for dev, gen in before.items():
+        try:
+            api("POST", f"/devices/{dev}/command", {"command": f"gen {gen}"})
+        except (OSError, ValueError) as e:  # urllib errors are OSErrors; report, keep the review
+            print(f"WARNING: {dev} not restored to generator {gen}: {e}", file=sys.stderr)
 
 
 def run_capture(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -357,9 +375,13 @@ def main(argv: list[str] | None = None) -> int:
         # The chip's frame rate depends on the generator and the music: read it before and
         # after the run, and let the budget use the lower (the wider chip-frame spread).
         fps = {d[:12]: [chip_info(d).get("fps")] for d in args.device}
-        _, job = run_capture(args, out_dir)
-        for d in args.device:
-            fps[d[:12]].append(chip_info(d).get("fps"))
+        before = {d: generator(d) for d in args.device}
+        try:
+            _, job = run_capture(args, out_dir)
+            for d in args.device:
+                fps[d[:12]].append(chip_info(d).get("fps"))
+        finally:
+            restore_generators(before)
         (out_dir / "fps.json").write_text(json.dumps(fps))
     capture = dict(np.load(out_dir / "capture.npz"))
     summary = json.loads(str(capture["summary"]))
