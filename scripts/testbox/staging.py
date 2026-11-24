@@ -397,6 +397,15 @@ def render(report: dict[str, Any]) -> str:
         ),
         "",
     ]
+    if report.get("artifact"):
+        # Presigned URLs expire, so link the box's redirect, which signs a fresh one. The store
+        # signs its LAN address (devtop), so the link opens from the home network.
+        key = report["artifact"]
+        link = f"http://blinkytest:8420/api/spark/artifacts/{key}"
+        lines += [
+            f"Full report in the Spark artifact store: `{key}` ([open]({link}), home network)",
+            "",
+        ]
     dep = report.get("deploy") or {}
     if not dep.get("pass"):
         lines += [f"Deploy failed at `{dep.get('failed_step')}`: {dep.get('message')}"]

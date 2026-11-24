@@ -23,6 +23,9 @@ ExecStart=@SERVER_DIR@/venv/bin/python -m blinky_server --no-ble --staging
 # The Spark client (#288): SPARK_JOB_API, SPARK_API_KEY, SPARK_WEBHOOK_SECRET. Optional ("-"):
 # without it the server runs and its /api/spark routes answer 503. Mode 600, never in the repo.
 EnvironmentFile=-@HOME_DIR@/.config/blinky/spark.env
+# Traces to the box's Alloy (loopback OTLP/HTTP), which forwards them to Tempo on bignasty.
+# Unset, the server runs with tracing off and says so at startup (telemetry.py).
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 
 # A stop is a drain (#325): blinky-server finishes the step or flash in flight, holding the
 # stop open with EXTEND_TIMEOUT_USEC. mixed: the SIGTERM goes to the server only, never to the
