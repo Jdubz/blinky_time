@@ -9,6 +9,8 @@ deploy.py). One pass:
    on the PR that merged it into staging. On a pass, if staging's head is still that sha, open
    the staging -> master PR if none is open and turn on its auto-merge, pinned to that sha (a
    merge commit: master's tree is the tested tree).
+   The report and the promotion PR list the Claude review verdict of every PR merged into
+   staging since master: informational, never a gate.
 2. Otherwise, the staging head: already reported, nothing to do. No change under the
    firmware's paths (tools/firmware_paths.json at the head) since master: post a passing
    status saying the test was skipped, and promote. Its staging build
@@ -40,6 +42,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from deploy import review_verdict  # the deployer's parser: one reading of the verdict comment
+
 # The firmware and its staging flow live in blinky-firmware (blinky_time#357): its staging
 # head is what gets tested, and its statuses and PRs are what this posts.
 GH_REPO = "Jdubz/blinky-firmware"
@@ -64,6 +68,7 @@ FIRMWARE_PATHS = "tools/firmware_paths.json"
 COMPARE_FILE_LIMIT = 300  # GitHub's compare lists at most this many files
 CORPUS = "corpus/edm"  # the blinky-corpus submodule
 REPORT_HEADER = "## Hardware test (staging) — "
+REVIEWS_HEADER = "Claude reviews since master (informational, not gated):"
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
 
 Gh = Callable[..., str]
@@ -269,6 +274,31 @@ def staging_pr(gh_: Gh, sha: str) -> int | None:
     return None
 
 
+def review_verdicts(gh_: Gh, sha: str) -> str:
+    """Markdown: the Claude review verdict of every PR merged into staging since master, up to
+    sha. Informational only (owner, 2026-11-23): nothing here blocks a promotion, so a
+    GitHub error becomes a note in the text, never an exception. A PR's verdict is the review
+    workflow's comment on its last commit, read as the box deployer reads it."""
+    try:
+        cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/master...{sha}")
+        prs: dict[int, dict[str, Any]] = {}
+        for c in cmp.get("commits") or []:
+            for p in gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{c['sha']}/pulls") or []:
+                if p.get("merged_at") and p["base"]["ref"] == BRANCH:
+                    prs[int(p["number"])] = p
+        lines = []
+        for n, p in sorted(prs.items()):
+            comments = gh_json(gh_, "api", f"repos/{GH_REPO}/issues/{n}/comments?per_page=100")
+            verdict, why = review_verdict(comments or [], p["head"]["sha"], f"#{n}")
+            mark = "✅" if verdict == "deploy" else "⚠️"
+            lines.append(f"- {mark} {why} ({p.get('title', '')})")
+    except (RuntimeError, ValueError, KeyError, TypeError) as e:
+        return f"{REVIEWS_HEADER} couldn't read them ({str(e)[:120]})\n"
+    if not lines:
+        return f"{REVIEWS_HEADER} no PRs found since master\n"
+    return "\n".join([REVIEWS_HEADER, "", *lines]) + "\n"
+
+
 def promote(gh_: Gh, sha: str, report_url: str | None, skipped: str | None = None) -> str:
     """Open the staging -> master PR if none is open; turn on its auto-merge (merge commit)."""
     open_prs = gh_json(
@@ -300,6 +330,7 @@ def promote(gh_: Gh, sha: str, report_url: str | None, skipped: str | None = Non
             + "\n\nMerging this to master cuts a candidate release (docs/RELEASE_PROCESS.md). "
             "Opened by the test box (scripts/testbox/staging.py)."
         )
+    body += "\n\n" + review_verdicts(gh_, sha)
     if open_prs:
         number = str(open_prs[0]["number"])
         gh_("pr", "comment", number, "--repo", GH_REPO, "--body", body)
@@ -422,7 +453,7 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
             "devices": state["running"]["devices"],
             "deploy": {"pass": False, "failed_step": "suite", "message": job.get("error")},
         }
-    text = render(report)
+    text = render(report) + "\n" + review_verdicts(gh_, sha)
     pr = staging_pr(gh_, sha)
     url = None
     if pr is not None:

@@ -21,6 +21,13 @@ _spec.loader.exec_module(staging)
 SHA = "s" * 40
 TESTED = "t" * 40  # the staging commit master was last merged from (master's second parent)
 FP_A, FP_B = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+PR_HEAD = "h" * 40  # the last commit of PR #12, the one that merged SHA into staging
+
+
+def verdict(head: str, headline: str) -> dict[str, Any]:
+    """The review workflow's sha-stamped verdict comment (scripts/post-review-verdict.sh)."""
+    body = f"## Claude review — {head}\n\n{headline}\n\ndetails"
+    return {"user": {"login": "github-actions[bot]"}, "body": body}
 
 
 def fp_status(description: str, state: str = "success") -> dict[str, Any]:
@@ -66,6 +73,9 @@ class GitHub:
         self.comments: list[tuple[str, str]] = []
         self.calls: list[tuple[str, ...]] = []
         self.open_promotion: list[dict[str, Any]] = []
+        # Comments on PR #12: by default a clean review of its last commit.
+        self.pr_comments: list[dict[str, Any]] = [verdict(PR_HEAD, "No issues found. Checked.")]
+        self.fail_reviews = False
 
     def __call__(self, *args: str, stdin: str | None = None) -> str:
         self.calls.append(args)
@@ -86,8 +96,13 @@ class GitHub:
                 {
                     "merge_base_commit": {"sha": "m" * 40},
                     "files": [{"filename": f} for f in self.changed],
+                    "commits": [{"sha": SHA}],
                 }
             )
+        if "issues/12/comments" in a:
+            if self.fail_reviews:
+                raise RuntimeError("gh api repos/... -> 1: HTTP 502: Bad Gateway")
+            return json.dumps(self.pr_comments)
         if "/statuses?per_page=" in a:
             if self.fail_fingerprints:
                 raise RuntimeError("gh api repos/... -> 1: HTTP 502: Bad Gateway")
@@ -102,7 +117,17 @@ class GitHub:
             self.statuses.append((st["state"], st["description"]))
             return "{}"
         if f"commits/{SHA}/pulls" in a:
-            return json.dumps([{"number": 12, "merged_at": "x", "base": {"ref": "staging"}}])
+            return json.dumps(
+                [
+                    {
+                        "number": 12,
+                        "merged_at": "x",
+                        "base": {"ref": "staging"},
+                        "head": {"sha": PR_HEAD},
+                        "title": "Fix the tracker",
+                    }
+                ]
+            )
         if args[:2] == ("pr", "comment"):
             self.comments.append((args[2], args[-1]))
             return f"https://github.com/{staging.GH_REPO}/pull/{args[2]}#issuecomment-1\n"
@@ -485,3 +510,47 @@ def test_a_skipped_head_whose_promotion_fails_is_retried() -> None:
     state = staging.run_once(g, srv)
     assert state["reported"] == SHA
     assert srv.submitted == []
+
+
+# -- review verdicts (informational) ----------------------------------------------------------
+
+
+def test_the_report_and_the_promotion_list_each_prs_review_verdict() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    report = g.comments[0][1]
+    assert staging.REVIEWS_HEADER in report
+    assert "- ✅ #12: review clean (Fix the tracker)" in report
+    create = next(c for c in g.calls if c[:2] == ("pr", "create"))
+    assert "- ✅ #12: review clean" in create[create.index("--body") + 1]
+
+
+def test_a_flagged_review_is_shown_but_does_not_block_the_promotion() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g.pr_comments = [
+        verdict("o" * 40, "No issues found."),  # an older commit's clean review doesn't count
+        verdict(PR_HEAD, "Found 1 issue: off-by-one in the picker."),
+    ]
+    staging.run_once(g, srv)
+    state = staging.run_once(g, srv)
+    assert "- ⚠️ #12: review of hhhhhhhhhhhh: Found 1 issue" in g.comments[0][1]
+    assert g.statuses[-1][0] == "success" and state["reported"] == SHA
+    assert any(c[:2] == ("pr", "merge") for c in g.calls)  # promoted anyway
+
+
+def test_a_missing_verdict_is_shown_as_such() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g.pr_comments = []
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    assert "- ⚠️ #12: no review verdict for hhhhhhhhhhhh" in g.comments[0][1]
+
+
+def test_a_github_error_reading_reviews_is_a_note_not_a_failure() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g.fail_reviews = True
+    staging.run_once(g, srv)
+    state = staging.run_once(g, srv)
+    assert f"{staging.REVIEWS_HEADER} couldn't read them" in g.comments[0][1]
+    assert g.statuses[-1][0] == "success" and state["reported"] == SHA
