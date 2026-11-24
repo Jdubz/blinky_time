@@ -101,9 +101,10 @@ REAP_INTERVAL_CYCLES = 6  # every 6th background cycle (~60s)
 # bootloader visits the server didn't start (an operator's UF2 drop, a
 # bootloader update), which finish well inside it.
 USB_DFU_RECOVERY_GRACE_S = 120.0
-# Reconnect hold on a UF2 target while uf2_upload.py runs (_run_uf2_flash): longer than the
-# subprocess can live (300 s stream timeout + 10 s exit wait), released as soon as it exits.
-UF2_WRITE_HOLD_S = 330.0
+# Reconnect hold on a UF2 target for _uf2_write_impl_for_job (_run_uf2_flash): longer than
+# the whole call can take (USB reset or up to four 20 s mount steps, then the subprocess's
+# 300 s stream timeout + 10 s exit wait), released as soon as it returns.
+UF2_WRITE_HOLD_S = 600.0
 
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
@@ -1140,6 +1141,7 @@ class FleetManager:
         # verify-via-reconnect is why the target isn't held across the whole flash.
         prior_hold = self._reconnect_blackout.get(job.device_id)
         self.hold_reconnect(job.device_id, UF2_WRITE_HOLD_S)
+        write_hold = self._reconnect_blackout.get(job.device_id)
         try:
             write_ok = await _uf2_write_impl_for_job(
                 job,
@@ -1151,11 +1153,14 @@ class FleetManager:
                 ),
             )
         finally:
-            # Lift this hold only; a hold someone else set before the flash runs out as set.
-            if prior_hold is not None and prior_hold > _time.monotonic():
-                self._reconnect_blackout[job.device_id] = prior_hold
-            else:
-                self.resume_reconnect(job.device_id)
+            # Lift this hold only. Someone else's is left alone: one set during the write (an
+            # operator's /release extends it, so the deadline is no longer ours; /reconnect
+            # already cleared it), or one set before the flash, which runs out as it was set.
+            if self._reconnect_blackout.get(job.device_id) == write_hold:
+                if prior_hold is not None and prior_hold > _time.monotonic():
+                    self._reconnect_blackout[job.device_id] = prior_hold
+                else:
+                    self.resume_reconnect(job.device_id)
         if not write_ok:
             # ``_uf2_write_impl_for_job`` already set ``job.error``.
             job.transition(FlashJobState.FAILED)

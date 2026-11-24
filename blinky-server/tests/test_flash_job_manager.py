@@ -212,6 +212,28 @@ async def test_uf2_write_holds_the_targets_reconnect_only_while_the_tool_runs(
     assert job.state is (FlashJobState.COMPLETED if write_ok else FlashJobState.FAILED)
 
 
+@pytest.mark.asyncio
+async def test_uf2_write_leaves_a_hold_set_during_the_write(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An operator's /release during WRITING (here 1200 s, past the write's own hold) is
+    theirs: the write's cleanup must not clear it."""
+    import blinky_server.device.manager as mgr
+
+    dev = "TEST_SERIAL_DURING"
+    await _serial_device_in(fleet, dev)
+
+    async def fake_write(job: Any, **_: Any) -> bool:
+        fleet.hold_reconnect(dev, 1200)
+        job.set_error("UF2 write did not complete: boom")
+        return False
+
+    monkeypatch.setattr(mgr, "_uf2_write_impl_for_job", fake_write)
+    job = await fleet.flash_device(dev, Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=5.0)
+    assert fleet._reconnect_blackout.get(dev, 0.0) > time.monotonic() + 1000
+
+
 def test_hold_reconnect_extends_but_never_shortens(fleet: FleetManager) -> None:
     """uf2_upload.py's own 90 s release must not cut the write's longer hold short."""
     fleet.hold_reconnect("dev", 330)
