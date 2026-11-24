@@ -157,6 +157,117 @@ async def test_uf2_path_picked_for_serial_device_without_firmware_file(
     assert "firmware file not found" in job.error.lower()
 
 
+# --- UF2 write: the server stays off the target's port -----------------------
+
+
+async def _serial_device_in(fleet: FleetManager, device_id: str) -> Any:
+    from blinky_server.device.device import Device
+
+    from .mock_transport import MockTransport
+
+    transport = MockTransport(transport_type="serial")
+    device = Device(
+        device_id=device_id,
+        port="/dev/ttyTEST0",
+        platform="nrf52840",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    await device.connect()
+    fleet._devices[device_id] = device
+    return device
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write_ok", [True, False])
+async def test_uf2_write_holds_the_targets_reconnect_only_while_the_tool_runs(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch, write_ok: bool
+) -> None:
+    """While uf2_upload.py owns the port (USB reset, bootloader entry, copy), discovery
+    must not reconnect the target; the hold is gone before VERIFYING, whose
+    verify-via-reconnect needs it gone (staging run 2026-11-23: a reconnect mid-entry)."""
+    import blinky_server.device.manager as mgr
+
+    dev = "TEST_SERIAL_HOLD"
+    await _serial_device_in(fleet, dev)
+    held_during_write: list[bool] = []
+    held_during_verify: list[bool] = []
+
+    async def fake_write(job: Any, **_: Any) -> bool:
+        held_during_write.append(time.monotonic() < fleet._reconnect_blackout.get(dev, 0.0))
+        if not write_ok:
+            job.set_error("UF2 write did not complete: boom")
+        return write_ok
+
+    async def fake_verify(*_: Any) -> None:
+        held_during_verify.append(dev in fleet._reconnect_blackout)
+
+    monkeypatch.setattr(mgr, "_uf2_write_impl_for_job", fake_write)
+    monkeypatch.setattr(fleet, "_verify_with_anomaly_checks", fake_verify)
+    job = await fleet.flash_device(dev, Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=5.0)
+
+    assert held_during_write == [True]
+    assert held_during_verify == ([False] if write_ok else [])
+    assert dev not in fleet._reconnect_blackout
+    assert job.state is (FlashJobState.COMPLETED if write_ok else FlashJobState.FAILED)
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_leaves_a_hold_set_during_the_write(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An operator's /release during WRITING (here 1200 s, past the write's own hold) is
+    theirs: the write's cleanup must not clear it."""
+    import blinky_server.device.manager as mgr
+
+    dev = "TEST_SERIAL_DURING"
+    await _serial_device_in(fleet, dev)
+
+    async def fake_write(job: Any, **_: Any) -> bool:
+        fleet.hold_reconnect(dev, 1200)
+        job.set_error("UF2 write did not complete: boom")
+        return False
+
+    monkeypatch.setattr(mgr, "_uf2_write_impl_for_job", fake_write)
+    job = await fleet.flash_device(dev, Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=5.0)
+    assert fleet._reconnect_blackout.get(dev, 0.0) > time.monotonic() + 1000
+
+
+def test_hold_reconnect_extends_but_never_shortens(fleet: FleetManager) -> None:
+    """uf2_upload.py's own 90 s release must not cut the write's longer hold short."""
+    fleet.hold_reconnect("dev", 330)
+    long_hold = fleet._reconnect_blackout["dev"]
+    fleet.hold_reconnect("dev", 90)
+    assert fleet._reconnect_blackout["dev"] == long_hold
+    fleet.hold_reconnect("dev", 600)
+    assert fleet._reconnect_blackout["dev"] > long_hold
+    fleet.resume_reconnect("dev")
+    assert "dev" not in fleet._reconnect_blackout
+
+
+@pytest.mark.asyncio
+async def test_uf2_write_hold_leaves_an_earlier_hold_in_place(
+    fleet: FleetManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hold set before the flash (an operator's release) outlives the write's own hold."""
+    import blinky_server.device.manager as mgr
+
+    dev = "TEST_SERIAL_PRIOR"
+    await _serial_device_in(fleet, dev)
+    earlier = time.monotonic() + 900.0
+    fleet._reconnect_blackout[dev] = earlier
+
+    async def fake_write(job: Any, **_: Any) -> bool:
+        job.set_error("UF2 write did not complete: boom")
+        return False
+
+    monkeypatch.setattr(mgr, "_uf2_write_impl_for_job", fake_write)
+    job = await fleet.flash_device(dev, Path("/tmp/fw.hex"))
+    await job.wait_until_terminal(timeout=5.0)
+    assert fleet._reconnect_blackout.get(dev) == earlier
+
+
 # --- should_attempt_auto_recovery -----------------------------------------
 
 
