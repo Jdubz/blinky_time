@@ -49,6 +49,8 @@ RESPONSIVE = (
     0.5  # an LED shows a chip's hits: lights for half its detections, half its flashes on one
 )
 
+RUN_SLACK_S = 30.0  # between one run's last detection and the next run's audio start, at most
+
 # What each generator lets the camera check. Fire flickers on its own (per-event matching
 # means little, but it never holds still); Audio flashes on each detection and holds still
 # between them.
@@ -91,8 +93,18 @@ def restore_generators(before: dict[str, str]) -> None:
             print(f"WARNING: {dev} not restored to generator {gen}: {e}", file=sys.stderr)
 
 
+def _log_tail(path: Path, n: int = 5) -> str:
+    try:
+        return " | ".join(path.read_text().strip().splitlines()[-n:]) or "(empty)"
+    except OSError as e:
+        return f"(no log: {e})"
+
+
 def run_capture(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The camera recording around one validation job: (capture summary, job)."""
+    """The camera recording around one validation job: (capture summary, job). The helper's
+    stderr (where it reports why it stopped) goes to ``camera.log`` and into any error here."""
+    log_path = out_dir / "camera.log"
+    log_file = log_path.open("w")
     cam = subprocess.Popen(
         [
             "/usr/bin/python3",
@@ -110,14 +122,15 @@ def run_capture(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any]
             str(out_dir / "capture.npz"),
         ],
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=log_file,
         text=True,
     )
+    job_id = None
     try:
         assert cam.stdout is not None
         ready = json.loads(cam.stdout.readline() or "{}")
         if not ready.get("ready"):
-            raise SystemExit("camera capture didn't start (see camera_capture.py's output)")
+            raise SystemExit(f"camera capture didn't start: {_log_tail(log_path)}")
         job = api(
             "POST",
             "/test/validate",
@@ -142,7 +155,13 @@ def run_capture(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any]
     finally:
         cam.send_signal(signal.SIGTERM)
         lines = (cam.communicate(timeout=120)[0] or "").strip().splitlines()
-    summary = json.loads(lines[-1]) if lines else {}
+        log_file.close()
+    if cam.returncode != 0 or not lines:
+        raise SystemExit(
+            f"camera capture failed (exit {cam.returncode}) during job {job_id}: "
+            f"{_log_tail(log_path)}"
+        )
+    summary = json.loads(lines[-1])
     (out_dir / "job.json").write_text(json.dumps(status))
     if status.get("status") != "complete":
         raise SystemExit(
@@ -207,7 +226,13 @@ def review_run(
         # first, then of the regions that pass selection. Only the lag's spread is meaningful.
         first = next(iter(dets))
         cols = list(range(lum.shape[1]))
-        slot = (t_s >= search_from) & (t_s <= job["completed_at"])
+        # A run's audio starts within one run (plus syncs and the gap between runs) of the
+        # previous run's last detection: bounding the search there keeps a repeated track from
+        # locking onto a later run's frames.
+        latest_start = min(
+            float(job["completed_at"]), search_from + args.duration_ms / 1000.0 + RUN_SLACK_S
+        )
+        slot = (t_s >= search_from) & (t_s <= latest_start + args.duration_ms / 1000.0 + 2.0)
         for _ in range(2):
             on_t: list[float] = []
             for k in cols:
@@ -217,7 +242,10 @@ def review_run(
             shift = ca.best_constant_offset(
                 dets[first],
                 np.unique(np.round(on_t, 4)),
-                (search_from, max(search_from + 0.001, job["completed_at"] - span)),
+                (
+                    search_from,
+                    max(search_from + 0.001, min(latest_start, job["completed_at"] - span)),
+                ),
             )
             d0 = dets[first] + shift
             w0 = (t_s >= d0.min() - 2) & (t_s <= d0.max() + 2)
