@@ -203,6 +203,7 @@ staging._info = fake_info
 staging.play_audio = fake_play_audio
 staging.stop_audio = noop
 staging.HEALTH_POLL_S = 0.05
+staging.HEALTH_SETTLE_S = 0.0
 STAGING_REQ = {
     "sha": "ab" * 20,
     "device_ids": DEVICES,
