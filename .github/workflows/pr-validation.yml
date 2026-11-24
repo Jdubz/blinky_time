@@ -10,6 +10,53 @@ on:
     branches: [ master, staging ]
 
 jobs:
+  # Which slow checks this change needs (owner, 2026-11-24: rapid iteration with sensible
+  # validation; not every check runs for every change). The server, ML and console suites
+  # run only when something they test changed. They stay required checks: a job skipped by
+  # its own `if` reports success (and the box deployer counts skipped as green), while a
+  # workflow-level path filter would leave a required check waiting forever.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.diff.outputs.server }}
+      ml: ${{ steps.diff.outputs.ml }}
+      console: ${{ steps.diff.outputs.console }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Diff against the base
+      id: diff
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE: ${{ github.event.before }}
+      run: |
+        if [ "$EVENT" = pull_request ]; then
+          range="origin/$BASE_REF...HEAD"
+        elif [ -n "$BEFORE" ] && ! [[ "$BEFORE" =~ ^0+$ ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+          range="$BEFORE..HEAD"
+        else
+          echo "no base to diff against: run everything"
+          printf 'server=true\nml=true\nconsole=true\n' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        git diff --name-only "$range" > changed.txt
+        echo "changed ($range):"; cat changed.txt
+        # server: blinky-server and the test box scripts its job also tests (not camera/, which
+        # has its own job), with the firmware
+        # tools and corpus scorers it runs; ml: ml-training and the corpus it labels and trains
+        # on; console: blinky-console. A change to this workflow runs everything.
+        check() {
+          if grep -qE "$2" changed.txt; then v=true; else v=false; fi
+          echo "$1=$v" >> "$GITHUB_OUTPUT"; echo "$1: $v"
+        }
+        check server '^(blinky-server/|scripts/testbox/[^/]+$|scripts/testbox/alloy/|firmware$|corpus$|\.github/workflows/pr-validation\.yml$)'
+        check ml '^(ml-training/|corpus$|\.github/workflows/pr-validation\.yml$)'
+        check console '^(blinky-console/|\.github/workflows/pr-validation\.yml$)'
+
   documentation:
     name: Documentation Check
     runs-on: ubuntu-latest
@@ -44,6 +91,10 @@ jobs:
   blinky-server-tests:
     name: Blinky Server Tests
     runs-on: ubuntu-latest
+    # Skipped unless server changed (job `changes`); runs if that job failed, so a broken
+    # diff can never skip it silently.
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.server == 'true') }}
 
     defaults:
       run:
@@ -187,6 +238,10 @@ jobs:
     # Quoted: unquoted, YAML reads ` #305)` as a comment and the check is named "...(#304,".
     name: "Trainer meets the Spark gpu_task contract (#304, #305)"
     runs-on: ubuntu-latest
+    # Skipped unless ml changed (job `changes`); runs if that job failed, so a broken
+    # diff can never skip it silently.
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
 
     steps:
     - name: Checkout repository
@@ -238,6 +293,10 @@ jobs:
     # committed evidence (drum_label_adtof.json) must be what it produces.
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Skipped unless ml changed (job `changes`); runs if that job failed, so a broken
+    # diff can never skip it silently.
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
 
     steps:
     - name: Checkout repository
@@ -283,6 +342,10 @@ jobs:
   blinky-console-tests:
     name: Blinky Console Tests
     runs-on: ubuntu-latest
+    # Skipped unless console changed (job `changes`); runs if that job failed, so a broken
+    # diff can never skip it silently.
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.console == 'true') }}
 
     defaults:
       run:
