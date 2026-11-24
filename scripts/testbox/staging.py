@@ -280,19 +280,41 @@ def review_verdicts(gh_: Gh, sha: str) -> str:
     GitHub error becomes a note in the text, never an exception. A PR's verdict is the review
     workflow's comment on its last commit, read as the box deployer reads it."""
     try:
-        cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/master...{sha}")
+        # Every page: a compare lists at most 250 commits per response, and a busy PR can have
+        # more than 100 comments (its verdict is among the newest). One JSON value per line.
+        shas = gh_(
+            "api",
+            "--paginate",
+            f"repos/{GH_REPO}/compare/master...{sha}",
+            "--jq",
+            ".commits[].sha",
+        ).split()
         prs: dict[int, dict[str, Any]] = {}
-        for c in cmp.get("commits") or []:
-            for p in gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{c['sha']}/pulls") or []:
+        for c in shas:
+            for p in gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{c}/pulls") or []:
                 if p.get("merged_at") and p["base"]["ref"] == BRANCH:
                     prs[int(p["number"])] = p
         lines = []
         for n, p in sorted(prs.items()):
-            comments = gh_json(gh_, "api", f"repos/{GH_REPO}/issues/{n}/comments?per_page=100")
-            verdict, why = review_verdict(comments or [], p["head"]["sha"], f"#{n}")
+            raw = gh_(
+                "api",
+                "--paginate",
+                f"repos/{GH_REPO}/issues/{n}/comments?per_page=100",
+                "--jq",
+                ".[] | {user: {login: .user.login}, body: .body}",
+            )
+            comments = [json.loads(ln) for ln in raw.splitlines() if ln.strip()]
+            verdict, why = review_verdict(comments, p["head"]["sha"], f"#{n}")
             mark = "✅" if verdict == "deploy" else "⚠️"
             lines.append(f"- {mark} {why} ({p.get('title', '')})")
-    except (RuntimeError, ValueError, KeyError, TypeError) as e:
+    except (
+        RuntimeError,
+        OSError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        KeyError,
+        TypeError,
+    ) as e:
         return f"{REVIEWS_HEADER} couldn't read them ({str(e)[:120]})\n"
     if not lines:
         return f"{REVIEWS_HEADER} no PRs found since master\n"

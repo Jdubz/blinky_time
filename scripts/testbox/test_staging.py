@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import subprocess
 import sys
 import urllib.error
 from pathlib import Path
@@ -91,18 +92,19 @@ class GitHub:
             spec = {"paths": self.paths, "unfingerprinted": self.unfingerprinted}
             raw = json.dumps(spec).encode()
             return json.dumps({"content": base64.b64encode(raw).decode()})
+        if args[:2] == ("api", "--paginate") and f"compare/master...{SHA}" in a:
+            return SHA + "\n"
+        if args[:2] == ("api", "--paginate") and "issues/12/comments" in a:
+            if self.fail_reviews:
+                raise subprocess.TimeoutExpired(["gh", *args], 120)
+            return "".join(json.dumps(c) + "\n" for c in self.pr_comments)
         if f"compare/master...{SHA}" in a:
             return json.dumps(
                 {
                     "merge_base_commit": {"sha": "m" * 40},
                     "files": [{"filename": f} for f in self.changed],
-                    "commits": [{"sha": SHA}],
                 }
             )
-        if "issues/12/comments" in a:
-            if self.fail_reviews:
-                raise RuntimeError("gh api repos/... -> 1: HTTP 502: Bad Gateway")
-            return json.dumps(self.pr_comments)
         if "/statuses?per_page=" in a:
             if self.fail_fingerprints:
                 raise RuntimeError("gh api repos/... -> 1: HTTP 502: Bad Gateway")
@@ -547,7 +549,8 @@ def test_a_missing_verdict_is_shown_as_such() -> None:
     assert "- ⚠️ #12: no review verdict for hhhhhhhhhhhh" in g.comments[0][1]
 
 
-def test_a_github_error_reading_reviews_is_a_note_not_a_failure() -> None:
+def test_a_stalled_review_lookup_is_a_note_not_a_failure() -> None:
+    # gh's 120 s timeout raises TimeoutExpired, not RuntimeError: still only a note.
     g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
     g.fail_reviews = True
     staging.run_once(g, srv)
