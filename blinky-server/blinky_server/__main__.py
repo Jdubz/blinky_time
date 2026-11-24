@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 from .api.app import create_app
+from .telemetry import TraceIdFilter
 
 # How long uvicorn waits for open connections on SIGTERM before the lifespan shutdown (#325).
 GRACEFUL_HTTP_S = 30
@@ -44,13 +45,17 @@ def main() -> None:
     args = parser.parse_args()
 
     log_level = getattr(logging, args.log_level.upper())
+    # trace_ctx: " trace_id=<hex>" inside a span (telemetry.TraceIdFilter), so Loki links a
+    # log line to its trace in Tempo; empty otherwise.
     log_fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-5s %(name)s: %(message)s", datefmt="%H:%M:%S"
+        "%(asctime)s %(levelname)-5s %(name)s: %(message)s%(trace_ctx)s", datefmt="%H:%M:%S"
     )
+    trace_ids = TraceIdFilter()
 
     # Console handler (for tmux / interactive use)
     console = logging.StreamHandler()
     console.setFormatter(log_fmt)
+    console.addFilter(trace_ids)
 
     # File handler with rotation (persists across restarts)
     # 5 MB per file x 3 backups = 20 MB max. Append mode preserves logs on restart.
@@ -63,6 +68,7 @@ def main() -> None:
         log_dir / "blinky-server.log", maxBytes=5_000_000, backupCount=3
     )
     file_handler.setFormatter(log_fmt)
+    file_handler.addFilter(trace_ids)
 
     logging.basicConfig(level=log_level, handlers=[console, file_handler])
 

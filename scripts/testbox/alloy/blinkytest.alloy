@@ -82,6 +82,12 @@ loki.process "box" {
 		stage.regex {
 			expression = `(?:job |job_id[=:] ?|workflow )(?P<job_id>[0-9a-f]{12})\b`
 		}
+
+		// telemetry.TraceIdFilter ends a line logged inside a span with " trace_id=<32 hex>":
+		// Grafana jumps from it to the trace in Tempo.
+		stage.regex {
+			expression = ` trace_id=(?P<trace_id>[0-9a-f]{32})$`
+		}
 	}
 
 	// Device serials (12 or 16 uppercase hex) from any unit, as structured metadata.
@@ -91,9 +97,10 @@ loki.process "box" {
 
 	stage.structured_metadata {
 		values = {
-			logger = "",
-			job_id = "",
-			device = "",
+			logger   = "",
+			job_id   = "",
+			device   = "",
+			trace_id = "",
 		}
 	}
 
@@ -128,6 +135,15 @@ prometheus.relabel "node_job" {
 		target_label = "job"
 		replacement  = "node"
 	}
+}
+
+// blinky-server's /metrics (telemetry.py): per-device health from json info, flash, workflow,
+// step and staging-suite metrics. job="blinky-server" is what dashboards and alerts key on.
+prometheus.scrape "blinky_server" {
+	targets         = [{__address__ = "127.0.0.1:8420"}]
+	forward_to      = [prometheus.remote_write.bignasty.receiver]
+	job_name        = "blinky-server"
+	scrape_interval = "15s"
 }
 
 // Alloy's own health (dropped samples, queue backlog), as on devtop.

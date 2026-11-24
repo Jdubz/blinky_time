@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .. import telemetry
 from ..device.device import alerts_since
 from ..firmware import deploy_pipeline
 from ..paths import data_dir
@@ -314,6 +315,7 @@ async def write_report(sha: str, report: dict[str, Any]) -> str:
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{sha}.json"
     path.write_text(json.dumps(report, indent=2) + "\n")
+    telemetry.record_staging(report)  # gauges, so a repeated step just sets them again
     return str(path)
 
 
