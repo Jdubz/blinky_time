@@ -312,3 +312,20 @@ async def test_a_command_that_times_out_still_restores_the_stream(
         await protocol.send_command("json info", timeout=0.2)
     assert protocol.streaming
     assert transport.sent_commands[-1] == "stream fast"
+
+
+async def test_a_timed_command_reports_when_the_reply_line_arrived(
+    protocol: DeviceProtocol,
+) -> None:
+    """The reply is finalized a silence gap after it arrives; a clock sync needs the arrival."""
+    import time
+
+    t0 = time.time()
+    resp, sent_at, line_times = await protocol.send_command_timed("json info")
+    t1 = time.time()
+    assert '"millis"' in resp or "version" in resp
+    assert t0 <= sent_at <= line_times[0] <= t1
+    assert len(line_times) == len(resp.split("\n"))
+    # The line arrived ~10 ms after sending (mock latency); the call returned a gap later.
+    assert line_times[0] - sent_at < 0.05
+    assert t1 - line_times[0] >= 0.09

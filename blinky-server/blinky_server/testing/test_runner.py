@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 from blinky_scoring.types import TestData
@@ -62,6 +61,12 @@ async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
     round-trip time. Returns (offset_ms = server_epoch_ms - firmware_millis,
     rtt_ms), or None if sync fails.
 
+    The round trip runs from writing the command line to the arrival of the reply line
+    that carries `millis` (``send_command_timed``), not to ``send_command``'s return: that
+    comes a 100 ms silence gap after the reply, and while streaming also includes pausing the
+    stream first, which put the midpoint off by tens of ms (the box camera's first absolute
+    run, 2026-11-24: RTT ~115 ms).
+
     A None return means the test session will record without a clock
     offset, leaving firmware-timestamped events uncorrelated with server
     audio playback timing. Each failure path now logs at WARN with
@@ -74,9 +79,8 @@ async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
     failing clock-sync is tolerable, but all devices failing means the
     entire run's timing is unreliable and the caller should halt.
     """
-    t_send = time.time() * 1000
     try:
-        resp = await device.protocol.send_command("json info")
+        resp, sent_at, line_times = await device.protocol.send_command_timed("json info")
     # `TimeoutError` here covers `asyncio.TimeoutError` too: pyproject.toml
     # requires Python >= 3.11, where asyncio.TimeoutError is an alias for
     # builtins.TimeoutError. ruff UP041 enforces this modern idiom — listing
@@ -105,7 +109,6 @@ async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
             e,
         )
         return None
-    t_recv = time.time() * 1000
 
     try:
         info, others = json_object_from(resp, "version")
@@ -139,7 +142,19 @@ async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
         )
         return None
 
-    # Estimate firmware time at midpoint of round-trip
+    # Estimate firmware time at the midpoint of the round trip to the line carrying millis.
+    lines = resp.split("\n")
+    at = [i for i, line in enumerate(lines) if '"millis"' in line]
+    if not at or at[0] >= len(line_times):
+        log.warning(
+            "[FALLBACK] clock sync %s: no timed reply line with millis (%d lines, %d times)",
+            device.id[:12],
+            len(lines),
+            len(line_times),
+        )
+        return None
+    t_send = sent_at * 1000
+    t_recv = line_times[at[0]] * 1000
     rtt = t_recv - t_send
     server_midpoint = t_send + rtt / 2
     offset = server_midpoint - fw_millis

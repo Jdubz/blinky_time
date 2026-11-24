@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 import pytest
@@ -24,16 +25,17 @@ class _Protocol:
         self.fw_offset_ms = fw_offset_ms
         self.calls = 0
 
-    async def send_command(self, cmd: str) -> str:
+    async def send_command_timed(self, cmd: str) -> tuple[str, float, list[float]]:
         assert cmd == "json info"
         self.calls += 1
         d = self.delays.pop(0) if self.delays else 0.002
+        sent = time.time()
         await asyncio.sleep(d / 2)
-        import time
-
         millis = time.time() * 1000 - self.fw_offset_ms
         await asyncio.sleep(d / 2)
-        return json.dumps({"version": "b0", "millis": millis})
+        arrived = time.time()
+        await asyncio.sleep(0.05)  # the silence gap before the reply is finalized: not counted
+        return json.dumps({"version": "b0", "millis": millis}), sent, [arrived]
 
 
 class _Device:
@@ -56,13 +58,13 @@ async def test_the_sync_keeps_the_shortest_round_trip() -> None:
     assert sync is not None
     assert proto.calls == test_runner.CLOCK_SYNC_SAMPLES
     assert sync["samples"] == 5
-    assert sync["rtt_ms"] < 20  # the 4 ms one, not the 60 ms one
+    assert sync["rtt_ms"] < 20  # the 4 ms one, not the 60 ms one, and not the 50 ms gap
     assert sync["offset_ms"] == pytest.approx(1_000_000.0, abs=sync["rtt_ms"] / 2 + 2)
 
 
 async def test_a_sync_with_no_reply_is_none() -> None:
     class _Dead:
-        async def send_command(self, cmd: str) -> str:
+        async def send_command_timed(self, cmd: str) -> tuple[str, float, list[float]]:
             raise TimeoutError
 
     assert await test_runner._sync_clock(_Device(_Dead())) is None  # type: ignore[arg-type]
