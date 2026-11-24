@@ -7,7 +7,6 @@ for progress and results. While the server is restarting, submissions answer 503
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import os
 from typing import Any
@@ -148,7 +147,7 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
             raise HTTPException(409, "A deploy or staging suite is already running")
         try:
             devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
-            await asyncio.to_thread(deploy_pipeline.require_test_devices, devices)
+            deploy_pipeline.require_test_devices(get_fleet(), devices)
         except deploy_pipeline.DeployError as e:
             raise HTTPException(400, str(e)) from e
         return await _submit(staging_suite, body.model_dump())

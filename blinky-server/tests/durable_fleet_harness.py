@@ -153,7 +153,7 @@ deploy_pipeline.fetch_staging_build = (
         "sha": sha,
     }
 )
-deploy_pipeline.require_test_devices = lambda devices: effect(f"test devices {len(devices)}")  # type: ignore[assignment]
+deploy_pipeline.require_test_devices = lambda fleet, devices: effect(f"test devices {len(devices)}")  # type: ignore[assignment]
 
 
 def _store_staging(hex_path: Path, version: str) -> Path:

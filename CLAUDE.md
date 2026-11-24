@@ -35,7 +35,7 @@ Direct `curl` against the low-level `/api/fleet/upload`, `/api/fleet/flash`, or 
 ./scripts/deploy.sh --devices=ID --release b214     # a specific STABLE release (deploy.sh is stable-only, #251)
 ```
 
-Candidates and `--dev` builds go only through blinky-firmware's `tools/deploy_local.py` to a test device on this machine's USB. Staging builds go only through the test box's staging suite (`POST /api/test/staging`, or `/api/fleet/deploy-staging`: test devices only, a server started with `--staging`).
+Candidates and `--dev` builds go only through blinky-firmware's `tools/deploy_local.py` to a test device on this machine's USB. Staging builds go only through the test box's staging suite (`POST /api/test/staging`, or `/api/fleet/deploy-staging`: a server started with `--staging`, to any configured chip on the box).
 
 deploy.sh runs the full pipeline (select firmware → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
 
@@ -48,6 +48,11 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 **Firmware that isn't stable** (candidates, and `--dev` builds of a clean tree, versioned `bN-dev-<sha>`) goes to exactly one device listed in blinky-firmware's `devices/test_devices.json` (`firmware/devices/` here). The deploy tools refuse every other device. Never flash an uncommitted or unreleased build to any other device "just to try it": that is how b210 (12 fps) and b211 (silent mic) reached the hat.
 
 **The deploy.sh-only rule is broader than firmware flashing.** It also covers any sequence of API calls that mutates persistent device state or device lifecycle: `device upload` (writes config to flash), `reboot`, `wipe_device_identity` (and its deprecated aliases `factory` / `reset`), fleet-wide config sweeps that loop over multiple settings, etc. Even though those go through `/api/devices/{id}/command` (not `/api/fleet/upload`), running them in an ad-hoc loop without a tested workflow leaves devices in `error`/`connecting` states and requires manual recovery. The server enforces this for the destructive subset (`device upload`, `reboot`, `wipe_device_identity`, `factory`, `reset` — see `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST` for the canonical list); for everything else the discipline is on the operator. **If a real test needs different device configurations, build firmware variants with each config baked in and deploy each via `deploy.sh` — do NOT script API config flips on running fleet devices.**
+
+**The test box is the exception** (owner, 2026-11-23: "This is a test box, not strictly a validation CI box"). On a server started with `--staging`, every chip is a test chip (a fleet device is never plugged into the box), so:
+- `device upload`, `reboot` and the rest of the gated list go straight to one chip through `/api/devices/{id}/command`, with no `X-Deploy-Tool` header. Never forge that header anywhere. Fleet-wide broadcasts (`/api/fleet/command`) stay gated on the box too.
+- Staging builds go to any configured chip on the box, with no test-device list (`deploy_pipeline.require_test_devices`, `scripts/testbox/staging.py`).
+- Stable deploys still go through `POST /api/fleet/deploy`. The firmware's 60-second rule between resets (below) still applies to every chip: space resets in any script that reconfigures one.
 
 **Bare-chip recovery only:** blinky-firmware's `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 

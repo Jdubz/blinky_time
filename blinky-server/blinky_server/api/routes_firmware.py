@@ -416,7 +416,7 @@ async def fleet_deploy_staging(body: StagingDeployRequest) -> dict[str, Any]:
     (tools/firmware_release.py download-staging: a successful staging-build.yml artifact of
     exactly that commit, every file checked against its manifest) in place of a release.
     Refused unless the server was started with --staging (the test box's unit) and every
-    target is in devices/test_devices.json. The image is stored as non-stable, so
+    target is a configured chip on the box. The image is stored as non-stable, so
     auto-recovery stays armed with the stable image.
     """
     from ..firmware.fleet_workflows import fleet_deploy_staging as wf
@@ -430,7 +430,7 @@ async def fleet_deploy_staging(body: StagingDeployRequest) -> dict[str, Any]:
             raise HTTPException(409, "A fleet deploy is already running")
         try:
             devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
-            await asyncio.to_thread(deploy_pipeline.require_test_devices, devices)
+            deploy_pipeline.require_test_devices(get_fleet(), devices)
         except deploy_pipeline.DeployError as e:
             raise HTTPException(400, str(e)) from e
         job_id = await _submit(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
 
 
@@ -120,6 +121,31 @@ async def test_send_command_device_upload_allowed_with_deploy_tool(
     )
     # 200 (mock device responds) — the gate is what we're testing here.
     assert resp.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "command", ['device upload {"deviceId":"x","ledWidth":1,"ledHeight":1}', "reboot"]
+)
+async def test_send_command_on_the_test_box_needs_no_deploy_tool(
+    api_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """On the test box (--staging) every chip is a test chip: no deploy.sh gate per device."""
+    from blinky_server.api.deps import get_fleet
+
+    monkeypatch.setattr(get_fleet(), "staging_enabled", True)
+    resp = await api_client.post("/api/devices/MOCK_DEVICE_000/command", json={"command": command})
+    assert resp.status_code == 200
+
+
+async def test_fleet_command_stays_gated_on_the_test_box(
+    api_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The box relaxes per-chip commands only; a broadcast reboot still needs deploy.sh."""
+    from blinky_server.api.deps import get_fleet
+
+    monkeypatch.setattr(get_fleet(), "staging_enabled", True)
+    resp = await api_client.post("/api/fleet/command", json={"command": "reboot"})
+    assert resp.status_code == 403
 
 
 async def test_fleet_command_reboot_blocked_without_deploy_tool(

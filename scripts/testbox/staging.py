@@ -17,8 +17,8 @@ deploy.py). One pass:
    with per-commit fields fixed) as the staging commit master was last merged from, and no
    change under the list's "unfingerprinted" paths: the same image, so skip and promote as
    above. Otherwise submit the suite (POST /api/test/staging)
-   for every connected test device (devices/test_devices.json, by configured device id) and
-   post a pending status.
+   for every connected, configured chip on the box (every box chip is a test chip) and post a
+   pending status.
 
 Only the newest staging commit is tested; a commit superseded while it waits is skipped (its
 successor carries its changes). State is in ~/.local/share/blinky-server/staging.json; the log
@@ -108,21 +108,15 @@ def http(method: str, path: str, body: Any = None, timeout: float = 30) -> Any:
         return json.loads(r.read())
 
 
-def test_devices(devices: list[dict[str, Any]], listed: set[str]) -> list[str]:
-    """Connected nRF52840s whose configured id is a listed test device."""
+def test_devices(devices: list[dict[str, Any]]) -> list[str]:
+    """Connected, configured nRF52840s: on the box every chip is a test chip, so no list."""
     return [
         d["id"]
         for d in devices
         if d.get("state") == "connected"
         and d.get("platform") == "nrf52840"
-        and d.get("device_type") in listed
+        and d.get("device_type")
     ]
-
-
-def listed_test_devices() -> set[str]:
-    # The firmware repo's list (the firmware/ submodule): the same one its tools enforce.
-    data = json.loads((LINK / "firmware" / "devices" / "test_devices.json").read_text())
-    return set(data["test_devices"])
 
 
 # -- GitHub ------------------------------------------------------------------------------------
@@ -471,7 +465,6 @@ def _detail(e: urllib.error.HTTPError) -> str:
 def run_once(
     gh_: Gh = gh,
     server: Callable[..., Any] = http,
-    listed: Callable[[], set[str]] = listed_test_devices,
 ) -> dict[str, Any]:
     state = load_state()
     if "running" in state:
@@ -520,7 +513,7 @@ def run_once(
             return skip(gh_, state, sha, why)
         log(f"{sha[:12]}: {why}")
     try:
-        devices = test_devices(server("GET", "/api/devices"), listed())
+        devices = test_devices(server("GET", "/api/devices"))
         if not devices:
             if state.get("no_device") != sha:  # once per commit, not every pass
                 post_status(gh_, sha, "pending", "no test device connected to the box")

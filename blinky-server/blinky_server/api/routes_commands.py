@@ -38,11 +38,12 @@ async def send_command(
     """Send a raw command to a device.
 
     Device-mutating commands require the X-Deploy-Tool header set by
-    scripts/deploy.sh; everything else is open. See
+    scripts/deploy.sh, except on the test box (--staging), whose chips are
+    all test chips; everything else is open. See
     deps._DEPLOY_GATED_COMMAND_LIST for the canonical gated set and
     deps.assert_command_allowed for the matching rule.
     """
-    assert_command_allowed(body.command, x_deploy_tool)
+    assert_command_allowed(body.command, x_deploy_tool, test_box=get_fleet().staging_enabled)
     device = _get_connected_device(device_id)
     resp = await device.protocol.send_command(body.command)
     return CommandResponse(response=resp)
