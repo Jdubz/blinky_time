@@ -20,7 +20,9 @@
 #   8. the deploy worktree (~/blinky-deploy -> ~/blinky-deploy-a|b, master only) and
 #      blinky-server.service running from it with --no-ble; blinky-deploy.timer keeps it at
 #      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
-#   9. development tooling, so the box can run every script, tool and CI check itself:
+#   9. Grafana Alloy, shipping the box's journal, host metrics and traces to the central LGTM
+#      stack on bignasty (scripts/testbox/alloy/blinkytest.alloy; Grafana: grafana.joshwentworth.com)
+#  10. development tooling, so the box can run every script, tool and CI check itself:
 #      arduino-cli (pinned) + the firmware toolchain, cppcheck (pinned, CI's build),
 #      adafruit-nrfutil, a dev Python venv, blinky-serial-mcp, git hooks, Claude Code
 #      (with Linux MCP servers: blinky-serial on this box, playwright + its Chromium)
@@ -239,6 +241,42 @@ install_service() {
 # The box doubles as a dev machine (Claude sessions in tmux), so it runs the same
 # scripts and CI checks as a workstation, with the same pins.
 
+# Grafana Alloy: the box's telemetry forwarder (logs, host metrics, traces) to the central LGTM
+# stack on bignasty (Josh-Wentworth/observability). Pinned to the version the central stack and the
+# Spark's forwarder run. deploy.py keeps /etc/alloy/config.alloy in step with the live slot.
+ALLOY_VERSION="1.16.0-1"
+install_alloy() {
+  install -d -m 0755 /etc/apt/keyrings || return 1
+  if [[ ! -s /etc/apt/keyrings/grafana.gpg ]]; then
+    curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg || return 1
+  fi
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+    > /etc/apt/sources.list.d/grafana.list
+  "${APT[@]}" update || return 1
+  apt-mark unhold alloy >/dev/null 2>&1
+  "${APT[@]}" install --allow-downgrades "alloy=$ALLOY_VERSION" || return 1
+  apt-mark hold alloy >/dev/null || return 1
+  usermod -aG systemd-journal alloy || return 1   # loki.source.journal reads the system journal
+  cat > /etc/default/alloy <<'ENV'
+# Grafana Alloy on the test box. Written by blinky_time scripts/testbox/setup.sh (install_alloy);
+# re-run setup.sh rather than editing by hand. The config itself is installed by deploy.py.
+CONFIG_FILE="/etc/alloy/config.alloy"
+# UI and /metrics on loopback only (the central stack is reached by push, never scraped).
+CUSTOM_ARGS="--server.http.listen-addr=127.0.0.1:12345 --disable-reporting"
+RESTART_ON_UPGRADE=true
+# The central LGTM stack on bignasty (Josh-Wentworth/observability), tailnet-only, no auth.
+# The same canonical values my-spark's deploy-common.sh supplies to the Spark's forwarder.
+LOKI_PUSH_URL="http://100.127.99.111:3100/loki/api/v1/push"
+PROM_RW_URL="http://100.127.99.111:9090/api/v1/write"
+TEMPO_OTLP_ENDPOINT="100.127.99.111:4317"
+ENV
+  local src="$DEPLOY_DIR/scripts/testbox/alloy/blinkytest.alloy"
+  [[ -f "$src" ]] || src="$HERE/alloy/blinkytest.alloy"
+  install -m 0644 "$src" /etc/alloy/config.alloy || return 1
+  systemctl enable alloy || return 1
+  systemctl restart alloy
+}
+
 install_arduino_cli() {
   # The version is pinned in the firmware's tools/firmware_toolchain.json; build.sh refuses any other.
   local want have tgz tmp rc
@@ -376,6 +414,7 @@ step "debug mate udev"    debug_mate_udev
 step "user ssh key"       user_ssh_key
 step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
+step "alloy (telemetry)"  install_alloy
 step "arduino-cli"        install_arduino_cli
 step "firmware toolchain" firmware_toolchain
 step "cppcheck"           install_cppcheck

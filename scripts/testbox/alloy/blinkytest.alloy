@@ -1,0 +1,194 @@
+// Alloy — the test box's forwarder (Raspberry Pi 5, tailnet `blinkytest`).
+//
+// PRODUCER ONLY, the same shape as my-spark's spark-1dd6.alloy and homelab-stacks' devtop.alloy:
+// read this box's journal and local exporters and PUSH over Tailscale to the central LGTM stack on
+// bignasty (Josh-Wentworth/observability). No backend or UI here.
+//
+// Installed to /etc/alloy/config.alloy by scripts/testbox/deploy.py whenever it changes (then
+// `systemctl reload alloy`); setup.sh installs the package and /etc/default/alloy, which supplies the
+// three push endpoints. They are REQUIRED: sys.env() of an unset var is "", and Alloy refuses an empty
+// URL at load, so a missing endpoint fails loudly instead of silently dropping signals.
+//
+// Labels stay low-cardinality (host, env, unit, service, level). Job, device and trace IDs go to
+// structured metadata. Validate with: alloy fmt scripts/testbox/alloy/blinkytest.alloy
+
+// ============================================================ systemd journal → Loki
+discovery.relabel "journal" {
+	targets = []
+
+	rule {
+		source_labels = ["__journal__systemd_unit"]
+		target_label  = "unit"
+	}
+
+	rule {
+		source_labels = ["__journal_syslog_identifier"]
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		target_label  = "level"
+	}
+
+	// Kernel lines carry no unit. Keep them (USB enumeration and resets are the flash path's ground
+	// truth) under a constant transport label instead of an empty unit.
+	rule {
+		source_labels = ["__journal__transport"]
+		target_label  = "transport"
+	}
+}
+
+loki.source.journal "box" {
+	max_age       = "12h"
+	relabel_rules = discovery.relabel.journal.rules
+	forward_to    = [loki.process.box.receiver]
+	labels        = {
+		host = "blinkytest",
+		env  = "test",
+	}
+}
+
+loki.process "box" {
+	// blinky-server's own lines. Scoped to its unit so other units keep their journal-derived level.
+	stage.match {
+		selector = `{unit="blinky-server.service"}`
+
+		// Discovery polls every 10 s and logs two INFO lines each time (~17k/day) that carry nothing
+		// new. Re-enumeration, connect and disconnect have their own lines, so drop just these.
+		stage.drop {
+			expression = `^\d\d:\d\d:\d\d INFO\s+blinky_server\.transport\.discovery: (Discovery: \d+ serial|Discovered serial )`
+		}
+
+		// Plain-text format "HH:MM:SS LEVEL  logger: message". stdout reaches journald at one priority,
+		// so the real level comes from the line, mapped onto journald's keywords.
+		stage.regex {
+			expression = `^\d\d:\d\d:\d\d (?P<pylevel>[A-Z]+)\s+(?P<logger>[\w.]+): `
+		}
+
+		stage.template {
+			source   = "level"
+			template = `{{ if eq .pylevel "WARNING" }}warning{{ else if eq .pylevel "ERROR" }}err{{ else if eq .pylevel "CRITICAL" }}crit{{ else if .pylevel }}{{ ToLower .pylevel }}{{ end }}`
+		}
+
+		stage.labels {
+			values = {
+				level = "",
+			}
+		}
+
+		// Job and durable workflow ids (12 hex) as structured metadata, never labels. Forms in the
+		// server's lines: "job <id>", "job_id=<id>", "workflow <id>" (work/durable.py).
+		stage.regex {
+			expression = `(?:job |job_id[=:] ?|workflow )(?P<job_id>[0-9a-f]{12})\b`
+		}
+	}
+
+	// Device serials (12 or 16 uppercase hex) from any unit, as structured metadata.
+	stage.regex {
+		expression = `\b(?P<device>[0-9A-F]{16}|[0-9A-F]{12})\b`
+	}
+
+	stage.structured_metadata {
+		values = {
+			logger = "",
+			job_id = "",
+			device = "",
+		}
+	}
+
+	forward_to = [loki.write.bignasty.receiver]
+}
+
+loki.write "bignasty" {
+	endpoint {
+		url = sys.env("LOKI_PUSH_URL")
+	}
+}
+
+// ============================================================ host metrics → Prometheus (remote-write)
+// Bare-metal agent, so the default /proc and /sys are the host's. thermal_zone and hwmon carry the
+// Pi's SoC temperature: a throttled host is a test failure, not a slow run (TEST_BOX.md).
+prometheus.exporter.unix "node" {
+	include_exporter_metrics = true
+}
+
+prometheus.scrape "node" {
+	targets    = prometheus.exporter.unix.node.targets
+	forward_to = [prometheus.relabel.node_job.receiver]
+	job_name   = "node"
+}
+
+// The unix exporter's targets carry job="integrations/unix", which job_name doesn't override; pin
+// job="node" so the stack's NodeExporterAbsent-style checks match (the same fix as spark-1dd6.alloy).
+prometheus.relabel "node_job" {
+	forward_to = [prometheus.remote_write.bignasty.receiver]
+
+	rule {
+		target_label = "job"
+		replacement  = "node"
+	}
+}
+
+// Alloy's own health (dropped samples, queue backlog), as on devtop.
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+	targets    = prometheus.exporter.self.alloy.targets
+	forward_to = [prometheus.relabel.alloy_job.receiver]
+	job_name   = "alloy"
+}
+
+// Same default-label override as node: the self exporter tags job="integrations/self".
+prometheus.relabel "alloy_job" {
+	forward_to = [prometheus.remote_write.bignasty.receiver]
+
+	rule {
+		target_label = "job"
+		replacement  = "alloy"
+	}
+}
+
+prometheus.remote_write "bignasty" {
+	endpoint {
+		url = sys.env("PROM_RW_URL")
+	}
+
+	external_labels = {
+		host = "blinkytest",
+		env  = "test",
+	}
+}
+
+// ============================================================ traces → Tempo (local OTLP receiver)
+// blinky-server exports OTLP to this loopback receiver; the exporter's queue and retry absorb a
+// Tempo restart instead of the server dropping spans. Loopback only, never the tailnet.
+otelcol.receiver.otlp "box" {
+	http {
+		endpoint = "127.0.0.1:4318"
+	}
+
+	grpc {
+		endpoint = "127.0.0.1:4317"
+	}
+
+	output {
+		traces = [otelcol.processor.batch.box.input]
+	}
+}
+
+otelcol.processor.batch "box" {
+	output {
+		traces = [otelcol.exporter.otlp.tempo.input]
+	}
+}
+
+otelcol.exporter.otlp "tempo" {
+	client {
+		endpoint = sys.env("TEMPO_OTLP_ENDPOINT")
+
+		tls {
+			insecure = true
+		}
+	}
+}
