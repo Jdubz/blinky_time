@@ -8,7 +8,7 @@ The test box runs with BLE off (`--no-ble` and `dtoverlay=disable-bt`; see `TEST
 
 - Each device runs the Nordic UART Service (`6e400001-b5a3-f393-e0a9-e50e24dcca9e`). Command output goes through `Print&`, tee'd to USB serial and NUS, so every command works over either.
 - `json info` reports `platform`, `sn` (FICR DEVICEID) and `ble` (the app's BLE MAC). The server dedups a device seen on both transports by `hardware_sn` only.
-- `blinky_server/transport/ble_transport.py`: before each connect it runs `bluetoothctl remove <addr>` (a stale GATT cache stacks notifications, so each one arrives N times), forces `StartNotify` rather than `AcquireNotify`, and bounds the whole connect at 25 s (15 s plus GATT rediscovery).
+- `blinky_server/transport/ble_transport.py`: before each *re*connect (not the first connect of a transport, including the first one after a server restart) it runs `bluetoothctl remove <addr>`, because a stale GATT cache stacks notifications so each arrives N times. The first connect skips it to save about 1 s, so stale subscriptions from before a restart aren't evicted until the next reconnect. It also forces `StartNotify` rather than `AcquireNotify`, and bounds the whole connect at 25 s (15 s plus GATT rediscovery).
 - On startup the server disconnects stale BlueZ connections left by a previous run (`transport/discovery.py`).
 - `--no-serial` runs the server BLE-only; `--no-ble` runs it USB-only.
 
@@ -31,7 +31,7 @@ Fleet-wide commands go out as BLE advertisements, not connections (`blinky_serve
 - Chunk size is the negotiated ATT MTU − 3, from 20 up to 244 bytes.
 - Init packet (built in pure Python by `firmware/compile.py`; adafruit-nrfutil is not used): `device_type` `0x0052` (the bootloader checks it exactly), `sd_req` `0xFFFE`, CRC-16/CCITT of the image.
 - On `INVALID_STATE` at START_DFU, or any failure mid-transfer, the server sends SYSTEM_RESET (`0x06`) so the bootloader doesn't stay stuck, then retries the whole sequence (up to 3 attempts). The bootloader keeps its DFU state across BLE disconnects until a reset.
-- After a DFU the server finds the device by name and NUS service, not by address.
+- After a DFU the server first looks for the app's original BLE address (`firmware/ble_dfu.py`). Only if that fails does it fall back to any nearby Blinky by name, NUS service and RSSI. That fallback can match a different nearby device, so it doesn't prove which device came back.
 
 ## Known limitations
 
