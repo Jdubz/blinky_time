@@ -13,7 +13,7 @@ Where the project is going, in priority order, across all three repos:
 | `P1-audio` | Consistent drum-hit reactivity | [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP1-audio) · [blinky-corpus](https://github.com/Jdubz/blinky-corpus/issues?q=is%3Aopen+label%3AP1-audio) |
 | `P2-smoothness` | LED smoothness, no dropped frames | [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP2-smoothness) |
 | `P3-esp32` | ESP32-S3: dual cores, NN feasibility | [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP3-esp32) · [blinky_time](https://github.com/Jdubz/blinky_time/issues?q=is%3Aopen+label%3AP3-esp32) |
-| `parked` | Not scheduled | [blinky_time](https://github.com/Jdubz/blinky_time/issues?q=is%3Aopen+label%3Aparked) · [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3Aparked) |
+| `parked` | Not scheduled (record mode: after P1–P3) | [blinky_time](https://github.com/Jdubz/blinky_time/issues?q=is%3Aopen+label%3Aparked) · [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3Aparked) |
 
 A new issue gets a label when it's filed. When priorities change, change this page and the labels together.
 
@@ -81,10 +81,13 @@ Umbrella: [blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/5
 
 Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) belong here. Don't change deployed-fleet code for it.
 
+## Later: after P1–P3
+
+- **Record mode (#243):** wanted, but only after a pass at audio, smoothness and ESP32-S3 support (owner, 2026-11-23). Start with the #243 re-scope; its phone checks are listed there.
+
 ## Parked
 
 - On-device NN training for the nRF52840 (see `ML_IMPROVEMENT_PLAN.md`).
-- Record mode (#243).
 - Bootloader self-update over BLE (blinky-firmware#10).
 - BLE-DFU MTU (blinky-firmware#11).
 - Fleet BLE reach (#221, blinky-firmware#16).
@@ -94,6 +97,9 @@ Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) b
 
 ## Open owner decisions
 
+Decided 2026-11-23: the `swd-flash.local` Pi is retired; SWD recovery is the test box's XIAO Debug Mate only. Record mode waits until after P1–P3.
+
+Still open:
+
 - **devtop:** which services it runs, so P0 can use them. The repo only describes one-shot CPU scripts.
-- **The `swd-flash.local` Pi:** retire it, or keep it as a second SWD route next to the Debug Mate.
 - **The frame-time gate:** the target threshold once the P2 stalls are fixed.
