@@ -13,7 +13,8 @@ import os
 import signal
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -21,9 +22,12 @@ log = logging.getLogger(__name__)
 @dataclass
 class PlaybackResult:
     success: bool
-    audio_start_time_ms: float  # epoch ms when playback started
+    audio_start_time_ms: float  # epoch ms when ffplay was spawned (sound leaves the speaker later)
     duration_ms: float  # actual playback duration
     error: str | None = None
+    # Per device id: the clock syncs around the run (test_runner._record_and_play), so a raw
+    # capture can put firmware times on the host clock and say how far to trust them.
+    clock: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def audio_seconds(audio_file: str) -> float:

@@ -252,7 +252,10 @@ async def validation_run(
         )
         if persist_raw:
             path = _raw_path(track["name"], run, device.id[:12])
-            path.write_text(json.dumps(_serialize_raw_capture(data, playback.audio_start_time_ms)))
+            capture = _serialize_raw_capture(
+                data, playback.audio_start_time_ms, playback.clock.get(device.id)
+            )
+            path.write_text(json.dumps(capture))
             raw[device.id[:12]] = str(path)
     result: dict[str, Any] = {"track": track["name"], "run": run, "scores": scores}
     if persist_raw:

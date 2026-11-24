@@ -29,12 +29,38 @@ INTER_RUN_GAP_S = 5
 SETTLE_MS = 12000  # ACF convergence time — skip early readings
 
 
-async def _sync_clock(device: Device) -> float | None:
-    """Measure clock offset between server and firmware.
+CLOCK_SYNC_SAMPLES = 5  # json info round trips per sync; the one with the shortest RTT is kept
+
+
+async def _sync_clock(device: Device, samples: int = CLOCK_SYNC_SAMPLES) -> dict[str, Any] | None:
+    """The firmware-to-host clock offset from the best of ``samples`` round trips: the one with
+    the shortest RTT, whose midpoint estimate is tightest (its error is at most RTT/2).
+    Returns {offset_ms, rtt_ms, samples}, or None if no sample succeeded (each failure is
+    logged by ``_sync_clock_sample``)."""
+    got = []
+    for _ in range(samples):
+        one = await _sync_clock_sample(device)
+        if one is not None:
+            got.append(one)
+    if not got:
+        return None
+    offset, rtt = min(got, key=lambda o: o[1])
+    log.debug(
+        "Clock sync %s: offset=%.1fms rtt=%.1fms (best of %d)",
+        device.id[:12],
+        offset,
+        rtt,
+        len(got),
+    )
+    return {"offset_ms": offset, "rtt_ms": rtt, "samples": len(got)}
+
+
+async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
+    """Measure clock offset between server and firmware: (offset_ms, rtt_ms).
 
     Sends `json info` (which includes `millis` field) and measures
-    round-trip time. Returns offset_ms = server_epoch_ms - firmware_millis,
-    or None if sync fails.
+    round-trip time. Returns (offset_ms = server_epoch_ms - firmware_millis,
+    rtt_ms), or None if sync fails.
 
     A None return means the test session will record without a clock
     offset, leaving firmware-timestamped events uncorrelated with server
@@ -117,8 +143,7 @@ async def _sync_clock(device: Device) -> float | None:
     rtt = t_recv - t_send
     server_midpoint = t_send + rtt / 2
     offset = server_midpoint - fw_millis
-    log.debug("Clock sync %s: offset=%.0fms rtt=%.0fms", device.id[:12], offset, rtt)
-    return offset
+    return offset, rtt
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
@@ -192,11 +217,13 @@ async def _record_and_play(
     # Two-pass design: pass 1 checks the all-failed predicate cleanly;
     # pass 2 actually opens recordings only after we know the run is
     # viable.
+    clock: dict[str, dict[str, Any]] = {}
     for device in devices:
         session = device.start_test_session()
-        offset = await _sync_clock(device)
-        if offset is not None:
-            session.set_clock_offset(offset)
+        sync = await _sync_clock(device)
+        if sync is not None:
+            session.set_clock_offset(sync["offset_ms"])
+            clock[device.id] = dict(sync)
         else:
             sync_failures += 1
         sessions[device.id] = session
@@ -234,6 +261,23 @@ async def _record_and_play(
                 results[device.id] = sessions[device.id].stop_recording()
                 device.stop_test_session()
 
+    # A second sync after the music measures how far the firmware clock drifted during the run
+    # (crystal tolerance): the run's events used the first offset throughout.
+    for device in devices:
+        if device.id not in clock:
+            continue
+        after = await _sync_clock(device)
+        if after is None:
+            log.warning(
+                "[FALLBACK] clock sync %s after the run failed: drift unknown", device.id[:12]
+            )
+            continue
+        clock[device.id].update(
+            after_offset_ms=after["offset_ms"],
+            after_rtt_ms=after["rtt_ms"],
+            drift_ms=after["offset_ms"] - clock[device.id]["offset_ms"],
+        )
+    playback.clock = clock
     return playback, results
 
 
@@ -256,7 +300,9 @@ def _apply_settle_filter(test_data: TestData, settle_ms: float) -> TestData:
     )
 
 
-def _serialize_raw_capture(test_data: TestData, audio_start_time_ms: float) -> dict[str, Any]:
+def _serialize_raw_capture(
+    test_data: TestData, audio_start_time_ms: float, clock: dict[str, Any] | None
+) -> dict[str, Any]:
     """Serialize the raw signal_frames + transients for gate-(b) analysis.
 
     Timestamps are normalized to seconds from audio start so downstream
@@ -265,6 +311,10 @@ def _serialize_raw_capture(test_data: TestData, audio_start_time_ms: float) -> d
 
     Only called when the caller opted into `persist_raw` — this can be
     ~0.5-2 MB per device per 35 s clip, so we don't serialize it by default.
+
+    ``audio_start_epoch_ms`` (when ffplay was spawned, host wall clock) and ``clock`` (the
+    device's syncs before and after the run: offset, RTT, drift; None if it failed) let other
+    measurements line up with this one: the box camera puts detections on its own clock.
     """
     frames_out = []
     for f in test_data.signal_frames:
@@ -291,6 +341,8 @@ def _serialize_raw_capture(test_data: TestData, audio_start_time_ms: float) -> d
             entry["features"] = {k: round(v, 4) for k, v in t.features.items()}
         transients_out.append(entry)
     return {
+        "audio_start_epoch_ms": audio_start_time_ms,
+        "clock": clock,
         "signal_frames": frames_out,
         "transients": transients_out,
     }
