@@ -332,7 +332,9 @@ def install_alloy_config(slot: Path) -> bool:
     True if it changed. Alloy not installed (no /etc/alloy): say so and leave it, since installing
     the agent is setup.sh's job, not a deploy's."""
     if not ALLOY_CONFIG.parent.is_dir():
-        log(f"Alloy isn't installed ({ALLOY_CONFIG.parent} missing): config not installed; run setup.sh")
+        log(
+            f"Alloy isn't installed ({ALLOY_CONFIG.parent} missing): config not installed; run setup.sh"
+        )
         return False
     text = (slot / ALLOY_CONFIG_SRC).read_text()
     if ALLOY_CONFIG.is_file() and ALLOY_CONFIG.read_text() == text:
