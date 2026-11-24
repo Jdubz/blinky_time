@@ -141,10 +141,6 @@ def state_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "staging.json"
 
 
-def listed() -> set[str]:
-    return {"hat_v1"}
-
-
 GOOD_REPORT = {
     "sha": SHA,
     "passed": True,
@@ -169,26 +165,32 @@ GOOD_REPORT = {
 }
 
 
-def test_a_built_head_is_submitted_for_the_test_devices_only() -> None:
-    g, srv = GitHub(), Server([HAT, LAMP, {**HAT, "id": "X", "state": "disconnected"}], {})
-    state = staging.run_once(g, srv, listed)
+def test_a_built_head_is_submitted_for_every_connected_configured_chip() -> None:
+    unconfigured = {**HAT, "id": "Y", "device_type": None}
+    disconnected = {**HAT, "id": "X", "state": "disconnected"}
+    g, srv = GitHub(), Server([HAT, LAMP, disconnected, unconfigured], {})
+    state = staging.run_once(g, srv)
     assert srv.submitted == [
-        {"sha": SHA, "device_ids": ["C04C56F9"], "track_dir": str(staging.LINK / staging.CORPUS)}
+        {
+            "sha": SHA,
+            "device_ids": ["C04C56F9", "AAAA"],
+            "track_dir": str(staging.LINK / staging.CORPUS),
+        }
     ]
     assert state["running"]["job"] == "job-1" and g.statuses[-1][0] == "pending"
 
 
 def test_a_running_suite_is_left_alone() -> None:
     g, srv = GitHub(), Server([HAT], {"status": "running", "progressMessage": "health"})
-    staging.run_once(g, srv, listed)
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1 and [s[0] for s in g.statuses] == ["pending"]
 
 
 def test_a_pass_reports_and_promotes_with_a_merge_commit() -> None:
     g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
-    staging.run_once(g, srv, listed)
-    state = staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
+    state = staging.run_once(g, srv)
     assert state["reported"] == SHA and "running" not in state
     assert g.statuses[-1][0] == "success"
     pr, text = g.comments[0]
@@ -207,7 +209,7 @@ def test_a_pass_reports_and_promotes_with_a_merge_commit() -> None:
     )
     assert merge in g.calls
     # Reported once: the next pass does nothing.
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1 and len(g.comments) == 1
 
 
@@ -215,7 +217,7 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
     """Staging moved on while the suite ran: the tested commit gets its status, the new head
     its own run; nothing untested reaches the PR to master (#351 review)."""
     g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     newer = "n" * 40
     real = g.__call__
 
@@ -224,7 +226,7 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
             return json.dumps({"commit": {"sha": newer}})
         return real(*args, stdin=stdin)
 
-    state = staging.run_once(moved, srv, listed)
+    state = staging.run_once(moved, srv)
     assert g.statuses[-1][0] == "success" and state["reported"] == SHA
     assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
 
@@ -232,8 +234,8 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
 def test_a_failed_report_fails_the_status_and_promotes_nothing() -> None:
     bad = {**GOOD_REPORT, "passed": False}
     g, srv = GitHub(), Server([HAT], {"status": "complete", "result": bad})
-    staging.run_once(g, srv, listed)
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
     assert g.statuses[-1][0] == "failure" and "FAILED" in g.comments[0][1]
     assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
 
@@ -247,15 +249,15 @@ def test_a_failed_report_fails_the_status_and_promotes_nothing() -> None:
 )
 def test_a_crashed_or_lost_suite_is_a_failure(job: Any) -> None:
     g, srv = GitHub(), Server([HAT], job)
-    staging.run_once(g, srv, listed)
-    state = staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
+    state = staging.run_once(g, srv)
     assert g.statuses[-1][0] == "failure" and state["reported"] == SHA
 
 
 def test_an_unbuilt_head_waits_and_a_failed_build_fails() -> None:
     g, srv = GitHub(artifact=False), Server([HAT], {})
-    staging.run_once(g, srv, listed)
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
     assert g.statuses == [("pending", "waiting for the staging build")] and not srv.submitted
     g.runs = [
         {
@@ -265,14 +267,15 @@ def test_an_unbuilt_head_waits_and_a_failed_build_fails() -> None:
             "event": "workflow_run",
         }
     ]
-    state = staging.run_once(g, srv, listed)
+    state = staging.run_once(g, srv)
     assert g.statuses[-1][0] == "failure" and state["reported"] == SHA and not srv.submitted
 
 
 def test_no_test_device_waits_without_reporting() -> None:
-    g, srv = GitHub(), Server([LAMP], {})
-    state = staging.run_once(g, srv, listed)
-    staging.run_once(g, srv, listed)
+    # Only chips that can't run the suite: one disconnected, one with no device config.
+    g, srv = GitHub(), Server([{**LAMP, "state": "disconnected"}, {**HAT, "device_type": None}], {})
+    state = staging.run_once(g, srv)
+    staging.run_once(g, srv)
     assert "running" not in state and "reported" not in state and not srv.submitted
     assert g.statuses == [("pending", "no test device connected to the box")]  # posted once
 
@@ -299,7 +302,7 @@ class Refusing(Server):
 @pytest.mark.parametrize("code", [400, 403, 422])
 def test_a_refused_suite_is_a_failure_not_a_retry(code: int) -> None:
     g = GitHub()
-    state = staging.run_once(g, Refusing(code), listed)
+    state = staging.run_once(g, Refusing(code))
     assert state["reported"] == SHA and g.statuses[-1][0] == "failure"
     assert "not test devices" in g.statuses[-1][1]
 
@@ -307,7 +310,7 @@ def test_a_refused_suite_is_a_failure_not_a_retry(code: int) -> None:
 @pytest.mark.parametrize("code", [409, 429, 500, 502, 503])
 def test_a_busy_or_failing_server_is_retried(code: int) -> None:
     g = GitHub()
-    state = staging.run_once(g, Refusing(code), listed)
+    state = staging.run_once(g, Refusing(code))
     assert "reported" not in state and not g.statuses
 
 
@@ -338,7 +341,7 @@ def test_a_deploy_failure_renders_its_step() -> None:
 def test_a_head_with_no_firmware_change_is_promoted_without_a_run() -> None:
     g = GitHub(changed=[".github/workflows/pr-validation.yml", "docs/RELEASE_PROCESS.md"])
     srv = Server([HAT], {})
-    state = staging.run_once(g, srv, listed)
+    state = staging.run_once(g, srv)
     assert srv.submitted == []
     assert g.statuses == [
         ("success", "no firmware change since master mmmmmmmmmmmm: hardware test skipped")
@@ -349,7 +352,7 @@ def test_a_head_with_no_firmware_change_is_promoted_without_a_run() -> None:
     assert merge[-2:] == ("--match-head-commit", SHA)
     # Reported: the next pass does nothing.
     g.calls.clear()
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert [c for c in g.calls if c[0] == "pr"] == []
 
 
@@ -360,7 +363,7 @@ def test_a_head_with_masters_image_is_promoted_without_a_run() -> None:
     """A firmware path changed (a comment in blinky-things/), but the image didn't."""
     g = GitHub(fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]})
     srv = Server([HAT], {})
-    state = staging.run_once(g, srv, listed)
+    state = staging.run_once(g, srv)
     assert srv.submitted == []
     assert g.statuses == [
         ("success", "same firmware image as master's (sha256:aaaaaaaaaaaa): hardware test skipped")
@@ -371,7 +374,7 @@ def test_a_head_with_masters_image_is_promoted_without_a_run() -> None:
 
 def test_the_image_is_only_compared_once_the_head_is_built() -> None:
     g = GitHub(artifact=False, fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]})
-    staging.run_once(g, Server([HAT], {}), listed)
+    staging.run_once(g, Server([HAT], {}))
     assert g.statuses == [("pending", "waiting for the staging build")]
     assert not any("/statuses?per_page=" in " ".join(c) for c in g.calls)
 
@@ -399,7 +402,7 @@ def test_anything_short_of_the_same_image_gets_the_suite(
 ) -> None:
     g = GitHub(fingerprints=fingerprints, master_parents=master_parents)
     srv = Server([HAT], {})
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1
     assert not any(c[:2] == ("pr", "create") for c in g.calls)
 
@@ -412,7 +415,7 @@ def test_a_change_the_fingerprint_cant_see_gets_the_suite() -> None:
         fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]},
     )
     srv = Server([HAT], {})
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1
     assert not any("/statuses?per_page=" in " ".join(c) for c in g.calls)
 
@@ -421,7 +424,7 @@ def test_unreadable_fingerprints_get_the_suite() -> None:
     g = GitHub(fingerprints={SHA: [fp_status(FP_A)], TESTED: [fp_status(FP_A)]})
     g.fail_fingerprints = True
     srv = Server([HAT], {})
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1
 
 
@@ -434,7 +437,7 @@ def test_unreadable_fingerprints_get_the_suite() -> None:
 )
 def test_a_firmware_change_gets_the_suite(changed: list[str]) -> None:
     g, srv = GitHub(changed=changed), Server([HAT], {})
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1
     assert not any(s == "success" for s, _ in g.statuses)
 
@@ -454,7 +457,7 @@ def test_a_rename_out_of_the_firmware_counts_as_a_change() -> None:
         return out
 
     srv = Server([HAT], {})
-    staging.run_once(call, srv, listed)
+    staging.run_once(call, srv)
     assert len(srv.submitted) == 1
 
 
@@ -468,7 +471,7 @@ def test_a_rename_out_of_the_firmware_counts_as_a_change() -> None:
 )
 def test_anything_that_cant_be_judged_gets_the_suite(gh_kwargs: dict[str, Any]) -> None:
     g, srv = GitHub(**gh_kwargs), Server([HAT], {})
-    staging.run_once(g, srv, listed)
+    staging.run_once(g, srv)
     assert len(srv.submitted) == 1
 
 
@@ -476,9 +479,9 @@ def test_a_skipped_head_whose_promotion_fails_is_retried() -> None:
     g, srv = GitHub(changed=["docs/x.md"]), Server([HAT], {})
     g.fail_merge = True
     with pytest.raises(RuntimeError):
-        staging.run_once(g, srv, listed)
+        staging.run_once(g, srv)
     assert staging.load_state().get("reported") != SHA
     g.fail_merge = False
-    state = staging.run_once(g, srv, listed)
+    state = staging.run_once(g, srv)
     assert state["reported"] == SHA
     assert srv.submitted == []

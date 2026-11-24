@@ -168,31 +168,24 @@ def fetch_staging_build(sha: str, out_dir: Path) -> dict[str, Any]:
 # ── 3. Targets ──────────────────────────────────────────────────────────
 
 
-def require_test_devices(devices: Sequence[Any]) -> None:
-    """Every target is a listed test device (devices/test_devices.json, keyed by the configured
-    device id the chip reports). Non-stable firmware goes nowhere else (RELEASE_PROCESS.md)."""
-    root = find_project_root()
-    refused = []
-    for d in devices:
-        r = subprocess.run(
-            [
-                sys.executable,
-                str(root / "tools" / "firmware_release.py"),
-                "is-test-device",
-                str(d.device_type),
-            ],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if r.returncode != 0:
-            refused.append(f"{d.id}({d.device_type})")
-    if refused:
+def require_test_devices(fleet: Any, devices: Sequence[Any]) -> None:
+    """Staging firmware goes only to the test box's chips.
+
+    The box is the server started with --staging (``fleet.staging_enabled``). Every chip it
+    serves is a test chip (a fleet device is never plugged into the box), so it takes staging
+    builds on any of them, with no list to keep in sync with the firmware repo's master (that
+    list gated its own first test chip: the box could not test the change that listed it).
+    Each target must be configured: the suite runs on its layout. Anywhere else, refused.
+    """
+    if not fleet.staging_enabled:
         raise DeployError(
             "targets",
-            f"not test devices: {refused}. Only devices in devices/test_devices.json take "
-            "non-stable firmware",
+            "staging firmware goes only to the test box's chips (a server started with --staging)",
+        )
+    unconfigured = [d.id for d in devices if not d.device_type]
+    if unconfigured:
+        raise DeployError(
+            "targets", f"unconfigured chips: {unconfigured}; upload a device config first"
         )
 
 
@@ -409,7 +402,7 @@ async def _release(tag: str | None, download_dir: Path) -> dict[str, Any]:
 @durable.step
 async def _staging_targets(fleet: Any, device_ids: list[str]) -> list[str]:
     devices = resolve_targets(fleet, device_ids)
-    require_test_devices(devices)
+    require_test_devices(fleet, devices)
     return [d.id for d in devices]
 
 

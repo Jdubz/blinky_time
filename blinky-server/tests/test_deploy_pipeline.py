@@ -75,6 +75,7 @@ class FakeFleet:
         self.broadcasts: list[str] = []
         self.broadcast_result: dict[str, str] = {"broadcast": "OK"}
         self.recovery: tuple[str, list[str]] | None = None
+        self.staging_enabled = True  # the test box (--staging); staging deploys need it
 
     def get_all_devices(self) -> list[FakeDevice]:
         return list(self.devices.values())
@@ -350,9 +351,6 @@ def _staging_run(tmp_path: Path, rel: dict[str, Any] | None = None) -> Any:
 
     def run(args: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
         calls.append(args)
-        if args[2] == "is-test-device":
-            ok = args[3] == "hat_v1"
-            return subprocess.CompletedProcess(args, 0 if ok else 1, "yes" if ok else "", "")
         assert args[2:5] == ["download-staging", "--sha", STAGING_SHA]
         return subprocess.CompletedProcess(args, 0, json.dumps({**good, **(rel or {})}), "")
 
@@ -419,23 +417,51 @@ async def test_staging_deploy_runs_every_step_and_never_arms_recovery(
     )
 
 
+async def test_staging_deploy_refuses_unless_the_server_is_the_test_box(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fleet = _fleet()
+    fleet.staging_enabled = False
+    result, flashed, stored = await _staging_deploy(fleet, monkeypatch, tmp_path)
+    assert result["status"] == "error" and result["failed_step"] == "targets"
+    assert "test box" in result["message"] and flashed == [] and stored == []
+
+
 @pytest.mark.parametrize(
     ("device_ids", "match"),
     [
-        (["ble_lamp"], "not test devices"),
-        (["hat_v1", "ble_lamp"], "not test devices"),
+        (["unconfigured"], "unconfigured chips"),
+        (["hat_v1", "unconfigured"], "unconfigured chips"),
         ("all", "explicit list of test devices"),
     ],
 )
-async def test_staging_deploy_refuses_anything_but_test_devices(
+async def test_staging_deploy_refuses_unconfigured_chips_and_all(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, device_ids: Any, match: str
 ) -> None:
     fleet = _fleet()
+    bare = FakeDevice("unconfigured")
+    bare.device_type = None  # no device config uploaded yet
+    fleet.devices[bare.id] = bare
     result, flashed, stored = await _staging_deploy(
         fleet, monkeypatch, tmp_path, device_ids=device_ids
     )
     assert result["status"] == "error" and result["failed_step"] == "targets"
     assert match in result["message"] and flashed == [] and stored == []
+
+
+async def test_staging_deploy_takes_any_configured_chip_on_the_box(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # No test-device list on the box: a chip configured as anything is a test chip there.
+    fleet = _fleet()
+    grid = FakeDevice("testbox_grid_v1")
+    fleet.devices[grid.id] = grid
+    grid.protocol.info = {**grid.protocol.info, "version": STAGING_VERSION}  # type: ignore[dict-item]
+    result, flashed, _ = await _staging_deploy(
+        fleet, monkeypatch, tmp_path, device_ids=["testbox_grid_v1"]
+    )
+    assert result["status"] == "ok", result
+    assert flashed == [(["testbox_grid_v1"], tmp_path / "staging.hex")]
 
 
 @pytest.mark.parametrize(
