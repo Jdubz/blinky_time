@@ -364,7 +364,9 @@ class DeviceProtocol:
     def _add_response_line(self, line: str) -> None:
         """Add a line to the response buffer, resetting the line timeout."""
         self._response_buf.append(line)
-        self._response_times.append(time.time())
+        # One arrival time per line of the joined response, even if a transport delivers
+        # several lines in one callback.
+        self._response_times.extend([time.time()] * (line.count("\n") + 1))
         if self._ack and line.startswith("OK"):
             # The acknowledgement ends the reply; what follows is the stream.
             if self._response_timer:
