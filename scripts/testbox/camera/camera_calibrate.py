@@ -90,14 +90,25 @@ class Camera:
             )
         self.order, self.starts, self.ids = cc.region_index(m["labels"])
         self.exposure_us, self.gain = exposure_us, gain
+        self.digital_tol = cc.GAIN_TOL
+        self.digital_gain = 1.0
         self.cam = cc.open_camera(exposure_us, gain)
         cc.settle(self.cam, exposure_us, gain)
 
-    def set_exposure(self, exposure_us: int) -> None:
+    def set_exposure(self, exposure_us: int) -> int:
+        """Lock an exposure the sensor can make exactly. A request between its steps (about
+        31.75 us at 640x480, measured 2026-11-24) is made up with digital gain, which the
+        capture refuses; so ask, read back what the sensor used, and ask for exactly that.
+        Returns the exposure locked."""
         self.cam.set_controls({"ExposureTime": exposure_us})
-        self.exposure_us = exposure_us
         time.sleep(0.25)
-        cc.settle(self.cam, exposure_us, self.gain)
+        actual = int([self.cam.capture_metadata() for _ in range(4)][-1]["ExposureTime"])
+        self.cam.set_controls({"ExposureTime": actual})
+        self.exposure_us = actual
+        time.sleep(0.25)
+        md = cc.settle(self.cam, actual, self.gain, digital_tol=self.digital_tol)
+        self.digital_gain = float(md.get("DigitalGain", 1.0))
+        return actual
 
     def frames(self, n: int) -> tuple[np.ndarray, np.ndarray, int, int]:
         """n frames: (sensor ts ns, brightness per region, frames with control drift,
@@ -110,12 +121,21 @@ class Camera:
                 frame = req.make_array("main")
             finally:
                 req.release()
-            bad += bool(cc.control_errors(md, self.exposure_us, self.gain))
+            bad += bool(cc.control_errors(md, self.exposure_us, self.gain, self.digital_tol))
             rgb, s, _ = cc.reduce_frame(frame, self.order, self.starts)
             sat += bool(s.any())
             ts.append(int(md["SensorTimestamp"]))
             lum.append(rgb.sum(axis=1))
         return np.asarray(ts, np.int64), np.asarray(lum, np.float64), bad, sat
+
+    def restore(self) -> None:
+        """Back to the region map's own exposure, requested as it was when the map was made
+        (not snapped), under the strict digital-gain check."""
+        self.digital_tol = cc.GAIN_TOL
+        self.exposure_us = self.settings["exposure_us"]
+        self.cam.set_controls({"ExposureTime": self.exposure_us})
+        time.sleep(0.25)
+        cc.settle(self.cam, self.exposure_us, self.gain)
 
     @staticmethod
     def wall_offset_s() -> float:
@@ -240,9 +260,20 @@ def do_pwm(args: argparse.Namespace, cam: Camera, dev: dict[str, Any]) -> dict[s
     command(args.device, f"testpattern solid {lvl} {lvl} {lvl}")
     time.sleep(0.2)
     sweep = []
+    # Digital gain scales a frame uniformly, so it can't change the ripple (a ratio): the
+    # sweep tolerates up to 10% of it (the ISP adds it between the sensor's exposure steps).
+    cam.digital_tol = 0.10
     try:
-        for exp in range(args.exp_from, args.exp_to + 1, args.exp_step):
-            cam.set_exposure(exp)
+        seen: set[int] = set()
+        for want in range(args.exp_from, args.exp_to + 1, args.exp_step):
+            try:
+                exp = cam.set_exposure(want)  # snapped to what the sensor can make
+            except SystemExit as e:  # this exposure won't lock: record it, keep sweeping
+                sweep.append({"requested_us": want, "skipped": str(e)})
+                continue
+            if exp in seen:
+                continue
+            seen.add(exp)
             _, lum, bad, sat = cam.frames(40)
             sig = lum - pedestal
             mean = sig.mean(axis=0)
@@ -251,6 +282,7 @@ def do_pwm(args: argparse.Namespace, cam: Camera, dev: dict[str, Any]) -> dict[s
             sweep.append(
                 {
                     "exposure_us": exp,
+                    "digital_gain": round(cam.digital_gain, 4),
                     "ripple_cv": cv,
                     "mean": float(mean.mean()),
                     "saturated": sat,
@@ -258,8 +290,12 @@ def do_pwm(args: argparse.Namespace, cam: Camera, dev: dict[str, Any]) -> dict[s
                 }
             )
     finally:
-        cam.set_exposure(args.exposure_us)
-    valid = [s for s in sweep if s["ripple_cv"] is not None and not s["saturated"]]
+        cam.restore()
+    valid = [
+        s
+        for s in sweep
+        if s.get("ripple_cv") is not None and not s["saturated"] and not s["control_errors"]
+    ]
     best = sorted(valid, key=lambda s: s["ripple_cv"])[:5]
     return {"level": lvl, "sweep": sweep, "lowest_ripple": best}
 
@@ -277,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--count", type=int, default=200)
     p.add_argument("--exp-from", type=int, default=200)
     p.add_argument("--exp-to", type=int, default=4000)
-    p.add_argument("--exp-step", type=int, default=25)
+    p.add_argument("--exp-step", type=int, default=32, help="sweep step, us (sensor steps ~31.75)")
     p.add_argument("--out", type=Path)
     args = p.parse_args(argv)
     if not args.device:
