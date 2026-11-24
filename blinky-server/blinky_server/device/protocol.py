@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -84,6 +85,8 @@ class DeviceProtocol:
 
         # Response collection state
         self._response_buf: list[str] = []
+        self._response_times: list[float] = []  # time.time() each response line arrived
+        self._last_timing: tuple[float, list[float]] = (0.0, [])
         self._response_event = asyncio.Event()
         self._response_timer: asyncio.TimerHandle | None = None
         self._pending = False
@@ -120,6 +123,19 @@ class DeviceProtocol:
 
         Automatically pauses/resumes streaming if active.
         """
+        response, _, _ = await self._command(command, timeout)
+        return response
+
+    async def send_command_timed(
+        self, command: str, timeout: float | None = None
+    ) -> tuple[str, float, list[float]]:
+        """``send_command``, plus when the command line was written (``time.time()``) and when
+        each reply line arrived, in the order of the response's lines. For clock syncs: the
+        method's own return comes a silence gap after the reply, and while streaming it also
+        includes pausing the stream first."""
+        return await self._command(command, timeout)
+
+    async def _command(self, command: str, timeout: float | None) -> tuple[str, float, list[float]]:
         if timeout is None:
             base = command.split()[0] if command.strip() else ""
             if base in SLOW_FLASH_COMMANDS:
@@ -157,6 +173,7 @@ class DeviceProtocol:
                 response = await self._send_and_collect(
                     command, timeout, ack=is_stream_enable or is_stream_disable
                 )
+                sent_at, line_times = self._last_timing
             except BaseException:
                 # A command that times out or fails must not leave the stream paused: the
                 # caller may carry on (a clock sync keeps its good samples) and would then
@@ -182,7 +199,7 @@ class DeviceProtocol:
                 await self._raw_send(f"stream {self._streaming_mode}")
                 self._streaming = True
 
-            return response
+            return response, sent_at, line_times
 
     async def get_info(self) -> dict[str, Any]:
         """Get device info as parsed JSON."""
@@ -266,11 +283,13 @@ class DeviceProtocol:
         validation runs proceed against prior-experiment settings.
         """
         self._response_buf.clear()
+        self._response_times.clear()
         self._pending = True
         self._cancelled = False
         self._ack = ack
         self._response_event.clear()
 
+        sent_at = time.time()
         await self._raw_send(command)
 
         timed_out = False
@@ -287,7 +306,12 @@ class DeviceProtocol:
             raise ConnectionError("Command cancelled: transport disconnected")
 
         result = "\n".join(self._response_buf)
+        # When the command went out and when each reply line came in: the reply is only
+        # finalized after a silence gap (RESPONSE_LINE_TIMEOUT_S), so the return time says
+        # nothing about when the device answered (send_command_timed).
+        self._last_timing = (sent_at, list(self._response_times))
         self._response_buf.clear()
+        self._response_times.clear()
 
         if timed_out:
             # `result` is the joined str of newline-delimited response lines, so
@@ -340,6 +364,9 @@ class DeviceProtocol:
     def _add_response_line(self, line: str) -> None:
         """Add a line to the response buffer, resetting the line timeout."""
         self._response_buf.append(line)
+        # One arrival time per line of the joined response, even if a transport delivers
+        # several lines in one callback.
+        self._response_times.extend([time.time()] * (line.count("\n") + 1))
         if self._ack and line.startswith("OK"):
             # The acknowledgement ends the reply; what follows is the stream.
             if self._response_timer:
