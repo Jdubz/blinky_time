@@ -21,10 +21,13 @@ from typing import Any
 
 import numpy as np
 
-# Measured on the box (OV5647, 640x480 binned, 2026-11-24): exposure moves in steps of about
-# 15.87 us, the sensor's line time. Rows are read top to bottom one line time apart, so a row's
-# light is sampled (row * LINE_NS) after row 0's. Re-measure if the mode or frame period changes.
-LINE_NS = 15_870
+# Measured on the box (OV5647, 640x480 binned, 2026-11-24, camera_calibrate.py timing): rows
+# are read top to bottom 31.75 us apart (a readout of ~15.2 ms), so a row's light is sampled
+# (row * LINE_NS) after row 0's. Three measurements agree: the sensor's exposure steps are
+# 31.75 us; the bottom-row-first share of 200 flashes gives 25.4 +- 3.6 us; and with 31.75 the
+# flash timing reference has a zero offset (+0.2 ms, inside the sync's +-1.6 ms) where 15.87
+# left -3.9 ms. Re-measure if the mode or frame period changes.
+LINE_NS = 31_750
 
 
 class Invalid(Exception):

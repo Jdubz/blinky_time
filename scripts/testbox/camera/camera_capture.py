@@ -19,7 +19,8 @@ frames are counted and reported, never hidden. The summary goes to stdout as one
 and into the output file, so the caller decides whether the run is valid.
 
 The camera is an OV5647 (rolling shutter). Measured on the box, 2026-11-24, 640x480 binned:
-frame period 14.816 ms (67.5 fps, sd 1.5 us); exposure steps of about 15.87 us, the line time.
+frame period 14.816 ms (67.5 fps, sd 1.5 us); exposure steps and the rolling-shutter line time of
+about 31.75 us (camera_analysis.LINE_NS).
 """
 
 from __future__ import annotations

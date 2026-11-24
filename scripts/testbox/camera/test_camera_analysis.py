@@ -276,7 +276,7 @@ def test_flash_lags_measure_the_camera_offset_and_floor() -> None:
 def test_line_time_comes_from_how_often_the_bottom_row_sees_a_flash_first() -> None:
     rng = np.random.default_rng(9)
     period = 14.816e6
-    line = 15_870.0
+    line = 31_750.0
     gap_rows = 140
     on = rng.uniform(0, 1000 * period, 4000)  # random phases
     top_end = 0.0  # top row's exposure ends at k * period
