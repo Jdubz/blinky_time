@@ -73,6 +73,11 @@ class FlashResponse(BaseModel):
 
 class CommandResponse(BaseModel):
     response: str
+    # When the command line was written and when each reply line arrived (time.time(), one
+    # per line of ``response``): a client syncing to the device clock needs the arrival,
+    # since the reply itself is returned a silence gap later.
+    sent_at: float | None = None
+    line_times: list[float] | None = None
 
 
 class StatusResponse(BaseModel):

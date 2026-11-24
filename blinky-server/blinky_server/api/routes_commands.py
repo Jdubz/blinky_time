@@ -45,8 +45,8 @@ async def send_command(
     """
     assert_command_allowed(body.command, x_deploy_tool, test_box=get_fleet().staging_enabled)
     device = _get_connected_device(device_id)
-    resp = await device.protocol.send_command(body.command)
-    return CommandResponse(response=resp)
+    resp, sent_at, line_times = await device.protocol.send_command_timed(body.command)
+    return CommandResponse(response=resp, sent_at=sent_at, line_times=line_times)
 
 
 @router.post("/devices/{device_id}/generator/{name}")
