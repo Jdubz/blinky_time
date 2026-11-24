@@ -39,7 +39,6 @@ SIZE = (640, 480)
 FRAME_US = 14815  # the sensor's ceiling at 640x480 (67.5 fps)
 SATURATED = 250  # a channel at or above this is clipped (8-bit)
 EXPOSURE_TOL_US = 40  # about 2.5 line times: the sensor rounds to whole lines
-FRAME_TOL_US = 20  # measured 14816 us for a requested 14815
 GAIN_TOL = 0.02
 
 _stop = False
@@ -99,9 +98,9 @@ def settle(cam: Any, exposure_us: int, gain: float, timeout_s: float = 3.0) -> d
 def control_errors(md: dict[str, Any], exposure_us: int, gain: float) -> list[str]:
     """What in a frame's metadata differs from the locked controls (a missing field counts)."""
     out = []
-    fd = md.get("FrameDuration")
-    if fd is None or abs(fd - FRAME_US) > FRAME_TOL_US:
-        out.append(f"frame duration {fd} us, want {FRAME_US}")
+    # FrameDuration is not checked: on this OV5647 it reports 16001 us (the driver's listed
+    # 62.5 fps) while the sensor timestamps run at 14816 us (measured 2026-11-24). The frame
+    # period is checked from the timestamps instead (_timing; camera_analysis.frame_timing).
     cg = md.get("ColourGains")
     if cg is None or any(abs(g - 1.0) > GAIN_TOL for g in cg):
         out.append(f"colour gains {cg}, want (1.0, 1.0)")
