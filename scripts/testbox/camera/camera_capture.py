@@ -19,7 +19,8 @@ frames are counted and reported, never hidden. The summary goes to stdout as one
 and into the output file, so the caller decides whether the run is valid.
 
 The camera is an OV5647 (rolling shutter). Measured on the box, 2026-11-24, 640x480 binned:
-frame period 14.816 ms (67.5 fps, sd 1.5 us); exposure steps of about 15.87 us, the line time.
+frame period 14.816 ms (67.5 fps, sd 1.5 us); exposure steps and the rolling-shutter line time of
+about 31.75 us (camera_analysis.LINE_NS).
 """
 
 from __future__ import annotations
@@ -84,18 +85,24 @@ def open_camera(exposure_us: int, gain: float) -> Any:
     return cam
 
 
-def settle(cam: Any, exposure_us: int, gain: float, timeout_s: float = 3.0) -> dict[str, Any]:
+def settle(
+    cam: Any, exposure_us: int, gain: float, timeout_s: float = 3.0, digital_tol: float = 0.02
+) -> dict[str, Any]:
     """Wait until frames carry the locked controls (they apply a few frames after start)."""
     deadline = time.monotonic() + timeout_s
     md: dict[str, Any] = {}
     while time.monotonic() < deadline:
         md = cam.capture_metadata()
-        if not control_errors(md, exposure_us, gain):
+        if not control_errors(md, exposure_us, gain, digital_tol):
             return md
-    raise SystemExit(f"camera controls never locked: {control_errors(md, exposure_us, gain)}")
+    raise SystemExit(
+        f"camera controls never locked: {control_errors(md, exposure_us, gain, digital_tol)}"
+    )
 
 
-def control_errors(md: dict[str, Any], exposure_us: int, gain: float) -> list[str]:
+def control_errors(
+    md: dict[str, Any], exposure_us: int, gain: float, digital_tol: float = GAIN_TOL
+) -> list[str]:
     """What in a frame's metadata differs from the locked controls (a missing field counts)."""
     out = []
     # FrameDuration is not checked: on this OV5647 it reports 16001 us (the driver's listed
@@ -111,7 +118,9 @@ def control_errors(md: dict[str, Any], exposure_us: int, gain: float) -> list[st
     if ag is None or abs(ag - gain) > GAIN_TOL * gain:
         out.append(f"analog gain {ag}, want {gain}")
     dg = md.get("DigitalGain")
-    if dg is not None and abs(dg - 1.0) > GAIN_TOL:
+    # The ISP adds digital gain when a requested exposure falls between the sensor's steps
+    # (~31.75 us here); timing captures keep it at 1.0, a ripple sweep may tolerate more.
+    if dg is not None and abs(dg - 1.0) > digital_tol:
         out.append(f"digital gain {dg}, want 1.0")
     return out
 
