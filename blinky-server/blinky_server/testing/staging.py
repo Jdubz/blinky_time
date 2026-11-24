@@ -60,6 +60,12 @@ DEFAULTS: dict[str, float] = {
     "validation_ms": 35000.0,
 }
 HEALTH_POLL_S = 4.0  # one json info per < 5 s: every loop-metrics window is read
+# The firmware publishes the last *closed* 5 s loop-metrics window. The deploy step just
+# before health ends with restore_runtime_settings + save, and a flash page erase stalls the
+# loop ~85 ms; that can sit in the window open when health starts (the first run on the box's
+# Sense Plus: 113 ms in the first window, 30-35 ms in the other 72). Health waits out two
+# windows before its baseline, so it measures the steady state it is meant to.
+HEALTH_SETTLE_S = 2 * 5.0
 # json info fields with onset-path timing, when the firmware reports them (#178).
 TIMING_FIELDS = ("onsetUs", "onsetMaxUs")
 
@@ -100,6 +106,7 @@ def beat_pace(samples: list[tuple[float, float, int]]) -> dict[str, Any] | None:
 async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, Any]:
     """``stable_minutes`` of json info per device, no music: fps, longest frame, reboots,
     overrun growth. Safe to repeat: it only reads."""
+    await asyncio.sleep(HEALTH_SETTLE_S)
     first = {i: await _info(i) for i in device_ids}
     seen: dict[str, dict[str, Any]] = {
         i: {
