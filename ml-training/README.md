@@ -1,11 +1,11 @@
 # Blinky Onset Activation — ML Training Pipeline
 
-Train a small NN that outputs a per-frame **onset** activation (one value per 16 ms mel frame) for the Blinky firmware. The task is onset detection: fire on every percussive hit, on or off the beat. It is not beat detection (see "Task is Onset Detection" in the repo's `CLAUDE.md`).
+Train a small NN that outputs a per-frame **onset** activation (one value per 16 ms mel frame) for the Blinky firmware. The task is drum-hit (kick/snare) detection, on or off the beat. It is not beat detection (see "Task is Drum-Hit Detection" in the repo's `CLAUDE.md`).
 
-**Current status (October 2026):**
+**Current status (2026-11-23): the NN is shelved on the nRF52840 and training is paused** (ESP32-S3 feasibility is the only active ML direction).
 - The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h` in blinky-firmware (`../firmware/` here).
 - **Devices ship with the onset NN off** (`BLINKY_ONSET_NN_ENABLED=0` in `blinky-things/audio/AudioTracker.h`). Onsets come from tuned spectral flux. On edm/ with the hat's CPU cost model, flux scores F1 0.546 at 178 fps; v33 scores 0.480 and holds the loop at 48 fps (~12 ms per inference).
-- A new model is enabled only when it beats flux under that same measurement (blinky-firmware's host harness in `tests/tracker/`). Roadmap and open experiments: `docs/ML_IMPROVEMENT_PLAN.md`.
+- A new model is enabled only when it beats flux under that same measurement (blinky-firmware's host harness in `tests/tracker/`). Status, the gate to turn a model back on, and paused work: `docs/ML_IMPROVEMENT_PLAN.md`.
 
 ## Quick Start
 

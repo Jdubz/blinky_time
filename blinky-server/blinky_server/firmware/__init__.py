@@ -5,7 +5,7 @@ The single entry point for any flash is ``FleetManager.flash_device()``
 ``_uf2_write_impl_for_job`` (UF2 over USB-MSC) or ``_ble_dfu_write_impl``
 (Nordic Legacy DFU over BLE), both gated by the
 ``_inside_flash_job_orchestrator`` ContextVar so direct calls fail loud
-with ``OutsideFlashJobContextError``. See ``docs/FLASH_LOCKDOWN_PLAN.md``
+with ``OutsideFlashJobContextError``. See ``docs/archive/FLASH_LOCKDOWN_PLAN.md``
 for the architecture and ``firmware/_guard.py`` for the lockdown
 mechanism.
 

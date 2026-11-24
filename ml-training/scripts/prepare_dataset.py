@@ -2338,7 +2338,7 @@ def main():
             print(f"    WARNING: only {extremes_pct:.1f}% of nonzero labels are at extremes "
                   f"(<0.05 or ≥0.9). Continuous-strength distribution may train a "
                   f"soft-regression model with compressed output. See v30 case study "
-                  f"(docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md).",
+                  f"(docs/archive/AUDIO_SYSTEM_AUDIT_2026_04_24.md).",
                   file=sys.stderr)
 
     # 6. Onset density estimate (audit A5) — events per second of audio.

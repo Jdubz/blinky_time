@@ -9,24 +9,27 @@ This document is a short index of the flashing/recovery safety mechanisms that p
    - Gated command list: `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST`.
 
 2. **One flash path inside blinky-server.** Every flash routes through `FleetManager.flash_device()` → `_run_flash_job` → guarded `_impl` functions. Direct calls to `_uf2_write_impl_for_job` or `_ble_dfu_write_impl` raise `OutsideFlashJobContextError`. The audit log at `~/.local/share/blinky-server/flash_attempts.jsonl` is the persistent ledger.
-   - Plan + sequencing: `docs/FLASH_LOCKDOWN_PLAN.md`.
+   - Rationale and history: `docs/archive/FLASH_LOCKDOWN_PLAN.md`.
+   - **Open check:** concurrent flashes are not yet exercised on hardware: to different devices at once (broadcaster stopped and restarted once per cycle), and to one device under two aliases (USB serial and BLE address), which must dedup to one job.
 
-3. **Bootloader changes go through `deploy-bootloader.sh`.** Wraps `scripts/verify_bootloader.py` (refuses BLs whose `check_dfu_mode()` reaches `bootloader_dfu_start()` without USB initialised — the literal bug that bricked the hat 2026-05-15). Pre-flash version log + post-flash version verify.
-   - Diagnostic narrative: `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md`.
-   - SWD recovery: the test box's XIAO Debug Mate with blinky-firmware `scripts/swd_recover.sh` (`docs/SWD_RECOVERY.md`); for fleet devices on the bench, `swd-flash.local` (Raspberry Pi Zero W with known-good fleet BL + MBR + S140 staged).
+3. **Bootloader changes go through blinky-firmware's `scripts/deploy-bootloader.sh`.** Wraps `scripts/verify_bootloader.py` (refuses BLs whose `check_dfu_mode()` reaches `bootloader_dfu_start()` without USB initialised — the literal bug that bricked the hat 2026-05-15). Pre-flash version log + post-flash version verify.
+   - Bootloader invariants and the 2026-05-15 incident: blinky-firmware's [BOOTLOADER_WORKFLOW.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/BOOTLOADER_WORKFLOW.md).
+   - SWD recovery: the test box's XIAO Debug Mate with blinky-firmware's `scripts/swd_recover.sh` ([SWD_RECOVERY.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/SWD_RECOVERY.md)). It is the only SWD recovery path (the `swd-flash.local` Pi is retired, 2026-11-23): a fleet device off the box needs physical access to a Debug Mate.
 
 4. **60-second rule between resets.** `SafeBootWatchdog::markStable()` is deferred to 60 s of uptime so mid-init crashes still count toward `RebootFrequencyCounter`. Any chain of resets within 60 s bumps the counter; at 5 cumulative trips, `configStorage.quarantineDeviceConfig()` flips `isValid=false` and the device boots into safeMode.
-   - Code: `blinky-things/blinky-things.ino` (`markStable()` deferral, `quarantineDeviceConfig` call), `blinky-things/hal/SafeBootWatchdog.h`, `blinky-things/hal/RebootFrequencyCounter.h`.
+   - Code (blinky-firmware): `blinky-things/blinky-things.ino` (`markStable()` deferral, `quarantineDeviceConfig` call), `blinky-things/hal/SafeBootWatchdog.h`, `blinky-things/hal/RebootFrequencyCounter.h`.
    - Since b215, `RebootFrequencyCounter` counts only fault resets (watchdog or CPU lockup) and clears after 5 min of uptime; older firmware counts every boot. Keep the 60-second gap anyway: devices in the field may run older firmware.
 
-5. **Only stable releases reach the fleet and new devices.** Candidates and `--dev` builds go only to a device listed in `devices/test_devices.json`, through `tools/deploy_local.py`. `deploy.sh` installs stable releases only.
-   - **Auto-recovery flashes only a verified stable image** (#251). blinky-server stores every image immutably, by sha256 (`firmware/images/`). An image is stable only when the server itself matched its bytes to a promoted stable release's hex (`tools/firmware_release.py download`). Only stable images can arm auto-recovery; the binding records the sha256, which is re-checked at boot and before every recovery flash. Other uploads can still be flashed explicitly, but never auto-recover.
-   - Channels, gate and promotion: `docs/RELEASE_PROCESS.md`.
-   - Browser updates for personal devices (stable only, signed OTA over USB): blinky-firmware's `docs/WEB_FLASHER.md`.
+5. **Only stable releases reach the fleet and new devices.** Candidates and `--dev` builds go only to a device listed in blinky-firmware's `devices/test_devices.json`, through its `tools/deploy_local.py`. Staging builds go only to chips on the test box, through its staging suite (every chip on a `--staging` server is a test chip, #382). `deploy.sh` installs stable releases only.
+   - **Auto-recovery flashes only a verified stable image** (#251). blinky-server stores every image immutably, by sha256 (`firmware/images/`). An image is stable only when the server itself matched its bytes to a promoted stable release's hex (blinky-firmware's `tools/firmware_release.py download`). Only stable images can arm auto-recovery; the binding records the sha256, which is re-checked at boot and before every recovery flash. Other uploads can still be flashed explicitly, but never auto-recover.
+   - Channels, gate and promotion: blinky-firmware's [RELEASE_PROCESS.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/RELEASE_PROCESS.md).
+   - Browser updates for personal devices (stable only, signed OTA over USB): blinky-firmware's [WEB_FLASHER.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md).
 
 ## Firmware-side defences
 
-- **Static assertions** on all stored config structs (`blinky-things/config/ConfigStorage.h` ~lines 394–406). Compile fails if a struct size changes without bumping `SETTINGS_VERSION` (currently 98).
+Paths in this section are in blinky-firmware.
+
+- **Static assertions** on all stored config structs (`blinky-things/config/ConfigStorage.h`, from ~line 400). Compile fails if a struct size changes without bumping `SETTINGS_VERSION` (currently 100).
 - **Parameter validation** in `ConfigStorage.cpp::loadConfiguration()`. An out-of-range value is clamped so the device still boots, but every clamp is logged at `[ERROR]` and counted in `BlinkyAssert::failCount`, so it shows up in `show errors`.
 - **Flash address validation** before every config write — refuses writes into the bootloader region or off the end of the application slot. See `blinky-things/tests/SafetyTest.h::isFlashAddressSafe()`.
 - **No silent fallbacks** — see CLAUDE.md "No Silent Fallbacks" section for the patterns we refuse to add (zero-fill array literals, ternary defaults, switch catchalls, etc.). Reference incident: v33 mel filterbank corruption (2026-04-27).
@@ -36,17 +39,16 @@ This document is a short index of the flashing/recovery safety mechanisms that p
 1. `./scripts/deploy.sh --devices=<id>` (re-flashes the latest stable release via the orchestrator; operator flashes skip the auto-recovery dedup).
 2. Wait ≥75 s uptime so `markStable()` clears the watchdog counter.
 3. Push device config via the fleet API `device upload` command (deploy.sh-gated).
-4. SWD if the device is off USB and unreachable over BLE: on the test box, `swd_recover.sh restore` through the Debug Mate; elsewhere `swd-flash.local`.
+4. SWD if the device is off USB and unreachable over BLE: blinky-firmware's `swd_recover.sh restore` through the test box's Debug Mate. A fleet device has to be brought to a Debug Mate (physical access).
 
-On the test box, step 1 normally happens by itself: blinky-server recovers a chip it sees in its USB bootloader (`2886:0045`/`0065`) after 120 s, with the armed stable image (blinky_time#378/#379; `docs/TEST_BOX_BUILD_PLAN.md`, "Recovery chain").
+On the test box, step 1 normally happens by itself: blinky-server recovers a chip it sees in its USB bootloader (`2886:0045`/`0065`) after 120 s, with the armed stable image (blinky_time#378/#379; `docs/TEST_BOX.md`, "Recovery chain").
 
-For unenrolled bare chips on the bench, `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` is the recovery path.
+For unenrolled bare chips on the bench, blinky-firmware's `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` is the recovery path.
 
 ## Related plans
 
-- `docs/FLASH_LOCKDOWN_PLAN.md` — server-side single-entry-point lockdown.
-- `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` — pre-install brick-proofing for sealed devices.
-- `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md` — bootloader invariants and the 2026-05-15 hat-bricking incident.
-- `docs/BLE_FLEET_RELIABILITY_PLAN.md` — remaining BLE-command-reliability work.
+- `docs/archive/FLASH_LOCKDOWN_PLAN.md`: the server-side single-entry-point lockdown (done; rationale).
+- blinky-firmware's [BOOTLOADER_WORKFLOW.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/BOOTLOADER_WORKFLOW.md): bootloader invariants, the 2026-05-15 hat-bricking incident, and pre-install brick-proofing for sealed devices.
+- `docs/BLE_REFERENCE.md`: BLE and BLE-DFU behaviour and its known limits.
 
 The pre-2026-05 version of this doc (Arduino IDE upload guidance, layered defense narrative, pre-commit hook references) is at `docs/archive/SAFETY_pre_2026_05.md`. It does not reflect the current safety model.

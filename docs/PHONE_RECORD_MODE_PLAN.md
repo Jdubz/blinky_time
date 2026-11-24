@@ -1,6 +1,7 @@
 # Phone Record Mode Plan
 
-> **Status (2026-10-21):** implemented (firmware, console, converter); not yet run on hardware. Open work: bench test on Android Chrome ([#195](https://github.com/Jdubz/blinky_time/issues/195)), screen-lock behavior ([#196](https://github.com/Jdubz/blinky_time/issues/196)), review fixes on a phone ([#198](https://github.com/Jdubz/blinky_time/issues/198)), and the re-scope to calibration data ([#243](https://github.com/Jdubz/blinky_time/issues/243)).
+> **Status (2026-11-23): parked.** The re-scope to live calibration-data capture ([#243](https://github.com/Jdubz/blinky_time/issues/243)) supersedes the PCM-first design below; nothing here is planned work until #243 is picked up.
+> The firmware, console and converter described here exist but were never run end to end on hardware. NUS output blocking the loop ([#189](https://github.com/Jdubz/blinky_time/issues/189)) is fixed.
 
 **Goal:** capture what a single device hears and does at real concert volume, with no blinky-server nearby. An Android phone running the hosted console (Chrome, Web Bluetooth) connects directly to one device. It starts a recording, and the device streams **raw mic PCM** plus its live analysis to the phone. The phone saves the session to disk for offline analysis.
 

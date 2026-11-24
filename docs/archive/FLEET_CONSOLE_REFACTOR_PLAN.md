@@ -1,5 +1,7 @@
 # Fleet Console Refactor Plan
 
+> **Archived 2026-11-23.** Kept for its rationale and history; not current guidance. Current docs: `docs/README.md`.
+
 Refactor `blinky-console` from a single-device WebSerial UI into a fleet management app. Host it from `blinky-server` for on-site installation use, keep it working from Firebase for remote/dev use, and add multiple connection types without duplicating transport logic.
 
 ## Status

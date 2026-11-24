@@ -1,6 +1,6 @@
 """Orchestrator-context guard for the write implementations.
 
-The lockdown invariant (see ``docs/FLASH_LOCKDOWN_PLAN.md`` §L2) is
+The lockdown invariant (see ``docs/archive/FLASH_LOCKDOWN_PLAN.md`` §L2) is
 that exactly one code path produces flashes: ``FleetManager.flash_device()``
 → ``_run_flash_job`` → either ``_uf2_write_impl_for_job`` or
 ``_ble_dfu_write_impl``. Anything else that calls those write impls
@@ -67,7 +67,7 @@ def assert_inside_orchestrator(impl_name: str) -> None:
             f"{impl_name} called outside _run_flash_job — every flash "
             "must route through FleetManager.flash_device(). "
             "Direct calls to write impls are forbidden by the lockdown "
-            "(see docs/FLASH_LOCKDOWN_PLAN.md §L2)."
+            "(see docs/archive/FLASH_LOCKDOWN_PLAN.md §L2)."
         )
 
 

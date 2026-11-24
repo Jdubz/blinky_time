@@ -157,7 +157,7 @@ async def list_flash_jobs(
     ``device_id`` (the latest one), so multi-step history of a single
     device is NOT visible here — earlier jobs for the same device are
     overwritten. If multi-flash history matters, the L4 persistent
-    audit log spec'd in ``docs/FLASH_LOCKDOWN_PLAN.md`` is the right
+    audit log spec'd in ``docs/archive/FLASH_LOCKDOWN_PLAN.md`` is the right
     home for it.
 
     Auth: requires ``X-API-Key``. Job metadata (firmware path, device

@@ -1,7 +1,7 @@
 # Conv1D W16 v32 — onset_consensus with strict ≥3-system filter
 #
 # v30/v31 collapse root cause (investigation 2026-04-24, see
-# docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md addendum):
+# docs/archive/AUDIO_SYSTEM_AUDIT_2026_04_24.md addendum):
 #   The bimodal-labels hypothesis was wrong. Both v30 (continuous strengths)
 #   and v31 (binarized at >0.05) collapsed because the underlying
 #   onset_consensus labels include a flood of 1- and 2-system detections
@@ -43,7 +43,7 @@ labels:
   onset_consensus_dir: "${BLINKY_DATA}/labels/onsets_consensus"
   # Filter to 3+ system agreement at PREP time. 1- and 2-system events have
   # sub-random mel-diff signal and inject pure label noise. See investigation
-  # in AUDIO_SYSTEM_AUDIT_2026_04_24.md.
+  # in docs/archive/AUDIO_SYSTEM_AUDIT_2026_04_24.md.
   min_systems: 3
   neighbor_weight: 0.25
   label_shift_frames: 1

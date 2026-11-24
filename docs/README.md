@@ -12,33 +12,22 @@ Each plan carries a status header; check it before treating the plan as outstand
 | [`DEVELOPMENT.md`](DEVELOPMENT.md) | Tooling development: git hooks, console + server dev. |
 | [`ROADMAP.md`](ROADMAP.md) | Priorities across all three repos (P0 tooling, P1 audio, P2 smoothness, P3 ESP32-S3), linked to the labelled GitHub issues, which are the system of record. |
 
-## Architecture / design
+## Reference
 
 | Doc | Purpose |
 |-----|---------|
-| [`ML_STORAGE_LAYOUT.md`](ML_STORAGE_LAYOUT.md) | NVMe pool / SATA tier layout for ML data on the training server; disk budget; recovery. |
+| [`TEST_BOX.md`](TEST_BOX.md) | The test box: hosts and roles, hardware as built, hands-off recovery chain, setup, blue/green deployer, staging runner, per-server device ownership. |
+| [`TESTING_METHODOLOGY.md`](TESTING_METHODOLOGY.md) | Tiered testing, from blinky-firmware's host harness up to full validation on the box chip; drum metrics; removed metrics. |
+| [`BLE_REFERENCE.md`](BLE_REFERENCE.md) | BLE today: NUS connections, fleet broadcast, the BLE-DFU protocol, known limitations. |
+| [`ML_STORAGE_LAYOUT.md`](ML_STORAGE_LAYOUT.md) | Where the ML data is (bignasty archive, the Spark's object store) and the storage roots. |
 
-## Plans (some shipped, some open — each has a status header)
+## Plans (each has a status header)
 
 | Doc | Status |
 |-----|--------|
-| [`TEST_BOX_BUILD_PLAN.md`](TEST_BOX_BUILD_PLAN.md) | **Open-bench prototype running** — sound-isolated test box: Pi 5 host, speaker, camera, one test chip in a XIAO Debug Mate (SWD), per-port-switched hub, LED grid wiring, hands-off recovery chain; acceptance gates. |
-| [`PHONE_RECORD_MODE_PLAN.md`](PHONE_RECORD_MODE_PLAN.md) | **Implemented, not yet run on hardware** — Android Chrome ⇄ one device over Web Bluetooth, raw mic PCM + analysis. |
-| [`ML_IMPROVEMENT_PLAN.md`](ML_IMPROVEMENT_PLAN.md) | Current ML roadmap. The onset NN is off on devices until a model beats spectral flux. |
-| [`BLE_FLEET_RELIABILITY_PLAN.md`](BLE_FLEET_RELIABILITY_PLAN.md) | Items 1, 2, 3 and 5 shipped; field measurements (#221, #190) left. |
-| [`BLUETOOTH_IMPLEMENTATION_PLAN.md`](BLUETOOTH_IMPLEMENTATION_PLAN.md) | BLE fleet management done and in daily use; mostly the build record. ESP32-S3/WiFi parts cut. |
-| [`FLASH_LOCKDOWN_PLAN.md`](FLASH_LOCKDOWN_PLAN.md) | **CLOSED** — `FleetManager.flash_device` is the single entry point; legacy paths deleted. Kept as architectural rationale. |
-| [`FLEET_CONSOLE_REFACTOR_PLAN.md`](FLEET_CONSOLE_REFACTOR_PLAN.md) | **Done** apart from M10 (deferred) and M16's discovery side. |
-| [`SERVER_CONSOLIDATION_PLAN.md`](SERVER_CONSOLIDATION_PLAN.md) | **Done** apart from two listed exceptions; testing lives in `blinky_server/testing/`. |
-
-## Reference / research
-
-| Doc | Purpose |
-|-----|---------|
-| [`WEB_UPDATE_RESEARCH_2026_10.md`](WEB_UPDATE_RESEARCH_2026_10.md) | Research input for the web updater: platform constraints (iPhone, Windows UF2, Chrome's DFU blocklist) and the options weighed. Not the current design; see blinky-firmware's WEB_FLASHER.md. |
-| [`TESTING_METHODOLOGY.md`](TESTING_METHODOLOGY.md) | Tiered testing approach, from the host harness up to full on-device validation through blinky-server. |
-| [`AUDIO_SYSTEM_AUDIT_2026_04_24.md`](AUDIO_SYSTEM_AUDIT_2026_04_24.md) | Training/validation pipeline audit (all items shipped) + v30/v31 collapse diagnostic narrative. Historical. |
-| [`HYBRID_FEATURE_ANALYSIS_PLAN.md`](HYBRID_FEATURE_ANALYSIS_PLAN.md) | Closed; kept for its five-gate method and the v27-hybrid lessons. |
+| [`ML_IMPROVEMENT_PLAN.md`](ML_IMPROVEMENT_PLAN.md) | NN shelved on the nRF52840; training paused; ESP32-S3 feasibility is the only active ML direction (P3). |
+| [`TEST_BOX_CAMERA_HARNESS_PLAN.md`](TEST_BOX_CAMERA_HARNESS_PLAN.md) | **Planned, not built** — the box camera watching the 8x8 grid: render fidelity, latency distributions, follow test, freezes. No issue tracks it yet. |
+| [`PHONE_RECORD_MODE_PLAN.md`](PHONE_RECORD_MODE_PLAN.md) | **Parked** — superseded by the #243 re-scope (live calibration-data capture). |
 
 ## Firmware (blinky-firmware)
 
@@ -49,7 +38,9 @@ Each plan carries a status header; check it before treating the plan as outstand
 | [`AUDIO_ARCHITECTURE.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/AUDIO_ARCHITECTURE.md), [`GLOSSARY.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/GLOSSARY.md) | AudioTracker (onsets, ACF period, PLP pattern) and its terms. |
 | [`ONSET_DETECTION_LITERATURE_2026_05_02.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/ONSET_DETECTION_LITERATURE_2026_05_02.md) | Published onset/drum-detection systems with citations — quote before claiming "the literature says X". |
 | [`WEB_FLASHER.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md) | Browser firmware updates (this repo's console page): signed QSPI OTA, signing, release mirror, rollout checklist. |
-| [`HARDWARE.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/HARDWARE.md) | XIAO nRF52840 Sense inventory, pins, wiring. |
+| [`HARDWARE.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/HARDWARE.md) | XIAO nRF52840 Sense / Sense Plus inventory, pins, wiring, the test box grid. |
+| [`SWD_RECOVERY.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/SWD_RECOVERY.md), [`BOOTLOADER_WORKFLOW.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/BOOTLOADER_WORKFLOW.md) | SWD recovery through the test box's XIAO Debug Mate (the only SWD path); bootloader builds, invariants and recovery. |
+| [`WEB_UPDATE_RESEARCH_2026_10.md`](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_UPDATE_RESEARCH_2026_10.md) | Research input for the web updater: platform constraints (iPhone, Windows UF2, Chrome's DFU blocklist). Not the current design. |
 
 ## Archive
 
@@ -60,6 +51,11 @@ Docs that no longer reflect the current system are in [`archive/`](archive/). Th
 - `archive/FLASH_LOCKDOWN_AUDIT.md` — migration gap inventory; the migration finished.
 - `archive/SAFETY_pre_2026_05.md` — pre-FlashLockdown safety doc, replaced by `SAFETY.md`.
 - `archive/POSTMORTEM_2026_05_18_LEDTYPE.md` — single-incident postmortem; lessons landed in registry CI lint + Nrf52PwmLedStrip offset validation.
+- `archive/FLASH_LOCKDOWN_PLAN.md` — the single-flash-entry-point lockdown (done); rationale for CLAUDE.md's invariant.
+- `archive/BLUETOOTH_IMPLEMENTATION_PLAN.md`, `archive/BLE_FLEET_RELIABILITY_PLAN.md` — how BLE fleet management was built; current facts are in `BLE_REFERENCE.md`.
+- `archive/SERVER_CONSOLIDATION_PLAN.md`, `archive/FLEET_CONSOLE_REFACTOR_PLAN.md` — done; the result is blinky-server's `testing/` and the fleet-first console.
+- `archive/HYBRID_FEATURE_ANALYSIS_PLAN.md` — closed; its five-gate method and the v27-hybrid lessons.
+- `archive/AUDIO_SYSTEM_AUDIT_2026_04_24.md` — the 2026-04 training/validation audit (all items shipped) and the v30/v31 collapse narrative.
 
 ## Documentation hygiene (per CLAUDE.md)
 
