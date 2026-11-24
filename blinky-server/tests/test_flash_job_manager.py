@@ -212,6 +212,18 @@ async def test_uf2_write_holds_the_targets_reconnect_only_while_the_tool_runs(
     assert job.state is (FlashJobState.COMPLETED if write_ok else FlashJobState.FAILED)
 
 
+def test_hold_reconnect_extends_but_never_shortens(fleet: FleetManager) -> None:
+    """uf2_upload.py's own 90 s release must not cut the write's longer hold short."""
+    fleet.hold_reconnect("dev", 330)
+    long_hold = fleet._reconnect_blackout["dev"]
+    fleet.hold_reconnect("dev", 90)
+    assert fleet._reconnect_blackout["dev"] == long_hold
+    fleet.hold_reconnect("dev", 600)
+    assert fleet._reconnect_blackout["dev"] > long_hold
+    fleet.resume_reconnect("dev")
+    assert "dev" not in fleet._reconnect_blackout
+
+
 @pytest.mark.asyncio
 async def test_uf2_write_hold_leaves_an_earlier_hold_in_place(
     fleet: FleetManager, monkeypatch: pytest.MonkeyPatch

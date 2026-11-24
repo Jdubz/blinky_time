@@ -1603,8 +1603,15 @@ class FleetManager:
         log.info("Fleet manager stopped")
 
     def hold_reconnect(self, device_id: str, seconds: float) -> None:
-        """Prevent auto-reconnect for a device for the given duration."""
-        self._reconnect_blackout[device_id] = _time.monotonic() + seconds
+        """Prevent auto-reconnect for a device for at least the given duration.
+
+        Extends, never shortens: a tool's own release (uf2_upload.py asks for 90 s) must not
+        cut short the hold a UF2 write already set for its subprocess. ``resume_reconnect``
+        is what ends a hold early.
+        """
+        until = _time.monotonic() + seconds
+        if self._reconnect_blackout.get(device_id, 0.0) < until:
+            self._reconnect_blackout[device_id] = until
 
     def resume_reconnect(self, device_id: str) -> None:
         """Clear reconnect blackout for a device, allowing auto-reconnect."""
