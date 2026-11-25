@@ -88,15 +88,17 @@ SERVER_PATHS = (
     "blinky-server/",
     "blinky-console/",  # the web UI the server serves
     "scripts/testbox/",  # this deployer and the units
-    # Submodules (gitlinks, so no trailing slash; blinky_time#357): the firmware repo's
-    # tools/ (release client, validators, test-device list), and the corpus (the Spark
-    # client's default audio root) with its scorers.
-    "firmware",
+    # The corpus submodule (a gitlink, so no trailing slash; blinky_time#357): the Spark
+    # client's default audio root, and the blinky_scoring the server imports. Not firmware/:
+    # the server runs its own host tools (blinky-server/hosttools/, #411) and reads nothing
+    # from the firmware checkout, so a firmware pin bump restarts nothing.
     "corpus",
 )
-# The submodules a slot checks out, when the commit has them. Never recursive: the firmware
-# repo's own bootloader and corpus submodules aren't needed (the corpus is a sibling here).
-SUBMODULES = ("firmware", "corpus")
+# The submodules a slot checks out, when the commit has them. Never recursive. Not firmware/
+# (decoupling step 3): nothing the box runs reads it. A slot that an older deploy.py checked
+# it out in keeps that checkout, untouched and unread, as it keeps the toolchain links that
+# deploy.py made (firmware/.arduino, .arduino).
+SUBMODULES = ("corpus",)
 # The latest master commit that passed the gate, server change or not. blinky-server builds the
 # Spark training bundle from it (blinky_server/spark/bundle.py), so ml-training changes reach
 # training without a server restart, and only once CI and review passed. Shared by every
@@ -468,26 +470,11 @@ def init_submodules(slot: Path, sha: str) -> list[str]:
     except RuntimeError:
         return []  # no .gitmodules at that commit, or no entries
     paths = [line.split()[1] for line in listed.splitlines() if len(line.split()) == 2]
-    want = [p for p in SUBMODULES if p in paths]
+    want = [p for p in SUBMODULES if p in paths]  # a firmware/ entry is skipped, not an error
     if want:
         run("git", "submodule", "sync", "--quiet", "--", *want, cwd=slot)
         run("git", "submodule", "update", "--init", "--quiet", "--", *want, cwd=slot)
     return want
-
-
-def link_firmware_toolchain(slot: Path) -> bool:
-    """The pinned toolchain inside the slot's firmware checkout. The firmware's tools find it
-    at their repo's ``.arduino`` (uf2_upload.py's uf2conv.py: every flash converts hex to UF2
-    with it), and their repo is the firmware/ submodule now (#357): without this every
-    flash failed. Runs from prepare and on every pass, so a slot prepared by an older
-    deploy.py gets it too. True when it made the link."""
-    fw = slot / "firmware"
-    link = fw / ".arduino"
-    if not (fw / "tools").is_dir() or link.exists() or link.is_symlink():
-        return False
-    link.symlink_to(DEV_CLONE / ".arduino")
-    log(f"linked the pinned toolchain into {fw}")
-    return True
 
 
 def prepare(slot: Path, sha: str) -> None:
@@ -496,10 +483,9 @@ def prepare(slot: Path, sha: str) -> None:
         run("git", "worktree", "add", "--quiet", "--detach", str(slot), sha, cwd=DEV_CLONE)
     # --force: the slot must be exactly `sha`, whatever an earlier process left in its tree.
     run("git", "checkout", "--force", "--quiet", "--detach", sha, cwd=slot)
+    # No firmware toolchain: every flash converts hex to UF2 with blinky-server's vendored
+    # uf2conv (hosttools/uf2conv/, #411), not a core's copy under .arduino.
     init_submodules(slot, sha)
-    link_firmware_toolchain(slot)
-    if not (slot / ".arduino").exists():  # the pinned toolchain, shared (1.3 GB)
-        (slot / ".arduino").symlink_to(DEV_CLONE / ".arduino")
     want = {
         "pyproject": run(
             "git", "rev-parse", f"{sha}:blinky-server/pyproject.toml", cwd=slot
@@ -565,7 +551,6 @@ def deploy_once(dry_run: bool = False) -> int:
         # Every pass, like the units: the deploy that brings this code runs the previous
         # deploy.py, which has no Alloy step, and a failed reload must be retried.
         reconcile_alloy_config(live)
-        link_firmware_toolchain(live)
     seen = (current, state.get("deployable"))
     if not dry_run and (target in seen or target in state["refused"]):
         return 0

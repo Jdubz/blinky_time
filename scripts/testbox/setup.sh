@@ -8,7 +8,8 @@
 #
 # What it does (each step logs OK/FAIL; any FAIL makes the run exit non-zero):
 #   1. apt upgrade + the packages the box needs (python, ffmpeg, uhubctl, gh, node...)
-#   2. clone blinky_time into the user's home (never pulls an existing clone)
+#   2. clone blinky_time into the user's home (never pulls an existing clone), with its corpus
+#      submodule; never the firmware submodule (the box doesn't build or read firmware)
 #   3. blinky-server venv with the `firmware` and `ble` extras (the server imports bleak
 #      unconditionally; the box's BLE guard is --no-ble plus dtoverlay=disable-bt)
 #   4. build blinky-console into blinky-server/web/
@@ -22,10 +23,13 @@
 #      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
 #   9. Grafana Alloy, shipping the box's journal, host metrics and traces to the central LGTM
 #      stack on bignasty (scripts/testbox/alloy/blinkytest.alloy; Grafana: grafana.joshwentworth.com)
-#  10. development tooling, so the box can run every script, tool and CI check itself:
-#      arduino-cli (pinned) + the firmware toolchain, cppcheck (pinned, CI's build),
-#      adafruit-nrfutil, a dev Python venv, blinky-serial-mcp, git hooks, Claude Code
-#      (with Linux MCP servers: blinky-serial on this box, playwright + its Chromium)
+#  10. development tooling for this repo: a dev Python venv, blinky-serial-mcp, git hooks,
+#      Claude Code (with Linux MCP servers: blinky-serial on this box, playwright + its Chromium)
+#
+# No firmware toolchain (arduino-cli, the pinned core, cppcheck, GCC 13, adafruit-nrfutil): the box
+# flashes published images with blinky-server's own host tools. To develop firmware on the box,
+# clone Jdubz/blinky-firmware and follow its docs/BUILD_GUIDE.md (arduino-cli at the version its
+# tools/firmware_toolchain.json pins, then `bash scripts/setup_toolchain.sh`).
 #
 # Log: /var/log/blinky-testbox-setup.log
 
@@ -40,7 +44,7 @@ while [[ $# -gt 0 ]]; do
     --user) TARGET_USER="$2"; shift 2 ;;
     --repo) REPO_URL="$2"; shift 2 ;;
     --skip-upgrade) SKIP_UPGRADE=1; shift ;;
-    -h|--help) sed -n 2,25p "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^# Log:/p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -102,13 +106,11 @@ install_packages() {
     ffmpeg alsa-utils               # ffplay for validation playback; aplay/amixer for the USB speaker
     uhubctl udisks2                 # USB port power-cycling; UF2 drive mounting
     openocd                         # SWD recovery through the XIAO Debug Mate (swd_recover.sh)
-    gh                              # tools/firmware_release.py downloads releases with gh
+    gh                              # release downloads (hosttools/firmware_release.py), staging.py
     nodejs npm                      # blinky-console build
     rpicam-apps-lite i2c-tools      # camera bring-up, I2C debugging
     avahi-daemon
     # development (the box is also a dev machine: Claude sessions in tmux)
-    cmake                           # cppcheck build, blinky-simulator
-    g++-13                          # CI's host compiler: GCC 14 rejects TFLite's bundled flatbuffers
     ripgrep fd-find shellcheck sox picocom unzip pipx
     python3-numpy python3-scipy python3-yaml python3-matplotlib python3-cryptography
     python3-pytest                  # tools/ and CI's python checks on the system python
@@ -131,10 +133,9 @@ clone_repo() {
   else
     as_user git clone "$REPO_URL" "$REPO_DIR" || return 1
   fi
-  # blinky-firmware (its tools: release client, validators, the pinned toolchain's setup)
-  # and blinky-corpus, at the commits this repo pins (#357). Never the firmware's own
-  # bootloader submodule.
-  ( cd "$REPO_DIR" && as_user git submodule update --init firmware corpus )
+  # blinky-corpus at the commit this repo pins (#357): the server imports its blinky_scoring.
+  # Not the firmware submodule: nothing on the box reads it (a clone that has it keeps it).
+  ( cd "$REPO_DIR" && as_user git submodule update --init corpus )
 }
 
 server_venv() {
@@ -210,9 +211,9 @@ user_ssh_key() {
 }
 
 deploy_worktree() {
-  # ~/blinky-deploy -> ~/blinky-deploy-a: a worktree of the dev clone (shared objects; the
-  # bootloader submodule is never checked out, so ~120 MB), detached at master, with its own
-  # venv and console build. deploy.py owns it from here on, alternating between -a and -b.
+  # ~/blinky-deploy -> ~/blinky-deploy-a: a worktree of the dev clone (shared objects; of the
+  # submodules only the corpus is checked out), detached at master, with its own venv and
+  # console build. deploy.py owns it from here on, alternating between -a and -b.
   as_user python3 "$REPO_DIR/scripts/testbox/deploy.py" --init
 }
 
@@ -239,8 +240,8 @@ install_service() {
 }
 
 # --- development tooling ----------------------------------------------------------
-# The box doubles as a dev machine (Claude sessions in tmux), so it runs the same
-# scripts and CI checks as a workstation, with the same pins.
+# The box doubles as a dev machine for this repo (Claude sessions in tmux). The firmware's
+# toolchain is blinky-firmware's to set up (the header says how).
 
 # Grafana Alloy: the box's telemetry forwarder (logs, host metrics, traces) to the central LGTM
 # stack on bignasty (Josh-Wentworth/observability). Pinned to the version the central stack and the
@@ -278,78 +279,25 @@ ENV
   systemctl restart alloy
 }
 
-install_arduino_cli() {
-  # The version is pinned in the firmware's tools/firmware_toolchain.json; build.sh refuses any other.
-  local want have tgz tmp rc
-  [[ "$(uname -m)" == aarch64 ]] || { echo "arduino-cli step expects aarch64, got $(uname -m)" >&2; return 1; }
-  want="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["arduino_cli"])' \
-    "$REPO_DIR/firmware/tools/firmware_toolchain.json")" || return 1
-  have="$(/usr/local/bin/arduino-cli version 2>/dev/null | sed -n 's/.*Version: *\([^ ]*\).*/\1/p')"
-  [[ "$have" == "$want" ]] && return 0
-  tgz="arduino-cli_${want}_Linux_ARM64.tar.gz"
-  tmp="$(mktemp -d)"
-  ( cd "$tmp" &&
-    curl -fsSLO "https://github.com/arduino/arduino-cli/releases/download/v$want/$tgz" &&
-    curl -fsSLO "https://github.com/arduino/arduino-cli/releases/download/v$want/$want-checksums.txt" &&
-    grep -E "[[:space:]]$tgz\$" "$want-checksums.txt" | sha256sum -c --strict - &&
-    tar -xzf "$tgz" arduino-cli &&
-    install -m 0755 arduino-cli /usr/local/bin/arduino-cli )
-  rc=$?; rm -rf "$tmp"; return $rc
-}
-
-firmware_toolchain() {
-  # The pinned core, libraries, TFLite and core patches (#252), installed by the firmware's
-  # own script into firmware/.arduino. Every flash needs it: uf2_upload.py converts hex to
-  # UF2 with the core's uf2conv.py. <repo>/.arduino points there too: the deploy slots link
-  # that path (scripts/testbox/deploy.py, link_firmware_toolchain).
-  ( cd "$REPO_DIR/firmware" && as_user bash scripts/setup_toolchain.sh ) || return 1
-  if [[ ! -e "$REPO_DIR/.arduino" ]]; then
-    as_user ln -s firmware/.arduino "$REPO_DIR/.arduino"
-  fi
-}
-
-CPPCHECK_VERSION=2.16.0   # = pr-validation.yml's cppcheck job: apt's version misses findings (#201)
-install_cppcheck() {
-  local prefix="/opt/cppcheck-$CPPCHECK_VERSION" src rc
-  if [[ "$("$prefix/bin/cppcheck" --version 2>/dev/null)" != "Cppcheck $CPPCHECK_VERSION" ]]; then
-    src="$(mktemp -d)"
-    git clone -q --depth 1 --branch "$CPPCHECK_VERSION" https://github.com/danmar/cppcheck.git "$src/cppcheck" &&
-      cmake -S "$src/cppcheck" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DUSE_MATCHCOMPILER=ON \
-        -DCMAKE_INSTALL_PREFIX="$prefix" >/dev/null &&
-      cmake --build "$src/build" -j"$(nproc)" >/dev/null &&
-      cmake --install "$src/build" >/dev/null
-    rc=$?; rm -rf "$src"; [[ $rc -eq 0 ]] || return $rc
-  fi
-  ln -sf "$prefix/bin/cppcheck" /usr/local/bin/cppcheck
-}
-
 DEV_VENV="$HOME_DIR/.venvs/blinky"
 dev_python() {
-  # adafruit-nrfutil: the core's .zip packager, which build.sh's compile runs from PATH.
-  if ! as_user pipx list --short 2>/dev/null | grep -q '^adafruit-nrfutil '; then
-    as_user pipx install adafruit-nrfutil || return 1
-  fi
-  # On top of the apt python3-* packages, what apt doesn't ship: tflite for
-  # tools/check_model_input.py (CI's model-input-check); librosa, soundfile and
+  # On top of the apt python3-* packages, what apt doesn't ship: librosa, soundfile and
   # mir_eval for ml-training's CPU analysis. Training itself runs on the Spark.
   if [[ ! -x "$DEV_VENV/bin/python" ]]; then
     as_user python3 -m venv --system-site-packages "$DEV_VENV" || return 1
   fi
   as_user "$DEV_VENV/bin/pip" install -q --upgrade pip &&
-    as_user "$DEV_VENV/bin/pip" install -q "tflite==2.18.0" librosa soundfile mir_eval || return 1
-  # Login shells (tmux starts them) get the venv and ~/.local/bin first on PATH.
+    as_user "$DEV_VENV/bin/pip" install -q librosa soundfile mir_eval || return 1
+  # Login shells (tmux starts them) get the venv and ~/.local/bin first on PATH. Written once:
+  # a profile with the block keeps it as it is (an older one also exports CXX=g++-13 for
+  # firmware host builds; that is blinky-firmware's setup now, and left alone here).
   local profile="$HOME_DIR/.profile"
-  # Replace the managed block whenever it changes (sed drops the old one).
-  if ! grep -qs 'export CXX=g++-13' "$profile"; then
-    as_user sed -i '/^# >>> blinky test box/,/^# <<< blinky test box/d' "$profile" || return 1
+  if ! grep -qs '^# >>> blinky test box' "$profile"; then
     as_user tee -a "$profile" >/dev/null <<'EOF'
 
 # >>> blinky test box (scripts/testbox/setup.sh) >>>
 # The dev venv (system site packages included) and per-user tools (claude, pipx apps).
 PATH="$HOME/.venvs/blinky/bin:$HOME/.local/bin:$PATH"
-# CI's host compiler (ubuntu-latest, GCC 13). tests/tracker/build_host_nn.sh builds
-# TFLite Micro with $CXX, and GCC 14 rejects its bundled flatbuffers (stl_emulation.h).
-export CXX=g++-13
 # <<< blinky test box <<<
 EOF
   fi
@@ -416,9 +364,6 @@ step "user ssh key"       user_ssh_key
 step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
 step "alloy (telemetry)"  install_alloy
-step "arduino-cli"        install_arduino_cli
-step "firmware toolchain" firmware_toolchain
-step "cppcheck"           install_cppcheck
 step "dev python"         dev_python
 step "blinky-serial-mcp"  serial_mcp
 step "git hooks"          git_hooks

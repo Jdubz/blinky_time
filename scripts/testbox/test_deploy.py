@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -370,7 +371,8 @@ def test_every_pass_reconciles_units_from_the_live_slot(box: dict[str, Any]) -> 
 
 
 def test_a_slot_checks_out_the_server_submodules_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """firmware and corpus at the commit's pins; never the bootloader, never recursive."""
+    """The corpus at the commit's pin; never the bootloader, never recursive, and not the
+    firmware (decoupling step 3: nothing the box runs reads it)."""
     calls: list[tuple[str, ...]] = []
 
     def fake_run(*cmd: str, **kw: Any) -> str:
@@ -383,10 +385,11 @@ def test_a_slot_checks_out_the_server_submodules_only(monkeypatch: pytest.Monkey
         return ""
 
     monkeypatch.setattr(deploy, "run", fake_run)
-    assert deploy.init_submodules(Path("/slot"), SHA) == ["firmware", "corpus"]
-    update = [c for c in calls if c[:3] == ("git", "submodule", "update")]
-    assert update == [
-        ("git", "submodule", "update", "--init", "--quiet", "--", "firmware", "corpus")
+    assert deploy.init_submodules(Path("/slot"), SHA) == ["corpus"]
+    submodule = [c for c in calls if c[:2] == ("git", "submodule")]
+    assert submodule == [
+        ("git", "submodule", "sync", "--quiet", "--", "corpus"),
+        ("git", "submodule", "update", "--init", "--quiet", "--", "corpus"),
     ]
 
 
@@ -400,19 +403,102 @@ def test_a_commit_without_submodules_checks_out_none(monkeypatch: pytest.MonkeyP
     assert deploy.init_submodules(Path("/slot"), SHA) == []
 
 
-def test_the_firmware_checkout_gets_the_pinned_toolchain(
+def _git(cwd: Path, *args: str) -> str:
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+    return r.stdout.strip()
+
+
+def _repo(path: Path, files: dict[str, str]) -> str:
+    path.mkdir(parents=True)
+    _git(path, "init", "-q")
+    for name, text in files.items():
+        (path / name).parent.mkdir(parents=True, exist_ok=True)
+        (path / name).write_text(text)
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "c")
+    return _git(path, "rev-parse", "HEAD")
+
+
+def test_a_slot_from_an_older_deployer_keeps_its_firmware_checkout_and_links(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """uf2_upload.py (in firmware/tools) converts hex to UF2 with the toolchain at its repo's
-    .arduino; the first flash from blinky-firmware failed without it (#357)."""
-    dev, slot = tmp_path / "dev", tmp_path / "slot"
-    (dev / ".arduino").mkdir(parents=True)
+    """The transition, against real git. Slots that an older deploy.py prepared have firmware/
+    checked out with firmware/.arduino and .arduino linked to the dev clone's toolchain. This
+    deploy.py prepares them all the same and leaves all three alone; a fresh slot gets
+    neither. A later commit that drops the firmware gitlink (step 4) still prepares, and a
+    rollback past it too."""
+    for k, v in {
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),  # no user config (signing, hooks)
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "protocol.file.allow",  # local submodule URLs
+        "GIT_CONFIG_VALUE_0": "always",
+        "GIT_CONFIG_KEY_1": "init.defaultBranch",
+        "GIT_CONFIG_VALUE_1": "master",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }.items():
+        monkeypatch.setenv(k, v)
+    fw = tmp_path / "blinky-firmware"
+    _repo(fw, {"tools/x.py": "1\n"})
+    _repo(tmp_path / "blinky-corpus", {"edm/x.txt": "1\n"})
+    dev = tmp_path / "blinky_time"
+    _repo(dev, {"blinky-server/pyproject.toml": "[project]\n", "blinky-console/package.json": "{}"})
+    for name, url in (("firmware", fw), ("corpus", tmp_path / "blinky-corpus")):
+        _git(dev, "submodule", "add", "-q", str(url), name)
+    _git(dev, "commit", "-qm", "submodules")
+    old = _git(dev, "rev-parse", "HEAD")
+    (dev / ".arduino").mkdir()
+
+    # What the older deploy.py left in a slot: the firmware checkout and both links.
+    slot = tmp_path / "blinky-deploy-a"
+    _git(dev, "worktree", "add", "-q", "--detach", str(slot), old)
+    _git(slot, "submodule", "update", "--init", "-q", "firmware", "corpus")
+    links = (slot / "firmware" / ".arduino", slot / ".arduino")
+    for link in links:
+        link.symlink_to(dev / ".arduino")
+    # The commit this deploy.py installs moves the firmware pin.
+    (fw / "tools" / "x.py").write_text("2\n")
+    _git(fw, "commit", "-qam", "fw 2")
+    _git(dev / "firmware", "pull", "-q", "origin", "master")
+    _git(dev, "commit", "-qam", "firmware pin")
+    new = _git(dev, "rev-parse", "HEAD")
+
+    others: list[tuple[str, ...]] = []
+    real_run = deploy.run
+
+    def run(*cmd: str, **kw: Any) -> str:
+        if cmd[0] == "git":
+            return str(real_run(*cmd, **kw))
+        others.append(cmd)  # venv, pip, npm
+        return ""
+
+    monkeypatch.setattr(deploy, "run", run)
     monkeypatch.setattr(deploy, "DEV_CLONE", dev)
-    assert deploy.link_firmware_toolchain(slot) is False  # no firmware checkout: nothing
-    (slot / "firmware" / "tools").mkdir(parents=True)
-    assert deploy.link_firmware_toolchain(slot) is True
-    assert (slot / "firmware" / ".arduino").resolve() == (dev / ".arduino").resolve()
-    assert deploy.link_firmware_toolchain(slot) is False  # once
+    deploy.prepare(slot, new)
+    assert _git(slot, "rev-parse", "HEAD") == new
+    assert (slot / "corpus" / "edm" / "x.txt").is_file()
+    assert (slot / "firmware" / "tools" / "x.py").read_text() == "1\n"  # left at the old pin
+    for link in links:
+        assert link.is_symlink() and link.resolve() == (dev / ".arduino").resolve()
+
+    fresh = tmp_path / "blinky-deploy-b"
+    deploy.prepare(fresh, new)
+    assert (fresh / "corpus" / "edm" / "x.txt").is_file()
+    assert list((fresh / "firmware").iterdir()) == []  # never checked out
+    assert not (fresh / ".arduino").exists() and not (fresh / ".arduino").is_symlink()
+
+    # Step 4 drops the gitlink: git keeps the populated directory (a warning), the prepare
+    # succeeds, and so does a rollback to the commit before.
+    _git(dev, "rm", "-q", "firmware")
+    _git(dev, "commit", "-qm", "no firmware submodule")
+    for sha in (_git(dev, "rev-parse", "HEAD"), new):
+        deploy.prepare(slot, sha)
+        assert _git(slot, "rev-parse", "HEAD") == sha
+        assert (slot / "corpus" / "edm" / "x.txt").is_file()
+    assert not any("arduino" in " ".join(c) for c in others)
 
 
 def test_the_server_unit_signals_only_the_server_on_stop() -> None:
@@ -474,7 +560,6 @@ def box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(
         deploy, "install_missing_units", lambda slot: calls["reconciled"].append(slot.name)
     )
-    monkeypatch.setattr(deploy, "link_firmware_toolchain", lambda slot: False)
     monkeypatch.setattr(deploy, "switch_to", switch)
     monkeypatch.setattr(deploy.time, "time", lambda: NOW)
     clock = [0.0]
@@ -498,6 +583,9 @@ def test_deploys_into_the_other_slot_then_switches(box: dict[str, Any]) -> None:
         ["ml-training/train.py"],
         ["tools/device_eval.py", "docs/x.md", "ml-training/configs/x.yaml"],
         [".github/workflows/pr-validation.yml", "devices/registry/hat_v1.json", "CLAUDE.md"],
+        # A firmware pin bump: the server reads nothing from the firmware checkout.
+        ["firmware"],
+        ["firmware", "docs/TEST_BOX.md"],
     ],
 )
 def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
@@ -522,7 +610,6 @@ def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
         "blinky-console/src/App.tsx",
         "blinky-console/src/café del mar.ts",  # non-ASCII and spaces
         "scripts/testbox/deploy.py",
-        "firmware",
         "corpus",
     ],
 )
