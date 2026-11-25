@@ -11,7 +11,8 @@ but before the flash finished. ``resume`` starts again and prints the job's resu
 dir (the work store) comes from XDG_DATA_HOME. WORKFLOW=deploy runs ``fleet.deploy`` instead
 (release download, store, settings broadcast and post-deploy assertion faked);
 ``broadcast:N`` exits in the middle of the Nth settings broadcast. WORKFLOW=staging runs
-``fleet.deploy-staging`` the same way (staging download and the test-device check faked).
+``fleet.deploy-staging`` the same way (staging download and the test-device check faked), and
+WORKFLOW=dev ``fleet.deploy-dev`` (the build-service fetch faked; the audio lock it holds too).
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from blinky_server.device.device import DeviceState
 from blinky_server.firmware import deploy_pipeline, fleet_workflows
 from blinky_server.firmware.flash_job import FlashJobState, FlashTransport
 from blinky_server.paths import data_dir
+from blinky_server.testing import workflows as testing_workflows
 from blinky_server.work import durable
 
 DEVICES = ["dev-a", "dev-b", "dev-c"]
@@ -162,6 +164,25 @@ def _store_staging(hex_path: Path, version: str) -> Path:
 
 
 routes_firmware._store_staging_hex = _store_staging  # type: ignore[assignment]
+deploy_pipeline.fetch_dev_build = lambda build_id, out: {  # type: ignore[assignment]
+    "tag": "dev-abababab",
+    "version": NEW,
+    "hex": "/fake/dev.hex",
+    "stable": False,
+    "channel": "dev",
+    "sha": STAGING_SHA,
+    "build_id": build_id,
+}
+
+
+def _store_dev(hex_path: Path, version: str) -> Path:
+    effect(f"store dev {version}")
+    return Path("/fake/stored-dev.hex")
+
+
+routes_firmware._store_dev_hex = _store_dev  # type: ignore[assignment]
+testing_workflows.acquire_audio_lock = lambda ids: effect("audio lock") or True  # type: ignore[func-returns-value]
+testing_workflows.release_audio_lock = lambda: effect("audio unlock")
 WORKFLOW = os.environ.get("WORKFLOW", "flash")
 fleet_workflows.images.load = lambda path: SimpleNamespace(version=NEW)
 fleet_workflows.VERSION_SETTLE_S = 0
@@ -197,6 +218,9 @@ async def main() -> None:
         wid = await durable.submit(
             fleet_workflows.fleet_deploy_staging, STAGING_SHA, DEVICES, str(out / "dl")
         )
+        wid_file.write_text(wid)
+    elif mode == "start" and WORKFLOW == "dev":
+        wid = await durable.submit(fleet_workflows.fleet_deploy_dev, "b1", DEVICES, str(out / "dl"))
         wid_file.write_text(wid)
     elif mode == "start":
         wid = await durable.submit(fleet_workflows.fleet_flash, DEVICES, "/fake/fw.hex")

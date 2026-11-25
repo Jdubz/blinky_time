@@ -369,6 +369,22 @@ def test_a_staging_deploy_cut_off_mid_flash_resumes_with_that_device(tmp_path: P
     assert not any(line.startswith("broadcast ") for line in log)
 
 
+def test_a_dev_deploy_cut_off_mid_flash_resumes_with_that_device(tmp_path: Path) -> None:
+    """docs/DEV_LOOP.md: the staging pipeline with a build-service package, holding the audio
+    lock; a restart mid-flash resumes with the device it cut off, the package fetched once."""
+    assert deploy_harness(tmp_path, "start", "before:2", workflow="dev").returncode == 9
+    res = result(deploy_harness(tmp_path, "resume", workflow="dev"))
+    assert res["status"] == "ok" and res["build_id"] == "b1", res
+    assert list(res["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
+    log = effects_of(tmp_path)
+    assert log.count("flash dev-a start") == 1 and log.count("flash dev-b start") == 2
+    assert log.count("test devices 3") == 1 and log.count("store dev b300") == 1
+    assert not any(line.startswith("arm ") for line in log)  # never armed: not stable (#251)
+    assert all(log.count(f"cmd {d} save") == 1 for d in ALL)
+    # The audio lock, taken again after the restart (per-run setup) and released at the end.
+    assert log.count("audio lock") == 2 and log[-1] == "audio unlock"
+
+
 def test_a_deploy_cut_off_in_its_settings_stage_redoes_only_that(tmp_path: Path) -> None:
     assert deploy_harness(tmp_path, "start", "broadcast:1").returncode == 9
     res = result(deploy_harness(tmp_path, "resume"))

@@ -23,6 +23,9 @@ A release is a GitHub Release of blinky-firmware tagged `b<N>` whose assets are:
   staging    not a release: the workflow artifact `staging-firmware-<sha>` that
              staging-build.yml builds from every green staging push (version
              b<N>-dev-<sha8>), for test devices only (download_staging)
+  dev        not a release: the same dev package, built by the build service from
+             an owner commit (docs/DEV_LOOP.md), for test devices only (verify_dev_package:
+             blinky-server fetches it, this verifies it)
 
 The repository is explicit: $BLINKY_FIRMWARE_REPO, default Jdubz/blinky-firmware.
 It is never read from a git remote, and no firmware checkout is needed.
@@ -143,7 +146,9 @@ def download_staging(sha, out_dir):
 def verify_dev_package(pkg_dir, sha, name=None):
     """Verify a dev package in ``pkg_dir`` (a staging-firmware-<sha> artifact or a build-service
     package): its manifest is a dev-channel build of exactly ``sha`` with the version
-    gen_version.sh stamps, and the hex and UF2 match their sha256s. Returns
+    gen_version.sh stamps, and the hex and UF2 match their sha256s. [blinky_time: and every
+    other file in pkg_dir is a regular file listed in the manifest with a matching sha256, so
+    nothing unverified sits beside the image (the box's dev loop, docs/DEV_LOOP.md).] Returns
     {"manifest", "hex", "uf2"}; raises ReleaseError otherwise."""
     if not SHA_RE.match(sha or ""):
         raise ReleaseError(f"not a full commit sha: {sha!r}")
@@ -171,6 +176,15 @@ def verify_dev_package(pkg_dir, sha, name=None):
             raise ReleaseError(f"{name}: {fname} missing")
         if sha256(p) != files[fname]:
             raise ReleaseError(f"{name}: {fname} sha256 mismatch - refusing to use it")
+    for p in sorted(pkg_dir.iterdir()):
+        if p.name == "manifest.json":
+            continue
+        if p.is_symlink() or not p.is_file():
+            raise ReleaseError(f"{name}: {p.name} is not a regular file - refusing the package")
+        if p.name not in files:
+            raise ReleaseError(f"{name}: {p.name} is not in the manifest - refusing the package")
+        if sha256(p) != files[p.name]:
+            raise ReleaseError(f"{name}: {p.name} sha256 mismatch - refusing to use it")
     return {"manifest": manifest, "hex": pkg_dir / required[0], "uf2": pkg_dir / required[1]}
 
 

@@ -26,7 +26,9 @@ from .flash_job import FlashJobState
 log = logging.getLogger(__name__)
 
 FLEET_JOBS = jobs.Family(
-    prefix="fleet.", kinds=("flash", "deploy", "deploy-staging"), result_steps=("flash_one",)
+    prefix="fleet.",
+    kinds=("flash", "deploy", "deploy-staging", "deploy-dev"),
+    result_steps=("flash_one",),
 )
 PER_DEVICE_TIMEOUT_S = 600.0
 # After a restart, discovery needs a moment to find the device again.
@@ -217,6 +219,30 @@ async def fleet_deploy_staging(
         flash=flash_devices,
         staging_sha=sha,
     )
+
+
+@durable.workflow("fleet.deploy-dev")
+async def fleet_deploy_dev(
+    build_id: str, device_ids: list[str], download_dir: str
+) -> dict[str, Any]:
+    """A build-service dev build to test devices, through the same pipeline as staging
+    (docs/DEV_LOOP.md): only the package's source differs. It holds the audio lock for the
+    whole deploy, as the staging suite does, so no test job measures the chips while they are
+    flashed, and a suite that dev mode preempted has let go of them first."""
+    from ..api.routes_firmware import _store_dev_hex
+    from ..testing.workflows import reserve
+
+    async with reserve(device_ids):
+        return await deploy_pipeline.run_deploy(
+            _fleet(),
+            jobs.Progress(),
+            release_tag=None,
+            device_ids=device_ids,
+            download_dir=Path(download_dir),
+            store_firmware=_store_dev_hex,
+            flash=flash_devices,
+            dev_build=build_id,
+        )
 
 
 @durable.workflow("fleet.deploy")

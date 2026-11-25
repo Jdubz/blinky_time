@@ -385,6 +385,7 @@ async def _deploy_active() -> bool:
     return bool(
         await jobs.active(FLEET_JOBS, "deploy")
         or await jobs.active(FLEET_JOBS, "deploy-staging")
+        or await jobs.active(FLEET_JOBS, "deploy-dev")
         or await jobs.active(TEST_JOBS, "staging")
     )
 
@@ -403,6 +404,15 @@ def _store_staging_hex(hex_path: Path, version: str) -> Path:
     # NOT stable: a staging build (#349) never arms auto-recovery (#251).
     try:
         return _store_firmware(hex_path.read_bytes(), version, stable=False, source="staging").path
+    except (HTTPException, OSError) as e:
+        detail = e.detail if isinstance(e, HTTPException) else str(e)
+        raise deploy_pipeline.DeployError("store", str(detail)) from e
+
+
+def _store_dev_hex(hex_path: Path, version: str) -> Path:
+    # NOT stable: a dev build (docs/DEV_LOOP.md) never arms auto-recovery (#251).
+    try:
+        return _store_firmware(hex_path.read_bytes(), version, stable=False, source="dev").path
     except (HTTPException, OSError) as e:
         detail = e.detail if isinstance(e, HTTPException) else str(e)
         raise deploy_pipeline.DeployError("store", str(detail)) from e

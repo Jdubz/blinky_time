@@ -22,6 +22,13 @@ deploy.py). One pass:
    for every connected, configured chip on the box (every box chip is a test chip) and post a
    pending status.
 
+The box's mode (GET /api/box/mode, docs/DEV_LOOP.md): in dev mode (or switching to it) a head
+that would be submitted is held instead, with the pending status "queued: box in dev mode since
+HH:MM (N waiting)", and reported to the server as waiting (PUT /api/box/queue/staging) so it
+shows in GET /api/box/mode, dev.py status and /metrics. Back in queue mode it is submitted as
+before. A suite that dev mode preempted (its job among the mode's "preempted") is not a
+failure: its head goes back in the queue and is tested again.
+
 Only the newest staging commit is tested; a commit superseded while it waits is skipped (its
 successor carries its changes). State is in ~/.local/share/blinky-server/staging.json; the log
 goes to the journal (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
@@ -36,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -70,6 +78,7 @@ CORPUS = "corpus/edm"  # the blinky-corpus submodule
 REPORT_HEADER = "## Hardware test (staging) — "
 REVIEWS_HEADER = "Claude reviews since master (informational, not gated):"
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
+RUNNER = "staging"  # this runner's name in the box's hardware queue (PUT /api/box/queue/staging)
 
 Gh = Callable[..., str]
 
@@ -111,6 +120,48 @@ def http(method: str, path: str, body: Any = None, timeout: float = 30) -> Any:
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
+
+
+def box_mode(server: Callable[..., Any]) -> dict[str, Any]:
+    """The box's mode (GET /api/box/mode). A server without the route (an older one, mid-deploy)
+    is in queue mode: the box ran that way before it had modes."""
+    try:
+        mode: dict[str, Any] = server("GET", "/api/box/mode")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        return {"mode": "queue", "waiting": [], "preempted": []}
+    return mode
+
+
+def holds(mode: dict[str, Any]) -> bool:
+    """The runners hold back: dev mode, or switching to it."""
+    return mode.get("mode") == "dev" or bool(mode.get("switching"))
+
+
+def queued_description(mode: dict[str, Any], waiting: int) -> str:
+    if mode.get("mode") == "dev":
+        when = time.strftime("%H:%M", time.localtime(float(mode.get("since") or time.time())))
+        return f"queued: box in dev mode since {when} ({waiting} waiting)"
+    return f"queued: box switching to dev mode ({waiting} waiting)"
+
+
+def report_queue(server: Callable[..., Any], state: dict[str, Any]) -> None:
+    """Tell the server what this runner holds back (nothing, outside dev mode). Display only:
+    a server that can't take it is logged, never a reason to stop."""
+    q = state.get("queued")
+    if q and q["sha"] == state.get("reported"):
+        q = None  # settled this pass (skipped, or its build failed): nothing waits
+    waiting = [{"sha": q["sha"], "since": q["since"], "what": "staging head"}] if q else []
+    if q and q.get("preempted"):
+        waiting[0]["preempted"] = True
+    try:
+        server("PUT", f"/api/box/queue/{RUNNER}", {"waiting": waiting})
+    except urllib.error.HTTPError as e:
+        if e.code != 404 or waiting:  # an older server has no queue: fine while nothing waits
+            log(f"box queue not reported: server answered {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        log(f"box queue not reported: {e}")
 
 
 def test_devices(devices: list[dict[str, Any]]) -> list[str]:
@@ -528,6 +579,19 @@ def run_once(
     gh_: Gh = gh,
     server: Callable[..., Any] = http,
 ) -> dict[str, Any]:
+    state = _pass(gh_, server)
+    report_queue(server, state)
+    return state
+
+
+def preempted(server: Callable[..., Any], job_id: str) -> dict[str, Any] | None:
+    """The box mode's record of ``job_id`` if dev mode preempted it, else None. A mode that
+    can't be read raises (URLError, OSError): the caller retries, it never guesses."""
+    mode = box_mode(server)
+    return next((p for p in mode.get("preempted") or [] if p.get("job") == job_id), None)
+
+
+def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
     state = load_state()
     if "running" in state:
         try:
@@ -544,11 +608,33 @@ def run_once(
         if job.get("status") not in TERMINAL:
             log(f"{state['running']['sha'][:12]}: {job.get('progressMessage')}")
             return state
+        try:
+            pre = (
+                preempted(server, state["running"]["job"]) if job["status"] == "cancelled" else None
+            )
+        except (urllib.error.URLError, OSError) as e:  # HTTPError included
+            # Preempted or cancelled by hand can't be told apart now: a retry, never a verdict.
+            log(
+                f"{state['running']['sha'][:12]}: suite cancelled, box mode unreadable ({e}); next pass"
+            )
+            return state
+        if pre is not None:
+            # Dev mode took the box: not a failure. The head goes back in the queue and is
+            # tested again (this pass holds it while the box stays in dev mode).
+            sha = state.pop("running")["sha"]
+            state["queued"] = {"sha": sha, "since": float(pre.get("at") or time.time())}
+            state["queued"]["preempted"] = True
+            save_state(state)
+            log(f"{sha[:12]}: suite preempted by dev mode; queued again")
+            return _pass(gh_, server)
         finish(gh_, state, job)
         save_state(state)
         return state
 
     sha = staging_head(gh_)
+    if state.get("queued", {}).get("sha") not in (None, sha) or state.get("reported") == sha:
+        state.pop("queued", None)  # superseded or settled: nothing of this runner waits
+        save_state(state)
     if state.get("reported") == sha:
         return state
     changed, why, blind = firmware_change(gh_, sha)
@@ -574,6 +660,13 @@ def run_once(
         if same:
             return skip(gh_, state, sha, why)
         log(f"{sha[:12]}: {why}")
+    try:
+        mode = box_mode(server)
+    except (urllib.error.URLError, OSError) as e:  # HTTPError included: never a verdict
+        log(f"{sha[:12]}: box mode unreadable ({e}); next pass")
+        return state
+    if holds(mode):
+        return hold(gh_, state, sha, mode)
     try:
         devices = test_devices(server("GET", "/api/devices"))
         if not devices:
@@ -606,9 +699,27 @@ def run_once(
         return state
     state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices}
     state.pop("waiting", None)
+    state.pop("queued", None)
     save_state(state)
     post_status(gh_, sha, "pending", f"testing on {len(devices)} test device(s)")
     log(f"{sha[:12]}: suite {job['job_id']} on {devices}")
+    return state
+
+
+def hold(gh_: Gh, state: dict[str, Any], sha: str, mode: dict[str, Any]) -> dict[str, Any]:
+    """Dev mode: submit nothing; hold sha in the box's queue with a pending status saying why.
+    The status is posted when its text changes, not every pass."""
+    q = state.get("queued")
+    if not q or q.get("sha") != sha:
+        q = {"sha": sha, "since": time.time()}
+    others = [w for w in mode.get("waiting") or [] if w.get("runner") != RUNNER]
+    desc = queued_description(mode, len(others) + 1)
+    if q.get("posted") != desc:
+        post_status(gh_, sha, "pending", desc)
+        q["posted"] = desc
+        log(f"{sha[:12]}: {desc}")
+    state["queued"] = q
+    save_state(state)
     return state
 
 

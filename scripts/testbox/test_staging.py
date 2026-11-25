@@ -148,10 +148,20 @@ class Server:
     def __init__(self, devices: list[dict[str, Any]], job: dict[str, Any] | Exception) -> None:
         self.devices, self.job = devices, job
         self.submitted: list[Any] = []
+        # The box's mode (GET /api/box/mode) and what the runner reports as waiting.
+        self.mode: dict[str, Any] = {"mode": "queue", "since": 0.0, "waiting": [], "preempted": []}
+        self.queue: list[list[dict[str, Any]]] = []
 
     def __call__(self, method: str, path: str, body: Any = None) -> Any:
         if path == "/api/devices":
             return self.devices
+        if method == "GET" and path == "/api/box/mode":
+            if isinstance(self.mode, Exception):
+                raise self.mode
+            return self.mode
+        if method == "PUT" and path == "/api/box/queue/staging":
+            self.queue.append(body["waiting"])
+            return {}
         if method == "POST" and path == "/api/test/staging":
             self.submitted.append(body)
             return {"job_id": "job-1"}
@@ -564,3 +574,104 @@ def test_the_report_links_its_archived_copy_through_the_box() -> None:
     assert "`inputs/abc/s.json`" in text
     assert "http://blinkytest:8420/api/spark/artifacts/inputs/abc/s.json" in text
     assert "artifact store" not in staging.render(GOOD_REPORT)
+
+
+# -- the box's dev mode (docs/DEV_LOOP.md) -----------------------------------------------------
+
+
+def dev_mode(srv: Server, since: float = 1_700_000_000.0, others: int = 0) -> None:
+    waiting = [{"runner": "pr", "sha": "x" * 40, "since": since} for _ in range(others)]
+    srv.mode = {"mode": "dev", "since": since, "waiting": waiting, "preempted": []}
+
+
+def test_dev_mode_holds_a_head_with_a_pending_status_once() -> None:
+    import time
+
+    g, srv = GitHub(), Server([HAT], {})
+    dev_mode(srv, others=2)
+    state = staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    when = time.strftime("%H:%M", time.localtime(1_700_000_000.0))
+    assert not srv.submitted and "running" not in state and "reported" not in state
+    assert g.statuses == [("pending", f"queued: box in dev mode since {when} (3 waiting)")]
+    # Reported to the server as waiting, with the time it started waiting, every pass.
+    assert [w[0]["sha"] for w in srv.queue] == [SHA, SHA]
+    assert srv.queue[0][0]["since"] == srv.queue[1][0]["since"] == state["queued"]["since"]
+
+
+def test_a_switch_still_waiting_for_its_suite_holds_too() -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    srv.mode = {"mode": "queue", "switching": {"to": "dev"}, "waiting": [], "preempted": []}
+    staging.run_once(g, srv)
+    assert not srv.submitted
+    assert g.statuses == [("pending", "queued: box switching to dev mode (1 waiting)")]
+
+
+def test_back_in_queue_mode_the_held_head_is_submitted_and_the_queue_cleared() -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    dev_mode(srv)
+    staging.run_once(g, srv)
+    srv.mode = {"mode": "queue", "since": 0.0, "waiting": [], "preempted": []}
+    state = staging.run_once(g, srv)
+    assert len(srv.submitted) == 1 and state["running"]["sha"] == SHA and "queued" not in state
+    assert srv.queue[-1] == [] and g.statuses[-1] == ("pending", "testing on 1 test device(s)")
+
+
+def test_a_head_settled_while_held_leaves_the_queue() -> None:
+    """Held in dev mode, then superseded by a head with no firmware change: skipped and
+    promoted (no hardware), and nothing of this runner waits any more."""
+    g, srv = GitHub(), Server([HAT], {})
+    dev_mode(srv)
+    staging.run_once(g, srv)
+    g.changed = ["docs/x.md"]
+    state = staging.run_once(g, srv)
+    assert state["reported"] == SHA and srv.queue[-1] == [] and not srv.submitted
+
+
+def test_a_suite_preempted_by_dev_mode_is_queued_again_not_failed() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "cancelled", "error": None})
+    staging.run_once(g, srv)  # submitted
+    dev_mode(srv)
+    srv.mode["preempted"] = [{"job": "job-1", "sha": SHA, "at": 1_700_000_100.0}]
+    state = staging.run_once(g, srv)
+    assert "running" not in state and "reported" not in state
+    assert state["queued"]["since"] == 1_700_000_100.0
+    assert srv.queue[-1][0]["preempted"] is True
+    assert all(st != "failure" for st, _ in g.statuses) and not g.comments
+    assert g.statuses[-1][1].startswith("queued: box in dev mode since")
+    # Back in queue mode, the same head is tested again.
+    srv.mode = {"mode": "queue", "since": 0.0, "waiting": [], "preempted": []}
+    srv.job = {"status": "running", "progressMessage": "health"}
+    state = staging.run_once(g, srv)
+    assert len(srv.submitted) == 2 and state["running"]["sha"] == SHA
+
+
+def test_a_cancel_that_was_not_a_preempt_is_still_a_failure() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "cancelled", "error": None})
+    staging.run_once(g, srv)
+    state = staging.run_once(g, srv)
+    assert state["reported"] == SHA and g.statuses[-1][0] == "failure"
+
+
+def test_a_server_without_modes_is_queue_mode() -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    srv.mode = urllib.error.HTTPError("u", 404, "not found", None, None)  # type: ignore[assignment,arg-type]
+    staging.run_once(g, srv)
+    assert len(srv.submitted) == 1
+
+
+def test_an_unreadable_mode_is_a_retry_never_a_verdict() -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    srv.mode = urllib.error.HTTPError("u", 500, "boom", None, None)  # type: ignore[assignment,arg-type]
+    state = staging.run_once(g, srv)
+    assert not srv.submitted and "reported" not in state and not g.statuses
+
+
+def test_a_cancelled_suite_with_an_unreadable_mode_is_a_retry_not_a_failure() -> None:
+    """Review: preempted or cancelled by hand can't be told apart without the mode."""
+    g, srv = GitHub(), Server([HAT], {"status": "cancelled", "error": None})
+    staging.run_once(g, srv)  # submitted
+    srv.mode = urllib.error.HTTPError("u", 503, "draining", None, None)  # type: ignore[assignment,arg-type]
+    state = staging.run_once(g, srv)
+    assert state["running"]["job"] == "job-1" and "reported" not in state
+    assert all(st != "failure" for st, _ in g.statuses) and not g.comments
