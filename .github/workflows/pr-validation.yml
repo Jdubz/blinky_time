@@ -2,12 +2,12 @@ name: PR Validation
 
 on:
   pull_request:
-    branches: [ master, staging ]
-  # Also validate master and staging themselves: two PRs that each pass alone
-  # can still break together once both are merged. A green run on a staging
-  # push starts the staging firmware build (staging-build.yml).
+    branches: [ master ]
+  # Also validate master itself: two PRs that each pass alone can still break
+  # together once both are merged. (blinky_time has no staging branch since the
+  # repo split; firmware staging lives in blinky-firmware.)
   push:
-    branches: [ master, staging ]
+    branches: [ master ]
 
 jobs:
   # Which slow checks this change needs (owner, 2026-11-24: rapid iteration with sensible
