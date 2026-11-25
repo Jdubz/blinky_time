@@ -42,8 +42,10 @@ Umbrella: [#386](https://github.com/Jdubz/blinky_time/issues/386). The loop:
 
 Heavy work runs on the Spark or devtop, never on the box.
 
+**Done when** (owner, 2026-11-24): a full dev loop is iterable with adequate observability. Measured 2026-11-24: a firmware PR to promoted master takes about an hour (CI and review ~15-35 min, the box's hardware test ~30 min, promotion ~6-8 min).
+
 **Where it stands (2026-11-24).** The box has its permanent test chip, a XIAO nRF52840 Sense Plus driving an 8x8 grid, and since 2026-11-24 a second chip, a XIAO ESP32-S3 (unconfigured, old firmware; `TEST_BOX.md`). Every chip on the box is a test chip (#382). The staging suite passes end to end, with the flash race fixed (#385, blinky-firmware#47), the health settle (#384) and review verdicts in the report (#383). Built since:
-- **Observability:** Alloy ships the box's logs, metrics and traces to the LGTM stack (#390), blinky-server exports Prometheus metrics and OTLP traces (#391), staging reports go to the Spark artifact store (#392), and the box has a Grafana dashboard (observability#162).
+- **Observability:** Alloy ships the box's logs, metrics and traces to the LGTM stack (#390), blinky-server exports Prometheus metrics and OTLP traces (#391; its metrics reached Prometheus only from 2026-11-24, when #407 fixed the deployer's install of the Alloy config), staging reports go to the Spark artifact store (#392), and the box has a Grafana dashboard (observability#162).
 - **Camera harness** ([#387](https://github.com/Jdubz/blinky_time/issues/387)): capture, region discovery, calibration with the firmware's `testpattern` (blinky-firmware#53: pixel walk, flash timing reference, PWM) and per-device detection-to-light reviews (#393, #396, #399). It is a secondary review, never a gate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
 - **Timing you can trust:** the clock sync times the reply line (#395, RTT 3-4 ms), runs record the audio start, clock and the chip's loop timing (#394, #399).
 - **CI only runs what a change touches** (#397, blinky-firmware#55).
@@ -51,6 +53,7 @@ Heavy work runs on the Spark or devtop, never on the box.
 - **The box can SSH to devtop** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
 
 **Next:**
+- **Decouple blinky_time from blinky-firmware** (owner, 2026-11-24: "they need to be completely decoupled"): no submodule and no source dependency; the repos meet only through published artifacts and service APIs.
 - A firmware submodule bump to a blinky-firmware master that includes blinky-firmware#46 and #47 (Dependabot #400 pins `395cfc7`, from 2026-11-22, which has neither), then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
 - The ESP32-S3 ([#405](https://github.com/Jdubz/blinky_time/issues/405)): its wiring and device config from the owner, a flash path on the box (P3 overlaps).
 - Per-server device ownership ([#403](https://github.com/Jdubz/blinky_time/issues/403)): each device belongs to exactly one server; BLE testing on the box waits on it.
@@ -107,8 +110,9 @@ Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) b
 
 Decided 2026-11-23: the `swd-flash.local` Pi is retired; SWD recovery is the test box's XIAO Debug Mate only. Record mode waits until after P1–P3.
 
+Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate observability. What P0 uses from the platform (surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919)): box logs, metrics and traces go to the existing Grafana stack on bignasty, reports and captures go to the artifact store, and heavy analysis runs as Spark jobs.
+
 Still open:
 
-- **What P0 uses from the platform.** devtop runs the Spark platform's shared infrastructure, not blinky compute: the SeaweedFS artifact store, the job archive, imagineer's aux GPU, org CI runners, and the Alloy forwarder to Grafana on bignasty. Surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919). Proposals there: ship box logs and metrics to the existing Grafana, keep reports and captures in the artifact store, run heavy analysis as Spark jobs, and maybe register CI runners on devtop.
 - **The frame-time gate:** the target threshold once the P2 stalls are fixed ([#404](https://github.com/Jdubz/blinky_time/issues/404)).
 - **The ACF tail ([blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59)):** draw the onset before the tempo work, or spread / cheapen the ACF.
