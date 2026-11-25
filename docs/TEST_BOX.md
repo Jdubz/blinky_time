@@ -98,7 +98,7 @@ blinky-firmware's `tools/deploy_local.py` and `tools/release_gate.py` (and `devi
 
 ## Needed: per-server device ownership
 
-`--no-ble` keeps the box from adopting production devices only by turning off a transport. The real requirement is that **every device belongs to exactly one server, and a server never touches a device it doesn't own**, whatever the transport or radio range. Proposed shape (to be designed in its own issue):
+`--no-ble` keeps the box from adopting production devices only by turning off a transport. The real requirement is that **every device belongs to exactly one server, and a server never touches a device it doesn't own**, whatever the transport or radio range. Proposed shape (to be designed in [#403](https://github.com/Jdubz/blinky_time/issues/403)):
 
 - **An ownership manifest per server** listing each owned device's ID, BLE MAC and USB serial.
 - **Refuse what isn't listed.** No connecting to, adopting, commanding, auto-recovering or flashing a device outside the manifest; log every refusal. Unknown devices show as "foreign", read-only.

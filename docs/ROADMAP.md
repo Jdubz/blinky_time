@@ -51,11 +51,12 @@ Heavy work runs on the Spark or devtop, never on the box.
 - **The box can SSH to devtop** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
 
 **Next:**
-- The firmware submodule bump here (Dependabot #400, which supersedes #381), then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
-- The ESP32-S3: its wiring and device config from the owner, a flash path on the box (P3 overlaps).
+- A firmware submodule bump to a blinky-firmware master that includes blinky-firmware#46 and #47 (Dependabot #400 pins `395cfc7`, from 2026-11-22, which has neither), then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
+- The ESP32-S3 ([#405](https://github.com/Jdubz/blinky_time/issues/405)): its wiring and device config from the owner, a flash path on the box (P3 overlaps).
+- Per-server device ownership ([#403](https://github.com/Jdubz/blinky_time/issues/403)): each device belongs to exactly one server; BLE testing on the box waits on it.
 - Camera: the follow test against drum labels, sound-to-light, and a review attached to each staging report.
 - Run the release gate on the box through the server API.
-- Recovery: auto-recovery on an enrolled box chip (#219), server-triggered SWD, and the bootloader gate runner.
+- Recovery: USB auto-recovery on the box's enrolled chip ([#219](https://github.com/Jdubz/blinky_time/issues/219)), server-triggered SWD, and the bootloader gate runner.
 - Spark and devtop: put the surveyed services to work (#386): Grafana observability for the box, the artifact store for reports and captures, Spark `audio` / `gpu_task` jobs for heavy work.
 
 ## P1: consistent drum-hit reactivity
@@ -76,8 +77,8 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 - [blinky-firmware#49](https://github.com/Jdubz/blinky-firmware/issues/49): a settings save stalls the loop ~85–115 ms (flash page erase).
 - [blinky-firmware#23](https://github.com/Jdubz/blinky-firmware/issues/23): JSON stream formatting runs on the render loop. The box streams during tests.
 - [blinky-firmware#14](https://github.com/Jdubz/blinky-firmware/issues/14): the LED DMA wait caps fps on large strips. Needed before the 1024-LED matrices.
-- **The ~30 ms detection-to-light tail (measured 2026-11-24):** ACF tempo detection runs inline in the audio update every 100 ms (`acfPeriodMs`) before the frame is drawn, and costs **17-19.5 ms per run** (PLP adds ~1-2 ms; blinky-firmware#57 reports `acfUs`/`acfMaxUs`/`plpUs`/`plpMaxUs`). That makes the chip's 31 ms `maxFrameMs` even with streaming off, and ~17 % of its CPU. Options, owner to choose: draw the onset before the tempo work runs (smallest), or spread / cheapen the ACF (needs a tempo-accuracy check). Camera before/after and the tracker harness per the audio rules. The ~15 ms median is validation's own streaming halving the loop rate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
-- Then tighten the staging frame-time gate. It allows 100 ms today, which the release docs call a visible freeze. The camera harness (P0) can confirm frames from outside.
+- **[blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59): the ~30 ms detection-to-light tail (measured 2026-11-24):** ACF tempo detection runs inline in the audio update every 100 ms (`acfPeriodMs`) before the frame is drawn, and costs **17-19.5 ms per run** (PLP adds ~1-2 ms; blinky-firmware#57 reports `acfUs`/`acfMaxUs`/`plpUs`/`plpMaxUs`). That makes the chip's 31 ms `maxFrameMs` even with streaming off, and ~17 % of its CPU. Options, owner to choose: draw the onset before the tempo work runs (smallest), or spread / cheapen the ACF (needs a tempo-accuracy check). Camera before/after and the tracker harness per the audio rules. The ~15 ms median is validation's own streaming halving the loop rate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
+- Then tighten the staging frame-time gate ([#404](https://github.com/Jdubz/blinky_time/issues/404)). It allows 100 ms today, which the release docs call a visible freeze. The camera harness (P0) can confirm frames from outside.
 
 ## P3: ESP32-S3
 
@@ -109,4 +110,5 @@ Decided 2026-11-23: the `swd-flash.local` Pi is retired; SWD recovery is the tes
 Still open:
 
 - **What P0 uses from the platform.** devtop runs the Spark platform's shared infrastructure, not blinky compute: the SeaweedFS artifact store, the job archive, imagineer's aux GPU, org CI runners, and the Alloy forwarder to Grafana on bignasty. Surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919). Proposals there: ship box logs and metrics to the existing Grafana, keep reports and captures in the artifact store, run heavy analysis as Spark jobs, and maybe register CI runners on devtop.
-- **The frame-time gate:** the target threshold once the P2 stalls are fixed.
+- **The frame-time gate:** the target threshold once the P2 stalls are fixed ([#404](https://github.com/Jdubz/blinky_time/issues/404)).
+- **The ACF tail ([blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59)):** draw the onset before the tempo work, or spread / cheapen the ACF.
