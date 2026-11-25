@@ -86,3 +86,50 @@ def test_anything_else_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_a_short_sha_is_refused() -> None:
     with pytest.raises(fr.ReleaseError, match="full commit sha"):
         fr.download_staging(SHA[:12], "/nonexistent")
+
+
+# [blinky_time: verify_dev_package, the checks download_staging runs on the artifact, shared
+# with the build service's packages (build-service/, docs/DEV_LOOP.md).]
+def write_package(d: Path, **manifest_over: Any) -> Path:
+    hexb, uf2b = b":00000001FF\n", b"UF2"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "blinky-things-b216.hex").write_bytes(hexb)
+    (d / "blinky-things-b216.uf2").write_bytes(uf2b)
+    m = {"build": 216, "version": f"b216-dev-{SHA[:8]}", "channel": "dev", "git_sha": SHA,
+         "files": {"blinky-things-b216.hex": hashlib.sha256(hexb).hexdigest(),
+                   "blinky-things-b216.uf2": hashlib.sha256(uf2b).hexdigest()}}
+    m.update(manifest_over)
+    (d / "manifest.json").write_text(json.dumps(m))
+    return d
+
+
+def test_a_good_dev_package_verifies(tmp_path: Path) -> None:
+    r = fr.verify_dev_package(write_package(tmp_path / "pkg"), SHA)
+    assert r["manifest"]["version"] == f"b216-dev-{SHA[:8]}"
+    assert r["hex"].name == "blinky-things-b216.hex" and r["uf2"].name == "blinky-things-b216.uf2"
+
+
+@pytest.mark.parametrize("over,why", [
+    ({"channel": "release"}, "not the dev build"),
+    ({"git_sha": "cd" * 20}, "not the dev build"),
+    ({"version": "b216-dev-cdcdcdcd"}, "not the dev build"),
+    ({"build": 215}, "not the dev build"),
+    ({"files": {"blinky-things-b216.uf2": "0" * 64}}, "no sha256 for blinky-things-b216.hex"),
+])
+def test_a_wrong_dev_package_is_refused(tmp_path: Path, over: dict[str, Any], why: str) -> None:
+    with pytest.raises(fr.ReleaseError, match=why):
+        fr.verify_dev_package(write_package(tmp_path / "pkg", **over), SHA)
+
+
+def test_a_tampered_or_incomplete_dev_package_is_refused(tmp_path: Path) -> None:
+    d = write_package(tmp_path / "pkg")
+    (d / "blinky-things-b216.uf2").write_bytes(b"tampered")
+    with pytest.raises(fr.ReleaseError, match="sha256 mismatch"):
+        fr.verify_dev_package(d, SHA)
+    (d / "blinky-things-b216.uf2").unlink()
+    with pytest.raises(fr.ReleaseError, match="missing"):
+        fr.verify_dev_package(d, SHA)
+    with pytest.raises(fr.ReleaseError, match="manifest.json"):
+        fr.verify_dev_package(tmp_path / "empty", SHA)
+    with pytest.raises(fr.ReleaseError, match="full commit sha"):
+        fr.verify_dev_package(d, SHA[:12])

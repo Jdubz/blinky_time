@@ -109,6 +109,17 @@ Two behaviours to expect: the server doesn't auto-recover a device within 30 min
    Check with `ffplay -nodisp -autoexit <track>.mp3`.
 5. **Enroll a chip** with its device config through `device upload` (on the box, straight to the chip, #382), and respect the 60-second rule between resets. The grid's chip takes `devices/registry/testbox_grid_v1.json` (brightness 0: see "LEDs: dark unless a test runs").
 
+## Build service client
+
+Dev builds come from the build service ([build-service/](../build-service/README.md), [DEV_LOOP.md](DEV_LOOP.md)). The box is a client, and its config is private and stays out of git: `~/.config/blinky/build.env` (mode 600), like `spark.env`.
+
+```
+BLINKY_BUILD_URL=http://<service address>:<port>
+BLINKY_BUILD_TOKEN=<the token from 1Password>
+```
+
+The box checks every package with `blinky-server/hosttools/firmware_release.py verify-dev-package --sha SHA --dir DIR`, the same checks `download-staging` runs on a staging artifact. Unpushed work goes as a bundle against a pushed branch (`git bundle create x.bundle origin/staging..HEAD`), from a clean commit, never a dirty tree.
+
 ## Staging runner
 
 `blinky-staging.timer` runs `scripts/testbox/staging.py` every 2 minutes from the deploy worktree. It hardware-tests the newest commit on blinky-firmware's `staging` branch: it submits the staging suite (`POST /api/test/staging`, `blinky_server/testing/staging.py`) for every connected, configured chip on the box, then posts the "Hardware test (staging)" commit status and the report on the PR. On a pass it opens the staging → master PR and turns on its auto-merge. A commit whose firmware image is unchanged (same fingerprint, no change under the firmware's paths) is skipped and promoted. State: `staging.py --status`; log: `journalctl -u blinky-staging`. The release flow around it is in blinky-firmware's [RELEASE_PROCESS.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/RELEASE_PROCESS.md).

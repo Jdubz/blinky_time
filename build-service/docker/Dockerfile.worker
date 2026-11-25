@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1
+# The build worker (build-service/README.md): runs with no network, as uid 10001, and
+# builds with the firmware toolchain installed HERE, at image build time, by
+# blinky-firmware's own scripts/setup_toolchain.sh at FIRMWARE_TOOLCHAIN_REF. A commit whose
+# toolchain pin differs fails with "toolchain mismatch: rebuild the worker image".
+#
+#   docker build -f docker/Dockerfile.worker --build-arg FIRMWARE_TOOLCHAIN_REF=<sha> .
+FROM python:3.11-slim-bookworm@sha256:ef56ae98435cc40d8a27020b0b32a9941515acd5840f0fba34858bb34dd362d1
+
+# = tools/firmware_toolchain.json arduino_cli; the checksum is from the release's
+# 1.3.1-checksums.txt. A pin change there fails every build as a toolchain mismatch
+# until these move with FIRMWARE_TOOLCHAIN_REF.
+ARG ARDUINO_CLI_VERSION=1.3.1
+ARG ARDUINO_CLI_SHA256=376428d7d45be640c00812a71612e1742edc2f5f9ee3742a2d6da7870e079588
+ARG FIRMWARE_REPO_URL=https://github.com/Jdubz/blinky-firmware.git
+# Required: a full blinky-firmware commit sha on one of its branches.
+ARG FIRMWARE_TOOLCHAIN_REF
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl git patch \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL -o /tmp/arduino-cli.tgz \
+        "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz" \
+ && echo "${ARDUINO_CLI_SHA256}  /tmp/arduino-cli.tgz" | sha256sum -c - \
+ && tar -C /usr/local/bin -xzf /tmp/arduino-cli.tgz arduino-cli \
+ && rm /tmp/arduino-cli.tgz \
+ && arduino-cli version
+
+COPY requirements-worker.txt /opt/blinky/requirements-worker.txt
+RUN pip install --no-cache-dir --require-hashes -r /opt/blinky/requirements-worker.txt
+
+RUN useradd --uid 10001 --user-group --create-home --home-dir /home/builder \
+        --shell /usr/sbin/nologin builder \
+ && install -d -o 10001 -g 10001 /jobs /cache
+
+# The toolchain, from an owner commit only: cloned with branch heads and no tags, and the
+# ref must be on a branch (a fork PR's commit is not). Installed at <src>/.arduino, where the
+# firmware's scripts expect it (scripts/arduino_env.sh, tools/check_build_libs.py), owned by
+# root so a build can't change it for the next one. Only toolchain.py is copied first, so a
+# change to the service's code doesn't reinstall the toolchain.
+COPY blinky_build/toolchain.py /opt/blinky/toolchain_fp.py
+RUN set -eu; \
+    echo "${FIRMWARE_TOOLCHAIN_REF:-}" | grep -Eq '^[0-9a-f]{40}$' \
+      || { echo "FIRMWARE_TOOLCHAIN_REF must be a full blinky-firmware commit sha" >&2; exit 1; }; \
+    git -c core.hooksPath=/dev/null clone --quiet --no-tags "$FIRMWARE_REPO_URL" /opt/blinky/src; \
+    cd /opt/blinky/src; \
+    git -c core.hooksPath=/dev/null -c advice.detachedHead=false \
+        checkout --quiet --detach "$FIRMWARE_TOOLCHAIN_REF"; \
+    test -n "$(git branch -r --contains "$FIRMWARE_TOOLCHAIN_REF")" \
+      || { echo "$FIRMWARE_TOOLCHAIN_REF is not on a branch of $FIRMWARE_REPO_URL" >&2; exit 1; }; \
+    bash scripts/setup_toolchain.sh; \
+    python /opt/blinky/toolchain_fp.py /opt/blinky/src > /opt/blinky/toolchain.json; \
+    cat /opt/blinky/toolchain.json; \
+    find /opt/blinky/src -mindepth 1 -maxdepth 1 ! -name .arduino -exec rm -rf {} +; \
+    rm -rf /opt/blinky/src/.arduino/staging; \
+    chmod -R a+rX,go-w /opt/blinky/src/.arduino; \
+    chown 10001:10001 /opt/blinky/src
+
+COPY blinky_build /opt/blinky/app/blinky_build
+
+ENV PYTHONPATH=/opt/blinky/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/home/builder \
+    BLINKY_BUILD_JOBS=/jobs \
+    BLINKY_BUILD_CACHE=/cache \
+    BLINKY_BUILD_SRC=/opt/blinky/src \
+    BLINKY_BUILD_TOOLCHAIN=/opt/blinky/toolchain.json
+
+USER 10001:10001
+ENTRYPOINT ["python", "-m", "blinky_build.worker"]

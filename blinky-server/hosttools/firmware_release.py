@@ -31,6 +31,7 @@ CLI:
   firmware_release.py download [--tag bN] [--out DIR]   (default: latest stable)
   firmware_release.py latest-stable
   firmware_release.py download-staging --sha SHA [--out DIR]   (staging build, test devices only)
+  firmware_release.py verify-dev-package --sha SHA --dir DIR   (a build-service package, the same checks)
   firmware_release.py mirror --out DIR [--keep N]   (stable releases for the web flasher)
 
 Every failure exits non-zero with a message; nothing falls back silently.
@@ -124,7 +125,36 @@ def download_staging(sha, out_dir):
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     gh("run", "download", str(run_id), "--name", name, "--dir", str(out_dir), "-R", slug)
-    manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+    r = verify_dev_package(out_dir, sha, name)
+    return {
+        "tag": f"staging-{sha[:8]}",
+        "sha": sha,
+        "run_id": run_id,
+        "hex": r["hex"],
+        "uf2": r["uf2"],
+        "manifest": r["manifest"],
+        "stable": False,
+        "channel": "dev",
+    }
+
+
+# [blinky_time: factored out of download_staging so a build-service package (build-service/,
+# docs/DEV_LOOP.md) is verified by exactly the same checks as a staging artifact.]
+def verify_dev_package(pkg_dir, sha, name=None):
+    """Verify a dev package in ``pkg_dir`` (a staging-firmware-<sha> artifact or a build-service
+    package): its manifest is a dev-channel build of exactly ``sha`` with the version
+    gen_version.sh stamps, and the hex and UF2 match their sha256s. Returns
+    {"manifest", "hex", "uf2"}; raises ReleaseError otherwise."""
+    if not SHA_RE.match(sha or ""):
+        raise ReleaseError(f"not a full commit sha: {sha!r}")
+    pkg_dir = Path(pkg_dir)
+    name = name or f"dev package {pkg_dir}"
+    try:
+        manifest = json.loads((pkg_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ReleaseError(f"{name}: no readable manifest.json ({e})") from None
+    if not isinstance(manifest, dict):
+        raise ReleaseError(f"{name}: manifest.json is not an object")
     n = manifest.get("build")
     want = f"b{n}-dev-{sha[:8]}"
     if manifest.get("channel") != "dev" or manifest.get("git_sha") != sha or manifest.get("version") != want:
@@ -134,23 +164,14 @@ def download_staging(sha, out_dir):
     files = manifest.get("files") or {}
     required = [f"blinky-things-b{n}.hex", f"blinky-things-b{n}.uf2"]
     for fname in required:
-        p = out_dir / fname
+        p = pkg_dir / fname
         if fname not in files:
             raise ReleaseError(f"{name}: manifest has no sha256 for {fname} - refusing to use it")
         if not p.exists():
             raise ReleaseError(f"{name}: {fname} missing")
         if sha256(p) != files[fname]:
             raise ReleaseError(f"{name}: {fname} sha256 mismatch - refusing to use it")
-    return {
-        "tag": f"staging-{sha[:8]}",
-        "sha": sha,
-        "run_id": run_id,
-        "hex": out_dir / required[0],
-        "uf2": out_dir / required[1],
-        "manifest": manifest,
-        "stable": False,
-        "channel": "dev",
-    }
+    return {"manifest": manifest, "hex": pkg_dir / required[0], "uf2": pkg_dir / required[1]}
 
 
 def list_releases():
@@ -327,6 +348,9 @@ def main():
     ds = sub.add_parser("download-staging")
     ds.add_argument("--sha", required=True, help="the staging commit (full sha)")
     ds.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-staging"))
+    vp = sub.add_parser("verify-dev-package")
+    vp.add_argument("--sha", required=True, help="the commit the package must be (full sha)")
+    vp.add_argument("--dir", required=True, help="the package directory (manifest.json, hex, uf2)")
     sub.add_parser("latest-stable")
     mi = sub.add_parser("mirror")
     mi.add_argument("--out", required=True, help="directory to (re)create; served as /firmware/")
@@ -341,6 +365,10 @@ def main():
             r = download_staging(args.sha, args.out)
             print(json.dumps({"tag": r["tag"], "stable": False, "channel": "dev", "sha": r["sha"],
                               "run_id": r["run_id"], "hex": str(r["hex"]), "uf2": str(r["uf2"]),
+                              "version": r["manifest"]["version"]}))
+        elif args.cmd == "verify-dev-package":
+            r = verify_dev_package(args.dir, args.sha)
+            print(json.dumps({"sha": args.sha, "hex": str(r["hex"]), "uf2": str(r["uf2"]),
                               "version": r["manifest"]["version"]}))
         elif args.cmd == "latest-stable":
             print(latest_stable_tag())

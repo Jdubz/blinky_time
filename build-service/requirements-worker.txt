@@ -1,0 +1,4 @@
+# The firmware's packaging step (tools/firmware_release.py package) imports tools/uf2_upload.py,
+# which needs pyserial. Nothing else: the worker runs the firmware's own scripts, not ours.
+pyserial==3.5 \
+    --hash=sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0
