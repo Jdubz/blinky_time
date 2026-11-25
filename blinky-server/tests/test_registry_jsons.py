@@ -172,14 +172,15 @@ def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> N
     is again the silent-failure surface we want to close at lint
     time. Mirror the enum ranges in
     ``blinky-things/devices/DeviceConfig.h`` (MatrixOrientation +
-    LayoutType): 0..4 and 0..2 respectively. PR #144 review item 8."""
+    LayoutType): 0..5 (5 = HORIZONTAL_ROTATED_180, blinky-firmware#46)
+    and 0..2 respectively. PR #144 review item 8."""
     cfg = json.loads(registry_path.read_text())
     orientation = cfg.get("orientation")
     layout = cfg.get("layoutType")
     if orientation is not None:
-        assert isinstance(orientation, int) and 0 <= orientation <= 4, (
+        assert isinstance(orientation, int) and 0 <= orientation <= 5, (
             f"{registry_path.name}: orientation={orientation} "
-            f"outside the MatrixOrientation enum range 0..4. See "
+            f"outside the MatrixOrientation enum range 0..5. See "
             f"blinky-things/devices/DeviceConfig.h."
         )
     if layout is not None:
@@ -188,6 +189,36 @@ def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> N
             f"outside the LayoutType enum range 0..2. See "
             f"blinky-things/devices/DeviceConfig.h."
         )
+
+
+# Every fleet entry's brightness as it stood when the test box's entry went dark (owner,
+# 2026-11-24): only the test chip defaults to off; every other device keeps booting lit at its
+# configured brightness (None: no key, the firmware's default of 100). A change here is a
+# deliberate per-device retune, never a side effect.
+FLEET_BRIGHTNESS = {
+    "big_bucket_v1.json": 100,
+    "bucket_v3.json": 80,
+    "cart_inner.json": 200,
+    "cart_outer.json": 200,
+    "cart_umbrella_v1.json": 200,
+    "display_v1.json": 150,
+    "hat_v1.json": None,
+    "long_tube_v1.json": 80,
+    "scarf.json": None,
+    "shannon_hat.json": None,
+    "sourpuss_hat.json": None,
+    "tube_v2.json": 120,
+}
+TEST_BOX_ENTRY = "testbox_grid_v1.json"
+
+
+def test_only_the_test_box_entry_is_dark() -> None:
+    """The test box's chip has brightness 0 (lit only while a test runs, testing/leds.py);
+    every fleet entry keeps its brightness, and none is 0."""
+    entries = {p.name: json.loads(p.read_text()) for p in _registry_json_files()}
+    assert entries[TEST_BOX_ENTRY].get("brightness") == 0
+    fleet = {name: cfg.get("brightness") for name, cfg in entries.items() if name != TEST_BOX_ENTRY}
+    assert fleet == FLEET_BRIGHTNESS
 
 
 def test_decoder_matches_firmware_examples() -> None:

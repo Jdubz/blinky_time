@@ -4,11 +4,11 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from ..device.device import Device
 from ..device.manager import FleetManager
-from .deps import get_fleet
+from .deps import assert_test_box_rules, get_fleet
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -105,6 +105,16 @@ async def _send_loop(ws: WebSocket, queue: asyncio.Queue[dict[str, Any] | None])
         log.debug("WebSocket send error: %s", e)
 
 
+async def _allowed(ws: WebSocket, cmd: str, *, test_box: bool) -> bool:
+    """deps.assert_test_box_rules for a WebSocket command: refused with an error message."""
+    try:
+        assert_test_box_rules(cmd, test_box=test_box)
+    except HTTPException as e:
+        await ws.send_json({"type": "error", "command": cmd, "error": e.detail})
+        return False
+    return True
+
+
 async def _recv_loop(ws: WebSocket, device: Device) -> None:
     """Receive commands from WebSocket and send to device."""
     try:
@@ -114,6 +124,8 @@ async def _recv_loop(ws: WebSocket, device: Device) -> None:
 
             if msg_type == "command":
                 cmd = str(data.get("command", ""))
+                if not await _allowed(ws, cmd, test_box=get_fleet().staging_enabled):
+                    continue
                 resp = await device.protocol.send_command(cmd)
                 await ws.send_json(
                     {
@@ -146,6 +158,9 @@ async def _recv_fleet_loop(ws: WebSocket, fleet: FleetManager) -> None:
 
             if msg_type == "command":
                 cmd = str(data.get("command", ""))
+                # A broadcast is never a single box chip: box-only commands go per device.
+                if not await _allowed(ws, cmd, test_box=bool(target_id) and fleet.staging_enabled):
+                    continue
                 if target_id:
                     device = fleet.get_device(str(target_id))
                     if device:

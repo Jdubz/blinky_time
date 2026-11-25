@@ -1853,6 +1853,7 @@ class FleetManager:
                         platform=disc.platform,
                         transport=transport,
                     )
+                    device.post_connect = self._post_connect
                     device.state = DeviceState.PRESENT
                     device.last_seen = _time.monotonic()
                     device.device_name = disc.description
@@ -1971,6 +1972,7 @@ class FleetManager:
                     platform=disc.platform,
                     transport=transport,
                 )
+                device.post_connect = self._post_connect
                 if disc.rssi is not None:
                     device.rssi = disc.rssi
                 self._devices[device_id] = device
@@ -2222,6 +2224,7 @@ class FleetManager:
                 platform=disc.platform,
                 transport=_create_transport(disc),
             )
+            device.post_connect = self._post_connect
             device.state = DeviceState.DFU_RECOVERY
             device.last_seen = now
             self._devices[device_id] = device
@@ -2355,6 +2358,7 @@ class FleetManager:
                     platform="nrf52840",
                     transport=BleTransport(boot_addr),
                 )
+                placeholder.post_connect = self._post_connect
                 placeholder.state = DeviceState.DFU_RECOVERY
                 placeholder.ble_address = app_addr
                 self._devices[placeholder_id] = placeholder
@@ -2365,6 +2369,14 @@ class FleetManager:
                     boot_addr,
                     app_addr,
                 )
+
+    async def _post_connect(self, device: Device) -> None:
+        """Every connect, before the device counts as connected: on the test box (--staging),
+        its LEDs go back to their config brightness unless a test run holds them lit
+        (testing/leds.py). Elsewhere nothing: a fleet server never sends ``leds``."""
+        from ..testing import leds
+
+        await leds.reconcile(device, staging=self.staging_enabled)
 
     def _refresh_dedup_exclusions(self) -> None:
         """Clear dedup exclusions only for BLE devices whose serial counterpart

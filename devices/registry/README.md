@@ -27,6 +27,7 @@ other.
 | `cart_outer` | Cart Outer | 96 (linear single strand) | LINEAR, single strand on D10. | `cart_outer.json` |
 | `long_tube_v1` | Long Tube | 240 (4×60 matrix) | MATRIX, vertical zigzag on D10. | `long_tube_v1.json` |
 | `cart_umbrella_v1` | Cart Umbrella | 104 (8×13 matrix) | MATRIX, `VERTICAL_FIRST_DOWN` (orientation 4) on D10. Confirmed against hardware 2026-05-18. | `cart_umbrella_v1.json` |
+| `testbox_grid_v1` | Test Box Grid | 64 (8×8 matrix) | MATRIX, `HORIZONTAL_ROTATED_180` (orientation 5) on D10. The test box's chip (Sense Plus 87DE9B58C90AFE2D, a test device). **`brightness: 0`:** the grid is dark at boot and while idle; blinky-server lights it with the firmware's runtime `leds` override only while a test runs (`docs/TEST_BOX.md`). The only entry with brightness 0. | `testbox_grid_v1.json` |
 | `display_v1` | Display | 1024 (32×32 panel grid) | MATRIX, PANEL_GRID orientation on D10. **ESP32-S3 platform retired 2026-03** — hardware exists but no firmware path today (next gen: `docs/NEXTGEN_ESP32S3_PLAN.md`). | `display_v1.json` |
 
 ## JSON Schema
@@ -62,7 +63,7 @@ Add only when this device needs a non-default value:
 | Field | Default | When to override |
 |---|---|---|
 | `ledPin2` | `0` (single-strand) | Multi-strand devices (e.g. cart_inner has two 52-LED strands on pins 10 + 9; firmware splits the buffer in half) |
-| `brightness` | `100` | Per-device tuning |
+| `brightness` | `100` | Per-device tuning. `0` only for the test box's chip (dark unless a test runs) |
 | `battery` | `false` | Battery-equipped devices only (today: tube_v2, hat_v1, sourpuss_hat, scarf, shannon_hat). When `true`, the firmware enables battery monitoring + fast charge and applies the **static** `Platform::Battery::*` thresholds (LiPo: low=3.5V, critical=3.3V, min=3.0V, max=4.2V). These values are NOT configurable per device — they are chemistry-derived constants in `blinky-things/hal/PlatformConstants.h`. When `false`/omitted, battery code paths are skipped entirely. |
 | `upVectorX` / `upVectorY` / `upVectorZ` | `0` / `0` / `1` | When the device is mounted with a non-vertical "up" |
 | `rotationDegrees` | `0` | When the device's "north" is rotated relative to the chip |
@@ -93,6 +94,7 @@ are rejected at construction with an `[ERROR]` log.
 - `2` = PANEL_GRID — 2×2 of equal sub-panels chained TL→TR→BL→BR, each sub-panel row serpentine
 - `3` = HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R, row 1 R→L, row 2 L→R, … (single strip snaked back and forth, big-bucket-style hand-wired panels)
 - `4` = VERTICAL_FIRST_DOWN — column-major, NO zigzag. Column 0 data enters at the TOP and flows down. Columns 1..N each have data entering at the BOTTOM, flowing up — ALL in the same direction (no alternation between adjacent columns). Used on `cart_umbrella_v1`: the first spoke's data comes off the controller down the canopy-to-tip leg; from the tip a long jumper runs to each subsequent spoke's tip, so every other spoke is wired bottom→top.
+- `5` = HORIZONTAL_ROTATED_180 — HORIZONTAL turned 180°: data enters at the bottom-right LED, each row runs right to left, rows go bottom to top, no serpentine. Used on `testbox_grid_v1`.
 
 ### Battery support
 
@@ -140,7 +142,7 @@ The firmware validates every stored configuration (`DeviceConfigLoader::validate
 - LED count must be 1-2048
 - `ledPin`, `ledPin2` and `buttonPin` must be 0-47 on nRF52840, and must all differ; a two-strand config needs an even LED count
 - `ledType`'s R/G/B byte offsets must be in range and distinct
-- `orientation` 0-4, `layoutType` 0-2, `brightness` ≤ 255
+- `orientation` 0-5, `layoutType` 0-2, `brightness` ≤ 255
 
 Invalid configurations are rejected with a log message. A non-standard sample rate or baud rate only logs a warning.
 

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..testing.audio_lock import LOCK_PATH, is_audio_locked, release_audio_lock
 from ..work import durable, jobs
-from .deps import get_fleet, require_api_key
+from .deps import assert_test_box_rules, get_fleet, require_api_key
 
 router = APIRouter(prefix="/test", tags=["testing"])
 
@@ -31,6 +31,16 @@ async def _submit(fn: Any, *args: Any) -> dict[str, Any]:
     except durable.NotRunning as e:
         raise HTTPException(503, str(e)) from e
     return {"job_id": job_id, "status": "submitted"}
+
+
+def _check_commands(
+    commands: list[str] | None, per_device: dict[str, list[str]] | None = None
+) -> None:
+    """A test job's command lists follow the command routes' test-box rules: one line each, and
+    no box-only command (``leds``) off the box (deps.assert_test_box_rules)."""
+    test_box = get_fleet().staging_enabled
+    for cmd in [*(commands or []), *(c for cmds in (per_device or {}).values() for c in cmds)]:
+        assert_test_box_rules(cmd, test_box=test_box)
 
 
 # ── Request Models ──
@@ -51,6 +61,10 @@ class ValidateRequest(BaseModel):
     # Adds ~20-50 KB per device per track to the result payload -- don't
     # enable for routine validation runs. See ml-training/analysis/run_gate_b.py.
     persist_raw: bool = False
+    # On the test box, the chips are lit for every run (testing/leds.py). True: the run needs
+    # the light (a camera review), so it fails if a chip can't be lit (firmware without
+    # `leds`) instead of going on dark.
+    needs_light: bool = False
 
 
 class StagingSuiteRequest(BaseModel):
@@ -115,6 +129,7 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
 
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
+    _check_commands(body.commands, body.per_device_commands)
     from ..testing.workflows import validate as wf
 
     return await _submit(wf, body.model_dump())
@@ -159,6 +174,7 @@ async def param_sweep(body: ParamSweepRequest) -> dict[str, Any]:
 
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
+    _check_commands(body.commands)
     from ..testing.workflows import param_sweep as wf
 
     return await _submit(wf, body.model_dump())
@@ -170,6 +186,7 @@ async def tune_threshold(body: TuneThresholdRequest) -> dict[str, Any]:
 
     Returns immediately with a job_id. Poll /test/jobs/{id} for results.
     """
+    _check_commands(body.commands)
     from ..testing.workflows import tune_threshold as wf
 
     return await _submit(wf, body.model_dump())

@@ -5,8 +5,8 @@ Each job's units are steps (``work/durable.py`` has the rules): one validation r
 one sweep run of one batch of values on one track, one threshold value on one track, one NN
 capture. A restart, a deploy's included, lets the step in flight finish and the job carries on
 from the next one when the server is back. Per-run setup (the audio lock, each device's runtime
-defaults and test commands, streaming) is ``session``, in the workflow body, so it runs again
-after a restart.
+defaults and test commands, streaming, the test box's LEDs lit) is ``session``, in the workflow
+body, so it runs again after a restart.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from dbos import DBOS
 
 from ..paths import data_dir
 from ..work import durable, jobs
+from . import leds
 from .audio_lock import acquire_audio_lock, release_audio_lock
 from .audio_player import audio_seconds, kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
@@ -128,6 +129,9 @@ async def _devices(
     devices: list[Any] = []
     try:
         with durable.hold("test session setup"):
+            leds.refuse_off_box(
+                [*(commands or []), *(c for cs in (per_device_commands or {}).values() for c in cs)]
+            )
             await kill_orphan_audio()
             devices = await _connected(device_ids)
             for device in devices:
@@ -144,21 +148,41 @@ async def _devices(
 
 
 @contextlib.asynccontextmanager
+async def lit(device_ids: list[str], *, needs_light: bool, purpose: str) -> AsyncIterator[None]:
+    """The test box's chips lit for the block, back to their config brightness (dark) after it
+    however it ends (testing/leds.py). Off the box, nothing. Runs on every execution of the
+    workflow body, so a resumed job lights them again."""
+    if not leds.on_box():
+        yield
+        return
+    devices = await _connected(device_ids)
+    missing = sorted(set(device_ids) - {d.id for d in devices})
+    if needs_light and missing:
+        # A chip that reconnects later would join the run dark (it has no holder here).
+        raise leds.LedsError(f"{purpose} needs the LEDs lit; not connected: {missing}")
+    async with leds.lit(devices, needs_light=needs_light, purpose=purpose):
+        yield
+
+
+@contextlib.asynccontextmanager
 async def session(
     device_ids: list[str],
     commands: list[str] | None = None,
     per_device_commands: dict[str, list[str]] | None = None,
     *,
     reserved: bool = False,
+    needs_light: bool = False,
+    purpose: str = "a test run",
 ) -> AsyncIterator[None]:
     """The audio lock (unless the job already holds it: ``reserved``), then each device at
-    runtime defaults plus the test commands, streaming. Runs on every execution of the
-    workflow, so a resumed job starts from known device state."""
-    if reserved:
-        async with _devices(device_ids, commands, per_device_commands):
-            yield
-        return
-    async with reserve(device_ids), _devices(device_ids, commands, per_device_commands):
+    runtime defaults plus the test commands, streaming, and on the test box its LEDs lit
+    (``needs_light``: the run fails if they can't be, as a camera review does). Runs on every
+    execution of the workflow, so a resumed job starts from known device state."""
+    async with contextlib.AsyncExitStack() as stack:
+        if not reserved:
+            await stack.enter_async_context(reserve(device_ids))
+        await stack.enter_async_context(_devices(device_ids, commands, per_device_commands))
+        await stack.enter_async_context(lit(device_ids, needs_light=needs_light, purpose=purpose))
         yield
 
 
@@ -270,7 +294,13 @@ async def validate(req: dict[str, Any]) -> dict[str, Any]:
         return {"status": "error", "message": p["error"]}
     tracks, num_runs = p["tracks"], req["num_runs"]
     results = []
-    async with session(p["devices"], req.get("commands"), req.get("per_device_commands")):
+    async with session(
+        p["devices"],
+        req.get("commands"),
+        req.get("per_device_commands"),
+        needs_light=bool(req.get("needs_light")),
+        purpose="validation",
+    ):
         total, n = len(tracks) * num_runs, 0
         for track in tracks:
             for run in range(1, num_runs + 1):
@@ -344,7 +374,7 @@ async def param_sweep(req: dict[str, Any]) -> dict[str, Any]:
     # One value per device per pass: 3 devices and 9 values is 3 audio passes.
     batches = [values[i : i + len(devices)] for i in range(0, len(values), len(devices))]
     per_value: dict[float, list[dict[str, Any]]] = {v: [] for v in values}
-    async with session(devices, req.get("commands")):
+    async with session(devices, req.get("commands"), purpose="a parameter sweep"):
         total, n = len(batches) * len(tracks) * num_runs, 0
         for batch in batches:
             assignments = list(zip(devices, batch, strict=False))
@@ -459,7 +489,7 @@ async def tune_threshold(req: dict[str, Any]) -> dict[str, Any]:
         )
         return avg
 
-    async with session([device], req.get("commands")):
+    async with session([device], req.get("commands"), purpose="threshold tuning"):
         coarse_scores = []
         for value in coarse:
             avg = await evaluate(value, "coarse")

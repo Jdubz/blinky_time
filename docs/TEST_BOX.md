@@ -51,6 +51,27 @@ From its schematic and firmware; details and sources in blinky-firmware's [SWD_R
 - Its GND at the socket is the low side of its power-analyser shunt, and it is rated 5 V / 1 A. Never power LEDs through it.
 - Debugging works only while its screen shows the main dashboard page.
 
+## LEDs: dark unless a test runs
+
+The grid is lit only while a test runs (owner, 2026-11-24). Only the box's chip works this way; every fleet device keeps booting lit, in Fire, at its configured brightness.
+
+- **Idle and at boot: dark.** The chip's device config, `devices/registry/testbox_grid_v1.json`, has `brightness: 0`. A reboot, a flash or a deploy leaves it dark.
+- **During a run: lit at 40.** Test runs light the chip with the firmware's runtime-only `leds` override (blinky-firmware `render/LedBrightness.h`; `leds 0-255 | off | config | status`, never saved), at `TEST_BRIGHTNESS` (`blinky_server/testing/leds.py`): the brightness the camera's exposure and gain were set for (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, "Levels"). It is a box setting, not a device one: any chip in the grid's place needs the camera's level.
+- **After a run, however it ends** (pass, failure, cancel, a drain's stop): `leds config`, back to the config's brightness (dark).
+- **Restarts.** Lighting is per-run setup in the workflow body, so a job recovered after a restart lights the chip again. When the chip (re)connects, the server sets it back to its config brightness unless a run in this process holds it lit, so a run cut off by a crash doesn't leave it lit.
+- **Only the box's chips.** The server sends `leds` only on a `--staging` server and only to configured chips (not the unconfigured ESP32-S3). The API refuses `leds` on any other server (command routes, WebSocket commands, test jobs' command lists), and in fleet broadcasts everywhere; a command with a CR or LF in it is refused everywhere, so a second line can't slip past the gates.
+
+Per run type:
+
+| Run | Lit | Needs light | On firmware without `leds` |
+|---|---|---|---|
+| Staging suite (health, validation, music and beat pace, final state) | from the deploy's end to the job's end | no: it reads the chip over serial; lit and dark frames cost the same (the override scales pixel values; generators, renderer and LED DMA run either way) | an ERROR in the server log; the run goes on |
+| Validation, parameter sweep, threshold tuning | for the test session | no | an ERROR in the log; the run goes on |
+| Camera review (`camera_review.py`: validation with `needs_light`) | for the test session | yes | the job fails (so does a planned chip that isn't connected when the session starts: it would join dark) |
+| Camera calibration (`camera_calibrate.py`, `--brightness`, default 40) | for the script | yes | the script refuses |
+
+A camera survey (`camera_capture.py survey`) runs outside any job: light the chip first (`leds 40` through `POST /api/devices/{id}/command`) and send `leds config` after.
+
 ## Recovery chain (hands-off)
 
 1. **USB, by blinky-server** (#378, #379). A chip enumerating as its UF2 bootloader (`2886:0045`, or `0065` for a Sense Plus factory bootloader) is parked in `DFU_RECOVERY`. After 120 s there, the server flashes the armed stable image through the single flash path onto the drive bound by USB serial, then verifies. Recovery is armed for a device by a stable deploy to it through `POST /api/fleet/deploy`. Verified on 2026-11-21: a chip with no app came back on b217 with nobody touching it.
@@ -86,7 +107,7 @@ Two behaviours to expect: the server doesn't auto-recover a device within 30 min
    defaults.ctl.!card Pebbles
    ```
    Check with `ffplay -nodisp -autoexit <track>.mp3`.
-5. **Enroll a chip** with its device config through `device upload` (on the box, straight to the chip, #382), and respect the 60-second rule between resets.
+5. **Enroll a chip** with its device config through `device upload` (on the box, straight to the chip, #382), and respect the 60-second rule between resets. The grid's chip takes `devices/registry/testbox_grid_v1.json` (brightness 0: see "LEDs: dark unless a test runs").
 
 ## Staging runner
 
