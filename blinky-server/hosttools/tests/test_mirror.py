@@ -125,3 +125,17 @@ def test_no_stable_release_is_latest_null(world: dict[str, Any], tmp_path: Path)
 def test_keep_must_be_positive(tmp_path: Path) -> None:
     with pytest.raises(fr.ReleaseError, match="--keep"):
         fr.mirror(tmp_path / "fw", keep=0)
+
+
+def test_a_release_withdrawn_mid_mirror_aborts(world: dict[str, Any], tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """Listed as stable, then its marker is gone by the time download() re-checks."""
+    seen: list[str] = []
+
+    def tag_exists(tag: str) -> bool:
+        seen.append(tag)
+        return tag in ("stable-b216", "stable-b217") and seen.count(tag) == 1
+
+    monkeypatch.setattr(fr, "tag_exists", tag_exists)
+    with pytest.raises(fr.ReleaseError, match="b217 stopped being stable"):
+        fr.mirror(tmp_path / "fw", keep=5)

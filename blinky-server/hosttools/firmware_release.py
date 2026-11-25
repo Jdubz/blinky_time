@@ -300,6 +300,10 @@ def mirror(out_dir, keep):
     for r in stable[:keep]:
         tag = r["tagName"]
         got = download(tag, out_dir / tag)
+        # [blinky_time: download() re-checks stable; a release withdrawn since the listing
+        # (marker deleted, made a pre-release) aborts the mirror instead of being served.]
+        if not got["stable"]:
+            raise ReleaseError(f"{tag} stopped being stable during the mirror; run it again")
         # download() leaves only this release's three assets in the directory.
         releases.append(mirror_entry(tag, got["manifest"], r["publishedAt"], release_info(tag)["url"]))
     if latest and latest[0] not in [e["tag"] for e in releases]:
