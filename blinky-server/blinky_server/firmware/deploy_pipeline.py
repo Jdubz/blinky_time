@@ -4,8 +4,8 @@ The rule this enforces isn't "only deploy.sh may deploy". It's "every
 deploy runs deploy.sh's safety mechanisms" (CLAUDE.md, Upload Safety). Each
 step below reuses the module deploy.sh relies on, and none can be skipped:
 
-1. Firmware: ``tools/firmware_release.py download`` (the exact command and
-   JSON contract deploy.sh uses): a STABLE release only, every asset checked
+1. Firmware: ``hosttools/firmware_release.py download`` (blinky-server's release client; the
+   exact command and JSON contract deploy.sh uses): a STABLE release only, every asset checked
    against the release manifest's sha256. The release's hex/UF2 passed the
    strict safety validators when it was packaged. Never a local build (#269).
 2. Store it as the server's current firmware (the same storage
@@ -38,8 +38,8 @@ from typing import Any
 
 from ..device.device import DeviceState
 from ..device.protocol import json_object_from
+from ..paths import hosttools_dir
 from ..work import durable
-from .compile import find_project_root
 
 log = logging.getLogger(__name__)
 
@@ -73,15 +73,15 @@ class DeployError(Exception):
 
 
 def fetch_stable_release(tag: str | None, out_dir: Path) -> dict[str, Any]:
-    """Run ``tools/firmware_release.py download`` exactly as deploy.sh does.
+    """Run ``hosttools/firmware_release.py download`` exactly as deploy.sh does.
 
     Returns its JSON (tag, stable, hex, uf2, version). Refuses anything that
     isn't a promoted stable release.
     """
-    root = find_project_root()
+    tools = hosttools_dir()
     args = [
         sys.executable,
-        str(root / "tools" / "firmware_release.py"),
+        str(tools / "firmware_release.py"),
         "download",
         "--out",
         str(out_dir),
@@ -90,7 +90,7 @@ def fetch_stable_release(tag: str | None, out_dir: Path) -> dict[str, Any]:
         args += ["--tag", tag]
     try:
         r = subprocess.run(
-            args, cwd=root, capture_output=True, text=True, timeout=RELEASE_DOWNLOAD_TIMEOUT_S
+            args, cwd=tools, capture_output=True, text=True, timeout=RELEASE_DOWNLOAD_TIMEOUT_S
         )
     except subprocess.TimeoutExpired as e:
         raise DeployError(
@@ -111,7 +111,7 @@ def fetch_stable_release(tag: str | None, out_dir: Path) -> dict[str, Any]:
         raise DeployError(
             "release",
             f"{rel.get('tag')} is not a stable release. Fleet deploys install stable releases only; "
-            "gate a candidate with tools/release_gate.py on a test device (docs/RELEASE_PROCESS.md)",
+            "gate a candidate with blinky-firmware's tools/release_gate.py on a test device (docs/RELEASE_PROCESS.md)",
         )
     for key in ("tag", "hex", "version"):
         if key not in rel:
@@ -122,14 +122,14 @@ def fetch_stable_release(tag: str | None, out_dir: Path) -> dict[str, Any]:
 
 
 def fetch_staging_build(sha: str, out_dir: Path) -> dict[str, Any]:
-    """Run ``tools/firmware_release.py download-staging``: the staging build of commit ``sha``
+    """Run ``hosttools/firmware_release.py download-staging``: the staging build of commit ``sha``
     (docs/RELEASE_PROCESS.md, "Staging"), verified against its manifest and refused unless it
     is the dev-channel build of exactly that commit, from a successful staging-build.yml run,
     with the commit on staging. Not a release: only test devices take it."""
-    root = find_project_root()
+    tools = hosttools_dir()
     args = [
         sys.executable,
-        str(root / "tools" / "firmware_release.py"),
+        str(tools / "firmware_release.py"),
         "download-staging",
         "--sha",
         sha,
@@ -138,7 +138,7 @@ def fetch_staging_build(sha: str, out_dir: Path) -> dict[str, Any]:
     ]
     try:
         r = subprocess.run(
-            args, cwd=root, capture_output=True, text=True, timeout=RELEASE_DOWNLOAD_TIMEOUT_S
+            args, cwd=tools, capture_output=True, text=True, timeout=RELEASE_DOWNLOAD_TIMEOUT_S
         )
     except subprocess.TimeoutExpired as e:
         raise DeployError(

@@ -55,3 +55,14 @@ def firmware_dir() -> Path:
         d.mkdir(parents=True, exist_ok=True)
         _firmware_dir = d
     return _firmware_dir
+
+
+def hosttools_dir() -> Path:
+    """blinky-server's host tools (``blinky-server/hosttools/``): the release client, the UF2
+    flash tool and its helpers, owned by blinky_time since the 2026-11-24 decoupling. They sit
+    next to the package, which the box installs editable from its deploy slot. Nothing in them
+    reads the blinky-firmware checkout."""
+    d = Path(__file__).resolve().parent.parent / "hosttools"
+    if not d.is_dir():
+        raise FileNotFoundError(f"{d} missing: blinky-server's host tools ship with its tree")
+    return d

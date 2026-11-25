@@ -1,7 +1,7 @@
 """UF2 firmware upload for nRF52840 devices.
 
-Delegates to tools/uf2_upload.py for UF2 drive detection, firmware copy, and
-verification.
+Delegates to hosttools/uf2_upload.py (blinky-server's own copy, since the 2026-11-24
+decoupling) for UF2 drive detection, firmware copy, and verification.
 
 Upload sequence:
   1. Disconnect the server's serial transport
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# tools/uf2_upload.py emits this exact line once the entire UF2 file has
+# hosttools/uf2_upload.py emits this exact line once the entire UF2 file has
 # landed on the bootloader's MSC drive successfully — i.e., the bytes
 # are on flash. Anything after this in the subprocess (verify-reboot
 # wait, drive-disappear timer) is informational only; the write itself
@@ -46,10 +46,10 @@ _WRITE_COMPLETE_RE = re.compile(r"\[PASS\] Wrote ([\d,]+) ?/ ?([\d,]+) bytes")
 
 
 def _find_uf2_tool() -> Path | None:
-    """tools/uf2_upload.py in the firmware checkout (compile.find_project_root)."""
-    from .compile import find_project_root
+    """blinky-server's UF2 flash tool, ``hosttools/uf2_upload.py`` (paths.hosttools_dir)."""
+    from ..paths import hosttools_dir
 
-    candidate = find_project_root() / "tools" / "uf2_upload.py"
+    candidate = hosttools_dir() / "uf2_upload.py"
     return candidate if candidate.exists() else None
 
 
@@ -109,10 +109,10 @@ def _get_usb_dev_path(serial_port: str) -> str | None:
 
 
 def _find_usb_reset_tool() -> Path | None:
-    """tools/usb_reset.py in the firmware checkout (compile.find_project_root)."""
-    from .compile import find_project_root
+    """blinky-server's USB reset helper, ``hosttools/usb_reset.py`` (paths.hosttools_dir)."""
+    from ..paths import hosttools_dir
 
-    candidate = find_project_root() / "tools" / "usb_reset.py"
+    candidate = hosttools_dir() / "usb_reset.py"
     return candidate if candidate.exists() else None
 
 
@@ -124,7 +124,7 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
     because pyserial's close drops DTR and TinyUSB enters a "no host" state
     that persists across subsequent port opens.
 
-    Delegates to tools/usb_reset.py via sudo. The helper validates the path
+    Delegates to hosttools/usb_reset.py via sudo. The helper validates the path
     format (/dev/bus/usb/ prefix) and uses a narrow sudoers rule instead of
     blanket root Python access.
     """
@@ -138,7 +138,7 @@ async def _usb_reset_device(usb_dev_path: str | None) -> bool:
 
     tool = _find_usb_reset_tool()
     if not tool:
-        log.warning("tools/usb_reset.py not found — cannot reset USB device")
+        log.warning("hosttools/usb_reset.py not found — cannot reset USB device")
         return False
 
     try:
@@ -332,7 +332,7 @@ async def _uf2_write_impl(
 # FlashJob-aware UF2 path.
 #
 # Same physical steps as ``_uf2_write_impl`` (disconnect → USB reset → run
-# tools/uf2_upload.py) but the success criterion is "we saw [PASS] Wrote
+# hosttools/uf2_upload.py) but the success criterion is "we saw [PASS] Wrote
 # N / N bytes on stdout," NOT "the subprocess exited 0." The subprocess's
 # trailing verify-reboot phase has a 60s wall-clock that fires reliably
 # on the 0.8.0-4 bootloader — but the write itself has already succeeded

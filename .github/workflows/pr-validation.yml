@@ -106,8 +106,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v5
 
-    # The server runs the firmware repo's tools/ and scores with the corpus's blinky_scoring
-    # (#357); never the bootloader submodule.
+    # The server scores with the corpus's blinky_scoring (#357). It no longer runs anything
+    # from firmware/ (its host tools are in hosttools/ since the 2026-11-24 decoupling); the
+    # firmware checkout here goes in decoupling step 2. Never the bootloader submodule.
     - name: Firmware and corpus submodules
       working-directory: .
       run: git submodule update --init --depth 1 firmware corpus
@@ -136,6 +137,12 @@ jobs:
 
     - name: Run tests
       run: venv/bin/python -m pytest tests/ -v
+
+    - name: Host tools (hosttools/)
+      # blinky-server's own release client and UF2 flash tool, vendored from blinky-firmware in
+      # the 2026-11-24 decoupling: verbatim firmware-style code, so outside the package's
+      # ruff/mypy scope, but tested here.
+      run: venv/bin/python -m pytest -v hosttools/tests/
 
     - name: Test box deployer and staging runner (scripts/testbox/)
       # They decide what the test box runs and what reaches master (#349), so they are

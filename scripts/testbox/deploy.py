@@ -494,7 +494,7 @@ def prepare(slot: Path, sha: str) -> None:
     """Make `slot` a ready tree at `sha`: venv and console built from it."""
     if not (slot / ".git").exists():
         run("git", "worktree", "add", "--quiet", "--detach", str(slot), sha, cwd=DEV_CLONE)
-    # --force: server-side compiles regenerate blinky-things/Version.h in a slot's tree.
+    # --force: the slot must be exactly `sha`, whatever an earlier process left in its tree.
     run("git", "checkout", "--force", "--quiet", "--detach", sha, cwd=slot)
     init_submodules(slot, sha)
     link_firmware_toolchain(slot)

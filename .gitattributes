@@ -21,3 +21,8 @@ blinky-console/** text=auto eol=lf
 # Patches: keep LF and never flag/strip their whitespace. A blank context
 # line is " " and context mirrors the patched source's trailing whitespace.
 *.patch text eol=lf -whitespace
+
+# Vendored Microsoft uf2conv (blinky-server/hosttools/uf2conv/README.md): kept byte-identical
+# to the toolchain copy, CRLF endings included.
+blinky-server/hosttools/uf2conv/uf2conv.py -text
+blinky-server/hosttools/uf2conv/LICENSE.txt -text

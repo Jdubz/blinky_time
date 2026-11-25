@@ -127,10 +127,10 @@ DEPLOY_TOOL_HEADER="X-Deploy-Tool: deploy.sh-${GIT_SHA}"
 REL_DIR="/tmp/blinky-release"
 REL_ARGS=(download --out "$REL_DIR")
 [[ -n "$RELEASE" ]] && REL_ARGS+=(--tag "$RELEASE")
-REL_JSON=$(python3 firmware/tools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
+REL_JSON=$(python3 blinky-server/hosttools/firmware_release.py "${REL_ARGS[@]}") || fail "release download/verification failed" 2
 rel() { python3 -c "import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])" "$REL_JSON" "$1"; }
 if [[ "$(rel stable)" != "True" ]]; then
-    fail "$(rel tag) is not a stable release. deploy.sh flashes stable releases only; gate a candidate with tools/release_gate.py on a test device (docs/RELEASE_PROCESS.md)" 6
+    fail "$(rel tag) is not a stable release. deploy.sh flashes stable releases only; gate a candidate with blinky-firmware's tools/release_gate.py on a test device (docs/RELEASE_PROCESS.md)" 6
 fi
 HEX=$(rel hex)
 if command -v cygpath >/dev/null 2>&1; then HEX=$(cygpath -u "$HEX"); fi
