@@ -51,7 +51,7 @@ Heavy work runs on the Spark or devtop, never on the box.
 - **The box can SSH to devtop** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
 
 **Next:**
-- The firmware submodule bump here (Dependabot #381), then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
+- The firmware submodule bump here (Dependabot #400, which supersedes #381), then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
 - The ESP32-S3: its wiring and device config from the owner, a flash path on the box (P3 overlaps).
 - Camera: the follow test against drum labels, sound-to-light, and a review attached to each staging report.
 - Run the release gate on the box through the server API.
