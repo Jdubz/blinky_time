@@ -14,8 +14,8 @@ This is the tooling repo (#357). The firmware has its own flow in [blinky-firmwa
 - **Naming**: by kind of change: `fix/...`, `feat/...`, `docs/...`, `ci/...`.
 - **Branch from / merge to**: `master`. One change per branch; delete it after merge.
 
-### Dependabot branches
-Dependabot opens daily PRs that bump the `firmware/` (blinky-firmware `master`) and `corpus/` (blinky-corpus `main`) submodule pins (`.github/dependabot.yml`). They go through the same CI and review as any PR, so the parity check and the server tests run against the new pin before it is merged.
+### Submodule pin bumps
+The `corpus/` (blinky-corpus `main`) and `firmware/` (blinky-firmware `master`, until the decoupling removes it) pins move by ordinary PRs, with the same CI and review as any change. Dependabot is not used for repos we own: its cooldown and schedule exist to hold back third-party releases, and they only delayed our own changes.
 
 ## Workflow
 
