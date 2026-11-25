@@ -4,9 +4,7 @@ Where blinky's ML training data is, and how configs find it. Training is paused 
 
 ## The archive (bignasty)
 
-On 2026-07-10 devtop's `/mnt/storage` became the my-spark object store, and the old devtop data layout (the `/mnt/nvme` pool, `/mnt/storage/blinky-ml-data`) no longer exists. blinky's ML data was archived first, to bignasty's RAID:
-
-`bignasty:/srv/dev-disk-by-uuid-45e47416-96ad-41be-9fc0-582e15241cbd/archive/devtop-2026-07/blinky/`
+On 2026-07-10 devtop's `/mnt/storage` became the my-spark object store, and the old devtop data layout (the `/mnt/nvme` pool, `/mnt/storage/blinky-ml-data`) no longer exists. blinky's ML data was archived first, to the archive on the NAS (bignasty's RAID). Its path is in the owner's private notes: this repo is public, and it names no host path or address. The archive's `blinky/` directory holds:
 
 | Path in the archive | Size | Contents |
 |---|---|---|

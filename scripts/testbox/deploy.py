@@ -76,7 +76,8 @@ UNITS = (
 )
 # Alloy (the box's telemetry forwarder to the central LGTM stack): its config ships in the slot and
 # is installed verbatim when it differs, then Alloy reloads (SIGHUP). setup.sh installs Alloy itself
-# and /etc/default/alloy (the push endpoints).
+# and /etc/default/alloy (the push endpoints, from the box's private
+# ~/.config/blinky/observability.env; the config reads them with sys.env()).
 ALLOY_CONFIG_SRC = Path("scripts/testbox/alloy/blinkytest.alloy")
 ALLOY_CONFIG = Path("/etc/alloy/config.alloy")
 MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
