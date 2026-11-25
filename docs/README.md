@@ -26,7 +26,7 @@ Each plan carries a status header; check it before treating the plan as outstand
 | Doc | Status |
 |-----|--------|
 | [`ML_IMPROVEMENT_PLAN.md`](ML_IMPROVEMENT_PLAN.md) | NN shelved on the nRF52840; training paused; ESP32-S3 feasibility is the only active ML direction (P3). |
-| [`TEST_BOX_CAMERA_HARNESS_PLAN.md`](TEST_BOX_CAMERA_HARNESS_PLAN.md) | **Planned, not built** — the box camera watching the 8x8 grid: render fidelity, latency distributions, follow test, freezes. No issue tracks it yet. |
+| [`TEST_BOX_CAMERA_HARNESS_PLAN.md`](TEST_BOX_CAMERA_HARNESS_PLAN.md) | The box camera watching the 8x8 grid, as an advisory review: capture, calibration (pixel walk, timing reference, PWM) and per-device detection-to-light reviews are built (`scripts/testbox/camera/`); the follow test and sound-to-light are not. |
 | [`PHONE_RECORD_MODE_PLAN.md`](PHONE_RECORD_MODE_PLAN.md) | **Parked** — superseded by the #243 re-scope (live calibration-data capture). |
 
 ## Firmware (blinky-firmware)

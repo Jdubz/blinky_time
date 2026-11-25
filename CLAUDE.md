@@ -230,7 +230,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/ROADMAP.md` | **Priorities across all three repos** (P0 tooling, P1 audio, P2 smoothness, P3 ESP32-S3), quality bars, parked work and open owner decisions. GitHub issues, labelled `P0-tooling` / `P1-audio` / `P2-smoothness` / `P3-esp32` / `parked`, are the system of record. |
 | `docs/ML_IMPROVEMENT_PLAN.md` | ML status: NN shelved on the nRF52840 and why, the gate to turn it back on, ESP32-S3 feasibility (P3), paused items |
 | `docs/TEST_BOX.md` | The test box: hosts and roles, hardware as built (Pi 5, one XIAO Sense Plus in a Debug Mate, 8x8 grid), hands-off recovery chain, setup, blue/green deployer, staging runner |
-| `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | Plan (not built): the box camera (OV5647) watching the grid: render fidelity, render and sound-to-light latency as distributions, follow test against drum labels, freezes |
+| `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | The box camera (OV5647) watching the grid, a secondary review, never a gate. Built (`scripts/testbox/camera/`): capture, region discovery, calibration with the firmware's `testpattern` (walk, timing reference, PWM), and `camera_review.py` (detection-to-light lag as distributions with a timing budget, per device). Not built: the follow test, sound-to-light, reviews attached to staging reports |
 | `docs/DEVELOPMENT.md` | Tooling development: git hooks, console + server dev |
 | `docs/TESTING_METHODOLOGY.md` | Tiered testing (host harness to full validation on the box chip), drum metrics, removed metrics |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
