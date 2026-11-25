@@ -170,6 +170,21 @@ def is_test_box_only_command(cmd: str) -> bool:
     )
 
 
+def assert_test_box_rules(cmd: str, *, test_box: bool) -> None:
+    """Raise if `cmd` holds more than one line (a newline would reach the device as a second
+    command no gate saw: ``gen fire\nleds 0``), or is test-box-only off the box. For every path
+    that forwards a free-text command: the command routes (assert_command_allowed), WebSocket
+    commands and test jobs' command lists."""
+    if "\n" in cmd or "\r" in cmd:
+        raise HTTPException(400, "A command is one line: it must not contain CR or LF.")
+    if not test_box and is_test_box_only_command(cmd):
+        raise HTTPException(
+            403,
+            f"Command '{cmd.strip()[:60]}' is for the test box's chips only (a server started "
+            "with --staging); it is never sent to fleet devices.",
+        )
+
+
 def assert_command_allowed(cmd: str, x_deploy_tool: str | None, *, test_box: bool = False) -> None:
     """Raise 403 if `cmd` is deploy-gated and X-Deploy-Tool is missing/invalid.
 
@@ -182,14 +197,10 @@ def assert_command_allowed(cmd: str, x_deploy_tool: str | None, *, test_box: boo
     with --staging). Every chip there is a test chip, iterated on directly, so
     the deploy.sh gate (which protects the fleet) doesn't apply. The firmware's
     60 s rule between resets still does: that is on the caller. Test-box-only
-    commands (``leds``) are refused unless ``test_box``.
+    commands (``leds``) are refused unless ``test_box``, and so is any command
+    with a CR or LF in it (assert_test_box_rules).
     """
-    if not test_box and is_test_box_only_command(cmd):
-        raise HTTPException(
-            403,
-            f"Command '{cmd.strip()[:60]}' is for the test box's chips only (a server started "
-            "with --staging); it is never sent to fleet devices.",
-        )
+    assert_test_box_rules(cmd, test_box=test_box)
     if test_box or not is_deploy_gated_command(cmd):
         return
     if x_deploy_tool is None or not x_deploy_tool.startswith(_DEPLOY_TOOL_PREFIX):

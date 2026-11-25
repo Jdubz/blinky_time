@@ -59,7 +59,7 @@ The grid is lit only while a test runs (owner, 2026-11-24). Only the box's chip 
 - **During a run: lit at 40.** Test runs light the chip with the firmware's runtime-only `leds` override (blinky-firmware `render/LedBrightness.h`; `leds 0-255 | off | config | status`, never saved), at `TEST_BRIGHTNESS` (`blinky_server/testing/leds.py`): the brightness the camera's exposure and gain were set for (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, "Levels"). It is a box setting, not a device one: any chip in the grid's place needs the camera's level.
 - **After a run, however it ends** (pass, failure, cancel, a drain's stop): `leds config`, back to the config's brightness (dark).
 - **Restarts.** Lighting is per-run setup in the workflow body, so a job recovered after a restart lights the chip again. When the chip (re)connects, the server sets it back to its config brightness unless a run in this process holds it lit, so a run cut off by a crash doesn't leave it lit.
-- **Only the box's chips.** The server sends `leds` only on a `--staging` server and only to configured chips (not the unconfigured ESP32-S3). The API refuses `leds` on any other server, and in fleet broadcasts everywhere.
+- **Only the box's chips.** The server sends `leds` only on a `--staging` server and only to configured chips (not the unconfigured ESP32-S3). The API refuses `leds` on any other server (command routes, WebSocket commands, test jobs' command lists), and in fleet broadcasts everywhere; a command with a CR or LF in it is refused everywhere, so a second line can't slip past the gates.
 
 Per run type:
 
@@ -67,7 +67,7 @@ Per run type:
 |---|---|---|---|
 | Staging suite (health, validation, music and beat pace, final state) | from the deploy's end to the job's end | no: it reads the chip over serial; lit and dark frames cost the same (the override scales pixel values; generators, renderer and LED DMA run either way) | an ERROR in the server log; the run goes on |
 | Validation, parameter sweep, threshold tuning | for the test session | no | an ERROR in the log; the run goes on |
-| Camera review (`camera_review.py`: validation with `needs_light`) | for the test session | yes | the job fails |
+| Camera review (`camera_review.py`: validation with `needs_light`) | for the test session | yes | the job fails (so does a planned chip that isn't connected when the session starts: it would join dark) |
 | Camera calibration (`camera_calibrate.py`, `--brightness`, default 40) | for the script | yes | the script refuses |
 
 A camera survey (`camera_capture.py survey`) runs outside any job: light the chip first (`leds 40` through `POST /api/devices/{id}/command`) and send `leds config` after.

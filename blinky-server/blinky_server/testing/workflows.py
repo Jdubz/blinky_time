@@ -129,6 +129,9 @@ async def _devices(
     devices: list[Any] = []
     try:
         with durable.hold("test session setup"):
+            leds.refuse_off_box(
+                [*(commands or []), *(c for cs in (per_device_commands or {}).values() for c in cs)]
+            )
             await kill_orphan_audio()
             devices = await _connected(device_ids)
             for device in devices:
@@ -152,7 +155,12 @@ async def lit(device_ids: list[str], *, needs_light: bool, purpose: str) -> Asyn
     if not leds.on_box():
         yield
         return
-    async with leds.lit(await _connected(device_ids), needs_light=needs_light, purpose=purpose):
+    devices = await _connected(device_ids)
+    missing = sorted(set(device_ids) - {d.id for d in devices})
+    if needs_light and missing:
+        # A chip that reconnects later would join the run dark (it has no holder here).
+        raise leds.LedsError(f"{purpose} needs the LEDs lit; not connected: {missing}")
+    async with leds.lit(devices, needs_light=needs_light, purpose=purpose):
         yield
 
 

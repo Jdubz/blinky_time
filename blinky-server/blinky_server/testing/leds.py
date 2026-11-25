@@ -138,6 +138,16 @@ async def lit(devices: Iterable[Device], *, needs_light: bool, purpose: str) -> 
                     await _darken(d, purpose)
 
 
+def refuse_off_box(commands: Iterable[str]) -> None:
+    """A test job's own commands: a box-only one (``leds``) off the box fails the job. The API
+    refuses them at submission; this covers a job recovered from before that check."""
+    from ..api.deps import is_test_box_only_command
+
+    bad = [c for c in commands if is_test_box_only_command(c)]
+    if bad and not on_box():
+        raise RuntimeError(f"test-box-only commands on a fleet server: {bad}")
+
+
 async def reconcile(device: Device, *, staging: bool) -> None:
     """On connect (device/manager.py), on the box (``staging``: the fleet manager's
     staging_enabled): a chip no run here holds goes dark (a run cut off by a crash left it lit);

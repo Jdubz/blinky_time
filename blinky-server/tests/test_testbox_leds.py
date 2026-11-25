@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from httpx import AsyncClient
 
 from blinky_server.api.deps import assert_command_allowed, is_test_box_only_command
 from blinky_server.device.device import Device, DeviceState
@@ -237,3 +238,91 @@ def test_calibration_lights_at_the_test_brightness() -> None:
     path = Path(__file__).resolve().parents[2] / "scripts/testbox/camera/camera_calibrate.py"
     m = re.search(r"^TEST_BRIGHTNESS = (\d+)$", path.read_text(), re.M)
     assert m and int(m.group(1)) == leds.TEST_BRIGHTNESS
+
+
+def test_a_command_is_one_line() -> None:
+    """A newline would reach the chip as a second command no gate saw."""
+    for cmd in ("gen fire\nleds 0", "gen fire\rreboot", "gen fire\r\ndevice upload {}"):
+        with pytest.raises(HTTPException) as e:
+            assert_command_allowed(cmd, None, test_box=True)
+        assert e.value.status_code == 400
+
+
+async def test_command_route_refuses_leds_off_the_box(api_client: AsyncClient) -> None:
+    r = await api_client.post(
+        "/api/devices/MOCK_DEVICE_000/command", json={"command": "gen fire\nleds 0"}
+    )
+    assert r.status_code == 400
+    r = await api_client.post("/api/devices/MOCK_DEVICE_000/command", json={"command": "leds 0"})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/test/validate", {"device_ids": ["X"], "track_dir": "/t", "commands": ["leds 0"]}),
+        (
+            "/api/test/validate",
+            {"device_ids": ["X"], "track_dir": "/t", "per_device_commands": {"X": ["leds off"]}},
+        ),
+        (
+            "/api/test/param-sweep",
+            {
+                "device_ids": ["X"],
+                "param_name": "p",
+                "values": [1],
+                "track_dir": "/t",
+                "commands": ["leds 40"],
+            },
+        ),
+        ("/api/test/tune-threshold", {"device_id": "X", "track_dir": "/t", "commands": ["leds"]}),
+    ],
+)
+async def test_test_jobs_refuse_leds_off_the_box(
+    api_client: AsyncClient, path: str, body: dict[str, object]
+) -> None:
+    r = await api_client.post(path, json=body)
+    assert r.status_code == 403, r.text
+
+
+async def test_websocket_commands_follow_the_box_rules() -> None:
+    from blinky_server.api.ws import _allowed
+
+    class FakeWs:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send_json(self, msg: dict[str, object]) -> None:
+            self.sent.append(msg)
+
+    ws = FakeWs()
+    assert not await _allowed(ws, "leds 0", test_box=False)  # type: ignore[arg-type]
+    assert not await _allowed(ws, "gen fire\nleds 0", test_box=True)  # type: ignore[arg-type]
+    assert [m["type"] for m in ws.sent] == ["error", "error"]
+    assert await _allowed(ws, "leds 0", test_box=True)  # type: ignore[arg-type]
+    assert await _allowed(ws, "gen fire", test_box=False)  # type: ignore[arg-type]
+
+
+async def test_a_job_recovered_off_the_box_refuses_leds(off_box: None) -> None:
+    leds.refuse_off_box(["gen audio", "set x 1"])
+    with pytest.raises(RuntimeError, match="test-box-only"):
+        leds.refuse_off_box(["gen audio", "leds 0"])
+
+
+async def test_a_lit_run_needing_light_refuses_missing_chips(
+    monkeypatch: pytest.MonkeyPatch, on_box: None
+) -> None:
+    from blinky_server.testing import workflows as wf
+
+    chip = FakeChip("a")
+
+    async def connected(ids: list[str]) -> list[FakeChip]:
+        return [chip]
+
+    monkeypatch.setattr(wf, "_connected", connected)
+    with pytest.raises(leds.LedsError, match="not connected"):
+        async with wf.lit(["a", "b"], needs_light=True, purpose="camera review"):
+            pass
+    assert chip.sent == []
+    async with wf.lit(["a", "b"], needs_light=False, purpose="validation"):
+        assert chip.override is True
