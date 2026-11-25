@@ -55,7 +55,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 [ "${1:-}" = "--dev" ] || { echo "want --dev"; exit 2; }
 if [ -f FAIL_BUILD ]; then
-  mkdir -p "@OUT@"; printf 'g++ -Werror=return-type x.cpp\nx.cpp:1: the real error\n' > "@OUT@/compile.log"
+  mkdir -p "@OUT@"
+  printf 'g++ -Werror=return-type x.cpp\nx.cpp:1: the real error\n' > "@OUT@/compile.log"
   echo "error: build broken on purpose"; exit 1
 fi
 N=$(tr -d '[:space:]' < blinky-things/BUILD_NUMBER)
