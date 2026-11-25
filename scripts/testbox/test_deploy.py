@@ -513,6 +513,9 @@ GIT: dict[str, Any] = {"diff": ["blinky-server/blinky_server/app.py"], "calls": 
 
 def fake_git(*cmd: str, **kw: Any) -> str:
     GIT["calls"].append(cmd)
+    if cmd[:2] == ("git", "fetch"):
+        # Never a submodule (#414 review): an old slot's firmware/ must not be fetched.
+        assert "--no-recurse-submodules" in cmd
     if cmd[:2] == ("git", "rev-parse"):
         return (SHA if cmd[2] == "origin/master" else OLD) + "\n"
     if cmd[:2] == ("git", "diff"):

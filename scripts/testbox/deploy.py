@@ -99,6 +99,7 @@ SERVER_PATHS = (
 # it out in keeps that checkout, untouched and unread, as it keeps the toolchain links that
 # deploy.py made (firmware/.arduino, .arduino).
 SUBMODULES = ("corpus",)
+FETCH = ("--quiet", "--no-recurse-submodules", "origin", BRANCH)  # see deploy_once
 # The latest master commit that passed the gate, server change or not. blinky-server builds the
 # Spark training bundle from it (blinky_server/spark/bundle.py), so ml-training changes reach
 # training without a server restart, and only once CI and review passed. Shared by every
@@ -542,7 +543,10 @@ def deploy_once(dry_run: bool = False) -> int:
     state = load_state()
     state.setdefault("accepted", {})
     live = live_slot()
-    run("git", "fetch", "--quiet", "origin", BRANCH, cwd=live, timeout=300)
+    # No submodule recursion: git's default (on-demand) would also fetch a firmware/ checkout
+    # an older deploy.py left in the slot whenever the pin moves, a fetch of a repo nothing
+    # here reads that could fail the pass. init_submodules fetches the corpus pin it needs.
+    run("git", "fetch", *FETCH, cwd=live, timeout=300)
     target = run("git", "rev-parse", f"origin/{BRANCH}", cwd=live).strip()
     current = run("git", "rev-parse", "HEAD", cwd=live).strip()
     state["deployed"] = current
@@ -639,7 +643,7 @@ def init() -> int:
     if LINK.exists() or LINK.is_symlink():
         log(f"{LINK} exists (-> {LINK.resolve()}); nothing to do")
         return 0
-    run("git", "fetch", "--quiet", "origin", BRANCH, cwd=DEV_CLONE, timeout=300)
+    run("git", "fetch", *FETCH, cwd=DEV_CLONE, timeout=300)
     sha = run("git", "rev-parse", f"origin/{BRANCH}", cwd=DEV_CLONE).strip()
     prepare(SLOTS[0], sha)
     point_at(SLOTS[0])
