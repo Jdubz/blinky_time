@@ -42,12 +42,18 @@ Umbrella: [#386](https://github.com/Jdubz/blinky_time/issues/386). The loop:
 
 Heavy work runs on the Spark or devtop, never on the box.
 
-**Where it stands (2026-11-23).** The box has its permanent test chip: a XIAO nRF52840 Sense Plus driving an 8x8 grid (`TEST_BOX.md`). Every chip on the box is a test chip (#382). The staging suite passes end to end on it, with the flash race fixed (#385), the health settle (#384) and review verdicts in the report (#383).
+**Where it stands (2026-11-24).** The box has its permanent test chip, a XIAO nRF52840 Sense Plus driving an 8x8 grid, and since 2026-11-24 a second chip, a XIAO ESP32-S3 (unconfigured, old firmware; `TEST_BOX.md`). Every chip on the box is a test chip (#382). The staging suite passes end to end, with the flash race fixed (#385, blinky-firmware#47), the health settle (#384) and review verdicts in the report (#383). Built since:
+- **Observability:** Alloy ships the box's logs, metrics and traces to the LGTM stack (#390), blinky-server exports Prometheus metrics and OTLP traces (#391), staging reports go to the Spark artifact store (#392), and the box has a Grafana dashboard (observability#162).
+- **Camera harness** ([#387](https://github.com/Jdubz/blinky_time/issues/387)): capture, region discovery, calibration with the firmware's `testpattern` (blinky-firmware#53: pixel walk, flash timing reference, PWM) and per-device detection-to-light reviews (#393, #396, #399). It is a secondary review, never a gate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
+- **Timing you can trust:** the clock sync times the reply line (#395, RTT 3-4 ms), runs record the audio start, clock and the chip's loop timing (#394, #399).
+- **CI only runs what a change touches** (#397, blinky-firmware#55).
+- **Serial:** a quiet device is no longer dropped as dead (#401).
+- **The box can SSH to devtop** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
 
 **Next:**
-- Finish the flash fixes: blinky-firmware#47, then the submodule bump.
-- The grid's registry entry, and registry-driven config for box chips.
-- The camera harness for the grid ([#387](https://github.com/Jdubz/blinky_time/issues/387)): dropped frames, render fidelity and latency, measured from outside the chip.
+- The firmware submodule bump here (Dependabot #400, which supersedes #381), then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
+- The ESP32-S3: its wiring and device config from the owner, a flash path on the box (P3 overlaps).
+- Camera: the follow test against drum labels, sound-to-light, and a review attached to each staging report.
 - Run the release gate on the box through the server API.
 - Recovery: auto-recovery on an enrolled box chip (#219), server-triggered SWD, and the bootloader gate runner.
 - Spark and devtop: put the surveyed services to work (#386): Grafana observability for the box, the artifact store for reports and captures, Spark `audio` / `gpu_task` jobs for heavy work.
@@ -70,11 +76,12 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 - [blinky-firmware#49](https://github.com/Jdubz/blinky-firmware/issues/49): a settings save stalls the loop ~85–115 ms (flash page erase).
 - [blinky-firmware#23](https://github.com/Jdubz/blinky-firmware/issues/23): JSON stream formatting runs on the render loop. The box streams during tests.
 - [blinky-firmware#14](https://github.com/Jdubz/blinky-firmware/issues/14): the LED DMA wait caps fps on large strips. Needed before the 1024-LED matrices.
+- **The ~30 ms detection-to-light tail (measured 2026-11-24):** ACF tempo detection runs inline in the audio update every 100 ms (`acfPeriodMs`) before the frame is drawn, and costs **17-19.5 ms per run** (PLP adds ~1-2 ms; blinky-firmware#57 reports `acfUs`/`acfMaxUs`/`plpUs`/`plpMaxUs`). That makes the chip's 31 ms `maxFrameMs` even with streaming off, and ~17 % of its CPU. Options, owner to choose: draw the onset before the tempo work runs (smallest), or spread / cheapen the ACF (needs a tempo-accuracy check). Camera before/after and the tracker harness per the audio rules. The ~15 ms median is validation's own streaming halving the loop rate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
 - Then tighten the staging frame-time gate. It allows 100 ms today, which the release docs call a visible freeze. The camera harness (P0) can confirm frames from outside.
 
 ## P3: ESP32-S3
 
-Umbrella: [blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50). Design: blinky-firmware `docs/NEXTGEN_ESP32S3_PLAN.md`.
+Umbrella: [blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50). Design: blinky-firmware `docs/NEXTGEN_ESP32S3_PLAN.md`. A XIAO ESP32-S3 is on the test box since 2026-11-24 (`TEST_BOX.md`): connected, unconfigured, old firmware; no flash path on the box yet.
 - Bring the build back.
 - Split the work across the two cores: the renderer never waits on audio.
 - Answer whether a frame-level onset NN fits the audio core *and beats SuperFlux on accuracy*.
