@@ -38,7 +38,9 @@ RUN useradd --uid 10001 --user-group --create-home --home-dir /home/builder \
 # ref must be on a branch (a fork PR's commit is not). Installed at <src>/.arduino, where the
 # firmware's scripts expect it (scripts/arduino_env.sh, tools/check_build_libs.py), owned by
 # root so a build can't change it for the next one. Only toolchain.py is copied first, so a
-# change to the service's code doesn't reinstall the toolchain.
+# change to the service's code doesn't reinstall the toolchain. The download cache
+# (.arduino/staging) is emptied but kept: arduino-cli creates it at startup if missing, and
+# the build can't write there.
 COPY blinky_build/toolchain.py /opt/blinky/toolchain_fp.py
 RUN set -eu; \
     echo "${FIRMWARE_TOOLCHAIN_REF:-}" | grep -Eq '^[0-9a-f]{40}$' \
@@ -53,7 +55,7 @@ RUN set -eu; \
     python /opt/blinky/toolchain_fp.py /opt/blinky/src > /opt/blinky/toolchain.json; \
     cat /opt/blinky/toolchain.json; \
     find /opt/blinky/src -mindepth 1 -maxdepth 1 ! -name .arduino -exec rm -rf {} +; \
-    rm -rf /opt/blinky/src/.arduino/staging; \
+    find /opt/blinky/src/.arduino/staging -mindepth 1 -delete; \
     chmod -R a+rX,go-w /opt/blinky/src/.arduino; \
     chown 10001:10001 /opt/blinky/src
 

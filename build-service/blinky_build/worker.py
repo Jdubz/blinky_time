@@ -121,6 +121,16 @@ class Worker:
                 shutil.rmtree(d / "src", ignore_errors=True)
                 log(f"{job_id}: marked failed (worker restarted)")
 
+    def prune_caches(self):
+        """Drop build caches of other toolchains: this image builds only its own."""
+        keep = f"tc-{toolchain.fingerprint_id(self.baked)}"
+        if not self.cfg.cache.is_dir():
+            return
+        for d in self.cfg.cache.iterdir():
+            if d.name.startswith("tc-") and d.name != keep:
+                shutil.rmtree(d, ignore_errors=True)
+                log(f"removed the build cache of another toolchain: {d.name}")
+
     def run_once(self):
         job_id = self.store.next_queued()
         if not job_id or not self.store.claim(job_id):
@@ -130,6 +140,7 @@ class Worker:
 
     def run_forever(self):
         self.recover()
+        self.prune_caches()
         self.heartbeat()
         threading.Thread(target=self._heartbeats, daemon=True).start()
         log(f"ready; toolchain {toolchain.fingerprint_id(self.baked)}")

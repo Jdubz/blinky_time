@@ -467,6 +467,7 @@ jobs:
         done
 
     - name: The sandbox is what the design says
+      shell: bash
       run: |
         set -euo pipefail
         w=$(docker ps -q --filter label=com.docker.compose.project=blinky-build-local --filter label=com.docker.compose.service=worker)
@@ -490,6 +491,7 @@ jobs:
 
     - name: The staging build's artifact for the same commit (manifest comparison)
       id: staging
+      shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -506,6 +508,9 @@ jobs:
         fi
 
     - name: End to end (SHA path, bundle path, verified packages)
+      # `shell: bash` is `bash -eo pipefail`: without pipefail the step would take tee's status
+      # and a failed e2e would pass.
+      shell: bash
       run: |
         python build-service/tests/e2e.py --url "http://$BLINKY_BUILD_BIND:$BLINKY_BUILD_PORT" \
           --sha "$FIRMWARE_SHA" --firmware "$RUNNER_TEMP/fw" --hosttools blinky-server/hosttools \

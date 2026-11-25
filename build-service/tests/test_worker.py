@@ -104,6 +104,17 @@ def test_build_cannot_persist_git_config(client, service, remote, worker_env, tm
     assert not (tmp_path / "src/.git/info/attributes").exists()
 
 
+def test_build_cache_is_per_toolchain_and_stale_ones_pruned(client, remote, worker_env, tmp_path):
+    w = worker_env()
+    _, b = client.post_sha(remote.tip)
+    w.run_once()
+    mine = f"tc-{toolchain.fingerprint_id(w.baked)}"
+    assert (tmp_path / "cache" / mine / "tmp").is_dir()
+    (tmp_path / "cache" / "tc-0123456789abcdef").mkdir()
+    w.prune_caches()
+    assert sorted(p.name for p in (tmp_path / "cache").iterdir()) == [mine]
+
+
 def test_recover_marks_interrupted_builds_failed(client, service, remote, worker_env):
     w = worker_env()
     _, b = client.post_sha(remote.tip)
