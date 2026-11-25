@@ -70,10 +70,10 @@ make export \
     PROCESSED_DIR=/mnt/nvme/processed_v36 \
     | tee "${V36_OUT}/export.log"
 
-[ -f "${V36_OUT}/frame_onset_model_data_int8.tflite" ] || \
+[ -f "${V36_OUT}/export/frame_onset_model_data_int8.tflite" ] || \
     { echo "ERROR: v36 export produced no .tflite"; exit 1; }
 
-TFLITE_KB=$(du -k "${V36_OUT}/frame_onset_model_data_int8.tflite" | cut -f1)
+TFLITE_KB=$(du -k "${V36_OUT}/export/frame_onset_model_data_int8.tflite" | cut -f1)
 echo "v36 tflite size: ${TFLITE_KB} KB (config max: 35 KB)"
 [ "${TFLITE_KB}" -le 35 ] || \
     { echo "ERROR: v36 tflite ${TFLITE_KB} KB > 35 KB budget"; exit 1; }

@@ -42,11 +42,11 @@ make export \
     RUN_NAME=v34d \
     | tee "${V34D_OUT}/export.log"
 
-[ -f "${V34D_OUT}/frame_onset_model_data_int8.tflite" ] || \
+[ -f "${V34D_OUT}/export/frame_onset_model_data_int8.tflite" ] || \
     { echo "ERROR: v34d export produced no .tflite"; exit 1; }
 
 # Surface tflite size — should be ≤27 KB per config
-TFLITE_KB=$(du -k "${V34D_OUT}/frame_onset_model_data_int8.tflite" | cut -f1)
+TFLITE_KB=$(du -k "${V34D_OUT}/export/frame_onset_model_data_int8.tflite" | cut -f1)
 echo "v34d tflite size: ${TFLITE_KB} KB (config max: 27 KB)"
 [ "${TFLITE_KB}" -le 27 ] || \
     { echo "ERROR: v34d tflite ${TFLITE_KB} KB > 27 KB budget"; exit 1; }

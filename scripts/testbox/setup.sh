@@ -299,8 +299,10 @@ EOF
 import re, sys
 path, block = sys.argv[1], sys.argv[2]
 text = open(path, encoding="utf-8").read()
-new = re.sub(r"^# >>> blinky test box.*?^# <<< blinky test box <<<$", lambda _: block,
-             text, count=1, flags=re.M | re.S)
+new, n = re.subn(r"^# >>> blinky test box.*?^# <<< blinky test box <<<$", lambda _: block,
+                 text, count=1, flags=re.M | re.S)
+if n != 1:  # an opening marker with no closing one: report it, never keep the old block
+    sys.exit(f"{path}: the blinky test box block has no closing marker; fix it by hand")
 if new != text:
     open(path, "w", encoding="utf-8").write(new)
 PY
